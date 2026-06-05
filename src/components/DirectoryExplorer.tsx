@@ -43,6 +43,8 @@ interface DirectoryExplorerProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
+  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation';
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
 }
 
 // 1. Initial high-fidelity Mock File System conforming to X4/Godot-style structures
@@ -114,6 +116,72 @@ const MOCK_FILESYSTEM_TREE: FSItem[] = [
     ]
   },
   {
+    name: "aiscripts",
+    kind: "directory",
+    path: "res://aiscripts",
+    isMock: true,
+    children: [
+      {
+        name: "hunter.escort.behavior.xml",
+        kind: "file",
+        path: "res://aiscripts/hunter.escort.behavior.xml",
+        isMock: true,
+        content: `<?xml version="1.0" encoding="utf-8"?>\n<aiscript name="hunter.escort.behavior" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">\n  <params>\n    <param name="target" type="object" default="this.ship.commander" comment="Leader ship" />\n    <param name="flee_shield" type="number" default="25" />\n  </params>\n  <actions>\n    <move_to destination="$target" speed="90" />\n    <shoot target="$enemy" weapon="primary" />\n  </actions>\n</aiscript>`
+      }
+    ]
+  },
+  {
+    name: "t",
+    kind: "directory",
+    path: "res://t",
+    isMock: true,
+    children: [
+      {
+        name: "0001-L044.xml",
+        kind: "file",
+        path: "res://t/0001-L044.xml",
+        isMock: true,
+        content: `<?xml version="1.0" encoding="utf-8"?>\n<language id="44">\n  <page id="20001" title="Weapon and Item Names">\n    <t id="1">Antimatter Disrupter Cannon</t>\n    <t id="2">Heavy Plasma Battery MK2</t>\n    <t id="3">Nanotech Hull Shielding</t>\n  </page>\n  <page id="20002" title="Dialogue and Messages">\n    <t id="1001">Warning. Incoming hazardous solar wind storm in 30 seconds!</t>\n    <t id="1002">Acolyte Squadron commander speaking. Standing by for flight vectors.</t>\n  </page>\n</language>`
+      }
+    ]
+  },
+  {
+    name: "libraries",
+    kind: "directory",
+    path: "res://libraries",
+    isMock: true,
+    children: [
+      {
+        name: "wares.xml",
+        kind: "file",
+        path: "res://libraries/wares.xml",
+        isMock: true,
+        content: `<?xml version="1.0" encoding="utf-8"?>
+<diff>
+  <add sel="/wares">
+    <ware id="custom_weapon_item" name="{20001,1}" description="{20001,3}">
+      <price min="25000" average="35000" max="45000" />
+    </ware>
+  </add>
+</diff>`
+      },
+      {
+        name: "jobs.xml",
+        kind: "file",
+        path: "res://libraries/jobs.xml",
+        isMock: true,
+        content: `<?xml version="1.0" encoding="utf-8"?>
+<diff>
+  <add sel="/jobs">
+    <job id="argon_heavy_patrol" name="Argon Heavy Patrol">
+      <quota galaxy="5" />
+    </job>
+  </add>
+</diff>`
+      }
+    ]
+  },
+  {
     name: "README.md",
     kind: "file",
     path: "res://README.md",
@@ -129,7 +197,9 @@ export default function DirectoryExplorer({
   setDirName,
   workspace,
   setWorkspace,
-  saveCheckpoint
+  saveCheckpoint,
+  workspaceView,
+  setWorkspaceView
 }: DirectoryExplorerProps) {
   const [fileFilter, setFileFilter] = useState('');
   const [fileTree, setFileTree] = useState<FSItem[]>(MOCK_FILESYSTEM_TREE);
@@ -137,7 +207,10 @@ export default function DirectoryExplorer({
     "res://addons": true,
     "res://addons/world_generator_plugin": true,
     "res://director": true,
-    "res://ui": true
+    "res://ui": true,
+    "res://aiscripts": true,
+    "res://t": true,
+    "res://libraries": true
   });
   
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
@@ -330,17 +403,97 @@ export default function DirectoryExplorer({
         } catch (e: any) {
           setStatusMessage({ type: 'error', text: `JSON parse failed: ${e.message}` });
         }
-      } else if (fileExtension === 'xml') {
-        const decoded = parseXMLToWorkspace(fileText);
-        if (decoded && decoded.nodes.length > 0) {
-          setWorkspace(decoded);
-          setStatusMessage({ type: 'success', text: `Imported XML Script: ${file.name}` });
+          } else if (fileExtension === 'xml') {
+        const isTFile = file.path.includes('/t/') || fileText.includes('<language');
+        const isAIScript = file.path.includes('/aiscripts/') || fileText.includes('<aiscript');
+        const isLibrary = file.path.includes('/libraries/') || fileText.includes('<diff');
+
+        if (isTFile) {
+          try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(fileText, "application/xml");
+            const langEl = doc.getElementsByTagName("language")[0];
+            if (langEl) {
+              const languageId = langEl.getAttribute("id") || "44";
+              const pagesList = langEl.getElementsByTagName("page");
+              const pages: any[] = [];
+              
+              for (let i = 0; i < pagesList.length; i++) {
+                const pEl = pagesList[i];
+                const pageId = pEl.getAttribute("id") || "20001";
+                const pageTitle = pEl.getAttribute("title") || `Page ${pageId}`;
+                const itemsList = pEl.getElementsByTagName("t");
+                const items: any[] = [];
+                
+                for (let j = 0; j < itemsList.length; j++) {
+                  const tEl = itemsList[j];
+                  const tId = tEl.getAttribute("id") || "1";
+                  items.push({
+                    id: tId,
+                    value: tEl.textContent || "",
+                    description: ""
+                  });
+                }
+                pages.push({ id: pageId, title: pageTitle, items });
+              }
+              
+              const targetTFile = {
+                languageId,
+                fileName: file.name,
+                pages
+              };
+              
+              setWorkspace(prev => {
+                const currentTFiles = prev.tFiles || [];
+                const existsIdx = currentTFiles.findIndex(f => f.languageId === languageId);
+                let newTFiles = [...currentTFiles];
+                if (existsIdx !== -1) {
+                  newTFiles[existsIdx] = targetTFile;
+                } else {
+                  newTFiles.push(targetTFile);
+                }
+                return { ...prev, tFiles: newTFiles };
+              });
+
+              if (setWorkspaceView) {
+                setWorkspaceView('translation');
+              }
+              setStatusMessage({ type: 'success', text: `Loaded Language t-file (${languageId}): ${file.name}` });
+            } else {
+              throw new Error("No language root tag identified.");
+            }
+          } catch (err: any) {
+            setStatusMessage({ type: 'error', text: `Could not parse Language XML: ${err.message}` });
+          }
+          setTimeout(() => setStatusMessage(null), 2500);
+        } else if (isAIScript) {
+          if (setWorkspaceView) {
+            setWorkspaceView('aiscripts');
+          }
+          setStatusMessage({ type: 'success', text: `Loaded AIScript Behavior: ${file.name}` });
+          setTimeout(() => setStatusMessage(null), 2500);
+        } else if (isLibrary) {
+          if (setWorkspaceView) {
+            setWorkspaceView('xmlpatch');
+          }
+          setStatusMessage({ type: 'success', text: `Opened Library XML Patch: ${file.name}` });
           setTimeout(() => setStatusMessage(null), 2500);
         } else {
-          setStatusMessage({ 
-            type: 'error', 
-            text: "Could not find compatible cues or actions nodes inside this XML script." 
-          });
+          // Fallback to standard MD script parser
+          const decoded = parseXMLToWorkspace(fileText);
+          if (decoded && decoded.nodes.length > 0) {
+            setWorkspace(decoded);
+            if (setWorkspaceView) {
+              setWorkspaceView('blueprint');
+            }
+            setStatusMessage({ type: 'success', text: `Imported XML Script: ${file.name}` });
+            setTimeout(() => setStatusMessage(null), 2500);
+          } else {
+            setStatusMessage({ 
+              type: 'error', 
+              text: "Could not find compatible cues or actions nodes inside this XML script." 
+            });
+          }
         }
       } else {
         // Non-node standard text file

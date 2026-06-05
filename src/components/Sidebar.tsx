@@ -43,6 +43,8 @@ interface SidebarProps {
   dirName: string;
   setDirName: (name: string) => void;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
+  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation';
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
 }
 
 export default function Sidebar({
@@ -60,7 +62,9 @@ export default function Sidebar({
   setDirHandle,
   dirName,
   setDirName,
-  saveCheckpoint
+  saveCheckpoint,
+  workspaceView,
+  setWorkspaceView
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
 
@@ -180,6 +184,8 @@ export default function Sidebar({
             workspace={workspace}
             setWorkspace={setWorkspace}
             saveCheckpoint={saveCheckpoint}
+            workspaceView={workspaceView}
+            setWorkspaceView={setWorkspaceView}
           />
         )}
 

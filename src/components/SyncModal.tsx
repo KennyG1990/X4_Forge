@@ -31,6 +31,7 @@ interface SyncModalProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
 }
 
 export default function SyncModal({
@@ -38,7 +39,8 @@ export default function SyncModal({
   onClose,
   workspace,
   setWorkspace,
-  saveCheckpoint
+  saveCheckpoint,
+  setWorkspaceView
 }: SyncModalProps) {
   const [activeTab, setActiveTab] = useState<'import' | 'github'>('import');
   
@@ -508,18 +510,105 @@ export default function SyncModal({
           throw new Error("Missing mandatory 'nodes' schema attribute.");
         }
       } else {
-        // Run customized Egosoft Script Parser
-        const reconstructed = parseXMLToWorkspace(textToImport);
-        if (reconstructed && reconstructed.nodes.length > 0) {
-          saveCheckpoint();
-          setWorkspace(reconstructed);
+        const isTFile = textToImport.includes('<language');
+        const isAIScript = textToImport.includes('<aiscript');
+        const isLibrary = textToImport.includes('<diff');
+
+        if (isTFile) {
+          // Parse Language T-File
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(textToImport, "application/xml");
+          const langEl = doc.getElementsByTagName("language")[0];
+          if (langEl) {
+            const languageId = langEl.getAttribute("id") || "44";
+            const pagesList = langEl.getElementsByTagName("page");
+            const pages: any[] = [];
+            
+            for (let i = 0; i < pagesList.length; i++) {
+              const pEl = pagesList[i];
+              const pageId = pEl.getAttribute("id") || "20001";
+              const pageTitle = pEl.getAttribute("title") || `Page ${pageId}`;
+              const itemsList = pEl.getElementsByTagName("t");
+              const items: any[] = [];
+              
+              for (let j = 0; j < itemsList.length; j++) {
+                const tEl = itemsList[j];
+                const tId = tEl.getAttribute("id") || "1";
+                items.push({
+                  id: tId,
+                  value: tEl.textContent || "",
+                  description: ""
+                });
+              }
+              pages.push({ id: pageId, title: pageTitle, items });
+            }
+            
+            const targetTFile = {
+              languageId,
+              fileName: `0001-L0${languageId}.xml`,
+              pages
+            };
+            
+            saveCheckpoint();
+            setWorkspace(prev => {
+              const currentTFiles = prev.tFiles || [];
+              const existsIdx = currentTFiles.findIndex(f => f.languageId === languageId);
+              let newTFiles = [...currentTFiles];
+              if (existsIdx !== -1) {
+                newTFiles[existsIdx] = targetTFile;
+              } else {
+                newTFiles.push(targetTFile);
+              }
+              return { ...prev, tFiles: newTFiles };
+            });
+
+            if (setWorkspaceView) {
+              setWorkspaceView('translation');
+            }
+            
+            setStatusBanner({
+              type: 'success',
+              msg: `Language translation catalog (${languageId}) parsed and loaded successfully!`
+            });
+            onClose();
+          } else {
+            throw new Error("Invalid language XML root structure.");
+          }
+        } else if (isAIScript) {
+          if (setWorkspaceView) {
+            setWorkspaceView('aiscripts');
+          }
           setStatusBanner({
             type: 'success',
-            msg: `Reconstructed Mission script successfully! Generated ${reconstructed.nodes.length} nodes and ${reconstructed.links.length} visual node chains.`
+            msg: `AIScript XML imported successfully! Visually routed to Behavior Tree builder.`
+          });
+          onClose();
+        } else if (isLibrary) {
+          if (setWorkspaceView) {
+            setWorkspaceView('xmlpatch');
+          }
+          setStatusBanner({
+            type: 'success',
+            msg: `X4 Library XML patch imported. Redirected to the XML Patching code viewer.`
           });
           onClose();
         } else {
-          throw new Error("No compatible game nodes (cues, events, actions) were identified in this script file.");
+          // Run customized Egosoft Script Parser
+          const reconstructed = parseXMLToWorkspace(textToImport);
+          if (reconstructed && reconstructed.nodes.length > 0) {
+            saveCheckpoint();
+            setWorkspace(reconstructed);
+            if (setWorkspaceView) {
+              setWorkspaceView('blueprint');
+            }
+            setStatusBanner({
+              type: 'success',
+              msg: `Reconstructed Mission script successfully! Generated ${reconstructed.nodes.length} nodes and ${reconstructed.links.length} visual node chains.`
+            });
+            onClose();
+          } else {
+            throw new Error("No compatible game nodes (cues, events, actions) were identified in this script file.");
+          }
         }
       }
     } catch (e: any) {

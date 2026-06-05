@@ -22,7 +22,8 @@ import {
   FolderGit2,
   Sparkles,
   Scroll,
-  Package
+  Package,
+  Globe
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -35,6 +36,7 @@ import AIConnectionModal from './components/AIConnectionModal';
 import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
+import TFileEditor from './components/TFileEditor';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace } from './types';
 import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
 
@@ -87,7 +89,7 @@ export default function App() {
 
   const workspace = rawWorkspace;
 
-  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch'>('blueprint');
+  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation'>('blueprint');
   const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem'>('script');
 
   const [dirHandle, setDirHandle] = useState<any | null>(null);
@@ -348,6 +350,18 @@ export default function App() {
             <FileCode className="w-3.5 h-3.5" />
             XML Patching
           </button>
+
+          <button
+            onClick={() => { setWorkspaceView('translation'); setActiveSidebarTab('config'); }}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'translation'
+                ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            Languages (t/)
+          </button>
         </div>
 
         {/* Preset & Project management utilities */}
@@ -470,6 +484,8 @@ export default function App() {
           dirName={dirName}
           setDirName={setDirName}
           saveCheckpoint={saveCheckpoint}
+          workspaceView={workspaceView}
+          setWorkspaceView={setWorkspaceView}
         />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
@@ -497,6 +513,11 @@ export default function App() {
             />
           ) : workspaceView === 'libraries' ? (
             <LibraryConfigurator
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+            />
+          ) : workspaceView === 'translation' ? (
+            <TFileEditor
               workspace={workspace}
               setWorkspace={setWorkspace}
             />
@@ -549,6 +570,7 @@ export default function App() {
         workspace={workspace}
         setWorkspace={setWorkspace}
         saveCheckpoint={saveCheckpoint}
+        setWorkspaceView={setWorkspaceView}
       />
 
       {/* AI Connection Provider Settings Modal */}

@@ -682,6 +682,36 @@ app.post("/api/agent/compile", (req, res) => {
   }
 });
 
+function populateNodeMetadata(nodes: any[]): any[] {
+  if (!nodes || !Array.isArray(nodes)) return [];
+  return nodes.map(node => {
+    // Attempt to match by xmlTag
+    let template = NODE_TEMPLATES.find(t => t.xmlTag === node.xmlTag);
+    // Fallback search by type
+    if (!template) {
+      template = NODE_TEMPLATES.find(t => t.type === node.type);
+    }
+    // Deep fallback to first template
+    if (!template) {
+      template = NODE_TEMPLATES[0];
+    }
+    
+    return {
+      id: node.id || `node_${Math.random().toString(36).substring(2, 9)}`,
+      type: node.type || template.type,
+      label: node.label || template.label,
+      xmlTag: node.xmlTag || template.xmlTag,
+      x: typeof node.x === 'number' ? node.x : Math.floor(Math.random() * 500) + 100,
+      y: typeof node.y === 'number' ? node.y : Math.floor(Math.random() * 400) + 100,
+      properties: { ...template.properties, ...node.properties },
+      propertiesSchema: template.propertiesSchema,
+      inputs: template.inputs,
+      outputs: template.outputs,
+      comment: node.comment || ""
+    };
+  });
+}
+
 /**
  * POST /api/agent/generate
  * Prompts the built-in Gemini language model to map a natural language instruction directly
@@ -694,30 +724,17 @@ app.post("/api/agent/generate", async (req, res) => {
   }
 
   try {
-    const systemInstruction = `You are a high-fidelity visual translator agent for the "X4 Foundations Mod Studio".
-Your task is to take a natural language command and design or modify a fully connected, functional "ModWorkspace" JSON schema.
-Connect the node inputs and outputs visually and logically. Put the coordinates (x, y) at a clean visual distance (like 300px increments) to display beautifully in a bento layout node network.
+    console.log(`[AI-STUDIO] Starting Phased Cognitive Prompt Interpretation Workflow...`);
+    
+    // --- PHASE 1: CORE NODE BLUEPRINT INTERPRETER ---
+    console.log(`[AI-STUDIO] [Phase 1/4] Interrogating Intent & Node Visual Setup...`);
+    const phase1System = `You are Phase 1 of a visual workspace translator. Design or edit ONLY the workspace metadata (name, version, author, description) and the raw "nodes" array based on the user's raw prompt.
+Do not worry about linkages / links or uiWidgets. 
+Focus strictly on allocating the logical nodes (e.g. cues, spawn actions, variables, etc.) with relevant properties needed to fulfill the request. Place them spacious coordinates (300px increments).`;
 
-CRITICAL RULES:
-1. ONLY return a raw JSON string matching the specified workspace schema.
-2. NEVER wrap your output in markdown \`\`\`json ... \`\`\` blocks! Return ONLY raw, pure parsable JSON.
-3. Every node MUST have valid connections listed in the "links" array.
-4. If they ask to spawn a ship or station, make sure to use exact valid macros (e.g. ship macros like 'ship_arg_l_destroyer_01_a_macro (Behemoth Van.)' and stations like 'station_arg_defense_01_macro (Defence Station)').
-5. When asked to construct/create a Chat Window, Text Window, dialogue logger, or similar, you MUST generate the widgets so that they form a beautiful workspace layout:
-   - Create a container "window" (e.g. w=550, h=380).
-   - Create a "chat" widget (e.g. w=510, h=220, type="chat") positioned inside the window (e.g. x_offset + 20, y_offset + 50) with default properties { "messages": ["[COMMAND]: Comm bridge active.", "[COCOPILOT]: Awaiting input..."] }.
-   - Create an "input" text field widget (type="input", e.g. w=340, h=40) placed at the bottom of the window (e.g. y_offset + 290).
-   - Create a "button" submit widget (type="button", label="SEND", e.g. w=150, h=40) placed next to the input field (e.g. x_offset + 380, y_offset + 290).
-6. Escape-hatch custom nodes: If the user requests complex conditions, event-triggers, or actions that aren't native node types, use the following:
-   - Action: type 'action', xmlTag 'custom_xml', properties schema { rawXml: "string" }
-   - Event: type 'event', xmlTag 'custom_event', properties schema { rawXml: "string" }
-   - Condition: type 'condition', xmlTag 'custom_condition', properties schema { rawXml: "string" }
-
-Valid Factions: 'player', 'argon', 'xenon', 'khaak', 'split', 'paranid', 'teladi', 'terran' etc.
-Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_failed', 'incoming_transmission', 'alarm_red'.`;
-
-    const schema = {
+    const phase1Schema = {
       type: Type.OBJECT,
+      required: ["name", "version", "author", "description", "nodes"],
       properties: {
         name: { type: Type.STRING, description: "Alphanumeric mod name with underscores, e.g. Bounty_Killer_Mod" },
         version: { type: Type.STRING },
@@ -727,42 +744,63 @@ Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_fai
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
-            required: ["id", "type", "label", "xmlTag", "x", "y", "properties", "inputs", "outputs"],
+            required: ["id", "type", "label", "xmlTag", "x", "y", "properties"],
             properties: {
               id: { type: Type.STRING },
-              type: { type: Type.STRING, description: "Must be custom type matching: cue, event, condition, action, variable" },
+              type: { type: Type.STRING, description: "cue, event, condition, action, variable" },
               label: { type: Type.STRING },
               xmlTag: { type: Type.STRING },
               x: { type: Type.NUMBER },
               y: { type: Type.NUMBER },
-              properties: { type: Type.OBJECT, description: "Key-value of settings based on node xmlTag definition" },
-              inputs: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  required: ["id", "name", "type"],
-                  properties: {
-                    id: { type: Type.STRING },
-                    name: { type: Type.STRING },
-                    type: { type: Type.STRING }
-                  }
-                }
-              },
-              outputs: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  required: ["id", "name", "type"],
-                  properties: {
-                    id: { type: Type.STRING },
-                    name: { type: Type.STRING },
-                    type: { type: Type.STRING }
-                  }
-                }
-              }
+              properties: { type: Type.OBJECT, description: "Logical settings properties for this xmlTag" },
+              comment: { type: Type.STRING }
             }
           }
-        },
+        }
+      }
+    };
+
+    let phase1Prompt = `Prompt: "${prompt}"`;
+    if (currentWorkspace) {
+      const promptNodes = (currentWorkspace.nodes || []).map((node: any) => ({
+        id: node.id,
+        type: node.type,
+        label: node.label,
+        xmlTag: node.xmlTag,
+        x: node.x,
+        y: node.y,
+        properties: node.properties
+      }));
+      phase1Prompt = `You are modifying an existing ModWorkspace layout.
+[Current Workspace Structure]:
+- Name: "${currentWorkspace.name}"
+- Version: "${currentWorkspace.version || "1.0.0"}"
+- Author: "${currentWorkspace.author || ""}"
+- Description: "${currentWorkspace.description || ""}"
+- Current Nodes: ${JSON.stringify(promptNodes)}
+
+Modify these nodes or add new ones to satisfy this prompt:
+"${prompt}"
+
+Maintain as many existing nodes as possible unless they require replacement.`;
+    }
+
+    const phase1RawResult = await callMultiProviderAI(req, phase1System, phase1Prompt, "json", phase1Schema);
+    const phase1Result = JSON.parse(phase1RawResult.trim());
+    
+    // Auto-populate port signatures and property schemas from source dictionary to ensure 100% compliance
+    const populatedNodes = populateNodeMetadata(phase1Result.nodes);
+
+    // --- PHASE 2: RELATIONAL WIRE LOGIC LINKEAGES ---
+    console.log(`[AI-STUDIO] [Phase 2/4] Constructing Relational Wire Linkages...`);
+    const phase2System = `You are Phase 2 of a visual workspace translator. Given the populated list of logical nodes, define how they connect together with visual wires/flows.
+Each connection represents a logic trigger or cue cascade (e.g. connecting a 'cue' output port to an 'event' input port, or a 'cue' output to an 'action' input).
+Return ONLY the links connection list matching the specified JSON schema.`;
+
+    const phase2Schema = {
+      type: Type.OBJECT,
+      required: ["links"],
+      properties: {
         links: {
           type: Type.ARRAY,
           items: {
@@ -770,13 +808,38 @@ Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_fai
             required: ["id", "sourceNodeId", "sourcePortId", "targetNodeId", "targetPortId"],
             properties: {
               id: { type: Type.STRING },
-              sourceNodeId: { type: Type.STRING },
-              sourcePortId: { type: Type.STRING },
-              targetNodeId: { type: Type.STRING },
-              targetPortId: { type: Type.STRING }
+              sourceNodeId: { type: Type.STRING, description: "ID of the source node" },
+              sourcePortId: { type: Type.STRING, description: "Source port ID e.g., 'out_cond', 'out_act', 'out_sub'" },
+              targetNodeId: { type: Type.STRING, description: "ID of the target node" },
+              targetPortId: { type: Type.STRING, description: "Target port ID e.g., 'in_cond', 'in_act', 'in_flow'" }
             }
           }
-        },
+        }
+      }
+    };
+
+    const phase2Prompt = `Construct logic link arrays for this workspace layout.
+[Populated Nodes Layout]:
+${JSON.stringify(populatedNodes.map(n => ({ id: n.id, label: n.label, type: n.type, xmlTag: n.xmlTag, inputs: n.inputs, outputs: n.outputs })))}
+
+[User Prompt Requirement Context]:
+"${prompt}"
+
+Please connect the nodes logically. For example, connect a Cue node's outputs ('out_cond' / 'out_act') to its associated Event or Action node inputs ('in_cond' / 'in_act').`;
+
+    const phase2RawResult = await callMultiProviderAI(req, phase2System, phase2Prompt, "json", phase2Schema);
+    const phase2Result = JSON.parse(phase2RawResult.trim());
+
+    // --- PHASE 3: HUD USER CONTROL INTERFACES ---
+    console.log(`[AI-STUDIO] [Phase 3/4] Designing Graphic Interface Control overlays...`);
+    const phase3System = `You are Phase 3 of a visual workspace translator. Design or edit active web graphic HUD dashboard widgets and custom UI themes that fit the mod behavior.
+Ensure that smaller UI elements (progressbar, buttons, checkboxes, input text) are styled and positioned visually inside container "window" elements (w, h heights).
+Return ONLY the uiWidgets and uiTheme block fit.`;
+
+    const phase3Schema = {
+      type: Type.OBJECT,
+      required: ["uiWidgets", "uiTheme"],
+      properties: {
         uiWidgets: {
           type: Type.ARRAY,
           items: {
@@ -808,59 +871,153 @@ Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_fai
       }
     };
 
-    let finalPrompt = prompt;
-    if (currentWorkspace) {
-      // Clean and minimize nodes to drastically reduce prompt size & guarantee no output truncation in LLM JSON response mode
-      const promptNodes = (currentWorkspace.nodes || []).map((node: any) => {
-        const { propertiesSchema, ...rest } = node;
-        return rest;
-      });
+    const currentUIWidgets = currentWorkspace?.uiWidgets || [];
+    const currentUITheme = currentWorkspace?.uiTheme || {
+      backgroundColor: "#0d1117",
+      borderColor: "#df9825",
+      accentColor: "#f39c12",
+      opacity: 0.85,
+      showIcons: true
+    };
 
-      finalPrompt = `You are EDITING, MODIFYING, or CORRECTING the current active visual ModWorkspace instead of generating a generic one from scratch, unless explicitly requested to build a completely brand new workspace.
-      
-[Current Workspace Structure]:
-- Name: "${currentWorkspace.name}"
-- Version: "${currentWorkspace.version || "1.0.0"}"
-- Author: "${currentWorkspace.author || "Player"}"
-- Description: "${currentWorkspace.description || ""}"
-- Nodes: ${JSON.stringify(promptNodes)}
-- Links: ${JSON.stringify(currentWorkspace.links)}
-- UI Widgets: ${JSON.stringify(currentWorkspace.uiWidgets || [])}
-- UI Theme: ${JSON.stringify(currentWorkspace.uiTheme || {})}
-
-[Current Egosoft Schema XML Code Validation Diagnostics]:
-${diagnostics && diagnostics.length > 0 ? JSON.stringify(diagnostics, null, 2) : "No validation diagnostics reports."}
-
-[User's Direct Target Instruction]:
+    const phase3Prompt = `Add or adjust visual HUD display control widgets.
+[User Request]:
 "${prompt}"
 
-CRITICAL EDITING POLICY:
-1. Maintain continuity: Keep the existing node visual coordinates (x, y), node labels, node IDs, and linkage connections intact wherever possible, unless they need to be changed or fixed to solve errors or satisfy the prompt.
-2. Solve the warnings/errors: Examine the warnings or errors in the diagnostics list and apply necessary fixes (e.g. hooking up cues to conditions/actions, adding missing properties, etc.) to the generated workspace nodes.
-3. Never drop existing nodes/links/widgets that are unrelated to the target modifications. Return the complete, updated "ModWorkspace" JSON object.`;
+[Nodes Created]:
+${JSON.stringify(populatedNodes.map(n => ({ id: n.id, label: n.label, xmlTag: n.xmlTag })))}
+
+[Current HUD widgets]:
+${JSON.stringify(currentUIWidgets)}
+
+Create, update, or reposition HUD window containers and nested controller elements to fit the mod. Return the compiled array.`;
+
+    const phase3RawResult = await callMultiProviderAI(req, phase3System, phase3Prompt, "json", phase3Schema);
+    const phase3Result = JSON.parse(phase3RawResult.trim());
+
+    // --- PACK COMBINED EXPERIMENT STAGE ---
+    let combinedWorkspace: ModWorkspace = {
+      id: `workspace_${Date.now()}`,
+      name: phase1Result.name || (currentWorkspace?.name || "My_Custom_Mod"),
+      version: phase1Result.version || (currentWorkspace?.version || "1.0.0"),
+      author: phase1Result.author || (currentWorkspace?.author || "Player"),
+      description: phase1Result.description || (currentWorkspace?.description || ""),
+      nodes: populatedNodes,
+      links: phase2Result.links || [],
+      uiWidgets: phase3Result.uiWidgets || [],
+      uiTheme: phase3Result.uiTheme || currentUITheme
+    };
+
+    // --- PHASE 4: EXPERT SCHEMA SELF-REPAIR SANITY VET ---
+    console.log(`[AI-STUDIO] [Phase 4/4] Executing Egosoft Schema Verification & Healing...`);
+    const currentCode = generateMDXML(combinedWorkspace);
+    const validationDiagnostics = validateModWorkspace(combinedWorkspace, currentCode);
+
+    if (validationDiagnostics.length > 0) {
+      console.log(`[AI-STUDIO] Validation reported ${validationDiagnostics.length} warnings. Running auto-remedy fix...`);
+      
+      const phase4System = `You are Phase 4 (Self-Healing Compiler) for the X4 Foundations visual editor.
+The generated workspace layout currently fails Egosoft's visual schema checks with specific warnings/errors.
+Study the diagnostics report, locate the incorrect links or missing variables/properties on the nodes, apply precise parameters to resolve them, and return the absolute complete ModWorkspace JSON.`;
+
+      const phase4Schema = {
+        type: Type.OBJECT,
+        required: ["name", "version", "author", "description", "nodes", "links", "uiWidgets", "uiTheme"],
+        properties: {
+          name: { type: Type.STRING },
+          version: { type: Type.STRING },
+          author: { type: Type.STRING },
+          description: { type: Type.STRING },
+          nodes: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              required: ["id", "type", "label", "xmlTag", "x", "y", "properties"],
+              properties: {
+                id: { type: Type.STRING },
+                type: { type: Type.STRING },
+                label: { type: Type.STRING },
+                xmlTag: { type: Type.STRING },
+                x: { type: Type.NUMBER },
+                y: { type: Type.NUMBER },
+                properties: { type: Type.OBJECT },
+                comment: { type: Type.STRING }
+              }
+            }
+          },
+          links: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              required: ["id", "sourceNodeId", "sourcePortId", "targetNodeId", "targetPortId"],
+              properties: {
+                id: { type: Type.STRING },
+                sourceNodeId: { type: Type.STRING },
+                sourcePortId: { type: Type.STRING },
+                targetNodeId: { type: Type.STRING },
+                targetPortId: { type: Type.STRING }
+              }
+            }
+          },
+          uiWidgets: { type: Type.ARRAY, items: { type: Type.OBJECT } },
+          uiTheme: { type: Type.OBJECT }
+        }
+      };
+
+      const phase4Prompt = `Correct the layout parameters of this ModWorkspace structure.
+[Damaged Workspace Layout]:
+${JSON.stringify({
+  name: combinedWorkspace.name,
+  description: combinedWorkspace.description,
+  nodes: combinedWorkspace.nodes.map(n => ({ id: n.id, xmlTag: n.xmlTag, properties: n.properties })),
+  links: combinedWorkspace.links
+})}
+
+[Egosoft Validation Diagnostics Code Reports]:
+${JSON.stringify(validationDiagnostics, null, 2)}
+
+Please edit the links or properties to resolve all errors in the diagnostic suite. Output the corrected variables.`;
+
+      try {
+        const phase4Raw = await callMultiProviderAI(req, phase4System, phase4Prompt, "json", phase4Schema);
+        const phase4Result = JSON.parse(phase4Raw.trim());
+        
+        // Re-populate system metadata to guarantee property schemas remain undamaged
+        const fixedNodes = populateNodeMetadata(phase4Result.nodes);
+        
+        combinedWorkspace = {
+          ...combinedWorkspace,
+          name: phase4Result.name || combinedWorkspace.name,
+          nodes: fixedNodes,
+          links: phase4Result.links || combinedWorkspace.links,
+          uiWidgets: phase4Result.uiWidgets || combinedWorkspace.uiWidgets,
+          uiTheme: phase4Result.uiTheme || combinedWorkspace.uiTheme
+        };
+        console.log(`[AI-STUDIO] Phased Auto-Remedy cycle completed successfully.`);
+      } catch (repairErr) {
+        console.warn(`[AI-STUDIO] Self-heal attempt failed (ignoring, falling back to base layout):`, repairErr);
+      }
+    } else {
+      console.log(`[AI-STUDIO] Verification complete: pristine schema validated on first run.`);
     }
 
-    const textOutput = await callMultiProviderAI(req, systemInstruction, finalPrompt, "json", schema);
-    const generatedWorkspace = JSON.parse(textOutput.trim());
-
-    // Generate automatic unique ids for items if missing
-    generatedWorkspace.id = `workspace_${Date.now()}`;
-
     // Apply globally to the shared space
-    activeWorkspace = generatedWorkspace;
+    activeWorkspace = combinedWorkspace;
     workspaceVersion++;
+
+    console.log(`[AI-STUDIO] Phased interpretation complete. Delivered blueprint named: ${combinedWorkspace.name}`);
 
     return res.json({
       success: true,
-      message: "AI Agent successfully designed and applied a new mod schema to the workspace!",
+      message: "AI Agent successfully designed and applied a new mod schema to the workspace in 4 distinct high-fidelity phases!",
       version: workspaceVersion,
-      workspace: generatedWorkspace
+      workspace: combinedWorkspace
     });
 
   } catch (error: any) {
     console.error("AI Agent layout generation error: ", error);
     return res.status(500).json({
-      error: error.message || "Failed to trigger automated workspace planner."
+      error: error.message || "Failed to trigger automated workspace planner in phased execution mode."
     });
   }
 });

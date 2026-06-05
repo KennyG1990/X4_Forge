@@ -57,6 +57,24 @@ export interface UIWidget {
   properties: Record<string, any>;
 }
 
+export interface TranslationItem {
+  id: string;
+  value: string;
+  description?: string;
+}
+
+export interface TranslationPage {
+  id: string;
+  title?: string;
+  items: TranslationItem[];
+}
+
+export interface TFile {
+  languageId: string;
+  fileName: string;
+  pages: TranslationPage[];
+}
+
 // Complete Mod Workspace containing scripts and widgets state
 export interface ModWorkspace {
   id: string;
@@ -74,6 +92,8 @@ export interface ModWorkspace {
     opacity: number;
     showIcons: boolean;
   };
+  tFiles?: TFile[];
+  aiScripts?: any[];
 }
 
 // Built-in game variables for X4 standard database definitions
