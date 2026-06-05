@@ -260,7 +260,9 @@ export default function Sidebar({
                 { type: 'button', title: 'Macro Menu Button', desc: 'Fires visual cues on selection click' },
                 { type: 'progressbar', title: 'Status Progress Bar', desc: 'Elegant status / shield indicator' },
                 { type: 'text', title: 'Display Label', desc: 'Human-readable description labels' },
-                { type: 'dropdown', title: 'Interactive Selector', desc: 'Drop-down values list widget' }
+                { type: 'dropdown', title: 'Interactive Selector', desc: 'Drop-down values list widget' },
+                { type: 'input', title: 'Text Input Box', desc: 'Custom command or log entry text field' },
+                { type: 'chat', title: 'Dialogue Chat Logs', desc: 'Scrollable live dialogue transmissions list' }
               ].map(widget => (
                 <button
                   key={widget.type}
@@ -375,6 +377,16 @@ export default function Sidebar({
                     />
                   )}
 
+                  {schema.type === 'textarea' && (
+                    <textarea
+                      value={(selectedNode.properties || {})[schema.key] || ''}
+                      onChange={e => handlePropChange(schema.key, e.target.value)}
+                      placeholder={schema.placeholder}
+                      rows={6}
+                      className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white font-mono text-[10px] leading-relaxed focus:outline-none focus:border-cyan-500 resize-y"
+                    />
+                  )}
+
                   {schema.type === 'number' && (
                     <input
                       type="number"
@@ -451,6 +463,30 @@ export default function Sidebar({
                         />
                       </div>
                     </>
+                  )}
+
+                  {selectedWidget.type === 'input' && (
+                    <div>
+                      <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Input Placeholder Text</label>
+                      <input
+                        type="text"
+                        value={selectedWidget.properties.placeholder || 'Type transmission command...'}
+                        onChange={e => handlePropChange('placeholder', e.target.value)}
+                        className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  )}
+
+                  {selectedWidget.type === 'chat' && (
+                    <div>
+                      <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Simulated Log Lines (Comma Separated)</label>
+                      <textarea
+                        value={(selectedWidget.properties.messages || []).join('\n')}
+                        onChange={e => handlePropChange('messages', e.target.value.split('\n'))}
+                        rows={4}
+                        className="w-full p-1.5 font-mono text-[10px] rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 resize-none"
+                      />
+                    </div>
                   )}
                 </div>
               )}

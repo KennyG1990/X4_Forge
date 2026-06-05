@@ -192,23 +192,118 @@ export default function AIHelper({ workspace, setWorkspace, localVersion, setLoc
     }
   };
 
+  // Custom dragging state & handlers to allow moving the widget out of the way of the log panel or canvas nodes
+  const [position, setPosition] = useState(() => {
+    const initialY = 140;
+    const initialX = typeof window !== 'undefined' ? window.innerWidth - 580 : 700;
+    return { x: initialX, y: initialY };
+  });
+
+  const isDraggingRef = React.useRef(false);
+  const hasDraggedRef = React.useRef(false);
+  const startCoordsRef = React.useRef({ x: 0, y: 0 });
+  const startPosRef = React.useRef({ x: 0, y: 0 });
+
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    let clientX = 0;
+    let clientY = 0;
+    if ('touches' in e) {
+      if (e.touches.length === 0) return;
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      if (e.button !== 0) return; // Only left-click
+      const target = e.target as HTMLElement;
+      if (target.closest('.drag-handle-only')) {
+        return; // ignore drag if close button is clicked
+      }
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+
+    isDraggingRef.current = true;
+    hasDraggedRef.current = false;
+    startCoordsRef.current = { x: clientX, y: clientY };
+    startPosRef.current = { x: position.x, y: position.y };
+
+    const handleDragMove = (moveEvent: MouseEvent | TouchEvent) => {
+      if (!isDraggingRef.current) return;
+      
+      let moveX = 0;
+      let moveY = 0;
+      if ('touches' in moveEvent) {
+        if (moveEvent.touches.length === 0) return;
+        moveX = moveEvent.touches[0].clientX;
+        moveY = moveEvent.touches[0].clientY;
+      } else {
+        moveX = moveEvent.clientX;
+        moveY = moveEvent.clientY;
+      }
+
+      const dx = moveX - startCoordsRef.current.x;
+      const dy = moveY - startCoordsRef.current.y;
+
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        hasDraggedRef.current = true;
+      }
+
+      const nextX = startPosRef.current.x + dx;
+      const nextY = startPosRef.current.y + dy;
+
+      // Clamp inside the viewport boundaries roughly so it cannot go fully offscreen
+      const maxX = window.innerWidth - 100;
+      const maxY = window.innerHeight - 80;
+      const clampedX = Math.max(10, Math.min(nextX, maxX));
+      const clampedY = Math.max(10, Math.min(nextY, maxY));
+
+      setPosition({ x: clampedX, y: clampedY });
+    };
+
+    const handleDragEnd = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener('mousemove', handleDragMove);
+      window.removeEventListener('mouseup', handleDragEnd);
+      window.removeEventListener('touchmove', handleDragMove);
+      window.removeEventListener('touchend', handleDragEnd);
+    };
+
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragEnd);
+    window.addEventListener('touchmove', handleDragMove, { passive: true });
+    window.addEventListener('touchend', handleDragEnd);
+  };
+
   const currentSuggestions = activeMode === 'chat' ? SUGGESTIONS.chat : SUGGESTIONS.builder;
 
   return (
-    <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end">
+    <div 
+      className="fixed z-40 flex flex-col items-end select-none"
+      style={{
+        left: `${position.x}px`,
+        top: `${position.y}px`,
+      }}
+    >
       {/* Expanded AI Guide Drawer panel */}
       {isOpen ? (
         <div className="w-[390px] h-[540px] bg-[#0c0f16] border border-[#df9825]/40 rounded-xl shadow-2xl flex flex-col overflow-hidden font-mono text-xs text-slate-300">
           
           {/* Assist Header */}
-          <div className="bg-[#df9825]/10 border-b border-[#df9825]/20 p-3.5 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-1.5 font-bold text-[#df9825]">
+          <div 
+            onMouseDown={handleDragStart}
+            onTouchStart={handleDragStart}
+            className="bg-[#df9825]/10 border-b border-[#df9825]/20 p-3.5 flex items-center justify-between shrink-0 cursor-grab active:cursor-grabbing select-none"
+            title="Drag from header to move guide window"
+          >
+            <div className="flex items-center gap-1.5 font-bold text-[#df9825] pointer-events-none">
               <Sparkles className="w-4 h-4 animate-pulse" />
               <span>X4 INTELLIGENT AI GUIDE</span>
             </div>
             <button 
-              onClick={() => setIsOpen(false)}
-              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-all cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsOpen(false);
+              }}
+              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-all cursor-pointer drag-handle-only"
             >
               <X className="w-4 h-4" />
             </button>
@@ -391,11 +486,21 @@ export default function AIHelper({ workspace, setWorkspace, localVersion, setLoc
       ) : (
         /* Floating click helper chip */
         <button
-          onClick={() => setIsOpen(true)}
-          className="flex items-center gap-2 px-4.5 py-3 rounded-full bg-[#df9825] hover:bg-[#df9825]/95 text-black font-mono text-xs font-bold shadow-2xl transition-all duration-150 transform hover:scale-105 active:scale-95 cursor-pointer"
+          onMouseDown={handleDragStart}
+          onTouchStart={handleDragStart}
+          onClick={(e) => {
+            if (hasDraggedRef.current) {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            setIsOpen(true);
+          }}
+          className="flex items-center gap-2 px-4.5 py-3 rounded-full bg-[#df9825]/90 hover:bg-[#df9825] text-black font-mono text-xs font-bold shadow-2xl transition-all duration-150 transform hover:scale-105 active:scale-95 cursor-grab active:cursor-grabbing select-none"
+          title="Drag anywhere; click to open AI Guide"
         >
-          <Bot className="w-4.5 h-4.5" />
-          X4 AI GUIDE
+          <Bot className="w-4.5 h-4.5 pointer-events-none" />
+          <span className="pointer-events-none">X4 AI GUIDE</span>
         </button>
       )}
     </div>

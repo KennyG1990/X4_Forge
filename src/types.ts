@@ -15,7 +15,7 @@ export interface Port {
 export interface PropertySchema {
   key: string;
   label: string;
-  type: 'text' | 'number' | 'select' | 'boolean' | 'coordinates';
+  type: 'text' | 'number' | 'select' | 'boolean' | 'coordinates' | 'textarea';
   options?: string[];
   placeholder?: string;
   description?: string;
@@ -48,7 +48,7 @@ export interface MDLink {
 // UI Mod Widget representation for the layout builder
 export interface UIWidget {
   id: string;
-  type: 'window' | 'table' | 'button' | 'text' | 'progressbar' | 'dropdown' | 'header';
+  type: 'window' | 'table' | 'button' | 'text' | 'progressbar' | 'dropdown' | 'header' | 'input' | 'chat';
   x: number;
   y: number;
   w: number;
@@ -339,6 +339,57 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     outputs: [
       { id: 'out_next', name: 'Next Action', type: 'flow' }
     ]
+  },
+  {
+    type: 'action',
+    label: 'Custom XML Action',
+    xmlTag: 'custom_xml',
+    properties: {
+      rawXml: '<show_notification text="\'Target acquired!\'" duration="5" />'
+    },
+    propertiesSchema: [
+      { key: 'rawXml', label: 'Raw XML Snippet', type: 'textarea', placeholder: 'Enter any valid Mission Director XML block...', description: 'This block will be printed raw directly into the actions block of the cue.' }
+    ],
+    inputs: [
+      { id: 'in_act', name: 'Action In', type: 'child' }
+    ],
+    outputs: [
+      { id: 'out_next', name: 'Next Action', type: 'flow' }
+    ]
+  },
+  {
+    type: 'event',
+    label: 'Custom XML Event',
+    xmlTag: 'custom_event',
+    properties: {
+      rawXml: '<event_cue_completed cue="md.MyPreviousCue" />'
+    },
+    propertiesSchema: [
+      { key: 'rawXml', label: 'Raw Event XML Snippet', type: 'textarea', placeholder: 'Enter raw event XML...', description: 'This event is embedded in the conditions tag.' }
+    ],
+    inputs: [
+      { id: 'in_cond', name: 'Condition In', type: 'child' }
+    ],
+    outputs: [
+      { id: 'out_flow', name: 'Trigger Actions', type: 'flow' }
+    ]
+  },
+  {
+    type: 'condition',
+    label: 'Custom XML Condition',
+    xmlTag: 'custom_condition',
+    properties: {
+      rawXml: '<check_value value="player.ship.isclass.ship_xl" />'
+    },
+    propertiesSchema: [
+      { key: 'rawXml', label: 'Raw Condition XML Snippet', type: 'textarea', placeholder: 'Enter raw check_value or condition XML...', description: 'This check_value is embedded in the conditions tag.' }
+    ],
+    inputs: [
+      { id: 'in_cond', name: 'Condition In', type: 'child' }
+    ],
+    outputs: [
+      { id: 'out_flow', name: 'Passed Flow', type: 'flow' }
+    ]
   }
 ];
 
@@ -373,15 +424,25 @@ export function generateMDXML(workspace: ModWorkspace): string {
         const targetNode = workspace.nodes.find(n => n.id === link.targetNodeId);
         if (targetNode) {
           if (targetNode.type === 'event') {
-            const eventProps = Object.entries(targetNode.properties)
-              .map(([k, v]) => `${k}="${v.toString().replace(/ \(.*\)/, '')}"`)
-              .join(' ');
-            xml += `        <${targetNode.xmlTag} ${eventProps} />\n`;
+            if (targetNode.xmlTag === 'custom_event' || targetNode.xmlTag.startsWith('custom_')) {
+              const raw = targetNode.properties.rawXml || `<!-- Custom Event -->`;
+              xml += `        ${raw}\n`;
+            } else {
+              const eventProps = Object.entries(targetNode.properties)
+                .map(([k, v]) => `${k}="${v.toString().replace(/ \(.*\)/, '')}"`)
+                .join(' ');
+              xml += `        <${targetNode.xmlTag} ${eventProps} />\n`;
+            }
           } else if (targetNode.type === 'condition') {
-            const val = targetNode.properties.value || '';
-            const op = targetNode.properties.operator || 'eq';
-            const amt = targetNode.properties.amount || '';
-            xml += `        <check_value value="${val}" value2="${amt}" operator="${op}" />\n`;
+            if (targetNode.xmlTag === 'custom_condition') {
+              const raw = targetNode.properties.rawXml || `<!-- Custom Condition -->`;
+              xml += `        ${raw}\n`;
+            } else {
+              const val = targetNode.properties.value || '';
+              const op = targetNode.properties.operator || 'eq';
+              const amt = targetNode.properties.amount || '';
+              xml += `        <check_value value="${val}" value2="${amt}" operator="${op}" />\n`;
+            }
           }
         }
       });
@@ -397,9 +458,12 @@ export function generateMDXML(workspace: ModWorkspace): string {
         
         while (currentNode) {
           if (currentNode.type === 'action') {
-            xml += `        <!-- Action: ${currentNode.label} -->\n`;
-            if (currentNode.xmlTag === 'create_ship') {
+            if (currentNode.xmlTag === 'custom_xml' || currentNode.xmlTag.startsWith('custom_')) {
+              xml += `        <!-- Custom Action -->\n`;
+              xml += `        ${currentNode.properties.rawXml || ''}\n`;
+            } else if (currentNode.xmlTag === 'create_ship') {
               const macroClean = (currentNode.properties.macro || '').split(' (')[0];
+              xml += `        <!-- Action: ${currentNode.label} -->\n`;
               xml += `        <create_ship name="${currentNode.properties.name || '$Ship'}" macro="${macroClean}" faction="${currentNode.properties.faction || 'player'}">\n`;
               xml += `          <space object="${currentNode.properties.sector || 'player.sector'}" />\n`;
               
@@ -408,25 +472,28 @@ export function generateMDXML(workspace: ModWorkspace): string {
                 xml += `          <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
               }
               xml += `        </create_ship>\n`;
-            } else if (currentNode.xmlTag === 'reward_player') {
-              let reputation = '';
-              if (currentNode.properties.standing && currentNode.properties.faction) {
-                reputation = `\n          <reputation faction="faction.${currentNode.properties.faction}" value="${currentNode.properties.standing}" />`;
+            } else {
+              xml += `        <!-- Action: ${currentNode.label} -->\n`;
+              if (currentNode.xmlTag === 'reward_player') {
+                let reputation = '';
+                if (currentNode.properties.standing && currentNode.properties.faction) {
+                  reputation = `\n          <reputation faction="faction.${currentNode.properties.faction}" value="${currentNode.properties.standing}" />`;
+                }
+                xml += `        <reward_player money="${currentNode.properties.money || 0}" notification="${currentNode.properties.notification || 'true'}">${reputation}\n        </reward_player>\n`;
+              } else if (currentNode.xmlTag === 'play_sound') {
+                xml += `        <play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
+              } else if (currentNode.xmlTag === 'show_help') {
+                xml += `        <show_help text="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
+              } else if (currentNode.xmlTag === 'create_station') {
+                const macroClean = (currentNode.properties.macro || '').split(' (')[0];
+                xml += `        <create_station name="${currentNode.properties.name || '$Station'}" macro="${macroClean}" faction="${currentNode.properties.faction || 'player'}">\n`;
+                xml += `          <space sector="${currentNode.properties.sector || 'player.sector'}" />\n`;
+                if (currentNode.properties.coords) {
+                  const xyz = currentNode.properties.coords.split(',');
+                  xml += `          <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
+                }
+                xml += `        </create_station>\n`;
               }
-              xml += `        <reward_player money="${currentNode.properties.money || 0}" notification="${currentNode.properties.notification || 'true'}">${reputation}\n        </reward_player>\n`;
-            } else if (currentNode.xmlTag === 'play_sound') {
-              xml += `        <play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
-            } else if (currentNode.xmlTag === 'show_help') {
-              xml += `        <show_help text="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
-            } else if (currentNode.xmlTag === 'create_station') {
-              const macroClean = (currentNode.properties.macro || '').split(' (')[0];
-              xml += `        <create_station name="${currentNode.properties.name || '$Station'}" macro="${macroClean}" faction="${currentNode.properties.faction || 'player'}">\n`;
-              xml += `          <space sector="${currentNode.properties.sector || 'player.sector'}" />\n`;
-              if (currentNode.properties.coords) {
-                const xyz = currentNode.properties.coords.split(',');
-                xml += `          <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
-              }
-              xml += `        </create_station>\n`;
             }
           }
           
@@ -530,6 +597,11 @@ export function generateUIXML(workspace: ModWorkspace): string {
     } else if (w.type === 'dropdown') {
       const opts = w.properties.options ? w.properties.options.join(',') : 'Option 1,Option 2';
       layoutXML += `    <select x="${w.x}" y="${w.y}" width="${w.w}" height="${w.h}" options="${opts}" />\n`;
+    } else if (w.type === 'input') {
+      const ph = w.properties.placeholder || 'Type transmission...';
+      layoutXML += `    <input x="${w.x}" y="${w.y}" width="${w.w}" height="${w.h}" placeholder="${ph}" />\n`;
+    } else if (w.type === 'chat') {
+      layoutXML += `    <chat_history x="${w.x}" y="${w.y}" width="${w.w}" height="${w.h}" title="${title}" />\n`;
     }
   });
 

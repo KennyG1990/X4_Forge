@@ -20,7 +20,9 @@ import {
   Undo2,
   Redo2,
   FolderGit2,
-  Sparkles
+  Sparkles,
+  Scroll,
+  Package
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -30,6 +32,9 @@ import CodePreview from './components/CodePreview';
 import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
+import AIScriptEditor from './components/AIScriptEditor';
+import LibraryConfigurator from './components/LibraryConfigurator';
+import XMLPatchSystem from './components/XMLPatchSystem';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace } from './types';
 import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
 
@@ -82,7 +87,7 @@ export default function App() {
 
   const workspace = rawWorkspace;
 
-  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer'>('blueprint');
+  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch'>('blueprint');
   const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem'>('script');
 
   const [dirHandle, setDirHandle] = useState<any | null>(null);
@@ -219,6 +224,8 @@ export default function App() {
         case 'progressbar': return { w: 300, h: 40, label: 'Warp Jump Coils', properties: { value: 75, progressColor: '#3b82f6' } };
         case 'text': return { w: 220, h: 30, label: 'Warning: Hull Breach near port engine', properties: {} };
         case 'dropdown': return { w: 180, h: 35, label: 'Standard Alert Modes', properties: { options: ['Red alert', 'Yellow alert', 'Green safe'] } };
+        case 'input': return { w: 220, h: 40, label: '', properties: { placeholder: 'Type transmission command...' } };
+        case 'chat': return { w: 320, h: 180, label: 'Sector Operations Chat Logs', properties: { messages: ['[COCOPILOT]: Welcome, Captain.', '[ARGON FLEET]: System status active.', '[XENON INCURSION]: Active threats in Sector 0'] } };
         default: return { w: 150, h: 40, label: 'Widget label', properties: {} };
       }
     };
@@ -284,25 +291,62 @@ export default function App() {
         <div id="view_selection_modes" className="flex items-center gap-1 p-1 rounded-md bg-black/45 border border-white/10">
           <button
             onClick={() => { setWorkspaceView('blueprint'); setActiveSidebarTab('script'); }}
-            className={`px-3 py-1 rounded text-xs font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
               workspaceView === 'blueprint'
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
           >
             <GitFork className="w-3.5 h-3.5" />
-            MD Script Graph
+            MD Scripts
           </button>
+          
+          <button
+            onClick={() => { setWorkspaceView('aiscripts'); setActiveSidebarTab('script'); }}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'aiscripts'
+                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <Scroll className="w-3.5 h-3.5" />
+            AIScripts
+          </button>
+
+          <button
+            onClick={() => { setWorkspaceView('libraries'); setActiveSidebarTab('config'); }}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'libraries'
+                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <Package className="w-3.5 h-3.5" />
+            Wares & Jobs
+          </button>
+
           <button
             onClick={() => { setWorkspaceView('ui-designer'); setActiveSidebarTab('ui'); }}
-            className={`px-3 py-1 rounded text-xs font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
               workspaceView === 'ui-designer'
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
           >
             <Layout className="w-3.5 h-3.5" />
-            HUD UI Builder
+            HUD & LUA UI
+          </button>
+
+          <button
+            onClick={() => { setWorkspaceView('xmlpatch'); setActiveSidebarTab('config'); }}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'xmlpatch'
+                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <FileCode className="w-3.5 h-3.5" />
+            XML Patching
           </button>
         </div>
 
@@ -439,19 +483,34 @@ export default function App() {
               selectedNode={selectedNode}
               setSelectedNode={setSelectedNode}
             />
-          ) : (
+          ) : workspaceView === 'ui-designer' ? (
             <UIBuilder
               workspace={workspace}
               setWorkspace={setWorkspace}
               selectedWidget={selectedWidget}
               setSelectedWidget={setSelectedWidget}
             />
+          ) : workspaceView === 'aiscripts' ? (
+            <AIScriptEditor
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+            />
+          ) : workspaceView === 'libraries' ? (
+            <LibraryConfigurator
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+            />
+          ) : (
+            <XMLPatchSystem
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+            />
           )}
 
         </main>
 
         {/* Right Side: Real-time Synchronized compiler preview output */}
-        <aside className="w-96 flex flex-col h-full bg-[#12141a] border-l border-white/10 justify-between">
+        <aside className="w-[460px] shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between">
           <CodePreview 
             workspace={workspace} 
             setWorkspace={setWorkspace} 

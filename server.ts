@@ -703,6 +703,15 @@ CRITICAL RULES:
 2. NEVER wrap your output in markdown \`\`\`json ... \`\`\` blocks! Return ONLY raw, pure parsable JSON.
 3. Every node MUST have valid connections listed in the "links" array.
 4. If they ask to spawn a ship or station, make sure to use exact valid macros (e.g. ship macros like 'ship_arg_l_destroyer_01_a_macro (Behemoth Van.)' and stations like 'station_arg_defense_01_macro (Defence Station)').
+5. When asked to construct/create a Chat Window, Text Window, dialogue logger, or similar, you MUST generate the widgets so that they form a beautiful workspace layout:
+   - Create a container "window" (e.g. w=550, h=380).
+   - Create a "chat" widget (e.g. w=510, h=220, type="chat") positioned inside the window (e.g. x_offset + 20, y_offset + 50) with default properties { "messages": ["[COMMAND]: Comm bridge active.", "[COCOPILOT]: Awaiting input..."] }.
+   - Create an "input" text field widget (type="input", e.g. w=340, h=40) placed at the bottom of the window (e.g. y_offset + 290).
+   - Create a "button" submit widget (type="button", label="SEND", e.g. w=150, h=40) placed next to the input field (e.g. x_offset + 380, y_offset + 290).
+6. Escape-hatch custom nodes: If the user requests complex conditions, event-triggers, or actions that aren't native node types, use the following:
+   - Action: type 'action', xmlTag 'custom_xml', properties schema { rawXml: "string" }
+   - Event: type 'event', xmlTag 'custom_event', properties schema { rawXml: "string" }
+   - Condition: type 'condition', xmlTag 'custom_condition', properties schema { rawXml: "string" }
 
 Valid Factions: 'player', 'argon', 'xenon', 'khaak', 'split', 'paranid', 'teladi', 'terran' etc.
 Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_failed', 'incoming_transmission', 'alarm_red'.`;
@@ -775,7 +784,7 @@ Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_fai
             required: ["id", "type", "x", "y", "w", "h", "label", "properties"],
             properties: {
               id: { type: Type.STRING },
-              type: { type: Type.STRING, description: "window, table, button, progressbar, check, text, dropdown, header" },
+              type: { type: Type.STRING, description: "window, table, button, progressbar, check, text, dropdown, header, input, chat" },
               x: { type: Type.NUMBER },
               y: { type: Type.NUMBER },
               w: { type: Type.NUMBER },
@@ -801,6 +810,12 @@ Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_fai
 
     let finalPrompt = prompt;
     if (currentWorkspace) {
+      // Clean and minimize nodes to drastically reduce prompt size & guarantee no output truncation in LLM JSON response mode
+      const promptNodes = (currentWorkspace.nodes || []).map((node: any) => {
+        const { propertiesSchema, ...rest } = node;
+        return rest;
+      });
+
       finalPrompt = `You are EDITING, MODIFYING, or CORRECTING the current active visual ModWorkspace instead of generating a generic one from scratch, unless explicitly requested to build a completely brand new workspace.
       
 [Current Workspace Structure]:
@@ -808,7 +823,7 @@ Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_fai
 - Version: "${currentWorkspace.version || "1.0.0"}"
 - Author: "${currentWorkspace.author || "Player"}"
 - Description: "${currentWorkspace.description || ""}"
-- Nodes: ${JSON.stringify(currentWorkspace.nodes)}
+- Nodes: ${JSON.stringify(promptNodes)}
 - Links: ${JSON.stringify(currentWorkspace.links)}
 - UI Widgets: ${JSON.stringify(currentWorkspace.uiWidgets || [])}
 - UI Theme: ${JSON.stringify(currentWorkspace.uiTheme || {})}

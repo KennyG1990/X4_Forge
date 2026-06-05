@@ -290,16 +290,32 @@ export default function SyncModal({
             let nodeType: 'event' | 'condition' = 'event';
             let label = `Event: ${tag}`;
             let schemaIdx = NODE_TEMPLATES.findIndex(t => t.xmlTag === tag);
+            let isCustom = false;
             
             if (tag === 'check_value') {
               nodeType = 'condition';
               label = 'Check: Wealth';
             }
             
-            const template = NODE_TEMPLATES[schemaIdx !== -1 ? schemaIdx : 1];
+            if (schemaIdx === -1) {
+              isCustom = true;
+              if (tag.startsWith('check_') || tag.startsWith('has_') || tag.startsWith('is_')) {
+                nodeType = 'condition';
+                label = `Custom Check: ${tag}`;
+                schemaIdx = NODE_TEMPLATES.findIndex(t => t.xmlTag === 'custom_condition');
+              } else {
+                nodeType = 'event';
+                label = `Custom Event: ${tag}`;
+                schemaIdx = NODE_TEMPLATES.findIndex(t => t.xmlTag === 'custom_event');
+              }
+            }
+            
+            const template = NODE_TEMPLATES[schemaIdx];
             const props: Record<string, any> = {};
             
-            if (tag === 'check_value') {
+            if (isCustom) {
+              props.rawXml = new XMLSerializer().serializeToString(child);
+            } else if (tag === 'check_value') {
               props.value = child.getAttribute("value") || 'player.money';
               props.operator = child.getAttribute("operator") || 'ge';
               props.amount = Number(child.getAttribute("value2")) || 1000000;
@@ -350,12 +366,18 @@ export default function SyncModal({
             
             const actionId = `action_${Date.now()}_${i}_${j}`;
             let schemaIdx = NODE_TEMPLATES.findIndex(t => t.xmlTag === tag);
-            if (schemaIdx === -1) continue;
+            let isCustom = false;
+            if (schemaIdx === -1) {
+              isCustom = true;
+              schemaIdx = NODE_TEMPLATES.findIndex(t => t.xmlTag === 'custom_xml');
+            }
             
             const template = NODE_TEMPLATES[schemaIdx];
             const props: Record<string, any> = {};
             
-            if (tag === 'create_ship') {
+            if (isCustom) {
+              props.rawXml = new XMLSerializer().serializeToString(child);
+            } else if (tag === 'create_ship') {
               props.name = child.getAttribute("name") || '$EscortShip';
               props.macro = child.getAttribute("macro") || 'ship_arg_s_fighter_01_a_macro (Elite Vanguard)';
               props.faction = child.getAttribute("faction") || 'player';
