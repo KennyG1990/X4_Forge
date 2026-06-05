@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   FolderGit2, 
   Layers, 
@@ -45,6 +45,8 @@ interface SidebarProps {
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
   workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation';
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
+  schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
+  onSchemaConfigChanged?: () => Promise<void> | void;
 }
 
 export default function Sidebar({
@@ -64,13 +66,105 @@ export default function Sidebar({
   setDirName,
   saveCheckpoint,
   workspaceView,
-  setWorkspaceView
+  setWorkspaceView,
+  schemaTemplates = [],
+  onSchemaConfigChanged
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
+  const [schemaDir, setSchemaDir] = useState<string>('');
+  const [schemaStatus, setSchemaStatus] = useState<{
+    mdXsdPath?: string;
+    commonXsdPath?: string;
+    mdExists?: boolean;
+    commonExists?: boolean;
+    loaded?: boolean;
+    counts?: { events: number; conditions: number; actions: number; control_flow: number };
+    error?: string;
+  }>({});
+  const [schemaMessage, setSchemaMessage] = useState<string>('');
+  const [schemaMessageType, setSchemaMessageType] = useState<'success' | 'error'>('success');
+  const [savingSchema, setSavingSchema] = useState<boolean>(false);
 
-  const filteredTemplates = NODE_TEMPLATES.filter(
+  const allTemplates = React.useMemo(() => {
+    const byTag = new Map<string, Omit<MDNode, 'id' | 'x' | 'y'>>();
+    NODE_TEMPLATES.forEach(template => byTag.set(template.xmlTag, template));
+    schemaTemplates.forEach(template => {
+      if (!byTag.has(template.xmlTag)) byTag.set(template.xmlTag, template);
+    });
+    return Array.from(byTag.values());
+  }, [schemaTemplates]);
+
+  const filteredTemplates = allTemplates.filter(
     t => nodeFilter === 'all' || t.type === nodeFilter
   );
+
+  const loadSchemaConfig = React.useCallback(async () => {
+    try {
+      const response = await fetch('/api/schema/config');
+      if (!response.ok) throw new Error('Schema config endpoint unavailable');
+      const data = await response.json();
+      setSchemaDir(data.resolved?.schemaDir || '');
+      setSchemaStatus({
+        mdXsdPath: data.resolved?.mdXsdPath,
+        commonXsdPath: data.resolved?.commonXsdPath,
+        mdExists: data.resolved?.mdExists,
+        commonExists: data.resolved?.commonExists,
+        loaded: data.loaded,
+        counts: data.schema_counts,
+        error: data.error
+      });
+      setSchemaMessage('');
+      setSchemaMessageType('success');
+    } catch (error: any) {
+      setSchemaMessage(error.message || 'Failed to load schema settings.');
+      setSchemaMessageType('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSchemaConfig();
+  }, [loadSchemaConfig]);
+
+  const saveSchemaConfig = async () => {
+    setSavingSchema(true);
+    setSchemaMessage('');
+    try {
+      const response = await fetch('/api/schema/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schemaDir })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setSchemaStatus(prev => ({
+          ...prev,
+          mdXsdPath: data.resolved?.mdXsdPath,
+          commonXsdPath: data.resolved?.commonXsdPath,
+          mdExists: data.resolved?.mdExists,
+          commonExists: data.resolved?.commonExists
+        }));
+        throw new Error(data.error || 'Failed to save schema settings.');
+      }
+
+      setSchemaStatus({
+        mdXsdPath: data.resolved?.mdXsdPath,
+        commonXsdPath: data.resolved?.commonXsdPath,
+        mdExists: data.resolved?.mdExists,
+        commonExists: data.resolved?.commonExists,
+        loaded: data.loaded,
+        counts: data.schema_counts,
+        error: data.error
+      });
+      setSchemaMessage(data.loaded ? 'Schema library reloaded.' : data.error || 'Schema settings saved, but library did not load.');
+      setSchemaMessageType(data.loaded ? 'success' : 'error');
+      await onSchemaConfigChanged?.();
+    } catch (error: any) {
+      setSchemaMessage(error.message || 'Failed to save schema settings.');
+      setSchemaMessageType('error');
+    } finally {
+      setSavingSchema(false);
+    }
+  };
 
   // Property editor change handling
   const handlePropChange = (key: string, value: any) => {
@@ -337,6 +431,81 @@ export default function Sidebar({
                 />
               </div>
             </div>
+
+            <div className="border-t border-white/10 pt-4 space-y-3">
+              <h3 className="text-xs font-mono font-semibold text-cyan-400 tracking-wider uppercase flex items-center gap-1.5">
+                <Settings className="w-3.5 h-3.5" />
+                XSD Schema Source
+              </h3>
+
+              <div>
+                <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider">Schema Directory</label>
+                <input
+                  type="text"
+                  value={schemaDir}
+                  onChange={e => setSchemaDir(e.target.value)}
+                  className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors font-mono text-[10px]"
+                  placeholder="Folder containing md.xsd and common.xsd"
+                />
+              </div>
+
+              <div className="space-y-1.5 rounded bg-black/30 border border-white/10 p-2 text-[10px]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-500 uppercase">md.xsd</span>
+                  <span className={schemaStatus.mdExists ? 'text-emerald-400' : 'text-red-400'}>
+                    {schemaStatus.mdExists ? 'found' : 'missing'}
+                  </span>
+                </div>
+                <div className="text-slate-400 break-all">{schemaStatus.mdXsdPath || 'Not resolved'}</div>
+
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
+                  <span className="text-slate-500 uppercase">common.xsd</span>
+                  <span className={schemaStatus.commonExists ? 'text-emerald-400' : 'text-red-400'}>
+                    {schemaStatus.commonExists ? 'found' : 'missing'}
+                  </span>
+                </div>
+                <div className="text-slate-400 break-all">{schemaStatus.commonXsdPath || 'Not resolved'}</div>
+              </div>
+
+              {schemaStatus.counts && (
+                <div className="grid grid-cols-2 gap-1 text-[10px]">
+                  <div className="bg-black/30 border border-white/10 rounded p-1.5">
+                    <span className="text-slate-500 uppercase block">Events</span>
+                    <span className="text-white">{schemaStatus.counts.events}</span>
+                  </div>
+                  <div className="bg-black/30 border border-white/10 rounded p-1.5">
+                    <span className="text-slate-500 uppercase block">Actions</span>
+                    <span className="text-white">{schemaStatus.counts.actions}</span>
+                  </div>
+                  <div className="bg-black/30 border border-white/10 rounded p-1.5">
+                    <span className="text-slate-500 uppercase block">Conditions</span>
+                    <span className="text-white">{schemaStatus.counts.conditions}</span>
+                  </div>
+                  <div className="bg-black/30 border border-white/10 rounded p-1.5">
+                    <span className="text-slate-500 uppercase block">Control</span>
+                    <span className="text-white">{schemaStatus.counts.control_flow}</span>
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={saveSchemaConfig}
+                disabled={savingSchema}
+                className="w-full px-3 py-2 rounded bg-cyan-600/20 border border-cyan-500/30 text-cyan-200 hover:bg-cyan-600/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-bold uppercase text-[10px] tracking-wider"
+              >
+                {savingSchema ? 'Reloading Schema...' : 'Save Schema Directory'}
+              </button>
+
+              {(schemaMessage || schemaStatus.error) && (
+                <div className={`text-[10px] leading-relaxed rounded border p-2 ${
+                  schemaMessageType === 'success' && !schemaStatus.error
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                    : 'bg-red-500/10 border-red-500/20 text-red-300'
+                }`}>
+                  {schemaMessage || schemaStatus.error}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -413,6 +582,18 @@ export default function Sidebar({
                         <option key={opt} value={opt}>{opt}</option>
                       ))}
                     </select>
+                  )}
+
+                  {schema.type === 'boolean' && (
+                    <label className="flex items-center gap-2 text-slate-300 bg-black/40 border border-white/10 rounded px-2 py-1.5">
+                      <input
+                        type="checkbox"
+                        checked={String((selectedNode.properties || {})[schema.key] || 'false') === 'true'}
+                        onChange={e => handlePropChange(schema.key, e.target.checked ? 'true' : 'false')}
+                        className="accent-cyan-500"
+                      />
+                      <span className="text-[10px] uppercase tracking-wider">{schema.key}</span>
+                    </label>
                   )}
 
                   {schema.type === 'coordinates' && (

@@ -8,6 +8,7 @@ import path from "path";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
+import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, writeXsdConfig } from "./src/lib/xsdParser";
 
 // Import types & helpers from the frontend shared file
 import {
@@ -22,11 +23,33 @@ import {
   PRESETS,
   ModWorkspace
 } from "./src/types";
+import type { SchemaLibrary } from "./src/lib/schemaTypes";
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+
+function loadCurrentSchemaLibrary(): SchemaLibrary {
+  try {
+    const resolved = resolveXsdConfig();
+    const library = loadSchemaLibrary(resolved.schemaDir, resolved.schemaFiles || ['md.xsd', 'common.xsd']);
+    console.log(`[AI-STUDIO] Loaded XSD schema library: ${library.events.length} events, ${library.conditions.length} conditions, ${library.actions.length} actions.`);
+    return library;
+  } catch (error: any) {
+    console.warn(`[AI-STUDIO] XSD schema library unavailable: ${error.message || error}`);
+    return createEmptySchemaLibrary(error.message || String(error));
+  }
+}
+
+let schemaLibrary: SchemaLibrary = loadCurrentSchemaLibrary();
+let schemaTemplatesByTag = new Map(schemaLibrary.templates.map(template => [template.xmlTag, template]));
+
+function reloadSchemaLibrary(): SchemaLibrary {
+  schemaLibrary = loadCurrentSchemaLibrary();
+  schemaTemplatesByTag = new Map(schemaLibrary.templates.map(template => [template.xmlTag, template]));
+  return schemaLibrary;
+}
 
 app.use(express.json({ limit: "5mb" }));
 
@@ -56,7 +79,12 @@ const DEFAULT_WORKSPACE: ModWorkspace = {
       xmlTag: "cue",
       x: 100,
       y: 100,
-      properties: { name: "Escort_Trigger_Cue", instantiate: "true", namespace: "this", state: "active" },
+      properties: {
+        name: "Escort_Trigger_Cue",
+        instantiate: "true",
+        namespace: "this",
+        state: "active"
+      },
       propertiesSchema: NODE_TEMPLATES[0].propertiesSchema,
       inputs: NODE_TEMPLATES[0].inputs,
       outputs: NODE_TEMPLATES[0].outputs
@@ -69,9 +97,9 @@ const DEFAULT_WORKSPACE: ModWorkspace = {
       x: 100,
       y: 400,
       properties: { cue: "md.Setup.Start" },
-      propertiesSchema: NODE_TEMPLATES[1].propertiesSchema,
-      inputs: NODE_TEMPLATES[1].inputs,
-      outputs: NODE_TEMPLATES[1].outputs
+      propertiesSchema: NODE_TEMPLATES[NODE_TEMPLATES.findIndex(t => t.xmlTag === 'event_cue_signalled')].propertiesSchema,
+      inputs: NODE_TEMPLATES[NODE_TEMPLATES.findIndex(t => t.xmlTag === 'event_cue_signalled')].inputs,
+      outputs: NODE_TEMPLATES[NODE_TEMPLATES.findIndex(t => t.xmlTag === 'event_cue_signalled')].outputs
     },
     {
       id: "action_0",
@@ -613,12 +641,98 @@ app.get("/api/agent/schema", (req, res) => {
       sound_effects: X4_SOUND_EFFECTS,
     },
     node_templates: NODE_TEMPLATES,
+    schema_library_loaded: schemaLibrary.loaded,
+    schema_counts: {
+      events: schemaLibrary.events.length,
+      conditions: schemaLibrary.conditions.length,
+      actions: schemaLibrary.actions.length,
+      control_flow: schemaLibrary.controlFlow.length,
+    },
+    schema_node_templates: schemaLibrary.templates,
     presets_list: Object.keys(PRESETS).map(key => ({
       id: key,
       name: PRESETS[key].name,
       desc: PRESETS[key].desc
     }))
   });
+});
+
+app.get("/api/schema/library", (req, res) => {
+  return res.json(schemaLibrary);
+});
+
+app.get("/api/schema/config", (req, res) => {
+  try {
+    return res.json({
+      config: readXsdConfig(),
+      resolved: resolveXsdConfig(),
+      schema_counts: {
+        events: schemaLibrary.events.length,
+        conditions: schemaLibrary.conditions.length,
+        actions: schemaLibrary.actions.length,
+        control_flow: schemaLibrary.controlFlow.length,
+      },
+      loaded: schemaLibrary.loaded,
+      error: schemaLibrary.error
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to read schema config." });
+  }
+});
+
+app.post("/api/schema/config", (req, res) => {
+  try {
+    const schemaDir = String(req.body?.schemaDir || '').trim();
+    if (!schemaDir) {
+      return res.status(400).json({ error: "Missing required schemaDir." });
+    }
+
+    const nextConfig = {
+      ...readXsdConfig(),
+      xsdSchemaPath: schemaDir,
+      schemaFiles: ['md.xsd', 'common.xsd']
+    };
+    const resolved = resolveXsdConfig(nextConfig);
+    if (!resolved.mdExists || !resolved.commonExists) {
+      return res.status(400).json({
+        error: "Schema directory must contain both md.xsd and common.xsd.",
+        resolved
+      });
+    }
+
+    writeXsdConfig(nextConfig);
+    const library = reloadSchemaLibrary();
+    return res.json({
+      success: library.loaded,
+      config: nextConfig,
+      resolved: resolveXsdConfig(nextConfig),
+      schema_counts: {
+        events: library.events.length,
+        conditions: library.conditions.length,
+        actions: library.actions.length,
+        control_flow: library.controlFlow.length,
+      },
+      loaded: library.loaded,
+      error: library.error
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to update schema config." });
+  }
+});
+
+app.get("/api/schema/element/:tag", (req, res) => {
+  const tag = req.params.tag;
+  const element = [
+    ...schemaLibrary.events,
+    ...schemaLibrary.conditions,
+    ...schemaLibrary.actions,
+    ...schemaLibrary.controlFlow
+  ].find(item => item.tag === tag);
+
+  if (!element) {
+    return res.status(404).json({ error: `Schema element not found: ${tag}` });
+  }
+  return res.json(element);
 });
 
 /**
@@ -643,13 +757,16 @@ app.post("/api/agent/workspace", (req, res) => {
     return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
   }
 
-  // Set the workspace
-  activeWorkspace = workspace;
-  workspaceVersion++;
+  // Set the workspace and bump version only if it changed
+  const isDifferent = JSON.stringify(workspace) !== JSON.stringify(activeWorkspace);
+  if (isDifferent) {
+    activeWorkspace = workspace;
+    workspaceVersion++;
+  }
 
   return res.json({
     success: true,
-    message: "Workspace successfully updated on the studio, bumping version.",
+    message: isDifferent ? "Workspace successfully updated on the studio, bumping version." : "Workspace already in sync.",
     version: workspaceVersion,
     workspace: activeWorkspace
   });
@@ -687,6 +804,9 @@ function populateNodeMetadata(nodes: any[]): any[] {
   return nodes.map(node => {
     // Attempt to match by xmlTag
     let template = NODE_TEMPLATES.find(t => t.xmlTag === node.xmlTag);
+    if (!template) {
+      template = schemaTemplatesByTag.get(node.xmlTag);
+    }
     // Fallback search by type
     if (!template) {
       template = NODE_TEMPLATES.find(t => t.type === node.type);
@@ -730,7 +850,13 @@ app.post("/api/agent/generate", async (req, res) => {
     console.log(`[AI-STUDIO] [Phase 1/4] Interrogating Intent & Node Visual Setup...`);
     const phase1System = `You are Phase 1 of a visual workspace translator. Design or edit ONLY the workspace metadata (name, version, author, description) and the raw "nodes" array based on the user's raw prompt.
 Do not worry about linkages / links or uiWidgets. 
-Focus strictly on allocating the logical nodes (e.g. cues, spawn actions, variables, etc.) with relevant properties needed to fulfill the request. Place them spacious coordinates (300px increments).`;
+Focus on allocating:
+1. Cue nodes (type="cue", xmlTag="cue") representing mission cues.
+2. Event/Condition nodes (type="event" or type="condition") representing triggers/checks. Available xmlTags: "event_cue_signalled", "event_object_destroyed", "event_object_changed_sector", "check_value", "custom_event", "custom_condition".
+3. Action nodes (type="action") representing actions. Available xmlTags: "create_ship", "reward_player", "play_sound", "show_help", "create_station", "custom_xml".
+
+Ensure each node has a unique 'id' (e.g., 'cue_0', 'event_0', 'action_0', etc.) and appropriate 'properties' matching their template.
+Position nodes clearly: Cues on the left, conditions to their right, and action chains horizontally to the right.`;
 
     const phase1Schema = {
       type: Type.OBJECT,
@@ -747,12 +873,15 @@ Focus strictly on allocating the logical nodes (e.g. cues, spawn actions, variab
             required: ["id", "type", "label", "xmlTag", "x", "y", "properties"],
             properties: {
               id: { type: Type.STRING },
-              type: { type: Type.STRING, description: "cue, event, condition, action, variable" },
+              type: { type: Type.STRING, description: "cue, event, condition, or action" },
               label: { type: Type.STRING },
               xmlTag: { type: Type.STRING },
               x: { type: Type.NUMBER },
               y: { type: Type.NUMBER },
-              properties: { type: Type.OBJECT, description: "Logical settings properties for this xmlTag" },
+              properties: {
+                type: Type.OBJECT,
+                description: "Properties for the node. E.g. for cue: {name, instantiate, namespace, state}. For event/condition/action: relevant keys according to their templates."
+              },
               comment: { type: Type.STRING }
             }
           }
@@ -793,9 +922,14 @@ Maintain as many existing nodes as possible unless they require replacement.`;
 
     // --- PHASE 2: RELATIONAL WIRE LOGIC LINKEAGES ---
     console.log(`[AI-STUDIO] [Phase 2/4] Constructing Relational Wire Linkages...`);
-    const phase2System = `You are Phase 2 of a visual workspace translator. Given the populated list of logical nodes, define how they connect together with visual wires/flows.
-Each connection represents a logic trigger or cue cascade (e.g. connecting a 'cue' output port to an 'event' input port, or a 'cue' output to an 'action' input).
-Return ONLY the links connection list matching the specified JSON schema.`;
+    const phase2System = `You are Phase 2 of a visual workspace translator. Given the populated list of visual nodes (cues, events, conditions, actions), define how they connect together.
+Return ONLY the links connection list matching the specified JSON schema.
+
+CRITICAL LINKING RULES:
+1. Connect conditions/events to their cue: sourceNodeId is the cue, sourcePortId="out_cond", targetNodeId is the event/condition, targetPortId="in_cond".
+2. Connect the first action of a cue: sourceNodeId is the cue, sourcePortId="out_act", targetNodeId is the first action, targetPortId="in_act".
+3. Chain subsequent actions together: sourceNodeId is the previous action, sourcePortId="out_next", targetNodeId is the next action, targetPortId="in_act".
+4. Connect child cues to parent cues for nested sub-cues: sourceNodeId is parent, sourcePortId="out_sub", targetNodeId is the child cue, targetPortId="in_flow".`;
 
     const phase2Schema = {
       type: Type.OBJECT,
@@ -809,9 +943,9 @@ Return ONLY the links connection list matching the specified JSON schema.`;
             properties: {
               id: { type: Type.STRING },
               sourceNodeId: { type: Type.STRING, description: "ID of the source node" },
-              sourcePortId: { type: Type.STRING, description: "Source port ID e.g., 'out_cond', 'out_act', 'out_sub'" },
+              sourcePortId: { type: Type.STRING, description: "out_cond, out_act, out_next, or out_sub" },
               targetNodeId: { type: Type.STRING, description: "ID of the target node" },
-              targetPortId: { type: Type.STRING, description: "Target port ID e.g., 'in_cond', 'in_act', 'in_flow'" }
+              targetPortId: { type: Type.STRING, description: "in_cond, in_act, or in_flow" }
             }
           }
         }
@@ -918,7 +1052,13 @@ Create, update, or reposition HUD window containers and nested controller elemen
       
       const phase4System = `You are Phase 4 (Self-Healing Compiler) for the X4 Foundations visual editor.
 The generated workspace layout currently fails Egosoft's visual schema checks with specific warnings/errors.
-Study the diagnostics report, locate the incorrect links or missing variables/properties on the nodes, apply precise parameters to resolve them, and return the absolute complete ModWorkspace JSON.`;
+Study the diagnostics report, apply corrections to the nodes, properties, and links, and return the absolute complete ModWorkspace JSON.
+
+CRITICAL COMPLIANCE RULES:
+1. Visual Event, Condition, and Action nodes must be linked correctly to their respective parent Cue node.
+2. Conditions/events connect via Cue's out_cond to Condition's in_cond.
+3. Actions connect sequentially starting from Cue's out_act to first Action's in_act, then Action's out_next to next Action's in_act.
+4. Child cues connect via parent Cue's out_sub to child Cue's in_flow.`;
 
       const phase4Schema = {
         type: Type.OBJECT,
@@ -940,7 +1080,10 @@ Study the diagnostics report, locate the incorrect links or missing variables/pr
                 xmlTag: { type: Type.STRING },
                 x: { type: Type.NUMBER },
                 y: { type: Type.NUMBER },
-                properties: { type: Type.OBJECT },
+                properties: {
+                  type: Type.OBJECT,
+                  description: "Properties for the node. E.g. for cue: {name, instantiate, namespace, state}. For event/condition/action: relevant keys according to their templates."
+                },
                 comment: { type: Type.STRING }
               }
             }

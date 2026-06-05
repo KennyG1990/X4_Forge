@@ -32,6 +32,7 @@ interface CanvasProps {
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
   selectedNode: MDNode | null;
   setSelectedNode: (node: MDNode | null) => void;
+  schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
 }
 
 export default function Canvas({
@@ -39,7 +40,8 @@ export default function Canvas({
   setWorkspace,
   saveCheckpoint,
   selectedNode,
-  setSelectedNode
+  setSelectedNode,
+  schemaTemplates = []
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
@@ -291,63 +293,84 @@ export default function Canvas({
     const positionedIds = new Set<string>();
     const newNodes = [...workspace.nodes];
 
-    let currentY = 80;
-
-    cues.forEach((cue) => {
-      // 1. Column 1: Cues (x = 80)
-      const cueIdx = newNodes.findIndex(n => n.id === cue.id);
-      if (cueIdx !== -1) {
-        newNodes[cueIdx] = { ...newNodes[cueIdx], x: 80, y: currentY };
-        positionedIds.add(cue.id);
-      }
-
-      const linkedLinks = workspace.links.filter(l => l.sourceNodeId === cue.id);
-
-      // 2. Column 2: Event Filters / Conditions (x = 360)
-      const condLinks = linkedLinks.filter(l => l.sourcePortId === 'out_cond');
-      let condY = currentY;
-      condLinks.forEach((l) => {
-        const targetIdx = newNodes.findIndex(n => n.id === l.targetNodeId);
-        if (targetIdx !== -1 && !positionedIds.has(l.targetNodeId)) {
-          newNodes[targetIdx] = { ...newNodes[targetIdx], x: 360, y: condY };
-          positionedIds.add(l.targetNodeId);
-          condY += 150;
-        }
-      });
-
-      // 3. Column 3 to 5: Action cascades flowing left-to-right (x = 640+)
-      const actLinks = linkedLinks.filter(l => l.sourcePortId === 'out_act');
-      let actY = currentY;
-      actLinks.forEach((l) => {
-        let currentNodeId: string | undefined = l.targetNodeId;
-        let actX = 640;
-        
-        while (currentNodeId) {
-          const targetIdx = newNodes.findIndex(n => n.id === currentNodeId);
-          if (targetIdx !== -1) {
-            if (!positionedIds.has(currentNodeId)) {
-              newNodes[targetIdx] = { ...newNodes[targetIdx], x: actX, y: actY };
-              positionedIds.add(currentNodeId);
-            }
-            // Follow next node links
-            const nextLink = workspace.links.find(
-              lnk => lnk.sourceNodeId === currentNodeId && lnk.sourcePortId === 'out_next'
-            );
-            currentNodeId = nextLink?.targetNodeId;
-            actX += 260;
-          } else {
-            currentNodeId = undefined;
-          }
-        }
-        actY += 160;
-      });
-
-      currentY += Math.max(condY - currentY, actY - currentY, 180) + 120;
+    // Find top level cues (no incoming links to 'in_flow')
+    const topLevelCues = cues.filter(c => {
+      return !workspace.links.some(l => l.targetNodeId === c.id && l.targetPortId === 'in_flow');
     });
 
-    // 4. Cluster unconnected floating elements at base
+    let currentY = 80;
+
+    function layoutCue(cueId: string, depth: number): number {
+      const idx = newNodes.findIndex(n => n.id === cueId);
+      if (idx === -1 || positionedIds.has(cueId)) return 0;
+
+      const x = 100 + depth * 1500;
+      newNodes[idx] = { ...newNodes[idx], x, y: currentY };
+      positionedIds.add(cueId);
+      const cueY = currentY;
+
+      // Position Conditions connected to out_cond (Column 2)
+      const condLinks = workspace.links.filter(l => l.sourceNodeId === cueId && l.sourcePortId === 'out_cond');
+      condLinks.forEach((link, cIdx) => {
+        const condNodeIdx = newNodes.findIndex(n => n.id === link.targetNodeId);
+        if (condNodeIdx !== -1 && !positionedIds.has(link.targetNodeId)) {
+          newNodes[condNodeIdx] = {
+            ...newNodes[condNodeIdx],
+            x: x + 300,
+            y: cueY + cIdx * 150
+          };
+          positionedIds.add(link.targetNodeId);
+        }
+      });
+
+      // Position Actions connected to out_act (Column 3+)
+      const actLinks = workspace.links.filter(l => l.sourceNodeId === cueId && l.sourcePortId === 'out_act');
+      actLinks.forEach((firstLink) => {
+        let actionNodeId = firstLink.targetNodeId;
+        let actionIdx = 0;
+        const seenActions = new Set<string>();
+        
+        while (actionNodeId && !seenActions.has(actionNodeId)) {
+          seenActions.add(actionNodeId);
+          const actNodeIdx = newNodes.findIndex(n => n.id === actionNodeId);
+          if (actNodeIdx !== -1 && !positionedIds.has(actionNodeId)) {
+            newNodes[actNodeIdx] = {
+              ...newNodes[actNodeIdx],
+              x: x + 600 + actionIdx * 300,
+              y: cueY
+            };
+            positionedIds.add(actionNodeId);
+          }
+          
+          const nextLink = workspace.links.find(l => l.sourceNodeId === actionNodeId && l.sourcePortId === 'out_next');
+          actionNodeId = nextLink ? nextLink.targetNodeId : '';
+          actionIdx++;
+        }
+      });
+
+      // Find children cues connected via out_sub to in_flow
+      const childLinks = workspace.links.filter(l => l.sourceNodeId === cueId && l.sourcePortId === 'out_sub');
+      if (childLinks.length > 0) {
+        childLinks.forEach((link, childIdx) => {
+          if (childIdx > 0) {
+            currentY += 450;
+          }
+          layoutCue(link.targetNodeId, depth + 1);
+        });
+      }
+      return currentY;
+    }
+
+    topLevelCues.forEach((cue, idx) => {
+      if (idx > 0) {
+        currentY += 500;
+      }
+      layoutCue(cue.id, 0);
+    });
+
+    // Cluster unconnected floating elements at base
     let baseFloaterX = 80;
-    let baseFloaterY = currentY + 60;
+    let baseFloaterY = currentY + 300;
     newNodes.forEach((node) => {
       if (!positionedIds.has(node.id)) {
         node.x = baseFloaterX;
@@ -355,7 +378,7 @@ export default function Canvas({
         baseFloaterX += 250;
         if (baseFloaterX > 1100) {
           baseFloaterX = 80;
-          baseFloaterY += 160;
+          baseFloaterY += 220;
         }
       }
     });
@@ -410,10 +433,11 @@ export default function Canvas({
 
     log("⚡ INIT: Initializing visual script compiler loop context...", "info");
 
-    // Gather active trigger cues
-    const targetCues = startNodeId 
-      ? workspace.nodes.filter(n => n.id === startNodeId || (n.type === 'cue' && workspace.links.some(l => l.targetNodeId === startNodeId && l.sourceNodeId === n.id)))
-      : workspace.nodes.filter(n => n.type === 'cue');
+    const cues = workspace.nodes.filter(n => n.type === 'cue');
+    const startCue = startNodeId ? cues.find(c => c.id === startNodeId) : null;
+    const targetCues = startCue ? [startCue] : cues.filter(c => {
+      return !workspace.links.some(l => l.targetNodeId === c.id && l.targetPortId === 'in_flow');
+    });
 
     if (targetCues.length === 0) {
       log("🚫 DIAGNOSTIC FAILED: No executable cues present in workspace grid.", "warn");
@@ -427,89 +451,91 @@ export default function Canvas({
       simTimersRef.current.push(timer);
     };
 
-    targetCues.forEach((cue) => {
-      // Glow Cue Node
+    function simulateCue(cue: MDNode, parentLink?: MDLink) {
+      // 1. Evaluate Cue
       scheduleStep(() => {
-        setActiveNodes([cue.id]);
-        log(`📂 [CUE EVALUATE] Found active block mdscript: "${cue.properties.name || cue.label || cue.id}"`, "info");
+        setActiveNodes(prev => [...prev, cue.id]);
+        if (parentLink) {
+          setPulsingLinks(prev => [...prev, parentLink.id]);
+        }
+        log(`📂 [CUE EVALUATE] Evaluating cue: "${cue.properties.name || cue.label || cue.id}"`, "info");
       }, delayCounter);
-      delayCounter += 900;
+      delayCounter += 800;
 
-      const linksFromCue = workspace.links.filter(l => l.sourceNodeId === cue.id);
-      
-      const conditions = linksFromCue.filter(l => l.sourcePortId === 'out_cond');
-      const actions = linksFromCue.filter(l => l.sourcePortId === 'out_act');
-
-      if (conditions.length > 0) {
-        scheduleStep(() => {
-          setPulsingLinks(prev => [...prev, ...conditions.map(l => l.id)]);
-          log(`⚙️ [CONDITIONS CHECK] Spawning checks down linked wire criteria paths...`, "info");
-        }, delayCounter);
-        delayCounter += 600;
-
-        scheduleStep(() => {
-          const ids = conditions.map(l => l.targetNodeId);
-          setActiveNodes(prev => [...prev, ...ids]);
-          ids.forEach(id => {
-            const node = workspace.nodes.find(n => n.id === id);
-            if (node) {
-              log(`✔️ [EVENT SOLVED] Filter lock resolved: <${node.xmlTag}> passed constraints successfully.`, "success");
-            }
-          });
-        }, delayCounter);
-        delayCounter += 900;
-      } else {
-        scheduleStep(() => {
-          log(`⚠️ [NOTICE] Cue has no trigger condition locks. Flowing directly to actions cascade.`, "success");
-        }, delayCounter);
-        delayCounter += 500;
-      }
-
-      if (actions.length > 0) {
-        scheduleStep(() => {
-          setPulsingLinks(prev => [...prev, ...actions.map(l => l.id)]);
-          log(`🚀 [EXECUTION SEQUENCE] Signaling logical action chains...`, "info");
-        }, delayCounter);
-        delayCounter += 600;
-
-        actions.forEach((actl) => {
-          let currentActId: string | undefined = actl.targetNodeId;
-          let lastNodeId = cue.id;
-
-          while (currentActId) {
-            const activeId = currentActId;
-            const sourceId = lastNodeId;
-            const node = workspace.nodes.find(n => n.id === activeId);
-            const wireLink = workspace.links.find(l => l.sourceNodeId === sourceId && l.targetNodeId === activeId);
-
-            if (node) {
-              scheduleStep(() => {
-                setActiveNodes(prev => [...prev, activeId]);
-                if (wireLink) setPulsingLinks(prev => [...prev, wireLink.id]);
-
-                let desc = `Fired visual xmlTag <${node.xmlTag}>.`;
-                if (node.xmlTag === 'create_ship') {
-                  desc += ` Spawning ship ${node.properties.name || '$Ship'} (${(node.properties.macro || '').split('(')[0].trim()}) in ${node.properties.sector || 'player.sector'}.`;
-                } else if (node.xmlTag === 'reward_player') {
-                  desc += ` Crediting +${Number(node.properties.money || 0).toLocaleString()} Cr and updating Argon relations.`;
-                } else if (node.xmlTag === 'play_sound') {
-                  desc += ` Dispatching sound ID '${node.properties.sound || 'notification_generic'}' relative to playership audio.`;
-                } else if (node.xmlTag === 'show_help') {
-                  desc += ` Feeding HUD alert text string: "${node.properties.text || ''}".`;
-                } else if (node.xmlTag === 'create_station') {
-                  desc += ` Spawning modular base space station macro at relative coords: ${node.properties.coords || '0,0,0'}.`;
-                }
-                log(`🔧 [ACTION DISPATCH] ${desc}`, "action");
-              }, delayCounter);
-              delayCounter += 1200;
-            }
-
-            const nextWire = workspace.links.find(l => l.sourceNodeId === activeId && l.sourcePortId === 'out_next');
-            currentActId = nextWire?.targetNodeId;
-            lastNodeId = activeId;
+      // 2. Evaluate conditions/events connected to out_cond
+      const condLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_cond');
+      if (condLinks.length > 0) {
+        condLinks.forEach(link => {
+          const condNode = workspace.nodes.find(n => n.id === link.targetNodeId);
+          if (condNode) {
+            scheduleStep(() => {
+              setActiveNodes(prev => [...prev, condNode.id]);
+              setPulsingLinks(prev => [...prev, link.id]);
+              log(`⚙️ [CONDITIONS CHECK] Checking condition: <${condNode.xmlTag}>`, "info");
+              Object.entries(condNode.properties).forEach(([k, v]) => {
+                log(`  ${k}: ${v}`, "info");
+              });
+            }, delayCounter);
+            delayCounter += 1000;
           }
         });
+
+        scheduleStep(() => {
+          log(`✔️ [CONDITIONS PASSED] All trigger conditions satisfied.`, "success");
+        }, delayCounter);
+        delayCounter += 600;
+      } else {
+        scheduleStep(() => {
+          log(`⚠️ [NOTICE] Cue has no trigger condition locks. Flowing directly to actions.`, "success");
+        }, delayCounter);
+        delayCounter += 600;
       }
+
+      // 3. Execute actions in chain connected to out_act
+      const actLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_act');
+      actLinks.forEach(firstLink => {
+        let currentNode = workspace.nodes.find(n => n.id === firstLink.targetNodeId);
+        let currentLink = firstLink;
+        const seen = new Set<string>();
+
+        while (currentNode && !seen.has(currentNode.id)) {
+          seen.add(currentNode.id);
+          
+          const nodeToGlow = currentNode;
+          const linkToGlow = currentLink;
+          
+          scheduleStep(() => {
+             setActiveNodes(prev => [...prev, nodeToGlow.id]);
+             setPulsingLinks(prev => [...prev, linkToGlow.id]);
+             log(`🚀 [ACTION EXECUTE] Running action <${nodeToGlow.xmlTag}>`, "action");
+             Object.entries(nodeToGlow.properties).forEach(([k, v]) => {
+               log(`  ${k}: ${v}`, "action");
+             });
+          }, delayCounter);
+          delayCounter += 1000;
+
+          const nextLink = workspace.links.find(l => l.sourceNodeId === currentNode!.id && l.sourcePortId === 'out_next');
+          if (nextLink) {
+            currentLink = nextLink;
+            currentNode = workspace.nodes.find(n => n.id === nextLink.targetNodeId);
+          } else {
+            currentNode = undefined;
+          }
+        }
+      });
+
+      // 4. Recursively simulate sub-cues
+      const childLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+      childLinks.forEach(link => {
+        const subCue = workspace.nodes.find(n => n.id === link.targetNodeId);
+        if (subCue && subCue.type === 'cue') {
+          simulateCue(subCue, link);
+        }
+      });
+    }
+
+    targetCues.forEach(cue => {
+      simulateCue(cue);
     });
 
     scheduleStep(() => {
@@ -520,8 +546,17 @@ export default function Canvas({
     }, delayCounter);
   };
 
+  const allTemplates = React.useMemo(() => {
+    const byTag = new Map<string, Omit<MDNode, 'id' | 'x' | 'y'>>();
+    NODE_TEMPLATES.forEach(template => byTag.set(template.xmlTag, template));
+    schemaTemplates.forEach(template => {
+      if (!byTag.has(template.xmlTag)) byTag.set(template.xmlTag, template);
+    });
+    return Array.from(byTag.values());
+  }, [schemaTemplates]);
+
   // Filter right click context spawn options
-  const filteredTemplates = NODE_TEMPLATES.filter(
+  const filteredTemplates = allTemplates.filter(
     t => t.label.toLowerCase().includes(searchQuery.toLowerCase()) || 
          t.xmlTag.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -779,30 +814,16 @@ export default function Canvas({
 
                 {/* Properties Inspector Preview */}
                 <div className="p-2.5 bg-black/45 text-slate-400 space-y-1 select-none border-b border-white/[0.04]">
-                  {node.type === 'cue' && (
-                    <>
-                      <div className="flex justify-between"><span className="text-slate-500 text-[10px]">CUE_ID:</span> <span className="text-purple-300 font-bold truncate">{node.properties.name || 'untamed'}</span></div>
-                      <div className="flex justify-between"><span className="text-slate-500 text-[10px]">INSTANTIATE:</span> <span className="text-slate-300">{node.properties.instantiate || 'false'}</span></div>
-                    </>
-                  )}
-                  {node.type === 'event' && (
-                    <>
-                      <div className="flex justify-between"><span className="text-slate-500 text-[10px]">XML_TAG:</span> <span className="text-amber-300 font-bold font-sans">&lt;{node.xmlTag}&gt;</span></div>
-                      {node.properties.cue && <div className="flex justify-between"><span className="text-slate-500 text-[10px]">SIG_SOURCE:</span> <span className="text-slate-300 truncate w-24 block text-right">{node.properties.cue}</span></div>}
-                    </>
-                  )}
-                  {node.type === 'action' && (
-                    <>
-                      <div className="flex justify-between"><span className="text-slate-500 text-[10px]">DISPATCH:</span> <span className="text-emerald-300 font-bold font-sans">&lt;{node.xmlTag}&gt;</span></div>
-                      {node.properties.macro && <div className="flex justify-between"><span className="text-slate-500 text-[10px]">MACRO:</span> <span className="text-slate-300 text-[9px] truncate w-28 block text-right">{(node.properties.macro).split(' (')[0]}</span></div>}
-                      {node.properties.money && <div className="flex justify-between"><span className="text-slate-500 text-[10px]">REWARD:</span> <span className="text-amber-400 font-bold">{Number(node.properties.money).toLocaleString()} cr</span></div>}
-                    </>
-                  )}
-                  {node.type === 'condition' && (
-                    <>
-                      <div className="flex justify-between"><span className="text-slate-500 text-[10px]">CHECK:</span> <span className="text-cyan-300 select-all truncate">{node.properties.value}</span></div>
-                      <div className="flex justify-between"><span className="text-slate-500 text-[10px]">CRITERIA:</span> <span className="text-slate-300 font-bold">{node.properties.operator || 'ge'} ({node.properties.amount})</span></div>
-                    </>
+                  {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
+                    <div key={key} className="flex justify-between">
+                      <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">{key}:</span>
+                      <span className="text-slate-300 truncate max-w-[140px] text-right font-medium" title={String(val)}>
+                        {String(val)}
+                      </span>
+                    </div>
+                  ))}
+                  {Object.keys(node.properties).length === 0 && (
+                    <div className="text-slate-500 italic text-[10px] text-center">No properties configured</div>
                   )}
                 </div>
 

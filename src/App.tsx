@@ -38,6 +38,8 @@ import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
 import TFileEditor from './components/TFileEditor';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace } from './types';
+import type { SchemaLibrary } from './lib/schemaTypes';
+import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
 
 // Default initial blank workspace schema
@@ -55,7 +57,7 @@ const BLANK_WORKSPACE: ModWorkspace = {
       xmlTag: "cue",
       x: 150,
       y: 120,
-      properties: { name: "My_Startup_Cue", instantiate: "false", namespace: "this", state: "active" },
+      properties: { name: "My_Startup_Cue", instantiate: "false", namespace: "this", state: "active", conditions: "", actions: "" },
       propertiesSchema: NODE_TEMPLATES[0].propertiesSchema,
       inputs: NODE_TEMPLATES[0].inputs,
       outputs: NODE_TEMPLATES[0].outputs
@@ -73,6 +75,24 @@ const BLANK_WORKSPACE: ModWorkspace = {
 };
 
 export default function App() {
+  const [schemaTemplates, setSchemaTemplates] = useState<Omit<MDNode, 'id' | 'x' | 'y'>[]>([]);
+  const loadSchemaLibrary = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/schema/library');
+      const library: SchemaLibrary | null = res.ok ? await res.json() : null;
+      if (library?.loaded && Array.isArray(library.templates)) {
+        setSchemaTemplates(library.templates);
+        setSchemaTemplatesForImport(library.templates);
+      } else {
+        setSchemaTemplates([]);
+        setSchemaTemplatesForImport([]);
+      }
+    } catch {
+      setSchemaTemplates([]);
+      setSchemaTemplatesForImport([]);
+    }
+  }, []);
+
   const [rawWorkspace, setRawWorkspace] = useState<ModWorkspace>(() => {
     // Attempt local storage sync
     const stored = localStorage.getItem('x4_mod_studio_workspace');
@@ -88,6 +108,10 @@ export default function App() {
   }, []);
 
   const workspace = rawWorkspace;
+
+  useEffect(() => {
+    loadSchemaLibrary();
+  }, [loadSchemaLibrary]);
 
   const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation'>('blueprint');
   const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem'>('script');
@@ -187,6 +211,7 @@ export default function App() {
         const data = await response.json();
         if (data && data.success && data.version) {
           setLocalVersion(data.version);
+          localStorage.setItem('x4_mod_studio_version', String(data.version));
         }
       } catch (err) {
         console.warn("Could not synchronize local edits to server workspace space.");
@@ -196,6 +221,31 @@ export default function App() {
     const debounceTimer = setTimeout(syncLocalEditsToServer, 1000);
     return () => clearTimeout(debounceTimer);
   }, [workspace]);
+
+  // Initial load and periodic background polling of the server workspace
+  useEffect(() => {
+    const fetchLatestServerWorkspace = async () => {
+      try {
+        const response = await fetch("/api/agent/workspace");
+        const data = await response.json();
+        if (data && data.workspace && data.version) {
+          const storedVer = Number(localStorage.getItem('x4_mod_studio_version') || String(localVersion));
+          if (data.version > storedVer) {
+            setWorkspace(data.workspace);
+            setLocalVersion(data.version);
+            localStorage.setItem('x4_mod_studio_version', String(data.version));
+            localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(data.workspace));
+          }
+        }
+      } catch (err) {
+        // Silently ignore background polling connection issues
+      }
+    };
+
+    fetchLatestServerWorkspace();
+    const interval = setInterval(fetchLatestServerWorkspace, 3000);
+    return () => clearInterval(interval);
+  }, [localVersion, setWorkspace]);
 
   // Command node addition handler
   const handleAddNode = (template: any) => {
@@ -464,7 +514,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         
         {/* Left Side: Drag control panel, property editor inspector */}
-        <Sidebar
+            <Sidebar
           activeTab={activeSidebarTab}
           setActiveTab={setActiveSidebarTab}
           workspace={workspace}
@@ -484,9 +534,11 @@ export default function App() {
           dirName={dirName}
           setDirName={setDirName}
           saveCheckpoint={saveCheckpoint}
-          workspaceView={workspaceView}
-          setWorkspaceView={setWorkspaceView}
-        />
+              workspaceView={workspaceView}
+              setWorkspaceView={setWorkspaceView}
+              schemaTemplates={schemaTemplates}
+              onSchemaConfigChanged={loadSchemaLibrary}
+            />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
         <main className="flex-1 flex flex-col h-full overflow-hidden border-r border-white/10 bg-[#0a0c10]">
@@ -498,6 +550,7 @@ export default function App() {
               saveCheckpoint={saveCheckpoint}
               selectedNode={selectedNode}
               setSelectedNode={setSelectedNode}
+              schemaTemplates={schemaTemplates}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder
