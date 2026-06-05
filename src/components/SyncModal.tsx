@@ -1,0 +1,1100 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { 
+  X, 
+  Upload, 
+  GitBranch, 
+  Terminal, 
+  Github, 
+  CheckCircle2, 
+  AlertCircle, 
+  FileJson, 
+  FileCode,
+  ArrowRightLeft,
+  ChevronRight,
+  ClipboardPaste,
+  ShieldAlert,
+  FolderSync,
+  GitCompare,
+  RefreshCw
+} from 'lucide-react';
+import { ModWorkspace, MDNode, MDLink, NODE_TEMPLATES } from '../types';
+import { generateMDXML, generateUIXML } from '../types';
+
+interface SyncModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  workspace: ModWorkspace;
+  setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
+  saveCheckpoint: (customTarget?: ModWorkspace) => void;
+}
+
+export default function SyncModal({
+  isOpen,
+  onClose,
+  workspace,
+  setWorkspace,
+  saveCheckpoint
+}: SyncModalProps) {
+  const [activeTab, setActiveTab] = useState<'import' | 'github'>('import');
+  
+  // GitHub Integration State (saved/loaded from localStorage)
+  const [pat, setPat] = useState(() => localStorage.getItem('x4_github_pat') || '');
+  const [owner, setOwner] = useState(() => localStorage.getItem('x4_github_owner') || '');
+  const [repo, setRepo] = useState(() => localStorage.getItem('x4_github_repo') || '');
+  const [branch, setBranch] = useState(() => localStorage.getItem('x4_github_branch') || 'main');
+  
+  // Push & Load States
+  const [commitMessage, setCommitMessage] = useState('Update X4 Mod files from X4:MD Studio');
+  const [filePathToLoad, setFilePathToLoad] = useState('ais_workspace.json');
+  const [pushSelectedFiles, setPushSelectedFiles] = useState({
+    workspace: true,
+    md_xml: true,
+    ui_xml: true,
+    readme: true
+  });
+
+  // Logs & Statuses
+  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'refused' | 'info'; msg: string } | null>(null);
+
+  // Raw Import Paste Area Text
+  const [importText, setImportText] = useState('');
+  const [dragActive, setDragActive] = useState(false);
+
+  // Advanced Diff & Commit Msg Autopopulator Engine States
+  const [remoteWorkspace, setRemoteWorkspace] = useState<ModWorkspace | null>(null);
+  const [isDiffLoading, setIsDiffLoading] = useState(false);
+  const [diffItems, setDiffItems] = useState<{ type: 'add' | 'remove' | 'edit'; text: string }[]>([]);
+
+  // Function to load the remote JSON configuration and compute exact diffs
+  const fetchRemoteAndComputeDiff = async (forceQuiet = false) => {
+    if (!owner || !repo) {
+      if (!forceQuiet) {
+        addLog("Cannot scan diff: repository owner/name is blank.");
+      }
+      return;
+    }
+
+    setIsDiffLoading(true);
+    if (!forceQuiet) {
+      addLog(`🔍 Scanning remote repository ${owner}/${repo} to compute file differences...`);
+    }
+
+    try {
+      const response = await fetch('/api/github/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pat: pat || undefined,
+          owner,
+          repo,
+          path: 'ais_workspace.json',
+          branch
+        })
+      });
+
+      if (!response.ok) {
+        // File does not exist - treat as a clean repository initializing for the first time
+        const initialDiff = [
+          { type: 'add' as const, text: `Mod Initialization: "${workspace.name || 'X4 Mod'}"` },
+          { type: 'add' as const, text: `Publish ${workspace.nodes?.length || 0} logic flow nodes` },
+          { type: 'add' as const, text: `Initialize ${workspace.links?.length || 0} signal wires` }
+        ];
+        setDiffItems(initialDiff);
+        setCommitMessage(`Initial commit: Create visual mod project [${workspace.name || 'mod'}] with ${workspace.nodes?.length || 0} logic gates`);
+        setRemoteWorkspace(null);
+        if (!forceQuiet) {
+          addLog("ℹ️ No previous workspace file found on GitHub. Set to INITIAL COMMIT mode.");
+        }
+        setIsDiffLoading(false);
+        return;
+      }
+
+      const result = await response.json();
+      let remote: any = null;
+      try {
+        remote = JSON.parse(result.content);
+      } catch (e) {
+        throw new Error("Target file on remote repo is not a valid JSON structure.");
+      }
+
+      setRemoteWorkspace(remote);
+
+      // Diff algorithm comparing local active workspace nodes with the downloaded one
+      const rawChanges: { type: 'add' | 'remove' | 'edit'; text: string }[] = [];
+      const localNodes = workspace.nodes || [];
+      const remoteNodes = remote.nodes || [];
+
+      // Look for custom node additions & modification profiles
+      localNodes.forEach(node => {
+        const matchesRemote = remoteNodes.find(rn => rn.id === node.id);
+        if (!matchesRemote) {
+          rawChanges.push({ type: 'add', text: `Added logical node [${node.label || node.xmlTag}]` });
+        } else {
+          // Verify property modification
+          const propsChanged = JSON.stringify(node.properties) !== JSON.stringify(matchesRemote.properties);
+          if (propsChanged) {
+            rawChanges.push({ type: 'edit', text: `Modified configs of [${node.label || node.xmlTag}]` });
+          }
+        }
+      });
+
+      // Look for logic node deletions
+      remoteNodes.forEach(node => {
+        const matchesLocal = localNodes.find(ln => ln.id === node.id);
+        if (!matchesLocal) {
+          rawChanges.push({ type: 'remove', text: `Removed node [${node.label || node.xmlTag}]` });
+        }
+      });
+
+      // Look for visual link updates
+      const localLinks = workspace.links || [];
+      const remoteLinks = remote.links || [];
+      if (localLinks.length > remoteLinks.length) {
+        rawChanges.push({ type: 'add', text: `Created ${localLinks.length - remoteLinks.length} new communication wire(s)` });
+      } else if (localLinks.length < remoteLinks.length) {
+        rawChanges.push({ type: 'remove', text: `Severed ${remoteLinks.length - localLinks.length} wire connection(s)` });
+      }
+
+      // Look for Custom UI components changes
+      const localWidgets = workspace.uiWidgets || [];
+      const remoteWidgets = remote.uiWidgets || [];
+      if (localWidgets.length !== remoteWidgets.length) {
+        rawChanges.push({ type: 'edit', text: `Layout shift: UI components from ${remoteWidgets.length} to ${localWidgets.length}` });
+      }
+
+      if (rawChanges.length === 0) {
+        rawChanges.push({ type: 'edit', text: 'No node structure variance found. Optimizing configurations.' });
+        setCommitMessage('chore: Refine X4 Mod alignment settings');
+      } else {
+        // Build auto-populated smart commit message based on computed diff
+        const addedText = rawChanges.filter(c => c.type === 'add').slice(0, 1).map(c => c.text);
+        const editedText = rawChanges.filter(c => c.type === 'edit').slice(0, 1).map(c => c.text);
+        const removedText = rawChanges.filter(c => c.type === 'remove').slice(0, 1).map(c => c.text);
+
+        let phrases: string[] = [];
+        if (addedText.length > 0) phrases.push(addedText[0]);
+        if (editedText.length > 0) phrases.push(editedText[0]);
+        if (removedText.length > 0) phrases.push(removedText[0]);
+
+        const formattedCommit = phrases.join(', ');
+        setCommitMessage(formattedCommit.substring(0, 72));
+      }
+
+      setDiffItems(rawChanges);
+      if (!forceQuiet) {
+        addLog(`🎉 SUCCESS: Computed remote difference summary with ${rawChanges.length} changes detected!`);
+      }
+    } catch (err: any) {
+      console.warn("Could not compute remote diff: ", err);
+      // Fallback
+      setDiffItems([
+        { type: 'edit', text: `Compared draft workspace: "${workspace.name}" with local additions.` },
+        { type: 'add', text: `${workspace.nodes?.length || 0} script layout nodes compiled` }
+      ]);
+      setCommitMessage(`Update: Visual flowchart adjustments [${workspace.name || 'mod'}]`);
+    } finally {
+      setIsDiffLoading(false);
+    }
+  };
+
+  // Automating scan whenever configurations are typed, or tab toggled
+  useEffect(() => {
+    if (activeTab === 'github' && owner && repo) {
+      const waitTimer = setTimeout(() => {
+        fetchRemoteAndComputeDiff(true);
+      }, 750);
+      return () => clearTimeout(waitTimer);
+    }
+  }, [activeTab, owner, repo, branch]);
+
+  // Save Git configurations
+  useEffect(() => {
+    localStorage.setItem('x4_github_pat', pat);
+    localStorage.setItem('x4_github_owner', owner);
+    localStorage.setItem('x4_github_repo', repo);
+    localStorage.setItem('x4_github_branch', branch);
+  }, [pat, owner, repo, branch]);
+
+  if (!isOpen) return null;
+
+  // Clear log visualizer
+  const addLog = (msg: string) => {
+    setTerminalLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  };
+
+  // Parser: Egosoft XML script mapping to visual flowchart nodegraph
+  const parseXMLToWorkspace = (xmlText: string): ModWorkspace | null => {
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      
+      const parserError = xmlDoc.getElementsByTagName("parsererror");
+      if (parserError.length > 0) {
+        throw new Error("Malformatted XML script syntax.");
+      }
+
+      const mdscript = xmlDoc.getElementsByTagName("mdscript")[0];
+      if (!mdscript) {
+        throw new Error("Missing main root <mdscript> node.");
+      }
+
+      const modName = mdscript.getAttribute("name") || "Parsed_X4_Mod";
+      const cuesList = xmlDoc.getElementsByTagName("cue");
+      
+      const nodes: MDNode[] = [];
+      const links: MDLink[] = [];
+      
+      let currentX = 150;
+      let currentY = 120;
+
+      for (let i = 0; i < cuesList.length; i++) {
+        const cue = cuesList[i];
+        const name = cue.getAttribute("name") || `cue_${i}`;
+        const instantiate = cue.getAttribute("instantiate") || "false";
+        const namespace = cue.getAttribute("namespace") || "this";
+        const state = cue.getAttribute("state") || "active";
+        
+        const cueId = `cue_${Date.now()}_${i}`;
+        
+        const cueNode: MDNode = {
+          id: cueId,
+          type: 'cue',
+          label: cue.getAttribute("name") ? `Cue: ${cue.getAttribute("name")}` : 'Mission Cue',
+          xmlTag: 'cue',
+          x: currentX,
+          y: currentY,
+          properties: { name, instantiate, namespace, state },
+          propertiesSchema: NODE_TEMPLATES[0].propertiesSchema,
+          inputs: NODE_TEMPLATES[0].inputs,
+          outputs: NODE_TEMPLATES[0].outputs
+        };
+        
+        nodes.push(cueNode);
+        
+        // Conditions block parsing
+        const conditions = cue.getElementsByTagName("conditions")[0];
+        if (conditions) {
+          const children = conditions.children;
+          for (let j = 0; j < children.length; j++) {
+            const child = children[j];
+            const tag = child.tagName;
+            const childId = `cond_event_${Date.now()}_${i}_${j}`;
+            
+            let nodeType: 'event' | 'condition' = 'event';
+            let label = `Event: ${tag}`;
+            let schemaIdx = NODE_TEMPLATES.findIndex(t => t.xmlTag === tag);
+            
+            if (tag === 'check_value') {
+              nodeType = 'condition';
+              label = 'Check: Wealth';
+            }
+            
+            const template = NODE_TEMPLATES[schemaIdx !== -1 ? schemaIdx : 1];
+            const props: Record<string, any> = {};
+            
+            if (tag === 'check_value') {
+              props.value = child.getAttribute("value") || 'player.money';
+              props.operator = child.getAttribute("operator") || 'ge';
+              props.amount = Number(child.getAttribute("value2")) || 1000000;
+            } else {
+              for (let a = 0; a < child.attributes.length; a++) {
+                const attr = child.attributes[a];
+                props[attr.name] = attr.value;
+              }
+            }
+            
+            const conditionNode: MDNode = {
+              id: childId,
+              type: nodeType,
+              label,
+              xmlTag: tag,
+              x: currentX - 100,
+              y: currentY + 320 + (j * 150),
+              properties: { ...template.properties, ...props },
+              propertiesSchema: template.propertiesSchema,
+              inputs: template.inputs,
+              outputs: template.outputs
+            };
+            
+            nodes.push(conditionNode);
+            
+            links.push({
+              id: `link_cond_${Date.now()}_${i}_${j}`,
+              sourceNodeId: cueId,
+              sourcePortId: 'out_cond',
+              targetNodeId: childId,
+              targetPortId: 'in_cond'
+            });
+          }
+        }
+        
+        // Actions block parsing
+        const actions = cue.getElementsByTagName("actions")[0];
+        if (actions) {
+          const actionChildren = actions.children;
+          let lastActionId = '';
+          let actionCount = 0;
+          
+          for (let j = 0; j < actionChildren.length; j++) {
+            const child = actionChildren[j];
+            const tag = child.tagName;
+            
+            if (child.nodeType !== 1) continue;
+            
+            const actionId = `action_${Date.now()}_${i}_${j}`;
+            let schemaIdx = NODE_TEMPLATES.findIndex(t => t.xmlTag === tag);
+            if (schemaIdx === -1) continue;
+            
+            const template = NODE_TEMPLATES[schemaIdx];
+            const props: Record<string, any> = {};
+            
+            if (tag === 'create_ship') {
+              props.name = child.getAttribute("name") || '$EscortShip';
+              props.macro = child.getAttribute("macro") || 'ship_arg_s_fighter_01_a_macro (Elite Vanguard)';
+              props.faction = child.getAttribute("faction") || 'player';
+              
+              const space = child.getElementsByTagName("space")[0];
+              if (space) {
+                props.sector = space.getAttribute("object") || 'player.sector';
+              }
+              const pos = child.getElementsByTagName("position")[0];
+              if (pos) {
+                props.coords = `${pos.getAttribute("x") || 0},${pos.getAttribute("y") || 0},${pos.getAttribute("z") || 1000}`;
+              }
+            } else if (tag === 'create_station') {
+              props.name = child.getAttribute("name") || '$Station';
+              props.macro = child.getAttribute("macro") || 'station_arg_defense_01_macro (Defence Station)';
+              props.faction = child.getAttribute("faction") || 'player';
+              
+              const space = child.getElementsByTagName("space")[0];
+              if (space) {
+                props.sector = space.getAttribute("sector") || 'player.sector';
+              }
+              const pos = child.getElementsByTagName("position")[0];
+              if (pos) {
+                props.coords = `${pos.getAttribute("x") || 5000},${pos.getAttribute("y") || 0},${pos.getAttribute("z") || 5000}`;
+              }
+            } else if (tag === 'reward_player') {
+              props.money = Number(child.getAttribute("money")) || 250000;
+              props.notification = child.getAttribute("notification") || 'true';
+              
+              const rep = child.getElementsByTagName("reputation")[0];
+              if (rep) {
+                props.faction = (rep.getAttribute("faction") || 'argon').replace('faction.', '');
+                props.standing = rep.getAttribute("value") || '0.05';
+              }
+            } else {
+              for (let a = 0; a < child.attributes.length; a++) {
+                const attr = child.attributes[a];
+                props[attr.name] = attr.value;
+              }
+            }
+            
+            const actionNode: MDNode = {
+              id: actionId,
+              type: 'action',
+              label: template.label,
+              xmlTag: tag,
+              x: currentX + 380 * (actionCount + 1),
+              y: currentY + 40,
+              properties: { ...template.properties, ...props },
+              propertiesSchema: template.propertiesSchema,
+              inputs: template.inputs,
+              outputs: template.outputs
+            };
+            
+            nodes.push(actionNode);
+            
+            if (actionCount === 0) {
+              links.push({
+                id: `link_act_init_${Date.now()}_${i}_${j}`,
+                sourceNodeId: cueId,
+                sourcePortId: 'out_act',
+                targetNodeId: actionId,
+                targetPortId: 'in_act'
+              });
+            } else if (lastActionId) {
+              links.push({
+                id: `link_act_next_${Date.now()}_${i}_${j}`,
+                sourceNodeId: lastActionId,
+                sourcePortId: 'out_next',
+                targetNodeId: actionId,
+                targetPortId: 'in_act'
+              });
+            }
+            
+            lastActionId = actionId;
+            actionCount++;
+          }
+        }
+        
+        currentY += 580;
+      }
+      
+      const parsedWorkspace: ModWorkspace = {
+        id: `workspace_${Date.now()}`,
+        name: modName,
+        version: "1.0.0",
+        author: "ImportedAuthor",
+        description: `Imported and visually reconstructed with ${nodes.length} nodes and ${links.length} connections.`,
+        nodes,
+        links,
+        uiWidgets: [],
+        uiTheme: {
+          backgroundColor: "#0d0e15",
+          borderColor: "#06b6d4",
+          accentColor: "#0891b2",
+          opacity: 0.95,
+          showIcons: true
+        }
+      };
+      
+      return parsedWorkspace;
+    } catch (err: any) {
+      console.warn("XML Import Parsing Error: ", err);
+      return null;
+    }
+  };
+
+  // Raw Content text/file parser execution
+  const executeImport = (textToImport: string, format: 'json' | 'xml') => {
+    if (!textToImport.trim()) {
+      setStatusBanner({ type: 'refused', msg: 'Please enter or drop file data to load.' });
+      return;
+    }
+
+    try {
+      if (format === 'json') {
+        const parsed = JSON.parse(textToImport);
+        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.nodes)) {
+          // Valid workspace json
+          saveCheckpoint();
+          setWorkspace(parsed);
+          setStatusBanner({ 
+            type: 'success', 
+            msg: `Workspace JSON "${parsed.name || 'mod'}" parsed successfully! Re-rendered ${parsed.nodes.length} visual nodes.` 
+          });
+          onClose();
+        } else {
+          throw new Error("Missing mandatory 'nodes' schema attribute.");
+        }
+      } else {
+        // Run customized Egosoft Script Parser
+        const reconstructed = parseXMLToWorkspace(textToImport);
+        if (reconstructed && reconstructed.nodes.length > 0) {
+          saveCheckpoint();
+          setWorkspace(reconstructed);
+          setStatusBanner({
+            type: 'success',
+            msg: `Reconstructed Mission script successfully! Generated ${reconstructed.nodes.length} nodes and ${reconstructed.links.length} visual node chains.`
+          });
+          onClose();
+        } else {
+          throw new Error("No compatible game nodes (cues, events, actions) were identified in this script file.");
+        }
+      }
+    } catch (e: any) {
+      setStatusBanner({ type: 'refused', msg: `Parse Error: ${e.message || "Ensure correct XML structure."}` });
+    }
+  };
+
+  // Drag and Drop files handling
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      const reader = new FileReader();
+
+      reader.onload = (event) => {
+        const contentText = event.target?.result as string || '';
+        setImportText(contentText);
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        
+        if (ext === 'json') {
+          executeImport(contentText, 'json');
+        } else if (ext === 'xml') {
+          executeImport(contentText, 'xml');
+        } else {
+          setStatusBanner({ type: 'info', msg: `Identified file structure as text. Extracted raw text content.` });
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  // File picker handler
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      
+      reader.onload = (event) => {
+        const contentText = event.target?.result as string || '';
+        setImportText(contentText);
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        if (ext === 'json') executeImport(contentText, 'json');
+        else executeImport(contentText, 'xml');
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  // Fetch Load from GitHub via internal server proxy endpoint (No Mock!)
+  const handleGitHubLoad = async () => {
+    if (!owner || !repo || !filePathToLoad) {
+      setStatusBanner({ type: 'refused', msg: 'Missing required Repo Owner, Name, or target File Path.' });
+      return;
+    }
+
+    setIsProcessing(true);
+    setTerminalLogs([]);
+    addLog(`Initiating connection request to GitHub repository: ${owner}/${repo}`);
+    addLog(`Downloading requested path: "${filePathToLoad}" on branch "${branch}"...`);
+
+    try {
+      const response = await fetch('/api/github/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pat: pat || undefined,
+          owner,
+          repo,
+          path: filePathToLoad,
+          branch
+        })
+      });
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || `Returned ${response.statusText}`);
+      }
+
+      addLog(`File successfully downloaded from GitHub! Size: ${result.content.length} characters.`);
+      addLog(`Commencing file decoder for file: ${result.fileName}`);
+
+      setIsProcessing(false);
+      
+      // Determine format automatically
+      const isJson = filePathToLoad.endsWith('.json') || result.content.trim().startsWith('{');
+      executeImport(result.content, isJson ? 'json' : 'xml');
+      
+    } catch (err: any) {
+      addLog(`❌ ERROR: GitHub file loading failed. ${err.message}`);
+      setIsProcessing(false);
+      setStatusBanner({ type: 'refused', msg: `GitHub Load Failed: ${err.message || 'Check connection details.'}` });
+    }
+  };
+
+  // Push Files to GitHub Commit via internal server proxy endpoint (No Mock!)
+  const handleGitHubPush = async () => {
+    if (!pat) {
+      setStatusBanner({ type: 'refused', msg: 'GitHub Personal Access Token (PAT) is required to push edits.' });
+      return;
+    }
+    if (!owner || !repo) {
+      setStatusBanner({ type: 'refused', msg: 'Please provide both Repository Owner and Name.' });
+      return;
+    }
+
+    setIsProcessing(true);
+    setTerminalLogs([]);
+    addLog(`Compiling active workspaces into Egosoft XML configurations...`);
+    
+    // Compile on the fly
+    const workspaceJson = JSON.stringify(workspace, null, 2);
+    const mdScriptXML = generateMDXML(workspace);
+    const uiLayoutXML = generateUIXML(workspace);
+    const readmeMD = `# ${workspace.name || 'X4 Foundations Mod'}
+*Author: ${workspace.author || 'Anonymous'}*
+*Version: ${workspace.version || '1.0.0'}*
+
+## Description
+${workspace.description || 'Custom mod developed inside X4 Foundations Mod Studio Visual Node Editor.'}
+
+## Visual Graph Layout
+This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${workspace.links.length}\` wiring layouts. Redefine and customize dynamically inside [X4:MD Studio](https://ai.studio/build).
+`;
+
+    // Package into files payload based on user selections
+    const filesToPush = [];
+    if (pushSelectedFiles.workspace) {
+      filesToPush.push({ path: 'ais_workspace.json', content: workspaceJson });
+    }
+    if (pushSelectedFiles.md_xml) {
+      filesToPush.push({ path: `md/${workspace.name || 'ais_mod'}.xml`, content: mdScriptXML });
+    }
+    if (pushSelectedFiles.ui_xml) {
+      filesToPush.push({ path: `ui/ais_ui_layout.xml`, content: uiLayoutXML });
+    }
+    if (pushSelectedFiles.readme) {
+      filesToPush.push({ path: 'README.md', content: readmeMD });
+    }
+
+    if (filesToPush.length === 0) {
+      setIsProcessing(false);
+      setStatusBanner({ type: 'refused', msg: 'Please select at least one compiled file target to push.' });
+      return;
+    }
+
+    addLog(`Preparing push payload containing ${filesToPush.length} files...`);
+    addLog(`Target branch: "${branch || 'main'}". Commit: "${commitMessage}"`);
+    addLog(`Dispatching server-side synchronized proxy request to api.github.com...`);
+
+    try {
+      const response = await fetch('/api/github/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pat,
+          owner,
+          repo,
+          branch,
+          commitMessage,
+          files: filesToPush
+        })
+      });
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || `Commit request failed: ${response.statusText}`);
+      }
+
+      addLog(`Synchronization complete! GitHub API updated files recursively on branch [${branch}].`);
+      result.results?.forEach((f: any) => {
+        addLog(`  => [Committed] ${f.path} (SHA: ${f.sha.substring(0, 8)})`);
+      });
+      addLog(`🎉 SUCCESS: Mod project changes merged cleanly! Repository is live.`);
+
+      setIsProcessing(false);
+      setStatusBanner({ 
+        type: 'success', 
+        msg: `Successfully synced & pushed ${filesToPush.length} files to GitHub repository ${owner}/${repo}!` 
+      });
+    } catch (err: any) {
+      addLog(`❌ ERROR: GitHub push request failed.`);
+      addLog(`  Details: ${err.message}`);
+      setIsProcessing(false);
+      setStatusBanner({ type: 'refused', msg: `GitHub Push Failed: ${err.message}` });
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 transition-all animate-fade-in font-sans">
+      <div className="w-full max-w-4xl bg-[#141822] border border-white/10 rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+        {/* Header section */}
+        <div className="flex items-center justify-between p-4 border-b border-white/5 bg-[#171c2a]">
+          <div className="flex items-center gap-2.5">
+            <FolderSync className="w-5 h-5 text-cyan-400" />
+            <div>
+              <h2 className="text-sm font-mono font-bold text-white tracking-wider uppercase">Mod Cloud Sync & File Parser</h2>
+              <p className="text-[10px] font-mono text-slate-400">Import existing codes or synchronize scripts directly with GitHub</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-all cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Status Alerts banner */}
+        {statusBanner && (
+          <div className={`p-3 text-[11px] font-mono border-b flex items-center justify-between transition-all ${
+            statusBanner.type === 'success' 
+              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
+              : statusBanner.type === 'refused'
+              ? 'bg-red-500/10 text-red-400 border-red-500/20'
+              : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+          }`}>
+            <div className="flex items-center gap-2">
+              {statusBanner.type === 'success' ? <CheckCircle2 className="w-4.5 h-4.5" /> : <AlertCircle className="w-4.5 h-4.5" />}
+              <span>{statusBanner.msg}</span>
+            </div>
+            <button 
+              onClick={() => setStatusBanner(null)} 
+              className="text-[10px] underline cursor-pointer hover:text-white"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Category Selector Tabs */}
+        <div className="flex border-b border-white/5 bg-black/15 font-mono text-xs">
+          <button
+            onClick={() => { setActiveTab('import'); setStatusBanner(null); }}
+            className={`flex-1 py-3 border-b-2 text-center font-bold tracking-tight transition-all cursor-pointer ${
+              activeTab === 'import'
+                ? 'border-cyan-500 text-white bg-cyan-600/5'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            📂 IMPORT JSON / MD XML
+          </button>
+          <button
+            onClick={() => { setActiveTab('github'); setStatusBanner(null); }}
+            className={`flex-1 py-3 border-b-2 text-center font-bold tracking-tight transition-all cursor-pointer ${
+              activeTab === 'github'
+                ? 'border-cyan-500 text-white bg-cyan-600/5'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Github className="w-3.5 h-3.5 inline mr-1" /> GITHUB REPO MANAGER
+          </button>
+        </div>
+
+        {/* Modal Container Scrollable Body */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          
+          {/* TAB 1: FILE IMPORTER */}
+          {activeTab === 'import' && (
+            <div className="space-y-4">
+              <div 
+                onDragEnter={handleDrag}
+                onDragOver={handleDrag}
+                onDragLeave={handleDrag}
+                onDrop={handleDrop}
+                className={`border-2 border-dashed rounded-lg p-6 text-center select-none cursor-pointer transition-all ${
+                  dragActive 
+                    ? 'border-cyan-500 bg-cyan-500/10' 
+                    : 'border-white/10 hover:border-cyan-500/40 bg-black/25'
+                }`}
+              >
+                <input 
+                  type="file" 
+                  id="import-file-picker" 
+                  accept=".json,.xml"
+                  className="hidden" 
+                  onChange={handleFileInput}
+                />
+                <label htmlFor="import-file-picker" className="cursor-pointer space-y-2 block">
+                  <Upload className="w-8 h-8 text-cyan-400 mx-auto" />
+                  <div className="text-white text-xs font-mono font-medium">
+                    Drag and drop file here, or <span className="text-cyan-400 underline">browse computer</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-mono">
+                    Accepts exported Workspace <span className="text-slate-400">.json</span> or Egosoft Mission Director <span className="text-slate-400">.xml</span> files
+                  </p>
+                </label>
+              </div>
+
+              <div className="relative">
+                <div className="flex items-center justify-between mb-1.5 font-mono">
+                  <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    Or Paste Raw Code to Load
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => executeImport(importText, 'json')}
+                      className="px-2 py-0.5 rounded text-[10px] bg-indigo-600/20 text-indigo-400 border border-indigo-500/35 hover:bg-indigo-600/35 cursor-pointer transition-all flex items-center gap-1"
+                    >
+                      <FileJson className="w-3 h-3" />
+                      Import Workspace JSON
+                    </button>
+                    <button
+                      onClick={() => executeImport(importText, 'xml')}
+                      className="px-2 py-0.5 rounded text-[10px] bg-cyan-600/20 text-cyan-400 border border-cyan-500/35 hover:bg-cyan-600/35 cursor-pointer transition-all flex items-center gap-1"
+                    >
+                      <FileCode className="w-3 h-3" />
+                      Parse Egosoft XML Script
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  value={importText}
+                  onChange={e => setImportText(e.target.value)}
+                  placeholder="Paste workspace JSON or standard X4 MD script XML here..."
+                  className="w-full h-44 p-3 rounded-lg bg-black/60 border border-white/10 font-mono text-[11px] text-slate-300 focus:outline-none focus:border-cyan-500 transition-all resize-none"
+                />
+              </div>
+
+              <div className="bg-slate-950/40 p-3 rounded-lg border border-white/5 space-y-1.5 text-[10.5px] leading-relaxed text-slate-400 font-mono">
+                <div className="text-cyan-400 uppercase font-bold text-[11px] flex items-center gap-1 mb-1">
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  X4 smart XML parser technology:
+                </div>
+                <div>• Auto-creates <span className="text-purple-400 font-semibold">Mission Cue</span> visual nodes dynamically mapped with logical ids.</div>
+                <div>• Translates nested event triggers and value conditions such as <span className="text-yellow-400">&lt;event_cue_signalled&gt;</span>.</div>
+                <div>• Decodes action sequences like <span className="text-emerald-400">&lt;create_ship&gt;</span> or <span className="text-emerald-400">&lt;reward_player&gt;</span> and auto-formats correct wiring links.</div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: GITHUB */}
+          {activeTab === 'github' && (
+            <div className="space-y-4 font-mono text-xs">
+              
+              {/* GitHub Credentials Section */}
+              <div className="bg-slate-900/40 p-3 rounded-lg border border-white/5 space-y-3">
+                <div className="text-white font-mono font-semibold text-xs tracking-wide uppercase flex items-center gap-1.5 border-b border-white/5 pb-1.5">
+                  <Github className="w-4 h-4 text-slate-400" />
+                  GitHub Repository Configuration
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-400 text-[10px] uppercase block mb-1 text-slate-400 tracking-wider">Personal Access Token (PAT)</label>
+                    <input
+                      type="password"
+                      value={pat}
+                      onChange={e => setPat(e.target.value)}
+                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxx"
+                      className="w-full p-2 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 text-[10px] uppercase block mb-1 text-slate-400 tracking-wider font-semibold flex items-center gap-1">
+                      <span>Repo Owner</span>
+                      <span className="text-[9px] lowercase text-slate-500 font-normal">(username)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={owner}
+                      onChange={e => setOwner(e.target.value)}
+                      placeholder="e.g. KennySmith-1911"
+                      className="w-full p-2 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Repository Name</label>
+                    <input
+                      type="text"
+                      value={repo}
+                      onChange={e => setRepo(e.target.value)}
+                      placeholder="e.g. my-x4-mods"
+                      className="w-full p-2 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Branch</label>
+                    <input
+                      type="text"
+                      value={branch}
+                      onChange={e => setBranch(e.target.value)}
+                      placeholder="main"
+                      className="w-full p-2 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Loader and Push columns side-by-side */}
+              <div className="grid grid-cols-2 gap-4">
+                
+                {/* Loader panel (LOAD) */}
+                <div className="bg-[#1a1f2e] p-3.5 rounded-lg border border-cyan-500/20 flex flex-col justify-between">
+                  <div className="space-y-2.5">
+                    <h3 className="text-cyan-400 font-semibold uppercase text-[11px] tracking-wider border-b border-white/5 pb-1 flex items-center gap-1">
+                      <ChevronRight className="w-3.5 h-3.5" />
+                      LOAD MOD FROM GITHUB
+                    </h3>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Download a workspace json or xml script directly from the remote repository to load it into the editor graph.
+                    </p>
+                    <div>
+                      <label className="text-slate-400 text-[10px] block mb-1">Target File to Load</label>
+                      <input
+                        type="text"
+                        value={filePathToLoad}
+                        onChange={e => setFilePathToLoad(e.target.value)}
+                        placeholder="ais_workspace.json"
+                        className="w-full p-1.5 rounded bg-black/50 border border-white/10 text-white text-[11px] focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleGitHubLoad}
+                    disabled={isProcessing}
+                    className="w-full py-2 mt-4 rounded bg-[#1e293b] hover:bg-cyan-600/20 text-cyan-400 border border-cyan-500/30 font-bold transition-all disabled:opacity-40 select-none cursor-pointer"
+                  >
+                    Load File
+                  </button>
+                </div>
+
+                {/* Submitting panel (PUSH) */}
+                <div className="bg-[#1a1f2e] p-3.5 rounded-lg border border-emerald-500/20 space-y-3.5">
+                  <h3 className="text-emerald-400 font-semibold uppercase text-[11px] tracking-wider border-b border-white/5 pb-1 flex items-center gap-1">
+                    <ChevronRight className="w-3.5 h-3.5" />
+                    COMMIT & PUSH MOD FILE
+                  </h3>
+                  
+                  {/* Proposed Workspace Diff Overview */}
+                  <div className="space-y-1.5 text-[11px]">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-1">
+                      <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-1 font-bold">
+                        <GitCompare className="w-3.5 h-3.5 text-emerald-400" />
+                        PROPOSED WORKSPACE CHANGES
+                      </div>
+                      <button
+                        onClick={(e) => { e.preventDefault(); fetchRemoteAndComputeDiff(); }}
+                        disabled={isDiffLoading || isProcessing}
+                        className="px-1.5 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 disabled:opacity-40 transition-all cursor-pointer flex items-center gap-1 text-[9px] border border-emerald-500/20"
+                        title="Re-scan and populate changes"
+                      >
+                        <RefreshCw className={`w-2.5 h-2.5 ${isDiffLoading ? 'animate-spin' : ''}`} />
+                        Scan remote diff
+                      </button>
+                    </div>
+
+                    {isDiffLoading ? (
+                      <div className="bg-black/30 p-2 h-24 rounded border border-white/5 flex flex-col items-center justify-center gap-1">
+                        <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+                        <span className="text-[9px] text-slate-400 font-mono animate-pulse">Comparing active graph with GitHub remote...</span>
+                      </div>
+                    ) : (
+                      <div className="bg-black/40 p-2 h-24 rounded border border-white/5 overflow-y-auto space-y-1 font-mono text-[10px] custom-scrollbar scrollbar-thin">
+                        {diffItems.length === 0 ? (
+                          <div className="text-slate-500 text-center py-5 leading-normal">
+                            No differences detected.<br/>Push to align remote repository branch.
+                          </div>
+                        ) : (
+                          diffItems.map((item, idx) => (
+                            <div 
+                              key={idx} 
+                              className={`p-1 rounded flex items-start gap-1 font-mono leading-tight ${
+                                item.type === 'add' 
+                                  ? 'bg-emerald-500/5 text-emerald-400' 
+                                  : item.type === 'remove' 
+                                  ? 'bg-red-500/5 text-red-400' 
+                                  : 'bg-amber-500/5 text-amber-400'
+                              }`}
+                            >
+                              <span className="font-bold flex-shrink-0 font-sans">
+                                {item.type === 'add' ? '+' : item.type === 'remove' ? '-' : '~'}
+                              </span>
+                              <span>{item.text}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 bg-black/30 p-2 rounded border border-white/5 text-[11px]">
+                    <div className="text-[9px] uppercase text-slate-500 tracking-wider mb-1">Files Pack to Push:</div>
+                    <label className="flex items-center gap-2 text-slate-300">
+                      <input 
+                        type="checkbox" 
+                        checked={pushSelectedFiles.workspace} 
+                        onChange={e => setPushSelectedFiles(p => ({ ...p, workspace: e.target.checked }))}
+                        className="accent-indigo-500"
+                      />
+                      <span>ais_workspace.json (Visual flow)</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-slate-300">
+                      <input 
+                        type="checkbox" 
+                        checked={pushSelectedFiles.md_xml} 
+                        onChange={e => setPushSelectedFiles(p => ({ ...p, md_xml: e.target.checked }))}
+                        className="accent-cyan-500"
+                      />
+                      <span>md/{workspace.name || 'mod'}.xml (X4 Engine script)</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-slate-300">
+                      <input 
+                        type="checkbox" 
+                        checked={pushSelectedFiles.ui_xml} 
+                        onChange={e => setPushSelectedFiles(p => ({ ...p, ui_xml: e.target.checked }))}
+                        className="accent-blue-500"
+                      />
+                      <span>ui/ais_ui_layout.xml (HUD menu lua)</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-slate-300">
+                      <input 
+                        type="checkbox" 
+                        checked={pushSelectedFiles.readme} 
+                        onChange={e => setPushSelectedFiles(p => ({ ...p, readme: e.target.checked }))}
+                        className="accent-teal-500"
+                      />
+                      <span>README.md (Documentation markdown)</span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 text-[10px] block mb-1">Commit Message <span className="text-[9px] text-emerald-400 font-normal">(Auto-populated)</span></label>
+                    <input
+                      type="text"
+                      value={commitMessage}
+                      onChange={e => setCommitMessage(e.target.value)}
+                      placeholder="Commit brief details..."
+                      className="w-full p-1.5 rounded bg-black/50 border border-white/10 text-white text-[11px] focus:outline-none focus:border-cyan-500 font-mono"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleGitHubPush}
+                    disabled={isProcessing}
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold transition-all disabled:opacity-40 select-none cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/30"
+                  >
+                    Sync & Push Updates
+                  </button>
+                </div>
+
+              </div>
+
+            </div>
+          )}
+
+          {/* TERMINAL STATUS DIAGNOSTICS OUTPUT PANEL */}
+          {terminalLogs.length > 0 && (
+            <div className="space-y-1.5 font-mono">
+              <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                Live Terminal Activity Log Tracker
+              </div>
+              <div className="w-full max-h-36 overflow-y-auto bg-black p-2.5 rounded-lg border border-white/5 text-[9.5px] leading-relaxed text-slate-400 space-y-1 h-full shadow-inner">
+                {terminalLogs.map((log, idx) => {
+                  let cls = '';
+                  if (log.includes('❌')) cls = 'text-red-400 font-semibold';
+                  if (log.includes('🎉') || log.includes('SUCCESS')) cls = 'text-emerald-400 font-semibold';
+                  if (log.includes('=> [Committed]')) cls = 'text-indigo-400';
+                  return (
+                    <div key={idx} className={cls}>
+                      {log}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+        </div>
+
+        {/* Technical Footer */}
+        <div className="p-3 bg-[#0d1017] border-t border-white/5 flex items-center justify-between text-[10px] font-mono text-slate-500">
+          <div className="flex items-center gap-1.5">
+            <ShieldAlert className="w-3.5 h-3.5 text-yellow-500" />
+            <span>Secure Connection (https proxy) encryption enabled</span>
+          </div>
+          <span>API: github.v3</span>
+        </div>
+      </div>
+    </div>
+  );
+}

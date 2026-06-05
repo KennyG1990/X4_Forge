@@ -1,0 +1,6 @@
+{
+  "name": "X4 Foundations Mod Studio",
+  "description": "Visual drag-and-drop script creator, MD XML generator, real-time code validator, and mod UI builder for X4: Foundations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
