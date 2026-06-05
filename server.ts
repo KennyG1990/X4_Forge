@@ -390,14 +390,35 @@ async function callMultiProviderAI(
 // 1. ORIGINAL GEMINI CHAT CHOTBOT API
 // -----------------------------------------------------
 app.post("/api/gemini", async (req, res) => {
-  const { prompt } = req.body;
+  const { prompt, currentWorkspace, diagnostics } = req.body;
   if (!prompt) {
     return res.status(400).json({ error: "Missing prompt parameter." });
   }
 
   try {
     const systemInstruction = "You are an elite X4: Foundations XML & Mission Director MD scripting expert. Help the player write clean, functional scripts. Maximize brief and scan-friendly code blocks using markdown formatting. Avoid lengthy definitions, get straight to functional XML examples and tips.";
-    const responseText = await callMultiProviderAI(req, systemInstruction, prompt, "text");
+    
+    let finalPrompt = prompt;
+    if (currentWorkspace) {
+      finalPrompt = `You are helping the player analyze, fix, or write script code within the context of their active visual node-graph workspace and list of active XML schema diagnostics.
+
+[Active Workspace Context]:
+- Name: "${currentWorkspace.name}"
+- Description: "${currentWorkspace.description || "No description provided."}"
+- Nodes: ${JSON.stringify(currentWorkspace.nodes?.map((n: any) => ({ id: n.id, label: n.label, type: n.type, xmlTag: n.xmlTag, properties: n.properties })) || [])}
+- Links/Connections: ${JSON.stringify(currentWorkspace.links || [])}
+- UI Widgets: ${JSON.stringify(currentWorkspace.uiWidgets || [])}
+
+[Live XML Schema Diagnostics (Errors / Warnings)]:
+${diagnostics && diagnostics.length > 0 ? JSON.stringify(diagnostics, null, 2) : "0 Errors, 0 Warnings. Everything currently compiles and validates successfully!"}
+
+[User Query / Direct Instructions]:
+"${prompt}"
+
+Please respond accurately to the user query using the above active workspace state and diagnostics as key context. If they are asking you to fix a warning or error, analyze which node or property is violating rules and tell them exactly how they can adjust those parameters!`;
+    }
+
+    const responseText = await callMultiProviderAI(req, systemInstruction, finalPrompt, "text");
     return res.json({ text: responseText });
   } catch (error: any) {
     console.error("Multi-Provider chat routing error: ", error);
@@ -667,14 +688,14 @@ app.post("/api/agent/compile", (req, res) => {
  * into a highly complex, logical ModWorkspace structured JSON value.
  */
 app.post("/api/agent/generate", async (req, res) => {
-  const { prompt } = req.body;
+  const { prompt, currentWorkspace, diagnostics } = req.body;
   if (!prompt) {
     return res.status(400).json({ error: "Missing 'prompt' body parameter." });
   }
 
   try {
     const systemInstruction = `You are a high-fidelity visual translator agent for the "X4 Foundations Mod Studio".
-Your task is to take a natural language command and design a fully connected, functional "ModWorkspace" JSON schema.
+Your task is to take a natural language command and design or modify a fully connected, functional "ModWorkspace" JSON schema.
 Connect the node inputs and outputs visually and logically. Put the coordinates (x, y) at a clean visual distance (like 300px increments) to display beautifully in a bento layout node network.
 
 CRITICAL RULES:
@@ -778,7 +799,33 @@ Valid Audio Sounds: 'notification_generic', 'mission_accomplished', 'mission_fai
       }
     };
 
-    const textOutput = await callMultiProviderAI(req, systemInstruction, prompt, "json", schema);
+    let finalPrompt = prompt;
+    if (currentWorkspace) {
+      finalPrompt = `You are EDITING, MODIFYING, or CORRECTING the current active visual ModWorkspace instead of generating a generic one from scratch, unless explicitly requested to build a completely brand new workspace.
+      
+[Current Workspace Structure]:
+- Name: "${currentWorkspace.name}"
+- Version: "${currentWorkspace.version || "1.0.0"}"
+- Author: "${currentWorkspace.author || "Player"}"
+- Description: "${currentWorkspace.description || ""}"
+- Nodes: ${JSON.stringify(currentWorkspace.nodes)}
+- Links: ${JSON.stringify(currentWorkspace.links)}
+- UI Widgets: ${JSON.stringify(currentWorkspace.uiWidgets || [])}
+- UI Theme: ${JSON.stringify(currentWorkspace.uiTheme || {})}
+
+[Current Egosoft Schema XML Code Validation Diagnostics]:
+${diagnostics && diagnostics.length > 0 ? JSON.stringify(diagnostics, null, 2) : "No validation diagnostics reports."}
+
+[User's Direct Target Instruction]:
+"${prompt}"
+
+CRITICAL EDITING POLICY:
+1. Maintain continuity: Keep the existing node visual coordinates (x, y), node labels, node IDs, and linkage connections intact wherever possible, unless they need to be changed or fixed to solve errors or satisfy the prompt.
+2. Solve the warnings/errors: Examine the warnings or errors in the diagnostics list and apply necessary fixes (e.g. hooking up cues to conditions/actions, adding missing properties, etc.) to the generated workspace nodes.
+3. Never drop existing nodes/links/widgets that are unrelated to the target modifications. Return the complete, updated "ModWorkspace" JSON object.`;
+    }
+
+    const textOutput = await callMultiProviderAI(req, systemInstruction, finalPrompt, "json", schema);
     const generatedWorkspace = JSON.parse(textOutput.trim());
 
     // Generate automatic unique ids for items if missing

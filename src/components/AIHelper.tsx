@@ -16,7 +16,7 @@ import {
   ChevronRight 
 } from 'lucide-react';
 import { getAIHeaders } from '../lib/apiHelper';
-import { ModWorkspace } from '../types';
+import { ModWorkspace, validateModWorkspace, generateMDXML } from '../types';
 
 interface AIHelperProps {
   workspace: ModWorkspace;
@@ -74,10 +74,17 @@ export default function AIHelper({ workspace, setWorkspace, localVersion, setLoc
     setInputText('');
 
     try {
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+
       const response = await fetch("/api/gemini", {
         method: "POST",
         headers: getAIHeaders(),
-        body: JSON.stringify({ prompt: promptMsg })
+        body: JSON.stringify({ 
+          prompt: promptMsg,
+          currentWorkspace: workspace,
+          diagnostics: diagnostics
+        })
       });
 
       const data = await response.json();
@@ -101,10 +108,17 @@ export default function AIHelper({ workspace, setWorkspace, localVersion, setLoc
     setInputText('');
 
     try {
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+
       const response = await fetch("/api/agent/generate", {
         method: "POST",
         headers: getAIHeaders(),
-        body: JSON.stringify({ prompt: promptMsg })
+        body: JSON.stringify({ 
+          prompt: promptMsg,
+          currentWorkspace: workspace,
+          diagnostics: diagnostics
+        })
       });
 
       const data = await response.json();

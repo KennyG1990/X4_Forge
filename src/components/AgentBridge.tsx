@@ -22,7 +22,7 @@ import {
   ChevronUp,
   X
 } from 'lucide-react';
-import { ModWorkspace } from '../types';
+import { ModWorkspace, validateModWorkspace, generateMDXML } from '../types';
 import { getAIHeaders } from '../lib/apiHelper';
 
 interface AgentBridgeProps {
@@ -146,10 +146,17 @@ export default function AgentBridge({
     setSimSuccess(null);
 
     try {
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+
       const response = await fetch("/api/agent/generate", {
         method: "POST",
         headers: getAIHeaders(),
-        body: JSON.stringify({ prompt: simPrompt })
+        body: JSON.stringify({ 
+          prompt: simPrompt,
+          currentWorkspace: workspace,
+          diagnostics: diagnostics
+        })
       });
 
       const data = await response.json();
