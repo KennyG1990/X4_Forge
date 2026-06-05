@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { schemaElementToTemplate, type SchemaElement } from './lib/schemaTypes';
+
 // Node port representation
 export interface Port {
   id: string;
@@ -413,8 +415,148 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
   }
 ];
 
+const CURATED_XML_TAGS = new Set(NODE_TEMPLATES.map(template => template.xmlTag));
+
+export function templateFromSchemaElement(element: SchemaElement): Omit<MDNode, 'id' | 'x' | 'y'> {
+  return schemaElementToTemplate(element);
+}
+
+export function renderGenericXMLNode(node: Pick<MDNode, 'xmlTag' | 'properties' | 'propertiesSchema'>, indent = ''): string {
+  const attrKeys = (node.propertiesSchema || []).map(schema => schema.key);
+  const keys = attrKeys.length > 0 ? attrKeys : Object.keys(node.properties || {});
+  const attrs = keys
+    .filter(key => key !== 'rawXml')
+    .map(key => [key, (node.properties || {})[key]] as const)
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
+    .map(([key, value]) => `${key}="${escapeXMLAttribute(String(value))}"`)
+    .join(' ');
+
+  return `${indent}<${node.xmlTag}${attrs ? ` ${attrs}` : ''} />`;
+}
+
+function escapeXMLAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 // Helper functions to generate the XML output cleanly
 export function generateMDXML(workspace: ModWorkspace): string {
+  function renderCue(cue: any, indentDepth: number = 2): string {
+    const indent = ' '.repeat(indentDepth);
+    const indentPlus = ' '.repeat(indentDepth + 2);
+    const indentDouble = ' '.repeat(indentDepth + 4);
+    
+    const cueName = cue.properties.name || cue.id;
+    const inst = cue.properties.instantiate === 'true' ? ' instantiate="true"' : '';
+    const ns = cue.properties.namespace ? ` namespace="${cue.properties.namespace}"` : '';
+    const state = cue.properties.state && cue.properties.state !== 'active' ? ` state="${cue.properties.state}"` : '';
+    
+    let xml = `${indent}<cue name="${cueName}"${inst}${ns}${state}>\n`;
+    
+    // Conditions block parsing (find all nodes connected to out_cond)
+    const condLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_cond');
+    if (condLinks.length > 0) {
+      xml += `${indentPlus}<conditions>\n`;
+      condLinks.forEach(link => {
+        const targetNode = workspace.nodes.find(n => n.id === link.targetNodeId);
+        if (targetNode) {
+          if (targetNode.xmlTag === 'custom_event' || targetNode.xmlTag === 'custom_condition') {
+            const raw = targetNode.properties.rawXml || '';
+            const lines = raw.trim().split('\n');
+            lines.forEach((l: string) => {
+              xml += `${indentDouble}${l}\n`;
+            });
+          } else if (targetNode.xmlTag === 'event_cue_signalled') {
+            xml += `${indentDouble}<event_cue_signalled cue="${targetNode.properties.cue || 'md.Setup.Start'}" />\n`;
+          } else if (targetNode.xmlTag === 'event_object_destroyed') {
+            const fac = targetNode.properties.faction && targetNode.properties.faction !== 'any' ? ` faction="faction.${targetNode.properties.faction}"` : '';
+            xml += `${indentDouble}<event_object_destroyed object="${targetNode.properties.object || 'player.target'}"${fac} />\n`;
+          } else if (targetNode.xmlTag === 'event_object_changed_sector') {
+            xml += `${indentDouble}<event_object_changed_sector object="${targetNode.properties.object || 'playership'}" sector="${targetNode.properties.sector || 'player.sector'}" />\n`;
+          } else if (targetNode.xmlTag === 'check_value') {
+            xml += `${indentDouble}<check_value value="${targetNode.properties.value || 'player.money'}" operator="${targetNode.properties.operator || 'ge'}" value2="${targetNode.properties.amount || 1000000}" />\n`;
+          } else if (!CURATED_XML_TAGS.has(targetNode.xmlTag)) {
+            xml += `${renderGenericXMLNode(targetNode, indentDouble)}\n`;
+          }
+        }
+      });
+      xml += `${indentPlus}</conditions>\n`;
+    }
+    
+    // Actions block parsing (find first action connected to out_act)
+    const actLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_act');
+    if (actLinks.length > 0) {
+      xml += `${indentPlus}<actions>\n`;
+      actLinks.forEach(firstLink => {
+        let currentNode = workspace.nodes.find(n => n.id === firstLink.targetNodeId);
+        const seen = new Set<string>();
+        
+        while (currentNode && !seen.has(currentNode.id)) {
+          seen.add(currentNode.id);
+          
+          if (currentNode.xmlTag === 'custom_xml') {
+            const raw = currentNode.properties.rawXml || '';
+            const lines = raw.trim().split('\n');
+            lines.forEach((l: string) => {
+              xml += `${indentDouble}${l}\n`;
+            });
+          } else if (currentNode.xmlTag === 'create_ship') {
+            xml += `${indentDouble}<create_ship name="${currentNode.properties.name || '$EscortShip'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" faction="${currentNode.properties.faction || 'player'}">\n`;
+            xml += `${indentDouble}  <space object="${currentNode.properties.sector || 'player.sector'}" />\n`;
+            if (currentNode.properties.coords) {
+              const xyz = currentNode.properties.coords.split(',');
+              xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
+            }
+            xml += `${indentDouble}</create_ship>\n`;
+          } else if (currentNode.xmlTag === 'reward_player') {
+            let rep = '';
+            if (currentNode.properties.standing && currentNode.properties.faction) {
+              rep = `\n${indentDouble}  <reputation faction="faction.${currentNode.properties.faction}" value="${currentNode.properties.standing}" />`;
+            }
+            xml += `${indentDouble}<reward_player money="${currentNode.properties.money || 0}" notification="${currentNode.properties.notification || 'true'}">${rep}\n${indentDouble}</reward_player>\n`;
+          } else if (currentNode.xmlTag === 'play_sound') {
+            xml += `${indentDouble}<play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
+          } else if (currentNode.xmlTag === 'show_help') {
+            xml += `${indentDouble}<show_help text="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
+          } else if (currentNode.xmlTag === 'create_station') {
+            xml += `${indentDouble}<create_station name="${currentNode.properties.name || '$Station'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" faction="${currentNode.properties.faction || 'player'}">\n`;
+            xml += `${indentDouble}  <space sector="${currentNode.properties.sector || 'player.sector'}" />\n`;
+            if (currentNode.properties.coords) {
+              const xyz = currentNode.properties.coords.split(',');
+              xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
+            }
+            xml += `${indentDouble}</create_station>\n`;
+          } else if (!CURATED_XML_TAGS.has(currentNode.xmlTag)) {
+            xml += `${renderGenericXMLNode(currentNode, indentDouble)}\n`;
+          }
+          
+          const nextLink = workspace.links.find(l => l.sourceNodeId === currentNode!.id && l.sourcePortId === 'out_next');
+          currentNode = nextLink ? workspace.nodes.find(n => n.id === nextLink.targetNodeId) : undefined;
+        }
+      });
+      xml += `${indentPlus}</actions>\n`;
+    }
+    
+    // Recursive nesting for child cues (out_sub -> in_flow)
+    const subCueLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+    if (subCueLinks.length > 0) {
+      xml += `${indentPlus}<cues>\n`;
+      subCueLinks.forEach(link => {
+        const subCue = workspace.nodes.find(n => n.id === link.targetNodeId);
+        if (subCue && subCue.type === 'cue') {
+          xml += renderCue(subCue, indentDepth + 4);
+        }
+      });
+      xml += `${indentPlus}</cues>\n`;
+    }
+    
+    xml += `${indent}</cue>\n`;
+    return xml;
+  }
+
   let xml = `<?xml version="1.0" encoding="utf-8"?>
 <mdscript name="${workspace.name || 'Sample_Mod'}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
   <!-- Generated by X4 Foundations Mod Studio (version ${workspace.version || '1.0.0'}) -->
@@ -423,138 +565,13 @@ export function generateMDXML(workspace: ModWorkspace): string {
   <cues>
 `;
 
-  // Find all Cue nodes
   const cueNodes = workspace.nodes.filter(n => n.type === 'cue');
+  const topLevelCues = cueNodes.filter(n => {
+    return !workspace.links.some(l => l.targetNodeId === n.id && l.sourcePortId === 'out_sub');
+  });
 
-  cueNodes.forEach(cue => {
-    const cueName = cue.properties.name || cue.id;
-    const inst = cue.properties.instantiate === 'true' ? ' instantiate="true"' : '';
-    const ns = cue.properties.namespace ? ` namespace="${cue.properties.namespace}"` : '';
-    
-    xml += `    <cue name="${cueName}"${inst}${ns}>\n`;
-
-    // Fetch linked events or conditions (Inputs: flow from conditions/events linked to out_cond or out_act)
-    const linkedLinks = workspace.links.filter(l => l.sourceNodeId === cue.id);
-    
-    // Conditions check
-    const condLinks = linkedLinks.filter(l => l.sourcePortId === 'out_cond');
-    if (condLinks.length > 0) {
-      xml += `      <conditions>\n`;
-      condLinks.forEach(link => {
-        const targetNode = workspace.nodes.find(n => n.id === link.targetNodeId);
-        if (targetNode) {
-          if (targetNode.type === 'event') {
-            if (targetNode.xmlTag === 'custom_event' || targetNode.xmlTag.startsWith('custom_')) {
-              const raw = targetNode.properties.rawXml || `<!-- Custom Event -->`;
-              xml += `        ${raw}\n`;
-            } else {
-              const eventProps = Object.entries(targetNode.properties)
-                .map(([k, v]) => `${k}="${v.toString().replace(/ \(.*\)/, '')}"`)
-                .join(' ');
-              xml += `        <${targetNode.xmlTag} ${eventProps} />\n`;
-            }
-          } else if (targetNode.type === 'condition') {
-            if (targetNode.xmlTag === 'custom_condition') {
-              const raw = targetNode.properties.rawXml || `<!-- Custom Condition -->`;
-              xml += `        ${raw}\n`;
-            } else {
-              const val = targetNode.properties.value || '';
-              const op = targetNode.properties.operator || 'eq';
-              const amt = targetNode.properties.amount || '';
-              xml += `        <check_value value="${val}" value2="${amt}" operator="${op}" />\n`;
-            }
-          }
-        }
-      });
-      xml += `      </conditions>\n`;
-    }
-
-    // Actions check
-    const actLinks = linkedLinks.filter(l => l.sourcePortId === 'out_act');
-    if (actLinks.length > 0) {
-      xml += `      <actions>\n`;
-      actLinks.forEach(link => {
-        let currentNode: MDNode | undefined = workspace.nodes.find(n => n.id === link.targetNodeId);
-        
-        while (currentNode) {
-          if (currentNode.type === 'action') {
-            if (currentNode.xmlTag === 'custom_xml' || currentNode.xmlTag.startsWith('custom_')) {
-              xml += `        <!-- Custom Action -->\n`;
-              xml += `        ${currentNode.properties.rawXml || ''}\n`;
-            } else if (currentNode.xmlTag === 'create_ship') {
-              const macroClean = (currentNode.properties.macro || '').split(' (')[0];
-              xml += `        <!-- Action: ${currentNode.label} -->\n`;
-              xml += `        <create_ship name="${currentNode.properties.name || '$Ship'}" macro="${macroClean}" faction="${currentNode.properties.faction || 'player'}">\n`;
-              xml += `          <space object="${currentNode.properties.sector || 'player.sector'}" />\n`;
-              
-              if (currentNode.properties.coords) {
-                const xyz = currentNode.properties.coords.split(',');
-                xml += `          <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
-              }
-              xml += `        </create_ship>\n`;
-            } else {
-              xml += `        <!-- Action: ${currentNode.label} -->\n`;
-              if (currentNode.xmlTag === 'reward_player') {
-                let reputation = '';
-                if (currentNode.properties.standing && currentNode.properties.faction) {
-                  reputation = `\n          <reputation faction="faction.${currentNode.properties.faction}" value="${currentNode.properties.standing}" />`;
-                }
-                xml += `        <reward_player money="${currentNode.properties.money || 0}" notification="${currentNode.properties.notification || 'true'}">${reputation}\n        </reward_player>\n`;
-              } else if (currentNode.xmlTag === 'play_sound') {
-                xml += `        <play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
-              } else if (currentNode.xmlTag === 'show_help') {
-                xml += `        <show_help text="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
-              } else if (currentNode.xmlTag === 'create_station') {
-                const macroClean = (currentNode.properties.macro || '').split(' (')[0];
-                xml += `        <create_station name="${currentNode.properties.name || '$Station'}" macro="${macroClean}" faction="${currentNode.properties.faction || 'player'}">\n`;
-                xml += `          <space sector="${currentNode.properties.sector || 'player.sector'}" />\n`;
-                if (currentNode.properties.coords) {
-                  const xyz = currentNode.properties.coords.split(',');
-                  xml += `          <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
-                }
-                xml += `        </create_station>\n`;
-              }
-            }
-          }
-          
-          // Move down the chain if there is a next action linked to 'out_next'
-          const nextActLink = workspace.links.find(l => l.sourceNodeId === currentNode?.id && l.sourcePortId === 'out_next');
-          currentNode = nextActLink ? workspace.nodes.find(n => n.id === nextActLink.targetNodeId) : undefined;
-        }
-      });
-      xml += `      </actions>\n`;
-    }
-
-    // Checking for linked child-cues connected to 'out_sub'
-    const subCues = linkedLinks.filter(l => l.sourcePortId === 'out_sub');
-    if (subCues.length > 0) {
-      xml += `      <cues>\n`;
-      subCues.forEach(link => {
-        const subCue = workspace.nodes.find(n => n.id === link.targetNodeId);
-        if (subCue && subCue.type === 'cue') {
-          // Represent recursive generation of cues simply
-          const subName = subCue.properties.name || subCue.id;
-          xml += `        <cue name="${subName}">\n`;
-          xml += `          <!-- Sub-cue definitions are grouped dynamically -->\n`;
-          // Quick nested trigger representation
-          const subActs = workspace.links.filter(l => l.sourceNodeId === subCue.id && l.sourcePortId === 'out_act');
-          if (subActs.length > 0) {
-            xml += `          <actions>\n`;
-            subActs.forEach(sa => {
-              const saNode = workspace.nodes.find(n => n.id === sa.targetNodeId);
-              if (saNode) {
-                xml += `            <show_help text="'Subcue triggered: ${saNode.label}'" duration="5" />\n`;
-              }
-            });
-            xml += `          </actions>\n`;
-          }
-          xml += `        </cue>\n`;
-        }
-      });
-      xml += `      </cues>\n`;
-    }
-
-    xml += `    </cue>\n`;
+  topLevelCues.forEach(cue => {
+    xml += renderCue(cue, 4);
   });
 
   xml += `  </cues>
@@ -642,80 +659,252 @@ export interface XMLDiagnostic {
 export function validateModWorkspace(workspace: ModWorkspace, code: string): XMLDiagnostic[] {
   const diagnostics: XMLDiagnostic[] = [];
 
-  // Check name & meta attributes
+  // ──────────────────────────────────────────────────────────────────
+  // LAW 1: Script Name — Uppercase, no spaces, non-empty
+  // ──────────────────────────────────────────────────────────────────
   if (!workspace.name) {
     diagnostics.push({
       severity: 'error',
-      message: 'Mod Name must not be empty. MD script compilation is restricted without name definitions.',
+      message: 'Mod Name must not be empty. The <mdscript name="..."> attribute is required by the X4 engine.',
       category: 'syntax'
     });
-  } else if (!/^[A-Za-z0-0_]+$/.test(workspace.name)) {
-    diagnostics.push({
-      severity: 'warning',
-      message: 'Mod Script name contains space or special characters. Strongly recommended to style using alphanumeric underscores (e.g. My_Custom_Script)',
-      category: 'syntax'
-    });
+  } else {
+    if (!/^[A-Za-z]/.test(workspace.name)) {
+      diagnostics.push({
+        severity: 'error',
+        message: `Script name "${workspace.name}" must start with a letter. The X4 MD engine requires <mdscript name="..."> to begin with [A-Z].`,
+        category: 'egosoft'
+      });
+    }
+    if (/\s/.test(workspace.name)) {
+      diagnostics.push({
+        severity: 'error',
+        message: `Script name "${workspace.name}" contains spaces. MD script names must not contain spaces so they can be used as references.`,
+        category: 'egosoft'
+      });
+    } else if (!/^[A-Za-z0-9_]+$/.test(workspace.name)) {
+      diagnostics.push({
+        severity: 'warning',
+        message: 'Script name contains special characters. Use only alphanumeric characters and underscores (e.g. My_Custom_Script).',
+        category: 'syntax'
+      });
+    }
   }
 
-  // Check Cues
+  // ──────────────────────────────────────────────────────────────────
+  // Helpers: resolve linked nodes for each cue in the flowchart
+  // ──────────────────────────────────────────────────────────────────
   const cueNodes = workspace.nodes.filter(n => n.type === 'cue');
+
+  /** Returns all condition/event nodes linked from a cue's out_cond port */
+  function getConditionNodes(cue: MDNode): MDNode[] {
+    return workspace.links
+      .filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_cond')
+      .map(l => workspace.nodes.find(n => n.id === l.targetNodeId))
+      .filter((n): n is MDNode => !!n);
+  }
+
+  /** Returns the full action chain linked from a cue's out_act port */
+  function getActionChain(cue: MDNode): MDNode[] {
+    const actions: MDNode[] = [];
+    const firstLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_act');
+    firstLinks.forEach(link => {
+      let current = workspace.nodes.find(n => n.id === link.targetNodeId);
+      const seen = new Set<string>();
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        actions.push(current);
+        const next = workspace.links.find(l => l.sourceNodeId === current!.id && l.sourcePortId === 'out_next');
+        current = next ? workspace.nodes.find(n => n.id === next.targetNodeId) : undefined;
+      }
+    });
+    return actions;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // No cues at all
+  // ──────────────────────────────────────────────────────────────────
   if (cueNodes.length === 0) {
     diagnostics.push({
       severity: 'warning',
-      message: 'No "Mission Cue" nodes configured. An MD script without cues will load successfully but will perform no actions.',
+      message: 'No "Mission Cue" nodes on the canvas. An MD script without cues will load but perform no actions.',
       category: 'egosoft'
     });
   }
 
-  // Warn about unlinked nodes
-  workspace.nodes.forEach(node => {
-    // A cue needs conditions or actions links
-    if (node.type === 'cue') {
-      const links = workspace.links.filter(l => l.sourceNodeId === node.id);
-      const hasConds = links.some(l => l.sourcePortId === 'out_cond');
-      const hasActs = links.some(l => l.sourcePortId === 'out_act');
-      if (!hasConds && !hasActs) {
+  // ──────────────────────────────────────────────────────────────────
+  // Per-cue validation (MD Laws 1-8)
+  // ──────────────────────────────────────────────────────────────────
+  const cueNamesSeen = new Set<string>();
+
+  cueNodes.forEach(cue => {
+    const cueName = cue.properties.name || cue.id;
+    const conditionNodes = getConditionNodes(cue);
+    const actionNodes = getActionChain(cue);
+
+    // ── LAW 1: Cue name must start with uppercase letter ──
+    if (cueName && !/^[A-Z]/.test(cueName)) {
+      diagnostics.push({
+        severity: 'error',
+        message: `Cue name "${cueName}" must start with an uppercase letter. The X4 engine requires this for all <cue name="..."> attributes.`,
+        nodeId: cue.id,
+        category: 'egosoft'
+      });
+    }
+
+    // ── LAW 1: Cue names must be unique within the script ──
+    if (cueNamesSeen.has(cueName)) {
+      diagnostics.push({
+        severity: 'error',
+        message: `Duplicate cue name "${cueName}". All cue names must be unique within their script file.`,
+        nodeId: cue.id,
+        category: 'egosoft'
+      });
+    }
+    cueNamesSeen.add(cueName);
+
+    // Classify condition nodes as events vs checks
+    const eventNodes = conditionNodes.filter(n => n.xmlTag && n.xmlTag.startsWith('event_'));
+    const checkNodes = conditionNodes.filter(n => n.xmlTag && !n.xmlTag.startsWith('event_') && n.type !== 'cue');
+    // Custom events/conditions: classify by type
+    const customEventNodes = conditionNodes.filter(n => n.xmlTag === 'custom_event');
+    const customConditionNodes = conditionNodes.filter(n => n.xmlTag === 'custom_condition');
+    const allEventLike = [...eventNodes, ...customEventNodes];
+    const allCheckLike = [...checkNodes, ...customConditionNodes];
+    const hasEvents = allEventLike.length > 0;
+    const hasChecks = allCheckLike.length > 0;
+    const hasConditions = conditionNodes.length > 0;
+
+    // ── LAW 3: Event conditions must come first in conditions block ──
+    if (hasEvents && hasChecks && conditionNodes.length > 0) {
+      const firstNode = conditionNodes[0];
+      const isFirstAnEvent = firstNode.xmlTag?.startsWith('event_') || firstNode.xmlTag === 'custom_event';
+      if (!isFirstAnEvent) {
         diagnostics.push({
-          severity: 'warning',
-          message: `Mission Cue "${node.properties.name || node.id}" has no Condition triggers or Actions configured.`,
-          nodeId: node.id,
+          severity: 'error',
+          message: `Cue "${cueName}": Event conditions must be the FIRST condition wired to the cue, but a check/condition node is wired first. Re-order the out_cond links so the event node comes first.`,
+          nodeId: cue.id,
           category: 'egosoft'
         });
       }
     }
 
-    // Other nodes should be targeted by some link (unless they are trigger-initiating nodes or we are check/action chains)
-    if (node.type === 'event' || node.type === 'condition' || node.type === 'action') {
-      const isTarget = workspace.links.some(l => l.targetNodeId === node.id);
-      if (!isTarget) {
+    // ── LAW 5: Non-event cues with only checks MUST have onfail or checkinterval ──
+    if (hasConditions && !hasEvents && hasChecks) {
+      const hasOnfail = cue.properties.onfail && cue.properties.onfail.trim().length > 0;
+      const hasCheckinterval = cue.properties.checkinterval && cue.properties.checkinterval.trim().length > 0;
+      if (!hasOnfail && !hasCheckinterval) {
         diagnostics.push({
-          severity: 'warning',
-          message: `Dangling logical node "${node.label}" is not connected to any active cue sequence or flow cascade.`,
-          nodeId: node.id,
-          category: 'references'
+          severity: 'error',
+          message: `Cue "${cueName}" has check-only conditions (no events) but is missing "onfail" or "checkinterval" attribute. The X4 engine requires one of these to know how often to re-evaluate.`,
+          nodeId: cue.id,
+          category: 'egosoft'
         });
       }
     }
-  });
 
-  // Verify missing inputs or variable macros
-  workspace.nodes.filter(n => n.type === 'action' && n.xmlTag === 'create_ship').forEach(ship => {
-    if (!ship.properties.macro) {
+    // ── LAW 6: Event-based cues must NOT use onfail, checkinterval, or checktime ──
+    if (hasEvents) {
+      const forbiddenAttrs: string[] = [];
+      if (cue.properties.onfail && cue.properties.onfail.trim().length > 0) forbiddenAttrs.push('onfail');
+      if (cue.properties.checkinterval && cue.properties.checkinterval.trim().length > 0) forbiddenAttrs.push('checkinterval');
+      if (cue.properties.checktime && cue.properties.checktime.trim().length > 0) forbiddenAttrs.push('checktime');
+      if (forbiddenAttrs.length > 0) {
+        diagnostics.push({
+          severity: 'error',
+          message: `Cue "${cueName}" uses event conditions but has forbidden attributes: ${forbiddenAttrs.join(', ')}. Event-based cues must NOT use onfail, checkinterval, or checktime.`,
+          nodeId: cue.id,
+          category: 'egosoft'
+        });
+      }
+    }
+
+    // ── LAW 7: Safe instantiation — only on event-based cues ──
+    if (cue.properties.instantiate === 'true' && !hasEvents) {
       diagnostics.push({
-        severity: 'error',
-        message: 'Create Ship action requires a Ship Class Macro specified.',
-        nodeId: ship.id,
+        severity: 'warning',
+        message: `Cue "${cueName}" uses instantiate="true" but has no event conditions. Instantiation on check-only or unconditional cues can cause memory leaks. Use events or remove instantiate.`,
+        nodeId: cue.id,
+        category: 'egosoft'
+      });
+    }
+
+    // ── LAW 8: No reset_cue on instantiated cues ──
+    if (cue.properties.instantiate === 'true') {
+      const hasResetSelf = actionNodes.some(n => {
+        if (n.xmlTag === 'custom_xml' && n.properties.rawXml) {
+          return /reset_cue\s+cue="this"/i.test(n.properties.rawXml);
+        }
+        return false;
+      });
+      if (hasResetSelf) {
+        diagnostics.push({
+          severity: 'error',
+          message: `Cue "${cueName}" uses instantiate="true" and contains <reset_cue cue="this" />. Resetting an instantiated cue stops it forever. Use a static cue with reset_cue instead.`,
+          nodeId: cue.id,
+          category: 'egosoft'
+        });
+      }
+    }
+
+    // ── Flowchart wiring: warn if cue has no conditions AND no actions ──
+    if (conditionNodes.length === 0 && actionNodes.length === 0) {
+      // Not an error — an unconditional cue with sub-cues is valid
+      const hasSubCues = workspace.links.some(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+      if (!hasSubCues) {
+        diagnostics.push({
+          severity: 'info',
+          message: `Cue "${cueName}" has no event/condition or action nodes wired. It will fire unconditionally with no effects. Wire condition/action nodes or add sub-cues.`,
+          nodeId: cue.id,
+          category: 'egosoft'
+        });
+      }
+    }
+
+    // ── Flowchart wiring: warn if conditions exist but no actions ──
+    if (conditionNodes.length > 0 && actionNodes.length === 0) {
+      const hasSubCues = workspace.links.some(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+      if (!hasSubCues) {
+        diagnostics.push({
+          severity: 'warning',
+          message: `Cue "${cueName}" has trigger conditions wired but no action nodes. The cue will fire but do nothing. Wire action nodes to the out_act port.`,
+          nodeId: cue.id,
+          category: 'egosoft'
+        });
+      }
+    }
+
+    // ── LAW 2: Namespace scoping — warn if no namespace set ──
+    if (!cue.properties.namespace || cue.properties.namespace.trim().length === 0) {
+      diagnostics.push({
+        severity: 'info',
+        message: `Cue "${cueName}" has no namespace set. Consider setting namespace="this" to scope variables locally and prevent collisions.`,
+        nodeId: cue.id,
         category: 'egosoft'
       });
     }
   });
 
-  // Check XML balancing constraints using string validation (regex-based nested diagnostics)
-  const openTags = (code.match(/<[a-zA-Z_]+/g) || []).map(t => t.substring(1));
-  const closeTags = (code.match(/<\/[a-zA-Z_]+/g) || []).map(t => t.substring(2));
+  // ──────────────────────────────────────────────────────────────────
+  // Orphan node detection — nodes not wired to any cue
+  // ──────────────────────────────────────────────────────────────────
+  const nonCueNodes = workspace.nodes.filter(n => n.type !== 'cue');
+  nonCueNodes.forEach(node => {
+    const isTargetOfAnyLink = workspace.links.some(l => l.targetNodeId === node.id);
+    if (!isTargetOfAnyLink) {
+      diagnostics.push({
+        severity: 'warning',
+        message: `${node.label || node.xmlTag || node.type} node "${node.id}" is not wired to any cue. It will be ignored during XML compilation.`,
+        nodeId: node.id,
+        category: 'references'
+      });
+    }
+  });
 
-  // Find tags that don't self terminate
-  const matches = [...code.matchAll(/<([a-zA-Z_]+)(?:\s+[^>]*[^/>])?>/g)];
+  // ──────────────────────────────────────────────────────────────────
+  // XML structural balance check
+  // ──────────────────────────────────────────────────────────────────
+  const matches = [...code.matchAll(/<([a-zA-Z_]+)(?:\s+[^>]*[^/>])?>$/gm)];
   const closers = [...code.matchAll(/<\/([a-zA-Z_]+)>/g)];
 
   if (matches.length > closers.length + code.split('/>').length - 1) {
@@ -726,7 +915,9 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
     });
   }
 
-  // Max components limits in XML ui tables
+  // ──────────────────────────────────────────────────────────────────
+  // UI widget size constraints
+  // ──────────────────────────────────────────────────────────────────
   const tables = workspace.uiWidgets.filter(w => w.type === 'table');
   tables.forEach(table => {
     if (table.w < 200 || table.h < 100) {
@@ -772,9 +963,9 @@ export const PRESETS: Record<string, { name: string; desc: string; workspace: Om
           x: 100,
           y: 400,
           properties: { cue: "md.Setup.Start" },
-          propertiesSchema: NODE_TEMPLATES[1].propertiesSchema,
-          inputs: NODE_TEMPLATES[1].inputs,
-          outputs: NODE_TEMPLATES[1].outputs
+          propertiesSchema: NODE_TEMPLATES[NODE_TEMPLATES.findIndex(t => t.xmlTag === 'event_cue_signalled')].propertiesSchema,
+          inputs: NODE_TEMPLATES[NODE_TEMPLATES.findIndex(t => t.xmlTag === 'event_cue_signalled')].inputs,
+          outputs: NODE_TEMPLATES[NODE_TEMPLATES.findIndex(t => t.xmlTag === 'event_cue_signalled')].outputs
         },
         {
           id: "action_0",
@@ -799,7 +990,7 @@ export const PRESETS: Record<string, { name: string; desc: string; workspace: Om
           type: "action",
           label: "Reward Player",
           xmlTag: "reward_player",
-          x: 800,
+          x: 750,
           y: 150,
           properties: {
             money: 50000,
