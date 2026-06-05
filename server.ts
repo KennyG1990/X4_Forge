@@ -180,6 +180,8 @@ async function callMultiProviderAI(
 ): Promise<string> {
   const provider = (req.headers["x-ai-provider"] as string) || "gemini";
   const customKey = (req.headers["x-custom-api-key"] as string) || "";
+  const model = (req.headers["x-ai-model"] as string) || "";
+  const reasoning = (req.headers["x-ai-reasoning"] as string) || "none";
 
   if (provider === "claude") {
     const claudeKey = customKey || process.env.ANTHROPIC_API_KEY;
@@ -187,9 +189,35 @@ async function callMultiProviderAI(
       throw new Error("Anthropic API key is not configured. Please supply your API Key in the AI Providers settings modal.");
     }
 
+    const finalModel = model || "claude-3-5-sonnet-latest";
     let finalPrompt = prompt;
     if (responseFormat === "json") {
       finalPrompt = `${prompt}\n\nCRITICAL: Return ONLY a raw, fully valid JSON object fitting this schema specifications: ${JSON.stringify(jsonSchema || {})}. Do NOT wrap the JSON inside markdown blocks or include any extra conversational text! Only output valid JSON!`;
+    }
+
+    const bodyPayload: any = {
+      model: finalModel,
+      system: systemInstruction,
+      messages: [
+        { role: "user", content: finalPrompt }
+      ]
+    };
+
+    // If user requested active thinking level, configure budget_tokens
+    if (reasoning !== "none" && (finalModel.includes("3-7") || finalModel.includes("4-") || finalModel.includes("thinking") || reasoning === "extra_high" || reasoning === "high")) {
+      let budget = 2048;
+      if (reasoning === "low") budget = 1024;
+      else if (reasoning === "medium") budget = 2048;
+      else if (reasoning === "high") budget = 4096;
+      else if (reasoning === "extra_high") budget = 8192;
+
+      bodyPayload.thinking = {
+        type: "enabled",
+        budget_tokens: budget
+      };
+      bodyPayload.max_tokens = budget + 4000;
+    } else {
+      bodyPayload.max_tokens = 4000;
     }
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -199,14 +227,7 @@ async function callMultiProviderAI(
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
       },
-      body: JSON.stringify({
-        model: "claude-3-5-sonnet-latest",
-        max_tokens: 4000,
-        system: systemInstruction,
-        messages: [
-          { role: "user", content: finalPrompt }
-        ]
-      })
+      body: JSON.stringify(bodyPayload)
     });
 
     const data: any = await response.json();
@@ -227,9 +248,29 @@ async function callMultiProviderAI(
       throw new Error("OpenAI API key is not configured. Please supply your API Key in the AI Providers settings modal.");
     }
 
+    const finalModel = model || "gpt-4o";
     let finalPrompt = prompt;
     if (responseFormat === "json") {
       finalPrompt = `${prompt}\n\nCRITICAL: Return ONLY a raw, fully valid JSON object fitting this schema specifications: ${JSON.stringify(jsonSchema || {})}. Do NOT wrap the JSON inside markdown blocks or include any extra conversational text! Only output valid JSON!`;
+    }
+
+    const bodyPayload: any = {
+      model: finalModel,
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: finalPrompt }
+      ],
+      response_format: responseFormat === "json" ? { type: "json_object" } : undefined
+    };
+
+    // Custom reasoning levels for o-models / reasoning
+    if (reasoning !== "none" && (finalModel.startsWith("o") || finalModel.includes("reasoning"))) {
+      let effort: "low" | "medium" | "high" = "medium";
+      if (reasoning === "low") effort = "low";
+      else if (reasoning === "medium") effort = "medium";
+      else if (reasoning === "high" || reasoning === "extra_high") effort = "high";
+
+      bodyPayload.reasoning_effort = effort;
     }
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -238,14 +279,7 @@ async function callMultiProviderAI(
         "Authorization": `Bearer ${openaiKey}`,
         "content-type": "application/json"
       },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: finalPrompt }
-        ],
-        response_format: responseFormat === "json" ? { type: "json_object" } : undefined
-      })
+      body: JSON.stringify(bodyPayload)
     });
 
     const data: any = await response.json();
@@ -260,12 +294,57 @@ async function callMultiProviderAI(
     }
     return textOut.trim();
 
+  } else if (provider === "openrouter") {
+    const openrouterKey = customKey || process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY;
+    if (!openrouterKey) {
+      throw new Error("OpenRouter API key is not configured. Please supply your API Key in the AI Providers settings modal.");
+    }
+
+    const finalModel = model || "google/gemini-2.1-flash";
+    let finalPrompt = prompt;
+    if (responseFormat === "json") {
+      finalPrompt = `${prompt}\n\nCRITICAL: Return ONLY a raw, fully valid JSON object fitting this schema specifications: ${JSON.stringify(jsonSchema || {})}. Do NOT wrap the JSON inside markdown blocks or include any extra conversational text! Only output valid JSON!`;
+    }
+
+    const bodyPayload: any = {
+      model: finalModel,
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: finalPrompt }
+      ],
+      response_format: responseFormat === "json" ? { type: "json_object" } : undefined
+    };
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openrouterKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://ai.studio/build",
+        "X-Title": "AI Studio Build"
+      },
+      body: JSON.stringify(bodyPayload)
+    });
+
+    const data: any = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error?.message || `OpenRouter API returned error code ${response.status}`);
+    }
+
+    let textOut = data?.choices?.[0]?.message?.content || "";
+    if (textOut.trim().startsWith("```")) {
+      textOut = textOut.replace(/^```[a-zA-Z]*\n/, "").replace(/\n```$/, "");
+    }
+    return textOut.trim();
+
   } else {
     // Default to Google Gemini API (standard model schema)
     const geminiKey = customKey || process.env.GEMINI_API_KEY;
     if (!geminiKey || geminiKey === "MY_GEMINI_API_KEY") {
       throw new Error("Gemini API key is not configured. Please supply your API Key in the AI Providers settings modal to enable cognitive assistance.");
     }
+
+    const finalModel = model || "gemini-3.5-flash";
 
     const ai = new GoogleGenAI({
       apiKey: geminiKey,
@@ -281,13 +360,24 @@ async function callMultiProviderAI(
       temperature: responseFormat === "json" ? 0.3 : 0.7,
     };
 
+    if (reasoning !== "none") {
+      // Set thinking budget or custom instructions
+      let extraInstructions = "";
+      if (reasoning === "low") extraInstructions = "\n(Optimize for brief, straightforward, direct responses with light analysis)";
+      else if (reasoning === "medium") extraInstructions = "\n(Employ steady logical step-by-step thinking processes for accuracy)";
+      else if (reasoning === "high") extraInstructions = "\n(Utilize deep internal multi-step reasoning before outputting details)";
+      else if (reasoning === "extra_high") extraInstructions = "\n(Maximize comprehensive logical thinking effort and address all latent edge cases)";
+      
+      config.systemInstruction = `${systemInstruction}${extraInstructions}`;
+    }
+
     if (responseFormat === "json") {
       config.responseMimeType = "application/json";
       config.responseSchema = jsonSchema;
     }
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-3.5-flash",
+      model: finalModel,
       contents: prompt,
       config
     });

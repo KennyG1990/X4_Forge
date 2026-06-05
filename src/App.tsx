@@ -31,6 +31,7 @@ import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace } from './types';
+import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
 
 // Default initial blank workspace schema
 const BLANK_WORKSPACE: ModWorkspace = {
@@ -94,6 +95,26 @@ export default function App() {
   const [isAgentBridgeOpen, setIsAgentBridgeOpen] = useState<boolean>(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
+
+  // Active AI modeling status states
+  const [activeAIProvider, setActiveAIProvider] = useState<string>('gemini');
+  const [activeAIModel, setActiveAIModel] = useState<string>('gemini-3.5-flash');
+  const [activeReasoning, setActiveReasoning] = useState<string>('none');
+
+  useEffect(() => {
+    const updateAIState = () => {
+      const provider = getActiveProvider();
+      setActiveAIProvider(provider);
+      setActiveAIModel(getProviderModel(provider));
+      setActiveReasoning(getProviderReasoning(provider));
+    };
+
+    updateAIState();
+    window.addEventListener('ai-config-updated', updateAIState);
+    return () => {
+      window.removeEventListener('ai-config-updated', updateAIState);
+    };
+  }, []);
 
   // Undo/Redo historical state stacks
   const [pastStates, setPastStates] = useState<ModWorkspace[]>([]);
@@ -247,7 +268,7 @@ export default function App() {
 
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-[#0F1115] text-slate-300 font-sans select-none">
+    <div className="w-screen h-screen flex flex-col bg-[#0F1115] text-slate-300 font-sans">
       {/* Upper Technical Header */}
       <header className="h-12 border-b border-white/10 bg-[#161920] px-4 flex items-center justify-between shrink-0 font-mono">
         
@@ -340,11 +361,21 @@ export default function App() {
 
           <button
             onClick={() => setIsAIConfigOpen(true)}
-            className="px-3 py-1 border border-amber-500/20 hover:border-[#df9825] bg-amber-500/5 text-amber-400 rounded font-mono text-[11px] hover:bg-amber-500/15 transition-all flex items-center gap-1.5 cursor-pointer"
-            title="Configure Google Gemini, Anthropic Claude, or OpenAI API credentials"
+            className="px-3 py-1 border border-amber-500/25 hover:border-[#df9825] bg-amber-500/5 text-amber-400 rounded font-mono text-[11px] hover:bg-amber-500/15 transition-all flex flex-col justify-center items-start text-left cursor-pointer select-none leading-tight gap-0.5"
+            title={`Configure AI: Active Engine: ${activeAIProvider.toUpperCase()} | Model: ${activeAIModel} | Reasoning: ${activeReasoning}`}
           >
-            <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
-            AI PROVIDERS
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-3 h-3 text-amber-500 animate-pulse" />
+              <span className="font-bold text-[9px] tracking-wide text-slate-200 uppercase">AI ENGINE: {activeAIProvider.toUpperCase()}</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[8.5px] text-[#df9825] font-mono leading-none">
+              <span className="opacity-95">{activeAIModel.length > 20 ? activeAIModel.substring(0, 18) + '...' : activeAIModel}</span>
+              {activeReasoning !== 'none' && (
+                <span className="bg-[#df9825]/15 px-1 py-0.5 rounded border border-[#df9825]/20 text-[7px] uppercase font-bold text-emerald-400">
+                  THINK:{activeReasoning}
+                </span>
+              )}
+            </div>
           </button>
 
           <button
@@ -435,7 +466,12 @@ export default function App() {
       </div>
 
       {/* Embedded Intelligent AI Guide Drawer chatbot */}
-      <AIHelper />
+      <AIHelper 
+        workspace={workspace}
+        setWorkspace={setWorkspace}
+        localVersion={localVersion}
+        setLocalVersion={setLocalVersion}
+      />
 
       {/* External AI Agent Developer Connection Gateway drawer panel */}
       <AgentBridge
