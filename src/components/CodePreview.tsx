@@ -25,7 +25,7 @@ import {
   Cpu
 } from 'lucide-react';
 import { ModWorkspace, generateMDXML, generateUIXML, validateModWorkspace, XMLDiagnostic, MDNode } from '../types';
-import { getAIHeaders } from '../lib/apiHelper';
+import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import MDScanner from './MDScanner';
 import PlaytestWorkspace from './PlaytestWorkspace';
 
@@ -172,10 +172,7 @@ export default function CodePreview({
         headers: getAIHeaders(),
         body: JSON.stringify({ workspace })
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to establish telemetry connection to server.");
-      }
+      const data = await handleApiResponse(response, "Failed to establish telemetry connection to server.");
       setAnalysisResult(data.analysis);
       setLastAnalyzedWorkspace(workspaceSerialized);
     } catch (err: any) {
@@ -254,10 +251,7 @@ export default function CodePreview({
         headers: getAIHeaders(),
         body: JSON.stringify({ workspace, logs: logInput })
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Log parsing request rejected.");
-      }
+      const data = await handleApiResponse(response, "Log parsing request rejected.");
       setLogAnalysis(data.analysis);
     } catch (err: any) {
       console.error(err);

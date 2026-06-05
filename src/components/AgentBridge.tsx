@@ -23,7 +23,7 @@ import {
   X
 } from 'lucide-react';
 import { ModWorkspace, validateModWorkspace, generateMDXML } from '../types';
-import { getAIHeaders } from '../lib/apiHelper';
+import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 
 interface AgentBridgeProps {
   isOpen: boolean;
@@ -159,10 +159,7 @@ export default function AgentBridge({
         })
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to trigger automated generation.");
-      }
+      const data = await handleApiResponse(response, "Failed to trigger automated generation.");
 
       // Generation was successful and updated the server workspace state
       setWorkspace(data.workspace);

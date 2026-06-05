@@ -15,7 +15,7 @@ import {
   Copy, 
   ChevronRight 
 } from 'lucide-react';
-import { getAIHeaders } from '../lib/apiHelper';
+import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import { ModWorkspace, validateModWorkspace, generateMDXML } from '../types';
 
 interface AIHelperProps {
@@ -87,10 +87,7 @@ export default function AIHelper({ workspace, setWorkspace, localVersion, setLoc
         })
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to establish connection.");
-      }
+      const data = await handleApiResponse(response, "Failed to establish connection.");
 
       setChatHistory(prev => [...prev, { role: 'assistant', text: data.text }]);
     } catch (err: any) {
@@ -121,10 +118,7 @@ export default function AIHelper({ workspace, setWorkspace, localVersion, setLoc
         })
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to trigger visual automated generator.");
-      }
+      const data = await handleApiResponse(response, "Failed to trigger visual automated generator.");
 
       const generatedWorkspace: ModWorkspace = data.workspace;
       const proposedText = `I have successfully designed a new Visual Mod Workspace layout named "${generatedWorkspace.name}". It contains ${generatedWorkspace.nodes.length} functional nodes, ${generatedWorkspace.links.length} connected flow paths, and ${generatedWorkspace.uiWidgets.length} interactive dashboard widgets.\n\nPlease inspect the blueprint audit report card below to confirm and apply these visual changes directly to your active stage!`;

@@ -106,3 +106,42 @@ export function getAIHeaders(): Record<string, string> {
   
   return headers;
 }
+
+export async function handleApiResponse<T = any>(response: Response, defaultError = "API request failed."): Promise<T> {
+  if (!response.ok) {
+    let errMsg = defaultError;
+    const contentType = response.headers.get("Content-Type") || "";
+    if (contentType && contentType.includes("application/json")) {
+      try {
+        const data = await response.json();
+        errMsg = data.error || errMsg;
+      } catch (_) {
+        // failed to parse JSON
+      }
+    } else {
+      try {
+        const text = await response.text();
+        if (text && text.length < 500 && !text.trim().startsWith("<!doctype") && !text.trim().startsWith("<html") && !text.trim().startsWith("<!DOCTYPE")) {
+          errMsg = text.trim();
+        } else {
+          errMsg = `HTTP Error ${response.status}: ${response.statusText || "Unresolved"}`;
+        }
+      } catch (_) {
+        errMsg = `HTTP Error ${response.status}: ${response.statusText || "Unresolved"}`;
+      }
+    }
+    if (errMsg.toLowerCase().includes("quota") || errMsg.toUpperCase().includes("RESOURCE_EXHAUSTED") || errMsg.toLowerCase().includes("rate limit") || errMsg.toLowerCase().includes("quota limit") || errMsg.toLowerCase().includes("exceeded")) {
+      errMsg = `⚠️ Free Tier AI Quota Exceeded (20 requests/day limit reached on our public key). Please click the amber "AI ENGINE" button in the top-right header and paste your own Gemini, Anthropic, or OpenAI Key to continue without any rate limits!`;
+    } else if (errMsg.toLowerCase().includes("key is not configured") || errMsg.toLowerCase().includes("api key is not configured") || errMsg.toLowerCase().includes("api key not found")) {
+      errMsg = `🔑 AI Connection Key required. Please click the amber "AI ENGINE" button in the top-right header and supply your API Key to enable automated cognitive mod assistant generation!`;
+    }
+    throw new Error(errMsg);
+  }
+
+  const contentType = response.headers.get("Content-Type") || "";
+  if (contentType && !contentType.includes("application/json")) {
+    throw new Error("Server response was not JSON.");
+  }
+  
+  return await response.json() as T;
+}
