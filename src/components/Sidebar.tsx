@@ -14,7 +14,12 @@ import {
   Sliders, 
   Wrench,
   Sparkles,
-  Info
+  Info,
+  BookOpen,
+  ChevronRight,
+  Pin,
+  Copy,
+  Check
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -26,6 +31,7 @@ import {
   UIWidget 
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
+import { WIKI_TOPICS } from './WikiBrowser';
 
 interface SidebarProps {
   activeTab: 'script' | 'ui' | 'config' | 'filesystem';
@@ -43,8 +49,8 @@ interface SidebarProps {
   dirName: string;
   setDirName: (name: string) => void;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
-  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation';
-  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
+  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki';
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
   onSchemaConfigChanged?: () => Promise<void> | void;
   onOpenEditorFile?: (file: {
@@ -80,6 +86,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
+  const [sidebarCopied, setSidebarCopied] = useState<boolean>(false);
   const [schemaStatus, setSchemaStatus] = useState<{
     mdXsdPath?: string;
     commonXsdPath?: string;
@@ -684,6 +691,91 @@ export default function Sidebar({
                       />
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Pinned Wiki Documentation Section inside Selected Node Property Inspector */}
+              {selectedNode && selectedNode.properties?.pinnedArticleId && (
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] text-amber-400 font-mono font-bold tracking-wider uppercase flex items-center gap-1.5 leading-none">
+                      <Pin className="w-3 h-3 rotate-45 text-amber-500 fill-amber-500/20" />
+                      PINNED CODEX REFERENCE
+                    </span>
+                    <button
+                      onClick={() => {
+                        setWorkspace(prev => ({
+                          ...prev,
+                          nodes: prev.nodes.map(n => 
+                            n.id === selectedNode.id 
+                              ? { ...n, properties: { ...n.properties, pinnedArticleId: null } }
+                              : n
+                          )
+                        }));
+                        setSelectedNode(prev => prev ? { ...prev, properties: { ...prev.properties, pinnedArticleId: null } } : null);
+                      }}
+                      className="text-[9px] text-red-400 hover:text-red-300 font-mono transition-colors uppercase outline-none font-semibold cursor-pointer"
+                    >
+                      Unpin Reference
+                    </button>
+                  </div>
+                  
+                  {(() => {
+                    const article = WIKI_TOPICS.find(t => t.id === selectedNode.properties.pinnedArticleId);
+                    if (!article) return <div className="text-[10px] text-slate-500 italic">Pinned reference guide not found.</div>;
+                    return (
+                      <div className="bg-[#141822] border border-amber-500/20 hover:border-amber-500/40 rounded-lg p-3 space-y-2.5 transition-all text-left">
+                        <div className="font-bold text-white text-[11px] leading-snug">{article.title}</div>
+                        <p className="text-[10px] text-slate-400 font-sans line-clamp-3 leading-relaxed">{article.summary}</p>
+                        
+                        {article.codeTemplate && (
+                          <div className="mt-2 border-t border-white/[0.03] pt-2">
+                            <span className="text-[9px] text-slate-500 font-mono uppercase tracking-widest block mb-1">Snippet Preview:</span>
+                            <pre className="text-[9.5px] text-cyan-400/90 font-mono whitespace-pre-wrap leading-tight bg-black/40 p-2 rounded border border-white/[0.02] max-h-24 overflow-y-auto custom-scrollbar">
+                              {article.codeTemplate}
+                            </pre>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 pt-1 border-t border-white/[0.03]">
+                          <button
+                            onClick={() => {
+                              if (setWorkspaceView) {
+                                setWorkspaceView('wiki');
+                                window.location.hash = `article_${article.id}`;
+                              }
+                            }}
+                            className="bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-400 px-2 py-1 rounded text-[9.5px] font-mono font-bold uppercase flex items-center gap-1 transition-colors outline-none cursor-pointer"
+                          >
+                            READ CODEX
+                            <ChevronRight className="w-3 h-3" />
+                          </button>
+                          {article.codeTemplate && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(article.codeTemplate || '');
+                                setSidebarCopied(true);
+                                setTimeout(() => setSidebarCopied(false), 2000);
+                              }}
+                              className="bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 text-cyan-400 px-2 py-1 rounded text-[9.5px] font-mono font-bold uppercase flex items-center gap-1 ml-auto transition-colors outline-none cursor-pointer"
+                            >
+                              {sidebarCopied ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                  <span>COPIED!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>COPY CODE</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

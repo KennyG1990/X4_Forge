@@ -22,11 +22,12 @@ import {
   Database,
   Volume2,
   Sparkles,
-  Zap
+  Zap,
+  Pin
 } from 'lucide-react';
-import { X4_FACTIONS, X4_SHIP_MACROS, X4_STATION_MACROS, X4_SOUND_EFFECTS } from '../types';
+import { X4_FACTIONS, X4_SHIP_MACROS, X4_STATION_MACROS, X4_SOUND_EFFECTS, MDNode, ModWorkspace } from '../types';
 
-interface WikiTopic {
+export interface WikiTopic {
   id: string;
   title: string;
   category: 'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui' | 'reference';
@@ -36,7 +37,7 @@ interface WikiTopic {
   egosoftUrl?: string;
 }
 
-const WIKI_TOPICS: WikiTopic[] = [
+export const WIKI_TOPICS: WikiTopic[] = [
   {
     id: "mdscript_basics",
     title: "Mission Director (MD) Scripting Basics",
@@ -157,7 +158,13 @@ const WIKI_TOPICS: WikiTopic[] = [
   }
 ];
 
-export default function WikiBrowser() {
+interface WikiBrowserProps {
+  selectedNode: MDNode | null;
+  setSelectedNode: React.Dispatch<React.SetStateAction<MDNode | null>>;
+  setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
+}
+
+export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspace }: WikiBrowserProps) {
   const [activeTab, setActiveTab] = useState<'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui' | 'reference'>('mdscript');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
@@ -507,6 +514,50 @@ export default function WikiBrowser() {
                       </div>
                       
                       <div className="flex items-center gap-2">
+                        {/* Pin / Unpin Button */}
+                        <button
+                          onClick={() => {
+                            if (!selectedNode) return;
+                            const isPinnedNow = selectedNode.properties?.pinnedArticleId === topic.id;
+                            const nextArticleId = isPinnedNow ? null : topic.id;
+                            
+                            setWorkspace(prev => ({
+                              ...prev,
+                              nodes: prev.nodes.map(n => 
+                                n.id === selectedNode.id 
+                                  ? { ...n, properties: { ...n.properties, pinnedArticleId: nextArticleId } }
+                                  : n
+                              )
+                            }));
+                            setSelectedNode(prev => prev ? { 
+                              ...prev, 
+                              properties: { ...prev.properties, pinnedArticleId: nextArticleId } 
+                            } : null);
+                          }}
+                          disabled={!selectedNode}
+                          className={`p-2 py-1.5 rounded-lg border font-mono text-[10px] font-bold uppercase flex items-center gap-1.5 transition-all select-none ${
+                            !selectedNode
+                              ? 'bg-slate-800/20 border-white/5 text-slate-500 cursor-not-allowed'
+                              : selectedNode.properties?.pinnedArticleId === topic.id
+                              ? 'bg-red-500/15 hover:bg-red-500/25 border-red-500/35 text-red-400 cursor-pointer'
+                              : 'bg-cyan-500/10 hover:bg-cyan-500/20 border-cyan-500/20 hover:border-cyan-500 text-cyan-400 hover:text-cyan-300 cursor-pointer'
+                          }`}
+                          title={
+                            !selectedNode 
+                              ? "Select any node on the Canvas to pin this documentation reference to it"
+                              : selectedNode.properties?.pinnedArticleId === topic.id
+                              ? `Unpin documentation from node '${selectedNode.label}'`
+                              : `Pin this documentation reference to node '${selectedNode.label}'`
+                          }
+                        >
+                          <Pin className="w-3.5 h-3.5" />
+                          {!selectedNode 
+                            ? 'Canvas node not selected' 
+                            : selectedNode.properties?.pinnedArticleId === topic.id
+                            ? 'Unpin Code' 
+                            : `Pin to ${selectedNode.label}`}
+                        </button>
+
                         {topic.egosoftUrl && (
                           <a
                             href={topic.egosoftUrl}
@@ -522,7 +573,7 @@ export default function WikiBrowser() {
                         
                         <button
                           onClick={() => triggerAICopilot(topic.title, topic.codeTemplate)}
-                          className="p-2 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 hover:border-amber-500 text-amber-400 hover:text-amber-300 font-mono text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer select-none"
+                          className="p-2 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/25 border border-amber-500/30 hover:border-amber-500 text-amber-400 hover:text-amber-300 font-mono text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer select-none"
                           title="Ask the AI copilot to explain this script logic"
                         >
                           <Sparkles className="w-3.5 h-3.5 animate-pulse text-amber-500" />

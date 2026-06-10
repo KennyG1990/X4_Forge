@@ -39,6 +39,7 @@ import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
+import GlobalSearch from './components/GlobalSearch';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
@@ -355,11 +356,21 @@ export default function App() {
       <header className="h-12 border-b border-white/10 bg-[#161920] px-4 flex items-center justify-between shrink-0 font-mono">
         
         {/* Workspace Brand and Logo */}
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-5">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-cyan-600 rounded flex items-center justify-center font-bold text-white text-xs">X4</div>
-            <span className="font-semibold text-white tracking-tight">X4:MD STUDIO v2.4</span>
+            <div className="w-6 h-6 bg-cyan-600 rounded flex items-center justify-center font-bold text-white text-xs shrink-0">X4</div>
+            <span className="font-semibold text-white tracking-tight shrink-0 select-none">X4:MD STUDIO v2.4</span>
           </div>
+
+          {/* Global Search Tool */}
+          <GlobalSearch
+            workspace={workspace}
+            workspaceView={workspaceView}
+            setWorkspaceView={setWorkspaceView}
+            setActiveSidebarTab={setActiveSidebarTab}
+            setSelectedNode={setSelectedNode}
+            setSelectedWidget={setSelectedWidget}
+          />
         </div>
 
         {/* View Selection Mode Tabs */}
@@ -613,7 +624,11 @@ export default function App() {
               setWorkspace={setWorkspace}
             />
           ) : workspaceView === 'wiki' ? (
-            <WikiBrowser />
+            <WikiBrowser
+              selectedNode={selectedNode}
+              setSelectedNode={setSelectedNode}
+              setWorkspace={setWorkspace}
+            />
           ) : (
             <XMLPatchSystem
               workspace={workspace}
