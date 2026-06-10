@@ -352,6 +352,7 @@ export default function AgentBridge({
     generate: false,
     diagnostics: true,
     compile: true,
+    modFolderInspect: true,
   });
 
   const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://example.com';
@@ -919,6 +920,40 @@ export default function AgentBridge({
                         className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                       >
                         {copiedTextId === 'curl_diagnostics' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ENDPOINT 7: GET MOD FOLDER INSPECT */}
+              <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
+                <button 
+                  onClick={() => toggleEndpoint('modFolderInspect')}
+                  className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
+                    <span className="text-white text-xs font-bold font-mono">/api/agent/mod-folder/inspect</span>
+                  </div>
+                  {collapsedEndpoints.modFolderInspect ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </button>
+                
+                {!collapsedEndpoints.modFolderInspect && (
+                  <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
+                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                      Read-only round-trip safety inventory. Classifies files as editable, partial, generated, or passthrough and returns a lossiness report before import/export.
+                    </p>
+                    <div className="relative">
+                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                        {`curl -X GET "${appOrigin}/api/agent/mod-folder/inspect?path=." \\
+     ${authCurlHeader}`}
+                      </pre>
+                      <button 
+                        onClick={() => handleCopy(`curl -X GET "${appOrigin}/api/agent/mod-folder/inspect?path=." ${authCurlHeader}`, 'curl_modinspect')}
+                        className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
+                      >
+                        {copiedTextId === 'curl_modinspect' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
                   </div>

@@ -112,7 +112,7 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 | **Real X4 Object Browser** | Partial | 55% | `src/lib/x4ObjectIndex.ts`, `/api/agent/object-index`, `WikiBrowser` Local Object Browser, schema-derived MD templates, configured game/mod paths, fallback constants. | Loose XML from installed extensions/mod workspace is indexed, but packed cat/dat archives are not decoded yet; node property dropdowns still need to consume the index directly. |
 | **Round-Trip Import/Edit/Export** | Partial | 60% | `SyncModal`, `DirectoryExplorer`, `SourceControl`, `parseXMLToWorkspace`, t-file import routing, AIScript/diff routing, `sanitizeWorkspace`, filesystem read/write endpoints, snapshots. | No full mod-folder importer, no passthrough/raw file preservation model, no lossiness report, no golden round-trip harness across real mods. |
 | **Diff-Safe Patch Builder** | Strong | 95% | `XMLPatchSystem`, `workspace.xmlPatches`, `compileDiffDocument`, XML patch wiki docs, global search over patches, target-file base XML loaders, client-side XPath match counting, and unified diff previews. | Fully implemented all requirements of this roadmap slice. Remaining gaps involve packed cat/dat file extraction (post-MVP). |
-| **Agent-First Automation API** | Strong | 91% | `/api/agent/schema`, `/api/agent/workspace`, `/api/agent/workspace/dry-run`, `/api/agent/compile`, `/api/agent/package`, `/api/agent/diagnostics`, `/api/agent/deploy`, `/api/agent/generate`, `AgentBridge`, full package manifest helper. | Needs JSON Patch-style granular edits and richer examples for multi-step agent workflows. |
+| **Agent-First Automation API** | Strong | 96% | `/api/agent/schema`, `/api/agent/workspace`, `/api/agent/workspace/dry-run`, `/api/agent/workspace/patch`, `/api/agent/compile`, `/api/agent/package`, `/api/agent/diagnostics`, `/api/agent/deploy`, `/api/agent/generate`, `AgentBridge`, full package manifest helper. | Needs richer examples for complete multi-step agent workflows and optional project-context endpoints for snapshots/path summaries. |
 | **Mod folder situational awareness** | Strong | 80% | `SETTINGS`, `FILESYSTEM`, `SOURCE`, `SYNC MOD`, snapshots/history, compile/deploy path configuration, directory explorer. | Needs generated/editable/partial/passthrough file classification and tighter integration with round-trip safety. |
 
 **Interpretation:** the app already has a credible X4 text-mod IDE shell. The highest-value work is not adding more tabs; it is deepening correctness engines behind the existing surfaces.
@@ -270,6 +270,7 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 
 **Roadmap detail:**
 - Add granular patch endpoints: `POST /api/agent/workspace/patch` for JSON Patch-style changes instead of full workspace replacement.
+- Add granular patch endpoints: `POST /api/agent/workspace/patch` for JSON Patch-style changes instead of full workspace replacement. **Implemented for `add`, `replace`, and `remove` using JSON Pointer paths, required `expectedVersion`, stale-write HTTP 409, and optional `dryRun`.**
 - Add read-only project context endpoints: current diagnostics, current package manifest metadata, configured paths, snapshots, and game index summary.
 - Add optimistic concurrency with `workspaceVersion` required on mutation endpoints to prevent stale-agent overwrites. **Implemented for full workspace replacement as optional `expectedVersion`; stale writes return HTTP 409.**
 - Add dry-run mutation mode: return proposed workspace + diagnostics without applying. **Implemented as `/api/agent/workspace/dry-run`.**
@@ -284,6 +285,11 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 - Added optional `expectedVersion` to `POST /api/agent/workspace`; stale values now return HTTP 409 with `code: "workspace.version_conflict"` and the current version.
 - Updated `/api/agent/schema` and `AgentBridge` documentation to advertise dry-run-before-apply and `expectedVersion` usage.
 - Verification: `npm run lint` (`tsc --noEmit`) passed; direct API dry-run returned `success: true`, `dryRun: true`, `wouldChange: true`, `wouldApply: true`, and proposed version increment; stale apply returned HTTP 409; schema advertised `/api/agent/workspace/dry-run`; browser Agent API panel visibly listed the dry-run route.
+
+**2026-06-10 implementation note:**
+- Added `/api/agent/workspace/patch` for JSON Patch-style granular workspace mutation. It supports `add`, `replace`, and `remove`, JSON Pointer paths, array append via `/-`, prototype-pollution path blocking, required `expectedVersion`, stale-write HTTP 409, optional `dryRun`, sanitized proposed workspace output, and Mod Doctor diagnostics in the response.
+- Updated `/api/agent/schema` and the browser `AgentBridge` API panel so external agents can discover and copy the patch endpoint workflow.
+- Verification: `npm run lint` (`tsc --noEmit`) passed; schema advertised `/api/agent/workspace/patch`; dry-run replace of `/description` returned `success: true`, `wouldChange: true`, `applied: false`; stale patch returned HTTP 409; actual patch applied and incremented version; a follow-up patch restored the original description; browser Agent API panel visibly listed `/api/agent/workspace/patch`.
 
 ---
 

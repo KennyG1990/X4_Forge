@@ -391,6 +391,149 @@ type GameLogIssue = {
   matchesActiveMod: boolean;
 };
 
+type ImportFileClassification = "editable" | "partial" | "generated" | "passthrough" | "ignored";
+
+type ModFolderInspectFile = {
+  path: string;
+  size: number;
+  hash: string | null;
+  classification: ImportFileClassification;
+  domain: string;
+  reason: string;
+};
+
+const MOD_FOLDER_INSPECT_MAX_FILES = 5000;
+const MOD_FOLDER_INSPECT_HASH_LIMIT = 2 * 1024 * 1024;
+
+function isSubPath(candidate: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(resolvedRoot + path.sep);
+}
+
+function hashSmallFile(filePath: string, size: number): string | null {
+  if (size > MOD_FOLDER_INSPECT_HASH_LIMIT) return null;
+  try {
+    return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function classifyModFolderFile(relativePath: string): Omit<ModFolderInspectFile, "path" | "size" | "hash"> {
+  const normalized = relativePath.replace(/\\/g, "/");
+  const lower = normalized.toLowerCase();
+  const name = path.posix.basename(lower);
+
+  if (lower.includes("/node_modules/") || lower.includes("/dist/")) {
+    return { classification: "ignored", domain: "tooling", reason: "Development/build artifact; not part of the shipped X4 mod surface." };
+  }
+  if (lower.startsWith(".snapshots/") || lower.includes("/.snapshots/")) {
+    return { classification: "generated", domain: "studio_snapshot", reason: "Studio snapshot metadata; preserved for development history, not modeled as mod content." };
+  }
+  if (name === "content.xml") {
+    return { classification: "partial", domain: "metadata", reason: "Known X4 metadata file; Studio can reason about it but does not preserve every hand-authored field yet." };
+  }
+  if (lower === "README.md".toLowerCase() || name === "readme.md") {
+    return { classification: "generated", domain: "documentation", reason: "Studio-generated README candidate; safe to regenerate but should be compared before overwrite." };
+  }
+  if (lower.endsWith(".x4studio.json") || lower.endsWith(".workspace.json")) {
+    return { classification: "editable", domain: "workspace", reason: "Studio workspace JSON; fully editable after sanitizeWorkspace import." };
+  }
+  if (lower.startsWith("md/") && lower.endsWith(".xml")) {
+    return { classification: "partial", domain: "mission_director", reason: "Mission Director XML; parser can reconstruct many graph nodes but unknown XML must be preserved raw." };
+  }
+  if (lower.startsWith("aiscripts/") && lower.endsWith(".xml")) {
+    return { classification: "partial", domain: "aiscript", reason: "AI script XML is a supported compile domain, but full round-trip parser coverage is not complete." };
+  }
+  if (lower.startsWith("t/") && lower.endsWith(".xml")) {
+    return { classification: "partial", domain: "translation", reason: "Translation XML is a supported domain; import must preserve page/item ids and comments." };
+  }
+  if (lower.startsWith("libraries/") && lower.endsWith(".xml")) {
+    return { classification: "partial", domain: "library_or_diff", reason: "Library XML or diff patch target; selectors/content need structural import before safe regeneration." };
+  }
+  if (lower.startsWith("ui/") || lower.startsWith("md_ui_layouts/")) {
+    return { classification: "partial", domain: "ui", reason: "UI files are mod content, but the Studio UI/Lua round-trip model is not complete yet." };
+  }
+  if (lower.endsWith(".xml")) {
+    return { classification: "passthrough", domain: "xml_unknown", reason: "XML file is outside current modeled domains; preserve byte-for-byte until a parser exists." };
+  }
+  return { classification: "passthrough", domain: "asset_or_unknown", reason: "Non-XML or unsupported file; preserve byte-for-byte during round-trip export." };
+}
+
+function inspectModFolder(rootPath: string) {
+  const files: ModFolderInspectFile[] = [];
+  let truncated = false;
+
+  function walk(dir: string) {
+    if (files.length >= MOD_FOLDER_INSPECT_MAX_FILES) {
+      truncated = true;
+      return;
+    }
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (files.length >= MOD_FOLDER_INSPECT_MAX_FILES) {
+        truncated = true;
+        return;
+      }
+      const fullPath = path.join(dir, entry.name);
+      const relativePath = path.relative(rootPath, fullPath).replace(/\\/g, "/");
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist") continue;
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        const stat = fs.statSync(fullPath);
+        const classification = classifyModFolderFile(relativePath);
+        files.push({
+          path: relativePath,
+          size: stat.size,
+          hash: hashSmallFile(fullPath, stat.size),
+          ...classification
+        });
+      }
+    }
+  }
+
+  walk(rootPath);
+  files.sort((a, b) => a.path.localeCompare(b.path));
+
+  const byClassification = files.reduce<Record<string, number>>((acc, file) => {
+    acc[file.classification] = (acc[file.classification] || 0) + 1;
+    return acc;
+  }, {});
+  const byDomain = files.reduce<Record<string, number>>((acc, file) => {
+    acc[file.domain] = (acc[file.domain] || 0) + 1;
+    return acc;
+  }, {});
+
+  const modeledFiles = files.filter(file => file.classification === "editable").map(file => file.path);
+  const partialFiles = files.filter(file => file.classification === "partial").map(file => file.path);
+  const passthroughFiles = files.filter(file => file.classification === "passthrough").map(file => file.path);
+  const generatedFiles = files.filter(file => file.classification === "generated").map(file => file.path);
+
+  return {
+    inspectedAt: new Date().toISOString(),
+    rootPath,
+    truncated,
+    fileCount: files.length,
+    counts: {
+      byClassification,
+      byDomain
+    },
+    lossinessReport: {
+      fullyEditable: modeledFiles,
+      partiallyUnderstood: partialFiles,
+      preserveRaw: passthroughFiles,
+      generatedOrStudioOwned: generatedFiles,
+      exportRisk: passthroughFiles.length || partialFiles.length
+        ? "high_until_passthrough_export_exists"
+        : "low",
+      summary: `${modeledFiles.length} fully editable, ${partialFiles.length} partially understood, ${passthroughFiles.length} passthrough, ${generatedFiles.length} generated/studio-owned.`
+    },
+    files
+  };
+}
+
 function uniqueExistingParentCandidates(paths: string[]): string[] {
   const seen = new Set<string>();
   return paths
@@ -1337,6 +1480,12 @@ app.get("/api/agent/schema", (req, res) => {
       },
       {
         method: "GET",
+        path: "/api/agent/mod-folder/inspect?path=<optionalRelativeFolder>",
+        auth: true,
+        purpose: "Read-only round-trip safety inventory for a mod folder under the configured filesystem/mod workspace root. Classifies files as editable, partial, generated, passthrough, or ignored and returns a lossiness report."
+      },
+      {
+        method: "GET",
         path: "/api/agent/object-index?q=<optional>&kind=<optional>&limit=<optional>",
         auth: true,
         purpose: "Search local X4 loose XML data and schema elements for object ids external agents can use in generated mods."
@@ -1486,6 +1635,15 @@ app.get("/api/agent/schema", (req, res) => {
       issues: "recent errors/warnings whose text mentions the active mod id",
       recentGlobalIssues: "recent errors/warnings from the log tail, even when not matched to the active mod",
       tailLines: "last log lines used for UI/runtime inspection"
+    },
+    mod_folder_inspect_shape: {
+      success: "boolean",
+      rootPath: "absolute inspected folder path under configured filesystem/mod workspace root",
+      fileCount: "number of files inspected, capped for safety",
+      counts: "counts by classification and domain",
+      lossinessReport: "lists fullyEditable, partiallyUnderstood, preserveRaw, generatedOrStudioOwned, exportRisk, and summary",
+      files: "array of { path, size, hash, classification, domain, reason }",
+      classifications: ["editable", "partial", "generated", "passthrough", "ignored"]
     },
     object_index_shape: {
       generatedAt: "ISO timestamp for index build",
@@ -2019,6 +2177,50 @@ app.get("/api/agent/game-log/status", (req, res) => {
     return res.status(500).json({
       status: "error",
       error: error.message || "Failed to read X4 game log status."
+    });
+  }
+});
+
+/**
+ * GET /api/agent/mod-folder/inspect
+ * Read-only round-trip safety inventory for existing mod folders.
+ */
+app.get("/api/agent/mod-folder/inspect", (req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const configuredRoot = resolved.filesystemPath || resolved.modWorkspacePath;
+    if (!configuredRoot) {
+      return res.status(400).json({
+        success: false,
+        error: "No filesystemPath or modWorkspacePath is configured."
+      });
+    }
+
+    const relativeFolder = typeof req.query.path === "string" ? req.query.path.trim() : "";
+    const rootPath = path.resolve(configuredRoot, relativeFolder || ".");
+    if (!isSubPath(rootPath, configuredRoot)) {
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden: Directory traversal detected."
+      });
+    }
+    if (!fs.existsSync(rootPath) || !fs.statSync(rootPath).isDirectory()) {
+      return res.status(404).json({
+        success: false,
+        error: `Mod folder not found: ${relativeFolder || "."}`
+      });
+    }
+
+    return res.json({
+      success: true,
+      baseRoot: configuredRoot,
+      relativeFolder: relativeFolder || ".",
+      ...inspectModFolder(rootPath)
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Failed to inspect mod folder."
     });
   }
 });

@@ -1,0 +1,10 @@
+{
+  "x4GamePath": "G:\\SteamLibrary\\steamapps\\common\\X4 Foundations",
+  "xsdSchemaPath": "F:\\DEV_ENV\\projects\\Mods\\X4Mods\\Schemas",
+  "schemaFiles": [
+    "md.xsd",
+    "common.xsd"
+  ],
+  "modWorkspacePath": "F:\\DEV_ENV\\projects\\Mods\\X4Mods",
+  "filesystemPath": "G:\\SteamLibrary\\steamapps\\common\\X4 Foundations\\extensions"
+}
