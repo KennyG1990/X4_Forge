@@ -98,6 +98,15 @@ export interface AIAction {
   properties: Record<string, any>;
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  actionRequired?: boolean;
+  proposedWorkspace?: ModWorkspace;
+  proposedVersion?: number;
+  actionApplied?: 'applied' | 'declined' | null;
+}
+
 export interface AIBehaviorScript {
   id: string;
   name: string;

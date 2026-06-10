@@ -45,10 +45,10 @@ import XMLPatchSystem from './components/XMLPatchSystem';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
-import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace } from './types';
+import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
-import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
+import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse } from './lib/apiHelper';
 import { compileAndSaveAll } from './lib/modCompiler';
 
 // Default initial blank workspace schema
