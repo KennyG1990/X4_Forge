@@ -6,4 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+.studio-api-token
 test_generate_api.py

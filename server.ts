@@ -41,10 +41,33 @@ dotenv.config();
 // placed there are visible to the server. .env.local takes precedence.
 dotenv.config({ path: '.env.local', override: true });
 
-const STUDIO_API_TOKEN = crypto.randomBytes(32).toString("hex");
-
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const TOKEN_FILE = path.join(process.cwd(), ".studio-api-token");
+
+function loadStudioApiToken(): string {
+  if (process.env.STUDIO_API_TOKEN?.trim()) {
+    return process.env.STUDIO_API_TOKEN.trim();
+  }
+  try {
+    const existing = fs.readFileSync(TOKEN_FILE, "utf8").trim();
+    if (existing) {
+      return existing;
+    }
+  } catch {
+    // First run on this checkout; create a local-only token below.
+  }
+  const token = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync(TOKEN_FILE, token, { encoding: "utf8" });
+  return token;
+}
+
+const STUDIO_API_TOKEN = loadStudioApiToken();
+
+function injectStudioToken(html: string): string {
+  const tokenScript = `<script>window.__STUDIO_API_TOKEN__=${JSON.stringify(STUDIO_API_TOKEN)};</script>`;
+  return html.replace("</head>", `  ${tokenScript}\n  </head>`);
+}
 
 function loadCurrentSchemaLibrary(): SchemaLibrary {
   try {
@@ -69,10 +92,14 @@ function reloadSchemaLibrary(): SchemaLibrary {
 
 app.use(express.json({ limit: "5mb" }));
 
-// Enable CORS for localhost / 127.0.0.1 integrations only
+// Enable CORS only for this app's same-port localhost origins.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:") || origin === "http://localhost" || origin === "http://127.0.0.1")) {
+  const allowedOrigins = new Set([
+    `http://127.0.0.1:${PORT}`,
+    `http://localhost:${PORT}`
+  ]);
+  if (origin && allowedOrigins.has(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
   }
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-ai-provider, x-custom-api-key");
@@ -83,17 +110,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Auth token endpoint (returns the per-session token)
-app.get("/api/auth/token", (req, res) => {
-  return res.json({ token: STUDIO_API_TOKEN });
-});
-
-// Middleware to verify session token for all /api/* routes except the handshake
+// Middleware to verify the app session token for all /api/* routes.
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (req.path === "/auth/token") {
-    return next();
-  }
-  
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized: Missing token." });
@@ -1952,12 +1970,23 @@ async function setupDevOrProd() {
       server: { middlewareMode: true },
       appType: "spa",
     });
+    app.get("/", async (req, res, next) => {
+      try {
+        const template = fs.readFileSync(path.join(process.cwd(), "index.html"), "utf8");
+        const html = await vite.transformIndexHtml(req.originalUrl, injectStudioToken(template));
+        res.status(200).set({ "Content-Type": "text/html" }).end(html);
+      } catch (error) {
+        vite.ssrFixStacktrace(error as Error);
+        next(error);
+      }
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      const html = fs.readFileSync(path.join(distPath, "index.html"), "utf8");
+      res.status(200).set({ "Content-Type": "text/html" }).end(injectStudioToken(html));
     });
   }
 }

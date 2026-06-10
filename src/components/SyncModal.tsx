@@ -3,27 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   X, 
   Upload, 
-  GitBranch, 
-  Terminal, 
-  Github, 
   CheckCircle2, 
   AlertCircle, 
   FileJson, 
   FileCode,
   ArrowRightLeft,
-  ChevronRight,
   ClipboardPaste,
   ShieldAlert,
-  FolderSync,
-  GitCompare,
-  RefreshCw
+  FolderSync
 } from 'lucide-react';
 import { ModWorkspace, MDNode, MDLink, NODE_TEMPLATES } from '../types';
-import { generateMDXML, generateUIXML } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
 
 interface SyncModalProps {
@@ -43,196 +36,14 @@ export default function SyncModal({
   saveCheckpoint,
   setWorkspaceView
 }: SyncModalProps) {
-  const [activeTab, setActiveTab] = useState<'import' | 'github'>('import');
-  
-  // GitHub Integration State (saved/loaded from localStorage)
-  const [pat, setPat] = useState(() => localStorage.getItem('x4_github_pat') || '');
-  const [owner, setOwner] = useState(() => localStorage.getItem('x4_github_owner') || '');
-  const [repo, setRepo] = useState(() => localStorage.getItem('x4_github_repo') || '');
-  const [branch, setBranch] = useState(() => localStorage.getItem('x4_github_branch') || 'main');
-  
-  // Push & Load States
-  const [commitMessage, setCommitMessage] = useState('Update X4 Mod files from X4:MD Studio');
-  const [filePathToLoad, setFilePathToLoad] = useState('ais_workspace.json');
-  const [pushSelectedFiles, setPushSelectedFiles] = useState({
-    workspace: true,
-    md_xml: true,
-    ui_xml: true,
-    readme: true
-  });
-
-  // Logs & Statuses
-  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [activeTab, setActiveTab] = useState<'import'>('import');
   const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'refused' | 'info'; msg: string } | null>(null);
 
   // Raw Import Paste Area Text
   const [importText, setImportText] = useState('');
   const [dragActive, setDragActive] = useState(false);
 
-  // Advanced Diff & Commit Msg Autopopulator Engine States
-  const [remoteWorkspace, setRemoteWorkspace] = useState<ModWorkspace | null>(null);
-  const [isDiffLoading, setIsDiffLoading] = useState(false);
-  const [diffItems, setDiffItems] = useState<{ type: 'add' | 'remove' | 'edit'; text: string }[]>([]);
-
-  // Function to load the remote JSON configuration and compute exact diffs
-  const fetchRemoteAndComputeDiff = async (forceQuiet = false) => {
-    if (!owner || !repo) {
-      if (!forceQuiet) {
-        addLog("Cannot scan diff: repository owner/name is blank.");
-      }
-      return;
-    }
-
-    setIsDiffLoading(true);
-    if (!forceQuiet) {
-      addLog(`🔍 Scanning remote repository ${owner}/${repo} to compute file differences...`);
-    }
-
-    try {
-      const response = await fetch('/api/github/load', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pat: pat || undefined,
-          owner,
-          repo,
-          path: 'ais_workspace.json',
-          branch
-        })
-      });
-
-      if (!response.ok) {
-        // File does not exist - treat as a clean repository initializing for the first time
-        const initialDiff = [
-          { type: 'add' as const, text: `Mod Initialization: "${workspace.name || 'X4 Mod'}"` },
-          { type: 'add' as const, text: `Publish ${workspace.nodes?.length || 0} logic flow nodes` },
-          { type: 'add' as const, text: `Initialize ${workspace.links?.length || 0} signal wires` }
-        ];
-        setDiffItems(initialDiff);
-        setCommitMessage(`Initial commit: Create visual mod project [${workspace.name || 'mod'}] with ${workspace.nodes?.length || 0} logic gates`);
-        setRemoteWorkspace(null);
-        if (!forceQuiet) {
-          addLog("ℹ️ No previous workspace file found on GitHub. Set to INITIAL COMMIT mode.");
-        }
-        setIsDiffLoading(false);
-        return;
-      }
-
-      const result = await response.json();
-      let remote: any = null;
-      try {
-        remote = JSON.parse(result.content);
-      } catch (e) {
-        throw new Error("Target file on remote repo is not a valid JSON structure.");
-      }
-
-      setRemoteWorkspace(remote);
-
-      // Diff algorithm comparing local active workspace nodes with the downloaded one
-      const rawChanges: { type: 'add' | 'remove' | 'edit'; text: string }[] = [];
-      const localNodes = workspace.nodes || [];
-      const remoteNodes = remote.nodes || [];
-
-      // Look for custom node additions & modification profiles
-      localNodes.forEach(node => {
-        const matchesRemote = remoteNodes.find(rn => rn.id === node.id);
-        if (!matchesRemote) {
-          rawChanges.push({ type: 'add', text: `Added logical node [${node.label || node.xmlTag}]` });
-        } else {
-          // Verify property modification
-          const propsChanged = JSON.stringify(node.properties) !== JSON.stringify(matchesRemote.properties);
-          if (propsChanged) {
-            rawChanges.push({ type: 'edit', text: `Modified configs of [${node.label || node.xmlTag}]` });
-          }
-        }
-      });
-
-      // Look for logic node deletions
-      remoteNodes.forEach(node => {
-        const matchesLocal = localNodes.find(ln => ln.id === node.id);
-        if (!matchesLocal) {
-          rawChanges.push({ type: 'remove', text: `Removed node [${node.label || node.xmlTag}]` });
-        }
-      });
-
-      // Look for visual link updates
-      const localLinks = workspace.links || [];
-      const remoteLinks = remote.links || [];
-      if (localLinks.length > remoteLinks.length) {
-        rawChanges.push({ type: 'add', text: `Created ${localLinks.length - remoteLinks.length} new communication wire(s)` });
-      } else if (localLinks.length < remoteLinks.length) {
-        rawChanges.push({ type: 'remove', text: `Severed ${remoteLinks.length - localLinks.length} wire connection(s)` });
-      }
-
-      // Look for Custom UI components changes
-      const localWidgets = workspace.uiWidgets || [];
-      const remoteWidgets = remote.uiWidgets || [];
-      if (localWidgets.length !== remoteWidgets.length) {
-        rawChanges.push({ type: 'edit', text: `Layout shift: UI components from ${remoteWidgets.length} to ${localWidgets.length}` });
-      }
-
-      if (rawChanges.length === 0) {
-        rawChanges.push({ type: 'edit', text: 'No node structure variance found. Optimizing configurations.' });
-        setCommitMessage('chore: Refine X4 Mod alignment settings');
-      } else {
-        // Build auto-populated smart commit message based on computed diff
-        const addedText = rawChanges.filter(c => c.type === 'add').slice(0, 1).map(c => c.text);
-        const editedText = rawChanges.filter(c => c.type === 'edit').slice(0, 1).map(c => c.text);
-        const removedText = rawChanges.filter(c => c.type === 'remove').slice(0, 1).map(c => c.text);
-
-        let phrases: string[] = [];
-        if (addedText.length > 0) phrases.push(addedText[0]);
-        if (editedText.length > 0) phrases.push(editedText[0]);
-        if (removedText.length > 0) phrases.push(removedText[0]);
-
-        const formattedCommit = phrases.join(', ');
-        setCommitMessage(formattedCommit.substring(0, 72));
-      }
-
-      setDiffItems(rawChanges);
-      if (!forceQuiet) {
-        addLog(`🎉 SUCCESS: Computed remote difference summary with ${rawChanges.length} changes detected!`);
-      }
-    } catch (err: any) {
-      console.warn("Could not compute remote diff: ", err);
-      // Fallback
-      setDiffItems([
-        { type: 'edit', text: `Compared draft workspace: "${workspace.name}" with local additions.` },
-        { type: 'add', text: `${workspace.nodes?.length || 0} script layout nodes compiled` }
-      ]);
-      setCommitMessage(`Update: Visual flowchart adjustments [${workspace.name || 'mod'}]`);
-    } finally {
-      setIsDiffLoading(false);
-    }
-  };
-
-  // Automating scan whenever configurations are typed, or tab toggled
-  useEffect(() => {
-    if (activeTab === 'github' && owner && repo) {
-      const waitTimer = setTimeout(() => {
-        fetchRemoteAndComputeDiff(true);
-      }, 750);
-      return () => clearTimeout(waitTimer);
-    }
-  }, [activeTab, owner, repo, branch]);
-
-  // Save Git configurations
-  useEffect(() => {
-    localStorage.setItem('x4_github_pat', pat);
-    localStorage.setItem('x4_github_owner', owner);
-    localStorage.setItem('x4_github_repo', repo);
-    localStorage.setItem('x4_github_branch', branch);
-  }, [pat, owner, repo, branch]);
-
   if (!isOpen) return null;
-
-  // Clear log visualizer
-  const addLog = (msg: string) => {
-    setTerminalLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
-  };
-
-
 
   // Raw Content text/file parser execution
   const executeImport = (textToImport: string, format: 'json' | 'xml') => {
@@ -417,147 +228,6 @@ export default function SyncModal({
     }
   };
 
-  // Fetch Load from GitHub via internal server proxy endpoint (No Mock!)
-  const handleGitHubLoad = async () => {
-    if (!owner || !repo || !filePathToLoad) {
-      setStatusBanner({ type: 'refused', msg: 'Missing required Repo Owner, Name, or target File Path.' });
-      return;
-    }
-
-    setIsProcessing(true);
-    setTerminalLogs([]);
-    addLog(`Initiating connection request to GitHub repository: ${owner}/${repo}`);
-    addLog(`Downloading requested path: "${filePathToLoad}" on branch "${branch}"...`);
-
-    try {
-      const response = await fetch('/api/github/load', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pat: pat || undefined,
-          owner,
-          repo,
-          path: filePathToLoad,
-          branch
-        })
-      });
-
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || `Returned ${response.statusText}`);
-      }
-
-      addLog(`File successfully downloaded from GitHub! Size: ${result.content.length} characters.`);
-      addLog(`Commencing file decoder for file: ${result.fileName}`);
-
-      setIsProcessing(false);
-      
-      // Determine format automatically
-      const isJson = filePathToLoad.endsWith('.json') || result.content.trim().startsWith('{');
-      executeImport(result.content, isJson ? 'json' : 'xml');
-      
-    } catch (err: any) {
-      addLog(`❌ ERROR: GitHub file loading failed. ${err.message}`);
-      setIsProcessing(false);
-      setStatusBanner({ type: 'refused', msg: `GitHub Load Failed: ${err.message || 'Check connection details.'}` });
-    }
-  };
-
-  // Push Files to GitHub Commit via internal server proxy endpoint (No Mock!)
-  const handleGitHubPush = async () => {
-    if (!pat) {
-      setStatusBanner({ type: 'refused', msg: 'GitHub Personal Access Token (PAT) is required to push edits.' });
-      return;
-    }
-    if (!owner || !repo) {
-      setStatusBanner({ type: 'refused', msg: 'Please provide both Repository Owner and Name.' });
-      return;
-    }
-
-    setIsProcessing(true);
-    setTerminalLogs([]);
-    addLog(`Compiling active workspaces into Egosoft XML configurations...`);
-    
-    // Compile on the fly
-    const workspaceJson = JSON.stringify(workspace, null, 2);
-    const mdScriptXML = generateMDXML(workspace);
-    const uiLayoutXML = generateUIXML(workspace);
-    const readmeMD = `# ${workspace.name || 'X4 Foundations Mod'}
-*Author: ${workspace.author || 'Anonymous'}*
-*Version: ${workspace.version || '1.0.0'}*
-
-## Description
-${workspace.description || 'Custom mod developed inside X4 Foundations Mod Studio Visual Node Editor.'}
-
-## Visual Graph Layout
-This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${workspace.links.length}\` wiring layouts. Redefine and customize dynamically inside [X4:MD Studio](https://ai.studio/build).
-`;
-
-    // Package into files payload based on user selections
-    const filesToPush = [];
-    if (pushSelectedFiles.workspace) {
-      filesToPush.push({ path: 'ais_workspace.json', content: workspaceJson });
-    }
-    if (pushSelectedFiles.md_xml) {
-      filesToPush.push({ path: `md/${workspace.name || 'ais_mod'}.xml`, content: mdScriptXML });
-    }
-    if (pushSelectedFiles.ui_xml) {
-      filesToPush.push({ path: `ui/ais_ui_layout.xml`, content: uiLayoutXML });
-    }
-    if (pushSelectedFiles.readme) {
-      filesToPush.push({ path: 'README.md', content: readmeMD });
-    }
-
-    if (filesToPush.length === 0) {
-      setIsProcessing(false);
-      setStatusBanner({ type: 'refused', msg: 'Please select at least one compiled file target to push.' });
-      return;
-    }
-
-    addLog(`Preparing push payload containing ${filesToPush.length} files...`);
-    addLog(`Target branch: "${branch || 'main'}". Commit: "${commitMessage}"`);
-    addLog(`Dispatching server-side synchronized proxy request to api.github.com...`);
-
-    try {
-      const response = await fetch('/api/github/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pat,
-          owner,
-          repo,
-          branch,
-          commitMessage,
-          files: filesToPush
-        })
-      });
-
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || `Commit request failed: ${response.statusText}`);
-      }
-
-      addLog(`Synchronization complete! GitHub API updated files recursively on branch [${branch}].`);
-      result.results?.forEach((f: any) => {
-        addLog(`  => [Committed] ${f.path} (SHA: ${f.sha.substring(0, 8)})`);
-      });
-      addLog(`🎉 SUCCESS: Mod project changes merged cleanly! Repository is live.`);
-
-      setIsProcessing(false);
-      setStatusBanner({ 
-        type: 'success', 
-        msg: `Successfully synced & pushed ${filesToPush.length} files to GitHub repository ${owner}/${repo}!` 
-      });
-    } catch (err: any) {
-      addLog(`❌ ERROR: GitHub push request failed.`);
-      addLog(`  Details: ${err.message}`);
-      setIsProcessing(false);
-      setStatusBanner({ type: 'refused', msg: `GitHub Push Failed: ${err.message}` });
-    }
-  };
-
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 transition-all animate-fade-in font-sans">
       <div className="w-full max-w-4xl bg-[#141822] border border-white/10 rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
@@ -567,7 +237,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             <FolderSync className="w-5 h-5 text-cyan-400" />
             <div>
               <h2 className="text-sm font-mono font-bold text-white tracking-wider uppercase">Mod Cloud Sync & File Parser</h2>
-              <p className="text-[10px] font-mono text-slate-400">Import existing codes or synchronize scripts directly with GitHub</p>
+              <p className="text-[10px] font-mono text-slate-400">Import existing workspace JSON or Egosoft XML files</p>
             </div>
           </div>
           <button 
@@ -696,38 +366,15 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           {/* GitHub Repo Manager (load / commit & push) has moved to the SOURCE panel:
               SourceControl.tsx › Remotes tab. This modal is now import-only. */}
 
-          {/* TERMINAL STATUS DIAGNOSTICS OUTPUT PANEL */}
-          {terminalLogs.length > 0 && (
-            <div className="space-y-1.5 font-mono">
-              <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                Live Terminal Activity Log Tracker
-              </div>
-              <div className="w-full max-h-36 overflow-y-auto bg-black p-2.5 rounded-lg border border-white/5 text-[9.5px] leading-relaxed text-slate-400 space-y-1 h-full shadow-inner">
-                {terminalLogs.map((log, idx) => {
-                  let cls = '';
-                  if (log.includes('❌')) cls = 'text-red-400 font-semibold';
-                  if (log.includes('🎉') || log.includes('SUCCESS')) cls = 'text-emerald-400 font-semibold';
-                  if (log.includes('=> [Committed]')) cls = 'text-indigo-400';
-                  return (
-                    <div key={idx} className={cls}>
-                      {log}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
         </div>
 
         {/* Technical Footer */}
         <div className="p-3 bg-[#0d1017] border-t border-white/5 flex items-center justify-between text-[10px] font-mono text-slate-500">
           <div className="flex items-center gap-1.5">
             <ShieldAlert className="w-3.5 h-3.5 text-yellow-500" />
-            <span>Secure Connection (https proxy) encryption enabled</span>
+            <span>Local import parser only</span>
           </div>
-          <span>API: github.v3</span>
+          <span>GitHub moved to SOURCE</span>
         </div>
       </div>
     </div>
