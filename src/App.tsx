@@ -141,7 +141,9 @@ export default function App() {
   }, [loadSchemaLibrary]);
 
   const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki'>('blueprint');
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git'>('script');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues'>('script');
+  const [visibleCueIds, setVisibleCueIds] = useState<string[] | null>(null);
+  const [focusNodeRequest, setFocusNodeRequest] = useState<{ nodeId: string; timestamp: number } | null>(null);
 
   const [dirHandle, setDirHandle] = useState<any | null>(null);
   const [dirName, setDirName] = useState<string>('');
@@ -691,6 +693,9 @@ export default function App() {
               compileMessage={compileMessage}
               handleCompileModProject={handleCompileModProject}
               handleLinkDirectory={handleLinkDirectory}
+              visibleCueIds={visibleCueIds}
+              setVisibleCueIds={setVisibleCueIds}
+              setFocusNodeRequest={setFocusNodeRequest}
             />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
@@ -704,6 +709,8 @@ export default function App() {
               selectedNode={selectedNode}
               setSelectedNode={setSelectedNode}
               schemaTemplates={schemaTemplates}
+              visibleCueIds={visibleCueIds}
+              focusNodeRequest={focusNodeRequest}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder

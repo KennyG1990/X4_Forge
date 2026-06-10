@@ -25,7 +25,8 @@ import {
   Globe,
   AlertTriangle,
   CheckCircle2,
-  Filter
+  Filter,
+  MessageSquare
 } from 'lucide-react';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES } from '../types';
 
@@ -36,6 +37,8 @@ interface CanvasProps {
   selectedNode: MDNode | null;
   setSelectedNode: (node: MDNode | null) => void;
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
+  visibleCueIds: string[] | null;
+  focusNodeRequest: { nodeId: string; timestamp: number } | null;
 }
 
 export default function Canvas({
@@ -44,9 +47,12 @@ export default function Canvas({
   saveCheckpoint,
   selectedNode,
   setSelectedNode,
-  schemaTemplates = []
+  schemaTemplates = [],
+  visibleCueIds,
+  focusNodeRequest
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
+  const [depPanelOpen, setDepPanelOpen] = useState<boolean>(true);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [panning, setPanning] = useState<{ x: number; y: number } | null>(null);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -444,9 +450,63 @@ export default function Canvas({
     return { xStart, xEnd, yStart, yEnd };
   }, [panOffset, zoom, viewportSize]);
 
+  // Map each non-cue node to the cue it belongs to
+  const nodeToCueMap = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    const cues = workspace.nodes.filter(n => n.type === 'cue');
+    
+    cues.forEach(cueNode => {
+      const visited = new Set<string>([cueNode.id]);
+      const queue = [cueNode.id];
+      map[cueNode.id] = cueNode.id;
+      
+      while (queue.length > 0) {
+        const currentId = queue.shift()!;
+        
+        workspace.links.forEach(link => {
+          // Skip parent-subcue transitions so we stay within the cue's boundary
+          const isCueBoundary = 
+            (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow');
+            
+          if (isCueBoundary) return;
+          
+          let neighborId: string | null = null;
+          if (link.sourceNodeId === currentId) {
+            neighborId = link.targetNodeId;
+          } else if (link.targetNodeId === currentId) {
+            neighborId = link.sourceNodeId;
+          }
+          
+          if (neighborId) {
+            const neighborNode = workspace.nodes.find(n => n.id === neighborId);
+            if (neighborNode && neighborNode.type !== 'cue' && !visited.has(neighborId)) {
+              visited.add(neighborId);
+              map[neighborId] = cueNode.id;
+              queue.push(neighborId);
+            }
+          }
+        });
+      }
+    });
+    
+    return map;
+  }, [workspace.nodes, workspace.links]);
+
+  // Nodes that are active in the workspace (not hidden by cue filter)
+  const nodesFilteredByCue = React.useMemo(() => {
+    if (!visibleCueIds) return workspace.nodes;
+    return workspace.nodes.filter(node => {
+      const cueId = nodeToCueMap[node.id];
+      if (cueId) {
+        return visibleCueIds.includes(cueId);
+      }
+      return true;
+    });
+  }, [workspace.nodes, visibleCueIds, nodeToCueMap]);
+
   // Nodes falling inside the visible bounds
   const visibleNodes = React.useMemo(() => {
-    return workspace.nodes.filter(node => {
+    return nodesFilteredByCue.filter(node => {
       const w = node.type === 'comment' ? (node.width || 400) : 240;
       const h = node.type === 'comment' ? (node.height || 300) : 200;
       return (
@@ -456,11 +516,16 @@ export default function Canvas({
         node.y <= visibleBounds.yEnd
       );
     });
-  }, [workspace.nodes, visibleBounds]);
+  }, [nodesFilteredByCue, visibleBounds]);
 
   // Links falling inside the visible bounds (at least one end inside, or crossing)
   const visibleLinks = React.useMemo(() => {
+    const visibleNodeIds = new Set(nodesFilteredByCue.map(n => n.id));
     return workspace.links.filter(link => {
+      if (!visibleNodeIds.has(link.sourceNodeId) || !visibleNodeIds.has(link.targetNodeId)) {
+        return false;
+      }
+      
       const start = getPortCoordinates(link.sourceNodeId, link.sourcePortId, true);
       const end = getPortCoordinates(link.targetNodeId, link.targetPortId, false);
       
@@ -476,7 +541,7 @@ export default function Canvas({
         minY <= visibleBounds.yEnd
       );
     });
-  }, [workspace.links, visibleBounds, workspace.nodes]);
+  }, [workspace.links, visibleBounds, nodesFilteredByCue, getPortCoordinates]);
 
   // Auto-Align Core Layout Math Algorithm (Tidy Graph Tool)
   const autoAlignGraph = () => {
@@ -798,6 +863,116 @@ export default function Canvas({
     setSelectedNode(node);
   }, [setSelectedNode]);
 
+  // Trigger camera focus / fit when focusNodeRequest is updated from the Sidebar Tree
+  useEffect(() => {
+    if (focusNodeRequest) {
+      const node = workspace.nodes.find(n => n.id === focusNodeRequest.nodeId);
+      if (node) {
+        focusNode(node);
+      }
+    }
+  }, [focusNodeRequest, workspace.nodes, focusNode]);
+
+  // Cue & Variable dependency analysis builder
+  const dependencies = React.useMemo(() => {
+    if (!selectedNode) return [];
+    
+    interface NodeDep {
+      id: string;
+      label: string;
+      type: 'cue' | 'event' | 'condition' | 'action' | 'variable' | 'comment';
+      direction: 'reliance' | 'required-by';
+      reason: string;
+      originalNode: MDNode;
+    }
+
+    const rels: NodeDep[] = [];
+    const cueName = selectedNode.properties?.name || '';
+
+    // 1. Structural links (MDLinks) directly connected to ports
+    workspace.links.forEach(link => {
+      // If selectedNode is the target, we require/rely on the source node
+      if (link.targetNodeId === selectedNode.id) {
+        const srcNode = workspace.nodes.find(n => n.id === link.sourceNodeId);
+        if (srcNode) {
+          rels.push({
+            id: srcNode.id,
+            label: srcNode.label,
+            type: srcNode.type,
+            direction: 'reliance',
+            reason: `Linked from "${srcNode.label}" (${link.sourcePortId} → ${link.targetPortId})`,
+            originalNode: srcNode
+          });
+        }
+      }
+
+      // If selectedNode is the source, the target node requires us
+      if (link.sourceNodeId === selectedNode.id) {
+        const tgtNode = workspace.nodes.find(n => n.id === link.targetNodeId);
+        if (tgtNode) {
+          rels.push({
+            id: tgtNode.id,
+            label: tgtNode.label,
+            type: tgtNode.type,
+            direction: 'required-by',
+            reason: `Triggers "${tgtNode.label}" (${link.sourcePortId} → ${link.targetPortId})`,
+            originalNode: tgtNode
+          });
+        }
+      }
+    });
+
+    // 2. Logical / Text based property references in workspace
+    const otherNodes = workspace.nodes.filter(n => n.id !== selectedNode.id);
+    otherNodes.forEach(other => {
+      const otherName = other.properties?.name || other.properties?.value || other.label;
+      if (otherName && typeof otherName === 'string') {
+        const refsOther = Object.entries(selectedNode.properties).some(([k, v]) => 
+          typeof v === 'string' && (v === otherName || v.includes(otherName))
+        );
+        if (refsOther) {
+          rels.push({
+            id: other.id,
+            label: other.label,
+            type: other.type,
+            direction: 'reliance',
+            reason: other.type === 'variable' ? `Reads variable "${otherName}"` : `References cue "${otherName}" in settings`,
+            originalNode: other
+          });
+        }
+      }
+
+      if (cueName && typeof cueName === 'string') {
+        const otherRefsUs = Object.entries(other.properties).some(([k, v]) => 
+          typeof v === 'string' && (v === cueName || v.includes(cueName))
+        );
+        if (otherRefsUs) {
+          rels.push({
+            id: other.id,
+            label: other.label,
+            type: other.type,
+            direction: 'required-by',
+            reason: `Node "${other.label}" refers to this cue`,
+            originalNode: other
+          });
+        }
+      }
+    });
+
+    // De-duplicate by id + direction
+    const seen = new Set<string>();
+    const uniqueRels: NodeDep[] = [];
+    rels.forEach(item => {
+      const key = `${item.id}_${item.direction}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueRels.push(item);
+      }
+    });
+
+    return uniqueRels;
+  }, [selectedNode, workspace.nodes, workspace.links]);
+
   // Visual Diagnostic Compilation checker
   const diagnostics = React.useMemo(() => {
     const list: { id: string; nodeId?: string; type: 'error' | 'warning' | 'info'; message: string }[] = [];
@@ -933,8 +1108,8 @@ export default function Canvas({
   );
 
   // Dynamic Minimap calculation helpers
-  const xs = workspace.nodes.map(n => n.x);
-  const ys = workspace.nodes.map(n => n.y);
+  const xs = nodesFilteredByCue.map(n => n.x);
+  const ys = nodesFilteredByCue.map(n => n.y);
   const minX = xs.length ? Math.min(...xs) - 80 : 0;
   const maxX = xs.length ? Math.max(...xs) + 260 : 600;
   const minY = ys.length ? Math.min(...ys) - 80 : 0;
@@ -1081,6 +1256,21 @@ export default function Canvas({
         >
           <Trash2 className="w-3.5 h-3.5" />
           CLEAR WIRES
+        </button>
+
+        <div className="h-5 w-px bg-white/10 mx-1" />
+
+        <button
+          onClick={() => setDepPanelOpen(prev => !prev)}
+          title="Toggle selected node dependency analyzer visual graph panel"
+          className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
+            depPanelOpen 
+              ? 'bg-violet-500/15 border-violet-500/35 text-violet-400' 
+              : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
+          }`}
+        >
+          <Filter className="w-3.5 h-3.5" />
+          <span>DEPS TRACE</span>
         </button>
       </div>
 
@@ -1327,117 +1517,209 @@ export default function Canvas({
 
               const isLowDetail = zoom < 0.45;
 
-              if (isLowDetail) {
-                return (
-                  <div
-                    key={node.id}
-                    onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
-                    style={{ left: node.x, top: node.y }}
-                    className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
-                      isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015] z-10' : 'hover:border-white/20'
-                    } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
-                  >
-                    <div className="flex-1 flex items-center justify-center text-center">
-                      <span className="font-bold text-[12px] truncate w-48 text-slate-100">
-                        {node.label}
-                      </span>
-                    </div>
-                    <div className="text-[8px] text-slate-500 text-center uppercase tracking-wider font-bold border-t border-white/[0.04] pt-1">
-                      {node.type.toUpperCase()}: &lt;{node.xmlTag}&gt;
+              // Shared Yellow Sticky Annotation render fragment helper
+              const stickyAnnotation = node.comment && (
+                <div 
+                  style={{ 
+                    position: 'absolute',
+                    left: node.x + 248, // Adjacent to the w-60 (240px) visual node card
+                    top: node.y,
+                    width: '190px',
+                  }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                  }}
+                  className="bg-amber-400/[0.12] hover:bg-amber-400/[0.22] border border-amber-400/40 text-amber-200 p-2.5 rounded-lg shadow-2xl font-sans text-[10px] leading-relaxed z-20 transition-all flex flex-col gap-1.5 backdrop-blur-md cursor-default text-left select-text"
+                >
+                  <div className="flex items-center justify-between border-b border-amber-400/20 pb-1 mb-0.5 select-none font-bold uppercase tracking-wider text-[8px] text-amber-400 font-mono">
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                      Sticky Note
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const text = window.prompt(`Edit Sticky Note Annotation for "${node.label}":`, node.comment);
+                          if (text !== null) {
+                            saveCheckpoint();
+                            setWorkspace(prev => ({
+                              ...prev,
+                              nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: text } : n)
+                            }));
+                            if (selectedNode && selectedNode.id === node.id) {
+                              setSelectedNode({ ...selectedNode, comment: text });
+                            }
+                          }
+                        }}
+                        className="text-[8.5px] text-yellow-300 hover:text-white"
+                      >
+                        Edit
+                      </button>
+                      <span className="text-amber-400/30 font-sans select-none">•</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          saveCheckpoint();
+                          setWorkspace(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: '' } : n)
+                          }));
+                          if (selectedNode && selectedNode.id === node.id) {
+                            setSelectedNode({ ...selectedNode, comment: '' });
+                          }
+                        }}
+                        className="text-red-400 hover:text-red-200"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
+                  <p className="whitespace-pre-wrap leading-relaxed italic text-slate-300 select-text font-serif text-[10px]">{node.comment}</p>
+                </div>
+              );
+
+              if (isLowDetail) {
+                return (
+                  <React.Fragment key={node.id}>
+                    <div
+                      onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
+                      style={{ left: node.x, top: node.y }}
+                      className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
+                        isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015] z-10' : 'hover:border-white/20'
+                      } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
+                    >
+                      <div className="flex-1 flex items-center justify-center text-center">
+                        <span className="font-bold text-[12px] truncate w-48 text-slate-100">
+                          {node.label}
+                        </span>
+                      </div>
+                      <div className="text-[8px] text-slate-500 text-center uppercase tracking-wider font-bold border-t border-white/[0.04] pt-1">
+                        {node.type.toUpperCase()}: &lt;{node.xmlTag}&gt;
+                      </div>
+                    </div>
+                    {stickyAnnotation}
+                  </React.Fragment>
                 );
               }
 
               return (
-              <div
-                key={node.id}
-                onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
-                style={{ left: node.x, top: node.y }}
-                className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
-                  isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
-                } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
-              >
-                {/* Visual node title & close handle button */}
-                <div className={`p-2.5 rounded-t-lg border-b flex items-center justify-between cursor-grab active:cursor-grabbing ${headingClasses}`}>
-                  <div className="flex items-center gap-1.5 truncate">
-                    {simActive && isGlowActive && (
-                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
-                    )}
-                    <span className="font-semibold text-xs tracking-tight truncate w-36">{node.label}</span>
+                <React.Fragment key={node.id}>
+                  <div
+                    onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
+                    style={{ left: node.x, top: node.y }}
+                    className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
+                      isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
+                    } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
+                  >
+                    {/* Visual node title & close handle button */}
+                    <div className={`p-2.5 rounded-t-lg border-b flex items-center justify-between cursor-grab active:cursor-grabbing ${headingClasses}`}>
+                      <div className="flex items-center gap-1.5 truncate">
+                        {simActive && isGlowActive && (
+                          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
+                        )}
+                        <span className="font-semibold text-xs tracking-tight truncate w-32">{node.label}</span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* Sticky Note Toggle Icon */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const existingComment = node.comment || '';
+                            const text = window.prompt(`Attach Yellow Sticky Note to "${node.label}" script step:`, existingComment);
+                            if (text !== null) {
+                              saveCheckpoint();
+                              setWorkspace(prev => ({
+                                ...prev,
+                                nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: text } : n)
+                              }));
+                              if (selectedNode && selectedNode.id === node.id) {
+                                setSelectedNode({ ...selectedNode, comment: text });
+                              }
+                            }
+                          }}
+                          title="Attach sticky-note annotation"
+                          className={`p-1 rounded transition-colors duration-100 cursor-pointer ${
+                            node.comment 
+                              ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30' 
+                              : 'hover:bg-yellow-400/10 text-slate-400 hover:text-yellow-400'
+                          }`}
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        </button>
+                        {node.type === 'event' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); triggerLogicSimulator(node.id); }}
+                            title="Simulate Event from this step specifically"
+                            className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer"
+                          >
+                            <Zap className="w-3.5 h-3.5 fill-emerald-400/20" />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => deleteNode(node.id, e)}
+                          title="Delete Node"
+                          className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Properties Inspector Preview */}
+                    <div className="p-2.5 bg-black/45 text-slate-400 space-y-1 select-none border-b border-white/[0.04]">
+                      {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
+                        <div key={key} className="flex justify-between">
+                          <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">{key}:</span>
+                          <span className="text-slate-300 truncate max-w-[140px] text-right font-medium" title={String(val)}>
+                            {String(val)}
+                          </span>
+                        </div>
+                      ))}
+                      {Object.keys(node.properties).length === 0 && (
+                        <div className="text-slate-500 italic text-[10px] text-center">No properties configured</div>
+                      )}
+                    </div>
+
+                    {/* Ports list row layouts */}
+                    <div className="p-2 space-y-2 bg-black/15 rounded-b-lg">
+                      {/* Event Inputs/Condition locks list */}
+                      {(node.inputs || []).map((port) => (
+                        <div key={port.id} className="flex items-center gap-2">
+                           <button
+                            onClick={(e) => handlePortClick(node.id, port, e)}
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                              linking?.nodeId === node.id && linking?.portId === port.id 
+                                ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
+                                : 'bg-[#10b981]/20 hover:bg-[#10b981]/60 border-[#10b981]/50'
+                            }`}
+                            title={`Connector terminal: ${port.name}`}
+                          />
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                        </div>
+                      ))}
+
+                      {/* Command outputs target lists */}
+                      {(node.outputs || []).map((port) => (
+                        <div key={port.id} className="flex items-center justify-end gap-2 text-right w-full">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                          <button
+                            onClick={(e) => handlePortClick(node.id, port, e)}
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                              linking?.nodeId === node.id && linking?.portId === port.id 
+                                ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
+                                : 'bg-cyan-500/20 hover:bg-cyan-500/60 border-cyan-500/50'
+                            }`}
+                            title={`Connector terminal: ${port.name}`}
+                          />
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {node.type === 'event' && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); triggerLogicSimulator(node.id); }}
-                        title="Simulate Event from this step specifically"
-                        className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer"
-                      >
-                        <Zap className="w-3.5 h-3.5 fill-emerald-400/20" />
-                      </button>
-                    )}
-                    <button
-                      onClick={(e) => deleteNode(node.id, e)}
-                      title="Delete Node"
-                      className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Properties Inspector Preview */}
-                <div className="p-2.5 bg-black/45 text-slate-400 space-y-1 select-none border-b border-white/[0.04]">
-                  {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
-                    <div key={key} className="flex justify-between">
-                      <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">{key}:</span>
-                      <span className="text-slate-300 truncate max-w-[140px] text-right font-medium" title={String(val)}>
-                        {String(val)}
-                      </span>
-                    </div>
-                  ))}
-                  {Object.keys(node.properties).length === 0 && (
-                    <div className="text-slate-500 italic text-[10px] text-center">No properties configured</div>
-                  )}
-                </div>
-
-                {/* Ports list row layouts */}
-                <div className="p-2 space-y-2 bg-black/15 rounded-b-lg">
-                  {/* Event Inputs/Condition locks list */}
-                  {(node.inputs || []).map((port) => (
-                    <div key={port.id} className="flex items-center gap-2">
-                       <button
-                        onClick={(e) => handlePortClick(node.id, port, e)}
-                        className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
-                          linking?.nodeId === node.id && linking?.portId === port.id 
-                            ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                            : 'bg-[#10b981]/20 hover:bg-[#10b981]/60 border-[#10b981]/50'
-                        }`}
-                        title={`Connector terminal: ${port.name}`}
-                      />
-                      <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
-                    </div>
-                  ))}
-
-                  {/* Command outputs target lists */}
-                  {(node.outputs || []).map((port) => (
-                    <div key={port.id} className="flex items-center justify-end gap-2 text-right w-full">
-                      <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
-                      <button
-                        onClick={(e) => handlePortClick(node.id, port, e)}
-                        className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
-                          linking?.nodeId === node.id && linking?.portId === port.id 
-                            ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                            : 'bg-cyan-500/20 hover:bg-cyan-500/60 border-cyan-500/50'
-                        }`}
-                        title={`Connector terminal: ${port.name}`}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+                  {stickyAnnotation}
+                </React.Fragment>
+              );
+            })}
         </div>
       </div>
 
@@ -1568,7 +1850,7 @@ export default function Canvas({
           RADAR MINIMAP
         </span>
         <div className="relative w-36 h-24 bg-[#05070a] rounded-lg border border-white/5 overflow-hidden">
-          {workspace.nodes.map(node => {
+          {nodesFilteredByCue.map(node => {
             // Transform coordinates down to scale perfectly within radar dimension boundaries (144px width, 96px height)
             const nodeX = rangeX > 1 ? ((node.x - minX) / rangeX) * 120 + 8 : 10;
             const nodeY = rangeY > 1 ? ((node.y - minY) / rangeY) * 80 + 8 : 10;
@@ -1743,6 +2025,131 @@ export default function Canvas({
             )}
           </div>
           <span className="text-[9px] text-slate-500 text-center leading-snug">Evaluates connected script graphs real-time to prevent broken XML references in X4 Foundations load processes.</span>
+        </div>
+      )}
+
+      {/* Dynamic Cue & Variable Dependency Graph overlay panel */}
+      {depPanelOpen && (
+        <div className="absolute top-[340px] right-4 z-40 w-80 bg-[#0e121b]/95 border border-violet-500/30 rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-slate-350 animate-terminal-line max-h-[380px] w-[320px]">
+          <div className="flex items-center justify-between border-b border-white/5 pb-2">
+            <span className="font-bold text-slate-100 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+              <MessageSquare className="w-4 h-4 text-violet-400 shrink-0" />
+              Dependency Graph
+            </span>
+            <button
+              onClick={() => setDepPanelOpen(false)}
+              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-1">
+            {selectedNode ? (
+              <>
+                {/* Header highlighting selected cue name with visual frame */}
+                <div className="p-2 border border-violet-500/25 bg-violet-950/20 rounded-lg text-center shadow-lg relative overflow-hidden group">
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-violet-500" />
+                  <span className="text-[9px] uppercase font-bold text-violet-400 block tracking-widest leading-none mb-1">SELECTED ROOT</span>
+                  <span className="text-white font-bold block truncate text-center">{selectedNode.label}</span>
+                  <span className="text-[9.5px] text-slate-500 font-mono mt-0.5 block">&lt;{selectedNode.xmlTag}&gt;</span>
+                </div>
+
+                {/* RELIES ON SECTION (PREDECESSORS) */}
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-cyan-400 tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                    RELIES ON (DATA / INBOUNDS)
+                  </span>
+                  {dependencies.filter(d => d.direction === 'reliance').length === 0 ? (
+                    <span className="text-[10px] text-slate-500 italic block pl-1.5 border-l border-white/5 py-1">
+                      No inbound dependencies detected.
+                    </span>
+                  ) : (
+                    <div className="space-y-1.5 pl-1.5 border-l border-white/5">
+                      {dependencies
+                        .filter(d => d.direction === 'reliance')
+                        .map(dep => {
+                          let typeColors = 'border-purple-500/40 text-purple-300 bg-purple-950/10';
+                          if (dep.type === 'variable') typeColors = 'border-cyan-500/40 text-cyan-300 bg-cyan-950/10';
+                          else if (dep.type === 'event') typeColors = 'border-amber-500/40 text-amber-300 bg-amber-950/10';
+                          else if (dep.type === 'action') typeColors = 'border-emerald-500/40 text-emerald-300 bg-emerald-950/10';
+
+                          return (
+                            <button
+                              key={`dep_in_${dep.id}`}
+                              onClick={() => focusNode(dep.originalNode)}
+                              className={`w-full text-left p-1.5 rounded border ${typeColors} hover:border-cyan-400 hover:bg-cyan-500/5 transition-all text-[10px] font-mono flex items-start gap-1 justify-between group cursor-pointer`}
+                              title="Click to zoom focus onto this dependency connection node"
+                            >
+                              <div className="flex-1 min-w-0 pr-1.5">
+                                <span className="font-bold block truncate">{dep.label}</span>
+                                <span className="text-[8px] text-slate-450 leading-none block truncate mt-0.5 italic">{dep.reason}</span>
+                              </div>
+                              <span className="text-[8px] uppercase tracking-wider font-semibold border border-white/10 px-1 py-0.5 rounded shrink-0 self-center text-slate-400 select-none group-hover:text-cyan-300 group-hover:border-cyan-400/30">
+                                PAN ↑
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+
+                {/* REQUIRED BY SECTION (CONSUMERS) */}
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-amber-400 tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    REQUIRED BY (OUTBOUNDS)
+                  </span>
+                  {dependencies.filter(d => d.direction === 'required-by').length === 0 ? (
+                    <span className="text-[10px] text-slate-500 italic block pl-1.5 border-l border-white/5 py-1">
+                      No outbound dependencies detected.
+                    </span>
+                  ) : (
+                    <div className="space-y-1.5 pl-1.5 border-l border-white/5">
+                      {dependencies
+                        .filter(d => d.direction === 'required-by')
+                        .map(dep => {
+                          let typeColors = 'border-purple-500/40 text-purple-300 bg-purple-950/10';
+                          if (dep.type === 'variable') typeColors = 'border-cyan-500/40 text-cyan-300 bg-cyan-950/10';
+                          else if (dep.type === 'event') typeColors = 'border-amber-500/40 text-amber-300 bg-amber-950/10';
+                          else if (dep.type === 'action') typeColors = 'border-emerald-500/40 text-emerald-300 bg-emerald-950/10';
+
+                          return (
+                            <button
+                              key={`dep_out_${dep.id}`}
+                              onClick={() => focusNode(dep.originalNode)}
+                              className={`w-full text-left p-1.5 rounded border ${typeColors} hover:border-cyan-400 hover:bg-cyan-500/5 transition-all text-[10px] font-mono flex items-start gap-1 justify-between group cursor-pointer`}
+                              title="Click to zoom focus onto this consumer node"
+                            >
+                              <div className="flex-1 min-w-0 pr-1.5">
+                                <span className="font-bold block truncate">{dep.label}</span>
+                                <span className="text-[8px] text-slate-450 leading-none block truncate mt-0.5 italic">{dep.reason}</span>
+                              </div>
+                              <span className="text-[8px] uppercase tracking-wider font-semibold border border-white/10 px-1 py-0.5 rounded shrink-0 self-center text-slate-400 select-none group-hover:text-cyan-300 group-hover:border-cyan-400/30">
+                                PAN ↑
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-center py-10 px-4 leading-normal font-sans border border-slate-850 bg-black/30 rounded-lg">
+                <MessageSquare className="w-8 h-8 text-slate-700 mb-2 animate-pulse" />
+                <span className="font-bold uppercase text-[10px] text-slate-500 tracking-wider">No active node selected</span>
+                <span className="text-[9px] text-slate-550 mt-1.5 leading-normal italic">
+                  Select any visual script cue or variable node on your canvas to instantly map out the flow-dependencies diagram!
+                </span>
+              </div>
+            )}
+          </div>
+          <span className="text-[8px] text-slate-550 text-center leading-normal">
+            Traces linkages, custom variables, inbounds/outbounds, and properties schemas automatically.
+          </span>
         </div>
       )}
 

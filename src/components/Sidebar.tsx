@@ -24,7 +24,8 @@ import {
   Folder,
   HardDrive,
   GitBranch,
-  GitCommit
+  GitCommit,
+  Compass
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -39,10 +40,11 @@ import DirectoryExplorer from './DirectoryExplorer';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
+import CueViewer from './CueViewer';
 
 interface SidebarProps {
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -73,6 +75,9 @@ interface SidebarProps {
   compileMessage?: string;
   handleCompileModProject?: () => Promise<void>;
   handleLinkDirectory?: () => Promise<void>;
+  visibleCueIds: string[] | null;
+  setVisibleCueIds: (ids: string[] | null) => void;
+  setFocusNodeRequest: (req: { nodeId: string; timestamp: number } | null) => void;
 }
 
 export default function Sidebar({
@@ -101,7 +106,10 @@ export default function Sidebar({
   compileStatus = 'idle',
   compileMessage = '',
   handleCompileModProject,
-  handleLinkDirectory
+  handleLinkDirectory,
+  visibleCueIds,
+  setVisibleCueIds,
+  setFocusNodeRequest
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -254,7 +262,7 @@ export default function Sidebar({
         <button
           id="tab_script"
           onClick={() => setActiveTab('script')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'script'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
@@ -264,9 +272,21 @@ export default function Sidebar({
           MD NODES
         </button>
         <button
+          id="tab_cues"
+          onClick={() => setActiveTab('cues')}
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+            activeTab === 'cues'
+              ? 'border-cyan-500 text-white bg-cyan-600/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+        >
+          <Compass className="w-3.5 h-3.5" />
+          CUES
+        </button>
+        <button
           id="tab_ui"
           onClick={() => setActiveTab('ui')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'ui'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
@@ -278,7 +298,7 @@ export default function Sidebar({
         <button
           id="tab_config"
           onClick={() => setActiveTab('config')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'config'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
@@ -314,7 +334,18 @@ export default function Sidebar({
       </div>
 
       {/* Main Content Pane */}
-      <div className={`flex-1 overflow-y-auto ${activeTab === 'filesystem' || activeTab === 'git' ? 'p-0' : 'p-4 space-y-4'}`}>
+      <div className={`flex-1 overflow-y-auto ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' ? 'p-0' : 'p-4 space-y-4'}`}>
+        {activeTab === 'cues' && (
+          <CueViewer
+            workspace={workspace}
+            selectedNode={selectedNode}
+            setSelectedNode={setSelectedNode}
+            setFocusNodeRequest={setFocusNodeRequest}
+            visibleCueIds={visibleCueIds}
+            setVisibleCueIds={setVisibleCueIds}
+          />
+        )}
+
         {activeTab === 'filesystem' && (
           <DirectoryExplorer
             dirHandle={dirHandle}
@@ -754,6 +785,34 @@ export default function Sidebar({
                   )}
                 </div>
               ))}
+
+              {/* Sticky-note annotations comment box */}
+              {selectedNode && (
+                <div className="border-t border-amber-500/15 pt-3 mt-3 bg-amber-500/5 p-2 rounded border border-amber-500/20">
+                  <label className="text-amber-400 font-bold block mb-1 uppercase text-[9px] tracking-wider flex items-center gap-1 leading-none select-none">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    STICKY-NOTE COMMENT / ANNOTATION
+                  </label>
+                  <textarea
+                    value={selectedNode.comment || ''}
+                    onChange={e => {
+                      const text = e.target.value;
+                      saveCheckpoint();
+                      setWorkspace(prev => ({
+                        ...prev,
+                        nodes: prev.nodes.map(n => n.id === selectedNode.id ? { ...n, comment: text } : n)
+                      }));
+                      setSelectedNode(prev => prev && prev.id === selectedNode.id ? { ...prev, comment: text } : prev);
+                    }}
+                    placeholder="Attach an interactive yellow sticky-note annotation beside this node on the canvas layout..."
+                    rows={4}
+                    className="w-full p-2 rounded bg-black/60 border border-amber-500/25 text-slate-200 font-sans text-[10.5px] leading-relaxed focus:outline-none focus:border-amber-400 placeholder-amber-400/20 resize-none text-left"
+                  />
+                  <p className="text-[8.5px] text-amber-500/80 italic leading-tight mt-1 select-none">
+                    Attaches a floating sticky-note document to this mission step on the canvas graph.
+                  </p>
+                </div>
+              )}
 
               {selectedWidget && (
                 <div className="space-y-3">
