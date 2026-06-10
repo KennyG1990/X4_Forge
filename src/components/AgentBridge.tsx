@@ -348,6 +348,7 @@ export default function AgentBridge({
     getWorkspace: false,
     postWorkspace: true,
     dryRunWorkspace: true,
+    patchWorkspace: true,
     generate: false,
     diagnostics: true,
     compile: true,
@@ -759,6 +760,48 @@ export default function AgentBridge({
                         className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                       >
                         {copiedTextId === 'curl_dryrunws' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ENDPOINT 4: POST WORKSPACE PATCH */}
+              <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
+                <button 
+                  onClick={() => toggleEndpoint('patchWorkspace')}
+                  className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-600/20 text-indigo-300 border border-indigo-500/30">POST</span>
+                    <span className="text-white text-xs font-bold font-mono">/api/agent/workspace/patch</span>
+                  </div>
+                  {collapsedEndpoints.patchWorkspace ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </button>
+                
+                {!collapsedEndpoints.patchWorkspace && (
+                  <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
+                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                      Applies JSON Patch-style granular edits with required expectedVersion safety. Supports add, replace, remove, and dryRun before applying.
+                    </p>
+                    <div className="relative">
+                      <pre className="bg-[#10141f] p-2 rounded text-[9px] text-cyan-300 overflow-y-auto max-h-36 select-all">
+                        {`curl -X POST "${appOrigin}/api/agent/workspace/patch" \\
+     ${authCurlHeader} \\
+     -H "Content-Type: application/json" \\
+     -d '{
+       "expectedVersion": 1,
+       "dryRun": true,
+       "operations": [
+         { "op": "replace", "path": "/description", "value": "Updated by an external agent." }
+       ]
+     }'`}
+                      </pre>
+                      <button 
+                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/workspace/patch" ${authCurlHeader} -H "Content-Type: application/json" -d '{"expectedVersion": 1, "dryRun": true, "operations": [{"op": "replace", "path": "/description", "value": "Updated by an external agent."}]}'`, 'curl_patchws')}
+                        className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
+                      >
+                        {copiedTextId === 'curl_patchws' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
                   </div>

@@ -279,6 +279,111 @@ function buildWorkspaceDiagnosticsPayload(ws: ModWorkspace) {
   };
 }
 
+type WorkspacePatchOperation = {
+  op: "add" | "replace" | "remove";
+  path: string;
+  value?: unknown;
+};
+
+const BLOCKED_PATCH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function decodeJsonPointer(pathValue: string): string[] {
+  if (!pathValue || pathValue[0] !== "/") {
+    throw new Error(`Invalid JSON Pointer path: ${pathValue}`);
+  }
+  return pathValue
+    .slice(1)
+    .split("/")
+    .map(part => part.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+
+function assertSafePatchSegment(segment: string) {
+  if (BLOCKED_PATCH_KEYS.has(segment)) {
+    throw new Error(`Unsafe patch path segment: ${segment}`);
+  }
+}
+
+function resolvePatchParent(root: any, pathValue: string) {
+  const segments = decodeJsonPointer(pathValue);
+  if (!segments.length) {
+    throw new Error("Root-level workspace replacement is not supported by /workspace/patch. Use /api/agent/workspace instead.");
+  }
+
+  let parent = root;
+  for (const segment of segments.slice(0, -1)) {
+    assertSafePatchSegment(segment);
+    if (Array.isArray(parent)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index) || index < 0 || index >= parent.length) {
+        throw new Error(`Patch array index out of range: ${segment}`);
+      }
+      parent = parent[index];
+    } else if (parent && typeof parent === "object") {
+      if (!(segment in parent)) {
+        throw new Error(`Patch path does not exist: ${pathValue}`);
+      }
+      parent = parent[segment];
+    } else {
+      throw new Error(`Patch path cannot traverse non-object value: ${pathValue}`);
+    }
+  }
+
+  const key = segments[segments.length - 1];
+  assertSafePatchSegment(key);
+  return { parent, key };
+}
+
+function applyWorkspacePatchOperations(workspace: ModWorkspace, operations: WorkspacePatchOperation[]): ModWorkspace {
+  const draft: any = JSON.parse(JSON.stringify(workspace));
+
+  operations.forEach((operation, index) => {
+    if (!operation || !["add", "replace", "remove"].includes(operation.op)) {
+      throw new Error(`Patch operation ${index} has unsupported op '${operation?.op}'.`);
+    }
+
+    const { parent, key } = resolvePatchParent(draft, operation.path);
+    if (Array.isArray(parent)) {
+      if (operation.op === "add") {
+        if (key === "-") {
+          parent.push(operation.value);
+          return;
+        }
+        const insertIndex = Number(key);
+        if (!Number.isInteger(insertIndex) || insertIndex < 0 || insertIndex > parent.length) {
+          throw new Error(`Patch add index out of range: ${operation.path}`);
+        }
+        parent.splice(insertIndex, 0, operation.value);
+        return;
+      }
+
+      const indexValue = Number(key);
+      if (!Number.isInteger(indexValue) || indexValue < 0 || indexValue >= parent.length) {
+        throw new Error(`Patch array index out of range: ${operation.path}`);
+      }
+      if (operation.op === "remove") {
+        parent.splice(indexValue, 1);
+      } else {
+        parent[indexValue] = operation.value;
+      }
+      return;
+    }
+
+    if (!parent || typeof parent !== "object") {
+      throw new Error(`Patch path parent is not an object: ${operation.path}`);
+    }
+    if (operation.op !== "add" && !(key in parent)) {
+      throw new Error(`Patch path does not exist: ${operation.path}`);
+    }
+    if (operation.op === "remove") {
+      delete parent[key];
+    } else {
+      parent[key] = operation.value;
+    }
+  });
+
+  return sanitizeWorkspace(draft);
+}
+
 type GameLogIssue = {
   severity: "error" | "warning";
   lineNumber: number;
@@ -1185,6 +1290,19 @@ app.get("/api/agent/schema", (req, res) => {
       },
       {
         method: "POST",
+        path: "/api/agent/workspace/patch",
+        auth: true,
+        body: {
+          expectedVersion: "required current version from GET /api/agent/workspace",
+          dryRun: "optional boolean; when true, returns proposed workspace and diagnostics without applying",
+          operations: [
+            { op: "add|replace|remove", path: "/JSON/Pointer/path", value: "required for add/replace" }
+          ]
+        },
+        purpose: "Apply JSON Patch-style granular edits to the active workspace with version-conflict protection. Supports add, replace, and remove on object fields and array items, including '-' append."
+      },
+      {
+        method: "POST",
         path: "/api/agent/compile",
         auth: true,
         body: { workspace: "optional ModWorkspace; defaults to active workspace" },
@@ -1825,6 +1943,65 @@ app.post("/api/agent/workspace/dry-run", (req, res) => {
       success: false,
       dryRun: true,
       error: error.message || "Failed to dry-run proposed workspace."
+    });
+  }
+});
+
+/**
+ * POST /api/agent/workspace/patch
+ * Applies JSON Patch-style granular workspace changes with required version safety.
+ */
+app.post("/api/agent/workspace/patch", (req, res) => {
+  const { operations, expectedVersion, dryRun } = req.body;
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return res.status(400).json({ success: false, error: "Missing required non-empty 'operations' array." });
+  }
+  if (expectedVersion === undefined) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required 'expectedVersion'. Read /api/agent/workspace before patching.",
+      code: "workspace.expected_version_required",
+      currentVersion: workspaceVersion
+    });
+  }
+  if (Number(expectedVersion) !== workspaceVersion) {
+    return res.status(409).json({
+      success: false,
+      error: "Workspace version conflict. Refresh /api/agent/workspace before applying changes.",
+      code: "workspace.version_conflict",
+      expectedVersion: Number(expectedVersion),
+      currentVersion: workspaceVersion
+    });
+  }
+
+  try {
+    const nextWorkspace = applyWorkspacePatchOperations(activeWorkspace, operations);
+    const isDifferent = JSON.stringify(nextWorkspace) !== JSON.stringify(activeWorkspace);
+    const nextVersion = isDifferent && !dryRun ? workspaceVersion + 1 : workspaceVersion;
+    const diagnosticsPayload = buildWorkspaceDiagnosticsPayload(nextWorkspace);
+
+    if (isDifferent && !dryRun) {
+      activeWorkspace = nextWorkspace;
+      workspaceVersion++;
+    }
+
+    return res.json({
+      success: true,
+      dryRun: Boolean(dryRun),
+      applied: Boolean(isDifferent && !dryRun),
+      wouldChange: isDifferent,
+      version: dryRun ? workspaceVersion : workspaceVersion,
+      proposedVersion: nextVersion,
+      operationsApplied: operations.length,
+      workspace: nextWorkspace,
+      ...diagnosticsPayload
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: error.message || "Failed to apply workspace patch.",
+      code: "workspace.patch_failed",
+      currentVersion: workspaceVersion
     });
   }
 });
