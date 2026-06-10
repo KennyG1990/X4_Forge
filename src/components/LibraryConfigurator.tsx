@@ -16,7 +16,9 @@ import {
   Anchor, 
   Code2, 
   ChevronRight,
-  GitPullRequest
+  GitPullRequest,
+  BadgeAlert,
+  AlertTriangle
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 
@@ -50,10 +52,23 @@ export interface JobDef {
   rebuildOnDestroy: boolean;
 }
 
+export interface ConflictWarning {
+  id: string;
+  severity: 'error' | 'warning' | 'info';
+  category: 'id_collision' | 'overlap' | 'validation' | 'pricing';
+  title: string;
+  message: string;
+  affectedIds: string[];
+  location: string;
+}
+
 export default function LibraryConfigurator({ workspace, setWorkspace }: LibraryConfiguratorProps) {
   const [activeSubTab, setActiveSubTab] = useState<'wares' | 'jobs'>('wares');
   const [activeItemIndex, setActiveItemIndex] = useState<number>(0);
   const [isPatchMode, setIsPatchMode] = useState<boolean>(true);
+  const [warnings, setWarnings] = useState<ConflictWarning[]>([]);
+  const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [warningsExpanded, setWarningsExpanded] = useState<boolean>(true);
 
   // High fidelity default arrays
   const defaultWares: WareDef[] = [
@@ -108,8 +123,286 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
     }
   ];
 
-  const wares = workspace.wares && workspace.wares.length > 0 ? workspace.wares : defaultWares;
-  const jobs = workspace.jobs && workspace.jobs.length > 0 ? workspace.jobs : defaultJobs;
+  const wares = workspace.wares || [];
+  const jobs = workspace.jobs || [];
+
+  const scanProjectFilesForConflicts = async () => {
+    setIsScanning(true);
+    const foundWarnings: ConflictWarning[] = [];
+    
+    // 1. Collect all custom registries in workspace + defaults
+    const registryWares = wares;
+    const registryJobs = jobs;
+
+    const wareDefsMap = new Map<string, Array<{ id: string; name?: string; source: string; details?: string }>>();
+    const jobDefsMap = new Map<string, Array<{ id: string; name?: string; source: string; details?: any }>>();
+
+    // Populate active workspace registry
+    registryWares.forEach(w => {
+      const list = wareDefsMap.get(w.id) || [];
+      list.push({ id: w.id, name: w.name, source: 'Workspace Registry' });
+      wareDefsMap.set(w.id, list);
+      
+      // Pricing rules validation
+      if (w.minPrice >= w.maxPrice) {
+        foundWarnings.push({
+          id: `price_floor_${w.id}`,
+          severity: 'error',
+          category: 'pricing',
+          title: 'Invalid pricing range',
+          message: `Min price (${w.minPrice} cr) is greater/equal to Max price (${w.maxPrice} cr) for '${w.id}'. X4 engine rejects unstable boundaries.`,
+          affectedIds: [w.id],
+          location: 'Workspace Registry'
+        });
+      }
+      if (w.avgPrice < w.minPrice || w.avgPrice > w.maxPrice) {
+        foundWarnings.push({
+          id: `price_avg_${w.id}`,
+          severity: 'warning',
+          category: 'pricing',
+          title: 'Average price anomalous',
+          message: `Average price (${w.avgPrice} cr) must reside between Min floor and Max ceiling.`,
+          affectedIds: [w.id],
+          location: 'Workspace Registry'
+        });
+      }
+    });
+
+    registryJobs.forEach(j => {
+      const list = jobDefsMap.get(j.id) || [];
+      list.push({ id: j.id, name: j.name, source: 'Workspace Registry', details: j });
+      jobDefsMap.set(j.id, list);
+
+      // Validation warnings
+      if (j.galaxyQuota <= 0) {
+        foundWarnings.push({
+          id: `quota_gal_${j.id}`,
+          severity: 'error',
+          category: 'validation',
+          title: 'Zero quota limit',
+          message: `Galaxy quota for job '${j.id}' is 0. No ships under this design will ever spawn.`,
+          affectedIds: [j.id],
+          location: 'Workspace Registry'
+        });
+      }
+      if (j.sectorQuota > j.galaxyQuota) {
+        foundWarnings.push({
+          id: `quota_sec_${j.id}`,
+          severity: 'warning',
+          category: 'validation',
+          title: 'Sector quota exceeds Galaxy',
+          message: `Sector quota limit (${j.sectorQuota}) is greater than Galaxy quota (${j.galaxyQuota}). Spawn volumes will be capped by galaxy volume.`,
+          affectedIds: [j.id],
+          location: 'Workspace Registry'
+        });
+      }
+    });
+
+    // 2. Scan xmlPatches built-in or custom blocks
+    const patches = workspace.xmlPatches || [];
+    patches.forEach(p => {
+      const xmlContent = p.content || '';
+      
+      // Regex match wares
+      const wareRegex = /<ware\s+id=["']([^"']+)["']/g;
+      let wareMatch;
+      while ((wareMatch = wareRegex.exec(xmlContent)) !== null) {
+        const wareId = wareMatch[1];
+        const nameMatch = xmlContent.match(/name=["']([^"']+)["']/);
+        const wareName = nameMatch ? nameMatch[1] : undefined;
+        const patchSource = `XML Patch Block: "${p.note || p.id}"`;
+        
+        const list = wareDefsMap.get(wareId) || [];
+        list.push({ id: wareId, name: wareName, source: patchSource });
+        wareDefsMap.set(wareId, list);
+      }
+
+      // Regex match jobs
+      const jobRegex = /<job\s+id=["']([^"']+)["']/g;
+      let jobMatch;
+      while ((jobMatch = jobRegex.exec(xmlContent)) !== null) {
+        const jobId = jobMatch[1];
+        const nameMatch = xmlContent.match(/name=["']([^"']+)["']/);
+        const jobName = nameMatch ? nameMatch[1] : undefined;
+        const patchSource = `XML Patch Block: "${p.note || p.id}"`;
+        
+        const factionMatch = xmlContent.match(/faction=["']([^"']+)["']/);
+        const tagMatch = xmlContent.match(/tags=["']([^"']+)["']/);
+        const scriptMatch = xmlContent.match(/script=["']([^"']+)["']/);
+        
+        const dummyJob = {
+          faction: factionMatch ? factionMatch[1] : '',
+          shipClass: tagMatch ? tagMatch[1] : '',
+          taskScript: scriptMatch ? scriptMatch[1] : ''
+        };
+
+        const list = jobDefsMap.get(jobId) || [];
+        list.push({ id: jobId, name: jobName, source: patchSource, details: dummyJob });
+        jobDefsMap.set(jobId, list);
+      }
+    });
+
+    // 3. Scan physical XML files on disk under /libraries/ directories
+    try {
+      const listRes = await fetch('/api/fs/list');
+      if (listRes.ok) {
+        const tree = await listRes.json();
+        
+        const flattenFiles = (nodes: any[]): any[] => {
+          let results: any[] = [];
+          if (!nodes || !Array.isArray(nodes)) return results;
+          nodes.forEach(n => {
+            if (n.kind === 'file') {
+              results.push(n);
+            } else if (n.kind === 'directory' && n.children) {
+              results = [...results, ...flattenFiles(n.children)];
+            }
+          });
+          return results;
+        };
+        
+        const allFiles = flattenFiles(tree);
+        const xmlFiles = allFiles.filter(f => f.name && f.name.endsWith('.xml') && f.path && f.path.includes('/libraries/'));
+        
+        for (const file of xmlFiles) {
+          try {
+            const readRes = await fetch(`/api/fs/read?path=${encodeURIComponent(file.path)}`);
+            if (readRes.ok) {
+              const data = await readRes.json();
+              const fileContent = data.content || '';
+              const relativePath = file.path.split('/workspace/').pop() || file.path;
+              
+              // Wares matching
+              const wareRegex = /<ware\s+id=["']([^"']+)["']/g;
+              let fileWareMatch;
+              while ((fileWareMatch = wareRegex.exec(fileContent)) !== null) {
+                const wareId = fileWareMatch[1];
+                const subBlock = fileContent.substring(fileWareMatch.index, fileWareMatch.index + 250);
+                const nameMatch = subBlock.match(/name=["']([^"']+)["']/);
+                const wareName = nameMatch ? nameMatch[1] : undefined;
+                
+                const list = wareDefsMap.get(wareId) || [];
+                list.push({ id: wareId, name: wareName, source: `Local Disk: ${relativePath}` });
+                wareDefsMap.set(wareId, list);
+              }
+
+              // Jobs matching
+              const jobRegex = /<job\s+id=["']([^"']+)["']/g;
+              let fileJobMatch;
+              while ((fileJobMatch = jobRegex.exec(fileContent)) !== null) {
+                const jobId = fileJobMatch[1];
+                const subBlock = fileContent.substring(fileJobMatch.index, fileJobMatch.index + 400);
+                const nameMatch = subBlock.match(/name=["']([^"']+)["']/);
+                const jobName = nameMatch ? nameMatch[1] : undefined;
+                
+                const factionMatch = subBlock.match(/faction=["']([^"']+)["']/);
+                const tagsMatch = subBlock.match(/tags=["']([^"']+)["']/);
+                const scriptMatch = subBlock.match(/script=["']([^"']+)["']/);
+                
+                const dummyJob = {
+                  faction: factionMatch ? factionMatch[1] : '',
+                  shipClass: tagsMatch ? tagsMatch[1] : '',
+                  taskScript: scriptMatch ? scriptMatch[1] : ''
+                };
+
+                const list = jobDefsMap.get(jobId) || [];
+                list.push({ id: jobId, name: jobName, source: `Local Disk: ${relativePath}`, details: dummyJob });
+                jobDefsMap.set(jobId, list);
+              }
+            }
+          } catch (fileErr) {
+            console.error("Local file conflict check read failed for:", file.path, fileErr);
+          }
+        }
+      }
+    } catch (fsErr) {
+      console.warn("FS scanning issue, falling back to memory arrays:", fsErr);
+    }
+
+    // 4. Duplicate ID collision evaluation
+    wareDefsMap.forEach((sources, wareId) => {
+      if (sources.length > 1) {
+        const distinctSources = Array.from(new Set(sources.map(s => s.source)));
+        if (distinctSources.length > 1) {
+          foundWarnings.push({
+            id: `conflict_ware_${wareId}`,
+            severity: 'error',
+            category: 'id_collision',
+            title: `Ware ID Conflict: '${wareId}'`,
+            message: `The precise Ware ID is defined across overlapping resources: ${distinctSources.join(' AND ')}. Will cause silent overwritten errors.`,
+            affectedIds: [wareId],
+            location: distinctSources.join(' vs ')
+          });
+        }
+      }
+    });
+
+    jobDefsMap.forEach((sources, jobId) => {
+      if (sources.length > 1) {
+        const distinctSources = Array.from(new Set(sources.map(s => s.source)));
+        if (distinctSources.length > 1) {
+          foundWarnings.push({
+            id: `conflict_job_${jobId}`,
+            severity: 'error',
+            category: 'id_collision',
+            title: `Job ID Conflict: '${jobId}'`,
+            message: `This Pilot Squad Job ID is declared in multiple file locations: ${distinctSources.join(' AND ')}. Engine parses only one.`,
+            affectedIds: [jobId],
+            location: distinctSources.join(' vs ')
+          });
+        }
+      }
+    });
+
+    // 5. Overlapping Jobs diagnostics (same faction, class tag, task behaviors)
+    const allJobsList: Array<{ id: string; name?: string; source: string; details: any }> = [];
+    jobDefsMap.forEach((sources, jobId) => {
+      sources.forEach(s => {
+        if (s.details) {
+          allJobsList.push({ id: jobId, name: s.name, source: s.source, details: s.details });
+        }
+      });
+    });
+
+    for (let i = 0; i < allJobsList.length; i++) {
+      for (let j = i + 1; j < allJobsList.length; j++) {
+        const jobA = allJobsList[i];
+        const jobB = allJobsList[j];
+        
+        if (jobA.id === jobB.id) continue;
+
+        const fA = String(jobA.details.faction || '').trim().toLowerCase();
+        const fB = String(jobB.details.faction || '').trim().toLowerCase();
+        const sClassA = String(jobA.details.shipClass || '').trim().toLowerCase();
+        const sClassB = String(jobB.details.shipClass || '').trim().toLowerCase();
+        const scriptA = String(jobA.details.taskScript || '').trim().toLowerCase();
+        const scriptB = String(jobB.details.taskScript || '').trim().toLowerCase();
+
+        const factionOverlap = fA && fB && (fA === fB || fA.includes(fB) || fB.includes(fA));
+        const classOverlap = sClassA && sClassB && (sClassA === sClassB || sClassA.includes(sClassB) || sClassB.includes(sClassA));
+        const scriptOverlap = scriptA && scriptB && (scriptA === scriptB || scriptA.includes(scriptB) || scriptB.includes(scriptA));
+
+        if (factionOverlap && classOverlap && scriptOverlap) {
+          foundWarnings.push({
+            id: `overlap_job_${jobA.id}_${jobB.id}`,
+            severity: 'warning',
+            category: 'overlap',
+            title: `Overlapping NPC Flight Roles`,
+            message: `Job '${jobA.id}' (${jobA.source}) and Job '${jobB.id}' (${jobB.source}) share faction parameters (${jobA.details.faction}) and script logic (${jobA.details.taskScript}). Can saturate local patrol quota boundaries.`,
+            affectedIds: [jobA.id, jobB.id],
+            location: `${jobA.source} VS ${jobB.source}`
+          });
+        }
+      }
+    }
+
+    setWarnings(foundWarnings);
+    setIsScanning(false);
+  };
+
+  React.useEffect(() => {
+    scanProjectFilesForConflicts();
+  }, [workspace.wares, workspace.jobs, workspace.xmlPatches]);
 
   const saveWares = (newWares: WareDef[]) => {
     setWorkspace(prev => ({
@@ -330,64 +623,214 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Side: Libraries assets items selector */}
-        <div className="w-72 border-r border-white/10 flex flex-col bg-[#11131c]/60">
+        <div className="w-72 border-r border-white/10 flex flex-col bg-[#11131c]/60 overflow-hidden">
           <div className="p-3 border-b border-white/10 shrink-0 flex items-center justify-between bg-[#161a24]">
-            <span className="font-mono text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              {activeSubTab === 'wares' ? 'wares registry' : 'npc jobs registry'} ({activeSubTab === 'wares' ? wares.length : jobs.length})
+            <span className="font-mono text-[10px] font-bold text-slate-400 uppercase tracking-wider font-bold">
+              {activeSubTab === 'wares' ? 'wares hierarchy' : 'npc jobs hierarchy'}
             </span>
             <button
               onClick={activeSubTab === 'wares' ? handleCreateWare : handleCreateJob}
-              className="p-1.5 rounded hover:bg-[#202533] text-cyan-400 hover:text-white transition-all cursor-pointer"
+              className="px-2 py-1 rounded hover:bg-[#202533] text-cyan-400 hover:text-white transition-all cursor-pointer flex items-center gap-1 text-[9px] font-bold tracking-wide border border-cyan-400/25 font-mono"
               title={`Create custom ${activeSubTab === 'wares' ? 'Ware asset ID' : 'Pilot quota Job group'}`}
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-3 h-3" /> ADD
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          <div className="flex-1 overflow-y-auto p-2 space-y-3 font-mono text-[11px] scrollbar-thin">
             {activeSubTab === 'wares' ? (
-              wares.map((item, idx) => (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveItemIndex(idx)}
-                  className={`w-full text-left p-2.5 rounded-lg border text-xs font-mono transition-all flex items-center justify-between group cursor-pointer ${
-                    activeItemIndex === idx
-                      ? 'bg-cyan-600/15 border-cyan-500/40 text-cyan-400'
-                      : 'border-transparent text-slate-400 hover:bg-white/5 hover:text-white'
-                  }`}
-                >
-                  <div className="truncate flex-1 pr-2">
-                    <div className="font-bold truncate text-slate-200 group-hover:text-white">{item.name}</div>
-                    <div className="text-[10px] text-slate-500 font-medium truncate mt-0.5">{item.id}</div>
-                  </div>
-                  <ChevronRight className="w-3.5 h-3.5 text-slate-600 group-hover:text-cyan-400 shrink-0" />
-                </button>
-              ))
+              wares.length === 0 ? (
+                <div className="text-[10px] text-slate-500 italic p-4 text-center">No Wares catalogued. click "ADD".</div>
+              ) : (
+                ['container', 'solid', 'liquid', 'energy'].map(transport => {
+                  const transportWares = wares.filter(w => (w.transport || 'container') === transport);
+                  if (transportWares.length === 0) return null;
+                  return (
+                    <div key={transport} className="space-y-1">
+                      <div className="text-[9.5px] font-bold text-[#4dd0e1] uppercase flex items-center gap-1 select-none py-1 border-b border-white/[0.03]">
+                        <span>📁 {transport} transport</span>
+                        <span className="text-slate-500 text-[8.5px]">({transportWares.length})</span>
+                      </div>
+                      <div className="pl-2 border-l border-white/5 space-y-0.5">
+                        {transportWares.map(item => {
+                          const idx = wares.findIndex(w => w.id === item.id);
+                          const itemHasWarning = warnings.filter(w => w.affectedIds.includes(item.id));
+                          const hasError = itemHasWarning.some(w => w.severity === 'error');
+                          const hasWarn = itemHasWarning.some(w => w.severity === 'warning');
+                          const isSelected = activeItemIndex === idx;
+
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => {
+                                setActiveItemIndex(idx);
+                              }}
+                              className={`w-full text-left py-1.5 px-2 rounded font-mono transition-all flex items-center justify-between group cursor-pointer ${
+                                isSelected
+                                  ? hasError
+                                    ? 'bg-red-950/20 text-red-400 font-bold border-l-2 border-red-500 pl-1.5'
+                                    : hasWarn
+                                      ? 'bg-amber-950/20 text-amber-400 font-bold border-l-2 border-amber-500 pl-1.5'
+                                      : 'bg-cyan-500/10 text-cyan-400 font-bold border-l-2 border-cyan-500 pl-1.5'
+                                  : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                              }`}
+                            >
+                              <div className="truncate flex-1 pr-1">
+                                <span className="truncate flex items-center gap-1">
+                                  💎 {item.name}
+                                </span>
+                              </div>
+                              <span className="text-[8.5px] text-slate-600 group-hover:text-slate-400 truncate scale-90">{item.id}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )
             ) : (
-              jobs.map((item, idx) => (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveItemIndex(idx)}
-                  className={`w-full text-left p-2.5 rounded-lg border text-xs font-mono transition-all flex items-center justify-between group cursor-pointer ${
-                    activeItemIndex === idx
-                      ? 'bg-cyan-600/15 border-cyan-500/40 text-cyan-400'
-                      : 'border-transparent text-slate-400 hover:bg-white/5 hover:text-white'
-                  }`}
-                >
-                  <div className="truncate flex-1 pr-2">
-                    <div className="font-bold truncate text-slate-200 group-hover:text-white">{item.name}</div>
-                    <div className="text-[10px] text-slate-500 font-medium truncate mt-0.5">{item.id}</div>
+              jobs.length === 0 ? (
+                <div className="text-[10px] text-slate-500 italic p-4 text-center">No Jobs catalogued. click "ADD".</div>
+              ) : (
+                Array.from(new Set(jobs.map(j => j.faction || 'other'))).map(faction => {
+                  const factionJobs = jobs.filter(j => (j.faction || 'other') === faction);
+                  return (
+                    <div key={faction} className="space-y-1">
+                      <div className="text-[9.5px] font-bold text-yellow-400 uppercase flex items-center gap-1 select-none py-1 border-b border-white/[0.03]">
+                        <span>📁 {faction.toUpperCase()} Faction</span>
+                        <span className="text-slate-500 text-[8.5px]">({factionJobs.length})</span>
+                      </div>
+                      <div className="pl-2 border-l border-white/5 space-y-0.5">
+                        {factionJobs.map(item => {
+                          const idx = jobs.findIndex(j => j.id === item.id);
+                          const itemHasWarning = warnings.filter(w => w.affectedIds.includes(item.id));
+                          const hasError = itemHasWarning.some(w => w.severity === 'error');
+                          const hasWarn = itemHasWarning.some(w => w.severity === 'warning');
+                          const isSelected = activeItemIndex === idx;
+
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => {
+                                setActiveItemIndex(idx);
+                              }}
+                              className={`w-full text-left py-1.5 px-2 rounded font-mono transition-all flex items-center justify-between group cursor-pointer ${
+                                isSelected
+                                  ? hasError
+                                    ? 'bg-red-950/20 text-red-400 font-bold border-l-2 border-red-500 pl-1.5'
+                                    : hasWarn
+                                      ? 'bg-amber-950/20 text-amber-400 font-bold border-l-2 border-amber-500 pl-1.5'
+                                      : 'bg-yellow-500/10 text-yellow-400 font-bold border-l-2 border-yellow-500 pl-1.5'
+                                  : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                              }`}
+                            >
+                              <div className="truncate flex-1 pr-1">
+                                <span className="truncate flex items-center gap-1">
+                                  ⚓ {item.name}
+                                </span>
+                              </div>
+                              <span className="text-[8.5px] text-slate-600 group-hover:text-slate-400 truncate scale-90">{item.id}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )
+            )}
+          </div>
+
+          {/* Warnings / Diagnostics panel */}
+          <div className="border-t border-white/10 shrink-0 bg-black/45 hover:bg-black/60 transition-colors select-none text-xs font-mono">
+            <button
+              onClick={() => setWarningsExpanded(!warningsExpanded)}
+              className="w-full p-3 font-bold uppercase tracking-wider flex items-center justify-between cursor-pointer text-slate-300 hover:text-white"
+            >
+              <div className="flex items-center gap-1.5">
+                <BadgeAlert className={`w-4 h-4 ${
+                  warnings.filter(w => w.severity === 'error').length > 0
+                    ? 'text-red-400 animate-pulse'
+                    : warnings.length > 0
+                      ? 'text-amber-400'
+                      : 'text-emerald-400'
+                }`} />
+                <span>Conflict Diagnostics</span>
+                {warnings.length > 0 ? (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                    warnings.filter(w => w.severity === 'error').length > 0
+                      ? 'bg-red-500/10 text-red-400'
+                      : 'bg-amber-500/10 text-amber-400'
+                  }`}>
+                    {warnings.length} issues
+                  </span>
+                ) : (
+                  <span className="text-[9.5px] text-emerald-400 font-extrabold">Clean</span>
+                )}
+              </div>
+              <span className="text-slate-500 text-[10px]">{warningsExpanded ? '▼' : '▲'}</span>
+            </button>
+
+            {warningsExpanded && (
+              <div className="max-h-60 overflow-y-auto p-2.5 border-t border-white/5 space-y-2 bg-[#0c0d12]/90 w-full">
+                <div className="flex items-center justify-between pb-1.5 mb-1 border-b border-white/5">
+                  <span className="text-[9.5px] text-slate-500">Cross-File Intersections:</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); scanProjectFilesForConflicts(); }}
+                    className={`text-[9.5px] text-cyan-400 hover:text-white font-bold inline-flex items-center gap-1 cursor-pointer ${isScanning ? 'animate-spin' : ''}`}
+                  >
+                    🔄 Re-Scan
+                  </button>
+                </div>
+                
+                {warnings.length === 0 ? (
+                  <div className="text-[10px] text-slate-500 py-3 text-center">
+                    No conflicts identified in active XML definitions or mod files!
                   </div>
-                  <ChevronRight className="w-3.5 h-3.5 text-slate-600 group-hover:text-cyan-400 shrink-0" />
-                </button>
-              ))
+                ) : (
+                  warnings.map(w => (
+                    <div
+                      key={w.id}
+                      className={`p-2 rounded border text-[10px] leading-relaxed flex flex-col gap-1 ${
+                        w.severity === 'error'
+                          ? 'bg-red-500/5 hover:bg-red-500/10 border-red-500/20 text-red-300'
+                          : 'bg-amber-500/5 hover:bg-amber-500/10 border-amber-500/20 text-amber-300'
+                      }`}
+                    >
+                      <div className="font-bold flex items-center justify-between">
+                        <span className="truncate pr-1">{w.title}</span>
+                        <span className={`text-[8.5px] uppercase font-bold p-0.5 px-0.8 rounded ${
+                          w.severity === 'error' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'
+                        }`}>
+                          {w.category.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <p className="text-[9.5px] text-slate-400">{w.message}</p>
+                      <div className="text-[8.5px] text-slate-600 truncate mt-0.5" title={w.location}>
+                        📍 Context: {w.location}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
           </div>
         </div>
 
         {/* Center portion: Visual controls detail editor sheet */}
         <div className="flex-1 flex flex-col border-r border-white/10 overflow-hidden">
-          <div className="p-4 border-b border-white/10 shrink-0 flex items-center justify-between bg-black/25">
+          {!activeItem ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 bg-black/5 text-center font-mono select-none">
+              <Sparkles className="w-12 h-12 text-slate-700 mb-3 stroke-[1.5]" />
+              <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">NO ACTIVE ASSET SELECTED</h3>
+              <p className="text-[10px] text-slate-500 max-w-sm mt-1 leading-relaxed font-sans">
+                Select an existing library ware or cargo job item in the sidebar, or click the corresponding "+" create button to begin configuring!
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="p-4 border-b border-white/10 shrink-0 flex items-center justify-between bg-black/25">
             <div>
               <h2 className="text-sm font-mono font-bold text-slate-200">
                 {activeItem?.name || 'Selected Asset'}
@@ -406,6 +849,35 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {activeItem && (() => {
+              const itemHasWarning = warnings.filter(w => w.affectedIds.includes(activeItem.id));
+              if (itemHasWarning.length === 0) return null;
+              
+              const hasError = itemHasWarning.some(w => w.severity === 'error');
+              return (
+                <div className={`p-3 rounded-lg border space-y-2 select-none animate-fadeIn ${
+                  hasError 
+                    ? 'bg-red-500/10 border-red-500/25' 
+                    : 'bg-amber-500/10 border-amber-500/25'
+                }`}>
+                  <div className={`text-xs font-bold uppercase tracking-wide flex items-center gap-1.5 ${
+                    hasError ? 'text-red-400' : 'text-amber-400'
+                  }`}>
+                    <BadgeAlert className="w-4 h-4" />
+                    <span>Mod Conflicts &amp; Warnings detected for this item</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {itemHasWarning.map(w => (
+                      <div key={w.id} className="text-[11px] leading-relaxed text-slate-300">
+                        • <strong className="text-slate-200 font-sans">{w.title}:</strong> {w.message}
+                        <div className="text-[9.5px] text-slate-500 font-mono mt-0.5 ml-2.5">Intersection Target: {w.location}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {activeSubTab === 'wares' ? (
               <div className="space-y-4 max-w-2xl">
                 <div className="space-y-3 font-mono text-xs">
@@ -590,6 +1062,8 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
               </div>
             )}
           </div>
+            </>
+          )}
         </div>
 
         {/* Right side: Real-time XML / Diff Code editor view */}

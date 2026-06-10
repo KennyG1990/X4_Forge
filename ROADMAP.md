@@ -1,6 +1,6 @@
 # X4 Mod Studio — Prototype Validation Roadmap
 
-**Status:** Draft v2 · **Goal:** Post-MVP mandatory-tool roadmap · **Sequencing:** Foundation-first · **Team:** Small (humans + AI agents, parallel tracks)
+**Status:** Draft v1 · **Goal:** Validate the core loop · **Sequencing:** Foundation-first · **Team:** Small (humans + AI agents, parallel tracks)
 
 ---
 
@@ -8,13 +8,7 @@
 
 > A non-trivial mod, built **entirely inside the studio**, compiles to XML, installs into X4 Foundations, and **runs in-game with zero hand-editing.**
 
-The prototype was user-confirmed as MVP-valid on 2026-06-10: generated/deployed mods load and function in-game. Nothing on this roadmap exists for its own sake — every item makes one link in that chain more trustworthy or turns the studio into a better workflow than hand-editing XML.
-
-## Product Positioning
-
-The studio should become the strongest X4 tool for **all text-editing forms of modding**: Mission Director XML, AI scripts, library diffs, wares, jobs, t-files, UI Lua/XML scaffolds, content metadata, and arbitrary XML patch work. The target is not merely "a generator"; it is the default text-mod IDE for X4.
-
-Mod folder management is still required, but its role is situational awareness and safety: users need to see the package tree, know what files are generated vs preserved, inspect imported content, and understand deployment state. It is infrastructure that supports text-mod authoring, not the primary value proposition by itself.
+The prototype is "validated" the day that sentence is true and repeatable. Nothing on this roadmap exists for its own sake — every item makes one link in that chain trustworthy.
 
 ## The core loop (the chain we're validating)
 

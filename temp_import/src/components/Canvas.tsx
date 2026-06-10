@@ -91,44 +91,6 @@ export default function Canvas({
   const simTimersRef = useRef<number[]>([]);
   const consoleBottomRef = useRef<HTMLDivElement>(null);
 
-  // Drops a template node safely from Sidebar Template Library onto coordinates clicked/positioned
-  const handleCanvasDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    try {
-      const dataStr = e.dataTransfer.getData('text/plain');
-      if (!dataStr) return;
-      const data = JSON.parse(dataStr);
-      if (data && data.type === 'x4-template-node') {
-        const templateNode = data.template;
-        const rect = canvasRef.current?.getBoundingClientRect();
-        if (rect) {
-          const clientX = e.clientX - rect.left;
-          const clientY = e.clientY - rect.top;
-          
-          // Translate client coords with panning offset and zoom scaling factor
-          const dropX = Math.round((clientX - panOffset.x) / zoom / 10) * 10;
-          const dropY = Math.round((clientY - panOffset.y) / zoom / 10) * 10;
-          
-          const newNode = {
-            ...templateNode,
-            id: `node_template_${Date.now()}`,
-            x: dropX,
-            y: dropY,
-            includeInBuild: true // Active compiled copies!
-          };
-          
-          saveCheckpoint();
-          setWorkspace(prev => ({
-            ...prev,
-            nodes: [...prev.nodes, newNode]
-          }));
-        }
-      }
-    } catch (err) {
-      console.error("Canvas dropping handle error", err);
-    }
-  };
-
   // Pan the canvas offset on clicking background dragging
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (contextMenu) {
@@ -1329,8 +1291,6 @@ export default function Canvas({
         ref={canvasRef}
         onMouseDown={handleCanvasMouseDown}
         onDoubleClick={handleCanvasDoubleClick}
-        onDragOver={e => e.preventDefault()}
-        onDrop={handleCanvasDrop}
         className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing outline-none"
         style={{
           backgroundImage: 'radial-gradient(circle, rgba(6, 182, 212, 0.15) 1px, transparent 1px)',
