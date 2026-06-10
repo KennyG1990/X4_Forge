@@ -414,6 +414,70 @@ export default function Canvas({
     };
   };
 
+  // Viewport tracking for optimization
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 1200, height: 800 });
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const updateSize = () => {
+      if (canvasRef.current) {
+        setViewportSize({
+          width: canvasRef.current.clientWidth,
+          height: canvasRef.current.clientHeight
+        });
+      }
+    };
+    updateSize();
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(canvasRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // Visible bounds calculation in virtual coordinates (frustum culling)
+  const visibleBounds = React.useMemo(() => {
+    const pad = 300 / Math.max(0.1, zoom);
+    const xStart = -panOffset.x / zoom - pad;
+    const xEnd = (-panOffset.x + viewportSize.width) / zoom + pad;
+    const yStart = -panOffset.y / zoom - pad;
+    const yEnd = (-panOffset.y + viewportSize.height) / zoom + pad;
+    
+    return { xStart, xEnd, yStart, yEnd };
+  }, [panOffset, zoom, viewportSize]);
+
+  // Nodes falling inside the visible bounds
+  const visibleNodes = React.useMemo(() => {
+    return workspace.nodes.filter(node => {
+      const w = node.type === 'comment' ? (node.width || 400) : 240;
+      const h = node.type === 'comment' ? (node.height || 300) : 200;
+      return (
+        node.x + w >= visibleBounds.xStart &&
+        node.x <= visibleBounds.xEnd &&
+        node.y + h >= visibleBounds.yStart &&
+        node.y <= visibleBounds.yEnd
+      );
+    });
+  }, [workspace.nodes, visibleBounds]);
+
+  // Links falling inside the visible bounds (at least one end inside, or crossing)
+  const visibleLinks = React.useMemo(() => {
+    return workspace.links.filter(link => {
+      const start = getPortCoordinates(link.sourceNodeId, link.sourcePortId, true);
+      const end = getPortCoordinates(link.targetNodeId, link.targetPortId, false);
+      
+      const minX = Math.min(start.x, end.x);
+      const maxX = Math.max(start.x, end.x);
+      const minY = Math.min(start.y, end.y);
+      const maxY = Math.max(start.y, end.y);
+      
+      return (
+        maxX >= visibleBounds.xStart &&
+        minX <= visibleBounds.xEnd &&
+        maxY >= visibleBounds.yStart &&
+        minY <= visibleBounds.yEnd
+      );
+    });
+  }, [workspace.links, visibleBounds, workspace.nodes]);
+
   // Auto-Align Core Layout Math Algorithm (Tidy Graph Tool)
   const autoAlignGraph = () => {
     saveCheckpoint();
@@ -1067,7 +1131,7 @@ export default function Canvas({
             </defs>
 
             {/* Wire Links Render loop */}
-            {workspace.links.map(link => {
+            {visibleLinks.map(link => {
               const start = getPortCoordinates(link.sourceNodeId, link.sourcePortId, true);
               const end = getPortCoordinates(link.targetNodeId, link.targetPortId, false);
 
@@ -1136,7 +1200,7 @@ export default function Canvas({
           </svg>
 
           {/* Sorted node list (comment boxes rendered first to reside in background) */}
-          {[...workspace.nodes]
+          {[...visibleNodes]
             .sort((a, b) => {
               if (a.type === 'comment' && b.type !== 'comment') return -1;
               if (a.type !== 'comment' && b.type === 'comment') return 1;
@@ -1259,6 +1323,30 @@ export default function Canvas({
               } else if (node.type === 'action') {
                 borderClasses = 'border-emerald-500/30 bg-[#0c1310]';
                 headingClasses = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+              }
+
+              const isLowDetail = zoom < 0.45;
+
+              if (isLowDetail) {
+                return (
+                  <div
+                    key={node.id}
+                    onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
+                    style={{ left: node.x, top: node.y }}
+                    className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
+                      isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015] z-10' : 'hover:border-white/20'
+                    } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
+                  >
+                    <div className="flex-1 flex items-center justify-center text-center">
+                      <span className="font-bold text-[12px] truncate w-48 text-slate-100">
+                        {node.label}
+                      </span>
+                    </div>
+                    <div className="text-[8px] text-slate-500 text-center uppercase tracking-wider font-bold border-t border-white/[0.04] pt-1">
+                      {node.type.toUpperCase()}: &lt;{node.xmlTag}&gt;
+                    </div>
+                  </div>
+                );
               }
 
               return (
