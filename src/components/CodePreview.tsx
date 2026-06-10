@@ -506,6 +506,48 @@ export default function CodePreview({
       .replace(/(&lt;!--.*?--&gt;)/g, '<span class="text-slate-500 font-mono italic">$1</span>');
   };
 
+  // Pick a searchable token for a diagnostic so we can locate its line in the generated code.
+  const getDiagToken = (d: PackageDiagnostic): string | null => {
+    if (d.sourceRef?.label) return d.sourceRef.label;
+    if (d.sourceRef?.id && !/^(cue|node|event|action|condition)_/.test(d.sourceRef.id)) return d.sourceRef.id;
+    const m = (d.message || '').match(/"([^"]+)"/);
+    return m ? m[1] : null;
+  };
+
+  // Map each diagnostic to a 0-based line index in the given code (by explicit line, or token match).
+  const computeLineDiagMap = (code: string, diags: PackageDiagnostic[]) => {
+    const map = new Map<number, { severity: string; messages: string[] }>();
+    const lines = code.split('\n');
+    diags.forEach(d => {
+      let idx = -1;
+      if (typeof d.line === 'number' && d.line >= 1 && d.line <= lines.length) {
+        idx = d.line - 1;
+      } else {
+        const token = getDiagToken(d);
+        if (token) idx = lines.findIndex(l => l.includes(token));
+      }
+      if (idx >= 0) {
+        const ex = map.get(idx);
+        const severity = (ex?.severity === 'error' || d.severity === 'error') ? 'error' : (ex?.severity || d.severity || 'warning');
+        map.set(idx, { severity, messages: [...(ex?.messages || []), d.message] });
+      }
+    });
+    return map;
+  };
+
+  // Send the current diagnostics + generated XML to the AI assistant (opens the chat drawer pre-filled).
+  const sendDiagnosticsToAI = () => {
+    if (diagnostics.length === 0) return;
+    const list = diagnostics.map((d, i) =>
+      `${i + 1}. [${d.severity}] ${(d.domain || d.category || '')}: ${d.message}` +
+      (d.filePath ? ` (file: ${d.filePath})` : '') +
+      (d.sourceRef ? ` (source: ${d.sourceRef.kind}${d.sourceRef.label ? '/' + d.sourceRef.label : ''})` : '')
+    ).join('\n');
+    const label = codeActiveTab === 'ui' ? 'UI layout' : 'Mission Director';
+    const prompt = `My X4 Foundations mod "${workspace.name || 'mod'}" has these Mod Doctor validation issues:\n\n${list}\n\nHere is the generated ${label} XML:\n\`\`\`xml\n${currentCode}\n\`\`\`\n\nFor each issue, explain plainly what's wrong and exactly how to fix it (which node, property, or value to change). Keep it concise.`;
+    window.dispatchEvent(new CustomEvent('open-ai-chat', { detail: { prompt } }));
+  };
+
   const highlightCode = (rawText: string) => {
     const ext = activeEditorFile?.name.split('.').pop()?.toLowerCase();
     if (ext === 'json') {
@@ -513,6 +555,15 @@ export default function CodePreview({
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
+        .replace(/("(?:\\.|[^"\\])*")(\s*:)/g, '<span class="text-purple-400">$1</span>$2')
+        .replace(/:\s*("(?:\\.|[^"\\])*")/g, ': <span class="text-emerald-300">$1</span>')
+        .replace(/\b(true|false|null)\b/g, '<span class="text-amber-400">$1</span>');
+    }
+    return highlightXML(rawText);
+  };
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
       {/* ================================================================ */}
       {/* SECTION 1: COMPILED XML FILE VIEWER                             */}
       {/* ================================================================ */}
@@ -655,11 +706,33 @@ export default function CodePreview({
               </div>
             </div>
           ) : (
-            <div className="h-full overflow-auto p-4">
-              <pre 
-                className="whitespace-pre overflow-x-auto pr-10 hover:text-white transition-colors duration-100 font-mono"
-                dangerouslySetInnerHTML={{ __html: highlightXML(currentCode) }}
-              />
+            <div className="h-full overflow-auto py-2 font-mono text-xs leading-relaxed">
+              {(() => {
+                const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);
+                return currentCode.split('\n').map((line, i) => {
+                  const ld = lineDiagMap.get(i);
+                  const lineClass = ld
+                    ? (ld.severity === 'error'
+                        ? 'bg-red-500/10 border-l-2 border-red-500'
+                        : 'bg-amber-500/10 border-l-2 border-amber-500')
+                    : 'border-l-2 border-transparent hover:bg-white/[0.02]';
+                  return (
+                    <div
+                      key={i}
+                      className={`flex ${lineClass}`}
+                      title={ld ? ld.messages.join('  •  ') : undefined}
+                    >
+                      <span className="select-none text-right pr-2 pl-2 w-10 shrink-0 text-slate-600 text-[10px] leading-relaxed">
+                        {i + 1}
+                      </span>
+                      <span
+                        className="flex-1 whitespace-pre pr-4 overflow-x-auto"
+                        dangerouslySetInnerHTML={{ __html: highlightXML(line) || '&nbsp;' }}
+                      />
+                    </div>
+                  );
+                });
+              })()}
             </div>
           )}
         </div>
@@ -681,6 +754,15 @@ export default function CodePreview({
               <span className="flex items-center gap-1 text-slate-355 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 block" /> {warnings.length} Warnings
               </span>
+              {diagnostics.length > 0 && (
+                <button
+                  onClick={sendDiagnosticsToAI}
+                  className="flex items-center gap-1 text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/30 cursor-pointer uppercase transition-all"
+                  title="Send these diagnostics + the generated XML to the AI assistant for fixes / advice"
+                >
+                  <Sparkles className="w-3 h-3" /> Ask AI
+                </button>
+              )}
             </div>
           </div>
 
