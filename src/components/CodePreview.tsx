@@ -562,6 +562,11 @@ export default function CodePreview({
     return highlightXML(rawText);
   };
 
+  // Derived render state (restored after a file truncation removed these declarations).
+  const errors = diagnostics.filter(d => d.severity === 'error');
+  const warnings = diagnostics.filter(d => d.severity === 'warning');
+  const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
+
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* ================================================================ */}
