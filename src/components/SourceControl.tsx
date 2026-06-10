@@ -75,23 +75,33 @@ function computeSimpleDiff(oldStr: string, newStr: string): DiffLine[] {
   let j = 0;
   
   while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length && oldLines[i].trim() === newLines[j].trim()) {
-      result.push({ type: 'normal', value: oldLines[i] });
+    const oldLine = oldLines[i];
+    const newLine = newLines[j];
+    
+    if (oldLine !== undefined && newLine !== undefined && oldLine.trim() === newLine.trim()) {
+      result.push({ type: 'normal', value: oldLine });
       i++;
       j++;
     } else {
       let foundMatch = false;
       for (let offset = 1; offset <= 5; offset++) {
-        if (i + offset < oldLines.length && oldLines[i + offset].trim() === newLines[j].trim()) {
+        const lookaheadOld = oldLines[i + offset];
+        const lookaheadNew = newLines[j + offset];
+        
+        if (lookaheadOld !== undefined && newLine !== undefined && lookaheadOld.trim() === newLine.trim()) {
           for (let k = 0; k < offset; k++) {
-            result.push({ type: 'deletion', value: oldLines[i + k] });
+            if (oldLines[i + k] !== undefined) {
+              result.push({ type: 'deletion', value: oldLines[i + k] });
+            }
           }
           i += offset;
           foundMatch = true;
           break;
-        } else if (j + offset < newLines.length && oldLines[i].trim() === newLines[j + offset].trim()) {
+        } else if (lookaheadNew !== undefined && oldLine !== undefined && oldLine.trim() === lookaheadNew.trim()) {
           for (let k = 0; k < offset; k++) {
-            result.push({ type: 'addition', value: newLines[j + k] });
+            if (newLines[j + k] !== undefined) {
+              result.push({ type: 'addition', value: newLines[j + k] });
+            }
           }
           j += offset;
           foundMatch = true;
@@ -99,16 +109,16 @@ function computeSimpleDiff(oldStr: string, newStr: string): DiffLine[] {
         }
       }
       if (!foundMatch) {
-        if (i < oldLines.length && j < newLines.length) {
-          result.push({ type: 'deletion', value: oldLines[i] });
-          result.push({ type: 'addition', value: newLines[j] });
+        if (oldLine !== undefined && newLine !== undefined) {
+          result.push({ type: 'deletion', value: oldLine });
+          result.push({ type: 'addition', value: newLine });
           i++;
           j++;
-        } else if (i < oldLines.length) {
-          result.push({ type: 'deletion', value: oldLines[i] });
+        } else if (oldLine !== undefined) {
+          result.push({ type: 'deletion', value: oldLine });
           i++;
-        } else if (j < newLines.length) {
-          result.push({ type: 'addition', value: newLines[j] });
+        } else if (newLine !== undefined) {
+          result.push({ type: 'addition', value: newLine });
           j++;
         }
       }
