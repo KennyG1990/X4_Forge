@@ -1,6 +1,6 @@
 {
   "x4GamePath": "G:\\SteamLibrary\\steamapps\\common\\X4 Foundations",
-  "xsdSchemaPath": "G:\\SteamLibrary\\steamapps\\common\\X4 Foundations\\extensions\\x4_ai_influence\\md",
+  "xsdSchemaPath": "F:\\DEV_ENV\\projects\\Mods\\X4Mods\\Schemas",
   "schemaFiles": [
     "md.xsd",
     "common.xsd"

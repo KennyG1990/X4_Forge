@@ -46,7 +46,7 @@ export default function AgentBridge({
   const [copiedTextId, setCopiedTextId] = useState<string | null>(null);
   
   // Settings
-  const [autoSync, setAutoSync] = useState<boolean>(true);
+  const [autoSync, setAutoSync] = useState<boolean>(false);
   const [isPolling, setIsPolling] = useState<boolean>(true);
   
   // Server state tracking
@@ -60,6 +60,7 @@ export default function AgentBridge({
   const [simLoading, setSimLoading] = useState<boolean>(false);
   const [simError, setSimError] = useState<string | null>(null);
   const [simSuccess, setSimSuccess] = useState<string | null>(null);
+  const [simDiagnostics, setSimDiagnostics] = useState<any[]>([]);
 
   // Documentation collapsables
   const [collapsedEndpoints, setCollapsedEndpoints] = useState<Record<string, boolean>>({
@@ -144,6 +145,7 @@ export default function AgentBridge({
     setSimLoading(true);
     setSimError(null);
     setSimSuccess(null);
+    setSimDiagnostics([]);
 
     try {
       const currentCode = generateMDXML(workspace);
@@ -165,7 +167,23 @@ export default function AgentBridge({
       setWorkspace(data.workspace);
       setLocalVersion(data.version);
       setServerVersion(data.version);
-      setSimSuccess(`Success! The AI Agent has designed a custom mod layout named "${data.workspace.name}" with ${data.workspace.nodes.length} nodes and successfully synchronised it into your viewport.`);
+      
+      const genDiagnostics = data.diagnostics || [];
+      setSimDiagnostics(genDiagnostics);
+
+      const errors = genDiagnostics.filter((d: any) => d.severity === 'error');
+      const warnings = genDiagnostics.filter((d: any) => d.severity === 'warning');
+
+      let msg = `Success! The AI Agent has designed a custom mod layout named "${data.workspace.name}" with ${data.workspace.nodes.length} nodes.`;
+      if (errors.length > 0 || warnings.length > 0) {
+        msg += ` However, the generated layout has ${errors.length} error(s) and ${warnings.length} warning(s) remaining in Egosoft validation checks.`;
+      } else {
+        msg += ` The logic complies fully with Egosoft schema checks (0 errors/warnings).`;
+      }
+      if (data.selfHealFailed) {
+        msg += ` (Phased auto-remedy healing failed to resolve all diagnostics.)`;
+      }
+      setSimSuccess(msg);
     } catch (err: any) {
       console.error(err);
       setSimError(err.message || "Something went wrong during simulation.");
@@ -565,9 +583,25 @@ export default function AgentBridge({
             )}
 
             {simSuccess && (
-              <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded text-[10px] transition-all flex items-start gap-1.5 leading-relaxed font-sans">
-                <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 animate-bounce" />
-                <span>{simSuccess}</span>
+              <div className="space-y-2">
+                <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded text-[10px] transition-all flex items-start gap-1.5 leading-relaxed font-sans">
+                  <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 animate-bounce" />
+                  <span>{simSuccess}</span>
+                </div>
+                {simDiagnostics.length > 0 && (
+                  <div className="space-y-1 bg-black/40 border border-white/10 p-2.5 rounded-lg max-h-32 overflow-y-auto scrollbar-thin">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Generated Diagnostics:</span>
+                    {simDiagnostics.map((diag, idx) => {
+                      const itemStyle = diag.severity === 'error' ? 'text-red-400' : 'text-amber-400';
+                      return (
+                        <div key={idx} className={`text-[10px] leading-relaxed flex items-start gap-1 ${itemStyle}`}>
+                          <span className="shrink-0">•</span>
+                          <span>[{diag.severity.toUpperCase()}] {diag.message}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 

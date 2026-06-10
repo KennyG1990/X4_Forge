@@ -15,8 +15,28 @@ export const toSafeModId = (name: string): string => {
 };
 
 export const toContentVersion = (value: string): string => {
-  const digits = String(value || '').replace(/\D/g, '');
-  return (digits || '1').slice(0, 6).padStart(3, '0');
+  const parts = String(value || '').split('.');
+  const major = parseInt(parts[0], 10) || 1;
+  const minor = parseInt(parts[1], 10) || 0;
+  const patch = parseInt(parts[2], 10) || 0;
+  
+  let versionNum = 100;
+  if (parts.length === 1) {
+    versionNum = major * 100;
+  } else if (parts.length === 2) {
+    if (parts[1].length === 1) {
+      versionNum = major * 100 + minor * 10;
+    } else {
+      versionNum = major * 100 + minor;
+    }
+  } else {
+    // parts.length >= 3
+    versionNum = major * 100 + minor * 10 + patch;
+    if (parts[1].length >= 2) {
+      versionNum = major * 100 + minor;
+    }
+  }
+  return String(Math.round(versionNum));
 };
 
 export const escapeXmlAttr = (str: string): string => {

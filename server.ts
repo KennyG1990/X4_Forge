@@ -6,6 +6,7 @@
 import express from "express";
 import path from "path";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, writeXsdConfig } from "./src/lib/xsdParser";
@@ -26,6 +27,8 @@ import {
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 
 dotenv.config();
+
+const STUDIO_API_TOKEN = crypto.randomBytes(32).toString("hex");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -53,9 +56,12 @@ function reloadSchemaLibrary(): SchemaLibrary {
 
 app.use(express.json({ limit: "5mb" }));
 
-// Enable CORS for external AI Agent integrations
+// Enable CORS for localhost / 127.0.0.1 integrations only
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
+  const origin = req.headers.origin;
+  if (origin && (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:") || origin === "http://localhost" || origin === "http://127.0.0.1")) {
+    res.header("Access-Control-Allow-Origin", origin);
+  }
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-ai-provider, x-custom-api-key");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
   if (req.method === "OPTIONS") {
@@ -63,6 +69,32 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Auth token endpoint (returns the per-session token)
+app.get("/api/auth/token", (req, res) => {
+  return res.json({ token: STUDIO_API_TOKEN });
+});
+
+// Middleware to verify session token for all /api/* routes except the handshake
+function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (req.path === "/auth/token") {
+    return next();
+  }
+  
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized: Missing token." });
+  }
+  
+  const token = authHeader.substring(7);
+  if (token !== STUDIO_API_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized: Invalid token." });
+  }
+  
+  next();
+}
+
+app.use("/api", authMiddleware);
 
 // Server-persisted active workspace (in-memory, preloaded with the Escort project)
 const DEFAULT_WORKSPACE: ModWorkspace = {
@@ -1152,11 +1184,16 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
 
     console.log(`[AI-STUDIO] Phased interpretation complete. Delivered blueprint named: ${combinedWorkspace.name}`);
 
+    const finalCode = generateMDXML(combinedWorkspace);
+    const finalDiagnostics = validateModWorkspace(combinedWorkspace, finalCode);
+
     return res.json({
       success: true,
       message: "AI Agent successfully designed and applied a new mod schema to the workspace in 4 distinct high-fidelity phases!",
       version: workspaceVersion,
-      workspace: combinedWorkspace
+      workspace: combinedWorkspace,
+      diagnostics: finalDiagnostics,
+      selfHealFailed: validationDiagnostics.length > 0 && finalDiagnostics.length > 0
     });
 
   } catch (error: any) {
@@ -1330,8 +1367,8 @@ async function setupDevOrProd() {
 }
 
 setupDevOrProd().then(() => {
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`X4 Mod Studio Dev Server running on http://localhost:${PORT}`);
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log(`X4 Mod Studio Dev Server running on http://127.0.0.1:${PORT}`);
   });
 }).catch(err => {
   console.error("Server failure: ", err);
