@@ -501,9 +501,11 @@ export default function CodePreview({
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
+      // Color attributes FIRST (on the escaped text) so the tag/comment passes below
+      // don't re-match the class="..." attributes of the <span>s we inject here.
+      .replace(/([a-zA-Z0-9_:-]+)=(&quot;|")([^"&]*)(&quot;|")/g, '<span class="text-purple-400">$1</span>=<span class="text-emerald-300">$2$3$4</span>')
       .replace(/(&lt;\/?[a-zA-Z0-9_:-]+)(\s|&gt;)/g, '<span class="text-cyan-400 font-semibold">$1</span>$2')
-      .replace(/([a-zA-Z0-9_:-]+)="([^"]*)"/g, '<span class="text-purple-400">$1</span>=<span class="text-emerald-300">"$2"</span>')
-      .replace(/(&lt;!--.*?--&gt;)/g, '<span class="text-slate-500 font-mono italic">$1</span>');
+      .replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="text-slate-500 font-mono italic">$1</span>');
   };
 
   // Pick a searchable token for a diagnostic so we can locate its line in the generated code.
@@ -566,6 +568,8 @@ export default function CodePreview({
   const errors = diagnostics.filter(d => d.severity === 'error');
   const warnings = diagnostics.filter(d => d.severity === 'warning');
   const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
+  const codeLines = currentCode.split('\n');
+  const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -711,10 +715,9 @@ export default function CodePreview({
               </div>
             </div>
           ) : (
-            <div className="h-full overflow-auto py-2 font-mono text-xs leading-relaxed">
-              {(() => {
-                const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);
-                return currentCode.split('\n').map((line, i) => {
+            <div className="relative h-full">
+              <div className="h-full overflow-auto py-2 font-mono text-xs leading-relaxed code-scroll">
+                {codeLines.map((line, i) => {
                   const ld = lineDiagMap.get(i);
                   const lineClass = ld
                     ? (ld.severity === 'error'
@@ -731,13 +734,25 @@ export default function CodePreview({
                         {i + 1}
                       </span>
                       <span
-                        className="flex-1 whitespace-pre pr-4 overflow-x-auto"
+                        className="flex-1 whitespace-pre pr-5"
                         dangerouslySetInnerHTML={{ __html: highlightXML(line) || '&nbsp;' }}
                       />
                     </div>
                   );
-                });
-              })()}
+                })}
+              </div>
+              {/* Error/warning markers on the scroll gutter (positioned by line fraction) */}
+              {lineDiagMap.size > 0 && (
+                <div className="absolute top-0 right-0 h-full w-3 pointer-events-none z-10">
+                  {Array.from(lineDiagMap.entries()).map(([idx, info]) => (
+                    <div
+                      key={idx}
+                      className={`absolute right-[2px] w-2 h-[3px] rounded-sm ${info.severity === 'error' ? 'bg-red-500' : 'bg-amber-400'}`}
+                      style={{ top: `${(idx / Math.max(codeLines.length, 1)) * 100}%` }}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
