@@ -220,6 +220,150 @@ export default function App() {
   const [activeAIModel, setActiveAIModel] = useState<string>('gemini-3.5-flash');
   const [activeReasoning, setActiveReasoning] = useState<string>('none');
 
+  // AI Guide Shared State & Handlers
+  const [aiChatHistory, setAiChatHistory] = useState<ChatMessage[]>([
+    { 
+      role: 'assistant', 
+      text: "Hello, Captain! I am your visual X4: Foundations Mission Director digital copilot. Press '💬 ASSISTANT CHAT' for advice, or '🛠️ BUILDER ACTION PORT' to describe modifications and generate them on-the-fly." 
+    }
+  ]);
+  const [aiInputText, setAiInputText] = useState<string>('');
+  const [aiActiveMode, setAiActiveMode] = useState<'chat' | 'builder'>('chat');
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiErrorText, setAiErrorText] = useState<string | null>(null);
+  const [isAiFloatingVisible, setIsAiFloatingVisible] = useState<boolean>(false);
+  const [isAiFloatingOpen, setIsAiFloatingOpen] = useState<boolean>(false);
+
+  const handleSendChatMode = async (promptMsg: string) => {
+    setAiChatHistory(prev => [...prev, { role: 'user', text: promptMsg }]);
+    setAiLoading(true);
+    setAiInputText('');
+    setAiErrorText(null);
+
+    try {
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+
+      const response = await fetch("/api/gemini", {
+        method: "POST",
+        headers: getAIHeaders(),
+        body: JSON.stringify({ 
+          prompt: promptMsg,
+          currentWorkspace: workspace,
+          diagnostics: diagnostics
+        })
+      });
+
+      const data = await handleApiResponse(response, "Failed to establish connection.");
+      setAiChatHistory(prev => [...prev, { role: 'assistant', text: data.text }]);
+    } catch (err: any) {
+      console.error(err);
+      setAiErrorText(err.message || "Something went wrong.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleSendBuilderMode = async (promptMsg: string) => {
+    setAiChatHistory(prev => [...prev, { role: 'user', text: `Generate workspace blueprint: ${promptMsg}` }]);
+    setAiLoading(true);
+    setAiInputText('');
+    setAiErrorText(null);
+
+    try {
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+
+      const response = await fetch("/api/agent/generate", {
+        method: "POST",
+        headers: getAIHeaders(),
+        body: JSON.stringify({ 
+          prompt: promptMsg,
+          currentWorkspace: workspace,
+          diagnostics: diagnostics
+        })
+      });
+
+      const data = await handleApiResponse(response, "Failed to trigger visual automated generator.");
+      const generatedWorkspace: ModWorkspace = data.workspace;
+      const proposedText = `I have successfully designed a new Visual Mod Workspace layout named "${generatedWorkspace.name}". It contains ${generatedWorkspace.nodes.length} functional nodes, ${generatedWorkspace.links.length} connected flow paths, and ${generatedWorkspace.uiWidgets.length} interactive dashboard widgets.\n\nPlease inspect the blueprint audit report card below to confirm and apply these visual changes directly to your active stage!`;
+      
+      setAiChatHistory(prev => [...prev, { 
+        role: 'assistant', 
+        text: proposedText,
+        actionRequired: true,
+        proposedWorkspace: generatedWorkspace,
+        proposedVersion: data.version,
+        actionApplied: null
+      }]);
+    } catch (err: any) {
+      console.error(err);
+      setAiErrorText(err.message || "Something went wrong during generation simulation.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleApplyAction = (index: number, msg: ChatMessage) => {
+    if (!msg.proposedWorkspace) return;
+    setWorkspace(msg.proposedWorkspace);
+    if (msg.proposedVersion !== undefined) {
+      setLocalVersion(msg.proposedVersion);
+    }
+    
+    setAiChatHistory(prev => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = {
+          ...updated[index],
+          actionRequired: false,
+          actionApplied: 'applied',
+          text: `Success! Proposed automated node scheme "${msg.proposedWorkspace?.name}" has been compiled and injected successfully into your visual canvas. Try navigating or adjusting the physical nodes now!`
+        };
+      }
+      return updated;
+    });
+  };
+
+  const handleDeclineAction = (index: number) => {
+    setAiChatHistory(prev => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = {
+          ...updated[index],
+          actionRequired: false,
+          actionApplied: 'declined',
+          text: `Action declined. Proposed visual modifications were successfully discarded. Feel free to re-submit your prompt with different parameters!`
+        };
+      }
+      return updated;
+    });
+  };
+
+  const handleSend = (text: string) => {
+    if (!text.trim()) return;
+    if (aiActiveMode === 'builder') {
+      handleSendBuilderMode(text);
+    } else {
+      handleSendChatMode(text);
+    }
+  };
+
+  // Listen to open-ai-chat events triggered by Wiki Browser or nodes clicks
+  useEffect(() => {
+    const handleOpenChatEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ prompt: string }>;
+      if (customEvent.detail && customEvent.detail.prompt) {
+        setActiveSidebarTab('ai');
+        handleSendChatMode(customEvent.detail.prompt);
+      }
+    };
+    window.addEventListener('open-ai-chat', handleOpenChatEvent);
+    return () => {
+      window.removeEventListener('open-ai-chat', handleOpenChatEvent);
+    };
+  }, [workspace]);
+
   useEffect(() => {
     const updateAIState = () => {
       const provider = getActiveProvider();
