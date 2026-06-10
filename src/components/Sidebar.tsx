@@ -45,6 +45,7 @@ import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
 import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
+import AIHelper from './AIHelper';
 
 interface SidebarProps {
   width?: number;
@@ -465,6 +466,20 @@ export default function Sidebar({
           <Library className="w-4 h-4 shrink-0" />
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">TEMPLATES</span>
         </button>
+
+        <button
+          id="tab_ai"
+          onClick={() => setActiveTab('ai')}
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
+            activeTab === 'ai'
+              ? 'text-amber-400 bg-amber-950/20 border-l-2 border-amber-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title="AI Co-pilot"
+        >
+          <Sparkles className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">CO-PILOT</span>
+        </button>
       </div>
 
       {/* Right Content Column */}
@@ -481,6 +496,7 @@ export default function Sidebar({
               {activeTab === 'filesystem' && <FolderGit2 className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-cyan-400" />}
+              {activeTab === 'ai' && <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
               
               {activeTab === 'script' && 'Node Toolbox'}
               {activeTab === 'cues' && 'Cue Hierarchy'}
@@ -489,6 +505,7 @@ export default function Sidebar({
               {activeTab === 'filesystem' && 'Filesystem'}
               {activeTab === 'git' && 'Source Control'}
               {activeTab === 'templates' && 'Blueprints'}
+              {activeTab === 'ai' && 'AI Co-pilot'}
             </div>
             <div className="text-[9px] text-slate-500 font-sans mt-0.5 leading-none">
               {activeTab === 'script' && 'Create visual logic nodes'}
@@ -498,8 +515,23 @@ export default function Sidebar({
               {activeTab === 'filesystem' && 'Workspace loose files list'}
               {activeTab === 'git' && 'Staged changes & remotes'}
               {activeTab === 'templates' && 'Manage reusable subgraphs'}
+              {activeTab === 'ai' && 'AI-assisted logic & templates'}
             </div>
           </div>
+
+          {activeTab === 'ai' && (
+            <button
+              onClick={() => setIsAiFloatingVisible(!isAiFloatingVisible)}
+              className={`px-2 py-1 rounded text-[9.5px] font-mono font-bold uppercase transition-all duration-150 border cursor-pointer ${
+                isAiFloatingVisible 
+                  ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-400' 
+                  : 'bg-slate-800 hover:bg-slate-700 border-white/10 text-slate-400 hover:text-slate-200'
+              }`}
+              title={isAiFloatingVisible ? "Hide floating AI guide panel" : "Show floating AI guide panel"}
+            >
+              {isAiFloatingVisible ? "Hide Float ✕" : "Show Float ⎋"}
+            </button>
+          )}
         </div>
 
         {/* Main Content Pane */}
@@ -1206,6 +1238,32 @@ export default function Sidebar({
               </div>
             )}
           </div>
+        )}
+
+        {/* AI CO-PILOT (Tab: ai) */}
+        {activeTab === 'ai' && (
+          <AIHelper
+            mode="sidebar"
+            workspace={workspace}
+            setWorkspace={setWorkspace}
+            localVersion={1}
+            setLocalVersion={() => {}}
+            chatHistory={aiChatHistory}
+            setChatHistory={setAiChatHistory}
+            inputText={aiInputText}
+            setInputText={setAiInputText}
+            activeMode={aiActiveMode}
+            setActiveMode={setAiActiveMode}
+            loading={aiLoading}
+            errorText={aiErrorText}
+            isOpen={false}
+            setIsOpen={() => {}}
+            handleSend={handleSend}
+            handleApplyAction={handleApplyAction}
+            handleDeclineAction={handleDeclineAction}
+            isAiFloatingVisible={isAiFloatingVisible}
+            setIsAiFloatingVisible={setIsAiFloatingVisible}
+          />
         )}
 
         {/* COMPONENT INSPECTOR OR PROPERTY VIEWER PANEL */}
