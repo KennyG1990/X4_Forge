@@ -348,6 +348,7 @@ export default function AgentBridge({
     getWorkspace: false,
     postWorkspace: true,
     generate: false,
+    diagnostics: true,
     compile: true,
   });
 
@@ -798,7 +799,43 @@ export default function AgentBridge({
                 )}
               </div>
 
-              {/* ENDPOINT 5: POST COMPILE */}
+              {/* ENDPOINT 5: POST DIAGNOSTICS */}
+              <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
+                <button 
+                  onClick={() => toggleEndpoint('diagnostics')}
+                  className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-600/20 text-amber-300 border border-amber-500/30">POST</span>
+                    <span className="text-white text-xs font-bold font-mono">/api/agent/diagnostics</span>
+                  </div>
+                  {collapsedEndpoints.diagnostics ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </button>
+                
+                {!collapsedEndpoints.diagnostics && (
+                  <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
+                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                      Runs Mod Doctor without returning full file contents. Use this before agent edits to get errors, warnings, source refs, generated file paths, schema context, and summary counts.
+                    </p>
+                    <div className="relative">
+                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                        {`curl -X POST "${appOrigin}/api/agent/diagnostics" \\
+     ${authCurlHeader} \\
+     -H "Content-Type: application/json" \\
+     -d '{"workspace": null}'`}
+                      </pre>
+                      <button 
+                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/diagnostics" ${authCurlHeader} -H "Content-Type: application/json" -d '{"workspace": null}'`, 'curl_diagnostics')}
+                        className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
+                      >
+                        {copiedTextId === 'curl_diagnostics' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ENDPOINT 6: POST COMPILE */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
                 <button 
                   onClick={() => toggleEndpoint('compile')}

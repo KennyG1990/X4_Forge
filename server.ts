@@ -233,6 +233,26 @@ function summarizeWorkspaceDomains(ws: ModWorkspace) {
   };
 }
 
+function summarizeDiagnostics(diagnostics: Array<{ severity?: string; domain?: string }>) {
+  const bySeverity: Record<string, number> = {};
+  const byDomain: Record<string, number> = {};
+
+  diagnostics.forEach(diagnostic => {
+    const severity = diagnostic.severity || "unknown";
+    const domain = diagnostic.domain || "unknown";
+    bySeverity[severity] = (bySeverity[severity] || 0) + 1;
+    byDomain[domain] = (byDomain[domain] || 0) + 1;
+  });
+
+  return {
+    total: diagnostics.length,
+    bySeverity,
+    byDomain,
+    hasErrors: (bySeverity.error || 0) > 0,
+    hasWarnings: (bySeverity.warning || 0) > 0
+  };
+}
+
 type GameLogIssue = {
   severity: "error" | "warning";
   lineNumber: number;
@@ -1102,8 +1122,10 @@ app.get("/api/agent/schema", (req, res) => {
         },
         mod_doctor: {
           purpose: "Package-wide diagnostics for agents and the Studio UI.",
+          endpoint: "/api/agent/diagnostics",
           coverage: ["content.xml metadata", "Mission Director graph/XML", "UI layout dimensions and runtime-risk warnings", "AI script names/actions/params", "wares price and production invariants", "jobs required fields and task references", "translation language/page/item ids", "XML patch selectors/actions/content", "compile settings and includeInBuild exclusions"],
-          diagnostic_fields: ["severity", "message", "category", "code", "domain", "filePath", "nodeId", "sourceRef"]
+          diagnostic_fields: ["severity", "message", "category", "code", "domain", "filePath", "nodeId", "sourceRef"],
+          summary_fields: ["total", "bySeverity", "byDomain", "hasErrors", "hasWarnings"]
         }
       },
       minimal_workspace: sanitizeWorkspace({ name: "My_AI_Mod", nodes: [], links: [], uiWidgets: [] })
@@ -1141,6 +1163,13 @@ app.get("/api/agent/schema", (req, res) => {
         auth: true,
         body: { workspace: "optional ModWorkspace; defaults to active workspace" },
         purpose: "Alias of compile for agents that want a package/file-manifest vocabulary."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/diagnostics",
+        auth: true,
+        body: { workspace: "optional ModWorkspace; defaults to active workspace" },
+        purpose: "Run Mod Doctor without returning full file contents. Use before agent mutations to get package-wide errors, warnings, source refs, generated file names, and summary counts."
       },
       {
         method: "POST",
@@ -1275,6 +1304,15 @@ app.get("/api/agent/schema", (req, res) => {
       },
       diagnostics: "Mod Doctor package-wide diagnostics with optional code, domain, filePath, nodeId, and sourceRef metadata",
       file_count: "number"
+    },
+    diagnostics_response_shape: {
+      success: "boolean",
+      modId: "safe extension folder id",
+      workspace_domains: "counts of submitted or active workspace domains before includeInBuild filtering",
+      generated_files: "relative package paths generated for the current compile settings",
+      summary: "diagnostic totals by severity and domain",
+      diagnostics: "full Mod Doctor diagnostic list without returning generated file contents",
+      schema_context: "whether md.xsd/common.xsd are resolved and the current schema element counts"
     },
     game_log_status_shape: {
       status: "no_log | stale | clean | warnings | errors",
@@ -1983,6 +2021,45 @@ app.post("/api/agent/package", (req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || "Failed to package workspace schema to file manifest."
+    });
+  }
+});
+
+/**
+ * POST /api/agent/diagnostics
+ * Runs Mod Doctor without returning full generated file contents.
+ */
+app.post("/api/agent/diagnostics", (req, res) => {
+  const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
+  try {
+    const { modId, files } = buildWorkspaceFileManifest(ws);
+    const diagnostics = runModDoctor(ws, files, modId);
+    const resolvedConfig = resolveXsdConfig();
+
+    return res.json({
+      success: true,
+      modId,
+      workspace_domains: summarizeWorkspaceDomains(ws),
+      generated_files: Object.keys(files).sort(),
+      summary: summarizeDiagnostics(diagnostics),
+      diagnostics,
+      schema_context: {
+        loaded: schemaLibrary.loaded,
+        error: schemaLibrary.error,
+        resolved_md_xsd: resolvedConfig.mdExists,
+        resolved_common_xsd: resolvedConfig.commonExists,
+        counts: {
+          events: schemaLibrary.events.length,
+          conditions: schemaLibrary.conditions.length,
+          actions: schemaLibrary.actions.length,
+          control_flow: schemaLibrary.controlFlow.length
+        }
+      }
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Failed to run Mod Doctor diagnostics."
     });
   }
 });
