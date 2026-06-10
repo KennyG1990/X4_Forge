@@ -45,7 +45,7 @@ import XMLPatchSystem from './components/XMLPatchSystem';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
-import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage } from './types';
+import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse } from './lib/apiHelper';
@@ -154,7 +154,51 @@ export default function App() {
   }, [loadSchemaLibrary]);
 
   const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki'>('blueprint');
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics'>('script');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest'>('script');
+
+  // Diagnostics / Mod Doctor states moved to App level to share across Sidebar/CodePreview
+  const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
+  const [diagnosticSource, setDiagnosticSource] = useState<'checking' | 'package' | 'local'>('checking');
+
+  const mdCode = React.useMemo(() => {
+    try {
+      return generateMDXML(workspace);
+    } catch (e) {
+      return '';
+    }
+  }, [workspace]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const localReports = validateModWorkspace(workspace, mdCode);
+    setDiagnosticSource('checking');
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/agent/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace })
+        });
+        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[] }>(response, 'Package Mod Doctor check failed.');
+        if (!cancelled) {
+          setDiagnostics(data.diagnostics || []);
+          setDiagnosticSource('package');
+        }
+      } catch (err) {
+        console.warn('Package Mod Doctor unavailable; falling back to local MD diagnostics:', err);
+        if (!cancelled) {
+          setDiagnostics(localReports);
+          setDiagnosticSource('local');
+        }
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [workspace, mdCode]);
   const [visibleCueIds, setVisibleCueIds] = useState<string[] | null>(null);
   const [focusNodeRequest, setFocusNodeRequest] = useState<{ nodeId: string; timestamp: number } | null>(null);
 
@@ -255,7 +299,14 @@ export default function App() {
       });
 
       const data = await handleApiResponse(response, "Failed to establish connection.");
-      setAiChatHistory(prev => [...prev, { role: 'assistant', text: data.text }]);
+      setAiChatHistory(prev => [...prev, { 
+        role: 'assistant', 
+        text: data.text,
+        actionRequired: data.actionRequired,
+        proposedWorkspace: data.proposedWorkspace,
+        proposedVersion: data.proposedVersion,
+        actionApplied: null
+      }]);
     } catch (err: any) {
       console.error(err);
       setAiErrorText(err.message || "Something went wrong.");
@@ -910,6 +961,8 @@ export default function App() {
           handleSend={handleSend}
           handleApplyAction={handleApplyAction}
           handleDeclineAction={handleDeclineAction}
+          diagnostics={diagnostics}
+          diagnosticSource={diagnosticSource}
         />
 
         {/* Left Resizer Handle */}
@@ -998,6 +1051,8 @@ export default function App() {
             activeEditorFile={activeEditorFile}
             setActiveEditorFile={setActiveEditorFile}
             selectedNode={selectedNode}
+            diagnostics={diagnostics}
+            diagnosticSource={diagnosticSource}
           />
         </aside>
 

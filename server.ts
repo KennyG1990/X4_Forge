@@ -768,7 +768,30 @@ app.post("/api/gemini", async (req, res) => {
   }
 
   try {
-    const systemInstruction = "You are an elite X4: Foundations XML & Mission Director MD scripting expert. Help the player write clean, functional scripts. Maximize brief and scan-friendly code blocks using markdown formatting. Avoid lengthy definitions, get straight to functional XML examples and tips.";
+    const systemInstruction = `You are an elite X4: Foundations XML & Mission Director MD scripting expert and workspace coordinator.
+Help the player write clean, functional scripts, design layouts, and troubleshoot diagnostics.
+
+Your response MUST be a JSON object that satisfies the following JSON Schema:
+{
+  "type": "object",
+  "required": ["text"],
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "Explanations, answers, recommendations or instructions. Use markdown formatting to render clean lists and scan-friendly code blocks."
+    },
+    "actionRequired": {
+      "type": "boolean",
+      "description": "Set to true if the user asked you to adjust/fix properties, toggle options, or modify components, and you are providing the corrected workspace."
+    },
+    "proposedWorkspace": {
+      "type": "object",
+      "description": "The complete, updated ModWorkspace object with the proposed edits applied. Keep all other nodes, links, and widgets intact."
+    }
+  }
+}
+
+If the player has validation warnings/errors or requests a change, you should analyze the issue, explain the fix in 'text', set 'actionRequired' to true, and provide the updated workspace in 'proposedWorkspace' (e.g., setting 'includeInBuild: false' on UI widgets, altering node properties, etc.). Otherwise, keep 'actionRequired' false and omit 'proposedWorkspace'.`;
     
     let finalPrompt = prompt;
     if (currentWorkspace) {
@@ -790,8 +813,31 @@ ${diagnostics && diagnostics.length > 0 ? JSON.stringify(diagnostics, null, 2) :
 Please respond accurately to the user query using the above active workspace state and diagnostics as key context. If they are asking you to fix a warning or error, analyze which node or property is violating rules and tell them exactly how they can adjust those parameters!`;
     }
 
-    const responseText = await callMultiProviderAI(req, systemInstruction, finalPrompt, "text");
-    return res.json({ text: responseText });
+    const schema = {
+      type: Type.OBJECT,
+      required: ["text"],
+      properties: {
+        text: { type: Type.STRING, description: "Detailed response text, explanations or guidelines." },
+        actionRequired: { type: Type.BOOLEAN, description: "True if you are proposing one or more automated fixes such as toggling options/attributes on nodes or widgets." },
+        proposedWorkspace: {
+          type: Type.OBJECT,
+          description: "The complete updated ModWorkspace object. You MUST preserve the existing nodes, UI widgets, and links, but make the requested changes (like setting includeInBuild to false for specific widgets, changing properties on a node, etc.)."
+        }
+      }
+    };
+
+    const responseText = await callMultiProviderAI(req, systemInstruction, finalPrompt, "json", schema);
+    
+    try {
+      const parsed = JSON.parse(responseText.trim());
+      return res.json({
+        text: parsed.text || "",
+        actionRequired: !!parsed.actionRequired,
+        proposedWorkspace: parsed.proposedWorkspace || null
+      });
+    } catch {
+      return res.json({ text: responseText, actionRequired: false, proposedWorkspace: null });
+    }
   } catch (error: any) {
     console.error("Multi-Provider chat routing error: ", error);
     return res.status(500).json({ error: error.message || "Failed to trigger AI compilation." });

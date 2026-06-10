@@ -767,6 +767,17 @@ export interface XMLDiagnostic {
   category: 'syntax' | 'references' | 'egosoft';
 }
 
+export type PackageDiagnostic = XMLDiagnostic & {
+  code?: string;
+  domain?: string;
+  filePath?: string;
+  sourceRef?: {
+    kind: string;
+    id?: string;
+    label?: string;
+  };
+};
+
 export function validateModWorkspace(workspace: ModWorkspace, code: string): XMLDiagnostic[] {
   const diagnostics: XMLDiagnostic[] = [];
 

@@ -28,7 +28,9 @@ import {
   Compass,
   Library,
   Trash2,
-  Activity
+  Activity,
+  Brain,
+  Terminal
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -38,10 +40,12 @@ import {
   ModWorkspace, 
   MDNode, 
   UIWidget,
-  ChatMessage
+  ChatMessage,
+  PackageDiagnostic
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
+import PackageModDoctor from './PackageModDoctor';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
@@ -51,8 +55,8 @@ import AIHelper from './AIHelper';
 
 interface SidebarProps {
   width?: number;
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -74,6 +78,7 @@ interface SidebarProps {
     content: string;
     handle?: any;
     isMock?: boolean;
+    isSaved?: boolean;
   }) => void;
   workspaceDirMode?: 'candy' | 'store';
   setWorkspaceDirMode?: (mode: 'candy' | 'store') => void;
@@ -100,6 +105,9 @@ interface SidebarProps {
   handleSend: (text: string) => void;
   handleApplyAction: (index: number, msg: ChatMessage) => void;
   handleDeclineAction: (index: number) => void;
+
+  diagnostics: PackageDiagnostic[];
+  diagnosticSource: 'checking' | 'package' | 'local';
 }
 
 export default function Sidebar({
@@ -144,7 +152,9 @@ export default function Sidebar({
   setIsAiFloatingOpen,
   handleSend,
   handleApplyAction,
-  handleDeclineAction
+  handleDeclineAction,
+  diagnostics,
+  diagnosticSource
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -483,14 +493,40 @@ export default function Sidebar({
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">CO-PILOT</span>
         </button>
         <button
+          id="tab_mdscanner"
+          onClick={() => setActiveTab('mdscanner')}
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
+            activeTab === 'mdscanner'
+              ? 'text-amber-400 bg-amber-950/20 border-l-2 border-amber-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title="MD Scanner"
+        >
+          <Brain className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full font-mono">SCANNER</span>
+        </button>
+        <button
+          id="tab_playtest"
+          onClick={() => setActiveTab('playtest')}
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
+            activeTab === 'playtest'
+              ? 'text-emerald-400 bg-emerald-950/20 border-l-2 border-emerald-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title="Playtest Workspace"
+        >
+          <Terminal className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full font-mono">PLAYTEST</span>
+        </button>
+        <button
           id="tab_diagnostics"
           onClick={() => setActiveTab('diagnostics')}
           className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'diagnostics'
-              ? 'text-emerald-400 bg-emerald-950/20 border-l-2 border-emerald-500 font-bold'
+              ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
-          title="MD Scanner & Playtest Workspace"
+          title="Package Mod Doctor Diagnostics"
         >
           <Activity className="w-4 h-4 shrink-0" />
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">DOCTOR</span>
@@ -512,7 +548,9 @@ export default function Sidebar({
               {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'ai' && <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
-              {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-emerald-400" />}
+              {activeTab === 'mdscanner' && <Brain className="w-3.5 h-3.5 text-amber-500" />}
+              {activeTab === 'playtest' && <Terminal className="w-3.5 h-3.5 text-emerald-400" />}
+              {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-cyan-405" />}
 
               {activeTab === 'script' && 'Node Toolbox'}
               {activeTab === 'cues' && 'Cue Hierarchy'}
@@ -522,6 +560,8 @@ export default function Sidebar({
               {activeTab === 'git' && 'Source Control'}
               {activeTab === 'templates' && 'Blueprints'}
               {activeTab === 'ai' && 'AI Co-pilot'}
+              {activeTab === 'mdscanner' && 'MD Scanner'}
+              {activeTab === 'playtest' && 'Playtest Workspace'}
               {activeTab === 'diagnostics' && 'Mod Doctor'}
             </div>
             <div className="text-[9px] text-slate-500 font-sans mt-0.5 leading-none">
@@ -533,7 +573,9 @@ export default function Sidebar({
               {activeTab === 'git' && 'Staged changes & remotes'}
               {activeTab === 'templates' && 'Manage reusable subgraphs'}
               {activeTab === 'ai' && 'AI-assisted logic & templates'}
-              {activeTab === 'diagnostics' && 'MD scanner & playtest log analysis'}
+              {activeTab === 'mdscanner' && 'Deep logic cognitive scanning & telemetry'}
+              {activeTab === 'playtest' && 'Directory sync, manual syncer, and log parser'}
+              {activeTab === 'diagnostics' && 'Package-wide syntax and reference check'}
             </div>
           </div>
 
@@ -590,14 +632,38 @@ export default function Sidebar({
           </ErrorBoundary>
         )}
 
-        {activeTab === 'diagnostics' && (
-          <ErrorBoundary label="Mod Doctor">
+        {activeTab === 'mdscanner' && (
+          <ErrorBoundary label="MD Scanner">
             <DiagnosticsHub
               workspace={workspace}
               setWorkspace={setWorkspace}
               saveCheckpoint={saveCheckpoint}
               modWorkspacePath={modWorkspacePath}
               setWorkspaceView={setWorkspaceView}
+              forceTab="analyzer"
+            />
+          </ErrorBoundary>
+        )}
+
+        {activeTab === 'playtest' && (
+          <ErrorBoundary label="Playtest Workspace">
+            <DiagnosticsHub
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              saveCheckpoint={saveCheckpoint}
+              modWorkspacePath={modWorkspacePath}
+              setWorkspaceView={setWorkspaceView}
+              forceTab="playtest"
+            />
+          </ErrorBoundary>
+        )}
+
+        {activeTab === 'diagnostics' && (
+          <ErrorBoundary label="Mod Doctor">
+            <PackageModDoctor
+              workspace={workspace}
+              diagnostics={diagnostics}
+              diagnosticSource={diagnosticSource}
             />
           </ErrorBoundary>
         )}

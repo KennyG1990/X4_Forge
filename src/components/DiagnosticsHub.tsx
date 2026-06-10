@@ -17,6 +17,7 @@ interface DiagnosticsHubProps {
   saveCheckpoint?: (customTarget?: ModWorkspace) => void;
   modWorkspacePath: string;
   setWorkspaceView?: (view: any) => void;
+  forceTab?: 'analyzer' | 'playtest';
 }
 
 /**
@@ -28,9 +29,12 @@ export default function DiagnosticsHub({
   workspace,
   setWorkspace,
   saveCheckpoint,
-  modWorkspacePath
+  modWorkspacePath,
+  forceTab
 }: DiagnosticsHubProps) {
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
+
+  const currentTab = forceTab || toolActiveTab;
 
   // Cognitive analyzer state
   const [analysisResult, setAnalysisResult] = useState<any>(null);
@@ -170,45 +174,61 @@ export default function DiagnosticsHub({
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#080a0e]">
       {/* Segmented tab header */}
-      <div className="flex border-b border-white/5 bg-black/45 items-center gap-1.5 px-2 py-1.5 shrink-0 font-mono">
-        <button
-          onClick={() => setToolActiveTab('analyzer')}
-          className={`px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
-            toolActiveTab === 'analyzer'
-              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/40'
-              : 'text-slate-400 hover:text-slate-200 border border-transparent'
-          }`}
-        >
-          <Brain className="w-3.5 h-3.5 text-amber-500" />
-          MD Scanner
-        </button>
-        <button
-          onClick={() => setToolActiveTab('playtest')}
-          className={`px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
-            toolActiveTab === 'playtest'
-              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
-              : 'text-slate-400 hover:text-slate-200 border border-transparent'
-          }`}
-        >
-          <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-          Playtest
-        </button>
-        {toolActiveTab === 'analyzer' && analysisResult && (
+      {!forceTab ? (
+        <div className="flex border-b border-white/5 bg-black/45 items-center gap-1.5 px-2 py-1.5 shrink-0 font-mono">
           <button
-            onClick={triggerAnalysis}
-            disabled={analyzing}
-            className="ml-auto px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-500 rounded text-[9px] flex items-center gap-1 transition-all disabled:opacity-50 cursor-pointer font-bold uppercase"
-            title="Re-run analysis"
+            onClick={() => setToolActiveTab('analyzer')}
+            className={`px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
+              toolActiveTab === 'analyzer'
+                ? 'bg-amber-500/10 text-amber-400 border border-amber-500/40'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+            }`}
           >
-            <RefreshCw className={`w-3 h-3 ${analyzing ? 'animate-spin' : ''}`} />
-            Analyze
+            <Brain className="w-3.5 h-3.5 text-amber-500" />
+            MD Scanner
           </button>
-        )}
-      </div>
+          <button
+            onClick={() => setToolActiveTab('playtest')}
+            className={`px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
+              toolActiveTab === 'playtest'
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+            }`}
+          >
+            <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+            Playtest
+          </button>
+          {toolActiveTab === 'analyzer' && analysisResult && (
+            <button
+              onClick={triggerAnalysis}
+              disabled={analyzing}
+              className="ml-auto px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-500 rounded text-[9px] flex items-center gap-1 transition-all disabled:opacity-50 cursor-pointer font-bold uppercase"
+              title="Re-run analysis"
+            >
+              <RefreshCw className={`w-3 h-3 ${analyzing ? 'animate-spin' : ''}`} />
+              Analyze
+            </button>
+          )}
+        </div>
+      ) : (
+        forceTab === 'analyzer' && analysisResult && (
+          <div className="flex bg-[#12141a]/40 border-b border-white/5 justify-end px-3 py-1.5 shrink-0">
+            <button
+              onClick={triggerAnalysis}
+              disabled={analyzing}
+              className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-505 rounded text-[9.5px] flex items-center gap-1 transition-all disabled:opacity-50 cursor-pointer font-bold uppercase font-mono"
+              title="Re-run analysis"
+            >
+              <RefreshCw className={`w-3 h-3 ${analyzing ? 'animate-spin' : ''}`} />
+              Re-Analyze
+            </button>
+          </div>
+        )
+      )}
 
       {/* Panel viewport */}
       <div className="flex-1 overflow-y-auto bg-[#06070a]/95 min-h-0">
-        {toolActiveTab === 'analyzer' ? (
+        {currentTab === 'analyzer' ? (
           <MDScanner
             workspace={workspace}
             analysisResult={analysisResult}
