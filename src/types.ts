@@ -77,6 +77,64 @@ export interface TFile {
   pages: TranslationPage[];
 }
 
+export interface AIParam {
+  name: string;
+  type: 'object' | 'number' | 'boolean' | 'ware' | 'faction';
+  defaultValue: string;
+  comment: string;
+}
+
+export interface AIAction {
+  id: string;
+  command: 'move_to' | 'flee' | 'shoot' | 'dock_at' | 'wait' | 'find_objects' | 'custom_xml';
+  label: string;
+  properties: Record<string, any>;
+}
+
+export interface AIBehaviorScript {
+  id: string;
+  name: string;
+  description: string;
+  command: string;
+  attentionLevel: 'high' | 'low';
+  params: AIParam[];
+  interrupts: Array<{ id: string; event: string; action: string }>;
+  actions: AIAction[];
+}
+
+export interface WareDef {
+  id: string;
+  name: string;
+  description: string;
+  transport: 'container' | 'liquid' | 'solid' | 'energy';
+  volume: number;
+  minPrice: number;
+  avgPrice: number;
+  maxPrice: number;
+  prodTime: number;
+  prodAmount: number;
+}
+
+export interface JobDef {
+  id: string;
+  name: string;
+  faction: string;
+  shipClass: 'fighter' | 'corvette' | 'destroyer' | 'carrier' | 'freighter';
+  shipMacro: string;
+  galaxyQuota: number;
+  sectorQuota: number;
+  taskScript: string;
+  rebuildOnDestroy: boolean;
+}
+
+export interface PatchBlock {
+  id: string;
+  sel: string;
+  action: 'add' | 'replace' | 'remove';
+  content: string;
+  note: string;
+}
+
 // Complete Mod Workspace containing scripts and widgets state
 export interface ModWorkspace {
   id: string;
@@ -95,7 +153,10 @@ export interface ModWorkspace {
     showIcons: boolean;
   };
   tFiles?: TFile[];
-  aiScripts?: any[];
+  aiScripts?: AIBehaviorScript[];
+  wares?: WareDef[];
+  jobs?: JobDef[];
+  xmlPatches?: PatchBlock[];
 }
 
 // Built-in game variables for X4 standard database definitions
@@ -1166,6 +1227,11 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       accentColor: ws.uiTheme?.accentColor || '#0891b2',
       opacity: typeof ws.uiTheme?.opacity === 'number' ? ws.uiTheme.opacity : 0.95,
       showIcons: typeof ws.uiTheme?.showIcons === 'boolean' ? ws.uiTheme.showIcons : true
-    }
+    },
+    tFiles: Array.isArray(ws.tFiles) ? ws.tFiles : [],
+    aiScripts: Array.isArray(ws.aiScripts) ? ws.aiScripts : [],
+    wares: Array.isArray(ws.wares) ? ws.wares : [],
+    jobs: Array.isArray(ws.jobs) ? ws.jobs : [],
+    xmlPatches: Array.isArray(ws.xmlPatches) ? ws.xmlPatches : []
   };
 }

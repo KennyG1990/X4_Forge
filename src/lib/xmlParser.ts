@@ -18,6 +18,45 @@ function attributesToProperties(element: Element): Record<string, any> {
   }, {});
 }
 
+function stripMacroPrefix(value: string): string {
+  return String(value || '').replace(/^macro\./, '');
+}
+
+function stripFactionPrefix(value: string): string {
+  return String(value || '').replace(/^faction\./, '');
+}
+
+function matchOption(options: string[], value: string): string {
+  const clean = stripMacroPrefix(value);
+  return options.find(option => option.startsWith(clean)) || clean || value;
+}
+
+function parseCheckValueProperties(element: Element): Record<string, any> {
+  const value = element.getAttribute("value") || 'player.money';
+  const exact = element.getAttribute("exact");
+  const min = element.getAttribute("min");
+  const max = element.getAttribute("max");
+  const list = element.getAttribute("list");
+
+  if (exact !== null) return { value, comparison: 'exact', amount: Number(exact) || exact };
+  if (min !== null) return { value, comparison: 'min', amount: Number(min) || min };
+  if (max !== null) return { value, comparison: 'max', amount: Number(max) || max };
+  if (list !== null) return { value, comparison: 'list', list };
+
+  const oldOperator = element.getAttribute("operator");
+  const oldValue2 = element.getAttribute("value2");
+  if (oldOperator || oldValue2) {
+    const comparison = oldOperator === 'le' || oldOperator === 'lt'
+      ? 'max'
+      : oldOperator === 'eq' || oldOperator === 'exact'
+        ? 'exact'
+        : 'min';
+    return { value, comparison, amount: Number(oldValue2) || oldValue2 || 1000000 };
+  }
+
+  return { value, comparison: 'expression' };
+}
+
 // Parser: Egosoft XML script mapping to visual flowchart nodegraph
 export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
   try {
@@ -66,7 +105,6 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       const name = cue.getAttribute("name") || `cue_${i}`;
       const instantiate = cue.getAttribute("instantiate") || "false";
       const namespace = cue.getAttribute("namespace") || "this";
-      const state = cue.getAttribute("state") || "active";
       
       const cueId = `cue_${Date.now()}_${i}`;
       elementToId.set(cue, cueId);
@@ -86,7 +124,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
         xmlTag: 'cue',
         x,
         y,
-        properties: { name, instantiate, namespace, state },
+        properties: { name, instantiate, namespace },
         propertiesSchema: NODE_TEMPLATES[0].propertiesSchema,
         inputs: NODE_TEMPLATES[0].inputs,
         outputs: NODE_TEMPLATES[0].outputs
@@ -145,8 +183,8 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
           } else if (tag === 'event_object_destroyed') {
             nodeType = 'event';
             label = 'Event: Object Destroyed';
-            const faction = (child.getAttribute("faction") || 'any').replace('faction.', '');
-            properties = { object: child.getAttribute("object") || 'player.target', faction };
+            const ownerCheck = (child.getAttribute("faction") || 'any').replace('faction.', '');
+            properties = { object: child.getAttribute("object") || 'player.target', ownerCheck };
           } else if (tag === 'event_object_changed_sector') {
             nodeType = 'event';
             label = 'Event: Sector Entered';
@@ -154,11 +192,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
           } else if (tag === 'check_value') {
             nodeType = 'condition';
             label = 'Check: Player Wealth';
-            properties = {
-              value: child.getAttribute("value") || 'player.money',
-              operator: child.getAttribute("operator") || 'ge',
-              amount: Number(child.getAttribute("value2")) || 1000000
-            };
+            properties = parseCheckValueProperties(child);
           } else {
             // Unrecognized / escape hatch
             const schemaTemplate = schemaTemplatesByTag.get(tag);
@@ -229,21 +263,18 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
           if (tag === 'create_ship') {
             label = 'Spawn Ship';
             const name = child.getAttribute("name") || '$EscortShip';
-            const faction = child.getAttribute("faction") || 'player';
+            const ownerEl = child.getElementsByTagName("owner")[0];
+            const faction = stripFactionPrefix(ownerEl?.getAttribute("exact") || child.getAttribute("faction") || 'player');
             const macroVal = child.getAttribute("macro") || '';
-            const matchingMacro = X4_SHIP_MACROS.find(m => m.startsWith(macroVal)) || macroVal;
-            const spaceObj = child.getElementsByTagName("space")[0]?.getAttribute("object") || 'player.sector';
+            const matchingMacro = matchOption(X4_SHIP_MACROS, macroVal);
+            const spaceObj = child.getAttribute("sector") || child.getAttribute("zone") || child.getElementsByTagName("space")[0]?.getAttribute("object") || 'player.sector';
             const posEl = child.getElementsByTagName("position")[0];
             const coords = posEl ? `${posEl.getAttribute("x") || 0},${posEl.getAttribute("y") || 0},${posEl.getAttribute("z") || 0}` : '0,0,1000';
             properties = { name, macro: matchingMacro, faction, sector: spaceObj, coords };
           } else if (tag === 'reward_player') {
             label = 'Reward Player';
             const money = Number(child.getAttribute("money")) || 0;
-            const notification = child.getAttribute("notification") || 'true';
-            const repEl = child.getElementsByTagName("reputation")[0];
-            const standing = repEl ? repEl.getAttribute("value") || '0.0' : '';
-            const faction = repEl ? (repEl.getAttribute("faction") || 'argon').replace('faction.', '') : '';
-            properties = { money, notification, standing, faction };
+            properties = { money };
           } else if (tag === 'play_sound') {
             label = 'Play Audio/Sound';
             properties = {
@@ -252,16 +283,16 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
             };
           } else if (tag === 'show_help') {
             label = 'Show Briefing';
-            const rawText = child.getAttribute("text") || '';
+            const rawText = child.getAttribute("custom") || child.getAttribute("text") || '';
             const text = rawText.replace(/^'|'$/g, '');
-            properties = { text, duration: Number(child.getAttribute("duration")) || 5 };
+            properties = { custom: text, duration: Number(child.getAttribute("duration")) || 5 };
           } else if (tag === 'create_station') {
             label = 'Spawn Station';
             const name = child.getAttribute("name") || '$MyDefenseStation';
-            const faction = child.getAttribute("faction") || 'player';
+            const faction = stripFactionPrefix(child.getAttribute("owner") || child.getAttribute("faction") || 'player');
             const macroVal = child.getAttribute("macro") || '';
-            const matchingMacro = X4_STATION_MACROS.find(m => m.startsWith(macroVal)) || macroVal;
-            const spaceObj = child.getElementsByTagName("space")[0]?.getAttribute("sector") || 'player.sector';
+            const matchingMacro = matchOption(X4_STATION_MACROS, macroVal);
+            const spaceObj = child.getAttribute("sector") || child.getAttribute("zone") || child.getElementsByTagName("space")[0]?.getAttribute("sector") || 'player.sector';
             const posEl = child.getElementsByTagName("position")[0];
             const coords = posEl ? `${posEl.getAttribute("x") || 0},${posEl.getAttribute("y") || 0},${posEl.getAttribute("z") || 0}` : '5000,0,5000';
             properties = { name, macro: matchingMacro, faction, sector: spaceObj, coords };

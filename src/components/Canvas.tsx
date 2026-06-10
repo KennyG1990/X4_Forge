@@ -88,6 +88,7 @@ export default function Canvas({
         y: e.clientY - node.y
       };
       setSelectedNode(node);
+      window.dispatchEvent(new CustomEvent('x4-node-selected', { detail: { nodeId } }));
     }
   };
 

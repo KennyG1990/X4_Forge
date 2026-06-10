@@ -34,12 +34,13 @@ export interface SchemaLibrary {
 
 export function schemaAttributeToProperty(attr: SchemaAttribute): PropertySchema {
   const enumValues = attr.enumValues?.filter(Boolean) || [];
-  const looksBoolean = /boolean/i.test(attr.type) || enumValues.every(v => v === 'true' || v === 'false');
+  const looksBoolean = /boolean/i.test(attr.type) || (enumValues.length > 0 && enumValues.every(v => v === 'true' || v === 'false'));
 
   return {
     key: attr.name,
     label: attr.required ? `${attr.name} *` : attr.name,
     type: enumValues.length > 0 ? 'select' : looksBoolean ? 'boolean' : 'text',
+    required: attr.required,
     options: enumValues.length > 0 ? enumValues : looksBoolean ? ['true', 'false'] : undefined,
     placeholder: attr.type || attr.name,
     description: attr.documentation || `${attr.type}${attr.required ? ' (required)' : ''}`

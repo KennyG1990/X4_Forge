@@ -47,6 +47,13 @@ interface SidebarProps {
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
   onSchemaConfigChanged?: () => Promise<void> | void;
+  onOpenEditorFile?: (file: {
+    name: string;
+    path: string;
+    content: string;
+    handle?: any;
+    isMock?: boolean;
+  }) => void;
 }
 
 export default function Sidebar({
@@ -68,7 +75,8 @@ export default function Sidebar({
   workspaceView,
   setWorkspaceView,
   schemaTemplates = [],
-  onSchemaConfigChanged
+  onSchemaConfigChanged,
+  onOpenEditorFile
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -280,6 +288,7 @@ export default function Sidebar({
             saveCheckpoint={saveCheckpoint}
             workspaceView={workspaceView}
             setWorkspaceView={setWorkspaceView}
+            onOpenEditorFile={onOpenEditorFile}
           />
         )}
 
