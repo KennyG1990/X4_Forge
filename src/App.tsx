@@ -895,6 +895,21 @@ export default function App() {
           visibleCueIds={visibleCueIds}
           setVisibleCueIds={setVisibleCueIds}
           setFocusNodeRequest={setFocusNodeRequest}
+          aiChatHistory={aiChatHistory}
+          setAiChatHistory={setAiChatHistory}
+          aiInputText={aiInputText}
+          setAiInputText={setAiInputText}
+          aiActiveMode={aiActiveMode}
+          setAiActiveMode={setAiActiveMode}
+          aiLoading={aiLoading}
+          aiErrorText={aiErrorText}
+          isAiFloatingVisible={isAiFloatingVisible}
+          setIsAiFloatingVisible={setIsAiFloatingVisible}
+          isAiFloatingOpen={isAiFloatingOpen}
+          setIsAiFloatingOpen={setIsAiFloatingOpen}
+          handleSend={handleSend}
+          handleApplyAction={handleApplyAction}
+          handleDeclineAction={handleDeclineAction}
         />
 
         {/* Left Resizer Handle */}
@@ -989,12 +1004,30 @@ export default function App() {
       </div>
 
       {/* Embedded Intelligent AI Guide Drawer chatbot */}
-      <AIHelper 
-        workspace={workspace}
-        setWorkspace={setWorkspace}
-        localVersion={localVersion}
-        setLocalVersion={setLocalVersion}
-      />
+      {isAiFloatingVisible && (
+        <AIHelper 
+          mode="floating"
+          workspace={workspace}
+          setWorkspace={setWorkspace}
+          localVersion={localVersion}
+          setLocalVersion={setLocalVersion}
+          chatHistory={aiChatHistory}
+          setChatHistory={setAiChatHistory}
+          inputText={aiInputText}
+          setInputText={setAiInputText}
+          activeMode={aiActiveMode}
+          setActiveMode={setAiActiveMode}
+          loading={aiLoading}
+          errorText={aiErrorText}
+          isOpen={isAiFloatingOpen}
+          setIsOpen={setIsAiFloatingOpen}
+          handleSend={handleSend}
+          handleApplyAction={handleApplyAction}
+          handleDeclineAction={handleDeclineAction}
+          isAiFloatingVisible={isAiFloatingVisible}
+          setIsAiFloatingVisible={setIsAiFloatingVisible}
+        />
+      )}
 
       {/* External AI Agent Developer Connection Gateway drawer panel */}
       <AgentBridge

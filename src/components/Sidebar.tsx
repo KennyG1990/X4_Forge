@@ -36,7 +36,8 @@ import {
   X4_STATION_MACROS, 
   ModWorkspace, 
   MDNode, 
-  UIWidget 
+  UIWidget,
+  ChatMessage
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
 import { WIKI_TOPICS } from './WikiBrowser';
@@ -47,8 +48,8 @@ import CueViewer from './CueViewer';
 
 interface SidebarProps {
   width?: number;
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -79,6 +80,23 @@ interface SidebarProps {
   visibleCueIds: string[] | null;
   setVisibleCueIds: (ids: string[] | null) => void;
   setFocusNodeRequest: (req: { nodeId: string; timestamp: number } | null) => void;
+  
+  // AI Guide Shared State & Handlers
+  aiChatHistory: ChatMessage[];
+  setAiChatHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  aiInputText: string;
+  setAiInputText: (text: string) => void;
+  aiActiveMode: 'chat' | 'builder';
+  setAiActiveMode: (mode: 'chat' | 'builder') => void;
+  aiLoading: boolean;
+  aiErrorText: string | null;
+  isAiFloatingVisible: boolean;
+  setIsAiFloatingVisible: (visible: boolean) => void;
+  isAiFloatingOpen: boolean;
+  setIsAiFloatingOpen: (open: boolean) => void;
+  handleSend: (text: string) => void;
+  handleApplyAction: (index: number, msg: ChatMessage) => void;
+  handleDeclineAction: (index: number) => void;
 }
 
 export default function Sidebar({
@@ -108,7 +126,22 @@ export default function Sidebar({
   handleCompileModProject,
   visibleCueIds,
   setVisibleCueIds,
-  setFocusNodeRequest
+  setFocusNodeRequest,
+  aiChatHistory,
+  setAiChatHistory,
+  aiInputText,
+  setAiInputText,
+  aiActiveMode,
+  setAiActiveMode,
+  aiLoading,
+  aiErrorText,
+  isAiFloatingVisible,
+  setIsAiFloatingVisible,
+  isAiFloatingOpen,
+  setIsAiFloatingOpen,
+  handleSend,
+  handleApplyAction,
+  handleDeclineAction
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
