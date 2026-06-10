@@ -29,7 +29,7 @@ import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
 import Canvas from './components/Canvas';
 import UIBuilder from './components/UIBuilder';
-import CodePreview from './components/CodePreview';
+import CodePreview, { EditorFile } from './components/CodePreview';
 import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
@@ -140,6 +140,7 @@ export default function App() {
   const [dirName, setDirName] = useState<string>('');
 
   const [selectedNode, setSelectedNode] = useState<MDNode | null>(null);
+  const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
   const [selectedWidget, setSelectedWidget] = useState<UIWidget | null>(null);
 
   const [localVersion, setLocalVersion] = useState<number>(1);
@@ -558,6 +559,9 @@ export default function App() {
               setWorkspaceView={setWorkspaceView}
               schemaTemplates={schemaTemplates}
               onSchemaConfigChanged={loadSchemaLibrary}
+              onOpenEditorFile={(file) => {
+                setActiveEditorFile(file);
+              }}
             />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
@@ -613,6 +617,9 @@ export default function App() {
             setDirHandle={setDirHandle}
             dirName={dirName}
             setDirName={setDirName}
+            activeEditorFile={activeEditorFile}
+            setActiveEditorFile={setActiveEditorFile}
+            selectedNode={selectedNode}
           />
         </aside>
 
