@@ -14,14 +14,16 @@ import {
   compileDiffDocument 
 } from './src/lib/modCompiler';
 
-async function main() {
-  // 1. Fetch secure token from handshake endpoint
-  console.log("Fetching authentication session token...");
-  const tokenResponse = await fetch('http://127.0.0.1:3000/api/auth/token');
-  if (!tokenResponse.ok) {
-    throw new Error('Failed to fetch authentication token from server.');
+function readStudioApiToken() {
+  if (process.env.STUDIO_API_TOKEN?.trim()) {
+    return process.env.STUDIO_API_TOKEN.trim();
   }
-  const { token } = await tokenResponse.json();
+  return fs.readFileSync('.studio-api-token', 'utf8').trim();
+}
+
+async function main() {
+  // 1. Read the same local token the server injects into the app HTML.
+  const token = readStudioApiToken();
   console.log("Token retrieved successfully.");
 
   // 2. Fetch active workspace from server using token
