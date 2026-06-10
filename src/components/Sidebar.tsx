@@ -19,7 +19,10 @@ import {
   ChevronRight,
   Pin,
   Copy,
-  Check
+  Check,
+  PackageCheck,
+  Folder,
+  HardDrive
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -32,6 +35,7 @@ import {
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
 import { WIKI_TOPICS } from './WikiBrowser';
+import SnapshotManager from './SnapshotManager';
 
 interface SidebarProps {
   activeTab: 'script' | 'ui' | 'config' | 'filesystem';
@@ -60,6 +64,12 @@ interface SidebarProps {
     handle?: any;
     isMock?: boolean;
   }) => void;
+  workspaceDirMode?: 'candy' | 'store';
+  setWorkspaceDirMode?: (mode: 'candy' | 'store') => void;
+  compileStatus?: 'idle' | 'compiling' | 'success' | 'error';
+  compileMessage?: string;
+  handleCompileModProject?: () => Promise<void>;
+  handleLinkDirectory?: () => Promise<void>;
 }
 
 export default function Sidebar({
@@ -82,7 +92,13 @@ export default function Sidebar({
   setWorkspaceView,
   schemaTemplates = [],
   onSchemaConfigChanged,
-  onOpenEditorFile
+  onOpenEditorFile,
+  workspaceDirMode = 'store',
+  setWorkspaceDirMode,
+  compileStatus = 'idle',
+  compileMessage = '',
+  handleCompileModProject,
+  handleLinkDirectory
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -522,6 +538,96 @@ export default function Sidebar({
                 </div>
               )}
             </div>
+
+            {/* EXTENSION COMPILER & WORKSPACE STAGING */}
+            <div className="border-t border-white/10 pt-4 space-y-3">
+              <h3 className="text-xs font-mono font-semibold text-cyan-400 tracking-wider uppercase flex items-center gap-1.5">
+                <PackageCheck className="w-3.5 h-3.5" />
+                Extension Package Compiler
+              </h3>
+
+              {/* Local Directory Link state */}
+              {dirHandle ? (
+                <div className="space-y-3">
+                  <div className="p-2 rounded bg-emerald-500/5 border border-emerald-500/20 text-[10px] space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 font-bold uppercase text-[9px]">
+                      <span>Connected Folder</span>
+                      <span className="text-emerald-400 flex items-center gap-0.5 font-bold uppercase text-[8px] animate-pulse">● Connected</span>
+                    </div>
+                    <div className="text-white break-all flex items-center gap-1 text-[10px]">
+                      <Folder className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+                      {dirName}
+                    </div>
+                  </div>
+
+                  {/* Candy Store mapping Mode Choice: Candy vs Candy Store */}
+                  <div>
+                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider flex items-center gap-1">
+                      <HardDrive className="w-3 h-3 text-cyan-400" />
+                      Staging Directory Type
+                    </label>
+                    <select
+                      value={workspaceDirMode}
+                      onChange={(e) => {
+                        const val = e.target.value as 'candy' | 'store';
+                        if (setWorkspaceDirMode) setWorkspaceDirMode(val);
+                        localStorage.setItem('x4_workspace_dir_mode', val);
+                      }}
+                      className="w-full bg-[#0F1115] border border-white/10 p-1.5 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                    >
+                      <option value="store">Generic Extensions Folder ("Candy Store")</option>
+                      <option value="candy">Direct Mod Folder ("Candy Itself")</option>
+                    </select>
+                    <p className="text-[9px] text-slate-500 leading-normal mt-1 italic">
+                      {workspaceDirMode === 'store' 
+                        ? 'Stages files in extensions/ folder inside a subdirectory named after your mod.' 
+                        : 'Writes files (content.xml, md/, etc) directly inside connected directory.'}
+                    </p>
+                  </div>
+
+                  {/* Trigger compiler button */}
+                  <button
+                    onClick={handleCompileModProject}
+                    disabled={compileStatus === 'compiling'}
+                    className="w-full py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-black font-mono font-bold text-[10px] rounded transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed uppercase shadow shadow-emerald-500/25 shrink-0"
+                  >
+                    <PackageCheck className={`w-4 h-4 ${compileStatus === 'compiling' ? 'animate-pulse' : ''}`} />
+                    Compile Mod Extension
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <button
+                    onClick={handleLinkDirectory}
+                    className="w-full py-2 bg-cyan-600/10 border border-cyan-500/30 hover:bg-cyan-600/20 text-cyan-400 hover:text-white rounded font-mono text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Folder className="w-4 h-4" />
+                    LINK LOCAL FOLDER HANDLE
+                  </button>
+                  <p className="text-[9.5px] text-slate-500 leading-relaxed italic">
+                    Connect local Extensions directory to write mod files directly to your computer.
+                  </p>
+                </div>
+              )}
+
+              {/* Compile results log notification */}
+              {compileMessage && (
+                <div className={`p-2 rounded border font-mono text-[9.5px] ${
+                  compileStatus === 'error'
+                    ? 'bg-red-500/10 border-red-500/20 text-red-300'
+                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                }`}>
+                  {compileMessage}
+                </div>
+              )}
+            </div>
+
+            {/* PERSISTENT HISTORICAL SNAPSHOTS */}
+            <SnapshotManager
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              saveCheckpoint={saveCheckpoint}
+            />
           </div>
         )}
 

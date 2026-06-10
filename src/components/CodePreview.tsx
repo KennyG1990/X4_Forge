@@ -1124,9 +1124,6 @@ export default function CodePreview({
               insertDemoX4Log={insertDemoX4Log}
               handleLogFileChange={handleLogFileChange}
               handleApplyAutoFix={handleApplyAutoFix}
-              compileStatus={compileStatus}
-              compileMessage={compileMessage}
-              handleCompileModProject={handleCompileModProject}
             />
           )}
         </div>

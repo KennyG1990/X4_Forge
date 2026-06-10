@@ -47,6 +47,7 @@ import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorksp
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
+import { compileAndSaveAll } from './lib/modCompiler';
 
 // Default initial blank workspace schema
 const BLANK_WORKSPACE: ModWorkspace = {
@@ -144,6 +145,12 @@ export default function App() {
 
   const [dirHandle, setDirHandle] = useState<any | null>(null);
   const [dirName, setDirName] = useState<string>('');
+  
+  const [workspaceDirMode, setWorkspaceDirMode] = useState<'candy' | 'store'>(() => {
+    return (localStorage.getItem('x4_workspace_dir_mode') as 'candy' | 'store') || 'store';
+  });
+  const [compileStatus, setCompileStatus] = useState<'idle' | 'compiling' | 'success' | 'error'>('idle');
+  const [compileMessage, setCompileMessage] = useState<string>('');
 
   const [selectedNode, setSelectedNode] = useState<MDNode | null>(null);
   const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
@@ -248,6 +255,38 @@ export default function App() {
     const debounceTimer = setTimeout(syncLocalEditsToServer, 1000);
     return () => clearTimeout(debounceTimer);
   }, [workspace]);
+
+  const handleCompileModProject = async () => {
+    if (!dirHandle) {
+      setCompileStatus('error');
+      setCompileMessage('No directory linked. Connect a local folder first.');
+      return;
+    }
+    setCompileStatus('compiling');
+    setCompileMessage('Generating files...');
+    try {
+      const res = await compileAndSaveAll(workspace, dirHandle, workspaceDirMode);
+      setCompileStatus('success');
+      setCompileMessage(res.message);
+    } catch (e: any) {
+      setCompileStatus('error');
+      setCompileMessage(e.message || 'Compilation failed. Validate XML files first.');
+    }
+  };
+
+  const handleLinkDirectory = async () => {
+    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
+      alert("Your browser does not fully support Direct Folder Sync. Please use Google Chrome, Edge, or Opera.");
+      return;
+    }
+    try {
+      const handle = await (window as any).showDirectoryPicker();
+      setDirHandle(handle);
+      setDirName(handle.name);
+    } catch (err: any) {
+      console.error("Directory picking failed/cancelled", err);
+    }
+  };
 
   // Initial load and periodic background polling of the server workspace
   useEffect(() => {
@@ -646,6 +685,12 @@ export default function App() {
               onOpenEditorFile={(file) => {
                 setActiveEditorFile(file);
               }}
+              workspaceDirMode={workspaceDirMode}
+              setWorkspaceDirMode={setWorkspaceDirMode}
+              compileStatus={compileStatus}
+              compileMessage={compileMessage}
+              handleCompileModProject={handleCompileModProject}
+              handleLinkDirectory={handleLinkDirectory}
             />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
