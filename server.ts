@@ -1461,7 +1461,7 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
  * Compiles and deploys the workspace directly into the configured X4 Extensions directory.
  */
 app.post("/api/agent/deploy", (req, res) => {
-  const ws = req.body.workspace || activeWorkspace;
+  const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
   try {
     const resolved = resolveXsdConfig();
     const modWorkspacePath = resolved.modWorkspacePath;
@@ -1526,17 +1526,28 @@ app.post("/api/agent/deploy", (req, res) => {
  * Compiles a submitted workspace JSON body on-the-fly and runs the Mod Studio XML validator check.
  */
 app.post("/api/agent/compile", (req, res) => {
-  const ws = req.body.workspace || activeWorkspace;
+  const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
   try {
-    const mdxml = generateMDXML(ws);
-    const uixml = generateUIXML(ws);
-    const diagnostics = validateModWorkspace(ws, mdxml);
+    const { modId, files } = buildWorkspaceFileManifest(ws);
+    const mdPath = `md/${modId}.xml`;
+    const uiPath = `md_ui_layouts/${modId}_ui.xml`;
+    const diagnostics = [
+      ...validateModWorkspace(ws, files[mdPath] || generateMDXML(ws)),
+      ...validatePackageReadiness(ws)
+    ];
 
     return res.json({
       success: true,
+      modId,
+      file_count: Object.keys(files).length,
       files: {
-        mission_director_xml: mdxml,
-        ui_layout_xml: uixml
+        ...files,
+        mission_director_xml: files[mdPath],
+        ui_layout_xml: files[uiPath] || ""
+      },
+      legacy_files: {
+        mission_director_xml: files[mdPath],
+        ui_layout_xml: files[uiPath] || ""
       },
       diagnostics
     });
@@ -1544,6 +1555,35 @@ app.post("/api/agent/compile", (req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || "Failed to compile workspace schema to XML."
+    });
+  }
+});
+
+/**
+ * POST /api/agent/package
+ * Agent-friendly alias for compile that returns the complete package file manifest.
+ */
+app.post("/api/agent/package", (req, res) => {
+  const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
+  try {
+    const { modId, files } = buildWorkspaceFileManifest(ws);
+    const mdPath = `md/${modId}.xml`;
+    const diagnostics = [
+      ...validateModWorkspace(ws, files[mdPath] || generateMDXML(ws)),
+      ...validatePackageReadiness(ws)
+    ];
+
+    return res.json({
+      success: true,
+      modId,
+      file_count: Object.keys(files).length,
+      files,
+      diagnostics
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Failed to package workspace schema to file manifest."
     });
   }
 });
@@ -1591,6 +1631,7 @@ app.post("/api/agent/generate", async (req, res) => {
   if (!prompt) {
     return res.status(400).json({ error: "Missing 'prompt' body parameter." });
   }
+  const baseWorkspace = sanitizeWorkspace(currentWorkspace || activeWorkspace);
 
   try {
     console.log(`[AI-STUDIO] Starting Phased Cognitive Prompt Interpretation Workflow...`);
@@ -1639,8 +1680,8 @@ Position nodes clearly: Cues on the left, conditions to their right, and action 
     };
 
     let phase1Prompt = `Prompt: "${prompt}"`;
-    if (currentWorkspace) {
-      const promptNodes = (currentWorkspace.nodes || []).map((node: any) => ({
+    if (baseWorkspace) {
+      const promptNodes = (baseWorkspace.nodes || []).map((node: any) => ({
         id: node.id,
         type: node.type,
         label: node.label,
@@ -1651,11 +1692,12 @@ Position nodes clearly: Cues on the left, conditions to their right, and action 
       }));
       phase1Prompt = `You are modifying an existing ModWorkspace layout.
 [Current Workspace Structure]:
-- Name: "${currentWorkspace.name}"
-- Version: "${currentWorkspace.version || "1.0.0"}"
-- Author: "${currentWorkspace.author || ""}"
-- Description: "${currentWorkspace.description || ""}"
+- Name: "${baseWorkspace.name}"
+- Version: "${baseWorkspace.version || "1.0.0"}"
+- Author: "${baseWorkspace.author || ""}"
+- Description: "${baseWorkspace.description || ""}"
 - Current Nodes: ${JSON.stringify(promptNodes)}
+- Non-MD domains to preserve unless the user explicitly asks to change them: ${JSON.stringify(summarizeWorkspaceDomains(baseWorkspace))}
 
 Modify these nodes or add new ones to satisfy this prompt:
 "${prompt}"
@@ -1754,8 +1796,8 @@ Return ONLY the uiWidgets and uiTheme block fit.`;
       }
     };
 
-    const currentUIWidgets = currentWorkspace?.uiWidgets || [];
-    const currentUITheme = currentWorkspace?.uiTheme || {
+    const currentUIWidgets = baseWorkspace.uiWidgets || [];
+    const currentUITheme = baseWorkspace.uiTheme || {
       backgroundColor: "#0d1117",
       borderColor: "#df9825",
       accentColor: "#f39c12",
@@ -1780,11 +1822,12 @@ Create, update, or reposition HUD window containers and nested controller elemen
 
     // --- PACK COMBINED EXPERIMENT STAGE ---
     let combinedWorkspace: ModWorkspace = {
+      ...baseWorkspace,
       id: `workspace_${Date.now()}`,
-      name: phase1Result.name || (currentWorkspace?.name || "My_Custom_Mod"),
-      version: phase1Result.version || (currentWorkspace?.version || "1.0.0"),
-      author: phase1Result.author || (currentWorkspace?.author || "Player"),
-      description: phase1Result.description || (currentWorkspace?.description || ""),
+      name: phase1Result.name || (baseWorkspace.name || "My_Custom_Mod"),
+      version: phase1Result.version || (baseWorkspace.version || "1.0.0"),
+      author: phase1Result.author || (baseWorkspace.author || "Player"),
+      description: phase1Result.description || (baseWorkspace.description || ""),
       nodes: populatedNodes,
       links: phase2Result.links || [],
       uiWidgets: phase3Result.uiWidgets || [],

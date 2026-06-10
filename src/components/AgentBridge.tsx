@@ -72,6 +72,7 @@ export default function AgentBridge({
   });
 
   const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://example.com';
+  const authCurlHeader = `-H "Authorization: Bearer $(Get-Content .studio-api-token)"`;
 
   const toggleEndpoint = (key: string) => {
     setCollapsedEndpoints(prev => ({ ...prev, [key]: !prev[key] }));
@@ -375,7 +376,7 @@ export default function AgentBridge({
                 {!collapsedEndpoints.schema && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
                     <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
-                      Fetches available X4 Foundations factions, ship macros, station macro tables, sound IDs, and initial node blueprints. Helps external agents use valid identifiers in their modifications.
+                      Public read-only contract for external agents: supported domains, endpoint catalog, auth rules, constants, templates, and compile response shape.
                     </p>
                     <div className="relative">
                       <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
@@ -408,14 +409,15 @@ export default function AgentBridge({
                 {!collapsedEndpoints.getWorkspace && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
                     <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
-                      Retrieves the current JSON representation of the user's nodes, wires, customized widgets, and UI layout theme configuration.
+                      Retrieves the current JSON representation of the user's nodes, wires, widgets, translations, AI scripts, wares, jobs, XML patches, and UI theme.
                     </p>
                     <div className="relative">
                       <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
-                        {`curl -X GET "${appOrigin}/api/agent/workspace"`}
+                        {`curl -X GET "${appOrigin}/api/agent/workspace" \\
+     ${authCurlHeader}`}
                       </pre>
                       <button 
-                        onClick={() => handleCopy(`curl -X GET "${appOrigin}/api/agent/workspace"`, 'curl_getws')}
+                        onClick={() => handleCopy(`curl -X GET "${appOrigin}/api/agent/workspace" ${authCurlHeader}`, 'curl_getws')}
                         className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                       >
                         {copiedTextId === 'curl_getws' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -441,11 +443,12 @@ export default function AgentBridge({
                 {!collapsedEndpoints.postWorkspace && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
                     <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
-                      Publishes a newly modified ModWorkspace JSON structure directly into the studio, instantly redrawing user canvas boards.
+                       Publishes a full ModWorkspace JSON structure directly into the studio, including optional tFiles, aiScripts, wares, jobs, and xmlPatches.
                     </p>
                     <div className="relative">
                       <pre className="bg-[#10141f] p-2 rounded text-[9px] text-cyan-300 overflow-y-auto max-h-32 select-all">
                         {`curl -X POST "${appOrigin}/api/agent/workspace" \\
+     ${authCurlHeader} \\
      -H "Content-Type: application/json" \\
      -d '{
        "workspace": {
@@ -458,7 +461,7 @@ export default function AgentBridge({
      }'`}
                       </pre>
                       <button 
-                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/workspace" -H "Content-Type: application/json" -d '{"workspace": {"name": "My_AI_Mod", "nodes": [], "links": [], "uiWidgets": []}}'`, 'curl_postws')}
+                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/workspace" ${authCurlHeader} -H "Content-Type: application/json" -d '{"workspace": {"name": "My_AI_Mod", "nodes": [], "links": [], "uiWidgets": []}}'`, 'curl_postws')}
                         className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                       >
                         {copiedTextId === 'curl_postws' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -484,16 +487,17 @@ export default function AgentBridge({
                 {!collapsedEndpoints.generate && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
                     <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
-                      Uses our server-side structured Gemini model to translate natural language directions directly into an elegantly aligned visual node network.
+                      Uses the server-side structured AI provider to generate or edit MD graph/UI layout domains while preserving existing non-MD domains.
                     </p>
                     <div className="relative">
                       <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
                         {`curl -X POST "${appOrigin}/api/agent/generate" \\
+     ${authCurlHeader} \\
      -H "Content-Type: application/json" \\
      -d '{"prompt": "Create custom mission with Elite Fighter wing escort"}'`}
                       </pre>
                       <button 
-                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/generate" -H "Content-Type: application/json" -d '{"prompt": "Create custom mission with Elite Fighter wing escort"}'`, 'curl_gen')}
+                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/generate" ${authCurlHeader} -H "Content-Type: application/json" -d '{"prompt": "Create custom mission with Elite Fighter wing escort"}'`, 'curl_gen')}
                         className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                       >
                         {copiedTextId === 'curl_gen' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -519,16 +523,17 @@ export default function AgentBridge({
                 {!collapsedEndpoints.compile && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
                     <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
-                      Sends any workspace payload to generate Egosoft standard XML scripts, returning built file layouts alongside real-time warnings.
+                      Sends any workspace payload to generate a complete package file manifest: content.xml, README, MD XML, UI XML, AI scripts, library diffs, translations, and XML patches.
                     </p>
                     <div className="relative">
                       <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
                         {`curl -X POST "${appOrigin}/api/agent/compile" \\
+     ${authCurlHeader} \\
      -H "Content-Type: application/json" \\
      -d '{"workspace": {...}}'`}
                       </pre>
                       <button 
-                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/compile" -H "Content-Type: application/json" -d '{"workspace": null}'`, 'curl_compile')}
+                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/compile" ${authCurlHeader} -H "Content-Type: application/json" -d '{"workspace": null}'`, 'curl_compile')}
                         className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                       >
                         {copiedTextId === 'curl_compile' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
