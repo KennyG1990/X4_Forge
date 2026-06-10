@@ -530,8 +530,8 @@ export default function Sidebar({
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-xs font-mono font-semibold text-slate-400 mb-2 tracking-wider uppercase flex items-center gap-1">
-                <Wrench className="w-3 h-3 text-cyan-400" />
+              <h3 className="text-[10px] font-mono font-semibold text-slate-400 mb-1.5 tracking-wider uppercase flex items-center gap-1">
+                <Wrench className="w-3.5 h-3.5 text-cyan-400" />
                 TOOLBOX (CLICK TO CREATE)
               </h3>
               <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
@@ -546,18 +546,18 @@ export default function Sidebar({
                     <button
                       key={idx}
                       onClick={() => onAddNode(template)}
-                      className="w-full text-left p-2 rounded bg-[#1c1f26] border border-white/5 hover:border-cyan-500/50 transition-all flex items-center justify-between group cursor-pointer"
+                      className="w-full text-left p-1.5 rounded bg-black/20 border border-white/5 hover:border-cyan-500/50 transition-all flex items-center justify-between group cursor-pointer"
                     >
                       <div>
-                        <div className="text-xs font-medium text-slate-200 group-hover:text-white transition-colors">
+                        <div className="text-xs font-semibold text-slate-200 group-hover:text-white transition-colors leading-none">
                           {template.label}
                         </div>
-                        <div className="text-[10px] font-mono text-slate-400">
+                        <div className="text-[9.5px] font-mono text-slate-500 mt-1">
                           &lt;{template.xmlTag}&gt;
                         </div>
                       </div>
-                      <span className={`text-[9px] font-mono border px-1.5 py-0.5 rounded ${badgeColors}`}>
-                        {template.type.toUpperCase()}
+                      <span className={`text-[8.5px] font-mono border px-1 py-0.5 rounded leading-none shrink-0 ${badgeColors}`}>
+                        {template.type.substring(0, 4).toUpperCase()}
                       </span>
                     </button>
                   );
@@ -570,16 +570,16 @@ export default function Sidebar({
         {/* UI MOD CUSTOMIZER WIDGETS (Tab: ui) */}
         {activeTab === 'ui' && (
           <div className="space-y-4">
-            <div className="bg-cyan-900/10 border border-cyan-500/20 p-3 rounded text-[11px] leading-relaxed text-slate-400">
-              <span className="text-cyan-400 font-semibold block mb-1">X4 Custom UI Rules:</span>
-              Design working contextual HUD menus or consoles. Add containers, tables, lists, progress bars and macro buttons. Widgets are fully interactive on the terminal.
+            <div className="bg-cyan-950/10 border border-cyan-500/15 p-2.5 rounded text-[10px] leading-relaxed text-slate-400">
+              <span className="text-cyan-400 font-bold block mb-0.5">X4 Custom UI Rules:</span>
+              Design working contextual HUD menus or consoles. Add containers, tables, lists, progress bars and macro buttons.
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-xs font-mono font-semibold text-slate-400 mb-2 tracking-wider uppercase">UI Widgets Library</h3>
+              <h3 className="text-[10px] font-mono font-semibold text-slate-400 mb-1.5 tracking-wider uppercase">UI Widgets Library</h3>
               {[
                 { type: 'window', title: 'Context Window Frame', desc: 'Outer widget window layout container' },
-                { type: 'header', title: 'Tactical Title / Header', desc: 'Wide high-contrast cyber text decoration line' },
+                { type: 'header', title: 'Tactical Title / Header', desc: 'Wide high-contrast cyber decoration line' },
                 { type: 'table', title: 'Standard Data Table', desc: 'Pre-styled multi-row grid framework' },
                 { type: 'button', title: 'Macro Menu Button', desc: 'Fires visual cues on selection click' },
                 { type: 'progressbar', title: 'Status Progress Bar', desc: 'Elegant status / shield indicator' },
@@ -587,23 +587,36 @@ export default function Sidebar({
                 { type: 'dropdown', title: 'Interactive Selector', desc: 'Drop-down values list widget' },
                 { type: 'input', title: 'Text Input Box', desc: 'Custom command or log entry text field' },
                 { type: 'chat', title: 'Dialogue Chat Logs', desc: 'Scrollable live dialogue transmissions list' }
-              ].map(widget => (
-                <button
-                  key={widget.type}
-                  onClick={() => onAddUIWidget(widget.type)}
-                  className="w-full text-left p-2.5 rounded bg-[#1c1f26] border border-white/5 hover:bg-cyan-600/10 hover:border-cyan-500/50 transition-all flex items-center justify-between group cursor-pointer"
-                >
-                  <div>
-                    <div className="text-xs font-medium text-slate-200 group-hover:text-white capitalize">
-                      {widget.title}
+              ].map(widget => {
+                let widgetIcon = <Layout className="w-3.5 h-3.5 text-cyan-400 shrink-0" />;
+                if (widget.type === 'header') widgetIcon = <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />;
+                if (widget.type === 'table') widgetIcon = <Library className="w-3.5 h-3.5 text-blue-400 shrink-0" />;
+                if (widget.type === 'button') widgetIcon = <Plus className="w-3.5 h-3.5 text-emerald-400 shrink-0" />;
+                if (widget.type === 'progressbar') widgetIcon = <Sliders className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
+                if (widget.type === 'text') widgetIcon = <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />;
+                if (widget.type === 'dropdown') widgetIcon = <ChevronRight className="w-3.5 h-3.5 text-cyan-400 shrink-0" />;
+                if (widget.type === 'input') widgetIcon = <Settings className="w-3.5 h-3.5 text-slate-400 shrink-0" />;
+                if (widget.type === 'chat') widgetIcon = <BookOpen className="w-3.5 h-3.5 text-purple-400 shrink-0" />;
+
+                return (
+                  <button
+                    key={widget.type}
+                    onClick={() => onAddUIWidget(widget.type)}
+                    className="w-full text-left p-2 rounded bg-black/20 border border-white/5 hover:bg-cyan-600/5 hover:border-cyan-500/50 transition-all flex items-center gap-2.5 group cursor-pointer"
+                  >
+                    {widgetIcon}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-slate-200 group-hover:text-white capitalize truncate leading-none">
+                        {widget.title}
+                      </div>
+                      <div className="text-[9px] text-slate-550 font-sans mt-1 truncate">
+                        {widget.desc}
+                      </div>
                     </div>
-                    <div className="text-[9px] text-slate-500 font-mono mt-0.5">
-                      {widget.desc}
-                    </div>
-                  </div>
-                  <Plus className="w-3.5 h-3.5 text-slate-500 group-hover:text-cyan-400 transition-colors" />
-                </button>
-              ))}
+                    <Plus className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 group-hover:text-cyan-400 transition-all" />
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
