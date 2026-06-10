@@ -268,10 +268,74 @@ export const validatePackageReadiness = (workspace: ModWorkspace): XMLDiagnostic
   return reports;
 };
 
+const MAX_SNAPSHOTS = 30;
+
+/**
+ * Writes a timestamped JSON snapshot of the workspace into <modDir>/.snapshots/.
+ * Used to build a durable, rollback-able version history alongside the mod.
+ * Non-fatal: a snapshot failure never blocks a compile.
+ */
+export const writeSnapshot = async (targetDir: any, workspace: ModWorkspace): Promise<void> => {
+  try {
+    const snapDir = await targetDir.getDirectoryHandle('.snapshots', { create: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    await writeTextFile(
+      snapDir,
+      `snapshot_${stamp}.json`,
+      JSON.stringify({ savedAt: new Date().toISOString(), name: workspace.name, workspace }, null, 2)
+    );
+    // Prune oldest snapshots beyond the cap (names sort chronologically by ISO stamp).
+    const names: string[] = [];
+    for await (const [name, handle] of (snapDir as any).entries()) {
+      if ((handle as any).kind === 'file' && name.startsWith('snapshot_') && name.endsWith('.json')) {
+        names.push(name);
+      }
+    }
+    names.sort();
+    for (let i = 0; i < names.length - MAX_SNAPSHOTS; i++) {
+      await (snapDir as any).removeEntry(names[i]);
+    }
+  } catch (err) {
+    console.warn('Snapshot write failed (non-fatal):', err);
+  }
+};
+
+/** Lists available snapshots for a mod, newest first. */
+export const listSnapshots = async (dirHandle: any, modId: string): Promise<{ name: string; savedAt: string }[]> => {
+  try {
+    const modDir = await dirHandle.getDirectoryHandle(modId);
+    const snapDir = await modDir.getDirectoryHandle('.snapshots');
+    const out: { name: string; savedAt: string }[] = [];
+    for await (const [name, handle] of (snapDir as any).entries()) {
+      if ((handle as any).kind === 'file' && name.endsWith('.json')) {
+        out.push({ name, savedAt: name.replace('snapshot_', '').replace('.json', '') });
+      }
+    }
+    return out.sort((a, b) => b.name.localeCompare(a.name));
+  } catch {
+    return [];
+  }
+};
+
+/** Reads a single snapshot back into a workspace object for restore. */
+export const readSnapshot = async (dirHandle: any, modId: string, snapshotName: string): Promise<ModWorkspace | null> => {
+  try {
+    const modDir = await dirHandle.getDirectoryHandle(modId);
+    const snapDir = await modDir.getDirectoryHandle('.snapshots');
+    const fileHandle = await snapDir.getFileHandle(snapshotName);
+    const file = await fileHandle.getFile();
+    const parsed = JSON.parse(await file.text());
+    return parsed.workspace || parsed;
+  } catch {
+    return null;
+  }
+};
+
 export const compileAndSaveAll = async (
   workspace: ModWorkspace,
   dirHandle: any,
-  mode: 'candy' | 'store'
+  mode: 'candy' | 'store',
+  options: { snapshot?: boolean } = {}
 ): Promise<{ success: boolean; message: string }> => {
   if (!dirHandle) {
     throw new Error('No directory linked.');
@@ -346,6 +410,11 @@ export const compileAndSaveAll = async (
     for (const [filePath, filePatches] of Object.entries(patchesByFile)) {
       await writeTextFileAtPath(targetDir, filePath, compileDiffDocument(filePatches, filePath));
     }
+  }
+
+  // 8. Version snapshot (rollback history) inside the mod folder, when requested.
+  if (options.snapshot && mode === 'store') {
+    await writeSnapshot(targetDir, workspace);
   }
 
   return {
