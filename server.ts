@@ -683,12 +683,14 @@ app.get("/api/schema/config", (req, res) => {
 app.post("/api/schema/config", (req, res) => {
   try {
     const schemaDir = String(req.body?.schemaDir || '').trim();
+    const gamePath = String(req.body?.x4GamePath || '').trim();
     if (!schemaDir) {
       return res.status(400).json({ error: "Missing required schemaDir." });
     }
 
     const nextConfig = {
       ...readXsdConfig(),
+      ...(gamePath ? { x4GamePath: gamePath } : {}),
       xsdSchemaPath: schemaDir,
       schemaFiles: ['md.xsd', 'common.xsd']
     };

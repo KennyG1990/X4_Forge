@@ -27,7 +27,8 @@ import {
   BookOpen,
   AlertCircle,
   AlertTriangle,
-  CheckCircle2
+  CheckCircle2,
+  Settings as SettingsGear
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -37,6 +38,7 @@ import CodePreview, { EditorFile } from './components/CodePreview';
 import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
+import DirectorySettingsModal from './components/DirectorySettingsModal';
 import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
@@ -162,6 +164,7 @@ export default function App() {
   const [isAgentBridgeOpen, setIsAgentBridgeOpen] = useState<boolean>(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
+  const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
 
   // Active AI modeling status states
   const [activeAIProvider, setActiveAIProvider] = useState<string>('gemini');
@@ -646,6 +649,15 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setIsDirSettingsOpen(true)}
+            className="px-3 py-1 border border-white/10 hover:border-cyan-400/40 bg-black/40 text-slate-300 hover:text-white rounded font-mono text-[11px] transition-all flex items-center gap-1.5 cursor-pointer"
+            title="Manage all folders the studio uses (Mod Workspace, X4 game path, schema)"
+          >
+            <SettingsGear className="w-3.5 h-3.5" />
+            SETTINGS
+          </button>
+
+          <button
             onClick={handleClearWorkspace}
             className="px-3 py-1 border border-red-500/10 hover:border-red-500/30 bg-red-500/5 text-red-400 rounded font-mono text-[11px] hover:bg-red-500/10 transition-all flex items-center gap-1 cursor-pointer"
             title="Clean workspace back to blank state"
@@ -799,6 +811,16 @@ export default function App() {
       <AIConnectionModal
         isOpen={isAIConfigOpen}
         onClose={() => setIsAIConfigOpen(false)}
+      />
+
+      {/* Directory Settings Modal — manages every folder the studio needs */}
+      <DirectorySettingsModal
+        isOpen={isDirSettingsOpen}
+        onClose={() => setIsDirSettingsOpen(false)}
+        dirHandle={dirHandle}
+        setDirHandle={setDirHandle}
+        dirName={dirName}
+        setDirName={setDirName}
       />
     </div>
   );

@@ -208,40 +208,14 @@ export default function DirectoryExplorer({dirHandle,
   setWorkspaceView,
   onOpenEditorFile}: DirectoryExplorerProps) {
   const [fileFilter, setFileFilter] = useState('');
-  const [fileTree, setFileTree] = useState<FSItem[]>(MOCK_FILESYSTEM_TREE);
-  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({
-    "res://addons": true,
-    "res://addons/world_generator_plugin": true,
-    "res://md": true,
-    "res://ui": true,
-    "res://aiscripts": true,
-    "res://t": true,
-    "res://libraries": true
-  });
+  const [fileTree, setFileTree] = useState<FSItem[]>([]);
+  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [activeFileHandle, setActiveFileHandle] = useState<any | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [syncOnEdits, setSyncOnEdits] = useState(true);
   const [isSandboxBlocked, setIsSandboxBlocked] = useState(false);
-
-  // Load preset workspace states into mocks so they are fully playable
-  useEffect(() => {
-    // Populate raw JSON workspace presets inside the mock configurations
-    const stored = localStorage.getItem('x4_mod_studio_workspace');
-    const escortMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'md')?.children?.find(c => c.name === 'Elite_Fighter_Escort.json');
-    const bountyMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'md')?.children?.find(c => c.name === 'Argon_Sector_Bounty.json');
-
-    if (escortMock) {
-      // Find Preset
-      const p = localStorage.getItem('x4_mod_studio_workspace_preset_escort') || JSON.stringify(workspace);
-      escortMock.content = p;
-    }
-    if (bountyMock) {
-      const p = localStorage.getItem('x4_mod_studio_workspace_preset_bounty') || JSON.stringify(workspace);
-      bountyMock.content = p;
-    }
-  }, []);
 
   // Sync state back to mock contents on edits if inside standard simulated mode
   useEffect(() => {
@@ -325,7 +299,7 @@ export default function DirectoryExplorer({dirHandle,
     if (dirHandle) {
       handleRefreshDirectory();
     } else {
-      setFileTree(MOCK_FILESYSTEM_TREE);
+      setFileTree([]);
     }
   }, [dirHandle, dirName]);
 
@@ -721,16 +695,11 @@ export default function DirectoryExplorer({dirHandle,
         {/* Current Folder Path breadcrumb */}
         <div className="flex items-center gap-1.5 bg-black/35 rounded-md p-1.5 border border-white/5">
           <span className="font-mono text-[10px] text-cyan-500 flex-shrink-0">
-            {dirHandle ? "ext://" : "res://"}
+            {dirHandle ? "ext://" : "—"}
           </span>
           <span className="font-mono text-[10px] font-bold text-slate-300 truncate tracking-wide flex-1">
-            {dirHandle ? `addons/${dirName}/` : "addons/world_generator_plugin/"}
+            {dirHandle ? `${dirName}/` : "No folder linked"}
           </span>
-          {!dirHandle && (
-            <span className="text-[8px] bg-amber-500/10 text-amber-500 px-1 rounded uppercase tracking-widest font-mono">
-              Demo
-            </span>
-          )}
         </div>
 
         {/* Target Local Directory Mount Trigger Button */}
@@ -769,26 +738,11 @@ export default function DirectoryExplorer({dirHandle,
 
       {/* Directory Tree Scroll List */}
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5 custom-scrollbar scrollbar-thin scrollbar-thumb-white/10 select-none bg-[#1b1e24]">
-        {/* Favorites shortcut header just like Godot */}
-        <div className="px-2 py-1 text-[10px] font-mono text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-          <span>★ Favorites:</span>
-        </div>
-        <div className="pb-2 border-b border-white/5 mb-2 ml-2">
-          <button 
-            disabled={!dirHandle}
-            className={`w-full text-left py-1.5 px-2 font-mono text-[11px] rounded transition-all flex items-center gap-1.5 ${
-              dirHandle ? 'text-amber-500 hover:bg-[#2d313d]' : 'text-slate-600 cursor-not-allowed'
-            }`}
-          >
-            📂 active_mod_workspace
-          </button>
-        </div>
-
         {/* Tree Render entry point */}
         <div className="space-y-1">
           {filteredTree.length === 0 ? (
-            <div className="text-center py-6 text-[10px] font-mono text-slate-500">
-              No files matched filters
+            <div className="text-center py-6 px-3 text-[10px] font-mono text-slate-500 leading-relaxed">
+              {dirHandle ? "No files matched filters" : "No folder linked. Use Settings → Directories to choose your Mod Workspace folder, then it will appear here."}
             </div>
           ) : (
             filteredTree.map(item => renderFSNode(item))
