@@ -535,7 +535,7 @@ export default function Sidebar({
         </div>
 
         {/* Main Content Pane */}
-        <div className={`flex-1 overflow-y-auto min-w-0 min-h-0 ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' ? 'p-0' : 'p-3 space-y-3'}`}>
+        <div className={`flex-1 overflow-y-auto min-w-0 min-h-0 ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' || activeTab === 'ai' ? 'p-0' : 'p-3 space-y-3'}`}>
         {activeTab === 'cues' && (
           <CueViewer
             workspace={workspace}
