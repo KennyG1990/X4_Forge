@@ -24,7 +24,10 @@ import {
   Scroll,
   Package,
   Globe,
-  BookOpen
+  BookOpen,
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -40,7 +43,7 @@ import XMLPatchSystem from './components/XMLPatchSystem';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
-import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace } from './types';
+import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
@@ -350,6 +353,19 @@ export default function App() {
   };
 
 
+  // MD Scripts Validation State calculations
+  const mdDiagnostics = React.useMemo(() => {
+    try {
+      const code = generateMDXML(workspace);
+      return validateModWorkspace(workspace, code);
+    } catch (e) {
+      return [{ severity: 'error', message: String(e), category: 'syntax' }];
+    }
+  }, [workspace]);
+
+  const mdErrorCount = mdDiagnostics.filter(d => d.severity === 'error').length;
+  const mdWarningCount = mdDiagnostics.filter(d => d.severity === 'warning').length;
+
   return (
     <div className="w-screen h-screen flex flex-col bg-[#0F1115] text-slate-300 font-sans">
       {/* Upper Technical Header */}
@@ -375,17 +391,60 @@ export default function App() {
 
         {/* View Selection Mode Tabs */}
         <div id="view_selection_modes" className="flex items-center gap-1 p-1 rounded-md bg-black/45 border border-white/10">
-          <button
-            onClick={() => { setWorkspaceView('blueprint'); setActiveSidebarTab('script'); }}
-            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              workspaceView === 'blueprint'
-                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
-                : 'text-slate-400 hover:text-white border border-transparent'
-            }`}
-          >
-            <GitFork className="w-3.5 h-3.5" />
-            MD Scripts
-          </button>
+          {(() => {
+            const isActive = workspaceView === 'blueprint';
+            let btnClass = '';
+            let tooltip = '';
+            let indicatorDot = null;
+            
+            if (mdErrorCount > 0) {
+              // Red for errors
+              btnClass = isActive
+                ? 'bg-red-500/15 text-red-400 border border-red-500/50 shadow-[0_0_8px_rgba(239,68,68,0.15)] hover:bg-red-500/25'
+                : 'bg-red-500/5 text-red-400/80 hover:text-red-300 border border-red-500/20 hover:border-red-500/40';
+              tooltip = `MD Scripts — ${mdErrorCount} validation error${mdErrorCount > 1 ? 's' : ''} detected! Click to view workspace flow errors.`;
+              indicatorDot = (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                </span>
+              );
+            } else if (mdWarningCount > 0) {
+              // Amber for warnings
+              btnClass = isActive
+                ? 'bg-amber-500/15 text-amber-400 border border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.1)] hover:bg-amber-500/25'
+                : 'bg-amber-500/5 text-amber-400/80 hover:text-amber-300 border border-amber-500/15 hover:border-amber-500/35';
+              tooltip = `MD Scripts — ${mdWarningCount} validation warning${mdWarningCount > 1 ? 's' : ''} active. Click to view rules advisory.`;
+              indicatorDot = (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                </span>
+              );
+            } else {
+              // Green for valid
+              btnClass = isActive
+                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.1)] hover:bg-emerald-500/25'
+                : 'text-slate-400 hover:text-emerald-400 border border-transparent hover:border-emerald-500/20';
+              tooltip = "MD Scripts — All flowchart script validation laws satisfied (valid).";
+              indicatorDot = (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+              );
+            }
+            
+            return (
+              <button
+                onClick={() => { setWorkspaceView('blueprint'); setActiveSidebarTab('script'); }}
+                className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-2 transition-all cursor-pointer ${btnClass}`}
+                title={tooltip}
+              >
+                <GitFork className="w-3.5 h-3.5" />
+                <span>MD Scripts</span>
+                {indicatorDot}
+              </button>
+            );
+          })()}
           
           <button
             onClick={() => { setWorkspaceView('aiscripts'); setActiveSidebarTab('script'); }}
