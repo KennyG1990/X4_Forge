@@ -4,12 +4,12 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Clipboard, 
-  Check, 
-  Download, 
-  Terminal, 
-  AlertTriangle, 
+import {
+  Clipboard,
+  Check,
+  Download,
+  Terminal,
+  AlertTriangle,
   CheckCircle,
   FileCode,
   FileJson,
@@ -24,10 +24,9 @@ import {
   Upload,
   Cpu,
   X,
-  PackageCheck,
-  Split
+  PackageCheck
 } from 'lucide-react';
-import { ModWorkspace, generateMDXML, generateUIXML, validateModWorkspace, XMLDiagnostic, MDNode, PackageDiagnostic } from '../types';
+import { ModWorkspace, generateMDXML, generateUIXML, validateModWorkspace, XMLDiagnostic, MDNode } from '../types';
 import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
 import { toSafeModId } from '../lib/modCompiler';
@@ -42,13 +41,6 @@ export interface EditorFile {
   isMock?: boolean;
 }
 
-export interface DiffLine {
-  type: 'added' | 'removed' | 'unchanged' | 'empty';
-  value: string;
-  originalLineNumber?: number;
-  modifiedLineNumber?: number;
-}
-
 interface CodePreviewProps {
   workspace: ModWorkspace;
   setWorkspace?: React.Dispatch<React.SetStateAction<ModWorkspace>>;
@@ -60,8 +52,6 @@ interface CodePreviewProps {
   compileStatus: 'idle' | 'compiling' | 'success' | 'error';
   compileMessage: string;
   handleCompileModProject: () => Promise<void>;
-  diagnostics: PackageDiagnostic[];
-  diagnosticSource: 'checking' | 'package' | 'local';
 }
 
 interface ScriptAnalysis {
@@ -104,24 +94,35 @@ interface LogAnalysisResult {
   issues: LogIssue[];
 }
 
-export default function CodePreview({ 
-  workspace, 
-  setWorkspace, 
-  saveCheckpoint, 
+type PackageDiagnostic = XMLDiagnostic & {
+  code?: string;
+  domain?: string;
+  filePath?: string;
+  sourceRef?: {
+    kind: string;
+    id?: string;
+    label?: string;
+  };
+};
+
+export default function CodePreview({
+  workspace,
+  setWorkspace,
+  saveCheckpoint,
   modWorkspacePath,
   activeEditorFile,
   setActiveEditorFile,
   selectedNode,
   compileStatus,
   compileMessage,
-  handleCompileModProject,
-  diagnostics,
-  diagnosticSource
+  handleCompileModProject
 }: CodePreviewProps) {
   const [codeActiveTab, setCodeActiveTab] = useState<'md' | 'ui' | 'node' | 'file'>('md');
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
   const [copied, setCopied] = useState<boolean>(false);
-  
+  const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
+  const [diagnosticSource, setDiagnosticSource] = useState<'package' | 'local' | 'checking'>('local');
+
   // Cognitive Analyzer states
   const [analysisResult, setAnalysisResult] = useState<ScriptAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState<boolean>(false);
@@ -137,43 +138,19 @@ export default function CodePreview({
   const [snapshots, setSnapshots] = useState<{ name: string; savedAt: string }[]>([]);
   const [showSnapshots, setShowSnapshots] = useState<boolean>(false);
   const [snapshotMsg, setSnapshotMsg] = useState<string>('');
-  
+
   const [logInput, setLogInput] = useState<string>('');
   const [diagnosingLogs, setDiagnosingLogs] = useState<boolean>(false);
   const [logAnalysis, setLogAnalysis] = useState<LogAnalysisResult | null>(null);
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [successfulFixApplied, setSuccessfulFixApplied] = useState<string | null>(null);
 
+
+
   // File Editor states
   const [editorContent, setEditorContent] = useState<string>('');
   const [editorSaveStatus, setEditorSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [editorError, setEditorError] = useState<string>('');
-
-  // ================================================================ 
-  // CUSTOM ANTI-GRAVITY IDE & DIFF PREVIEWER CONTEXTUAL VARIABLESS 
-  // ================================================================ 
-  interface Tab {
-    id: string; // 'md', 'ui', 'node', or filesystem file path
-    name: string;
-    type: 'md' | 'ui' | 'node' | 'file';
-    path?: string;
-  }
-
-  const [openTabs, setOpenTabs] = useState<Tab[]>([
-    { id: 'md', name: 'MD.xml', type: 'md' },
-    { id: 'ui', name: 'UI_LAYOUT.xml', type: 'ui' }
-  ]);
-  const [openFilesMap, setOpenFilesMap] = useState<Record<string, { name: string, path: string, content: string, originalContent: string }>>({});
-
-  const [diffEnabled, setDiffEnabled] = useState<boolean>(false);
-  const [diffMode, setDiffMode] = useState<'split' | 'unified'>('split');
-  const [diffBaseType, setDiffBaseType] = useState<'compile' | 'original'>('compile');
-
-  // Baseline copies for live modifications comparisons
-  const [initialMDCode, setInitialMDCode] = useState<string>('');
-  const [initialUICode, setInitialUICode] = useState<string>('');
-  const [originalMD, setOriginalMD] = useState<string>('');
-  const [originalUI, setOriginalUI] = useState<string>('');
 
   const mdCode = generateMDXML(workspace);
   const uiCode = generateUIXML(workspace);
@@ -225,7 +202,38 @@ export default function CodePreview({
   // Check if File System Access API is supported
   const isFileSystemAccessSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
+  // Run package-wide Mod Doctor diagnostics via the same API used by external agents.
+  useEffect(() => {
+    let cancelled = false;
+    const localReports = validateModWorkspace(workspace, mdCode);
+    setDiagnosticSource('checking');
 
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/agent/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace })
+        });
+        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[] }>(response, 'Package Mod Doctor check failed.');
+        if (!cancelled) {
+          setDiagnostics(data.diagnostics || []);
+          setDiagnosticSource('package');
+        }
+      } catch (err) {
+        console.warn('Package Mod Doctor unavailable; falling back to local MD diagnostics:', err);
+        if (!cancelled) {
+          setDiagnostics(localReports);
+          setDiagnosticSource('local');
+        }
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [workspaceSerialized, mdCode]);
 
   // Handle automatic synchronization to folder on workspace edits
   useEffect(() => {
@@ -234,49 +242,10 @@ export default function CodePreview({
     }
   }, [workspaceSerialized, autoSaveEnabled, modWorkspacePath]);
 
-  // Synchronise base template references initially or on compile
-  useEffect(() => {
-    if (!initialMDCode && mdCode) {
-      setInitialMDCode(mdCode);
-    }
-    if (!initialUICode && uiCode) {
-      setInitialUICode(uiCode);
-    }
-    if (!originalMD && mdCode) {
-      setOriginalMD(mdCode);
-    }
-    if (!originalUI && uiCode) {
-      setOriginalUI(uiCode);
-    }
-  }, [mdCode, uiCode]);
-
-  // Synchronise files selected in the project sidebar
   useEffect(() => {
     if (activeEditorFile) {
-      // Ensure tab exists
-      setOpenTabs(prev => {
-        if (prev.some(t => t.id === activeEditorFile.path)) {
-          return prev;
-        }
-        return [...prev, { id: activeEditorFile.path, name: activeEditorFile.name, path: activeEditorFile.path, type: 'file' as const }];
-      });
-      // Ensure file exists in cache
-      setOpenFilesMap(prev => {
-        if (prev[activeEditorFile.path]) {
-          return prev;
-        }
-        return {
-          ...prev,
-          [activeEditorFile.path]: {
-            name: activeEditorFile.name,
-            path: activeEditorFile.path,
-            content: activeEditorFile.content,
-            originalContent: activeEditorFile.content
-          }
-        };
-      });
-      setCodeActiveTab('file');
       setEditorContent(activeEditorFile.content);
+      setCodeActiveTab('file');
       setEditorSaveStatus('idle');
       setEditorError('');
     }
@@ -296,18 +265,6 @@ export default function CodePreview({
       });
       if (response.ok) {
         activeEditorFile.content = editorContent;
-        // Update cache originalContents to clear modified indicator bullet (•)
-        setOpenFilesMap(prev => {
-          if (!prev[activeEditorFile.path]) return prev;
-          return {
-            ...prev,
-            [activeEditorFile.path]: {
-              ...prev[activeEditorFile.path],
-              content: editorContent,
-              originalContent: editorContent
-            }
-          };
-        });
         setEditorSaveStatus('saved');
         setTimeout(() => setEditorSaveStatus('idle'), 2000);
       } else {
@@ -322,66 +279,6 @@ export default function CodePreview({
 
   const handleEditorContentChange = (val: string) => {
     setEditorContent(val);
-    if (activeEditorFile) {
-      setOpenFilesMap(prev => {
-        if (!prev[activeEditorFile.path]) return prev;
-        return {
-          ...prev,
-          [activeEditorFile.path]: {
-            ...prev[activeEditorFile.path],
-            content: val
-          }
-        };
-      });
-    }
-  };
-
-  const handleSelectTab = (tab: Tab) => {
-    if (tab.type === 'md') {
-      setCodeActiveTab('md');
-      setActiveEditorFile(null);
-    } else if (tab.type === 'ui') {
-      setCodeActiveTab('ui');
-      setActiveEditorFile(null);
-    } else if (tab.type === 'node') {
-      setCodeActiveTab('node');
-    } else if (tab.type === 'file' && tab.path) {
-      const fileData = openFilesMap[tab.id];
-      if (fileData) {
-        setActiveEditorFile({
-          name: fileData.name,
-          path: fileData.path,
-          content: fileData.content
-        });
-        setCodeActiveTab('file');
-        setEditorContent(fileData.content);
-      }
-    }
-  };
-
-  const handleCloseTab = (tabId: string) => {
-    setOpenTabs(prev => {
-      const filtered = prev.filter(t => t.id !== tabId);
-      // If closing the active tab, fallback to another active or default md
-      const isClosingActiveFile = codeActiveTab === 'file' && activeEditorFile?.path === tabId;
-      if (isClosingActiveFile) {
-        const remainingFiles = filtered.filter(t => t.type === 'file');
-        if (remainingFiles.length > 0) {
-          const nextFile = remainingFiles[remainingFiles.length - 1];
-          setTimeout(() => handleSelectTab(nextFile), 0);
-        } else {
-          setCodeActiveTab('md');
-          setActiveEditorFile(null);
-        }
-      }
-      return filtered;
-    });
-
-    setOpenFilesMap(prev => {
-      const copy = { ...prev };
-      delete copy[tabId];
-      return copy;
-    });
   };
 
   const copyToClipboard = () => {
@@ -395,107 +292,15 @@ export default function CodePreview({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = codeActiveTab === 'md' 
-      ? `${workspace.name || 'custom_md_script'}.xml` 
+    link.download = codeActiveTab === 'md'
+      ? `${workspace.name || 'custom_md_script'}.xml`
       : codeActiveTab === 'ui'
-      ? `${workspace.name || 'custom_menu_layout'}_ui.xml`
-      : activeEditorFile?.name || 'edited_file.xml';
+        ? `${workspace.name || 'custom_menu_layout'}_ui.xml`
+        : activeEditorFile?.name || 'edited_file.xml';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  };
-
-  // Memory-leak-safe, super-fast line block aligner for side-by-side IDE visual comparisons
-  const computeLineDiff = (oldLines: string[], newLines: string[]): { 
-    originalLines: DiffLine[]; 
-    modifiedLines: DiffLine[]; 
-    unifiedLines: DiffLine[]; 
-  } => {
-    // If either is too large, use a fast simple line matching or simple slider to protect resources
-    if (oldLines.length > 2500 || newLines.length > 2500) {
-      const originalLines: DiffLine[] = oldLines.map((l, idx) => ({ type: 'removed', value: l, originalLineNumber: idx + 1 }));
-      const modifiedLines: DiffLine[] = newLines.map((l, idx) => ({ type: 'added', value: l, modifiedLineNumber: idx + 1 }));
-      const unifiedLines: DiffLine[] = [
-        ...oldLines.map((l, idx) => ({ type: 'removed' as const, value: l, originalLineNumber: idx + 1 })),
-        ...newLines.map((l, idx) => ({ type: 'added' as const, value: l, modifiedLineNumber: idx + 1 }))
-      ];
-      return { originalLines, modifiedLines, unifiedLines };
-    }
-
-    const m = oldLines.length;
-    const n = newLines.length;
-    const dp: number[][] = [];
-    for (let i = 0; i <= m; i++) {
-      dp[i] = new Array(n + 1).fill(0);
-    }
-
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        if (oldLines[i - 1] === newLines[j - 1]) {
-          dp[i][j] = dp[i - 1][j - 1] + 1;
-        } else {
-          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-        }
-      }
-    }
-
-    let i = m;
-    let j = n;
-    
-    const revOriginal: DiffLine[] = [];
-    const revModified: DiffLine[] = [];
-    const revUnified: DiffLine[] = [];
-
-    while (i > 0 || j > 0) {
-      if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-        const lineVal = oldLines[i - 1];
-        revOriginal.push({ type: 'unchanged', value: lineVal, originalLineNumber: i, modifiedLineNumber: j });
-        revModified.push({ type: 'unchanged', value: lineVal, originalLineNumber: i, modifiedLineNumber: j });
-        revUnified.push({ type: 'unchanged', value: lineVal, originalLineNumber: i, modifiedLineNumber: j });
-        i--;
-        j--;
-      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-        revOriginal.push({ type: 'empty', value: '', modifiedLineNumber: j });
-        revModified.push({ type: 'added', value: newLines[j - 1], modifiedLineNumber: j });
-        revUnified.push({ type: 'added', value: newLines[j - 1], modifiedLineNumber: j });
-        j--;
-      } else {
-        revOriginal.push({ type: 'removed', value: oldLines[i - 1], originalLineNumber: i });
-        revModified.push({ type: 'empty', value: '', originalLineNumber: i });
-        revUnified.push({ type: 'removed', value: oldLines[i - 1], originalLineNumber: i });
-        i--;
-      }
-    }
-
-    return {
-      originalLines: revOriginal.reverse(),
-      modifiedLines: revModified.reverse(),
-      unifiedLines: revUnified.reverse()
-    };
-  };
-
-  const getDiffTexts = (): { original: string, current: string } => {
-    let original = '';
-    let current = '';
-
-    if (codeActiveTab === 'md') {
-      original = diffBaseType === 'compile' ? (originalMD || mdCode) : (initialMDCode || mdCode);
-      current = mdCode;
-    } else if (codeActiveTab === 'ui') {
-      original = diffBaseType === 'compile' ? (originalUI || uiCode) : (initialUICode || uiCode);
-      current = uiCode;
-    } else if (codeActiveTab === 'node') {
-      current = selectedNode ? generateNodeXMLPreview(selectedNode) : '';
-      original = ''; 
-    } else if (codeActiveTab === 'file') {
-      current = editorContent;
-      if (activeEditorFile) {
-        original = openFilesMap[activeEditorFile.path]?.originalContent || activeEditorFile.content;
-      }
-    }
-
-    return { original, current };
   };
 
   const triggerAnalysis = async () => {
@@ -617,7 +422,7 @@ export default function CodePreview({
 
   const handleApplyAutoFix = (fix: any) => {
     if (!setWorkspace || !saveCheckpoint) {
-      console.warn("Auto-fix not supported in this frame state.");
+      console.warn("Auto-fix not  supported in this frame state.");
       return;
     }
 
@@ -696,11 +501,9 @@ export default function CodePreview({
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      // Color attributes FIRST (on the escaped text) so the tag/comment passes below
-      // don't re-match the class="..." attributes of the <span>s we inject here.
-      .replace(/([a-zA-Z0-9_:-]+)=(&quot;|")([^"&]*)(&quot;|")/g, '<span class="text-purple-400">$1</span>=<span class="text-emerald-300">$2$3$4</span>')
       .replace(/(&lt;\/?[a-zA-Z0-9_:-]+)(\s|&gt;)/g, '<span class="text-cyan-400 font-semibold">$1</span>$2')
-      .replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="text-slate-500 font-mono italic">$1</span>');
+      .replace(/([a-zA-Z0-9_:-]+)="([^"]*)"/g, '<span class="text-purple-400">$1</span>=<span class="text-emerald-300">"$2"</span>')
+      .replace(/(&lt;!--.*?--&gt;)/g, '<span class="text-slate-500 font-mono italic">$1</span>');
   };
 
   // Pick a searchable token for a diagnostic so we can locate its line in the generated code.
@@ -732,6 +535,7 @@ export default function CodePreview({
     return map;
   };
 
+  // Send the current diagnostics + generated XML to the AI assistant (opens the chat drawer pre-filled).
   const sendDiagnosticsToAI = () => {
     if (diagnostics.length === 0) return;
     const list = diagnostics.map((d, i) =>
@@ -739,11 +543,10 @@ export default function CodePreview({
       (d.filePath ? ` (file: ${d.filePath})` : '') +
       (d.sourceRef ? ` (source: ${d.sourceRef.kind}${d.sourceRef.label ? '/' + d.sourceRef.label : ''})` : '')
     ).join('\n');
-    const label = codeActiveTab === 'ui' ? 'UI layout' : codeActiveTab === 'file' ? activeEditorFile?.name || 'active file' : 'Mission Director';
-    const prompt = `My X4 Foundations mod "${workspace.name || 'mod'}" has these Mod Doctor validation issues:\n\n${list}\n\nHere is the generated ${label} XML/code:\n\`\`\`xml\n${currentCode}\n\`\`\`\n\nFor each issue, explain plainly what's wrong and exactly how to fix it. Point to the node, property, file, or value that should change. Keep it concise.`;
+    const label = codeActiveTab === 'ui' ? 'UI layout' : 'Mission Director';
+    const prompt = `My X4 Foundations mod "${workspace.name || 'mod'}" has these Mod Doctor validation issues:\n\n${list}\n\nHere is the generated ${label} XML:\n\`\`\`xml\n${currentCode}\n\`\`\`\n\nFor each issue, explain plainly what's wrong and exactly how to fix it (which node, property, or value to change). Keep it concise.`;
     window.dispatchEvent(new CustomEvent('open-ai-chat', { detail: { prompt } }));
   };
-
 
   const highlightCode = (rawText: string) => {
     const ext = activeEditorFile?.name.split('.').pop()?.toLowerCase();
@@ -759,556 +562,254 @@ export default function CodePreview({
     return highlightXML(rawText);
   };
 
-  const renderMinimap = (lines: { type?: string; value: string }[]) => {
-    return (
-      <div className="w-10 shrink-0 border-l border-white/5 bg-[#08090d] select-none overflow-hidden flex flex-col justify-start relative pointer-events-none pr-0.5">
-        <div className="absolute inset-0 flex flex-col py-2 pointer-events-none overflow-hidden scale-y-95 opacity-80 select-none">
-          {lines.slice(0, 160).map((line, idx) => {
-            const isAdded = line.type === 'added';
-            const isRemoved = line.type === 'removed';
-            
-            let trackColor = 'bg-slate-700/25';
-            if (isAdded) {
-              trackColor = 'bg-[#10b981]/45';
-            } else if (isRemoved) {
-              trackColor = 'bg-[#ef4444]/45';
-            } else {
-              const val = line.value.trim();
-              if (val.startsWith('<cue') || val.startsWith('</cue')) {
-                trackColor = 'bg-amber-400/45';
-              } else if (val.startsWith('<event') || val.startsWith('<action')) {
-                trackColor = 'bg-cyan-400/40';
-              } else if (val.startsWith('<')) {
-                trackColor = 'bg-purple-400/30';
-              } else if (val.length > 0) {
-                trackColor = 'bg-slate-650/15';
-              }
-            }
-
-            const spaceCount = line.value.length - line.value.trimStart().length;
-            const indent = Math.min(spaceCount * 0.8, 12);
-
-            return (
-              <div key={idx} className="flex h-[2px] items-center my-[0.8px]" style={{ paddingLeft: `${indent}px` }}>
-                <div className={`h-[1px] rounded ${trackColor}`} style={{ width: `${Math.max(4, Math.min(22, line.value.trim().length / 2))}px` }} />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
-  const codeLines = currentCode.split('\n');
-  const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);
+  // Derived render state (restored after a file truncation removed these declarations).
   const errors = diagnostics.filter(d => d.severity === 'error');
   const warnings = diagnostics.filter(d => d.severity === 'warning');
+  const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
 
   return (
-    <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#050608] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
+    <div className="flex flex-col h-full min-h-0">
       {/* ================================================================ */}
-      {/* WINDOW TITLE BAR HEADER (ANALYTIC & PRECISE)                     */}
+      {/* SECTION 1: COMPILED XML FILE VIEWER                             */}
       {/* ================================================================ */}
-      <div className="bg-[#090b10] border-b border-black py-2 px-4 flex items-center justify-between shrink-0 select-none">
-        <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#27c93f]" />
-        </div>
-        <div className="text-[10px] font-mono text-slate-400 font-semibold tracking-wider uppercase truncate max-w-[65%]">
-          {workspace.name ? workspace.name.replace(/_/g, '-') : 'X4-MOD-STUDIO'} - Antigravity IDE - {
-            codeActiveTab === 'md' ? 'MD.xml' :
-            codeActiveTab === 'ui' ? 'UI_LAYOUT.xml' :
-            codeActiveTab === 'node' ? `NODE-${selectedNode?.xmlTag || 'PREVIEW'}.XML` :
-            activeEditorFile ? activeEditorFile.name : 'CODEPREVIEW.TSX'
-          }{
-            (codeActiveTab === 'file' && activeEditorFile && openFilesMap[activeEditorFile.path]?.content !== openFilesMap[activeEditorFile.path]?.originalContent) ? ' •' : ''
-          }
-        </div>
-        <div className="text-[9px] font-mono text-cyan-500/80 font-black uppercase tracking-widest pl-2.5 border-l border-white/5 bg-cyan-950/20 px-2 py-0.5 rounded">
-          X4-MDR
-        </div>
-      </div>
-
-      {/* ================================================================ */}
-      {/* IDE TABS SELECTION ROW                                           */}
-      {/* ================================================================ */}
-      <div className="bg-[#0c0e14] border-b border-white/5 select-none shrink-0 flex items-center justify-between pl-1">
-        <div className="flex items-center divide-x divide-white/5 overflow-x-auto scrollbar-none flex-1">
-          {openTabs.map(tab => {
-            const isActive = 
-              (tab.id === 'md' && codeActiveTab === 'md') ||
-              (tab.id === 'ui' && codeActiveTab === 'ui') ||
-              (tab.id === 'node' && codeActiveTab === 'node') ||
-              (tab.type === 'file' && codeActiveTab === 'file' && activeEditorFile?.path === tab.id);
-
-            const isUnsaved = tab.type === 'file' && openFilesMap[tab.id] 
-              ? openFilesMap[tab.id].content !== openFilesMap[tab.id].originalContent 
-              : false;
-
-            return (
-              <div
-                key={tab.id}
-                className={`flex items-center h-9 px-3.5 border-r border-[#151722] font-mono cursor-pointer transition-all shrink-0 select-none relative group ${
-                  isActive 
-                    ? 'bg-[#181d2a] text-[#5fc3e4] border-t-2 border-cyan-400 font-bold'
-                    : 'bg-[#0a0c10]/50 text-slate-500 hover:bg-[#131720]/80 hover:text-slate-300'
-                }`}
-                onClick={() => handleSelectTab(tab)}
+      <div className="flex-[6] flex flex-col min-h-0 border-b border-white/10 overflow-hidden">
+        {/* Upper Code Tab Option Bar */}
+        <div className="flex border-b border-white/5 bg-black/45 justify-between items-center px-3.5 py-2 shrink-0 select-none">
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+            {selectedNode && (
+              <button
+                onClick={() => setCodeActiveTab('node')}
+                className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer max-w-[220px] ${codeActiveTab === 'node'
+                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/35'
+                  : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                  }`}
+                title={`Selected canvas node: ${selectedNode.id}`}
               >
-                <span className="mr-2 select-none">
-                  {tab.type === 'md' && <FileCode className="w-3.5 h-3.5 text-cyan-400" />}
-                  {tab.type === 'ui' && <FileJson className="w-3.5 h-[#fc5dbb]" />}
-                  {tab.type === 'node' && <Terminal className="w-3.5 h-3.5 text-amber-400" />}
-                  {tab.type === 'file' && (
-                    tab.name.endsWith('.json') ? <FileJson className="w-3.5 h-3.5 text-emerald-400" /> :
-                    tab.name.endsWith('.tsx') || tab.name.endsWith('.ts') ? <span className="text-[#3178c6] text-[10px] font-black shrink-0 select-none">TS</span> :
-                    <FileCode className="w-3.5 h-3.5 text-blue-400" />
-                  )}
-                </span>
-
-                <span className="text-[10px] tracking-tight">{tab.name}</span>
-
-                {tab.type === 'file' && (
-                  <button
-                    type="button"
-                    className="ml-2 p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-white transition-all cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleCloseTab(tab.id);
-                    }}
-                  >
-                    {isUnsaved ? (
-                      <span className="block w-1.5 h-1.5 rounded-full bg-amber-400 group-hover:hidden" />
-                    ) : null}
-                    <X className={`w-3 h-3 ${isUnsaved ? 'hidden group-hover:block animate-pulse' : 'opacity-40 group-hover:opacity-100'}`} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* IDE Action Control Widgets */}
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-black/25 shrink-0 select-none border-l border-white/5">
-          {/* Diff Power Switch */}
-          <button
-            onClick={() => setDiffEnabled(!diffEnabled)}
-            className={`px-2.5 py-1 rounded text-[9px] font-mono font-bold tracking-tight uppercase transition-all flex items-center gap-1 cursor-pointer border ${
-              diffEnabled
-                ? 'bg-amber-500/10 text-amber-400 border-amber-500/40'
-                : 'bg-slate-900/60 text-slate-500 border-white/5 hover:text-slate-300 hover:bg-slate-800'
-            }`}
-            title="Toggle Git-spec Diff Viewer"
-          >
-            <Sparkles className="w-3 h-3 shrink-0" />
-            DIFF: {diffEnabled ? 'ON' : 'OFF'}
-          </button>
-
-          {diffEnabled && (
+                <Terminal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="truncate">NODE: {selectedNode.xmlTag}</span>
+              </button>
+            )}
+            {activeEditorFile && (
+              <button
+                onClick={() => setCodeActiveTab('file')}
+                className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer max-w-[220px] ${codeActiveTab === 'file'
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/35'
+                  : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                  }`}
+                title={activeEditorFile.path}
+              >
+                <FileCode className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate">{activeEditorFile.name}</span>
+              </button>
+            )}
             <button
-              onClick={() => setDiffMode(diffMode === 'split' ? 'unified' : 'split')}
-              className="px-2 py-1 rounded bg-[#0f1118] hover:bg-slate-800 text-slate-400 hover:text-cyan-400 transition-all font-mono text-[9px] border border-white/5 flex items-center gap-1 cursor-pointer"
-              title={`Switch Diff Mode (current: ${diffMode})`}
+              onClick={() => setCodeActiveTab('md')}
+              className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${codeActiveTab === 'md'
+                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                }`}
             >
-              <Split className="w-3 h-3" />
-              {diffMode === 'split' ? 'SPLIT' : 'UNIFIED'}
+              <FileCode className="w-3.5 h-3.5 text-cyan-400" />
+              MD.xml
             </button>
-          )}
+            <button
+              onClick={() => setCodeActiveTab('ui')}
+              className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${codeActiveTab === 'ui'
+                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                }`}
+            >
+              <FileJson className="w-3.5 h-3.5 text-cyan-400" />
+              UI_LAYOUT.xml
+            </button>
+          </div>
 
-          <span className="w-[1px] h-4 bg-white/5 mx-0.5" />
-
-          {/* Standard triggers */}
-          <button
-            onClick={onCompileModProject}
-            disabled={compileStatus === 'compiling'}
-            className="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/35 rounded text-emerald-400 hover:text-white transition-all font-mono text-[9px] flex items-center gap-1 cursor-pointer disabled:opacity-50 font-bold"
-            title="Compile whole workspace"
-          >
-            <PackageCheck className="w-3 h-3 animate-pulse" />
-            COMPILE
-          </button>
-
-          <button
-            onClick={copyToClipboard}
-            className="px-2 py-1 bg-slate-900 border border-white/10 rounded text-[#cbd5e1]/70 hover:text-cyan-400 transition-all font-mono text-[9px] flex items-center gap-1 hover:bg-slate-800 cursor-pointer"
-            title="Copy active code"
-          >
-            {copied ? <Check className="w-3 h-3 text-emerald-400 animate-bounce" /> : <Clipboard className="w-3 h-3" />}
-            COPY
-          </button>
-
-          <button
-            onClick={downloadFile}
-            className="px-2 py-1 bg-cyan-500/10 border border-cyan-500/30 rounded text-cyan-400 hover:text-white transition-all font-mono text-[9px] flex items-center gap-1 hover:bg-cyan-500/25 cursor-pointer"
-            title="Download active file"
-          >
-            <Download className="w-3 h-3" />
-            DL
-          </button>
-        </div>
-      </div>
-
-      {/* ================================================================ */}
-      {/* BREADCRUMB PATHBAR ROW                                           */}
-      {/* ================================================================ */}
-      <div className="bg-[#10121a] py-1 px-4 text-[9px] text-slate-500 font-mono border-b border-white/5 flex items-center justify-between select-none shrink-0">
-        <div className="flex items-center gap-1 truncate max-w-[65%]">
-          <Folder className="w-3.5 h-3.5 text-cyan-500/80 shrink-0" />
-          <span className="text-slate-600 hover:text-slate-400 transition-colors uppercase">workspace</span>
-          <span className="text-slate-700">&gt;</span>
-          {codeActiveTab === 'md' && (
-            <>
-              <span className="text-slate-600 uppercase">md</span>
-              <span className="text-slate-700">&gt;</span>
-              <span className="text-slate-400 italic font-mono lowercase truncate">{workspace.name || 'mod'}.xml</span>
-            </>
-          )}
-          {codeActiveTab === 'ui' && (
-            <>
-              <span className="text-slate-600 uppercase">ui</span>
-              <span className="text-slate-700">&gt;</span>
-              <span className="text-slate-400 italic font-mono lowercase">ui_layout.xml</span>
-            </>
-          )}
-          {codeActiveTab === 'node' && (
-            <>
-              <span className="text-slate-600 uppercase">canvas</span>
-              <span className="text-slate-700">&gt;</span>
-              <span className="text-amber-400 font-semibold">{selectedNode?.xmlTag}</span>
-            </>
-          )}
-          {codeActiveTab === 'file' && activeEditorFile && (
-            <span className="truncate flex items-center gap-1">
-              {activeEditorFile.path.split('/').map((seg, idx, arr) => (
-                <React.Fragment key={seg}>
-                  <span className={idx === arr.length - 1 ? 'text-slate-300 font-medium' : 'text-slate-600'}>
-                    {seg}
-                  </span>
-                  {idx < arr.length - 1 && <span className="text-slate-750 inline">&gt;</span>}
-                </React.Fragment>
-              ))}
-            </span>
-          )}
+          {/* Code Utility triggers */}
+          <div id="code_actions" className="flex items-center gap-1.5 shrink-0">
+            {isFileEditorActive && (
+              <>
+                <button
+                  onClick={saveActiveEditorFile}
+                  disabled={editorSaveStatus === 'saving'}
+                  className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded font-mono text-[9px] text-emerald-400 hover:text-white flex items-center gap-1 hover:bg-emerald-500/20 transition-all active:scale-[0.98] cursor-pointer disabled:opacity-50"
+                  title="Save active filesystem file"
+                >
+                  <Save className={`w-3 h-3 ${editorSaveStatus === 'saving' ? 'animate-pulse' : ''}`} />
+                  {editorSaveStatus === 'saved' ? 'SAVED' : 'SAVE'}
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveEditorFile(null);
+                    setCodeActiveTab('md');
+                  }}
+                  className="px-2 py-1 bg-slate-900 border border-white/10 rounded font-mono text-[9px] text-slate-400 hover:text-red-300 flex items-center gap-1 hover:bg-red-500/10 transition-all cursor-pointer"
+                  title="Close active file editor"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </>
+            )}
+            <button
+              onClick={onCompileModProject}
+              disabled={compileStatus === 'compiling'}
+              className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/35 rounded font-mono text-[9px] text-emerald-400 hover:text-white flex items-center gap-1 hover:bg-emerald-500/20 transition-all active:scale-[0.98] cursor-pointer disabled:opacity-50"
+              title="Compile this workspace into a complete X4 extension folder"
+            >
+              <PackageCheck className={`w-3 h-3 ${compileStatus === 'compiling' ? 'animate-pulse' : ''}`} />
+              COMPILE
+            </button>
+            <button
+              onClick={copyToClipboard}
+              className="px-2.5 py-1 bg-slate-900 border border-white/10 rounded font-mono text-[9px] text-slate-300 hover:text-cyan-400 flex items-center gap-1 hover:bg-slate-800 transition-all active:scale-[0.98] cursor-pointer"
+              title="Copy compiled raw XML file to clipboard"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                  COPIED
+                </>
+              ) : (
+                <>
+                  <Clipboard className="w-3 h-3" />
+                  COPY
+                </>
+              )}
+            </button>
+            <button
+              onClick={downloadFile}
+              className="px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/30 rounded font-mono text-[9px] text-cyan-400 hover:text-white flex items-center gap-1 hover:bg-cyan-500/25 transition-all active:scale-[0.98] cursor-pointer"
+              title="Download compiled XML element"
+            >
+              <Download className="w-3 h-3" />
+              DL
+            </button>
+          </div>
         </div>
 
-        {/* Diagnostic reference selections */}
-        <div className="flex items-center gap-3 font-mono">
-          {diffEnabled && (
-            <div className="flex items-center gap-1.5 border-r border-[#1a1c29] pr-3 select-none">
-              <span className="text-slate-600 uppercase text-[8px] font-extrabold tracking-wider">diff reference:</span>
-              <select
-                value={diffBaseType}
-                onChange={(e) => setDiffBaseType(e.target.value as 'compile' | 'original')}
-                className="bg-[#0c0d12] border border-white/10 text-[9px] text-[#cbd5e1]/70 rounded px-1.5 py-0.5 outline-none font-mono focus:border-cyan-500/50 cursor-pointer text-slate-300"
-              >
-                <option value="compile">Last Compiled Build</option>
-                <option value="original">Initial Loaded Template</option>
-              </select>
-            </div>
-          )}
-
-          <span>UTF-8</span>
-          <span className="text-slate-750 font-black select-none">•</span>
-          <span>
-            {codeActiveTab === 'file' && activeEditorFile?.name.endsWith('.json') ? 'JSON' : 'XML / STRUCT'}
-          </span>
-          <span className="text-slate-755 font-black select-none">•</span>
-          <span>
-            {diffEnabled ? 'DIFF_ACTIVE' : `LINES: ${codeLines.length}`}
-          </span>
-        </div>
-      </div>
-
-      {/* ================================================================ */}
-      {/* VIEWPANE STAGE (DIFF MODE OR NORMAL CODE EDITOR)                  */}
-      {/* ================================================================ */}
-      <div id="xml_code_viewport" className="flex-1 flex min-h-0 relative select-text overflow-hidden">
-        {diffEnabled ? (
-          diffMode === 'split' ? (
-            // ==================== SIDE-BY-SIDE DIFF MODE ====================
-            <div className="flex-1 flex overflow-hidden min-h-0 bg-[#050608]">
-              {/* Sync viewport inside a single vertical scrollbar space */}
-              <div className="flex-1 overflow-auto scrollbar-thin flex min-h-0 select-text">
-                <div className="flex flex-grow min-w-[750px] divide-x divide-white/5">
-                  
-                  {/* Left Lane: Reference Source */}
-                  <div className="flex-1 bg-[#050608]/98 select-text">
-                    <div className="sticky top-0 z-10 bg-[#11131a] border-b border-white/5 py-1.5 px-3.5 font-mono text-[9px] text-[#ef4444] font-bold flex items-center justify-between select-none">
-                      <span>ORIGINAL REFERENCE</span>
-                      <span className="text-[7.5px] bg-red-950/40 px-1.5 py-0.5 rounded border border-red-500/20 uppercase tracking-widest">BASELINE</span>
-                    </div>
-                    <div className="py-2.5 text-xs font-mono leading-relaxed">
-                      {computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).originalLines.map((line, i) => {
-                        const isRemoved = line.type === 'removed';
-                        const isEmpty = line.type === 'empty';
-                        
-                        let lineBg = 'hover:bg-white/[0.01]';
-                        let textColor = 'text-slate-500';
-                        if (isRemoved) {
-                          lineBg = 'bg-[#ef4444]/10 border-l-2 border-[#ef4444]';
-                          textColor = 'text-red-300';
-                        } else if (isEmpty) {
-                          lineBg = 'bg-[#151720]/15 text-transparent opacity-5 select-none pointer-events-none';
-                        }
-
-                        return (
-                          <div key={i} className={`flex h-[18px] items-center ${lineBg}`}>
-                            <span className="select-none text-right pr-2.5 pl-2 w-10 shrink-0 text-slate-650 text-[9.5px]">
-                              {line.originalLineNumber || ''}
-                            </span>
-                            <span className="select-none w-4 text-center shrink-0 pr-1 text-[#ef4444] text-[9.5px] font-black">
-                              {isRemoved ? '-' : ''}
-                            </span>
-                            <span
-                              className={`flex-1 whitespace-pre pr-4 truncate ${textColor}`}
-                              dangerouslySetInnerHTML={!isEmpty ? { __html: highlightXML(line.value) || '&nbsp;' } : undefined}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Right Lane: Edited Working Document */}
-                  <div className="flex-1 bg-[#050608]/98 select-text">
-                    <div className="sticky top-0 z-10 bg-[#11131a] border-b border-white/5 py-1.5 px-3.5 font-mono text-[9px] text-[#22c55e] font-bold flex items-center justify-between select-none">
-                      <span>EDITED WORKING STATE</span>
-                      <span className="text-[7.5px] bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-500/20 uppercase tracking-widest">EDITED</span>
-                    </div>
-                    <div className="py-2.5 text-xs font-mono leading-relaxed">
-                      {computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).modifiedLines.map((line, i) => {
-                        const isAdded = line.type === 'added';
-                        const isEmpty = line.type === 'empty';
-                        
-                        let lineBg = 'hover:bg-white/[0.01]';
-                        let textColor = 'text-[#cbd5e1]/70';
-                        if (isAdded) {
-                          lineBg = 'bg-[#22c55e]/10 border-l-2 border-[#22c55e]';
-                          textColor = 'text-emerald-300';
-                        } else if (isEmpty) {
-                          lineBg = 'bg-[#151720]/15 text-transparent opacity-5 select-none pointer-events-none';
-                        }
-
-                        return (
-                          <div key={i} className={`flex h-[18px] items-center ${lineBg}`}>
-                            <span className="select-none text-right pr-2.5 pl-2 w-10 shrink-0 text-slate-650 text-[9.5px]">
-                              {line.modifiedLineNumber || ''}
-                            </span>
-                            <span className="select-none w-4 text-center shrink-0 pr-1 text-[#22c55e] text-[9.5px] font-black">
-                              {isAdded ? '+' : ''}
-                            </span>
-                            <span
-                              className={`flex-1 whitespace-pre pr-4 truncate ${textColor}`}
-                              dangerouslySetInnerHTML={!isEmpty ? { __html: highlightCode(line.value) || '&nbsp;' } : undefined}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                </div>
+        {/* XML preview raw contents display */}
+        <div id="xml_code_viewport" className="flex-1 overflow-hidden font-mono text-[11px] leading-relaxed bg-[#050608]/95 relative select-text min-h-0 scrollbar-thin">
+          {isFileEditorActive ? (
+            <div className="relative h-full w-full overflow-auto">
+              <pre
+                aria-hidden="true"
+                className="absolute inset-0 p-4 whitespace-pre min-w-full min-h-full pointer-events-none font-mono leading-relaxed"
+                dangerouslySetInnerHTML={{ __html: highlightCode(editorContent) + '\n' }}
+              />
+              <textarea
+                value={editorContent}
+                onChange={e => handleEditorContentChange(e.target.value)}
+                spellCheck={false}
+                className="absolute inset-0 w-full h-full resize-none p-4 bg-transparent text-transparent caret-cyan-300 selection:bg-cyan-500/30 outline-none font-mono leading-relaxed whitespace-pre overflow-auto"
+                aria-label={`Editing ${activeEditorFile.name}`}
+              />
+              <div className="absolute bottom-2 right-3 px-2 py-1 rounded bg-black/75 border border-white/10 text-[9px] text-slate-400 pointer-events-none">
+                {editorSaveStatus === 'error' ? editorError : activeEditorFile.path}
               </div>
-
-              {/* Synchronous Minimap */}
-              {renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).modifiedLines)}
             </div>
           ) : (
-            // ==================== UNIFIED STACKED DIFF MODE ====================
-            <div className="flex-1 flex overflow-hidden min-h-0 bg-[#050608]">
-              <div className="flex-1 overflow-auto scrollbar-thin py-2 select-text">
-                {computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).unifiedLines.map((line, i) => {
-                  const isAdded = line.type === 'added';
-                  const isRemoved = line.type === 'removed';
-                  
-                  let lineBg = 'hover:bg-white/[0.01] border-l-2 border-transparent';
-                  let textColor = 'text-slate-400';
-                  let symbol = ' ';
-                  let numText = '';
-
-                  if (isAdded) {
-                    lineBg = 'bg-[#22c55e]/10 border-l-2 border-[#22c55e]';
-                    textColor = 'text-emerald-300';
-                    symbol = '+';
-                    numText = line.modifiedLineNumber ? `${line.modifiedLineNumber}` : '';
-                  } else if (isRemoved) {
-                    lineBg = 'bg-[#ef4444]/15 border-l-2 border-[#ef4444]';
-                    textColor = 'text-red-300';
-                    symbol = '-';
-                    numText = line.originalLineNumber ? `${line.originalLineNumber}` : '';
-                  } else {
-                    numText = line.modifiedLineNumber ? `${line.modifiedLineNumber}` : `${line.originalLineNumber || ''}`;
-                  }
-
-                  return (
-                    <div key={i} className={`flex h-[18px] items-center ${lineBg}`}>
-                      <span className="select-none text-right pr-2.5 pl-2 w-10 shrink-0 text-slate-650 text-[9.5px]">
-                        {numText}
-                      </span>
-                      <span className={`select-none w-4 text-center shrink-0 pr-1 text-[10px] font-black ${isAdded ? 'text-emerald-500' : isRemoved ? 'text-red-500' : 'text-slate-655'}`}>
-                        {symbol}
-                      </span>
-                      <span
-                        className={`flex-1 whitespace-pre pr-4 truncate ${textColor}`}
-                        dangerouslySetInnerHTML={{ __html: highlightCode(line.value) || '&nbsp;' }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Unified Minimap */}
-              {renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).unifiedLines)}
-            </div>
-          )
-        ) : (
-          // ==================== NORMAL WORKSPACE EDIT & DISPLAY ====================
-          <div className="flex-1 flex overflow-hidden min-h-0">
-            {isFileEditorActive ? (
-              // EDITABLE INPUT FOR DIRECTORY FILES
-              <div className="relative h-full w-full overflow-hidden flex flex-1 bg-[#050608]">
-                <div className="flex-1 h-full relative overflow-auto scrollbar-thin">
-                  <pre
-                    aria-hidden="true"
-                    className="absolute inset-0 p-4 whitespace-pre pt-3 pr-4 leading-relaxed font-mono text-xs select-none pointer-events-none text-transparent"
-                    dangerouslySetInnerHTML={{ __html: highlightCode(editorContent) + '\n' }}
-                  />
-                  <textarea
-                    value={editorContent}
-                    onChange={e => handleEditorContentChange(e.target.value)}
-                    spellCheck={false}
-                    className="absolute inset-0 w-full h-full resize-none p-4 pt-3 pr-4 bg-transparent text-slate-300 caret-cyan-300 selection:bg-cyan-500/25 outline-none font-mono text-xs leading-relaxed whitespace-pre"
-                    aria-label={`Editing ${activeEditorFile.name}`}
-                  />
-                </div>
-                {/* Save status pill */}
-                <div className="absolute bottom-3 right-4 px-2 py-1 rounded bg-[#0b0c13]/90 border border-white/5 text-[9px] text-slate-500 pointer-events-none select-none z-10 font-mono">
-                  {editorSaveStatus === 'error' ? (
-                    <span className="text-red-400 font-bold uppercase">{editorError}</span>
-                  ) : editorSaveStatus === 'saving' ? (
-                    <span className="text-cyan-400 animate-pulse">SAVING ON-DISK...</span>
-                  ) : editorSaveStatus === 'saved' ? (
-                    <span className="text-[#36e07a] font-bold">✔ DRAFT DEPLOYED TO BLUEPRINT</span>
-                  ) : (
-                    <span className="text-slate-500 lowercase">{activeEditorFile.path}</span>
-                  )}
-                </div>
-              </div>
-            ) : (
-              // READ-ONLY VIEWER FOR AUTOGEN XML TEMPLATES (MD, UI, NODE)
-              <div className="flex-grow h-full overflow-auto py-3 font-mono text-xs leading-relaxed code-scroll scrollbar-thin">
-                {codeLines.map((line, i) => {
+            <div className="h-full overflow-auto py-2 font-mono text-xs leading-relaxed">
+              {(() => {
+                const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);
+                return currentCode.split('\n').map((line, i) => {
                   const ld = lineDiagMap.get(i);
                   const lineClass = ld
                     ? (ld.severity === 'error'
-                        ? 'bg-red-500/10 border-l-2 border-[#ef4444]'
-                        : 'bg-amber-500/10 border-l-2 border-amber-500')
+                      ? 'bg-red-500/10 border-l-2 border-red-500'
+                      : 'bg-amber-500/10 border-l-2 border-amber-500')
                     : 'border-l-2 border-transparent hover:bg-white/[0.02]';
                   return (
                     <div
                       key={i}
-                      className={`flex h-[18px] items-center ${lineClass}`}
+                      className={`flex ${lineClass}`}
                       title={ld ? ld.messages.join('  •  ') : undefined}
                     >
-                      <span className="select-none text-right pr-2.5 pl-2 w-10 shrink-0 text-slate-650 text-[9.5px]">
+                      <span className="select-none text-right pr-2 pl-2 w-10 shrink-0 text-slate-600 text-[10px] leading-relaxed">
                         {i + 1}
                       </span>
                       <span
-                        className="flex-grow whitespace-pre pr-4 truncate"
+                        className="flex-1 whitespace-pre pr-4 overflow-x-auto"
                         dangerouslySetInnerHTML={{ __html: highlightXML(line) || '&nbsp;' }}
                       />
                     </div>
                   );
-                })}
-              </div>
-            )}
-
-            {/* Error indicators scroll-gutter */}
-            {lineDiagMap.size > 0 && !diffEnabled && (
-              <div className="absolute top-0 right-1 w-2.5 h-full pointer-events-none z-10 selection:bg-transparent">
-                {Array.from(lineDiagMap.entries()).map(([idx, info]) => (
-                  <div
-                    key={idx}
-                    className={`absolute right-0 w-2 h-[3.5px] rounded-sm ${info.severity === 'error' ? 'bg-red-500' : 'bg-amber-400'}`}
-                    style={{ top: `${(idx / Math.max(codeLines.length, 1)) * 100}%` }}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* Render CSS Visual Code-Strips Minimap */}
-            {renderMinimap(codeLines.map(l => ({ value: l })))}
-          </div>
-        )}
-      </div>
-
-      <div className="border-t border-white/5 bg-black/45 px-3.5 py-2.5 space-y-2 font-mono text-xs max-h-48 overflow-y-auto shrink-0 transition-all scrollbar-thin">
-        <div className="flex items-center justify-between border-b border-white/5 pb-1.5 select-none font-mono">
-          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[10px]">
-            <Terminal className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-            PACKAGE MOD DOCTOR (DIAGNOSTICS)
-          </div>
-          <div className="flex items-center gap-2 text-[9px] font-bold">
-            <span className="flex items-center gap-1 text-slate-300 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
-              {diagnosticSource === 'checking' ? 'CHECKING' : diagnosticSource === 'package' ? 'API' : 'LOCAL'}
-            </span>
-            <span className="flex items-center gap-1 text-slate-355 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 block" /> {errors.length} Errors
-            </span>
-            <span className="flex items-center gap-1 text-slate-355 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 block" /> {warnings.length} Warnings
-            </span>
-            {diagnostics.length > 0 && (
-              <button
-                onClick={sendDiagnosticsToAI}
-                className="flex items-center gap-1 text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/30 cursor-pointer uppercase transition-all"
-                title="Send these diagnostics plus the active XML/code to the AI assistant"
-              >
-                <Sparkles className="w-3 h-3" /> Ask AI
-              </button>
-            )}
-          </div>
+                });
+              })()}
+            </div>
+          )}
         </div>
 
-        {diagnostics.length === 0 ? (
-          <div className="text-emerald-400/90 text-[10px] leading-normal flex items-center gap-2 bg-emerald-500/5 p-2 rounded border border-emerald-500/10 font-sans font-medium">
-            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>No package warning flags detected across generated mod files.</span>
+        {/* X4 Engine Pre-Validation Diagnostics Monitor */}
+        <div className="border-t border-white/5 bg-black/45 px-3.5 py-2.5 space-y-2 font-mono text-xs max-h-48 overflow-y-auto shrink-0 transition-all scrollbar-thin">
+          <div className="flex items-center justify-between border-b border-white/5 pb-1.5 select-none font-mono">
+            <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[10px]">
+              <Terminal className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+              PACKAGE MOD DOCTOR (DIAGNOSTICS)
+            </div>
+            <div className="flex items-center gap-2 text-[9px] font-bold">
+              <span className="flex items-center gap-1 text-slate-300 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                {diagnosticSource === 'checking' ? 'CHECKING' : diagnosticSource === 'package' ? 'API' : 'LOCAL'}
+              </span>
+              <span className="flex items-center gap-1 text-slate-355 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 block" /> {errors.length} Errors
+              </span>
+              <span className="flex items-center gap-1 text-slate-355 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 block" /> {warnings.length} Warnings
+              </span>
+              {diagnostics.length > 0 && (
+                <button
+                  onClick={sendDiagnosticsToAI}
+                  className="flex items-center gap-1 text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/30 cursor-pointer uppercase transition-all"
+                  title="Send these diagnostics + the generated XML to the AI assistant for fixes / advice"
+                >
+                  <Sparkles className="w-3 h-3" /> Ask AI
+                </button>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className="space-y-1.5 font-sans">
-            {diagnostics.map((diag, index) => {
-              const itemStyle = diag.severity === 'error'
-                ? 'bg-red-500/5 text-red-300 border-red-500/15'
-                : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/15' : 'bg-blue-500/5 text-blue-300 border-blue-500/15');
 
-              return (
-                <div key={index} className={`p-1.5 rounded border text-[10px] leading-relaxed flex items-start gap-2 ${itemStyle}`}>
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
-                  <div>
-                    <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] mb-0.5">
-                      [{diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
-                    </span>
-                    {diag.filePath && (
-                      <span className="font-mono text-[8px] text-slate-300 block mb-0.5">{diag.filePath}</span>
-                    )}
-                    {diag.message}
-                    {diag.sourceRef && (
-                      <span className="font-mono text-[8px] text-slate-400 block mt-0.5">
-                        SOURCE: {diag.sourceRef.kind}{diag.sourceRef.label ? ` / ${diag.sourceRef.label}` : ''}{diag.sourceRef.id ? ` / ${diag.sourceRef.id}` : ''}
+          {diagnostics.length === 0 ? (
+            <div className="text-emerald-400/90 text-[10px] leading-normal flex items-center gap-2 bg-emerald-500/5 p-2 rounded border border-emerald-500/10 font-sans font-medium">
+              <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>No package warning flags detected across generated mod files.</span>
+            </div>
+          ) : (
+            <div className="space-y-1.5 font-sans">
+              {diagnostics.map((diag, index) => {
+                const itemStyle = diag.severity === 'error'
+                  ? 'bg-red-500/5 text-red-300 border-red-500/15'
+                  : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/15' : 'bg-blue-500/5 text-blue-300 border-blue-500/15');
+
+                return (
+                  <div key={index} className={`p-1.5 rounded border text-[10px] leading-relaxed flex items-start gap-2 ${itemStyle}`}>
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
+                    <div>
+                      <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] mb-0.5">
+                        [{diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
                       </span>
-                    )}
+                      {diag.filePath && (
+                        <span className="font-mono text-[8px] text-slate-300 block mb-0.5">{diag.filePath}</span>
+                      )}
+                      {diag.message}
+                      {diag.sourceRef && (
+                        <span className="font-mono text-[8px] text-slate-400 block mt-0.5">
+                          SOURCE: {diag.sourceRef.kind}{diag.sourceRef.label ? ` / ${diag.sourceRef.label}` : ''}{diag.sourceRef.id ? ` / ${diag.sourceRef.id}` : ''}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
+      {/* ================================================================ */}
+      {/* SECTION 2: LIVE SIMULATION DIAGNOSTICS & PLAYTEST HUB          */}
+      {/* ================================================================ */}
       <div className="flex-[4] flex flex-col min-h-0 bg-[#080a0e] overflow-hidden select-none border-t border-[#df9825]/10">
+
+        {/* Diagnostic Tool Segmented Header */}
         <div className="flex border-b border-white/5 bg-black/45 justify-between items-center px-3.5 py-1.5 shrink-0">
           <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none font-mono">
             <button
@@ -1316,7 +817,7 @@ export default function CodePreview({
               className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${toolActiveTab === 'analyzer'
                 ? 'bg-amber-500/10 text-amber-400 border border-amber-500/40'
                 : 'text-slate-400 hover:text-slate-200 border border-transparent'
-              }`}
+                }`}
             >
               <Brain className="w-3.5 h-3.5 animate-pulse text-amber-500" />
               MD SCANNER
@@ -1326,13 +827,14 @@ export default function CodePreview({
               className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${toolActiveTab === 'playtest'
                 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
                 : 'text-slate-400 hover:text-slate-200 border border-transparent'
-              }`}
+                }`}
             >
               <Terminal className="w-3.5 h-3.5 text-emerald-400" />
               PLAYTEST WORKSPACE
             </button>
           </div>
 
+          {/* Action triggers specific to tabs */}
           <div id="tool_actions" className="flex items-center gap-1.5 shrink-0">
             {toolActiveTab === 'analyzer' ? (
               analysisResult && (
@@ -1372,11 +874,12 @@ export default function CodePreview({
           </div>
         </div>
 
+        {/* Viewport display */}
         <div className="flex-1 overflow-y-auto bg-[#06070a]/95 flex flex-col relative text-xs min-h-0 scrollbar-thin">
           {showSnapshots && (
             <div className="absolute inset-x-0 top-0 z-20 bg-[#0a0c11] border-b border-cyan-500/30 p-3 max-h-72 overflow-y-auto shadow-xl">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-mono font-bold text-cyan-400 uppercase tracking-wide">Version History - .snapshots/</span>
+                <span className="text-[11px] font-mono font-bold text-cyan-400 uppercase tracking-wide">Version History — .snapshots/</span>
                 <button onClick={() => setShowSnapshots(false)} className="text-slate-400 hover:text-white cursor-pointer">
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -1436,7 +939,9 @@ export default function CodePreview({
             />
           )}
         </div>
+
       </div>
+
     </div>
   );
 }
