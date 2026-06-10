@@ -40,7 +40,6 @@ export interface MDNode {
   width?: number;
   height?: number;
   color?: string;
-  includeInBuild?: boolean;
 }
 
 // Connection wire representation between nodes
@@ -62,7 +61,6 @@ export interface UIWidget {
   h: number;
   label: string;
   properties: Record<string, any>;
-  includeInBuild?: boolean;
 }
 
 export interface TranslationItem {
@@ -81,7 +79,6 @@ export interface TFile {
   languageId: string;
   fileName: string;
   pages: TranslationPage[];
-  includeInBuild?: boolean;
 }
 
 export interface AIParam {
@@ -107,7 +104,6 @@ export interface AIBehaviorScript {
   params: AIParam[];
   interrupts: Array<{ id: string; event: string; action: string }>;
   actions: AIAction[];
-  includeInBuild?: boolean;
 }
 
 export interface WareDef {
@@ -121,7 +117,6 @@ export interface WareDef {
   maxPrice: number;
   prodTime: number;
   prodAmount: number;
-  includeInBuild?: boolean;
 }
 
 export interface JobDef {
@@ -134,7 +129,6 @@ export interface JobDef {
   sectorQuota: number;
   taskScript: string;
   rebuildOnDestroy: boolean;
-  includeInBuild?: boolean;
 }
 
 export interface PatchBlock {
@@ -144,7 +138,6 @@ export interface PatchBlock {
   content: string;
   note: string;
   targetFile?: string;
-  includeInBuild?: boolean;
 }
 
 // Complete Mod Workspace containing scripts and widgets state
@@ -169,15 +162,6 @@ export interface ModWorkspace {
   wares?: WareDef[];
   jobs?: JobDef[];
   xmlPatches?: PatchBlock[];
-  compileSettings?: {
-    md: boolean;
-    ui: boolean;
-    ai: boolean;
-    library: boolean;
-    translations: boolean;
-    patches: boolean;
-  };
-  templates?: MDNode[];
 }
 
 // Built-in game variables for X4 standard database definitions
@@ -525,20 +509,7 @@ function escapeXMLAttribute(value: string): string {
 }
 
 // Helper functions to generate the XML output cleanly
-export function generateMDXML(originalWorkspace: ModWorkspace): string {
-  // Filter out any nodes where includeInBuild is false
-  const activeNodes = (originalWorkspace.nodes || []).filter(n => n.includeInBuild !== false);
-  const activeNodeIds = new Set(activeNodes.map(n => n.id));
-  const activeLinks = (originalWorkspace.links || []).filter(l => 
-    activeNodeIds.has(l.sourceNodeId) && activeNodeIds.has(l.targetNodeId)
-  );
-
-  const workspace = {
-    ...originalWorkspace,
-    nodes: activeNodes,
-    links: activeLinks
-  };
-
+export function generateMDXML(workspace: ModWorkspace): string {
   function renderCue(cue: any, indentDepth: number = 2): string {
     const indent = ' '.repeat(indentDepth);
     const indentPlus = ' '.repeat(indentDepth + 2);
@@ -675,13 +646,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace): string {
 }
 
 // Generate the Lua config / Egosoft UI Customization parameters XML for menus
-export function generateUIXML(originalWorkspace: ModWorkspace): string {
-  const activeWidgets = (originalWorkspace.uiWidgets || []).filter(w => w.includeInBuild !== false);
-  const workspace = {
-    ...originalWorkspace,
-    uiWidgets: activeWidgets
-  };
-
+export function generateUIXML(workspace: ModWorkspace): string {
   const t = workspace.uiTheme;
   const alpha = Math.round(t.opacity * 255).toString(16).padStart(2, '0');
   
@@ -1225,8 +1190,7 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
         accentColor: '#0891b2',
         opacity: 0.95,
         showIcons: true
-      },
-      templates: []
+      }
     };
   }
 
@@ -1249,15 +1213,9 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       properties: node.properties || (template ? { ...template.properties } : {}),
       propertiesSchema: node.propertiesSchema || (template ? template.propertiesSchema : []),
       inputs: node.inputs || (template ? template.inputs : []),
-      outputs: node.outputs || (template ? template.outputs : []),
-      includeInBuild: typeof node.includeInBuild === 'boolean' ? node.includeInBuild : true
+      outputs: node.outputs || (template ? template.outputs : [])
     };
   }).filter((n): n is MDNode => n !== null);
-
-  const sanitizedWidgets = (Array.isArray(ws.uiWidgets) ? ws.uiWidgets : []).map((w: any) => ({
-    ...w,
-    includeInBuild: typeof w.includeInBuild === 'boolean' ? w.includeInBuild : true
-  }));
 
   return {
     id: ws.id || `workspace_${Date.now()}`,
@@ -1267,7 +1225,7 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     description: ws.description || '',
     nodes: sanitizedNodes,
     links: Array.isArray(ws.links) ? ws.links : [],
-    uiWidgets: sanitizedWidgets,
+    uiWidgets: Array.isArray(ws.uiWidgets) ? ws.uiWidgets : [],
     uiTheme: {
       backgroundColor: ws.uiTheme?.backgroundColor || '#0F1115',
       borderColor: ws.uiTheme?.borderColor || '#06b6d4',
@@ -1275,29 +1233,10 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       opacity: typeof ws.uiTheme?.opacity === 'number' ? ws.uiTheme.opacity : 0.95,
       showIcons: typeof ws.uiTheme?.showIcons === 'boolean' ? ws.uiTheme.showIcons : true
     },
-    tFiles: (Array.isArray(ws.tFiles) ? ws.tFiles : []).map((tf: any) => ({
-      ...tf,
-      includeInBuild: typeof tf.includeInBuild === 'boolean' ? tf.includeInBuild : true
-    })),
-    aiScripts: (Array.isArray(ws.aiScripts) ? ws.aiScripts : []).map((as: any) => ({
-      ...as,
-      includeInBuild: typeof as.includeInBuild === 'boolean' ? as.includeInBuild : true
-    })),
-    wares: (Array.isArray(ws.wares) ? ws.wares : []).map((w: any) => ({
-      ...w,
-      includeInBuild: typeof w.includeInBuild === 'boolean' ? w.includeInBuild : true
-    })),
-    jobs: (Array.isArray(ws.jobs) ? ws.jobs : []).map((j: any) => ({
-      ...j,
-      includeInBuild: typeof j.includeInBuild === 'boolean' ? j.includeInBuild : true
-    })),
-    xmlPatches: (Array.isArray(ws.xmlPatches) ? ws.xmlPatches : []).map((xp: any) => ({
-      ...xp,
-      includeInBuild: typeof xp.includeInBuild === 'boolean' ? xp.includeInBuild : true
-    })),
-    templates: (Array.isArray(ws.templates) ? ws.templates : []).map((tNode: any) => ({
-      ...tNode,
-      includeInBuild: false // Templates must remain non-compilable by definition!
-    }))
+    tFiles: Array.isArray(ws.tFiles) ? ws.tFiles : [],
+    aiScripts: Array.isArray(ws.aiScripts) ? ws.aiScripts : [],
+    wares: Array.isArray(ws.wares) ? ws.wares : [],
+    jobs: Array.isArray(ws.jobs) ? ws.jobs : [],
+    xmlPatches: Array.isArray(ws.xmlPatches) ? ws.xmlPatches : []
   };
 }

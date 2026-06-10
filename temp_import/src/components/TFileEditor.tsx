@@ -83,7 +83,10 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
 
   // Initialize from workspace if present, or fallback and initialize workspace state
   const [tFiles, setTFiles] = useState<TFile[]>(() => {
-    return workspace.tFiles || [];
+    if (workspace.tFiles && workspace.tFiles.length > 0) {
+      return workspace.tFiles;
+    }
+    return defaultTFiles;
   });
 
   const [activeFileIdx, setActiveFileIdx] = useState<number>(0);
@@ -101,7 +104,7 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
     }));
   };
 
-  const activeFile = tFiles[activeFileIdx] || tFiles[0];
+  const activeFile = tFiles[activeFileIdx] || tFiles[0] || defaultTFiles[0];
 
   // Ensure an active page is selected
   useEffect(() => {
@@ -335,18 +338,15 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   };
 
   // Compile XML output
-  const compileTFileXML = (file: TFile | undefined): string => {
-    if (!file) {
-      return `<?xml version="1.0" encoding="utf-8"?>\n<!-- Click "+ LANG" to create a Language translation t-file -->\n<language id="44">\n</language>`;
-    }
+  const compileTFileXML = (file: TFile): string => {
     let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
     xml += `<language id="${file.languageId}">\n`;
     
-    (file.pages || []).forEach(page => {
+    file.pages.forEach(page => {
       const pTitle = page.title ? ` title="${page.title}"` : '';
       xml += `  <page id="${page.id}"${pTitle}>\n`;
       
-      (page.items || []).forEach(item => {
+      page.items.forEach(item => {
         const comment = item.description ? ` <!-- ${item.description} -->` : '';
         xml += `    <t id="${item.id}">${item.value}</t>${comment}\n`;
       });
@@ -423,132 +423,104 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
           
           <div className="flex-1 overflow-y-auto p-3 space-y-4">
             
-            {/* Header section: Languages and Pages Hierarchy Tree */}
-            <div className="space-y-3.5">
-              <div className="flex items-center justify-between border-b border-white/5 pb-1">
-                <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 font-bold">
-                  📁 languages tree
+            {/* Header section 1: Translation Files List */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                  <Languages className="w-3 h-3 text-emerald-400" /> Language files
                 </span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={handleAddLanguageFile}
-                    className="p-1 rounded bg-[#202530] text-emerald-400 hover:bg-[#2c3344] hover:text-white transition-all cursor-pointer text-[9px] font-bold uppercase font-mono flex items-center gap-0.5"
-                    title="Add language file (e.g., German, French)"
-                  >
-                    <Plus className="w-2.5 h-2.5" /> LANG
-                  </button>
-                  <button
-                    onClick={handleAddPage}
-                    disabled={tFiles.length === 0}
-                    className="p-1 rounded bg-[#202530] text-cyan-400 hover:bg-[#2c3344] hover:text-white transition-all cursor-pointer text-[9px] font-bold uppercase font-mono flex items-center gap-0.5 disabled:opacity-30 disabled:pointer-events-none"
-                    title="Add unique Page ID catalogue"
-                  >
-                    <Plus className="w-2.5 h-2.5" /> PAGE
-                  </button>
-                </div>
+                <button
+                  onClick={handleAddLanguageFile}
+                  className="p-1 rounded bg-[#202530] text-emerald-400 hover:bg-[#2c3344] hover:text-white transition-colors cursor-pointer"
+                  title="Add language file (e.g., German, French)"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
               </div>
 
-              <div className="space-y-4 font-mono text-[11px] scrollbar-thin">
-                {tFiles.length === 0 ? (
-                  <div className="text-[10px] text-slate-500 italic p-4 text-center">No language translation files created. Click "+ LANG" to create!</div>
-                ) : (
-                  tFiles.map((file, fIdx) => {
-                    const matchedLang = LANGUAGES_SUPPORT.find(l => l.id === file.languageId);
-                    const isFileActive = activeFileIdx === fIdx;
+              <div className="space-y-1">
+                {tFiles.map((file, idx) => {
+                  const matchedLang = LANGUAGES_SUPPORT.find(l => l.id === file.languageId);
+                  const isCur = idx === activeFileIdx;
+                  return (
+                    <div 
+                      key={file.fileName}
+                      className={`flex items-center justify-between p-2 rounded group transition-all font-mono text-[11px] ${
+                        isCur ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-black/25 hover:bg-[#202530] text-slate-400 border border-transparent'
+                      }`}
+                    >
+                      <button
+                        onClick={() => { setActiveFileIdx(idx); }}
+                        className="flex-1 text-left flex items-center gap-1.5 cursor-pointer truncate"
+                      >
+                        <span className="text-xs">{matchedLang?.flag || '🌐'}</span>
+                        <div className="truncate">
+                          <span className="font-bold block text-slate-200 group-hover:text-white">{file.fileName}</span>
+                          <span className="text-[9px] text-slate-500">Lang: {file.languageId} ({matchedLang?.name || 'Custom'})</span>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteLanguageFile(idx)}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400 rounded transition-opacity cursor-pointer ml-1"
+                        title="Delete translation file"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
+            {/* Header section 2: Pages within the file */}
+            <div className="space-y-2 pt-2 border-t border-white/5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                  <BookOpen className="w-3 h-3 text-cyan-400" /> Lookup Pages
+                </span>
+                <button
+                  onClick={handleAddPage}
+                  className="p-1 rounded bg-[#202530] text-cyan-400 hover:bg-[#2c3344] hover:text-white transition-colors cursor-pointer"
+                  title="Add unique Page ID catalogue"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {activeFile && activeFile.pages.length === 0 ? (
+                <div className="text-center py-4 text-[10px] font-mono text-slate-600">
+                  No Pages declared.
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {activeFile?.pages.map(page => {
+                    const isCur = page.id === activePageId;
                     return (
-                      <div key={file.fileName} className="space-y-1.5">
-                        {/* File Level Root Node */}
-                        <div className={`p-1.5 rounded flex items-center justify-between transition-colors ${
-                          isFileActive ? 'bg-emerald-500/5 text-emerald-400 border border-emerald-500/20' : 'bg-black/15 text-slate-400 border border-transparent'
-                        }`}>
-                          <button
-                            onClick={() => {
-                              setActiveFileIdx(fIdx);
-                              if (file.pages && file.pages.length > 0) {
-                                setActivePageId(file.pages[0].id);
-                              } else {
-                                setActivePageId('');
-                              }
-                            }}
-                            className="flex-1 text-left flex items-center gap-1.5 cursor-pointer truncate"
-                          >
-                            <span className="text-xs">{matchedLang?.flag || '🌐'}</span>
-                            <div className="truncate">
-                              <span className="font-bold text-slate-200 block text-[10.5px] leading-tight">{file.fileName}</span>
-                              <span className="text-[8.5px] text-slate-500 block">({matchedLang?.name || 'Custom'})</span>
-                            </div>
-                          </button>
-                          
-                          <button
-                            onClick={() => handleDeleteLanguageFile(fIdx)}
-                            className="p-1 hover:text-rose-400 rounded transition-colors cursor-pointer text-slate-600 ml-1 shrink-0"
-                            title="Delete this Language translation file"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-
-                        {/* Pages Level Inside the File */}
-                        <div className="pl-3.5 border-l border-white/5 space-y-2">
-                          {file.pages.length === 0 ? (
-                            <span className="text-[8.5px] text-slate-600 italic block py-0.5">No pages. Click "+ PAGE".</span>
-                          ) : (
-                            file.pages.map(page => {
-                              const isPageActive = isFileActive && page.id === activePageId;
-                              return (
-                                <div key={page.id} className="space-y-0.5">
-                                  {/* Page selector button */}
-                                  <div className={`p-1 rounded flex items-center justify-between transition-colors ${
-                                    isPageActive ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:text-slate-200'
-                                  }`}>
-                                    <button
-                                      onClick={() => {
-                                        setActiveFileIdx(fIdx);
-                                        setActivePageId(page.id);
-                                      }}
-                                      className="flex-1 text-left cursor-pointer truncate flex items-center gap-1"
-                                    >
-                                      <span>📃 Page {page.id}</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setActiveFileIdx(fIdx);
-                                        handleDeletePage(page.id);
-                                      }}
-                                      className="p-1 hover:text-rose-400 rounded transition-colors text-slate-600 shrink-0 cursor-pointer"
-                                      title="Delete lookup Page"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </button>
-                                  </div>
-
-                                  {/* T-Keys (leaf items of the hierarchy) */}
-                                  <div className="pl-4 border-l border-white/[0.03] space-y-0.5 font-medium text-[9px] text-slate-600 block">
-                                    {page.items.length === 0 ? (
-                                      <span className="italic block text-[8.5px] py-0.5 text-slate-700">Empty Page</span>
-                                    ) : (
-                                      page.items.slice(0, 4).map(item => (
-                                        <div key={item.id} className="truncate flex items-center gap-1 max-w-[200px]" title={`id:${item.id} -> ${item.value}`}>
-                                          <span className="text-[8px] text-slate-600">{item.id}:</span>
-                                          <span className="truncate text-slate-500">{item.value}</span>
-                                        </div>
-                                      ))
-                                    )}
-                                    {page.items.length > 4 && (
-                                      <span className="text-[8px] text-slate-700 block italic">({page.items.length - 4} more keys...)</span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
+                      <div
+                        key={page.id}
+                        className={`group flex items-center justify-between p-2 rounded transition-all font-mono text-[11px] ${
+                          isCur ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-semibold' : 'bg-black/15 hover:bg-[#202530] text-slate-400'
+                        }`}
+                      >
+                        <button
+                          onClick={() => setActivePageId(page.id)}
+                          className="flex-1 text-left cursor-pointer truncate"
+                        >
+                          <span className="text-white block truncate">Page {page.id}</span>
+                          <span className="text-[9px] text-slate-500 truncate block">{page.title || 'Translation catalogue'}</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeletePage(page.id)}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400 rounded transition-opacity cursor-pointer"
+                          title="Delete Page"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     );
-                  })
-                )}
-              </div>
+                  })}
+                </div>
+              )}
             </div>
 
           </div>

@@ -25,9 +25,7 @@ import {
   HardDrive,
   GitBranch,
   GitCommit,
-  Compass,
-  Library,
-  Trash2
+  Compass
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -46,8 +44,8 @@ import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
 
 interface SidebarProps {
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -111,13 +109,6 @@ export default function Sidebar({
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
   const [sidebarCopied, setSidebarCopied] = useState<boolean>(false);
-  
-  // Custom templates tab sidebar states
-  const [newTemplateName, setNewTemplateName] = useState<string>('New Custom Blueprint');
-  const [newTemplateTypeIdx, setNewTemplateTypeIdx] = useState<number>(0);
-  const [editedTemplateId, setEditedTemplateId] = useState<string | null>(null);
-  const [editedTemplateLabel, setEditedTemplateLabel] = useState<string>('');
-  const [editedTemplateXmlTag, setEditedTemplateXmlTag] = useState<string>('');
   const [schemaStatus, setSchemaStatus] = useState<{
     mdXsdPath?: string;
     commonXsdPath?: string;
@@ -130,72 +121,6 @@ export default function Sidebar({
   const [schemaMessage, setSchemaMessage] = useState<string>('');
   const [schemaMessageType, setSchemaMessageType] = useState<'success' | 'error'>('success');
   const [savingSchema, setSavingSchema] = useState<boolean>(false);
-
-  const compileSettings = workspace.compileSettings || {
-    md: true,
-    ui: true,
-    ai: true,
-    library: true,
-    translations: true,
-    patches: true
-  };
-
-  const handleToggleCompileSetting = (key: 'md' | 'ui' | 'ai' | 'library' | 'translations' | 'patches') => {
-    setWorkspace(prev => ({
-      ...prev,
-      compileSettings: {
-        ...compileSettings,
-        [key]: !compileSettings[key]
-      }
-    }));
-  };
-
-  const handleSendCuePackageToAIGuide = () => {
-    if (!selectedNode) return;
-
-    // 1. Gather linked nodes
-    const links = workspace.links || [];
-    const connectedNodeIds = new Set<string>();
-    links.forEach(l => {
-      if (l.sourceNodeId === selectedNode.id) connectedNodeIds.add(l.targetNodeId);
-      if (l.targetNodeId === selectedNode.id) connectedNodeIds.add(l.sourceNodeId);
-    });
-
-    const dependencies = (workspace.nodes || []).filter(n => connectedNodeIds.has(n.id));
-
-    // 2. Format highly detailed prompt context message
-    let serializedContext = `### SELECTED ELEMENT NODE\n- Label: "${selectedNode.label}"\n- XML Tag: <${selectedNode.xmlTag}>\n`;
-    if (Object.keys(selectedNode.properties || {}).length > 0) {
-      serializedContext += `  Properties:\n`;
-      Object.entries(selectedNode.properties).forEach(([k, v]) => {
-        serializedContext += `    - ${k}: ${JSON.stringify(v)}\n`;
-      });
-    }
-    if (selectedNode.comment) {
-      serializedContext += `  Comment Annotation: "${selectedNode.comment}"\n`;
-    }
-
-    if (dependencies.length > 0) {
-      serializedContext += `\n### DEPENDENCIES & CONNECTING NODES\n`;
-      dependencies.forEach(dep => {
-        serializedContext += `- Relation Connection: <${dep.xmlTag}> Tag, labeled "${dep.label}"\n`;
-        if (Object.keys(dep.properties || {}).length > 0) {
-          serializedContext += `  Properties:\n`;
-          Object.entries(dep.properties).forEach(([k, v]) => {
-            serializedContext += `    - ${k}: ${JSON.stringify(v)}\n`;
-          });
-        }
-      });
-    }
-
-    // 3. Dispatch global open-ai-chat event
-    const promptMessage = `I would like to edit my mission cue sequence. Here is the active selected node and its dependency graph context:\n\n${serializedContext}\n\nPlease analyze this cue structure, offer feedback on Egosoft engine compliance, and guide me on how to enhance this sequence or introduce custom conditions & action events!`;
-
-    const event = new CustomEvent('open-ai-chat', {
-      detail: { prompt: promptMessage }
-    });
-    window.dispatchEvent(event);
-  };
 
   const allTemplates = React.useMemo(() => {
     const byTag = new Map<string, Omit<MDNode, 'id' | 'x' | 'y'>>();
@@ -400,18 +325,6 @@ export default function Sidebar({
         >
           <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
           SOURCE
-        </button>
-        <button
-          id="tab_templates"
-          onClick={() => setActiveTab('templates')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
-            activeTab === 'templates'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
-          }`}
-        >
-          <Library className="w-3.5 h-3.5 text-cyan-400" />
-          TEMPLATES
         </button>
       </div>
 
@@ -723,69 +636,6 @@ export default function Sidebar({
                     </p>
                   </div>
 
-                  {/* Compilation scope targets choice */}
-                  <div className="bg-[#0F1115]/50 border border-white/5 rounded p-2.5 space-y-2 select-none">
-                    <label className="text-slate-400 block uppercase text-[8.5px] tracking-wider font-bold">
-                      🛠️ active modules to compile
-                    </label>
-                    <div className="grid grid-cols-2 gap-2 font-mono text-[9.5px]">
-                      <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={compileSettings.md}
-                          onChange={() => handleToggleCompileSetting('md')}
-                          className="accent-emerald-500 rounded cursor-pointer"
-                        />
-                        MD Scripts
-                      </label>
-                      <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={compileSettings.ui}
-                          onChange={() => handleToggleCompileSetting('ui')}
-                          className="accent-emerald-500 rounded cursor-pointer"
-                        />
-                        HUD & LUA UI
-                      </label>
-                      <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={compileSettings.ai}
-                          onChange={() => handleToggleCompileSetting('ai')}
-                          className="accent-emerald-500 rounded cursor-pointer"
-                        />
-                        AI Behaviors
-                      </label>
-                      <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={compileSettings.library}
-                          onChange={() => handleToggleCompileSetting('library')}
-                          className="accent-emerald-500 rounded cursor-pointer"
-                        />
-                        Wares & Jobs
-                      </label>
-                      <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={compileSettings.translations}
-                          onChange={() => handleToggleCompileSetting('translations')}
-                          className="accent-emerald-500 rounded cursor-pointer"
-                        />
-                        T Languages
-                      </label>
-                      <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={compileSettings.patches}
-                          onChange={() => handleToggleCompileSetting('patches')}
-                          className="accent-emerald-500 rounded cursor-pointer"
-                        />
-                        XML Patching
-                      </label>
-                    </div>
-                  </div>
-
                   {/* Trigger compiler button */}
                   <button
                     onClick={handleCompileModProject}
@@ -825,289 +675,6 @@ export default function Sidebar({
           </div>
         )}
 
-        {/* LIBRARY / TEMPLATES (Tab: templates) */}
-        {activeTab === 'templates' && (
-          <div className="space-y-4">
-            {/* Title */}
-            <div>
-              <h3 className="text-xs font-mono font-semibold text-cyan-400 mb-1 tracking-wider uppercase flex items-center gap-1.5 leading-none">
-                <Library className="w-4 h-4 text-cyan-400" />
-                TEMPLATE BLUEPRINTS
-              </h3>
-              <p className="text-[10px] text-slate-500 leading-normal font-sans">
-                Non-compilable visual templates. Drag them onto the canvas or drag-start, select, and customize them.
-              </p>
-            </div>
-
-            {/* Part 1: CREATE REUSABLE BLUEPRINT */}
-            <div className="space-y-3 bg-black/40 p-3 rounded border border-white/5 font-mono text-[11px]">
-              <span className="text-cyan-400 uppercase font-bold text-[9px] tracking-wider block">
-                CREATE BLUEPRINT BLUEPRINT
-              </span>
-              
-              <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">Blueprint Title</label>
-                <input
-                  type="text"
-                  value={newTemplateName}
-                  onChange={e => setNewTemplateName(e.target.value)}
-                  className="w-full p-1.5 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-[10px]"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">Base Node Structure</label>
-                <select
-                  value={newTemplateTypeIdx}
-                  onChange={e => setNewTemplateTypeIdx(Number(e.target.value))}
-                  className="w-full p-1.5 rounded bg-[#0b0c10] border border-white/10 text-slate-300 focus:outline-none focus:border-cyan-500 text-[10px] cursor-pointer"
-                >
-                  {NODE_TEMPLATES.map((nodeT, idx) => (
-                    <option key={idx} value={idx}>
-                      {nodeT.label} ({nodeT.xmlTag})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <button
-                onClick={() => {
-                  if (!newTemplateName.trim()) return;
-                  const baseNode = NODE_TEMPLATES[newTemplateTypeIdx];
-                  if (!baseNode) return;
-
-                  const customT: MDNode = {
-                    id: `custom_template_${Date.now()}`,
-                    type: baseNode.type,
-                    label: newTemplateName,
-                    xmlTag: baseNode.xmlTag,
-                    x: 100,
-                    y: 100,
-                    properties: { ...baseNode.properties },
-                    propertiesSchema: [...(baseNode.propertiesSchema || [])],
-                    inputs: [...(baseNode.inputs || [])],
-                    outputs: [...(baseNode.outputs || [])],
-                    includeInBuild: false
-                  };
-
-                  saveCheckpoint();
-                  setWorkspace(prev => ({
-                    ...prev,
-                    templates: [...(prev.templates || []), customT]
-                  }));
-                  setNewTemplateName('New Custom Blueprint');
-                }}
-                className="w-full py-1.5 font-bold uppercase transition-all bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 hover:text-white rounded border border-cyan-500/30 cursor-pointer text-[10px] tracking-wider text-center"
-              >
-                + Save as Blueprint
-              </button>
-            </div>
-
-            {/* Part 2: LIST AND EDITING */}
-            <div className="space-y-2">
-              <span className="text-slate-400 uppercase font-bold text-[9px] tracking-wider flex items-center justify-between">
-                <span>AVAILABLE BLUEPRINTS</span>
-                <span className="text-slate-500 text-[8px] lowercase">drag or click to add</span>
-              </span>
-
-              <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
-                {[
-                  {
-                    id: 'preseed_sample_cue',
-                    type: 'cue' as const,
-                    label: 'Standard Mission Cue Scaffold',
-                    xmlTag: 'cue',
-                    x: 100,
-                    y: 100,
-                    properties: { name: 'Cue_Scaffold', instantiate: 'true', namespace: 'this', state: 'active' },
-                    propertiesSchema: NODE_TEMPLATES.find(t => t.xmlTag === 'cue')?.propertiesSchema || [],
-                    inputs: NODE_TEMPLATES.find(t => t.xmlTag === 'cue')?.inputs || [],
-                    outputs: NODE_TEMPLATES.find(t => t.xmlTag === 'cue')?.outputs || [],
-                    includeInBuild: false
-                  },
-                  {
-                    id: 'preseed_cargo_alert',
-                    type: 'event' as const,
-                    label: 'Cargo Check Event Trigger',
-                    xmlTag: 'event_object_destroyed',
-                    x: 100,
-                    y: 100,
-                    properties: { object: 'player.target', faction: 'any' },
-                    propertiesSchema: NODE_TEMPLATES.find(t => t.xmlTag === 'event_object_destroyed')?.propertiesSchema || [],
-                    inputs: NODE_TEMPLATES.find(t => t.xmlTag === 'event_object_destroyed')?.inputs || [],
-                    outputs: NODE_TEMPLATES.find(t => t.xmlTag === 'event_object_destroyed')?.outputs || [],
-                    includeInBuild: false
-                  },
-                  {
-                    id: 'preseed_briefing_help',
-                    type: 'action' as const,
-                    label: 'Briefing Help Banner Alarm',
-                    xmlTag: 'show_help',
-                    x: 100,
-                    y: 100,
-                    properties: { text: "Warning: Elite Sector Security forces alert!", duration: 10 },
-                    propertiesSchema: NODE_TEMPLATES.find(t => t.xmlTag === 'show_help')?.propertiesSchema || [],
-                    inputs: NODE_TEMPLATES.find(t => t.xmlTag === 'show_help')?.inputs || [],
-                    outputs: NODE_TEMPLATES.find(t => t.xmlTag === 'show_help')?.outputs || [],
-                    includeInBuild: false
-                  },
-                  ...(workspace.templates || [])
-                ].map((tNode, idx) => {
-                  let badgeColors = 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-                  if (tNode.type === 'cue') badgeColors = 'bg-purple-500/10 text-purple-400 border-purple-500/20';
-                  if (tNode.type === 'event') badgeColors = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
-                  if (tNode.type === 'condition') badgeColors = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
-                  if (tNode.type === 'action') badgeColors = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-
-                  const isCustom = !tNode.id.startsWith('preseed_');
-
-                  return (
-                    <div
-                      key={idx}
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('text/plain', JSON.stringify({
-                          type: 'x4-template-node',
-                          template: tNode
-                        }));
-                      }}
-                      onClick={() => {
-                        if (isCustom) {
-                          setEditedTemplateId(tNode.id);
-                          setEditedTemplateLabel(tNode.label);
-                          setEditedTemplateXmlTag(tNode.xmlTag);
-                        } else {
-                          setEditedTemplateId(null);
-                        }
-                      }}
-                      className={`p-2 rounded bg-[#1c1f26] border hover:border-cyan-500/50 transition-all flex flex-col gap-1.5 cursor-grab active:cursor-grabbing font-mono text-[10px] ${
-                        editedTemplateId === tNode.id ? 'border-cyan-500 text-white bg-cyan-700/5' : 'border-white/5 text-slate-300'
-                      }`}
-                      title="Drag this card onto the visual canvas to spawn it, or click to edit item attributes."
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-slate-200 select-none">
-                          {tNode.label}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <span className={`text-[8px] font-bold border px-1 rounded scale-90 ${badgeColors}`}>
-                            {tNode.type.toUpperCase()}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between text-[9px] text-slate-400 select-none border-t border-white/5 pt-1 font-mono">
-                        <span>&lt;{tNode.xmlTag}&gt;</span>
-                        <div className="flex gap-1.5">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              // Clone/instantiate onto workspace.nodes
-                              saveCheckpoint();
-                              const instNode = {
-                                ...tNode,
-                                id: `node_inst_${Date.now()}`,
-                                x: 200 + Math.random() * 80,
-                                y: 150 + Math.random() * 80,
-                                includeInBuild: true // Direct insertion sets it as compilable in the active mod!
-                              };
-                              setWorkspace(prev => ({
-                                ...prev,
-                                nodes: [...prev.nodes, instNode]
-                              }));
-                            }}
-                            className="text-cyan-400 hover:text-cyan-200 transition-all cursor-pointer font-bold leading-none bg-cyan-500/10 px-1 py-0.5 rounded uppercase text-[8px]"
-                          >
-                            + Insert active
-                          </button>
-                          {isCustom && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                saveCheckpoint();
-                                setWorkspace(prev => ({
-                                  ...prev,
-                                  templates: (prev.templates || []).filter(item => item.id !== tNode.id)
-                                }));
-                                if (editedTemplateId === tNode.id) {
-                                  setEditedTemplateId(null);
-                                }
-                              }}
-                              className="text-red-400 hover:text-red-300 hover:bg-red-500/10 px-1 py-0.5 rounded cursor-pointer leading-none"
-                              title="Delete this template blueprint"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* PART 3: VISUALLY SEE & EDIT CUSTOM TEMPLATE ATTRIBUTES */}
-            {editedTemplateId && (
-              <div className="border-t border-cyan-500/20 pt-3 space-y-3 bg-[#0F1115] p-3 rounded border border-white/10 font-mono text-[11px]">
-                <div className="flex items-center justify-between">
-                  <span className="text-cyan-400 font-bold text-[9px] uppercase tracking-wider">
-                    Edit Blueprint Fields
-                  </span>
-                  <button
-                    onClick={() => setEditedTemplateId(null)}
-                    className="text-slate-400 hover:text-white cursor-pointer"
-                  >
-                    Close
-                  </button>
-                </div>
-
-                <div>
-                  <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">Display Label</label>
-                  <input
-                    type="text"
-                    value={editedTemplateLabel}
-                    onChange={e => {
-                      const newV = e.target.value;
-                      setEditedTemplateLabel(newV);
-                      setWorkspace(prev => ({
-                        ...prev,
-                        templates: (prev.templates || []).map(item =>
-                          item.id === editedTemplateId ? { ...item, label: newV } : item
-                        )
-                      }));
-                    }}
-                    className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-[10px]"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">XML Tag Node</label>
-                  <input
-                    type="text"
-                    value={editedTemplateXmlTag}
-                    onChange={e => {
-                      const newV = e.target.value;
-                      setEditedTemplateXmlTag(newV);
-                      setWorkspace(prev => ({
-                        ...prev,
-                        templates: (prev.templates || []).map(item =>
-                          item.id === editedTemplateId ? { ...item, xmlTag: newV } : item
-                        )
-                      }));
-                    }}
-                    className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-[10px]"
-                  />
-                </div>
-                
-                <p className="text-[8px] text-slate-500 leading-normal italic select-none font-sans">
-                  Editing values instantly refreshes blueprint configurations safely without altering canvas assets.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* COMPONENT INSPECTOR OR PROPERTY VIEWER PANEL */}
         {(selectedNode || selectedWidget) && (
           <div className="border-t border-white/10 pt-4 mt-2">
@@ -1125,36 +692,6 @@ export default function Sidebar({
                   onChange={e => handleLabelChange(e.target.value)}
                   className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
                 />
-              </div>
-
-              {/* Build Inclusion Toggle */}
-              <div>
-                <label className="text-slate-400 block mb-1 font-semibold uppercase text-[9px] tracking-wider">Build Inclusion</label>
-                <label className="flex items-center gap-2 text-slate-300 bg-black/60 border border-white/10 rounded px-2.5 py-1.5 cursor-pointer hover:bg-black/90 transition-all select-none">
-                  <input
-                    type="checkbox"
-                    checked={selectedNode ? selectedNode.includeInBuild !== false : (selectedWidget ? selectedWidget.includeInBuild !== false : true)}
-                    onChange={e => {
-                      saveCheckpoint();
-                      const val = e.target.checked;
-                      if (selectedNode) {
-                        setWorkspace(prev => ({
-                          ...prev,
-                          nodes: prev.nodes.map(n => n.id === selectedNode.id ? { ...n, includeInBuild: val } : n)
-                        }));
-                        setSelectedNode(prev => prev && prev.id === selectedNode.id ? { ...prev, includeInBuild: val } : prev);
-                      } else if (selectedWidget) {
-                        setWorkspace(prev => ({
-                          ...prev,
-                          uiWidgets: prev.uiWidgets.map(w => w.id === selectedWidget.id ? { ...w, includeInBuild: val } : w)
-                        }));
-                        setSelectedWidget(prev => prev && prev.id === selectedWidget.id ? { ...prev, includeInBuild: val } : prev);
-                      }
-                    }}
-                    className="accent-cyan-500 cursor-pointer"
-                  />
-                  <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-400">Include in automatic build</span>
-                </label>
               </div>
 
               {selectedNode && (selectedNode.propertiesSchema || []).map(schema => (
@@ -1262,25 +799,6 @@ export default function Sidebar({
                   <p className="text-[8.5px] text-amber-500/80 italic leading-tight mt-1 select-none">
                     Attaches a floating sticky-note document to this mission step on the canvas graph.
                   </p>
-                </div>
-              )}
-
-              {/* AI Copilot Cue Editor */}
-              {selectedNode && (
-                <div className="mt-4 border-t border-cyan-500/10 pt-3 bg-gradient-to-r from-emerald-500/5 to-cyan-500/5 hover:from-emerald-500/10 hover:to-cyan-500/10 border border-emerald-500/10 rounded p-2.5 flex flex-col gap-2 transition-all">
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-                    <span className="text-[10px] text-emerald-400 uppercase font-bold tracking-wider">AI Copilot Cue Editor</span>
-                  </div>
-                  <p className="text-[9.5px] text-slate-400 leading-normal font-sans">
-                    Send this node and all of its linking triggers/actions dependencies on the canvas to the AI Guide for interactive editing.
-                  </p>
-                  <button
-                    onClick={handleSendCuePackageToAIGuide}
-                    className="w-full text-center py-1.5 font-mono text-[9.5px] font-bold text-emerald-400 hover:text-white bg-emerald-500/10 hover:bg-emerald-600 rounded border border-emerald-500/25 cursor-pointer uppercase tracking-wider transition-all flex items-center justify-center gap-1"
-                  >
-                    🚀 Transmit Context to AI Guide
-                  </button>
                 </div>
               )}
 

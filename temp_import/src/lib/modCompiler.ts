@@ -352,7 +352,7 @@ export const readSnapshot = async (dirHandle: any, modId: string, snapshotName: 
 };
 
 export const compileAndSaveAll = async (
-  originalWorkspace: ModWorkspace,
+  workspace: ModWorkspace,
   dirHandle: any,
   mode: 'candy' | 'store',
   options: { snapshot?: boolean } = {}
@@ -360,26 +360,6 @@ export const compileAndSaveAll = async (
   if (!dirHandle) {
     throw new Error('No directory linked.');
   }
-
-  // Filter out any items the user has excluded from the current build output
-  const activeNodes = (originalWorkspace.nodes || []).filter(n => n.includeInBuild !== false);
-  const activeWidgets = (originalWorkspace.uiWidgets || []).filter(w => w.includeInBuild !== false);
-  const activeAiScripts = (originalWorkspace.aiScripts || []).filter(s => s.includeInBuild !== false);
-  const activeWares = (originalWorkspace.wares || []).filter(w => w.includeInBuild !== false);
-  const activeJobs = (originalWorkspace.jobs || []).filter(j => j.includeInBuild !== false);
-  const activeTFiles = (originalWorkspace.tFiles || []).filter(f => f.includeInBuild !== false);
-  const activeXmlPatches = (originalWorkspace.xmlPatches || []).filter(p => p.includeInBuild !== false);
-
-  const workspace = {
-    ...originalWorkspace,
-    nodes: activeNodes,
-    uiWidgets: activeWidgets,
-    aiScripts: activeAiScripts,
-    wares: activeWares,
-    jobs: activeJobs,
-    tFiles: activeTFiles,
-    xmlPatches: activeXmlPatches
-  };
 
   const errors = validatePackageReadiness(workspace).filter(r => r.severity === 'error');
   if (errors.length > 0) {

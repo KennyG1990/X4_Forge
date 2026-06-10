@@ -1,0 +1,320 @@
+import fs from 'fs';
+import path from 'path';
+import { XMLParser } from 'fast-xml-parser';
+import { schemaLibraryToTemplates, SchemaAttribute, SchemaCategory, SchemaElement, SchemaLibrary } from './schemaTypes';
+
+type AnyNode = Record<string, any>;
+
+const EVENT_GROUPS = new Set(['specificconditions_event', 'commonconditions_event']);
+const CONDITION_GROUPS = new Set(['specificconditions_nonevent', 'commonconditions_nonevent']);
+const ACTION_GROUPS = new Set(['commonactions']);
+const CONTROL_FLOW_TAGS = new Set(['do_if', 'do_else', 'do_elseif', 'do_all', 'do_any', 'do_while', 'do_for_each']);
+
+const parser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '',
+  allowBooleanAttributes: true,
+  commentPropName: '#comment',
+  trimValues: true
+});
+
+export interface XsdConfig {
+  x4GamePath?: string;
+  xsdSchemaPath?: string;
+  schemaFiles?: string[];
+  modWorkspacePath?: string;
+  filesystemPath?: string;
+}
+
+export interface ResolvedXsdConfig extends XsdConfig {
+  schemaDir: string;
+  mdXsdPath: string;
+  commonXsdPath: string;
+  mdExists: boolean;
+  commonExists: boolean;
+  modWorkspacePath?: string;
+  filesystemPath?: string;
+}
+
+function arrayOf<T>(value: T | T[] | undefined): T[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function cleanText(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(cleanText).filter(Boolean).join(' ');
+  if (typeof value === 'object') {
+    const node = value as AnyNode;
+    if ('#text' in node) return cleanText(node['#text']);
+    return Object.values(node).map(cleanText).filter(Boolean).join(' ');
+  }
+  return '';
+}
+
+function documentationOf(node: AnyNode | undefined): string {
+  if (!node) return '';
+  return cleanText(node['xs:annotation']?.['xs:documentation']);
+}
+
+function collectNodesByKey(node: any, key: string, out: AnyNode[] = []): AnyNode[] {
+  if (!node || typeof node !== 'object') return out;
+  if (Array.isArray(node)) {
+    node.forEach(item => collectNodesByKey(item, key, out));
+    return out;
+  }
+  if (node[key]) out.push(...arrayOf(node[key]));
+  Object.values(node).forEach(value => collectNodesByKey(value, key, out));
+  return out;
+}
+
+function collectEnums(node: AnyNode | undefined): string[] {
+  if (!node) return [];
+  const enums = collectNodesByKey(node, 'xs:enumeration')
+    .map(en => en.value)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  return Array.from(new Set(enums));
+}
+
+function collectSimpleTypes(schemaRoots: AnyNode[]): Record<string, string[]> {
+  const simpleTypes: Record<string, string[]> = {};
+  schemaRoots.forEach(root => {
+    arrayOf(root['xs:schema']?.['xs:simpleType']).forEach((simpleType: AnyNode) => {
+      if (!simpleType.name) return;
+      const enums = collectEnums(simpleType);
+      if (enums.length > 0) simpleTypes[simpleType.name] = enums;
+    });
+  });
+  return simpleTypes;
+}
+
+function collectAttributeGroups(schemaRoots: AnyNode[]): Map<string, AnyNode> {
+  const groups = new Map<string, AnyNode>();
+  schemaRoots.forEach(root => {
+    arrayOf(root['xs:schema']?.['xs:attributeGroup']).forEach((group: AnyNode) => {
+      if (group.name) groups.set(group.name, group);
+    });
+  });
+  return groups;
+}
+
+function attributeType(attr: AnyNode): string {
+  if (attr.type) return attr.type;
+  const inlineEnums = collectEnums(attr['xs:simpleType']);
+  if (inlineEnums.length > 0) return 'enum';
+  return 'expression';
+}
+
+function attributeToDescriptor(attr: AnyNode, simpleTypes: Record<string, string[]>): SchemaAttribute | null {
+  if (!attr?.name) return null;
+  const type = attributeType(attr);
+  const inlineEnums = collectEnums(attr['xs:simpleType']);
+  const enumValues = inlineEnums.length > 0 ? inlineEnums : simpleTypes[type];
+  return {
+    name: attr.name,
+    type,
+    required: attr.use === 'required',
+    documentation: documentationOf(attr),
+    enumValues,
+    defaultValue: attr.default
+  };
+}
+
+function collectAttributes(
+  node: AnyNode,
+  simpleTypes: Record<string, string[]>,
+  attributeGroups: Map<string, AnyNode>,
+  seenGroups = new Set<string>()
+): SchemaAttribute[] {
+  const attrs: SchemaAttribute[] = [];
+
+  collectNodesByKey(node, 'xs:attribute').forEach(attr => {
+    const descriptor = attributeToDescriptor(attr, simpleTypes);
+    if (descriptor) attrs.push(descriptor);
+  });
+
+  collectNodesByKey(node, 'xs:attributeGroup').forEach(groupRef => {
+    const ref = groupRef.ref || groupRef.name;
+    if (!ref || seenGroups.has(ref)) return;
+    const group = attributeGroups.get(ref);
+    if (!group) return;
+    seenGroups.add(ref);
+    attrs.push(...collectAttributes(group, simpleTypes, attributeGroups, seenGroups));
+  });
+
+  const byName = new Map<string, SchemaAttribute>();
+  attrs.forEach(attr => {
+    const existing = byName.get(attr.name);
+    byName.set(attr.name, {
+      ...existing,
+      ...attr,
+      required: Boolean(existing?.required || attr.required),
+      documentation: attr.documentation || existing?.documentation || ''
+    });
+  });
+  return Array.from(byName.values()).sort((a, b) => Number(b.required) - Number(a.required) || a.name.localeCompare(b.name));
+}
+
+function childElementsOf(node: AnyNode, category: SchemaCategory): SchemaElement['childElements'] {
+  return collectNodesByKey(node['xs:complexType'] || {}, 'xs:element')
+    .map(child => child.name || child.ref)
+    .filter((tag): tag is string => typeof tag === 'string' && tag.length > 0)
+    .map(tag => ({ tag, category, documentation: '' }))
+    .slice(0, 50);
+}
+
+function classifyFromGroup(groupName: string, tag: string): SchemaCategory {
+  if (CONTROL_FLOW_TAGS.has(tag)) return 'control_flow';
+  if (EVENT_GROUPS.has(groupName) || tag.startsWith('event_')) return 'event';
+  if (CONDITION_GROUPS.has(groupName)) return 'condition';
+  if (ACTION_GROUPS.has(groupName)) return CONTROL_FLOW_TAGS.has(tag) ? 'control_flow' : 'action';
+  return tag.startsWith('event_') ? 'event' : 'action';
+}
+
+function collectGroupElements(
+  schemaRoots: AnyNode[],
+  simpleTypes: Record<string, string[]>,
+  attributeGroups: Map<string, AnyNode>,
+  groupNames: Set<string>
+): SchemaElement[] {
+  const elements = new Map<string, SchemaElement>();
+
+  schemaRoots.forEach(root => {
+    const sourceFile = root.__sourceFile || '';
+    arrayOf(root['xs:schema']?.['xs:group']).forEach((group: AnyNode) => {
+      if (!group.name || !groupNames.has(group.name)) return;
+      collectNodesByKey(group, 'xs:element').forEach(element => {
+        const tag = element.name || element.ref;
+        if (!tag) return;
+        const category = classifyFromGroup(group.name, tag);
+        elements.set(tag, {
+          tag,
+          category,
+          documentation: documentationOf(element),
+          attributes: collectAttributes(element, simpleTypes, attributeGroups),
+          childElements: childElementsOf(element, category),
+          sourceFile
+        });
+      });
+    });
+  });
+
+  return Array.from(elements.values()).sort((a, b) => a.tag.localeCompare(b.tag));
+}
+
+export function getDefaultGamePath(): string {
+  if (process.env.X4_GAME_PATH) return process.env.X4_GAME_PATH;
+  if (fs.existsSync(configPath())) {
+    try {
+      const config = readXsdConfig();
+      if (config.x4GamePath) return config.x4GamePath;
+    } catch {
+      // Ignore malformed config here; startup will still report schema load errors.
+    }
+  }
+  return 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations';
+}
+
+export function getDefaultSchemaDir(gamePath = getDefaultGamePath()): string {
+  if (process.env.X4_XSD_PATH) return process.env.X4_XSD_PATH;
+  if (fs.existsSync(configPath())) {
+    try {
+      const config = readXsdConfig();
+      if (config.xsdSchemaPath) return path.isAbsolute(config.xsdSchemaPath)
+        ? config.xsdSchemaPath
+        : path.join(gamePath, config.xsdSchemaPath);
+    } catch {
+      // Ignore malformed config here; startup will still report schema load errors.
+    }
+  }
+  return path.join(gamePath, 'extensions', 'x4_ai_influence', 'md');
+}
+
+function configPath(): string {
+  return path.resolve(process.cwd(), 'config.json');
+}
+
+export function readXsdConfig(): XsdConfig {
+  const fullPath = configPath();
+  if (!fs.existsSync(fullPath)) return {};
+  return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+}
+
+export function writeXsdConfig(config: XsdConfig): void {
+  fs.writeFileSync(configPath(), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
+  const gamePath = process.env.X4_GAME_PATH || config.x4GamePath || 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations';
+  const schemaDir = process.env.X4_XSD_PATH
+    || (config.xsdSchemaPath
+      ? (path.isAbsolute(config.xsdSchemaPath) ? config.xsdSchemaPath : path.join(gamePath, config.xsdSchemaPath))
+      : path.join(gamePath, 'extensions', 'x4_ai_influence', 'md'));
+
+  const files = config.schemaFiles?.length ? config.schemaFiles : ['md.xsd', 'common.xsd'];
+  const mdFile = files.find(file => path.basename(file).toLowerCase() === 'md.xsd') || 'md.xsd';
+  const commonFile = files.find(file => path.basename(file).toLowerCase() === 'common.xsd') || 'common.xsd';
+  const mdXsdPath = path.isAbsolute(mdFile) ? mdFile : path.join(schemaDir, mdFile);
+  const commonXsdPath = path.isAbsolute(commonFile) ? commonFile : path.join(schemaDir, commonFile);
+
+  return {
+    ...config,
+    x4GamePath: gamePath,
+    xsdSchemaPath: config.xsdSchemaPath || schemaDir,
+    schemaFiles: files,
+    schemaDir,
+    mdXsdPath,
+    commonXsdPath,
+    mdExists: fs.existsSync(mdXsdPath),
+    commonExists: fs.existsSync(commonXsdPath)
+  };
+}
+
+export function loadSchemaLibrary(schemaDir = getDefaultSchemaDir(), files = ['md.xsd', 'common.xsd']): SchemaLibrary {
+  const schemaRoots = files.map(file => {
+    const fullPath = path.isAbsolute(file) ? file : path.join(schemaDir, file);
+    const parsed = parser.parse(fs.readFileSync(fullPath, 'utf8'));
+    parsed.__sourceFile = fullPath;
+    return parsed;
+  });
+
+  const simpleTypes = collectSimpleTypes(schemaRoots);
+  const attributeGroups = collectAttributeGroups(schemaRoots);
+
+  const events = collectGroupElements(schemaRoots, simpleTypes, attributeGroups, EVENT_GROUPS);
+  const conditions = collectGroupElements(schemaRoots, simpleTypes, attributeGroups, CONDITION_GROUPS);
+  const actionLike = collectGroupElements(schemaRoots, simpleTypes, attributeGroups, ACTION_GROUPS);
+  const controlFlow = actionLike.filter(element => element.category === 'control_flow');
+  const actions = actionLike.filter(element => element.category !== 'control_flow');
+
+  const libraryBase = {
+    events,
+    conditions,
+    actions,
+    controlFlow,
+    simpleTypes,
+    sourceFiles: files.map(file => path.isAbsolute(file) ? file : path.join(schemaDir, file)),
+    loaded: true
+  };
+
+  return {
+    ...libraryBase,
+    templates: schemaLibraryToTemplates(libraryBase)
+  };
+}
+
+export function createEmptySchemaLibrary(error?: string): SchemaLibrary {
+  return {
+    events: [],
+    conditions: [],
+    actions: [],
+    controlFlow: [],
+    simpleTypes: {},
+    templates: [],
+    sourceFiles: [],
+    loaded: false,
+    error
+  };
+}
