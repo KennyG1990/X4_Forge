@@ -1515,6 +1515,6 @@ export default function Sidebar({
         Engine Context: Egosoft MD 4.5
       </div>
     </div> {/* Close Right Content Column */}
-  </div> {/* Close side_panel */}
+  </div>
   );
 }
