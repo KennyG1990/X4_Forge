@@ -1412,6 +1412,55 @@ app.get("/api/fs/read", (req, res) => {
   }
 });
 
+// Server base target file resolver for XML patch preview/validation
+app.get("/api/patch/base-content", (req, res) => {
+  try {
+    const targetFile = String(req.query.targetFile || '').trim();
+    if (!targetFile) {
+      return res.status(400).json({ error: "Missing targetFile parameter." });
+    }
+    const normalized = path.normalize(targetFile);
+    if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
+      return res.status(400).json({ error: "Forbidden: Invalid targetFile path." });
+    }
+
+    const resolved = resolveXsdConfig();
+    const pathsToCheck: string[] = [];
+
+    // Check workspace path
+    if (resolved.modWorkspacePath) {
+      pathsToCheck.push(path.join(resolved.modWorkspacePath, targetFile));
+    }
+    // Check main game path
+    if (resolved.x4GamePath) {
+      pathsToCheck.push(path.join(resolved.x4GamePath, targetFile));
+      // Check extensions folder
+      const extPath = path.join(resolved.x4GamePath, 'extensions');
+      if (fs.existsSync(extPath) && fs.statSync(extPath).isDirectory()) {
+        try {
+          const extensions = fs.readdirSync(extPath);
+          for (const ext of extensions) {
+            pathsToCheck.push(path.join(extPath, ext, targetFile));
+          }
+        } catch (e) {
+          // Ignore
+        }
+      }
+    }
+
+    for (const p of pathsToCheck) {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+        const content = fs.readFileSync(p, 'utf8');
+        return res.json({ content, sourcePath: p });
+      }
+    }
+
+    return res.status(404).json({ error: `File '${targetFile}' not found in loose files. It may be packed inside game archives (.cat/.dat).`, isPacked: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to find target base file." });
+  }
+});
+
 // Server Filesystem write endpoint
 app.post("/api/fs/write", (req, res) => {
   try {

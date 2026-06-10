@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   GitFork, 
   Plus, 
@@ -37,6 +37,7 @@ export interface PatchBlock {
   action: 'add' | 'replace' | 'remove';
   content: string;
   note: string;
+  pos?: 'before' | 'after' | 'prepend' | 'append';
   targetFile?: string;
 }
 
@@ -142,7 +143,325 @@ export const BUILTIN_BOILERPLATES: BoilerplateSnippet[] = [
 
 export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSystemProps) {
   const [targetFile, setTargetFile] = useState<string>('libraries/ship_macros.xml');
-  
+
+  const patchBlocks = workspace.xmlPatches || [];
+  const filteredBlocks = patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile);
+
+  const [baseFileContent, setBaseFileContent] = useState<string | null>(null);
+  const [baseFileLoading, setBaseFileLoading] = useState<boolean>(false);
+  const [baseFileError, setBaseFileError] = useState<string | null>(null);
+  const [isPacked, setIsPacked] = useState<boolean>(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'patch' | 'preview'>('patch');
+
+  useEffect(() => {
+    if (!targetFile) return;
+    setBaseFileLoading(true);
+    setBaseFileError(null);
+    setIsPacked(false);
+    setBaseFileContent(null);
+    fetch(`/api/patch/base-content?targetFile=${encodeURIComponent(targetFile)}`)
+      .then(res => {
+        if (!res.ok) {
+          return res.json().then(data => {
+            throw new Error(data.error || 'Failed to load base file');
+          });
+        }
+        return res.json();
+      })
+      .then(data => {
+        setBaseFileContent(data.content);
+        setBaseFileLoading(false);
+      })
+      .catch(err => {
+        setBaseFileError(err.message);
+        if (err.message.includes('packed')) {
+          setIsPacked(true);
+        }
+        setBaseFileLoading(false);
+      });
+  }, [targetFile]);
+
+  const parsedBaseDoc = useMemo(() => {
+    if (!baseFileContent) return null;
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(baseFileContent, 'text/xml');
+      const parserError = doc.getElementsByTagName("parsererror");
+      if (parserError.length > 0) return null;
+      return doc;
+    } catch {
+      return null;
+    }
+  }, [baseFileContent]);
+
+  const applyPatchesResult = useMemo(() => {
+    if (!parsedBaseDoc) return { doc: null, errors: {} as Record<string, string> };
+    
+    const doc = parsedBaseDoc.cloneNode(true) as Document;
+    const errors: Record<string, string> = {};
+
+    filteredBlocks.forEach(b => {
+      if (!b.sel || b.includeInBuild === false) return;
+      try {
+        const nodes = doc.evaluate(
+          b.sel,
+          doc,
+          null,
+          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+          null
+        );
+
+        if (nodes.snapshotLength === 0) {
+          errors[b.id] = "Selector matched 0 elements.";
+          return;
+        }
+
+        for (let idx = 0; idx < nodes.snapshotLength; idx++) {
+          const target = nodes.snapshotItem(idx) as Node;
+          if (!target) continue;
+
+          if (b.action === 'remove') {
+            if (target.nodeType === Node.ATTRIBUTE_NODE) {
+              const attr = target as Attr;
+              const owner = attr.ownerElement;
+              if (owner) {
+                owner.removeAttribute(attr.name);
+              }
+            } else if (target.parentNode) {
+              target.parentNode.removeChild(target);
+            }
+          } else if (b.action === 'replace') {
+            if (target.nodeType === Node.ATTRIBUTE_NODE) {
+              const attr = target as Attr;
+              attr.value = b.content.trim();
+            } else {
+              const fragDoc = new DOMParser().parseFromString(`<root>${b.content}</root>`, 'text/xml');
+              const parserError = fragDoc.getElementsByTagName("parsererror");
+              if (parserError.length > 0) {
+                throw new Error("XML syntax error in patch content.");
+              }
+              const parent = target.parentNode;
+              if (parent) {
+                const children = Array.from(fragDoc.documentElement.childNodes);
+                children.forEach(child => {
+                  const imported = doc.importNode(child, true);
+                  parent.insertBefore(imported, target);
+                });
+                parent.removeChild(target);
+              }
+            }
+          } else if (b.action === 'add') {
+            if (target.nodeType === Node.ELEMENT_NODE) {
+              const fragDoc = new DOMParser().parseFromString(`<root>${b.content}</root>`, 'text/xml');
+              const parserError = fragDoc.getElementsByTagName("parsererror");
+              if (parserError.length > 0) {
+                throw new Error("XML syntax error in patch content.");
+              }
+              const children = Array.from(fragDoc.documentElement.childNodes);
+              const pos = b.pos || 'append';
+
+              if (pos === 'prepend') {
+                children.reverse().forEach(child => {
+                  const imported = doc.importNode(child, true);
+                  target.insertBefore(imported, target.firstChild);
+                });
+              } else if (pos === 'before') {
+                const parent = target.parentNode;
+                if (parent) {
+                  children.forEach(child => {
+                    const imported = doc.importNode(child, true);
+                    parent.insertBefore(imported, target);
+                  });
+                }
+              } else if (pos === 'after') {
+                const parent = target.parentNode;
+                if (parent) {
+                  const nextSib = target.nextSibling;
+                  children.forEach(child => {
+                    const imported = doc.importNode(child, true);
+                    parent.insertBefore(imported, nextSib);
+                  });
+                }
+              } else {
+                // append
+                children.forEach(child => {
+                  const imported = doc.importNode(child, true);
+                  target.appendChild(imported);
+                });
+              }
+            } else {
+              throw new Error("Cannot add children to non-element target.");
+            }
+          }
+        }
+      } catch (err: any) {
+        errors[b.id] = err.message || String(err);
+      }
+    });
+
+    return { doc, errors };
+  }, [parsedBaseDoc, filteredBlocks]);
+
+  const validateBlockXPath = (b: PatchBlock) => {
+    if (baseFileLoading) {
+      return { status: 'loading', message: 'Loading base file...' };
+    }
+    if (isPacked || baseFileError) {
+      return { status: 'no_file', message: 'Base file packed or not found (XPath validation skipped)' };
+    }
+    if (!parsedBaseDoc) {
+      return { status: 'no_file', message: 'No valid base file loaded' };
+    }
+    if (!b.sel.trim()) {
+      return { status: 'warn', message: 'XPath selector is empty' };
+    }
+
+    try {
+      const result = parsedBaseDoc.evaluate(
+        b.sel,
+        parsedBaseDoc,
+        null,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+        null
+      );
+      const count = result.snapshotLength;
+      if (count === 0) {
+        return { status: 'error', message: '❌ Selector matches 0 elements. Patch will fail silently in-game.', count };
+      } else if (count === 1) {
+        return { status: 'success', message: '✅ Selector matches exactly 1 target element.', count };
+      } else {
+        return { status: 'warn', message: `⚠️ Selector matches multiple elements (${count} matches). Patch will apply to all of them.`, count };
+      }
+    } catch (err: any) {
+      return { status: 'error', message: `❌ Invalid XPath selector syntax: ${err.message || err}` };
+    }
+  };
+
+  function computeSimpleDiff(oldStr: string, newStr: string) {
+    const oldLines = (oldStr || '').split('\n');
+    const newLines = (newStr || '').split('\n');
+    const result: { type: 'addition' | 'deletion' | 'normal'; value: string }[] = [];
+    let i = 0;
+    let j = 0;
+    
+    while (i < oldLines.length || j < newLines.length) {
+      const oldLine = oldLines[i];
+      const newLine = newLines[j];
+      
+      if (oldLine !== undefined && newLine !== undefined && oldLine.trim() === newLine.trim()) {
+        result.push({ type: 'normal', value: oldLine });
+        i++;
+        j++;
+      } else {
+        let foundMatch = false;
+        for (let offset = 1; offset <= 5; offset++) {
+          const lookaheadOld = oldLines[i + offset];
+          const lookaheadNew = newLines[j + offset];
+          
+          if (lookaheadOld !== undefined && newLine !== undefined && lookaheadOld.trim() === newLine.trim()) {
+            for (let k = 0; k < offset; k++) {
+              if (oldLines[i + k] !== undefined) {
+                result.push({ type: 'deletion', value: oldLines[i + k] });
+              }
+            }
+            i += offset;
+            foundMatch = true;
+            break;
+          } else if (lookaheadNew !== undefined && oldLine !== undefined && oldLine.trim() === lookaheadNew.trim()) {
+            for (let k = 0; k < offset; k++) {
+              if (newLines[j + k] !== undefined) {
+                result.push({ type: 'addition', value: newLines[j + k] });
+              }
+            }
+            j += offset;
+            foundMatch = true;
+            break;
+          }
+        }
+        if (!foundMatch) {
+          if (oldLine !== undefined && newLine !== undefined) {
+            result.push({ type: 'deletion', value: oldLine });
+            result.push({ type: 'addition', value: newLine });
+            i++;
+            j++;
+          } else if (oldLine !== undefined) {
+            result.push({ type: 'deletion', value: oldLine });
+            i++;
+          } else if (newLine !== undefined) {
+            result.push({ type: 'addition', value: newLine });
+            j++;
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  const previewDiffLines = useMemo(() => {
+    if (!baseFileContent || !applyPatchesResult.doc) return [];
+    try {
+      const serializer = new XMLSerializer();
+      const modifiedXml = serializer.serializeToString(applyPatchesResult.doc);
+      return computeSimpleDiff(baseFileContent, modifiedXml);
+    } catch {
+      return [];
+    }
+  }, [baseFileContent, applyPatchesResult.doc]);
+
+  const diffSnippet = useMemo(() => {
+    if (previewDiffLines.length === 0) return [];
+    const contextSize = 3;
+    const result: { type: 'addition' | 'deletion' | 'normal'; value: string; label: string }[] = [];
+
+    let oldLineNum = 1;
+    let newLineNum = 1;
+    const linesWithMeta = previewDiffLines.map(line => {
+      let label = '';
+      if (line.type === 'normal') {
+        label = `${oldLineNum}→${newLineNum}`;
+        oldLineNum++;
+        newLineNum++;
+      } else if (line.type === 'deletion') {
+        label = `${oldLineNum}   `;
+        oldLineNum++;
+      } else {
+        label = `   ${newLineNum}`;
+        newLineNum++;
+      }
+      return { ...line, label };
+    });
+
+    const changeIndices = linesWithMeta
+      .map((line, idx) => (line.type !== 'normal' ? idx : -1))
+      .filter(idx => idx !== -1);
+
+    if (changeIndices.length === 0) {
+      return [{ type: 'normal' as const, value: 'No changes detected. Modify or add patch blocks to preview.', label: '' }];
+    }
+
+    const indicesToInclude = new Set<number>();
+    changeIndices.forEach(changeIdx => {
+      const start = Math.max(0, changeIdx - contextSize);
+      const end = Math.min(linesWithMeta.length - 1, changeIdx + contextSize);
+      for (let i = start; i <= end; i++) {
+        indicesToInclude.add(i);
+      }
+    });
+
+    let lastIncludedIdx = -1;
+    linesWithMeta.forEach((line, idx) => {
+      if (indicesToInclude.has(idx)) {
+        if (lastIncludedIdx !== -1 && idx - lastIncludedIdx > 1) {
+          result.push({ type: 'normal', value: `... [Skip ${idx - lastIncludedIdx - 1} lines] ...`, label: '...' });
+        }
+        result.push(line);
+        lastIncludedIdx = idx;
+      }
+    });
+
+    return result;
+  }, [previewDiffLines]);
+
   const [sidebarTab, setSidebarTab] = useState<'recipes' | 'boilerplates' | 'tree'>('tree');
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedSnippetId, setCopiedSnippetId] = useState<string | null>(null);
@@ -256,9 +575,6 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
     }
   ];
 
-  const patchBlocks = workspace.xmlPatches || [];
-  const filteredBlocks = patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile);
-
   const savePatches = (newPatches: PatchBlock[]) => {
     setWorkspace(prev => ({
       ...prev,
@@ -360,7 +676,8 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
       if (b.action === 'remove') {
         xml += `  <remove sel="${b.sel}" />\n\n`;
       } else {
-        xml += `  <${b.action} sel="${b.sel}">\n`;
+        const posAttr = (b.action === 'add' && b.pos) ? ` pos="${b.pos}"` : '';
+        xml += `  <${b.action} sel="${b.sel}"${posAttr}>\n`;
         // Indent lines
         const lines = b.content.split('\n');
         lines.forEach(l => {
@@ -876,6 +1193,52 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
                     </div>
                   </div>
 
+                  {/* Position selector for 'add' action */}
+                  {b.action === 'add' && (
+                    <div className="space-y-1 font-mono text-[10.5px]">
+                      <div className="flex items-center gap-1">
+                        <span className="text-slate-400 uppercase font-bold text-[9px] w-24">Position (pos):</span>
+                        <select
+                          value={b.pos || 'append'}
+                          onChange={(e) => handleUpdatePatchBlock(b.id, 'pos', e.target.value)}
+                          className="bg-black/50 border border-white/10 rounded px-2 py-1 text-slate-200 flex-1 h-7 focus:outline-none focus:border-emerald-500 text-[10px] font-mono cursor-pointer"
+                        >
+                          <option value="append">append (Default - add as last child)</option>
+                          <option value="prepend">prepend (add as first child)</option>
+                          <option value="before">before (insert before target node)</option>
+                          <option value="after">after (insert after target node)</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* XPath Matches and Application Errors */}
+                  {(() => {
+                    const val = validateBlockXPath(b);
+                    const err = applyPatchesResult.errors[b.id];
+                    return (
+                      <div className="ml-24 text-[9.5px] font-mono flex flex-col gap-0.5 mt-0.5">
+                        {val.status === 'success' && (
+                          <span className="text-emerald-400 font-bold">{val.message}</span>
+                        )}
+                        {val.status === 'warn' && (
+                          <span className="text-amber-400 font-semibold">{val.message}</span>
+                        )}
+                        {val.status === 'error' && (
+                          <span className="text-rose-400 font-bold">{val.message}</span>
+                        )}
+                        {val.status === 'no_file' && (
+                          <span className="text-slate-500">{val.message}</span>
+                        )}
+                        {err && (
+                          <span className="text-rose-500 font-bold bg-rose-950/20 border border-rose-900/30 px-2 py-0.5 rounded mt-1">
+                            ⚠️ Applied error: {err}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Code editor block for Add or Replace content */}
                   {b.action !== 'remove' && (
                     <div className="ml-24 space-y-1 font-mono text-[10.5px]">
@@ -896,12 +1259,23 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
         </div>
 
         {/* Right side code preview area */}
-        <div className="w-[360px] bg-[#0c0e14] border-l border-white/10 p-4 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3 shrink-0 font-mono text-xs">
-            <div className="flex items-center gap-1 text-emerald-400 font-semibold">
-              <Code2 className="w-4 h-4" />
-              <span>Full Generated Patch</span>
+        <div className="w-[450px] bg-[#0c0e14] border-l border-white/10 p-4 flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3 shrink-0 font-mono text-xs gap-2">
+            <div className="flex items-center gap-1 bg-[#0F1115] border border-white/10 p-0.5 rounded shrink-0">
+              <button
+                onClick={() => setRightPanelTab('patch')}
+                className={`px-2.5 py-1 text-[9.5px] font-mono font-bold uppercase rounded ${rightPanelTab === 'patch' ? 'bg-emerald-500 text-black' : 'text-slate-400 hover:text-slate-200'} cursor-pointer transition-all`}
+              >
+                Patch XML
+              </button>
+              <button
+                onClick={() => setRightPanelTab('preview')}
+                className={`px-2.5 py-1 text-[9.5px] font-mono font-bold uppercase rounded ${rightPanelTab === 'preview' ? 'bg-emerald-500 text-black' : 'text-slate-400 hover:text-slate-200'} cursor-pointer transition-all`}
+              >
+                Applied Preview
+              </button>
             </div>
+            
             <button
               onClick={copyToClipboard}
               className="px-2.5 py-0.5 rounded bg-black/45 hover:bg-black/80 font-bold uppercase text-[9.5px] border border-white/10 text-slate-300 hover:text-emerald-400 cursor-pointer flex items-center gap-1"
@@ -910,11 +1284,52 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
             </button>
           </div>
 
-          <div className="flex-1 bg-black/50 rounded-lg p-3 font-mono text-[10.5px] text-slate-400 overflow-y-auto relative custom-scrollbar border border-white/5 leading-normal select-text selection:bg-emerald-500/25">
-            <pre className="whitespace-pre">
-              {compileDiffDocument()}
-            </pre>
-          </div>
+          {rightPanelTab === 'patch' ? (
+            <div className="flex-1 bg-black/50 rounded-lg p-3 font-mono text-[10.5px] text-slate-400 overflow-y-auto relative custom-scrollbar border border-white/5 leading-normal select-text selection:bg-emerald-500/25">
+              <pre className="whitespace-pre">
+                {compileDiffDocument()}
+              </pre>
+            </div>
+          ) : (
+            <div className="flex-1 bg-black/50 rounded-lg p-3 font-mono text-[10px] overflow-y-auto relative custom-scrollbar border border-white/5 leading-relaxed select-text flex flex-col gap-0.5">
+              {baseFileLoading ? (
+                <div className="text-center py-20 text-slate-500 font-mono text-xs">Loading base game XML...</div>
+              ) : isPacked || baseFileError ? (
+                <div className="text-center py-16 text-slate-500 text-[10.5px] whitespace-pre-line px-4 font-mono leading-relaxed">
+                  {baseFileError || `Target file '${targetFile}' is packed in Egosoft .cat/.dat game archives.\n\nUnified text diff preview is unavailable unless loose XML files are provided.`}
+                </div>
+              ) : (
+                <div className="flex flex-col font-mono text-[9.5px]">
+                  <div className="text-[9px] uppercase tracking-wide text-slate-500 border-b border-white/5 pb-1 mb-1 font-bold">
+                    Unified Diff: {targetFile}
+                  </div>
+                  {diffSnippet.map((line, idx) => {
+                    let lineClass = 'text-slate-400';
+                    let prefix = ' ';
+                    if (line.type === 'addition') {
+                      lineClass = 'bg-emerald-950/45 text-emerald-300 border-l-2 border-emerald-500 px-1';
+                      prefix = '+';
+                    } else if (line.type === 'deletion') {
+                      lineClass = 'bg-rose-950/45 text-rose-300 border-l-2 border-red-500 px-1';
+                      prefix = '-';
+                    } else if (line.label === '...') {
+                      lineClass = 'text-slate-600 bg-slate-900/20 px-1 border-y border-white/5 py-0.5 my-0.5';
+                      prefix = '';
+                    }
+                    return (
+                      <div key={idx} className={`flex items-start font-mono transition-colors ${lineClass}`}>
+                        <span className="w-10 select-none text-[8px] text-slate-600 mr-2 border-r border-white/5 pr-1.5 text-right font-normal shrink-0">
+                          {line.label}
+                        </span>
+                        <span className="select-none font-bold text-slate-600 mr-1 shrink-0 w-3 text-center">{prefix}</span>
+                        <span className="whitespace-pre flex-1 overflow-x-auto break-all select-text">{line.value}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
