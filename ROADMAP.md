@@ -70,6 +70,8 @@ The evidence that the loop closed.
 
 **Observed status as of 2026-06-10:** the MVP loop has been user-confirmed: the studio can build usable mods, deploy them into the X4 game folder, and the generated mods load and function in-game. The roadmap now shifts from "can it work?" to "is this better, safer, and faster than hand-editing X4 mods?"
 
+- **Completed:** Sidebar Resizing and Visual Refactoring. The left sidebar and right code-preview aside are now fully resizable with drag-to-resize handles. The sidebar navigation was overhauled into a vertical icon strip, and all panels (MD Nodes, Cues, Widgets, Mod Meta, Filesystem, Source Control, Templates) were visually modernized to be compact and premium.
+
 **Priority rule:** prioritize features that make text/XML/script editing safer and more complete across every X4 modding domain. File-tree and mod-folder management should be built when it improves awareness, preservation, deployment safety, or round-trip confidence.
 
 ### Decision record — highest-value feature bets
