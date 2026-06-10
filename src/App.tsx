@@ -97,6 +97,26 @@ export default function App() {
     // Attempt local storage sync
     const stored = localStorage.getItem('x4_mod_studio_workspace');
     const parsed = stored ? JSON.parse(stored) : BLANK_WORKSPACE;
+    
+    // Merge legacy localStorage items for backwards compatibility:
+    const legacyAIScripts = localStorage.getItem('x4_mod_studio_aiscripts');
+    const legacyWares = localStorage.getItem('x4_mod_studio_wares');
+    const legacyJobs = localStorage.getItem('x4_mod_studio_jobs');
+    const legacyPatches = localStorage.getItem('x4_mod_studio_xml_patches');
+
+    if (legacyAIScripts && (!parsed.aiScripts || parsed.aiScripts.length === 0)) {
+      try { parsed.aiScripts = JSON.parse(legacyAIScripts); } catch(e){}
+    }
+    if (legacyWares && (!parsed.wares || parsed.wares.length === 0)) {
+      try { parsed.wares = JSON.parse(legacyWares); } catch(e){}
+    }
+    if (legacyJobs && (!parsed.jobs || parsed.jobs.length === 0)) {
+      try { parsed.jobs = JSON.parse(legacyJobs); } catch(e){}
+    }
+    if (legacyPatches && (!parsed.xmlPatches || parsed.xmlPatches.length === 0)) {
+      try { parsed.xmlPatches = JSON.parse(legacyPatches); } catch(e){}
+    }
+
     return sanitizeWorkspace(parsed);
   });
 

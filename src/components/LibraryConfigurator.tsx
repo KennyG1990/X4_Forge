@@ -108,25 +108,21 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
     }
   ];
 
-  // Persists local structures via LocalStorage and triggers sync
-  const [wares, setWares] = useState<WareDef[]>(() => {
-    const saved = localStorage.getItem('x4_mod_studio_wares');
-    return saved ? JSON.parse(saved) : defaultWares;
-  });
-
-  const [jobs, setJobs] = useState<JobDef[]>(() => {
-    const saved = localStorage.getItem('x4_mod_studio_jobs');
-    return saved ? JSON.parse(saved) : defaultJobs;
-  });
+  const wares = workspace.wares && workspace.wares.length > 0 ? workspace.wares : defaultWares;
+  const jobs = workspace.jobs && workspace.jobs.length > 0 ? workspace.jobs : defaultJobs;
 
   const saveWares = (newWares: WareDef[]) => {
-    setWares(newWares);
-    localStorage.setItem('x4_mod_studio_wares', JSON.stringify(newWares));
+    setWorkspace(prev => ({
+      ...prev,
+      wares: newWares
+    }));
   };
 
   const saveJobs = (newJobs: JobDef[]) => {
-    setJobs(newJobs);
-    localStorage.setItem('x4_mod_studio_jobs', JSON.stringify(newJobs));
+    setWorkspace(prev => ({
+      ...prev,
+      jobs: newJobs
+    }));
   };
 
   const handleCreateWare = () => {

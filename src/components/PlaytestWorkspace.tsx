@@ -9,7 +9,8 @@ import {
   Save, 
   RefreshCw, 
   Wrench, 
-  Cpu 
+  Cpu,
+  PackageCheck
 } from 'lucide-react';
 
 interface LogIssue {
@@ -54,6 +55,9 @@ interface PlaytestWorkspaceProps {
   insertDemoX4Log: () => void;
   handleLogFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleApplyAutoFix: (fix: any) => void;
+  compileStatus: 'idle' | 'compiling' | 'success' | 'error';
+  compileMessage: string;
+  handleCompileModProject: () => Promise<void>;
 }
 
 export default function PlaytestWorkspace({
@@ -74,7 +78,10 @@ export default function PlaytestWorkspace({
   handleTriggerLogAnalysis,
   insertDemoX4Log,
   handleLogFileChange,
-  handleApplyAutoFix
+  handleApplyAutoFix,
+  compileStatus,
+  compileMessage,
+  handleCompileModProject
 }: PlaytestWorkspaceProps) {
   return (
     <div className="p-4 space-y-5 font-sans select-text">
@@ -154,6 +161,37 @@ export default function PlaytestWorkspace({
         )}
 
         {/* SYNC INDICATORS banner */}
+        <div className="p-3 bg-[#0a0c10] border border-emerald-500/15 rounded-lg space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-mono font-bold uppercase text-emerald-400 flex items-center gap-1.5">
+                <PackageCheck className="w-3.5 h-3.5" />
+                Extension Package Compiler
+              </div>
+              <p className="text-[10.5px] text-slate-400 leading-normal mt-1">
+                Builds <code className="text-cyan-400 font-mono">content.xml</code>, <code className="text-cyan-400 font-mono">md/</code>, and optional generated resource folders into <code className="text-cyan-400 font-mono">extensions/&lt;mod_id&gt;/</code>.
+              </p>
+            </div>
+            <button
+              onClick={handleCompileModProject}
+              disabled={!dirHandle || compileStatus === 'compiling'}
+              className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-black font-mono font-bold text-[10px] rounded transition-all flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed shrink-0"
+            >
+              <PackageCheck className={`w-3.5 h-3.5 ${compileStatus === 'compiling' ? 'animate-pulse' : ''}`} />
+              COMPILE MOD
+            </button>
+          </div>
+          {compileMessage && (
+            <div className={`p-2 rounded border font-mono text-[10px] ${
+              compileStatus === 'error'
+                ? 'bg-red-500/10 border-red-500/20 text-red-300'
+                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+            }`}>
+              {compileMessage}
+            </div>
+          )}
+        </div>
+
         {syncStatus === 'syncing' && (
           <div className="p-2 bg-slate-900 border border-white/10 rounded font-mono text-[10px] text-slate-400 flex items-center justify-center gap-2 animate-pulse">
             <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
@@ -362,13 +400,13 @@ export default function PlaytestWorkspace({
         </h5>
         <div className="text-[10px] text-slate-400 leading-relaxed font-sans font-medium space-y-2">
           <p>
-            1. Launch X4: Foundations with properties: <code className="text-cyan-400 font-mono font-bold select-all bg-black/45 px-1 py-0.5 rounded">-debug all -reloaddirector</code>
+            1. Launch X4: Foundations with properties: <code className="text-cyan-400 font-mono font-bold select-all bg-black/45 px-1 py-0.5 rounded">-debug scripts -logfile debuglog.txt</code>
           </p>
           <p>
             2. Refresh/save compiled files, then fire this reload signal in your game's active developer terminal input:
           </p>
           <div className="p-1 px-2 bg-slate-900/80 border border-white/5 rounded font-mono text-[9.5px] font-bold text-center block text-white select-all">
-            /reloaddirector
+            refreshmd
           </div>
         </div>
       </div>

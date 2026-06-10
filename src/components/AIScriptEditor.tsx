@@ -90,21 +90,12 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
     }
   ];
 
-  // Load from local storage or set initial
-  const [scripts, setScripts] = useState<typeof defaultAIScripts>(() => {
-    const saved = localStorage.getItem('x4_mod_studio_aiscripts');
-    return saved ? JSON.parse(saved) : defaultAIScripts;
-  });
+  const scripts = workspace.aiScripts && workspace.aiScripts.length > 0 ? workspace.aiScripts : defaultAIScripts;
 
-  const saveScriptsState = (newScripts: typeof scripts) => {
-    setScripts(newScripts);
-    localStorage.setItem('x4_mod_studio_aiscripts', JSON.stringify(newScripts));
-    
-    // Also push to parent workspace as custom nodes to trigger saving inside directory explorer automatically
+  const saveScriptsState = (newScripts: typeof defaultAIScripts) => {
     setWorkspace(prev => ({
       ...prev,
-      // Store reference inside workspace structure
-      name: prev.name
+      aiScripts: newScripts
     }));
   };
 
@@ -245,8 +236,7 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
       return;
     }
     const filtered = scripts.filter((_, idx) => idx !== activeScriptIdx);
-    setScripts(filtered);
-    localStorage.setItem('x4_mod_studio_aiscripts', JSON.stringify(filtered));
+    saveScriptsState(filtered);
     setActiveScriptIdx(0);
   };
 

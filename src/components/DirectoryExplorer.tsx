@@ -45,6 +45,13 @@ interface DirectoryExplorerProps {
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
   workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation';
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
+  onOpenEditorFile?: (file: {
+    name: string;
+    path: string;
+    content: string;
+    handle?: any;
+    isMock?: boolean;
+  }) => void;
 }
 
 // 1. Initial high-fidelity Mock File System conforming to X4/Godot-style structures
@@ -78,29 +85,29 @@ const MOCK_FILESYSTEM_TREE: FSItem[] = [
     ]
   },
   {
-    name: "director",
+    name: "md",
     kind: "directory",
-    path: "res://director",
+    path: "res://md",
     isMock: true,
     children: [
       {
         name: "Elite_Fighter_Escort.json",
         kind: "file",
-        path: "res://director/Elite_Fighter_Escort.json",
+        path: "res://md/Elite_Fighter_Escort.json",
         isMock: true,
         content: "" // Filled dynamically in initializer
       },
       {
         name: "Argon_Sector_Bounty.json",
         kind: "file",
-        path: "res://director/Argon_Sector_Bounty.json",
+        path: "res://md/Argon_Sector_Bounty.json",
         isMock: true,
         content: "" // Filled dynamically in initializer
       },
       {
         name: "Custom_Startup_Script.xml",
         kind: "file",
-        path: "res://director/Custom_Startup_Script.xml",
+        path: "res://md/Custom_Startup_Script.xml",
         isMock: true,
         content: `<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="Custom_Startup_Script">\n  <cues>\n    <cue name="My_Startup_Cue" state="active">\n      <conditions>\n        <event_cue_signalled cue="md.Setup.Start" />\n      </conditions>\n      <actions>\n        <show_help text="'Visual XML Mod initiated!'" duration="5" />\n      </actions>\n    </cue>\n  </cues>\n</mdscript>`
       }
@@ -190,8 +197,7 @@ const MOCK_FILESYSTEM_TREE: FSItem[] = [
   }
 ];
 
-export default function DirectoryExplorer({
-  dirHandle,
+export default function DirectoryExplorer({dirHandle,
   setDirHandle,
   dirName,
   setDirName,
@@ -199,14 +205,14 @@ export default function DirectoryExplorer({
   setWorkspace,
   saveCheckpoint,
   workspaceView,
-  setWorkspaceView
-}: DirectoryExplorerProps) {
+  setWorkspaceView,
+  onOpenEditorFile}: DirectoryExplorerProps) {
   const [fileFilter, setFileFilter] = useState('');
   const [fileTree, setFileTree] = useState<FSItem[]>(MOCK_FILESYSTEM_TREE);
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({
     "res://addons": true,
     "res://addons/world_generator_plugin": true,
-    "res://director": true,
+    "res://md": true,
     "res://ui": true,
     "res://aiscripts": true,
     "res://t": true,
@@ -223,8 +229,8 @@ export default function DirectoryExplorer({
   useEffect(() => {
     // Populate raw JSON workspace presets inside the mock configurations
     const stored = localStorage.getItem('x4_mod_studio_workspace');
-    const escortMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'director')?.children?.find(c => c.name === 'Elite_Fighter_Escort.json');
-    const bountyMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'director')?.children?.find(c => c.name === 'Argon_Sector_Bounty.json');
+    const escortMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'md')?.children?.find(c => c.name === 'Elite_Fighter_Escort.json');
+    const bountyMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'md')?.children?.find(c => c.name === 'Argon_Sector_Bounty.json');
 
     if (escortMock) {
       // Find Preset
@@ -386,6 +392,15 @@ export default function DirectoryExplorer({
         const f = await file.handle.getFile();
         fileText = await f.text();
       }
+
+      
+      onOpenEditorFile?.({
+        name: file.name,
+        path: file.path,
+        content: fileText,
+        handle: file.handle,
+        isMock: file.isMock
+      });
 
       const fileExtension = file.name.split('.').pop()?.toLowerCase();
 
@@ -559,7 +574,7 @@ export default function DirectoryExplorer({
         setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
       } else {
         // Mock add
-        const parentCol = fileTree.find(n => n.name === 'director');
+        const parentCol = fileTree.find(n => n.name === 'md');
         if (parentCol && parentCol.children) {
           const mockPath = `res://director/${filename}`;
           const initialContent = type === 'json' 

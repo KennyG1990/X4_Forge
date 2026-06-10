@@ -54,14 +54,14 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
     }
   ];
 
-  const [patchBlocks, setPatchBlocks] = useState<PatchBlock[]>(() => {
-    const saved = localStorage.getItem('x4_mod_studio_xml_patches');
-    return saved ? JSON.parse(saved) : defaultPatches;
-  });
+  const patchBlocks = workspace.xmlPatches && workspace.xmlPatches.length > 0 ? workspace.xmlPatches : defaultPatches;
+  const filteredBlocks = patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile);
 
   const savePatches = (newPatches: PatchBlock[]) => {
-    setPatchBlocks(newPatches);
-    localStorage.setItem('x4_mod_studio_xml_patches', JSON.stringify(newPatches));
+    setWorkspace(prev => ({
+      ...prev,
+      xmlPatches: newPatches
+    }));
   };
 
   const handleAddPatchBlock = (action: 'add' | 'replace' | 'remove') => {
@@ -88,7 +88,8 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
       sel,
       action,
       content,
-      note
+      note,
+      targetFile
     };
 
     savePatches([...patchBlocks, nBlock]);
@@ -117,7 +118,8 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
         sel: '/macros/macro[@name="ship_tel_xl_carrier_01_a_macro"]/properties/hangars',
         action: 'replace',
         content: '<dock capacity="80" class="ship_s" />\n    <dock capacity="20" class="ship_m" />',
-        note: 'Expand XL Carrier drone & squad hangar counts'
+        note: 'Expand XL Carrier drone & squad hangar counts',
+        targetFile: 'libraries/ship_macros.xml'
       };
     } else if (recipeKey === 'combat_music') {
       raw = {
@@ -125,7 +127,8 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
         sel: '/soundlibrary/playlist[@id="combat_music_playlist"]',
         action: 'add',
         content: '<track path="sound/music/custom_battle_drum" intensity="high" />',
-        note: 'Inject deep custom war drum playlist track'
+        note: 'Inject deep custom war drum playlist track',
+        targetFile: 'libraries/sound_library.xml'
       };
     } else {
       raw = {
@@ -133,7 +136,8 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
         sel: '/parameters/shield[@id="boost_shield_regen"]/modifiers',
         action: 'replace',
         content: '<multiplier value="2.5" />',
-        note: 'Boost combat overdrive shield multipliers'
+        note: 'Boost combat overdrive shield multipliers',
+        targetFile: 'libraries/ship_macros.xml'
       };
     }
 
@@ -142,13 +146,14 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
 
   // Compile full patch document XML
   const compileDiffDocument = (): string => {
+    const activeBlocks = patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile);
     let xml = `<?xml version="1.0" encoding="utf-8"?>
 <!-- XML Diff patch targeting file: "${targetFile}" -->
 <!-- Applied safely into the central Egosoft index registry -->
 <diff>
 `;
 
-    patchBlocks.forEach(b => {
+    activeBlocks.forEach(b => {
       xml += `  <!-- ${b.note} -->\n`;
       if (b.action === 'remove') {
         xml += `  <remove sel="${b.sel}" />\n\n`;
@@ -286,12 +291,12 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
           </div>
 
           <div className="flex-1 overflow-y-auto space-y-3 pr-1 py-1">
-            {patchBlocks.length === 0 ? (
+            {filteredBlocks.length === 0 ? (
               <div className="text-center py-24 text-[11px] font-mono text-slate-500 whitespace-pre">
-                No patch blocks.<br />Click right header actions to build custom patches!
+                No patch blocks for this file.<br />Click right header actions to build custom patches!
               </div>
             ) : (
-              patchBlocks.map((b, bidx) => (
+              filteredBlocks.map((b, bidx) => (
                 <div
                   key={b.id}
                   className="bg-[#1c1f26]/90 border border-white/5 hover:border-emerald-500/30 p-3.5 rounded-lg flex flex-col gap-2.5 shadow-md relative group"
