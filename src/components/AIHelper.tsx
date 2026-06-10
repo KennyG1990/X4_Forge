@@ -98,6 +98,22 @@ export default function AIHelper({ workspace, setWorkspace, localVersion, setLoc
     }
   };
 
+  // Listen to open-ai-chat events triggered by Wiki Browser or nodes clicks
+  React.useEffect(() => {
+    const handleOpenChatEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ prompt: string }>;
+      if (customEvent.detail && customEvent.detail.prompt) {
+        setIsOpen(true);
+        setActiveMode('chat');
+        handleSendChatMode(customEvent.detail.prompt);
+      }
+    };
+    window.addEventListener('open-ai-chat', handleOpenChatEvent);
+    return () => {
+      window.removeEventListener('open-ai-chat', handleOpenChatEvent);
+    };
+  }, [workspace]);
+
   const handleSendBuilderMode = async (promptMsg: string) => {
     // Add user message to history
     setChatHistory(prev => [...prev, { role: 'user', text: `Generate workspace blueprint: ${promptMsg}` }]);

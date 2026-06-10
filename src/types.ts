@@ -21,12 +21,13 @@ export interface PropertySchema {
   options?: string[];
   placeholder?: string;
   description?: string;
+  required?: boolean;
 }
 
 // Visual Node representation in the blueprint editor
 export interface MDNode {
   id: string;
-  type: 'cue' | 'event' | 'condition' | 'action' | 'variable';
+  type: 'cue' | 'event' | 'condition' | 'action' | 'variable' | 'comment';
   label: string;
   xmlTag: string;
   x: number;
@@ -36,6 +37,9 @@ export interface MDNode {
   inputs: Port[];
   outputs: Port[];
   comment?: string;
+  width?: number;
+  height?: number;
+  color?: string;
 }
 
 // Connection wire representation between nodes
@@ -133,6 +137,7 @@ export interface PatchBlock {
   action: 'add' | 'replace' | 'remove';
   content: string;
   note: string;
+  targetFile?: string;
 }
 
 // Complete Mod Workspace containing scripts and widgets state

@@ -36,15 +36,13 @@ export interface FSItem {
 }
 
 interface DirectoryExplorerProps {
-  dirHandle: any | null;
-  setDirHandle: (handle: any | null) => void;
-  dirName: string;
-  setDirName: (name: string) => void;
+  modWorkspacePath: string;
+  filesystemPath: string;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
-  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation';
-  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
+  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki';
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
   onOpenEditorFile?: (file: {
     name: string;
     path: string;
@@ -54,280 +52,50 @@ interface DirectoryExplorerProps {
   }) => void;
 }
 
-// 1. Initial high-fidelity Mock File System conforming to X4/Godot-style structures
-const MOCK_FILESYSTEM_TREE: FSItem[] = [
-  {
-    name: "addons",
-    kind: "directory",
-    path: "res://addons",
-    isMock: true,
-    children: [
-      {
-        name: "world_generator_plugin",
-        kind: "directory",
-        path: "res://addons/world_generator_plugin",
-        isMock: true,
-        children: [
-          { name: "plugin.cfg", kind: "file", path: "res://addons/world_generator_plugin/plugin.cfg", isMock: true, content: "[plugin]\nname=\"World Generator\"\nauthor=\"Space Creator\"\nversion=\"1.0.0\"" },
-          { name: "README.md", kind: "file", path: "res://addons/world_generator_plugin/README.md", isMock: true, content: "# World Generator Addon\nCreates beautiful procedural asteroid belts." },
-          { name: "world_generator_plugin.gd", kind: "file", path: "res://addons/world_generator_plugin/world_generator_plugin.gd", isMock: true, content: "extends EditorPlugin\n# Godot engine addon init script" }
-        ]
-      },
-      {
-        name: "ai_assistant_hub",
-        kind: "directory",
-        path: "res://addons/ai_assistant_hub",
-        isMock: true,
-        children: [
-          { name: "assistant_setup.json", kind: "file", path: "res://addons/ai_assistant_hub/assistant_setup.json", isMock: true, content: "" }
-        ]
-      }
-    ]
-  },
-  {
-    name: "md",
-    kind: "directory",
-    path: "res://md",
-    isMock: true,
-    children: [
-      {
-        name: "Elite_Fighter_Escort.json",
-        kind: "file",
-        path: "res://md/Elite_Fighter_Escort.json",
-        isMock: true,
-        content: "" // Filled dynamically in initializer
-      },
-      {
-        name: "Argon_Sector_Bounty.json",
-        kind: "file",
-        path: "res://md/Argon_Sector_Bounty.json",
-        isMock: true,
-        content: "" // Filled dynamically in initializer
-      },
-      {
-        name: "Custom_Startup_Script.xml",
-        kind: "file",
-        path: "res://md/Custom_Startup_Script.xml",
-        isMock: true,
-        content: `<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="Custom_Startup_Script">\n  <cues>\n    <cue name="My_Startup_Cue" state="active">\n      <conditions>\n        <event_cue_signalled cue="md.Setup.Start" />\n      </conditions>\n      <actions>\n        <show_help text="'Visual XML Mod initiated!'" duration="5" />\n      </actions>\n    </cue>\n  </cues>\n</mdscript>`
-      }
-    ]
-  },
-  {
-    name: "ui",
-    kind: "directory",
-    path: "res://ui",
-    isMock: true,
-    children: [
-      { name: "menu_layout_config.xml", kind: "file", path: "res://ui/menu_layout_config.xml", isMock: true, content: `<?xml version="1.0" encoding="utf-8"?>\n<ui_menu name="X4_Custom_Menu">\n  <theme>\n    <background color="#0F1115" opacity="0.95" />\n  </theme>\n</ui_menu>` }
-    ]
-  },
-  {
-    name: "aiscripts",
-    kind: "directory",
-    path: "res://aiscripts",
-    isMock: true,
-    children: [
-      {
-        name: "hunter.escort.behavior.xml",
-        kind: "file",
-        path: "res://aiscripts/hunter.escort.behavior.xml",
-        isMock: true,
-        content: `<?xml version="1.0" encoding="utf-8"?>\n<aiscript name="hunter.escort.behavior" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">\n  <params>\n    <param name="target" type="object" default="this.ship.commander" comment="Leader ship" />\n    <param name="flee_shield" type="number" default="25" />\n  </params>\n  <actions>\n    <move_to destination="$target" speed="90" />\n    <shoot target="$enemy" weapon="primary" />\n  </actions>\n</aiscript>`
-      }
-    ]
-  },
-  {
-    name: "t",
-    kind: "directory",
-    path: "res://t",
-    isMock: true,
-    children: [
-      {
-        name: "0001-L044.xml",
-        kind: "file",
-        path: "res://t/0001-L044.xml",
-        isMock: true,
-        content: `<?xml version="1.0" encoding="utf-8"?>\n<language id="44">\n  <page id="20001" title="Weapon and Item Names">\n    <t id="1">Antimatter Disrupter Cannon</t>\n    <t id="2">Heavy Plasma Battery MK2</t>\n    <t id="3">Nanotech Hull Shielding</t>\n  </page>\n  <page id="20002" title="Dialogue and Messages">\n    <t id="1001">Warning. Incoming hazardous solar wind storm in 30 seconds!</t>\n    <t id="1002">Acolyte Squadron commander speaking. Standing by for flight vectors.</t>\n  </page>\n</language>`
-      }
-    ]
-  },
-  {
-    name: "libraries",
-    kind: "directory",
-    path: "res://libraries",
-    isMock: true,
-    children: [
-      {
-        name: "wares.xml",
-        kind: "file",
-        path: "res://libraries/wares.xml",
-        isMock: true,
-        content: `<?xml version="1.0" encoding="utf-8"?>
-<diff>
-  <add sel="/wares">
-    <ware id="custom_weapon_item" name="{20001,1}" description="{20001,3}">
-      <price min="25000" average="35000" max="45000" />
-    </ware>
-  </add>
-</diff>`
-      },
-      {
-        name: "jobs.xml",
-        kind: "file",
-        path: "res://libraries/jobs.xml",
-        isMock: true,
-        content: `<?xml version="1.0" encoding="utf-8"?>
-<diff>
-  <add sel="/jobs">
-    <job id="argon_heavy_patrol" name="Argon Heavy Patrol">
-      <quota galaxy="5" />
-    </job>
-  </add>
-</diff>`
-      }
-    ]
-  },
-  {
-    name: "README.md",
-    kind: "file",
-    path: "res://README.md",
-    isMock: true,
-    content: "# X4 foundations Visual Modding Studio Workspace"
-  }
-];
 
-export default function DirectoryExplorer({dirHandle,
-  setDirHandle,
-  dirName,
-  setDirName,
+
+export default function DirectoryExplorer({
+  modWorkspacePath,
+  filesystemPath,
   workspace,
   setWorkspace,
   saveCheckpoint,
   workspaceView,
   setWorkspaceView,
-  onOpenEditorFile}: DirectoryExplorerProps) {
+  onOpenEditorFile
+}: DirectoryExplorerProps) {
   const [fileFilter, setFileFilter] = useState('');
-  const [fileTree, setFileTree] = useState<FSItem[]>(MOCK_FILESYSTEM_TREE);
-  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({
-    "res://addons": true,
-    "res://addons/world_generator_plugin": true,
-    "res://md": true,
-    "res://ui": true,
-    "res://aiscripts": true,
-    "res://t": true,
-    "res://libraries": true
-  });
+  const [fileTree, setFileTree] = useState<FSItem[]>([]);
+  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
-  const [activeFileHandle, setActiveFileHandle] = useState<any | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [syncOnEdits, setSyncOnEdits] = useState(true);
-  const [isSandboxBlocked, setIsSandboxBlocked] = useState(false);
-
-  // Load preset workspace states into mocks so they are fully playable
-  useEffect(() => {
-    // Populate raw JSON workspace presets inside the mock configurations
-    const stored = localStorage.getItem('x4_mod_studio_workspace');
-    const escortMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'md')?.children?.find(c => c.name === 'Elite_Fighter_Escort.json');
-    const bountyMock = MOCK_FILESYSTEM_TREE.find(n => n.name === 'md')?.children?.find(c => c.name === 'Argon_Sector_Bounty.json');
-
-    if (escortMock) {
-      // Find Preset
-      const p = localStorage.getItem('x4_mod_studio_workspace_preset_escort') || JSON.stringify(workspace);
-      escortMock.content = p;
-    }
-    if (bountyMock) {
-      const p = localStorage.getItem('x4_mod_studio_workspace_preset_bounty') || JSON.stringify(workspace);
-      bountyMock.content = p;
-    }
-  }, []);
-
-  // Sync state back to mock contents on edits if inside standard simulated mode
-  useEffect(() => {
-    if (syncOnEdits && !dirHandle && activeFilePath) {
-      const serialized = JSON.stringify(workspace, null, 2);
-      updateMockFileContent(fileTree, activeFilePath, serialized);
-    }
-  }, [workspace, activeFilePath, dirHandle]);
-
-  const updateMockFileContent = (tree: FSItem[], path: string, content: string): boolean => {
-    for (let i = 0; i < tree.length; i++) {
-      if (tree[i].path === path) {
-        tree[i].content = content;
-        return true;
-      }
-      if (tree[i].children) {
-        const found = updateMockFileContent(tree[i].children!, path, content);
-        if (found) return true;
-      }
-    }
-    return false;
-  };
-
-  // 2. Local recursive scanner of folders using Native Filesystem Access
-  const scanRealLocalDirectory = async (handle: any): Promise<FSItem[]> => {
-    const items: FSItem[] = [];
-    try {
-      for await (const entry of handle.values()) {
-        const itemPath = `${dirName}://${entry.name}`;
-        if (entry.kind === 'directory') {
-          // Scan recursively
-          const children = await scanRealLocalDirectory(entry);
-          items.push({
-            name: entry.name,
-            kind: 'directory',
-            path: itemPath,
-            handle: entry,
-            children
-          });
-        } else {
-          items.push({
-            name: entry.name,
-            kind: 'file',
-            path: itemPath,
-            handle: entry
-          });
-        }
-      }
-    } catch (err) {
-      console.warn("Real directory scanning failed or restricted.", err);
-    }
-
-    // Sort folders first, then files
-    return items.sort((a, b) => {
-      if (a.kind !== b.kind) {
-        return a.kind === 'directory' ? -1 : 1;
-      }
-      return a.name.localeCompare(b.name);
-    });
-  };
 
   const handleRefreshDirectory = async () => {
-    if (!dirHandle) {
-      setStatusMessage({ type: 'info', text: "Refreshed simulated workspace!" });
-      setTimeout(() => setStatusMessage(null), 2000);
+    if (!filesystemPath && !modWorkspacePath) {
+      setFileTree([]);
       return;
     }
 
     try {
-      const scanned = await scanRealLocalDirectory(dirHandle);
-      setFileTree(scanned);
-      setStatusMessage({ type: 'success', text: "Synced local project filesystem!" });
+      const response = await fetch('/api/fs/list');
+      if (response.ok) {
+        const tree = await response.json();
+        setFileTree(tree);
+        setStatusMessage({ type: 'success', text: "Synced project filesystem!" });
+      } else {
+        throw new Error("Failed to load filesystem tree.");
+      }
       setTimeout(() => setStatusMessage(null), 2000);
     } catch (e: any) {
       setStatusMessage({ type: 'error', text: `Sync failed: ${e.message}` });
     }
   };
 
-  // Re-scan whenever handle changes
+  // Re-scan whenever configured paths change
   useEffect(() => {
-    if (dirHandle) {
-      handleRefreshDirectory();
-    } else {
-      setFileTree(MOCK_FILESYSTEM_TREE);
-    }
-  }, [dirHandle, dirName]);
+    handleRefreshDirectory();
+  }, [modWorkspacePath, filesystemPath]);
 
   const toggleFolder = (path: string) => {
     setExpandedPaths(prev => ({
@@ -336,70 +104,23 @@ export default function DirectoryExplorer({dirHandle,
     }));
   };
 
-  // 3. Mount Native File System Directory Picker
-  const handleMountDirectory = async () => {
-    setIsSandboxBlocked(false);
-    if (!('showDirectoryPicker' in window)) {
-      setStatusMessage({ 
-        type: 'error', 
-        text: "Direct Directory access is barred by your browser. Please try Chrome, Edge, or Opera." 
-      });
-      return;
-    }
-
-    try {
-      const handle = await (window as any).showDirectoryPicker();
-      setDirHandle(handle);
-      setDirName(handle.name);
-      setStatusMessage({ type: 'success', text: `Mounted filesystem: ${handle.name}` });
-      setTimeout(() => setStatusMessage(null), 2500);
-    } catch (err: any) {
-      console.error(err);
-      if (err.name === 'SecurityError') {
-        setIsSandboxBlocked(true);
-        setStatusMessage({
-          type: 'error',
-          text: "Iframe sandbox bounds barred directory requests. Access via New Tab!"
-        });
-      } else {
-        setStatusMessage({
-          type: 'error',
-          text: `FileSystem mount failed: ${err.message || 'Cancelled'}`
-        });
-      }
-    }
-  };
-
   // 4. File Click and Content Loader
   const handleFileClick = async (file: FSItem) => {
     try {
       saveCheckpoint();
       setActiveFilePath(file.path);
-      setActiveFileHandle(file.handle || null);
 
-      let fileText = '';
-
-      if (file.isMock) {
-        // Mock fallback retrieval
-        if (file.content === "") {
-          // Re-populate mock default matching active workspace schemas
-          fileText = JSON.stringify(workspace, null, 2);
-        } else {
-          fileText = file.content || '';
-        }
-      } else if (file.handle) {
-        // Read native file API chunk
-        const f = await file.handle.getFile();
-        fileText = await f.text();
+      const response = await fetch(`/api/fs/read?path=${encodeURIComponent(file.path)}`);
+      if (!response.ok) {
+        throw new Error("Could not read file from server.");
       }
+      const data = await response.json();
+      const fileText = data.content || '';
 
-      
       onOpenEditorFile?.({
         name: file.name,
         path: file.path,
-        content: fileText,
-        handle: file.handle,
-        isMock: file.isMock
+        content: fileText
       });
 
       const fileExtension = file.name.split('.').pop()?.toLowerCase();
@@ -418,7 +139,7 @@ export default function DirectoryExplorer({dirHandle,
         } catch (e: any) {
           setStatusMessage({ type: 'error', text: `JSON parse failed: ${e.message}` });
         }
-          } else if (fileExtension === 'xml') {
+      } else if (fileExtension === 'xml') {
         const isTFile = file.path.includes('/t/') || fileText.includes('<language');
         const isAIScript = file.path.includes('/aiscripts/') || fileText.includes('<aiscript');
         const isLibrary = file.path.includes('/libraries/') || fileText.includes('<diff');
@@ -534,20 +255,20 @@ export default function DirectoryExplorer({dirHandle,
       : generateMDXML(workspace);
 
     try {
-      if (activeFileHandle) {
-        // Native write to linked system disk
-        const writable = await activeFileHandle.createWritable();
-        await writable.write(contentToSave);
-        await writable.close();
-        setStatusMessage({ type: 'success', text: `Saved directly back to local file: ${activeFilePath.split('/').pop()}` });
+      const response = await fetch('/api/fs/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: activeFilePath, content: contentToSave })
+      });
+      if (response.ok) {
+        setStatusMessage({ type: 'success', text: `Saved file: ${activeFilePath.split('/').pop()}` });
       } else {
-        // Mock save
-        updateMockFileContent(fileTree, activeFilePath, contentToSave);
-        setStatusMessage({ type: 'success', text: `Workspace simulated save complete! (${activeFilePath.split('/').pop()})` });
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to write file on server.");
       }
       setTimeout(() => setStatusMessage(null), 2500);
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: `FileSystem write access blocked: ${err.message}` });
+      setStatusMessage({ type: 'error', text: `Save failed: ${err.message}` });
     }
   };
 
@@ -558,40 +279,31 @@ export default function DirectoryExplorer({dirHandle,
     const filename = cleanName.endsWith(`.${type}`) ? cleanName : `${cleanName}.${type}`;
 
     try {
-      if (dirHandle) {
-        // Native local storage file create
-        const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-        const writer = await fileHandle.createWritable();
-        
-        const initialContent = type === 'json' 
-          ? JSON.stringify(workspace, null, 2)
-          : generateMDXML(workspace);
+      const initialContent = type === 'json' 
+        ? JSON.stringify(workspace, null, 2)
+        : generateMDXML(workspace);
 
-        await writer.write(initialContent);
-        await writer.close();
-
-        await handleRefreshDirectory();
-        setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
-      } else {
-        // Mock add
-        const parentCol = fileTree.find(n => n.name === 'md');
-        if (parentCol && parentCol.children) {
-          const mockPath = `res://director/${filename}`;
-          const initialContent = type === 'json' 
-            ? JSON.stringify(workspace, null, 2)
-            : generateMDXML(workspace);
-
-          parentCol.children.push({
-            name: filename,
-            kind: 'file',
-            path: mockPath,
-            isMock: true,
-            content: initialContent
-          });
-          setFileTree([...fileTree]);
-          setStatusMessage({ type: 'success', text: `Created simulated file: ${filename}` });
-        }
+      const createResponse = await fetch('/api/fs/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: filename, type: 'file' })
+      });
+      if (!createResponse.ok) {
+        const err = await createResponse.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to create file on server.");
       }
+
+      const writeResponse = await fetch('/api/fs/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filename, content: initialContent })
+      });
+      if (!writeResponse.ok) {
+        throw new Error("Failed to write initial content.");
+      }
+
+      await handleRefreshDirectory();
+      setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
       setTimeout(() => setStatusMessage(null), 2500);
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: `Could not create file: ${err.message}` });
@@ -721,38 +433,12 @@ export default function DirectoryExplorer({dirHandle,
         {/* Current Folder Path breadcrumb */}
         <div className="flex items-center gap-1.5 bg-black/35 rounded-md p-1.5 border border-white/5">
           <span className="font-mono text-[10px] text-cyan-500 flex-shrink-0">
-            {dirHandle ? "ext://" : "res://"}
+            path://
           </span>
-          <span className="font-mono text-[10px] font-bold text-slate-300 truncate tracking-wide flex-1">
-            {dirHandle ? `addons/${dirName}/` : "addons/world_generator_plugin/"}
+          <span className="font-mono text-[10px] font-bold text-slate-300 truncate tracking-wide flex-1" title={filesystemPath || modWorkspacePath || "No folder configured"}>
+            {filesystemPath || modWorkspacePath || "No folder configured"}
           </span>
-          {!dirHandle && (
-            <span className="text-[8px] bg-amber-500/10 text-amber-500 px-1 rounded uppercase tracking-widest font-mono">
-              Demo
-            </span>
-          )}
         </div>
-
-        {/* Target Local Directory Mount Trigger Button */}
-        {!dirHandle && (
-          <button
-            onClick={handleMountDirectory}
-            className="w-full py-1.5 px-3 rounded-md bg-gradient-to-r from-cyan-600/30 to-blue-600/30 border border-cyan-500/40 hover:border-cyan-500/80 text-cyan-400 font-mono text-[10px] font-bold tracking-tight hover:from-cyan-600/40 hover:to-blue-600/40 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md"
-          >
-            <FolderOpen className="w-3.5 h-3.5" />
-            TARGET LOCAL DIRECTORY
-          </button>
-        )}
-
-        {isSandboxBlocked && (
-          <div className="p-2 border border-yellow-500/20 bg-yellow-500/5 text-[9.5px] text-yellow-500 font-sans leading-normal rounded-md space-y-1">
-            <span className="font-bold block flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
-              Iframe Sandbox Restricted Mount
-            </span>
-            <span>Authorize local folder access by opening AI Studio in a new tab using the URL in the right panel.</span>
-          </div>
-        )}
 
         {/* File filter input */}
         <div className="relative">
@@ -769,26 +455,11 @@ export default function DirectoryExplorer({dirHandle,
 
       {/* Directory Tree Scroll List */}
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5 custom-scrollbar scrollbar-thin scrollbar-thumb-white/10 select-none bg-[#1b1e24]">
-        {/* Favorites shortcut header just like Godot */}
-        <div className="px-2 py-1 text-[10px] font-mono text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-          <span>★ Favorites:</span>
-        </div>
-        <div className="pb-2 border-b border-white/5 mb-2 ml-2">
-          <button 
-            disabled={!dirHandle}
-            className={`w-full text-left py-1.5 px-2 font-mono text-[11px] rounded transition-all flex items-center gap-1.5 ${
-              dirHandle ? 'text-amber-500 hover:bg-[#2d313d]' : 'text-slate-600 cursor-not-allowed'
-            }`}
-          >
-            📂 active_mod_workspace
-          </button>
-        </div>
-
         {/* Tree Render entry point */}
         <div className="space-y-1">
           {filteredTree.length === 0 ? (
-            <div className="text-center py-6 text-[10px] font-mono text-slate-500">
-              No files matched filters
+            <div className="text-center py-6 px-3 text-[10px] font-mono text-slate-500 leading-relaxed">
+              {(filesystemPath || modWorkspacePath) ? "No files matched filters" : "No folder configured. Use Settings to configure your Filesystem folder."}
             </div>
           ) : (
             filteredTree.map(item => renderFSNode(item))
@@ -817,7 +488,7 @@ export default function DirectoryExplorer({dirHandle,
       {/* Godot style Footer feedback detail */}
       <div className="p-2 border-t border-white/5 bg-[#17191e] flex items-center justify-between font-mono text-[9px] text-slate-500 shrink-0">
         <span>Active File: {activeFilePath ? activeFilePath.split('/').pop() : 'None Loaded'}</span>
-        {dirHandle && <span className="text-emerald-500">● RealTime Connected</span>}
+        {(filesystemPath || modWorkspacePath) && <span className="text-emerald-500">● Server Connected</span>}
       </div>
     </div>
   );

@@ -14,7 +14,18 @@ import {
   Sliders, 
   Wrench,
   Sparkles,
-  Info
+  Info,
+  BookOpen,
+  ChevronRight,
+  Pin,
+  Copy,
+  Check,
+  PackageCheck,
+  Folder,
+  HardDrive,
+  GitBranch,
+  GitCommit,
+  Compass
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -26,10 +37,15 @@ import {
   UIWidget 
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
+import { WIKI_TOPICS } from './WikiBrowser';
+import SnapshotManager from './SnapshotManager';
+import SourceControl from './SourceControl';
+import ErrorBoundary from './ErrorBoundary';
+import CueViewer from './CueViewer';
 
 interface SidebarProps {
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -38,13 +54,11 @@ interface SidebarProps {
   setSelectedNode: React.Dispatch<React.SetStateAction<MDNode | null>>;
   selectedWidget: UIWidget | null;
   setSelectedWidget: React.Dispatch<React.SetStateAction<UIWidget | null>>;
-  dirHandle: any | null;
-  setDirHandle: (handle: any | null) => void;
-  dirName: string;
-  setDirName: (name: string) => void;
+  modWorkspacePath: string;
+  filesystemPath: string;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
-  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation';
-  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
+  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki';
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
   onSchemaConfigChanged?: () => Promise<void> | void;
   onOpenEditorFile?: (file: {
@@ -54,6 +68,14 @@ interface SidebarProps {
     handle?: any;
     isMock?: boolean;
   }) => void;
+  workspaceDirMode?: 'candy' | 'store';
+  setWorkspaceDirMode?: (mode: 'candy' | 'store') => void;
+  compileStatus?: 'idle' | 'compiling' | 'success' | 'error';
+  compileMessage?: string;
+  handleCompileModProject?: () => Promise<void>;
+  visibleCueIds: string[] | null;
+  setVisibleCueIds: (ids: string[] | null) => void;
+  setFocusNodeRequest: (req: { nodeId: string; timestamp: number } | null) => void;
 }
 
 export default function Sidebar({
@@ -67,19 +89,26 @@ export default function Sidebar({
   setSelectedNode,
   selectedWidget,
   setSelectedWidget,
-  dirHandle,
-  setDirHandle,
-  dirName,
-  setDirName,
+  modWorkspacePath,
+  filesystemPath,
   saveCheckpoint,
   workspaceView,
   setWorkspaceView,
-  schemaTemplates = [],
+  schemaTemplates,
   onSchemaConfigChanged,
-  onOpenEditorFile
+  onOpenEditorFile,
+  workspaceDirMode,
+  setWorkspaceDirMode,
+  compileStatus,
+  compileMessage,
+  handleCompileModProject,
+  visibleCueIds,
+  setVisibleCueIds,
+  setFocusNodeRequest
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
+  const [sidebarCopied, setSidebarCopied] = useState<boolean>(false);
   const [schemaStatus, setSchemaStatus] = useState<{
     mdXsdPath?: string;
     commonXsdPath?: string;
@@ -228,7 +257,7 @@ export default function Sidebar({
         <button
           id="tab_script"
           onClick={() => setActiveTab('script')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'script'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
@@ -238,9 +267,21 @@ export default function Sidebar({
           MD NODES
         </button>
         <button
+          id="tab_cues"
+          onClick={() => setActiveTab('cues')}
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+            activeTab === 'cues'
+              ? 'border-cyan-500 text-white bg-cyan-600/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+        >
+          <Compass className="w-3.5 h-3.5" />
+          CUES
+        </button>
+        <button
           id="tab_ui"
           onClick={() => setActiveTab('ui')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'ui'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
@@ -252,7 +293,7 @@ export default function Sidebar({
         <button
           id="tab_config"
           onClick={() => setActiveTab('config')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'config'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
@@ -264,25 +305,46 @@ export default function Sidebar({
         <button
           id="tab_filesystem"
           onClick={() => setActiveTab('filesystem')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'filesystem'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
         >
-          <FolderGit2 className="w-4 h-4" />
+          <FolderGit2 className="w-3.5 h-3.5" />
           FILESYSTEM
+        </button>
+        <button
+          id="tab_git"
+          onClick={() => setActiveTab('git')}
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+            activeTab === 'git'
+              ? 'border-cyan-500 text-white bg-cyan-600/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+        >
+          <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
+          SOURCE
         </button>
       </div>
 
       {/* Main Content Pane */}
-      <div className={`flex-1 overflow-y-auto ${activeTab === 'filesystem' ? 'p-0' : 'p-4 space-y-4'}`}>
+      <div className={`flex-1 overflow-y-auto ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' ? 'p-0' : 'p-4 space-y-4'}`}>
+        {activeTab === 'cues' && (
+          <CueViewer
+            workspace={workspace}
+            selectedNode={selectedNode}
+            setSelectedNode={setSelectedNode}
+            setFocusNodeRequest={setFocusNodeRequest}
+            visibleCueIds={visibleCueIds}
+            setVisibleCueIds={setVisibleCueIds}
+          />
+        )}
+
         {activeTab === 'filesystem' && (
           <DirectoryExplorer
-            dirHandle={dirHandle}
-            setDirHandle={setDirHandle}
-            dirName={dirName}
-            setDirName={setDirName}
+            modWorkspacePath={modWorkspacePath}
+            filesystemPath={filesystemPath}
             workspace={workspace}
             setWorkspace={setWorkspace}
             saveCheckpoint={saveCheckpoint}
@@ -290,6 +352,18 @@ export default function Sidebar({
             setWorkspaceView={setWorkspaceView}
             onOpenEditorFile={onOpenEditorFile}
           />
+        )}
+
+        {activeTab === 'git' && (
+          <ErrorBoundary label="Source Control">
+            <SourceControl
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              onOpenEditorFile={onOpenEditorFile}
+              saveCheckpoint={saveCheckpoint}
+              setWorkspaceView={setWorkspaceView}
+            />
+          </ErrorBoundary>
         )}
 
         {/* NODE COMPONENT LIBRARY LIST (Tab: script) */}
@@ -515,6 +589,89 @@ export default function Sidebar({
                 </div>
               )}
             </div>
+
+            {/* EXTENSION COMPILER & WORKSPACE STAGING */}
+            <div className="border-t border-white/10 pt-4 space-y-3">
+              <h3 className="text-xs font-mono font-semibold text-cyan-400 tracking-wider uppercase flex items-center gap-1.5">
+                <PackageCheck className="w-3.5 h-3.5" />
+                Extension Package Compiler
+              </h3>
+
+              {/* Local Directory Link state */}
+              {modWorkspacePath ? (
+                <div className="space-y-3">
+                  <div className="p-2 rounded bg-emerald-500/5 border border-emerald-500/20 text-[10px] space-y-1">
+                    <div className="flex items-center justify-between text-slate-400 font-bold uppercase text-[9px]">
+                       <span>Workspace Path</span>
+                       <span className="text-emerald-400 flex items-center gap-0.5 font-bold uppercase text-[8px] animate-pulse">● Configured</span>
+                    </div>
+                    <div className="text-white break-all flex items-center gap-1 text-[10px]">
+                      <Folder className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+                      {modWorkspacePath}
+                    </div>
+                  </div>
+
+                  {/* Candy Store mapping Mode Choice: Candy vs Candy Store */}
+                  <div>
+                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider flex items-center gap-1">
+                      <HardDrive className="w-3 h-3 text-cyan-400" />
+                      Staging Directory Type
+                    </label>
+                    <select
+                      value={workspaceDirMode}
+                      onChange={(e) => {
+                        const val = e.target.value as 'candy' | 'store';
+                        if (setWorkspaceDirMode) setWorkspaceDirMode(val);
+                        localStorage.setItem('x4_workspace_dir_mode', val);
+                      }}
+                      className="w-full bg-[#0F1115] border border-white/10 p-1.5 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                    >
+                      <option value="store">Generic Extensions Folder ("Candy Store")</option>
+                      <option value="candy">Direct Mod Folder ("Candy Itself")</option>
+                    </select>
+                    <p className="text-[9px] text-slate-500 leading-normal mt-1 italic">
+                      {workspaceDirMode === 'store' 
+                        ? 'Stages files in extensions/ folder inside a subdirectory named after your mod.' 
+                        : 'Writes files (content.xml, md/, etc) directly inside connected directory.'}
+                    </p>
+                  </div>
+
+                  {/* Trigger compiler button */}
+                  <button
+                    onClick={handleCompileModProject}
+                    disabled={compileStatus === 'compiling'}
+                    className="w-full py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-black font-mono font-bold text-[10px] rounded transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed uppercase shadow shadow-emerald-500/25 shrink-0"
+                  >
+                    <PackageCheck className={`w-4 h-4 ${compileStatus === 'compiling' ? 'animate-pulse' : ''}`} />
+                    Compile Mod Extension
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-[9.5px] text-slate-500 leading-relaxed italic text-center py-2">
+                    No workspace staging folder configured. Configure it in Settings to enable compiler.
+                  </p>
+                </div>
+              )}
+
+              {/* Compile results log notification */}
+              {compileMessage && (
+                <div className={`p-2 rounded border font-mono text-[9.5px] ${
+                  compileStatus === 'error'
+                    ? 'bg-red-500/10 border-red-500/20 text-red-300'
+                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                }`}>
+                  {compileMessage}
+                </div>
+              )}
+            </div>
+
+            {/* PERSISTENT HISTORICAL SNAPSHOTS */}
+            <SnapshotManager
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              saveCheckpoint={saveCheckpoint}
+            />
           </div>
         )}
 
@@ -617,6 +774,34 @@ export default function Sidebar({
                 </div>
               ))}
 
+              {/* Sticky-note annotations comment box */}
+              {selectedNode && (
+                <div className="border-t border-amber-500/15 pt-3 mt-3 bg-amber-500/5 p-2 rounded border border-amber-500/20">
+                  <label className="text-amber-400 font-bold block mb-1 uppercase text-[9px] tracking-wider flex items-center gap-1 leading-none select-none">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    STICKY-NOTE COMMENT / ANNOTATION
+                  </label>
+                  <textarea
+                    value={selectedNode.comment || ''}
+                    onChange={e => {
+                      const text = e.target.value;
+                      saveCheckpoint();
+                      setWorkspace(prev => ({
+                        ...prev,
+                        nodes: prev.nodes.map(n => n.id === selectedNode.id ? { ...n, comment: text } : n)
+                      }));
+                      setSelectedNode(prev => prev && prev.id === selectedNode.id ? { ...prev, comment: text } : prev);
+                    }}
+                    placeholder="Attach an interactive yellow sticky-note annotation beside this node on the canvas layout..."
+                    rows={4}
+                    className="w-full p-2 rounded bg-black/60 border border-amber-500/25 text-slate-200 font-sans text-[10.5px] leading-relaxed focus:outline-none focus:border-amber-400 placeholder-amber-400/20 resize-none text-left"
+                  />
+                  <p className="text-[8.5px] text-amber-500/80 italic leading-tight mt-1 select-none">
+                    Attaches a floating sticky-note document to this mission step on the canvas graph.
+                  </p>
+                </div>
+              )}
+
               {selectedWidget && (
                 <div className="space-y-3">
                   {selectedWidget.type === 'progressbar' && (
@@ -684,6 +869,91 @@ export default function Sidebar({
                       />
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Pinned Wiki Documentation Section inside Selected Node Property Inspector */}
+              {selectedNode && selectedNode.properties?.pinnedArticleId && (
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] text-amber-400 font-mono font-bold tracking-wider uppercase flex items-center gap-1.5 leading-none">
+                      <Pin className="w-3 h-3 rotate-45 text-amber-500 fill-amber-500/20" />
+                      PINNED CODEX REFERENCE
+                    </span>
+                    <button
+                      onClick={() => {
+                        setWorkspace(prev => ({
+                          ...prev,
+                          nodes: prev.nodes.map(n => 
+                            n.id === selectedNode.id 
+                              ? { ...n, properties: { ...n.properties, pinnedArticleId: null } }
+                              : n
+                          )
+                        }));
+                        setSelectedNode(prev => prev ? { ...prev, properties: { ...prev.properties, pinnedArticleId: null } } : null);
+                      }}
+                      className="text-[9px] text-red-400 hover:text-red-300 font-mono transition-colors uppercase outline-none font-semibold cursor-pointer"
+                    >
+                      Unpin Reference
+                    </button>
+                  </div>
+                  
+                  {(() => {
+                    const article = WIKI_TOPICS.find(t => t.id === selectedNode.properties.pinnedArticleId);
+                    if (!article) return <div className="text-[10px] text-slate-500 italic">Pinned reference guide not found.</div>;
+                    return (
+                      <div className="bg-[#141822] border border-amber-500/20 hover:border-amber-500/40 rounded-lg p-3 space-y-2.5 transition-all text-left">
+                        <div className="font-bold text-white text-[11px] leading-snug">{article.title}</div>
+                        <p className="text-[10px] text-slate-400 font-sans line-clamp-3 leading-relaxed">{article.summary}</p>
+                        
+                        {article.codeTemplate && (
+                          <div className="mt-2 border-t border-white/[0.03] pt-2">
+                            <span className="text-[9px] text-slate-500 font-mono uppercase tracking-widest block mb-1">Snippet Preview:</span>
+                            <pre className="text-[9.5px] text-cyan-400/90 font-mono whitespace-pre-wrap leading-tight bg-black/40 p-2 rounded border border-white/[0.02] max-h-24 overflow-y-auto custom-scrollbar">
+                              {article.codeTemplate}
+                            </pre>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 pt-1 border-t border-white/[0.03]">
+                          <button
+                            onClick={() => {
+                              if (setWorkspaceView) {
+                                setWorkspaceView('wiki');
+                                window.location.hash = `article_${article.id}`;
+                              }
+                            }}
+                            className="bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-400 px-2 py-1 rounded text-[9.5px] font-mono font-bold uppercase flex items-center gap-1 transition-colors outline-none cursor-pointer"
+                          >
+                            READ CODEX
+                            <ChevronRight className="w-3 h-3" />
+                          </button>
+                          {article.codeTemplate && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(article.codeTemplate || '');
+                                setSidebarCopied(true);
+                                setTimeout(() => setSidebarCopied(false), 2000);
+                              }}
+                              className="bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 text-cyan-400 px-2 py-1 rounded text-[9.5px] font-mono font-bold uppercase flex items-center gap-1 ml-auto transition-colors outline-none cursor-pointer"
+                            >
+                              {sidebarCopied ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                  <span>COPIED!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>COPY CODE</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

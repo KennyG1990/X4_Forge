@@ -23,24 +23,33 @@ import {
   Sparkles,
   Scroll,
   Package,
-  Globe
+  Globe,
+  BookOpen,
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Settings as SettingsGear
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
 import Canvas from './components/Canvas';
 import UIBuilder from './components/UIBuilder';
-import CodePreview from './components/CodePreview';
+import CodePreview, { EditorFile } from './components/CodePreview';
 import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
+import DirectorySettingsModal from './components/DirectorySettingsModal';
 import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
 import TFileEditor from './components/TFileEditor';
-import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace } from './types';
+import WikiBrowser from './components/WikiBrowser';
+import GlobalSearch from './components/GlobalSearch';
+import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
+import { compileAndSaveAll } from './lib/modCompiler';
 
 // Default initial blank workspace schema
 const BLANK_WORKSPACE: ModWorkspace = {
@@ -131,21 +140,42 @@ export default function App() {
 
   useEffect(() => {
     loadSchemaLibrary();
+    (async () => {
+      try {
+        const res = await fetch('/api/schema/config').then(r => r.json());
+        if (res.config) {
+          setModWorkspacePath(res.config.modWorkspacePath || '');
+          setFilesystemPath(res.config.filesystemPath || '');
+        }
+      } catch (err) {
+        console.warn("Could not load initial directory settings from server.");
+      }
+    })();
   }, [loadSchemaLibrary]);
 
-  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation'>('blueprint');
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem'>('script');
+  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki'>('blueprint');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues'>('script');
+  const [visibleCueIds, setVisibleCueIds] = useState<string[] | null>(null);
+  const [focusNodeRequest, setFocusNodeRequest] = useState<{ nodeId: string; timestamp: number } | null>(null);
 
-  const [dirHandle, setDirHandle] = useState<any | null>(null);
-  const [dirName, setDirName] = useState<string>('');
+  const [modWorkspacePath, setModWorkspacePath] = useState<string>('');
+  const [filesystemPath, setFilesystemPath] = useState<string>('');
+  
+  const [workspaceDirMode, setWorkspaceDirMode] = useState<'candy' | 'store'>(() => {
+    return (localStorage.getItem('x4_workspace_dir_mode') as 'candy' | 'store') || 'store';
+  });
+  const [compileStatus, setCompileStatus] = useState<'idle' | 'compiling' | 'success' | 'error'>('idle');
+  const [compileMessage, setCompileMessage] = useState<string>('');
 
   const [selectedNode, setSelectedNode] = useState<MDNode | null>(null);
+  const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
   const [selectedWidget, setSelectedWidget] = useState<UIWidget | null>(null);
 
   const [localVersion, setLocalVersion] = useState<number>(1);
   const [isAgentBridgeOpen, setIsAgentBridgeOpen] = useState<boolean>(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
+  const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
 
   // Active AI modeling status states
   const [activeAIProvider, setActiveAIProvider] = useState<string>('gemini');
@@ -241,6 +271,34 @@ export default function App() {
     const debounceTimer = setTimeout(syncLocalEditsToServer, 1000);
     return () => clearTimeout(debounceTimer);
   }, [workspace]);
+
+  const handleCompileModProject = async () => {
+    if (!modWorkspacePath) {
+      setCompileStatus('error');
+      setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
+      return;
+    }
+    setCompileStatus('compiling');
+    setCompileMessage('Compiling and deploying project on the server...');
+    try {
+      const deployRes = await fetch('/api/agent/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace })
+      });
+      const deployData = await deployRes.json();
+      if (deployRes.ok && deployData.success) {
+        setCompileStatus('success');
+        setCompileMessage(deployData.message);
+      } else {
+        setCompileStatus('error');
+        setCompileMessage(deployData.error || 'Compilation or deployment failed.');
+      }
+    } catch (e: any) {
+      setCompileStatus('error');
+      setCompileMessage(e.message || 'Compilation failed. Connection error.');
+    }
+  };
 
   // Initial load and periodic background polling of the server workspace
   useEffect(() => {
@@ -346,32 +404,98 @@ export default function App() {
   };
 
 
+  // MD Scripts Validation State calculations
+  const mdDiagnostics = React.useMemo(() => {
+    try {
+      const code = generateMDXML(workspace);
+      return validateModWorkspace(workspace, code);
+    } catch (e) {
+      return [{ severity: 'error', message: String(e), category: 'syntax' }];
+    }
+  }, [workspace]);
+
+  const mdErrorCount = mdDiagnostics.filter(d => d.severity === 'error').length;
+  const mdWarningCount = mdDiagnostics.filter(d => d.severity === 'warning').length;
+
   return (
     <div className="w-screen h-screen flex flex-col bg-[#0F1115] text-slate-300 font-sans">
       {/* Upper Technical Header */}
       <header className="h-12 border-b border-white/10 bg-[#161920] px-4 flex items-center justify-between shrink-0 font-mono">
         
         {/* Workspace Brand and Logo */}
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-5">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-cyan-600 rounded flex items-center justify-center font-bold text-white text-xs">X4</div>
-            <span className="font-semibold text-white tracking-tight">X4:MD STUDIO v2.4</span>
+            <div className="w-6 h-6 bg-cyan-600 rounded flex items-center justify-center font-bold text-white text-xs shrink-0">X4</div>
+            <span className="font-semibold text-white tracking-tight shrink-0 select-none">X4:MD STUDIO v2.4</span>
           </div>
+
+          {/* Global Search Tool */}
+          <GlobalSearch
+            workspace={workspace}
+            workspaceView={workspaceView}
+            setWorkspaceView={setWorkspaceView}
+            setActiveSidebarTab={setActiveSidebarTab}
+            setSelectedNode={setSelectedNode}
+            setSelectedWidget={setSelectedWidget}
+          />
         </div>
 
         {/* View Selection Mode Tabs */}
         <div id="view_selection_modes" className="flex items-center gap-1 p-1 rounded-md bg-black/45 border border-white/10">
-          <button
-            onClick={() => { setWorkspaceView('blueprint'); setActiveSidebarTab('script'); }}
-            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              workspaceView === 'blueprint'
-                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
-                : 'text-slate-400 hover:text-white border border-transparent'
-            }`}
-          >
-            <GitFork className="w-3.5 h-3.5" />
-            MD Scripts
-          </button>
+          {(() => {
+            const isActive = workspaceView === 'blueprint';
+            let btnClass = '';
+            let tooltip = '';
+            let indicatorDot = null;
+            
+            if (mdErrorCount > 0) {
+              // Red for errors
+              btnClass = isActive
+                ? 'bg-red-500/15 text-red-400 border border-red-500/50 shadow-[0_0_8px_rgba(239,68,68,0.15)] hover:bg-red-500/25'
+                : 'bg-red-500/5 text-red-400/80 hover:text-red-300 border border-red-500/20 hover:border-red-500/40';
+              tooltip = `MD Scripts — ${mdErrorCount} validation error${mdErrorCount > 1 ? 's' : ''} detected! Click to view workspace flow errors.`;
+              indicatorDot = (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                </span>
+              );
+            } else if (mdWarningCount > 0) {
+              // Amber for warnings
+              btnClass = isActive
+                ? 'bg-amber-500/15 text-amber-400 border border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.1)] hover:bg-amber-500/25'
+                : 'bg-amber-500/5 text-amber-400/80 hover:text-amber-300 border border-amber-500/15 hover:border-amber-500/35';
+              tooltip = `MD Scripts — ${mdWarningCount} validation warning${mdWarningCount > 1 ? 's' : ''} active. Click to view rules advisory.`;
+              indicatorDot = (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                </span>
+              );
+            } else {
+              // Green for valid
+              btnClass = isActive
+                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.1)] hover:bg-emerald-500/25'
+                : 'text-slate-400 hover:text-emerald-400 border border-transparent hover:border-emerald-500/20';
+              tooltip = "MD Scripts — All flowchart script validation laws satisfied (valid).";
+              indicatorDot = (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+              );
+            }
+            
+            return (
+              <button
+                onClick={() => { setWorkspaceView('blueprint'); setActiveSidebarTab('script'); }}
+                className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-2 transition-all cursor-pointer ${btnClass}`}
+                title={tooltip}
+              >
+                <GitFork className="w-3.5 h-3.5" />
+                <span>MD Scripts</span>
+                {indicatorDot}
+              </button>
+            );
+          })()}
           
           <button
             onClick={() => { setWorkspaceView('aiscripts'); setActiveSidebarTab('script'); }}
@@ -431,6 +555,18 @@ export default function App() {
           >
             <Globe className="w-3.5 h-3.5" />
             Languages (t/)
+          </button>
+
+          <button
+            onClick={() => { setWorkspaceView('wiki'); setActiveSidebarTab('config'); }}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'wiki'
+                ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            X4 Wiki
           </button>
         </div>
 
@@ -520,6 +656,15 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setIsDirSettingsOpen(true)}
+            className="px-3 py-1 border border-white/10 hover:border-cyan-400/40 bg-black/40 text-slate-300 hover:text-white rounded font-mono text-[11px] transition-all flex items-center gap-1.5 cursor-pointer"
+            title="Manage all folders the studio uses (Mod Workspace, X4 game path, schema)"
+          >
+            <SettingsGear className="w-3.5 h-3.5" />
+            SETTINGS
+          </button>
+
+          <button
             onClick={handleClearWorkspace}
             className="px-3 py-1 border border-red-500/10 hover:border-red-500/30 bg-red-500/5 text-red-400 rounded font-mono text-[11px] hover:bg-red-500/10 transition-all flex items-center gap-1 cursor-pointer"
             title="Clean workspace back to blank state"
@@ -549,15 +694,24 @@ export default function App() {
           setSelectedNode={setSelectedNode}
           selectedWidget={selectedWidget}
           setSelectedWidget={setSelectedWidget}
-          dirHandle={dirHandle}
-          setDirHandle={setDirHandle}
-          dirName={dirName}
-          setDirName={setDirName}
+          modWorkspacePath={modWorkspacePath}
+          filesystemPath={filesystemPath}
           saveCheckpoint={saveCheckpoint}
               workspaceView={workspaceView}
               setWorkspaceView={setWorkspaceView}
               schemaTemplates={schemaTemplates}
               onSchemaConfigChanged={loadSchemaLibrary}
+              onOpenEditorFile={(file) => {
+                setActiveEditorFile(file);
+              }}
+              workspaceDirMode={workspaceDirMode}
+              setWorkspaceDirMode={setWorkspaceDirMode}
+              compileStatus={compileStatus}
+              compileMessage={compileMessage}
+              handleCompileModProject={handleCompileModProject}
+              visibleCueIds={visibleCueIds}
+              setVisibleCueIds={setVisibleCueIds}
+              setFocusNodeRequest={setFocusNodeRequest}
             />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
@@ -571,6 +725,8 @@ export default function App() {
               selectedNode={selectedNode}
               setSelectedNode={setSelectedNode}
               schemaTemplates={schemaTemplates}
+              visibleCueIds={visibleCueIds}
+              focusNodeRequest={focusNodeRequest}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder
@@ -594,6 +750,12 @@ export default function App() {
               workspace={workspace}
               setWorkspace={setWorkspace}
             />
+          ) : workspaceView === 'wiki' ? (
+            <WikiBrowser
+              selectedNode={selectedNode}
+              setSelectedNode={setSelectedNode}
+              setWorkspace={setWorkspace}
+            />
           ) : (
             <XMLPatchSystem
               workspace={workspace}
@@ -609,10 +771,13 @@ export default function App() {
             workspace={workspace} 
             setWorkspace={setWorkspace} 
             saveCheckpoint={saveCheckpoint} 
-            dirHandle={dirHandle}
-            setDirHandle={setDirHandle}
-            dirName={dirName}
-            setDirName={setDirName}
+            modWorkspacePath={modWorkspacePath}
+            compileStatus={compileStatus}
+            compileMessage={compileMessage}
+            handleCompileModProject={handleCompileModProject}
+            activeEditorFile={activeEditorFile}
+            setActiveEditorFile={setActiveEditorFile}
+            selectedNode={selectedNode}
           />
         </aside>
 
@@ -650,6 +815,16 @@ export default function App() {
       <AIConnectionModal
         isOpen={isAIConfigOpen}
         onClose={() => setIsAIConfigOpen(false)}
+      />
+
+      {/* Directory Settings Modal — manages every folder the studio needs */}
+      <DirectorySettingsModal
+        isOpen={isDirSettingsOpen}
+        onClose={() => setIsDirSettingsOpen(false)}
+        modWorkspacePath={modWorkspacePath}
+        setModWorkspacePath={setModWorkspacePath}
+        filesystemPath={filesystemPath}
+        setFilesystemPath={setFilesystemPath}
       />
     </div>
   );

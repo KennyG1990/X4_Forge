@@ -22,7 +22,11 @@ import {
   Plus,
   Compass,
   Zap,
-  Globe
+  Globe,
+  AlertTriangle,
+  CheckCircle2,
+  Filter,
+  MessageSquare
 } from 'lucide-react';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES } from '../types';
 
@@ -33,6 +37,8 @@ interface CanvasProps {
   selectedNode: MDNode | null;
   setSelectedNode: (node: MDNode | null) => void;
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
+  visibleCueIds: string[] | null;
+  focusNodeRequest: { nodeId: string; timestamp: number } | null;
 }
 
 export default function Canvas({
@@ -41,13 +47,33 @@ export default function Canvas({
   saveCheckpoint,
   selectedNode,
   setSelectedNode,
-  schemaTemplates = []
+  schemaTemplates = [],
+  visibleCueIds,
+  focusNodeRequest
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
+  const [depPanelOpen, setDepPanelOpen] = useState<boolean>(true);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [panning, setPanning] = useState<{ x: number; y: number } | null>(null);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [linking, setLinking] = useState<{ nodeId: string; portId: string; type: string } | null>(null);
+
+  // Find in Blueprint search overlay states
+  const [searchOpen, setSearchOpen] = useState<boolean>(false);
+  const [searchNodesQuery, setSearchNodesQuery] = useState<string>('');
+
+  // Diagnostic panel toggle State
+  const [diagnosticPanelOpen, setDiagnosticPanelOpen] = useState<boolean>(false);
+
+  // Drag connection background-click support (Unreal smart auto-completion)
+  const [pendingLinkTarget, setPendingLinkTarget] = useState<{ nodeId: string; portId: string; type: string } | null>(null);
+  const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Scaling comment boxes
+  const [resizingComment, setResizingComment] = useState<{ id: string; startWidth: number; startHeight: number; clientX: number; clientY: number } | null>(null);
+
+  // Ref container to track starting offsets of nodes to avoid drift during multi-drag inside group comment boxes
+  const draggedNodesStartOffset = useRef<{ id: string; x: number; y: number }[]>([]);
 
   // Quick Spawn Context Menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; gridX: number; gridY: number } | null>(null);
@@ -71,12 +97,46 @@ export default function Canvas({
       setContextMenu(null);
       return;
     }
+
+    // Unreal Engine style: Drag wire to blank space and click triggers Quick Spawn popup auto-linking
+    if (linking) {
+      e.preventDefault();
+      if (!canvasRef.current) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.preventDefault() || e.clientY - rect.top;
+      const gridX = Math.round((x - panOffset.x) / zoom / 10) * 10;
+      const gridY = Math.round((y - panOffset.y) / zoom / 10) * 10;
+
+      setPendingLinkTarget(linking);
+      setContextMenu({ x, y, gridX, gridY });
+      setSearchQuery('');
+      setLinking(null);
+      return;
+    }
+
     if (e.target === canvasRef.current || (e.target as HTMLElement).id === 'grid-pattern' || (e.target as HTMLElement).tagName === 'path' || (e.target as HTMLElement).tagName === 'svg') {
       setPanning({ x: e.clientX, y: e.clientY });
     }
   };
 
-  // Node Drags initialization
+  // Double click empty space to trigger Quick Spawn selection, just like Unreal Spacebar/DoubleClick
+  const handleCanvasDoubleClick = (e: React.MouseEvent) => {
+    if (e.target === canvasRef.current || (e.target as HTMLElement).id === 'grid-pattern' || (e.target as HTMLElement).tagName === 'path' || (e.target as HTMLElement).tagName === 'svg') {
+      e.preventDefault();
+      if (!canvasRef.current) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const gridX = Math.round((x - panOffset.x) / zoom / 10) * 10;
+      const gridY = Math.round((y - panOffset.y) / zoom / 10) * 10;
+
+      setContextMenu({ x, y, gridX, gridY });
+      setSearchQuery('');
+    }
+  };
+
+  // Node Drags initialization with spatial state snapshots for child drag integration within comments
   const handleNodeMouseDown = (nodeId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (contextMenu) setContextMenu(null);
@@ -84,9 +144,14 @@ export default function Canvas({
     const node = workspace.nodes.find(n => n.id === nodeId);
     if (node) {
       dragStartPos.current = {
-        x: e.clientX - node.x,
-        y: e.clientY - node.y
+        x: e.clientX,
+        y: e.clientY
       };
+      draggedNodesStartOffset.current = workspace.nodes.map(n => ({
+        id: n.id,
+        x: n.x,
+        y: n.y
+      }));
       setSelectedNode(node);
       window.dispatchEvent(new CustomEvent('x4-node-selected', { detail: { nodeId } }));
     }
@@ -109,34 +174,103 @@ export default function Canvas({
     setSearchQuery('');
   };
 
-  // Sync mouse interactions
+  // Sync mouse interactions (panning, resizing comment groups, dragging node clusters, and wiring live line mouse tracers)
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (draggedNodeId) {
-        // Drag snap to grid calculations
-        const newX = Math.round((e.clientX - dragStartPos.current.x) / 10) * 10;
-        const newY = Math.round((e.clientY - dragStartPos.current.y) / 10) * 10;
+      if (resizingComment) {
+        const dx = (e.clientX - resizingComment.clientX) / zoom;
+        const dy = (e.clientY - resizingComment.clientY) / zoom;
         
         setWorkspace(prev => ({
           ...prev,
           nodes: prev.nodes.map(n => 
-            n.id === draggedNodeId ? { ...n, x: newX, y: newY } : n
+            n.id === resizingComment.id 
+              ? { 
+                  ...n, 
+                  width: Math.max(150, Math.round((resizingComment.startWidth + dx) / 10) * 10), 
+                  height: Math.max(100, Math.round((resizingComment.startHeight + dy) / 10) * 10) 
+                } 
+              : n
           )
         }));
+      } else if (draggedNodeId) {
+        const dragStart = draggedNodesStartOffset.current.find(n => n.id === draggedNodeId);
+        if (dragStart) {
+          const dx = (e.clientX - dragStartPos.current.x) / zoom;
+          const dy = (e.clientY - dragStartPos.current.y) / zoom;
+          
+          const virtualDx = Math.round(dx / 10) * 10;
+          const virtualDy = Math.round(dy / 10) * 10;
+          
+          const targetNode = workspace.nodes.find(n => n.id === draggedNodeId);
+          
+          if (targetNode && targetNode.type === 'comment') {
+            const commentWidth = targetNode.width || 400;
+            const commentHeight = targetNode.height || 300;
+            
+            // Look up nodes whose starting coordinates were bounds-encompassed inside this Comment Box
+            const nodesInsideIds = draggedNodesStartOffset.current.filter(startingNode => {
+              return startingNode.id !== draggedNodeId && 
+                     startingNode.id !== 'grid-canvas' &&
+                     workspace.nodes.find(wn => wn.id === startingNode.id)?.type !== 'comment' &&
+                     startingNode.x >= dragStart.x && 
+                     startingNode.x <= dragStart.x + commentWidth &&
+                     startingNode.y >= dragStart.y && 
+                     startingNode.y <= dragStart.y + commentHeight;
+            }).map(n => n.id);
+            
+            setWorkspace(prev => ({
+              ...prev,
+              nodes: prev.nodes.map(n => {
+                const startingInfo = draggedNodesStartOffset.current.find(s => s.id === n.id);
+                if (!startingInfo) return n;
+                
+                if (n.id === draggedNodeId) {
+                  return { ...n, x: startingInfo.x + virtualDx, y: startingInfo.y + virtualDy };
+                } else if (nodesInsideIds.includes(n.id)) {
+                  return { ...n, x: startingInfo.x + virtualDx, y: startingInfo.y + virtualDy };
+                }
+                return n;
+              })
+            }));
+          } else {
+            // Standard individual dragging
+            setWorkspace(prev => ({
+              ...prev,
+              nodes: prev.nodes.map(n => {
+                const startingInfo = draggedNodesStartOffset.current.find(s => s.id === n.id);
+                if (startingInfo && n.id === draggedNodeId) {
+                  return { ...n, x: startingInfo.x + virtualDx, y: startingInfo.y + virtualDy };
+                }
+                return n;
+              })
+            }));
+          }
+        }
       } else if (panning) {
         const dx = e.clientX - panning.x;
         const dy = e.clientY - panning.y;
         setPanOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
         setPanning({ x: e.clientX, y: e.clientY });
       }
+      
+      // Live wire tracker mouse vector calculations
+      if (linking) {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (rect) {
+          const x = (e.clientX - rect.left - panOffset.x) / zoom;
+          const y = (e.clientY - rect.top - panOffset.y) / zoom;
+          setMousePos({ x, y });
+        }
+      }
     };
 
     const handleMouseUp = () => {
-      if (draggedNodeId) {
-        // Save history checkpoint once released
+      if (draggedNodeId || resizingComment) {
         saveCheckpoint();
       }
       setDraggedNodeId(null);
+      setResizingComment(null);
       setPanning(null);
     };
 
@@ -146,7 +280,7 @@ export default function Canvas({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggedNodeId, panning, saveCheckpoint]);
+  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes]);
 
   // Handle intuitive smooth zoom-to-cursor via mouse scroll wheel
   useEffect(() => {
@@ -286,6 +420,129 @@ export default function Canvas({
     };
   };
 
+  // Viewport tracking for optimization
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 1200, height: 800 });
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const updateSize = () => {
+      if (canvasRef.current) {
+        setViewportSize({
+          width: canvasRef.current.clientWidth,
+          height: canvasRef.current.clientHeight
+        });
+      }
+    };
+    updateSize();
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(canvasRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // Visible bounds calculation in virtual coordinates (frustum culling)
+  const visibleBounds = React.useMemo(() => {
+    const pad = 300 / Math.max(0.1, zoom);
+    const xStart = -panOffset.x / zoom - pad;
+    const xEnd = (-panOffset.x + viewportSize.width) / zoom + pad;
+    const yStart = -panOffset.y / zoom - pad;
+    const yEnd = (-panOffset.y + viewportSize.height) / zoom + pad;
+    
+    return { xStart, xEnd, yStart, yEnd };
+  }, [panOffset, zoom, viewportSize]);
+
+  // Map each non-cue node to the cue it belongs to
+  const nodeToCueMap = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    const cues = workspace.nodes.filter(n => n.type === 'cue');
+    
+    cues.forEach(cueNode => {
+      const visited = new Set<string>([cueNode.id]);
+      const queue = [cueNode.id];
+      map[cueNode.id] = cueNode.id;
+      
+      while (queue.length > 0) {
+        const currentId = queue.shift()!;
+        
+        workspace.links.forEach(link => {
+          // Skip parent-subcue transitions so we stay within the cue's boundary
+          const isCueBoundary = 
+            (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow');
+            
+          if (isCueBoundary) return;
+          
+          let neighborId: string | null = null;
+          if (link.sourceNodeId === currentId) {
+            neighborId = link.targetNodeId;
+          } else if (link.targetNodeId === currentId) {
+            neighborId = link.sourceNodeId;
+          }
+          
+          if (neighborId) {
+            const neighborNode = workspace.nodes.find(n => n.id === neighborId);
+            if (neighborNode && neighborNode.type !== 'cue' && !visited.has(neighborId)) {
+              visited.add(neighborId);
+              map[neighborId] = cueNode.id;
+              queue.push(neighborId);
+            }
+          }
+        });
+      }
+    });
+    
+    return map;
+  }, [workspace.nodes, workspace.links]);
+
+  // Nodes that are active in the workspace (not hidden by cue filter)
+  const nodesFilteredByCue = React.useMemo(() => {
+    if (!visibleCueIds) return workspace.nodes;
+    return workspace.nodes.filter(node => {
+      const cueId = nodeToCueMap[node.id];
+      if (cueId) {
+        return visibleCueIds.includes(cueId);
+      }
+      return true;
+    });
+  }, [workspace.nodes, visibleCueIds, nodeToCueMap]);
+
+  // Nodes falling inside the visible bounds
+  const visibleNodes = React.useMemo(() => {
+    return nodesFilteredByCue.filter(node => {
+      const w = node.type === 'comment' ? (node.width || 400) : 240;
+      const h = node.type === 'comment' ? (node.height || 300) : 200;
+      return (
+        node.x + w >= visibleBounds.xStart &&
+        node.x <= visibleBounds.xEnd &&
+        node.y + h >= visibleBounds.yStart &&
+        node.y <= visibleBounds.yEnd
+      );
+    });
+  }, [nodesFilteredByCue, visibleBounds]);
+
+  // Links falling inside the visible bounds (at least one end inside, or crossing)
+  const visibleLinks = React.useMemo(() => {
+    const visibleNodeIds = new Set(nodesFilteredByCue.map(n => n.id));
+    return workspace.links.filter(link => {
+      if (!visibleNodeIds.has(link.sourceNodeId) || !visibleNodeIds.has(link.targetNodeId)) {
+        return false;
+      }
+      
+      const start = getPortCoordinates(link.sourceNodeId, link.sourcePortId, true);
+      const end = getPortCoordinates(link.targetNodeId, link.targetPortId, false);
+      
+      const minX = Math.min(start.x, end.x);
+      const maxX = Math.max(start.x, end.x);
+      const minY = Math.min(start.y, end.y);
+      const maxY = Math.max(start.y, end.y);
+      
+      return (
+        maxX >= visibleBounds.xStart &&
+        minX <= visibleBounds.xEnd &&
+        maxY >= visibleBounds.yStart &&
+        minY <= visibleBounds.yEnd
+      );
+    });
+  }, [workspace.links, visibleBounds, nodesFilteredByCue, getPortCoordinates]);
+
   // Auto-Align Core Layout Math Algorithm (Tidy Graph Tool)
   const autoAlignGraph = () => {
     saveCheckpoint();
@@ -387,7 +644,7 @@ export default function Canvas({
     setWorkspace(prev => ({ ...prev, nodes: newNodes }));
   };
 
-  // Launch Right-Click Spawn Context Menu Selection Handler
+  // Launch Right-Click Spawn Context Menu Selection Handler with automatic link routing completion
   const handleQuickSpawn = (template: any) => {
     if (!contextMenu) return;
     saveCheckpoint();
@@ -400,10 +657,53 @@ export default function Canvas({
       properties: { ...template.properties }
     };
 
-    setWorkspace(prev => ({
-      ...prev,
-      nodes: [...prev.nodes, newNode]
-    }));
+    if (pendingLinkTarget) {
+      // Smart Auto-Linking completion math matching Unreal Engine 5 Blueprint drag-to-spawn behaviors
+      const sourcePortId = pendingLinkTarget.portId;
+      const isPendingSourceOutput = sourcePortId.startsWith('out') || sourcePortId === 'out_act' || sourcePortId === 'out_sub' || sourcePortId === 'out_next' || sourcePortId === 'out_cond';
+      
+      let matchedTargetPortId = '';
+      if (isPendingSourceOutput) {
+        // Pending was an output port. Find matching input on the spawned node (e.g., 'in_flow')
+        const matchedPort = newNode.inputs.find(p => p.id === 'in_flow' || p.id.startsWith('in'));
+        if (matchedPort) {
+          matchedTargetPortId = matchedPort.id;
+        }
+      } else {
+        // Pending was an input port. Find matching output on the spawned node (e.g., 'out_next')
+        const matchedPort = newNode.outputs.find(p => p.id === 'out_next' || p.id.startsWith('out'));
+        if (matchedPort) {
+          matchedTargetPortId = matchedPort.id;
+        }
+      }
+
+      if (matchedTargetPortId) {
+        const newLink: MDLink = {
+          id: `link_${Date.now()}`,
+          sourceNodeId: isPendingSourceOutput ? pendingLinkTarget.nodeId : newNode.id,
+          sourcePortId: isPendingSourceOutput ? pendingLinkTarget.portId : matchedTargetPortId,
+          targetNodeId: isPendingSourceOutput ? newNode.id : pendingLinkTarget.nodeId,
+          targetPortId: isPendingSourceOutput ? matchedTargetPortId : pendingLinkTarget.portId
+        };
+        
+        setWorkspace(prev => ({
+          ...prev,
+          nodes: [...prev.nodes, newNode],
+          links: [...prev.links, newLink]
+        }));
+      } else {
+        setWorkspace(prev => ({
+          ...prev,
+          nodes: [...prev.nodes, newNode]
+        }));
+      }
+      setPendingLinkTarget(null);
+    } else {
+      setWorkspace(prev => ({
+        ...prev,
+        nodes: [...prev.nodes, newNode]
+      }));
+    }
 
     setContextMenu(null);
     setSelectedNode(newNode);
@@ -547,6 +847,251 @@ export default function Canvas({
     }, delayCounter);
   };
 
+  // Focus and Center Viewport camera onto a specific Selected Node, smoothly centering details pane
+  const focusNode = React.useCallback((node: MDNode) => {
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    
+    const targetZoom = 1;
+    const newPanX = width / 2 - node.x * targetZoom;
+    const newPanY = height / 2 - node.y * targetZoom;
+    
+    setZoom(targetZoom);
+    setPanOffset({ x: newPanX, y: newPanY });
+    setSelectedNode(node);
+  }, [setSelectedNode]);
+
+  // Trigger camera focus / fit when focusNodeRequest is updated from the Sidebar Tree
+  useEffect(() => {
+    if (focusNodeRequest) {
+      const node = workspace.nodes.find(n => n.id === focusNodeRequest.nodeId);
+      if (node) {
+        focusNode(node);
+      }
+    }
+  }, [focusNodeRequest, workspace.nodes, focusNode]);
+
+  // Cue & Variable dependency analysis builder
+  const dependencies = React.useMemo(() => {
+    if (!selectedNode) return [];
+    
+    interface NodeDep {
+      id: string;
+      label: string;
+      type: 'cue' | 'event' | 'condition' | 'action' | 'variable' | 'comment';
+      direction: 'reliance' | 'required-by';
+      reason: string;
+      originalNode: MDNode;
+    }
+
+    const rels: NodeDep[] = [];
+    const cueName = selectedNode.properties?.name || '';
+
+    // 1. Structural links (MDLinks) directly connected to ports
+    workspace.links.forEach(link => {
+      // If selectedNode is the target, we require/rely on the source node
+      if (link.targetNodeId === selectedNode.id) {
+        const srcNode = workspace.nodes.find(n => n.id === link.sourceNodeId);
+        if (srcNode) {
+          rels.push({
+            id: srcNode.id,
+            label: srcNode.label,
+            type: srcNode.type,
+            direction: 'reliance',
+            reason: `Linked from "${srcNode.label}" (${link.sourcePortId} → ${link.targetPortId})`,
+            originalNode: srcNode
+          });
+        }
+      }
+
+      // If selectedNode is the source, the target node requires us
+      if (link.sourceNodeId === selectedNode.id) {
+        const tgtNode = workspace.nodes.find(n => n.id === link.targetNodeId);
+        if (tgtNode) {
+          rels.push({
+            id: tgtNode.id,
+            label: tgtNode.label,
+            type: tgtNode.type,
+            direction: 'required-by',
+            reason: `Triggers "${tgtNode.label}" (${link.sourcePortId} → ${link.targetPortId})`,
+            originalNode: tgtNode
+          });
+        }
+      }
+    });
+
+    // 2. Logical / Text based property references in workspace
+    const otherNodes = workspace.nodes.filter(n => n.id !== selectedNode.id);
+    otherNodes.forEach(other => {
+      const otherName = other.properties?.name || other.properties?.value || other.label;
+      if (otherName && typeof otherName === 'string') {
+        const refsOther = Object.entries(selectedNode.properties).some(([k, v]) => 
+          typeof v === 'string' && (v === otherName || v.includes(otherName))
+        );
+        if (refsOther) {
+          rels.push({
+            id: other.id,
+            label: other.label,
+            type: other.type,
+            direction: 'reliance',
+            reason: other.type === 'variable' ? `Reads variable "${otherName}"` : `References cue "${otherName}" in settings`,
+            originalNode: other
+          });
+        }
+      }
+
+      if (cueName && typeof cueName === 'string') {
+        const otherRefsUs = Object.entries(other.properties).some(([k, v]) => 
+          typeof v === 'string' && (v === cueName || v.includes(cueName))
+        );
+        if (otherRefsUs) {
+          rels.push({
+            id: other.id,
+            label: other.label,
+            type: other.type,
+            direction: 'required-by',
+            reason: `Node "${other.label}" refers to this cue`,
+            originalNode: other
+          });
+        }
+      }
+    });
+
+    // De-duplicate by id + direction
+    const seen = new Set<string>();
+    const uniqueRels: NodeDep[] = [];
+    rels.forEach(item => {
+      const key = `${item.id}_${item.direction}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueRels.push(item);
+      }
+    });
+
+    return uniqueRels;
+  }, [selectedNode, workspace.nodes, workspace.links]);
+
+  // Visual Diagnostic Compilation checker
+  const diagnostics = React.useMemo(() => {
+    const list: { id: string; nodeId?: string; type: 'error' | 'warning' | 'info'; message: string }[] = [];
+    
+    const cues = workspace.nodes.filter(n => n.type === 'cue');
+    if (cues.length === 0) {
+      list.push({
+        id: 'no_cues',
+        type: 'error',
+        message: 'No cue entry points found in this script.'
+      });
+    }
+    
+    workspace.nodes.forEach(node => {
+      if (node.type === 'comment') return;
+      
+      // 1. Orphan Checks
+      if (node.type !== 'cue') {
+        const hasInputs = node.inputs && node.inputs.length > 0;
+        if (hasInputs) {
+          const isLinked = workspace.links.some(l => l.targetNodeId === node.id);
+          if (!isLinked) {
+            list.push({
+              id: `orphan_${node.id}`,
+              nodeId: node.id,
+              type: 'warning',
+              message: `Orphan Node: "${node.label}" is unconnected and will never execute.`
+            });
+          }
+        }
+      }
+      
+      // 2. Empty properties
+      if (node.type === 'cue' && !node.properties.name) {
+        list.push({
+          id: `empty_cue_name_${node.id}`,
+          nodeId: node.id,
+          type: 'error',
+          message: `Required Fields: Cue "${node.label}" is missing a unique 'name' identification attribute.`
+        });
+      }
+      
+      if (node.xmlTag === 'wait' && (!node.properties.exact && !node.properties.min)) {
+        list.push({
+          id: `wait_dur_${node.id}`,
+          nodeId: node.id,
+          type: 'warning',
+          message: `Variable Lock: Wait action "${node.label}" has no wait duration (exact/min) specified.`
+        });
+      }
+    });
+
+    return list;
+  }, [workspace.nodes, workspace.links]);
+
+  // Add Comment Box bounding group, matching Unreal Engine box boundaries
+  const addCommentBox = React.useCallback(() => {
+    saveCheckpoint();
+    
+    let x = -panOffset.x / zoom + 250;
+    let y = -panOffset.y / zoom + 180;
+    let width = 450;
+    let height = 300;
+    let label = "Comment Group";
+    const color = "rgba(6, 182, 212, 0.04)";
+    
+    if (selectedNode) {
+      x = selectedNode.x - 30;
+      y = selectedNode.y - 45;
+      width = 300;
+      height = 240;
+      label = `Logic Group ${selectedNode.label}`;
+    }
+    
+    const newCommentNode: MDNode = {
+      id: `node_${Date.now()}`,
+      type: 'comment',
+      label,
+      xmlTag: 'comment',
+      x: Math.round(x / 10) * 10,
+      y: Math.round(y / 10) * 10,
+      width,
+      height,
+      color,
+      properties: {},
+      propertiesSchema: [],
+      inputs: [],
+      outputs: []
+    };
+
+    setWorkspace(prev => ({
+      ...prev,
+      nodes: [...prev.nodes, newCommentNode]
+    }));
+  }, [selectedNode, panOffset, zoom, saveCheckpoint, setWorkspace]);
+
+  // Listen to visual keyboard shortcuts (such as 'C' for Comment, or 'Ctrl+F' to search blueprints)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || (activeEl as HTMLElement).contentEditable === 'true')) {
+        return;
+      }
+
+      if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setSearchOpen(prev => !prev);
+      } else if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        addCommentBox();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [addCommentBox]);
+
   const allTemplates = React.useMemo(() => {
     const byTag = new Map<string, Omit<MDNode, 'id' | 'x' | 'y'>>();
     NODE_TEMPLATES.forEach(template => byTag.set(template.xmlTag, template));
@@ -563,8 +1108,8 @@ export default function Canvas({
   );
 
   // Dynamic Minimap calculation helpers
-  const xs = workspace.nodes.map(n => n.x);
-  const ys = workspace.nodes.map(n => n.y);
+  const xs = nodesFilteredByCue.map(n => n.x);
+  const ys = nodesFilteredByCue.map(n => n.y);
   const minX = xs.length ? Math.min(...xs) - 80 : 0;
   const maxX = xs.length ? Math.max(...xs) + 260 : 600;
   const minY = ys.length ? Math.min(...ys) - 80 : 0;
@@ -598,6 +1143,60 @@ export default function Canvas({
         >
           <RefreshCw className="w-3.5 h-3.5" />
           100%
+        </button>
+        
+        <div className="h-5 w-px bg-white/10 mx-1" />
+
+        {/* Unreal Engine 5 Style Comment Box Group Button */}
+        <button
+          onClick={addCommentBox}
+          title="Group Selected/Centered nodes inside a Comment Box (Shortcut: C)"
+          className="p-1.5 px-2.5 rounded bg-purple-950/20 hover:bg-purple-900/30 border border-purple-500/20 text-purple-400 hover:text-white transition-all text-[11px] font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          COMMENT GROUP
+        </button>
+
+        {/* Find in Blueprints Search Bar toggle */}
+        <button
+          onClick={() => setSearchOpen(prev => !prev)}
+          title="Search All Nodes by label, tag, or field properties (Shortcut: Ctrl+F)"
+          className={`p-1.5 px-2.5 rounded border text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+            searchOpen 
+              ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-400' 
+              : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-300'
+          }`}
+        >
+          <Search className="w-3.5 h-3.5 font-bold" />
+          FIND
+        </button>
+
+        {/* Compile / Diagnostic checks badge */}
+        <button
+          onClick={() => setDiagnosticPanelOpen(prev => !prev)}
+          className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
+            diagnostics.some(d => d.type === 'error')
+              ? 'bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/15'
+              : diagnostics.some(d => d.type === 'warning')
+              ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/15'
+              : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/15'
+          }`}
+          title="Check blueprint syntax and logic connections for warnings or isolated states"
+        >
+          {diagnostics.some(d => d.type === 'error') ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+          ) : diagnostics.some(d => d.type === 'warning') ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          )}
+          <span>COMPILER: {
+            diagnostics.some(d => d.type === 'error')
+              ? "ERRORS"
+              : diagnostics.some(d => d.type === 'warning')
+              ? "WARN"
+              : "OK"
+          }</span>
         </button>
         
         <div className="h-5 w-px bg-white/10 mx-1" />
@@ -658,6 +1257,21 @@ export default function Canvas({
           <Trash2 className="w-3.5 h-3.5" />
           CLEAR WIRES
         </button>
+
+        <div className="h-5 w-px bg-white/10 mx-1" />
+
+        <button
+          onClick={() => setDepPanelOpen(prev => !prev)}
+          title="Toggle selected node dependency analyzer visual graph panel"
+          className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
+            depPanelOpen 
+              ? 'bg-violet-500/15 border-violet-500/35 text-violet-400' 
+              : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
+          }`}
+        >
+          <Filter className="w-3.5 h-3.5" />
+          <span>DEPS TRACE</span>
+        </button>
       </div>
 
       {/* Visual Linking indicator notification banner */}
@@ -676,6 +1290,7 @@ export default function Canvas({
         id="grid-canvas"
         ref={canvasRef}
         onMouseDown={handleCanvasMouseDown}
+        onDoubleClick={handleCanvasDoubleClick}
         className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing outline-none"
         style={{
           backgroundImage: 'radial-gradient(circle, rgba(6, 182, 212, 0.15) 1px, transparent 1px)',
@@ -706,7 +1321,7 @@ export default function Canvas({
             </defs>
 
             {/* Wire Links Render loop */}
-            {workspace.links.map(link => {
+            {visibleLinks.map(link => {
               const start = getPortCoordinates(link.sourceNodeId, link.sourcePortId, true);
               const end = getPortCoordinates(link.targetNodeId, link.targetPortId, false);
 
@@ -752,119 +1367,359 @@ export default function Canvas({
                 </g>
               );
             })}
+
+            {/* Unreal Engine style: live cable visual dragging tracker */}
+            {linking && (
+              (() => {
+                const start = getPortCoordinates(linking.nodeId, linking.portId, true);
+                const end = mousePos;
+                const dx = Math.abs(end.x - start.x) * 0.52;
+                const pathData = `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}`;
+                return (
+                  <path
+                    d={pathData}
+                    fill="none"
+                    stroke="#06b6d4"
+                    strokeWidth="2"
+                    strokeDasharray="4,4"
+                    className="pointer-events-none animate-pulse opacity-85"
+                  />
+                );
+              })()
+            )}
           </svg>
 
-          {/* Node Component Cards Loop */}
-          {workspace.nodes.map(node => {
-            const isSelected = selectedNode?.id === node.id;
-            const isGlowActive = activeNodes.includes(node.id);
-            
-            let borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
-            let headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
-
-            if (node.type === 'cue') {
-              borderClasses = 'border-purple-500/30 bg-[#0f1118]';
-              headingClasses = 'bg-purple-500/10 text-purple-300 border-purple-500/20';
-            } else if (node.type === 'event') {
-              borderClasses = 'border-amber-500/30 bg-[#121114]';
-              headingClasses = 'bg-amber-500/10 text-amber-300 border-amber-500/20';
-            } else if (node.type === 'condition') {
-              borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
-              headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
-            } else if (node.type === 'action') {
-              borderClasses = 'border-emerald-500/30 bg-[#0c1310]';
-              headingClasses = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
-            }
-
-            return (
-              <div
-                key={node.id}
-                onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
-                style={{ left: node.x, top: node.y }}
-                className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
-                  isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
-                } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
-              >
-                {/* Visual node title & close handle button */}
-                <div className={`p-2.5 rounded-t-lg border-b flex items-center justify-between cursor-grab active:cursor-grabbing ${headingClasses}`}>
-                  <div className="flex items-center gap-1.5 truncate">
-                    {simActive && isGlowActive && (
-                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
-                    )}
-                    <span className="font-semibold text-xs tracking-tight truncate w-36">{node.label}</span>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {node.type === 'event' && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); triggerLogicSimulator(node.id); }}
-                        title="Simulate Event from this step specifically"
-                        className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer"
-                      >
-                        <Zap className="w-3.5 h-3.5 fill-emerald-400/20" />
-                      </button>
-                    )}
-                    <button
-                      onClick={(e) => deleteNode(node.id, e)}
-                      title="Delete Node"
-                      className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
+          {/* Sorted node list (comment boxes rendered first to reside in background) */}
+          {[...visibleNodes]
+            .sort((a, b) => {
+              if (a.type === 'comment' && b.type !== 'comment') return -1;
+              if (a.type !== 'comment' && b.type === 'comment') return 1;
+              return 0;
+            })
+            .map(node => {
+              if (node.type === 'comment') {
+                const isSelected = selectedNode?.id === node.id;
+                const width = node.width || 400;
+                const height = node.height || 300;
+                const commentBg = node.color || 'rgba(6, 182, 212, 0.04)';
+                
+                return (
+                  <div
+                    key={node.id}
+                    onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
+                    style={{ 
+                      left: node.x, 
+                      top: node.y,
+                      width: width,
+                      height: height,
+                      backgroundColor: commentBg
+                    }}
+                    className={`absolute rounded-xl border border-dashed border-white/20 text-slate-300 font-mono shadow-md select-none group flex flex-col pointer-events-auto transition-shadow ${
+                      isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-400/80 scale-[1.002] z-10' : 'hover:border-white/35 z-0'
+                    }`}
+                  >
+                    {/* Comment Header bar */}
+                    <div 
+                      className="w-full p-2 bg-white/[0.03] border-b border-white/[0.05] rounded-t-xl flex items-center justify-between cursor-grab active:cursor-grabbing font-bold text-xs"
+                      style={{ color: node.color ? '#e2e8f0' : '#22d3ee' }}
+                      onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                     >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
+                      <div className="flex items-center gap-1.5 truncate">
+                        <input
+                          type="text"
+                          value={node.label}
+                          onChange={(e) => {
+                            setWorkspace(prev => ({
+                              ...prev,
+                              nodes: prev.nodes.map(n => n.id === node.id ? { ...n, label: e.target.value } : n)
+                            }));
+                          }}
+                          className="bg-transparent border-none text-slate-200 focus:bg-black/55 px-1.5 py-0.5 rounded focus:outline-none focus:ring-1 focus:ring-cyan-500 max-w-[280px] font-semibold"
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          title="Double-click to edit group label"
+                        />
+                      </div>
+                      
+                      <div className="flex items-center gap-2" onMouseDown={e => e.stopPropagation()}>
+                        <div className="flex items-center gap-1">
+                          {['rgba(6, 182, 212, 0.04)', 'rgba(168, 85, 247, 0.04)', 'rgba(234, 179, 8, 0.04)', 'rgba(34, 197, 94, 0.04)'].map((col, idx) => {
+                            const borderCol = col.replace('0.04', '0.4');
+                            return (
+                              <button
+                                key={idx}
+                                onClick={() => {
+                                  saveCheckpoint();
+                                  setWorkspace(prev => ({
+                                    ...prev,
+                                    nodes: prev.nodes.map(n => n.id === node.id ? { ...n, color: col } : n)
+                                  }));
+                                }}
+                                style={{ backgroundColor: col, borderColor: borderCol }}
+                                className="w-2.5 h-2.5 rounded-full border cursor-pointer hover:scale-110 transition-transform"
+                              />
+                            );
+                          })}
+                        </div>
+                        <button
+                          onClick={(e) => deleteNode(node.id, e)}
+                          className="p-1 rounded hover:bg-red-500/10 text-slate-400 hover:text-red-400 cursor-pointer"
+                          title="Delete Comment Box"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 pointer-events-none relative" />
+                    
+                    {/* Resize handle */}
+                    <div
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        setResizingComment({
+                          id: node.id,
+                          startWidth: width,
+                          startHeight: height,
+                          clientX: e.clientX,
+                          clientY: e.clientY
+                        });
+                      }}
+                      className="absolute bottom-1 right-1 w-4 h-4 cursor-se-resize flex items-center justify-center text-slate-500 hover:text-cyan-400 select-none font-bold select-none text-[11px]"
+                      title="Drag to Resize Box"
+                    >
+                      ◢
+                    </div>
                   </div>
-                </div>
+                );
+              }
 
-                {/* Properties Inspector Preview */}
-                <div className="p-2.5 bg-black/45 text-slate-400 space-y-1 select-none border-b border-white/[0.04]">
-                  {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
-                    <div key={key} className="flex justify-between">
-                      <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">{key}:</span>
-                      <span className="text-slate-300 truncate max-w-[140px] text-right font-medium" title={String(val)}>
-                        {String(val)}
-                      </span>
-                    </div>
-                  ))}
-                  {Object.keys(node.properties).length === 0 && (
-                    <div className="text-slate-500 italic text-[10px] text-center">No properties configured</div>
-                  )}
-                </div>
+              const isSelected = selectedNode?.id === node.id;
+              const isGlowActive = activeNodes.includes(node.id);
+              
+              let borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
+              let headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
 
-                {/* Ports list row layouts */}
-                <div className="p-2 space-y-2 bg-black/15 rounded-b-lg">
-                  {/* Event Inputs/Condition locks list */}
-                  {(node.inputs || []).map((port) => (
-                    <div key={port.id} className="flex items-center gap-2">
-                       <button
-                        onClick={(e) => handlePortClick(node.id, port, e)}
-                        className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
-                          linking?.nodeId === node.id && linking?.portId === port.id 
-                            ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                            : 'bg-[#10b981]/20 hover:bg-[#10b981]/60 border-[#10b981]/50'
-                        }`}
-                        title={`Connector terminal: ${port.name}`}
-                      />
-                      <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
-                    </div>
-                  ))}
+              if (node.type === 'cue') {
+                borderClasses = 'border-purple-500/30 bg-[#0f1118]';
+                headingClasses = 'bg-purple-500/10 text-purple-300 border-purple-500/20';
+              } else if (node.type === 'event') {
+                borderClasses = 'border-amber-500/30 bg-[#121114]';
+                headingClasses = 'bg-[#451a03]/50 text-amber-300 border-amber-500/20';
+              } else if (node.type === 'condition') {
+                borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
+                headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
+              } else if (node.type === 'action') {
+                borderClasses = 'border-emerald-500/30 bg-[#0c1310]';
+                headingClasses = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+              }
 
-                  {/* Command outputs target lists */}
-                  {(node.outputs || []).map((port) => (
-                    <div key={port.id} className="flex items-center justify-end gap-2 text-right w-full">
-                      <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+              const isLowDetail = zoom < 0.45;
+
+              // Shared Yellow Sticky Annotation render fragment helper
+              const stickyAnnotation = node.comment && (
+                <div 
+                  style={{ 
+                    position: 'absolute',
+                    left: node.x + 248, // Adjacent to the w-60 (240px) visual node card
+                    top: node.y,
+                    width: '190px',
+                  }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                  }}
+                  className="bg-amber-400/[0.12] hover:bg-amber-400/[0.22] border border-amber-400/40 text-amber-200 p-2.5 rounded-lg shadow-2xl font-sans text-[10px] leading-relaxed z-20 transition-all flex flex-col gap-1.5 backdrop-blur-md cursor-default text-left select-text"
+                >
+                  <div className="flex items-center justify-between border-b border-amber-400/20 pb-1 mb-0.5 select-none font-bold uppercase tracking-wider text-[8px] text-amber-400 font-mono">
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                      Sticky Note
+                    </span>
+                    <div className="flex items-center gap-1">
                       <button
-                        onClick={(e) => handlePortClick(node.id, port, e)}
-                        className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
-                          linking?.nodeId === node.id && linking?.portId === port.id 
-                            ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                            : 'bg-cyan-500/20 hover:bg-cyan-500/60 border-cyan-500/50'
-                        }`}
-                        title={`Connector terminal: ${port.name}`}
-                      />
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const text = window.prompt(`Edit Sticky Note Annotation for "${node.label}":`, node.comment);
+                          if (text !== null) {
+                            saveCheckpoint();
+                            setWorkspace(prev => ({
+                              ...prev,
+                              nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: text } : n)
+                            }));
+                            if (selectedNode && selectedNode.id === node.id) {
+                              setSelectedNode({ ...selectedNode, comment: text });
+                            }
+                          }
+                        }}
+                        className="text-[8.5px] text-yellow-300 hover:text-white"
+                      >
+                        Edit
+                      </button>
+                      <span className="text-amber-400/30 font-sans select-none">•</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          saveCheckpoint();
+                          setWorkspace(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: '' } : n)
+                          }));
+                          if (selectedNode && selectedNode.id === node.id) {
+                            setSelectedNode({ ...selectedNode, comment: '' });
+                          }
+                        }}
+                        className="text-red-400 hover:text-red-200"
+                      >
+                        Delete
+                      </button>
                     </div>
-                  ))}
+                  </div>
+                  <p className="whitespace-pre-wrap leading-relaxed italic text-slate-300 select-text font-serif text-[10px]">{node.comment}</p>
                 </div>
-              </div>
-            );
-          })}
+              );
+
+              if (isLowDetail) {
+                return (
+                  <React.Fragment key={node.id}>
+                    <div
+                      onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
+                      style={{ left: node.x, top: node.y }}
+                      className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
+                        isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015] z-10' : 'hover:border-white/20'
+                      } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
+                    >
+                      <div className="flex-1 flex items-center justify-center text-center">
+                        <span className="font-bold text-[12px] truncate w-48 text-slate-100">
+                          {node.label}
+                        </span>
+                      </div>
+                      <div className="text-[8px] text-slate-500 text-center uppercase tracking-wider font-bold border-t border-white/[0.04] pt-1">
+                        {node.type.toUpperCase()}: &lt;{node.xmlTag}&gt;
+                      </div>
+                    </div>
+                    {stickyAnnotation}
+                  </React.Fragment>
+                );
+              }
+
+              return (
+                <React.Fragment key={node.id}>
+                  <div
+                    onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
+                    style={{ left: node.x, top: node.y }}
+                    className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
+                      isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
+                    } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
+                  >
+                    {/* Visual node title & close handle button */}
+                    <div className={`p-2.5 rounded-t-lg border-b flex items-center justify-between cursor-grab active:cursor-grabbing ${headingClasses}`}>
+                      <div className="flex items-center gap-1.5 truncate">
+                        {simActive && isGlowActive && (
+                          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
+                        )}
+                        <span className="font-semibold text-xs tracking-tight truncate w-32">{node.label}</span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* Sticky Note Toggle Icon */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const existingComment = node.comment || '';
+                            const text = window.prompt(`Attach Yellow Sticky Note to "${node.label}" script step:`, existingComment);
+                            if (text !== null) {
+                              saveCheckpoint();
+                              setWorkspace(prev => ({
+                                ...prev,
+                                nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: text } : n)
+                              }));
+                              if (selectedNode && selectedNode.id === node.id) {
+                                setSelectedNode({ ...selectedNode, comment: text });
+                              }
+                            }
+                          }}
+                          title="Attach sticky-note annotation"
+                          className={`p-1 rounded transition-colors duration-100 cursor-pointer ${
+                            node.comment 
+                              ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30' 
+                              : 'hover:bg-yellow-400/10 text-slate-400 hover:text-yellow-400'
+                          }`}
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        </button>
+                        {node.type === 'event' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); triggerLogicSimulator(node.id); }}
+                            title="Simulate Event from this step specifically"
+                            className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer"
+                          >
+                            <Zap className="w-3.5 h-3.5 fill-emerald-400/20" />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => deleteNode(node.id, e)}
+                          title="Delete Node"
+                          className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Properties Inspector Preview */}
+                    <div className="p-2.5 bg-black/45 text-slate-400 space-y-1 select-none border-b border-white/[0.04]">
+                      {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
+                        <div key={key} className="flex justify-between">
+                          <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">{key}:</span>
+                          <span className="text-slate-300 truncate max-w-[140px] text-right font-medium" title={String(val)}>
+                            {String(val)}
+                          </span>
+                        </div>
+                      ))}
+                      {Object.keys(node.properties).length === 0 && (
+                        <div className="text-slate-500 italic text-[10px] text-center">No properties configured</div>
+                      )}
+                    </div>
+
+                    {/* Ports list row layouts */}
+                    <div className="p-2 space-y-2 bg-black/15 rounded-b-lg">
+                      {/* Event Inputs/Condition locks list */}
+                      {(node.inputs || []).map((port) => (
+                        <div key={port.id} className="flex items-center gap-2">
+                           <button
+                            onClick={(e) => handlePortClick(node.id, port, e)}
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                              linking?.nodeId === node.id && linking?.portId === port.id 
+                                ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
+                                : 'bg-[#10b981]/20 hover:bg-[#10b981]/60 border-[#10b981]/50'
+                            }`}
+                            title={`Connector terminal: ${port.name}`}
+                          />
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                        </div>
+                      ))}
+
+                      {/* Command outputs target lists */}
+                      {(node.outputs || []).map((port) => (
+                        <div key={port.id} className="flex items-center justify-end gap-2 text-right w-full">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                          <button
+                            onClick={(e) => handlePortClick(node.id, port, e)}
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                              linking?.nodeId === node.id && linking?.portId === port.id 
+                                ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
+                                : 'bg-cyan-500/20 hover:bg-cyan-500/60 border-cyan-500/50'
+                            }`}
+                            title={`Connector terminal: ${port.name}`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {stickyAnnotation}
+                </React.Fragment>
+              );
+            })}
         </div>
       </div>
 
@@ -995,7 +1850,7 @@ export default function Canvas({
           RADAR MINIMAP
         </span>
         <div className="relative w-36 h-24 bg-[#05070a] rounded-lg border border-white/5 overflow-hidden">
-          {workspace.nodes.map(node => {
+          {nodesFilteredByCue.map(node => {
             // Transform coordinates down to scale perfectly within radar dimension boundaries (144px width, 96px height)
             const nodeX = rangeX > 1 ? ((node.x - minX) / rangeX) * 120 + 8 : 10;
             const nodeY = rangeY > 1 ? ((node.y - minY) / rangeY) * 80 + 8 : 10;
@@ -1032,6 +1887,271 @@ export default function Canvas({
         </div>
         <p className="text-[8px] text-slate-500 font-sans text-center mt-0.5">Double click canvas to Spawn node</p>
       </div>
+
+      {/* AAA Feature 6: Find in Blueprints Floating Search HUD Panel */}
+      {searchOpen && (
+        <div className="absolute top-20 left-4 z-50 w-80 bg-[#0c111a]/95 border border-cyan-500/30 rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-slate-300 animate-terminal-line max-h-96">
+          <div className="flex items-center justify-between border-b border-white/5 pb-2">
+            <span className="font-bold text-slate-100 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+              <Search className="w-3.5 h-3.5 text-cyan-400" />
+              Find in Blueprints
+            </span>
+            <button
+              onClick={() => setSearchOpen(false)}
+              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-500" />
+            <input
+              type="text"
+              value={searchNodesQuery}
+              onChange={(e) => setSearchNodesQuery(e.target.value)}
+              placeholder="Search labels, tags, property keys..."
+              className="w-full bg-[#05070a] border border-white/10 rounded-lg px-2.5 py-1.5 pl-8 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+              autoFocus
+            />
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar pr-1 max-h-56">
+            {(() => {
+              const matches = workspace.nodes.filter(n => {
+                if (n.type === 'comment') return false;
+                const matchesLabel = n.label.toLowerCase().includes(searchNodesQuery.toLowerCase());
+                const matchesTag = n.xmlTag.toLowerCase().includes(searchNodesQuery.toLowerCase());
+                const matchesProperties = Object.values(n.properties).some(val => 
+                  String(val).toLowerCase().includes(searchNodesQuery.toLowerCase())
+                );
+                return matchesLabel || matchesTag || matchesProperties;
+              });
+
+              if (!searchNodesQuery) {
+                return <span className="text-[10px] text-slate-500 italic block text-center py-4">Type a query to scan graph elements...</span>;
+              }
+
+              if (matches.length === 0) {
+                return <span className="text-[10px] text-slate-500 block text-center py-4 bg-black/10 rounded-lg">No nodes fit the query matches</span>;
+              }
+
+              return matches.map(node => {
+                let nodeAccentColor = 'text-cyan-400';
+                if (node.type === 'cue') nodeAccentColor = 'text-purple-400';
+                else if (node.type === 'event') nodeAccentColor = 'text-amber-400';
+                else if (node.type === 'action') nodeAccentColor = 'text-emerald-400';
+
+                return (
+                  <button
+                    key={`search_res_${node.id}`}
+                    onClick={() => focusNode(node)}
+                    className="w-full text-left p-2 rounded bg-white/[0.02] hover:bg-cyan-500/10 border border-white/[0.03] hover:border-cyan-500/20 flex flex-col gap-1 transition-all cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-200 truncate">{node.label}</span>
+                      <span className={`text-[8px] font-semibold truncate ${nodeAccentColor}`}>
+                        &lt;{node.xmlTag}&gt;
+                      </span>
+                    </div>
+                    {Object.keys(node.properties).length > 0 && (
+                      <div className="text-[9px] text-slate-500 font-sans truncate">
+                        Properties: {Object.entries(node.properties).map(([k, v]) => `${k}="${v}"`).join(', ')}
+                      </div>
+                    )}
+                  </button>
+                );
+              });
+            })()}
+          </div>
+          <span className="text-[9px] text-slate-500 italic leading-snug">Click any matched node to pan-teleport camera directly onto it.</span>
+        </div>
+      )}
+
+      {/* AAA Feature 7: Compiler Diagnostics Warnings Overlay Panel */}
+      {diagnosticPanelOpen && (
+        <div className="absolute top-20 right-4 z-50 w-80 bg-[#0c111a]/95 border border-cyan-500/30 rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-slate-300 animate-terminal-line max-h-96 w-[320px]">
+          <div className="flex items-center justify-between border-b border-white/5 pb-2">
+            <span className="font-bold text-slate-100 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              Compiler Diagnostics
+            </span>
+            <button
+              onClick={() => setDiagnosticPanelOpen(false)}
+              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-1 max-h-64">
+            {diagnostics.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-center py-6 bg-emerald-500/5 rounded-lg border border-emerald-500/20 text-emerald-400">
+                <CheckCircle2 className="w-6 h-6 mb-1.5 animate-pulse" />
+                <span className="font-bold uppercase text-[10px]">ALL LOGS GOCLEAN</span>
+                <span className="text-[9px] text-slate-400 mt-0.5">0 errors, 0 logic warnings</span>
+              </div>
+            ) : (
+              diagnostics.map((diag) => {
+                let boxStyle = 'bg-amber-500/5 border-amber-500/20 text-amber-300';
+                let iconColor = 'text-amber-400';
+                if (diag.type === 'error') {
+                  boxStyle = 'bg-red-500/5 border-red-500/20 text-red-300';
+                  iconColor = 'text-red-400';
+                }
+
+                const targetNode = diag.nodeId ? workspace.nodes.find(n => n.id === diag.nodeId) : undefined;
+
+                return (
+                  <div
+                    key={diag.id}
+                    className={`p-2 rounded border flex flex-col gap-1.5 leading-relaxed text-left text-[10px] ${boxStyle}`}
+                  >
+                    <div className="flex items-start gap-1.5">
+                      <AlertTriangle className={`w-3.5 h-3.5 ${iconColor} shrink-0 mt-0.5`} />
+                      <span className="flex-1 font-semibold">{diag.message}</span>
+                    </div>
+                    {targetNode && (
+                      <button
+                        onClick={() => focusNode(targetNode)}
+                        className="text-[9px] self-end px-2 py-0.5 bg-white/5 hover:border-cyan-500/30 rounded border border-white/10 text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-all cursor-pointer"
+                      >
+                        PAN TO TERMINAL
+                      </button>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <span className="text-[9px] text-slate-500 text-center leading-snug">Evaluates connected script graphs real-time to prevent broken XML references in X4 Foundations load processes.</span>
+        </div>
+      )}
+
+      {/* Dynamic Cue & Variable Dependency Graph overlay panel */}
+      {depPanelOpen && (
+        <div className="absolute top-[340px] right-4 z-40 w-80 bg-[#0e121b]/95 border border-violet-500/30 rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-slate-350 animate-terminal-line max-h-[380px] w-[320px]">
+          <div className="flex items-center justify-between border-b border-white/5 pb-2">
+            <span className="font-bold text-slate-100 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+              <MessageSquare className="w-4 h-4 text-violet-400 shrink-0" />
+              Dependency Graph
+            </span>
+            <button
+              onClick={() => setDepPanelOpen(false)}
+              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-1">
+            {selectedNode ? (
+              <>
+                {/* Header highlighting selected cue name with visual frame */}
+                <div className="p-2 border border-violet-500/25 bg-violet-950/20 rounded-lg text-center shadow-lg relative overflow-hidden group">
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-violet-500" />
+                  <span className="text-[9px] uppercase font-bold text-violet-400 block tracking-widest leading-none mb-1">SELECTED ROOT</span>
+                  <span className="text-white font-bold block truncate text-center">{selectedNode.label}</span>
+                  <span className="text-[9.5px] text-slate-500 font-mono mt-0.5 block">&lt;{selectedNode.xmlTag}&gt;</span>
+                </div>
+
+                {/* RELIES ON SECTION (PREDECESSORS) */}
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-cyan-400 tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                    RELIES ON (DATA / INBOUNDS)
+                  </span>
+                  {dependencies.filter(d => d.direction === 'reliance').length === 0 ? (
+                    <span className="text-[10px] text-slate-500 italic block pl-1.5 border-l border-white/5 py-1">
+                      No inbound dependencies detected.
+                    </span>
+                  ) : (
+                    <div className="space-y-1.5 pl-1.5 border-l border-white/5">
+                      {dependencies
+                        .filter(d => d.direction === 'reliance')
+                        .map(dep => {
+                          let typeColors = 'border-purple-500/40 text-purple-300 bg-purple-950/10';
+                          if (dep.type === 'variable') typeColors = 'border-cyan-500/40 text-cyan-300 bg-cyan-950/10';
+                          else if (dep.type === 'event') typeColors = 'border-amber-500/40 text-amber-300 bg-amber-950/10';
+                          else if (dep.type === 'action') typeColors = 'border-emerald-500/40 text-emerald-300 bg-emerald-950/10';
+
+                          return (
+                            <button
+                              key={`dep_in_${dep.id}`}
+                              onClick={() => focusNode(dep.originalNode)}
+                              className={`w-full text-left p-1.5 rounded border ${typeColors} hover:border-cyan-400 hover:bg-cyan-500/5 transition-all text-[10px] font-mono flex items-start gap-1 justify-between group cursor-pointer`}
+                              title="Click to zoom focus onto this dependency connection node"
+                            >
+                              <div className="flex-1 min-w-0 pr-1.5">
+                                <span className="font-bold block truncate">{dep.label}</span>
+                                <span className="text-[8px] text-slate-450 leading-none block truncate mt-0.5 italic">{dep.reason}</span>
+                              </div>
+                              <span className="text-[8px] uppercase tracking-wider font-semibold border border-white/10 px-1 py-0.5 rounded shrink-0 self-center text-slate-400 select-none group-hover:text-cyan-300 group-hover:border-cyan-400/30">
+                                PAN ↑
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+
+                {/* REQUIRED BY SECTION (CONSUMERS) */}
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-amber-400 tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    REQUIRED BY (OUTBOUNDS)
+                  </span>
+                  {dependencies.filter(d => d.direction === 'required-by').length === 0 ? (
+                    <span className="text-[10px] text-slate-500 italic block pl-1.5 border-l border-white/5 py-1">
+                      No outbound dependencies detected.
+                    </span>
+                  ) : (
+                    <div className="space-y-1.5 pl-1.5 border-l border-white/5">
+                      {dependencies
+                        .filter(d => d.direction === 'required-by')
+                        .map(dep => {
+                          let typeColors = 'border-purple-500/40 text-purple-300 bg-purple-950/10';
+                          if (dep.type === 'variable') typeColors = 'border-cyan-500/40 text-cyan-300 bg-cyan-950/10';
+                          else if (dep.type === 'event') typeColors = 'border-amber-500/40 text-amber-300 bg-amber-950/10';
+                          else if (dep.type === 'action') typeColors = 'border-emerald-500/40 text-emerald-300 bg-emerald-950/10';
+
+                          return (
+                            <button
+                              key={`dep_out_${dep.id}`}
+                              onClick={() => focusNode(dep.originalNode)}
+                              className={`w-full text-left p-1.5 rounded border ${typeColors} hover:border-cyan-400 hover:bg-cyan-500/5 transition-all text-[10px] font-mono flex items-start gap-1 justify-between group cursor-pointer`}
+                              title="Click to zoom focus onto this consumer node"
+                            >
+                              <div className="flex-1 min-w-0 pr-1.5">
+                                <span className="font-bold block truncate">{dep.label}</span>
+                                <span className="text-[8px] text-slate-450 leading-none block truncate mt-0.5 italic">{dep.reason}</span>
+                              </div>
+                              <span className="text-[8px] uppercase tracking-wider font-semibold border border-white/10 px-1 py-0.5 rounded shrink-0 self-center text-slate-400 select-none group-hover:text-cyan-300 group-hover:border-cyan-400/30">
+                                PAN ↑
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-center py-10 px-4 leading-normal font-sans border border-slate-850 bg-black/30 rounded-lg">
+                <MessageSquare className="w-8 h-8 text-slate-700 mb-2 animate-pulse" />
+                <span className="font-bold uppercase text-[10px] text-slate-500 tracking-wider">No active node selected</span>
+                <span className="text-[9px] text-slate-550 mt-1.5 leading-normal italic">
+                  Select any visual script cue or variable node on your canvas to instantly map out the flow-dependencies diagram!
+                </span>
+              </div>
+            )}
+          </div>
+          <span className="text-[8px] text-slate-550 text-center leading-normal">
+            Traces linkages, custom variables, inbounds/outbounds, and properties schemas automatically.
+          </span>
+        </div>
+      )}
 
     </div>
   );

@@ -31,6 +31,7 @@ export interface PatchBlock {
   action: 'add' | 'replace' | 'remove';
   content: string;
   note: string;
+  targetFile?: string;
 }
 
 export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSystemProps) {

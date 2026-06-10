@@ -22,6 +22,8 @@ export interface XsdConfig {
   x4GamePath?: string;
   xsdSchemaPath?: string;
   schemaFiles?: string[];
+  modWorkspacePath?: string;
+  filesystemPath?: string;
 }
 
 export interface ResolvedXsdConfig extends XsdConfig {
@@ -30,6 +32,8 @@ export interface ResolvedXsdConfig extends XsdConfig {
   commonXsdPath: string;
   mdExists: boolean;
   commonExists: boolean;
+  modWorkspacePath?: string;
+  filesystemPath?: string;
 }
 
 function arrayOf<T>(value: T | T[] | undefined): T[] {
