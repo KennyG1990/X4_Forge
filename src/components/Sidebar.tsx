@@ -22,7 +22,9 @@ import {
   Check,
   PackageCheck,
   Folder,
-  HardDrive
+  HardDrive,
+  GitBranch,
+  GitCommit
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -36,10 +38,11 @@ import {
 import DirectoryExplorer from './DirectoryExplorer';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
+import SourceControl from './SourceControl';
 
 interface SidebarProps {
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -287,19 +290,31 @@ export default function Sidebar({
         <button
           id="tab_filesystem"
           onClick={() => setActiveTab('filesystem')}
-          className={`flex-1 py-3 text-xs font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
             activeTab === 'filesystem'
               ? 'border-cyan-500 text-white bg-cyan-600/10'
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
         >
-          <FolderGit2 className="w-4 h-4" />
+          <FolderGit2 className="w-3.5 h-3.5" />
           FILESYSTEM
+        </button>
+        <button
+          id="tab_git"
+          onClick={() => setActiveTab('git')}
+          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+            activeTab === 'git'
+              ? 'border-cyan-500 text-white bg-cyan-600/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+        >
+          <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
+          SOURCE
         </button>
       </div>
 
       {/* Main Content Pane */}
-      <div className={`flex-1 overflow-y-auto ${activeTab === 'filesystem' ? 'p-0' : 'p-4 space-y-4'}`}>
+      <div className={`flex-1 overflow-y-auto ${activeTab === 'filesystem' || activeTab === 'git' ? 'p-0' : 'p-4 space-y-4'}`}>
         {activeTab === 'filesystem' && (
           <DirectoryExplorer
             dirHandle={dirHandle}
@@ -311,6 +326,14 @@ export default function Sidebar({
             saveCheckpoint={saveCheckpoint}
             workspaceView={workspaceView}
             setWorkspaceView={setWorkspaceView}
+            onOpenEditorFile={onOpenEditorFile}
+          />
+        )}
+
+        {activeTab === 'git' && (
+          <SourceControl
+            workspace={workspace}
+            setWorkspace={setWorkspace}
             onOpenEditorFile={onOpenEditorFile}
           />
         )}
