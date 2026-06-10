@@ -29,7 +29,7 @@ import {
 import { ModWorkspace, generateMDXML, generateUIXML, validateModWorkspace, XMLDiagnostic, MDNode } from '../types';
 import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
-import { compileAndSaveAll, toSafeModId, listSnapshots, readSnapshot } from '../lib/modCompiler';
+import { toSafeModId } from '../lib/modCompiler';
 import MDScanner from './MDScanner';
 import PlaytestWorkspace from './PlaytestWorkspace';
 
@@ -45,10 +45,7 @@ interface CodePreviewProps {
   workspace: ModWorkspace;
   setWorkspace?: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   saveCheckpoint?: (customTarget?: ModWorkspace) => void;
-  dirHandle: any | null;
-  setDirHandle: (handle: any | null) => void;
-  dirName: string;
-  setDirName: (name: string) => void;
+  modWorkspacePath: string;
   activeEditorFile: EditorFile | null;
   setActiveEditorFile: React.Dispatch<React.SetStateAction<EditorFile | null>>;
   selectedNode: MDNode | null;
@@ -101,10 +98,7 @@ export default function CodePreview({
   workspace, 
   setWorkspace, 
   saveCheckpoint, 
-  dirHandle, 
-  setDirHandle, 
-  dirName, 
-  setDirName,
+  modWorkspacePath,
   activeEditorFile,
   setActiveEditorFile,
   selectedNode,
@@ -195,12 +189,12 @@ export default function CodePreview({
     setDiagnostics(reports);
   }, [workspace, mdCode]);
 
-  // Handle automatic synchronization to folder handle on workspace edits
+  // Handle automatic synchronization to folder on workspace edits
   useEffect(() => {
-    if (autoSaveEnabled && dirHandle) {
-      saveToDirectory(dirHandle, false);
+    if (autoSaveEnabled && modWorkspacePath) {
+      saveToDirectory(false);
     }
-  }, [workspaceSerialized, autoSaveEnabled, dirHandle]);
+  }, [workspaceSerialized, autoSaveEnabled, modWorkspacePath]);
 
   useEffect(() => {
     if (activeEditorFile) {
@@ -215,14 +209,22 @@ export default function CodePreview({
     if (!activeEditorFile) return;
     setEditorSaveStatus('saving');
     try {
-      if (activeEditorFile.handle) {
-        const writable = await activeEditorFile.handle.createWritable();
-        await writable.write(editorContent);
-        await writable.close();
+      const response = await fetch('/api/fs/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: activeEditorFile.path,
+          content: editorContent
+        })
+      });
+      if (response.ok) {
+        activeEditorFile.content = editorContent;
+        setEditorSaveStatus('saved');
+        setTimeout(() => setEditorSaveStatus('idle'), 2000);
+      } else {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to write file on server.");
       }
-      activeEditorFile.content = editorContent;
-      setEditorSaveStatus('saved');
-      setTimeout(() => setEditorSaveStatus('idle'), 2000);
     } catch (err: any) {
       setEditorSaveStatus('error');
       setEditorError(err.message || 'Save failed.');
@@ -275,26 +277,31 @@ export default function CodePreview({
     }
   };
 
-  const saveToDirectory = async (handle: any, showFeedback: boolean) => {
-    if (!handle) return;
+  const saveToDirectory = async (showFeedback: boolean) => {
+    if (!modWorkspacePath) return;
     if (showFeedback) {
       setSyncStatus('syncing');
     }
     try {
-      // Canonical packaging: writes <handle>/<modid>/ with content.xml, every populated
-      // domain, and a rollback snapshot. Replaces the old loose-folder writer that dumped
-      // md/, aiscripts/, etc. directly into the linked root with no manifest.
-      await compileAndSaveAll(workspace, handle, 'store', { snapshot: true });
-
-      if (showFeedback) {
-        setSyncStatus('success');
-        setTimeout(() => setSyncStatus('idle'), 2000);
+      const deployRes = await fetch('/api/agent/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace })
+      });
+      const deployData = await deployRes.json();
+      if (deployRes.ok && deployData.success) {
+        if (showFeedback) {
+          setSyncStatus('success');
+          setTimeout(() => setSyncStatus('idle'), 2000);
+        }
+      } else {
+        throw new Error(deployData.error || "Failed to deploy on server.");
       }
     } catch (err: any) {
       console.error("Playtest Directory Sync Error:", err);
       if (showFeedback) {
         setSyncStatus('error');
-        setSyncErrorMsg(err.message || "Disk write access refused. Try opening MD Studio in a new tab to bypass iframe security sandbox bounds.");
+        setSyncErrorMsg(err.message || "Disk write access refused.");
         setTimeout(() => setSyncStatus('idle'), 5000);
       }
     }
@@ -304,45 +311,46 @@ export default function CodePreview({
   const toggleSnapshots = async () => {
     const next = !showSnapshots;
     setShowSnapshots(next);
-    if (next && dirHandle) {
-      const list = await listSnapshots(dirHandle, toSafeModId(workspace.name));
-      setSnapshots(list);
+    if (next && modWorkspacePath) {
+      try {
+        const response = await fetch(`/api/fs/snapshots?modId=${encodeURIComponent(toSafeModId(workspace.name))}`);
+        if (response.ok) {
+          const list = await response.json();
+          setSnapshots(list);
+        }
+      } catch (err) {
+        console.error("Failed to load snapshots:", err);
+      }
     }
   };
 
   // Restore the workspace from a chosen snapshot (pushes an undo checkpoint first)
-  const restoreSnapshot = async (name: string) => {
-    if (!dirHandle || !setWorkspace) return;
-    const restored = await readSnapshot(dirHandle, toSafeModId(workspace.name), name);
-    if (restored) {
-      if (saveCheckpoint) saveCheckpoint();
-      setWorkspace(restored);
-      setSnapshotMsg(`Restored snapshot from ${name.replace('snapshot_', '').replace('.json', '')}`);
-      setShowSnapshots(false);
-      setTimeout(() => setSnapshotMsg(''), 3500);
-    } else {
-      setSnapshotMsg('Could not read that snapshot file.');
-      setTimeout(() => setSnapshotMsg(''), 3500);
-    }
-  };
-
-  const handleLinkDirectory = async () => {
-    if (!isFileSystemAccessSupported) {
-      alert("Your browser does not fully support Direct Folder Sync. Please use Google Chrome, Edge, or Opera.");
-      return;
-    }
+  const restoreSnapshot = async (snapshotName: string) => {
+    if (!modWorkspacePath || !setWorkspace) return;
     try {
-      const handle = await (window as any).showDirectoryPicker();
-      setDirHandle(handle);
-      setDirName(handle.name);
-      await saveToDirectory(handle, true);
-    } catch (err: any) {
-      console.error("Directory picking failed/cancelled", err);
-      if (err.name === 'SecurityError') {
-        setSyncStatus('error');
-        setSyncErrorMsg("Iframe security sandbox blocked folder access. Open the app in a new tab by clicking the url on the right!");
-        setTimeout(() => setSyncStatus('idle'), 6000);
+      const response = await fetch('/api/fs/restore-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          modId: toSafeModId(workspace.name),
+          snapshotName
+        })
+      });
+      if (response.ok) {
+        const resData = await response.json();
+        if (resData.success && resData.workspace) {
+          if (saveCheckpoint) saveCheckpoint();
+          setWorkspace(resData.workspace);
+          setSnapshotMsg(`Restored snapshot from ${snapshotName.replace('snapshot_', '').replace('.json', '')}`);
+          setShowSnapshots(false);
+          setTimeout(() => setSnapshotMsg(''), 3500);
+          return;
+        }
       }
+      throw new Error("Failed to restore snapshot on server.");
+    } catch (err: any) {
+      setSnapshotMsg(err.message || 'Could not restore snapshot.');
+      setTimeout(() => setSnapshotMsg(''), 3500);
     }
   };
 
@@ -717,23 +725,23 @@ export default function CodePreview({
                 </button>
               )
             ) : (
-              dirHandle && (
+              modWorkspacePath && (
                 <>
                   <button
                     onClick={toggleSnapshots}
                     className="px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 rounded font-mono text-[9px] flex items-center gap-1 transition-all cursor-pointer font-bold uppercase"
                     title="Browse and restore on-disk version snapshots"
                   >
-                    <Activity className="w-3 h-3" />
+                    <Activity className="w-3.5 h-3.5" />
                     HISTORY
                   </button>
                   <button
-                    onClick={() => saveToDirectory(dirHandle, true)}
+                    onClick={() => saveToDirectory(true)}
                     disabled={syncStatus === 'syncing'}
                     className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 rounded font-mono text-[9px] flex items-center gap-1 transition-all cursor-pointer font-bold uppercase"
                     title="Force immediate sync to disk"
                   >
-                    <Save className={`w-3 h-3 ${syncStatus === 'syncing' ? 'animate-pulse' : ''}`} />
+                    <Save className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-pulse' : ''}`} />
                     SYNC FILES
                   </button>
                 </>
@@ -787,14 +795,12 @@ export default function CodePreview({
             />
           ) : (
             <PlaytestWorkspace
-              dirHandle={dirHandle}
-              dirName={dirName}
+              modWorkspacePath={modWorkspacePath}
               syncStatus={syncStatus}
               syncErrorMsg={syncErrorMsg}
               autoSaveEnabled={autoSaveEnabled}
               setAutoSaveEnabled={setAutoSaveEnabled}
               saveToDirectory={saveToDirectory}
-              handleLinkDirectory={handleLinkDirectory}
               logInput={logInput}
               setLogInput={setLogInput}
               diagnosingLogs={diagnosingLogs}

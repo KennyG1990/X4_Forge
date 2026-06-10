@@ -20,14 +20,10 @@ import {
 interface DirectorySettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  dirHandle: any | null;
-  setDirHandle: (handle: any | null) => void;
-  dirName: string;
-  setDirName: (name: string) => void;
-  fsHandle: any | null;
-  setFsHandle: (handle: any | null) => void;
-  fsName: string;
-  setFsName: (name: string) => void;
+  modWorkspacePath: string;
+  setModWorkspacePath: (path: string) => void;
+  filesystemPath: string;
+  setFilesystemPath: (path: string) => void;
 }
 
 /**
@@ -65,17 +61,15 @@ function DirectoryRow({
 export default function DirectorySettingsModal({
   isOpen,
   onClose,
-  dirHandle,
-  setDirHandle,
-  dirName,
-  setDirName,
-  fsHandle,
-  setFsHandle,
-  fsName,
-  setFsName
+  modWorkspacePath,
+  setModWorkspacePath,
+  filesystemPath,
+  setFilesystemPath
 }: DirectorySettingsModalProps) {
   const [gamePath, setGamePath] = useState('');
   const [schemaPath, setSchemaPath] = useState('');
+  const [workspaceInput, setWorkspaceInput] = useState('');
+  const [filesystemInput, setFilesystemInput] = useState('');
   const [resolved, setResolved] = useState<any>(null);
   const [status, setStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'error'; msg: string }>({ type: 'idle', msg: '' });
 
@@ -86,6 +80,8 @@ export default function DirectorySettingsModal({
         const res = await fetch('/api/schema/config').then(r => r.json());
         setGamePath(res.config?.x4GamePath || res.resolved?.x4GamePath || '');
         setSchemaPath(res.config?.xsdSchemaPath || res.resolved?.schemaDir || '');
+        setWorkspaceInput(res.config?.modWorkspacePath || res.resolved?.modWorkspacePath || '');
+        setFilesystemInput(res.config?.filesystemPath || res.resolved?.filesystemPath || '');
         setResolved(res.resolved || null);
       } catch {
         setStatus({ type: 'error', msg: 'Could not load directory config from the server.' });
@@ -93,49 +89,26 @@ export default function DirectorySettingsModal({
     })();
   }, [isOpen]);
 
-  const linkWorkspaceFolder = async () => {
-    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
-      setStatus({ type: 'error', msg: 'Folder linking requires Chrome, Edge, or Opera.' });
-      return;
-    }
-    try {
-      const handle = await (window as any).showDirectoryPicker();
-      setDirHandle(handle);
-      setDirName(handle.name);
-      setStatus({ type: 'success', msg: `Mod Workspace folder set to "${handle.name}".` });
-    } catch {
-      /* user cancelled the picker */
-    }
-  };
-
-  const linkFsFolder = async () => {
-    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
-      setStatus({ type: 'error', msg: 'Folder linking requires Chrome, Edge, or Opera.' });
-      return;
-    }
-    try {
-      const handle = await (window as any).showDirectoryPicker();
-      setFsHandle(handle);
-      setFsName(handle.name);
-      setStatus({ type: 'success', msg: `Filesystem folder set to "${handle.name}".` });
-    } catch {
-      /* user cancelled the picker */
-    }
-  };
-
   const saveServerPaths = async () => {
     setStatus({ type: 'saving', msg: '' });
     try {
       const res = await fetch('/api/schema/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schemaDir: schemaPath.trim(), x4GamePath: gamePath.trim() })
+        body: JSON.stringify({
+          schemaDir: schemaPath.trim(),
+          x4GamePath: gamePath.trim(),
+          modWorkspacePath: workspaceInput.trim(),
+          filesystemPath: filesystemInput.trim()
+        })
       }).then(r => r.json());
       if (res.error) {
         setResolved(res.resolved || resolved);
         setStatus({ type: 'error', msg: res.error });
       } else {
         setResolved(res.resolved || null);
+        setModWorkspacePath(workspaceInput.trim());
+        setFilesystemPath(filesystemInput.trim());
         setStatus({
           type: 'success',
           msg: `Saved. Schema library reloaded: ${res.schema_counts?.events ?? 0} events, ${res.schema_counts?.conditions ?? 0} conditions, ${res.schema_counts?.actions ?? 0} actions.`
@@ -174,44 +147,34 @@ export default function DirectorySettingsModal({
         </div>
 
         <div className="p-4 space-y-3">
-          {/* 1. Mod Workspace folder (browser-linked) */}
+          {/* 1. Mod Workspace folder */}
           <DirectoryRow
             icon={<HardDrive className="w-4 h-4" />}
             title="Mod Workspace Folder"
             tooltip="Your sandbox (e.g. a 'My X4 Mods' folder) where the studio writes compiled mods. Each mod becomes its own <modid>/ subfolder here, with content.xml and a .snapshots/ version history inside it."
           >
-            <div className="flex items-center gap-2">
-              <div className="flex-1 px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 truncate">
-                {dirHandle ? dirName : <span className="text-slate-500">Not linked — choose a folder to enable compiling</span>}
-              </div>
-              <button
-                onClick={linkWorkspaceFolder}
-                className="px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 rounded text-[10px] font-mono font-bold uppercase flex items-center gap-1.5 cursor-pointer shrink-0"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                {dirHandle ? 'Change' : 'Link Folder'}
-              </button>
-            </div>
+            <input
+              type="text"
+              value={workspaceInput}
+              onChange={e => setWorkspaceInput(e.target.value)}
+              placeholder="e.g. C:\Users\Moshi\Desktop\MyStagingWorkspace"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+            />
           </DirectoryRow>
 
-          {/* 1b. Filesystem folder (browser-linked) */}
+          {/* 1b. Filesystem folder */}
           <DirectoryRow
             icon={<FolderOpen className="w-4 h-4" />}
             title="Filesystem Folder"
-            tooltip="The directory shown in the left-hand 'Filesystem' explorer sidebar. Used to browse and edit files. Defaults to your Mod Workspace folder if not linked."
+            tooltip="The directory shown in the left-hand 'Filesystem' explorer sidebar. Used to browse and edit files. Defaults to your Mod Workspace folder if not configured."
           >
-            <div className="flex items-center gap-2">
-              <div className="flex-1 px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 truncate">
-                {fsHandle ? fsName : <span className="text-slate-500">Not linked — defaults to Mod Workspace Folder</span>}
-              </div>
-              <button
-                onClick={linkFsFolder}
-                className="px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 rounded text-[10px] font-mono font-bold uppercase flex items-center gap-1.5 cursor-pointer shrink-0"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                {fsHandle ? 'Change' : 'Link Folder'}
-              </button>
-            </div>
+            <input
+              type="text"
+              value={filesystemInput}
+              onChange={e => setFilesystemInput(e.target.value)}
+              placeholder="e.g. G:\SteamLibrary\steamapps\common\X4 Foundations\extensions"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+            />
           </DirectoryRow>
 
           {/* 2. X4 Game installation (server path) */}
@@ -268,7 +231,7 @@ export default function DirectorySettingsModal({
 
           <div className="flex items-center justify-between pt-1">
             <span className="text-[9px] text-slate-500 font-sans">
-              Workspace &amp; Filesystem folders are stored in this browser session; the game &amp; schema paths are saved to the studio's config.
+              All directory paths are saved securely on the server config.
             </span>
             <button
               onClick={saveServerPaths}

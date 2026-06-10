@@ -53,14 +53,8 @@ interface SidebarProps {
   setSelectedNode: React.Dispatch<React.SetStateAction<MDNode | null>>;
   selectedWidget: UIWidget | null;
   setSelectedWidget: React.Dispatch<React.SetStateAction<UIWidget | null>>;
-  dirHandle: any | null;
-  setDirHandle: (handle: any | null) => void;
-  dirName: string;
-  setDirName: (name: string) => void;
-  fsHandle: any | null;
-  setFsHandle: (handle: any | null) => void;
-  fsName: string;
-  setFsName: (name: string) => void;
+  modWorkspacePath: string;
+  filesystemPath: string;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
   workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki';
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
@@ -78,7 +72,6 @@ interface SidebarProps {
   compileStatus?: 'idle' | 'compiling' | 'success' | 'error';
   compileMessage?: string;
   handleCompileModProject?: () => Promise<void>;
-  handleLinkDirectory?: () => Promise<void>;
   visibleCueIds: string[] | null;
   setVisibleCueIds: (ids: string[] | null) => void;
   setFocusNodeRequest: (req: { nodeId: string; timestamp: number } | null) => void;
@@ -95,26 +88,19 @@ export default function Sidebar({
   setSelectedNode,
   selectedWidget,
   setSelectedWidget,
-  dirHandle,
-  setDirHandle,
-  dirName,
-  setDirName,
-  fsHandle,
-  setFsHandle,
-  fsName,
-  setFsName,
+  modWorkspacePath,
+  filesystemPath,
   saveCheckpoint,
   workspaceView,
   setWorkspaceView,
-  schemaTemplates = [],
+  schemaTemplates,
   onSchemaConfigChanged,
   onOpenEditorFile,
-  workspaceDirMode = 'store',
+  workspaceDirMode,
   setWorkspaceDirMode,
-  compileStatus = 'idle',
-  compileMessage = '',
+  compileStatus,
+  compileMessage,
   handleCompileModProject,
-  handleLinkDirectory,
   visibleCueIds,
   setVisibleCueIds,
   setFocusNodeRequest
@@ -356,14 +342,8 @@ export default function Sidebar({
 
         {activeTab === 'filesystem' && (
           <DirectoryExplorer
-            dirHandle={dirHandle}
-            setDirHandle={setDirHandle}
-            dirName={dirName}
-            setDirName={setDirName}
-            fsHandle={fsHandle}
-            setFsHandle={setFsHandle}
-            fsName={fsName}
-            setFsName={setFsName}
+            modWorkspacePath={modWorkspacePath}
+            filesystemPath={filesystemPath}
             workspace={workspace}
             setWorkspace={setWorkspace}
             saveCheckpoint={saveCheckpoint}
@@ -615,16 +595,16 @@ export default function Sidebar({
               </h3>
 
               {/* Local Directory Link state */}
-              {dirHandle ? (
+              {modWorkspacePath ? (
                 <div className="space-y-3">
                   <div className="p-2 rounded bg-emerald-500/5 border border-emerald-500/20 text-[10px] space-y-1">
                     <div className="flex items-center justify-between text-slate-400 font-bold uppercase text-[9px]">
-                      <span>Connected Folder</span>
-                      <span className="text-emerald-400 flex items-center gap-0.5 font-bold uppercase text-[8px] animate-pulse">● Connected</span>
+                       <span>Workspace Path</span>
+                       <span className="text-emerald-400 flex items-center gap-0.5 font-bold uppercase text-[8px] animate-pulse">● Configured</span>
                     </div>
                     <div className="text-white break-all flex items-center gap-1 text-[10px]">
                       <Folder className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
-                      {dirName}
+                      {modWorkspacePath}
                     </div>
                   </div>
 
@@ -665,15 +645,8 @@ export default function Sidebar({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <button
-                    onClick={handleLinkDirectory}
-                    className="w-full py-2 bg-cyan-600/10 border border-cyan-500/30 hover:bg-cyan-600/20 text-cyan-400 hover:text-white rounded font-mono text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Folder className="w-4 h-4" />
-                    LINK LOCAL FOLDER HANDLE
-                  </button>
-                  <p className="text-[9.5px] text-slate-500 leading-relaxed italic">
-                    Connect local Extensions directory to write mod files directly to your computer.
+                  <p className="text-[9.5px] text-slate-500 leading-relaxed italic text-center py-2">
+                    No workspace staging folder configured. Configure it in Settings to enable compiler.
                   </p>
                 </div>
               )}

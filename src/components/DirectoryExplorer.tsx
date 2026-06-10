@@ -36,14 +36,8 @@ export interface FSItem {
 }
 
 interface DirectoryExplorerProps {
-  dirHandle: any | null;
-  setDirHandle: (handle: any | null) => void;
-  dirName: string;
-  setDirName: (name: string) => void;
-  fsHandle?: any | null;
-  setFsHandle?: (handle: any | null) => void;
-  fsName?: string;
-  setFsName?: (name: string) => void;
+  modWorkspacePath: string;
+  filesystemPath: string;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
@@ -60,117 +54,48 @@ interface DirectoryExplorerProps {
 
 
 
-export default function DirectoryExplorer({dirHandle,
-  setDirHandle,
-  dirName,
-  setDirName,
-  fsHandle,
-  setFsHandle,
-  fsName,
-  setFsName,
+export default function DirectoryExplorer({
+  modWorkspacePath,
+  filesystemPath,
   workspace,
   setWorkspace,
   saveCheckpoint,
   workspaceView,
   setWorkspaceView,
-  onOpenEditorFile}: DirectoryExplorerProps) {
-  const activeFsHandle = fsHandle || dirHandle;
-  const activeFsName = fsName || dirName;
+  onOpenEditorFile
+}: DirectoryExplorerProps) {
   const [fileFilter, setFileFilter] = useState('');
   const [fileTree, setFileTree] = useState<FSItem[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
-  const [activeFileHandle, setActiveFileHandle] = useState<any | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [syncOnEdits, setSyncOnEdits] = useState(true);
-  const [isSandboxBlocked, setIsSandboxBlocked] = useState(false);
-
-  // Sync state back to mock contents on edits if inside standard simulated mode
-  useEffect(() => {
-    if (syncOnEdits && !dirHandle && activeFilePath) {
-      const serialized = JSON.stringify(workspace, null, 2);
-      updateMockFileContent(fileTree, activeFilePath, serialized);
-    }
-  }, [workspace, activeFilePath, dirHandle]);
-
-  const updateMockFileContent = (tree: FSItem[], path: string, content: string): boolean => {
-    for (let i = 0; i < tree.length; i++) {
-      if (tree[i].path === path) {
-        tree[i].content = content;
-        return true;
-      }
-      if (tree[i].children) {
-        const found = updateMockFileContent(tree[i].children!, path, content);
-        if (found) return true;
-      }
-    }
-    return false;
-  };
-
-  // 2. Local recursive scanner of folders using Native Filesystem Access
-  const scanRealLocalDirectory = async (handle: any): Promise<FSItem[]> => {
-    const items: FSItem[] = [];
-    try {
-      for await (const entry of handle.values()) {
-        const itemPath = `${activeFsName}://${entry.name}`;
-        if (entry.kind === 'directory') {
-          // Scan recursively
-          const children = await scanRealLocalDirectory(entry);
-          items.push({
-            name: entry.name,
-            kind: 'directory',
-            path: itemPath,
-            handle: entry,
-            children
-          });
-        } else {
-          items.push({
-            name: entry.name,
-            kind: 'file',
-            path: itemPath,
-            handle: entry
-          });
-        }
-      }
-    } catch (err) {
-      console.warn("Real directory scanning failed or restricted.", err);
-    }
-
-    // Sort folders first, then files
-    return items.sort((a, b) => {
-      if (a.kind !== b.kind) {
-        return a.kind === 'directory' ? -1 : 1;
-      }
-      return a.name.localeCompare(b.name);
-    });
-  };
 
   const handleRefreshDirectory = async () => {
-    if (!activeFsHandle) {
-      setStatusMessage({ type: 'info', text: "Refreshed simulated workspace!" });
-      setTimeout(() => setStatusMessage(null), 2000);
+    if (!filesystemPath && !modWorkspacePath) {
+      setFileTree([]);
       return;
     }
 
     try {
-      const scanned = await scanRealLocalDirectory(activeFsHandle);
-      setFileTree(scanned);
-      setStatusMessage({ type: 'success', text: "Synced local project filesystem!" });
+      const response = await fetch('/api/fs/list');
+      if (response.ok) {
+        const tree = await response.json();
+        setFileTree(tree);
+        setStatusMessage({ type: 'success', text: "Synced project filesystem!" });
+      } else {
+        throw new Error("Failed to load filesystem tree.");
+      }
       setTimeout(() => setStatusMessage(null), 2000);
     } catch (e: any) {
       setStatusMessage({ type: 'error', text: `Sync failed: ${e.message}` });
     }
   };
 
-  // Re-scan whenever handle changes
+  // Re-scan whenever configured paths change
   useEffect(() => {
-    if (activeFsHandle) {
-      handleRefreshDirectory();
-    } else {
-      setFileTree([]);
-    }
-  }, [activeFsHandle, activeFsName]);
+    handleRefreshDirectory();
+  }, [modWorkspacePath, filesystemPath]);
 
   const toggleFolder = (path: string) => {
     setExpandedPaths(prev => ({
@@ -179,75 +104,23 @@ export default function DirectoryExplorer({dirHandle,
     }));
   };
 
-  // 3. Mount Native File System Directory Picker
-  const handleMountDirectory = async () => {
-    setIsSandboxBlocked(false);
-    if (!('showDirectoryPicker' in window)) {
-      setStatusMessage({ 
-        type: 'error', 
-        text: "Direct Directory access is barred by your browser. Please try Chrome, Edge, or Opera." 
-      });
-      return;
-    }
-
-    try {
-      const handle = await (window as any).showDirectoryPicker();
-      if (setFsHandle && setFsName) {
-        setFsHandle(handle);
-        setFsName(handle.name);
-      } else {
-        setDirHandle(handle);
-        setDirName(handle.name);
-      }
-      setStatusMessage({ type: 'success', text: `Mounted filesystem: ${handle.name}` });
-      setTimeout(() => setStatusMessage(null), 2500);
-    } catch (err: any) {
-      console.error(err);
-      if (err.name === 'SecurityError') {
-        setIsSandboxBlocked(true);
-        setStatusMessage({
-          type: 'error',
-          text: "Iframe sandbox bounds barred directory requests. Access via New Tab!"
-        });
-      } else {
-        setStatusMessage({
-          type: 'error',
-          text: `FileSystem mount failed: ${err.message || 'Cancelled'}`
-        });
-      }
-    }
-  };
-
   // 4. File Click and Content Loader
   const handleFileClick = async (file: FSItem) => {
     try {
       saveCheckpoint();
       setActiveFilePath(file.path);
-      setActiveFileHandle(file.handle || null);
 
-      let fileText = '';
-
-      if (file.isMock) {
-        // Mock fallback retrieval
-        if (file.content === "") {
-          // Re-populate mock default matching active workspace schemas
-          fileText = JSON.stringify(workspace, null, 2);
-        } else {
-          fileText = file.content || '';
-        }
-      } else if (file.handle) {
-        // Read native file API chunk
-        const f = await file.handle.getFile();
-        fileText = await f.text();
+      const response = await fetch(`/api/fs/read?path=${encodeURIComponent(file.path)}`);
+      if (!response.ok) {
+        throw new Error("Could not read file from server.");
       }
+      const data = await response.json();
+      const fileText = data.content || '';
 
-      
       onOpenEditorFile?.({
         name: file.name,
         path: file.path,
-        content: fileText,
-        handle: file.handle,
-        isMock: file.isMock
+        content: fileText
       });
 
       const fileExtension = file.name.split('.').pop()?.toLowerCase();
@@ -266,7 +139,7 @@ export default function DirectoryExplorer({dirHandle,
         } catch (e: any) {
           setStatusMessage({ type: 'error', text: `JSON parse failed: ${e.message}` });
         }
-          } else if (fileExtension === 'xml') {
+      } else if (fileExtension === 'xml') {
         const isTFile = file.path.includes('/t/') || fileText.includes('<language');
         const isAIScript = file.path.includes('/aiscripts/') || fileText.includes('<aiscript');
         const isLibrary = file.path.includes('/libraries/') || fileText.includes('<diff');
@@ -382,20 +255,20 @@ export default function DirectoryExplorer({dirHandle,
       : generateMDXML(workspace);
 
     try {
-      if (activeFileHandle) {
-        // Native write to linked system disk
-        const writable = await activeFileHandle.createWritable();
-        await writable.write(contentToSave);
-        await writable.close();
-        setStatusMessage({ type: 'success', text: `Saved directly back to local file: ${activeFilePath.split('/').pop()}` });
+      const response = await fetch('/api/fs/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: activeFilePath, content: contentToSave })
+      });
+      if (response.ok) {
+        setStatusMessage({ type: 'success', text: `Saved file: ${activeFilePath.split('/').pop()}` });
       } else {
-        // Mock save
-        updateMockFileContent(fileTree, activeFilePath, contentToSave);
-        setStatusMessage({ type: 'success', text: `Workspace simulated save complete! (${activeFilePath.split('/').pop()})` });
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to write file on server.");
       }
       setTimeout(() => setStatusMessage(null), 2500);
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: `FileSystem write access blocked: ${err.message}` });
+      setStatusMessage({ type: 'error', text: `Save failed: ${err.message}` });
     }
   };
 
@@ -406,40 +279,31 @@ export default function DirectoryExplorer({dirHandle,
     const filename = cleanName.endsWith(`.${type}`) ? cleanName : `${cleanName}.${type}`;
 
     try {
-      if (activeFsHandle) {
-        // Native local storage file create
-        const fileHandle = await activeFsHandle.getFileHandle(filename, { create: true });
-        const writer = await fileHandle.createWritable();
-        
-        const initialContent = type === 'json' 
-          ? JSON.stringify(workspace, null, 2)
-          : generateMDXML(workspace);
+      const initialContent = type === 'json' 
+        ? JSON.stringify(workspace, null, 2)
+        : generateMDXML(workspace);
 
-        await writer.write(initialContent);
-        await writer.close();
-
-        await handleRefreshDirectory();
-        setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
-      } else {
-        // Mock add
-        const parentCol = fileTree.find(n => n.name === 'md');
-        if (parentCol && parentCol.children) {
-          const mockPath = `res://director/${filename}`;
-          const initialContent = type === 'json' 
-            ? JSON.stringify(workspace, null, 2)
-            : generateMDXML(workspace);
-
-          parentCol.children.push({
-            name: filename,
-            kind: 'file',
-            path: mockPath,
-            isMock: true,
-            content: initialContent
-          });
-          setFileTree([...fileTree]);
-          setStatusMessage({ type: 'success', text: `Created simulated file: ${filename}` });
-        }
+      const createResponse = await fetch('/api/fs/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: filename, type: 'file' })
+      });
+      if (!createResponse.ok) {
+        const err = await createResponse.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to create file on server.");
       }
+
+      const writeResponse = await fetch('/api/fs/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filename, content: initialContent })
+      });
+      if (!writeResponse.ok) {
+        throw new Error("Failed to write initial content.");
+      }
+
+      await handleRefreshDirectory();
+      setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
       setTimeout(() => setStatusMessage(null), 2500);
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: `Could not create file: ${err.message}` });
@@ -569,33 +433,12 @@ export default function DirectoryExplorer({dirHandle,
         {/* Current Folder Path breadcrumb */}
         <div className="flex items-center gap-1.5 bg-black/35 rounded-md p-1.5 border border-white/5">
           <span className="font-mono text-[10px] text-cyan-500 flex-shrink-0">
-            {activeFsHandle ? "ext://" : "—"}
+            path://
           </span>
-          <span className="font-mono text-[10px] font-bold text-slate-300 truncate tracking-wide flex-1">
-            {activeFsHandle ? `${activeFsName}/` : "No folder linked"}
+          <span className="font-mono text-[10px] font-bold text-slate-300 truncate tracking-wide flex-1" title={filesystemPath || modWorkspacePath || "No folder configured"}>
+            {filesystemPath || modWorkspacePath || "No folder configured"}
           </span>
         </div>
-
-        {/* Target Local Directory Mount Trigger Button */}
-        {!activeFsHandle && (
-          <button
-            onClick={handleMountDirectory}
-            className="w-full py-1.5 px-3 rounded-md bg-gradient-to-r from-cyan-600/30 to-blue-600/30 border border-cyan-500/40 hover:border-cyan-500/80 text-cyan-400 font-mono text-[10px] font-bold tracking-tight hover:from-cyan-600/40 hover:to-blue-600/40 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md"
-          >
-            <FolderOpen className="w-3.5 h-3.5" />
-            TARGET LOCAL DIRECTORY
-          </button>
-        )}
-
-        {isSandboxBlocked && (
-          <div className="p-2 border border-yellow-500/20 bg-yellow-500/5 text-[9.5px] text-yellow-500 font-sans leading-normal rounded-md space-y-1">
-            <span className="font-bold block flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
-              Iframe Sandbox Restricted Mount
-            </span>
-            <span>Authorize local folder access by opening AI Studio in a new tab using the URL in the right panel.</span>
-          </div>
-        )}
 
         {/* File filter input */}
         <div className="relative">
@@ -616,7 +459,7 @@ export default function DirectoryExplorer({dirHandle,
         <div className="space-y-1">
           {filteredTree.length === 0 ? (
             <div className="text-center py-6 px-3 text-[10px] font-mono text-slate-500 leading-relaxed">
-              {activeFsHandle ? "No files matched filters" : "No folder linked. Use Settings → Directories to choose your Filesystem folder, then it will appear here."}
+              {(filesystemPath || modWorkspacePath) ? "No files matched filters" : "No folder configured. Use Settings to configure your Filesystem folder."}
             </div>
           ) : (
             filteredTree.map(item => renderFSNode(item))
@@ -645,7 +488,7 @@ export default function DirectoryExplorer({dirHandle,
       {/* Godot style Footer feedback detail */}
       <div className="p-2 border-t border-white/5 bg-[#17191e] flex items-center justify-between font-mono text-[9px] text-slate-500 shrink-0">
         <span>Active File: {activeFilePath ? activeFilePath.split('/').pop() : 'None Loaded'}</span>
-        {activeFsHandle && <span className="text-emerald-500">● RealTime Connected</span>}
+        {(filesystemPath || modWorkspacePath) && <span className="text-emerald-500">● Server Connected</span>}
       </div>
     </div>
   );

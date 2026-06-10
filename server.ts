@@ -726,6 +726,9 @@ app.post("/api/schema/config", (req, res) => {
   try {
     const schemaDir = String(req.body?.schemaDir || '').trim();
     const gamePath = String(req.body?.x4GamePath || '').trim();
+    const modWorkspacePath = req.body?.modWorkspacePath !== undefined ? String(req.body.modWorkspacePath || '').trim() : undefined;
+    const filesystemPath = req.body?.filesystemPath !== undefined ? String(req.body.filesystemPath || '').trim() : undefined;
+
     if (!schemaDir) {
       return res.status(400).json({ error: "Missing required schemaDir." });
     }
@@ -733,6 +736,8 @@ app.post("/api/schema/config", (req, res) => {
     const nextConfig = {
       ...readXsdConfig(),
       ...(gamePath ? { x4GamePath: gamePath } : {}),
+      ...(modWorkspacePath !== undefined ? { modWorkspacePath } : {}),
+      ...(filesystemPath !== undefined ? { filesystemPath } : {}),
       xsdSchemaPath: schemaDir,
       schemaFiles: ['md.xsd', 'common.xsd']
     };
@@ -761,6 +766,235 @@ app.post("/api/schema/config", (req, res) => {
     });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "Failed to update schema config." });
+  }
+});
+
+// Helper for scanning filesystem recursively
+function scanDirectory(dir: string, baseDir: string): any[] {
+  const items: any[] = [];
+  try {
+    if (!fs.existsSync(dir)) return [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+      if (entry.name.startsWith('.') && entry.name !== '.snapshots') {
+        continue;
+      }
+      if (entry.name === 'node_modules' || entry.name === 'dist') {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        items.push({
+          name: entry.name,
+          kind: 'directory',
+          path: relativePath,
+          children: scanDirectory(fullPath, baseDir)
+        });
+      } else {
+        items.push({
+          name: entry.name,
+          kind: 'file',
+          path: relativePath
+        });
+      }
+    }
+  } catch (err) {
+    console.warn(`Error scanning directory ${dir}:`, err);
+  }
+  
+  return items.sort((a, b) => {
+    if (a.kind !== b.kind) {
+      return a.kind === 'directory' ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+}
+
+// Server Filesystem list endpoint
+app.get("/api/fs/list", (req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const rootPath = resolved.filesystemPath || resolved.modWorkspacePath;
+    if (!rootPath) {
+      return res.json([]);
+    }
+    if (!fs.existsSync(rootPath)) {
+      return res.json([]);
+    }
+    const tree = scanDirectory(rootPath, rootPath);
+    return res.json(tree);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to list filesystem." });
+  }
+});
+
+// Server Filesystem read endpoint
+app.get("/api/fs/read", (req, res) => {
+  try {
+    const relativePath = String(req.query.path || '').trim();
+    if (!relativePath) {
+      return res.status(400).json({ error: "Missing path parameter." });
+    }
+    const resolved = resolveXsdConfig();
+    const rootPath = resolved.filesystemPath || resolved.modWorkspacePath;
+    if (!rootPath) {
+      return res.status(400).json({ error: "No filesystem/workspace path configured." });
+    }
+    
+    const safePath = path.resolve(rootPath, relativePath);
+    if (!safePath.startsWith(path.resolve(rootPath))) {
+      return res.status(403).json({ error: "Forbidden: Directory traversal detected." });
+    }
+    
+    if (!fs.existsSync(safePath)) {
+      return res.status(404).json({ error: "File not found." });
+    }
+    
+    const content = fs.readFileSync(safePath, 'utf8');
+    return res.json({ content });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to read file." });
+  }
+});
+
+// Server Filesystem write endpoint
+app.post("/api/fs/write", (req, res) => {
+  try {
+    const relativePath = String(req.body?.path || '').trim();
+    const content = req.body?.content ?? '';
+    if (!relativePath) {
+      return res.status(400).json({ error: "Missing path parameter." });
+    }
+    const resolved = resolveXsdConfig();
+    const rootPath = resolved.filesystemPath || resolved.modWorkspacePath;
+    if (!rootPath) {
+      return res.status(400).json({ error: "No filesystem/workspace path configured." });
+    }
+    
+    const safePath = path.resolve(rootPath, relativePath);
+    if (!safePath.startsWith(path.resolve(rootPath))) {
+      return res.status(403).json({ error: "Forbidden: Directory traversal detected." });
+    }
+    
+    const dir = path.dirname(safePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
+    fs.writeFileSync(safePath, content, 'utf8');
+    return res.json({ success: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to write file." });
+  }
+});
+
+// Server Filesystem create endpoint
+app.post("/api/fs/create", (req, res) => {
+  try {
+    const { name, type } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: "Missing name parameter." });
+    }
+    const cleanName = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const resolved = resolveXsdConfig();
+    const rootPath = resolved.filesystemPath || resolved.modWorkspacePath;
+    if (!rootPath) {
+      return res.status(400).json({ error: "No filesystem/workspace path configured." });
+    }
+    
+    const safePath = path.resolve(rootPath, cleanName);
+    if (!safePath.startsWith(path.resolve(rootPath))) {
+      return res.status(403).json({ error: "Forbidden: Directory traversal detected." });
+    }
+    
+    if (fs.existsSync(safePath)) {
+      return res.status(400).json({ error: "Target already exists." });
+    }
+    
+    if (type === 'directory') {
+      fs.mkdirSync(safePath, { recursive: true });
+    } else {
+      const dir = path.dirname(safePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(safePath, '', 'utf8');
+    }
+    
+    return res.json({ success: true, path: cleanName });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to create resource." });
+  }
+});
+
+// Server Filesystem snapshots list endpoint
+app.get("/api/fs/snapshots", (req, res) => {
+  try {
+    const modId = String(req.query.modId || '').trim();
+    if (!modId) {
+      return res.status(400).json({ error: "Missing modId parameter." });
+    }
+    const resolved = resolveXsdConfig();
+    const modWorkspacePath = resolved.modWorkspacePath;
+    if (!modWorkspacePath) {
+      return res.json([]);
+    }
+    const snapDir = path.join(modWorkspacePath, modId, '.snapshots');
+    if (!fs.existsSync(snapDir)) {
+      return res.json([]);
+    }
+    const files = fs.readdirSync(snapDir).filter(name => name.startsWith('snapshot_') && name.endsWith('.json'));
+    const list = files.map(file => {
+      try {
+        const content = fs.readFileSync(path.join(snapDir, file), 'utf8');
+        const parsed = JSON.parse(content);
+        return {
+          name: file,
+          savedAt: parsed.savedAt || new Date().toISOString()
+        };
+      } catch (e) {
+        return {
+          name: file,
+          savedAt: new Date().toISOString()
+        };
+      }
+    });
+    list.sort((a, b) => b.name.localeCompare(a.name));
+    return res.json(list);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to list snapshots." });
+  }
+});
+
+// Server Filesystem restore snapshot endpoint
+app.post("/api/fs/restore-snapshot", (req, res) => {
+  try {
+    const { modId, snapshotName } = req.body;
+    if (!modId || !snapshotName) {
+      return res.status(400).json({ error: "Missing modId or snapshotName parameter." });
+    }
+    const resolved = resolveXsdConfig();
+    const modWorkspacePath = resolved.modWorkspacePath;
+    if (!modWorkspacePath) {
+      return res.status(400).json({ error: "No mod workspace path configured." });
+    }
+    const snapFile = path.join(modWorkspacePath, modId, '.snapshots', snapshotName);
+    if (!fs.existsSync(snapFile)) {
+      return res.status(404).json({ error: "Snapshot not found." });
+    }
+    const content = fs.readFileSync(snapFile, 'utf8');
+    const parsed = JSON.parse(content);
+    if (!parsed.workspace) {
+      return res.status(400).json({ error: "Invalid snapshot format." });
+    }
+    
+    activeWorkspace = parsed.workspace;
+    workspaceVersion++;
+    
+    return res.json({ success: true, workspace: activeWorkspace });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to restore snapshot." });
   }
 });
 
@@ -816,6 +1050,118 @@ app.post("/api/agent/workspace", (req, res) => {
   });
 });
 
+function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'store'): string {
+  const modId = toSafeModId(ws.name);
+  const targetPath = mode === 'store' ? path.join(rootPath, modId) : rootPath;
+
+  if (mode === 'store') {
+    if (fs.existsSync(targetPath)) {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+    }
+  }
+  if (!fs.existsSync(targetPath)) {
+    fs.mkdirSync(targetPath, { recursive: true });
+  }
+
+  // 1. content.xml
+  const contentXml = generateContentXML(modId, ws);
+  fs.writeFileSync(path.join(targetPath, 'content.xml'), contentXml);
+
+  // 2. README.md
+  fs.writeFileSync(path.join(targetPath, 'README.md'), `# ${ws.name || modId}\n\nGenerated by X4:MD Studio.\n`);
+
+  // 3. md/<modId>.xml
+  const mdXml = generateMDXML(ws);
+  const mdDir = path.join(targetPath, 'md');
+  fs.mkdirSync(mdDir, { recursive: true });
+  fs.writeFileSync(path.join(mdDir, `${modId}.xml`), mdXml);
+
+  // 4. UI
+  if (ws.uiWidgets?.length) {
+    const uiDir = path.join(targetPath, 'md_ui_layouts');
+    fs.mkdirSync(uiDir, { recursive: true });
+    const uiXml = generateUIXML(ws);
+    fs.writeFileSync(path.join(uiDir, `${modId}_ui.xml`), uiXml);
+  }
+
+  // 5. AIScripts
+  if (ws.aiScripts?.length) {
+    const aiDir = path.join(targetPath, 'aiscripts');
+    fs.mkdirSync(aiDir, { recursive: true });
+    for (const script of ws.aiScripts) {
+      const fileName = script.name.endsWith('.xml') ? script.name : `${script.name}.xml`;
+      fs.writeFileSync(path.join(aiDir, fileName), compileScriptToXML(script));
+    }
+  }
+
+  // 6. Wares and Jobs
+  if (ws.wares?.length || ws.jobs?.length) {
+    const libDir = path.join(targetPath, 'libraries');
+    fs.mkdirSync(libDir, { recursive: true });
+    if (ws.wares?.length) {
+      fs.writeFileSync(path.join(libDir, 'wares.xml'), compileWaresXML(ws.wares));
+    }
+    if (ws.jobs?.length) {
+      fs.writeFileSync(path.join(libDir, 'jobs.xml'), compileJobsXML(ws.jobs));
+    }
+  }
+
+  // 7. Translations
+  if (ws.tFiles?.length) {
+    const tDir = path.join(targetPath, 't');
+    fs.mkdirSync(tDir, { recursive: true });
+    for (const tFile of ws.tFiles) {
+      const fileName = tFile.fileName || `0001-L${tFile.languageId}.xml`;
+      fs.writeFileSync(path.join(tDir, fileName), compileTFileXML(tFile));
+    }
+  }
+
+  // 8. XML diff patches
+  if (ws.xmlPatches?.length) {
+    const patchesByFile: Record<string, any[]> = {};
+    ws.xmlPatches.forEach((patch: any) => {
+      const file = patch.targetFile || 'libraries/ship_macros.xml';
+      if (!patchesByFile[file]) {
+        patchesByFile[file] = [];
+      }
+      patchesByFile[file].push(patch);
+    });
+
+    for (const [filePath, filePatches] of Object.entries(patchesByFile)) {
+      const targetFilePath = path.join(targetPath, filePath);
+      const targetDir = path.dirname(targetFilePath);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+      fs.writeFileSync(targetFilePath, compileDiffDocument(filePatches, filePath));
+    }
+  }
+
+  // Snapshots
+  try {
+    const snapDir = path.join(targetPath, '.snapshots');
+    if (!fs.existsSync(snapDir)) {
+      fs.mkdirSync(snapDir, { recursive: true });
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(
+      path.join(snapDir, `snapshot_${stamp}.json`),
+      JSON.stringify({ savedAt: new Date().toISOString(), name: ws.name, workspace: ws }, null, 2),
+      'utf8'
+    );
+    const names = fs.readdirSync(snapDir).filter(name => name.startsWith('snapshot_') && name.endsWith('.json'));
+    names.sort();
+    const MAX_SNAPSHOTS = 30;
+    for (let i = 0; i < names.length - MAX_SNAPSHOTS; i++) {
+      fs.unlinkSync(path.join(snapDir, names[i]));
+    }
+  } catch (err) {
+    console.warn('Snapshot write failed (non-fatal):', err);
+  }
+
+  return targetPath;
+}
+
 /**
  * POST /api/agent/deploy
  * Compiles and deploys the workspace directly into the configured X4 Extensions directory.
@@ -824,115 +1170,59 @@ app.post("/api/agent/deploy", (req, res) => {
   const ws = req.body.workspace || activeWorkspace;
   try {
     const resolved = resolveXsdConfig();
+    const modWorkspacePath = resolved.modWorkspacePath;
     const x4GamePath = resolved.x4GamePath;
-    if (!x4GamePath) {
+    
+    if (!modWorkspacePath && !x4GamePath) {
       return res.status(400).json({
         success: false,
-        error: "X4 Game Installation path is not configured on the server."
+        error: "Neither Mod Workspace Folder nor X4 Game Installation are configured."
       });
-    }
-
-    if (!fs.existsSync(x4GamePath)) {
-      return res.status(400).json({
-        success: false,
-        error: `X4 Game Installation path "${x4GamePath}" does not exist on the server filesystem.`
-      });
-    }
-
-    const extensionsPath = path.join(x4GamePath, 'extensions');
-    if (!fs.existsSync(extensionsPath)) {
-      fs.mkdirSync(extensionsPath, { recursive: true });
     }
 
     const modId = toSafeModId(ws.name);
-    const modPath = path.join(extensionsPath, modId);
+    let stagingPath = '';
+    let deployedPath = '';
 
-    // Clean old mod directory if exists
-    if (fs.existsSync(modPath)) {
-      fs.rmSync(modPath, { recursive: true, force: true });
-    }
-    fs.mkdirSync(modPath, { recursive: true });
-
-    // 1. content.xml
-    const contentXml = generateContentXML(modId, ws);
-    fs.writeFileSync(path.join(modPath, 'content.xml'), contentXml);
-
-    // 2. md/<modId>.xml
-    const mdXml = generateMDXML(ws);
-    const mdDir = path.join(modPath, 'md');
-    fs.mkdirSync(mdDir, { recursive: true });
-    fs.writeFileSync(path.join(mdDir, `${modId}.xml`), mdXml);
-
-    // 3. UI
-    if (ws.uiWidgets?.length) {
-      const uiDir = path.join(modPath, 'md_ui_layouts');
-      fs.mkdirSync(uiDir, { recursive: true });
-      const uiXml = generateUIXML(ws);
-      fs.writeFileSync(path.join(uiDir, `${modId}_ui.xml`), uiXml);
-    }
-
-    // 4. AIScripts
-    if (ws.aiScripts?.length) {
-      const aiDir = path.join(modPath, 'aiscripts');
-      fs.mkdirSync(aiDir, { recursive: true });
-      for (const script of ws.aiScripts) {
-        const fileName = script.name.endsWith('.xml') ? script.name : `${script.name}.xml`;
-        fs.writeFileSync(path.join(aiDir, fileName), compileScriptToXML(script));
+    // 1. Compile to Mod Workspace Path (Staging) if configured
+    if (modWorkspacePath) {
+      if (!fs.existsSync(modWorkspacePath)) {
+        fs.mkdirSync(modWorkspacePath, { recursive: true });
       }
+      stagingPath = compileWorkspaceToFolder(ws, modWorkspacePath, 'store');
     }
 
-    // 5. Wares and Jobs
-    if (ws.wares?.length || ws.jobs?.length) {
-      const libDir = path.join(modPath, 'libraries');
-      fs.mkdirSync(libDir, { recursive: true });
-      if (ws.wares?.length) {
-        fs.writeFileSync(path.join(libDir, 'wares.xml'), compileWaresXML(ws.wares));
-      }
-      if (ws.jobs?.length) {
-        fs.writeFileSync(path.join(libDir, 'jobs.xml'), compileJobsXML(ws.jobs));
-      }
-    }
-
-    // 6. Translations
-    if (ws.tFiles?.length) {
-      const tDir = path.join(modPath, 't');
-      fs.mkdirSync(tDir, { recursive: true });
-      for (const tFile of ws.tFiles) {
-        const fileName = tFile.fileName || `0001-L${tFile.languageId}.xml`;
-        fs.writeFileSync(path.join(tDir, fileName), compileTFileXML(tFile));
-      }
-    }
-
-    // 7. XML diff patches
-    if (ws.xmlPatches?.length) {
-      const patchesByFile: Record<string, any[]> = {};
-      ws.xmlPatches.forEach((patch: any) => {
-        const file = patch.targetFile || 'libraries/ship_macros.xml';
-        if (!patchesByFile[file]) {
-          patchesByFile[file] = [];
+    // 2. Compile and deploy to Game Extensions Path if configured
+    if (x4GamePath) {
+      if (fs.existsSync(x4GamePath)) {
+        const extensionsPath = path.join(x4GamePath, 'extensions');
+        if (!fs.existsSync(extensionsPath)) {
+          fs.mkdirSync(extensionsPath, { recursive: true });
         }
-        patchesByFile[file].push(patch);
-      });
-
-      for (const [filePath, filePatches] of Object.entries(patchesByFile)) {
-        const targetFilePath = path.join(modPath, filePath);
-        const targetDir = path.dirname(targetFilePath);
-        if (!fs.existsSync(targetDir)) {
-          fs.mkdirSync(targetDir, { recursive: true });
-        }
-        fs.writeFileSync(targetFilePath, compileDiffDocument(filePatches, filePath));
+        deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store');
+      } else {
+        console.warn(`Configured X4 Game Installation path "${x4GamePath}" does not exist.`);
       }
+    }
+
+    let message = '';
+    if (stagingPath && deployedPath) {
+      message = `Successfully compiled to staging workspace AND deployed to game extensions: ${deployedPath}`;
+    } else if (stagingPath) {
+      message = `Successfully compiled to staging workspace: ${stagingPath}`;
+    } else if (deployedPath) {
+      message = `Successfully deployed to game extensions: ${deployedPath}`;
     }
 
     return res.json({
       success: true,
-      message: `Successfully deployed mod "${ws.name}" to game extensions folder.`,
-      deployedPath: modPath
+      message,
+      deployedPath: deployedPath || stagingPath
     });
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      error: error.message || "Failed to deploy mod to extensions folder."
+      error: error.message || "Failed to compile/deploy mod."
     });
   }
 });

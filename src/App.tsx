@@ -140,6 +140,17 @@ export default function App() {
 
   useEffect(() => {
     loadSchemaLibrary();
+    (async () => {
+      try {
+        const res = await fetch('/api/schema/config').then(r => r.json());
+        if (res.config) {
+          setModWorkspacePath(res.config.modWorkspacePath || '');
+          setFilesystemPath(res.config.filesystemPath || '');
+        }
+      } catch (err) {
+        console.warn("Could not load initial directory settings from server.");
+      }
+    })();
   }, [loadSchemaLibrary]);
 
   const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki'>('blueprint');
@@ -147,10 +158,8 @@ export default function App() {
   const [visibleCueIds, setVisibleCueIds] = useState<string[] | null>(null);
   const [focusNodeRequest, setFocusNodeRequest] = useState<{ nodeId: string; timestamp: number } | null>(null);
 
-  const [dirHandle, setDirHandle] = useState<any | null>(null);
-  const [dirName, setDirName] = useState<string>('');
-  const [fsHandle, setFsHandle] = useState<any | null>(null);
-  const [fsName, setFsName] = useState<string>('');
+  const [modWorkspacePath, setModWorkspacePath] = useState<string>('');
+  const [filesystemPath, setFilesystemPath] = useState<string>('');
   
   const [workspaceDirMode, setWorkspaceDirMode] = useState<'candy' | 'store'>(() => {
     return (localStorage.getItem('x4_workspace_dir_mode') as 'candy' | 'store') || 'store';
@@ -264,60 +273,30 @@ export default function App() {
   }, [workspace]);
 
   const handleCompileModProject = async () => {
-    if (!dirHandle) {
+    if (!modWorkspacePath) {
       setCompileStatus('error');
-      setCompileMessage('No directory linked. Connect a Mod Workspace staging folder first.');
+      setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
       return;
     }
     setCompileStatus('compiling');
-    setCompileMessage('Generating files in staging folder...');
+    setCompileMessage('Compiling and deploying project on the server...');
     try {
-      // 1. Compile locally to browser-linked staging workspace (dirHandle)
-      const res = await compileAndSaveAll(workspace, dirHandle, workspaceDirMode);
-      let message = res.message;
-
-      // 2. Deploy to server extensions folder if configured
-      try {
-        const deployRes = await fetch('/api/agent/deploy', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workspace })
-        });
-        if (deployRes.ok) {
-          const deployData = await deployRes.json();
-          if (deployData.success) {
-            message = `Successfully compiled to staging workspace AND deployed to game extensions: ${deployData.deployedPath}`;
-          } else {
-            message += ` (Staging compile succeeded, but deployment failed: ${deployData.error})`;
-          }
-        } else {
-          const errData = await deployRes.json().catch(() => ({}));
-          message += ` (Deployment skipped: ${errData.error || 'Game installation not configured'})`;
-        }
-      } catch (deployErr: any) {
-        console.warn("Server-side deployment failed:", deployErr);
-        message += ` (Deployment failed: connection error)`;
+      const deployRes = await fetch('/api/agent/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace })
+      });
+      const deployData = await deployRes.json();
+      if (deployRes.ok && deployData.success) {
+        setCompileStatus('success');
+        setCompileMessage(deployData.message);
+      } else {
+        setCompileStatus('error');
+        setCompileMessage(deployData.error || 'Compilation or deployment failed.');
       }
-
-      setCompileStatus('success');
-      setCompileMessage(message);
     } catch (e: any) {
       setCompileStatus('error');
-      setCompileMessage(e.message || 'Compilation failed. Validate XML files first.');
-    }
-  };
-
-  const handleLinkDirectory = async () => {
-    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
-      alert("Your browser does not fully support Direct Folder Sync. Please use Google Chrome, Edge, or Opera.");
-      return;
-    }
-    try {
-      const handle = await (window as any).showDirectoryPicker();
-      setDirHandle(handle);
-      setDirName(handle.name);
-    } catch (err: any) {
-      console.error("Directory picking failed/cancelled", err);
+      setCompileMessage(e.message || 'Compilation failed. Connection error.');
     }
   };
 
@@ -715,14 +694,8 @@ export default function App() {
           setSelectedNode={setSelectedNode}
           selectedWidget={selectedWidget}
           setSelectedWidget={setSelectedWidget}
-          dirHandle={dirHandle}
-          setDirHandle={setDirHandle}
-          dirName={dirName}
-          setDirName={setDirName}
-          fsHandle={fsHandle}
-          setFsHandle={setFsHandle}
-          fsName={fsName}
-          setFsName={setFsName}
+          modWorkspacePath={modWorkspacePath}
+          filesystemPath={filesystemPath}
           saveCheckpoint={saveCheckpoint}
               workspaceView={workspaceView}
               setWorkspaceView={setWorkspaceView}
@@ -736,7 +709,6 @@ export default function App() {
               compileStatus={compileStatus}
               compileMessage={compileMessage}
               handleCompileModProject={handleCompileModProject}
-              handleLinkDirectory={handleLinkDirectory}
               visibleCueIds={visibleCueIds}
               setVisibleCueIds={setVisibleCueIds}
               setFocusNodeRequest={setFocusNodeRequest}
@@ -799,10 +771,7 @@ export default function App() {
             workspace={workspace} 
             setWorkspace={setWorkspace} 
             saveCheckpoint={saveCheckpoint} 
-            dirHandle={dirHandle}
-            setDirHandle={setDirHandle}
-            dirName={dirName}
-            setDirName={setDirName}
+            modWorkspacePath={modWorkspacePath}
             compileStatus={compileStatus}
             compileMessage={compileMessage}
             handleCompileModProject={handleCompileModProject}
@@ -852,14 +821,10 @@ export default function App() {
       <DirectorySettingsModal
         isOpen={isDirSettingsOpen}
         onClose={() => setIsDirSettingsOpen(false)}
-        dirHandle={dirHandle}
-        setDirHandle={setDirHandle}
-        dirName={dirName}
-        setDirName={setDirName}
-        fsHandle={fsHandle}
-        setFsHandle={setFsHandle}
-        fsName={fsName}
-        setFsName={setFsName}
+        modWorkspacePath={modWorkspacePath}
+        setModWorkspacePath={setModWorkspacePath}
+        filesystemPath={filesystemPath}
+        setFilesystemPath={setFilesystemPath}
       />
     </div>
   );
