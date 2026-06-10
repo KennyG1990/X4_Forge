@@ -21,9 +21,13 @@ interface ErrorBoundaryState {
  * Catches render-time crashes in a subtree so a single broken panel shows a
  * recoverable fallback instead of white-screening the entire application.
  */
-export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export default class ErrorBoundary extends (React.Component as any) {
+  props: Readonly<ErrorBoundaryProps>;
+  state: ErrorBoundaryState;
+
   constructor(props: ErrorBoundaryProps) {
     super(props);
+    this.props = props;
     this.state = { hasError: false, message: '' };
   }
 
@@ -36,7 +40,7 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, E
   }
 
   handleReset = () => {
-    this.setState({ hasError: false, message: '' });
+    (this as any).setState({ hasError: false, message: '' });
   };
 
   render() {
