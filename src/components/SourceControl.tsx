@@ -22,8 +22,16 @@ import {
   X,
   Lock,
   Compass,
-  Play
+  Play,
+  ChevronRight,
+  ClipboardPaste,
+  FileCode,
+  FileJson,
+  Upload,
+  ArrowRightLeft,
+  Info
 } from 'lucide-react';
+import { parseXMLToWorkspace } from '../lib/xmlParser';
 import { ModWorkspace, generateMDXML, generateUIXML } from '../types';
 
 // Baseline layout of commits matching user screenshot exactly
@@ -45,6 +53,8 @@ interface SourceControlProps {
   workspace: ModWorkspace;
   setWorkspace: (updater: ModWorkspace | ((prev: ModWorkspace) => ModWorkspace)) => void;
   onOpenEditorFile?: (file: { name: string; path: string; content: string }) => void;
+  saveCheckpoint?: (customTarget?: ModWorkspace) => void;
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
 }
 
 // Simple line diff helper
@@ -341,16 +351,18 @@ const SEEDED_COMMIT_LOGS: GitCommitItem[] = [
 export default function SourceControl({
   workspace,
   setWorkspace,
-  onOpenEditorFile
+  onOpenEditorFile,
+  saveCheckpoint,
+  setWorkspaceView
 }: SourceControlProps) {
-  // Remote GitHub integration credentials
+  // Remote GitHub integration credentials (consistent with SyncModal storage keys)
   const [gitPat, setGitPat] = useState<string>(() => localStorage.getItem('x4_github_pat') || '');
-  const [gitOwner, setGitOwner] = useState<string>(() => localStorage.getItem('x4_github_owner') || 'KennyG1990');
-  const [gitRepo, setGitRepo] = useState<string>(() => localStorage.getItem('x4_github_repo') || 'X4_Elite_Escort');
-  const [activeBranch, setActiveBranch] = useState<string>('main');
+  const [gitOwner, setGitOwner] = useState<string>(() => localStorage.getItem('x4_github_owner') || '');
+  const [gitRepo, setGitRepo] = useState<string>(() => localStorage.getItem('x4_github_repo') || '');
+  const [activeBranch, setActiveBranch] = useState<string>(() => localStorage.getItem('x4_github_branch') || 'main');
   
   const [isGitHubConnected, setIsGitHubConnected] = useState<boolean>(() => {
-    return localStorage.getItem('x4_github_connected') === 'true';
+    return localStorage.getItem('x4_github_connected') === 'true' || !!localStorage.getItem('x4_github_pat');
   });
   const [showConfig, setShowConfig] = useState<boolean>(false);
   const [syncLoading, setSyncLoading] = useState<boolean>(false);
@@ -365,7 +377,18 @@ export default function SourceControl({
     return null;
   });
 
-  const [activeTab, setActiveTab2] = useState<'sourceControl' | 'graph'>('sourceControl');
+  const [activeTab, setActiveTab2] = useState<'sourceControl' | 'remotes' | 'graph'>('sourceControl');
+
+  // GITHUB REPO MANAGER FILE LOAD AND MULTI-SNAP SYNC STATE
+  const [filePathToLoad, setFilePathToLoad] = useState<string>('ais_workspace.json');
+  const [pushSelectedFiles, setPushSelectedFiles] = useState({
+    workspace: true,
+    md_xml: true,
+    ui_xml: true,
+    readme: true
+  });
+  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
   const [commitMessage, setCommitMessage] = useState<string>('');
   const [generatingMessage, setGeneratingMessage] = useState<boolean>(false);
@@ -579,11 +602,16 @@ Guidelines:
     setCommitMessage('');
   };
 
+  const addLog = (text: string) => {
+    setTerminalLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${text}`]);
+  };
+
   // Connects GitHub Credentials
   const handleConnectGitHub = () => {
     localStorage.setItem('x4_github_pat', gitPat);
     localStorage.setItem('x4_github_owner', gitOwner);
     localStorage.setItem('x4_github_repo', gitRepo);
+    localStorage.setItem('x4_github_branch', activeBranch);
     localStorage.setItem('x4_github_connected', 'true');
     setIsGitHubConnected(true);
     setShowConfig(false);
@@ -643,6 +671,245 @@ Guidelines:
       setSyncStatusMsg(`Push failed: ${err.message || err}`);
     } finally {
       setSyncLoading(false);
+    }
+  };
+
+  // ADVANCED GITHUB LOADER & MULTI-SNAP SYNCHRONIZER (Consolidated from SyncModal)
+  const handleGitHubLoad = async () => {
+    if (!gitPat || !gitOwner || !gitRepo) {
+      setSyncStatusMsg('Please enter your GitHub Credentials in settings first.');
+      return;
+    }
+    setIsProcessing(true);
+    setTerminalLogs([]);
+    addLog(`Initiating connection to api.github.com...`);
+    addLog(`Remote target: ${gitOwner}/${gitRepo} on branch [${activeBranch}]`);
+    addLog(`Target file descriptor requested: "${filePathToLoad}"`);
+
+    try {
+      const response = await fetch('/api/github/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pat: gitPat,
+          owner: gitOwner,
+          repo: gitRepo,
+          branch: activeBranch,
+          path: filePathToLoad
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || `Server returned error status ${response.status}`);
+      }
+
+      const contentText = result.content;
+      if (!contentText) {
+        throw new Error("File retrieved is blank or missing valid payload.");
+      }
+
+      const contentSize = new Blob([contentText]).size;
+      addLog(`🎉 File content retrieved successfully (${contentSize} bytes)`);
+      addLog(`Parsing content according to format rules...`);
+
+      // Determine parse format dynamically
+      const format = filePathToLoad.toLowerCase().endsWith('.xml') ? 'xml' : 'json';
+
+      if (format === 'json') {
+        const parsed = JSON.parse(contentText);
+        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.nodes)) {
+          if (saveCheckpoint) saveCheckpoint();
+          setWorkspace(parsed);
+          addLog(`Success: Restored workspace state "${parsed.name || 'mod'}".`);
+          addLog(`Loaded visual node layout structure containing ${parsed.nodes.length} nodes.`);
+          setSyncStatusMsg(`Successfully loaded Remote JSON workspace!`);
+        } else {
+          throw new Error("Retrieved JSON is missing valid visual flow 'nodes' structure.");
+        }
+      } else {
+        // XML parsing logic matches SyncModal exactly
+        const isTFile = contentText.includes('<language');
+        const isAIScript = contentText.includes('<aiscript');
+        const isLibrary = contentText.includes('<diff');
+
+        if (isTFile) {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(contentText, "application/xml");
+          const langEl = doc.getElementsByTagName("language")[0];
+          if (langEl) {
+            const languageId = langEl.getAttribute("id") || "44";
+            const pagesList = langEl.getElementsByTagName("page");
+            const pages: any[] = [];
+            
+            for (let i = 0; i < pagesList.length; i++) {
+              const pEl = pagesList[i];
+              const pageId = pEl.getAttribute("id") || "20001";
+              const pageTitle = pEl.getAttribute("title") || `Page ${pageId}`;
+              const itemsList = pEl.getElementsByTagName("t");
+              const items: any[] = [];
+              
+              for (let j = 0; j < itemsList.length; j++) {
+                const tEl = itemsList[j];
+                const tId = tEl.getAttribute("id") || "1";
+                items.push({
+                  id: tId,
+                  value: tEl.textContent || "",
+                  description: ""
+                });
+              }
+              pages.push({ id: pageId, title: pageTitle, items });
+            }
+            
+            const targetTFile = {
+              languageId,
+              fileName: `0001-L0${languageId}.xml`,
+              pages
+            };
+            
+            if (saveCheckpoint) saveCheckpoint();
+            setWorkspace(prev => {
+              const currentTFiles = prev.tFiles || [];
+              const existsIdx = currentTFiles.findIndex(f => f.languageId === languageId);
+              let newTFiles = [...currentTFiles];
+              if (existsIdx !== -1) {
+                newTFiles[existsIdx] = targetTFile;
+              } else {
+                newTFiles.push(targetTFile);
+              }
+              return { ...prev, tFiles: newTFiles };
+            });
+
+            if (setWorkspaceView) {
+              setWorkspaceView('translation');
+            }
+            addLog(`🎉 SUCCESS: Language catalog loaded on translation view.`);
+            setSyncStatusMsg(`Language translation catalog successfully loaded.`);
+          } else {
+            throw new Error("XML structure does not map language tags.");
+          }
+        } else if (isAIScript) {
+          if (setWorkspaceView) {
+            setWorkspaceView('aiscripts');
+          }
+          addLog(`🎉 SUCCESS: AIScript routed to Behavior Tree builder.`);
+          setSyncStatusMsg(`AIScript imported.`);
+        } else if (isLibrary) {
+          if (setWorkspaceView) {
+            setWorkspaceView('xmlpatch');
+          }
+          addLog(`🎉 SUCCESS: X4 library diff xml routed to XML Patching workspace.`);
+          setSyncStatusMsg(`X4 library XML patch imported.`);
+        } else {
+          // Reconstruct workspace from Egosoft Script Parser
+          const reconstructed = parseXMLToWorkspace(contentText);
+          if (reconstructed && reconstructed.nodes.length > 0) {
+            if (saveCheckpoint) saveCheckpoint();
+            setWorkspace(reconstructed);
+            if (setWorkspaceView) {
+              setWorkspaceView('blueprint');
+            }
+            addLog(`🎉 SUCCESS: XML script compiled! visual diagram generated.`);
+            addLog(`Loaded: ${reconstructed.nodes.length} functional visual nodes.`);
+            setSyncStatusMsg(`Mission script XML parsed successfully.`);
+          } else {
+            throw new Error("Target file XML does not contain compatible game cues, variables or action tags.");
+          }
+        }
+      }
+    } catch (err: any) {
+      addLog(`❌ ERROR: Fetch operation failed.`);
+      addLog(`Details: ${err.message}`);
+      setSyncStatusMsg(`Fetch Failed: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGithubPushMulti = async (customCommitMsg?: string) => {
+    if (!gitPat || !gitOwner || !gitRepo) {
+      setSyncStatusMsg('Authenticate GitHub peer in settings first.');
+      return;
+    }
+
+    setIsProcessing(true);
+    setTerminalLogs([]);
+    addLog(`Packing mod configuration files...`);
+
+    const workspaceJson = JSON.stringify(workspace, null, 2);
+    const mdScriptXML = generateMDXML(workspace);
+    const uiLayoutXML = generateUIXML(workspace);
+    const readmeMD = `# ${workspace.name || 'X4 Foundations Mod'}
+*Author: ${workspace.author || 'Anonymous'}*
+*Version: ${workspace.version || '1.0.0'}*
+
+## Description
+${workspace.description || 'Custom mod developed inside X4 Foundations Mod Studio Visual Node Editor.'}
+
+## Visual Graph Layout
+This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${workspace.links.length}\` wiring layouts. Redefine dynamically.
+`;
+
+    const filesToPush = [];
+    if (pushSelectedFiles.workspace) {
+      filesToPush.push({ path: 'ais_workspace.json', content: workspaceJson });
+    }
+    if (pushSelectedFiles.md_xml) {
+      filesToPush.push({ path: `md/${workspace.name || 'ais_mod'}.xml`, content: mdScriptXML });
+    }
+    if (pushSelectedFiles.ui_xml) {
+      filesToPush.push({ path: 'ui/ais_ui_layout.xml', content: uiLayoutXML });
+    }
+    if (pushSelectedFiles.readme) {
+      filesToPush.push({ path: 'README.md', content: readmeMD });
+    }
+
+    if (filesToPush.length === 0) {
+      setIsProcessing(false);
+      setSyncStatusMsg('Select at least one file to push.');
+      return;
+    }
+
+    const finalCommitMsg = customCommitMsg?.trim() || `feat: synchronize mod resources [Studio Commit]`;
+    addLog(`Syncing ${filesToPush.length} checked mod structures...`);
+    addLog(`Commit message context: "${finalCommitMsg}"`);
+
+    try {
+      const response = await fetch('/api/github/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pat: gitPat,
+          owner: gitOwner,
+          repo: gitRepo,
+          branch: activeBranch,
+          commitMessage: finalCommitMsg,
+          files: filesToPush
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || `Push operation failed with status ${response.status}`);
+      }
+
+      addLog(`Merged changes recursively to GitHub!`);
+      result.results?.forEach((f: any) => {
+        addLog(` => [COMMITTED] ${f.path}`);
+      });
+      addLog(`🎉 SUCCESS: All sources merged cleanly! Mod update is live.`);
+      setSyncStatusMsg(`Successfully pushed ${filesToPush.length} files to GitHub!`);
+
+      // Baseline our changes locally
+      const stringified = JSON.stringify(workspace);
+      localStorage.setItem('x4_git_baseline', stringified);
+      setGitBaseline(workspace);
+    } catch (err: any) {
+      addLog(`❌ ERROR: Push operation failed.`);
+      addLog(`Details: ${err.message}`);
+      setSyncStatusMsg(`Sync Push Failed: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -711,25 +978,36 @@ Guidelines:
       <div className="flex border-b border-white/5 bg-[#0e121a]">
         <button
           onClick={() => setActiveTab2('sourceControl')}
-          className={`flex-1 py-2 text-[10px] font-mono font-bold tracking-wider uppercase border-b-2 flex items-center justify-center gap-1.5 cursor-pointer ${
+          className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'sourceControl'
               ? 'border-cyan-500 text-white bg-cyan-600/5'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
           <GitCommit className="w-3.5 h-3.5" />
-          Pending ({workingChanges.length})
+          Changes ({workingChanges.length})
+        </button>
+        <button
+          onClick={() => setActiveTab2('remotes')}
+          className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
+            activeTab === 'remotes'
+              ? 'border-violet-500 text-white bg-violet-600/5'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Github className="w-3.5 h-3.5 text-violet-400" />
+          Remotes
         </button>
         <button
           onClick={() => setActiveTab2('graph')}
-          className={`flex-1 py-2 text-[10px] font-mono font-bold tracking-wider uppercase border-b-2 flex items-center justify-center gap-1.5 cursor-pointer ${
+          className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'graph'
               ? 'border-cyan-500 text-white bg-cyan-600/5'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
           <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
-          Git Graph Log
+          Graph Log
         </button>
 
         <button
@@ -739,7 +1017,7 @@ Guidelines:
           }`}
           title="GitHub Peer Settings"
         >
-          <Github className="w-4 h-4" />
+          <Settings className="w-3.5 h-3.5 text-slate-400 hover:text-white" />
         </button>
       </div>
 
@@ -963,6 +1241,236 @@ Guidelines:
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* REMOTES TAB VIEW */}
+      {activeTab === 'remotes' && (
+        <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-3 space-y-4 font-mono text-xs">
+          
+          {/* GitHub Credentials Section inline if not connected, or general summary if connected */}
+          {!isGitHubConnected ? (
+            <div className="bg-slate-900/40 p-3 rounded-lg border border-dashed border-white/10 space-y-3">
+              <div className="text-white font-mono font-semibold text-xs tracking-wide uppercase flex items-center gap-1.5 border-b border-white/5 pb-1.5">
+                <Github className="w-4 h-4 text-slate-400" />
+                Configure Remote GitHub Peer
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Personal Access Token (PAT)</label>
+                  <input
+                    type="password"
+                    value={gitPat}
+                    onChange={e => setGitPat(e.target.value)}
+                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxx"
+                    className="w-full p-2 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-xs text-slate-200"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Owner</label>
+                    <input
+                      type="text"
+                      value={gitOwner}
+                      onChange={e => setGitOwner(e.target.value)}
+                      placeholder="e.g. KennyG1990"
+                      className="w-full p-2 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-500 text-xs text-slate-200"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Repository</label>
+                    <input
+                      type="text"
+                      value={gitRepo}
+                      onChange={e => setGitRepo(e.target.value)}
+                      placeholder="e.g. x4-elite-escort"
+                      className="w-full p-2 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-500 text-xs text-slate-200"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Branch</label>
+                  <input
+                    type="text"
+                    value={activeBranch}
+                    onChange={e => setActiveBranch(e.target.value)}
+                    placeholder="main"
+                    className="w-full p-2 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-505 text-xs text-slate-200"
+                  />
+                </div>
+                <button
+                  onClick={handleConnectGitHub}
+                  className="w-full mt-1.5 py-1.5 bg-cyan-600 hover:bg-cyan-505 hover:text-black text-slate-900 font-mono font-bold text-xs rounded transition-all cursor-pointer uppercase flex items-center justify-center gap-1"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Link GitHub Repo
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-[#111622] p-3 rounded-lg border border-emerald-500/10 space-y-2 animate-fade-in">
+              <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
+                <span className="text-emerald-400 font-bold uppercase text-[10px] flex items-center gap-1 tracking-wider">
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse inline-block" />
+                  Connected Peer
+                </span>
+                <button
+                  onClick={handleDisconnectGitHub}
+                  className="px-2 py-0.5 text-[9px] text-red-300 hover:text-red-205 bg-red-950/20 hover:bg-red-900/30 border border-red-900/30 rounded cursor-pointer font-bold"
+                >
+                  DISCONNECT
+                </button>
+              </div>
+              <div className="space-y-1 text-[10.5px]">
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-semibold text-[9.5px]">Repository:</span>
+                  <span className="text-white font-medium font-sans truncate max-w-[150px]">{gitOwner}/{gitRepo}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-semibold text-[9.5px]">Branch:</span>
+                  <span className="text-cyan-400 italic">"{activeBranch}"</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Loader Panel (LOAD) */}
+          <div className="bg-[#0e121a] p-3 rounded-lg border border-cyan-500/15 space-y-3">
+            <h3 className="text-cyan-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
+              <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
+              LOAD SCRIPT FROM GITHUB
+            </h3>
+            <p className="text-[10px] text-slate-400 leading-normal">
+              Download a workspace state json or Egosoft game XML script directly from the remote repository to load it into the workspace graph.
+            </p>
+            <div className="space-y-2">
+              <div>
+                <label className="text-slate-505 text-[10px] block mb-1">Target File to Load</label>
+                <input
+                  type="text"
+                  value={filePathToLoad}
+                  onChange={e => setFilePathToLoad(e.target.value)}
+                  placeholder="e.g. ais_workspace.json"
+                  className="w-full p-2 rounded bg-black/60 border border-white/10 text-white text-[11px] focus:outline-none focus:border-cyan-500 font-mono"
+                />
+              </div>
+              <button
+                disabled={isProcessing || !isGitHubConnected}
+                onClick={handleGitHubLoad}
+                className="w-full py-1.5 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 hover:border-transparent text-cyan-300 hover:text-black font-bold uppercase rounded transition-all cursor-pointer disabled:opacity-20 flex items-center justify-center gap-1"
+              >
+                {isProcessing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                Fetch & Load remote file
+              </button>
+            </div>
+          </div>
+
+          {/* MULTI SNAPSHOT SOURCE SYNCHRONIZER (PUSH) */}
+          <div className="bg-[#0e121a] p-3 rounded-lg border border-violet-500/15 space-y-3 animate-fade-in">
+            <h3 className="text-violet-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
+              <ChevronRight className="w-3.5 h-3.5 text-violet-400" />
+              Sync & Push Pack targets
+            </h3>
+            <p className="text-[10px] text-slate-400 leading-normal">
+              Package your visual flowchart designs and compiled Egosoft script codes back into a bundle and push to the remote repository recursively.
+            </p>
+
+            <div className="space-y-2 font-mono text-[10px] bg-black/30 p-2 rounded border border-white/5">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">ais_workspace.json (Visual graph layout JSON)</span>
+                <input
+                  type="checkbox"
+                  checked={pushSelectedFiles.workspace}
+                  onChange={e => setPushSelectedFiles(prev => ({ ...prev, workspace: e.target.checked }))}
+                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">md/{workspace.name || 'ais_mod'}.xml (Egosoft MD cues script)</span>
+                <input
+                  type="checkbox"
+                  checked={pushSelectedFiles.md_xml}
+                  onChange={e => setPushSelectedFiles(prev => ({ ...prev, md_xml: e.target.checked }))}
+                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">ui/ais_ui_layout.xml (HUD menu lua config)</span>
+                <input
+                  type="checkbox"
+                  checked={pushSelectedFiles.ui_xml}
+                  onChange={e => setPushSelectedFiles(prev => ({ ...prev, ui_xml: e.target.checked }))}
+                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">README.md (Mod documentation log)</span>
+                <input
+                  type="checkbox"
+                  checked={pushSelectedFiles.readme}
+                  onChange={e => setPushSelectedFiles(prev => ({ ...prev, readme: e.target.checked }))}
+                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div>
+                <label className="text-slate-500 text-[10px] block mb-1">Staging commit context message</label>
+                <input
+                  type="text"
+                  placeholder="feat: customize active mission logical flows"
+                  className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white text-[11px] focus:outline-none focus:border-violet-500 font-mono placeholder-slate-650"
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      handleGithubPushMulti((e.target as HTMLInputElement).value);
+                    }
+                  }}
+                />
+              </div>
+              <button
+                disabled={isProcessing || !isGitHubConnected}
+                onClick={() => handleGithubPushMulti('feat: synchronize mod resources [Studio Commit]')}
+                className="w-full py-1.5 bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 hover:border-transparent text-violet-300 hover:text-black font-bold uppercase rounded transition-all cursor-pointer disabled:opacity-20 flex items-center justify-center gap-1.5"
+              >
+                {isProcessing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
+                Sync & Push Updates
+              </button>
+            </div>
+          </div>
+
+          {/* Live Terminal Activity Log Console */}
+          {terminalLogs.length > 0 && (
+            <div className="space-y-1.5 font-mono">
+              <div className="text-[9.5px] text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-1.5 pb-0.5 border-b border-white/5">
+                <Terminal className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                Live Synchronization Activity Logs
+              </div>
+              <div className="w-full max-h-36 overflow-y-auto bg-black p-2 rounded text-[10px] leading-relaxed text-slate-400 space-y-1 h-32 font-mono">
+                {terminalLogs.map((log, idx) => {
+                  let cls = '';
+                  if (log.includes('❌')) cls = 'text-red-400 font-bold';
+                  if (log.includes('🎉') || log.includes('SUCCESS')) cls = 'text-emerald-400 font-bold';
+                  if (log.includes('[COMMITTED]')) cls = 'text-purple-400';
+                  return (
+                    <div key={idx} className={cls}>
+                      {log}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Technical footer card info panel */}
+          <div className="p-2 border border-slate-800 rounded bg-[#10141e]/50 flex items-center justify-between text-[9px] text-slate-500 font-mono">
+            <span className="flex items-center gap-1">
+              <Info className="w-3 h-3 text-cyan-400 animate-pulse" />
+              Secure Proxy Connected
+            </span>
+            <span>API v3</span>
+          </div>
+
         </div>
       )}
 

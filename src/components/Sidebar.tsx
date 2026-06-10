@@ -335,6 +335,8 @@ export default function Sidebar({
             workspace={workspace}
             setWorkspace={setWorkspace}
             onOpenEditorFile={onOpenEditorFile}
+            saveCheckpoint={saveCheckpoint}
+            setWorkspaceView={setWorkspaceView}
           />
         )}
 
