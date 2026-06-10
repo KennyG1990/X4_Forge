@@ -105,6 +105,22 @@ These confidence estimates capture current product judgment, not proof. They sho
 6. Map errors back to editable objects.
 7. Preserve manual/unknown XML during round trips.
 
+### Verification snapshot — current app feature match
+
+Checked against the running browser app at `http://127.0.0.1:3000/` and current source code on 2026-06-10. This is a product-surface assessment, not a claim that each feature is complete.
+
+| Recommendation | Current match | Confidence | Existing surfaces | Remaining gap |
+|---|---:|---:|---|---|
+| **Schema-Aware Mod Doctor** | Partial | 70% | `validateModWorkspace`, `validatePackageReadiness`, schema library loading, MD validation badges, `CodePreview`, `Canvas` diagnostics overlay, `/api/agent/compile`. | Full package/domain validation is missing: aiscripts, wares, jobs, t-files, XML patch selector validation, UI output validation, and sourceRef links back to exact editable items. |
+| **Live Game Feedback Loop** | Early partial | 45% | `PlaytestWorkspace` debug/reload instructions, `/api/gemini/analyze-log`, deploy path through `/api/agent/deploy`, configured `x4GamePath`. | No deterministic `debuglog.txt` tail/status endpoint, no deploy-session markers, no automatic mapping from game log errors back to Studio diagnostics. |
+| **Real X4 Object Browser** | Early partial | 40% | X4 Wiki/Codex tab, schema-derived MD templates, hardcoded `X4_FACTIONS`, `X4_SHIP_MACROS`, `X4_STATION_MACROS`, `X4_SOUND_EFFECTS`, Settings for game/schema paths. | No local game-file index, no DLC/mod-aware object database, no real autocomplete/search for macros/wares/factions/jobs/sounds from the installed game. |
+| **Round-Trip Import/Edit/Export** | Partial | 60% | `SyncModal`, `DirectoryExplorer`, `SourceControl`, `parseXMLToWorkspace`, t-file import routing, AIScript/diff routing, `sanitizeWorkspace`, filesystem read/write endpoints, snapshots. | No full mod-folder importer, no passthrough/raw file preservation model, no lossiness report, no golden round-trip harness across real mods. |
+| **Diff-Safe Patch Builder** | Partial | 65% | `XMLPatchSystem`, `workspace.xmlPatches`, `compileDiffDocument`, XML patch wiki docs, global search over patches. | No XPath validation against actual target files, no before/after preview, no selector match counts, no `pos` support UI. |
+| **Agent-First Automation API** | Strong | 85% | `/api/agent/schema`, `/api/agent/workspace`, `/api/agent/compile`, `/api/agent/package`, `/api/agent/deploy`, `/api/agent/generate`, `AgentBridge`, full package manifest helper. | Needs JSON Patch-style granular edits, dry-run mutation endpoint, version-conflict enforcement, current diagnostics endpoint, and richer examples. |
+| **Mod folder situational awareness** | Strong | 80% | `SETTINGS`, `FILESYSTEM`, `SOURCE`, `SYNC MOD`, snapshots/history, compile/deploy path configuration, directory explorer. | Needs generated/editable/partial/passthrough file classification and tighter integration with round-trip safety. |
+
+**Interpretation:** the app already has a credible X4 text-mod IDE shell. The highest-value work is not adding more tabs; it is deepening correctness engines behind the existing surfaces.
+
 ### P1 — Mod Doctor: schema + package + runtime diagnostics
 
 **User value:** a modder should know *before and after deployment* whether the package is valid, what is wrong, and exactly where to fix it in the studio.
