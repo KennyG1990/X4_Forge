@@ -40,6 +40,7 @@ import DirectoryExplorer from './DirectoryExplorer';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
+import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
 
 interface SidebarProps {
@@ -354,13 +355,15 @@ export default function Sidebar({
         )}
 
         {activeTab === 'git' && (
-          <SourceControl
-            workspace={workspace}
-            setWorkspace={setWorkspace}
-            onOpenEditorFile={onOpenEditorFile}
-            saveCheckpoint={saveCheckpoint}
-            setWorkspaceView={setWorkspaceView}
-          />
+          <ErrorBoundary label="Source Control">
+            <SourceControl
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              onOpenEditorFile={onOpenEditorFile}
+              saveCheckpoint={saveCheckpoint}
+              setWorkspaceView={setWorkspaceView}
+            />
+          </ErrorBoundary>
         )}
 
         {/* NODE COMPONENT LIBRARY LIST (Tab: script) */}

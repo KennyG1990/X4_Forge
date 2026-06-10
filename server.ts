@@ -37,6 +37,9 @@ import {
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 
 dotenv.config();
+// Also load .env.local (Vite convention) so values like GITHUB_CLIENT_ID and GEMINI_API_KEY
+// placed there are visible to the server. .env.local takes precedence.
+dotenv.config({ path: '.env.local', override: true });
 
 const STUDIO_API_TOKEN = crypto.randomBytes(32).toString("hex");
 
@@ -1766,6 +1769,178 @@ app.post("/api/github/push", async (req, res) => {
   } catch (error: any) {
     console.error("GitHub push error: ", error);
     return res.status(500).json({ error: error.message || "Failed to commit files to GitHub." });
+  }
+});
+
+
+/**
+ * POST /api/github/create
+ * Creates a new GitHub repository under the authenticated user (from the PAT),
+ * so a mod-in-progress can be published as a fresh repo in one click.
+ */
+app.post("/api/github/create", async (req, res) => {
+  const { pat, name, description, private: isPrivate } = req.body;
+
+  if (!pat) {
+    return res.status(400).json({ error: "GitHub Personal Access Token (PAT) is required." });
+  }
+  if (!name) {
+    return res.status(400).json({ error: "Repository name is required." });
+  }
+
+  try {
+    const response = await fetch("https://api.github.com/user/repos", {
+      method: "POST",
+      headers: {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": `token ${pat}`,
+        "User-Agent": "x4-md-studio-proxy",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        name,
+        description: description || "X4 Foundations mod created with X4:MD Studio",
+        private: !!isPrivate,
+        auto_init: false
+      })
+    });
+
+    const data: any = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data?.message || `GitHub returned error code ${response.status}`,
+        details: data?.errors
+      });
+    }
+
+    return res.json({
+      success: true,
+      owner: data.owner?.login,
+      repo: data.name,
+      full_name: data.full_name,
+      html_url: data.html_url,
+      default_branch: data.default_branch || "main"
+    });
+  } catch (error: any) {
+    console.error("GitHub create-repo error: ", error);
+    return res.status(500).json({ error: error.message || "Failed to create GitHub repository." });
+  }
+});
+
+
+/**
+ * POST /api/github/device/start
+ * Begins the GitHub OAuth Device Flow: requests a device + user code so the user can
+ * authorize in their browser (no PAT copy-paste, no client secret needed).
+ */
+app.post("/api/github/device/start", async (req, res) => {
+  const clientId = String(req.body?.client_id || process.env.GITHUB_CLIENT_ID || "").trim();
+  const scope = String(req.body?.scope || "repo").trim();
+  if (!clientId) {
+    return res.status(400).json({ error: "Missing GitHub OAuth Client ID. Register an OAuth App (with Device Flow enabled) and provide its Client ID." });
+  }
+  try {
+    const response = await fetch("https://github.com/login/device/code", {
+      method: "POST",
+      headers: { "Accept": "application/json", "Content-Type": "application/json", "User-Agent": "x4-md-studio" },
+      body: JSON.stringify({ client_id: clientId, scope })
+    });
+    const data: any = await response.json();
+    if (!response.ok || data.error) {
+      return res.status(400).json({ error: data.error_description || data.error || "Failed to start GitHub device authorization." });
+    }
+    // data: device_code, user_code, verification_uri, expires_in, interval
+    return res.json(data);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Device authorization request failed." });
+  }
+});
+
+/**
+ * POST /api/github/device/poll
+ * Polls GitHub for the device-flow access token. Returns { pending: true } until the
+ * user approves, then { access_token, login } once authorized.
+ */
+app.post("/api/github/device/poll", async (req, res) => {
+  const clientId = String(req.body?.client_id || process.env.GITHUB_CLIENT_ID || "").trim();
+  const deviceCode = String(req.body?.device_code || "").trim();
+  if (!clientId || !deviceCode) {
+    return res.status(400).json({ error: "Missing client_id or device_code." });
+  }
+  try {
+    const response = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { "Accept": "application/json", "Content-Type": "application/json", "User-Agent": "x4-md-studio" },
+      body: JSON.stringify({
+        client_id: clientId,
+        device_code: deviceCode,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+      })
+    });
+    const data: any = await response.json();
+
+    if (data.access_token) {
+      // Fetch the authenticated user's login so the client can auto-fill the repo owner.
+      let login: string | undefined;
+      try {
+        const userRes = await fetch("https://api.github.com/user", {
+          headers: {
+            "Accept": "application/vnd.github.v3+json",
+            "Authorization": `token ${data.access_token}`,
+            "User-Agent": "x4-md-studio"
+          }
+        });
+        const userData: any = await userRes.json();
+        login = userData?.login;
+      } catch {
+        // Non-fatal; owner can be entered manually.
+      }
+      return res.json({ access_token: data.access_token, token_type: data.token_type, scope: data.scope, login });
+    }
+
+    // Still waiting / throttled / expired — surface the GitHub error code to the poller.
+    return res.json({ pending: true, error: data.error, interval: data.interval });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Device token poll failed." });
+  }
+});
+
+
+/**
+ * POST /api/github/commits
+ * Returns the real commit history for the connected repo/branch so the Graph Log
+ * reflects the actual mod repository instead of seeded placeholder data.
+ */
+app.post("/api/github/commits", async (req, res) => {
+  const { pat, owner, repo, branch } = req.body;
+  if (!pat || !owner || !repo) {
+    return res.status(400).json({ error: "Missing pat, owner, or repo." });
+  }
+  try {
+    const url = `https://api.github.com/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch || "main")}&per_page=50`;
+    const response = await fetch(url, {
+      headers: {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": `token ${pat}`,
+        "User-Agent": "x4-md-studio-proxy"
+      }
+    });
+    const data: any = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json({ error: data?.message || `GitHub returned ${response.status}` });
+    }
+    const commits = (Array.isArray(data) ? data : []).map((c: any) => ({
+      sha: (c.sha || "").substring(0, 7),
+      message: (c.commit?.message || "").split("\n")[0],
+      body: c.commit?.message || "",
+      author: c.commit?.author?.name || c.author?.login || "unknown",
+      email: c.commit?.author?.email || "",
+      date: c.commit?.author?.date || "",
+      html_url: c.html_url
+    }));
+    return res.json({ commits });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to fetch repository commits." });
   }
 });
 

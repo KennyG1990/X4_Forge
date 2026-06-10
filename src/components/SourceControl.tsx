@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   GitBranch, 
   GitCommit, 
@@ -29,10 +29,13 @@ import {
   FileJson,
   Upload,
   ArrowRightLeft,
-  Info
+  Info,
+  GitCompare,
+  Plus
 } from 'lucide-react';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
 import { ModWorkspace, generateMDXML, generateUIXML } from '../types';
+import { getAIHeaders } from '../lib/apiHelper';
 
 // Baseline layout of commits matching user screenshot exactly
 interface GitCommitItem {
@@ -46,6 +49,7 @@ interface GitCommitItem {
   activeTracks: number[]; // active vertical lines in this row
   mergeFromTrack?: number;
   branchFromTrack?: number;
+  summary?: string; // AI-generated plain-English diff summary for this commit
   filesChanged?: { path: string; status: 'added' | 'modified' | 'deleted'; diffLines: { type: 'addition' | 'deletion' | 'normal'; value: string }[] }[];
 }
 
@@ -368,6 +372,12 @@ export default function SourceControl({
   const [syncLoading, setSyncLoading] = useState<boolean>(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<string>('');
 
+  // OAuth Device Flow (one-click "Connect with GitHub") state
+  const [gitClientId, setGitClientId] = useState<string>(() => localStorage.getItem('x4_github_client_id') || '');
+  const [deviceFlow, setDeviceFlow] = useState<{ userCode: string; verificationUri: string } | null>(null);
+  const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const pollTimerRef = useRef<any>(null);
+
   // Local workspace diffing / staging baseline
   const [gitBaseline, setGitBaseline] = useState<ModWorkspace | null>(() => {
     const raw = localStorage.getItem('x4_git_baseline');
@@ -393,6 +403,14 @@ export default function SourceControl({
   const [commitMessage, setCommitMessage] = useState<string>('');
   const [generatingMessage, setGeneratingMessage] = useState<boolean>(false);
   const [commitMessageError, setCommitMessageError] = useState<string>('');
+
+  // Create-repo + remote-diff + AI diff-summary state
+  const [creatingRepo, setCreatingRepo] = useState<boolean>(false);
+  const [diffItems, setDiffItems] = useState<{ type: 'add' | 'remove' | 'modify'; text: string }[]>([]);
+  const [isDiffLoading, setIsDiffLoading] = useState<boolean>(false);
+  const [remoteDiffChecked, setRemoteDiffChecked] = useState<boolean>(false);
+  const [diffSummary, setDiffSummary] = useState<string>('');
+  const [generatingSummary, setGeneratingSummary] = useState<boolean>(false);
 
   // Track full dynamic commit history (hybrid layout: starting with seeded list, and expanding as user commits!)
   const [localHistory, setLocalHistory] = useState<GitCommitItem[]>(() => {
@@ -535,7 +553,7 @@ Guidelines:
 
       const res = await fetch('/api/gemini', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAIHeaders(),
         body: JSON.stringify(bodyPayload)
       });
 
@@ -557,7 +575,7 @@ Guidelines:
   };
 
   // Triggers committing visual workspace files to active local commit log
-  const handlePerformCommit = () => {
+  const handlePerformCommit = async () => {
     if (!commitMessage.trim()) {
       setCommitMessageError('Commit message is required.');
       return;
@@ -568,6 +586,12 @@ Guidelines:
     }
 
     setCommitMessageError('');
+
+    // Ensure the commit carries an AI diff summary (auto-generate if the user didn't make one)
+    let summary = diffSummary.trim();
+    if (!summary) {
+      summary = await handleGenerateDiffSummary();
+    }
 
     // Prepare full diff state to be persisted inside history commit node for direct auditing!
     const commitFiles = workingChanges.map(c => ({
@@ -586,6 +610,7 @@ Guidelines:
       branch: activeBranch,
       track: 0,
       activeTracks: [0],
+      summary: summary || undefined,
       filesChanged: commitFiles
     };
 
@@ -598,12 +623,116 @@ Guidelines:
     localStorage.setItem('x4_git_baseline', stringified);
     setGitBaseline(workspace);
 
-    // Reset input message
+    // Reset input message + summary; allow the next remote diff to re-run
     setCommitMessage('');
+    setDiffSummary('');
+    setRemoteDiffChecked(false);
   };
 
   const addLog = (text: string) => {
     setTerminalLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${text}`]);
+  };
+
+  // Clean up any in-flight device-flow polling when the panel unmounts
+  useEffect(() => {
+    return () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current); };
+  }, []);
+
+  const cancelDeviceFlow = () => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    setIsConnecting(false);
+    setDeviceFlow(null);
+    setSyncStatusMsg('Cancelled GitHub sign-in.');
+  };
+
+  // One-click GitHub sign-in via OAuth Device Flow: opens the browser, polls for the token,
+  // then stores it exactly like a PAT so all existing load/push/create logic keeps working.
+  const handleConnectWithGitHub = async () => {
+    const clientId = gitClientId.trim(); // optional override; the server falls back to its configured GITHUB_CLIENT_ID
+    setIsConnecting(true);
+    setSyncStatusMsg('Starting GitHub authorization…');
+    try {
+      const startRes = await fetch('/api/github/device/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(clientId ? { client_id: clientId, scope: 'repo' } : { scope: 'repo' })
+      });
+      let start: any = null;
+      try { start = await startRes.json(); } catch { start = null; }
+
+      if (!start) {
+        throw new Error(startRes.status === 404
+          ? 'GitHub route not found (404). Fully stop the dev server (Ctrl+C) and run "npm run dev" again so it loads the new endpoints.'
+          : `GitHub sign-in failed: server returned ${startRes.status}.`);
+      }
+      if (start.error || !start.device_code) {
+        throw new Error(start.error || 'GitHub sign-in is not configured. Add GITHUB_CLIENT_ID to .env.local and restart the dev server.');
+      }
+
+      if (clientId) localStorage.setItem('x4_github_client_id', clientId);
+      setDeviceFlow({ userCode: start.user_code, verificationUri: start.verification_uri });
+      setSyncStatusMsg('Opening GitHub in your browser — enter the code to authorize.');
+      try { window.open(start.verification_uri, '_blank', 'noopener'); } catch { /* popup blocked; link still shown */ }
+
+      const intervalMs = Math.max(start.interval || 5, 5) * 1000;
+      const deadline = Date.now() + (start.expires_in || 900) * 1000;
+
+      const poll = async () => {
+        if (Date.now() > deadline) {
+          setIsConnecting(false);
+          setDeviceFlow(null);
+          setSyncStatusMsg('GitHub authorization timed out. Try connecting again.');
+          return;
+        }
+        try {
+          const res = await fetch('/api/github/device/poll', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(clientId ? { client_id: clientId, device_code: start.device_code } : { device_code: start.device_code })
+          }).then(r => r.json());
+
+          if (res.access_token) {
+            setGitPat(res.access_token);
+            localStorage.setItem('x4_github_pat', res.access_token);
+            if (res.login) {
+              setGitOwner(res.login);
+              localStorage.setItem('x4_github_owner', res.login);
+            }
+            localStorage.setItem('x4_github_branch', activeBranch);
+            localStorage.setItem('x4_github_connected', 'true');
+            setIsGitHubConnected(true);
+            setIsConnecting(false);
+            setDeviceFlow(null);
+            setSyncStatusMsg(`Connected to GitHub as ${res.login || 'your account'}!`);
+            return;
+          }
+
+          if (res.error === 'access_denied') {
+            setIsConnecting(false);
+            setDeviceFlow(null);
+            setSyncStatusMsg('GitHub authorization was denied.');
+            return;
+          }
+          if (res.error === 'expired_token') {
+            setIsConnecting(false);
+            setDeviceFlow(null);
+            setSyncStatusMsg('The authorization code expired. Try again.');
+            return;
+          }
+          // authorization_pending / slow_down → keep waiting
+          const nextMs = res.error === 'slow_down' ? intervalMs + 5000 : intervalMs;
+          pollTimerRef.current = setTimeout(poll, nextMs);
+        } catch {
+          pollTimerRef.current = setTimeout(poll, intervalMs);
+        }
+      };
+
+      pollTimerRef.current = setTimeout(poll, intervalMs);
+    } catch (e: any) {
+      setIsConnecting(false);
+      setDeviceFlow(null);
+      setSyncStatusMsg(`Connect failed: ${e.message}`);
+    }
   };
 
   // Connects GitHub Credentials
@@ -913,6 +1042,159 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
     }
   };
 
+  // Sanitize a mod name into a valid GitHub repository name
+  const toRepoName = (name: string): string => {
+    const safe = (name || '')
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return safe || 'x4-mod';
+  };
+
+  // Create a brand-new GitHub repo from the active mod, then push its initial files
+  const handleCreateRepoFromMod = async () => {
+    if (!gitPat) {
+      setSyncStatusMsg('Enter a GitHub Personal Access Token in settings first.');
+      setShowConfig(true);
+      return;
+    }
+    const repoName = gitRepo.trim() || toRepoName(workspace.name);
+    setCreatingRepo(true);
+    setTerminalLogs([]);
+    addLog(`Creating new GitHub repository "${repoName}"...`);
+    try {
+      const res = await fetch('/api/github/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pat: gitPat,
+          name: repoName,
+          description: workspace.description || `X4 Foundations mod: ${workspace.name || repoName}`
+        })
+      }).then(r => r.json());
+
+      if (res.error) throw new Error(res.error);
+
+      setGitOwner(res.owner);
+      setGitRepo(res.repo);
+      localStorage.setItem('x4_github_owner', res.owner);
+      localStorage.setItem('x4_github_repo', res.repo);
+      localStorage.setItem('x4_github_pat', gitPat);
+      localStorage.setItem('x4_github_branch', activeBranch);
+      localStorage.setItem('x4_github_connected', 'true');
+      setIsGitHubConnected(true);
+      addLog(`🎉 Repository created: ${res.full_name}`);
+      addLog(`Pushing initial mod files to ${activeBranch}...`);
+      setSyncStatusMsg(`Repo "${res.full_name}" created. Pushing initial files...`);
+      await handleGithubPushMulti(`chore: initial commit of ${workspace.name || repoName} from X4:MD Studio`);
+    } catch (e: any) {
+      addLog(`❌ ERROR: ${e.message}`);
+      setSyncStatusMsg(`Create failed: ${e.message}`);
+    } finally {
+      setCreatingRepo(false);
+    }
+  };
+
+  // Load the targeted repo's files and summarize how they differ from the active workspace
+  const handleScanRemoteDiff = async () => {
+    if (!isGitHubConnected || !gitPat || !gitOwner || !gitRepo) return;
+    setIsDiffLoading(true);
+    setRemoteDiffChecked(true);
+    try {
+      const remote = await fetch('/api/github/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pat: gitPat, owner: gitOwner, repo: gitRepo, branch: activeBranch, path: 'ais_workspace.json' })
+      }).then(r => r.json());
+
+      const items: { type: 'add' | 'remove' | 'modify'; text: string }[] = [];
+
+      if (remote.error || !remote.content) {
+        items.push({ type: 'add', text: 'ais_workspace.json not found on remote — a push will create it.' });
+      } else {
+        let remoteWs: any = null;
+        try { remoteWs = JSON.parse(remote.content); } catch { /* not json */ }
+        if (!remoteWs || !Array.isArray(remoteWs.nodes)) {
+          items.push({ type: 'modify', text: 'Remote workspace file is unreadable; a push will overwrite it.' });
+        } else {
+          if ((remoteWs.nodes?.length || 0) !== workspace.nodes.length) {
+            items.push({ type: 'modify', text: `Nodes: remote ${remoteWs.nodes?.length || 0} → local ${workspace.nodes.length}` });
+          }
+          if ((remoteWs.links?.length || 0) !== workspace.links.length) {
+            items.push({ type: 'modify', text: `Links: remote ${remoteWs.links?.length || 0} → local ${workspace.links.length}` });
+          }
+          if ((remoteWs.uiWidgets?.length || 0) !== (workspace.uiWidgets?.length || 0)) {
+            items.push({ type: 'modify', text: `UI widgets: remote ${remoteWs.uiWidgets?.length || 0} → local ${workspace.uiWidgets?.length || 0}` });
+          }
+          if ((remoteWs.name || '') !== (workspace.name || '')) {
+            items.push({ type: 'modify', text: `Mod name: "${remoteWs.name || ''}" → "${workspace.name || ''}"` });
+          }
+          const md = computeSimpleDiff(generateMDXML(remoteWs), generateMDXML(workspace));
+          const adds = md.filter(l => l.type === 'addition').length;
+          const dels = md.filter(l => l.type === 'deletion').length;
+          if (adds || dels) {
+            items.push({ type: 'modify', text: `md/${workspace.name || 'mod'}.xml: +${adds} / -${dels} lines` });
+          }
+        }
+      }
+
+      if (items.length === 0) {
+        items.push({ type: 'modify', text: 'In sync — local workspace matches the remote repository.' });
+      }
+      setDiffItems(items);
+    } catch (e: any) {
+      setSyncStatusMsg(`Remote diff failed: ${e.message}`);
+    } finally {
+      setIsDiffLoading(false);
+    }
+  };
+
+  // Auto-run the remote diff once when the Remotes tab is opened while connected to the mod's repo
+  useEffect(() => {
+    if (activeTab === 'remotes' && isGitHubConnected && gitRepo && !remoteDiffChecked && !isDiffLoading) {
+      handleScanRemoteDiff();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, isGitHubConnected, gitRepo]);
+
+  // Generate a plain-English diff summary using whichever AI provider the app is configured with
+  const handleGenerateDiffSummary = async (): Promise<string> => {
+    if (workingChanges.length === 0) {
+      setSyncStatusMsg('No working changes to summarize.');
+      return '';
+    }
+    setGeneratingSummary(true);
+    try {
+      const detail = workingChanges
+        .map(c => `File "${c.path}" (${c.status}): +${c.diffCount.additions} / -${c.diffCount.deletions} lines.`)
+        .join('\n');
+
+      const res = await fetch('/api/gemini', {
+        method: 'POST',
+        headers: getAIHeaders(),
+        body: JSON.stringify({
+          prompt: `Summarize the following X4 Foundations mod changes for a git commit, in 1-3 short plain-English sentences. No markdown, no preamble, just the summary:\n${detail}`,
+          currentWorkspace: {
+            name: workspace.name,
+            description: workspace.description,
+            nodes: workspace.nodes.map(n => ({ id: n.id, label: n.label, xmlTag: n.xmlTag })),
+            links: workspace.links
+          }
+        })
+      });
+      const data = await res.json();
+      const text = (data.text || '').trim().replace(/^["']|["']$/g, '');
+      setDiffSummary(text);
+      return text;
+    } catch (e: any) {
+      setSyncStatusMsg(`Summary generation failed: ${e.message}`);
+      return '';
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
   // Master line render coordinates calculator for perfect connection lines between commits in graph tab
   const computedGraphTracks = useMemo(() => {
     const trackWidth = 14;
@@ -932,8 +1214,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       const yCurrent = i * rowHeight + 22;
 
       // Vertical line for active track continuation
-      current.activeTracks.forEach(t => {
-        const hasTInNext = next.activeTracks.includes(t);
+      (current.activeTracks || []).forEach(t => {
+        const hasTInNext = (next.activeTracks || []).includes(t);
         if (hasTInNext) {
           const xT = paddingLeft + t * trackWidth;
           paths.push({
@@ -1207,6 +1489,29 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               <p className="text-[9px] text-red-400 font-mono italic">{commitMessageError}</p>
             )}
 
+            {/* AI diff summary (auto-attached on commit, or generate now) */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-mono font-bold uppercase text-slate-450 tracking-wider">
+                  Diff summary {diffSummary ? '' : <span className="text-slate-500 normal-case font-normal">(auto on commit)</span>}
+                </span>
+                <button
+                  onClick={handleGenerateDiffSummary}
+                  disabled={generatingSummary || workingChanges.length === 0}
+                  className="px-1.5 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-300 disabled:opacity-30 transition-all cursor-pointer flex items-center gap-1 text-[9px] border border-cyan-500/20 font-mono uppercase"
+                  title="Generate a plain-English summary of the staged changes using the configured AI"
+                >
+                  {generatingSummary ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : <Sparkles className="w-2.5 h-2.5" />}
+                  Generate
+                </button>
+              </div>
+              {diffSummary && (
+                <p className="text-[10px] text-slate-300 leading-relaxed bg-black/30 border border-white/5 rounded p-2 font-sans">
+                  {diffSummary}
+                </p>
+              )}
+            </div>
+
             <div className="flex gap-1.5 h-8">
               <button
                 onClick={handlePerformCommit}
@@ -1247,7 +1552,47 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       {/* REMOTES TAB VIEW */}
       {activeTab === 'remotes' && (
         <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-3 space-y-4 font-mono text-xs">
-          
+
+          {/* One-click GitHub sign-in (OAuth Device Flow) */}
+          {!isGitHubConnected && (
+            <div className="bg-gradient-to-b from-[#111622] to-[#0c1017] p-3 rounded-lg border border-cyan-500/25 space-y-2.5">
+              <div className="text-white font-bold text-xs uppercase tracking-wide flex items-center gap-1.5">
+                <Github className="w-4 h-4 text-cyan-400" />
+                Connect with GitHub
+              </div>
+              {deviceFlow ? (
+                <div className="space-y-2 text-center">
+                  <p className="text-[10px] text-slate-400 leading-relaxed">In the GitHub tab that just opened, enter this code:</p>
+                  <div className="text-xl font-mono font-bold tracking-[0.3em] text-cyan-300 bg-black/40 border border-cyan-500/30 rounded py-2 select-all">
+                    {deviceFlow.userCode}
+                  </div>
+                  <div className="flex items-center justify-center gap-3">
+                    <a href={deviceFlow.verificationUri} target="_blank" rel="noopener noreferrer" className="text-[10px] text-cyan-400 underline">Open github.com/login/device</a>
+                    <button onClick={cancelDeviceFlow} className="text-[10px] text-slate-400 hover:text-white cursor-pointer">Cancel</button>
+                  </div>
+                  <p className="text-[9px] text-emerald-400 animate-pulse flex items-center justify-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin" /> Waiting for you to authorize…
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    One-click sign-in through your browser — no token copy-paste. Opens GitHub, you approve, and you're connected.
+                  </p>
+                  <button
+                    onClick={handleConnectWithGitHub}
+                    disabled={isConnecting}
+                    className="w-full py-2 bg-cyan-600 hover:bg-cyan-400 hover:text-black text-slate-900 font-bold text-xs rounded transition-all cursor-pointer uppercase flex items-center justify-center gap-1.5 disabled:opacity-40"
+                  >
+                    {isConnecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
+                    Connect with GitHub
+                  </button>
+                  <div className="text-center text-[9px] text-slate-600 uppercase tracking-wider">— or enter a token manually below —</div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* GitHub Credentials Section inline if not connected, or general summary if connected */}
           {!isGitHubConnected ? (
             <div className="bg-slate-900/40 p-3 rounded-lg border border-dashed border-white/10 space-y-3">
@@ -1334,6 +1679,27 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             </div>
           )}
 
+          {/* Create a brand-new repo from the active mod */}
+          <div className="bg-[#0e121a] p-3 rounded-lg border border-emerald-500/15 space-y-2">
+            <h3 className="text-emerald-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
+              <Plus className="w-3.5 h-3.5 text-emerald-400" />
+              CREATE REPO FROM THIS MOD
+            </h3>
+            <p className="text-[10px] text-slate-400 leading-normal">
+              Publishes "{workspace.name || 'this mod'}" as a new GitHub repository (named{' '}
+              <span className="text-emerald-300 font-mono">{toRepoName(workspace.name)}</span>) and pushes its initial files. Requires a PAT in settings.
+            </p>
+            <button
+              onClick={handleCreateRepoFromMod}
+              disabled={creatingRepo || !gitPat}
+              className="w-full py-1.5 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 hover:border-transparent text-emerald-300 hover:text-black font-bold uppercase rounded transition-all cursor-pointer disabled:opacity-30 flex items-center justify-center gap-1.5"
+              title={gitPat ? 'Create and publish a new GitHub repository for this mod' : 'Add a GitHub PAT in settings first'}
+            >
+              {creatingRepo ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
+              Create &amp; Publish Repo
+            </button>
+          </div>
+
           {/* Loader Panel (LOAD) */}
           <div className="bg-[#0e121a] p-3 rounded-lg border border-cyan-500/15 space-y-3">
             <h3 className="text-cyan-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
@@ -1374,6 +1740,44 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             <p className="text-[10px] text-slate-400 leading-normal">
               Package your visual flowchart designs and compiled Egosoft script codes back into a bundle and push to the remote repository recursively.
             </p>
+
+            {/* Remote vs local diff overview (auto-scans when this tab opens while connected) */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between border-b border-white/5 pb-1">
+                <span className="text-[9.5px] text-slate-400 uppercase tracking-wider flex items-center gap-1 font-bold">
+                  <GitCompare className="w-3.5 h-3.5 text-violet-400" />
+                  Remote vs Local
+                </span>
+                <button
+                  onClick={handleScanRemoteDiff}
+                  disabled={isDiffLoading || !isGitHubConnected}
+                  className="px-1.5 py-0.5 rounded bg-violet-500/10 hover:bg-violet-500/25 text-violet-300 disabled:opacity-30 transition-all cursor-pointer flex items-center gap-1 text-[9px] border border-violet-500/20"
+                  title="Compare the active workspace against the remote repository"
+                >
+                  <RefreshCw className={`w-2.5 h-2.5 ${isDiffLoading ? 'animate-spin' : ''}`} />
+                  Rescan
+                </button>
+              </div>
+              <div className="bg-black/40 p-2 max-h-28 overflow-y-auto rounded border border-white/5 space-y-1 font-mono text-[10px]">
+                {isDiffLoading ? (
+                  <div className="text-slate-400 text-center py-3 animate-pulse">Comparing with remote…</div>
+                ) : diffItems.length === 0 ? (
+                  <div className="text-slate-500 text-center py-3 leading-normal">
+                    {isGitHubConnected ? 'Auto-compares when opened; or press Rescan.' : 'Connect a repo to compare.'}
+                  </div>
+                ) : (
+                  diffItems.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className={`flex items-start gap-1 ${item.type === 'add' ? 'text-emerald-400' : item.type === 'remove' ? 'text-red-400' : 'text-amber-400'}`}
+                    >
+                      <span className="font-bold font-sans shrink-0">{item.type === 'add' ? '+' : item.type === 'remove' ? '-' : '~'}</span>
+                      <span className="text-slate-300">{item.text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
 
             <div className="space-y-2 font-mono text-[10px] bg-black/30 p-2 rounded border border-white/5">
               <div className="flex items-center justify-between">
@@ -1635,6 +2039,11 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                   <p className="text-[10px] text-slate-400 font-mono leading-normal mt-0.5">
                     Committed by <span className="text-cyan-300">{selectedCommit.author}</span> ({selectedCommit.email}) • {selectedCommit.timestamp}
                   </p>
+                  {selectedCommit.summary && (
+                    <p className="text-[10px] text-slate-300 leading-relaxed mt-1 max-w-2xl font-sans border-l-2 border-cyan-500/40 pl-2">
+                      {selectedCommit.summary}
+                    </p>
+                  )}
                 </div>
               </div>
               <button 
