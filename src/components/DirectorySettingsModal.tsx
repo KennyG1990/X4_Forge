@@ -24,6 +24,10 @@ interface DirectorySettingsModalProps {
   setDirHandle: (handle: any | null) => void;
   dirName: string;
   setDirName: (name: string) => void;
+  fsHandle: any | null;
+  setFsHandle: (handle: any | null) => void;
+  fsName: string;
+  setFsName: (name: string) => void;
 }
 
 /**
@@ -64,7 +68,11 @@ export default function DirectorySettingsModal({
   dirHandle,
   setDirHandle,
   dirName,
-  setDirName
+  setDirName,
+  fsHandle,
+  setFsHandle,
+  fsName,
+  setFsName
 }: DirectorySettingsModalProps) {
   const [gamePath, setGamePath] = useState('');
   const [schemaPath, setSchemaPath] = useState('');
@@ -95,6 +103,21 @@ export default function DirectorySettingsModal({
       setDirHandle(handle);
       setDirName(handle.name);
       setStatus({ type: 'success', msg: `Mod Workspace folder set to "${handle.name}".` });
+    } catch {
+      /* user cancelled the picker */
+    }
+  };
+
+  const linkFsFolder = async () => {
+    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
+      setStatus({ type: 'error', msg: 'Folder linking requires Chrome, Edge, or Opera.' });
+      return;
+    }
+    try {
+      const handle = await (window as any).showDirectoryPicker();
+      setFsHandle(handle);
+      setFsName(handle.name);
+      setStatus({ type: 'success', msg: `Filesystem folder set to "${handle.name}".` });
     } catch {
       /* user cancelled the picker */
     }
@@ -171,6 +194,26 @@ export default function DirectorySettingsModal({
             </div>
           </DirectoryRow>
 
+          {/* 1b. Filesystem folder (browser-linked) */}
+          <DirectoryRow
+            icon={<FolderOpen className="w-4 h-4" />}
+            title="Filesystem Folder"
+            tooltip="The directory shown in the left-hand 'Filesystem' explorer sidebar. Used to browse and edit files. Defaults to your Mod Workspace folder if not linked."
+          >
+            <div className="flex items-center gap-2">
+              <div className="flex-1 px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 truncate">
+                {fsHandle ? fsName : <span className="text-slate-500">Not linked — defaults to Mod Workspace Folder</span>}
+              </div>
+              <button
+                onClick={linkFsFolder}
+                className="px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 rounded text-[10px] font-mono font-bold uppercase flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                {fsHandle ? 'Change' : 'Link Folder'}
+              </button>
+            </div>
+          </DirectoryRow>
+
           {/* 2. X4 Game installation (server path) */}
           <DirectoryRow
             icon={<Gamepad2 className="w-4 h-4" />}
@@ -225,7 +268,7 @@ export default function DirectorySettingsModal({
 
           <div className="flex items-center justify-between pt-1">
             <span className="text-[9px] text-slate-500 font-sans">
-              The Mod Workspace folder is stored in this browser session; the game &amp; schema paths are saved to the studio's config.
+              Workspace &amp; Filesystem folders are stored in this browser session; the game &amp; schema paths are saved to the studio's config.
             </span>
             <button
               onClick={saveServerPaths}

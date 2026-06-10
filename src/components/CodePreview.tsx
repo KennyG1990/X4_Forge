@@ -52,6 +52,9 @@ interface CodePreviewProps {
   activeEditorFile: EditorFile | null;
   setActiveEditorFile: React.Dispatch<React.SetStateAction<EditorFile | null>>;
   selectedNode: MDNode | null;
+  compileStatus: 'idle' | 'compiling' | 'success' | 'error';
+  compileMessage: string;
+  handleCompileModProject: () => Promise<void>;
 }
 
 interface ScriptAnalysis {
@@ -104,7 +107,10 @@ export default function CodePreview({
   setDirName,
   activeEditorFile,
   setActiveEditorFile,
-  selectedNode
+  selectedNode,
+  compileStatus,
+  compileMessage,
+  handleCompileModProject
 }: CodePreviewProps) {
   const [codeActiveTab, setCodeActiveTab] = useState<'md' | 'ui' | 'node' | 'file'>('md');
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
@@ -133,9 +139,7 @@ export default function CodePreview({
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [successfulFixApplied, setSuccessfulFixApplied] = useState<string | null>(null);
 
-  // Compile states
-  const [compileStatus, setCompileStatus] = useState<'idle' | 'compiling' | 'success' | 'error'>('idle');
-  const [compileMessage, setCompileMessage] = useState<string>('');
+
 
   // File Editor states
   const [editorContent, setEditorContent] = useState<string>('');
@@ -433,29 +437,9 @@ export default function CodePreview({
   // are shared by both the auto-sync and Compile paths via compileAndSaveAll(). The previous
   // in-component duplicates were removed during the compiler consolidation.
 
-  const handleCompileModProject = async () => {
-    if (!dirHandle) {
-      setCompileStatus('error');
-      setCompileMessage('Link your X4 extensions folder before compiling a package.');
-      setToolActiveTab('playtest');
-      return;
-    }
-
-    setCompileStatus('compiling');
-    setCompileMessage('');
-
-    try {
-      const res = await compileAndSaveAll(workspace, dirHandle, 'store', { snapshot: true });
-      setCompileStatus('success');
-      setCompileMessage(res.message);
-      setToolActiveTab('playtest');
-      window.dispatchEvent(new CustomEvent('x4-mod-compiled'));
-      setTimeout(() => setCompileStatus('idle'), 3500);
-    } catch (err: any) {
-      setCompileStatus('error');
-      setCompileMessage(err.message || 'Compile failed.');
-      setToolActiveTab('playtest');
-    }
+  const onCompileModProject = async () => {
+    await handleCompileModProject();
+    setToolActiveTab('playtest');
   };
 
   const highlightXML = (rawXML: string) => {
@@ -574,7 +558,7 @@ export default function CodePreview({
               </>
             )}
             <button
-              onClick={handleCompileModProject}
+              onClick={onCompileModProject}
               disabled={compileStatus === 'compiling'}
               className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/35 rounded font-mono text-[9px] text-emerald-400 hover:text-white flex items-center gap-1 hover:bg-emerald-500/20 transition-all active:scale-[0.98] cursor-pointer disabled:opacity-50"
               title="Compile this workspace into a complete X4 extension folder"

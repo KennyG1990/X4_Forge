@@ -7,6 +7,7 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import crypto from "crypto";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, writeXsdConfig } from "./src/lib/xsdParser";
@@ -24,6 +25,15 @@ import {
   PRESETS,
   ModWorkspace
 } from "./src/types";
+import {
+  toSafeModId,
+  generateContentXML,
+  compileScriptToXML,
+  compileWaresXML,
+  compileJobsXML,
+  compileTFileXML,
+  compileDiffDocument
+} from "./src/lib/modCompiler";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 
 dotenv.config();
@@ -804,6 +814,127 @@ app.post("/api/agent/workspace", (req, res) => {
     version: workspaceVersion,
     workspace: activeWorkspace
   });
+});
+
+/**
+ * POST /api/agent/deploy
+ * Compiles and deploys the workspace directly into the configured X4 Extensions directory.
+ */
+app.post("/api/agent/deploy", (req, res) => {
+  const ws = req.body.workspace || activeWorkspace;
+  try {
+    const resolved = resolveXsdConfig();
+    const x4GamePath = resolved.x4GamePath;
+    if (!x4GamePath) {
+      return res.status(400).json({
+        success: false,
+        error: "X4 Game Installation path is not configured on the server."
+      });
+    }
+
+    if (!fs.existsSync(x4GamePath)) {
+      return res.status(400).json({
+        success: false,
+        error: `X4 Game Installation path "${x4GamePath}" does not exist on the server filesystem.`
+      });
+    }
+
+    const extensionsPath = path.join(x4GamePath, 'extensions');
+    if (!fs.existsSync(extensionsPath)) {
+      fs.mkdirSync(extensionsPath, { recursive: true });
+    }
+
+    const modId = toSafeModId(ws.name);
+    const modPath = path.join(extensionsPath, modId);
+
+    // Clean old mod directory if exists
+    if (fs.existsSync(modPath)) {
+      fs.rmSync(modPath, { recursive: true, force: true });
+    }
+    fs.mkdirSync(modPath, { recursive: true });
+
+    // 1. content.xml
+    const contentXml = generateContentXML(modId, ws);
+    fs.writeFileSync(path.join(modPath, 'content.xml'), contentXml);
+
+    // 2. md/<modId>.xml
+    const mdXml = generateMDXML(ws);
+    const mdDir = path.join(modPath, 'md');
+    fs.mkdirSync(mdDir, { recursive: true });
+    fs.writeFileSync(path.join(mdDir, `${modId}.xml`), mdXml);
+
+    // 3. UI
+    if (ws.uiWidgets?.length) {
+      const uiDir = path.join(modPath, 'md_ui_layouts');
+      fs.mkdirSync(uiDir, { recursive: true });
+      const uiXml = generateUIXML(ws);
+      fs.writeFileSync(path.join(uiDir, `${modId}_ui.xml`), uiXml);
+    }
+
+    // 4. AIScripts
+    if (ws.aiScripts?.length) {
+      const aiDir = path.join(modPath, 'aiscripts');
+      fs.mkdirSync(aiDir, { recursive: true });
+      for (const script of ws.aiScripts) {
+        const fileName = script.name.endsWith('.xml') ? script.name : `${script.name}.xml`;
+        fs.writeFileSync(path.join(aiDir, fileName), compileScriptToXML(script));
+      }
+    }
+
+    // 5. Wares and Jobs
+    if (ws.wares?.length || ws.jobs?.length) {
+      const libDir = path.join(modPath, 'libraries');
+      fs.mkdirSync(libDir, { recursive: true });
+      if (ws.wares?.length) {
+        fs.writeFileSync(path.join(libDir, 'wares.xml'), compileWaresXML(ws.wares));
+      }
+      if (ws.jobs?.length) {
+        fs.writeFileSync(path.join(libDir, 'jobs.xml'), compileJobsXML(ws.jobs));
+      }
+    }
+
+    // 6. Translations
+    if (ws.tFiles?.length) {
+      const tDir = path.join(modPath, 't');
+      fs.mkdirSync(tDir, { recursive: true });
+      for (const tFile of ws.tFiles) {
+        const fileName = tFile.fileName || `0001-L${tFile.languageId}.xml`;
+        fs.writeFileSync(path.join(tDir, fileName), compileTFileXML(tFile));
+      }
+    }
+
+    // 7. XML diff patches
+    if (ws.xmlPatches?.length) {
+      const patchesByFile: Record<string, any[]> = {};
+      ws.xmlPatches.forEach((patch: any) => {
+        const file = patch.targetFile || 'libraries/ship_macros.xml';
+        if (!patchesByFile[file]) {
+          patchesByFile[file] = [];
+        }
+        patchesByFile[file].push(patch);
+      });
+
+      for (const [filePath, filePatches] of Object.entries(patchesByFile)) {
+        const targetFilePath = path.join(modPath, filePath);
+        const targetDir = path.dirname(targetFilePath);
+        if (!fs.existsSync(targetDir)) {
+          fs.mkdirSync(targetDir, { recursive: true });
+        }
+        fs.writeFileSync(targetFilePath, compileDiffDocument(filePatches, filePath));
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Successfully deployed mod "${ws.name}" to game extensions folder.`,
+      deployedPath: modPath
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Failed to deploy mod to extensions folder."
+    });
+  }
 });
 
 /**

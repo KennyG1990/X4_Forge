@@ -57,6 +57,10 @@ interface SidebarProps {
   setDirHandle: (handle: any | null) => void;
   dirName: string;
   setDirName: (name: string) => void;
+  fsHandle: any | null;
+  setFsHandle: (handle: any | null) => void;
+  fsName: string;
+  setFsName: (name: string) => void;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
   workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki';
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
@@ -95,6 +99,10 @@ export default function Sidebar({
   setDirHandle,
   dirName,
   setDirName,
+  fsHandle,
+  setFsHandle,
+  fsName,
+  setFsName,
   saveCheckpoint,
   workspaceView,
   setWorkspaceView,
@@ -352,6 +360,10 @@ export default function Sidebar({
             setDirHandle={setDirHandle}
             dirName={dirName}
             setDirName={setDirName}
+            fsHandle={fsHandle}
+            setFsHandle={setFsHandle}
+            fsName={fsName}
+            setFsName={setFsName}
             workspace={workspace}
             setWorkspace={setWorkspace}
             saveCheckpoint={saveCheckpoint}

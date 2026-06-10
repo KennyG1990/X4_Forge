@@ -40,6 +40,10 @@ interface DirectoryExplorerProps {
   setDirHandle: (handle: any | null) => void;
   dirName: string;
   setDirName: (name: string) => void;
+  fsHandle?: any | null;
+  setFsHandle?: (handle: any | null) => void;
+  fsName?: string;
+  setFsName?: (name: string) => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
@@ -60,12 +64,18 @@ export default function DirectoryExplorer({dirHandle,
   setDirHandle,
   dirName,
   setDirName,
+  fsHandle,
+  setFsHandle,
+  fsName,
+  setFsName,
   workspace,
   setWorkspace,
   saveCheckpoint,
   workspaceView,
   setWorkspaceView,
   onOpenEditorFile}: DirectoryExplorerProps) {
+  const activeFsHandle = fsHandle || dirHandle;
+  const activeFsName = fsName || dirName;
   const [fileFilter, setFileFilter] = useState('');
   const [fileTree, setFileTree] = useState<FSItem[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
@@ -103,7 +113,7 @@ export default function DirectoryExplorer({dirHandle,
     const items: FSItem[] = [];
     try {
       for await (const entry of handle.values()) {
-        const itemPath = `${dirName}://${entry.name}`;
+        const itemPath = `${activeFsName}://${entry.name}`;
         if (entry.kind === 'directory') {
           // Scan recursively
           const children = await scanRealLocalDirectory(entry);
@@ -137,14 +147,14 @@ export default function DirectoryExplorer({dirHandle,
   };
 
   const handleRefreshDirectory = async () => {
-    if (!dirHandle) {
+    if (!activeFsHandle) {
       setStatusMessage({ type: 'info', text: "Refreshed simulated workspace!" });
       setTimeout(() => setStatusMessage(null), 2000);
       return;
     }
 
     try {
-      const scanned = await scanRealLocalDirectory(dirHandle);
+      const scanned = await scanRealLocalDirectory(activeFsHandle);
       setFileTree(scanned);
       setStatusMessage({ type: 'success', text: "Synced local project filesystem!" });
       setTimeout(() => setStatusMessage(null), 2000);
@@ -155,12 +165,12 @@ export default function DirectoryExplorer({dirHandle,
 
   // Re-scan whenever handle changes
   useEffect(() => {
-    if (dirHandle) {
+    if (activeFsHandle) {
       handleRefreshDirectory();
     } else {
       setFileTree([]);
     }
-  }, [dirHandle, dirName]);
+  }, [activeFsHandle, activeFsName]);
 
   const toggleFolder = (path: string) => {
     setExpandedPaths(prev => ({
@@ -182,8 +192,13 @@ export default function DirectoryExplorer({dirHandle,
 
     try {
       const handle = await (window as any).showDirectoryPicker();
-      setDirHandle(handle);
-      setDirName(handle.name);
+      if (setFsHandle && setFsName) {
+        setFsHandle(handle);
+        setFsName(handle.name);
+      } else {
+        setDirHandle(handle);
+        setDirName(handle.name);
+      }
       setStatusMessage({ type: 'success', text: `Mounted filesystem: ${handle.name}` });
       setTimeout(() => setStatusMessage(null), 2500);
     } catch (err: any) {
@@ -391,9 +406,9 @@ export default function DirectoryExplorer({dirHandle,
     const filename = cleanName.endsWith(`.${type}`) ? cleanName : `${cleanName}.${type}`;
 
     try {
-      if (dirHandle) {
+      if (activeFsHandle) {
         // Native local storage file create
-        const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+        const fileHandle = await activeFsHandle.getFileHandle(filename, { create: true });
         const writer = await fileHandle.createWritable();
         
         const initialContent = type === 'json' 
@@ -554,15 +569,15 @@ export default function DirectoryExplorer({dirHandle,
         {/* Current Folder Path breadcrumb */}
         <div className="flex items-center gap-1.5 bg-black/35 rounded-md p-1.5 border border-white/5">
           <span className="font-mono text-[10px] text-cyan-500 flex-shrink-0">
-            {dirHandle ? "ext://" : "—"}
+            {activeFsHandle ? "ext://" : "—"}
           </span>
           <span className="font-mono text-[10px] font-bold text-slate-300 truncate tracking-wide flex-1">
-            {dirHandle ? `${dirName}/` : "No folder linked"}
+            {activeFsHandle ? `${activeFsName}/` : "No folder linked"}
           </span>
         </div>
 
         {/* Target Local Directory Mount Trigger Button */}
-        {!dirHandle && (
+        {!activeFsHandle && (
           <button
             onClick={handleMountDirectory}
             className="w-full py-1.5 px-3 rounded-md bg-gradient-to-r from-cyan-600/30 to-blue-600/30 border border-cyan-500/40 hover:border-cyan-500/80 text-cyan-400 font-mono text-[10px] font-bold tracking-tight hover:from-cyan-600/40 hover:to-blue-600/40 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md"
@@ -601,7 +616,7 @@ export default function DirectoryExplorer({dirHandle,
         <div className="space-y-1">
           {filteredTree.length === 0 ? (
             <div className="text-center py-6 px-3 text-[10px] font-mono text-slate-500 leading-relaxed">
-              {dirHandle ? "No files matched filters" : "No folder linked. Use Settings → Directories to choose your Mod Workspace folder, then it will appear here."}
+              {activeFsHandle ? "No files matched filters" : "No folder linked. Use Settings → Directories to choose your Filesystem folder, then it will appear here."}
             </div>
           ) : (
             filteredTree.map(item => renderFSNode(item))
@@ -630,7 +645,7 @@ export default function DirectoryExplorer({dirHandle,
       {/* Godot style Footer feedback detail */}
       <div className="p-2 border-t border-white/5 bg-[#17191e] flex items-center justify-between font-mono text-[9px] text-slate-500 shrink-0">
         <span>Active File: {activeFilePath ? activeFilePath.split('/').pop() : 'None Loaded'}</span>
-        {dirHandle && <span className="text-emerald-500">● RealTime Connected</span>}
+        {activeFsHandle && <span className="text-emerald-500">● RealTime Connected</span>}
       </div>
     </div>
   );
