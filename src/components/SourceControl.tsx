@@ -423,7 +423,7 @@ export default function SourceControl({
         }
       } catch (e) {}
     }
-    return SEEDED_COMMIT_LOGS;
+    return [];
   });
 
   // Modal inspection variables
@@ -1195,6 +1195,67 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
     }
   };
 
+  // Relative "x mins ago" formatter for commit timestamps
+  const timeAgo = (iso: string): string => {
+    if (!iso) return '';
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return iso;
+    const s = Math.floor((Date.now() - t) / 1000);
+    if (s < 60) return 'just now';
+    const m = Math.floor(s / 60); if (m < 60) return `${m} min${m > 1 ? 's' : ''} ago`;
+    const h = Math.floor(m / 60); if (h < 24) return `${h} hour${h > 1 ? 's' : ''} ago`;
+    const d = Math.floor(h / 24); if (d < 30) return `${d} day${d > 1 ? 's' : ''} ago`;
+    const mo = Math.floor(d / 30); if (mo < 12) return `${mo} month${mo > 1 ? 's' : ''} ago`;
+    return `${Math.floor(mo / 12)} year(s) ago`;
+  };
+
+  // Fetch the REAL commit history of the connected repo (replaces the seeded placeholder log)
+  const handleFetchRemoteCommits = async () => {
+    if (!isGitHubConnected || !gitPat || !gitOwner || !gitRepo) {
+      setSyncStatusMsg('Authenticate GitHub peer in settings first.');
+      return;
+    }
+    setSyncStatusMsg(`Fetching commit history from ${gitOwner}/${gitRepo}…`);
+    try {
+      const res = await fetch('/api/github/commits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pat: gitPat, owner: gitOwner, repo: gitRepo, branch: activeBranch })
+      }).then(r => r.json());
+      if (res.error) throw new Error(res.error);
+
+      const mapped: GitCommitItem[] = (res.commits || []).map((c: any) => {
+        const bodyLines = (c.body || '').split('\n').slice(1).join(' ').trim();
+        return {
+          sha: c.sha,
+          message: c.message,
+          author: c.author,
+          email: c.email,
+          timestamp: timeAgo(c.date),
+          branch: activeBranch,
+          track: 0,
+          activeTracks: [0],
+          summary: bodyLines || undefined
+        } as GitCommitItem;
+      });
+
+      saveHistory(mapped);
+      setSyncStatusMsg(mapped.length
+        ? `Loaded ${mapped.length} commits from ${gitOwner}/${gitRepo}.`
+        : 'No commits on this branch yet.');
+    } catch (e: any) {
+      setSyncStatusMsg(`Fetch commits failed: ${e.message}`);
+    }
+  };
+
+  // Auto-load real commit history when the Graph Log opens (or repo/branch changes) while connected
+  useEffect(() => {
+    if (activeTab === 'graph' && isGitHubConnected && gitRepo) {
+      handleFetchRemoteCommits();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, isGitHubConnected, gitRepo, activeBranch]);
+
   // Master line render coordinates calculator for perfect connection lines between commits in graph tab
   const computedGraphTracks = useMemo(() => {
     const trackWidth = 14;
@@ -1890,7 +1951,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             </div>
             
             <div className="flex items-center gap-2">
-              <button className="hover:text-cyan-400 flex items-center gap-0.5" title="Pull updates">
+              <button onClick={handleFetchRemoteCommits} className="hover:text-cyan-400 flex items-center gap-0.5" title="Reload commit history from the remote repo">
                 <ArrowDown className="w-3 h-3" />
                 Pull
               </button>
@@ -1898,7 +1959,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                 <ArrowUp className="w-3 h-3" />
                 Push
               </button>
-              <button className="hover:text-cyan-400 flex items-center gap-0.5" title="Fetch status">
+              <button onClick={handleFetchRemoteCommits} className="hover:text-cyan-400 flex items-center gap-0.5" title="Refresh commit history">
                 <RefreshCw className="w-2.5 h-2.5" />
                 Fetch
               </button>
@@ -1931,6 +1992,13 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
 
             {/* Commit Log row items list */}
             <div className="relative z-10">
+              {localHistory.length === 0 && (
+                <div className="p-6 text-center text-[10px] text-slate-500 leading-relaxed font-sans">
+                  {isGitHubConnected
+                    ? 'No commits on this branch yet — push your mod to populate the history.'
+                    : 'Connect a GitHub repo in the Remotes tab to view its commit history here.'}
+                </div>
+              )}
               {localHistory.map((commit, index) => {
                 const nodeX = 14 + commit.track * 14;
                 const nodeY = 22;
