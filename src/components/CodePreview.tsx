@@ -732,6 +732,18 @@ export default function CodePreview({
     return map;
   };
 
+  const sendDiagnosticsToAI = () => {
+    if (diagnostics.length === 0) return;
+    const list = diagnostics.map((d, i) =>
+      `${i + 1}. [${d.severity}] ${(d.domain || d.category || '')}: ${d.message}` +
+      (d.filePath ? ` (file: ${d.filePath})` : '') +
+      (d.sourceRef ? ` (source: ${d.sourceRef.kind}${d.sourceRef.label ? '/' + d.sourceRef.label : ''})` : '')
+    ).join('\n');
+    const label = codeActiveTab === 'ui' ? 'UI layout' : 'Mission Director';
+    const prompt = `My X4 Foundations mod "${workspace.name || 'mod'}" has these Mod Doctor validation issues:\n\n${list}\n\nHere is the generated ${label} XML:\n\`\`\`xml\n${currentCode}\n\`\`\`\n\nFor each issue, explain plainly what's wrong and exactly how to fix it. Keep it concise.`;
+    window.dispatchEvent(new CustomEvent('open-ai-chat', { detail: { prompt } }));
+  };
+
 
   const highlightCode = (rawText: string) => {
     const ext = activeEditorFile?.name.split('.').pop()?.toLowerCase();
@@ -789,7 +801,11 @@ export default function CodePreview({
 
   const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
   const codeLines = currentCode.split('\n');
-  const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);  return (
+  const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);
+  const errors = diagnostics.filter(d => d.severity === 'error');
+  const warnings = diagnostics.filter(d => d.severity === 'warning');
+
+  return (
     <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#050608] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
       {/* ================================================================ */}
       {/* WINDOW TITLE BAR HEADER (ANALYTIC & PRECISE)                     */}
@@ -1226,6 +1242,36 @@ export default function CodePreview({
             {renderMinimap(codeLines.map(l => ({ value: l })))}
           </div>
         )}
+      </div>
+      <div className="shrink-0 border-t border-white/5 bg-[#080b11] px-3 py-2 font-mono">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="text-[10px] font-bold tracking-wider text-slate-300 truncate">
+              PACKAGE MOD DOCTOR (DIAGNOSTICS)
+            </span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded border border-cyan-500/20 bg-cyan-500/10 text-cyan-300">
+              {diagnosticSource === 'checking' ? 'CHECKING' : diagnosticSource === 'package' ? 'API' : 'LOCAL'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-[9px] font-bold">
+            <span className="px-1.5 py-0.5 rounded border border-red-500/20 bg-red-500/10 text-red-300">
+              {errors.length} Errors
+            </span>
+            <span className="px-1.5 py-0.5 rounded border border-amber-500/20 bg-amber-500/10 text-amber-300">
+              {warnings.length} Warnings
+            </span>
+            {diagnostics.length > 0 && (
+              <button
+                onClick={sendDiagnosticsToAI}
+                className="flex items-center gap-1 text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/30 cursor-pointer uppercase transition-all"
+                title="Send these diagnostics and generated XML to the AI assistant."
+              >
+                <Sparkles className="w-3 h-3" /> Ask AI
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
