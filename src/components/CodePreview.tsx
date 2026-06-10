@@ -513,20 +513,6 @@ export default function CodePreview({
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/("(?:\\.|[^"\\])*")(\s*:)?/g, (_match, key, colon) => colon ? `<span class="text-cyan-300">${key}</span>${colon}` : `<span class="text-emerald-300">${key}</span>`)
-        .replace(/\b(true|false|null)\b/g, '<span class="text-amber-300">$1</span>');
-    }
-    return highlightXML(rawText);
-  };
-
-  const errors = diagnostics.filter(d => d.severity === 'error');
-  const warnings = diagnostics.filter(d => d.severity === 'warning');
-
-  const isFileEditorActive = codeActiveTab === 'file' && activeEditorFile;
-
-  return (
-    <div id="code_preview_container" className="flex-1 bg-[#0a0c10] flex flex-col h-full overflow-hidden text-slate-300 border-l border-white/5 font-mono">
-      
       {/* ================================================================ */}
       {/* SECTION 1: COMPILED XML FILE VIEWER                             */}
       {/* ================================================================ */}
