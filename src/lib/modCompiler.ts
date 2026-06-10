@@ -209,7 +209,8 @@ export const compileDiffDocument = (patches: any[], targetFile: string): string 
     if (b.action === 'remove') {
       xml += `  <remove sel="${escapeXmlAttr(b.sel)}" />\n\n`;
     } else {
-      xml += `  <${b.action} sel="${escapeXmlAttr(b.sel)}">\n`;
+      const posAttr = (b.action === 'add' && b.pos) ? ` pos="${escapeXmlAttr(b.pos)}"` : '';
+      xml += `  <${b.action} sel="${escapeXmlAttr(b.sel)}"${posAttr}>\n`;
       const lines = (b.content || '').split('\n').filter((l: string) => l.trim().length > 0);
       lines.forEach((l: string) => {
         xml += `    ${l}\n`;

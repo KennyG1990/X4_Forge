@@ -143,6 +143,7 @@ export interface PatchBlock {
   action: 'add' | 'replace' | 'remove';
   content: string;
   note: string;
+  pos?: 'before' | 'after' | 'prepend' | 'append';
   targetFile?: string;
   includeInBuild?: boolean;
 }
