@@ -27,7 +27,8 @@ import {
   GitCommit,
   Compass,
   Library,
-  Trash2
+  Trash2,
+  Activity
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -40,6 +41,7 @@ import {
   ChatMessage
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
+import DiagnosticsHub from './DiagnosticsHub';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
@@ -49,8 +51,8 @@ import AIHelper from './AIHelper';
 
 interface SidebarProps {
   width?: number;
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -480,6 +482,19 @@ export default function Sidebar({
           <Sparkles className="w-4 h-4 shrink-0" />
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">CO-PILOT</span>
         </button>
+        <button
+          id="tab_diagnostics"
+          onClick={() => setActiveTab('diagnostics')}
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
+            activeTab === 'diagnostics'
+              ? 'text-emerald-400 bg-emerald-950/20 border-l-2 border-emerald-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title="MD Scanner & Playtest Workspace"
+        >
+          <Activity className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">DOCTOR</span>
+        </button>
       </div>
 
       {/* Right Content Column */}
@@ -497,7 +512,8 @@ export default function Sidebar({
               {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'ai' && <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
-              
+              {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-emerald-400" />}
+
               {activeTab === 'script' && 'Node Toolbox'}
               {activeTab === 'cues' && 'Cue Hierarchy'}
               {activeTab === 'ui' && 'UI Widgets'}
@@ -506,6 +522,7 @@ export default function Sidebar({
               {activeTab === 'git' && 'Source Control'}
               {activeTab === 'templates' && 'Blueprints'}
               {activeTab === 'ai' && 'AI Co-pilot'}
+              {activeTab === 'diagnostics' && 'Mod Doctor'}
             </div>
             <div className="text-[9px] text-slate-500 font-sans mt-0.5 leading-none">
               {activeTab === 'script' && 'Create visual logic nodes'}
@@ -516,6 +533,7 @@ export default function Sidebar({
               {activeTab === 'git' && 'Staged changes & remotes'}
               {activeTab === 'templates' && 'Manage reusable subgraphs'}
               {activeTab === 'ai' && 'AI-assisted logic & templates'}
+              {activeTab === 'diagnostics' && 'MD scanner & playtest log analysis'}
             </div>
           </div>
 
@@ -567,6 +585,18 @@ export default function Sidebar({
               setWorkspace={setWorkspace}
               onOpenEditorFile={onOpenEditorFile}
               saveCheckpoint={saveCheckpoint}
+              setWorkspaceView={setWorkspaceView}
+            />
+          </ErrorBoundary>
+        )}
+
+        {activeTab === 'diagnostics' && (
+          <ErrorBoundary label="Mod Doctor">
+            <DiagnosticsHub
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              saveCheckpoint={saveCheckpoint}
+              modWorkspacePath={modWorkspacePath}
               setWorkspaceView={setWorkspaceView}
             />
           </ErrorBoundary>

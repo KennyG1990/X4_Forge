@@ -823,9 +823,9 @@ export default function CodePreview({
         </div>
       </div>
 
-      {/* ================================================================ */}
-      {/* SECTION 2: LIVE SIMULATION DIAGNOSTICS & PLAYTEST HUB          */}
-      {/* ================================================================ */}
+      {/* SECTION 2 (MD Scanner + Playtest) was moved to the left sidebar "DOCTOR" tab
+          (see DiagnosticsHub). Hidden here so the right panel is a pure code/diff viewer. */}
+      {false && (
       <div className="flex-[4] flex flex-col min-h-0 bg-[#080a0e] overflow-hidden select-none border-t border-[#df9825]/10">
         
         {/* Diagnostic Tool Segmented Header */}
@@ -962,6 +962,7 @@ export default function CodePreview({
         </div>
 
       </div>
+      )}
 
     </div>
   );
