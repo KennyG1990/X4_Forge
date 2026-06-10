@@ -754,6 +754,14 @@ Guidelines:
   };
 
   // Pushes active files to real linked GitHub repository using custom express proxy endpoint
+  // Builds the commit message used for pushes: the user's typed commit message as the title,
+  // with the AI diff summary as the body. Falls back to an override or a sensible default.
+  const buildCommitMessage = (override?: string): string => {
+    const title = (override?.trim() || commitMessage.trim() || 'Update mod files from X4:MD Studio');
+    const body = diffSummary.trim();
+    return body ? `${title}\n\n${body}` : title;
+  };
+
   const handlePushGitWorkspace = async () => {
     if (!isGitHubConnected || !gitPat) {
       setSyncStatusMsg('Source control is not authenticated. Open settings to link GitHub.');
@@ -776,7 +784,7 @@ Guidelines:
         owner: gitOwner,
         repo: gitRepo,
         branch: activeBranch,
-        commitMessage: `feat: synchronize mod files [Studio Commit]`,
+        commitMessage: buildCommitMessage(),
         files: [
           { path: 'content.xml', content: contentXml },
           { path: `md/${workspace.name || 'mod'}.xml`, content: mdCode },
@@ -999,7 +1007,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       return;
     }
 
-    const finalCommitMsg = customCommitMsg?.trim() || `feat: synchronize mod resources [Studio Commit]`;
+    const finalCommitMsg = buildCommitMessage(customCommitMsg);
     addLog(`Syncing ${filesToPush.length} checked mod structures...`);
     addLog(`Commit message context: "${finalCommitMsg}"`);
 
@@ -1895,7 +1903,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               </div>
               <button
                 disabled={isProcessing || !isGitHubConnected}
-                onClick={() => handleGithubPushMulti('feat: synchronize mod resources [Studio Commit]')}
+                onClick={() => handleGithubPushMulti()}
                 className="w-full py-1.5 bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 hover:border-transparent text-violet-300 hover:text-black font-bold uppercase rounded transition-all cursor-pointer disabled:opacity-20 flex items-center justify-center gap-1.5"
               >
                 {isProcessing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
