@@ -177,6 +177,44 @@ export default function App() {
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
   const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
 
+  // Left & Right Sidebar Resizing States
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
+  const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(460);
+  const [isResizingLeft, setIsResizingLeft] = useState<boolean>(false);
+  const [isResizingRight, setIsResizingRight] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isResizingLeft) {
+        const newWidth = Math.max(200, Math.min(550, e.clientX));
+        setLeftSidebarWidth(newWidth);
+      }
+      if (isResizingRight) {
+        const newWidth = Math.max(300, Math.min(800, window.innerWidth - e.clientX));
+        setRightSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingLeft(false);
+      setIsResizingRight(false);
+    };
+
+    if (isResizingLeft || isResizingRight) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingLeft, isResizingRight]);
+
   // Active AI modeling status states
   const [activeAIProvider, setActiveAIProvider] = useState<string>('gemini');
   const [activeAIModel, setActiveAIModel] = useState<string>('gemini-3.5-flash');
@@ -679,7 +717,8 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         
         {/* Left Side: Drag control panel, property editor inspector */}
-            <Sidebar
+        <Sidebar
+          width={leftSidebarWidth}
           activeTab={activeSidebarTab}
           setActiveTab={setActiveSidebarTab}
           workspace={workspace}
@@ -697,22 +736,33 @@ export default function App() {
           modWorkspacePath={modWorkspacePath}
           filesystemPath={filesystemPath}
           saveCheckpoint={saveCheckpoint}
-              workspaceView={workspaceView}
-              setWorkspaceView={setWorkspaceView}
-              schemaTemplates={schemaTemplates}
-              onSchemaConfigChanged={loadSchemaLibrary}
-              onOpenEditorFile={(file) => {
-                setActiveEditorFile(file);
-              }}
-              workspaceDirMode={workspaceDirMode}
-              setWorkspaceDirMode={setWorkspaceDirMode}
-              compileStatus={compileStatus}
-              compileMessage={compileMessage}
-              handleCompileModProject={handleCompileModProject}
-              visibleCueIds={visibleCueIds}
-              setVisibleCueIds={setVisibleCueIds}
-              setFocusNodeRequest={setFocusNodeRequest}
-            />
+          workspaceView={workspaceView}
+          setWorkspaceView={setWorkspaceView}
+          schemaTemplates={schemaTemplates}
+          onSchemaConfigChanged={loadSchemaLibrary}
+          onOpenEditorFile={(file) => {
+            setActiveEditorFile(file);
+          }}
+          workspaceDirMode={workspaceDirMode}
+          setWorkspaceDirMode={setWorkspaceDirMode}
+          compileStatus={compileStatus}
+          compileMessage={compileMessage}
+          handleCompileModProject={handleCompileModProject}
+          visibleCueIds={visibleCueIds}
+          setVisibleCueIds={setVisibleCueIds}
+          setFocusNodeRequest={setFocusNodeRequest}
+        />
+
+        {/* Left Resizer Handle */}
+        <div
+          className={`w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
+            isResizingLeft ? 'bg-cyan-500 w-1.5' : ''
+          }`}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizingLeft(true);
+          }}
+        />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
         <main className="flex-1 flex flex-col h-full overflow-hidden border-r border-white/10 bg-[#0a0c10]">
@@ -765,8 +815,19 @@ export default function App() {
 
         </main>
 
+        {/* Right Resizer Handle */}
+        <div
+          className={`w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
+            isResizingRight ? 'bg-cyan-500 w-1.5' : ''
+          }`}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizingRight(true);
+          }}
+        />
+
         {/* Right Side: Real-time Synchronized compiler preview output */}
-        <aside className="w-[460px] shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between">
+        <aside className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between" style={{ width: rightSidebarWidth }}>
           <CodePreview 
             workspace={workspace} 
             setWorkspace={setWorkspace} 

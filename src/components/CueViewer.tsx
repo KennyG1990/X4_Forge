@@ -193,12 +193,12 @@ export default function CueViewer({
     const isInstantiated = node.node.properties?.instantiate === 'true';
 
     return (
-      <div key={node.id} style={{ paddingLeft: `${depth * 8}px` }}>
+      <div key={node.id} style={{ paddingLeft: `${depth * 6}px` }}>
         <div 
-          className={`group flex items-center gap-1.5 py-1 px-1.5 rounded text-left transition-all font-mono text-[11px] border border-transparent select-none my-0.5 ${
+          className={`group flex items-center gap-1 py-0.5 px-1.5 rounded text-left transition-all font-mono text-[10.5px] border border-transparent select-none my-0.5 ${
             isActive 
-              ? 'bg-purple-600/20 text-purple-300 border-purple-500/30' 
-              : 'text-slate-200 hover:text-white hover:bg-white/[0.03]'
+              ? 'bg-purple-950/30 text-purple-300 border-purple-500/25 font-bold' 
+              : 'text-slate-200 hover:text-white hover:bg-white/[0.02]'
           }`}
         >
           {/* Collapse folder bracket pointer */}
@@ -212,7 +212,7 @@ export default function CueViewer({
               </button>
             ) : (
               <div className="w-4 h-4 flex items-center justify-center">
-                <span className="w-1 h-1 rounded-full bg-slate-600" />
+                <span className="w-1 h-1 rounded-full bg-slate-650" />
               </div>
             )}
           </span>
@@ -220,7 +220,7 @@ export default function CueViewer({
           {/* Eye Icon Visibility Checkbox checkbox style */}
           <button
             onClick={(e) => handleToggleCueVisibility(node, e)}
-            className={`p-1 rounded shrink-0 transition-colors cursor-pointer ${
+            className={`p-0.5 rounded shrink-0 transition-colors cursor-pointer ${
               isChecked 
                 ? 'text-cyan-400 hover:text-cyan-200 hover:bg-cyan-500/10' 
                 : 'text-slate-600 hover:text-slate-400 hover:bg-white/5'
@@ -236,7 +236,7 @@ export default function CueViewer({
 
           {/* Cue Badge Icon */}
           <GitCommit className={`w-3.5 h-3.5 shrink-0 ${
-            isChecked ? 'text-purple-400' : 'text-slate-600'
+            isChecked ? 'text-purple-400' : 'text-slate-650'
           }`} />
 
           {/* Clickable Cue Title label */}
@@ -258,7 +258,7 @@ export default function CueViewer({
 
         {/* Recursive sub-cue child elements block */}
         {isParent && isExpanded && (
-          <div className="border-l border-white/5 ml-3 my-0.5 space-y-0.5">
+          <div className="border-l border-white/5 ml-2 my-0.5 space-y-0.5">
             {node.children.map(child => renderCueNode(child, depth + 1))}
           </div>
         )}
@@ -267,62 +267,47 @@ export default function CueViewer({
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#1b1e24] text-[#e0e0e0] overflow-hidden select-none font-sans border-r border-white/5">
-      {/* Title Bar Section Header */}
-      <div className="p-3 border-b border-white/10 shrink-0 space-y-2 bg-[#20232b]">
+    <div className="flex flex-col h-full bg-transparent text-[#e0e0e0] overflow-hidden select-none font-sans">
+      {/* Action Controls and Filter Header */}
+      <div className="p-3 border-b border-white/5 shrink-0 space-y-2 bg-transparent">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <Compass className="w-4 h-4 text-purple-400" />
-            <span className="font-mono text-xs font-bold uppercase tracking-wide text-white">Cue Hierarchy</span>
-          </div>
-
-          {/* Visibility presets triggers */}
-          <div className="flex gap-1">
+          <div className="flex items-center gap-1 bg-black/20 p-0.5 rounded border border-white/5">
             <button
               onClick={handleSelectAll}
-              className="p-1 px-1.5 rounded-md hover:bg-[#2d313d] text-cyan-400 hover:text-white transition-all text-[9.5px] font-mono font-bold cursor-pointer"
+              className="p-1 px-1.5 rounded hover:bg-white/5 text-cyan-400 hover:text-cyan-200 transition-all text-[9px] font-mono font-bold cursor-pointer"
               title="Show all cues and elements"
             >
               SHOW ALL
             </button>
-            <span className="text-slate-600 self-center">|</span>
+            <span className="text-white/10 text-[9px] font-mono px-0.5">|</span>
             <button
               onClick={handleClearAll}
-              className="p-1 px-1.5 rounded-md hover:bg-[#2d313d] text-slate-400 hover:text-red-400 transition-all text-[9.5px] font-mono font-bold cursor-pointer"
+              className="p-1 px-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-red-400 transition-all text-[9px] font-mono font-bold cursor-pointer"
               title="Hide all cues from canvas"
             >
               CLEAR ALL
             </button>
           </div>
-        </div>
-
-        {/* Visibility filter counter badge */}
-        <div className="flex items-center gap-1.5 bg-black/35 rounded-md p-1.5 border border-white/5 font-mono text-[9.5px] justify-between">
-          <div className="flex items-center gap-1">
-            <Link2 className="w-3.5 h-3.5 text-slate-500" />
-            <span className="text-slate-400">Status:</span>
-            <span className="text-purple-400 font-bold">{allCues.length} total cues</span>
-          </div>
-          <div className="text-[9px] bg-cyan-500/10 text-cyan-400 px-1 rounded font-bold uppercase">
-            {visibleCueIds === null ? 'All Active' : `${visibleCueIds.length} visible`}
+          <div className="text-[9px] bg-cyan-950/40 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-500/20 font-bold font-mono">
+            {visibleCueIds === null ? `${allCues.length} Cues` : `${visibleCueIds.length}/${allCues.length} Visible`}
           </div>
         </div>
 
         {/* File filter search box */}
         <div className="relative">
-          <Search className="absolute left-2 top-2.5 w-3 h-3 text-slate-500" />
+          <Search className="absolute left-2.5 top-2.5 w-3 h-3 text-slate-500" />
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Filter Cue Hierarchy"
-            className="w-full pl-7 pr-2 py-1.5 rounded bg-black/45 border border-white/5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors font-mono"
+            placeholder="Search Cues..."
+            className="w-full pl-7 pr-2 py-1.5 rounded bg-black/40 border border-white/5 text-[10.5px] text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors font-mono"
           />
         </div>
       </div>
 
       {/* Tree scroll viewport */}
-      <div className="flex-1 overflow-y-auto p-2 custom-scrollbar bg-[#1b1e24] scrollbar-thin">
+      <div className="flex-1 overflow-y-auto p-2 custom-scrollbar bg-transparent scrollbar-thin">
         {filteredTree.length === 0 ? (
           <div className="text-center py-8 text-[10px] font-mono text-slate-500 leading-normal">
             {allCues.length === 0 
@@ -338,7 +323,7 @@ export default function CueViewer({
       </div>
 
       {/* Actionable tutorial help line */}
-      <div className="p-2 border-t border-white/5 bg-[#17191e] flex items-center justify-between font-mono text-[8.5px] text-slate-500 shrink-0">
+      <div className="p-2 border-t border-white/5 bg-[#17191e]/50 flex items-center justify-between font-mono text-[8.5px] text-slate-500 shrink-0">
         <span className="truncate">👁 Toggle eye icon to filter. Click name to Pan.</span>
       </div>
     </div>

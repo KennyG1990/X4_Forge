@@ -1538,21 +1538,21 @@ export default function Canvas({
               const isSelected = selectedNode?.id === node.id;
               const isGlowActive = activeNodes.includes(node.id);
               
-              let borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
-              let headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
+              let borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
+              let headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
 
               if (node.type === 'cue') {
-                borderClasses = 'border-purple-500/30 bg-[#0f1118]';
-                headingClasses = 'bg-purple-500/10 text-purple-300 border-purple-500/20';
+                borderClasses = 'border-purple-500/20 bg-[#0f1118]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'event') {
-                borderClasses = 'border-amber-500/30 bg-[#121114]';
-                headingClasses = 'bg-[#451a03]/50 text-amber-300 border-amber-500/20';
+                borderClasses = 'border-amber-500/20 bg-[#121114]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'condition') {
-                borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
-                headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
+                borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'action') {
-                borderClasses = 'border-emerald-500/30 bg-[#0c1310]';
-                headingClasses = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+                borderClasses = 'border-emerald-500/20 bg-[#0c1310]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               }
 
               const isLowDetail = zoom < 0.45;
@@ -1652,13 +1652,28 @@ export default function Canvas({
                       isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
                     } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
                   >
+                    {/* Top-accent Gradient Line */}
+                    <div className={`h-[3px] rounded-t-lg w-full bg-gradient-to-r ${
+                      node.type === 'cue' 
+                        ? 'from-purple-500 to-fuchsia-500' 
+                        : node.type === 'event' 
+                        ? 'from-amber-500 to-orange-500' 
+                        : node.type === 'condition' 
+                        ? 'from-cyan-500 to-blue-500' 
+                        : 'from-emerald-500 to-teal-500'
+                    }`} />
+
                     {/* Visual node title & close handle button */}
-                    <div className={`p-2.5 rounded-t-lg border-b flex items-center justify-between cursor-grab active:cursor-grabbing ${headingClasses}`}>
+                    <div className="p-2 flex items-center justify-between border-b border-white/[0.04] cursor-grab active:cursor-grabbing bg-white/[0.01]">
                       <div className="flex items-center gap-1.5 truncate">
                         {simActive && isGlowActive && (
                           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
                         )}
-                        <span className="font-semibold text-xs tracking-tight truncate w-32">{node.label}</span>
+                        {node.type === 'cue' && <Compass className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
+                        {node.type === 'event' && <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400/20 shrink-0" />}
+                        {node.type === 'condition' && <Filter className="w-3.5 h-3.5 text-cyan-400 shrink-0" />}
+                        {node.type === 'action' && <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20 shrink-0" />}
+                        <span className="font-semibold text-[11px] tracking-tight truncate w-32 text-slate-100">{node.label}</span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         {/* Sticky Note Toggle Icon */}
@@ -1707,48 +1722,48 @@ export default function Canvas({
                     </div>
 
                     {/* Properties Inspector Preview */}
-                    <div className="p-2.5 bg-black/45 text-slate-400 space-y-1 select-none border-b border-white/[0.04]">
+                    <div className="p-2 bg-[#090b0f] text-slate-400 space-y-1 select-none border-b border-white/[0.04] font-mono text-[9px] rounded-md m-1.5">
                       {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
-                        <div key={key} className="flex justify-between">
-                          <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">{key}:</span>
-                          <span className="text-slate-300 truncate max-w-[140px] text-right font-medium" title={String(val)}>
+                        <div key={key} className="flex justify-between leading-normal">
+                          <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">{key}:</span>
+                          <span className="text-slate-300 truncate max-w-[130px] text-right font-medium" title={String(val)}>
                             {String(val)}
                           </span>
                         </div>
                       ))}
                       {Object.keys(node.properties).length === 0 && (
-                        <div className="text-slate-500 italic text-[10px] text-center">No properties configured</div>
+                        <div className="text-slate-650 italic text-[9px] text-center">No properties configured</div>
                       )}
                     </div>
 
                     {/* Ports list row layouts */}
-                    <div className="p-2 space-y-2 bg-black/15 rounded-b-lg">
+                    <div className="p-2 space-y-1.5 bg-black/10 rounded-b-lg">
                       {/* Event Inputs/Condition locks list */}
                       {(node.inputs || []).map((port) => (
                         <div key={port.id} className="flex items-center gap-2">
                            <button
                             onClick={(e) => handlePortClick(node.id, port, e)}
-                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                            className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
                               linking?.nodeId === node.id && linking?.portId === port.id 
                                 ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                                : 'bg-[#10b981]/20 hover:bg-[#10b981]/60 border-[#10b981]/50'
+                                : 'bg-[#10b981]/15 hover:bg-[#10b981]/50 border-[#10b981]/40'
                             }`}
                             title={`Connector terminal: ${port.name}`}
                           />
-                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                          <span className="text-[9.5px] text-slate-450 uppercase font-bold tracking-wider">{port.name}</span>
                         </div>
                       ))}
 
                       {/* Command outputs target lists */}
                       {(node.outputs || []).map((port) => (
                         <div key={port.id} className="flex items-center justify-end gap-2 text-right w-full">
-                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                          <span className="text-[9.5px] text-slate-450 uppercase font-bold tracking-wider">{port.name}</span>
                           <button
                             onClick={(e) => handlePortClick(node.id, port, e)}
-                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                            className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
                               linking?.nodeId === node.id && linking?.portId === port.id 
                                 ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                                : 'bg-cyan-500/20 hover:bg-cyan-500/60 border-cyan-500/50'
+                                : 'bg-cyan-500/15 hover:bg-cyan-500/50 border-cyan-500/40'
                             }`}
                             title={`Connector terminal: ${port.name}`}
                           />

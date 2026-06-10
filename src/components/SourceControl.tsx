@@ -1098,10 +1098,10 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
   }, [localHistory]);
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0c10] select-none text-slate-300 font-sans" id="source_control_system">
+    <div className="flex flex-col h-full bg-transparent select-none text-slate-300 font-sans" id="source_control_system">
       
       {/* Tab Nav Controls */}
-      <div className="flex border-b border-white/5 bg-[#0e121a]">
+      <div className="flex border-b border-white/5 bg-transparent">
         <button
           onClick={() => setActiveTab2('sourceControl')}
           className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
@@ -1249,7 +1249,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                 {workingChanges.map(change => (
                   <div 
                     key={change.path}
-                    className="flex items-center justify-between p-2 rounded bg-[#0e121a] hover:bg-[#121824] border border-white/5 group transition-all"
+                    className="flex items-center justify-between p-2 rounded bg-black/20 hover:bg-white/[0.02] border border-white/5 group transition-all"
                   >
                     <div className="flex items-center gap-1.5 min-w-0">
                       <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -1301,8 +1301,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           </div>
 
           {/* Staging actions and Commit Input */}
-          <div className="p-3 bg-[#0a0c10] border border-white/5 rounded-lg space-y-3">
-            <label className="text-[9px] font-mono font-bold uppercase text-slate-450 block tracking-wider">Commit drafting desk</label>
+          <div className="p-3 bg-black/30 border border-white/5 rounded-lg space-y-3">
+            <label className="text-[9px] font-mono font-bold uppercase text-slate-400 block tracking-wider">Commit drafting desk</label>
             
             <div className="relative">
               <textarea
@@ -1311,7 +1311,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                 placeholder="Message (Ctrl+Enter to commit...)"
                 rows={2}
                 disabled={generatingMessage}
-                className="w-full bg-[#07090d] border border-white/10 rounded-md p-2 text-[10.5px] font-mono text-white placeholder-slate-650 focus:outline-none focus:border-cyan-500 resize-none max-h-16 disabled:opacity-50"
+                className="w-full bg-[#07090d] border border-white/10 rounded-md p-2 text-[10.5px] font-mono text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 resize-none max-h-16 disabled:opacity-50"
                 onKeyDown={e => {
                   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
@@ -1524,7 +1524,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           )}
 
           {/* Create a brand-new repo from the active mod */}
-          <div className="bg-[#0e121a] p-3 rounded-lg border border-emerald-500/15 space-y-2">
+          <div className="bg-black/20 p-3 rounded-lg border border-emerald-500/15 space-y-2">
             <h3 className="text-emerald-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
               <Plus className="w-3.5 h-3.5 text-emerald-400" />
               CREATE REPO FROM THIS MOD
@@ -1545,7 +1545,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           </div>
 
           {/* Loader Panel (LOAD) */}
-          <div className="bg-[#0e121a] p-3 rounded-lg border border-cyan-500/15 space-y-3">
+          <div className="bg-black/20 p-3 rounded-lg border border-cyan-500/15 space-y-3">
             <h3 className="text-cyan-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
               <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
               LOAD SCRIPT FROM GITHUB

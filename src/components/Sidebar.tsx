@@ -46,6 +46,7 @@ import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
 
 interface SidebarProps {
+  width?: number;
   activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates';
   setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates') => void;
   workspace: ModWorkspace;
@@ -81,6 +82,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({
+  width,
   activeTab,
   setActiveTab,
   workspace,
@@ -326,97 +328,149 @@ export default function Sidebar({
   };
 
   return (
-    <div id="side_panel" className="w-80 border-r border-white/5 bg-[#12141a] flex flex-col h-full text-slate-300">
-      {/* Category Tabs */}
-      <div className="flex border-b border-white/10 bg-[#161920]/40">
+    <div
+      id="side_panel"
+      style={{ width }}
+      className="border-r border-white/5 bg-[#12141a] flex h-full text-slate-300 min-w-0"
+    >
+      {/* Left Icon Strip */}
+      <div className="w-[52px] bg-[#0a0c10] border-r border-white/5 flex flex-col items-center py-4 gap-2.5 shrink-0">
         <button
           id="tab_script"
           onClick={() => setActiveTab('script')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'script'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
+          title="MD Nodes"
         >
-          <Layers className="w-4 h-4" />
-          MD NODES
+          <Layers className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">NODES</span>
         </button>
+
         <button
           id="tab_cues"
           onClick={() => setActiveTab('cues')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'cues'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'text-purple-400 bg-purple-950/20 border-l-2 border-purple-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
+          title="Cues"
         >
-          <Compass className="w-3.5 h-3.5" />
-          CUES
+          <Compass className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">CUES</span>
         </button>
+
         <button
           id="tab_ui"
           onClick={() => setActiveTab('ui')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'ui'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
+          title="Menu Widgets"
         >
-          <Layout className="w-4 h-4" />
-          MENU WIDGETS
+          <Layout className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">WIDGETS</span>
         </button>
+
         <button
           id="tab_config"
           onClick={() => setActiveTab('config')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tight border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'config'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
+          title="Mod Meta"
         >
-          <Settings className="w-4 h-4" />
-          MOD META
+          <Settings className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">META</span>
         </button>
+
         <button
           id="tab_filesystem"
           onClick={() => setActiveTab('filesystem')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'filesystem'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
+          title="Filesystem"
         >
-          <FolderGit2 className="w-3.5 h-3.5" />
-          FILESYSTEM
+          <FolderGit2 className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">FILES</span>
         </button>
+
         <button
           id="tab_git"
           onClick={() => setActiveTab('git')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'git'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
+          title="Source Control"
         >
-          <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
-          SOURCE
+          <GitBranch className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">SOURCE</span>
         </button>
+
         <button
           id="tab_templates"
           onClick={() => setActiveTab('templates')}
-          className={`flex-1 py-3 text-[10px] font-mono font-bold tracking-tighter border-b-2 flex flex-col items-center gap-1 transition-all cursor-pointer ${
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
             activeTab === 'templates'
-              ? 'border-cyan-500 text-white bg-cyan-600/10'
-              : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
+          title="Templates"
         >
-          <Library className="w-3.5 h-3.5 text-cyan-400" />
-          TEMPLATES
+          <Library className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">TEMPLATES</span>
         </button>
       </div>
 
-      {/* Main Content Pane */}
-      <div className={`flex-1 overflow-y-auto ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' ? 'p-0' : 'p-4 space-y-4'}`}>
+      {/* Right Content Column */}
+      <div className="flex-1 flex flex-col min-w-0 h-full bg-[#12141a]">
+        
+        {/* Sleek Tab Header */}
+        <div className="px-3.5 py-3 border-b border-white/5 bg-[#161920]/30 shrink-0 flex items-center justify-between font-mono">
+          <div>
+            <div className="text-[11px] font-bold text-slate-105 uppercase tracking-wider flex items-center gap-1.5 leading-none">
+              {activeTab === 'script' && <Layers className="w-3.5 h-3.5 text-cyan-400" />}
+              {activeTab === 'cues' && <Compass className="w-3.5 h-3.5 text-purple-400" />}
+              {activeTab === 'ui' && <Layout className="w-3.5 h-3.5 text-cyan-400" />}
+              {activeTab === 'config' && <Settings className="w-3.5 h-3.5 text-cyan-400" />}
+              {activeTab === 'filesystem' && <FolderGit2 className="w-3.5 h-3.5 text-cyan-400" />}
+              {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-cyan-400" />}
+              {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-cyan-400" />}
+              
+              {activeTab === 'script' && 'Node Toolbox'}
+              {activeTab === 'cues' && 'Cue Hierarchy'}
+              {activeTab === 'ui' && 'UI Widgets'}
+              {activeTab === 'config' && 'Mod Config'}
+              {activeTab === 'filesystem' && 'Filesystem'}
+              {activeTab === 'git' && 'Source Control'}
+              {activeTab === 'templates' && 'Blueprints'}
+            </div>
+            <div className="text-[9px] text-slate-500 font-sans mt-0.5 leading-none">
+              {activeTab === 'script' && 'Create visual logic nodes'}
+              {activeTab === 'cues' && 'Navigate Mission Director cues'}
+              {activeTab === 'ui' && 'HUD widgets & Lua overlays'}
+              {activeTab === 'config' && 'Edit extension settings'}
+              {activeTab === 'filesystem' && 'Workspace loose files list'}
+              {activeTab === 'git' && 'Staged changes & remotes'}
+              {activeTab === 'templates' && 'Manage reusable subgraphs'}
+            </div>
+          </div>
+        </div>
+
+        {/* Main Content Pane */}
+        <div className={`flex-1 overflow-y-auto min-w-0 min-h-0 ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' ? 'p-0' : 'p-3 space-y-3'}`}>
         {activeTab === 'cues' && (
           <CueViewer
             workspace={workspace}
@@ -1447,6 +1501,7 @@ export default function Sidebar({
       <div className="p-3 border-t border-white/5 bg-black/45 text-center text-[10px] font-mono text-slate-500">
         Engine Context: Egosoft MD 4.5
       </div>
-    </div>
+    </div> {/* Close Right Content Column */}
+  </div> {/* Close side_panel */}
   );
 }
