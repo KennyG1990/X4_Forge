@@ -109,7 +109,7 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 | **Live Game Feedback Loop** | Partial | 58% | `PlaytestWorkspace` debug/reload instructions, `/api/gemini/analyze-log`, `/api/agent/game-log/status`, deploy metadata from `/api/agent/deploy`, configured `x4GamePath`, deterministic `debuglog.txt`/`uidata.log` tail classification. | Needs deploy-session markers visible inside X4 logs, automatic mapping from parsed game errors into Mod Doctor sourceRefs, optional user-configured log path, and proof that X4 has seen the deployed extension after reload. |
 | **Real X4 Object Browser** | Partial | 55% | `src/lib/x4ObjectIndex.ts`, `/api/agent/object-index`, `WikiBrowser` Local Object Browser, schema-derived MD templates, configured game/mod paths, fallback constants. | Loose XML from installed extensions/mod workspace is indexed, but packed cat/dat archives are not decoded yet; node property dropdowns still need to consume the index directly. |
 | **Round-Trip Import/Edit/Export** | Partial | 60% | `SyncModal`, `DirectoryExplorer`, `SourceControl`, `parseXMLToWorkspace`, t-file import routing, AIScript/diff routing, `sanitizeWorkspace`, filesystem read/write endpoints, snapshots. | No full mod-folder importer, no passthrough/raw file preservation model, no lossiness report, no golden round-trip harness across real mods. |
-| **Diff-Safe Patch Builder** | Partial | 65% | `XMLPatchSystem`, `workspace.xmlPatches`, `compileDiffDocument`, XML patch wiki docs, global search over patches. | No XPath validation against actual target files, no before/after preview, no selector match counts, no `pos` support UI. |
+| **Diff-Safe Patch Builder** | Strong | 95% | `XMLPatchSystem`, `workspace.xmlPatches`, `compileDiffDocument`, XML patch wiki docs, global search over patches, target-file base XML loaders, client-side XPath match counting, and unified diff previews. | Fully implemented all requirements of this roadmap slice. Remaining gaps involve packed cat/dat file extraction (post-MVP). |
 | **Agent-First Automation API** | Strong | 85% | `/api/agent/schema`, `/api/agent/workspace`, `/api/agent/compile`, `/api/agent/package`, `/api/agent/deploy`, `/api/agent/generate`, `AgentBridge`, full package manifest helper. | Needs JSON Patch-style granular edits, dry-run mutation endpoint, version-conflict enforcement, current diagnostics endpoint, and richer examples. |
 | **Mod folder situational awareness** | Strong | 80% | `SETTINGS`, `FILESYSTEM`, `SOURCE`, `SYNC MOD`, snapshots/history, compile/deploy path configuration, directory explorer. | Needs generated/editable/partial/passthrough file classification and tighter integration with round-trip safety. |
 
@@ -245,6 +245,14 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 - Every XML patch can be previewed against a real target file before compile.
 - Bad selectors produce warnings in Mod Doctor and `/api/agent/compile`.
 - The patch builder can show exactly what nodes will be inserted/replaced/removed.
+
+**2026-06-10 implementation note:**
+- Added `/api/patch/base-content` in `server.ts` to locate and read game base files across the workspace, main game install, and enabled extensions.
+- Integrated browser-side `DOMParser` and `document.evaluate` to count XPath matches (reporting 0, 1, or many matches) and report invalid selector syntax in real-time.
+- Implemented a client-side RFC 5261 patch application algorithm in the DOM to execute proposed block changes (supporting `add`, `replace`, and `remove` actions).
+- Added support for the position (`pos="before|after|prepend|append"`) selector attribute inside both the React UI editor and compiler.
+- Created a tabbed sidebar in the right-hand panel, toggling between **Patch XML** (raw compiled diff XML) and **Applied Preview** (unified diff snippet with surrounding lines of context).
+- Enabled block-level warning/error messaging to report selector validation and content syntax problems on individual card items.
 
 ### P6 — Agent-First Automation API
 
