@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Folder, 
   Terminal, 
@@ -36,7 +36,33 @@ interface LogAnalysisResult {
   issues: LogIssue[];
 }
 
+interface GameLogIssue {
+  severity: 'error' | 'warning';
+  lineNumber: number;
+  text: string;
+  matchesActiveMod: boolean;
+}
+
+interface GameLogStatus {
+  status: 'no_log' | 'stale' | 'clean' | 'warnings' | 'errors' | 'error';
+  modId: string;
+  summary?: string;
+  selectedLogPath?: string;
+  logUpdatedAt?: string;
+  logBytes?: number;
+  counts?: {
+    allIssues: number;
+    activeIssues: number;
+    activeErrors: number;
+    activeWarnings: number;
+  };
+  issues?: GameLogIssue[];
+  recentGlobalIssues?: GameLogIssue[];
+  error?: string;
+}
+
 interface PlaytestWorkspaceProps {
+  activeModId: string;
   modWorkspacePath: string;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncErrorMsg: string;
@@ -56,6 +82,7 @@ interface PlaytestWorkspaceProps {
 }
 
 export default function PlaytestWorkspace({
+  activeModId,
   modWorkspacePath,
   syncStatus,
   syncErrorMsg,
@@ -73,6 +100,41 @@ export default function PlaytestWorkspace({
   handleLogFileChange,
   handleApplyAutoFix
 }: PlaytestWorkspaceProps) {
+  const [gameLogStatus, setGameLogStatus] = useState<GameLogStatus | null>(null);
+  const [gameLogLoading, setGameLogLoading] = useState<boolean>(false);
+  const [gameLogError, setGameLogError] = useState<string>('');
+
+  const refreshGameLogStatus = async () => {
+    setGameLogLoading(true);
+    setGameLogError('');
+    try {
+      const response = await fetch(`/api/agent/game-log/status?modId=${encodeURIComponent(activeModId)}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to read X4 debug log status.');
+      }
+      setGameLogStatus(data);
+    } catch (err: any) {
+      setGameLogError(err.message || 'Failed to read X4 debug log status.');
+    } finally {
+      setGameLogLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshGameLogStatus();
+    const timer = window.setInterval(refreshGameLogStatus, 15000);
+    return () => window.clearInterval(timer);
+  }, [activeModId]);
+
+  const gameLogTone = gameLogStatus?.status === 'errors'
+    ? 'border-red-500/30 bg-red-500/5 text-red-300'
+    : gameLogStatus?.status === 'warnings'
+      ? 'border-amber-500/30 bg-amber-500/5 text-amber-300'
+      : gameLogStatus?.status === 'clean'
+        ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300'
+        : 'border-white/10 bg-slate-900/35 text-slate-300';
+
   return (
     <div className="p-4 space-y-5 font-sans select-text">
       
@@ -178,6 +240,46 @@ export default function PlaytestWorkspace({
           <p className="text-[11px] text-slate-400 leading-normal">
             Paste lines from <code className="text-cyan-400">debug.log</code>, or load it with the picker below to analyze MD engine issues.
           </p>
+        </div>
+
+        <div className={`rounded-lg border p-3 space-y-2 ${gameLogTone}`}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-0.5 min-w-0">
+              <div className="font-mono text-[9px] uppercase font-black tracking-wider text-white">
+                Live X4 Log Status: {gameLogStatus?.status || 'checking'}
+              </div>
+              <p className="text-[10px] leading-relaxed text-slate-300">
+                {gameLogError || gameLogStatus?.summary || 'Reading recent debuglog.txt output...'}
+              </p>
+            </div>
+            <button
+              onClick={refreshGameLogStatus}
+              disabled={gameLogLoading}
+              className="px-2 py-1 bg-black/30 border border-white/10 rounded font-mono text-[9px] text-slate-200 hover:text-white disabled:opacity-50 flex items-center gap-1 shrink-0 cursor-pointer"
+            >
+              <RefreshCw className={`w-3 h-3 ${gameLogLoading ? 'animate-spin' : ''}`} />
+              REFRESH
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[9px] font-mono text-slate-400">
+            <span className="truncate" title={activeModId}>MOD: {activeModId}</span>
+            <span className="truncate" title={gameLogStatus?.selectedLogPath || ''}>
+              LOG: {gameLogStatus?.selectedLogPath || 'not found'}
+            </span>
+            {gameLogStatus?.logUpdatedAt && <span className="truncate">UPDATED: {new Date(gameLogStatus.logUpdatedAt).toLocaleTimeString()}</span>}
+            {gameLogStatus?.counts && <span>ACTIVE ISSUES: {gameLogStatus.counts.activeIssues}</span>}
+          </div>
+
+          {gameLogStatus?.issues && gameLogStatus.issues.length > 0 && (
+            <div className="space-y-1 max-h-28 overflow-y-auto scrollbar-thin">
+              {gameLogStatus.issues.slice(-3).map((issue, index) => (
+                <pre key={`${issue.lineNumber}-${index}`} className="whitespace-pre-wrap rounded bg-black/35 border border-white/5 p-1.5 text-[9px] leading-tight text-slate-300 font-mono">
+                  [{issue.severity}] {issue.text}
+                </pre>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* LOG TEXTAREA BUFFER */}

@@ -1295,6 +1295,14 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       ...xp,
       includeInBuild: typeof xp.includeInBuild === 'boolean' ? xp.includeInBuild : true
     })),
+    compileSettings: {
+      md: typeof ws.compileSettings?.md === 'boolean' ? ws.compileSettings.md : true,
+      ui: typeof ws.compileSettings?.ui === 'boolean' ? ws.compileSettings.ui : true,
+      ai: typeof ws.compileSettings?.ai === 'boolean' ? ws.compileSettings.ai : true,
+      library: typeof ws.compileSettings?.library === 'boolean' ? ws.compileSettings.library : true,
+      translations: typeof ws.compileSettings?.translations === 'boolean' ? ws.compileSettings.translations : true,
+      patches: typeof ws.compileSettings?.patches === 'boolean' ? ws.compileSettings.patches : true
+    },
     templates: (Array.isArray(ws.templates) ? ws.templates : []).map((tNode: any) => ({
       ...tNode,
       includeInBuild: false // Templates must remain non-compilable by definition!

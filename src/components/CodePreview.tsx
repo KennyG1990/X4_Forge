@@ -94,6 +94,17 @@ interface LogAnalysisResult {
   issues: LogIssue[];
 }
 
+type PackageDiagnostic = XMLDiagnostic & {
+  code?: string;
+  domain?: string;
+  filePath?: string;
+  sourceRef?: {
+    kind: string;
+    id?: string;
+    label?: string;
+  };
+};
+
 export default function CodePreview({ 
   workspace, 
   setWorkspace, 
@@ -109,7 +120,8 @@ export default function CodePreview({
   const [codeActiveTab, setCodeActiveTab] = useState<'md' | 'ui' | 'node' | 'file'>('md');
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
   const [copied, setCopied] = useState<boolean>(false);
-  const [diagnostics, setDiagnostics] = useState<XMLDiagnostic[]>([]);
+  const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
+  const [diagnosticSource, setDiagnosticSource] = useState<'package' | 'local' | 'checking'>('local');
   
   // Cognitive Analyzer states
   const [analysisResult, setAnalysisResult] = useState<ScriptAnalysis | null>(null);
@@ -173,9 +185,16 @@ export default function CodePreview({
     description: workspace.description,
     author: workspace.author,
     version: workspace.version,
-    nodes: workspace.nodes.map(n => ({ id: n.id, type: n.type, label: n.label, xmlTag: n.xmlTag, properties: n.properties })),
+    compileSettings: workspace.compileSettings,
+    nodes: workspace.nodes.map(n => ({ id: n.id, type: n.type, label: n.label, xmlTag: n.xmlTag, properties: n.properties, includeInBuild: n.includeInBuild })),
     links: workspace.links,
-    uiWidgets: workspace.uiWidgets.map(w => ({ id: w.id, type: w.type, label: w.label, properties: w.properties }))
+    uiWidgets: workspace.uiWidgets.map(w => ({ id: w.id, type: w.type, label: w.label, properties: w.properties, w: w.w, h: w.h, includeInBuild: w.includeInBuild })),
+    uiTheme: workspace.uiTheme,
+    aiScripts: workspace.aiScripts,
+    wares: workspace.wares,
+    jobs: workspace.jobs,
+    tFiles: workspace.tFiles,
+    xmlPatches: workspace.xmlPatches
   });
 
   const isAnalysisStale = analysisResult !== null && lastAnalyzedWorkspace !== workspaceSerialized;
@@ -183,11 +202,38 @@ export default function CodePreview({
   // Check if File System Access API is supported
   const isFileSystemAccessSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
-  // Run diagnostics validator updates
+  // Run package-wide Mod Doctor diagnostics via the same API used by external agents.
   useEffect(() => {
-    const reports = validateModWorkspace(workspace, mdCode);
-    setDiagnostics(reports);
-  }, [workspace, mdCode]);
+    let cancelled = false;
+    const localReports = validateModWorkspace(workspace, mdCode);
+    setDiagnosticSource('checking');
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/agent/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace })
+        });
+        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[] }>(response, 'Package Mod Doctor check failed.');
+        if (!cancelled) {
+          setDiagnostics(data.diagnostics || []);
+          setDiagnosticSource('package');
+        }
+      } catch (err) {
+        console.warn('Package Mod Doctor unavailable; falling back to local MD diagnostics:', err);
+        if (!cancelled) {
+          setDiagnostics(localReports);
+          setDiagnosticSource('local');
+        }
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [workspaceSerialized, mdCode]);
 
   // Handle automatic synchronization to folder on workspace edits
   useEffect(() => {
@@ -637,9 +683,12 @@ export default function CodePreview({
           <div className="flex items-center justify-between border-b border-white/5 pb-1.5 select-none font-mono">
             <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[10px]">
               <Terminal className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-              EGOSOFT SCHEMA XML VALIDATOR (DIAGNOSTICS)
+              PACKAGE MOD DOCTOR (DIAGNOSTICS)
             </div>
             <div className="flex items-center gap-2 text-[9px] font-bold">
+              <span className="flex items-center gap-1 text-slate-300 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                {diagnosticSource === 'checking' ? 'CHECKING' : diagnosticSource === 'package' ? 'API' : 'LOCAL'} 
+              </span>
               <span className="flex items-center gap-1 text-slate-355 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20">
                 <span className="w-1.5 h-1.5 rounded-full bg-red-500 block" /> {errors.length} Errors
               </span>
@@ -652,7 +701,7 @@ export default function CodePreview({
           {diagnostics.length === 0 ? (
             <div className="text-emerald-400/90 text-[10px] leading-normal flex items-center gap-2 bg-emerald-500/5 p-2 rounded border border-emerald-500/10 font-sans font-medium">
               <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>No syntax warning flags detected. Your visual coordinates match strict Schema expectations!</span>
+              <span>No package warning flags detected across generated mod files.</span>
             </div>
           ) : (
             <div className="space-y-1.5 font-sans">
@@ -666,9 +715,17 @@ export default function CodePreview({
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
                     <div>
                       <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] mb-0.5">
-                        [{diag.severity}] ID: {diag.category.toUpperCase()}
+                        [{diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
                       </span>
+                      {diag.filePath && (
+                        <span className="font-mono text-[8px] text-slate-300 block mb-0.5">{diag.filePath}</span>
+                      )}
                       {diag.message}
+                      {diag.sourceRef && (
+                        <span className="font-mono text-[8px] text-slate-400 block mt-0.5">
+                          SOURCE: {diag.sourceRef.kind}{diag.sourceRef.label ? ` / ${diag.sourceRef.label}` : ''}{diag.sourceRef.id ? ` / ${diag.sourceRef.id}` : ''}
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
@@ -795,6 +852,7 @@ export default function CodePreview({
             />
           ) : (
             <PlaytestWorkspace
+              activeModId={toSafeModId(workspace.name)}
               modWorkspacePath={modWorkspacePath}
               syncStatus={syncStatus}
               syncErrorMsg={syncErrorMsg}

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, 
   Book, 
@@ -164,13 +164,34 @@ interface WikiBrowserProps {
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
 }
 
+interface X4IndexedObject {
+  id: string;
+  name: string;
+  kind: 'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'aiscript' | 'md_element' | 'macro';
+  sourceFile: string;
+  detail?: string;
+}
+
+interface X4ObjectIndexResponse {
+  generatedAt: string;
+  roots: string[];
+  scannedFiles: number;
+  skippedFiles: number;
+  truncated: boolean;
+  counts: Record<string, number>;
+  items: X4IndexedObject[];
+}
+
 export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspace }: WikiBrowserProps) {
   const [activeTab, setActiveTab] = useState<'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui' | 'reference'>('mdscript');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
   // Reference search state
   const [refSearch, setRefSearch] = useState<string>('');
-  const [refType, setRefType] = useState<'factions' | 'ships' | 'stations' | 'sounds'>('ships');
+  const [refType, setRefType] = useState<'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'aiscript' | 'md_element' | 'macro'>('ship');
+  const [objectIndex, setObjectIndex] = useState<X4ObjectIndexResponse | null>(null);
+  const [objectIndexLoading, setObjectIndexLoading] = useState<boolean>(false);
+  const [objectIndexError, setObjectIndexError] = useState<string>('');
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -204,16 +225,56 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
     window.dispatchEvent(event);
   };
 
+  const loadObjectIndex = async () => {
+    setObjectIndexLoading(true);
+    setObjectIndexError('');
+    try {
+      const params = new URLSearchParams({
+        kind: refType,
+        q: refSearch,
+        limit: '500'
+      });
+      const response = await fetch(`/api/agent/object-index?${params.toString()}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load local X4 object index.');
+      }
+      setObjectIndex(data);
+    } catch (err: any) {
+      setObjectIndexError(err.message || 'Failed to load local X4 object index.');
+      setObjectIndex(null);
+    } finally {
+      setObjectIndexLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'reference') return;
+    const timer = window.setTimeout(loadObjectIndex, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, refType, refSearch]);
+
   // Filter reference constants
   const filteredReferences = useMemo(() => {
-    let list: Array<{ id: string; name: string; desc?: string }> = [];
-    if (refType === 'factions') {
+    let list: Array<{ id: string; name: string; desc?: string; sourceFile?: string }> = [];
+
+    if (objectIndex?.items?.length) {
+      list = objectIndex.items.map(item => ({
+        id: item.id,
+        name: item.name,
+        desc: `${item.kind}${item.detail ? ` - ${item.detail}` : ''}`,
+        sourceFile: item.sourceFile
+      }));
+      return list;
+    }
+
+    if (refType === 'faction') {
       list = X4_FACTIONS.map(f => ({ 
         id: `faction.${f}`, 
         name: f.toUpperCase(), 
         desc: "Faction Code Key" 
       }));
-    } else if (refType === 'ships') {
+    } else if (refType === 'ship') {
       list = X4_SHIP_MACROS.map(s => {
         const parts = s.split(' ');
         const id = parts[0];
@@ -224,7 +285,7 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
           desc: "Ship Component Design Macro" 
         };
       });
-    } else if (refType === 'stations') {
+    } else if (refType === 'station') {
       list = X4_STATION_MACROS.map(st => {
         const parts = st.split(' ');
         const id = parts[0];
@@ -235,7 +296,7 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
           desc: "Modular Station Layout Macro" 
         };
       });
-    } else if (refType === 'sounds') {
+    } else if (refType === 'sound') {
       list = X4_SOUND_EFFECTS.map(sn => ({ 
         id: `sound.${sn}`, 
         name: sn.replace(/_/g, ' ').toUpperCase(), 
@@ -248,7 +309,7 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
       item.name.toLowerCase().includes(refSearch.toLowerCase()) ||
       (item.desc && item.desc.toLowerCase().includes(refSearch.toLowerCase()))
     );
-  }, [refType, refSearch]);
+  }, [refType, refSearch, objectIndex]);
 
   return (
     <div id="wiki-browser-panel" className="flex flex-col h-full bg-[#0d1017] text-slate-200">
@@ -325,7 +386,7 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            Wares & Sounds Lookup
+            Local Object Browser
           </button>
         </div>
 
@@ -354,51 +415,93 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
             {/* Left selector sidebar: Choose factions / ships / stations / sounds */}
             <div className="w-52 bg-[#090b11] border-r border-white/5 p-3 flex flex-col gap-1.5 shrink-0 justify-between">
               <div className="flex flex-col gap-1 font-mono text-[10px]">
-                <span className="text-[9px] text-slate-500 uppercase font-black px-1.5 tracking-wider mb-1">Lookups Categories</span>
+                <span className="text-[9px] text-slate-500 uppercase font-black px-1.5 tracking-wider mb-1">Local Index Categories</span>
                 
                 <button
-                  onClick={() => { setRefType('ships'); setRefSearch(''); }}
+                  onClick={() => { setRefType('ship'); setRefSearch(''); }}
                   className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'ships' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                    refType === 'ship' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
                   }`}
                 >
                   <Compass className="w-3.5 h-3.5" />
-                  Ship Macros ({X4_SHIP_MACROS.length})
+                  Ships ({objectIndex?.counts?.ship ? objectIndex.counts.ship : `${X4_SHIP_MACROS.length} fallback`})
                 </button>
 
                 <button
-                  onClick={() => { setRefType('stations'); setRefSearch(''); }}
+                  onClick={() => { setRefType('station'); setRefSearch(''); }}
                   className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'stations' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                    refType === 'station' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
                   }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
-                  Station Macros ({X4_STATION_MACROS.length})
+                  Stations ({objectIndex?.counts?.station ? objectIndex.counts.station : `${X4_STATION_MACROS.length} fallback`})
                 </button>
 
                 <button
-                  onClick={() => { setRefType('factions'); setRefSearch(''); }}
+                  onClick={() => { setRefType('ware'); setRefSearch(''); }}
                   className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'factions' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                    refType === 'ware' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  Wares ({objectIndex?.counts?.ware ?? 0})
+                </button>
+
+                <button
+                  onClick={() => { setRefType('faction'); setRefSearch(''); }}
+                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
+                    refType === 'faction' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
                   }`}
                 >
                   <Globe className="w-3.5 h-3.5" />
-                  Factions Dictionary ({X4_FACTIONS.length})
+                  Factions ({objectIndex?.counts?.faction ? objectIndex.counts.faction : `${X4_FACTIONS.length} fallback`})
                 </button>
 
                 <button
-                  onClick={() => { setRefType('sounds'); setRefSearch(''); }}
+                  onClick={() => { setRefType('sound'); setRefSearch(''); }}
                   className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'sounds' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                    refType === 'sound' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
                   }`}
                 >
                   <Volume2 className="w-3.5 h-3.5" />
-                  Sound Effects ({X4_SOUND_EFFECTS.length})
+                  Sounds ({objectIndex?.counts?.sound ? objectIndex.counts.sound : `${X4_SOUND_EFFECTS.length} fallback`})
+                </button>
+
+                <button
+                  onClick={() => { setRefType('job'); setRefSearch(''); }}
+                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
+                    refType === 'job' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  Jobs ({objectIndex?.counts?.job ?? 0})
+                </button>
+
+                <button
+                  onClick={() => { setRefType('aiscript'); setRefSearch(''); }}
+                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
+                    refType === 'aiscript' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Scroll className="w-3.5 h-3.5" />
+                  AI Scripts ({objectIndex?.counts?.aiscript ?? 0})
+                </button>
+
+                <button
+                  onClick={() => { setRefType('md_element'); setRefSearch(''); }}
+                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
+                    refType === 'md_element' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  MD Elements ({objectIndex?.counts?.md_element ?? 0})
                 </button>
               </div>
 
               <div id="quick-ref-sidebar-instruction" className="p-2 border border-[#df9825]/10 bg-amber-500/[0.02] rounded text-[10px] leading-relaxed text-slate-500 text-center font-mono">
-                Click copy icons to copy XML schema ID keys directly into code properties.
+                {objectIndex
+                  ? `${objectIndex.scannedFiles} XML files indexed from ${objectIndex.roots.length} root(s).`
+                  : objectIndexError || 'Loading local X4 object index...'}
               </div>
             </div>
 
@@ -417,6 +520,18 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
                     className="w-full bg-[#07090d] border border-white/10 rounded-lg px-2.5 py-1.5 pl-8 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
                     autoFocus
                   />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[9px] font-mono text-slate-500">
+                  <span>
+                    {objectIndexLoading ? 'Indexing local XML...' : objectIndex ? `Generated ${new Date(objectIndex.generatedAt).toLocaleTimeString()}${objectIndex.truncated ? ' - capped' : ''}` : 'Hardcoded fallback active'}
+                  </span>
+                  <button
+                    onClick={loadObjectIndex}
+                    disabled={objectIndexLoading}
+                    className="px-2 py-0.5 border border-white/10 rounded text-slate-300 hover:text-white hover:border-amber-500/40 disabled:opacity-50 cursor-pointer"
+                  >
+                    REFRESH INDEX
+                  </button>
                 </div>
               </div>
 
@@ -438,6 +553,9 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
                           <span className="text-[10px] text-amber-500 font-mono select-all truncate">{ref.id}</span>
                           {ref.desc && (
                             <span className="text-[9px] text-slate-500 font-sans truncate tracking-wider font-semibold uppercase">{ref.desc}</span>
+                          )}
+                          {ref.sourceFile && (
+                            <span className="text-[8px] text-slate-600 font-mono truncate" title={ref.sourceFile}>{ref.sourceFile}</span>
                           )}
                         </div>
                         <button

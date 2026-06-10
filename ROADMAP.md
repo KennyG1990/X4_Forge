@@ -105,9 +105,9 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 
 | Recommendation | Current match | Confidence | Existing surfaces | Remaining gap |
 |---|---:|---:|---|---|
-| **Schema-Aware Mod Doctor** | Partial | 70% | `validateModWorkspace`, `validatePackageReadiness`, schema library loading, MD validation badges, `CodePreview`, `Canvas` diagnostics overlay, `/api/agent/compile`. | Full package/domain validation is missing: aiscripts, wares, jobs, t-files, XML patch selector validation, UI output validation, and sourceRef links back to exact editable items. |
-| **Live Game Feedback Loop** | Early partial | 45% | `PlaytestWorkspace` debug/reload instructions, `/api/gemini/analyze-log`, deploy path through `/api/agent/deploy`, configured `x4GamePath`. | No deterministic `debuglog.txt` tail/status endpoint, no deploy-session markers, no automatic mapping from game log errors back to Studio diagnostics. |
-| **Real X4 Object Browser** | Early partial | 40% | X4 Wiki/Codex tab, schema-derived MD templates, hardcoded `X4_FACTIONS`, `X4_SHIP_MACROS`, `X4_STATION_MACROS`, `X4_SOUND_EFFECTS`, Settings for game/schema paths. | No local game-file index, no DLC/mod-aware object database, no real autocomplete/search for macros/wares/factions/jobs/sounds from the installed game. |
+| **Schema-Aware Mod Doctor** | Partial | 78% | `src/lib/modDoctor.ts`, `validateModWorkspace`, `validatePackageReadiness`, schema library loading, package diagnostics in `CodePreview`, `/api/agent/compile`, `/api/agent/package`, `/api/agent/schema`. | Still needs real XSD validation beyond MD/common, target-file XPath match counts, diagnostic grouping/navigation, and stronger sourceRef links back into every editor tab. |
+| **Live Game Feedback Loop** | Partial | 58% | `PlaytestWorkspace` debug/reload instructions, `/api/gemini/analyze-log`, `/api/agent/game-log/status`, deploy metadata from `/api/agent/deploy`, configured `x4GamePath`, deterministic `debuglog.txt`/`uidata.log` tail classification. | Needs deploy-session markers visible inside X4 logs, automatic mapping from parsed game errors into Mod Doctor sourceRefs, optional user-configured log path, and proof that X4 has seen the deployed extension after reload. |
+| **Real X4 Object Browser** | Partial | 55% | `src/lib/x4ObjectIndex.ts`, `/api/agent/object-index`, `WikiBrowser` Local Object Browser, schema-derived MD templates, configured game/mod paths, fallback constants. | Loose XML from installed extensions/mod workspace is indexed, but packed cat/dat archives are not decoded yet; node property dropdowns still need to consume the index directly. |
 | **Round-Trip Import/Edit/Export** | Partial | 60% | `SyncModal`, `DirectoryExplorer`, `SourceControl`, `parseXMLToWorkspace`, t-file import routing, AIScript/diff routing, `sanitizeWorkspace`, filesystem read/write endpoints, snapshots. | No full mod-folder importer, no passthrough/raw file preservation model, no lossiness report, no golden round-trip harness across real mods. |
 | **Diff-Safe Patch Builder** | Partial | 65% | `XMLPatchSystem`, `workspace.xmlPatches`, `compileDiffDocument`, XML patch wiki docs, global search over patches. | No XPath validation against actual target files, no before/after preview, no selector match counts, no `pos` support UI. |
 | **Agent-First Automation API** | Strong | 85% | `/api/agent/schema`, `/api/agent/workspace`, `/api/agent/compile`, `/api/agent/package`, `/api/agent/deploy`, `/api/agent/generate`, `AgentBridge`, full package manifest helper. | Needs JSON Patch-style granular edits, dry-run mutation endpoint, version-conflict enforcement, current diagnostics endpoint, and richer examples. |
@@ -137,6 +137,11 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 - A generated package with intentionally bad MD, bad AI script, bad XML patch selector, and bad metadata produces actionable diagnostics in the UI and via `/api/agent/compile`.
 - The app no longer reports "success" without also showing diagnostic counts by severity.
 
+**2026-06-10 implementation note:**
+- Added `src/lib/modDoctor.ts` as the shared package diagnostic pass for manifest metadata, MD, UI preview risk, AI scripts, wares, jobs, t-files, XML patches, compile settings, and `includeInBuild` exclusions.
+- `/api/agent/compile` and `/api/agent/package` now return package-wide diagnostics with optional `code`, `domain`, `filePath`, and `sourceRef` metadata.
+- `CodePreview` now labels the panel `PACKAGE MOD DOCTOR (DIAGNOSTICS)`, calls the agent compile API, and shows whether diagnostics came from the API or local fallback.
+
 ### P2 — Live Game Feedback Loop
 
 **User value:** the studio should confirm what X4 actually accepted, not just what the compiler emitted.
@@ -158,6 +163,11 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 **Definition of done:**
 - After deploy, the Studio can show whether X4 mentioned the extension in the latest log window.
 - A known bad generated XML file produces a captured X4 error that links back to a Studio diagnostic.
+
+**2026-06-10 implementation note:**
+- Added `/api/agent/game-log/status?modId=<id>` to locate and tail known `debuglog.txt`/`uidata.log` paths, including the discovered `Documents\Egosoft\X4\<profile>\debuglog.txt` location.
+- `/api/agent/deploy` now records last deploy metadata; log status reports `stale` only when the matching mod was deployed after the selected log changed.
+- `PlaytestWorkspace` now shows a deterministic Live X4 Log Status card with clean/stale/warning/error/no-log classification, selected log path, active issue count, and a manual refresh button.
 - No feature claims automatic `/reloadui` or command injection success until visible game-side evidence proves the input path.
 
 ### P3 — Real X4 Object Browser and Game Index
@@ -182,6 +192,13 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 - Creating a `create_ship` node can select a real ship macro discovered from the user's install.
 - A ware/job/XML patch editor can search real target ids from local game data.
 - The API can answer "what valid ship macros/factions/wares are available in this install?"
+
+**2026-06-10 implementation note:**
+- Added `src/lib/x4ObjectIndex.ts` to scan loose XML roots from configured X4 paths and mod workspace paths.
+- Added `/api/agent/object-index?q=<query>&kind=<kind>&limit=<n>` returning `{roots, scannedFiles, skippedFiles, counts, items}` for ships, stations, wares, factions, sounds, jobs, AI scripts, generic macros, and schema-derived MD elements.
+- Updated `/api/agent/schema` to advertise the object-index endpoint and response shape for external agents.
+- Updated the Wiki/Codex Reference tab into a Local Object Browser with index counts, searchable rows, source-file display, copy buttons, and fallback constants when the local loose-file index has no rows for a category.
+- Verified on the current machine: the loose-file scan indexed 101 XML files from 2 roots, including 78 wares, 357 jobs, 5 AI scripts, 16 generic macros, and 1207 MD schema elements. Ship/station macro rows still rely on fallback constants because this install's ship assets are packed rather than loose XML.
 
 ### P4 — Round-trip Import/Edit/Export
 

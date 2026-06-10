@@ -36,6 +36,8 @@ import {
   compileDiffDocument,
   validatePackageReadiness
 } from "./src/lib/modCompiler";
+import { runModDoctor } from "./src/lib/modDoctor";
+import { buildX4ObjectIndex, filterX4ObjectIndex, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 
 dotenv.config();
@@ -85,10 +87,12 @@ function loadCurrentSchemaLibrary(): SchemaLibrary {
 
 let schemaLibrary: SchemaLibrary = loadCurrentSchemaLibrary();
 let schemaTemplatesByTag = new Map(schemaLibrary.templates.map(template => [template.xmlTag, template]));
+let objectIndexCache: { key: string; builtAt: number; index: X4ObjectIndex } | null = null;
 
 function reloadSchemaLibrary(): SchemaLibrary {
   schemaLibrary = loadCurrentSchemaLibrary();
   schemaTemplatesByTag = new Map(schemaLibrary.templates.map(template => [template.xmlTag, template]));
+  objectIndexCache = null;
   return schemaLibrary;
 }
 
@@ -135,8 +139,32 @@ app.use("/api", authMiddleware);
 
 type CompiledFileManifest = Record<string, string>;
 
+type LastDeployInfo = {
+  modId: string;
+  workspaceName: string;
+  deployedAt: string;
+  stagingPath?: string;
+  deployedPath?: string;
+};
+
+let lastDeployInfo: LastDeployInfo | null = null;
+
+function activeBuildWorkspace(workspaceInput: any): ModWorkspace {
+  const sanitized = sanitizeWorkspace(workspaceInput);
+  return {
+    ...sanitized,
+    nodes: (sanitized.nodes || []).filter(n => n.includeInBuild !== false),
+    uiWidgets: (sanitized.uiWidgets || []).filter(w => w.includeInBuild !== false),
+    aiScripts: (sanitized.aiScripts || []).filter(s => s.includeInBuild !== false),
+    wares: (sanitized.wares || []).filter(w => w.includeInBuild !== false),
+    jobs: (sanitized.jobs || []).filter(j => j.includeInBuild !== false),
+    tFiles: (sanitized.tFiles || []).filter(t => t.includeInBuild !== false),
+    xmlPatches: (sanitized.xmlPatches || []).filter(p => p.includeInBuild !== false)
+  };
+}
+
 function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files: CompiledFileManifest } {
-  const ws = sanitizeWorkspace(workspaceInput);
+  const ws = activeBuildWorkspace(workspaceInput);
   const modId = toSafeModId(ws.name);
   const files: CompiledFileManifest = {};
   const settings = ws.compileSettings || { md: true, ui: true, ai: true, library: true, translations: true, patches: true };
@@ -203,6 +231,181 @@ function summarizeWorkspaceDomains(ws: ModWorkspace) {
     jobs: ws.jobs?.length || 0,
     xmlPatches: ws.xmlPatches?.length || 0
   };
+}
+
+type GameLogIssue = {
+  severity: "error" | "warning";
+  lineNumber: number;
+  text: string;
+  matchesActiveMod: boolean;
+};
+
+function uniqueExistingParentCandidates(paths: string[]): string[] {
+  const seen = new Set<string>();
+  return paths
+    .filter(Boolean)
+    .map(candidate => path.normalize(candidate))
+    .filter(candidate => {
+      const key = candidate.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function findDebugLogCandidates(): string[] {
+  const resolved = resolveXsdConfig();
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const docs = home ? path.join(home, "Documents", "Egosoft", "X4") : "";
+  const candidates = [
+    path.join(process.cwd(), "debuglog.txt"),
+    path.join(process.cwd(), "uidata.log"),
+    resolved.x4GamePath ? path.join(resolved.x4GamePath, "debuglog.txt") : "",
+    resolved.x4GamePath ? path.join(resolved.x4GamePath, "uidata.log") : ""
+  ];
+
+  if (docs && fs.existsSync(docs)) {
+    try {
+      for (const profileName of fs.readdirSync(docs)) {
+        const profilePath = path.join(docs, profileName);
+        if (fs.existsSync(profilePath) && fs.statSync(profilePath).isDirectory()) {
+          candidates.push(path.join(profilePath, "debuglog.txt"));
+          candidates.push(path.join(profilePath, "uidata.log"));
+        }
+      }
+    } catch {
+      // Candidate discovery is best-effort; callers still get explicit paths checked.
+    }
+  }
+
+  return uniqueExistingParentCandidates(candidates);
+}
+
+function readTail(filePath: string, maxBytes: number): string {
+  const stat = fs.statSync(filePath);
+  const bytesToRead = Math.min(stat.size, maxBytes);
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return buffer.toString("utf8");
+}
+
+function analyzeGameLog(tail: string, modId: string): { issues: GameLogIssue[]; tailLines: string[] } {
+  const normalizedMod = modId.toLowerCase();
+  const lines = tail.split(/\r?\n/).filter(line => line.trim().length > 0);
+  const baseLine = Math.max(1, lines.length - 1);
+  const issuePattern = /\b(error|warning|failed|exception|invalid|not allowed|rejected|could not|unable to)\b/i;
+  const issues = lines
+    .map((text, index) => ({ text, index }))
+    .filter(({ text }) => issuePattern.test(text))
+    .map(({ text, index }) => ({
+      severity: /\b(warning|warn)\b/i.test(text) && !/\berror\b/i.test(text) ? "warning" as const : "error" as const,
+      lineNumber: baseLine + index,
+      text,
+      matchesActiveMod: normalizedMod.length > 0 && text.toLowerCase().includes(normalizedMod)
+    }));
+
+  return {
+    issues,
+    tailLines: lines.slice(-120)
+  };
+}
+
+function getGameLogStatus(modIdInput?: string) {
+  const modId = toSafeModId(modIdInput || lastDeployInfo?.workspaceName || activeWorkspace.name);
+  const candidates = findDebugLogCandidates();
+  const selectedLogPath = candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  const relevantLastDeploy = lastDeployInfo?.modId === modId ? lastDeployInfo : null;
+
+  if (!selectedLogPath) {
+    return {
+      status: "no_log",
+      modId,
+      summary: "No debuglog.txt or uidata.log file was found in the known X4 log locations.",
+      selectedLogPath: "",
+      checkedPaths: candidates,
+      lastDeploy: relevantLastDeploy,
+      issues: [],
+      tailLines: []
+    };
+  }
+
+  const stat = fs.statSync(selectedLogPath);
+  const tail = readTail(selectedLogPath, 256 * 1024);
+  const { issues, tailLines } = analyzeGameLog(tail, modId);
+  const activeIssues = issues.filter(issue => issue.matchesActiveMod);
+  const activeErrors = activeIssues.filter(issue => issue.severity === "error");
+  const activeWarnings = activeIssues.filter(issue => issue.severity === "warning");
+  const logUpdatedAt = stat.mtime.toISOString();
+  const staleForLastDeploy = Boolean(relevantLastDeploy?.deployedAt && new Date(logUpdatedAt).getTime() < new Date(relevantLastDeploy.deployedAt).getTime());
+
+  let status: "stale" | "errors" | "warnings" | "clean" = "clean";
+  if (staleForLastDeploy) status = "stale";
+  else if (activeErrors.length > 0) status = "errors";
+  else if (activeWarnings.length > 0) status = "warnings";
+
+  const summary = status === "stale"
+    ? "A log file was found, but it has not changed since the last Studio deploy."
+    : status === "errors"
+      ? `${activeErrors.length} active-mod error(s) found in recent X4 log output.`
+      : status === "warnings"
+        ? `${activeWarnings.length} active-mod warning(s) found in recent X4 log output.`
+        : `No recent X4 errors or warnings mentioning "${modId}" were found in the tailed log.`;
+
+  return {
+    status,
+    modId,
+    summary,
+    selectedLogPath,
+    checkedPaths: candidates,
+    logUpdatedAt,
+    logBytes: stat.size,
+    lastDeploy: relevantLastDeploy,
+    counts: {
+      allIssues: issues.length,
+      activeIssues: activeIssues.length,
+      activeErrors: activeErrors.length,
+      activeWarnings: activeWarnings.length
+    },
+    issues: activeIssues.slice(-50),
+    recentGlobalIssues: issues.slice(-20),
+    tailLines
+  };
+}
+
+function getObjectIndex(): X4ObjectIndex {
+  const resolved = resolveXsdConfig();
+  const roots = [
+    resolved.x4GamePath ? path.join(resolved.x4GamePath, "libraries") : "",
+    resolved.x4GamePath ? path.join(resolved.x4GamePath, "assets") : "",
+    resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "",
+    resolved.modWorkspacePath || "",
+    resolved.filesystemPath || ""
+  ];
+  const cacheKey = JSON.stringify({ roots, schemaLoaded: schemaLibrary.loaded, schemaCounts: {
+    events: schemaLibrary.events.length,
+    conditions: schemaLibrary.conditions.length,
+    actions: schemaLibrary.actions.length,
+    controlFlow: schemaLibrary.controlFlow.length
+  }});
+
+  if (objectIndexCache && objectIndexCache.key === cacheKey && Date.now() - objectIndexCache.builtAt < 60_000) {
+    return objectIndexCache.index;
+  }
+
+  const schemaElements = [
+    ...schemaLibrary.events.map(element => ({ tag: element.tag, category: "md_event" })),
+    ...schemaLibrary.conditions.map(element => ({ tag: element.tag, category: "md_condition" })),
+    ...schemaLibrary.actions.map(element => ({ tag: element.tag, category: "md_action" })),
+    ...schemaLibrary.controlFlow.map(element => ({ tag: element.tag, category: "md_control_flow" }))
+  ];
+  const index = buildX4ObjectIndex(roots, schemaElements);
+  objectIndexCache = { key: cacheKey, builtAt: Date.now(), index };
+  return index;
 }
 
 // Server-persisted active workspace (in-memory, preloaded with the Escort project)
@@ -837,9 +1040,24 @@ app.get("/api/agent/schema", (req, res) => {
           actions: ["add", "replace", "remove"],
           common_targets: ["libraries/ship_macros.xml", "libraries/sound_library.xml", "libraries/wares.xml", "libraries/jobs.xml"]
         },
+        object_index: {
+          endpoint: "/api/agent/object-index",
+          purpose: "Search local loose XML game/mod data for ships, station macros, wares, factions, sounds, jobs, AI scripts, generic macros, and schema-derived MD elements.",
+          query: {
+            q: "optional text search over id, name, detail, and sourceFile",
+            kind: "optional kind filter: all | ship | station | ware | faction | sound | job | aiscript | md_element | macro",
+            limit: "optional result cap, max 2000"
+          },
+          note: "This index reads loose XML files from configured paths. Packed cat/dat archives are not decoded yet."
+        },
         package_manifest: {
-          always_outputs: ["content.xml", "README.md", "md/<modId>.xml"],
-          conditional_outputs: ["md_ui_layouts/<modId>_ui.xml", "aiscripts/*.xml", "libraries/wares.xml", "libraries/jobs.xml", "t/*.xml", "<xmlPatch.targetFile>"]
+          always_outputs: ["content.xml", "README.md"],
+          conditional_outputs: ["md/<modId>.xml", "md_ui_layouts/<modId>_ui.xml", "aiscripts/*.xml", "libraries/wares.xml", "libraries/jobs.xml", "t/*.xml", "<xmlPatch.targetFile>"]
+        },
+        mod_doctor: {
+          purpose: "Package-wide diagnostics for agents and the Studio UI.",
+          coverage: ["content.xml metadata", "Mission Director graph/XML", "UI layout dimensions and runtime-risk warnings", "AI script names/actions/params", "wares price and production invariants", "jobs required fields and task references", "translation language/page/item ids", "XML patch selectors/actions/content", "compile settings and includeInBuild exclusions"],
+          diagnostic_fields: ["severity", "message", "category", "code", "domain", "filePath", "nodeId", "sourceRef"]
         }
       },
       minimal_workspace: sanitizeWorkspace({ name: "My_AI_Mod", nodes: [], links: [], uiWidgets: [] })
@@ -884,6 +1102,18 @@ app.get("/api/agent/schema", (req, res) => {
         auth: true,
         body: { workspace: "optional ModWorkspace; defaults to active workspace" },
         purpose: "Compile and write the package into configured Mod Workspace and/or X4 game extensions paths."
+      },
+      {
+        method: "GET",
+        path: "/api/agent/game-log/status?modId=<optionalModId>",
+        auth: true,
+        purpose: "Read recent X4 debuglog.txt/uidata.log output, classify active-mod errors or warnings, and report whether the log is stale relative to the last Studio deploy."
+      },
+      {
+        method: "GET",
+        path: "/api/agent/object-index?q=<optional>&kind=<optional>&limit=<optional>",
+        auth: true,
+        purpose: "Search local X4 loose XML data and schema elements for object ids external agents can use in generated mods."
       },
       {
         method: "POST",
@@ -966,7 +1196,8 @@ app.get("/api/agent/schema", (req, res) => {
         has_xsd_schema_path: Boolean(currentConfig.xsdSchemaPath),
         resolved_md_xsd: resolvedConfig.mdExists,
         resolved_common_xsd: resolvedConfig.commonExists
-      }
+      },
+      last_deploy: lastDeployInfo
     },
     constants: {
       factions: X4_FACTIONS,
@@ -996,8 +1227,28 @@ app.get("/api/agent/schema", (req, res) => {
         mission_director_xml: "same content as files['md/<modId>.xml']",
         ui_layout_xml: "same content as files['md_ui_layouts/<modId>_ui.xml'] when UI widgets exist"
       },
-      diagnostics: "validateModWorkspace + validatePackageReadiness results",
+      diagnostics: "Mod Doctor package-wide diagnostics with optional code, domain, filePath, nodeId, and sourceRef metadata",
       file_count: "number"
+    },
+    game_log_status_shape: {
+      status: "no_log | stale | clean | warnings | errors",
+      modId: "safe extension folder id used for active-mod line matching",
+      selectedLogPath: "debuglog.txt or uidata.log path when found",
+      checkedPaths: "candidate paths searched",
+      lastDeploy: "last successful Studio deploy metadata when available",
+      counts: "issue counters for all tailed issues and active-mod issues",
+      issues: "recent errors/warnings whose text mentions the active mod id",
+      recentGlobalIssues: "recent errors/warnings from the log tail, even when not matched to the active mod",
+      tailLines: "last log lines used for UI/runtime inspection"
+    },
+    object_index_shape: {
+      generatedAt: "ISO timestamp for index build",
+      roots: "existing roots scanned",
+      scannedFiles: "number of XML files scanned",
+      skippedFiles: "number of unreadable or too-large files skipped",
+      truncated: "true if scan hit safety cap",
+      counts: "counts by object kind",
+      items: "array of { id, name, kind, sourceFile, detail }"
     }
   });
 });
@@ -1354,7 +1605,45 @@ app.post("/api/agent/workspace", (req, res) => {
   });
 });
 
+/**
+ * GET /api/agent/game-log/status
+ * Log-first live game feedback loop. Reads recent X4 debug output and classifies
+ * active-mod errors without sending log content to any AI provider.
+ */
+app.get("/api/agent/game-log/status", (req, res) => {
+  try {
+    const modId = typeof req.query.modId === "string" ? req.query.modId : undefined;
+    return res.json(getGameLogStatus(modId));
+  } catch (error: any) {
+    return res.status(500).json({
+      status: "error",
+      error: error.message || "Failed to read X4 game log status."
+    });
+  }
+});
+
+/**
+ * GET /api/agent/object-index
+ * Agent and UI searchable index over local loose X4 XML objects plus MD schema elements.
+ */
+app.get("/api/agent/object-index", (req, res) => {
+  try {
+    const index = getObjectIndex();
+    const filtered = filterX4ObjectIndex(index, {
+      q: typeof req.query.q === "string" ? req.query.q : "",
+      kind: typeof req.query.kind === "string" ? req.query.kind : "all",
+      limit: typeof req.query.limit === "string" ? Number(req.query.limit) : 500
+    });
+    return res.json(filtered);
+  } catch (error: any) {
+    return res.status(500).json({
+      error: error.message || "Failed to build X4 object index."
+    });
+  }
+});
+
 function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'store'): string {
+  ws = activeBuildWorkspace(ws);
   const modId = toSafeModId(ws.name);
   const targetPath = mode === 'store' ? path.join(rootPath, modId) : rootPath;
   const settings = ws.compileSettings || { md: true, ui: true, ai: true, library: true, translations: true, patches: true };
@@ -1521,10 +1810,19 @@ app.post("/api/agent/deploy", (req, res) => {
       message = `Successfully deployed to game extensions: ${deployedPath}`;
     }
 
+    lastDeployInfo = {
+      modId,
+      workspaceName: ws.name,
+      deployedAt: new Date().toISOString(),
+      stagingPath: stagingPath || undefined,
+      deployedPath: deployedPath || undefined
+    };
+
     return res.json({
       success: true,
       message,
-      deployedPath: deployedPath || stagingPath
+      deployedPath: deployedPath || stagingPath,
+      lastDeploy: lastDeployInfo
     });
   } catch (error: any) {
     return res.status(500).json({
@@ -1544,10 +1842,7 @@ app.post("/api/agent/compile", (req, res) => {
     const { modId, files } = buildWorkspaceFileManifest(ws);
     const mdPath = `md/${modId}.xml`;
     const uiPath = `md_ui_layouts/${modId}_ui.xml`;
-    const diagnostics = [
-      ...validateModWorkspace(ws, files[mdPath] || generateMDXML(ws)),
-      ...validatePackageReadiness(ws)
-    ];
+    const diagnostics = runModDoctor(ws, files, modId);
 
     return res.json({
       success: true,
@@ -1580,11 +1875,7 @@ app.post("/api/agent/package", (req, res) => {
   const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
   try {
     const { modId, files } = buildWorkspaceFileManifest(ws);
-    const mdPath = `md/${modId}.xml`;
-    const diagnostics = [
-      ...validateModWorkspace(ws, files[mdPath] || generateMDXML(ws)),
-      ...validatePackageReadiness(ws)
-    ];
+    const diagnostics = runModDoctor(ws, files, modId);
 
     return res.json({
       success: true,
