@@ -253,6 +253,32 @@ function summarizeDiagnostics(diagnostics: Array<{ severity?: string; domain?: s
   };
 }
 
+function buildWorkspaceDiagnosticsPayload(ws: ModWorkspace) {
+  const { modId, files } = buildWorkspaceFileManifest(ws);
+  const diagnostics = runModDoctor(ws, files, modId);
+  const resolvedConfig = resolveXsdConfig();
+
+  return {
+    modId,
+    workspace_domains: summarizeWorkspaceDomains(ws),
+    generated_files: Object.keys(files).sort(),
+    summary: summarizeDiagnostics(diagnostics),
+    diagnostics,
+    schema_context: {
+      loaded: schemaLibrary.loaded,
+      error: schemaLibrary.error,
+      resolved_md_xsd: resolvedConfig.mdExists,
+      resolved_common_xsd: resolvedConfig.commonExists,
+      counts: {
+        events: schemaLibrary.events.length,
+        conditions: schemaLibrary.conditions.length,
+        actions: schemaLibrary.actions.length,
+        control_flow: schemaLibrary.controlFlow.length
+      }
+    }
+  };
+}
+
 type GameLogIssue = {
   severity: "error" | "warning";
   lineNumber: number;
@@ -1147,8 +1173,15 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/workspace",
         auth: true,
-        body: { workspace: "ModWorkspace" },
-        purpose: "Replace the active studio workspace and bump the version if changed."
+        body: { workspace: "ModWorkspace", expectedVersion: "optional current version from GET /api/agent/workspace; returns 409 if stale" },
+        purpose: "Replace the active studio workspace and bump the version if changed. Send expectedVersion to prevent stale-agent overwrites."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/workspace/dry-run",
+        auth: true,
+        body: { workspace: "ModWorkspace", expectedVersion: "optional current version from GET /api/agent/workspace" },
+        purpose: "Preview a full workspace replacement without mutating active state. Returns sanitized workspace, wouldChange/wouldApply flags, version conflict state, proposed version, generated file names, and Mod Doctor diagnostics."
       },
       {
         method: "POST",
@@ -1313,6 +1346,17 @@ app.get("/api/agent/schema", (req, res) => {
       summary: "diagnostic totals by severity and domain",
       diagnostics: "full Mod Doctor diagnostic list without returning generated file contents",
       schema_context: "whether md.xsd/common.xsd are resolved and the current schema element counts"
+    },
+    workspace_dry_run_response_shape: {
+      success: "boolean",
+      dryRun: "true",
+      wouldChange: "whether the sanitized proposal differs from the active workspace",
+      wouldApply: "false when unchanged or when expectedVersion is stale",
+      versionConflict: "true when expectedVersion was provided and does not match currentVersion",
+      currentVersion: "current active workspace version",
+      proposedVersion: "version that would exist after a successful apply",
+      workspace: "sanitized proposed workspace",
+      diagnostics: "same Mod Doctor diagnostics as /api/agent/diagnostics"
     },
     game_log_status_shape: {
       status: "no_log | stale | clean | warnings | errors",
@@ -1717,10 +1761,20 @@ app.get("/api/agent/workspace", (req, res) => {
  * Updates the currently active workspace state and bumps the revision version.
  */
 app.post("/api/agent/workspace", (req, res) => {
-  const { workspace } = req.body;
+  const { workspace, expectedVersion } = req.body;
   if (!workspace) {
     return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
   }
+  if (expectedVersion !== undefined && Number(expectedVersion) !== workspaceVersion) {
+    return res.status(409).json({
+      success: false,
+      error: "Workspace version conflict. Refresh /api/agent/workspace before applying changes.",
+      code: "workspace.version_conflict",
+      expectedVersion: Number(expectedVersion),
+      currentVersion: workspaceVersion
+    });
+  }
+
   const nextWorkspace = sanitizeWorkspace(workspace);
 
   // Set the workspace and bump version only if it changed
@@ -1736,6 +1790,43 @@ app.post("/api/agent/workspace", (req, res) => {
     version: workspaceVersion,
     workspace: activeWorkspace
   });
+});
+
+/**
+ * POST /api/agent/workspace/dry-run
+ * Validates a proposed full workspace replacement without mutating active state.
+ */
+app.post("/api/agent/workspace/dry-run", (req, res) => {
+  const { workspace, expectedVersion } = req.body;
+  if (!workspace) {
+    return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
+  }
+
+  try {
+    const nextWorkspace = sanitizeWorkspace(workspace);
+    const isDifferent = JSON.stringify(nextWorkspace) !== JSON.stringify(activeWorkspace);
+    const versionConflict = expectedVersion !== undefined && Number(expectedVersion) !== workspaceVersion;
+    const diagnosticsPayload = buildWorkspaceDiagnosticsPayload(nextWorkspace);
+
+    return res.json({
+      success: true,
+      dryRun: true,
+      wouldApply: isDifferent && !versionConflict,
+      wouldChange: isDifferent,
+      versionConflict,
+      expectedVersion: expectedVersion === undefined ? null : Number(expectedVersion),
+      currentVersion: workspaceVersion,
+      proposedVersion: isDifferent && !versionConflict ? workspaceVersion + 1 : workspaceVersion,
+      workspace: nextWorkspace,
+      ...diagnosticsPayload
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      dryRun: true,
+      error: error.message || "Failed to dry-run proposed workspace."
+    });
+  }
 });
 
 /**
@@ -2032,29 +2123,9 @@ app.post("/api/agent/package", (req, res) => {
 app.post("/api/agent/diagnostics", (req, res) => {
   const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
   try {
-    const { modId, files } = buildWorkspaceFileManifest(ws);
-    const diagnostics = runModDoctor(ws, files, modId);
-    const resolvedConfig = resolveXsdConfig();
-
     return res.json({
       success: true,
-      modId,
-      workspace_domains: summarizeWorkspaceDomains(ws),
-      generated_files: Object.keys(files).sort(),
-      summary: summarizeDiagnostics(diagnostics),
-      diagnostics,
-      schema_context: {
-        loaded: schemaLibrary.loaded,
-        error: schemaLibrary.error,
-        resolved_md_xsd: resolvedConfig.mdExists,
-        resolved_common_xsd: resolvedConfig.commonExists,
-        counts: {
-          events: schemaLibrary.events.length,
-          conditions: schemaLibrary.conditions.length,
-          actions: schemaLibrary.actions.length,
-          control_flow: schemaLibrary.controlFlow.length
-        }
-      }
+      ...buildWorkspaceDiagnosticsPayload(ws)
     });
   } catch (error: any) {
     return res.status(500).json({

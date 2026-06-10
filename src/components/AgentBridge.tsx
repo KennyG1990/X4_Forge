@@ -347,6 +347,7 @@ export default function AgentBridge({
     schema: true,
     getWorkspace: false,
     postWorkspace: true,
+    dryRunWorkspace: true,
     generate: false,
     diagnostics: true,
     compile: true,
@@ -719,7 +720,52 @@ export default function AgentBridge({
                 )}
               </div>
 
-              {/* ENDPOINT 3: POST WORKSPACE */}
+              {/* ENDPOINT 3: POST WORKSPACE DRY-RUN */}
+              <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
+                <button 
+                  onClick={() => toggleEndpoint('dryRunWorkspace')}
+                  className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-600/20 text-blue-300 border border-blue-500/30">POST</span>
+                    <span className="text-white text-xs font-bold font-mono">/api/agent/workspace/dry-run</span>
+                  </div>
+                  {collapsedEndpoints.dryRunWorkspace ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </button>
+                
+                {!collapsedEndpoints.dryRunWorkspace && (
+                  <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
+                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                      Previews a full workspace replacement without mutating the Studio. Returns sanitized workspace, wouldChange/wouldApply flags, version conflict status, generated file names, and Mod Doctor diagnostics.
+                    </p>
+                    <div className="relative">
+                      <pre className="bg-[#10141f] p-2 rounded text-[9px] text-cyan-300 overflow-y-auto max-h-36 select-all">
+                        {`curl -X POST "${appOrigin}/api/agent/workspace/dry-run" \\
+     ${authCurlHeader} \\
+     -H "Content-Type: application/json" \\
+     -d '{
+       "expectedVersion": 1,
+       "workspace": {
+         "name": "Bounty_Hunter_Mod",
+         "nodes": [],
+         "links": [],
+         "uiWidgets": [],
+         "uiTheme": {}
+       }
+     }'`}
+                      </pre>
+                      <button 
+                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/workspace/dry-run" ${authCurlHeader} -H "Content-Type: application/json" -d '{"expectedVersion": 1, "workspace": {"name": "My_AI_Mod", "nodes": [], "links": [], "uiWidgets": [], "uiTheme": {}}}'`, 'curl_dryrunws')}
+                        className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
+                      >
+                        {copiedTextId === 'curl_dryrunws' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ENDPOINT 4: POST WORKSPACE */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
                 <button 
                   onClick={() => toggleEndpoint('postWorkspace')}
@@ -735,7 +781,7 @@ export default function AgentBridge({
                 {!collapsedEndpoints.postWorkspace && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
                     <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
-                       Publishes a full ModWorkspace JSON structure directly into the studio, including optional tFiles, aiScripts, wares, jobs, and xmlPatches.
+                       Publishes a full ModWorkspace JSON structure directly into the studio, including optional tFiles, aiScripts, wares, jobs, and xmlPatches. Include expectedVersion from GET /workspace to reject stale-agent overwrites.
                     </p>
                     <div className="relative">
                       <pre className="bg-[#10141f] p-2 rounded text-[9px] text-cyan-300 overflow-y-auto max-h-32 select-all">
@@ -743,6 +789,7 @@ export default function AgentBridge({
      ${authCurlHeader} \\
      -H "Content-Type: application/json" \\
      -d '{
+       "expectedVersion": 1,
        "workspace": {
          "name": "Bounty_Hunter_Mod",
          "nodes": [...],
@@ -753,7 +800,7 @@ export default function AgentBridge({
      }'`}
                       </pre>
                       <button 
-                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/workspace" ${authCurlHeader} -H "Content-Type: application/json" -d '{"workspace": {"name": "My_AI_Mod", "nodes": [], "links": [], "uiWidgets": []}}'`, 'curl_postws')}
+                        onClick={() => handleCopy(`curl -X POST "${appOrigin}/api/agent/workspace" ${authCurlHeader} -H "Content-Type: application/json" -d '{"expectedVersion": 1, "workspace": {"name": "My_AI_Mod", "nodes": [], "links": [], "uiWidgets": [], "uiTheme": {}}}'`, 'curl_postws')}
                         className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                       >
                         {copiedTextId === 'curl_postws' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -763,7 +810,7 @@ export default function AgentBridge({
                 )}
               </div>
 
-              {/* ENDPOINT 4: POST GENERATE (Gemini automation helper) */}
+              {/* ENDPOINT 5: POST GENERATE (Gemini automation helper) */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
                 <button 
                   onClick={() => toggleEndpoint('generate')}
@@ -799,7 +846,7 @@ export default function AgentBridge({
                 )}
               </div>
 
-              {/* ENDPOINT 5: POST DIAGNOSTICS */}
+              {/* ENDPOINT 6: POST DIAGNOSTICS */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
                 <button 
                   onClick={() => toggleEndpoint('diagnostics')}
@@ -835,7 +882,7 @@ export default function AgentBridge({
                 )}
               </div>
 
-              {/* ENDPOINT 6: POST COMPILE */}
+              {/* ENDPOINT 7: POST COMPILE */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
                 <button 
                   onClick={() => toggleEndpoint('compile')}

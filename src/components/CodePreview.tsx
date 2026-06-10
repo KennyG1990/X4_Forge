@@ -732,6 +732,18 @@ export default function CodePreview({
     return map;
   };
 
+  const sendDiagnosticsToAI = () => {
+    if (diagnostics.length === 0) return;
+    const list = diagnostics.map((d, i) =>
+      `${i + 1}. [${d.severity}] ${(d.domain || d.category || '')}: ${d.message}` +
+      (d.filePath ? ` (file: ${d.filePath})` : '') +
+      (d.sourceRef ? ` (source: ${d.sourceRef.kind}${d.sourceRef.label ? '/' + d.sourceRef.label : ''})` : '')
+    ).join('\n');
+    const label = codeActiveTab === 'ui' ? 'UI layout' : codeActiveTab === 'file' ? activeEditorFile?.name || 'active file' : 'Mission Director';
+    const prompt = `My X4 Foundations mod "${workspace.name || 'mod'}" has these Mod Doctor validation issues:\n\n${list}\n\nHere is the generated ${label} XML/code:\n\`\`\`xml\n${currentCode}\n\`\`\`\n\nFor each issue, explain plainly what's wrong and exactly how to fix it. Point to the node, property, file, or value that should change. Keep it concise.`;
+    window.dispatchEvent(new CustomEvent('open-ai-chat', { detail: { prompt } }));
+  };
+
 
   const highlightCode = (rawText: string) => {
     const ext = activeEditorFile?.name.split('.').pop()?.toLowerCase();
@@ -789,7 +801,11 @@ export default function CodePreview({
 
   const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
   const codeLines = currentCode.split('\n');
-  const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);  return (
+  const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);
+  const errors = diagnostics.filter(d => d.severity === 'error');
+  const warnings = diagnostics.filter(d => d.severity === 'warning');
+
+  return (
     <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#050608] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
       {/* ================================================================ */}
       {/* WINDOW TITLE BAR HEADER (ANALYTIC & PRECISE)                     */}
@@ -1226,6 +1242,200 @@ export default function CodePreview({
             {renderMinimap(codeLines.map(l => ({ value: l })))}
           </div>
         )}
+      </div>
+
+      <div className="border-t border-white/5 bg-black/45 px-3.5 py-2.5 space-y-2 font-mono text-xs max-h-48 overflow-y-auto shrink-0 transition-all scrollbar-thin">
+        <div className="flex items-center justify-between border-b border-white/5 pb-1.5 select-none font-mono">
+          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[10px]">
+            <Terminal className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+            PACKAGE MOD DOCTOR (DIAGNOSTICS)
+          </div>
+          <div className="flex items-center gap-2 text-[9px] font-bold">
+            <span className="flex items-center gap-1 text-slate-300 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+              {diagnosticSource === 'checking' ? 'CHECKING' : diagnosticSource === 'package' ? 'API' : 'LOCAL'}
+            </span>
+            <span className="flex items-center gap-1 text-slate-355 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 block" /> {errors.length} Errors
+            </span>
+            <span className="flex items-center gap-1 text-slate-355 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 block" /> {warnings.length} Warnings
+            </span>
+            {diagnostics.length > 0 && (
+              <button
+                onClick={sendDiagnosticsToAI}
+                className="flex items-center gap-1 text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/30 cursor-pointer uppercase transition-all"
+                title="Send these diagnostics plus the active XML/code to the AI assistant"
+              >
+                <Sparkles className="w-3 h-3" /> Ask AI
+              </button>
+            )}
+          </div>
+        </div>
+
+        {diagnostics.length === 0 ? (
+          <div className="text-emerald-400/90 text-[10px] leading-normal flex items-center gap-2 bg-emerald-500/5 p-2 rounded border border-emerald-500/10 font-sans font-medium">
+            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>No package warning flags detected across generated mod files.</span>
+          </div>
+        ) : (
+          <div className="space-y-1.5 font-sans">
+            {diagnostics.map((diag, index) => {
+              const itemStyle = diag.severity === 'error'
+                ? 'bg-red-500/5 text-red-300 border-red-500/15'
+                : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/15' : 'bg-blue-500/5 text-blue-300 border-blue-500/15');
+
+              return (
+                <div key={index} className={`p-1.5 rounded border text-[10px] leading-relaxed flex items-start gap-2 ${itemStyle}`}>
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
+                  <div>
+                    <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] mb-0.5">
+                      [{diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
+                    </span>
+                    {diag.filePath && (
+                      <span className="font-mono text-[8px] text-slate-300 block mb-0.5">{diag.filePath}</span>
+                    )}
+                    {diag.message}
+                    {diag.sourceRef && (
+                      <span className="font-mono text-[8px] text-slate-400 block mt-0.5">
+                        SOURCE: {diag.sourceRef.kind}{diag.sourceRef.label ? ` / ${diag.sourceRef.label}` : ''}{diag.sourceRef.id ? ` / ${diag.sourceRef.id}` : ''}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="flex-[4] flex flex-col min-h-0 bg-[#080a0e] overflow-hidden select-none border-t border-[#df9825]/10">
+        <div className="flex border-b border-white/5 bg-black/45 justify-between items-center px-3.5 py-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none font-mono">
+            <button
+              onClick={() => setToolActiveTab('analyzer')}
+              className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${toolActiveTab === 'analyzer'
+                ? 'bg-amber-500/10 text-amber-400 border border-amber-500/40'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+              }`}
+            >
+              <Brain className="w-3.5 h-3.5 animate-pulse text-amber-500" />
+              MD SCANNER
+            </button>
+            <button
+              onClick={() => setToolActiveTab('playtest')}
+              className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${toolActiveTab === 'playtest'
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+              PLAYTEST WORKSPACE
+            </button>
+          </div>
+
+          <div id="tool_actions" className="flex items-center gap-1.5 shrink-0">
+            {toolActiveTab === 'analyzer' ? (
+              analysisResult && (
+                <button
+                  onClick={triggerAnalysis}
+                  disabled={analyzing}
+                  className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-500 rounded font-mono text-[9px] flex items-center gap-1 transition-all disabled:opacity-50 cursor-pointer font-bold uppercase"
+                  title="Re-run plain English description update on structural changes"
+                >
+                  <RefreshCw className={`w-3 h-3 ${analyzing ? "animate-spin" : ""}`} />
+                  ANALYZE
+                </button>
+              )
+            ) : (
+              modWorkspacePath && (
+                <>
+                  <button
+                    onClick={toggleSnapshots}
+                    className="px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 rounded font-mono text-[9px] flex items-center gap-1 transition-all cursor-pointer font-bold uppercase"
+                    title="Browse and restore on-disk version snapshots"
+                  >
+                    <Activity className="w-3.5 h-3.5" />
+                    HISTORY
+                  </button>
+                  <button
+                    onClick={() => saveToDirectory(true)}
+                    disabled={syncStatus === 'syncing'}
+                    className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 rounded font-mono text-[9px] flex items-center gap-1 transition-all cursor-pointer font-bold uppercase"
+                    title="Force immediate sync to disk"
+                  >
+                    <Save className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-pulse' : ''}`} />
+                    SYNC FILES
+                  </button>
+                </>
+              )
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto bg-[#06070a]/95 flex flex-col relative text-xs min-h-0 scrollbar-thin">
+          {showSnapshots && (
+            <div className="absolute inset-x-0 top-0 z-20 bg-[#0a0c11] border-b border-cyan-500/30 p-3 max-h-72 overflow-y-auto shadow-xl">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-mono font-bold text-cyan-400 uppercase tracking-wide">Version History - .snapshots/</span>
+                <button onClick={() => setShowSnapshots(false)} className="text-slate-400 hover:text-white cursor-pointer">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {snapshots.length === 0 ? (
+                <p className="text-[10px] text-slate-500 font-sans leading-relaxed">No snapshots yet. One is written automatically into the mod folder each time you sync or compile.</p>
+              ) : (
+                <div className="space-y-1">
+                  {snapshots.map(s => (
+                    <div key={s.name} className="flex items-center justify-between bg-white/[0.02] border border-white/5 rounded px-2 py-1">
+                      <span className="text-[10px] text-slate-300 font-mono truncate">{s.savedAt}</span>
+                      <button
+                        onClick={() => restoreSnapshot(s.name)}
+                        className="px-2 py-0.5 text-[9px] font-bold bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 rounded uppercase cursor-pointer shrink-0 ml-2"
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {snapshotMsg && (
+            <div className="absolute bottom-2 left-2 right-2 z-20 bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-[10px] rounded px-2 py-1 font-mono text-center">
+              {snapshotMsg}
+            </div>
+          )}
+          {toolActiveTab === 'analyzer' ? (
+            <MDScanner
+              workspace={workspace}
+              analysisResult={analysisResult}
+              analyzing={analyzing}
+              analysisError={analysisError}
+              triggerAnalysis={triggerAnalysis}
+              isAnalysisStale={isAnalysisStale}
+            />
+          ) : (
+            <PlaytestWorkspace
+              activeModId={toSafeModId(workspace.name)}
+              modWorkspacePath={modWorkspacePath}
+              syncStatus={syncStatus}
+              syncErrorMsg={syncErrorMsg}
+              autoSaveEnabled={autoSaveEnabled}
+              setAutoSaveEnabled={setAutoSaveEnabled}
+              saveToDirectory={saveToDirectory}
+              logInput={logInput}
+              setLogInput={setLogInput}
+              diagnosingLogs={diagnosingLogs}
+              logAnalysis={logAnalysis}
+              diagnosticError={diagnosticError}
+              successfulFixApplied={successfulFixApplied}
+              handleTriggerLogAnalysis={handleTriggerLogAnalysis}
+              insertDemoX4Log={insertDemoX4Log}
+              handleLogFileChange={handleLogFileChange}
+              handleApplyAutoFix={handleApplyAutoFix}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
