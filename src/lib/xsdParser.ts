@@ -24,6 +24,8 @@ export interface XsdConfig {
   schemaFiles?: string[];
   modWorkspacePath?: string;
   filesystemPath?: string;
+  /** optional user-configured X4 debug log path (debuglog.txt) */
+  x4LogPath?: string;
 }
 
 export interface ResolvedXsdConfig extends XsdConfig {

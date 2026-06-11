@@ -134,7 +134,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/round-trip-selftest",
   "/agent/patch-audit",
   "/agent/diagnostics",
-  "/agent/api-selftest"
+  "/agent/api-selftest",
+  "/agent/log-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -274,6 +275,7 @@ type GameLogIssue = {
   lineNumber: number;
   text: string;
   matchesActiveMod: boolean;
+  sourceRef?: { kind: string; file?: string; line?: number; label?: string };
 };
 
 function uniqueExistingParentCandidates(paths: string[]): string[] {
@@ -294,6 +296,8 @@ function findDebugLogCandidates(): string[] {
   const home = process.env.USERPROFILE || process.env.HOME || "";
   const docs = home ? path.join(home, "Documents", "Egosoft", "X4") : "";
   const candidates = [
+    // User-configured log path takes priority.
+    resolved.x4LogPath || "",
     path.join(process.cwd(), "debuglog.txt"),
     path.join(process.cwd(), "uidata.log"),
     resolved.x4GamePath ? path.join(resolved.x4GamePath, "debuglog.txt") : "",
@@ -330,6 +334,23 @@ function readTail(filePath: string, maxBytes: number): string {
   return buffer.toString("utf8");
 }
 
+/**
+ * Map an X4 log line back to a Studio source reference where possible. X4 errors
+ * commonly name the MD script and a line, e.g. "* Error in MD script
+ * 'sector_bounty_hunter' ... line 18" or "(md.Foo.Cue): ...". Deterministic, no AI.
+ */
+function mapLogLineToSourceRef(text: string): { kind: string; file?: string; line?: number; label?: string } | undefined {
+  const scriptQuoted = text.match(/(?:md script|script)\s+'([\w.\-]+)'/i)?.[1]
+    || text.match(/\bmd\.([\w]+)\b/i)?.[1];
+  const lineNo = text.match(/\bline\s+(\d+)/i)?.[1];
+  const cue = text.match(/cue\s+'([\w.\-]+)'/i)?.[1];
+  if (scriptQuoted) {
+    const base = scriptQuoted.replace(/^md\./i, '');
+    return { kind: 'md_file', file: `md/${base}.xml`, line: lineNo ? Number(lineNo) : undefined, label: cue ? `cue ${cue}` : undefined };
+  }
+  return undefined;
+}
+
 function analyzeGameLog(tail: string, modId: string): { issues: GameLogIssue[]; tailLines: string[] } {
   const normalizedMod = modId.toLowerCase();
   const lines = tail.split(/\r?\n/).filter(line => line.trim().length > 0);
@@ -342,12 +363,32 @@ function analyzeGameLog(tail: string, modId: string): { issues: GameLogIssue[]; 
       severity: /\b(warning|warn)\b/i.test(text) && !/\berror\b/i.test(text) ? "warning" as const : "error" as const,
       lineNumber: baseLine + index,
       text,
-      matchesActiveMod: normalizedMod.length > 0 && text.toLowerCase().includes(normalizedMod)
+      matchesActiveMod: normalizedMod.length > 0 && text.toLowerCase().includes(normalizedMod),
+      sourceRef: mapLogLineToSourceRef(text)
     }));
 
   return {
     issues,
     tailLines: lines.slice(-120)
+  };
+}
+
+/**
+ * Deterministic state model for the live feedback loop. Pure function so it can
+ * be unit-tested with synthetic log content.
+ */
+function computeGameStates(args: { tail: string; modId: string; deployed: boolean; stale: boolean }) {
+  const { tail, modId, deployed, stale } = args;
+  const { issues } = analyzeGameLog(tail, modId);
+  const active = issues.filter(i => i.matchesActiveMod);
+  const seenByX4 = modId.length > 0 && tail.toLowerCase().includes(modId.toLowerCase());
+  const runtimeErrors = active.some(i => i.severity === 'error');
+  return {
+    deployed,                                   // a Studio deploy happened
+    seenByX4: seenByX4 && !stale,               // the (fresh) log mentions the extension id
+    loadedCleanly: seenByX4 && !stale && !runtimeErrors,
+    runtimeErrors,
+    activeIssueCount: active.length
   };
 }
 
@@ -392,10 +433,14 @@ function getGameLogStatus(modIdInput?: string) {
         ? `${activeWarnings.length} active-mod warning(s) found in recent X4 log output.`
         : `No recent X4 errors or warnings mentioning "${modId}" were found in the tailed log.`;
 
+  const states = computeGameStates({ tail, modId, deployed: Boolean(relevantLastDeploy), stale: staleForLastDeploy });
+
   return {
     status,
     modId,
     summary,
+    // Explicit pipeline states: Compiled -> Deployed -> Seen by X4 -> Loaded cleanly -> Runtime errors.
+    states,
     selectedLogPath,
     checkedPaths: candidates,
     logUpdatedAt,
@@ -2475,6 +2520,31 @@ app.get("/api/agent/api-selftest", (req, res) => {
     // Always restore live state.
     activeWorkspace = savedWs;
     workspaceVersion = savedVer;
+  }
+});
+
+// Public read-only self-test for the deterministic live-feedback log logic.
+app.get("/api/agent/log-selftest", (req, res) => {
+  try {
+    const modId = 'mymod';
+    const cleanTail = `[General] 1.23 Loading extension mymod\n[General] 1.40 extension 'mymod' loaded`;
+    const errorTail = `[General] 1.23 Loading extension mymod\n[Scripts] 2.5 *** Error in MD script 'mymod' cue 'Start': unexpected value (line 18)`;
+    const notSeenTail = `[General] 1.0 Loading extension othermod\n[General] 1.1 done`;
+
+    const clean = computeGameStates({ tail: cleanTail, modId, deployed: true, stale: false });
+    const errored = computeGameStates({ tail: errorTail, modId, deployed: true, stale: false });
+    const errIssue = analyzeGameLog(errorTail, modId).issues.find(i => i.matchesActiveMod);
+    const notSeen = computeGameStates({ tail: notSeenTail, modId, deployed: true, stale: false });
+
+    const results = [
+      { test: 'cleanLoad', pass: clean.seenByX4 && clean.loadedCleanly && !clean.runtimeErrors, detail: clean },
+      { test: 'runtimeError', pass: errored.runtimeErrors && !errored.loadedCleanly, detail: errored },
+      { test: 'errorSourceRefMapping', pass: errIssue?.sourceRef?.file === 'md/mymod.xml' && errIssue?.sourceRef?.line === 18, detail: errIssue?.sourceRef },
+      { test: 'notSeen', pass: !notSeen.seenByX4 && !notSeen.loadedCleanly, detail: notSeen }
+    ];
+    return res.json({ allPassed: results.every(r => r.pass), results });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'log-selftest failed' });
   }
 });
 
