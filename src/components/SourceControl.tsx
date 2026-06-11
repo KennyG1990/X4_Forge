@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
 import { ModWorkspace, generateMDXML, generateUIXML } from '../types';
+import { toTFileName } from '../lib/modCompiler';
 import { getAIHeaders } from '../lib/apiHelper';
 
 // Baseline layout of commits matching user screenshot exactly
@@ -675,7 +676,7 @@ Guidelines:
             
             const targetTFile = {
               languageId,
-              fileName: `0001-L0${languageId}.xml`,
+              fileName: toTFileName({ languageId }),
               pages
             };
             

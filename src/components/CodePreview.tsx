@@ -37,7 +37,8 @@ import {
   compileWaresXML,
   compileJobsXML,
   compileTFileXML,
-  compileDiffDocument
+  compileDiffDocument,
+  toTFileName
 } from '../lib/modCompiler';
 import MDScanner from './MDScanner';
 import PlaytestWorkspace from './PlaytestWorkspace';
@@ -160,7 +161,7 @@ function getSnapshotContentForPath(snapWS: ModWorkspace, relativePath: string): 
   // 7. Translations in t/
   if (normPath.startsWith('t/') && normPath.endsWith('.xml')) {
     const fileName = normPath.substring('t/'.length);
-    const tFile = snapWS.tFiles?.find(f => f.fileName === fileName || (f.fileName || `0001-L${f.languageId}.xml`) === fileName);
+    const tFile = snapWS.tFiles?.find(f => f.fileName === fileName || toTFileName(f) === fileName);
     if (tFile) {
       return compileTFileXML(tFile);
     }
@@ -227,6 +228,13 @@ export default function CodePreview({
   const [editorContent, setEditorContent] = useState<string>('');
   const [editorSaveStatus, setEditorSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [editorError, setEditorError] = useState<string>('');
+  const [generatedDraft, setGeneratedDraft] = useState<string>('');
+  const [generatedDraftKey, setGeneratedDraftKey] = useState<string>('');
+  const [generatedDraftDirty, setGeneratedDraftDirty] = useState<boolean>(false);
+  const [generatedApplyStatus, setGeneratedApplyStatus] = useState<'idle' | 'applying' | 'applied' | 'error'>('idle');
+  const [generatedApplyMessage, setGeneratedApplyMessage] = useState<string>('');
+  const [generatedEditorScroll, setGeneratedEditorScroll] = useState({ top: 0, left: 0 });
+  const [splitEditorScroll, setSplitEditorScroll] = useState({ top: 0, left: 0 });
 
   // ================================================================ 
   // CUSTOM ANTI-GRAVITY IDE & DIFF PREVIEWER CONTEXTUAL VARIABLESS 
@@ -290,13 +298,86 @@ export default function CodePreview({
     return xml;
   };
 
+  const collectDownstreamNodeIds = (startIds: string[], sourceWorkspace: ModWorkspace = workspace): Set<string> => {
+    const ids = new Set<string>(startIds);
+    const queue = [...startIds];
+    while (queue.length > 0) {
+      const sourceId = queue.shift()!;
+      sourceWorkspace.links
+        .filter(link => link.sourceNodeId === sourceId)
+        .forEach(link => {
+          if (!ids.has(link.targetNodeId)) {
+            ids.add(link.targetNodeId);
+            queue.push(link.targetNodeId);
+          }
+        });
+    }
+    return ids;
+  };
+
+  const generateSelectedNodeHierarchyXML = (node: MDNode | null, sourceWorkspace: ModWorkspace = workspace): string => {
+    if (!node) return '';
+    if (node.type === 'cue') {
+      return generateMDXML(sourceWorkspace, [node.id]);
+    }
+
+    const downstreamIds = collectDownstreamNodeIds([node.id], sourceWorkspace);
+    const selectedNodes = sourceWorkspace.nodes.filter(n => downstreamIds.has(n.id));
+    const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
+    const syntheticCue: MDNode = {
+      id: '__preview_selected_node_cue__',
+      type: 'cue',
+      label: `Preview: ${node.label}`,
+      xmlTag: 'cue',
+      x: 0,
+      y: 0,
+      properties: {
+        name: `Preview_${node.properties?.name || node.label || node.xmlTag}`,
+        instantiate: 'false',
+        namespace: 'this'
+      },
+      propertiesSchema: [],
+      inputs: [],
+      outputs: []
+    };
+
+    const hierarchyLinks = sourceWorkspace.links.filter(link =>
+      selectedNodeIds.has(link.sourceNodeId) && selectedNodeIds.has(link.targetNodeId)
+    );
+    const syntheticLinks = [
+      {
+        id: '__preview_selected_node_link__',
+        sourceNodeId: syntheticCue.id,
+        sourcePortId: node.type === 'action' ? 'out_act' : 'out_cond',
+        targetNodeId: node.id,
+        targetPortId: node.type === 'action' ? 'in_act' : 'in_cond'
+      },
+      ...sourceWorkspace.links
+        .filter(link => link.sourceNodeId === node.id && link.sourcePortId === 'out_flow')
+        .map(link => ({
+          id: `__preview_flow_${link.id}`,
+          sourceNodeId: syntheticCue.id,
+          sourcePortId: 'out_act',
+          targetNodeId: link.targetNodeId,
+          targetPortId: 'in_act'
+        })),
+      ...hierarchyLinks
+    ];
+
+    return generateMDXML({
+      ...sourceWorkspace,
+      nodes: [syntheticCue, ...selectedNodes],
+      links: syntheticLinks
+    }, [syntheticCue.id]);
+  };
+
   let currentCode = '';
   if (codeActiveTab === 'md') {
-    currentCode = mdCode;
+    currentCode = selectedNode ? generateSelectedNodeHierarchyXML(selectedNode) : mdCode;
   } else if (codeActiveTab === 'ui') {
     currentCode = uiCode;
   } else if (codeActiveTab === 'node') {
-    currentCode = selectedNode ? generateNodeXMLPreview(selectedNode) : '';
+    currentCode = generateSelectedNodeHierarchyXML(selectedNode);
   } else if (codeActiveTab === 'file') {
     currentCode = editorContent;
   }
@@ -317,6 +398,25 @@ export default function CodePreview({
     tFiles: workspace.tFiles,
     xmlPatches: workspace.xmlPatches
   });
+
+  const generatedDraftSourceKey = JSON.stringify({
+    tab: codeActiveTab,
+    selectedNodeId: selectedNode?.id || null,
+    selectedCueIds,
+    activeFilePath: activeEditorFile?.path || null,
+    workspaceSerialized
+  });
+
+  useEffect(() => {
+    if (codeActiveTab === 'file') return;
+    if (!generatedDraftDirty || generatedDraftKey !== generatedDraftSourceKey) {
+      setGeneratedDraft(currentCode);
+      setGeneratedDraftKey(generatedDraftSourceKey);
+      setGeneratedDraftDirty(false);
+      setGeneratedApplyStatus('idle');
+      setGeneratedApplyMessage('');
+    }
+  }, [codeActiveTab, currentCode, generatedDraftDirty, generatedDraftKey, generatedDraftSourceKey]);
 
   const isAnalysisStale = analysisResult !== null && lastAnalyzedWorkspace !== workspaceSerialized;
 
@@ -434,6 +534,61 @@ export default function CodePreview({
     }
   };
 
+  const activeCodeText = codeActiveTab === 'file'
+    ? editorContent
+    : (generatedDraft || currentCode);
+
+  const handleGeneratedDraftChange = (val: string) => {
+    setGeneratedDraft(val);
+    setGeneratedDraftDirty(val !== currentCode);
+    setGeneratedApplyStatus('idle');
+    setGeneratedApplyMessage('');
+  };
+
+  const applyGeneratedCodeEdit = () => {
+    if (!setWorkspace) {
+      setGeneratedApplyStatus('error');
+      setGeneratedApplyMessage('Workspace editing is not available in this view.');
+      return;
+    }
+    if (codeActiveTab !== 'md') {
+      setGeneratedApplyStatus('error');
+      setGeneratedApplyMessage('Only Mission Director XML has a safe parser-backed apply path right now.');
+      return;
+    }
+    if (selectedNode || selectedCueIds.length > 0) {
+      setGeneratedApplyStatus('error');
+      setGeneratedApplyMessage('Partial hierarchy edits are editable/copyable, but apply is gated until partial-graph merge is lossless. Switch to full MD.xml to apply.');
+      return;
+    }
+
+    setGeneratedApplyStatus('applying');
+    try {
+      const parsed = parseXMLToWorkspace(generatedDraft);
+      if (!parsed) {
+        throw new Error('Could not parse edited Mission Director XML.');
+      }
+      const nextWorkspace: ModWorkspace = {
+        ...workspace,
+        name: parsed.name || workspace.name,
+        version: parsed.version || workspace.version,
+        author: parsed.author || workspace.author,
+        description: parsed.description || workspace.description,
+        nodes: parsed.nodes,
+        links: parsed.links
+      };
+      saveCheckpoint?.(workspace);
+      setWorkspace(nextWorkspace);
+      setGeneratedDraftDirty(false);
+      setGeneratedApplyStatus('applied');
+      setGeneratedApplyMessage(`Applied ${parsed.nodes.length} parsed MD nodes back into the workspace.`);
+      setTimeout(() => setGeneratedApplyStatus('idle'), 2500);
+    } catch (err: any) {
+      setGeneratedApplyStatus('error');
+      setGeneratedApplyMessage(err.message || 'Could not apply edited XML.');
+    }
+  };
+
   const handleSelectTab = (tab: Tab) => {
     if (tab.type === 'md') {
       setCodeActiveTab('md');
@@ -483,13 +638,13 @@ export default function CodePreview({
   };
 
   const copyToClipboard = () => {
-    navigator.clipboard.writeText(currentCode);
+    navigator.clipboard.writeText(activeCodeText);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const downloadFile = () => {
-    const blob = new Blob([currentCode], { type: 'text/xml' });
+    const blob = new Blob([activeCodeText], { type: 'text/xml' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -579,31 +734,41 @@ export default function CodePreview({
 
     if (codeActiveTab === 'md') {
       if (snapshotDiffWorkspace) {
-        original = generateMDXML(snapshotDiffWorkspace, selectedCueIds);
+        const snapSelected = selectedNode
+          ? snapshotDiffWorkspace.nodes?.find(n => n.id === selectedNode.id) || null
+          : null;
+        original = snapSelected
+          ? generateSelectedNodeHierarchyXML(snapSelected, snapshotDiffWorkspace)
+          : generateMDXML(snapshotDiffWorkspace, selectedCueIds);
       } else {
         const baseWorkspace = diffBaseType === 'compile' 
           ? (lastCompiledWorkspace || initialWorkspace || workspace)
           : (initialWorkspace || workspace);
-        original = generateMDXML(baseWorkspace, selectedCueIds);
+        const baseSelected = selectedNode
+          ? baseWorkspace.nodes?.find(n => n.id === selectedNode.id) || null
+          : null;
+        original = baseSelected
+          ? generateSelectedNodeHierarchyXML(baseSelected, baseWorkspace)
+          : generateMDXML(baseWorkspace, selectedCueIds);
       }
-      current = mdCode;
+      current = activeCodeText;
     } else if (codeActiveTab === 'ui') {
       if (snapshotDiffWorkspace) {
         original = generateUIXML(snapshotDiffWorkspace);
       } else {
         original = diffBaseType === 'compile' ? (originalUI || uiCode) : (initialUICode || uiCode);
       }
-      current = uiCode;
+      current = activeCodeText;
     } else if (codeActiveTab === 'node') {
-      current = selectedNode ? generateNodeXMLPreview(selectedNode) : '';
+      current = activeCodeText;
       if (snapshotDiffWorkspace && selectedNode) {
         const snapNode = snapshotDiffWorkspace.nodes?.find(n => n.id === selectedNode.id);
-        original = snapNode ? generateNodeXMLPreview(snapNode) : '';
+        original = snapNode ? generateSelectedNodeHierarchyXML(snapNode, snapshotDiffWorkspace) : '';
       } else {
         original = '';
       }
     } else if (codeActiveTab === 'file') {
-      current = editorContent;
+      current = activeCodeText;
       if (activeEditorFile) {
         if (snapshotDiffWorkspace) {
           original = getSnapshotContentForPath(snapshotDiffWorkspace, activeEditorFile.path);
@@ -905,9 +1070,41 @@ export default function CodePreview({
     );
   };
 
+  const renderHighlightedTextarea = (
+    value: string,
+    onChange: (value: string) => void,
+    ariaLabel: string,
+    paddingClass: string,
+    scroll: { top: number; left: number },
+    setScroll: React.Dispatch<React.SetStateAction<{ top: number; left: number }>>,
+    toneClass = 'text-slate-300'
+  ) => (
+    <>
+      <pre
+        aria-hidden="true"
+        className={`absolute inset-0 ${paddingClass} font-mono text-xs leading-relaxed whitespace-pre pointer-events-none select-none overflow-hidden ${toneClass}`}
+        style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}
+        dangerouslySetInnerHTML={{ __html: `${highlightXML(value)}\n` }}
+      />
+      <textarea
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        onScroll={e => {
+          const target = e.currentTarget;
+          setScroll({ top: target.scrollTop, left: target.scrollLeft });
+        }}
+        spellCheck={false}
+        className={`absolute inset-0 w-full h-full resize-none ${paddingClass} bg-transparent text-transparent caret-cyan-300 selection:bg-cyan-500/25 outline-none font-mono text-xs leading-relaxed whitespace-pre overflow-auto scrollbar-thin`}
+        aria-label={ariaLabel}
+      />
+    </>
+  );
+
   const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
-  const codeLines = currentCode.split('\n');
-  const lineDiagMap = computeLineDiagMap(currentCode, diagnostics);  return (
+  const codeLines = activeCodeText.split('\n');
+  const lineDiagMap = computeLineDiagMap(activeCodeText, diagnostics);
+
+  return (
     <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#050608] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
       {/* ================================================================ */}
       {/* WINDOW TITLE BAR HEADER (ANALYTIC & PRECISE)                     */}
@@ -1031,6 +1228,18 @@ export default function CodePreview({
             <PackageCheck className="w-3 h-3 animate-pulse" />
             COMPILE
           </button>
+
+          {codeActiveTab !== 'file' && (
+            <button
+              onClick={applyGeneratedCodeEdit}
+              disabled={!generatedDraftDirty || generatedApplyStatus === 'applying'}
+              className="px-2 py-1 bg-cyan-500/10 hover:bg-cyan-500/25 border border-cyan-500/35 rounded text-cyan-300 hover:text-white transition-all font-mono text-[9px] flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed font-bold"
+              title="Apply edited generated XML back into the workspace where a safe parser exists"
+            >
+              <Save className="w-3 h-3" />
+              APPLY XML
+            </button>
+          )}
 
           <button
             onClick={copyToClipboard}
@@ -1199,38 +1408,24 @@ export default function CodePreview({
                   {/* Right Lane: Edited Working Document */}
                   <div className="flex-1 bg-[#050608]/98 select-text">
                     <div className="sticky top-0 z-10 bg-[#11131a] border-b border-white/5 py-1.5 px-3.5 font-mono text-[9px] text-[#22c55e] font-bold flex items-center justify-between select-none">
-                      <span>EDITED WORKING STATE</span>
-                      <span className="text-[7.5px] bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-500/20 uppercase tracking-widest">EDITED</span>
+                      <span>EDITABLE WORKING STATE</span>
+                      <span className="text-[7.5px] bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-500/20 uppercase tracking-widest">LIVE EDITOR</span>
                     </div>
-                    <div className="py-2.5 text-xs font-mono leading-relaxed">
-                      {computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).modifiedLines.map((line, i) => {
-                        const isAdded = line.type === 'added';
-                        const isEmpty = line.type === 'empty';
-                        
-                        let lineBg = 'hover:bg-white/[0.01]';
-                        let textColor = 'text-[#cbd5e1]/70';
-                        if (isAdded) {
-                          lineBg = 'bg-[#22c55e]/10 border-l-2 border-[#22c55e]';
-                          textColor = 'text-emerald-300';
-                        } else if (isEmpty) {
-                          lineBg = 'bg-[#151720]/15 text-transparent opacity-5 select-none pointer-events-none';
-                        }
-
-                        return (
-                          <div key={i} className={`flex h-[18px] items-center ${lineBg}`}>
-                            <span className="select-none text-right pr-2.5 pl-2 w-10 shrink-0 text-slate-650 text-[9.5px]">
-                              {line.modifiedLineNumber || ''}
-                            </span>
-                            <span className="select-none w-4 text-center shrink-0 pr-1 text-[#22c55e] text-[9.5px] font-black">
-                              {isAdded ? '+' : ''}
-                            </span>
-                            <span
-                              className={`flex-1 whitespace-pre pr-4 truncate ${textColor}`}
-                              dangerouslySetInnerHTML={!isEmpty ? { __html: highlightCode(line.value) || '&nbsp;' } : undefined}
-                            />
-                          </div>
-                        );
-                      })}
+                    <div className="relative h-[calc(100%-28px)] min-h-[420px]">
+                      {renderHighlightedTextarea(
+                        activeCodeText,
+                        value => codeActiveTab === 'file' ? handleEditorContentChange(value) : handleGeneratedDraftChange(value),
+                        'Editing latest code beside snapshot',
+                        'py-2.5 pl-11 pr-4',
+                        splitEditorScroll,
+                        setSplitEditorScroll,
+                        'text-emerald-200/90'
+                      )}
+                      <div className="absolute left-0 top-0 bottom-0 w-10 py-2.5 bg-[#050608] border-r border-white/5 text-right pr-2 select-none pointer-events-none font-mono text-[9.5px] leading-relaxed text-slate-650 overflow-hidden">
+                        {activeCodeText.split('\n').slice(0, 4000).map((_, i) => (
+                          <div key={i}>{i + 1}</div>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
@@ -1322,31 +1517,36 @@ export default function CodePreview({
                 </div>
               </div>
             ) : (
-              // READ-ONLY VIEWER FOR AUTOGEN XML TEMPLATES (MD, UI, NODE)
-              <div className="flex-grow h-full overflow-auto py-3 font-mono text-xs leading-relaxed code-scroll scrollbar-thin">
-                {codeLines.map((line, i) => {
-                  const ld = lineDiagMap.get(i);
-                  const lineClass = ld
-                    ? (ld.severity === 'error'
-                        ? 'bg-red-500/10 border-l-2 border-[#ef4444]'
-                        : 'bg-amber-500/10 border-l-2 border-amber-500')
-                    : 'border-l-2 border-transparent hover:bg-white/[0.02]';
-                  return (
-                    <div
-                      key={i}
-                      className={`flex h-[18px] items-center ${lineClass}`}
-                      title={ld ? ld.messages.join('  •  ') : undefined}
-                    >
-                      <span className="select-none text-right pr-2.5 pl-2 w-10 shrink-0 text-slate-650 text-[9.5px]">
-                        {i + 1}
-                      </span>
-                      <span
-                        className="flex-grow whitespace-pre pr-4 truncate"
-                        dangerouslySetInnerHTML={{ __html: highlightXML(line) || '&nbsp;' }}
-                      />
+              // EDITABLE VIEWER FOR GENERATED XML TEMPLATES (MD, UI, NODE)
+              <div className="relative h-full w-full overflow-hidden flex flex-1 bg-[#050608]">
+                <div className="absolute left-0 top-0 bottom-0 w-11 py-3 bg-[#050608] border-r border-white/5 text-right pr-2 select-none pointer-events-none font-mono text-[9.5px] leading-relaxed text-slate-650 overflow-hidden">
+                  {codeLines.slice(0, 4000).map((_, i) => (
+                    <div key={i} className={lineDiagMap.has(i) ? (lineDiagMap.get(i)?.severity === 'error' ? 'text-red-400' : 'text-amber-300') : ''}>
+                      {i + 1}
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
+                {renderHighlightedTextarea(
+                  activeCodeText,
+                  handleGeneratedDraftChange,
+                  'Editing generated XML',
+                  'py-3 pl-14 pr-12',
+                  generatedEditorScroll,
+                  setGeneratedEditorScroll
+                )}
+                <div className="absolute bottom-3 right-14 px-2 py-1 rounded bg-[#0b0c13]/90 border border-white/5 text-[9px] pointer-events-none select-none z-10 font-mono">
+                  {generatedApplyStatus === 'error' ? (
+                    <span className="text-red-400 font-bold uppercase">{generatedApplyMessage}</span>
+                  ) : generatedApplyStatus === 'applying' ? (
+                    <span className="text-cyan-400 animate-pulse">APPLYING XML...</span>
+                  ) : generatedApplyStatus === 'applied' ? (
+                    <span className="text-[#36e07a] font-bold">{generatedApplyMessage}</span>
+                  ) : generatedDraftDirty ? (
+                    <span className="text-amber-300 font-bold">DRAFT MODIFIED - APPLY TO WORKSPACE WHEN READY</span>
+                  ) : (
+                    <span className="text-slate-500 lowercase">generated XML is editable</span>
+                  )}
+                </div>
               </div>
             )}
 

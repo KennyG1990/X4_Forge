@@ -21,6 +21,7 @@ import {
   MessageSquare
 } from 'lucide-react';
 import { ModWorkspace, TFile, TranslationPage, TranslationItem } from '../types';
+import { toTFileName } from '../lib/modCompiler';
 
 interface TFileEditorProps {
   workspace: ModWorkspace;
@@ -43,7 +44,7 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   const defaultTFiles: TFile[] = [
     {
       languageId: '44',
-      fileName: '0001-L044.xml',
+      fileName: '0001-l044.xml',
       pages: [
         {
           id: '20001',
@@ -67,7 +68,7 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
     },
     {
       languageId: '49',
-      fileName: '0001-L049.xml',
+      fileName: '0001-l049.xml',
       pages: [
         {
           id: '20001',
@@ -129,7 +130,7 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
 
     const matchedLang = LANGUAGES_SUPPORT.find(l => l.id === newLangId);
     const codeSuffix = matchedLang ? matchedLang.suffix : `L0${newLangId}`;
-    const filename = `0001-${codeSuffix}.xml`;
+    const filename = toTFileName({ fileName: `0001-${codeSuffix}.xml`, languageId: newLangId });
 
     // Check if duplicate filename
     if (tFiles.some(f => f.languageId === newLangId)) {
@@ -409,7 +410,7 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
             <span className="font-bold text-slate-200 block">X4 String Translation Files (t-files):</span>
             <p>
               Mod objects referencing names, subtitles, or messages use string lookups with the syntax <code className="text-emerald-400 font-mono px-1 bg-black/40 rounded">{"{pageId, stringId}"}</code> (e.g. <code className="text-emerald-400 font-mono px-1 bg-black/40 rounded">{"{20001, 1}"}</code> will fetch <em>"Antimatter Disrupter Cannon"</em>). 
-              Files live inside the <code className="text-cyan-400 font-mono px-1 bg-black/40.2 rounded">/t/</code> directory under the schema <code className="text-cyan-300 font-mono px-1">0001-L0xx.xml</code> (where <code className="text-orange-400">044</code>: English, <code className="text-orange-400">049</code>: German, etc.).
+              Files live inside the <code className="text-cyan-400 font-mono px-1 bg-black/40.2 rounded">/t/</code> directory under the schema <code className="text-cyan-300 font-mono px-1">0001-l0xx.xml</code> (where <code className="text-orange-400">044</code>: English, <code className="text-orange-400">049</code>: German, etc.).
             </p>
           </div>
         </div>

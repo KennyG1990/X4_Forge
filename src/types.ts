@@ -124,12 +124,16 @@ export interface WareDef {
   name: string;
   description: string;
   transport: 'container' | 'liquid' | 'solid' | 'energy';
+  tags?: string;
   volume: number;
   minPrice: number;
   avgPrice: number;
   maxPrice: number;
   prodTime: number;
   prodAmount: number;
+  productionMethod?: string;
+  productionName?: string;
+  primaryWares?: Array<{ ware: string; amount: number | string }>;
   includeInBuild?: boolean;
 }
 
@@ -188,6 +192,22 @@ export interface ModWorkspace {
     patches: boolean;
   };
   templates?: MDNode[];
+  /**
+   * Files imported from an existing mod that the studio does not (yet) model as
+   * editable domains. Preserved verbatim so import -> export is lossless. On
+   * export they are written back at their original relative path, unless a
+   * generated file already claims that path (the generated file wins).
+   */
+  passthroughFiles?: PassthroughFile[];
+}
+
+export interface PassthroughFile {
+  /** relative path within the extension, e.g. "libraries/god.xml" */
+  path: string;
+  /** verbatim file content */
+  content: string;
+  /** classification of why this file is preserved raw rather than modeled */
+  reason?: 'unknown_domain' | 'unparsed' | 'binary' | 'partial';
 }
 
 // Built-in game variables for X4 standard database definitions
@@ -760,6 +780,96 @@ export function generateUIXML(originalWorkspace: ModWorkspace): string {
   return layoutXML;
 }
 
+/**
+ * Generate the X4 UI extension index (`ui.xml`) that lives at the extension
+ * ROOT and registers the mod's Lua menu file(s). Format verified against the
+ * kuertee x4-mod-ui-extensions reference mod: an <addon> with an
+ * <environment type="menus"> listing <file name="ui/..."/> entries, and a
+ * noNamespaceSchemaLocation pointing at the game's ui/core/addon.xsd.
+ */
+export function generateUIIndexXML(workspace: ModWorkspace, modId: string): string {
+  const luaPath = `ui/${modId}.lua`;
+  return `<?xml version="1.0" encoding="utf-8"?>
+<addon name="${modId}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../ui/core/addon.xsd">
+  <environment type="menus">
+    <file name="${luaPath}" />
+  </environment>
+</addon>`;
+}
+
+/**
+ * Generate a Lua entry point for the mod's UI, packaged at `ui/<modId>.lua` and
+ * registered by `ui.xml`. This uses X4's real menu-registration pattern (the
+ * global `Menus` table + `Helper.registerMenu`, guarded so a missing global
+ * never hard-errors) instead of the previous invented `RegisterLayout` /
+ * `RemoveAllUITriggers` calls. Widget definitions authored in the studio are
+ * emitted as a data table the menu's createMenu hook can consume; the actual
+ * widget construction is left to X4's Helper/widgetSystem API rather than
+ * fabricated here.
+ */
+export function generateUILuaScript(workspace: ModWorkspace, modId: string): string {
+  const activeWidgets = (workspace.uiWidgets || []).filter(w => w.includeInBuild !== false);
+  const luaName = modId.replace(/[^a-zA-Z0-9_]/g, '_');
+  const esc = (s: string) => String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+  const widgetLines = activeWidgets.map(w => {
+    const label = esc(w.label || '');
+    return `    { type = "${esc(w.type)}", id = "${esc(w.id)}", label = "${label}", x = ${Math.round(w.x)}, y = ${Math.round(w.y)}, width = ${Math.round(w.w)}, height = ${Math.round(w.h)} },`;
+  }).join('\n');
+
+  const t = workspace.uiTheme || ({} as any);
+
+  return `-- ${workspace.name || modId} — X4 UI extension entry point
+-- Packaged at: extensions/${modId}/ui/${modId}.lua
+-- Registered by: extensions/${modId}/ui.xml (<environment type="menus">)
+--
+-- This file uses X4's real UI menu-registration pattern. X4 exposes the global
+-- 'Menus' table and a 'Helper' library to UI Lua. We register this menu by
+-- inserting it into Menus and calling Helper.registerMenu when available.
+-- Widget construction itself must use X4's widgetSystem (see the game's
+-- ui/core scripts); the studio emits widget metadata below for that hook.
+
+local ffi = require("ffi")
+
+local widgets = {
+${widgetLines || '    -- (no widgets authored in the studio yet)'}
+}
+
+local theme = {
+  background = "${esc(t.backgroundColor || '')}",
+  border = "${esc(t.borderColor || '')}",
+  accent = "${esc(t.accentColor || '')}",
+  opacity = ${typeof t.opacity === 'number' ? t.opacity : 1},
+}
+
+local menu = {
+  name = "${luaName}_menu",
+  widgets = widgets,
+  theme = theme,
+}
+
+function menu.onShowMenu()
+  -- Build the menu frame here using Helper/widgetSystem and menu.widgets.
+  -- e.g. local frame = Helper.createFrameHandle(menu, { ... })
+end
+
+local function init()
+  -- Register with X4's menu system. Guard each global so a UI-API change or a
+  -- non-UI load context fails soft instead of throwing.
+  if type(Menus) == "table" then
+    table.insert(Menus, menu)
+  end
+  if Helper and type(Helper.registerMenu) == "function" then
+    Helper.registerMenu(menu)
+  end
+end
+
+init()
+
+return menu
+`;
+}
+
 // Validation logic returns specific diagnostics
 export interface XMLDiagnostic {
   severity: 'error' | 'warning' | 'info';
@@ -1329,6 +1439,13 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     templates: (Array.isArray(ws.templates) ? ws.templates : []).map((tNode: any) => ({
       ...tNode,
       includeInBuild: false // Templates must remain non-compilable by definition!
-    }))
+    })),
+    passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
+      .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
+      .map((f: any) => ({
+        path: String(f.path).replace(/\\/g, '/').replace(/^\/+/, ''),
+        content: String(f.content),
+        reason: ['unknown_domain', 'unparsed', 'binary', 'partial'].includes(f.reason) ? f.reason : 'unknown_domain'
+      }))
   };
 }

@@ -32,12 +32,16 @@ export interface WareDef {
   name: string;
   description: string;
   transport: 'container' | 'liquid' | 'solid' | 'energy';
+  tags?: string;
   volume: number;
   minPrice: number;
   avgPrice: number;
   maxPrice: number;
   prodTime: number;
   prodAmount: number;
+  productionMethod?: string;
+  productionName?: string;
+  primaryWares?: Array<{ ware: string; amount: number | string }>;
 }
 
 export interface JobDef {
@@ -77,24 +81,38 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
       name: 'Quantum Engine Injectors',
       description: 'Super-efficient fuel compression injectors used in advanced high-speed capital engines.',
       transport: 'container',
+      tags: 'economy equipment',
       volume: 8,
       minPrice: 420,
       avgPrice: 850,
       maxPrice: 1600,
       prodTime: 45,
-      prodAmount: 4
+      prodAmount: 4,
+      productionMethod: 'default',
+      productionName: 'Assembly output',
+      primaryWares: [
+        { ware: 'ore', amount: 15 },
+        { ware: 'energycells', amount: 40 }
+      ]
     },
     {
       id: 'ware_fusion_conductors',
       name: 'High-Temp Fusion Conductors',
       description: 'Superconducting alloy links that distribute stable energy payloads to magnetic rail accelerators.',
       transport: 'container',
+      tags: 'economy equipment',
       volume: 12,
       minPrice: 800,
       avgPrice: 1250,
       maxPrice: 2400,
       prodTime: 60,
-      prodAmount: 2
+      prodAmount: 2,
+      productionMethod: 'default',
+      productionName: 'Assembly output',
+      primaryWares: [
+        { ware: 'ore', amount: 15 },
+        { ware: 'energycells', amount: 40 }
+      ]
     }
   ];
 
@@ -427,12 +445,16 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
       name: "Quantum Focus Crystals",
       description: "Highly volatile carbon lattices that refract focus laser beam emitters.",
       transport: 'container',
+      tags: 'economy equipment',
       volume: 4,
       minPrice: 180,
       avgPrice: 350,
       maxPrice: 720,
       prodTime: 30,
-      prodAmount: 10
+      prodAmount: 10,
+      productionMethod: 'default',
+      productionName: 'Assembly output',
+      primaryWares: []
     };
 
     const next = [...wares, nWare];
@@ -485,6 +507,24 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
     saveWares(next);
   };
 
+  const serializePrimaryWares = (primaryWares?: WareDef['primaryWares']) => {
+    return (primaryWares || [])
+      .map(entry => `${entry.ware}:${entry.amount}`)
+      .join('\n');
+  };
+
+  const parsePrimaryWares = (value: string): WareDef['primaryWares'] => {
+    return value
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => {
+        const [ware, amount = '1'] = line.split(/[:=,]\s*/);
+        return { ware: ware.trim(), amount: Number(amount) || amount.trim() || 1 };
+      })
+      .filter(entry => entry.ware.length > 0);
+  };
+
   const handleUpdateActiveJobProp = (key: keyof JobDef, val: any) => {
     const next = jobs.map((j, idx) => {
       if (idx === activeItemIndex) {
@@ -496,6 +536,29 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
   };
 
   // Compile XML content cleanly
+  const renderWareAttributes = (item: WareDef) => {
+    const tagsAttr = item.tags ? ` tags="${item.tags}"` : '';
+    return `id="${item.id}" name="${item.name}" description="${item.description}" transport="${item.transport}" volume="${item.volume}"${tagsAttr}`;
+  };
+
+  const renderWareProduction = (item: WareDef, indent = '      ') => {
+    const method = item.productionMethod || 'default';
+    const nameAttr = item.productionName ? ` name="${item.productionName}"` : '';
+    const primaryWares = (item.primaryWares || []).filter(entry => entry.ware && Number(entry.amount) > 0);
+    if (primaryWares.length === 0) {
+      return `${indent}<production time="${item.prodTime}" amount="${item.prodAmount}" method="${method}"${nameAttr} />`;
+    }
+
+    const inputs = primaryWares
+      .map(entry => `${indent}    <ware ware="${entry.ware}" amount="${entry.amount}" />`)
+      .join('\n');
+    return `${indent}<production time="${item.prodTime}" amount="${item.prodAmount}" method="${method}"${nameAttr}>
+${indent}  <primary>
+${inputs}
+${indent}  </primary>
+${indent}</production>`;
+  };
+
   const compileWaresXML = (): string => {
     const item = wares[activeItemIndex] || wares[0];
     if (!item) return '';
@@ -505,14 +568,9 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
 <diff>
   <!-- XML Diff Patch adding to core wares database file: libraries/wares.xml -->
   <add sel="/wares">
-    <ware id="${item.id}" name="${item.name}" description="${item.description}" transport="${item.transport}" volume="${item.volume}" tags="economy equipment">
+    <ware ${renderWareAttributes(item)}>
       <price min="${item.minPrice}" average="${item.avgPrice}" max="${item.maxPrice}" />
-      <production time="${item.prodTime}" amount="${item.prodAmount}" method="default" name="Assembly output">
-        <primary>
-          <ware ware="ore" amount="15" />
-          <ware ware="energycells" amount="40" />
-        </primary>
-      </production>
+${renderWareProduction(item)}
     </ware>
   </add>
 </diff>`;
@@ -520,14 +578,9 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
       return `<?xml version="1.0" encoding="utf-8"?>
 <wares>
   <!-- Pure XML wares definitions replacement list -->
-  <ware id="${item.id}" name="${item.name}" description="${item.description}" transport="${item.transport}" volume="${item.volume}">
+  <ware ${renderWareAttributes(item)}>
     <price min="${item.minPrice}" average="${item.avgPrice}" max="${item.maxPrice}" />
-    <production time="${item.prodTime}" amount="${item.prodAmount}" method="default">
-      <primary>
-        <ware ware="ore" amount="15" />
-        <ware ware="energycells" amount="40" />
-      </primary>
-    </production>
+${renderWareProduction(item, '    ')}
   </ware>
 </wares>`;
     }
@@ -905,6 +958,17 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
                     </select>
                   </div>
 
+                  <div>
+                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Ware Tags</label>
+                    <input
+                      type="text"
+                      value={(activeItem as WareDef).tags || ''}
+                      onChange={e => handleUpdateActiveWareProp('tags', e.target.value)}
+                      placeholder="economy equipment"
+                      className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                    />
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3 pb-1">
                     <div>
                       <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Cargo Volume (m³)</label>
@@ -934,6 +998,44 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
                           placeholder="qty"
                         />
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-black/35 rounded-lg border border-white/5 space-y-3">
+                    <span className="font-bold text-[9px] text-slate-400 tracking-wider block uppercase border-b border-white/5 pb-1">
+                      Explicit Production Recipe
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Method</label>
+                        <input
+                          type="text"
+                          value={(activeItem as WareDef).productionMethod || 'default'}
+                          onChange={e => handleUpdateActiveWareProp('productionMethod', e.target.value)}
+                          className="w-full p-1.5 rounded bg-black border border-white/10 text-slate-200"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Recipe Name</label>
+                        <input
+                          type="text"
+                          value={(activeItem as WareDef).productionName || ''}
+                          onChange={e => handleUpdateActiveWareProp('productionName', e.target.value)}
+                          placeholder="Assembly output"
+                          className="w-full p-1.5 rounded bg-black border border-white/10 text-slate-200"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">
+                        Primary Inputs, one per line: ware_id:amount
+                      </label>
+                      <textarea
+                        value={serializePrimaryWares((activeItem as WareDef).primaryWares)}
+                        onChange={e => handleUpdateActiveWareProp('primaryWares', parsePrimaryWares(e.target.value))}
+                        placeholder={'ore:15\nenergycells:40'}
+                        className="w-full p-2 h-16 rounded bg-black border border-white/10 text-emerald-300 focus:outline-none focus:border-cyan-500 transition-colors resize-none font-mono text-[11px]"
+                      />
                     </div>
                   </div>
 

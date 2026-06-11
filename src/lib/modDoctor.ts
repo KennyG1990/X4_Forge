@@ -4,7 +4,7 @@
  */
 
 import { ModWorkspace, XMLDiagnostic, generateMDXML, validateModWorkspace } from '../types';
-import { validatePackageReadiness, toContentVersion } from './modCompiler';
+import { validatePackageReadiness, toContentVersion, toTFileName } from './modCompiler';
 
 export interface ModDoctorDiagnostic extends XMLDiagnostic {
   code?: string;
@@ -142,7 +142,7 @@ export function runModDoctor(
           category: 'egosoft',
           code: 'ui.invalid_size',
           domain: 'ui_layout',
-          filePath: `md_ui_layouts/${modId}_ui.xml`,
+          filePath: `ui/${modId}.lua`,
           sourceRef: { kind: 'ui_widget', id: widget.id, label: widget.label },
           message: `UI widget "${widget.label || widget.id}" has non-positive dimensions.`
         });
@@ -151,12 +151,12 @@ export function runModDoctor(
 
     if (active(workspace.uiWidgets).length > 0) {
       push(diagnostics, {
-        severity: 'warning',
+        severity: 'info',
         category: 'egosoft',
-        code: 'ui.preview_schema',
+        code: 'ui.lua_scaffold',
         domain: 'ui_layout',
-        filePath: `md_ui_layouts/${modId}_ui.xml`,
-        message: 'UI layout output is a Studio preview format. Verify runtime compatibility before treating it as an X4-supported UI mod file.'
+        filePath: `ui/${modId}.lua`,
+        message: 'UI is packaged as an X4-correct ui.xml addon index plus a Lua entry point (ui/<modId>.lua). The Lua wires into X4’s menu system, but widget construction via Helper/widgetSystem is scaffolded — complete the onShowMenu hook and verify in-game before relying on the menu.'
       });
     }
   } else if ((workspace.uiWidgets || []).length > 0) {
@@ -268,6 +268,30 @@ export function runModDoctor(
         });
       }
 
+      if (!String(ware.tags || '').trim()) {
+        push(diagnostics, {
+          severity: 'warning',
+          category: 'egosoft',
+          code: 'ware.missing_tags',
+          domain: 'libraries',
+          filePath,
+          sourceRef: { kind: 'ware', id: ware.id, label: ware.name },
+          message: `Ware "${ware.id || ware.name}" has no explicit tags. Add tags such as "economy equipment" when the ware should be classified by X4 systems.`
+        });
+      }
+
+      if (!Array.isArray(ware.primaryWares) || ware.primaryWares.length === 0) {
+        push(diagnostics, {
+          severity: 'warning',
+          category: 'egosoft',
+          code: 'ware.missing_primary_inputs',
+          domain: 'libraries',
+          filePath,
+          sourceRef: { kind: 'ware', id: ware.id, label: ware.name },
+          message: `Ware "${ware.id || ware.name}" has no explicit primary production inputs. The compiler will no longer invent ore/energycells; add primary inputs if this ware should be produced.`
+        });
+      }
+
       if (!(ware.minPrice <= ware.avgPrice && ware.avgPrice <= ware.maxPrice)) {
         push(diagnostics, {
           severity: 'error',
@@ -333,7 +357,7 @@ export function runModDoctor(
 
   if (settings.translations) {
     active(workspace.tFiles).forEach(tFile => {
-      const filePath = `t/${tFile.fileName || `0001-L${tFile.languageId}.xml`}`;
+      const filePath = `t/${toTFileName(tFile)}`;
       if (!/^\d+$/.test(String(tFile.languageId || ''))) {
         push(diagnostics, {
           severity: 'error',
@@ -346,7 +370,7 @@ export function runModDoctor(
         });
       }
 
-      if (tFile.fileName && !/^0001-L\d{3}\.xml$/i.test(tFile.fileName)) {
+      if (tFile.fileName && !/^0001-[lL]\d{3}\.xml$/.test(tFile.fileName)) {
         push(diagnostics, {
           severity: 'warning',
           category: 'egosoft',
@@ -354,7 +378,7 @@ export function runModDoctor(
           domain: 'translations',
           filePath,
           sourceRef: { kind: 't_file', id: tFile.fileName },
-          message: `Translation file "${tFile.fileName}" does not match the common 0001-L044.xml naming convention.`
+          message: `Translation file "${tFile.fileName}" does not match the common 0001-l044.xml naming convention.`
         });
       }
 

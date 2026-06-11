@@ -1648,6 +1648,9 @@ export default function Canvas({
                 return (
                   <React.Fragment key={node.id}>
                     <div
+                      data-node-id={node.id}
+                      data-node-type={node.type}
+                      data-node-label={node.label}
                       onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                       style={{ left: node.x, top: node.y }}
                       className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
@@ -1671,6 +1674,9 @@ export default function Canvas({
               return (
                 <React.Fragment key={node.id}>
                   <div
+                    data-node-id={node.id}
+                    data-node-type={node.type}
+                    data-node-label={node.label}
                     onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                     style={{ left: node.x, top: node.y }}
                     className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${

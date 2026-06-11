@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ModWorkspace, generateMDXML, generateUIXML, XMLDiagnostic } from '../types';
+import { ModWorkspace, generateMDXML, generateUIXML, generateUIIndexXML, generateUILuaScript, XMLDiagnostic } from '../types';
 
 export const toSafeModId = (name: string): string => {
   const safe = name
@@ -15,28 +15,13 @@ export const toSafeModId = (name: string): string => {
 };
 
 export const toContentVersion = (value: string): string => {
-  const parts = String(value || '').split('.');
-  const major = parseInt(parts[0], 10) || 1;
-  const minor = parseInt(parts[1], 10) || 0;
-  const patch = parseInt(parts[2], 10) || 0;
-  
-  let versionNum = 100;
-  if (parts.length === 1) {
-    versionNum = major * 100;
-  } else if (parts.length === 2) {
-    if (parts[1].length === 1) {
-      versionNum = major * 100 + minor * 10;
-    } else {
-      versionNum = major * 100 + minor;
-    }
-  } else {
-    // parts.length >= 3
-    versionNum = major * 100 + minor * 10 + patch;
-    if (parts[1].length >= 2) {
-      versionNum = major * 100 + minor;
-    }
-  }
-  return String(Math.round(versionNum));
+  const normalized = String(value || '').trim().match(/^\d+(?:\.\d+)?/)?.[0];
+  const numericVersion = normalized ? Number.parseFloat(normalized) : 1;
+  const contentVersion = Number.isFinite(numericVersion)
+    ? Math.round(numericVersion * 100)
+    : 100;
+
+  return String(Math.max(1, contentVersion));
 };
 
 export const escapeXmlAttr = (str: string): string => {
@@ -53,6 +38,20 @@ export const escapeXmlText = (str: string): string => {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+};
+
+export const toTFileName = (file: any): string => {
+  const explicitName = String(file?.fileName || '').trim();
+  if (explicitName) {
+    const match = explicitName.match(/^(.+?)-[lL](\d+)\.xml$/);
+    if (match) {
+      return `${match[1]}-l${match[2].padStart(3, '0')}.xml`;
+    }
+    return explicitName;
+  }
+
+  const languageId = String(file?.languageId || '44').replace(/\D/g, '') || '44';
+  return `0001-l${languageId.padStart(3, '0')}.xml`;
 };
 
 export const generateContentXML = (modId: string, workspace: ModWorkspace): string => {
@@ -129,8 +128,6 @@ export const compileScriptToXML = (script: any): string => {
     }
   });
 
-  xml += `      <wait exact="5s" />\n`;
-  xml += `      <resume label="start" />\n`;
   xml += `    </actions>\n`;
   xml += `  </attention>\n`;
   xml += `</aiscript>`;
@@ -143,14 +140,27 @@ export const compileWaresXML = (wares: any[]): string => {
   xml += `  <!-- XML Diff Patch adding to core wares database file: libraries/wares.xml -->\n`;
   xml += `  <add sel="/wares">\n`;
   wares.forEach((item: any) => {
-    xml += `    <ware id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" description="${escapeXmlAttr(item.description)}" transport="${escapeXmlAttr(item.transport)}" volume="${item.volume}" tags="economy equipment">\n`;
+    const tagsAttr = item.tags ? ` tags="${escapeXmlAttr(item.tags)}"` : '';
+    const productionMethod = item.productionMethod || 'default';
+    const productionNameAttr = item.productionName ? ` name="${escapeXmlAttr(item.productionName)}"` : '';
+    const primaryWares = Array.isArray(item.primaryWares)
+      ? item.primaryWares.filter((ware: any) => String(ware?.ware || '').trim() && Number(ware?.amount) > 0)
+      : [];
+
+    xml += `    <ware id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" description="${escapeXmlAttr(item.description)}" transport="${escapeXmlAttr(item.transport)}" volume="${item.volume}"${tagsAttr}>\n`;
     xml += `      <price min="${item.minPrice}" average="${item.avgPrice}" max="${item.maxPrice}" />\n`;
-    xml += `      <production time="${item.prodTime}" amount="${item.prodAmount}" method="default" name="Assembly output">\n`;
-    xml += `        <primary>\n`;
-    xml += `          <ware ware="ore" amount="15" />\n`;
-    xml += `          <ware ware="energycells" amount="40" />\n`;
-    xml += `        </primary>\n`;
-    xml += `      </production>\n`;
+    xml += `      <production time="${item.prodTime}" amount="${item.prodAmount}" method="${escapeXmlAttr(productionMethod)}"${productionNameAttr}`;
+    if (primaryWares.length === 0) {
+      xml += ` />\n`;
+    } else {
+      xml += `>\n`;
+      xml += `        <primary>\n`;
+      primaryWares.forEach((ware: any) => {
+        xml += `          <ware ware="${escapeXmlAttr(ware.ware)}" amount="${escapeXmlAttr(String(ware.amount))}" />\n`;
+      });
+      xml += `        </primary>\n`;
+      xml += `      </production>\n`;
+    }
     xml += `    </ware>\n`;
   });
   xml += `  </add>\n`;
@@ -403,10 +413,11 @@ export const compileAndSaveAll = async (
   const directorDir = await targetDir.getDirectoryHandle('md', { create: true });
   await writeTextFile(directorDir, `${modId}.xml`, generateMDXML(workspace));
 
-  // 3. UI widget layouts
+  // 3. UI — X4-correct: extension-root ui.xml registering a Lua entry under ui/.
   if (workspace.uiWidgets?.length) {
-    const uiDir = await targetDir.getDirectoryHandle('md_ui_layouts', { create: true });
-    await writeTextFile(uiDir, `${modId}_ui.xml`, generateUIXML(workspace));
+    await writeTextFile(targetDir, 'ui.xml', generateUIIndexXML(workspace, modId));
+    const uiDir = await targetDir.getDirectoryHandle('ui', { create: true });
+    await writeTextFile(uiDir, `${modId}.lua`, generateUILuaScript(workspace, modId));
   }
 
   // 4. AIScripts behavior trees
@@ -433,7 +444,7 @@ export const compileAndSaveAll = async (
   if (workspace.tFiles?.length) {
     const tDir = await targetDir.getDirectoryHandle('t', { create: true });
     for (const tFile of workspace.tFiles) {
-      await writeTextFile(tDir, tFile.fileName || `0001-L${tFile.languageId}.xml`, compileTFileXML(tFile));
+      await writeTextFile(tDir, toTFileName(tFile), compileTFileXML(tFile));
     }
   }
 

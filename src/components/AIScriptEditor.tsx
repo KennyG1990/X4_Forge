@@ -372,8 +372,6 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
       }
     });
 
-    xml += `      <wait exact="5s" />\n`;
-    xml += `      <resume label="start" />\n`;
     xml += `    </actions>\n`;
     xml += `  </attention>\n`;
     xml += `</aiscript>`;

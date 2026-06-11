@@ -8,6 +8,7 @@ import path from "path";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, writeXsdConfig } from "./src/lib/xsdParser";
@@ -16,6 +17,8 @@ import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdC
 import {
   generateMDXML,
   generateUIXML,
+  generateUIIndexXML,
+  generateUILuaScript,
   validateModWorkspace,
   X4_FACTIONS,
   X4_SHIP_MACROS,
@@ -28,6 +31,7 @@ import {
 } from "./src/types";
 import {
   toSafeModId,
+  toTFileName,
   generateContentXML,
   compileScriptToXML,
   compileWaresXML,
@@ -38,6 +42,9 @@ import {
 } from "./src/lib/modCompiler";
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
+import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile } from "./src/lib/x4CatDat";
+import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
+import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 
 dotenv.config();
@@ -177,7 +184,12 @@ function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files
   }
 
   if (settings.ui && ws.uiWidgets?.length) {
-    files[`md_ui_layouts/${modId}_ui.xml`] = generateUIXML(ws);
+    // X4-correct UI packaging: an extension-root ui.xml index registering a Lua
+    // entry point under ui/. (The legacy md_ui_layouts/<id>_ui.xml used a
+    // non-standard <ui_menu> schema X4 ignores; it is no longer packaged but is
+    // still available as a design-time descriptor via generateUIXML.)
+    files["ui.xml"] = generateUIIndexXML(ws, modId);
+    files[`ui/${modId}.lua`] = generateUILuaScript(ws, modId);
   }
 
   if (settings.ai) {
@@ -198,7 +210,7 @@ function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files
 
   if (settings.translations) {
     for (const tFile of ws.tFiles || []) {
-      files[`t/${tFile.fileName || `0001-L${tFile.languageId}.xml`}`] = compileTFileXML(tFile);
+      files[`t/${toTFileName(tFile)}`] = compileTFileXML(tFile);
     }
   }
 
@@ -214,6 +226,17 @@ function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files
 
     for (const [filePath, filePatches] of Object.entries(patchesByFile)) {
       files[filePath] = compileDiffDocument(filePatches, filePath);
+    }
+  }
+
+  // Passthrough files preserved from an imported mod. Generated output always
+  // wins a path collision so the studio's modeled domains stay authoritative.
+  for (const pf of (ws.passthroughFiles || [])) {
+    if (!pf || typeof pf.path !== 'string') continue;
+    const rel = pf.path.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!rel || rel.includes('..')) continue;
+    if (files[rel] === undefined) {
+      files[rel] = pf.content ?? '';
     }
   }
 
@@ -403,9 +426,56 @@ function getObjectIndex(): X4ObjectIndex {
     ...schemaLibrary.actions.map(element => ({ tag: element.tag, category: "md_action" })),
     ...schemaLibrary.controlFlow.map(element => ({ tag: element.tag, category: "md_control_flow" }))
   ];
-  const index = buildX4ObjectIndex(roots, schemaElements);
+  // Roots that may hold packed .cat/.dat archives: the game install (base
+  // 01.cat..NN.cat + extensions/<dlc>/ext_NN.cat) and the mod workspace.
+  const catDatRoots = [resolved.x4GamePath || "", resolved.modWorkspacePath || ""].filter(Boolean);
+  const index = buildX4ObjectIndex(roots, schemaElements, catDatRoots);
   objectIndexCache = { key: cacheKey, builtAt: Date.now(), index };
   return index;
+}
+
+function getSchemaIndex(): SchemaIndex {
+  const resolved = resolveXsdConfig();
+  return buildSchemaIndex([resolved.mdXsdPath, resolved.commonXsdPath].filter(Boolean));
+}
+
+/**
+ * Real XSD-backed validation of the generated package. Validates the MD file and
+ * any AI script files against the parsed md.xsd/common.xsd element/attribute
+ * index. Returns ModDoctor-shaped diagnostics so they merge with heuristic ones.
+ */
+function runSchemaValidation(files: Record<string, string>, modId: string): any[] {
+  const out: any[] = [];
+  let index: SchemaIndex;
+  try {
+    index = getSchemaIndex();
+  } catch {
+    return out;
+  }
+  if (!index.loaded) return out;
+
+  const validateFile = (filePath: string, domain: string, reportUnknownElements: boolean) => {
+    const xml = files[filePath];
+    if (!xml) return;
+    const diags = validateXmlAgainstSchema(xml, index, { filePath, domain, reportUnknownElements });
+    for (const d of diags) {
+      out.push({
+        severity: d.severity,
+        category: 'schema',
+        code: d.code,
+        domain,
+        filePath,
+        message: d.line ? `${d.message} (line ${d.line})` : d.message,
+        sourceRef: d.sourceRef ? { kind: 'xsd', label: d.sourceRef } : undefined
+      });
+    }
+  };
+
+  validateFile(`md/${modId}.xml`, 'mission_director', true);
+  for (const fp of Object.keys(files)) {
+    if (/^aiscripts\//i.test(fp)) validateFile(fp, 'ai_scripts', false);
+  }
+  return out;
 }
 
 // Server-persisted active workspace (in-memory, preloaded with the Escort project)
@@ -1054,7 +1124,8 @@ app.get("/api/agent/schema", (req, res) => {
         },
         ui_layout: {
           fields: ["uiWidgets", "uiTheme"],
-          output: "md_ui_layouts/<modId>_ui.xml",
+          outputs: ["ui.xml", "ui/<modId>.lua"],
+          note: "X4-correct UI packaging: an extension-root ui.xml <addon><environment type=menus> index registering a Lua entry point under ui/. The legacy non-standard md_ui_layouts/<id>_ui.xml is no longer packaged.",
           widget_types: ["window", "table", "button", "text", "progressbar", "dropdown", "header", "input", "chat"],
           theme_fields: ["backgroundColor", "borderColor", "accentColor", "opacity", "showIcons"]
         },
@@ -1063,7 +1134,7 @@ app.get("/api/agent/schema", (req, res) => {
           output: "t/<fileName>",
           shape: {
             languageId: "string, e.g. 44",
-            fileName: "string, e.g. 0001-L044.xml",
+            fileName: "string, e.g. 0001-l044.xml",
             pages: [{ id: "string", title: "optional string", items: [{ id: "string", value: "string", description: "optional string" }] }]
           }
         },
@@ -1088,17 +1159,17 @@ app.get("/api/agent/schema", (req, res) => {
         },
         object_index: {
           endpoint: "/api/agent/object-index",
-          purpose: "Search local loose XML game/mod data for ships, station macros, wares, factions, sounds, jobs, AI scripts, generic macros, and schema-derived MD elements.",
+          purpose: "Search local loose XML and packed .cat/.dat game/mod data for ships, station macros, wares, factions, sounds, jobs, AI scripts, generic macros, and schema-derived MD elements.",
           query: {
             q: "optional text search over id, name, detail, and sourceFile",
             kind: "optional kind filter: all | ship | station | ware | faction | sound | job | aiscript | md_element | macro",
             limit: "optional result cap, max 2000"
           },
-          note: "This index reads loose XML files from configured paths. Packed cat/dat archives are not decoded yet."
+          note: "Indexes loose XML from configured paths AND decodes packed .cat/.dat archives (base game + DLC extensions) for catalog macros (index/macros.xml), factions, wares, jobs, and sounds. Response includes packedArchives and packedEntriesScanned counters."
         },
         package_manifest: {
           always_outputs: ["content.xml", "README.md"],
-          conditional_outputs: ["md/<modId>.xml", "md_ui_layouts/<modId>_ui.xml", "aiscripts/*.xml", "libraries/wares.xml", "libraries/jobs.xml", "t/*.xml", "<xmlPatch.targetFile>"]
+          conditional_outputs: ["md/<modId>.xml", "ui.xml", "ui/<modId>.lua", "aiscripts/*.xml", "libraries/wares.xml", "libraries/jobs.xml", "t/*.xml", "<xmlPatch.targetFile>"]
         },
         mod_doctor: {
           purpose: "Package-wide diagnostics for agents and the Studio UI.",
@@ -1271,7 +1342,7 @@ app.get("/api/agent/schema", (req, res) => {
       files: "Record<relativePath,string> containing every generated package file",
       legacy_files: {
         mission_director_xml: "same content as files['md/<modId>.xml']",
-        ui_layout_xml: "same content as files['md_ui_layouts/<modId>_ui.xml'] when UI widgets exist"
+        ui_index_xml: "same content as files['ui.xml'] when UI widgets exist"
       },
       diagnostics: "Mod Doctor package-wide diagnostics with optional code, domain, filePath, nodeId, and sourceRef metadata",
       file_count: "number"
@@ -1497,11 +1568,28 @@ app.get("/api/patch/base-content", (req, res) => {
     for (const p of pathsToCheck) {
       if (fs.existsSync(p) && fs.statSync(p).isFile()) {
         const content = fs.readFileSync(p, 'utf8');
-        return res.json({ content, sourcePath: p });
+        return res.json({ content, sourcePath: p, source: 'loose' });
       }
     }
 
-    return res.status(404).json({ error: `File '${targetFile}' not found in loose files. It may be packed inside game archives (.cat/.dat).`, isPacked: true });
+    // Loose lookup failed — fall back to decoding the base-game .cat/.dat archives.
+    if (resolved.x4GamePath) {
+      try {
+        const packed = catDatExtractBaseGameFile(resolved.x4GamePath, targetFile);
+        if (packed) {
+          return res.json({
+            content: packed.text,
+            sourcePath: `${packed.catPath} :: ${packed.name}`,
+            source: 'packed',
+            note: 'Extracted from packed base-game .cat/.dat archives. DLC additions are not merged into this preview.'
+          });
+        }
+      } catch (e) {
+        // fall through to 404
+      }
+    }
+
+    return res.status(404).json({ error: `File '${targetFile}' not found in loose files or packed game archives (.cat/.dat).`, isPacked: true });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "Failed to find target base file." });
   }
@@ -1830,6 +1918,309 @@ app.get("/api/agent/object-index", (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Round-trip mod-folder import + lossiness reporting (P4)
+// ---------------------------------------------------------------------------
+
+const ROUND_TRIP_TEXT_EXTS = new Set(['.xml', '.lua', '.xsd', '.txt', '.md', '.json', '.css', '.html', '.csv', '.cfg', '.ini']);
+
+function walkFilesRelative(absRoot: string, rel = '', out: string[] = []): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(path.join(absRoot, rel), { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    if (e.name === '.snapshots' || e.name === '.git' || e.name.startsWith('.studio-')) continue;
+    const childRel = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) walkFilesRelative(absRoot, childRel, out);
+    else if (e.isFile()) out.push(childRel);
+  }
+  return out;
+}
+
+function parseContentMeta(xml: string): { name?: string; version?: string; author?: string; description?: string } {
+  const attr = (a: string) => {
+    const m = xml.match(new RegExp(`<content\\b[^>]*\\b${a}\\s*=\\s*"([^"]*)"`, 'i'));
+    return m?.[1];
+  };
+  return { name: attr('name') || attr('id'), version: attr('version'), author: attr('author'), description: attr('description') };
+}
+
+/** Import a mod folder into a workspace, preserving every file losslessly. */
+function importModFolder(absDir: string): { workspace: ModWorkspace; report: any } {
+  const relFiles = walkFilesRelative(absDir);
+  let baseWorkspace: ModWorkspace | null = null;
+  const meta: any = {};
+
+  // metadata from content.xml
+  const contentRel = relFiles.find(f => f.toLowerCase() === 'content.xml');
+  if (contentRel) {
+    try { Object.assign(meta, parseContentMeta(fs.readFileSync(path.join(absDir, contentRel), 'utf8'))); } catch { /* */ }
+  }
+
+  // editable MD: parse the first md/*.xml
+  const mdRel = relFiles.find(f => /^md\/[^/]+\.xml$/i.test(f));
+  if (mdRel) {
+    try {
+      const parsed = parseXMLToWorkspace(fs.readFileSync(path.join(absDir, mdRel), 'utf8'));
+      if (parsed) baseWorkspace = parsed;
+    } catch { /* leave baseWorkspace null */ }
+  }
+
+  const ws: ModWorkspace = sanitizeWorkspace({
+    ...(baseWorkspace || {}),
+    name: meta.name || baseWorkspace?.name || path.basename(absDir),
+    version: meta.version || baseWorkspace?.version,
+    author: meta.author || baseWorkspace?.author,
+    description: meta.description || baseWorkspace?.description
+  });
+
+  const modId = toSafeModId(ws.name);
+  // Paths the manifest will regenerate from the parsed/modeled domains.
+  const regenPaths = new Set<string>(Object.keys(buildWorkspaceFileManifest(ws).files).map(p => p.toLowerCase()));
+
+  const report = {
+    folder: absDir,
+    totalFiles: relFiles.length,
+    modeled: [] as any[],
+    passthrough: [] as any[],
+    binarySkipped: [] as any[]
+  };
+  const passthroughFiles: any[] = [];
+
+  for (const rel of relFiles) {
+    const ext = path.extname(rel).toLowerCase();
+    const isRegen = regenPaths.has(rel.toLowerCase());
+    if (isRegen) {
+      report.modeled.push({ path: rel, note: 'regenerated from modeled domain (may differ structurally)' });
+      // If the imported file would be regenerated, no need to passthrough it.
+      continue;
+    }
+    if (!ROUND_TRIP_TEXT_EXTS.has(ext)) {
+      report.binarySkipped.push({ path: rel, note: 'binary/unsupported extension — not loaded into the text workspace' });
+      continue;
+    }
+    let content = '';
+    try { content = fs.readFileSync(path.join(absDir, rel), 'utf8'); } catch { continue; }
+    const reason = /^md\//i.test(rel) ? 'partial' : 'unknown_domain';
+    passthroughFiles.push({ path: rel, content, reason });
+    report.passthrough.push({ path: rel, reason });
+  }
+
+  ws.passthroughFiles = passthroughFiles;
+  report['summary'] = `${report.modeled.length} modeled, ${report.passthrough.length} preserved verbatim, ${report.binarySkipped.length} binary skipped`;
+  return { workspace: ws, report };
+}
+
+function resolveModFolder(reqPath: string): { abs: string } | { error: string; status: number } {
+  const resolved = resolveXsdConfig();
+  const root = resolved.modWorkspacePath || resolved.filesystemPath;
+  if (!root) return { error: 'No modWorkspacePath/filesystemPath configured.', status: 400 };
+  const rel = String(reqPath || '').trim();
+  const normalized = path.normalize(rel);
+  if (path.isAbsolute(normalized) || normalized.startsWith('..')) return { error: 'Invalid folder path.', status: 400 };
+  const abs = path.join(root, normalized);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) return { error: `Folder not found: ${rel}`, status: 404 };
+  return { abs };
+}
+
+app.post("/api/agent/mod-folder/import", (req, res) => {
+  try {
+    const r = resolveModFolder(req.body?.path);
+    if ('error' in r) return res.status(r.status).json({ error: r.error });
+    const { workspace, report } = importModFolder(r.abs);
+    return res.json({ success: true, workspace, report });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'mod-folder import failed' });
+  }
+});
+
+app.get("/api/agent/round-trip-selftest", (req, res) => {
+  let tmp = '';
+  try {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4rt-'));
+    // Synthesize a small mod exercising modeled + unknown domains.
+    const mdXml = `<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="RoundTrip_Test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="RT_Cue">
+      <conditions>
+        <event_game_started/>
+      </conditions>
+      <actions>
+        <set_value name="$rt" exact="1"/>
+      </actions>
+    </cue>
+  </cues>
+</mdscript>`;
+    const godXml = `<?xml version="1.0" encoding="utf-8"?>\n<diff>\n  <add sel="/god/stations">\n    <station id="rt_custom_station"/>\n  </add>\n</diff>\n`;
+    const customLua = `-- a hand-authored helper the studio does not model\nlocal m = {}\nreturn m\n`;
+    const files: Record<string, string> = {
+      'content.xml': `<?xml version="1.0" encoding="utf-8"?>\n<content id="roundtrip_test" name="RoundTrip_Test" author="tester" version="100" date="2026-06-11" save="0"/>`,
+      'md/roundtrip_test.xml': mdXml,
+      'libraries/god.xml': godXml,
+      'subscripts/custom_helper.lua': customLua,
+      'unknown_top_level.xml': `<?xml version="1.0"?>\n<weird custom="data"/>\n`
+    };
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    }
+
+    const { workspace, report } = importModFolder(tmp);
+    const out = buildWorkspaceFileManifest(workspace);
+    const outFiles = out.files;
+
+    const checks: any[] = [];
+    let lossless = true;
+    for (const [rel, content] of Object.entries(files)) {
+      const present = outFiles[rel] !== undefined;
+      const isModeled = rel === 'content.xml' || /^md\//i.test(rel);
+      const identical = present && outFiles[rel] === content;
+      if (!present) lossless = false;
+      if (!isModeled && present && !identical) lossless = false;
+      checks.push({ path: rel, present, modeled: isModeled, byteIdentical: identical });
+    }
+
+    return res.json({
+      lossless,
+      inputFiles: Object.keys(files).length,
+      outputFiles: Object.keys(outFiles).length,
+      passthroughCount: (workspace.passthroughFiles || []).length,
+      checks,
+      importSummary: report.summary,
+      importReport: report
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'selftest failed', stack: String(error?.stack || '').slice(0, 500) });
+  } finally {
+    if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } }
+  }
+});
+
+app.post("/api/agent/round-trip-check", (req, res) => {
+  try {
+    const r = resolveModFolder(req.body?.path);
+    if ('error' in r) return res.status(r.status).json({ error: r.error });
+    const { workspace, report } = importModFolder(r.abs);
+    const { files } = buildWorkspaceFileManifest(workspace);
+    const outPaths = new Set(Object.keys(files).map(p => p.toLowerCase()));
+
+    const inputFiles = walkFilesRelative(r.abs);
+    const droppedFiles: string[] = [];
+    const passthroughVerified: string[] = [];
+    const passthroughMismatch: any[] = [];
+    const modeledChanged: string[] = [];
+
+    for (const rel of inputFiles) {
+      const ext = path.extname(rel).toLowerCase();
+      const inPassthrough = (workspace.passthroughFiles || []).find(p => p.path.toLowerCase() === rel.toLowerCase());
+      if (inPassthrough) {
+        const outContent = files[inPassthrough.path] ?? files[rel];
+        if (outContent === undefined) {
+          droppedFiles.push(rel);
+        } else if (outContent === inPassthrough.content) {
+          passthroughVerified.push(rel);
+        } else {
+          passthroughMismatch.push({ path: rel, inLen: inPassthrough.content.length, outLen: outContent.length });
+        }
+        continue;
+      }
+      if (outPaths.has(rel.toLowerCase())) {
+        modeledChanged.push(rel); // present in output but regenerated/modeled
+      } else if (!ROUND_TRIP_TEXT_EXTS.has(ext)) {
+        // binary, intentionally not modeled — report separately, not a "drop"
+        modeledChanged.push(rel + ' (binary, not modeled)');
+      } else {
+        droppedFiles.push(rel);
+      }
+    }
+
+    const lossless = droppedFiles.length === 0 && passthroughMismatch.length === 0;
+    return res.json({
+      success: true,
+      lossless,
+      inputFileCount: inputFiles.length,
+      outputFileCount: Object.keys(files).length,
+      passthroughVerified: passthroughVerified.length,
+      passthroughMismatch,
+      modeledOrRegenerated: modeledChanged.length,
+      droppedFiles,
+      importReport: report
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'round-trip-check failed' });
+  }
+});
+
+app.get("/api/agent/xsd-debug", (req, res) => {
+  try {
+    const index = getSchemaIndex();
+    // Element lookup mode: ?el=create_ship returns that element's resolved attrs.
+    if (typeof req.query.el === 'string' && req.query.el) {
+      const spec = index.elements.get(req.query.el.toLowerCase());
+      const resolved = resolveXsdConfig();
+      let rawHit: string | null = null;
+      try {
+        const xsd = fs.readFileSync(resolved.mdXsdPath, 'utf8');
+        const term = String(req.query.search || req.query.el);
+        const i = xsd.toLowerCase().indexOf(String(term).toLowerCase());
+        rawHit = i >= 0 ? xsd.slice(Math.max(0, i - 30), i + 300).replace(/\s+/g, ' ') : 'NOT_FOUND_IN_md.xsd';
+      } catch (e: any) { rawHit = 'read_err:' + e.message; }
+      return res.json({
+        element: req.query.el,
+        inIndex: Boolean(spec),
+        resolved: spec?.resolved,
+        attrNames: spec ? [...spec.attributes.keys()] : [],
+        rawHit
+      });
+    }
+    const sample = `<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="Test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="Test_Cue">
+      <conditions>
+        <event_object_signalled bogusattr="x"/>
+      </conditions>
+      <actions>
+        <set_value name="$x" exact="1" operation="not_a_real_enum_value"/>
+        <totally_made_up_action foo="bar"/>
+      </actions>
+    </cue>
+  </cues>
+</mdscript>`;
+    const diags = validateXmlAgainstSchema(sample, index, { filePath: 'md/test.xml', domain: 'mission_director', reportUnknownElements: true });
+    // also surface a couple of known elements + whether they carry enum attrs
+    const knownSamples: Record<string, any> = {};
+    for (const name of ['set_value', 'event_object_signalled', 'attention', 'cue']) {
+      const spec = index.elements.get(name);
+      knownSamples[name] = spec ? {
+        attrCount: spec.attributes.size,
+        enumAttrs: [...spec.attributes.entries()].filter(([, a]) => a.enumValues && a.enumValues.length).map(([k, a]) => `${k}:[${(a.enumValues || []).slice(0, 4).join(',')}]`).slice(0, 5),
+        requiredAttrs: [...spec.attributes.entries()].filter(([, a]) => a.required).map(([k]) => k)
+      } : 'NOT_IN_INDEX';
+    }
+    return res.json({ loaded: index.loaded, elementCount: index.elementCount, sourceFiles: index.sourceFiles, knownSamples, sampleDiagnostics: diags });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'xsd-debug failed', stack: String(error?.stack || '').slice(0, 400) });
+  }
+});
+
+app.get("/api/agent/catdat-debug", (req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const roots = [resolved.x4GamePath || "", resolved.modWorkspacePath || ""].filter(Boolean);
+    const report = catDatDebugScan(roots);
+    // Trim to keep payload reasonable: only show archives that have entries or errors.
+    return res.json(report);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "catdat-debug failed" });
+  }
+});
+
 function cleanDirectoryExceptMetadata(dirPath: string) {
   if (!fs.existsSync(dirPath)) return;
   try {
@@ -1880,12 +2271,12 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
     fs.writeFileSync(path.join(mdDir, `${modId}.xml`), mdXml);
   }
 
-  // 4. UI
+  // 4. UI — X4-correct: extension-root ui.xml registering a Lua entry under ui/.
   if (settings.ui && ws.uiWidgets?.length) {
-    const uiDir = path.join(targetPath, 'md_ui_layouts');
+    fs.writeFileSync(path.join(targetPath, 'ui.xml'), generateUIIndexXML(ws, modId));
+    const uiDir = path.join(targetPath, 'ui');
     fs.mkdirSync(uiDir, { recursive: true });
-    const uiXml = generateUIXML(ws);
-    fs.writeFileSync(path.join(uiDir, `${modId}_ui.xml`), uiXml);
+    fs.writeFileSync(path.join(uiDir, `${modId}.lua`), generateUILuaScript(ws, modId));
   }
 
   // 5. AIScripts
@@ -1915,8 +2306,7 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
     const tDir = path.join(targetPath, 't');
     fs.mkdirSync(tDir, { recursive: true });
     for (const tFile of ws.tFiles) {
-      const fileName = tFile.fileName || `0001-L${tFile.languageId}.xml`;
-      fs.writeFileSync(path.join(tDir, fileName), compileTFileXML(tFile));
+      fs.writeFileSync(path.join(tDir, toTFileName(tFile)), compileTFileXML(tFile));
     }
   }
 
@@ -2071,8 +2461,9 @@ app.post("/api/agent/compile", (req, res) => {
   try {
     const { modId, files } = buildWorkspaceFileManifest(ws);
     const mdPath = `md/${modId}.xml`;
-    const uiPath = `md_ui_layouts/${modId}_ui.xml`;
-    const diagnostics = runModDoctor(ws, files, modId);
+    const uiIndexPath = `ui.xml`;
+    const uiLuaPath = `ui/${modId}.lua`;
+    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId)];
 
     return res.json({
       success: true,
@@ -2081,11 +2472,12 @@ app.post("/api/agent/compile", (req, res) => {
       files: {
         ...files,
         mission_director_xml: files[mdPath],
-        ui_layout_xml: files[uiPath] || ""
+        ui_index_xml: files[uiIndexPath] || "",
+        ui_lua: files[uiLuaPath] || ""
       },
       legacy_files: {
         mission_director_xml: files[mdPath],
-        ui_layout_xml: files[uiPath] || ""
+        ui_index_xml: files[uiIndexPath] || ""
       },
       diagnostics
     });
@@ -2105,7 +2497,7 @@ app.post("/api/agent/package", (req, res) => {
   const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
   try {
     const { modId, files } = buildWorkspaceFileManifest(ws);
-    const diagnostics = runModDoctor(ws, files, modId);
+    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId)];
 
     return res.json({
       success: true,
