@@ -224,6 +224,8 @@ export default function App() {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
   const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
+  // Bumped when Directory Settings closes so the Sidebar's read-only schema panel refreshes.
+  const [schemaConfigVersion, setSchemaConfigVersion] = useState<number>(0);
   const [isCompileModalOpen, setIsCompileModalOpen] = useState<boolean>(false);
 
   // Left & Right Sidebar Resizing States
@@ -990,6 +992,8 @@ export default function App() {
           setWorkspaceView={setWorkspaceView}
           schemaTemplates={schemaTemplates}
           onSchemaConfigChanged={loadSchemaLibrary}
+          onOpenDirectorySettings={() => setIsDirSettingsOpen(true)}
+          schemaConfigVersion={schemaConfigVersion}
           onOpenEditorFile={(file) => {
             setActiveEditorFile(file);
           }}
@@ -1174,7 +1178,7 @@ export default function App() {
       {/* Directory Settings Modal — manages every folder the studio needs */}
       <DirectorySettingsModal
         isOpen={isDirSettingsOpen}
-        onClose={() => setIsDirSettingsOpen(false)}
+        onClose={() => { setIsDirSettingsOpen(false); setSchemaConfigVersion(v => v + 1); }}
         modWorkspacePath={modWorkspacePath}
         setModWorkspacePath={setModWorkspacePath}
         filesystemPath={filesystemPath}

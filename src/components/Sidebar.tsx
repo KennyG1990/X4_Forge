@@ -46,6 +46,7 @@ import {
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
+import ObjectIndexPicker from './ObjectIndexPicker';
 import PackageModDoctor from './PackageModDoctor';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
@@ -74,6 +75,10 @@ interface SidebarProps {
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
   onSchemaConfigChanged?: () => Promise<void> | void;
+  /** Opens the Directory Settings modal — the single authority for the XSD schema directory. */
+  onOpenDirectorySettings?: () => void;
+  /** Bumped by App when the Directory Settings modal closes, so the read-only schema panel refreshes. */
+  schemaConfigVersion?: number;
   onOpenEditorFile?: (file: {
     name: string;
     path: string;
@@ -132,6 +137,8 @@ export default function Sidebar({
   setWorkspaceView,
   schemaTemplates,
   onSchemaConfigChanged,
+  onOpenDirectorySettings,
+  schemaConfigVersion,
   onOpenEditorFile,
   workspaceDirMode,
   setWorkspaceDirMode,
@@ -287,7 +294,7 @@ export default function Sidebar({
 
   useEffect(() => {
     loadSchemaConfig();
-  }, [loadSchemaConfig]);
+  }, [loadSchemaConfig, schemaConfigVersion]);
 
   const saveSchemaConfig = async () => {
     setSavingSchema(true);
@@ -864,13 +871,12 @@ export default function Sidebar({
 
               <div>
                 <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider">Schema Directory</label>
-                <input
-                  type="text"
-                  value={schemaDir}
-                  onChange={e => setSchemaDir(e.target.value)}
-                  className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors font-mono text-[10px]"
-                  placeholder="Folder containing md.xsd and common.xsd"
-                />
+                <div className="w-full p-2 rounded bg-black/40 border border-white/10 text-slate-300 font-mono text-[10px] break-all min-h-[34px] flex items-center">
+                  {schemaDir || <span className="text-slate-500 italic">Not configured — set it in Directory Settings</span>}
+                </div>
+                <p className="text-slate-500 text-[9px] mt-1 leading-snug">
+                  Configured in <span className="text-cyan-400">Directory Settings</span> (the single source of truth). This panel is read-only.
+                </p>
               </div>
 
               <div className="space-y-1.5 rounded bg-black/30 border border-white/10 p-2 text-[10px]">
@@ -913,11 +919,11 @@ export default function Sidebar({
               )}
 
               <button
-                onClick={saveSchemaConfig}
-                disabled={savingSchema}
-                className="w-full px-3 py-2 rounded bg-cyan-600/20 border border-cyan-500/30 text-cyan-200 hover:bg-cyan-600/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-bold uppercase text-[10px] tracking-wider"
+                onClick={() => onOpenDirectorySettings?.()}
+                className="w-full px-3 py-2 rounded bg-cyan-600/20 border border-cyan-500/30 text-cyan-200 hover:bg-cyan-600/30 transition-colors font-bold uppercase text-[10px] tracking-wider flex items-center justify-center gap-1.5"
               >
-                {savingSchema ? 'Reloading Schema...' : 'Save Schema Directory'}
+                <Settings className="w-3.5 h-3.5" />
+                Edit in Directory Settings
               </button>
 
               {(schemaMessage || schemaStatus.error) && (
@@ -1460,6 +1466,15 @@ export default function Sidebar({
                       onChange={e => handlePropChange(schema.key, e.target.value)}
                       placeholder={schema.placeholder}
                       className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  )}
+
+                  {schema.type === 'reference' && (
+                    <ObjectIndexPicker
+                      kind={schema.refKind || 'macro'}
+                      value={(selectedNode.properties || {})[schema.key] || ''}
+                      onChange={v => handlePropChange(schema.key, v)}
+                      placeholder={schema.placeholder}
                     />
                   )}
 

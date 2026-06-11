@@ -20,7 +20,15 @@ Context for the next coding agent. This captures a review pass + a compiler/dire
 
 **UPDATE (9th pass, same session):** deps are INSTALLED (better-sqlite3 / xpath / @xmldom — `restart-studio.bat` now npm-installs first), SQLite stages 3+4 are DONE (cold-boot restore 230 ms vs 2,156 ms full decode, live parity match), XPath-level selector overlap is DONE (selftest 11/11), and repo hygiene is COMMITTED (`a5e070e`: config.json/temp_import untracked, README + .env.example + config.example.json shipped). See ROADMAP "9th pass" changelog.
 
-**Next obvious work:** object-index-backed editor dropdowns; round-trip editability breadth (wares/jobs/aiscripts parsers); flip reference-validation/Extension-Doctor reads to SQLite; collapse folder-id-mismatch infos in the UI; C2 in-game verification (human step).
+**Next obvious work:** object-index-backed editor dropdowns; round-trip editability breadth (wares/jobs/aiscripts parsers); flip reference-validation/Extension-Doctor reads to SQLite; collapse folder-id-mismatch infos in the UI; C2 in-game verification (human step). **Full ranked forward plan: `ROADMAP.md` → Current State → Forward plan.**
+
+**Environment (still true — read before editing).** Split dev servers: Vite on **3000** (UI/HMR), API on **3001** (`tsx watch`, `API_ONLY=true`) — editing `server.ts`/`src/lib/*` restarts only the API (~2-3s `/api` 503 gap), the page does **not** reload; frontend edits are pure HMR. **Verify in the browser + selftest endpoints, not bash `tsc`/node** — the sandbox is a stale mirror and can't run the Windows-native `node_modules`; host Read/Edit/Write are live. The AI-editing pipeline has truncated component files before — re-verify in-browser right after any large component edit.
+
+---
+
+# Archive — superseded session notes (historical)
+
+*Everything below is older session handoffs (Codex / earlier passes) and the original numbered sections 0–5. Several items read as "to-do" but are long done — e.g. the "ONE PENDING ITEM" (click-through UI) in the next block is **DONE** (8th pass), and §2's `0.0.0.0`/CORS/no-auth findings are fixed. Trust the CURRENT section above and `ROADMAP.md` → Current State. Kept for the audit trail.*
 
 ---
 

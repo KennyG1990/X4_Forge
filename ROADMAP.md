@@ -1,6 +1,6 @@
 # X4 Mod Studio — Prototype Validation Roadmap
 
-**Status:** Draft v1 · **Goal:** Validate the core loop · **Sequencing:** Foundation-first · **Team:** Small (humans + AI agents, parallel tracks)
+**Status:** Active · **Phase:** correctness done → ergonomics + in-game capstone · **Read [Current State](#current-state) first.** Everything below the *Archive* divider is append-only history kept for the audit trail; where it conflicts with Current State, Current State wins.
 
 ---
 
@@ -21,7 +21,41 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ---
 
+## Current State
+
+*Authoritative snapshot — updated 2026-06-11 (9th pass). This is the one place to read for where the project is and where it's going. The dated changelogs in the Archive below are the verification record; where they conflict with this section, this section is correct.*
+
+**Where we are.** The correctness backend is built and proven. The project has moved from *"can it work / is it correct?"* to *"is it ergonomic, and can a **new** non-trivial mod be built start-to-finish and proven in-game?"*
+
+**Milestones**
+- **M0 — Foundation gate: CLEARED.** API binds `127.0.0.1`, CORS locked, per-session token auth, env provider-keys gated to app-origin requests, honest success messages (real post-validation counts + surfaced self-heal errors).
+- **M1 — Loop closes once: DONE** (user-confirmed in-game). Author → compile → package → deploy to `extensions/` → loads and runs.
+- **M2 — Loop trustworthy: LARGELY DONE.** Round-trip lossless, `md-audit` 0 findings, XSD + semantic reference validation (macros/wares/factions/time-format), patch diagnostics. Residual: round-trip *editability* breadth (wares/jobs/aiscripts are preserved passthrough, not yet editable graphs).
+- **M3 — Prototype validated: OPEN — the capstone.** Gated on **C2**: a new non-trivial mod built entirely in-studio, run in X4, documented. Human-in-the-loop.
+
+**Done & verified** (selftest oracles all green at last check: `/api/agent/selftest` 10/10 · `extension-doctor-selftest` 11 checks · `round-trip-selftest` lossless · `md-audit` 0 · `db-selftest` pass + live parity). Highlights: deadair-scale mods (1,294 nodes) load without freezing; Extension Doctor complete (missing deps, duplicate ids, full-file + diff-selector + XPath-level overlap, load-order winner simulation, click-through UI); SQLite cache live (cold boot **230 ms** vs **2,156 ms** full decode); aiscript-naming collision fixed at the compiler; dev-server split (backend edits don't reload the page); repo hygiene committed (`a5e070e`).
+
+**Forward plan** (ranked by leverage toward the North Star — next code move is Tier 1):
+1. **Ergonomics — object-index-backed editor dropdowns** (+ finish the SQLite read-flip). Turn free-text node fields (`create_ship.macro`, owner/faction, ware/job ids, patch targets) into searchable typed pickers backed by the live index, so an invalid reference *can't be typed*. Highest leverage — makes the trustworthy backend *felt* on every node. (Report pains #1/#2.)
+2. **Distribution & update safety — P-B → P-C → P-D.** content.xml `<dependency>` metadata + resolve-check (P-B, the prerequisite) → mod profiles / modset switching (P-C) → update-audit scan, "re-validate my mod against the current game version" (P-D). (Pains #8/#3.)
+3. **IDE breadth — round-trip parsers + reference layer.** Editable wares/jobs/aiscripts parsing; flip reference-validation / Extension-Doctor reads to SQLite; P-E in-app searchable scriptproperties/MD-action reference + hover docs + quickstart gallery. (Pains #1/#2/#4.)
+4. **Capstone — C2 in-game verification (human).** Build a new non-trivial mod in-studio, deploy, confirm it runs in X4 with zero hand-editing, document it → validates M3.
+
+Smaller carried items: demote/collapse the chatty `ext.folder_id_mismatch` infos in the UI. (Analyze-latency UX is already handled: 120s timeout + Cancel.)
+
+**Environment (still true — read before editing).** Split dev servers: Vite on **3000** (UI/HMR, browser-facing), API on **3001** (`tsx watch`, `API_ONLY=true`). Editing `server.ts`/`src/lib/*` restarts only the API (~2-3s `/api` 503 gap); the page does **not** reload; frontend edits are pure HMR. **Verify in the browser + selftest endpoints, not bash `tsc`/node** — the bash sandbox is a stale mirror and can't run the Windows-native `node_modules`; host Read/Edit/Write are live. The AI-editing pipeline has truncated component files before — re-verify in-browser right after any large component edit.
+
+---
+
+# Archive — historical context (append-only; Current State above wins)
+
+*Everything below predates or feeds the Current State section: the original Tracks/Milestones framing, the per-pass dated changelogs (the verification record), and the design rationale. Kept for the audit trail. Where any of it reads as "to-do" but Current State says done, Current State is correct.*
+
+---
+
 ## Tracks (parallelizable)
+
+> **[SUPERSEDED]** Tracks A and B are largely complete (see Current State / M0–M2); C2 remains the open capstone. Retained for original framing.
 
 Three tracks. **B is the gate** (do first, it's cheap). **A is the critical path** to validation. **C proves it.** A and B can run fully in parallel; C leans on A.
 
@@ -56,6 +90,8 @@ The evidence that the loop closed.
 ---
 
 ## Milestones
+
+> **[STATUS]** M0 cleared · M1 done (in-game confirmed) · M2 largely done · M3 open (C2 capstone). See Current State for detail.
 
 | Milestone | Definition of done | Tracks |
 |---|---|---|
@@ -202,6 +238,24 @@ All browser-verified at `http://localhost:3000`; all selftest oracles green at s
 
 **Remaining queue (carried forward):** object-index-backed editor dropdowns (typed pickers); round-trip editability breadth (wares/jobs/aiscripts parsers); flip reference-validation + Extension Doctor reads to SQLite; demote/collapse folder-id-mismatch infos in the UI; C2 in-game verification (human step).
 
+### Changelog — 2026-06-11 (10th pass: single schema-directory authority)
+
+**Schema directory unified to one editor — DONE, live-verified.** There were *two* controls for the XSD schema directory: the standalone "XSD Schema Source" panel in the META sidebar (`Sidebar.tsx`) and the "XSD Schema Folder" field in the Directory Settings modal (`DirectorySettingsModal.tsx`). Both POST the same `xsdSchemaPath` key to `/api/schema/config` (the endpoint merges, so neither clobbers the other), so they never truly diverged — but two editors for one value is confusing. Per intent, the **Settings modal is now the single authority**: the Sidebar panel is converted to **read-only** (displays the configured directory, md.xsd/common.xsd found state, and the event/condition/action/control counts) with a "Configured in Directory Settings… read-only" hint and an **"Edit in Directory Settings"** button (new `onOpenDirectorySettings` prop → `setIsDirSettingsOpen(true)` in `App.tsx`). The panel refreshes when the modal closes via a new `schemaConfigVersion` counter (App bumps it on `onClose`; the Sidebar's `loadSchemaConfig` effect depends on it). *Verified live:* META → read-only panel renders with the path + counts + hint; "Edit in Directory Settings" opens the modal; closing it refreshes the panel; zero console errors. (Minor: the now-unused `saveSchemaConfig`/`savingSchema` in `Sidebar.tsx` are left in place as harmless dead code — safe to delete in a later cleanup.)
+
+### Changelog — 2026-06-11 (11th pass: object-index editor pickers — Forward-plan Tier 1)
+
+**Scope.** Start Tier 1: replace static hardcoded reference dropdowns in the node property editor with searchable typeaheads backed by the **live installed-game object index** (`/api/agent/object-index`), so a wrong reference can't be typed and the user isn't limited to a 9-item hardcoded list.
+
+**Work done (files):**
+- **`ObjectIndexPicker.tsx`** (NEW) — a searchable combobox: debounced query to `/api/agent/object-index?kind=&q=&limit=25`, dropdown of `{id, name}` matches, click-to-set, outside-click close, loading spinner. Crucially it still allows **free text** so MD variables (`$ship`, `player.ship`) remain valid; X4 text-ref names like `{20203,201}` are hidden.
+- **`types.ts`** — added `'reference'` to `PropertySchema.type` + a `refKind` field; converted `create_ship.macro` → `reference/ship` and `create_station.macro` → `reference/station` (and cleaned their defaults of the ` (Human Name)` suffix). Compiler unaffected: `create_ship` already does `macro="${(macro||'').split(' (')[0]}"`, so a clean macro id passes through unchanged.
+- **`Sidebar.tsx`** — imported the picker; added a `schema.type === 'reference'` branch in the property editor that renders `<ObjectIndexPicker kind={refKind} …>`.
+- **`types.ts` `sanitizeWorkspace`** — `propertiesSchema` now **re-hydrates from the node's template by `xmlTag`** instead of preferring the node's baked copy (it's presentation derived from `xmlTag`, not user data). This makes template improvements like these pickers reach *existing* nodes on load, not only newly created ones; falls back to the node's own schema only when no template matches.
+
+**Verification status: PARTIAL — final UI confirmation pending (Chrome extension disconnected mid-test).** Confirmed live before the disconnect: the object-index API returns real data (`counts` ship 694 / station 940 / ware 1980 / faction 33 / macro 6982; `q=arg&kind=ship` filters correctly; items are `{id, name, kind, …}`), and HMR applied the new code with no app console errors. Confirmed by code: the compiler format makes clean macro ids correct. **Not yet visually confirmed** (blocked on the extension reconnecting): that a `create_ship` node now renders the typeahead, that picking sets the value, and that compile output is unchanged. Next session (or once Chrome reconnects): select/create a Create Ship node → verify the macro field is the live picker → pick a macro → `/api/agent/compile` shows the correct `macro="…"`.
+
+**Follow-ups (Tier 1 continuation):** faction pickers need short-code mapping (the index id is `faction.argon` but the compiler emits `faction.${code}` from a short `argon`, so a raw-id pick would double-prefix — deferred, kept as the small existing select); ware/job reference fields; patch-target pickers; then finish the SQLite read-flip so these queries hit the DB.
+
 ### SQLite persistence layer (design — implemented 8th pass; awaiting native dep install)
 
 **Why.** The expensive, reusable data the studio computes — the packed `.cat/.dat` object index (694 ships, 8,616 macros, 1,950 wares, 33 factions, 3,783 sounds across 64 archives) and the extension manifest/file index — is currently rebuilt **in memory on every server boot**, and serializing a 1,294-node workspace over `/api/agent/workspace` takes seconds. None of that needs to live in the frontend; it's classic "query over tens of thousands of indexed records," which is exactly what an embedded DB is for. The mod being *edited* stays in frontend memory (it's small); the DB is a backend **cache + query layer**, not the document store.
@@ -241,6 +295,8 @@ CREATE INDEX idx_extfiles_path ON ext_files(rel_path);            -- GROUP BY re
 **Explicitly NOT in SQL:** the workspace being edited (frontend memory), generated XML (computed on demand), and the user's source files (the filesystem remains the source of truth — the DB only *indexes* them).
 
 ### Next priorities (ranked, post 2026-06-11)
+
+> **[SUPERSEDED — see Current State → Forward plan.]** Of this original list: #1 (MD generator schema-valid → `md-audit` 0), #2 (diagnostics click-to-navigate), #5 (aiscripts.xsd validation), and #6 (patch-builder default target) are **done**. #3 (object-index editor dropdowns) and #4 (round-trip breadth) carry forward as Forward-plan Tiers 1 and 3. Kept for rationale.
 
 The four engines that landed are *detection and plumbing*. The highest-value remaining work turns that detection into correct, visible output. Ranked by leverage toward the North Star ("a studio-built mod runs in X4 with zero hand-editing"):
 

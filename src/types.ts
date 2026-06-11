@@ -17,11 +17,13 @@ export interface Port {
 export interface PropertySchema {
   key: string;
   label: string;
-  type: 'text' | 'number' | 'select' | 'boolean' | 'coordinates' | 'textarea';
+  type: 'text' | 'number' | 'select' | 'boolean' | 'coordinates' | 'textarea' | 'reference';
   options?: string[];
   placeholder?: string;
   description?: string;
   required?: boolean;
+  /** For type:'reference' — which live object-index kind to search (ship/station/ware/faction/sound/job). */
+  refKind?: 'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'macro';
 }
 
 // Visual Node representation in the blueprint editor
@@ -369,14 +371,14 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     xmlTag: 'create_ship',
     properties: {
       name: '$EscortShip',
-      macro: 'ship_arg_l_destroyer_01_a_macro (Behemoth Van.)',
+      macro: 'ship_arg_l_destroyer_01_a_macro',
       faction: 'player',
       sector: 'player.sector',
       coords: '0,0,1000'
     },
     propertiesSchema: [
       { key: 'name', label: 'Variable Name', type: 'text', placeholder: '$SpawnedShip' },
-      { key: 'macro', label: 'Ship Class Macro', type: 'select', options: X4_SHIP_MACROS },
+      { key: 'macro', label: 'Ship Class Macro', type: 'reference', refKind: 'ship', placeholder: 'Search ship macros… or type a variable', description: 'Searchable against the real installed game index (ships + DLC).' },
       { key: 'faction', label: 'Owner Faction', type: 'select', options: X4_FACTIONS },
       { key: 'sector', label: 'Sector / Spawn Zone', type: 'text', placeholder: 'player.sector' },
       { key: 'coords', label: 'Relative Coordinates (X,Y,Z)', type: 'coordinates', placeholder: '0,0,1000' }
@@ -455,14 +457,14 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     xmlTag: 'create_station',
     properties: {
       name: '$MyDefenseStation',
-      macro: 'defence_arg_tube_01_macro (Argon Defence Platform)',
+      macro: 'defence_arg_tube_01_macro',
       faction: 'player',
       sector: 'player.sector',
       coords: '5000,0,5000'
     },
     propertiesSchema: [
       { key: 'name', label: 'Station Entity Target', type: 'text', placeholder: '$MyStation' },
-      { key: 'macro', label: 'Station Design Macro', type: 'select', options: X4_STATION_MACROS },
+      { key: 'macro', label: 'Station Design Macro', type: 'reference', refKind: 'station', placeholder: 'Search station macros… or type a variable', description: 'Searchable against the real installed game index (stations + DLC).' },
       { key: 'faction', label: 'Owner Faction', type: 'select', options: X4_FACTIONS },
       { key: 'sector', label: 'Spawn Sector', type: 'text', placeholder: 'player.sector' },
       { key: 'coords', label: 'Coordinates (X,Y,Z)', type: 'coordinates', placeholder: '10000, 0, -5000' }
@@ -1411,7 +1413,11 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       x: typeof node.x === 'number' ? node.x : 100,
       y: typeof node.y === 'number' ? node.y : 100,
       properties: node.properties || (template ? { ...template.properties } : {}),
-      propertiesSchema: node.propertiesSchema || (template ? template.propertiesSchema : []),
+      // propertiesSchema is derived from the node's xmlTag (it's presentation, not user data),
+      // so always re-hydrate it from the current template when one exists. This lets template
+      // improvements (e.g. live object-index reference pickers) reach existing nodes on load,
+      // not just newly created ones; fall back to the node's own schema only if no template.
+      propertiesSchema: (template ? template.propertiesSchema : node.propertiesSchema) || [],
       inputs: node.inputs || (template ? template.inputs : []),
       outputs: node.outputs || (template ? template.outputs : []),
       includeInBuild: typeof node.includeInBuild === 'boolean' ? node.includeInBuild : true
