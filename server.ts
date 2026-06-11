@@ -137,7 +137,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/api-selftest",
   "/agent/log-selftest",
   "/agent/reference-selftest",
-  "/agent/type-probe"
+  "/agent/type-probe",
+  "/agent/selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -2284,6 +2285,36 @@ function parseContentMeta(xml: string): { name?: string; version?: string; autho
   return { name: attr('name') || attr('id'), version: attr('version'), author: attr('author'), description: attr('description') };
 }
 
+function decodeXmlEntities(s: string): string {
+  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+}
+
+/**
+ * Parse an X4 translation (t-file) into the studio's editable TFile model.
+ * Structure: <language id><page id title><t id>value</t></page></language>.
+ * `compileTFileXML` is the faithful inverse, so these round-trip cleanly.
+ */
+function parseTFileXML(xml: string, fileName: string): any | null {
+  const langId = xml.match(/<language\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1];
+  if (!langId) return null;
+  const pages: any[] = [];
+  const pageRe = /<page\b([^>]*)>([\s\S]*?)<\/page>/gi;
+  let pm: RegExpExecArray | null;
+  while ((pm = pageRe.exec(xml)) !== null) {
+    const id = pm[1].match(/\bid\s*=\s*"([^"]+)"/i)?.[1];
+    if (!id) continue;
+    const title = pm[1].match(/\btitle\s*=\s*"([^"]*)"/i)?.[1] || '';
+    const items: any[] = [];
+    const tRe = /<t\b[^>]*\bid\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)<\/t>/gi;
+    let tm: RegExpExecArray | null;
+    while ((tm = tRe.exec(pm[2])) !== null) {
+      items.push({ id: tm[1], value: decodeXmlEntities(tm[2]), description: '' });
+    }
+    pages.push({ id, title, items });
+  }
+  return { languageId: String(langId).replace(/\D/g, '') || langId, fileName, pages, includeInBuild: true };
+}
+
 /** Import a mod folder into a workspace, preserving every file losslessly. */
 function importModFolder(absDir: string): { workspace: ModWorkspace; report: any } {
   const relFiles = walkFilesRelative(absDir);
@@ -2307,25 +2338,37 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
 
   const mdParsed = Boolean(baseWorkspace && Array.isArray(baseWorkspace.nodes) && baseWorkspace.nodes.length > 0);
 
+  // Editable translations: parse every t/*.xml into the TFile model. fileName is
+  // the original basename so toTFileName regenerates at the exact same path.
+  const tFiles: any[] = [];
+  const editableTPaths = new Set<string>();
+  for (const rel of relFiles) {
+    if (!/^t\/[^/]+\.xml$/i.test(rel)) continue;
+    try {
+      const parsed = parseTFileXML(fs.readFileSync(path.join(absDir, rel), 'utf8'), rel.replace(/^t\//i, ''));
+      if (parsed && parsed.pages.length) { tFiles.push(parsed); editableTPaths.add(rel.toLowerCase()); }
+    } catch { /* leave as passthrough */ }
+  }
+
   const ws: ModWorkspace = sanitizeWorkspace({
     ...(baseWorkspace || {}),
     name: meta.name || baseWorkspace?.name || path.basename(absDir),
     version: meta.version || baseWorkspace?.version,
     author: meta.author || baseWorkspace?.author,
-    description: meta.description || baseWorkspace?.description
+    description: meta.description || baseWorkspace?.description,
+    tFiles
   });
 
   // Only regenerate domains we actually modeled. If the MD didn't parse, turn MD
   // generation OFF so the original md file is preserved verbatim (as passthrough)
-  // instead of being overwritten by an empty regenerated file. Other domains have
-  // no importer yet, so disable their generation too — their files round-trip as
-  // passthrough until a parser models them.
+  // instead of being overwritten by an empty regenerated file. Domains without an
+  // importer stay OFF — their files round-trip as passthrough until a parser models them.
   ws.compileSettings = {
     md: mdParsed,
     ui: false,
     ai: false,
     library: false,
-    translations: false,
+    translations: tFiles.length > 0,
     patches: false
   };
 
@@ -2350,6 +2393,10 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     if (mdRel && lower === mdRel.toLowerCase() && mdParsed) {
       classification.push({ path: rel, class: 'editable', note: 'parsed into the MD node graph' });
       continue; // regenerated from nodes on export
+    }
+    if (editableTPaths.has(lower) && regenPaths.has(lower)) {
+      classification.push({ path: rel, class: 'editable', note: 'parsed into the editable translation (TFile) model' });
+      continue;
     }
     if (regenPaths.has(lower)) {
       classification.push({ path: rel, class: 'generated', note: 'regenerated from a modeled domain on export' });
@@ -2422,10 +2469,12 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
 </mdscript>`;
     const godXml = `<?xml version="1.0" encoding="utf-8"?>\n<diff>\n  <add sel="/god/stations">\n    <station id="rt_custom_station"/>\n  </add>\n</diff>\n`;
     const customLua = `-- a hand-authored helper the studio does not model\nlocal m = {}\nreturn m\n`;
+    const tFileXml = `<?xml version="1.0" encoding="utf-8"?>\n<language id="44">\n  <page id="10001" title="RoundTrip">\n    <t id="1001">Bounty Hunter</t>\n    <t id="1002">Destroy the target</t>\n  </page>\n</language>`;
     const files: Record<string, string> = {
       'content.xml': `<?xml version="1.0" encoding="utf-8"?>\n<content id="roundtrip_test" name="RoundTrip_Test" author="tester" version="100" date="2026-06-11" save="0"/>`,
       'md/roundtrip_test.xml': mdXml,
       'libraries/god.xml': godXml,
+      't/0001-l044.xml': tFileXml,
       'subscripts/custom_helper.lua': customLua,
       'unknown_top_level.xml': `<?xml version="1.0"?>\n<weird custom="data"/>\n`
     };
@@ -2439,15 +2488,19 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
     const out = buildWorkspaceFileManifest(workspace);
     const outFiles = out.files;
 
+    // Classification decides the contract: editable/generated files may be
+    // regenerated (differ); partial/passthrough must be byte-identical.
+    const classOf = (rel: string) => (report.classification.find((c: any) => c.path.toLowerCase() === rel.toLowerCase())?.class) || 'unknown';
     const checks: any[] = [];
     let lossless = true;
     for (const [rel, content] of Object.entries(files)) {
       const present = outFiles[rel] !== undefined;
-      const isModeled = rel === 'content.xml' || /^md\//i.test(rel);
+      const cls = classOf(rel);
+      const mayDiffer = cls === 'editable' || cls === 'generated';
       const identical = present && outFiles[rel] === content;
       if (!present) lossless = false;
-      if (!isModeled && present && !identical) lossless = false;
-      checks.push({ path: rel, present, modeled: isModeled, byteIdentical: identical });
+      if (!mayDiffer && present && !identical) lossless = false;
+      checks.push({ path: rel, class: cls, present, byteIdentical: identical });
     }
 
     return res.json({
@@ -2608,6 +2661,32 @@ app.get("/api/agent/api-selftest", (req, res) => {
 // Public read-only self-test for the deterministic live-feedback log logic.
 // Public read-only test for reference + time-format validation, using the exact
 // failures observed in-game (invalid macro, bare-number duration).
+// Consolidated regression: runs every public self-test and reports one verdict.
+app.get("/api/agent/selftest", async (req, res) => {
+  const base = `http://127.0.0.1:${PORT}/api/agent`;
+  const get = async (p: string) => { try { const r = await fetch(`${base}/${p}`); return await r.json(); } catch (e: any) { return { __error: String(e?.message || e) }; } };
+  try {
+    const [md, ref, api, log, rt, patch] = await Promise.all([
+      get('md-audit'), get('reference-selftest'), get('api-selftest'), get('log-selftest'), get('round-trip-selftest'), get('patch-audit')
+    ]);
+    const checks = [
+      { name: 'md_generator_zero_findings', pass: md.findingCount === 0, detail: { findingCount: md.findingCount } },
+      { name: 'reference_macro_caught', pass: (ref.macroDiagnostics || []).length === 1 },
+      { name: 'reference_time_format_caught', pass: (ref.timeFormatDiagnostics || []).length === 1 },
+      { name: 'reference_faction_bad_caught', pass: ref.factionBadDetected === true },
+      { name: 'reference_faction_good_clean', pass: ref.factionGoodClean === true },
+      { name: 'generator_emits_time_units', pass: ref.durationEmittedWithUnit === true },
+      { name: 'agent_api_concurrency', pass: api.allPassed === true },
+      { name: 'live_feedback_logic', pass: log.allPassed === true },
+      { name: 'round_trip_lossless', pass: rt.lossless === true },
+      { name: 'patch_diagnostics', pass: Array.isArray(patch.diagnostics) && patch.diagnostics.some((d: any) => d.code === 'patch.target_unresolved') && patch.diagnostics.some((d: any) => d.code === 'patch.selector_root_mismatch') }
+    ];
+    return res.json({ allPassed: checks.every(c => c.pass), passed: checks.filter(c => c.pass).length, total: checks.length, checks });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'selftest failed' });
+  }
+});
+
 // Public probe: report the schema-declared type of specific element attributes,
 // to confirm whether X4 types are strict (time/int) or permissive (expression).
 app.get("/api/agent/type-probe", (req, res) => {
@@ -2633,11 +2712,18 @@ app.get("/api/agent/type-probe", (req, res) => {
     }
     const sortedTypes = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
     const nameTypes = sortedTypes.filter(([t]) => /name$|ref$/i.test(t));
+    // Sample real macros to pick valid template defaults.
+    const oi = getObjectIndex();
+    const sampleStations = oi.items.filter(i => i.kind === 'station' && /defence|defense/i.test(i.id)).slice(0, 8).map(i => i.id);
+    const anyStations = oi.items.filter(i => i.kind === 'station').slice(0, 6).map(i => i.id);
+    const sampleShips = oi.items.filter(i => i.kind === 'ship' && i.id.includes('arg')).slice(0, 4).map(i => i.id);
     return res.json({
       note: 'If types are generic (expression/unions), the XSD cannot catch runtime value errors — value-format validation is needed.',
       types: out,
       referenceTypeCandidates: nameTypes,
-      allTypesTop: sortedTypes.slice(0, 40)
+      sampleDefenceStations: sampleStations,
+      anyStations,
+      sampleArgonShips: sampleShips
     });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'type-probe failed' });
@@ -2666,11 +2752,16 @@ app.get("/api/agent/reference-selftest", (req, res) => {
     const diags = validateXmlAgainstSchema(md, index, { domain: 'mission_director', reportUnknownElements: true, references });
     // Also validate a raw bare-number duration to confirm the time-format net.
     const timeDiags = validateXmlAgainstSchema('<show_help custom="x" duration="8"/>', index, { references });
+    // Faction: invalid vs valid literal.
+    const factionBad = validateXmlAgainstSchema('<create_ship macro="ship_arg_l_destroyer_01_a_macro"><owner exact="faction.notareal"/></create_ship>', index, { references });
+    const factionGood = validateXmlAgainstSchema('<create_ship macro="ship_arg_l_destroyer_01_a_macro"><owner exact="faction.argon"/></create_ship>', index, { references });
     return res.json({
       durationEmittedWithUnit: /duration="8s"/.test(md),          // generator emits units now
       durationRaw: (md.match(/duration="[^"]*"/) || [])[0] || null,
       macroDiagnostics: diags.filter(d => d.code === 'REF_UNKNOWN_MACRO').map(d => ({ code: d.code, severity: d.severity, ref: d.sourceRef, message: d.message.slice(0, 110) })),
       timeFormatDiagnostics: timeDiags.filter(d => d.code === 'XSD_TIME_FORMAT').map(d => ({ code: d.code, severity: d.severity, message: d.message.slice(0, 110) })),
+      factionBadDetected: factionBad.some(d => d.code === 'REF_UNKNOWN_FACTION'),
+      factionGoodClean: !factionGood.some(d => d.code === 'REF_UNKNOWN_FACTION'),
       mdSnippet: (md.match(/<create_ship[^>]*>/) || [])[0] || null
     });
   } catch (error: any) {

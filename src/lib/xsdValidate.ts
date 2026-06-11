@@ -421,6 +421,19 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
         });
       }
 
+      // Faction reference: the explicit "faction.<id>" literal form is
+      // unambiguous (unlike bare expressions), so validate it even though the
+      // schema type is often an expression union.
+      if (opts.references?.factions?.size && attr.value && /^faction\.\w+$/i.test(attr.value)) {
+        if (!opts.references.factions.has(attr.value.toLowerCase())) {
+          out.push({
+            severity: 'error', domain, filePath, line: tag.line,
+            sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_FACTION',
+            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known faction. Valid factions come from libraries/factions.xml in the indexed game data.`
+          });
+        }
+      }
+
       // Reference existence check, driven by the schema's semantic type.
       const refs = opts.references;
       if (refs && attr.value && isLiteralRef(attr.value)) {

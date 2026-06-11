@@ -455,7 +455,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     xmlTag: 'create_station',
     properties: {
       name: '$MyDefenseStation',
-      macro: 'station_arg_defense_01_macro (Defence Station)',
+      macro: 'defence_arg_tube_01_macro (Argon Defence Platform)',
       faction: 'player',
       sector: 'player.sector',
       coords: '5000,0,5000'
@@ -479,7 +479,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     label: 'Custom XML Action',
     xmlTag: 'custom_xml',
     properties: {
-      rawXml: '<show_notification text="\'Target acquired!\'" timeout="5" />'
+      rawXml: '<show_notification text="\'Target acquired!\'" timeout="5s" />'
     },
     propertiesSchema: [
       { key: 'rawXml', label: 'Raw XML Snippet', type: 'textarea', placeholder: 'Enter any valid Mission Director XML block...', description: 'This block will be printed raw directly into the actions block of the cue.' }
