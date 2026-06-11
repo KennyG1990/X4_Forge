@@ -313,6 +313,27 @@ export interface ValidateOptions {
   domain?: string;
   reportUnknownElements?: boolean; // default false (info-only, can false-positive)
   reportUnknownAttributes?: boolean; // default true (warning)
+  checkTimeFormat?: boolean; // default true
+  /**
+   * Real game-data reference sets, keyed by the schema's semantic attribute
+   * types. When provided, literal values of attributes with that type are
+   * checked for existence (catches runtime "no ship generated" / unknown id).
+   */
+  references?: {
+    macros?: Set<string>;   // type "macroname"/"macro"
+    wares?: Set<string>;    // type "warename"/"ware" (literal only)
+    factions?: Set<string>; // type "faction" (literal only)
+  };
+}
+
+// X4 time-typed attributes are schema-typed as permissive "expression", so the
+// XSD can't catch a bare number. These names are time values at runtime and a
+// literal integer without a unit (e.g. "8") fails as "not of type time".
+const TIME_ATTR_NAMES = new Set(['duration', 'timeout', 'delay', 'interval']);
+
+/** A literal (non-expression) reference value we can check against an index. */
+function isLiteralRef(v: string): boolean {
+  return !!v && !/[{}$\s]/.test(v) && !v.includes('.');
 }
 
 /**
@@ -382,6 +403,40 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
             sourceRef: `${tag.name}@${attr.name}`,
             code: 'XSD_ENUM_VIOLATION',
             message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" is not a valid value. Allowed: ${aspec.enumValues.slice(0, 12).join(', ')}${aspec.enumValues.length > 12 ? ', …' : ''}.`
+          });
+        }
+      }
+
+      // Time-format check (schema type is permissive "expression", so this is a
+      // curated semantic rule): a bare integer on a time attribute fails at runtime.
+      if (opts.checkTimeFormat !== false && TIME_ATTR_NAMES.has(aname) && attr.value && /^\d+(\.\d+)?$/.test(attr.value)) {
+        out.push({
+          severity: 'warning',
+          domain,
+          filePath,
+          line: tag.line,
+          sourceRef: `${tag.name}@${attr.name}`,
+          code: 'XSD_TIME_FORMAT',
+          message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" looks like a time but has no unit. X4 rejects bare numbers for time values at runtime — use "${attr.value}s" (or ms/min/h).`
+        });
+      }
+
+      // Reference existence check, driven by the schema's semantic type.
+      const refs = opts.references;
+      if (refs && attr.value && isLiteralRef(attr.value)) {
+        const t = (aspec.type || '').toLowerCase();
+        const lv = attr.value.toLowerCase();
+        if ((t === 'macroname' || t === 'macro') && refs.macros && refs.macros.size && !refs.macros.has(lv)) {
+          out.push({
+            severity: 'error', domain, filePath, line: tag.line,
+            sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_MACRO',
+            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known macro in the indexed game data (${refs.macros.size} macros). X4 will not resolve it at runtime — pick a real macro from the Object Browser.`
+          });
+        } else if ((t === 'warename' || t === 'ware') && refs.wares && refs.wares.size && !refs.wares.has(lv)) {
+          out.push({
+            severity: 'warning', domain, filePath, line: tag.line,
+            sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_WARE',
+            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known ware id in the indexed game data (${refs.wares.size} wares).`
           });
         }
       }

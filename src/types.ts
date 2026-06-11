@@ -554,6 +554,19 @@ function escapeXMLAttribute(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/**
+ * Format a value as an X4 time literal. X4 time-typed attributes (durations,
+ * delays) require a unit suffix — a bare number like "8" fails at runtime with
+ * "Evaluated value '8' is not of type time". A bare number gets "s" appended;
+ * values that already carry a unit, or are MD expressions ({...}), pass through.
+ */
+export function formatX4Time(value: unknown): string {
+  const s = String(value ?? '').trim();
+  if (!s) return '0s';
+  if (/^\d+(\.\d+)?$/.test(s)) return `${s}s`;     // bare number -> seconds
+  return s;                                          // already has a unit or is an expression
+}
+
 // Helper functions to generate the XML output cleanly
 export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: string[]): string {
   // Filter out any nodes where includeInBuild is false
@@ -657,8 +670,10 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
           } else if (currentNode.xmlTag === 'play_sound') {
             xml += `${indentDouble}<play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
           } else if (currentNode.xmlTag === 'show_help') {
-            // md.xsd: custom text goes in `custom`, not `text`.
-            xml += `${indentDouble}<show_help custom="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
+            // md.xsd: custom text goes in `custom`, not `text`. `duration` is an
+            // X4 time value — a bare number ("8") is rejected at runtime, it must
+            // carry a unit ("8s").
+            xml += `${indentDouble}<show_help custom="'${currentNode.properties.text || ''}'" duration="${formatX4Time(currentNode.properties.duration ?? 5)}" />\n`;
           } else if (currentNode.xmlTag === 'create_station') {
             // md.xsd: owner is a REQUIRED attribute (not a child); location via
             // the `sector` attribute + a <position> child. No `faction` attr, no <space>.

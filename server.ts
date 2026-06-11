@@ -135,7 +135,9 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/patch-audit",
   "/agent/diagnostics",
   "/agent/api-selftest",
-  "/agent/log-selftest"
+  "/agent/log-selftest",
+  "/agent/reference-selftest",
+  "/agent/type-probe"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -512,6 +514,23 @@ function getAiSchemaIndex(): SchemaIndex | null {
  * any AI script files against the parsed md.xsd/common.xsd element/attribute
  * index. Returns ModDoctor-shaped diagnostics so they merge with heuristic ones.
  */
+/** Build reference id sets from the game index, keyed by schema semantic type. */
+function getReferenceSets(): { macros: Set<string>; wares: Set<string>; factions: Set<string> } {
+  const macros = new Set<string>();
+  const wares = new Set<string>();
+  const factions = new Set<string>();
+  try {
+    const idx = getObjectIndex();
+    for (const item of idx.items) {
+      const id = item.id.toLowerCase();
+      if (item.kind === 'ship' || item.kind === 'station' || item.kind === 'macro') macros.add(id);
+      else if (item.kind === 'ware') wares.add(id);
+      else if (item.kind === 'faction') { factions.add(id); factions.add(id.replace(/^faction\./, '')); }
+    }
+  } catch { /* no index — empty sets disable ref checks */ }
+  return { macros, wares, factions };
+}
+
 function runSchemaValidation(files: Record<string, string>, modId: string): any[] {
   const out: any[] = [];
   let index: SchemaIndex;
@@ -522,10 +541,12 @@ function runSchemaValidation(files: Record<string, string>, modId: string): any[
   }
   if (!index.loaded) return out;
 
+  const references = getReferenceSets();
+
   const validateFile = (filePath: string, domain: string, reportUnknownElements: boolean, useIndex: SchemaIndex) => {
     const xml = files[filePath];
     if (!xml) return;
-    const diags = validateXmlAgainstSchema(xml, useIndex, { filePath, domain, reportUnknownElements });
+    const diags = validateXmlAgainstSchema(xml, useIndex, { filePath, domain, reportUnknownElements, references });
     for (const d of diags) {
       out.push({
         severity: d.severity,
@@ -626,6 +647,67 @@ function runPatchDiagnostics(ws: any): any[] {
         severity: 'info', category: 'schema', code: 'patch.target_resolved', domain: 'xml_patches',
         filePath: targetFile, sourceRef: { kind: 'xml_patch', id: patch.id },
         message: `Patch target "${targetFile}" resolved from ${base.source} base file. Selector root looks consistent; run the in-editor XPath preview for exact match counts.`
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Reference diagnostics: cross-check object references the studio emits against
+ * the real game index (packed + loose). Catches things static schema validation
+ * can't — e.g. a `create_ship macro="ship_xen_i_destroyer_01_macro"` that the
+ * game has no macro for (which fails at runtime as "No ship generated"). These
+ * are exactly the deterministic runtime failures worth catching before deploy.
+ */
+function runReferenceDiagnostics(ws: any): any[] {
+  const out: any[] = [];
+  const nodes = (ws.nodes || []).filter((n: any) => n.includeInBuild !== false);
+  const shipNodes = nodes.filter((n: any) => n.xmlTag === 'create_ship');
+  const stationNodes = nodes.filter((n: any) => n.xmlTag === 'create_station');
+  if (!shipNodes.length && !stationNodes.length) return out;
+
+  let index: X4ObjectIndex;
+  try { index = getObjectIndex(); } catch { return out; }
+  // Only validate when we actually have a macro index (game path configured).
+  const shipMacros = new Set<string>();
+  const stationMacros = new Set<string>();
+  const anyMacros = new Set<string>();
+  for (const item of index.items) {
+    const id = item.id.toLowerCase();
+    if (item.kind === 'ship') shipMacros.add(id);
+    if (item.kind === 'station') stationMacros.add(id);
+    if (item.kind === 'ship' || item.kind === 'station' || item.kind === 'macro') anyMacros.add(id);
+  }
+  if (anyMacros.size === 0) return out; // no index — can't validate, stay silent
+
+  const cleanMacro = (raw: any) => String(raw || '').split(' (')[0].trim().toLowerCase();
+
+  for (const node of shipNodes) {
+    const macro = cleanMacro(node.properties?.macro);
+    if (!macro) continue;
+    if (!anyMacros.has(macro)) {
+      out.push({
+        severity: 'error', category: 'reference', code: 'ref.unknown_ship_macro', domain: 'mission_director',
+        filePath: `md/${toSafeModId(ws.name)}.xml`, sourceRef: { kind: 'md_node', id: node.id, label: 'create_ship.macro' },
+        message: `create_ship references macro "${macro}" which does not exist in the indexed game data (${shipMacros.size} ship macros known). X4 will generate no ship at runtime. Pick a real macro from the Object Browser.`
+      });
+    } else if (!shipMacros.has(macro)) {
+      out.push({
+        severity: 'warning', category: 'reference', code: 'ref.macro_not_ship', domain: 'mission_director',
+        filePath: `md/${toSafeModId(ws.name)}.xml`, sourceRef: { kind: 'md_node', id: node.id, label: 'create_ship.macro' },
+        message: `create_ship macro "${macro}" exists but is not classified as a ship macro — verify it is spawnable as a ship.`
+      });
+    }
+  }
+  for (const node of stationNodes) {
+    const macro = cleanMacro(node.properties?.macro);
+    if (!macro) continue;
+    if (!anyMacros.has(macro)) {
+      out.push({
+        severity: 'error', category: 'reference', code: 'ref.unknown_station_macro', domain: 'mission_director',
+        filePath: `md/${toSafeModId(ws.name)}.xml`, sourceRef: { kind: 'md_node', id: node.id, label: 'create_station.macro' },
+        message: `create_station references macro "${macro}" which does not exist in the indexed game data (${stationMacros.size} station macros known). X4 will create no station at runtime.`
       });
     }
   }
@@ -2473,7 +2555,7 @@ app.get("/api/agent/md-audit", (req, res) => {
     const ws = sanitizeWorkspace({ name: 'MD_Audit', nodes, links });
     const md = generateMDXML(ws);
     const index = getSchemaIndex();
-    const findings = validateXmlAgainstSchema(md, index, { filePath: 'md/md_audit.xml', domain: 'mission_director', reportUnknownElements: true });
+    const findings = validateXmlAgainstSchema(md, index, { filePath: 'md/md_audit.xml', domain: 'mission_director', reportUnknownElements: true, references: getReferenceSets() });
 
     // Schema truth for every element that appears in a finding.
     const involved = [...new Set(findings.map(f => String(f.sourceRef || '').split('@')[0]).filter(Boolean))];
@@ -2524,6 +2606,78 @@ app.get("/api/agent/api-selftest", (req, res) => {
 });
 
 // Public read-only self-test for the deterministic live-feedback log logic.
+// Public read-only test for reference + time-format validation, using the exact
+// failures observed in-game (invalid macro, bare-number duration).
+// Public probe: report the schema-declared type of specific element attributes,
+// to confirm whether X4 types are strict (time/int) or permissive (expression).
+app.get("/api/agent/type-probe", (req, res) => {
+  try {
+    const index = getSchemaIndex();
+    const probe: Array<[string, string]> = [
+      ['show_help', 'duration'], ['set_value', 'exact'], ['wait', 'exact'], ['wait', 'min'],
+      ['create_ship', 'macro'], ['show_notification', 'timeout'], ['signal_cue_instantly', 'cue'], ['play_sound', 'sound']
+    ];
+    const out: any = {};
+    for (const [el, at] of probe) {
+      const spec = index.elements.get(el);
+      const a = spec?.attributes.get(at);
+      out[`${el}@${at}`] = a ? { type: a.type || '(none)', enum: a.enumValues ? a.enumValues.slice(0, 6) : undefined, required: a.required } : (spec ? 'attr_not_found' : 'element_not_found');
+    }
+    // Full type vocabulary across the index (to find reference types like macroname/cuename/warename).
+    const typeCounts: Record<string, number> = {};
+    for (const [, spec] of index.elements) {
+      for (const [, a] of spec.attributes) {
+        const t = a.type || '(none)';
+        typeCounts[t] = (typeCounts[t] || 0) + 1;
+      }
+    }
+    const sortedTypes = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+    const nameTypes = sortedTypes.filter(([t]) => /name$|ref$/i.test(t));
+    return res.json({
+      note: 'If types are generic (expression/unions), the XSD cannot catch runtime value errors — value-format validation is needed.',
+      types: out,
+      referenceTypeCandidates: nameTypes,
+      allTypesTop: sortedTypes.slice(0, 40)
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'type-probe failed' });
+  }
+});
+
+app.get("/api/agent/reference-selftest", (req, res) => {
+  try {
+    const badWs = sanitizeWorkspace({
+      name: 'Ref_Test',
+      nodes: [
+        { id: 'c', type: 'cue', xmlTag: 'cue', properties: { name: 'C' }, includeInBuild: true },
+        { id: 's1', type: 'action', xmlTag: 'create_ship', properties: { name: '$x', macro: 'ship_xen_i_destroyer_01_macro', faction: 'xenon' }, includeInBuild: true },
+        { id: 'h1', type: 'action', xmlTag: 'show_help', properties: { text: 'hi', duration: 8 }, includeInBuild: true }
+      ],
+      links: [
+        { id: 'l1', sourceNodeId: 'c', sourcePortId: 'out_act', targetNodeId: 's1', targetPortId: 'in_act' },
+        { id: 'l2', sourceNodeId: 's1', sourcePortId: 'out_next', targetNodeId: 'h1', targetPortId: 'in_act' }
+      ]
+    });
+    const { modId, files } = buildWorkspaceFileManifest(badWs);
+    const md = files[`md/${modId}.xml`] || '';
+    // Schema-driven validation with real reference sets (macroname type -> macro index).
+    const index = getSchemaIndex();
+    const references = getReferenceSets();
+    const diags = validateXmlAgainstSchema(md, index, { domain: 'mission_director', reportUnknownElements: true, references });
+    // Also validate a raw bare-number duration to confirm the time-format net.
+    const timeDiags = validateXmlAgainstSchema('<show_help custom="x" duration="8"/>', index, { references });
+    return res.json({
+      durationEmittedWithUnit: /duration="8s"/.test(md),          // generator emits units now
+      durationRaw: (md.match(/duration="[^"]*"/) || [])[0] || null,
+      macroDiagnostics: diags.filter(d => d.code === 'REF_UNKNOWN_MACRO').map(d => ({ code: d.code, severity: d.severity, ref: d.sourceRef, message: d.message.slice(0, 110) })),
+      timeFormatDiagnostics: timeDiags.filter(d => d.code === 'XSD_TIME_FORMAT').map(d => ({ code: d.code, severity: d.severity, message: d.message.slice(0, 110) })),
+      mdSnippet: (md.match(/<create_ship[^>]*>/) || [])[0] || null
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'reference-selftest failed', stack: String(error?.stack||'').slice(0,300) });
+  }
+});
+
 app.get("/api/agent/log-selftest", (req, res) => {
   try {
     const modId = 'mymod';
