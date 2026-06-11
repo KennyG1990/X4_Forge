@@ -30,7 +30,8 @@ import {
   Trash2,
   Activity,
   Brain,
-  Terminal
+  Terminal,
+  Database
 } from 'lucide-react';
 import { 
   NODE_TEMPLATES, 
@@ -52,11 +53,12 @@ import SourceControl from './SourceControl';
 import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
 import AIHelper from './AIHelper';
+import ObjectBrowser from './ObjectBrowser';
 
 interface SidebarProps {
   width?: number;
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -531,6 +533,19 @@ export default function Sidebar({
           <Activity className="w-4 h-4 shrink-0" />
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">DOCTOR</span>
         </button>
+        <button
+          id="tab_reference"
+          onClick={() => setActiveTab('reference')}
+          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
+            activeTab === 'reference'
+              ? 'text-amber-400 bg-amber-950/20 border-l-2 border-amber-500 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title="Local Object Browser"
+        >
+          <Database className="w-4 h-4 shrink-0" />
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full font-mono">OBJECTS</span>
+        </button>
       </div>
 
       {/* Right Content Column */}
@@ -551,6 +566,7 @@ export default function Sidebar({
               {activeTab === 'mdscanner' && <Brain className="w-3.5 h-3.5 text-amber-500" />}
               {activeTab === 'playtest' && <Terminal className="w-3.5 h-3.5 text-emerald-400" />}
               {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-cyan-405" />}
+              {activeTab === 'reference' && <Database className="w-3.5 h-3.5 text-amber-400" />}
 
               {activeTab === 'script' && 'Node Toolbox'}
               {activeTab === 'cues' && 'Cue Hierarchy'}
@@ -563,6 +579,7 @@ export default function Sidebar({
               {activeTab === 'mdscanner' && 'MD Scanner'}
               {activeTab === 'playtest' && 'Playtest Workspace'}
               {activeTab === 'diagnostics' && 'Mod Doctor'}
+              {activeTab === 'reference' && 'Object Browser'}
             </div>
             <div className="text-[9px] text-slate-500 font-sans mt-0.5 leading-none">
               {activeTab === 'script' && 'Create visual logic nodes'}
@@ -576,6 +593,7 @@ export default function Sidebar({
               {activeTab === 'mdscanner' && 'Deep logic cognitive scanning & telemetry'}
               {activeTab === 'playtest' && 'Directory sync, manual syncer, and log parser'}
               {activeTab === 'diagnostics' && 'Package-wide syntax and reference check'}
+              {activeTab === 'reference' && 'Browse local ships, wares, factions, and code references'}
             </div>
           </div>
 
@@ -665,6 +683,12 @@ export default function Sidebar({
               diagnostics={diagnostics}
               diagnosticSource={diagnosticSource}
             />
+          </ErrorBoundary>
+        )}
+
+        {activeTab === 'reference' && (
+          <ErrorBoundary label="Local Object Browser">
+            <ObjectBrowser />
           </ErrorBoundary>
         )}
 

@@ -233,306 +233,12 @@ function summarizeWorkspaceDomains(ws: ModWorkspace) {
   };
 }
 
-function summarizeDiagnostics(diagnostics: Array<{ severity?: string; domain?: string }>) {
-  const bySeverity: Record<string, number> = {};
-  const byDomain: Record<string, number> = {};
-
-  diagnostics.forEach(diagnostic => {
-    const severity = diagnostic.severity || "unknown";
-    const domain = diagnostic.domain || "unknown";
-    bySeverity[severity] = (bySeverity[severity] || 0) + 1;
-    byDomain[domain] = (byDomain[domain] || 0) + 1;
-  });
-
-  return {
-    total: diagnostics.length,
-    bySeverity,
-    byDomain,
-    hasErrors: (bySeverity.error || 0) > 0,
-    hasWarnings: (bySeverity.warning || 0) > 0
-  };
-}
-
-function buildWorkspaceDiagnosticsPayload(ws: ModWorkspace) {
-  const { modId, files } = buildWorkspaceFileManifest(ws);
-  const diagnostics = runModDoctor(ws, files, modId);
-  const resolvedConfig = resolveXsdConfig();
-
-  return {
-    modId,
-    workspace_domains: summarizeWorkspaceDomains(ws),
-    generated_files: Object.keys(files).sort(),
-    summary: summarizeDiagnostics(diagnostics),
-    diagnostics,
-    schema_context: {
-      loaded: schemaLibrary.loaded,
-      error: schemaLibrary.error,
-      resolved_md_xsd: resolvedConfig.mdExists,
-      resolved_common_xsd: resolvedConfig.commonExists,
-      counts: {
-        events: schemaLibrary.events.length,
-        conditions: schemaLibrary.conditions.length,
-        actions: schemaLibrary.actions.length,
-        control_flow: schemaLibrary.controlFlow.length
-      }
-    }
-  };
-}
-
-type WorkspacePatchOperation = {
-  op: "add" | "replace" | "remove";
-  path: string;
-  value?: unknown;
-};
-
-const BLOCKED_PATCH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
-function decodeJsonPointer(pathValue: string): string[] {
-  if (!pathValue || pathValue[0] !== "/") {
-    throw new Error(`Invalid JSON Pointer path: ${pathValue}`);
-  }
-  return pathValue
-    .slice(1)
-    .split("/")
-    .map(part => part.replace(/~1/g, "/").replace(/~0/g, "~"));
-}
-
-function assertSafePatchSegment(segment: string) {
-  if (BLOCKED_PATCH_KEYS.has(segment)) {
-    throw new Error(`Unsafe patch path segment: ${segment}`);
-  }
-}
-
-function resolvePatchParent(root: any, pathValue: string) {
-  const segments = decodeJsonPointer(pathValue);
-  if (!segments.length) {
-    throw new Error("Root-level workspace replacement is not supported by /workspace/patch. Use /api/agent/workspace instead.");
-  }
-
-  let parent = root;
-  for (const segment of segments.slice(0, -1)) {
-    assertSafePatchSegment(segment);
-    if (Array.isArray(parent)) {
-      const index = Number(segment);
-      if (!Number.isInteger(index) || index < 0 || index >= parent.length) {
-        throw new Error(`Patch array index out of range: ${segment}`);
-      }
-      parent = parent[index];
-    } else if (parent && typeof parent === "object") {
-      if (!(segment in parent)) {
-        throw new Error(`Patch path does not exist: ${pathValue}`);
-      }
-      parent = parent[segment];
-    } else {
-      throw new Error(`Patch path cannot traverse non-object value: ${pathValue}`);
-    }
-  }
-
-  const key = segments[segments.length - 1];
-  assertSafePatchSegment(key);
-  return { parent, key };
-}
-
-function applyWorkspacePatchOperations(workspace: ModWorkspace, operations: WorkspacePatchOperation[]): ModWorkspace {
-  const draft: any = JSON.parse(JSON.stringify(workspace));
-
-  operations.forEach((operation, index) => {
-    if (!operation || !["add", "replace", "remove"].includes(operation.op)) {
-      throw new Error(`Patch operation ${index} has unsupported op '${operation?.op}'.`);
-    }
-
-    const { parent, key } = resolvePatchParent(draft, operation.path);
-    if (Array.isArray(parent)) {
-      if (operation.op === "add") {
-        if (key === "-") {
-          parent.push(operation.value);
-          return;
-        }
-        const insertIndex = Number(key);
-        if (!Number.isInteger(insertIndex) || insertIndex < 0 || insertIndex > parent.length) {
-          throw new Error(`Patch add index out of range: ${operation.path}`);
-        }
-        parent.splice(insertIndex, 0, operation.value);
-        return;
-      }
-
-      const indexValue = Number(key);
-      if (!Number.isInteger(indexValue) || indexValue < 0 || indexValue >= parent.length) {
-        throw new Error(`Patch array index out of range: ${operation.path}`);
-      }
-      if (operation.op === "remove") {
-        parent.splice(indexValue, 1);
-      } else {
-        parent[indexValue] = operation.value;
-      }
-      return;
-    }
-
-    if (!parent || typeof parent !== "object") {
-      throw new Error(`Patch path parent is not an object: ${operation.path}`);
-    }
-    if (operation.op !== "add" && !(key in parent)) {
-      throw new Error(`Patch path does not exist: ${operation.path}`);
-    }
-    if (operation.op === "remove") {
-      delete parent[key];
-    } else {
-      parent[key] = operation.value;
-    }
-  });
-
-  return sanitizeWorkspace(draft);
-}
-
 type GameLogIssue = {
   severity: "error" | "warning";
   lineNumber: number;
   text: string;
   matchesActiveMod: boolean;
 };
-
-type ImportFileClassification = "editable" | "partial" | "generated" | "passthrough" | "ignored";
-
-type ModFolderInspectFile = {
-  path: string;
-  size: number;
-  hash: string | null;
-  classification: ImportFileClassification;
-  domain: string;
-  reason: string;
-};
-
-const MOD_FOLDER_INSPECT_MAX_FILES = 5000;
-const MOD_FOLDER_INSPECT_HASH_LIMIT = 2 * 1024 * 1024;
-
-function isSubPath(candidate: string, root: string): boolean {
-  const resolvedRoot = path.resolve(root);
-  const resolvedCandidate = path.resolve(candidate);
-  return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(resolvedRoot + path.sep);
-}
-
-function hashSmallFile(filePath: string, size: number): string | null {
-  if (size > MOD_FOLDER_INSPECT_HASH_LIMIT) return null;
-  try {
-    return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-function classifyModFolderFile(relativePath: string): Omit<ModFolderInspectFile, "path" | "size" | "hash"> {
-  const normalized = relativePath.replace(/\\/g, "/");
-  const lower = normalized.toLowerCase();
-  const name = path.posix.basename(lower);
-
-  if (lower.includes("/node_modules/") || lower.includes("/dist/")) {
-    return { classification: "ignored", domain: "tooling", reason: "Development/build artifact; not part of the shipped X4 mod surface." };
-  }
-  if (lower.startsWith(".snapshots/") || lower.includes("/.snapshots/")) {
-    return { classification: "generated", domain: "studio_snapshot", reason: "Studio snapshot metadata; preserved for development history, not modeled as mod content." };
-  }
-  if (name === "content.xml") {
-    return { classification: "partial", domain: "metadata", reason: "Known X4 metadata file; Studio can reason about it but does not preserve every hand-authored field yet." };
-  }
-  if (lower === "README.md".toLowerCase() || name === "readme.md") {
-    return { classification: "generated", domain: "documentation", reason: "Studio-generated README candidate; safe to regenerate but should be compared before overwrite." };
-  }
-  if (lower.endsWith(".x4studio.json") || lower.endsWith(".workspace.json")) {
-    return { classification: "editable", domain: "workspace", reason: "Studio workspace JSON; fully editable after sanitizeWorkspace import." };
-  }
-  if (lower.startsWith("md/") && lower.endsWith(".xml")) {
-    return { classification: "partial", domain: "mission_director", reason: "Mission Director XML; parser can reconstruct many graph nodes but unknown XML must be preserved raw." };
-  }
-  if (lower.startsWith("aiscripts/") && lower.endsWith(".xml")) {
-    return { classification: "partial", domain: "aiscript", reason: "AI script XML is a supported compile domain, but full round-trip parser coverage is not complete." };
-  }
-  if (lower.startsWith("t/") && lower.endsWith(".xml")) {
-    return { classification: "partial", domain: "translation", reason: "Translation XML is a supported domain; import must preserve page/item ids and comments." };
-  }
-  if (lower.startsWith("libraries/") && lower.endsWith(".xml")) {
-    return { classification: "partial", domain: "library_or_diff", reason: "Library XML or diff patch target; selectors/content need structural import before safe regeneration." };
-  }
-  if (lower.startsWith("ui/") || lower.startsWith("md_ui_layouts/")) {
-    return { classification: "partial", domain: "ui", reason: "UI files are mod content, but the Studio UI/Lua round-trip model is not complete yet." };
-  }
-  if (lower.endsWith(".xml")) {
-    return { classification: "passthrough", domain: "xml_unknown", reason: "XML file is outside current modeled domains; preserve byte-for-byte until a parser exists." };
-  }
-  return { classification: "passthrough", domain: "asset_or_unknown", reason: "Non-XML or unsupported file; preserve byte-for-byte during round-trip export." };
-}
-
-function inspectModFolder(rootPath: string) {
-  const files: ModFolderInspectFile[] = [];
-  let truncated = false;
-
-  function walk(dir: string) {
-    if (files.length >= MOD_FOLDER_INSPECT_MAX_FILES) {
-      truncated = true;
-      return;
-    }
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (files.length >= MOD_FOLDER_INSPECT_MAX_FILES) {
-        truncated = true;
-        return;
-      }
-      const fullPath = path.join(dir, entry.name);
-      const relativePath = path.relative(rootPath, fullPath).replace(/\\/g, "/");
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist") continue;
-        walk(fullPath);
-      } else if (entry.isFile()) {
-        const stat = fs.statSync(fullPath);
-        const classification = classifyModFolderFile(relativePath);
-        files.push({
-          path: relativePath,
-          size: stat.size,
-          hash: hashSmallFile(fullPath, stat.size),
-          ...classification
-        });
-      }
-    }
-  }
-
-  walk(rootPath);
-  files.sort((a, b) => a.path.localeCompare(b.path));
-
-  const byClassification = files.reduce<Record<string, number>>((acc, file) => {
-    acc[file.classification] = (acc[file.classification] || 0) + 1;
-    return acc;
-  }, {});
-  const byDomain = files.reduce<Record<string, number>>((acc, file) => {
-    acc[file.domain] = (acc[file.domain] || 0) + 1;
-    return acc;
-  }, {});
-
-  const modeledFiles = files.filter(file => file.classification === "editable").map(file => file.path);
-  const partialFiles = files.filter(file => file.classification === "partial").map(file => file.path);
-  const passthroughFiles = files.filter(file => file.classification === "passthrough").map(file => file.path);
-  const generatedFiles = files.filter(file => file.classification === "generated").map(file => file.path);
-
-  return {
-    inspectedAt: new Date().toISOString(),
-    rootPath,
-    truncated,
-    fileCount: files.length,
-    counts: {
-      byClassification,
-      byDomain
-    },
-    lossinessReport: {
-      fullyEditable: modeledFiles,
-      partiallyUnderstood: partialFiles,
-      preserveRaw: passthroughFiles,
-      generatedOrStudioOwned: generatedFiles,
-      exportRisk: passthroughFiles.length || partialFiles.length
-        ? "high_until_passthrough_export_exists"
-        : "low",
-      summary: `${modeledFiles.length} fully editable, ${partialFiles.length} partially understood, ${passthroughFiles.length} passthrough, ${generatedFiles.length} generated/studio-owned.`
-    },
-    files
-  };
-}
 
 function uniqueExistingParentCandidates(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -1396,10 +1102,8 @@ app.get("/api/agent/schema", (req, res) => {
         },
         mod_doctor: {
           purpose: "Package-wide diagnostics for agents and the Studio UI.",
-          endpoint: "/api/agent/diagnostics",
           coverage: ["content.xml metadata", "Mission Director graph/XML", "UI layout dimensions and runtime-risk warnings", "AI script names/actions/params", "wares price and production invariants", "jobs required fields and task references", "translation language/page/item ids", "XML patch selectors/actions/content", "compile settings and includeInBuild exclusions"],
-          diagnostic_fields: ["severity", "message", "category", "code", "domain", "filePath", "nodeId", "sourceRef"],
-          summary_fields: ["total", "bySeverity", "byDomain", "hasErrors", "hasWarnings"]
+          diagnostic_fields: ["severity", "message", "category", "code", "domain", "filePath", "nodeId", "sourceRef"]
         }
       },
       minimal_workspace: sanitizeWorkspace({ name: "My_AI_Mod", nodes: [], links: [], uiWidgets: [] })
@@ -1421,28 +1125,8 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/workspace",
         auth: true,
-        body: { workspace: "ModWorkspace", expectedVersion: "optional current version from GET /api/agent/workspace; returns 409 if stale" },
-        purpose: "Replace the active studio workspace and bump the version if changed. Send expectedVersion to prevent stale-agent overwrites."
-      },
-      {
-        method: "POST",
-        path: "/api/agent/workspace/dry-run",
-        auth: true,
-        body: { workspace: "ModWorkspace", expectedVersion: "optional current version from GET /api/agent/workspace" },
-        purpose: "Preview a full workspace replacement without mutating active state. Returns sanitized workspace, wouldChange/wouldApply flags, version conflict state, proposed version, generated file names, and Mod Doctor diagnostics."
-      },
-      {
-        method: "POST",
-        path: "/api/agent/workspace/patch",
-        auth: true,
-        body: {
-          expectedVersion: "required current version from GET /api/agent/workspace",
-          dryRun: "optional boolean; when true, returns proposed workspace and diagnostics without applying",
-          operations: [
-            { op: "add|replace|remove", path: "/JSON/Pointer/path", value: "required for add/replace" }
-          ]
-        },
-        purpose: "Apply JSON Patch-style granular edits to the active workspace with version-conflict protection. Supports add, replace, and remove on object fields and array items, including '-' append."
+        body: { workspace: "ModWorkspace" },
+        purpose: "Replace the active studio workspace and bump the version if changed."
       },
       {
         method: "POST",
@@ -1460,13 +1144,6 @@ app.get("/api/agent/schema", (req, res) => {
       },
       {
         method: "POST",
-        path: "/api/agent/diagnostics",
-        auth: true,
-        body: { workspace: "optional ModWorkspace; defaults to active workspace" },
-        purpose: "Run Mod Doctor without returning full file contents. Use before agent mutations to get package-wide errors, warnings, source refs, generated file names, and summary counts."
-      },
-      {
-        method: "POST",
         path: "/api/agent/deploy",
         auth: true,
         body: { workspace: "optional ModWorkspace; defaults to active workspace" },
@@ -1477,12 +1154,6 @@ app.get("/api/agent/schema", (req, res) => {
         path: "/api/agent/game-log/status?modId=<optionalModId>",
         auth: true,
         purpose: "Read recent X4 debuglog.txt/uidata.log output, classify active-mod errors or warnings, and report whether the log is stale relative to the last Studio deploy."
-      },
-      {
-        method: "GET",
-        path: "/api/agent/mod-folder/inspect?path=<optionalRelativeFolder>",
-        auth: true,
-        purpose: "Read-only round-trip safety inventory for a mod folder under the configured filesystem/mod workspace root. Classifies files as editable, partial, generated, passthrough, or ignored and returns a lossiness report."
       },
       {
         method: "GET",
@@ -1605,26 +1276,6 @@ app.get("/api/agent/schema", (req, res) => {
       diagnostics: "Mod Doctor package-wide diagnostics with optional code, domain, filePath, nodeId, and sourceRef metadata",
       file_count: "number"
     },
-    diagnostics_response_shape: {
-      success: "boolean",
-      modId: "safe extension folder id",
-      workspace_domains: "counts of submitted or active workspace domains before includeInBuild filtering",
-      generated_files: "relative package paths generated for the current compile settings",
-      summary: "diagnostic totals by severity and domain",
-      diagnostics: "full Mod Doctor diagnostic list without returning generated file contents",
-      schema_context: "whether md.xsd/common.xsd are resolved and the current schema element counts"
-    },
-    workspace_dry_run_response_shape: {
-      success: "boolean",
-      dryRun: "true",
-      wouldChange: "whether the sanitized proposal differs from the active workspace",
-      wouldApply: "false when unchanged or when expectedVersion is stale",
-      versionConflict: "true when expectedVersion was provided and does not match currentVersion",
-      currentVersion: "current active workspace version",
-      proposedVersion: "version that would exist after a successful apply",
-      workspace: "sanitized proposed workspace",
-      diagnostics: "same Mod Doctor diagnostics as /api/agent/diagnostics"
-    },
     game_log_status_shape: {
       status: "no_log | stale | clean | warnings | errors",
       modId: "safe extension folder id used for active-mod line matching",
@@ -1635,15 +1286,6 @@ app.get("/api/agent/schema", (req, res) => {
       issues: "recent errors/warnings whose text mentions the active mod id",
       recentGlobalIssues: "recent errors/warnings from the log tail, even when not matched to the active mod",
       tailLines: "last log lines used for UI/runtime inspection"
-    },
-    mod_folder_inspect_shape: {
-      success: "boolean",
-      rootPath: "absolute inspected folder path under configured filesystem/mod workspace root",
-      fileCount: "number of files inspected, capped for safety",
-      counts: "counts by classification and domain",
-      lossinessReport: "lists fullyEditable, partiallyUnderstood, preserveRaw, generatedOrStudioOwned, exportRisk, and summary",
-      files: "array of { path, size, hash, classification, domain, reason }",
-      classifications: ["editable", "partial", "generated", "passthrough", "ignored"]
     },
     object_index_shape: {
       generatedAt: "ISO timestamp for index build",
@@ -2037,20 +1679,10 @@ app.get("/api/agent/workspace", (req, res) => {
  * Updates the currently active workspace state and bumps the revision version.
  */
 app.post("/api/agent/workspace", (req, res) => {
-  const { workspace, expectedVersion } = req.body;
+  const { workspace } = req.body;
   if (!workspace) {
     return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
   }
-  if (expectedVersion !== undefined && Number(expectedVersion) !== workspaceVersion) {
-    return res.status(409).json({
-      success: false,
-      error: "Workspace version conflict. Refresh /api/agent/workspace before applying changes.",
-      code: "workspace.version_conflict",
-      expectedVersion: Number(expectedVersion),
-      currentVersion: workspaceVersion
-    });
-  }
-
   const nextWorkspace = sanitizeWorkspace(workspace);
 
   // Set the workspace and bump version only if it changed
@@ -2069,102 +1701,6 @@ app.post("/api/agent/workspace", (req, res) => {
 });
 
 /**
- * POST /api/agent/workspace/dry-run
- * Validates a proposed full workspace replacement without mutating active state.
- */
-app.post("/api/agent/workspace/dry-run", (req, res) => {
-  const { workspace, expectedVersion } = req.body;
-  if (!workspace) {
-    return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
-  }
-
-  try {
-    const nextWorkspace = sanitizeWorkspace(workspace);
-    const isDifferent = JSON.stringify(nextWorkspace) !== JSON.stringify(activeWorkspace);
-    const versionConflict = expectedVersion !== undefined && Number(expectedVersion) !== workspaceVersion;
-    const diagnosticsPayload = buildWorkspaceDiagnosticsPayload(nextWorkspace);
-
-    return res.json({
-      success: true,
-      dryRun: true,
-      wouldApply: isDifferent && !versionConflict,
-      wouldChange: isDifferent,
-      versionConflict,
-      expectedVersion: expectedVersion === undefined ? null : Number(expectedVersion),
-      currentVersion: workspaceVersion,
-      proposedVersion: isDifferent && !versionConflict ? workspaceVersion + 1 : workspaceVersion,
-      workspace: nextWorkspace,
-      ...diagnosticsPayload
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      dryRun: true,
-      error: error.message || "Failed to dry-run proposed workspace."
-    });
-  }
-});
-
-/**
- * POST /api/agent/workspace/patch
- * Applies JSON Patch-style granular workspace changes with required version safety.
- */
-app.post("/api/agent/workspace/patch", (req, res) => {
-  const { operations, expectedVersion, dryRun } = req.body;
-  if (!Array.isArray(operations) || operations.length === 0) {
-    return res.status(400).json({ success: false, error: "Missing required non-empty 'operations' array." });
-  }
-  if (expectedVersion === undefined) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required 'expectedVersion'. Read /api/agent/workspace before patching.",
-      code: "workspace.expected_version_required",
-      currentVersion: workspaceVersion
-    });
-  }
-  if (Number(expectedVersion) !== workspaceVersion) {
-    return res.status(409).json({
-      success: false,
-      error: "Workspace version conflict. Refresh /api/agent/workspace before applying changes.",
-      code: "workspace.version_conflict",
-      expectedVersion: Number(expectedVersion),
-      currentVersion: workspaceVersion
-    });
-  }
-
-  try {
-    const nextWorkspace = applyWorkspacePatchOperations(activeWorkspace, operations);
-    const isDifferent = JSON.stringify(nextWorkspace) !== JSON.stringify(activeWorkspace);
-    const nextVersion = isDifferent && !dryRun ? workspaceVersion + 1 : workspaceVersion;
-    const diagnosticsPayload = buildWorkspaceDiagnosticsPayload(nextWorkspace);
-
-    if (isDifferent && !dryRun) {
-      activeWorkspace = nextWorkspace;
-      workspaceVersion++;
-    }
-
-    return res.json({
-      success: true,
-      dryRun: Boolean(dryRun),
-      applied: Boolean(isDifferent && !dryRun),
-      wouldChange: isDifferent,
-      version: dryRun ? workspaceVersion : workspaceVersion,
-      proposedVersion: nextVersion,
-      operationsApplied: operations.length,
-      workspace: nextWorkspace,
-      ...diagnosticsPayload
-    });
-  } catch (error: any) {
-    return res.status(400).json({
-      success: false,
-      error: error.message || "Failed to apply workspace patch.",
-      code: "workspace.patch_failed",
-      currentVersion: workspaceVersion
-    });
-  }
-});
-
-/**
  * GET /api/agent/game-log/status
  * Log-first live game feedback loop. Reads recent X4 debug output and classifies
  * active-mod errors without sending log content to any AI provider.
@@ -2177,50 +1713,6 @@ app.get("/api/agent/game-log/status", (req, res) => {
     return res.status(500).json({
       status: "error",
       error: error.message || "Failed to read X4 game log status."
-    });
-  }
-});
-
-/**
- * GET /api/agent/mod-folder/inspect
- * Read-only round-trip safety inventory for existing mod folders.
- */
-app.get("/api/agent/mod-folder/inspect", (req, res) => {
-  try {
-    const resolved = resolveXsdConfig();
-    const configuredRoot = resolved.filesystemPath || resolved.modWorkspacePath;
-    if (!configuredRoot) {
-      return res.status(400).json({
-        success: false,
-        error: "No filesystemPath or modWorkspacePath is configured."
-      });
-    }
-
-    const relativeFolder = typeof req.query.path === "string" ? req.query.path.trim() : "";
-    const rootPath = path.resolve(configuredRoot, relativeFolder || ".");
-    if (!isSubPath(rootPath, configuredRoot)) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden: Directory traversal detected."
-      });
-    }
-    if (!fs.existsSync(rootPath) || !fs.statSync(rootPath).isDirectory()) {
-      return res.status(404).json({
-        success: false,
-        error: `Mod folder not found: ${relativeFolder || "."}`
-      });
-    }
-
-    return res.json({
-      success: true,
-      baseRoot: configuredRoot,
-      relativeFolder: relativeFolder || ".",
-      ...inspectModFolder(rootPath)
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || "Failed to inspect mod folder."
     });
   }
 });
@@ -2491,25 +1983,6 @@ app.post("/api/agent/package", (req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || "Failed to package workspace schema to file manifest."
-    });
-  }
-});
-
-/**
- * POST /api/agent/diagnostics
- * Runs Mod Doctor without returning full generated file contents.
- */
-app.post("/api/agent/diagnostics", (req, res) => {
-  const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
-  try {
-    return res.json({
-      success: true,
-      ...buildWorkspaceDiagnosticsPayload(ws)
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || "Failed to run Mod Doctor diagnostics."
     });
   }
 });

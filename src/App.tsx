@@ -39,6 +39,7 @@ import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
 import DirectorySettingsModal from './components/DirectorySettingsModal';
+import CompileConfirmationModal from './components/CompileConfirmationModal';
 import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
@@ -154,7 +155,7 @@ export default function App() {
   }, [loadSchemaLibrary]);
 
   const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki'>('blueprint');
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest'>('script');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference'>('script');
 
   // Diagnostics / Mod Doctor states moved to App level to share across Sidebar/CodePreview
   const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
@@ -220,6 +221,7 @@ export default function App() {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
   const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
+  const [isCompileModalOpen, setIsCompileModalOpen] = useState<boolean>(false);
 
   // Left & Right Sidebar Resizing States
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
@@ -505,12 +507,7 @@ export default function App() {
     return () => clearTimeout(debounceTimer);
   }, [workspace]);
 
-  const handleCompileModProject = async () => {
-    if (!modWorkspacePath) {
-      setCompileStatus('error');
-      setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
-      return;
-    }
+  const executeCompileModProject = async () => {
     setCompileStatus('compiling');
     setCompileMessage('Compiling and deploying project on the server...');
     try {
@@ -531,6 +528,15 @@ export default function App() {
       setCompileStatus('error');
       setCompileMessage(e.message || 'Compilation failed. Connection error.');
     }
+  };
+
+  const handleCompileModProject = async () => {
+    if (!modWorkspacePath) {
+      setCompileStatus('error');
+      setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
+      return;
+    }
+    setIsCompileModalOpen(true);
   };
 
   // Initial load and periodic background polling of the server workspace
@@ -1118,6 +1124,16 @@ export default function App() {
         setModWorkspacePath={setModWorkspacePath}
         filesystemPath={filesystemPath}
         setFilesystemPath={setFilesystemPath}
+      />
+
+      {/* Selectable Compile Targets Confirmation Wizard Modal */}
+      <CompileConfirmationModal
+        isOpen={isCompileModalOpen}
+        onClose={() => setIsCompileModalOpen(false)}
+        onConfirm={executeCompileModProject}
+        workspace={workspace}
+        setWorkspace={setWorkspace}
+        modWorkspacePath={modWorkspacePath}
       />
     </div>
   );
