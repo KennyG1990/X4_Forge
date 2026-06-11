@@ -187,9 +187,33 @@ function activeBuildWorkspace(workspaceInput: any): ModWorkspace {
   };
 }
 
+/**
+ * Namespace the mod's OWN AI scripts (and the job <task script> references that point to
+ * them) with the mod id, so two studio-made mods don't ship colliding generic filenames
+ * like aiscripts/hunter.escort.behavior.xml — a real cross-mod conflict the Extension
+ * Doctor flags. Base-game script refs (move.*, order.*, etc.) are NOT the mod's own and
+ * are left untouched. `ws` is a fresh sanitized copy, so mutating it here is safe.
+ */
+function namespaceModAiScripts(ws: any, modId: string): void {
+  const scripts = ws.aiScripts || [];
+  if (!scripts.length) return;
+  const prefix = `${modId}.`;
+  const rename = (n: string) => (n && !n.startsWith(prefix)) ? `${prefix}${n}` : n;
+  const ownNames = new Set<string>(scripts.map((s: any) => s.name).filter(Boolean));
+  for (const s of scripts) {
+    if (s.name) s.name = rename(s.name);
+  }
+  for (const job of ws.jobs || []) {
+    if (job.taskScript && ownNames.has(job.taskScript)) {
+      job.taskScript = rename(job.taskScript);
+    }
+  }
+}
+
 function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files: CompiledFileManifest } {
   const ws = activeBuildWorkspace(workspaceInput);
   const modId = toSafeModId(ws.name);
+  namespaceModAiScripts(ws, modId);
   const files: CompiledFileManifest = {};
   const settings = ws.compileSettings || { md: true, ui: true, ai: true, library: true, translations: true, patches: true };
 
@@ -850,6 +874,25 @@ async function generateContentWithRetry(ai: any, params: any, maxRetries = 2) {
 // Unified Multi-Provider AI Endpoint Controller (Gemini, Claude, OpenAI)
 // Plays direct native fetch proxy requests to protect backend secrets.
 // -----------------------------------------------------
+// Security (Track B): the server's own .env provider keys may only back requests that
+// came from the app UI in the browser (Origin/Referer = the app's localhost origins).
+// External clients (scripts, agents, other local processes) must supply their own key
+// via x-custom-api-key — they hold the studio token, but that authorizes workspace
+// access, not spending the user's provider credits.
+function isAppUiRequest(req: express.Request): boolean {
+  const appOrigins = new Set([
+    "http://localhost:3000", "http://127.0.0.1:3000",
+    `http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`
+  ]);
+  const origin = (req.headers.origin as string) || "";
+  if (appOrigins.has(origin)) return true;
+  const referer = (req.headers.referer as string) || "";
+  for (const o of appOrigins) {
+    if (referer.startsWith(o + "/") || referer === o) return true;
+  }
+  return false;
+}
+
 async function callMultiProviderAI(
   req: express.Request,
   systemInstruction: string,
@@ -858,14 +901,17 @@ async function callMultiProviderAI(
   jsonSchema?: any
 ): Promise<string> {
   const provider = (req.headers["x-ai-provider"] as string) || "gemini";
-  const customKey = (req.headers["x-custom-api-key"] as string) || "";
+  const customKeyHeader = (req.headers["x-custom-api-key"] as string) || "";
+  const envFallbackAllowed = isAppUiRequest(req);
+  const NO_KEY_MSG = "No API key for this request. App-UI requests use the configured provider settings; external/agent requests must supply their own key via the x-custom-api-key header (the server's .env keys are reserved for the app UI).";
+  const customKey = customKeyHeader;
   const model = (req.headers["x-ai-model"] as string) || "";
   const reasoning = (req.headers["x-ai-reasoning"] as string) || "none";
 
   if (provider === "claude") {
-    const claudeKey = customKey || process.env.ANTHROPIC_API_KEY;
+    const claudeKey = customKey || (envFallbackAllowed ? process.env.ANTHROPIC_API_KEY : undefined);
     if (!claudeKey) {
-      throw new Error("Anthropic API key is not configured. Please supply your API Key in the AI Providers settings modal.");
+      throw new Error(envFallbackAllowed ? "Anthropic API key is not configured. Please supply your API Key in the AI Providers settings modal." : NO_KEY_MSG);
     }
 
     const finalModel = model || "claude-3-5-sonnet-latest";
@@ -922,9 +968,9 @@ async function callMultiProviderAI(
     return textOut.trim();
 
   } else if (provider === "openai") {
-    const openaiKey = customKey || process.env.OPENAI_API_KEY;
+    const openaiKey = customKey || (envFallbackAllowed ? process.env.OPENAI_API_KEY : undefined);
     if (!openaiKey) {
-      throw new Error("OpenAI API key is not configured. Please supply your API Key in the AI Providers settings modal.");
+      throw new Error(envFallbackAllowed ? "OpenAI API key is not configured. Please supply your API Key in the AI Providers settings modal." : NO_KEY_MSG);
     }
 
     const finalModel = model || "gpt-4o";
@@ -974,9 +1020,9 @@ async function callMultiProviderAI(
     return textOut.trim();
 
   } else if (provider === "openrouter") {
-    const openrouterKey = customKey || process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY;
+    const openrouterKey = customKey || (envFallbackAllowed ? (process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY) : undefined);
     if (!openrouterKey) {
-      throw new Error("OpenRouter API key is not configured. Please supply your API Key in the AI Providers settings modal.");
+      throw new Error(envFallbackAllowed ? "OpenRouter API key is not configured. Please supply your API Key in the AI Providers settings modal." : NO_KEY_MSG);
     }
 
     const finalModel = model || "google/gemini-2.1-flash";
@@ -1018,9 +1064,9 @@ async function callMultiProviderAI(
 
   } else {
     // Default to Google Gemini API (standard model schema)
-    const geminiKey = customKey || process.env.GEMINI_API_KEY;
+    const geminiKey = customKey || (envFallbackAllowed ? process.env.GEMINI_API_KEY : undefined);
     if (!geminiKey || geminiKey === "MY_GEMINI_API_KEY") {
-      throw new Error("Gemini API key is not configured. Please supply your API Key in the AI Providers settings modal to enable cognitive assistance.");
+      throw new Error(envFallbackAllowed ? "Gemini API key is not configured. Please supply your API Key in the AI Providers settings modal to enable cognitive assistance." : NO_KEY_MSG);
     }
 
     const finalModel = model || "gemini-3.5-flash";
@@ -2574,6 +2620,333 @@ app.post("/api/agent/round-trip-check", (req, res) => {
   }
 });
 
+/**
+ * Extension Doctor (P-A) — cross-mod conflict scan over an extensions/ folder.
+ * Read-only and side-effect-free. Checks: (1) missing dependencies, (2) duplicate
+ * extension ids, (3) cross-mod file/patch collisions (full-file overrides + identical
+ * diff selectors on a shared base path). Returns the standard diagnostic shape.
+ * Extracted as a function so both the live endpoint and the selftest can call it.
+ */
+function runExtensionDoctor(extRoot: string) {
+    interface ExtInfo {
+      folder: string; id: string; idLower: string; name?: string; version?: string;
+      enabled: boolean; deps: { id: string; optional: boolean; name?: string }[]; absDir: string;
+    }
+
+    const exts: ExtInfo[] = [];
+    for (const folder of fs.readdirSync(extRoot)) {
+      const absDir = path.join(extRoot, folder);
+      let isDir = false;
+      try { isDir = fs.statSync(absDir).isDirectory(); } catch { isDir = false; }
+      const contentPath = path.join(absDir, "content.xml");
+      if (!isDir || !fs.existsSync(contentPath)) continue;
+
+      let xml = "";
+      try { xml = fs.readFileSync(contentPath, "utf8"); } catch { continue; }
+      const id = xml.match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || folder;
+      const enabledAttr = xml.match(/<content\b[^>]*\benabled\s*=\s*"([^"]+)"/i)?.[1];
+      const enabled = enabledAttr !== "0" && enabledAttr !== "false";
+      const name = xml.match(/<content\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1];
+      const version = xml.match(/<content\b[^>]*\bversion\s*=\s*"([^"]+)"/i)?.[1];
+
+      const deps: { id: string; optional: boolean; name?: string }[] = [];
+      const depRe = /<dependency\b([^>]*)>/gi;
+      let dm: RegExpExecArray | null;
+      while ((dm = depRe.exec(xml))) {
+        const attrs = dm[1];
+        const depId = attrs.match(/\bid\s*=\s*"([^"]+)"/i)?.[1];
+        if (!depId) continue;
+        deps.push({
+          id: depId,
+          optional: /\boptional\s*=\s*"(?:true|1)"/i.test(attrs),
+          name: attrs.match(/\bname\s*=\s*"([^"]+)"/i)?.[1]
+        });
+      }
+      exts.push({ folder, id, idLower: id.toLowerCase(), name, version, enabled, deps, absDir });
+    }
+
+    const idToExts = new Map<string, ExtInfo[]>();
+    for (const e of exts) {
+      const arr = idToExts.get(e.idLower) || [];
+      arr.push(e);
+      idToExts.set(e.idLower, arr);
+    }
+    const installedIds = new Set(exts.map(e => e.idLower));
+
+    const findings: any[] = [];
+
+    // CHECK 1 — dependency resolution.
+    for (const e of exts) {
+      for (const d of e.deps) {
+        if (installedIds.has(d.id.toLowerCase())) continue;
+        findings.push({
+          severity: d.optional ? "info" : "error",
+          category: "dependency",
+          code: d.optional ? "dep.missing_optional" : "dep.missing_required",
+          domain: "extension",
+          filePath: `extensions/${e.folder}/content.xml`,
+          message: `${e.name || e.folder} ${d.optional ? "optionally depends on" : "requires"} "${d.id}"${d.name ? ` (${d.name})` : ""}, which is not installed${d.optional ? "." : " — this extension may fail to load."}`,
+          sourceRef: { kind: "dependency", id: d.id, label: e.id },
+          openTargets: [{ label: e.folder, path: `${e.folder}/content.xml` }]
+        });
+      }
+    }
+
+    // CHECK 2 — duplicate extension ids.
+    for (const arr of idToExts.values()) {
+      if (arr.length < 2) continue;
+      findings.push({
+        severity: "error",
+        category: "conflict",
+        code: "ext.duplicate_id",
+        domain: "extension",
+        filePath: arr.map(a => `extensions/${a.folder}/content.xml`).join(", "),
+        message: `Duplicate extension id "${arr[0].id}" declared by ${arr.length} folders (${arr.map(a => a.folder).join(", ")}). X4 loads only one of them.`,
+        sourceRef: { kind: "extension", id: arr[0].id },
+        openTargets: arr.map(a => ({ label: a.folder, path: `${a.folder}/content.xml` }))
+      });
+    }
+
+    // CHECK 2b — folder name vs content id mismatch. Not fatal (X4 identifies
+    // extensions by folder; dependencies reference the content id), but a mismatch
+    // is a common source of confusion when wiring dependencies and debugging load
+    // issues, so surface it as info. First-party ego_* content is skipped.
+    for (const e of exts) {
+      if (/^ego_/i.test(e.id) || /^ego_/i.test(e.folder)) continue;
+      if (e.folder.toLowerCase() === e.idLower) continue;
+      findings.push({
+        severity: "info",
+        category: "convention",
+        code: "ext.folder_id_mismatch",
+        domain: "extension",
+        filePath: `extensions/${e.folder}/content.xml`,
+        message: `Folder "${e.folder}" declares content id "${e.id}" — folder name and id differ. Dependencies resolve by id, the engine identifies the extension by folder; keeping them identical avoids wiring mistakes.`,
+        sourceRef: { kind: "extension", id: e.id, label: e.folder },
+        openTargets: [{ label: e.folder, path: `${e.folder}/content.xml` }]
+      });
+    }
+
+    // LOAD ORDER SIMULATION — X4 loads extensions alphabetically by folder name
+    // (case-insensitive), with declared dependencies loaded before their dependents.
+    // Deterministic topological sort with alphabetical tie-break; used to annotate
+    // conflict findings with the actual winner (last loaded wins).
+    const enabledExts = exts.filter(e => e.enabled);
+    const extByIdLower = new Map(enabledExts.map(e => [e.idLower, e]));
+    const loadOrder: string[] = [];
+    const loVisited = new Set<string>();
+    const loVisiting = new Set<string>();
+    const loVisit = (e: ExtInfo) => {
+      if (loVisited.has(e.folder)) return;
+      if (loVisiting.has(e.folder)) return; // dependency cycle — bail out of the branch
+      loVisiting.add(e.folder);
+      for (const d of [...e.deps].sort((a, b) => a.id.localeCompare(b.id))) {
+        const dep = extByIdLower.get(d.id.toLowerCase());
+        if (dep) loVisit(dep);
+      }
+      loVisiting.delete(e.folder);
+      loVisited.add(e.folder);
+      loadOrder.push(e.folder);
+    };
+    for (const e of [...enabledExts].sort((a, b) => a.folder.toLowerCase().localeCompare(b.folder.toLowerCase()))) {
+      loVisit(e);
+    }
+    const loadRank = new Map(loadOrder.map((f, i) => [f, i]));
+    const orderContested = (mods: string[]) =>
+      [...mods].sort((a, b) => (loadRank.get(a) ?? -1) - (loadRank.get(b) ?? -1));
+
+    // CHECK 3 — cross-mod file/patch collisions.
+    // Key every (third-party) mod's XML files by the base path they occupy (rel to ext
+    // root, mirroring the base-game layout). Official DLCs (ego_*) are excluded — first-
+    // party, mostly packed, layered by the engine. A path shared by >=2 mods is contested:
+    // full-file overrides collide outright; diff files collide on identical selectors.
+    interface FileRec { folder: string; isDiff: boolean; selectors: string[]; }
+    const pathMap = new Map<string, FileRec[]>();
+    for (const e of exts) {
+      if (!e.enabled || /^ego_/i.test(e.id)) continue;
+      for (const rel of walkFilesRelative(e.absDir)) {
+        const relLower = rel.toLowerCase();
+        // content.xml and ui.xml are per-extension root manifests (each mod has its own;
+        // they register that mod's content/UI, they don't override each other) — never a conflict.
+        if (!relLower.endsWith(".xml") || relLower === "content.xml" || relLower === "ui.xml") continue;
+        // Translations (t/) and index/ files are merged additively by X4 (by language→page→id,
+        // or name→path), not destructively overridden — a shared path there is not a real
+        // file-level conflict, so skip them to avoid false "load order decides" warnings.
+        if (relLower.startsWith("t/") || relLower.startsWith("index/")) continue;
+        let xml = "";
+        try { xml = fs.readFileSync(path.join(e.absDir, rel), "utf8"); } catch { continue; }
+        const isDiff = /<diff[\s>]/.test(xml);
+        const selectors = isDiff
+          ? [...xml.matchAll(/<(?:add|replace|remove)\b[^>]*\bsel\s*=\s*"([^"]+)"/gi)].map(mm => mm[1])
+          : [];
+        const tf = rel.replace(/\\/g, "/");
+        const arr = pathMap.get(tf) || [];
+        arr.push({ folder: e.folder, isDiff, selectors });
+        pathMap.set(tf, arr);
+      }
+    }
+    for (const [tf, recs] of pathMap) {
+      if (recs.length < 2) continue;
+      const mods = recs.map(r => r.folder);
+      const fullFileOwners = recs.filter(r => !r.isDiff).map(r => r.folder);
+      const selOwners = new Map<string, string[]>();
+      for (const r of recs) {
+        for (const s of r.selectors) {
+          const a = selOwners.get(s) || [];
+          a.push(r.folder);
+          selOwners.set(s, a);
+        }
+      }
+      const selCollisions = [...selOwners.entries()].filter(([, o]) => o.length > 1);
+
+      const ordered = orderContested(mods);
+      const winner = ordered[ordered.length - 1];
+
+      if (fullFileOwners.length > 0) {
+        findings.push({
+          severity: "warning", category: "conflict", code: "file.override_collision",
+          domain: "xml_patches", filePath: tf,
+          message: `${recs.length} enabled mods provide ${tf} (full-file override) — simulated load order: ${ordered.join(" → ")}; winner (loaded last): ${winner}.`,
+          sourceRef: { kind: "file_conflict", id: tf, label: mods.join(", ") },
+          openTargets: recs.map(r => ({ label: r.folder, path: `${r.folder}/${tf}` })),
+          loadOrder: ordered, winner
+        });
+      } else if (selCollisions.length) {
+        findings.push({
+          severity: "warning", category: "conflict", code: "patch.selector_collision",
+          domain: "xml_patches", filePath: tf,
+          message: `${mods.length} enabled mods patch ${tf} with ${selCollisions.length} identical selector(s) — simulated load order: ${ordered.join(" → ")}; winner (loaded last): ${winner}.`,
+          sourceRef: { kind: "patch_conflict", id: tf, label: mods.join(", ") },
+          openTargets: recs.map(r => ({ label: r.folder, path: `${r.folder}/${tf}` })),
+          loadOrder: ordered, winner
+        });
+      } else {
+        findings.push({
+          severity: "info", category: "conflict", code: "patch.shared_target",
+          domain: "xml_patches", filePath: tf,
+          message: `${mods.length} enabled mods patch ${tf} (different selectors — lower conflict risk): ${mods.join(", ")}.`,
+          sourceRef: { kind: "patch_conflict", id: tf, label: mods.join(", ") },
+          openTargets: recs.map(r => ({ label: r.folder, path: `${r.folder}/${tf}` }))
+        });
+      }
+    }
+
+    const rank: Record<string, number> = { error: 0, warning: 1, info: 2 };
+    findings.sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3));
+    const counts = { error: 0, warning: 0, info: 0 } as Record<string, number>;
+    for (const f of findings) counts[f.severity] = (counts[f.severity] || 0) + 1;
+
+    return {
+      extensionsScanned: exts.length,
+      enabledCount: exts.filter(e => e.enabled).length,
+      counts,
+      findings,
+      loadOrder
+    };
+}
+
+app.get("/api/agent/extension-doctor", (_req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const extRoot = resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "";
+    if (!extRoot || !fs.existsSync(extRoot)) {
+      return res.status(400).json({ error: "X4 extensions folder not found. Set the X4 game path in Settings." });
+    }
+    return res.json({ success: true, extensionsRoot: extRoot, ...runExtensionDoctor(extRoot) });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "extension-doctor scan failed" });
+  }
+});
+
+// Positive regression test: synthesize a temp extensions folder with deliberate faults
+// (a required missing dependency, a duplicate id, and two mods patching the same
+// libraries/jobs.xml with an identical selector) and assert each check fires. The real
+// install is conflict-clean, so this is how we prove the positive paths actually work.
+app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
+  let tmp = "";
+  try {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "x4ed-"));
+    const write = (rel: string, content: string) => {
+      const abs = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    };
+    write("mod_a/content.xml", `<?xml version="1.0"?>\n<content id="mod_a" name="Mod A" version="100" enabled="1">\n  <dependency id="not_installed_dep" name="Ghost Dependency"/>\n</content>`);
+    write("mod_a/libraries/jobs.xml", `<?xml version="1.0"?>\n<diff>\n  <add sel="/jobs"><job id="a_job"/></add>\n</diff>`);
+    write("mod_b/content.xml", `<?xml version="1.0"?>\n<content id="mod_b" name="Mod B" version="100" enabled="1">\n  <dependency id="mod_z" name="Z Library"/>\n</content>`);
+    write("mod_b/libraries/jobs.xml", `<?xml version="1.0"?>\n<diff>\n  <add sel="/jobs"><job id="b_job"/></add>\n</diff>`);
+    // mod_z: alphabetically AFTER mod_b, but mod_b depends on it, so the topological
+    // load order must place mod_z BEFORE mod_b. Also collides with mod_a/mod_b on a
+    // full-file override (libraries/wares.xml) to test winner annotation.
+    write("mod_z/content.xml", `<?xml version="1.0"?>\n<content id="mod_z" name="Mod Z" version="100" enabled="1"/>`);
+    write("mod_a/libraries/wares.xml", `<?xml version="1.0"?>\n<wares><ware id="a_ware"/></wares>`);
+    write("mod_z/libraries/wares.xml", `<?xml version="1.0"?>\n<wares><ware id="z_ware"/></wares>`);
+    write("mod_c/content.xml", `<?xml version="1.0"?>\n<content id="dup_id" name="Mod C" version="100" enabled="1"/>`);
+    write("mod_c_dup/content.xml", `<?xml version="1.0"?>\n<content id="dup_id" name="Mod C Clone" version="100" enabled="1"/>`);
+    // Both mods also ship t/0001.xml (translations MERGE) and a root ui.xml (per-extension
+    // manifest) — neither must be flagged as a collision.
+    write("mod_a/t/0001.xml", `<?xml version="1.0"?>\n<language id="44"><page id="1"><t id="1">A</t></page></language>`);
+    write("mod_b/t/0001.xml", `<?xml version="1.0"?>\n<language id="44"><page id="2"><t id="1">B</t></page></language>`);
+    write("mod_a/ui.xml", `<?xml version="1.0"?>\n<addon><environment type="menus"><file name="ui/a.lua"/></environment></addon>`);
+    write("mod_b/ui.xml", `<?xml version="1.0"?>\n<addon><environment type="menus"><file name="ui/b.lua"/></environment></addon>`);
+
+    const result = runExtensionDoctor(tmp);
+    const has = (code: string, pred?: (f: any) => boolean) =>
+      result.findings.some((f: any) => f.code === code && (!pred || pred(f)));
+    const checks = {
+      missingRequiredDep: has("dep.missing_required", f => f.sourceRef?.id === "not_installed_dep" && f.severity === "error"),
+      duplicateId: has("ext.duplicate_id"),
+      selectorCollision: has("patch.selector_collision", f => f.filePath === "libraries/jobs.xml" && f.severity === "warning"),
+      // negative cases: translations merge and ui.xml/content.xml are per-extension manifests,
+      // so shared t/ and ui.xml paths must NOT produce collisions.
+      tFilesNotFlagged: !result.findings.some((f: any) => f.filePath === "t/0001.xml"),
+      uiManifestNotFlagged: !result.findings.some((f: any) => f.filePath === "ui.xml"),
+      // folder "mod_c" declares id "dup_id" → folder/id mismatch must fire (as info).
+      folderIdMismatch: has("ext.folder_id_mismatch", f => f.sourceRef?.label === "mod_c" && f.severity === "info"),
+      // load-order simulation: mod_b depends on mod_z, so mod_z loads before mod_b
+      // despite sorting after it alphabetically.
+      depAwareLoadOrder: Array.isArray(result.loadOrder)
+        && result.loadOrder.indexOf("mod_z") !== -1
+        && result.loadOrder.indexOf("mod_z") < result.loadOrder.indexOf("mod_b"),
+      // selector collision (mod_a vs mod_b on libraries/jobs.xml): winner = mod_b (loads last).
+      selectorWinner: has("patch.selector_collision", f => f.filePath === "libraries/jobs.xml" && f.winner === "mod_b"),
+      // full-file override (mod_a vs mod_z on libraries/wares.xml): mod_z loads before
+      // mod_b but after mod_a (topo: a, z, b) → winner = mod_z.
+      overrideWinner: has("file.override_collision", f => f.filePath === "libraries/wares.xml" && f.winner === "mod_z")
+    };
+    const pass = checks.missingRequiredDep && checks.duplicateId && checks.selectorCollision
+      && checks.tFilesNotFlagged && checks.uiManifestNotFlagged
+      && checks.folderIdMismatch && checks.depAwareLoadOrder
+      && checks.selectorWinner && checks.overrideWinner;
+    return res.json({ success: true, pass, checks, codes: result.findings.map((f: any) => f.code), result });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "extension-doctor-selftest failed" });
+  } finally {
+    if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
+  }
+});
+
+// Read a single file inside the extensions/ folder by ext-root-relative path (e.g.
+// "deadair_scripts/content.xml"). Backs the Extension Doctor finding click-through.
+// Read-only and path-traversal guarded.
+app.get("/api/agent/extension-file", (req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const extRoot = resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "";
+    if (!extRoot) return res.status(400).json({ error: "X4 game path not configured." });
+    const rel = String(req.query.path || "").replace(/\\/g, "/");
+    if (!rel || rel.includes("..") || path.isAbsolute(rel)) {
+      return res.status(400).json({ error: "Invalid path." });
+    }
+    const abs = path.join(extRoot, rel);
+    if (!abs.startsWith(extRoot)) return res.status(400).json({ error: "Path escapes extensions root." });
+    if (!fs.existsSync(abs)) return res.status(404).json({ error: "File not found." });
+    const content = fs.readFileSync(abs, "utf8");
+    return res.json({ success: true, path: rel, name: path.basename(rel), content });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "extension-file read failed" });
+  }
+});
+
 // Public read-only audit: build a workspace exercising every node template and
 // curated MD branch, generate MD, validate against the real schema, and report
 // findings plus the schema truth for each involved element. Used to drive the
@@ -3438,6 +3811,7 @@ Create, update, or reposition HUD window containers and nested controller elemen
     console.log(`[AI-STUDIO] [Phase 4/4] Executing Egosoft Schema Verification & Healing...`);
     const currentCode = generateMDXML(combinedWorkspace);
     const validationDiagnostics = validateModWorkspace(combinedWorkspace, currentCode);
+    let selfHealError: string | null = null;
 
     if (validationDiagnostics.length > 0) {
       console.log(`[AI-STUDIO] Validation reported ${validationDiagnostics.length} warnings. Running auto-remedy fix...`);
@@ -3529,8 +3903,9 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
           uiTheme: phase4Result.uiTheme || combinedWorkspace.uiTheme
         };
         console.log(`[AI-STUDIO] Phased Auto-Remedy cycle completed successfully.`);
-      } catch (repairErr) {
-        console.warn(`[AI-STUDIO] Self-heal attempt failed (ignoring, falling back to base layout):`, repairErr);
+      } catch (repairErr: any) {
+        selfHealError = repairErr?.message || String(repairErr);
+        console.warn(`[AI-STUDIO] Self-heal attempt failed (falling back to base layout):`, repairErr);
       }
     } else {
       console.log(`[AI-STUDIO] Verification complete: pristine schema validated on first run.`);
@@ -3544,14 +3919,29 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
 
     const finalCode = generateMDXML(combinedWorkspace);
     const finalDiagnostics = validateModWorkspace(combinedWorkspace, finalCode);
+    const finalErrors = finalDiagnostics.filter(d => d.severity === 'error').length;
+    const finalWarnings = finalDiagnostics.filter(d => d.severity === 'warning').length;
+
+    // Honest reporting: the message must reflect the real post-validation state,
+    // including a self-heal attempt that threw (previously swallowed silently).
+    let resultMessage = `AI Agent generated and applied "${combinedWorkspace.name}" (${combinedWorkspace.nodes.length} nodes) in 4 phases.`;
+    if (finalDiagnostics.length === 0) {
+      resultMessage += ` Validation clean: 0 errors / 0 warnings.`;
+    } else {
+      resultMessage += ` Validation found ${finalErrors} error(s) / ${finalWarnings} warning(s) remaining.`;
+    }
+    if (selfHealError) {
+      resultMessage += ` Self-heal phase failed (${selfHealError}); the un-healed layout was applied.`;
+    }
 
     return res.json({
       success: true,
-      message: "AI Agent successfully designed and applied a new mod schema to the workspace in 4 distinct high-fidelity phases!",
+      message: resultMessage,
       version: workspaceVersion,
       workspace: combinedWorkspace,
       diagnostics: finalDiagnostics,
-      selfHealFailed: validationDiagnostics.length > 0 && finalDiagnostics.length > 0
+      selfHealFailed: (validationDiagnostics.length > 0 && finalDiagnostics.length > 0) || !!selfHealError,
+      selfHealError
     });
 
   } catch (error: any) {
@@ -3881,6 +4271,20 @@ app.post("/api/github/commits", async (req, res) => {
 
 // Configure Vite middleware or static serving
 async function setupDevOrProd() {
+  // Split-dev mode: run as an API-only server. The web UI + HMR are served by a
+  // standalone Vite process (see vite.config.ts), which proxies /api here. A
+  // backend restart (tsx watch) then no longer tears down the browser page.
+  if (process.env.API_ONLY === "true") {
+    app.get("/", (_req, res) => {
+      res
+        .status(200)
+        .type("text/plain")
+        .end(
+          "X4:MD Studio API server (API_ONLY). The web UI is served by Vite — open http://localhost:3000",
+        );
+    });
+    return;
+  }
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

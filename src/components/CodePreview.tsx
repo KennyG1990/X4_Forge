@@ -975,10 +975,16 @@ export default function CodePreview({
   };
 
   const highlightXML = (rawXML: string) => {
-    return rawXML
+    const escaped = rawXML
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
+      .replace(/>/g, '&gt;');
+    // Large-file guard: the span-wrapping regex passes below are O(file size) and run on
+    // every render. For very large generated files (e.g. deadair's 868KB MD) that freezes
+    // the viewer, so above the threshold we skip coloring and return escaped text only —
+    // still fully readable and editable, just monochrome (standard large-file IDE behavior).
+    if (escaped.length > 100000) return escaped;
+    return escaped
       // Color attributes FIRST (on the escaped text) so the tag/comment passes below
       // don't re-match the class="..." attributes of the <span>s we inject here.
       .replace(/([a-zA-Z0-9_:-]+)=(&quot;|")([^"&]*)(&quot;|")/g, '<span class="text-purple-400">$1</span>=<span class="text-emerald-300">$2$3$4</span>')
@@ -1018,6 +1024,10 @@ export default function CodePreview({
 
   const highlightCode = (rawText: string) => {
     const ext = activeEditorFile?.name.split('.').pop()?.toLowerCase();
+    // Large-file guard (see highlightXML): skip coloring for big files to keep the editor responsive.
+    if (rawText.length > 100000) {
+      return rawText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
     if (ext === 'json') {
       return rawText
         .replace(/&/g, '&amp;')

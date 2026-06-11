@@ -455,14 +455,17 @@ export default function AgentBridge({
       const errors = genDiagnostics.filter((d: any) => d.severity === 'error');
       const warnings = genDiagnostics.filter((d: any) => d.severity === 'warning');
 
-      let msg = `Success! The AI Agent has designed a custom mod layout named "${data.workspace.name}" with ${data.workspace.nodes.length} nodes.`;
-      if (errors.length > 0 || warnings.length > 0) {
-        msg += ` However, the generated layout has ${errors.length} error(s) and ${warnings.length} warning(s) remaining in Egosoft validation checks.`;
+      const hasIssues = errors.length > 0 || warnings.length > 0;
+      let msg = `${hasIssues ? 'Generated with issues.' : 'Success!'} The AI Agent has designed a custom mod layout named "${data.workspace.name}" with ${data.workspace.nodes.length} nodes.`;
+      if (hasIssues) {
+        msg += ` The generated layout has ${errors.length} error(s) and ${warnings.length} warning(s) remaining in Egosoft validation checks.`;
       } else {
         msg += ` The logic complies fully with Egosoft schema checks (0 errors/warnings).`;
       }
       if (data.selfHealFailed) {
-        msg += ` (Phased auto-remedy healing failed to resolve all diagnostics.)`;
+        msg += data.selfHealError
+          ? ` (Self-heal phase failed: ${data.selfHealError} — the un-healed layout was applied.)`
+          : ` (Phased auto-remedy healing failed to resolve all diagnostics.)`;
       }
       setSimSuccess(msg);
     } catch (err: any) {

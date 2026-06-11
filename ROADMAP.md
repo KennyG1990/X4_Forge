@@ -116,11 +116,101 @@ Focus shifted from backend correctness engines to **client-side robustness** of 
 - **MD Scanner result-render white-screen fixed (`src/components/MDScanner.tsx`).** A successful analyze (200) was white-screening the *entire* app: deepseek occasionally returns a field as a string/object where the renderer expected an array (or `summary`/`triggerCondition` as a non-string), so a `.map()` threw or React hit "Objects are not valid as a React child" — and it escaped to a full unmount. Added an `asText()` coercion helper and `Array.isArray()` guards around `flowSteps`, `entityRegistry`, `tacticalInsights`, plus coerced `summary`/`triggerCondition` and every per-row field. *Verified:* analyze → 200 → full result renders (Summary, Activation Trigger, Logical Execution Flowchart with per-node plain-English steps), `#root` populated, no boundary error, no white screen.
 - **MD Scanner + Playtest relocated to the left sidebar (`DiagnosticsHub.tsx`).** New self-contained hub owns its own analyze/log/sync state and lives in the left icon strip (SCANNER / PLAYTEST / DOCTOR tabs, each wrapped in `ErrorBoundary`); the right panel is now a clean code/diff viewer. SECTION 2 of `CodePreview` hidden.
 - **Code-viewer error highlighting + dark theme.** Per-line diagnostic highlighting in the code block, an Antigravity-style error-tick gutter overlay, app-wide dark webkit scrollbars, and an "Ask AI" button that pipes diagnostics to the assistant. `highlightXML` attribute/tag regex order fixed (was leaking `class="…"` as visible text).
+- **Dev-server reload churn diagnosed and fixed (split architecture).** Root cause of the constant full-page reloads: the app ran as a **single process** (`tsx watch server.ts` hosting Vite in *middleware mode* on port 3000), so any edit to `server.ts` or a shared `src/lib/*`/`src/types.ts` module restarted the whole process — tearing down Vite and force-reloading the browser (with a brief window of `Failed to fetch` 401s and a blank `#root`). Since the active correctness work lives in `src/lib`, this fired constantly. Two fixes: (1) **scoped both watchers** — `vite.config.ts` `watch.ignored` + `tsx watch --ignore` globs so app/doc/tooling writes (`.studio-api-token`, `.snapshots/`, `*.log`, `config.json`, `dist/`, `temp_import/`, `*.md`) stop triggering reloads; (2) **split the dev servers** — Vite now runs standalone on **port 3000** (UI + HMR, browser-facing, never restarts on backend edits) and proxies `/api` → a separate **API server on 3001** (`tsx watch server.ts` with `API_ONLY=true`, which skips the Vite middleware). A small dev-only Vite plugin injects the shared `.studio-api-token` into `index.html` so auth still works (guarded against double-inject in the combined fallback path). `restart-studio.bat` now launches both servers (kills 3000+3001 first) in their own windows. **Critical detail:** Vite's own watcher must *ignore the pure-backend entry files* (`server.ts`, `install_mod.ts`, `use_agent_api.py`) — the client never imports them, so Vite can't HMR them and would otherwise do a **full page reload** on every backend edit even in split mode. With those ignored, the API server (tsx watch) restarts on its own and the page is untouched. *Status: **live-verified** on the Windows host. Confirmed in-browser: Vite serves on 3000, token injected by the dev plugin (`tokenInjected: true`), `/api/schema/config` proxied to the 3001 API returns 200 with real config, and a page sentinel **survived** a `server.ts` edit (API restarted → 200, page did not reload) — the exact decoupling we were after.*
 
 **Honest residuals (this pass):**
 - **Analyze latency.** The structured-JSON analyze takes ~60–90s; the server's OpenRouter `fetch` has **no timeout**, so a slow/hung model leaves the panel spinning indefinitely. Add a server-side timeout + a client abort/cancel.
 - **ErrorBoundary reliability.** The full-app unmount suggests the modified `ErrorBoundary` (`extends (React.Component as any)` with redundant `props`/`state` field declarations — fragile under esbuild `useDefineForClassFields`) may not always catch. The MDScanner fix held without touching it, but the boundary should be made provably catch-all (convert to a clean class-field `state` initializer) so the next bad model response degrades to a panel-level error card, not a blank app.
 - **File-truncation hazard persists.** The concurrent AI editing pipeline has truncated component files (CodePreview twice) mid-session; treat every component edit as needing an immediate live re-verify.
+
+### Changelog — 2026-06-11 (5th pass: large-mod performance — the deadair stress case)
+
+**Motivation (from Ken):** the studio is *for* enabling ambitious mods like DeadAir's Dynamic Universe with fewer failure points — but it chokes loading mods at that scale. Stress case: `deadair_scripts/md/deadairdynamicuniverse.xml` = **868 KB / 12,632 lines / 162 cues + 52 libraries**, ~8,200 XML elements (2,108 `set_value`, 1,747 `do_if`), plus a second 536 KB MD file and a 372 KB jobs.xml.
+
+Diagnosed the freeze as **pure frontend render/compute** (not a front↔back data-coupling problem — the file is trivial to move and fits in memory; the browser just can't paint thousands of nodes/lines at once, and two algorithms were super-linear). Three contained fixes, all HMR-applied with no console errors:
+
+1. **`nodeToCueMap` rewritten O(cues × links × nodes) → O(nodes + links)** (`Canvas.tsx`). The old version ran a per-cue BFS that did a full `workspace.links.forEach` per visited node and a linear `workspace.nodes.find` per neighbor — recomputed on every node/link change (i.e., every drag). Now prebuilds a node-id `Map` + an undirected adjacency list (excluding parent→sub-cue boundary links) and BFSes with an index-pointer queue (no O(n) `Array.shift`). Same semantics, dramatically cheaper.
+2. **Radar minimap capped** (`Canvas.tsx`). It painted one DOM dot per node (2,000+ divs recreated on every pan/zoom). Now `minimapNodes` keeps all cues (structural anchors) and samples the rest to ≤500 dots.
+3. **Code-viewer large-file guard** (`CodePreview.tsx`). `highlightXML`/`highlightCode` ran three global regex passes over the *entire* file on every render. Above 100 KB they now return escaped-but-uncolored text (standard large-file IDE behavior) — the 868 KB MD stays readable/editable instead of freezing. (Minimap was already capped at 160 lines; line-number gutter already capped at 4,000.)
+
+**The main node render was already viewport-culled** (`visibleNodes`), so that part was fine — the costs were the two algorithms above plus the whole-file highlight.
+
+**Verification status: LIVE-VERIFIED.** Imported `deadair_scripts/md/deadairdynamicuniverse.xml` (867 KB) through the real frontend path (SYNC MOD → file import → `parseXMLToWorkspace` → `setWorkspace`). It reconstructed into **1,294 nodes / 1,293 links** and rendered **without freezing** — canvas interactive (scroll/pan moved the graph), code viewer showing the 7,455-line generated MD in monochrome (large-file guard confirmed active), minimap sampled, and **zero console errors**. This is the exact scale that previously killed the studio. (Separate follow-up surfaced: `/api/agent/workspace` takes ~seconds to serialize a 1,294-node workspace — backend serialization/polling cost, not the render freeze; candidate for the SQLite/persistence work.)
+
+**Follow-up perf backlog (not yet done):** memoize the whole-file highlight + `computeLineDiagMap` with `useMemo` keyed on text; consider true line-windowing in the code viewer; profile the frontend `parseMDXML` itself on the 868 KB file; and (architectural) move the **object index / Extension Doctor / cat-dat decode** to a persistent **SQLite** store on the backend (it's a query-over-tens-of-thousands-of-records problem — the right place for a DB; the mod-being-edited stays in frontend memory).
+
+### Changelog — 2026-06-11 (6th pass: Extension Doctor P-A — v1, in progress)
+
+Starting the report's #1 near-term recommendation (cross-mod conflict scanning) now that the studio survives deadair-scale mods. Grounded against the real install: **34 extensions** in `G:\…\X4 Foundations\extensions` (deadair_scripts, the DLCs, sn_mod_support_apis, x4-mod-ui-extensions, etc.), with dependencies that cross-reference other mods by content id (e.g. `ws_2042901274` = sn_mod_support_apis) and at least one real catch visible by inspection: **deadair_scripts requires `DeadAir_Eco`, which is not installed.**
+
+**v1 backend scope** — a single read-only endpoint `/api/agent/extension-doctor` that scans the whole `extensions/` folder and returns `{extensionsScanned, enabledCount, counts, findings[]}` using the existing diagnostic shape. Three checks:
+1. **Dependency resolution.** Parse each `content.xml` `id` + `<dependency>` list; flag non-optional deps whose id resolves to neither another installed extension nor a DLC (error), optional ones as info. Reuses the cross-mod id map.
+2. **Duplicate extension ids.** Two folders declaring the same `content id` → error (X4 loads only one).
+3. **Cross-mod patch overlap.** Collect every `<diff>` `sel=` per mod keyed by the patched base path (e.g. `libraries/jobs.xml`); when ≥2 enabled mods patch the same target, report it — escalating to a warning ("load order decides the winner") when they share identical selectors. This is the "why this file won" insight the report asks for.
+
+Builds entirely on existing helpers (`resolveXsdConfig`, `walkFilesRelative`, content/dependency parsing). v1 is backend + live verification against the real 34-mod folder; the Mod Doctor UI surface (grouping + click-through) follows once the scan is proven. Deliberately out of v1: full load-order simulation, XPath-level match overlap (needs an XPath lib), and DLC-content gating.
+
+**Status: backend LIVE-VERIFIED** against the real install (`/api/agent/extension-doctor`, GET, read-only). Scanned **33 extensions (all enabled)**; result `{error:0, warning:0, info:1}`. The one finding is correct and non-trivial: *"DeadAir Scripts optionally depends on DeadAir_Eco (DeadAir Economy Overhaul), which is not installed"* — graded **info** because deadair marks it `optional="true"` (the dependency parser reads the optional flag, so it didn't false-alarm as an error). Duplicate-id and patch-overlap checks correctly returned nothing, cross-checked against the raw files: every `<diff>` base path (deadair's `libraries/jobs.xml`, `wares.xml`, `maps/*`, etc.) appears exactly once across all mods, so there are genuinely no cross-mod patch conflicts in this set — the zero is real, not a missed detection. The scan is accurate; the next step is surfacing it in the Mod Doctor UI (grouped findings + click-through) and adding a positive patch-conflict fixture to regression-test check #3.
+
+**v1.1 scope (in progress) — hardening + UI:**
+1. **Shared-path collision detection** (extends check #3). Beyond `<diff>` selector overlap, also flag when ≥2 enabled mods ship the *same base-game rel path* (e.g. two mods both providing `libraries/wares.xml`), which is a full-file override collision X4 resolves purely by load order. Diff-vs-diff stays a warning on identical selectors; full-file path collisions are a warning ("last loaded wins").
+2. **`/api/agent/extension-doctor-selftest`** — synthesizes a temp extensions folder with deliberate faults (a required missing dependency, a duplicate id, and two mods patching the same `libraries/jobs.xml` with an identical selector) and asserts each check fires with the right severity. Positive regression test for all three checks, since the real folder happens to be conflict-clean. Mirrors the existing `round-trip-selftest` pattern (os.tmpdir).
+3. **UI surface** — an "Extensions" view in the left-sidebar DOCTOR hub (`DiagnosticsHub`): a "Scan installed extensions" button calling `/api/agent/extension-doctor`, rendering grouped findings by severity with counts and per-finding file/message, matching the existing Mod Doctor styling.
+
+Each piece is verified live before being marked done (selftest asserts the positive cases; the UI is confirmed in-browser against the real 33-mod scan).
+
+**v1.1 backend status: LIVE-VERIFIED.**
+- `/api/agent/extension-doctor-selftest` synthesizes a temp folder (missing required dep + duplicate id + two mods patching `libraries/jobs.xml` with identical selector + both shipping `t/0001.xml` and root `ui.xml`) and asserts **5 checks — 3 positive, 2 negative — all pass**: `dep.missing_required`, `ext.duplicate_id`, `patch.selector_collision` fire; `t/` translations and `ui.xml` manifests are correctly **not** flagged.
+- **False-positive tuning (found via the real scan, then guarded by the selftest):** the full-file collision check initially flagged `t/0001.xml` (translations merge additively in X4, not override) and `ui.xml`/`content.xml` (per-extension root manifests, not base overrides). Both are now excluded; `index/` too (merged name→path maps).
+- **Real 33-mod scan result:** `{error:0, warning:4, info:1}`, **zero false positives**. The 1 info is the optional `DeadAir_Eco` dep. The 4 warnings are genuine global-namespace collisions: `md/deadairdynamicuniverse.xml` (deadairdynamicuniverse + deadair_scripts), `md/extendedconversationmenu_testmod.xml`, and — notably — `aiscripts/hunter.escort.behavior.xml` + `aiscripts/miner.auto.harvest.xml`, where two studio-made test mods collide because **the studio generates default aiscripts with generic, non-mod-prefixed names**. That's a real product bug the Doctor surfaced (fix: prefix generated aiscript filenames with the mod id) — logged to the perf/correctness backlog.
+
+**UI surface: LIVE-VERIFIED.** Added an "EXTENSION DOCTOR" card to the Mod Doctor panel (`PackageModDoctor.tsx`, the DOCTOR tab) — a "Scan Installed Extensions" button calling `/api/agent/extension-doctor`, rendering the `{error/warning/info}` counts and each finding (severity-colored, with code, file path, and message), reusing the existing diagnostic styling. Confirmed in-browser: clicking Scan showed "33 MODS", counts **0 Err / 4 Warn / 1 Info**, and the full-file-override findings list — matching the verified backend exactly, with no console errors. It sits alongside the per-workspace Package Diagnostics, so the DOCTOR tab now covers both "is *my* mod valid" and "do my installed mods conflict."
+
+**P-A status: v1 + v1.1 COMPLETE and live-verified** (dependency / duplicate-id / cross-mod file+patch conflict scan, selftest-guarded, surfaced in the UI). Remaining Extension-Doctor backlog (future): XPath-level match overlap (needs an XPath lib), full load-order winner simulation, and folder-name vs id mismatch checks.
+
+### Changelog — 2026-06-11 (7th pass: aiscript-naming fix, Doctor click-through, SQLite design)
+
+**1. Generated-aiscript naming collision — FIXED and live-verified.** The Extension Doctor's own finding (two studio-made mods both shipping `aiscripts/hunter.escort.behavior.xml`, `miner.auto.harvest.xml`) was a real compiler bug: default AI scripts (seeded in `AIScriptEditor.tsx`) compiled to generic filenames identical across every mod. Added `namespaceModAiScripts(ws, modId)` in `server.ts`, run inside `buildWorkspaceFileManifest` (the canonical compile/package/deploy chokepoint, operating on the fresh sanitized copy). It prefixes the mod's **own** AI script names with the mod id **and** rewrites the job `<task script>` references that point to them, so reference integrity is preserved; base-game refs (`move.*`, `order.*`) are deliberately left alone. *Verified* via `/api/agent/compile` on a `TestMod` with `aiScripts:["hunter.escort.behavior"]` + a job referencing it → output `aiscripts/testmod.hunter.escort.behavior.xml` and `<task script="testmod.hunter.escort.behavior">` — namespaced and in sync. Two mods now produce distinct filenames; the collision class is gone at the source.
+
+**2. Extension Doctor click-through — BACKEND done & verified, UI pending.** Each finding now carries `openTargets: [{label, path}]` — concrete extension-root-relative file paths for the involved mod(s) (dep/dup → each `<folder>/content.xml`; conflicts → each `<folder>/<contestedPath>`). New read endpoint `GET /api/agent/extension-file?path=<extRel>` returns `{path, name, content}`, read-only and path-traversal guarded. *Verified:* first real finding exposes `openTargets:[{label:"argon_alarm_reward", path:"argon_alarm_reward/aiscripts/hunter.escort.behavior.xml"}]`, and the read endpoint returns it (200, 1768 bytes). **Remaining (handoff to Codex):** in `PackageModDoctor.tsx`, render each finding's `openTargets` as clickable chips; on click `fetch('/api/agent/extension-file?path='+encodeURIComponent(t.path))` and show `content` in a read-only modal (monospace, scrollable, close button). Selftest at `/api/agent/extension-doctor-selftest` still passes (`pass:true`); real scan `{error:0, warning:4, info:1}`.
+
+### SQLite persistence layer (design — to implement)
+
+**Why.** The expensive, reusable data the studio computes — the packed `.cat/.dat` object index (694 ships, 8,616 macros, 1,950 wares, 33 factions, 3,783 sounds across 64 archives) and the extension manifest/file index — is currently rebuilt **in memory on every server boot**, and serializing a 1,294-node workspace over `/api/agent/workspace` takes seconds. None of that needs to live in the frontend; it's classic "query over tens of thousands of indexed records," which is exactly what an embedded DB is for. The mod being *edited* stays in frontend memory (it's small); the DB is a backend **cache + query layer**, not the document store.
+
+**Stack.** `better-sqlite3` (synchronous, embedded, zero-config, no separate process — fits the single-binary dev server). DB file at a gitignored cache path, e.g. `<modWorkspacePath>/.studio-cache/index.db` (falls back to `os.tmpdir()`), created/migrated on boot in a new `src/lib/db.ts`.
+
+**Schema (v1).**
+```sql
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);              -- schema_version, game_path, built_at
+CREATE TABLE source_mtime (path TEXT PRIMARY KEY, mtime INTEGER);  -- invalidation: archive/file -> last mtime seen
+CREATE TABLE object_index (                                        -- the cat/dat + loose decode result
+  kind TEXT, id TEXT, name TEXT, source_mod TEXT, source_file TEXT, macro TEXT, dlc TEXT,
+  PRIMARY KEY (kind, id)
+);
+CREATE INDEX idx_obj_kind ON object_index(kind);
+CREATE INDEX idx_obj_id   ON object_index(id);
+CREATE TABLE extensions (                                          -- content.xml manifest cache
+  folder TEXT PRIMARY KEY, content_id TEXT, name TEXT, version TEXT, enabled INTEGER, deps_json TEXT
+);
+CREATE INDEX idx_ext_id ON extensions(content_id);
+CREATE TABLE ext_files (                                           -- per-mod file index for conflict scan
+  folder TEXT, rel_path TEXT, is_diff INTEGER, selectors_json TEXT, hash TEXT,
+  PRIMARY KEY (folder, rel_path)
+);
+CREATE INDEX idx_extfiles_path ON ext_files(rel_path);            -- GROUP BY rel_path HAVING COUNT(DISTINCT folder) > 1
+```
+
+**Invalidation.** Before serving, compare each source archive/file mtime to `source_mtime`; re-decode only changed sources (incremental). Store `game_path` in `meta` — wipe + rebuild if it changes. So a cold boot with an unchanged install is a fast read, not a 64-archive decode.
+
+**Integration points (swap in behind existing APIs; response shapes unchanged):**
+- `x4ObjectIndex.ts` / `x4CatDat.ts` → write decode results into `object_index`; `/api/agent/object-index` queries it (indexed `WHERE kind=? AND id LIKE ?`).
+- Reference validation (`macroname`/`warename`/`faction`) → indexed point lookups instead of in-memory Maps.
+- `runExtensionDoctor` → populate `extensions` + `ext_files`; check #3 becomes a `GROUP BY rel_path` query; dependency check a join on `extensions.content_id`.
+
+**Migration plan.** (1) Add `better-sqlite3` + `src/lib/db.ts` (open/migrate). (2) Mirror-write into SQLite while keeping in-memory as source of truth; compare results behind a flag. (3) Flip reads to SQLite; keep in-memory as a fallback if the DB is unavailable. (4) Add a `/api/agent/db-selftest` (build a temp DB, assert query results match the in-memory path).
+
+**Explicitly NOT in SQL:** the workspace being edited (frontend memory), generated XML (computed on demand), and the user's source files (the filesystem remains the source of truth — the DB only *indexes* them).
 
 ### Next priorities (ranked, post 2026-06-11)
 
@@ -350,6 +440,50 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 - Stale writes are rejected with a clear version conflict response.
 
 ---
+
+## Community pain-point alignment — diff vs. the deep-research report (2026-06-11)
+
+Source: `deep-research-report.md` (Codex) — a qualitative review of the biggest recurring X4 modding pain points, ranked into ten issues. Its thesis: *"X4 is moddable, but too much of the real workflow is pieced together from forum archaeology, extracted schemas, Discord help, and community APIs,"* with ~three-quarters of friction in three buckets: docs/discoverability, update-driven breakage, and missing first-party tooling/diagnostics.
+
+That thesis is precisely the studio's reason to exist — collapse that scattered workflow into one app. The diff below grades each documented pain against what the studio does **today** and converts the gaps into an in-scope buildlist. Verdict up front: **the studio can meaningfully address 6 of the 10 pains (plus a 7th partially); 3 are engine/asset-pipeline problems only Egosoft can own.**
+
+### Diff table
+
+| # | Report pain point (prevalence) | Studio coverage today | Gap → what we can achieve |
+|---|---|---|---|
+| 1 | Fragmented docs / discoverability (High) | **Partial** — Local Object Browser (real cat/dat index: 694 ships, 33 factions, 1950 wares, 3783 sounds), schema-derived node templates, in-app XSD element/attr/enum surfacing, Wiki/Codex tab | Productize an in-app **searchable reference**: scriptproperties / MD-action / XSD symbol search + hover docs on every node & field + task-based quickstart gallery. Directly kills "unpack the XSD and read the comments." |
+| 2 | XML/MD/XPath/Lua hard to learn (High) | **Strong (core)** — visual node-based MD authoring (no hand-written XML), 8-domain compilers, XSD-backed validation, XPath match-counting in the patch builder | Already the headline win. Extend: more templates, finish schema-valid generators, object-index-backed **typed pickers** instead of free-text fields. |
+| 3 | Major updates break mods (High) | **Partial** — validation runs against the *installed* game's XSD + object index, so references that no longer exist are catchable | Add an **"update audit"**: re-scan a mod against the current install and flag now-dangling references (removed macros/wares/factions) as a migration checklist. (Machine-readable breakage notes themselves are Egosoft's job.) |
+| 4 | UI modding unstable / conflict-prone (High) | **Weak** — packages X4-correct `ui.xml` + Lua entry point; the engine-level hook layer is Egosoft-only | **Partial only:** generate UI that uses the community **UI-callback pattern** (interop-friendly) instead of whole-function Lua overrides, and flag whole-function overrides as a conflict risk. The real fix (first-party callback layer) is out of our hands. |
+| 5 | Debugging / logging / conflict diagnosis weak (High) | **Strong (single-mod)** — Mod Doctor (XSD + reference + semantic checks with file+line+sourceRef), live `debuglog` parsing → sourceRef mapping, patch diagnostics | **Biggest new opportunity.** Extend from one mod to a cross-mod **Extension Doctor**: scan the whole `extensions/` folder for duplicate `<diff>` selectors hitting the same node across mods, folder-name collisions, unsatisfied/missing dependencies, broken DLC refs, and **load-order winner/loser ("why this file won")**. This is the report's #1 near-term recommendation and we already own the pieces (patch-target resolver + object index + mounted extensions folder). |
+| 6 | Missing first-party editors / automation (High) | **Strong** — the studio *is* the "modding workbench" the report asks for: visual editors, generators (wares/jobs), pack/validate, deploy, GitHub publish | Fill remaining scaffolds: gamestart generator, deeper ware/job models. Pack/validate/publish is largely present. |
+| 7 | Asset pipeline — ships/Blender/NPC (Medium) | **Out of scope** — text/XML/script IDE, not a 3D asset tool | Explicitly not our domain; don't overpromise. |
+| 8 | Distribution / install-path confusion (Medium) | **Partial/Strong** — path config + detection (game / workspace / extensions), deploy to `extensions/`, GitHub repo-create/push/commit-summaries, snapshots | Add: **content.xml `<dependency>`** support (gap already noted in the appendix), **version pinning**, **mod profiles / modset switching** (enable/disable named sets), and optionally a **GUI Workshop-publish wrapper** around `-buildcat`/X Catalog Tool. GitHub distribution is already done. |
+| 9 | Engine-boundary / plugin bridge (Medium) | **Out of scope** — the agent API edits mods; it is not an in-game IPC/plugin bridge | Egosoft's platform decision; not our domain. |
+| 10 | Modified-tag / trusted-mod policy (Medium) | **Mostly out of scope** — game-side policy/UX | Minor: surface a plain-language explainer + flag when a mod would trip the modified state. Low priority. |
+
+### The studio already answers most of the report's recommended MVP toolset
+
+The report names six MVP components. The studio already covers four, can credibly reach a fifth, and the sixth is an engine feature:
+
+- **Authoring + validation layer** (XSD validation, selector diagnostics, symbol search) → **have** (Mod Doctor + object index); deepen with symbol search + hover docs.
+- **Diff + patch tooling** (generate diff, apply, show selector conflicts, validate) → **have** (patch builder + XPath match counts + patch diagnostics).
+- **Extension Doctor** (dependency / path / duplicate-selector / DLC checks, profile audit) → **partial → build next** (we do it for one mod; extend to all enabled mods).
+- **GUI scaffolding workbench** (generators, templates, pack/validate/publish) → **have**.
+- **UI interoperability layer** → **engine feature (Egosoft)**; we can only emit interop-friendly UI.
+- **External integration bridge** → **engine feature (Egosoft)**; out of scope.
+
+### Prioritized buildlist (in-scope, ranked by leverage)
+
+- **P-A — Extension Doctor (cross-mod conflict scan).** *(Pains #5, #8, #1 — highest leverage.)* Scan all of `extensions/`: duplicate `<diff>` selectors across mods, folder collisions, unsatisfied/missing dependencies, broken DLC refs, and load-order winner determination. JSON report + Mod Doctor grouping. It's the report's top near-term ask and we're ~70% there.
+- **P-B — content.xml `<dependency>` + version pinning + DLC gating.** *(Pain #8.)* Add dependency metadata to the compiler and Mod Doctor checks that each dependency resolves in the install. Prerequisite for real conflict/profile work.
+- **P-C — Mod profiles / modset switching.** *(Pain #8.)* Save/restore named enable-sets across `extensions/`; one-click switch.
+- **P-D — Update-audit scan.** *(Pain #3.)* One button: re-validate the active mod against the current install's XSD + object index, output a migration checklist of dangling references.
+- **P-E — In-app searchable reference + hover docs + quickstarts.** *(Pains #1, #2.)* Symbol search over scriptproperties / MD actions / XSD; hover docs on nodes & fields; a "start here" template gallery.
+- **P-F — Interop-friendly UI generation.** *(Pain #4, partial.)* Emit UI via the community callback pattern; flag whole-function Lua overrides as conflict risks.
+- *(Optional / low)* Workshop-publish GUI wrapper (#8); modified-tag explainer (#10).
+
+**Honest scope line:** P-A→P-F turn the report's "X4 is moddable but the workflow is archaeology" into "the studio *is* the workflow" for the text / XML / MD / script surface — which is exactly where the report says ~three-quarters of the friction lives. The three pains we can't touch (3D/character assets, an in-game plugin/IPC bridge, the engine-level UI hook layer) are Egosoft-platform features, and the roadmap should keep saying so rather than pretend otherwise.
 
 ## Lower-priority UX polish
 

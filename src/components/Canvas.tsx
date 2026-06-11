@@ -513,45 +513,50 @@ export default function Canvas({
     return { xStart, xEnd, yStart, yEnd };
   }, [panOffset, zoom, viewportSize]);
 
-  // Map each non-cue node to the cue it belongs to
+  // Map each non-cue node to the cue it belongs to.
+  // Rewritten from O(cues × links × nodes) to O(nodes + links): prebuild a node-id
+  // lookup and an undirected adjacency list (excluding parent→sub-cue boundary links),
+  // then BFS each cue subtree with an index-pointer queue (no O(n) Array.shift).
   const nodeToCueMap = React.useMemo(() => {
     const map: Record<string, string> = {};
-    const cues = workspace.nodes.filter(n => n.type === 'cue');
-    
-    cues.forEach(cueNode => {
-      const visited = new Set<string>([cueNode.id]);
-      const queue = [cueNode.id];
+    const nodeById = new Map<string, MDNode>();
+    for (const n of workspace.nodes) nodeById.set(n.id, n);
+
+    const adj = new Map<string, string[]>();
+    const addAdj = (a: string, b: string) => {
+      let arr = adj.get(a);
+      if (!arr) { arr = []; adj.set(a, arr); }
+      arr.push(b);
+    };
+    for (const link of workspace.links) {
+      // Skip parent-subcue transitions so we stay within the cue's boundary.
+      if (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow') continue;
+      addAdj(link.sourceNodeId, link.targetNodeId);
+      addAdj(link.targetNodeId, link.sourceNodeId);
+    }
+
+    for (const cueNode of workspace.nodes) {
+      if (cueNode.type !== 'cue') continue;
       map[cueNode.id] = cueNode.id;
-      
-      while (queue.length > 0) {
-        const currentId = queue.shift()!;
-        
-        workspace.links.forEach(link => {
-          // Skip parent-subcue transitions so we stay within the cue's boundary
-          const isCueBoundary = 
-            (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow');
-            
-          if (isCueBoundary) return;
-          
-          let neighborId: string | null = null;
-          if (link.sourceNodeId === currentId) {
-            neighborId = link.targetNodeId;
-          } else if (link.targetNodeId === currentId) {
-            neighborId = link.sourceNodeId;
+      const visited = new Set<string>([cueNode.id]);
+      const queue: string[] = [cueNode.id];
+      let head = 0;
+      while (head < queue.length) {
+        const currentId = queue[head++];
+        const neighbors = adj.get(currentId);
+        if (!neighbors) continue;
+        for (const neighborId of neighbors) {
+          if (visited.has(neighborId)) continue;
+          const neighborNode = nodeById.get(neighborId);
+          if (neighborNode && neighborNode.type !== 'cue') {
+            visited.add(neighborId);
+            map[neighborId] = cueNode.id;
+            queue.push(neighborId);
           }
-          
-          if (neighborId) {
-            const neighborNode = workspace.nodes.find(n => n.id === neighborId);
-            if (neighborNode && neighborNode.type !== 'cue' && !visited.has(neighborId)) {
-              visited.add(neighborId);
-              map[neighborId] = cueNode.id;
-              queue.push(neighborId);
-            }
-          }
-        });
+        }
       }
-    });
-    
+    }
+
     return map;
   }, [workspace.nodes, workspace.links]);
 
@@ -605,6 +610,19 @@ export default function Canvas({
       );
     });
   }, [workspace.links, visibleBounds, nodesFilteredByCue, getPortCoordinates]);
+
+  // Minimap dots: cap the rendered count so a large mod doesn't paint thousands of
+  // DOM nodes on every pan/zoom. Always keep cues (structural anchors); sample the rest.
+  const minimapNodes = React.useMemo(() => {
+    const MAX = 500;
+    if (nodesFilteredByCue.length <= MAX) return nodesFilteredByCue;
+    const cues = nodesFilteredByCue.filter(n => n.type === 'cue');
+    const others = nodesFilteredByCue.filter(n => n.type !== 'cue');
+    const budget = Math.max(1, MAX - cues.length);
+    const step = Math.max(1, Math.ceil(others.length / budget));
+    const sampled = others.filter((_, i) => i % step === 0);
+    return [...cues, ...sampled];
+  }, [nodesFilteredByCue]);
 
   // Auto-Align Core Layout Math Algorithm (Tidy Graph Tool)
   const autoAlignGraph = () => {
@@ -1936,7 +1954,7 @@ export default function Canvas({
           RADAR MINIMAP
         </span>
         <div className="relative w-36 h-24 bg-[#05070a] rounded-lg border border-white/5 overflow-hidden">
-          {nodesFilteredByCue.map(node => {
+          {minimapNodes.map(node => {
             // Transform coordinates down to scale perfectly within radar dimension boundaries (144px width, 96px height)
             const nodeX = rangeX > 1 ? ((node.x - minX) / rangeX) * 120 + 8 : 10;
             const nodeY = rangeY > 1 ? ((node.y - minY) / rangeY) * 80 + 8 : 10;
