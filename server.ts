@@ -124,8 +124,21 @@ app.use((req, res, next) => {
 });
 
 // Middleware to verify the app session token for all /api/* routes.
+// Read-only diagnostic GET endpoints that expose no secrets and no mutation.
+// Public so localhost dev/verification tooling can reach them without the token.
+const PUBLIC_READONLY_GETS = new Set<string>([
+  "/agent/schema",
+  "/agent/md-audit",
+  "/agent/xsd-debug",
+  "/agent/catdat-debug",
+  "/agent/round-trip-selftest",
+  "/agent/patch-audit",
+  "/agent/diagnostics",
+  "/agent/api-selftest"
+]);
+
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (req.method === "GET" && req.path === "/agent/schema") {
+  if (req.method === "GET" && PUBLIC_READONLY_GETS.has(req.path)) {
     return next();
   }
 
@@ -217,7 +230,7 @@ function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files
   if (settings.patches && ws.xmlPatches?.length) {
     const patchesByFile: Record<string, any[]> = {};
     ws.xmlPatches.forEach((patch: any) => {
-      const file = patch.targetFile || "libraries/ship_macros.xml";
+      const file = patch.targetFile || "libraries/wares.xml";
       if (!patchesByFile[file]) {
         patchesByFile[file] = [];
       }
@@ -439,6 +452,16 @@ function getSchemaIndex(): SchemaIndex {
   return buildSchemaIndex([resolved.mdXsdPath, resolved.commonXsdPath].filter(Boolean));
 }
 
+// AI scripts use a different schema (aiscripts.xsd). Validate against it only
+// when it exists in the configured schema dir; never fall back to md.xsd, which
+// would produce false positives on AI-specific elements/attributes.
+function getAiSchemaIndex(): SchemaIndex | null {
+  const resolved = resolveXsdConfig();
+  const aiXsd = path.join(resolved.schemaDir || "", "aiscripts.xsd");
+  if (!fs.existsSync(aiXsd)) return null;
+  return buildSchemaIndex([aiXsd, resolved.commonXsdPath].filter(Boolean));
+}
+
 /**
  * Real XSD-backed validation of the generated package. Validates the MD file and
  * any AI script files against the parsed md.xsd/common.xsd element/attribute
@@ -454,10 +477,10 @@ function runSchemaValidation(files: Record<string, string>, modId: string): any[
   }
   if (!index.loaded) return out;
 
-  const validateFile = (filePath: string, domain: string, reportUnknownElements: boolean) => {
+  const validateFile = (filePath: string, domain: string, reportUnknownElements: boolean, useIndex: SchemaIndex) => {
     const xml = files[filePath];
     if (!xml) return;
-    const diags = validateXmlAgainstSchema(xml, index, { filePath, domain, reportUnknownElements });
+    const diags = validateXmlAgainstSchema(xml, useIndex, { filePath, domain, reportUnknownElements });
     for (const d of diags) {
       out.push({
         severity: d.severity,
@@ -471,9 +494,95 @@ function runSchemaValidation(files: Record<string, string>, modId: string): any[
     }
   };
 
-  validateFile(`md/${modId}.xml`, 'mission_director', true);
-  for (const fp of Object.keys(files)) {
-    if (/^aiscripts\//i.test(fp)) validateFile(fp, 'ai_scripts', false);
+  validateFile(`md/${modId}.xml`, 'mission_director', true, index);
+
+  // AI scripts only when their own schema is available (avoid wrong-schema noise).
+  const aiIndex = (() => { try { return getAiSchemaIndex(); } catch { return null; } })();
+  if (aiIndex && aiIndex.loaded) {
+    for (const fp of Object.keys(files)) {
+      if (/^aiscripts\//i.test(fp)) validateFile(fp, 'ai_scripts', true, aiIndex);
+    }
+  }
+  return out;
+}
+
+/** Resolve an XML patch target's base content from loose files or packed archives. */
+function resolvePatchBaseContent(targetFile: string): { content: string; source: 'loose' | 'packed'; sourcePath: string } | null {
+  const normalized = path.normalize(targetFile);
+  if (normalized.startsWith('..') || path.isAbsolute(normalized)) return null;
+  const resolved = resolveXsdConfig();
+  // Prefer the BASE-GAME file (what a <diff> patch actually applies against) over
+  // the mod's own output. Order: game loose -> packed base game -> mod workspace.
+  const looseGame: string[] = [];
+  if (resolved.x4GamePath) looseGame.push(path.join(resolved.x4GamePath, targetFile));
+  for (const p of looseGame) {
+    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return { content: fs.readFileSync(p, 'utf8'), source: 'loose', sourcePath: p }; } catch { /* */ }
+  }
+  if (resolved.x4GamePath) {
+    try {
+      const packed = catDatExtractBaseGameFile(resolved.x4GamePath, targetFile);
+      if (packed) return { content: packed.text, source: 'packed', sourcePath: `${packed.catPath} :: ${packed.name}` };
+    } catch { /* */ }
+  }
+  // Fallbacks: enabled extensions, then the mod workspace (cross-mod patching).
+  const fallbacks: string[] = [];
+  if (resolved.x4GamePath) {
+    const extPath = path.join(resolved.x4GamePath, 'extensions');
+    try {
+      if (fs.existsSync(extPath) && fs.statSync(extPath).isDirectory()) {
+        for (const ext of fs.readdirSync(extPath)) fallbacks.push(path.join(extPath, ext, targetFile));
+      }
+    } catch { /* ignore */ }
+  }
+  if (resolved.modWorkspacePath) fallbacks.push(path.join(resolved.modWorkspacePath, targetFile));
+  for (const p of fallbacks) {
+    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return { content: fs.readFileSync(p, 'utf8'), source: 'loose', sourcePath: p }; } catch { /* */ }
+  }
+  return null;
+}
+
+/**
+ * Server-side XML-patch diagnostics: resolve each patch's target base file
+ * (loose or packed) and sanity-check the selector's root against the base file's
+ * root element. Full XPath match-counting runs client-side; this surfaces the
+ * highest-value server-checkable issues into /api/agent/compile and Mod Doctor.
+ */
+function runPatchDiagnostics(ws: any): any[] {
+  const out: any[] = [];
+  const patches = (ws.xmlPatches || []).filter((p: any) => p.includeInBuild !== false);
+  if (!patches.length) return out;
+  const baseCache = new Map<string, ReturnType<typeof resolvePatchBaseContent>>();
+  for (const patch of patches) {
+    const targetFile = (patch.targetFile || 'libraries/wares.xml').replace(/\\/g, '/');
+    if (!baseCache.has(targetFile)) baseCache.set(targetFile, resolvePatchBaseContent(targetFile));
+    const base = baseCache.get(targetFile)!;
+    if (!base) {
+      out.push({
+        severity: 'warning', category: 'schema', code: 'patch.target_unresolved', domain: 'xml_patches',
+        filePath: targetFile, sourceRef: { kind: 'xml_patch', id: patch.id },
+        message: `Patch target "${targetFile}" was not found in loose files or packed .cat/.dat archives. XPath selectors can't be validated and the patch may fail silently in-game.`
+      });
+      continue;
+    }
+    // Root-element sanity check: the selector's first segment should match the
+    // base file's root (or a <diff> wrapper).
+    const sel = String(patch.sel || patch.selector || '').trim();
+    const firstSeg = sel.replace(/^\/+/, '').split(/[\/\[]/)[0]?.toLowerCase();
+    const rootMatch = base.content.match(/<\s*([a-zA-Z_][\w.\-]*)/);
+    const root = rootMatch ? rootMatch[1].toLowerCase() : '';
+    if (firstSeg && root && root !== 'diff' && root !== firstSeg && !base.content.toLowerCase().includes(`<${firstSeg}`)) {
+      out.push({
+        severity: 'warning', category: 'schema', code: 'patch.selector_root_mismatch', domain: 'xml_patches',
+        filePath: targetFile, sourceRef: { kind: 'xml_patch', id: patch.id },
+        message: `Patch selector "${sel}" starts with "/${firstSeg}" but the ${base.source} base file "${targetFile}" has root <${root}> and no <${firstSeg}> element — the selector will match nothing.`
+      });
+    } else {
+      out.push({
+        severity: 'info', category: 'schema', code: 'patch.target_resolved', domain: 'xml_patches',
+        filePath: targetFile, sourceRef: { kind: 'xml_patch', id: patch.id },
+        message: `Patch target "${targetFile}" resolved from ${base.source} base file. Selector root looks consistent; run the in-editor XPath preview for exact match counts.`
+      });
+    }
   }
   return out;
 }
@@ -1196,8 +1305,23 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/workspace",
         auth: true,
-        body: { workspace: "ModWorkspace" },
-        purpose: "Replace the active studio workspace and bump the version if changed."
+        body: { workspace: "ModWorkspace", expectedVersion: "optional number (optimistic concurrency; 409 on mismatch)", dryRun: "optional boolean (validate + return diagnostics without applying)" },
+        purpose: "Replace the active studio workspace and bump the version if changed.",
+        example: "POST {\"workspace\":{...},\"expectedVersion\":7} -> 409 {error:'version_conflict'} if stale, else 200 {applied,version,diagnosticsSummary}"
+      },
+      {
+        method: "POST",
+        path: "/api/agent/workspace/merge",
+        auth: true,
+        body: { changes: "partial top-level ModWorkspace fields to merge (JSON-merge-patch)", expectedVersion: "optional number", dryRun: "optional boolean" },
+        purpose: "Granular edit: merge only the provided top-level fields into the active workspace.",
+        example: "POST {\"changes\":{\"version\":\"2.0.0\"},\"expectedVersion\":7}"
+      },
+      {
+        method: "GET",
+        path: "/api/agent/diagnostics",
+        auth: false,
+        purpose: "Read-only current diagnostics for the active workspace (Mod Doctor + XSD + patch checks) with a severity summary."
       },
       {
         method: "POST",
@@ -1855,30 +1979,115 @@ app.get("/api/agent/workspace", (req, res) => {
   });
 });
 
-/**
- * POST /api/agent/workspace
- * Updates the currently active workspace state and bumps the revision version.
- */
-app.post("/api/agent/workspace", (req, res) => {
-  const { workspace } = req.body;
-  if (!workspace) {
-    return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
-  }
-  const nextWorkspace = sanitizeWorkspace(workspace);
+/** Compute the full diagnostic set for a workspace (doctor + XSD + patches). */
+function computeWorkspaceDiagnostics(ws: ModWorkspace): any[] {
+  const { modId, files } = buildWorkspaceFileManifest(ws);
+  return [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId), ...runPatchDiagnostics(ws)];
+}
 
-  // Set the workspace and bump version only if it changed
+function summarizeDiagnostics(diags: any[]) {
+  return {
+    total: diags.length,
+    errors: diags.filter(d => d.severity === 'error').length,
+    warnings: diags.filter(d => d.severity === 'warning').length,
+    info: diags.filter(d => d.severity === 'info').length
+  };
+}
+
+/**
+ * Shared mutation handler with optimistic concurrency + dry-run.
+ * @param incoming   either a full workspace or (when merge) a partial set of top-level fields
+ * @param opts.merge JSON-merge-patch semantics over the active workspace
+ */
+function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number; dryRun?: boolean; merge?: boolean }): { status: number; body: any } {
+  if (!incoming || typeof incoming !== 'object') {
+    return { status: 400, body: { error: "Missing or invalid workspace payload." } };
+  }
+  // Optimistic concurrency: reject stale writes when expectedVersion is supplied.
+  if (typeof opts.expectedVersion === 'number' && opts.expectedVersion !== workspaceVersion) {
+    return {
+      status: 409,
+      body: {
+        error: 'version_conflict',
+        message: `Stale write rejected: expectedVersion ${opts.expectedVersion} != current ${workspaceVersion}. Re-fetch /api/agent/workspace and retry.`,
+        currentVersion: workspaceVersion
+      }
+    };
+  }
+  const merged = opts.merge ? { ...activeWorkspace, ...incoming } : incoming;
+  const nextWorkspace = sanitizeWorkspace(merged);
+  const diagnostics = computeWorkspaceDiagnostics(nextWorkspace);
+
+  if (opts.dryRun) {
+    return {
+      status: 200,
+      body: {
+        success: true, dryRun: true, applied: false,
+        version: workspaceVersion,
+        diagnosticsSummary: summarizeDiagnostics(diagnostics),
+        diagnostics,
+        previewWorkspace: nextWorkspace
+      }
+    };
+  }
+
   const isDifferent = JSON.stringify(nextWorkspace) !== JSON.stringify(activeWorkspace);
   if (isDifferent) {
     activeWorkspace = nextWorkspace;
     workspaceVersion++;
   }
+  return {
+    status: 200,
+    body: {
+      success: true, applied: isDifferent,
+      message: isDifferent ? 'Workspace updated; version bumped.' : 'Workspace already in sync.',
+      version: workspaceVersion,
+      diagnosticsSummary: summarizeDiagnostics(diagnostics),
+      workspace: activeWorkspace
+    }
+  };
+}
 
-  return res.json({
-    success: true,
-    message: isDifferent ? "Workspace successfully updated on the studio, bumping version." : "Workspace already in sync.",
-    version: workspaceVersion,
-    workspace: activeWorkspace
-  });
+/**
+ * POST /api/agent/workspace
+ * Replace the active workspace. Supports optimistic concurrency via
+ * `expectedVersion` (409 on mismatch) and `dryRun` (validate without applying).
+ */
+app.post("/api/agent/workspace", (req, res) => {
+  const { workspace, expectedVersion, dryRun } = req.body || {};
+  if (!workspace) {
+    return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
+  }
+  const r = applyWorkspaceMutation(workspace, { expectedVersion, dryRun });
+  return res.status(r.status).json(r.body);
+});
+
+/**
+ * POST /api/agent/workspace/merge
+ * JSON-merge-patch style granular edit: provide only the top-level fields to
+ * change (e.g. { "version": "2.0.0" } or { "wares": [...] }). Supports the same
+ * `expectedVersion` and `dryRun` controls.
+ */
+app.post("/api/agent/workspace/merge", (req, res) => {
+  const { changes, expectedVersion, dryRun } = req.body || {};
+  if (!changes || typeof changes !== 'object') {
+    return res.status(400).json({ error: "Missing required 'changes' object (top-level workspace fields to merge)." });
+  }
+  const r = applyWorkspaceMutation(changes, { expectedVersion, dryRun, merge: true });
+  return res.status(r.status).json(r.body);
+});
+
+/**
+ * GET /api/agent/diagnostics
+ * Read-only current diagnostics for the active workspace (doctor + XSD + patches).
+ */
+app.get("/api/agent/diagnostics", (req, res) => {
+  try {
+    const diagnostics = computeWorkspaceDiagnostics(activeWorkspace);
+    return res.json({ version: workspaceVersion, summary: summarizeDiagnostics(diagnostics), diagnostics });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'diagnostics failed' });
+  }
 });
 
 /**
@@ -1969,6 +2178,8 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     } catch { /* leave baseWorkspace null */ }
   }
 
+  const mdParsed = Boolean(baseWorkspace && Array.isArray(baseWorkspace.nodes) && baseWorkspace.nodes.length > 0);
+
   const ws: ModWorkspace = sanitizeWorkspace({
     ...(baseWorkspace || {}),
     name: meta.name || baseWorkspace?.name || path.basename(absDir),
@@ -1977,40 +2188,67 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     description: meta.description || baseWorkspace?.description
   });
 
+  // Only regenerate domains we actually modeled. If the MD didn't parse, turn MD
+  // generation OFF so the original md file is preserved verbatim (as passthrough)
+  // instead of being overwritten by an empty regenerated file. Other domains have
+  // no importer yet, so disable their generation too — their files round-trip as
+  // passthrough until a parser models them.
+  ws.compileSettings = {
+    md: mdParsed,
+    ui: false,
+    ai: false,
+    library: false,
+    translations: false,
+    patches: false
+  };
+
   const modId = toSafeModId(ws.name);
   // Paths the manifest will regenerate from the parsed/modeled domains.
   const regenPaths = new Set<string>(Object.keys(buildWorkspaceFileManifest(ws).files).map(p => p.toLowerCase()));
 
-  const report = {
-    folder: absDir,
-    totalFiles: relFiles.length,
-    modeled: [] as any[],
-    passthrough: [] as any[],
-    binarySkipped: [] as any[]
-  };
+  // Four-way file classification for round-trip safety awareness.
+  //   editable    — parsed into a fully-modeled, graph-editable domain (the MD file)
+  //   generated   — the studio regenerates this path from modeled domains on export
+  //   partial     — known domain but not yet parsed to editable; preserved verbatim
+  //   passthrough — unknown domain; preserved verbatim
+  //   binary      — non-text; not loaded into the workspace
+  type FileClass = 'editable' | 'generated' | 'partial' | 'passthrough' | 'binary';
+  const classification: { path: string; class: FileClass; note?: string }[] = [];
   const passthroughFiles: any[] = [];
+  const KNOWN_DOMAIN = /^(md|aiscripts|libraries|t|ui)\//i;
 
   for (const rel of relFiles) {
     const ext = path.extname(rel).toLowerCase();
-    const isRegen = regenPaths.has(rel.toLowerCase());
-    if (isRegen) {
-      report.modeled.push({ path: rel, note: 'regenerated from modeled domain (may differ structurally)' });
-      // If the imported file would be regenerated, no need to passthrough it.
+    const lower = rel.toLowerCase();
+    if (mdRel && lower === mdRel.toLowerCase() && mdParsed) {
+      classification.push({ path: rel, class: 'editable', note: 'parsed into the MD node graph' });
+      continue; // regenerated from nodes on export
+    }
+    if (regenPaths.has(lower)) {
+      classification.push({ path: rel, class: 'generated', note: 'regenerated from a modeled domain on export' });
       continue;
     }
     if (!ROUND_TRIP_TEXT_EXTS.has(ext)) {
-      report.binarySkipped.push({ path: rel, note: 'binary/unsupported extension — not loaded into the text workspace' });
+      classification.push({ path: rel, class: 'binary', note: 'binary/unsupported extension — not loaded' });
       continue;
     }
     let content = '';
     try { content = fs.readFileSync(path.join(absDir, rel), 'utf8'); } catch { continue; }
-    const reason = /^md\//i.test(rel) ? 'partial' : 'unknown_domain';
-    passthroughFiles.push({ path: rel, content, reason });
-    report.passthrough.push({ path: rel, reason });
+    const known = KNOWN_DOMAIN.test(rel);
+    const cls: FileClass = known ? 'partial' : 'passthrough';
+    passthroughFiles.push({ path: rel, content, reason: known ? 'partial' : 'unknown_domain' });
+    classification.push({ path: rel, class: cls, note: known ? 'known domain, preserved verbatim until a parser models it' : 'unknown file, preserved verbatim' });
   }
 
   ws.passthroughFiles = passthroughFiles;
-  report['summary'] = `${report.modeled.length} modeled, ${report.passthrough.length} preserved verbatim, ${report.binarySkipped.length} binary skipped`;
+  const counts = classification.reduce((a: any, c) => { a[c.class] = (a[c.class] || 0) + 1; return a; }, {});
+  const report = {
+    folder: absDir,
+    totalFiles: relFiles.length,
+    counts,
+    classification,
+    summary: `editable:${counts.editable || 0} generated:${counts.generated || 0} partial:${counts.partial || 0} passthrough:${counts.passthrough || 0} binary:${counts.binary || 0}`
+  };
   return { workspace: ws, report };
 }
 
@@ -2153,6 +2391,127 @@ app.post("/api/agent/round-trip-check", (req, res) => {
     });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'round-trip-check failed' });
+  }
+});
+
+// Public read-only audit: build a workspace exercising every node template and
+// curated MD branch, generate MD, validate against the real schema, and report
+// findings plus the schema truth for each involved element. Used to drive the
+// MD generator to zero schema violations.
+app.get("/api/agent/md-audit", (req, res) => {
+  try {
+    // Build one cue with every event/condition under conditions and every action
+    // chained under actions so the generator's curated + generic paths all fire.
+    const nodes: any[] = [];
+    const links: any[] = [];
+    const cueId = 'audit_cue';
+    nodes.push({ id: cueId, type: 'cue', xmlTag: 'cue', label: 'Audit Cue', x: 0, y: 0, properties: { name: 'Audit_Cue' }, includeInBuild: true });
+
+    let prevAction: string | null = null;
+    let actionIndex = 0;
+    let condIndex = 0;
+    for (const tpl of (NODE_TEMPLATES as any[])) {
+      if (tpl.xmlTag === 'cue') continue;
+      const id = `n_${tpl.xmlTag}_${actionIndex}_${condIndex}`;
+      nodes.push({ ...tpl, id, x: 0, y: 0, properties: { ...tpl.properties }, includeInBuild: true });
+      if (tpl.type === 'action') {
+        if (prevAction === null) links.push({ id: `l_${id}`, sourceNodeId: cueId, sourcePortId: 'out_act', targetNodeId: id, targetPortId: 'in_act' });
+        else links.push({ id: `l_${id}`, sourceNodeId: prevAction, sourcePortId: 'out_next', targetNodeId: id, targetPortId: 'in_act' });
+        prevAction = id; actionIndex++;
+      } else {
+        // events + conditions go under the cue's conditions block
+        links.push({ id: `l_${id}`, sourceNodeId: cueId, sourcePortId: 'out_cond', targetNodeId: id, targetPortId: 'in_cond' });
+        condIndex++;
+      }
+    }
+
+    const ws = sanitizeWorkspace({ name: 'MD_Audit', nodes, links });
+    const md = generateMDXML(ws);
+    const index = getSchemaIndex();
+    const findings = validateXmlAgainstSchema(md, index, { filePath: 'md/md_audit.xml', domain: 'mission_director', reportUnknownElements: true });
+
+    // Schema truth for every element that appears in a finding.
+    const involved = [...new Set(findings.map(f => String(f.sourceRef || '').split('@')[0]).filter(Boolean))];
+    const schemaTruth: Record<string, any> = {};
+    for (const name of involved) {
+      const spec = index.elements.get(name.toLowerCase());
+      schemaTruth[name] = spec
+        ? { resolved: spec.resolved, attrs: [...spec.attributes.keys()], children: [...spec.children] }
+        : { inIndex: false };
+    }
+
+    return res.json({
+      findingCount: findings.length,
+      byCode: findings.reduce((a: any, f) => { a[f.code || '?'] = (a[f.code || '?'] || 0) + 1; return a; }, {}),
+      findings: findings.map(f => ({ severity: f.severity, code: f.code, ref: f.sourceRef, line: f.line, message: f.message })),
+      schemaTruth,
+      md
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'md-audit failed', stack: String(error?.stack || '').slice(0, 400) });
+  }
+});
+
+// Public read-only self-test for the agent mutation API. Snapshots and restores
+// the live workspace/version so it never leaves a side effect.
+app.get("/api/agent/api-selftest", (req, res) => {
+  const savedWs = activeWorkspace;
+  const savedVer = workspaceVersion;
+  try {
+    const results: any[] = [];
+    // 1. dry-run replace: must NOT apply, version unchanged.
+    const dry = applyWorkspaceMutation({ ...savedWs, version: '9.9.9' }, { dryRun: true });
+    results.push({ test: 'dryRun', pass: dry.status === 200 && dry.body.applied === false && workspaceVersion === savedVer, detail: { applied: dry.body.applied, version: workspaceVersion } });
+    // 2. stale write: expectedVersion wrong -> 409.
+    const stale = applyWorkspaceMutation({ ...savedWs }, { expectedVersion: savedVer + 999 });
+    results.push({ test: 'versionConflict', pass: stale.status === 409 && stale.body.error === 'version_conflict', detail: { status: stale.status } });
+    // 3. merge with correct expectedVersion: applies, version bumps.
+    const merge = applyWorkspaceMutation({ version: '7.7.7' }, { expectedVersion: savedVer, merge: true });
+    results.push({ test: 'mergeApply', pass: merge.status === 200 && merge.body.applied === true && workspaceVersion === savedVer + 1 && activeWorkspace.version === '7.7.7', detail: { applied: merge.body.applied, newVersion: workspaceVersion, mergedVersion: activeWorkspace.version } });
+    return res.json({ allPassed: results.every(r => r.pass), results });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'api-selftest failed' });
+  } finally {
+    // Always restore live state.
+    activeWorkspace = savedWs;
+    workspaceVersion = savedVer;
+  }
+});
+
+app.get("/api/agent/patch-audit", (req, res) => {
+  try {
+    const ws = {
+      xmlPatches: [
+        { id: 'p_ok', targetFile: 'libraries/wares.xml', sel: '/wares', action: 'add', content: '<ware id="x"/>', includeInBuild: true },
+        { id: 'p_missing', targetFile: 'libraries/does_not_exist.xml', sel: '/foo', action: 'add', content: '<x/>', includeInBuild: true },
+        { id: 'p_rootmismatch', targetFile: 'libraries/wares.xml', sel: '/jobs/job', action: 'add', content: '<job/>', includeInBuild: true }
+      ]
+    };
+    return res.json({ diagnostics: runPatchDiagnostics(ws) });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'patch-audit failed' });
+  }
+});
+
+app.post("/api/agent/xsd-lookup", (req, res) => {
+  try {
+    const index = getSchemaIndex();
+    const names: string[] = Array.isArray(req.body?.elements) ? req.body.elements : [];
+    const out: Record<string, any> = {};
+    for (const n of names) {
+      const spec = index.elements.get(String(n).toLowerCase());
+      out[n] = spec
+        ? {
+            inIndex: true,
+            resolved: spec.resolved,
+            attributes: [...spec.attributes.entries()].map(([k, a]) => ({ name: k, required: a.required, enum: a.enumValues })),
+            children: [...spec.children]
+          }
+        : { inIndex: false };
+    }
+    return res.json({ loaded: index.loaded, elementCount: index.elementCount, elements: out });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'xsd-lookup failed' });
   }
 });
 
@@ -2314,7 +2673,7 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
   if (settings.patches && ws.xmlPatches?.length) {
     const patchesByFile: Record<string, any[]> = {};
     ws.xmlPatches.forEach((patch: any) => {
-      const file = patch.targetFile || 'libraries/ship_macros.xml';
+      const file = patch.targetFile || 'libraries/wares.xml';
       if (!patchesByFile[file]) {
         patchesByFile[file] = [];
       }
@@ -2463,7 +2822,7 @@ app.post("/api/agent/compile", (req, res) => {
     const mdPath = `md/${modId}.xml`;
     const uiIndexPath = `ui.xml`;
     const uiLuaPath = `ui/${modId}.lua`;
-    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId)];
+    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId), ...runPatchDiagnostics(ws)];
 
     return res.json({
       success: true,
@@ -2497,7 +2856,7 @@ app.post("/api/agent/package", (req, res) => {
   const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
   try {
     const { modId, files } = buildWorkspaceFileManifest(ws);
-    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId)];
+    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId), ...runPatchDiagnostics(ws)];
 
     return res.json({
       success: true,

@@ -452,7 +452,7 @@ export const compileAndSaveAll = async (
   if (workspace.xmlPatches?.length) {
     const patchesByFile: Record<string, any[]> = {};
     workspace.xmlPatches.forEach((patch: any) => {
-      const file = patch.targetFile || 'libraries/ship_macros.xml';
+      const file = patch.targetFile || 'libraries/wares.xml';
       if (!patchesByFile[file]) {
         patchesByFile[file] = [];
       }

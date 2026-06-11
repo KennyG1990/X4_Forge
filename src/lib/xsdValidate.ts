@@ -39,6 +39,8 @@ interface ElementSpec {
   openAttributes: boolean;
   /** true when we successfully resolved the element's type (inline or named) */
   resolved: boolean;
+  /** lowercased names of child elements this element may contain (best-effort) */
+  children: Set<string>;
 }
 
 export interface SchemaIndex {
@@ -103,6 +105,7 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
   const simpleTypeEnums: Record<string, string[]> = {};
   const attributeGroups = new Map<string, AnyNode>();
   const complexTypes = new Map<string, AnyNode>();
+  const groups = new Map<string, AnyNode>();
   for (const root of roots) {
     arrayOf(root['xs:schema']?.['xs:simpleType']).forEach((st: AnyNode) => {
       if (st.name) {
@@ -116,6 +119,47 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     arrayOf(root['xs:schema']?.['xs:complexType']).forEach((ct: AnyNode) => {
       if (ct.name) complexTypes.set(ct.name, ct);
     });
+    arrayOf(root['xs:schema']?.['xs:group']).forEach((g: AnyNode) => {
+      if (g.name) groups.set(g.name, g);
+    });
+  }
+
+  // Collect the child-element names an element may contain, following named
+  // complexTypes (via `type`/`base`) and xs:group references. Best-effort and
+  // intentionally over-inclusive (used to avoid false "unknown element" flags).
+  function collectChildren(typeNode: AnyNode, into: Set<string>, seenTypes: Set<string>, seenGroups: Set<string>, depth = 0) {
+    if (!typeNode || typeof typeNode !== 'object' || depth > 40) return;
+    for (const [k, v] of Object.entries(typeNode)) {
+      if (k === 'xs:attribute' || k === 'xs:attributeGroup' || k === 'xs:annotation' || k === 'xs:simpleType') continue;
+      if (k === 'xs:element') {
+        for (const el of arrayOf(v)) {
+          const nm = el?.name || el?.ref;
+          if (typeof nm === 'string' && nm) into.add(nm.toLowerCase());
+          // descend into inline-typed children? No — only THIS element's direct
+          // particle membership matters, but X4 nests via groups, handled below.
+        }
+        continue;
+      }
+      if (k === 'xs:group') {
+        for (const g of arrayOf(v)) {
+          const ref = g?.ref || g?.name;
+          if (ref && groups.has(ref) && !seenGroups.has(ref)) {
+            seenGroups.add(ref);
+            collectChildren(groups.get(ref)!, into, seenTypes, seenGroups, depth + 1);
+          } else if (g && typeof g === 'object') {
+            collectChildren(g, into, seenTypes, seenGroups, depth + 1);
+          }
+        }
+        continue;
+      }
+      if (k === 'base' && typeof v === 'string' && complexTypes.has(v) && !seenTypes.has(v)) {
+        seenTypes.add(v);
+        collectChildren(complexTypes.get(v)!, into, seenTypes, seenGroups, depth + 1);
+        continue;
+      }
+      // recurse into structural containers (sequence/choice/all/complexContent/extension/restriction)
+      if (typeof v === 'object' && v !== null) collectChildren(v, into, seenTypes, seenGroups, depth + 1);
+    }
   }
 
   const addAttr = (attr: AnyNode, into: Map<string, AttrSpec>) => {
@@ -170,25 +214,29 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     }
   }
 
-  const resolveElementAttrs = (el: AnyNode): { attrs: Map<string, AttrSpec>; open: boolean; resolved: boolean } => {
+  const resolveElementAttrs = (el: AnyNode): { attrs: Map<string, AttrSpec>; open: boolean; resolved: boolean; children: Set<string> } => {
     const into = new Map<string, AttrSpec>();
+    const children = new Set<string>();
     const open = { v: false };
     let resolved = false;
     // inline complexType
     if (el['xs:complexType']) {
       collectTypeAttrs(el['xs:complexType'], into, new Set(), new Set(), open);
+      collectChildren(el['xs:complexType'], children, new Set(), new Set());
       resolved = true;
     }
     // named type reference
     if (typeof el.type === 'string' && complexTypes.has(el.type)) {
-      collectTypeAttrs(complexTypes.get(el.type)!, into, new Set(), new Set([el.type]), open);
+      const t = complexTypes.get(el.type)!;
+      collectTypeAttrs(t, into, new Set(), new Set([el.type]), open);
+      collectChildren(t, children, new Set([el.type]), new Set());
       resolved = true;
     }
-    return { attrs: into, open: open.v, resolved };
+    return { attrs: into, open: open.v, resolved, children };
   };
 
-  const elements = new Map<string, ElementSpec & { resolved: boolean }>();
-  const addElement = (name: string, attrs: Map<string, AttrSpec>, open: boolean, resolved: boolean) => {
+  const elements = new Map<string, ElementSpec>();
+  const addElement = (name: string, attrs: Map<string, AttrSpec>, open: boolean, resolved: boolean, children: Set<string>) => {
     const lname = name.toLowerCase();
     const prev = elements.get(lname);
     if (prev) {
@@ -202,8 +250,9 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
       }
       prev.openAttributes = prev.openAttributes || open;
       prev.resolved = prev.resolved || resolved;
+      for (const c of children) prev.children.add(c);
     } else {
-      elements.set(lname, { attributes: attrs, openAttributes: open, resolved });
+      elements.set(lname, { attributes: attrs, openAttributes: open, resolved, children });
     }
   };
 
@@ -211,8 +260,8 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     for (const el of collectByKey(root, 'xs:element')) {
       const name = el?.name;
       if (typeof name !== 'string' || !name) continue;
-      const { attrs, open, resolved } = resolveElementAttrs(el);
-      addElement(name, attrs, open, resolved);
+      const { attrs, open, resolved, children } = resolveElementAttrs(el);
+      addElement(name, attrs, open, resolved, children);
     }
   }
 

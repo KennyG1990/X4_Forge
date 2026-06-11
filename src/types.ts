@@ -479,7 +479,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     label: 'Custom XML Action',
     xmlTag: 'custom_xml',
     properties: {
-      rawXml: '<show_notification text="\'Target acquired!\'" duration="5" />'
+      rawXml: '<show_notification text="\'Target acquired!\'" timeout="5" />'
     },
     propertiesSchema: [
       { key: 'rawXml', label: 'Raw XML Snippet', type: 'textarea', placeholder: 'Enter any valid Mission Director XML block...', description: 'This block will be printed raw directly into the actions block of the cue.' }
@@ -597,12 +597,23 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
           } else if (targetNode.xmlTag === 'event_cue_signalled') {
             xml += `${indentDouble}<event_cue_signalled cue="${targetNode.properties.cue || 'md.Setup.Start'}" />\n`;
           } else if (targetNode.xmlTag === 'event_object_destroyed') {
-            const fac = targetNode.properties.faction && targetNode.properties.faction !== 'any' ? ` faction="faction.${targetNode.properties.faction}"` : '';
-            xml += `${indentDouble}<event_object_destroyed object="${targetNode.properties.object || 'player.target'}"${fac} />\n`;
+            // md.xsd: event_object_destroyed has no `faction` attribute; faction
+            // filtering belongs in a follow-up condition, not here.
+            xml += `${indentDouble}<event_object_destroyed object="${targetNode.properties.object || 'player.target'}" />\n`;
           } else if (targetNode.xmlTag === 'event_object_changed_sector') {
             xml += `${indentDouble}<event_object_changed_sector object="${targetNode.properties.object || 'playership'}" sector="${targetNode.properties.sector || 'player.sector'}" />\n`;
           } else if (targetNode.xmlTag === 'check_value') {
-            xml += `${indentDouble}<check_value value="${targetNode.properties.value || 'player.money'}" operator="${targetNode.properties.operator || 'ge'}" value2="${targetNode.properties.amount || 1000000}" />\n`;
+            // md.xsd: check_value compares via min/max/exact (+negate), NOT the
+            // legacy operator/value2 form.
+            const rawOp = String(targetNode.properties.operator || 'ge');
+            const op = (rawOp.match(/\((\w+)\)/)?.[1] || rawOp).toLowerCase();
+            const amt = targetNode.properties.amount ?? 1000000;
+            let cmp: string;
+            if (op === 'ge' || op === 'min' || op === 'gt') cmp = `min="${amt}"`;
+            else if (op === 'le' || op === 'max' || op === 'lt') cmp = `max="${amt}"`;
+            else if (op === 'ne') cmp = `exact="${amt}" negate="true"`;
+            else cmp = `exact="${amt}"`;
+            xml += `${indentDouble}<check_value value="${targetNode.properties.value || 'player.money'}" ${cmp} />\n`;
           } else if (!CURATED_XML_TAGS.has(targetNode.xmlTag)) {
             xml += `${renderGenericXMLNode(targetNode, indentDouble)}\n`;
           }
@@ -629,26 +640,31 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
               xml += `${indentDouble}${l}\n`;
             });
           } else if (currentNode.xmlTag === 'create_ship') {
-            xml += `${indentDouble}<create_ship name="${currentNode.properties.name || '$EscortShip'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" faction="${currentNode.properties.faction || 'player'}">\n`;
-            xml += `${indentDouble}  <space object="${currentNode.properties.sector || 'player.sector'}" />\n`;
+            // md.xsd: owner is a child <owner exact="faction.x"/>; location via
+            // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
+            const fac = currentNode.properties.faction || 'player';
+            const sector = currentNode.properties.sector || 'player.sector';
+            xml += `${indentDouble}<create_ship name="${currentNode.properties.name || '$EscortShip'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" sector="${sector}">\n`;
+            xml += `${indentDouble}  <owner exact="faction.${fac}" />\n`;
             if (currentNode.properties.coords) {
               const xyz = currentNode.properties.coords.split(',');
               xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
             }
             xml += `${indentDouble}</create_ship>\n`;
           } else if (currentNode.xmlTag === 'reward_player') {
-            let rep = '';
-            if (currentNode.properties.standing && currentNode.properties.faction) {
-              rep = `\n${indentDouble}  <reputation faction="faction.${currentNode.properties.faction}" value="${currentNode.properties.standing}" />`;
-            }
-            xml += `${indentDouble}<reward_player money="${currentNode.properties.money || 0}" notification="${currentNode.properties.notification || 'true'}">${rep}\n${indentDouble}</reward_player>\n`;
+            // md.xsd: reward_player takes a `money` attribute and no children.
+            xml += `${indentDouble}<reward_player money="${currentNode.properties.money || 0}" />\n`;
           } else if (currentNode.xmlTag === 'play_sound') {
             xml += `${indentDouble}<play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
           } else if (currentNode.xmlTag === 'show_help') {
-            xml += `${indentDouble}<show_help text="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
+            // md.xsd: custom text goes in `custom`, not `text`.
+            xml += `${indentDouble}<show_help custom="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
           } else if (currentNode.xmlTag === 'create_station') {
-            xml += `${indentDouble}<create_station name="${currentNode.properties.name || '$Station'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" faction="${currentNode.properties.faction || 'player'}">\n`;
-            xml += `${indentDouble}  <space sector="${currentNode.properties.sector || 'player.sector'}" />\n`;
+            // md.xsd: owner is a REQUIRED attribute (not a child); location via
+            // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
+            const fac = currentNode.properties.faction || 'player';
+            const sector = currentNode.properties.sector || 'player.sector';
+            xml += `${indentDouble}<create_station name="${currentNode.properties.name || '$Station'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" owner="faction.${fac}" sector="${sector}">\n`;
             if (currentNode.properties.coords) {
               const xyz = currentNode.properties.coords.split(',');
               xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;

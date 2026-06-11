@@ -426,7 +426,7 @@ export function runModDoctor(
 
   if (settings.patches) {
     active(workspace.xmlPatches).forEach(patch => {
-      const filePath = patch.targetFile || 'libraries/ship_macros.xml';
+      const filePath = patch.targetFile || 'libraries/wares.xml';
       if (!patch.targetFile?.trim()) {
         push(diagnostics, {
           severity: 'warning',
@@ -435,7 +435,7 @@ export function runModDoctor(
           domain: 'xml_patches',
           filePath,
           sourceRef: { kind: 'xml_patch', id: patch.id },
-          message: 'XML patch has no target file. It will default to libraries/ship_macros.xml.'
+          message: 'XML patch has no explicit target file. Set one — it will otherwise default to libraries/wares.xml, which is unlikely to be what you intend.'
         });
       }
 
