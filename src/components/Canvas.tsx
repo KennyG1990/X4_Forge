@@ -39,6 +39,8 @@ interface CanvasProps {
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
   visibleCueIds: string[] | null;
   focusNodeRequest: { nodeId: string; timestamp: number } | null;
+  selectedCueIds: string[];
+  setSelectedCueIds: React.Dispatch<React.SetStateAction<string[]>>;
 }
 
 export default function Canvas({
@@ -49,7 +51,9 @@ export default function Canvas({
   setSelectedNode,
   schemaTemplates = [],
   visibleCueIds,
-  focusNodeRequest
+  focusNodeRequest,
+  selectedCueIds,
+  setSelectedCueIds
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   const [depPanelOpen, setDepPanelOpen] = useState<boolean>(true);
@@ -155,6 +159,8 @@ export default function Canvas({
 
     if (e.target === canvasRef.current || (e.target as HTMLElement).id === 'grid-pattern' || (e.target as HTMLElement).tagName === 'path' || (e.target as HTMLElement).tagName === 'svg') {
       setPanning({ x: e.clientX, y: e.clientY });
+      setSelectedNode(null);
+      setSelectedCueIds([]);
     }
   };
 
@@ -190,6 +196,25 @@ export default function Canvas({
         x: n.x,
         y: n.y
       }));
+
+      const isCue = node.type === 'cue';
+      if (isCue) {
+        const isModified = e.shiftKey || e.ctrlKey || e.metaKey;
+        if (isModified) {
+          setSelectedCueIds(prev => {
+            if (prev.includes(nodeId)) {
+              return prev.filter(id => id !== nodeId);
+            } else {
+              return [...prev, nodeId];
+            }
+          });
+        } else {
+          setSelectedCueIds([nodeId]);
+        }
+      } else {
+        setSelectedCueIds([]);
+      }
+
       setSelectedNode(node);
       window.dispatchEvent(new CustomEvent('x4-node-selected', { detail: { nodeId } }));
     }
@@ -1535,7 +1560,7 @@ export default function Canvas({
                 );
               }
 
-              const isSelected = selectedNode?.id === node.id;
+              const isSelected = selectedNode?.id === node.id || (node.type === 'cue' && selectedCueIds.includes(node.id));
               const isGlowActive = activeNodes.includes(node.id);
               
               let borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';

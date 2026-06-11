@@ -32,6 +32,8 @@ interface SnapshotManagerProps {
   workspace: ModWorkspace;
   setWorkspace: (updater: ModWorkspace | ((prev: ModWorkspace) => ModWorkspace)) => void;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
+  modWorkspacePath: string;
+  onSelectSnapshot?: (snapWS: ModWorkspace | null) => void;
 }
 
 // Robust line-by-line Diff engine
@@ -99,59 +101,71 @@ function computeSimpleDiff(oldStr: string, newStr: string): DiffLine[] {
 export default function SnapshotManager({
   workspace,
   setWorkspace,
-  saveCheckpoint
+  saveCheckpoint,
+  modWorkspacePath,
+  onSelectSnapshot
 }: SnapshotManagerProps) {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [newSnapshotName, setNewSnapshotName] = useState('');
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'saves' | 'diff'>('saves');
   const [showFeedback, setShowFeedback] = useState<'saved' | 'restored' | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
 
   const modId = useMemo(() => toSafeModId(workspace.name), [workspace.name]);
-  const storageKey = useMemo(() => `x4_mod_snapshots_${modId}`, [modId]);
 
-  // Load snapshots from localStorage on initialization
-  useEffect(() => {
+  // Load snapshots from staging directory on initialization/workspace change
+  const fetchSnapshots = async () => {
+    if (!modWorkspacePath) {
+      setSnapshots([]);
+      return;
+    }
+    setLoading(true);
     try {
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        setSnapshots(JSON.parse(stored));
-      } else {
-        setSnapshots([]);
+      const response = await fetch(`/api/fs/snapshots?modId=${encodeURIComponent(modId)}`);
+      if (response.ok) {
+        const list = await response.json();
+        setSnapshots(list);
       }
     } catch (e) {
-      console.error("Failed to load snapshots from localStorage:", e);
+      console.error("Failed to load snapshots from server:", e);
       setSnapshots([]);
-    }
-    setSelectedSnapshotId(null);
-  }, [storageKey]);
-
-  // Save snapshots whenever the list changes
-  const persistSnapshots = (list: Snapshot[]) => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(list));
-      setSnapshots(list);
-    } catch (e) {
-      console.error("Failed to persist snapshots into localStorage", e);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Create a new snapshot of the current workspace state
-  const handleCreateSnapshot = (customName?: string) => {
-    const name = (customName || newSnapshotName || `Snapshot #${snapshots.length + 1}`).trim();
-    const newSnapshot: Snapshot = {
-      id: `snap_${Date.now()}`,
-      name,
-      timestamp: new Date().toLocaleTimeString() + ' ' + new Date().toLocaleDateString(),
-      workspace: JSON.parse(JSON.stringify(workspace))
-    };
+  useEffect(() => {
+    fetchSnapshots();
+    setSelectedSnapshotId(null);
+    if (onSelectSnapshot) {
+      onSelectSnapshot(null);
+    }
+  }, [modWorkspacePath, modId]);
 
-    const updated = [newSnapshot, ...snapshots];
-    persistSnapshots(updated);
-    setNewSnapshotName('');
-    setSelectedSnapshotId(newSnapshot.id);
-    setShowFeedback('saved');
-    setTimeout(() => setShowFeedback(null), 2000);
+  // Create a new snapshot of the current workspace state on the server
+  const handleCreateSnapshot = async (customName?: string) => {
+    if (!modWorkspacePath) return;
+    const name = (customName || newSnapshotName || `Snapshot #${snapshots.length + 1}`).trim();
+    try {
+      const response = await fetch('/api/fs/snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          modId,
+          workspace,
+          name
+        })
+      });
+      if (response.ok) {
+        setNewSnapshotName('');
+        setShowFeedback('saved');
+        setTimeout(() => setShowFeedback(null), 2000);
+        await fetchSnapshots();
+      }
+    } catch (e) {
+      console.error("Failed to save snapshot on server:", e);
+    }
   };
 
   // Create an automatic snapshot on manual trigger or changes
@@ -160,32 +174,85 @@ export default function SnapshotManager({
   };
 
   // Roll back the active workspace to the selected snapshot
-  const handleRestoreSnapshot = (snap: Snapshot) => {
+  const handleRestoreSnapshot = async (snap: Snapshot) => {
+    if (!modWorkspacePath) return;
     // Capture current state in undo stack before rolling back
     saveCheckpoint();
-    
-    // Roll back active workspace
-    setWorkspace(JSON.parse(JSON.stringify(snap.workspace)));
-    
-    setShowFeedback('restored');
-    setTimeout(() => setShowFeedback(null), 2000);
-  };
-
-  // Delete a snapshot
-  const handleDeleteSnapshot = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const updated = snapshots.filter(s => s.id !== id);
-    persistSnapshots(updated);
-    if (selectedSnapshotId === id) {
-      setSelectedSnapshotId(updated[0]?.id || null);
+    try {
+      const response = await fetch('/api/fs/restore-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          modId,
+          snapshotName: snap.id
+        })
+      });
+      if (response.ok) {
+        const resData = await response.json();
+        if (resData.success && resData.workspace) {
+          setWorkspace(resData.workspace);
+          setShowFeedback('restored');
+          setTimeout(() => setShowFeedback(null), 2000);
+          if (onSelectSnapshot) {
+            onSelectSnapshot(null);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to restore snapshot:", err);
     }
   };
 
-  // Clear all checkpoints
-  const handleClearAll = () => {
+  // Delete a snapshot from server
+  const handleDeleteSnapshot = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!modWorkspacePath) return;
+    try {
+      const response = await fetch('/api/fs/delete-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          modId,
+          snapshotName: id
+        })
+      });
+      if (response.ok) {
+        await fetchSnapshots();
+        if (selectedSnapshotId === id) {
+          setSelectedSnapshotId(null);
+          if (onSelectSnapshot) {
+            onSelectSnapshot(null);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete snapshot:", err);
+    }
+  };
+
+  // Clear all checkpoints from server
+  const handleClearAll = async () => {
+    if (!modWorkspacePath) return;
     if (confirm("Are you sure you want to permanently clear all snapshots for this mod? This is irreversible.")) {
-      persistSnapshots([]);
+      for (const snap of snapshots) {
+        try {
+          await fetch('/api/fs/delete-snapshot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              modId,
+              snapshotName: snap.id
+            })
+          });
+        } catch (e) {
+          // ignore individual snapshot delete failures
+        }
+      }
       setSelectedSnapshotId(null);
+      if (onSelectSnapshot) {
+        onSelectSnapshot(null);
+      }
+      await fetchSnapshots();
     }
   };
 
@@ -193,6 +260,13 @@ export default function SnapshotManager({
   const selectedSnapshot = useMemo(() => {
     return snapshots.find(s => s.id === selectedSnapshotId) || null;
   }, [snapshots, selectedSnapshotId]);
+
+  // Propagate snapshot selection changes up to the parent application
+  useEffect(() => {
+    if (onSelectSnapshot) {
+      onSelectSnapshot(selectedSnapshot ? selectedSnapshot.workspace : null);
+    }
+  }, [selectedSnapshot, onSelectSnapshot]);
 
   // Generate and compare XML structures between current workspace and selected snapshot
   const diffData = useMemo(() => {

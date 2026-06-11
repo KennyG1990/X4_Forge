@@ -535,7 +535,7 @@ function escapeXMLAttribute(value: string): string {
 }
 
 // Helper functions to generate the XML output cleanly
-export function generateMDXML(originalWorkspace: ModWorkspace): string {
+export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: string[]): string {
   // Filter out any nodes where includeInBuild is false
   const activeNodes = (originalWorkspace.nodes || []).filter(n => n.includeInBuild !== false);
   const activeNodeIds = new Set(activeNodes.map(n => n.id));
@@ -671,11 +671,13 @@ export function generateMDXML(originalWorkspace: ModWorkspace): string {
 `;
 
   const cueNodes = workspace.nodes.filter(n => n.type === 'cue');
-  const topLevelCues = cueNodes.filter(n => {
-    return !workspace.links.some(l => l.targetNodeId === n.id && l.sourcePortId === 'out_sub');
-  });
+  const targetCues = selectedCueIds && selectedCueIds.length > 0
+    ? cueNodes.filter(n => selectedCueIds.includes(n.id))
+    : cueNodes.filter(n => {
+        return !workspace.links.some(l => l.targetNodeId === n.id && l.sourcePortId === 'out_sub');
+      });
 
-  topLevelCues.forEach(cue => {
+  targetCues.forEach(cue => {
     xml += renderCue(cue, 4);
   });
 

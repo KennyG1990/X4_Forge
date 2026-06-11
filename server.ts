@@ -1589,7 +1589,16 @@ app.get("/api/fs/snapshots", (req, res) => {
     if (!modWorkspacePath) {
       return res.json([]);
     }
-    const snapDir = path.join(modWorkspacePath, modId, '.snapshots');
+    const modDir = path.join(modWorkspacePath, modId);
+    
+    // Read the unique mod ID from .studio-mod-id in staging mod folder
+    const modIdFile = path.join(modDir, '.studio-mod-id');
+    let currentModUniqueId = '';
+    if (fs.existsSync(modIdFile)) {
+      currentModUniqueId = fs.readFileSync(modIdFile, 'utf8').trim();
+    }
+
+    const snapDir = path.join(modDir, '.snapshots');
     if (!fs.existsSync(snapDir)) {
       return res.json([]);
     }
@@ -1599,20 +1608,82 @@ app.get("/api/fs/snapshots", (req, res) => {
         const content = fs.readFileSync(path.join(snapDir, file), 'utf8');
         const parsed = JSON.parse(content);
         return {
-          name: file,
-          savedAt: parsed.savedAt || new Date().toISOString()
+          id: file,
+          name: parsed.name || file.replace('snapshot_', '').replace('.json', '').replace(/-/g, ':'),
+          timestamp: parsed.savedAt ? new Date(parsed.savedAt).toLocaleString() : new Date(fs.statSync(path.join(snapDir, file)).mtime).toLocaleString(),
+          workspace: parsed.workspace || parsed,
+          modId: parsed.modId
         };
       } catch (e) {
-        return {
-          name: file,
-          savedAt: new Date().toISOString()
-        };
+        return null;
       }
-    });
-    list.sort((a, b) => b.name.localeCompare(a.name));
-    return res.json(list);
+    }).filter(Boolean);
+
+    // Filter snapshots to only return those matching the current mod's unique ID
+    const filteredList = list.filter((item: any) => !currentModUniqueId || item.modId === currentModUniqueId);
+
+    filteredList.sort((a, b) => b.id.localeCompare(a.id));
+    return res.json(filteredList);
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "Failed to list snapshots." });
+  }
+});
+
+// Server Filesystem save snapshot endpoint
+app.post("/api/fs/snapshot", (req, res) => {
+  try {
+    const { modId, workspace, name } = req.body;
+    if (!modId || !workspace) {
+      return res.status(400).json({ error: "Missing modId or workspace." });
+    }
+    const resolved = resolveXsdConfig();
+    const modWorkspacePath = resolved.modWorkspacePath;
+    if (!modWorkspacePath) {
+      return res.status(400).json({ error: "No mod workspace path configured." });
+    }
+    const modDir = path.join(modWorkspacePath, modId);
+    if (!fs.existsSync(modDir)) {
+      fs.mkdirSync(modDir, { recursive: true });
+    }
+
+    const modIdFile = path.join(modDir, '.studio-mod-id');
+    let modUniqueId = '';
+    if (fs.existsSync(modIdFile)) {
+      modUniqueId = fs.readFileSync(modIdFile, 'utf8').trim();
+    }
+    if (!modUniqueId) {
+      modUniqueId = `mod_${crypto.randomBytes(8).toString('hex')}`;
+      fs.writeFileSync(modIdFile, modUniqueId, 'utf8');
+    }
+
+    const snapDir = path.join(modDir, '.snapshots');
+    if (!fs.existsSync(snapDir)) {
+      fs.mkdirSync(snapDir, { recursive: true });
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(
+      path.join(snapDir, `snapshot_${stamp}.json`),
+      JSON.stringify({
+        savedAt: new Date().toISOString(),
+        name: name || `Snapshot_${stamp}`,
+        modId: modUniqueId,
+        workspace
+      }, null, 2),
+      'utf8'
+    );
+
+    // Prune oldest snapshots beyond 30 limit
+    const names = fs.readdirSync(snapDir).filter(n => n.startsWith('snapshot_') && n.endsWith('.json'));
+    names.sort();
+    const MAX_SNAPSHOTS = 30;
+    for (let i = 0; i < names.length - MAX_SNAPSHOTS; i++) {
+      fs.unlinkSync(path.join(snapDir, names[i]));
+    }
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to save snapshot." });
   }
 });
 
@@ -1644,6 +1715,28 @@ app.post("/api/fs/restore-snapshot", (req, res) => {
     return res.json({ success: true, workspace: activeWorkspace });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "Failed to restore snapshot." });
+  }
+});
+
+// Server Filesystem delete snapshot endpoint
+app.post("/api/fs/delete-snapshot", (req, res) => {
+  try {
+    const { modId, snapshotName } = req.body;
+    if (!modId || !snapshotName) {
+      return res.status(400).json({ error: "Missing modId or snapshotName parameter." });
+    }
+    const resolved = resolveXsdConfig();
+    const modWorkspacePath = resolved.modWorkspacePath;
+    if (!modWorkspacePath) {
+      return res.status(400).json({ error: "No mod workspace path configured." });
+    }
+    const snapFile = path.join(modWorkspacePath, modId, '.snapshots', snapshotName);
+    if (fs.existsSync(snapFile)) {
+      fs.unlinkSync(snapFile);
+    }
+    return res.json({ success: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Failed to delete snapshot." });
   }
 });
 
@@ -1737,7 +1830,27 @@ app.get("/api/agent/object-index", (req, res) => {
   }
 });
 
-function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'store'): string {
+function cleanDirectoryExceptMetadata(dirPath: string) {
+  if (!fs.existsSync(dirPath)) return;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === '.snapshots' || entry.name === '.studio-mod-id') {
+        continue;
+      }
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+      } else {
+        fs.unlinkSync(fullPath);
+      }
+    }
+  } catch (err) {
+    console.warn(`Error cleaning directory ${dirPath}:`, err);
+  }
+}
+
+function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'store', writeSnapshots: boolean = false): string {
   ws = activeBuildWorkspace(ws);
   const modId = toSafeModId(ws.name);
   const targetPath = mode === 'store' ? path.join(rootPath, modId) : rootPath;
@@ -1745,7 +1858,7 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
 
   if (mode === 'store') {
     if (fs.existsSync(targetPath)) {
-      fs.rmSync(targetPath, { recursive: true, force: true });
+      cleanDirectoryExceptMetadata(targetPath);
     }
   }
   if (!fs.existsSync(targetPath)) {
@@ -1828,26 +1941,48 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
     }
   }
 
-  // Snapshots
-  try {
-    const snapDir = path.join(targetPath, '.snapshots');
-    if (!fs.existsSync(snapDir)) {
-      fs.mkdirSync(snapDir, { recursive: true });
+  // Snapshots & modID identification
+  if (writeSnapshots) {
+    // 1. Find or create the unique mod ID in the ambiguous file
+    const modIdFile = path.join(targetPath, '.studio-mod-id');
+    let modUniqueId = '';
+    if (fs.existsSync(modIdFile)) {
+      try {
+        modUniqueId = fs.readFileSync(modIdFile, 'utf8').trim();
+      } catch (err) {
+        console.warn('Failed to read .studio-mod-id:', err);
+      }
     }
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    fs.writeFileSync(
-      path.join(snapDir, `snapshot_${stamp}.json`),
-      JSON.stringify({ savedAt: new Date().toISOString(), name: ws.name, workspace: ws }, null, 2),
-      'utf8'
-    );
-    const names = fs.readdirSync(snapDir).filter(name => name.startsWith('snapshot_') && name.endsWith('.json'));
-    names.sort();
-    const MAX_SNAPSHOTS = 30;
-    for (let i = 0; i < names.length - MAX_SNAPSHOTS; i++) {
-      fs.unlinkSync(path.join(snapDir, names[i]));
+    if (!modUniqueId) {
+      modUniqueId = `mod_${crypto.randomBytes(8).toString('hex')}`;
+      try {
+        fs.writeFileSync(modIdFile, modUniqueId, 'utf8');
+      } catch (err) {
+        console.warn('Failed to write .studio-mod-id:', err);
+      }
     }
-  } catch (err) {
-    console.warn('Snapshot write failed (non-fatal):', err);
+
+    // 2. Write the workspace snapshot
+    try {
+      const snapDir = path.join(targetPath, '.snapshots');
+      if (!fs.existsSync(snapDir)) {
+        fs.mkdirSync(snapDir, { recursive: true });
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.writeFileSync(
+        path.join(snapDir, `snapshot_${stamp}.json`),
+        JSON.stringify({ savedAt: new Date().toISOString(), name: ws.name, modId: modUniqueId, workspace: ws }, null, 2),
+        'utf8'
+      );
+      const names = fs.readdirSync(snapDir).filter(name => name.startsWith('snapshot_') && name.endsWith('.json'));
+      names.sort();
+      const MAX_SNAPSHOTS = 30;
+      for (let i = 0; i < names.length - MAX_SNAPSHOTS; i++) {
+        fs.unlinkSync(path.join(snapDir, names[i]));
+      }
+    } catch (err) {
+      console.warn('Snapshot write failed (non-fatal):', err);
+    }
   }
 
   return targetPath;
@@ -1880,7 +2015,7 @@ app.post("/api/agent/deploy", (req, res) => {
       if (!fs.existsSync(modWorkspacePath)) {
         fs.mkdirSync(modWorkspacePath, { recursive: true });
       }
-      stagingPath = compileWorkspaceToFolder(ws, modWorkspacePath, 'store');
+      stagingPath = compileWorkspaceToFolder(ws, modWorkspacePath, 'store', true);
     }
 
     // 2. Compile and deploy to Game Extensions Path if configured
@@ -1890,7 +2025,7 @@ app.post("/api/agent/deploy", (req, res) => {
         if (!fs.existsSync(extensionsPath)) {
           fs.mkdirSync(extensionsPath, { recursive: true });
         }
-        deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store');
+        deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false);
       } else {
         console.warn(`Configured X4 Game Installation path "${x4GamePath}" does not exist.`);
       }

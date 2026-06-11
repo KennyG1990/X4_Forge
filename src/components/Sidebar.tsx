@@ -110,6 +110,7 @@ interface SidebarProps {
 
   diagnostics: PackageDiagnostic[];
   diagnosticSource: 'checking' | 'package' | 'local';
+  onSelectSnapshot?: (snapWS: ModWorkspace | null) => void;
 }
 
 export default function Sidebar({
@@ -156,7 +157,8 @@ export default function Sidebar({
   handleApplyAction,
   handleDeclineAction,
   diagnostics,
-  diagnosticSource
+  diagnosticSource,
+  onSelectSnapshot
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -1073,6 +1075,8 @@ export default function Sidebar({
               workspace={workspace}
               setWorkspace={setWorkspace}
               saveCheckpoint={saveCheckpoint}
+              modWorkspacePath={modWorkspacePath}
+              onSelectSnapshot={onSelectSnapshot}
             />
           </div>
         )}

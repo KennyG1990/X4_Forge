@@ -161,6 +161,8 @@ export default function App() {
   const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
   const [diagnosticSource, setDiagnosticSource] = useState<'checking' | 'package' | 'local'>('checking');
 
+  const [snapshotDiffWorkspace, setSnapshotDiffWorkspace] = useState<ModWorkspace | null>(null);
+
   const mdCode = React.useMemo(() => {
     try {
       return generateMDXML(workspace);
@@ -213,6 +215,7 @@ export default function App() {
   const [compileMessage, setCompileMessage] = useState<string>('');
 
   const [selectedNode, setSelectedNode] = useState<MDNode | null>(null);
+  const [selectedCueIds, setSelectedCueIds] = useState<string[]>([]);
   const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
   const [selectedWidget, setSelectedWidget] = useState<UIWidget | null>(null);
 
@@ -969,6 +972,7 @@ export default function App() {
           handleDeclineAction={handleDeclineAction}
           diagnostics={diagnostics}
           diagnosticSource={diagnosticSource}
+          onSelectSnapshot={setSnapshotDiffWorkspace}
         />
 
         {/* Left Resizer Handle */}
@@ -995,6 +999,8 @@ export default function App() {
               schemaTemplates={schemaTemplates}
               visibleCueIds={visibleCueIds}
               focusNodeRequest={focusNodeRequest}
+              selectedCueIds={selectedCueIds}
+              setSelectedCueIds={setSelectedCueIds}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder
@@ -1059,6 +1065,9 @@ export default function App() {
             selectedNode={selectedNode}
             diagnostics={diagnostics}
             diagnosticSource={diagnosticSource}
+            snapshotDiffWorkspace={snapshotDiffWorkspace}
+            onClearSnapshotDiff={() => setSnapshotDiffWorkspace(null)}
+            selectedCueIds={selectedCueIds}
           />
         </aside>
 
