@@ -974,7 +974,18 @@ export default function CodePreview({
     setToolActiveTab('playtest');
   };
 
+  // Memo cache for whole-file highlighting: the regex passes are O(file size) and the
+  // same strings are re-highlighted on every render (drag, scroll, state changes).
+  // Keyed by the input string itself — V8 caches string hashes, and the generated
+  // text keeps the same instance between renders, so hits are cheap. Small cap keeps
+  // memory bounded when many distinct files are viewed.
+  const highlightCacheRef = React.useRef(new Map<string, string>());
+
   const highlightXML = (rawXML: string) => {
+    const cache = highlightCacheRef.current;
+    const cached = cache.get(rawXML);
+    if (cached !== undefined) return cached;
+
     const escaped = rawXML
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -983,13 +994,16 @@ export default function CodePreview({
     // every render. For very large generated files (e.g. deadair's 868KB MD) that freezes
     // the viewer, so above the threshold we skip coloring and return escaped text only —
     // still fully readable and editable, just monochrome (standard large-file IDE behavior).
-    if (escaped.length > 100000) return escaped;
-    return escaped
+    const out = escaped.length > 100000 ? escaped : escaped
       // Color attributes FIRST (on the escaped text) so the tag/comment passes below
       // don't re-match the class="..." attributes of the <span>s we inject here.
       .replace(/([a-zA-Z0-9_:-]+)=(&quot;|")([^"&]*)(&quot;|")/g, '<span class="text-purple-400">$1</span>=<span class="text-emerald-300">$2$3$4</span>')
       .replace(/(&lt;\/?[a-zA-Z0-9_:-]+)(\s|&gt;)/g, '<span class="text-cyan-400 font-semibold">$1</span>$2')
       .replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="text-slate-500 font-mono italic">$1</span>');
+
+    if (cache.size > 12) cache.clear();
+    cache.set(rawXML, out);
+    return out;
   };
 
   // Pick a searchable token for a diagnostic so we can locate its line in the generated code.
@@ -1022,22 +1036,33 @@ export default function CodePreview({
   };
 
 
+  const highlightCodeCacheRef = React.useRef(new Map<string, { ext: string | undefined; out: string }>());
+
   const highlightCode = (rawText: string) => {
     const ext = activeEditorFile?.name.split('.').pop()?.toLowerCase();
+    const cache = highlightCodeCacheRef.current;
+    const cached = cache.get(rawText);
+    if (cached !== undefined && cached.ext === ext) return cached.out;
+
+    let out: string;
     // Large-file guard (see highlightXML): skip coloring for big files to keep the editor responsive.
     if (rawText.length > 100000) {
-      return rawText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-    if (ext === 'json') {
-      return rawText
+      out = rawText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    } else if (ext === 'json') {
+      out = rawText
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/("(?:\\.|[^"\\])*")(\s*:)/g, '<span class="text-purple-400">$1</span>$2')
         .replace(/:\s*("(?:\\.|[^"\\])*")/g, ': <span class="text-emerald-300">$1</span>')
         .replace(/\b(true|false|null)\b/g, '<span class="text-amber-400">$1</span>');
+    } else {
+      out = highlightXML(rawText);
     }
-    return highlightXML(rawText);
+
+    if (cache.size > 12) cache.clear();
+    cache.set(rawText, { ext, out });
+    return out;
   };
 
   const renderMinimap = (lines: { type?: string; value: string }[]) => {
@@ -1111,8 +1136,13 @@ export default function CodePreview({
   );
 
   const isFileEditorActive = codeActiveTab === 'file' && !!activeEditorFile;
-  const codeLines = activeCodeText.split('\n');
-  const lineDiagMap = computeLineDiagMap(activeCodeText, diagnostics);
+  // Memoized: splitting + token-searching a large generated file on every render is
+  // O(file size × diagnostics) — only recompute when the text or diagnostics change.
+  const codeLines = React.useMemo(() => activeCodeText.split('\n'), [activeCodeText]);
+  const lineDiagMap = React.useMemo(
+    () => computeLineDiagMap(activeCodeText, diagnostics),
+    [activeCodeText, diagnostics]
+  );
 
   return (
     <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#050608] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">

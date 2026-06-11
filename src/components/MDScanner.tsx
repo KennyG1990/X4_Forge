@@ -37,6 +37,7 @@ interface MDScannerProps {
   analysisError: string | null;
   triggerAnalysis: () => Promise<void>;
   isAnalysisStale: boolean;
+  cancelAnalysis?: () => void;
 }
 
 export default function MDScanner({
@@ -45,7 +46,8 @@ export default function MDScanner({
   analyzing,
   analysisError,
   triggerAnalysis,
-  isAnalysisStale
+  isAnalysisStale,
+  cancelAnalysis
 }: MDScannerProps) {
   return (
     <div className="p-4 space-y-4 font-sans select-text">
@@ -130,6 +132,14 @@ export default function MDScanner({
               De-serializing visual logic nodes and links...
             </p>
           </div>
+          {cancelAnalysis && (
+            <button
+              onClick={cancelAnalysis}
+              className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 rounded text-[10px] font-mono font-bold uppercase transition-all cursor-pointer"
+            >
+              Cancel
+            </button>
+          )}
         </div>
       )}
 

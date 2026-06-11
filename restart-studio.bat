@@ -25,6 +25,15 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3001" ^| findstr "LISTENING
 cd /d "%~dp0"
 
 echo.
+echo Installing/updating dependencies (npm install)...
+call npm install
+if errorlevel 1 (
+    echo npm install reported an error - check the output above.
+    pause
+    exit /b 1
+)
+
+echo.
 echo Starting API server (port 3001)...
 start "X4 API (3001)" cmd /k "set API_ONLY=true&& set PORT=3001&& npm run dev:api"
 

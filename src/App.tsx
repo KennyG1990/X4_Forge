@@ -420,6 +420,52 @@ export default function App() {
     };
   }, [workspace]);
 
+  // Diagnostics click-to-navigate: Mod Doctor findings dispatch 'navigate-to-source'
+  // with the diagnostic's sourceRef; jump to the owning editor surface (and, for MD
+  // nodes, focus the node on the canvas).
+  useEffect(() => {
+    const handleNavigateToSource = (e: Event) => {
+      const { kind, id } = (e as CustomEvent<{ kind: string; id?: string; label?: string }>).detail || {};
+      if (!kind) return;
+      switch (kind) {
+        case 'md_node':
+        case 'cue':
+        case 'node': {
+          setWorkspaceView('blueprint');
+          const node = id ? workspace.nodes.find(n => n.id === id) : undefined;
+          if (node) {
+            setSelectedNode(node);
+            setFocusNodeRequest({ nodeId: node.id, timestamp: Date.now() });
+          }
+          break;
+        }
+        case 'ui_widget':
+          setWorkspaceView('ui-designer');
+          break;
+        case 'ai_script':
+        case 'ai_param':
+          setWorkspaceView('aiscripts');
+          break;
+        case 'ware':
+        case 'job':
+          setWorkspaceView('libraries');
+          break;
+        case 't_file':
+        case 't_page':
+        case 't_item':
+          setWorkspaceView('translation');
+          break;
+        case 'xml_patch':
+          setWorkspaceView('xmlpatch');
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener('navigate-to-source', handleNavigateToSource);
+    return () => window.removeEventListener('navigate-to-source', handleNavigateToSource);
+  }, [workspace]);
+
   useEffect(() => {
     const updateAIState = () => {
       const provider = getActiveProvider();

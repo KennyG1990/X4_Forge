@@ -41,6 +41,7 @@ export default function DiagnosticsHub({
   const [analyzing, setAnalyzing] = useState<boolean>(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [lastAnalyzedWorkspace, setLastAnalyzedWorkspace] = useState<string>('');
+  const analysisAbortRef = React.useRef<AbortController | null>(null);
 
   // Playtest / sync state
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
@@ -60,21 +61,33 @@ export default function DiagnosticsHub({
   const triggerAnalysis = async () => {
     setAnalyzing(true);
     setAnalysisError(null);
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
     try {
       const response = await fetch('/api/gemini/analyze', {
         method: 'POST',
         headers: getAIHeaders(),
-        body: JSON.stringify({ workspace })
+        body: JSON.stringify({ workspace }),
+        signal: controller.signal
       });
       const data = await handleApiResponse(response, 'Failed to establish telemetry connection to server.');
       setAnalysisResult(data.analysis);
       setLastAnalyzedWorkspace(workspaceSerialized);
     } catch (err: any) {
-      console.error(err);
-      setAnalysisError(err.message || 'Failed to catalog script outline. Verify telemetry status.');
+      if (err?.name === 'AbortError') {
+        setAnalysisError('Analysis cancelled.');
+      } else {
+        console.error(err);
+        setAnalysisError(err.message || 'Failed to catalog script outline. Verify telemetry status.');
+      }
     } finally {
+      analysisAbortRef.current = null;
       setAnalyzing(false);
     }
+  };
+
+  const cancelAnalysis = () => {
+    analysisAbortRef.current?.abort();
   };
 
   const saveToDirectory = async (showFeedback: boolean) => {
@@ -236,6 +249,7 @@ export default function DiagnosticsHub({
             analysisError={analysisError}
             triggerAnalysis={triggerAnalysis}
             isAnalysisStale={isAnalysisStale}
+            cancelAnalysis={cancelAnalysis}
           />
         ) : (
           <PlaytestWorkspace

@@ -46,6 +46,18 @@ import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile,
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
+import * as xpathLib from "xpath";
+import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
+import {
+  isDbAvailable, openStudioDb, bindGamePath, dbSelfTest,
+  cacheObjectIndex as dbCacheObjectIndex,
+  readAllObjects as dbReadAllObjects,
+  objectIndexCounts as dbObjectIndexCounts,
+  sourcesUnchanged as dbSourcesUnchanged,
+  recordSourceStamps as dbRecordSourceStamps,
+  getDbMeta, setDbMeta,
+  type StudioDb, type SourceStamp
+} from "./src/lib/db";
 
 dotenv.config();
 // Also load .env.local (Vite convention) so values like GITHUB_CLIENT_ID and GEMINI_API_KEY
@@ -96,6 +108,17 @@ let schemaLibrary: SchemaLibrary = loadCurrentSchemaLibrary();
 let schemaTemplatesByTag = new Map(schemaLibrary.templates.map(template => [template.xmlTag, template]));
 let objectIndexCache: { key: string; builtAt: number; index: X4ObjectIndex } | null = null;
 
+// SQLite cache (mirror-write stage — see src/lib/db.ts). Lazily opened once;
+// null when better-sqlite3 isn't installed or the DB can't be opened. All uses
+// are best-effort: a cache failure must never break the in-memory path.
+let studioDb: StudioDb | null | undefined; // undefined = not attempted yet
+function getStudioDb(): StudioDb | null {
+  if (studioDb !== undefined) return studioDb;
+  studioDb = isDbAvailable().available ? openStudioDb() : null;
+  if (studioDb) console.log(`[studio-db] SQLite cache active at ${studioDb.path}`);
+  return studioDb;
+}
+
 function reloadSchemaLibrary(): SchemaLibrary {
   schemaLibrary = loadCurrentSchemaLibrary();
   schemaTemplatesByTag = new Map(schemaLibrary.templates.map(template => [template.xmlTag, template]));
@@ -138,7 +161,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/log-selftest",
   "/agent/reference-selftest",
   "/agent/type-probe",
-  "/agent/selftest"
+  "/agent/selftest",
+  "/agent/db-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -485,6 +509,44 @@ function getGameLogStatus(modIdInput?: string) {
   };
 }
 
+/**
+ * Invalidation stamps for the SQLite-cached object index: every .cat archive
+ * (game root + extension subfolders + mod workspace) plus the top-level mtimes
+ * of the scan roots. Cheap to collect; catches archive/install changes. Deeply
+ * nested loose-XML edits may not bump these — the warm path still fully
+ * rebuilds every 60 s, so staleness is bounded to cold boots after such edits.
+ */
+function collectObjectIndexStamps(resolved: ReturnType<typeof resolveXsdConfig>): SourceStamp[] {
+  const stamps: SourceStamp[] = [];
+  const stat = (p: string) => { try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return null; } };
+  const addCats = (dir: string) => {
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.toLowerCase().endsWith('.cat')) continue;
+        const p = path.join(dir, f);
+        const m = stat(p);
+        if (m !== null) stamps.push({ path: p, mtime: m });
+      }
+    } catch { /* root missing */ }
+  };
+  if (resolved.x4GamePath) {
+    addCats(resolved.x4GamePath);
+    const extDir = path.join(resolved.x4GamePath, 'extensions');
+    try {
+      for (const sub of fs.readdirSync(extDir)) addCats(path.join(extDir, sub));
+    } catch { /* no extensions dir */ }
+    const extM = stat(extDir);
+    if (extM !== null) stamps.push({ path: extDir, mtime: extM });
+  }
+  for (const root of [resolved.modWorkspacePath, resolved.filesystemPath]) {
+    if (!root) continue;
+    addCats(root);
+    const m = stat(root);
+    if (m !== null) stamps.push({ path: root, mtime: m });
+  }
+  return stamps;
+}
+
 function getObjectIndex(): X4ObjectIndex {
   const resolved = resolveXsdConfig();
   const roots = [
@@ -505,6 +567,47 @@ function getObjectIndex(): X4ObjectIndex {
     return objectIndexCache.index;
   }
 
+  // COLD-BOOT FAST PATH (SQLite stage 3): if this process has never built the
+  // index, the cached copy was built with the same cacheKey, and every source
+  // stamp matches, restore from the DB instead of re-decoding 60+ archives.
+  if (!objectIndexCache) {
+    try {
+      const db = getStudioDb();
+      if (db) {
+        bindGamePath(db, resolved.x4GamePath || "");
+        const metaRaw = getDbMeta(db, 'object_index_meta');
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw);
+          const stamps = collectObjectIndexStamps(resolved);
+          if (meta.cacheKey === cacheKey && stamps.length > 0 && dbSourcesUnchanged(db, stamps)) {
+            const rows = dbReadAllObjects(db);
+            if (rows.length > 0) {
+              const restored: X4ObjectIndex = {
+                generatedAt: meta.generatedAt,
+                roots: meta.roots || [],
+                scannedFiles: meta.scannedFiles || 0,
+                skippedFiles: meta.skippedFiles || 0,
+                truncated: !!meta.truncated,
+                packedArchives: meta.packedArchives || 0,
+                packedEntriesScanned: meta.packedEntriesScanned || 0,
+                counts: meta.counts || {},
+                items: rows.map(r => ({
+                  kind: r.kind as any, id: r.id, name: r.name,
+                  sourceFile: r.source_file || '', detail: r.detail || undefined
+                }))
+              };
+              objectIndexCache = { key: cacheKey, builtAt: Date.now(), index: restored };
+              console.log(`[studio-db] object index restored from SQLite cache (${rows.length} rows, no archive decode).`);
+              return restored;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[studio-db] cold-boot restore failed, falling back to full build:', err);
+    }
+  }
+
   const schemaElements = [
     ...schemaLibrary.events.map(element => ({ tag: element.tag, category: "md_event" })),
     ...schemaLibrary.conditions.map(element => ({ tag: element.tag, category: "md_condition" })),
@@ -516,6 +619,36 @@ function getObjectIndex(): X4ObjectIndex {
   const catDatRoots = [resolved.x4GamePath || "", resolved.modWorkspacePath || ""].filter(Boolean);
   const index = buildX4ObjectIndex(roots, schemaElements, catDatRoots);
   objectIndexCache = { key: cacheKey, builtAt: Date.now(), index };
+
+  // Mirror-write into the SQLite cache + record invalidation stamps and the
+  // restore metadata the cold-boot fast path needs (best-effort; in-memory
+  // remains authoritative for this process).
+  try {
+    const db = getStudioDb();
+    if (db) {
+      bindGamePath(db, resolved.x4GamePath || "");
+      dbCacheObjectIndex(db, index.items.map(it => ({
+        kind: it.kind, id: it.id, name: it.name,
+        source_file: it.sourceFile || null, detail: it.detail ?? null
+      })), index.generatedAt);
+      const stamps = collectObjectIndexStamps(resolved);
+      dbRecordSourceStamps(db, stamps);
+      setDbMeta(db, 'object_index_meta', JSON.stringify({
+        cacheKey,
+        generatedAt: index.generatedAt,
+        roots: index.roots,
+        scannedFiles: index.scannedFiles,
+        skippedFiles: index.skippedFiles,
+        truncated: index.truncated,
+        packedArchives: index.packedArchives,
+        packedEntriesScanned: index.packedEntriesScanned,
+        counts: index.counts
+      }));
+    }
+  } catch (err) {
+    console.warn('[studio-db] object-index mirror-write failed (ignored):', err);
+  }
+
   return index;
 }
 
@@ -903,6 +1036,8 @@ async function callMultiProviderAI(
   const provider = (req.headers["x-ai-provider"] as string) || "gemini";
   const customKeyHeader = (req.headers["x-custom-api-key"] as string) || "";
   const envFallbackAllowed = isAppUiRequest(req);
+  // Hard server-side timeout: a hung provider must not leave the client spinning forever.
+  const AI_TIMEOUT_MS = 120_000;
   const NO_KEY_MSG = "No API key for this request. App-UI requests use the configured provider settings; external/agent requests must supply their own key via the x-custom-api-key header (the server's .env keys are reserved for the app UI).";
   const customKey = customKeyHeader;
   const model = (req.headers["x-ai-model"] as string) || "";
@@ -952,7 +1087,8 @@ async function callMultiProviderAI(
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
       },
-      body: JSON.stringify(bodyPayload)
+      body: JSON.stringify(bodyPayload),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS)
     });
 
     const data: any = await response.json();
@@ -1004,7 +1140,8 @@ async function callMultiProviderAI(
         "Authorization": `Bearer ${openaiKey}`,
         "content-type": "application/json"
       },
-      body: JSON.stringify(bodyPayload)
+      body: JSON.stringify(bodyPayload),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS)
     });
 
     const data: any = await response.json();
@@ -1048,7 +1185,8 @@ async function callMultiProviderAI(
         "HTTP-Referer": "https://ai.studio/build",
         "X-Title": "AI Studio Build"
       },
-      body: JSON.stringify(bodyPayload)
+      body: JSON.stringify(bodyPayload),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS)
     });
 
     const data: any = await response.json();
@@ -1076,7 +1214,9 @@ async function callMultiProviderAI(
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build',
-        }
+        },
+        // Server-side cap so a hung Gemini call can't spin the client forever.
+        timeout: AI_TIMEOUT_MS
       }
     });
 
@@ -2627,7 +2767,7 @@ app.post("/api/agent/round-trip-check", (req, res) => {
  * diff selectors on a shared base path). Returns the standard diagnostic shape.
  * Extracted as a function so both the live endpoint and the selftest can call it.
  */
-function runExtensionDoctor(extRoot: string) {
+function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel: string) => string | null }) {
     interface ExtInfo {
       folder: string; id: string; idLower: string; name?: string; version?: string;
       enabled: boolean; deps: { id: string; optional: boolean; name?: string }[]; absDir: string;
@@ -2759,7 +2899,7 @@ function runExtensionDoctor(extRoot: string) {
     // root, mirroring the base-game layout). Official DLCs (ego_*) are excluded — first-
     // party, mostly packed, layered by the engine. A path shared by >=2 mods is contested:
     // full-file overrides collide outright; diff files collide on identical selectors.
-    interface FileRec { folder: string; isDiff: boolean; selectors: string[]; }
+    interface FileRec { folder: string; isDiff: boolean; selectors: { op: string; sel: string }[]; }
     const pathMap = new Map<string, FileRec[]>();
     for (const e of exts) {
       if (!e.enabled || /^ego_/i.test(e.id)) continue;
@@ -2776,7 +2916,7 @@ function runExtensionDoctor(extRoot: string) {
         try { xml = fs.readFileSync(path.join(e.absDir, rel), "utf8"); } catch { continue; }
         const isDiff = /<diff[\s>]/.test(xml);
         const selectors = isDiff
-          ? [...xml.matchAll(/<(?:add|replace|remove)\b[^>]*\bsel\s*=\s*"([^"]+)"/gi)].map(mm => mm[1])
+          ? [...xml.matchAll(/<(add|replace|remove)\b[^>]*\bsel\s*=\s*"([^"]+)"/gi)].map(mm => ({ op: mm[1].toLowerCase(), sel: mm[2] }))
           : [];
         const tf = rel.replace(/\\/g, "/");
         const arr = pathMap.get(tf) || [];
@@ -2791,9 +2931,9 @@ function runExtensionDoctor(extRoot: string) {
       const selOwners = new Map<string, string[]>();
       for (const r of recs) {
         for (const s of r.selectors) {
-          const a = selOwners.get(s) || [];
+          const a = selOwners.get(s.sel) || [];
           a.push(r.folder);
-          selOwners.set(s, a);
+          selOwners.set(s.sel, a);
         }
       }
       const selCollisions = [...selOwners.entries()].filter(([, o]) => o.length > 1);
@@ -2820,13 +2960,69 @@ function runExtensionDoctor(extRoot: string) {
           loadOrder: ordered, winner
         });
       } else {
-        findings.push({
-          severity: "info", category: "conflict", code: "patch.shared_target",
-          domain: "xml_patches", filePath: tf,
-          message: `${mods.length} enabled mods patch ${tf} (different selectors — lower conflict risk): ${mods.join(", ")}.`,
-          sourceRef: { kind: "patch_conflict", id: tf, label: mods.join(", ") },
-          openTargets: recs.map(r => ({ label: r.folder, path: `${r.folder}/${tf}` }))
-        });
+        // XPath-LEVEL overlap: selector strings differ, but they may still resolve
+        // to the same node in the real base file (e.g. /jobs/job[@id='x'] vs
+        // //job[@id='x']). Evaluate every selector against the resolved base
+        // content and flag nodes claimed by >=2 mods where at least one op is
+        // replace/remove (add+add to a shared parent merges and is fine).
+        let xpathConflicts: { nodeName: string; folders: string[]; sels: string[] }[] = [];
+        const baseContent = opts?.resolveBaseContent ? opts.resolveBaseContent(tf) : null;
+        if (baseContent && baseContent.length <= 2_000_000) {
+          try {
+            const doc = new XmlDomParser({ onError: () => { /* tolerate recoverable parse noise */ } })
+              .parseFromString(baseContent, 'text/xml');
+            const nodeOwners = new Map<any, { folder: string; op: string; sel: string }[]>();
+            let evaluated = 0;
+            for (const r of recs) {
+              for (const s of r.selectors) {
+                if (evaluated >= 200) break;
+                evaluated++;
+                let matches: any;
+                try { matches = xpathLib.select(s.sel, doc as any); } catch { continue; }
+                if (!Array.isArray(matches)) continue;
+                for (const n of matches.slice(0, 50)) {
+                  const arr = nodeOwners.get(n) || [];
+                  arr.push({ folder: r.folder, op: s.op, sel: s.sel });
+                  nodeOwners.set(n, arr);
+                }
+              }
+            }
+            for (const [n, owners] of nodeOwners) {
+              const ownerFolders = [...new Set(owners.map(o => o.folder))];
+              if (ownerFolders.length < 2) continue;
+              if (!owners.some(o => o.op === 'replace' || o.op === 'remove')) continue;
+              xpathConflicts.push({
+                nodeName: (n && n.nodeName) || '?',
+                folders: ownerFolders,
+                sels: [...new Set(owners.map(o => o.sel))].slice(0, 4)
+              });
+              if (xpathConflicts.length >= 5) break;
+            }
+          } catch { /* unparseable base — fall through to the info finding */ }
+        }
+
+        if (xpathConflicts.length > 0) {
+          const example = xpathConflicts[0];
+          const ordered2 = orderContested([...new Set(xpathConflicts.flatMap(c => c.folders))]);
+          const winner2 = ordered2[ordered2.length - 1];
+          findings.push({
+            severity: "warning", category: "conflict", code: "patch.xpath_overlap",
+            domain: "xml_patches", filePath: tf,
+            message: `${mods.length} enabled mods patch ${tf} with DIFFERENT selector strings that resolve to the same node(s) in the base file — e.g. <${example.nodeName}> targeted by ${example.sels.map(s => `"${s}"`).join(" and ")} (${example.folders.join(", ")}). ${xpathConflicts.length} overlapping node(s) found; at least one op is replace/remove, so load order decides the result — simulated order: ${ordered2.join(" → ")}; winner: ${winner2}.`,
+            sourceRef: { kind: "patch_conflict", id: tf, label: example.folders.join(", ") },
+            openTargets: recs.map(r => ({ label: r.folder, path: `${r.folder}/${tf}` })),
+            loadOrder: ordered2, winner: winner2,
+            overlaps: xpathConflicts
+          });
+        } else {
+          findings.push({
+            severity: "info", category: "conflict", code: "patch.shared_target",
+            domain: "xml_patches", filePath: tf,
+            message: `${mods.length} enabled mods patch ${tf} (different selectors — lower conflict risk): ${mods.join(", ")}.`,
+            sourceRef: { kind: "patch_conflict", id: tf, label: mods.join(", ") },
+            openTargets: recs.map(r => ({ label: r.folder, path: `${r.folder}/${tf}` }))
+          });
+        }
       }
     }
 
@@ -2851,7 +3047,25 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
     if (!extRoot || !fs.existsSync(extRoot)) {
       return res.status(400).json({ error: "X4 extensions folder not found. Set the X4 game path in Settings." });
     }
-    return res.json({ success: true, extensionsRoot: extRoot, ...runExtensionDoctor(extRoot) });
+    // Base-content resolver for XPath-level overlap detection: loose game file
+    // first, then the packed .cat/.dat archives. Cached per scan.
+    const baseCache = new Map<string, string | null>();
+    const resolveBaseContent = (rel: string): string | null => {
+      if (baseCache.has(rel)) return baseCache.get(rel)!;
+      let out: string | null = null;
+      try {
+        const loose = path.join(resolved.x4GamePath!, rel);
+        if (fs.existsSync(loose) && fs.statSync(loose).isFile()) {
+          out = fs.readFileSync(loose, 'utf8');
+        } else {
+          const packed = catDatExtractBaseGameFile(resolved.x4GamePath!, rel.replace(/\\/g, '/'));
+          if (packed) out = packed.text;
+        }
+      } catch { out = null; }
+      baseCache.set(rel, out);
+      return out;
+    };
+    return res.json({ success: true, extensionsRoot: extRoot, ...runExtensionDoctor(extRoot, { resolveBaseContent }) });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "extension-doctor scan failed" });
   }
@@ -2880,6 +3094,12 @@ app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
     write("mod_z/content.xml", `<?xml version="1.0"?>\n<content id="mod_z" name="Mod Z" version="100" enabled="1"/>`);
     write("mod_a/libraries/wares.xml", `<?xml version="1.0"?>\n<wares><ware id="a_ware"/></wares>`);
     write("mod_z/libraries/wares.xml", `<?xml version="1.0"?>\n<wares><ware id="z_ware"/></wares>`);
+    // XPath-overlap fixtures: DIFFERENT selector strings that resolve to the SAME
+    // base node (must fire patch.xpath_overlap) vs different nodes (must stay info).
+    write("mod_a/libraries/baskets.xml", `<?xml version="1.0"?>\n<diff>\n  <remove sel="/baskets/basket[@id='shared']"/>\n</diff>`);
+    write("mod_b/libraries/baskets.xml", `<?xml version="1.0"?>\n<diff>\n  <replace sel="//basket[@id='shared']"><basket id="shared" tier="2"/></replace>\n</diff>`);
+    write("mod_a/libraries/god.xml", `<?xml version="1.0"?>\n<diff>\n  <remove sel="/god/x[@id='a_node']"/>\n</diff>`);
+    write("mod_b/libraries/god.xml", `<?xml version="1.0"?>\n<diff>\n  <replace sel="/god/x[@id='b_node']"><x id="b_node2"/></replace>\n</diff>`);
     write("mod_c/content.xml", `<?xml version="1.0"?>\n<content id="dup_id" name="Mod C" version="100" enabled="1"/>`);
     write("mod_c_dup/content.xml", `<?xml version="1.0"?>\n<content id="dup_id" name="Mod C Clone" version="100" enabled="1"/>`);
     // Both mods also ship t/0001.xml (translations MERGE) and a root ui.xml (per-extension
@@ -2889,7 +3109,12 @@ app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
     write("mod_a/ui.xml", `<?xml version="1.0"?>\n<addon><environment type="menus"><file name="ui/a.lua"/></environment></addon>`);
     write("mod_b/ui.xml", `<?xml version="1.0"?>\n<addon><environment type="menus"><file name="ui/b.lua"/></environment></addon>`);
 
-    const result = runExtensionDoctor(tmp);
+    // Stub base resolver: the synthetic mods patch these "base game" files.
+    const stubBases: Record<string, string> = {
+      'libraries/baskets.xml': `<baskets><basket id="shared" tier="1"/><basket id="other"/></baskets>`,
+      'libraries/god.xml': `<god><x id="a_node"/><x id="b_node"/></god>`
+    };
+    const result = runExtensionDoctor(tmp, { resolveBaseContent: rel => stubBases[rel.replace(/\\/g, '/')] ?? null });
     const has = (code: string, pred?: (f: any) => boolean) =>
       result.findings.some((f: any) => f.code === code && (!pred || pred(f)));
     const checks = {
@@ -2911,17 +3136,53 @@ app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
       selectorWinner: has("patch.selector_collision", f => f.filePath === "libraries/jobs.xml" && f.winner === "mod_b"),
       // full-file override (mod_a vs mod_z on libraries/wares.xml): mod_z loads before
       // mod_b but after mod_a (topo: a, z, b) → winner = mod_z.
-      overrideWinner: has("file.override_collision", f => f.filePath === "libraries/wares.xml" && f.winner === "mod_z")
+      overrideWinner: has("file.override_collision", f => f.filePath === "libraries/wares.xml" && f.winner === "mod_z"),
+      // XPath overlap: "/baskets/basket[@id='shared']" (remove) and "//basket[@id='shared']"
+      // (replace) are different strings resolving to the same base node → warning.
+      xpathOverlap: has("patch.xpath_overlap", f => f.filePath === "libraries/baskets.xml" && f.severity === "warning"),
+      // Different selectors hitting DIFFERENT nodes must stay an info shared-target.
+      xpathNoFalsePositive: has("patch.shared_target", f => f.filePath === "libraries/god.xml")
+        && !result.findings.some((f: any) => f.code === "patch.xpath_overlap" && f.filePath === "libraries/god.xml")
     };
     const pass = checks.missingRequiredDep && checks.duplicateId && checks.selectorCollision
       && checks.tFilesNotFlagged && checks.uiManifestNotFlagged
       && checks.folderIdMismatch && checks.depAwareLoadOrder
-      && checks.selectorWinner && checks.overrideWinner;
+      && checks.selectorWinner && checks.overrideWinner
+      && checks.xpathOverlap && checks.xpathNoFalsePositive;
     return res.json({ success: true, pass, checks, codes: result.findings.map((f: any) => f.code), result });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "extension-doctor-selftest failed" });
   } finally {
     if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
+  }
+});
+
+// (cold-boot restore verified live: see ROADMAP 8th pass.)
+// SQLite cache self-test (migration step 4's oracle): builds a throwaway DB and
+// asserts the query layer matches a known in-memory fixture. Reports
+// {available:false, reason} cleanly when better-sqlite3 isn't installed.
+app.get("/api/agent/db-selftest", (_req, res) => {
+  try {
+    const result = dbSelfTest();
+
+    // Stage-4 parity: when the live process has an in-memory index AND the live
+    // cache DB has rows, their per-kind counts must agree.
+    let liveParity: any = null;
+    try {
+      const db = getStudioDb();
+      if (db && objectIndexCache) {
+        const dbCounts = dbObjectIndexCounts(db);
+        const memCounts: Record<string, number> = {};
+        for (const it of objectIndexCache.index.items) memCounts[it.kind] = (memCounts[it.kind] || 0) + 1;
+        const kinds = new Set([...Object.keys(dbCounts), ...Object.keys(memCounts)]);
+        const mismatches = [...kinds].filter(k => (dbCounts[k] || 0) !== (memCounts[k] || 0));
+        liveParity = { match: mismatches.length === 0, mismatches, memory: memCounts, db: dbCounts };
+      }
+    } catch { /* parity is informational */ }
+
+    return res.json({ success: true, ...result, liveCache: getStudioDb()?.path || null, liveParity });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "db-selftest failed" });
   }
 });
 

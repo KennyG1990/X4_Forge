@@ -252,8 +252,19 @@ export default function PackageModDoctor({
                 ? 'bg-red-500/5 text-red-350 border-red-500/20'
                 : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25' : 'bg-blue-500/5 text-blue-300 border-blue-500/20');
 
+              const navigable = !!diag.sourceRef;
+              const navigateToSource = () => {
+                if (!diag.sourceRef) return;
+                window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: diag.sourceRef }));
+              };
+
               return (
-                <div key={index} className={`p-2.5 rounded-lg border text-[10.5px] leading-relaxed flex items-start gap-2 ${itemStyle}`}>
+                <div
+                  key={index}
+                  onClick={navigable ? navigateToSource : undefined}
+                  title={navigable ? 'Jump to source in the editor' : undefined}
+                  className={`p-2.5 rounded-lg border text-[10.5px] leading-relaxed flex items-start gap-2 ${itemStyle} ${navigable ? 'cursor-pointer hover:bg-white/5 transition-all' : ''}`}
+                >
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
                   <div className="space-y-1">
                     <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] leading-none mb-1">
@@ -266,8 +277,8 @@ export default function PackageModDoctor({
                     )}
                     <p className="text-slate-300 leading-normal">{diag.message}</p>
                     {diag.sourceRef && (
-                      <span className="font-mono text-[8px] text-slate-400 block mt-1">
-                        SOURCE: {diag.sourceRef.kind}{diag.sourceRef.label ? ` / ${diag.sourceRef.label}` : ''}{diag.sourceRef.id ? ` / ${diag.sourceRef.id}` : ''}
+                      <span className="font-mono text-[8px] text-cyan-300/90 block mt-1">
+                        SOURCE: {diag.sourceRef.kind}{diag.sourceRef.label ? ` / ${diag.sourceRef.label}` : ''}{diag.sourceRef.id ? ` / ${diag.sourceRef.id}` : ''} →
                       </span>
                     )}
                   </div>
