@@ -1223,6 +1223,8 @@ export default function App() {
         setWorkspace={setWorkspace}
         saveCheckpoint={saveCheckpoint}
         setWorkspaceView={setWorkspaceView}
+        modWorkspacePath={modWorkspacePath}
+        filesystemPath={filesystemPath}
       />
 
       {/* AI Connection Provider Settings Modal */}

@@ -2719,14 +2719,20 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
 
 function resolveModFolder(reqPath: string): { abs: string } | { error: string; status: number } {
   const resolved = resolveXsdConfig();
-  const root = resolved.modWorkspacePath || resolved.filesystemPath;
-  if (!root) return { error: 'No modWorkspacePath/filesystemPath configured.', status: 400 };
+  const roots = [resolved.modWorkspacePath, resolved.filesystemPath]
+    .filter((root): root is string => Boolean(root))
+    .filter((root, idx, arr) => arr.indexOf(root) === idx);
+  if (roots.length === 0) return { error: 'No modWorkspacePath/filesystemPath configured.', status: 400 };
   const rel = String(reqPath || '').trim();
   const normalized = path.normalize(rel);
   if (path.isAbsolute(normalized) || normalized.startsWith('..')) return { error: 'Invalid folder path.', status: 400 };
-  const abs = path.join(root, normalized);
-  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) return { error: `Folder not found: ${rel}`, status: 404 };
-  return { abs };
+  for (const root of roots) {
+    const rootAbs = path.resolve(root);
+    const abs = path.resolve(rootAbs, normalized);
+    if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) continue;
+    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { abs };
+  }
+  return { error: `Folder not found in configured roots: ${rel}`, status: 404 };
 }
 
 app.post("/api/agent/mod-folder/import", (req, res) => {
