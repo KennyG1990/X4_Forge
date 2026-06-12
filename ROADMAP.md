@@ -527,7 +527,22 @@ All browser-verified at `http://localhost:3000`; regression sweep green after th
 - **Real-data probe:** `/api/patch/base-content` returns valid XML for `t/0001-l044.xml` (680 B) and `t/0001.xml` (49 KB) from the real install. *Attribution caveat:* whether those entries are pck-stored or plain isn't observable through the endpoint — the fixture is the decompression proof; the probe proves no regression and end-to-end extraction.
 - **Remaining T4.1 increments re-scoped:** *Inc 2 (VFS-backed pickers)* — **already satisfied** by the 11th-pass object-index pickers (live-index typeaheads). *Inc 1 (SQLite content cache for extracted files)* — **deferred, perf-only**: extraction is already positioned-read (no full .dat loads) and the object index is SQLite-cached; cache file *content* only if base-content/override-map latency ever becomes a felt problem. **T4.1 is functionally complete; next lever: T4.2 diff-to-patch** (its dependency — vanilla source on demand — is now proven).
 
-## Tier 4 — ecosystem levers (proposed 2026-06-12; T4.4 + T4.1 SHIPPED — next: T4.2)
+### Changelog — 2026-06-12 (37th pass, Fable: T4.2 diff-to-patch + T4.3 ui_event — Tier 4 complete)
+
+All browser-verified at `http://localhost:3000`; full oracle battery green at session end.
+
+**T4.2 Diff-to-Patch (both increments):**
+- **`src/lib/xpathSynth.ts` (NEW — the synthesis front-end for the existing XML Patching domain, not a new patch engine).** `synthesizePatch(vanilla, edited)` → minimal X4 `<diff>` ops at element AND attribute granularity (attr add/replace/remove, element add with `pos="before"` anchoring, removes, deep-recursion stays minimal). Selectors prefer `[@id]`/`[@name]` predicates; positional `[n]` is a flagged warning. **The honesty contract is structural:** `applyPatch` + `structuralDiff` live in the same module so `runXpathSynthSelftest()` PROVES `apply(synthesize()) ≡ edited` for every case — **12/12** (attr ops, appends, middle-inserts with before-anchors, removes, deep minimality, positional warning, text-change → element replace, zero-op identity, multi-op combo, mismatched-roots rejection). Endpoints: authed `POST /api/agent/xpath-synth` (inline vanilla or loose→packed resolution), public `GET /api/agent/xpath-synth-selftest`.
+- **Twin-pane UI** — new **Diff→Patch** tab in the XML Patching workbench: the vanilla target (already loaded by the workbench, packed-aware) seeds an editable copy; Synthesize → ops + warnings + diff preview; **Add to Workspace** adopts the ops as `PatchBlock`s. `PatchBlock.attrType` added (`types.ts`; the sanitizer's spread preserves it) and **both** diff compilers — `modCompiler.compileDiffDocument` and the component-local preview copy in `XMLPatchSystem.tsx` — now emit `<add sel type="@attr">value</add>` and single-line attribute replaces. *(Found during verification: only the modCompiler copy had been fixed at first; the component's duplicate compiler dropped `type=` — the duplicate-implementation hazard again. Both now agree; unifying them is a code-review item.)*
+- *Verified live:* seeded from real packed `libraries/factions.xml` (52 KB), two-part edit → exactly 2 ops (`<add sel="/factions">` element + `<add sel=".../faction[@id='argon']" type="@studiotest">`), adopted, compiled correctly; invalid edited XML (duplicate attribute) rejected with the parser's message; selftest 12/12 live; test blocks removed after verification.
+
+**T4.3 Lua↔MD connector (engine + editor; canvas arrow deferred):**
+- **`ui_event` endpoint kind added to `contractGlue.ts`** — the existing contract seam pointed at the widget→cue case, NOT a third glue system. For a `kind:'ui_event'` endpoint the generator emits a **type-guarded `Glue.<id>(payload)`** (required-field + Lua-type guards from the declared contract fields: string/number/boolean/table) that forwards to MD via `AddUITriggeredEvent` — no HTTP — plus a `RegisterEvent` so `raise_lua_event` can trigger it too; the MD scaffold emits the matching **`On_<id>` listener cue** (`event_ui_triggered screen/control`) and no `Call_` library (the widget, not MD, is the caller). Validation: `method`/`path` required only for `http` endpoints (advisory warning if set on a ui_event); `baseUrl` only required when the contract has at least one real HTTP endpoint.
+- **Contract editor** (`ContractEditor.tsx`): per-endpoint **HTTP / UI EVENT** kind selector; ui_event hides method/path/response and shows "Payload fields (type-guarded)" + an inline explanation of both generated ends.
+- **`contract-selftest` 19 → 24 checks, 24/24** (ui_event Lua has no `http.request`, type guards emitted, MD listener-only scaffold, pure-UI contract needs no baseUrl, method-on-ui_event warns). *Verified live in the editor:* added a ui_event endpoint, kind selector + hint + advisory warning + generated Lua all render.
+- **Scope adaptation (documented, not hidden):** the ROADMAP's *Inc 2 canvas arrow* (drag UI-widget → MD node) is **deferred**. The generator capability is complete and reachable through the seam's existing authoring surface (the Contracts editor); the arrow is an alternate entry point to the same generator, not new capability — better added after the code-review pass than alongside it.
+
+## Tier 4 — ecosystem levers (2026-06-12: ALL FOUR LEVERS SHIPPED — see 35th–37th pass changelogs)
 
 Four high-value additions that round the studio out from "mod authoring" into "mod ecosystem." They are **annotated with what they extend** so we build on existing modules rather than spawn parallel ones (the lesson of the UI Layout episode). They also form a **dependency chain**, not four independent silos — order matters.
 
@@ -572,14 +587,14 @@ Four high-value additions that round the studio out from "mod authoring" into "m
 - *Inc 2 — pickers:* ✅ **ALREADY SHIPPED (11th pass)** — `ObjectIndexPicker` + patch-target picker are live-index typeaheads backed by the packed archives. The lever's goal predated the pass that delivered it.
 
 **T4.2 Diff-to-Patch (needs T4.1):**
-- *Inc 1 — engine:* `src/lib/xpathSynth.ts` — `synthesizePatch(vanillaXml, editedXml)` → minimal `<diff>` ops, preferring id/name selectors over positional `[n]`. `runXpathSynthSelftest()` must round-trip: apply the generated patch to vanilla and assert it reproduces the edit.
-- *Inc 2 — UI:* twin-pane editor reusing the existing form editor + XML Patching domain front-end.
+- *Inc 1 — engine:* ✅ **DONE (37th pass).** `src/lib/xpathSynth.ts` with `synthesizePatch` + `applyPatch` + `structuralDiff`; selftest **12/12** proves apply(synthesize()) ≡ edited. POST `/api/agent/xpath-synth` + public selftest GET.
+- *Inc 2 — UI:* ✅ **DONE (37th pass).** Diff→Patch tab in the XML Patching workbench; ops adopt as `PatchBlock`s (`attrType` added; both diff compilers emit it).
 
 **T4.3 Lua↔MD connector (independent; extends `contractGlue`):**
-- *Inc 1 — engine:* add a `ui_event` endpoint kind to `src/lib/contractGlue.ts` (raise-event Lua + `event_ui_triggered` listener-cue scaffold + type guards). Extend `runContractSelftest()`.
-- *Inc 2 — UI:* cross-domain arrow on the canvas (UI widget → MD action node) that drives the generator. Do NOT add a new glue module.
+- *Inc 1 — engine:* ✅ **DONE (37th pass).** `ui_event` kind in `contractGlue.ts` (type-guarded `Glue.<id>` → `AddUITriggeredEvent` + `On_<id>` listener-cue scaffold); contract-selftest **24/24**.
+- *Inc 2 — UI:* ✅ kind selector in the Contracts editor (37th pass). The **canvas cross-domain arrow is DEFERRED** — same generator, alternate entry point; revisit post code-review. Do NOT add a new glue module.
 
-**Status:** T4.4 Inc 1 shipped (35th pass); the rest scoped only. Each follows the house pattern — pure engine module + `run*Selftest()` oracle + public GET endpoint, THEN UI, verified live — and each must justify why it extends an existing module rather than duplicating one before any code is written.
+**Status:** ALL FOUR LEVERS SHIPPED (35th–37th passes, browser-verified; T4.1 re-scoped honestly, T4.3 canvas arrow deferred). Next phase: **code review + linting/quality pass over the Tier 4 surface**, then T1.3/C2 (in-game, human-gated). Each lever followed the house pattern — pure engine module + `run*Selftest()` oracle + public GET endpoint, THEN UI, verified live — and each must justify why it extends an existing module rather than duplicating one before any code is written.
 
 ### SQLite persistence layer (design — implemented 8th pass; awaiting native dep install)
 
@@ -864,70 +879,4 @@ That thesis is precisely the studio's reason to exist — collapse that scattere
 | 2 | XML/MD/XPath/Lua hard to learn (High) | **Strong (core)** — visual node-based MD authoring (no hand-written XML), 8-domain compilers, XSD-backed validation, XPath match-counting in the patch builder | Already the headline win. Extend: more templates, finish schema-valid generators, object-index-backed **typed pickers** instead of free-text fields. |
 | 3 | Major updates break mods (High) | **Partial** — validation runs against the *installed* game's XSD + object index, so references that no longer exist are catchable | Add an **"update audit"**: re-scan a mod against the current install and flag now-dangling references (removed macros/wares/factions) as a migration checklist. (Machine-readable breakage notes themselves are Egosoft's job.) |
 | 4 | UI modding unstable / conflict-prone (High) | **Weak** — packages X4-correct `ui.xml` + Lua entry point; the engine-level hook layer is Egosoft-only | **Partial only:** generate UI that uses the community **UI-callback pattern** (interop-friendly) instead of whole-function Lua overrides, and flag whole-function overrides as a conflict risk. The real fix (first-party callback layer) is out of our hands. |
-| 5 | Debugging / logging / conflict diagnosis weak (High) | **Strong (single-mod)** — Mod Doctor (XSD + reference + semantic checks with file+line+sourceRef), live `debuglog` parsing → sourceRef mapping, patch diagnostics | **Biggest new opportunity.** Extend from one mod to a cross-mod **Extension Doctor**: scan the whole `extensions/` folder for duplicate `<diff>` selectors hitting the same node across mods, folder-name collisions, unsatisfied/missing dependencies, broken DLC refs, and **load-order winner/loser ("why this file won")**. This is the report's #1 near-term recommendation and we already own the pieces (patch-target resolver + object index + mounted extensions folder). |
-| 6 | Missing first-party editors / automation (High) | **Strong** — the studio *is* the "modding workbench" the report asks for: visual editors, generators (wares/jobs), pack/validate, deploy, GitHub publish | Fill remaining scaffolds: gamestart generator, deeper ware/job models. Pack/validate/publish is largely present. |
-| 7 | Asset pipeline — ships/Blender/NPC (Medium) | **Out of scope** — text/XML/script IDE, not a 3D asset tool | Explicitly not our domain; don't overpromise. |
-| 8 | Distribution / install-path confusion (Medium) | **Partial/Strong** — path config + detection (game / workspace / extensions), deploy to `extensions/`, GitHub repo-create/push/commit-summaries, snapshots | Add: **content.xml `<dependency>`** support (gap already noted in the appendix), **version pinning**, **mod profiles / modset switching** (enable/disable named sets), and optionally a **GUI Workshop-publish wrapper** around `-buildcat`/X Catalog Tool. GitHub distribution is already done. |
-| 9 | Engine-boundary / plugin bridge (Medium) | **Out of scope** — the agent API edits mods; it is not an in-game IPC/plugin bridge | Egosoft's platform decision; not our domain. |
-| 10 | Modified-tag / trusted-mod policy (Medium) | **Mostly out of scope** — game-side policy/UX | Minor: surface a plain-language explainer + flag when a mod would trip the modified state. Low priority. |
-
-### The studio already answers most of the report's recommended MVP toolset
-
-The report names six MVP components. The studio already covers four, can credibly reach a fifth, and the sixth is an engine feature:
-
-- **Authoring + validation layer** (XSD validation, selector diagnostics, symbol search) → **have** (Mod Doctor + object index); deepen with symbol search + hover docs.
-- **Diff + patch tooling** (generate diff, apply, show selector conflicts, validate) → **have** (patch builder + XPath match counts + patch diagnostics).
-- **Extension Doctor** (dependency / path / duplicate-selector / DLC checks, profile audit) → **partial → build next** (we do it for one mod; extend to all enabled mods).
-- **GUI scaffolding workbench** (generators, templates, pack/validate/publish) → **have**.
-- **UI interoperability layer** → **engine feature (Egosoft)**; we can only emit interop-friendly UI.
-- **External integration bridge** → **engine feature (Egosoft)**; out of scope.
-
-### Prioritized buildlist (in-scope, ranked by leverage)
-
-- **P-A — Extension Doctor (cross-mod conflict scan).** *(Pains #5, #8, #1 — highest leverage.)* Scan all of `extensions/`: duplicate `<diff>` selectors across mods, folder collisions, unsatisfied/missing dependencies, broken DLC refs, and load-order winner determination. JSON report + Mod Doctor grouping. It's the report's top near-term ask and we're ~70% there.
-- **P-B — content.xml `<dependency>` + version pinning + DLC gating.** *(Pain #8.)* Add dependency metadata to the compiler and Mod Doctor checks that each dependency resolves in the install. Prerequisite for real conflict/profile work.
-- **P-C — Mod profiles / modset switching.** *(Pain #8.)* Save/restore named enable-sets across `extensions/`; one-click switch.
-- **P-D — Update-audit scan.** *(Pain #3.)* One button: re-validate the active mod against the current install's XSD + object index, output a migration checklist of dangling references.
-- **P-E — In-app searchable reference + hover docs + quickstarts.** *(Pains #1, #2.)* Symbol search over scriptproperties / MD actions / XSD; hover docs on nodes & fields; a "start here" template gallery.
-- **P-F — Interop-friendly UI generation.** *(Pain #4, partial.)* Emit UI via the community callback pattern; flag whole-function Lua overrides as conflict risks.
-- *(Optional / low)* Workshop-publish GUI wrapper (#8); modified-tag explainer (#10).
-
-**Honest scope line:** P-A→P-F turn the report's "X4 is moddable but the workflow is archaeology" into "the studio *is* the workflow" for the text / XML / MD / script surface — which is exactly where the report says ~three-quarters of the friction lives. The three pains we can't touch (3D/character assets, an in-game plugin/IPC bridge, the engine-level UI hook layer) are Egosoft-platform features, and the roadmap should keep saying so rather than pretend otherwise.
-
-## Lower-priority UX polish
-
-UE5-style UX polish — drag-to-search, comment-group cards, reroute nodes, content-browser drag-drop, the cue-tree/behavior-tree view. All worth doing, but none is as important as Mod Doctor, live game feedback, game-data indexing, round-trip safety, or diff-safe patching. (Note: when we do build the graph model, lean toward MD's *declarative behavior-tree* nature rather than UE5's imperative exec-flow metaphor.)
-
----
-
-## Open questions to resolve before/early in M1
-- X4 install path + mod folder conventions on the target machine (for A3 packaging).
-- Which real Egosoft MD scripts become the golden round-trip corpus (for A1).
-- Division of labor: which track each agent/person owns.
-
----
-
-## Appendix — Compiler correctness vs Egosoft conventions
-
-Each of the eight content domains the app can emit, weighed against documented X4 modding conventions (Egosoft wiki + community patch/extension references). "DoD" = what A4 must make true. Status reflects the **current** main-branch output.
-
-| Domain | Output location | Status vs Egosoft | What's wrong / DoD |
-|---|---|---|---|
-| **content.xml / packaging** | `extensions/<id>/content.xml` | ✅ Correct core | Root attrs, `date=YYYY-MM-DD`, `save`, `enabled`, `<text language="44">`, lowercase `<id>` all good. **Fixed 2026-06-11:** `toContentVersion` now uses numeric `version × 100` conversion (`"2.5"→"250"`, `"0.25"→"25"`), verified through `/api/agent/compile`. Remaining enhancement: no `<dependency>` support yet (other extensions / DLC gating). |
-| **MD scripts** | `md/<id>.xml` | ✅ Correct | `noNamespaceSchemaLocation="md.xsd"`, folder, cue tree all valid. Most mature compiler. |
-| **UI layouts** | `ui.xml` (extension root) + `ui/<id>.lua` | ✅ Fixed 2026-06-11 | **Reworked to X4-correct packaging.** The packager now writes an extension-root `ui.xml` `<addon><environment type="menus"><file name="ui/<id>.lua"/></environment></addon>` index (format verified against the kuertee `x4-mod-ui-extensions` reference mod) plus a packaged `ui/<id>.lua` entry point that registers through X4's real `Menus` table + `Helper.registerMenu` pattern (guarded so a missing global fails soft). The previous non-standard `md_ui_layouts/<id>_ui.xml` `<ui_menu>` output (which X4 ignored) is no longer packaged — `generateUIXML` is retained only as a design-time descriptor for the in-app preview. The invented `RegisterLayout`/`RemoveAllUITriggers` calls are gone. Remaining enhancement: the Lua's `onShowMenu` widget construction is scaffolded with widget metadata; building actual widgets via `widgetSystem` and in-game verification is the next step (Mod Doctor now emits an info diagnostic saying exactly this). **[Correction 2026-06-11: this note describes only the auto-packaged `ui/<id>.lua` path. The interactive HUD & LUA UI tab — widget library, Layout GUI Designer, Lua Script Event Manager, and a syntax-validated Lua editor — does produce working in-game Lua/UI. See "Capability gaps & upgrade levers → Lever 3" up top.]** |
-| **AI scripts** | `aiscripts/<name>.xml` | ✅ Correct core | `aiscripts.xsd` ref + `<params>/<attention>/<actions>` structure broadly right. **Verified 2026-06-11:** local `aiscripts.xsd` requires `<param type=...>`, so that warning was stale. **Fixed 2026-06-11:** the shared compiler and AIScript preview no longer inject a hidden `<wait exact="5s"/><resume label="start"/>` loop into every script; generated actions now reflect only explicit user-authored behavior. Remaining enhancements: richer order-block support and deeper schema coverage for advanced AI commands. |
-| **Wares** | `libraries/wares.xml` (`<diff><add sel="/wares">`) | ✅ Correct core | Diff-as-file pattern is **correct** (X4 detects `<diff>` root and patches base `libraries/wares.xml`). **Fixed 2026-06-11:** the compiler no longer fabricates `ore`+`energycells` or hardcoded `tags="economy equipment"` for every ware. Tags, production method/name, and primary input wares are now explicit editable fields; missing inputs produce Mod Doctor warnings instead of hidden fake data. Remaining enhancement: richer schema-aware ware editor for advanced production methods/effects. |
-| **Jobs** | `libraries/jobs.xml` (`<diff><add sel="/jobs">`) | ⚠️ Valid shape, thin | Diff pattern correct. But `<expiration>`, `<loadout><level>`, `<modifiers>` hardcoded; `tags="military <shipClass>"` uses shipClass as a tag (approximate). Real jobs schema is much richer (basket, environment, location, orders). Approximation only. |
-| **Translations** | `t/0001-l<lang>.xml` | ✅ Correct core | `<language id><page id><t id>` structure correct. **Fixed 2026-06-11:** translation filenames now normalize to lowercase, zero-padded paths (`0001-l044.xml`, `0001-l049.xml`) across the shared compiler, server package manifest, deploy writer, import paths, Mod Doctor, and UI help text. Remaining enhancement: no guard pushing custom page IDs into a high range to avoid clobbering vanilla strings. |
-| **XML diff patches** | `<targetFile>` (`<diff>` w/ `add`/`replace`/`remove sel=`) | ✅ Correct core (updated) | Matches the documented patch convention (XPath `sel`, three ops). **Reconciled 2026-06-11 (was stale vs P5):** `pos="before\|after\|prepend\|append"` on `<add>` is implemented in both the editor and `compileDiffDocument`; client-side XPath validation reports 0/1/many matches and invalid-selector syntax against the resolved base file; and base-file resolution now works for **packed** targets too (`/api/patch/base-content` decodes `.cat/.dat`). Remaining: the default target `libraries/ship_macros.xml` is still a guess (that file does not exist in X4 — verified: `/api/patch/base-content` returns 404 for it), so the default should be changed and per-domain XPath diagnostics surfaced into Mod Doctor. |
-
-**Reading of the table:** the *diff-based* domains (wares, jobs, patches) are structurally on the rails but emit placeholder content; the *UI* domain is split — it already has a Lua path pointed at the right place (`/ui/`) but doesn't package it, while the thing it *does* package (`md_ui_layouts/<ui_menu>`) is non-standard; `content.xml` has a real version bug; MD is solid. So A4 isn't just "move code" — it's "move code **and** fix these per-domain correctness issues as you go," with the round-trip + XSD harness (A1/A2) as the safety net that proves each fix.
-
----
-
-## Sources
-- [Egosoft Wiki — Modding Support](https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding%20Support/)
-- [Egosoft Wiki — h2odragon's HOWTO-hackx4f](https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding%20Support/ScriptingMD/Community%20Guides/h2odragon's%20HOWTO-hackx4f/)
-- [Steam — Workshop for X Rebirth and X4 (content.xml / version)](https://steamcommunity.com/sharedfiles/filedetails/?id=245117855)
-- [kuertee/x4-mod-ui-extensions — content.xml example](https://github.com/kuertee/x4-mod-ui-extensions/blob/master/content.xml)
+| 5 | Debugging / logging / conflict diagnosis weak (High) | **Strong (single-mod)** — Mod Doctor (XSD + reference + semantic checks with file+line+sourceRef), live `debuglog` parsing → sourceRef mapping, patch diagnostics | **Biggest new opportunity.** Extend from one mod to a cross-mod **Extension Docto

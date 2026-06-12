@@ -31,9 +31,16 @@ export interface ContractField {
 export interface ContractEndpoint {
   /** Stable identifier; used to derive Lua event names. Lowercase + underscores. */
   id: string;
-  method: ContractMethod;
+  /**
+   * 'http' (default): MD raises an event, the glue Lua calls the external process.
+   * 'ui_event' (T4.3): an in-game Lua UI widget calls Glue.<id>(payload); the glue
+   * type-guards the payload and forwards it to MD via AddUITriggeredEvent — the
+   * SAME contract seam pointed at the widget→cue case (no external process).
+   */
+  kind?: 'http' | 'ui_event';
+  method?: ContractMethod;
   /** Path appended to baseUrl, e.g. "/v1/status". Must start with "/". */
-  path: string;
+  path?: string;
   description?: string;
   /** JSON request-body fields (for POST/PUT/PATCH). */
   request?: ContractField[];
@@ -85,13 +92,17 @@ export function validateContract(contract: IntegrationContract): ContractFinding
   if (!contract.namespace || !NS_RE.test(contract.namespace)) {
     findings.push({ severity: 'error', message: `namespace "${contract.namespace ?? ''}" must match ${NS_RE} (lowercase, starts with a letter).` });
   }
-  if (!contract.baseUrl || !/^https?:\/\/.+/i.test(contract.baseUrl)) {
-    findings.push({ severity: 'error', message: `baseUrl "${contract.baseUrl ?? ''}" must be an http(s) URL.` });
-  } else if (!/^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(:\d+)?/i.test(contract.baseUrl)) {
-    findings.push({ severity: 'warning', message: `baseUrl "${contract.baseUrl}" is not a localhost address; external-integration mods normally talk to a *local* process.` });
-  }
-
   const endpoints = Array.isArray(contract.endpoints) ? contract.endpoints : [];
+  // ui_event endpoints live entirely in-game; baseUrl only matters when at
+  // least one endpoint actually goes over HTTP (T4.3).
+  const hasHttp = endpoints.some(ep => ep && (ep.kind || 'http') === 'http');
+  if (hasHttp) {
+    if (!contract.baseUrl || !/^https?:\/\/.+/i.test(contract.baseUrl)) {
+      findings.push({ severity: 'error', message: `baseUrl "${contract.baseUrl ?? ''}" must be an http(s) URL.` });
+    } else if (!/^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(:\d+)?/i.test(contract.baseUrl)) {
+      findings.push({ severity: 'warning', message: `baseUrl "${contract.baseUrl}" is not a localhost address; external-integration mods normally talk to a *local* process.` });
+    }
+  }
   if (endpoints.length === 0) {
     findings.push({ severity: 'error', message: 'Contract has no endpoints.' });
   }
@@ -109,14 +120,22 @@ export function validateContract(contract: IntegrationContract): ContractFinding
     } else {
       seen.add(ep.id);
     }
-    if (!METHODS.includes(ep.method)) {
-      findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" has invalid method "${ep.method}".` });
+    const kind = ep.kind || 'http';
+    if (kind !== 'http' && kind !== 'ui_event') {
+      findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" has invalid kind "${String(ep.kind)}".` });
     }
-    if (!ep.path || !ep.path.startsWith('/')) {
-      findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" path "${ep.path ?? ''}" must start with "/".` });
+    if (kind === 'http') {
+      if (!METHODS.includes(ep.method as ContractMethod)) {
+        findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" has invalid method "${ep.method}".` });
+      }
+      if (!ep.path || !ep.path.startsWith('/')) {
+        findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" path "${ep.path ?? ''}" must start with "/".` });
+      }
+    } else if (ep.method || ep.path) {
+      findings.push({ severity: 'warning', endpointId: ep.id, message: `endpoint "${ep.id}" is a ui_event; method/path are ignored.` });
     }
     const bodyMethods: ContractMethod[] = ['POST', 'PUT', 'PATCH'];
-    if (ep.request && ep.request.length > 0 && !bodyMethods.includes(ep.method)) {
+    if (kind === 'http' && ep.request && ep.request.length > 0 && !bodyMethods.includes(ep.method as ContractMethod)) {
       findings.push({ severity: 'warning', endpointId: ep.id, message: `endpoint "${ep.id}" is ${ep.method} but declares a request body; ${ep.method} bodies are usually ignored.` });
     }
     for (const f of [...(ep.request || []), ...(ep.response || [])]) {
@@ -177,9 +196,42 @@ export function generateHttpGlueLua(contract: IntegrationContract): string {
   const fns: string[] = [];
   const registrations: string[] = [];
 
+  const luaTypeOf = (t: ContractFieldType): string =>
+    t === 'number' ? 'number' : t === 'boolean' ? 'boolean' : (t === 'object' || t === 'array') ? 'table' : 'string';
+
   for (const ep of contract.endpoints) {
     const ev = endpointEventNames(ns, ep.id);
-    const sendsBody = bodyMethods.includes(ep.method);
+
+    if ((ep.kind || 'http') === 'ui_event') {
+      // T4.3 — in-game UI widget → MD cue bridge: no HTTP involved. The widget's
+      // Lua calls Glue.<id>(payload); the glue type-guards the declared fields
+      // and forwards the table to MD via AddUITriggeredEvent (event_ui_triggered).
+      const fields = ep.request || [];
+      const guards: string[] = [`    payload = payload or {}`];
+      for (const f of fields) {
+        if (f.required) {
+          guards.push(`    if payload[${JSON.stringify(f.name)}] == nil then DebugError(${JSON.stringify(`[${ns}] ${ep.id}: missing required field '${f.name}'`)}); return end`);
+        }
+        guards.push(`    if payload[${JSON.stringify(f.name)}] ~= nil and type(payload[${JSON.stringify(f.name)}]) ~= ${JSON.stringify(luaTypeOf(f.type))} then DebugError(${JSON.stringify(`[${ns}] ${ep.id}: field '${f.name}' must be ${luaTypeOf(f.type)}`)}); return end`);
+      }
+      fns.push([
+        `-- ${ep.id}: ui_event${ep.description ? ` — ${luaComment(ep.description)}` : ''} (widget → MD, no HTTP)`,
+        `function Glue.${ep.id}(payload)`,
+        ...guards,
+        `    AddUITriggeredEvent(NS, ${JSON.stringify(ep.id)}, payload)`,
+        `end`,
+        ``,
+        `-- Other Lua (or MD via raise_lua_event "${ev.request}") can trigger it too.`,
+        `RegisterEvent(${JSON.stringify(ev.request)}, function(_, param)`,
+        `    Glue.${ep.id}(param)`,
+        `end)`,
+        ``
+      ].join('\n'));
+      registrations.push(ev.request);
+      continue;
+    }
+
+    const sendsBody = bodyMethods.includes(ep.method as ContractMethod);
     const requiredFields = (ep.request || []).filter(f => f.required).map(f => f.name);
 
     const validationLines = requiredFields.length > 0
@@ -272,6 +324,21 @@ export function generateContractMdScript(contract: IntegrationContract, modId: s
   const blocks = contract.endpoints.map(ep => {
     const ev = endpointEventNames(ns, ep.id);
     const req = ep.request || [];
+    if ((ep.kind || 'http') === 'ui_event') {
+      const fieldList = req.map(fld => fld.name).join(', ') || 'none declared';
+      return [
+        `    <!-- ui_event ${ep.id} — raised by the mod's Lua UI via Glue.${ep.id}(payload) (fields: ${fieldList}). -->`,
+        `    <cue name="On_${ep.id}">`,
+        `      <conditions>`,
+        `        <event_ui_triggered screen="'${ns}'" control="'${ep.id}'" />`,
+        `      </conditions>`,
+        `      <actions>`,
+        `        <!-- event.param3 holds the payload table from AddUITriggeredEvent -->`,
+        `        <debug_text text="'${ep.id}: '+event.param3" filter="general" />`,
+        `      </actions>`,
+        `    </cue>`
+      ].join('\n');
+    }
     const paramDecls = req.map(fld => `        <param name="${fld.name}" />`).join('\n');
     const payload = req.length
       ? `table[${req.map(fld => `$${fld.name}=$${fld.name}`).join(', ')}]`
@@ -310,7 +377,8 @@ export function runContractGlueSelftest() {
     baseUrl: 'http://127.0.0.1:8713',
     endpoints: [
       { id: 'get_status', method: 'GET', path: '/v1/status', response: [{ name: 'ok', type: 'boolean' }] },
-      { id: 'send_prompt', method: 'POST', path: '/v1/prompt', request: [{ name: 'text', type: 'string', required: true }], response: [{ name: 'reply', type: 'string' }] }
+      { id: 'send_prompt', method: 'POST', path: '/v1/prompt', request: [{ name: 'text', type: 'string', required: true }], response: [{ name: 'reply', type: 'string' }] },
+      { id: 'hud_button_clicked', kind: 'ui_event', description: 'HUD button -> MD', request: [{ name: 'button_id', type: 'string', required: true }, { name: 'count', type: 'number' }] }
     ]
   };
 
@@ -324,9 +392,11 @@ export function runContractGlueSelftest() {
   // every endpoint must produce a RegisterEvent + a Glue function + a response event
   const allEndpointsWired = good.endpoints.every(ep => {
     const ev = endpointEventNames(good.namespace, ep.id);
-    return lua.includes(`RegisterEvent(${JSON.stringify(ev.request)}`)
-      && lua.includes(`function Glue.${ep.id}(`)
-      && lua.includes(JSON.stringify(`${ep.id}.response`));
+    const base = lua.includes(`RegisterEvent(${JSON.stringify(ev.request)}`)
+      && lua.includes(`function Glue.${ep.id}(`);
+    return (ep.kind || 'http') === 'http'
+      ? base && lua.includes(JSON.stringify(`${ep.id}.response`))
+      : base;
   });
   ok('all_endpoints_wired', allEndpointsWired);
 
@@ -364,11 +434,34 @@ export function runContractGlueSelftest() {
   try { md = generateContractMdScript(good, 'mymod'); } catch { mdThrew = true; }
   ok('md_generates_without_throwing', !mdThrew && md.length > 0);
   ok('md_is_mdscript', md.includes('<mdscript name="mymod_http"') && md.includes('</mdscript>'));
-  ok('md_wires_call_and_response', good.endpoints.every(ep => md.includes(`<library name="Call_${ep.id}">`) && md.includes(`name="'${good.namespace}.${ep.id}'"`) && md.includes(`control="'${ep.id}.response'"`)));
+  ok('md_wires_call_and_response', good.endpoints.every(ep => (ep.kind || 'http') === 'ui_event'
+    ? (md.includes(`<cue name="On_${ep.id}">`) && md.includes(`control="'${ep.id}'"`) && !md.includes(`<library name="Call_${ep.id}">`))
+    : (md.includes(`<library name="Call_${ep.id}">`) && md.includes(`name="'${good.namespace}.${ep.id}'"`) && md.includes(`control="'${ep.id}.response'"`))));
   ok('md_passes_request_params', md.includes('<param name="text" />') && md.includes('$text=$text'));
   let mdBadThrew = false;
   try { generateContractMdScript(bad, 'x'); } catch { mdBadThrew = true; }
   ok('md_refuses_bad_contract', mdBadThrew);
+
+  // T4.3 — ui_event endpoint kind (widget → MD bridge, no HTTP)
+  ok('ui_event_lua_no_http', (() => {
+    const start = lua.indexOf('function Glue.hud_button_clicked(');
+    const end = lua.indexOf('\nend', start);
+    const fn = start >= 0 && end > start ? lua.slice(start, end) : '';
+    return fn.length > 0 && !fn.includes('http.request') && fn.includes('AddUITriggeredEvent(NS, "hud_button_clicked"');
+  })());
+  ok('ui_event_type_guards',
+    lua.includes('type(payload["button_id"]) ~= "string"')
+    && lua.includes('type(payload["count"]) ~= "number"')
+    && lua.includes("missing required field 'button_id'"));
+  ok('ui_event_md_listener_only',
+    md.includes('<cue name="On_hud_button_clicked">')
+    && md.includes(`control="'hud_button_clicked'"`)
+    && !md.includes('Call_hud_button_clicked'));
+  const pureUi: IntegrationContract = { namespace: 'uionly', baseUrl: '', endpoints: [{ id: 'btn', kind: 'ui_event', request: [] }] };
+  ok('pure_ui_contract_needs_no_baseurl', validateContract(pureUi).filter(f => f.severity === 'error').length === 0);
+  ok('ui_event_method_warns', validateContract({
+    namespace: 'x1', baseUrl: '', endpoints: [{ id: 'a', kind: 'ui_event', method: 'GET' }]
+  }).some(f => f.severity === 'warning' && /ignored/.test(f.message)));
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };
 }

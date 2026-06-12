@@ -143,21 +143,42 @@ export default function ContractEditor({ workspace, setWorkspace }: ContractEdit
             <div className="flex items-center gap-2">
               <input className={`${inputCls} flex-1`} value={ep.id} spellCheck={false}
                 onChange={e => updateEndpoint(i, { id: e.target.value })} placeholder="endpoint_id" />
-              <select className="px-2 py-1.5 rounded bg-black/60 border border-white/10 text-cyan-300 font-mono text-[11px]"
-                value={ep.method} onChange={e => updateEndpoint(i, { method: e.target.value as ContractMethod })}>
-                {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              <select className="px-2 py-1.5 rounded bg-black/60 border border-white/10 text-fuchsia-300 font-mono text-[11px]"
+                value={ep.kind || 'http'} onChange={e => updateEndpoint(i, { kind: e.target.value as 'http' | 'ui_event' })}
+                title="http: MD → external process. ui_event: Lua UI widget → MD cue (no HTTP).">
+                <option value="http">HTTP</option>
+                <option value="ui_event">UI EVENT</option>
               </select>
+              {(ep.kind || 'http') === 'http' && (
+                <select className="px-2 py-1.5 rounded bg-black/60 border border-white/10 text-cyan-300 font-mono text-[11px]"
+                  value={ep.method || 'POST'} onChange={e => updateEndpoint(i, { method: e.target.value as ContractMethod })}>
+                  {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              )}
               <button onClick={() => removeEndpoint(i)} title="Remove endpoint"
                 className="p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10">
                 <Trash className="w-3.5 h-3.5" />
               </button>
             </div>
-            <input className={inputCls} value={ep.path} spellCheck={false}
-              onChange={e => updateEndpoint(i, { path: e.target.value })} placeholder="/v1/path" />
-            <FieldListEditor label="Request body fields" fields={ep.request || []}
-              onChange={fs => updateFieldList(i, 'request', fs)} />
-            <FieldListEditor label="Response fields" fields={ep.response || []}
-              onChange={fs => updateFieldList(i, 'response', fs)} />
+            {(ep.kind || 'http') === 'http' ? (
+              <>
+                <input className={inputCls} value={ep.path || ''} spellCheck={false}
+                  onChange={e => updateEndpoint(i, { path: e.target.value })} placeholder="/v1/path" />
+                <FieldListEditor label="Request body fields" fields={ep.request || []}
+                  onChange={fs => updateFieldList(i, 'request', fs)} />
+                <FieldListEditor label="Response fields" fields={ep.response || []}
+                  onChange={fs => updateFieldList(i, 'response', fs)} />
+              </>
+            ) : (
+              <>
+                <div className="text-[9px] text-slate-500 font-sans leading-snug">
+                  UI EVENT: a Lua widget calls <span className="font-mono text-fuchsia-300">Glue.{ep.id || 'id'}(payload)</span>;
+                  the payload is type-guarded and forwarded to the MD listener cue <span className="font-mono text-fuchsia-300">On_{ep.id || 'id'}</span> via AddUITriggeredEvent.
+                </div>
+                <FieldListEditor label="Payload fields (type-guarded)" fields={ep.request || []}
+                  onChange={fs => updateFieldList(i, 'request', fs)} />
+              </>
+            )}
           </div>
         ))}
       </div>
