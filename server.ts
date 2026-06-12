@@ -50,7 +50,6 @@ import { generateHttpGlueLua, generateContractMdScript, validateContract, runCon
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
-import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
 import {
@@ -173,8 +172,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/lua-snippets",
   "/agent/cue-lineage-selftest",
   "/agent/log-telemetry-selftest",
-  "/agent/log-file-selftest",
-  "/agent/ui-layout-selftest"
+  "/agent/log-file-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3128,15 +3126,6 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
 // (a required missing dependency, a duplicate id, and two mods patching the same
 // libraries/jobs.xml with an identical selector) and assert each check fires. The real
 // install is conflict-clean, so this is how we prove the positive paths actually work.
-// Tier 2 / T1.1 — UI layout-descriptor engine self-test.
-app.get("/api/agent/ui-layout-selftest", (_req, res) => {
-  try {
-    res.json(runUILayoutSelftest());
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "ui-layout-selftest failed" });
-  }
-});
-
 // Tier 2 / T3.3 — read/tail an X4 debug-log file and parse it into cue telemetry.
 function readAndParseLogFile(filePath: string, cueNames: string[], maxBytes = 262144) {
   const stat = fs.statSync(filePath);

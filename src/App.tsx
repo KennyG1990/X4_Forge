@@ -29,8 +29,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Settings as SettingsGear,
-  Plug,
-  LayoutGrid
+  Plug
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -46,7 +45,6 @@ import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
 import ContractEditor from './components/ContractEditor';
-import UILayoutCanvas from './components/UILayoutCanvas';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
@@ -158,7 +156,7 @@ export default function App() {
     })();
   }, [loadSchemaLibrary]);
 
-  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'uilayout' | 'translation' | 'wiki'>('blueprint');
+  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki'>('blueprint');
   const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference'>('script');
 
   // Diagnostics / Mod Doctor states moved to App level to share across Sidebar/CodePreview
@@ -852,18 +850,6 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => { setWorkspaceView('uilayout'); setActiveSidebarTab('config'); }}
-            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              workspaceView === 'uilayout'
-                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
-                : 'text-slate-400 hover:text-white border border-transparent'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            UI Layout
-          </button>
-
-          <button
             onClick={() => { setWorkspaceView('translation'); setActiveSidebarTab('config'); }}
             className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
               workspaceView === 'translation'
@@ -1110,11 +1096,6 @@ export default function App() {
             />
           ) : workspaceView === 'contracts' ? (
             <ContractEditor
-              workspace={workspace}
-              setWorkspace={setWorkspace}
-            />
-          ) : workspaceView === 'uilayout' ? (
-            <UILayoutCanvas
               workspace={workspace}
               setWorkspace={setWorkspace}
             />

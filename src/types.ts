@@ -5,7 +5,6 @@
 
 import { schemaElementToTemplate, type SchemaElement } from './lib/schemaTypes';
 import type { IntegrationContract } from './lib/contractGlue';
-import type { UILayoutDescriptor } from './lib/uiLayout';
 
 // Node port representation
 export interface Port {
@@ -207,8 +206,6 @@ export interface ModWorkspace {
   integrationContract?: IntegrationContract;
   /** Lever 3: a single freely-editable custom Lua buffer, packaged as ui/<id>_custom.lua. */
   customLua?: string;
-  /** T1: WYSIWYG grid UI layout descriptor, packaged as ui/<id>_layout.lua. */
-  uiLayout?: UILayoutDescriptor;
 }
 
 export interface PassthroughFile {
@@ -1500,7 +1497,6 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
         }
       : undefined,
     customLua: typeof ws.customLua === 'string' ? ws.customLua : undefined,
-    uiLayout: ws.uiLayout && typeof ws.uiLayout === 'object' ? ws.uiLayout : undefined,
     passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
       .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
       .map((f: any) => ({
