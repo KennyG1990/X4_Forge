@@ -1,6 +1,6 @@
 # X4 Mod Studio — Prototype Validation Roadmap
 
-**Status:** Active · **Phase:** correctness done → ergonomics + in-game capstone · **Read [Current State](#current-state) first.** Everything below the *Archive* divider is append-only history kept for the audit trail; where it conflicts with Current State, Current State wins.
+**Status:** Active · **Phase:** all capability tiers built (1–4, 37 passes) → code review / quality hardening → C2 in-game capstone · **Read [Current State](#current-state) first.** Everything below the *Archive* divider is append-only history kept for the audit trail; where it conflicts with Current State, Current State wins.
 
 ---
 
@@ -23,25 +23,31 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
-*Authoritative snapshot — updated 2026-06-11 (9th pass). This is the one place to read for where the project is and where it's going. The dated changelogs in the Archive below are the verification record; where they conflict with this section, this section is correct.*
+*Authoritative snapshot — updated 2026-06-12 (37th pass, end of the Tier 4 build sessions). This is the one place to read for where the project is and where it's going. The dated changelogs in the Archive below are the verification record; where they conflict with this section, this section is correct.*
 
-**Where we are.** The correctness backend is built and proven. The project has moved from *"can it work / is it correct?"* to *"is it ergonomic, and can a **new** non-trivial mod be built start-to-finish and proven in-game?"*
+**Where we are.** **All planned capability work is built.** Every tier on this roadmap — the correctness backend, the ergonomics levers (1–3), Tier 2 visual analysis (T2 cue lineage, T3 log telemetry), the T1 layout bridge, and the Tier 4 ecosystem levers (override visualizer, zero-extraction vanilla access, diff-to-patch, Lua↔MD connector) — is shipped, selftest-covered, and browser-verified. The project's phase has shifted from *building capability* to *hardening it*: the agreed next step is a **code review + linting/quality pass** (queue prepared in `HANDOFF.md`), followed by the human-gated in-game capstone.
 
 **Milestones**
-- **M0 — Foundation gate: CLEARED.** API binds `127.0.0.1`, CORS locked, per-session token auth, env provider-keys gated to app-origin requests, honest success messages (real post-validation counts + surfaced self-heal errors).
+- **M0 — Foundation gate: CLEARED.** API binds `127.0.0.1`, CORS locked, per-session token auth, env provider-keys gated to app-origin requests, honest success messages.
 - **M1 — Loop closes once: DONE** (user-confirmed in-game). Author → compile → package → deploy to `extensions/` → loads and runs.
-- **M2 — Loop trustworthy: LARGELY DONE.** Round-trip lossless, `md-audit` 0 findings, XSD + semantic reference validation (macros/wares/factions/time-format), patch diagnostics. Residual: round-trip *editability* breadth (wares/jobs/aiscripts are preserved passthrough, not yet editable graphs).
-- **M3 — Prototype validated: OPEN — the capstone.** Gated on **C2**: a new non-trivial mod built entirely in-studio, run in X4, documented. Human-in-the-loop.
+- **M2 — Loop trustworthy: DONE in depth, one residual.** Round-trip lossless, `md-audit` 0, XSD + semantic reference validation, patch diagnostics, format oracles for every engine. Residual: round-trip *editability* breadth (wares/jobs/aiscripts import as preserved passthrough, not yet editable graphs).
+- **M3 — Prototype validated: OPEN — the capstone.** Gated on **C2**: a new non-trivial mod built entirely in-studio, run in X4, documented. Human-in-the-loop. This is the last milestone and it is deliberately not automatable.
 
-**Done & verified** (selftest oracles all green at last check: `/api/agent/selftest` 10/10 · `extension-doctor-selftest` 11 checks · `round-trip-selftest` lossless · `md-audit` 0 · `db-selftest` pass + live parity). Highlights: deadair-scale mods (1,294 nodes) load without freezing; Extension Doctor complete (missing deps, duplicate ids, full-file + diff-selector + XPath-level overlap, load-order winner simulation, click-through UI); SQLite cache live (cold boot **230 ms** vs **2,156 ms** full decode); aiscript-naming collision fixed at the compiler; dev-server split (backend edits don't reload the page); repo hygiene committed (`a5e070e`).
+**What the program does today** (each area selftest-backed; battery at the 37th pass: main 10/10 · override-map 11/11 · catdat 12/12 · xpath-synth 12/12 · contract 24/24 · extension-doctor pass · round-trip lossless · ui-layout 19/19 · ui-widget-validate 9/9 · cue-lineage 17/17 · log-telemetry 17/17 · md-audit 0 · db-selftest pass):
+- **Authoring.** Visual node canvas for the **full `md.xsd` vocabulary** (~1,478 schema-driven elements with real attributes — Lever 1), reference fields as live typed pickers backed by the installed game's object index (694 ships / 8.6k macros / 1.9k wares / 33 factions from packed archives) so invalid references can't be typed; wares/jobs/t-files/aiscripts/XML-patch editors; HUD & Lua UI designer with a snap-grid layout bridge (free-form designer → engine-correct responsive grid descriptor, T1.1–T1.2); vetted Lua snippet library; editable persisted custom-Lua buffer.
+- **Correctness.** Real XSD validation (md + aiscripts), semantic reference + time-format validation, package diagnostics with click-to-navigate, structural cue-lineage analysis with a red broken-lineage tree (T2), honest success reporting throughout.
+- **Vanilla access (T4.1).** Zero-extraction reads of the game's `.cat/.dat` archives — positioned reads, gzip/zlib `.pck` decompression with graceful fallback, `.pck` alias resolution — feeding the object index, base-content resolution, and pickers; SQLite-cached (cold boot 230 ms vs 2.2 s).
+- **Ecosystem safety (T4.4 + Extension Doctor).** Whole-install scan: missing deps, duplicate ids, folder/id mismatches, full-file + selector + XPath-level cross-mod conflicts with load-order winner simulation, per-element **override drill-down** (who rewrites what, who wins) from real node identity against resolved vanilla.
+- **Patch tooling (T4.2).** Diff→Patch twin-pane: edit a copy of any vanilla file (loose or packed), the studio synthesizes the **minimal standard `<diff>`** with id/name-anchored selectors (positional fallback warns), proven by re-application, adoptable directly as workspace patch blocks (attribute-level ops included).
+- **Integration (Levers 2–3 + T4.3).** First-class X4↔external HTTP/JSON contract: validated model, generated glue Lua (async callbacks, required-field guards, response-shape checks) + matching MD cue scaffolds, packaged into the build; **`ui_event` endpoints** bridge in-game Lua widgets → MD cues with type-guarded payloads (no third glue system — one contract seam for both).
+- **Debugging (T3).** X4 log parsing with deterministic cue correlation, bound to the cue tree (fired cues glow, error cues go red), plus backend live log-file tail.
+- **Platform.** Deadair-scale mods (1,294 nodes / 868 KB MD) load without freezing; split dev servers (backend edits don't reload the page); GitHub integration (device-flow OAuth, real commit log, AI diff summaries); agent API with concurrency control, dry-run, and 20+ public read-only selftest/diagnostic GETs; snapshots/version history; security gates (M0).
 
-**Forward plan** (ranked by leverage toward the North Star — next code move is Tier 1):
-1. **Ergonomics — object-index-backed editor dropdowns — DELIVERED** (11th–14th passes; only the SQLite read-flip remains, deferred/low-value). Free-text reference fields are now searchable typed pickers backed by the live index, so an invalid reference *can't be typed*: `create_ship`/`create_station` macro + faction, `reward_player` faction, Wares & Jobs job faction, ware production inputs, and the XML-patch target file. Highest leverage — makes the trustworthy backend *felt* on every node. (Report pains #1/#2.)
-2. **Distribution & update safety — P-B → P-C → P-D.** content.xml `<dependency>` metadata + resolve-check (P-B, the prerequisite) → mod profiles / modset switching (P-C) → update-audit scan, "re-validate my mod against the current game version" (P-D). (Pains #8/#3.)
-3. **IDE breadth — round-trip parsers + reference layer.** Editable wares/jobs/aiscripts parsing; flip reference-validation / Extension-Doctor reads to SQLite; P-E in-app searchable scriptproperties/MD-action reference + hover docs + quickstart gallery. (Pains #1/#2/#4.)
-4. **Capstone — C2 in-game verification (human).** Build a new non-trivial mod in-studio, deploy, confirm it runs in X4 with zero hand-editing, document it → validates M3.
-
-Smaller carried items: demote/collapse the chatty `ext.folder_id_mismatch` infos in the UI. (Analyze-latency UX is already handled: 120s timeout + Cancel.)
+**Forward plan** (ranked; 1 is the agreed next step):
+1. **Code review + lint/quality pass (NEXT — directive from Ken, 2026-06-12).** Queue with carry-forward findings is in `HANDOFF.md`: unify the duplicate diff compilers (caused a real bug this session), escape selectors in the component compiler, merge the near-duplicate element-path builders (`overrideMap`/`xpathSynth`), add ESLint + tighten endpoint typing, decide the CRLF/`.gitattributes` question (needs Ken's sign-off), clear the ui_event editor rough edge.
+2. **C2 capstone — in-game verification (human).** Build a new non-trivial mod start-to-finish in-studio, deploy, confirm it runs in X4 with zero hand-editing, document it → validates M3. The studio side is ready; this needs Ken and a running game.
+3. **T1.3 — runtime ftable loader Lua** (turn the validated grid descriptor into real in-game widget construction). Deliberately gated behind C2-style in-game verification — the fabrication-prone half of UI codegen.
+4. **Deferred backlog** (each documented where it was deferred): T4.3 canvas cross-domain arrow (alternate entry point to the shipped ui_event generator); SQLite content cache for extracted vanilla files (perf-only); flip reference-validation/Extension-Doctor reads to SQLite; round-trip editability breadth (editable wares/jobs/aiscripts graphs — the M2 residual); distribution safety P-B→P-C→P-D (dependency metadata → mod profiles → update audit); P-E in-app scriptproperties/MD reference docs; demote the chatty `ext.folder_id_mismatch` infos.
 
 **Environment (still true — read before editing).** Split dev servers: Vite on **3000** (UI/HMR, browser-facing), API on **3001** (`tsx watch`, `API_ONLY=true`). Editing `server.ts`/`src/lib/*` restarts only the API (~2-3s `/api` 503 gap); the page does **not** reload; frontend edits are pure HMR. **Verify in the browser + selftest endpoints, not bash `tsc`/node** — the bash sandbox is a stale mirror and can't run the Windows-native `node_modules`; host Read/Edit/Write are live. The AI-editing pipeline has truncated component files before — re-verify in-browser right after any large component edit.
 
@@ -865,18 +871,4 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 
 ---
 
-## Community pain-point alignment — diff vs. the deep-research report (2026-06-11)
-
-Source: `deep-research-report.md` (Codex) — a qualitative review of the biggest recurring X4 modding pain points, ranked into ten issues. Its thesis: *"X4 is moddable, but too much of the real workflow is pieced together from forum archaeology, extracted schemas, Discord help, and community APIs,"* with ~three-quarters of friction in three buckets: docs/discoverability, update-driven breakage, and missing first-party tooling/diagnostics.
-
-That thesis is precisely the studio's reason to exist — collapse that scattered workflow into one app. The diff below grades each documented pain against what the studio does **today** and converts the gaps into an in-scope buildlist. Verdict up front: **the studio can meaningfully address 6 of the 10 pains (plus a 7th partially); 3 are engine/asset-pipeline problems only Egosoft can own.**
-
-### Diff table
-
-| # | Report pain point (prevalence) | Studio coverage today | Gap → what we can achieve |
-|---|---|---|---|
-| 1 | Fragmented docs / discoverability (High) | **Partial** — Local Object Browser (real cat/dat index: 694 ships, 33 factions, 1950 wares, 3783 sounds), schema-derived node templates, in-app XSD element/attr/enum surfacing, Wiki/Codex tab | Productize an in-app **searchable reference**: scriptproperties / MD-action / XSD symbol search + hover docs on every node & field + task-based quickstart gallery. Directly kills "unpack the XSD and read the comments." |
-| 2 | XML/MD/XPath/Lua hard to learn (High) | **Strong (core)** — visual node-based MD authoring (no hand-written XML), 8-domain compilers, XSD-backed validation, XPath match-counting in the patch builder | Already the headline win. Extend: more templates, finish schema-valid generators, object-index-backed **typed pickers** instead of free-text fields. |
-| 3 | Major updates break mods (High) | **Partial** — validation runs against the *installed* game's XSD + object index, so references that no longer exist are catchable | Add an **"update audit"**: re-scan a mod against the current install and flag now-dangling references (removed macros/wares/factions) as a migration checklist. (Machine-readable breakage notes themselves are Egosoft's job.) |
-| 4 | UI modding unstable / conflict-prone (High) | **Weak** — packages X4-correct `ui.xml` + Lua entry point; the engine-level hook layer is Egosoft-only | **Partial only:** generate UI that uses the community **UI-callback pattern** (interop-friendly) instead of whole-function Lua overrides, and flag whole-function overrides as a conflict risk. The real fix (first-party callback layer) is out of our hands. |
-| 5 | Debugging / logging / conflict diagnosis weak (High) | **Strong (single-mod)** — Mod Doctor (XSD + reference + semantic checks with file+line+sourceRef), live `debuglog` parsing → sourceRef mapping, patch diagnostics | **Biggest new opportunity.** Extend from one mod to a cross-mod **Extension Docto
+## Community pain-point alignment — diff vs. the deep
