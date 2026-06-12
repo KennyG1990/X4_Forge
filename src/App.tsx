@@ -221,6 +221,18 @@ export default function App() {
   const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
   const [selectedWidget, setSelectedWidget] = useState<UIWidget | null>(null);
 
+  // Selection hygiene: undo/redo (or any workspace replacement) can remove the
+  // entity a panel has selected; clear dangling selections so inspectors and
+  // the dependency graph never show a deleted node/widget (verification find).
+  useEffect(() => {
+    if (selectedNode && !workspace.nodes.some(n => n.id === selectedNode.id)) {
+      setSelectedNode(null);
+    }
+    if (selectedWidget && !(workspace.uiWidgets || []).some(w => w.id === selectedWidget.id)) {
+      setSelectedWidget(null);
+    }
+  }, [workspace, selectedNode, selectedWidget]);
+
   const [localVersion, setLocalVersion] = useState<number>(1);
   const [isAgentBridgeOpen, setIsAgentBridgeOpen] = useState<boolean>(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);

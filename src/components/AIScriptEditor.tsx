@@ -537,16 +537,20 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
                         <Bot className="w-3.5 h-3.5 opacity-60" />
                         {s.name}
                       </span>
-                      <button
+                      {/* span, not button: a <button> may not nest inside a <button> (invalid HTML / React hydration warning) */}
+                      <span
+                        role="button"
+                        tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleInstantiateTemplate(s);
                         }}
-                        className="p-1 text-amber-400 opacity-0 group-hover/preset:opacity-100 hover:bg-amber-500/10 rounded transition-all cursor-pointer text-[9px] font-bold"
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleInstantiateTemplate(s); } }}
+                        className="p-1 text-amber-400 opacity-0 group-hover/preset:opacity-100 hover:bg-amber-500/10 rounded transition-all cursor-pointer text-[9px] font-bold inline-flex"
                         title="Instantiate template into mod project"
                       >
                         <Plus className="w-3 h-3" />
-                      </button>
+                      </span>
                     </button>
                   </div>
                 );
