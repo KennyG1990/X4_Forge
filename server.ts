@@ -52,6 +52,7 @@ import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
+import { analyzeOverrides, runOverrideMapSelftest } from "./src/lib/overrideMap";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
 import {
@@ -176,7 +177,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
-  "/agent/ui-layout-selftest"
+  "/agent/ui-layout-selftest",
+  "/agent/override-map-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3123,6 +3125,70 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
     return res.json({ success: true, extensionsRoot: extRoot, ...runExtensionDoctor(extRoot, { resolveBaseContent }) });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "extension-doctor scan failed" });
+  }
+});
+
+// T4.4 Override Visualizer (Inc 1) — per-element drill-down on a contested base
+// file: who rewrites what, who wins. EXTENDS the Extension Doctor (same record
+// shape + its simulated load order); the analysis engine is src/lib/overrideMap.ts.
+app.get("/api/agent/override-map", (req, res) => {
+  try {
+    const targetFile = String(req.query.file || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (!targetFile || targetFile.includes(":") || targetFile.split("/").includes("..")) {
+      return res.status(400).json({ error: "Provide ?file=<base-relative xml path>, e.g. libraries/jobs.xml" });
+    }
+    const resolved = resolveXsdConfig();
+    const extRoot = resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "";
+    if (!extRoot || !fs.existsSync(extRoot)) {
+      return res.status(400).json({ error: "X4 extensions folder not found. Set the X4 game path in Settings." });
+    }
+    // Targeted record collection: same enabled / ego_* / diff-selector rules as the
+    // Doctor's pathMap, but checking only the requested rel path in each extension.
+    const records: { folder: string; isDiff: boolean; selectors: { op: string; sel: string }[] }[] = [];
+    for (const folder of fs.readdirSync(extRoot)) {
+      const absDir = path.join(extRoot, folder);
+      const contentPath = path.join(absDir, "content.xml");
+      try { if (!fs.statSync(absDir).isDirectory() || !fs.existsSync(contentPath)) continue; } catch { continue; }
+      let cxml = "";
+      try { cxml = fs.readFileSync(contentPath, "utf8"); } catch { continue; }
+      const id = cxml.match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || folder;
+      if (/^ego_/i.test(id)) continue;
+      const enabledAttr = cxml.match(/<content\b[^>]*\benabled\s*=\s*"([^"]+)"/i)?.[1];
+      if (enabledAttr === "0" || enabledAttr === "false") continue;
+      const filePath = path.join(absDir, targetFile);
+      if (!fs.existsSync(filePath)) continue;
+      let xml = "";
+      try { xml = fs.readFileSync(filePath, "utf8"); } catch { continue; }
+      const isDiff = /<diff[\s>]/.test(xml);
+      const selectors = isDiff
+        ? [...xml.matchAll(/<(add|replace|remove)\b[^>]*\bsel\s*=\s*"([^"]+)"/gi)].map(mm => ({ op: mm[1].toLowerCase(), sel: mm[2] }))
+        : [];
+      records.push({ folder, isDiff, selectors });
+    }
+    // Load order from the Doctor (cheap pass — no base resolution, no xpath evals).
+    const { loadOrder } = runExtensionDoctor(extRoot);
+    // Vanilla content: loose game file first, then the packed .cat/.dat archives.
+    let baseContent: string | null = null;
+    try {
+      const loose = path.join(resolved.x4GamePath!, targetFile);
+      if (fs.existsSync(loose) && fs.statSync(loose).isFile()) {
+        baseContent = fs.readFileSync(loose, "utf8");
+      } else {
+        const packed = catDatExtractBaseGameFile(resolved.x4GamePath!, targetFile);
+        if (packed) baseContent = packed.text;
+      }
+    } catch { baseContent = null; }
+    return res.json({ success: true, ...analyzeOverrides({ targetFile, records, loadOrder, baseContent }) });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "override-map failed" });
+  }
+});
+
+app.get("/api/agent/override-map-selftest", (_req, res) => {
+  try {
+    return res.json(runOverrideMapSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "override-map-selftest failed" });
   }
 });
 

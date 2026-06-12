@@ -14,7 +14,7 @@ Context for the next coding agent. This captures a review pass + a compiler/dire
 - **Tier 4 scoped into ROADMAP** (4 levers + per-lever increments + build order). Not built — that's your job.
 
 ### Your queue (ranked — full detail in ROADMAP "T4 — concrete increments")
-1. **T4.4 Override Visualizer — START HERE.** Cheapest, highest infra-reuse: it extends the existing `runExtensionDoctor` in `server.ts` (already does shared-path collision + load-order sim) with a per-element "who rewrites what, who wins" drill-down. Real test data is already on disk: the mounted 34-mod `extensions/` folder. Inc 1 = `src/lib/overrideMap.ts` engine + `run*Selftest()` + public GET; Inc 2 = drill-down panel in `PackageModDoctor.tsx`.
+1. **T4.4 Override Visualizer — Inc 1 DONE (35th pass), Inc 2 next.** Inc 1 shipped & browser-verified: `src/lib/overrideMap.ts` engine (per-element claims + load-order winner, base-resolution via xpath/@xmldom with honest string fallback), `runOverrideMapSelftest()` 11/11, public `GET /api/agent/override-map-selftest`, authed `GET /api/agent/override-map?file=` — verified against the real 34-mod folder (deadair full-file collision reproduced; `libraries/jobs.xml` resolved from packed vanilla). **Inc 2 = drill-down panel in `PackageModDoctor.tsx`**: click a collision finding → fetch `/api/agent/override-map?file=<finding.filePath>` → render entries (node, claims, contested/merged, winner) in the existing modal/chip style.
 2. **T4.1 Zero-extraction VFS — keystone, SPIKE FIRST.** Node `.cat`/`.dat` reader (+ PCK/zlib decompress) → SQLite cache (`src/lib/db.ts`) → VFS-backed pickers. **Do Inc 0 only** (parse one cat, extract+decompress one entry against a tiny committed synthetic fixture, public GET selftest) and **stop to confirm the round-trip before any UI.** The game root with the real `.cat` files is one level above the mounted `extensions/` folder (`G:\SteamLibrary\steamapps\common\X4 Foundations`). Format is community-documented, not an Egosoft contract — version the reader defensively.
 3. **T4.2 Diff-to-Patch — needs T4.1.** `src/lib/xpathSynth.ts`: tree-diff → minimal `<diff>` ops, prefer id/name selectors over positional `[n]`; selftest must re-apply the generated patch to vanilla and reproduce the edit. Then a twin-pane UI on the existing XML Patching domain.
 4. **T4.3 Lua↔MD connector — independent, extends `contractGlue`.** Add a `ui_event` endpoint kind to `src/lib/contractGlue.ts` (raise-event Lua + `event_ui_triggered` listener-cue scaffold). **Do NOT build a third glue system** — point the existing contract generator at the UI-widget→cue case.
@@ -165,10 +165,4 @@ Tested live against the running app + the app's own loaded `md.xsd` (398 events 
 8. **Load `aiscripts.xsd`** into the schema library so AI scripts get validated; fix `<param>`/`<interrupts>` structure.
 9. **Agent API completeness:** route `/compile` + `/generate` + a new `/package` endpoint through the shared `modCompiler.ts` so all 7 domains are covered (fixes the drop/omit bugs).
 10. **Round-trip + XSD harness (Track A1/A2):** golden-file import→export→diff tests; validate generated XML against real XSDs.
-11. **Auto-sync vs validation:** `compileAndSaveAll` calls `validatePackageReadiness` which throws on errors (e.g. no cue / no name). With auto-sync on every edit, this can block snapshots mid-edit. Consider letting snapshots write even when the package isn't fully valid.
-
----
-
-## 4. Housekeeping
-- Pre-fix leftovers in the user's game folder: `extensions/md/` and `extensions/aiscripts/` (loose, no `content.xml`) — safe to delete; they're from the old buggy auto-sync path.
-- The real end-to-end on-disk test (link sandbox folder → comp
+11. **Auto-sync vs validation:** `compileAndSaveAll` calls `validatePackageReadiness` which throws on errors (e.g. no cue / no name). With auto-sync on every edit, this can block snapshots mid-edit. Consider letting snapshots write even when the package isn'
