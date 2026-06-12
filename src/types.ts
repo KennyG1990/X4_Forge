@@ -160,6 +160,8 @@ export interface PatchBlock {
   content: string;
   note: string;
   pos?: 'before' | 'after' | 'prepend' | 'append';
+  /** Attribute-level add ('@name'): compiles to <add sel="..." type="@name">value</add>. */
+  attrType?: string;
   targetFile?: string;
   includeInBuild?: boolean;
 }

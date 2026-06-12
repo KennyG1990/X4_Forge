@@ -220,6 +220,12 @@ export const compileDiffDocument = (patches: any[], targetFile: string): string 
     }
     if (b.action === 'remove') {
       xml += `  <remove sel="${escapeXmlAttr(b.sel)}" />\n\n`;
+    } else if (b.action === 'add' && b.attrType) {
+      // Attribute-level add (T4.2): <add sel="..." type="@attr">value</add>
+      xml += `  <add sel="${escapeXmlAttr(b.sel)}" type="${escapeXmlAttr(b.attrType)}">${escapeXmlText((b.content || '').trim())}</add>\n\n`;
+    } else if (b.action === 'replace' && b.sel.includes('/@')) {
+      // Attribute-value replace: single-line escaped text body
+      xml += `  <replace sel="${escapeXmlAttr(b.sel)}">${escapeXmlText((b.content || '').trim())}</replace>\n\n`;
     } else {
       const posAttr = (b.action === 'add' && b.pos) ? ` pos="${escapeXmlAttr(b.pos)}"` : '';
       xml += `  <${b.action} sel="${escapeXmlAttr(b.sel)}"${posAttr}>\n`;

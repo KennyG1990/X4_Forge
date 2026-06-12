@@ -152,7 +152,64 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
   const [baseFileLoading, setBaseFileLoading] = useState<boolean>(false);
   const [baseFileError, setBaseFileError] = useState<string | null>(null);
   const [isPacked, setIsPacked] = useState<boolean>(false);
-  const [rightPanelTab, setRightPanelTab] = useState<'patch' | 'preview'>('patch');
+  const [rightPanelTab, setRightPanelTab] = useState<'patch' | 'preview' | 'difftool'>('patch');
+
+  // T4.2 Inc 2 — Diff→Patch twin-pane: the user edits a copy of the vanilla
+  // file and the studio synthesizes the minimal <diff> ops via
+  // POST /api/agent/xpath-synth (engine: src/lib/xpathSynth.ts).
+  const [dtEdited, setDtEdited] = useState<string>('');
+  const [dtSeededFor, setDtSeededFor] = useState<string | null>(null);
+  const [dtBusy, setDtBusy] = useState(false);
+  const [dtError, setDtError] = useState<string | null>(null);
+  const [dtResult, setDtResult] = useState<any>(null);
+
+  useEffect(() => {
+    if (baseFileContent && dtSeededFor !== targetFile) {
+      setDtEdited(baseFileContent);
+      setDtSeededFor(targetFile);
+      setDtResult(null);
+      setDtError(null);
+    }
+  }, [baseFileContent, targetFile, dtSeededFor]);
+
+  const runDiffToPatch = async () => {
+    if (!baseFileContent) return;
+    setDtBusy(true);
+    setDtError(null);
+    setDtResult(null);
+    try {
+      const res = await fetch('/api/agent/xpath-synth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vanillaXml: baseFileContent, editedXml: dtEdited, targetFile })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Synthesis failed (${res.status})`);
+      setDtResult(data);
+    } catch (err: any) {
+      setDtError(err.message || 'Patch synthesis failed.');
+    } finally {
+      setDtBusy(false);
+    }
+  };
+
+  const adoptSynthesizedOps = () => {
+    if (!dtResult?.ops?.length) return;
+    const stamp = Date.now();
+    const blocks = dtResult.ops.map((op: any, i: number) => ({
+      id: `dt_${stamp}_${i}`,
+      sel: op.sel,
+      action: op.type,
+      content: op.content || '',
+      note: 'Diff→Patch synthesized',
+      pos: op.pos === 'before' ? ('before' as const) : undefined,
+      attrType: op.attrType || undefined,
+      targetFile
+    }));
+    setWorkspace(prev => ({ ...prev, xmlPatches: [...(prev.xmlPatches || []), ...blocks] }));
+    setDtResult(null);
+    setRightPanelTab('patch');
+  };
 
   useEffect(() => {
     if (!targetFile) return;
@@ -676,6 +733,12 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
       xml += `  <!-- ${b.note} -->\n`;
       if (b.action === 'remove') {
         xml += `  <remove sel="${b.sel}" />\n\n`;
+      } else if (b.action === 'add' && b.attrType) {
+        // Attribute-level add (T4.2): single-line <add sel type="@attr">value</add>
+        xml += `  <add sel="${b.sel}" type="${b.attrType}">${(b.content || '').trim()}</add>\n\n`;
+      } else if (b.action === 'replace' && b.sel.includes('/@')) {
+        // Attribute-value replace: single-line text body
+        xml += `  <replace sel="${b.sel}">${(b.content || '').trim()}</replace>\n\n`;
       } else {
         const posAttr = (b.action === 'add' && b.pos) ? ` pos="${b.pos}"` : '';
         xml += `  <${b.action} sel="${b.sel}"${posAttr}>\n`;
@@ -1273,6 +1336,12 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
               >
                 Applied Preview
               </button>
+              <button
+                onClick={() => setRightPanelTab('difftool')}
+                className={`px-2.5 py-1 text-[9.5px] font-mono font-bold uppercase rounded ${rightPanelTab === 'difftool' ? 'bg-fuchsia-500 text-black' : 'text-slate-400 hover:text-slate-200'} cursor-pointer transition-all`}
+              >
+                Diff→Patch
+              </button>
             </div>
             
             <button
@@ -1283,7 +1352,60 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
             </button>
           </div>
 
-          {rightPanelTab === 'patch' ? (
+          {rightPanelTab === 'difftool' ? (
+            <div className="flex-1 flex flex-col gap-2 min-h-0">
+              <div className="text-[9px] uppercase tracking-wide text-slate-500 font-bold shrink-0">
+                Edit a copy of {targetFile} — the studio computes the minimal patch
+              </div>
+              <textarea
+                value={dtEdited}
+                onChange={e => setDtEdited(e.target.value)}
+                spellCheck={false}
+                disabled={!baseFileContent}
+                placeholder={baseFileLoading ? 'Loading vanilla content…' : (baseFileError || 'No vanilla content available for this target.')}
+                className="flex-1 bg-black/50 border border-white/10 rounded-lg p-2 font-mono text-[10px] text-slate-300 resize-none focus:outline-none focus:border-fuchsia-500/50 custom-scrollbar min-h-0"
+              />
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={runDiffToPatch}
+                  disabled={dtBusy || !baseFileContent}
+                  className="flex-1 px-2.5 py-1.5 rounded bg-fuchsia-500/15 hover:bg-fuchsia-500/25 font-bold uppercase text-[9.5px] border border-fuchsia-500/30 text-fuchsia-300 cursor-pointer transition-all disabled:opacity-50"
+                >
+                  {dtBusy ? 'Synthesizing…' : 'Synthesize Patch'}
+                </button>
+                <button
+                  onClick={() => { setDtEdited(baseFileContent || ''); setDtResult(null); setDtError(null); }}
+                  disabled={!baseFileContent}
+                  className="px-2.5 py-1.5 rounded bg-black/45 hover:bg-black/80 font-bold uppercase text-[9.5px] border border-white/10 text-slate-300 cursor-pointer transition-all disabled:opacity-50"
+                >
+                  Reset
+                </button>
+              </div>
+              {dtError && (
+                <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans shrink-0">{dtError}</div>
+              )}
+              {dtResult && (
+                <div className="shrink-0 max-h-60 overflow-y-auto custom-scrollbar bg-black/50 border border-fuchsia-500/25 rounded-lg p-2 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] font-bold uppercase text-fuchsia-300">
+                      {dtResult.ops.length} op(s){dtResult.warnings?.length ? ` · ${dtResult.warnings.length} warning(s)` : ''}
+                    </span>
+                    <button
+                      onClick={adoptSynthesizedOps}
+                      disabled={!dtResult.ops.length}
+                      className="px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 font-bold uppercase text-[9px] border border-emerald-500/30 text-emerald-300 cursor-pointer transition-all disabled:opacity-50"
+                    >
+                      Add to Workspace
+                    </button>
+                  </div>
+                  {(dtResult.warnings || []).map((w: string, i: number) => (
+                    <div key={i} className="text-amber-300 text-[9px] font-sans leading-snug">⚠ {w}</div>
+                  ))}
+                  <pre className="whitespace-pre-wrap font-mono text-[9.5px] text-slate-300 select-text">{dtResult.diffXml}</pre>
+                </div>
+              )}
+            </div>
+          ) : rightPanelTab === 'patch' ? (
             <div className="flex-1 bg-black/50 rounded-lg p-3 font-mono text-[10.5px] text-slate-400 overflow-y-auto relative custom-scrollbar border border-white/5 leading-normal select-text selection:bg-emerald-500/25">
               <pre className="whitespace-pre">
                 {compileDiffDocument()}
