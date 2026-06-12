@@ -25,6 +25,7 @@ import {
   BadgeAlert
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
+import ObjectIndexPicker from './ObjectIndexPicker';
 
 interface XMLPatchSystemProps {
   workspace: ModWorkspace;
@@ -708,17 +709,15 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
         {/* Target file selectors */}
         <div className="flex items-center gap-2 font-mono text-[11px]">
           <span className="text-slate-500 uppercase font-bold text-[9.5px]">Target File:</span>
-          <select
-            value={targetFile}
-            onChange={(e) => setTargetFile(e.target.value)}
-            className="bg-[#0F1115] border border-white/10 p-1 px-2 rounded text-[10px] text-slate-300 focus:outline-none focus:border-emerald-500 cursor-pointer"
-          >
-            <option value="libraries/ship_macros.xml">libraries/ship_macros.xml (Vessel Stats)</option>
-            <option value="libraries/sound_library.xml">libraries/sound_library.xml (Game SFX & Lists)</option>
-            <option value="libraries/wares.xml">libraries/wares.xml (Wares Override)</option>
-            <option value="libraries/jobs.xml">libraries/jobs.xml (Quota Spawners)</option>
-            <option value="ui/menu_layout_config.xml">ui/menu_layout_config.xml (Interface Anchors)</option>
-          </select>
+          <div className="w-80">
+            <ObjectIndexPicker
+              endpoint="/api/agent/patch-targets"
+              kind="patch-target"
+              value={targetFile}
+              onChange={v => setTargetFile(v)}
+              placeholder="Search real base-game files… (e.g. libraries/wares.xml)"
+            />
+          </div>
         </div>
       </div>
 

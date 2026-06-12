@@ -379,7 +379,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     propertiesSchema: [
       { key: 'name', label: 'Variable Name', type: 'text', placeholder: '$SpawnedShip' },
       { key: 'macro', label: 'Ship Class Macro', type: 'reference', refKind: 'ship', placeholder: 'Search ship macros… or type a variable', description: 'Searchable against the real installed game index (ships + DLC).' },
-      { key: 'faction', label: 'Owner Faction', type: 'select', options: X4_FACTIONS },
+      { key: 'faction', label: 'Owner Faction', type: 'reference', refKind: 'faction', placeholder: 'Search factions… (stores the short code)', description: 'All factions from the installed game + DLC. Stored as the short code (e.g. argon); the compiler emits faction.argon.' },
       { key: 'sector', label: 'Sector / Spawn Zone', type: 'text', placeholder: 'player.sector' },
       { key: 'coords', label: 'Relative Coordinates (X,Y,Z)', type: 'coordinates', placeholder: '0,0,1000' }
     ],
@@ -404,7 +404,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
       { key: 'money', label: 'Credits Reward', type: 'number', placeholder: '250000' },
       { key: 'notification', label: 'Display Notification', type: 'select', options: ['true', 'false'] },
       { key: 'standing', label: 'Faction Reputation Change', type: 'text', placeholder: '0.05 (Scale -1.0 to 1.0)' },
-      { key: 'faction', label: 'Reputation Faction', type: 'select', options: X4_FACTIONS }
+      { key: 'faction', label: 'Reputation Faction', type: 'reference', refKind: 'faction', placeholder: 'Search factions… (stores the short code)', description: 'All factions from the installed game + DLC. Stored as the short code (e.g. argon).' }
     ],
     inputs: [
       { id: 'in_act', name: 'Action In', type: 'child' }
@@ -465,7 +465,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     propertiesSchema: [
       { key: 'name', label: 'Station Entity Target', type: 'text', placeholder: '$MyStation' },
       { key: 'macro', label: 'Station Design Macro', type: 'reference', refKind: 'station', placeholder: 'Search station macros… or type a variable', description: 'Searchable against the real installed game index (stations + DLC).' },
-      { key: 'faction', label: 'Owner Faction', type: 'select', options: X4_FACTIONS },
+      { key: 'faction', label: 'Owner Faction', type: 'reference', refKind: 'faction', placeholder: 'Search factions… (stores the short code)', description: 'All factions from the installed game + DLC. Stored as the short code (e.g. argon); the compiler emits faction.argon.' },
       { key: 'sector', label: 'Spawn Sector', type: 'text', placeholder: 'player.sector' },
       { key: 'coords', label: 'Coordinates (X,Y,Z)', type: 'coordinates', placeholder: '10000, 0, -5000' }
     ],

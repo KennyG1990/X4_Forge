@@ -19,6 +19,16 @@ interface ObjectIndexPickerProps {
   /** Which object-index kind to search (ship/station/ware/faction/sound/job/macro). */
   kind: string;
   placeholder?: string;
+  /**
+   * Optional prefix to strip from an index id before storing/displaying it. E.g. factions
+   * are indexed as `faction.argon` but the MD compiler stores the short code `argon` (it
+   * emits `faction.${code}`). With stripPrefix="faction." the picker offers all real
+   * factions yet stores the value the compiler expects.
+   */
+  stripPrefix?: string;
+  /** API endpoint to query (default the object index). Must return `{ items: [{id,name}] }`
+   *  and accept `?kind=&q=&limit=`. Used to reuse this picker for e.g. patch targets. */
+  endpoint?: string;
 }
 
 /**
@@ -27,7 +37,8 @@ interface ObjectIndexPickerProps {
  * real id (a wrong reference can't be typed by accident) but free text is still allowed
  * so MD variables like `$ship` / `player.ship` remain valid entries.
  */
-export default function ObjectIndexPicker({ value, onChange, kind, placeholder }: ObjectIndexPickerProps) {
+export default function ObjectIndexPicker({ value, onChange, kind, placeholder, stripPrefix, endpoint = '/api/agent/object-index' }: ObjectIndexPickerProps) {
+  const strip = (id: string) => (stripPrefix && id.startsWith(stripPrefix) ? id.slice(stripPrefix.length) : id);
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<IndexItem[]>([]);
   const [open, setOpen] = useState(false);
@@ -42,7 +53,7 @@ export default function ObjectIndexPicker({ value, onChange, kind, placeholder }
       setLoading(true);
       try {
         const res = await fetch(
-          `/api/agent/object-index?kind=${encodeURIComponent(kind)}&q=${encodeURIComponent(query.trim())}&limit=25`
+          `${endpoint}?kind=${encodeURIComponent(kind)}&q=${encodeURIComponent(query.trim())}&limit=25`
         );
         const data = await res.json();
         if (!cancelled) setItems(Array.isArray(data.items) ? data.items : []);
@@ -96,21 +107,24 @@ export default function ObjectIndexPicker({ value, onChange, kind, placeholder }
               No matches in the game index. Free text is allowed (e.g. a variable).
             </div>
           )}
-          {items.map(it => (
-            <button
-              key={it.id}
-              type="button"
-              onMouseDown={e => { e.preventDefault(); pick(it.id); }}
-              className={`w-full text-left px-2 py-1.5 hover:bg-cyan-500/10 border-b border-white/5 last:border-0 ${
-                it.id === value ? 'bg-cyan-500/10' : ''
-              }`}
-            >
-              <span className="block font-mono text-[10.5px] text-cyan-300 truncate">{it.id}</span>
-              {!isTextRef(it.name) && it.name !== it.id && (
-                <span className="block text-[9px] text-slate-500 truncate">{it.name}</span>
-              )}
-            </button>
-          ))}
+          {items.map(it => {
+            const stored = strip(it.id);
+            return (
+              <button
+                key={it.id}
+                type="button"
+                onMouseDown={e => { e.preventDefault(); pick(stored); }}
+                className={`w-full text-left px-2 py-1.5 hover:bg-cyan-500/10 border-b border-white/5 last:border-0 ${
+                  stored === value ? 'bg-cyan-500/10' : ''
+                }`}
+              >
+                <span className="block font-mono text-[10.5px] text-cyan-300 truncate">{stored}</span>
+                {!isTextRef(it.name) && it.name !== it.id && (
+                  <span className="block text-[9px] text-slate-500 truncate">{it.name}</span>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

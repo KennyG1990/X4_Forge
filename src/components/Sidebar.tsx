@@ -1475,6 +1475,7 @@ export default function Sidebar({
                       value={(selectedNode.properties || {})[schema.key] || ''}
                       onChange={v => handlePropChange(schema.key, v)}
                       placeholder={schema.placeholder}
+                      stripPrefix={schema.refKind === 'faction' ? 'faction.' : undefined}
                     />
                   )}
 

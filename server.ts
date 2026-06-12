@@ -42,7 +42,7 @@ import {
 } from "./src/lib/modCompiler";
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
-import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile } from "./src/lib/x4CatDat";
+import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
@@ -2438,6 +2438,47 @@ app.get("/api/agent/object-index", (req, res) => {
     return res.status(500).json({
       error: error.message || "Failed to build X4 object index."
     });
+  }
+});
+
+// Real base-game XML file paths that can be the target of a <diff> patch, enumerated
+// from the packed .cat manifests (so the patch editor only offers files that actually
+// exist — e.g. surfaces that `libraries/ship_macros.xml` is NOT a real base file).
+let patchTargetsCache: { key: string; builtAt: number; paths: string[] } | null = null;
+function listBasePatchTargets(): string[] {
+  const resolved = resolveXsdConfig();
+  if (!resolved.x4GamePath) return [];
+  const key = resolved.x4GamePath;
+  if (patchTargetsCache && patchTargetsCache.key === key && Date.now() - patchTargetsCache.builtAt < 300_000) {
+    return patchTargetsCache.paths;
+  }
+  const set = new Set<string>();
+  try {
+    for (const arc of findCatDatArchives([resolved.x4GamePath])) {
+      let entries;
+      try { entries = parseCat(arc.catPath); } catch { continue; }
+      for (const e of entries) {
+        const name = e.name.replace(/\\/g, "/");
+        const lower = name.toLowerCase();
+        // Realistic patch targets: base library/index/map XML files.
+        if (lower.endsWith(".xml") && /^(libraries|index|maps)\//.test(lower)) set.add(name);
+      }
+    }
+  } catch { /* best effort */ }
+  const paths = [...set].sort();
+  patchTargetsCache = { key, builtAt: Date.now(), paths };
+  return paths;
+}
+
+app.get("/api/agent/patch-targets", (req, res) => {
+  try {
+    const q = (typeof req.query.q === "string" ? req.query.q : "").toLowerCase().trim();
+    const limit = Math.min(Number(req.query.limit) || 25, 100);
+    let paths = listBasePatchTargets();
+    if (q) paths = paths.filter(p => p.toLowerCase().includes(q));
+    return res.json({ success: true, total: paths.length, items: paths.slice(0, limit).map(p => ({ id: p, name: "" })) });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "patch-targets listing failed" });
   }
 });
 

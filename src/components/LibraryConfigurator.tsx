@@ -21,6 +21,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
+import ObjectIndexPicker from './ObjectIndexPicker';
 
 interface LibraryConfiguratorProps {
   workspace: ModWorkspace;
@@ -507,22 +508,21 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
     saveWares(next);
   };
 
-  const serializePrimaryWares = (primaryWares?: WareDef['primaryWares']) => {
-    return (primaryWares || [])
-      .map(entry => `${entry.ware}:${entry.amount}`)
-      .join('\n');
+  // --- Production-input row helpers (ware picker + amount) -----------------
+  const getPrimaryWares = (): NonNullable<WareDef['primaryWares']> =>
+    ((activeItem as WareDef)?.primaryWares || []) as NonNullable<WareDef['primaryWares']>;
+
+  const updatePrimaryWare = (index: number, key: 'ware' | 'amount', val: string | number) => {
+    const next = getPrimaryWares().map((entry, i) => (i === index ? { ...entry, [key]: val } : entry));
+    handleUpdateActiveWareProp('primaryWares', next);
   };
 
-  const parsePrimaryWares = (value: string): WareDef['primaryWares'] => {
-    return value
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .filter(Boolean)
-      .map(line => {
-        const [ware, amount = '1'] = line.split(/[:=,]\s*/);
-        return { ware: ware.trim(), amount: Number(amount) || amount.trim() || 1 };
-      })
-      .filter(entry => entry.ware.length > 0);
+  const addPrimaryWare = () => {
+    handleUpdateActiveWareProp('primaryWares', [...getPrimaryWares(), { ware: '', amount: 1 }]);
+  };
+
+  const removePrimaryWare = (index: number) => {
+    handleUpdateActiveWareProp('primaryWares', getPrimaryWares().filter((_, i) => i !== index));
   };
 
   const handleUpdateActiveJobProp = (key: keyof JobDef, val: any) => {
@@ -1027,15 +1027,53 @@ ${renderWareProduction(item, '    ')}
                       </div>
                     </div>
                     <div>
-                      <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">
-                        Primary Inputs, one per line: ware_id:amount
-                      </label>
-                      <textarea
-                        value={serializePrimaryWares((activeItem as WareDef).primaryWares)}
-                        onChange={e => handleUpdateActiveWareProp('primaryWares', parsePrimaryWares(e.target.value))}
-                        placeholder={'ore:15\nenergycells:40'}
-                        className="w-full p-2 h-16 rounded bg-black border border-white/10 text-emerald-300 focus:outline-none focus:border-cyan-500 transition-colors resize-none font-mono text-[11px]"
-                      />
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-slate-500 text-[8.5px] uppercase font-bold">
+                          Production Inputs (live ware index)
+                        </label>
+                        <button
+                          type="button"
+                          onClick={addPrimaryWare}
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-[9px] font-bold transition-colors"
+                        >
+                          <Plus className="w-2.5 h-2.5" /> Add input
+                        </button>
+                      </div>
+                      <div className="space-y-1.5">
+                        {getPrimaryWares().length === 0 && (
+                          <p className="text-[9px] text-slate-600 italic">
+                            No inputs — produced from nothing (e.g. a raw resource harvested in-field).
+                          </p>
+                        )}
+                        {getPrimaryWares().map((entry, i) => (
+                          <div key={i} className="flex items-center gap-1.5">
+                            <div className="flex-1 min-w-0">
+                              <ObjectIndexPicker
+                                kind="ware"
+                                value={entry.ware}
+                                onChange={v => updatePrimaryWare(i, 'ware', v)}
+                                placeholder="Search ware…"
+                              />
+                            </div>
+                            <input
+                              type="number"
+                              min={1}
+                              value={entry.amount}
+                              onChange={e => updatePrimaryWare(i, 'amount', Number(e.target.value) || e.target.value)}
+                              title="Amount consumed per production cycle"
+                              className="w-20 p-1.5 rounded bg-black border border-white/10 text-emerald-300 text-center font-mono text-[11px] focus:outline-none focus:border-cyan-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removePrimaryWare(i)}
+                              title="Remove input"
+                              className="p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                            >
+                              <Trash className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
@@ -1100,18 +1138,13 @@ ${renderWareProduction(item, '    ')}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Owning Combatant Faction</label>
-                      <select
+                      <ObjectIndexPicker
+                        kind="faction"
+                        stripPrefix="faction."
                         value={(activeItem as JobDef).faction}
-                        onChange={e => handleUpdateActiveJobProp('faction', e.target.value)}
-                        className="w-full p-2 rounded bg-[#0F1115] border border-white/10 text-white cursor-pointer"
-                      >
-                        <option value="argon">Argon Federation</option>
-                        <option value="terran">Terran Protectorate</option>
-                        <option value="xenon">Xenon Incursions AI</option>
-                        <option value="split">Split Patriarchate</option>
-                        <option value="paranid">Holy Order of Pontifex</option>
-                        <option value="yaki">Yaki Raiders</option>
-                      </select>
+                        onChange={v => handleUpdateActiveJobProp('faction', v)}
+                        placeholder="Search factions… (stores the short code)"
+                      />
                     </div>
                     <div>
                       <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Target Flight Code Behavior</label>

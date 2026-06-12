@@ -488,18 +488,37 @@ export default function Canvas({
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const updateSize = () => {
-      if (canvasRef.current) {
-        setViewportSize({
-          width: canvasRef.current.clientWidth,
-          height: canvasRef.current.clientHeight
-        });
+    let raf = 0;
+    // Measure on an animation frame (after layout settles), skip zero-size reads, and only
+    // update state when the size actually changed (avoids redundant re-renders).
+    const measure = () => {
+      const el = canvasRef.current;
+      if (!el) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0 && h > 0) {
+        setViewportSize(prev => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
       }
     };
-    updateSize();
-    const resizeObserver = new ResizeObserver(updateSize);
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
+    scheduleMeasure();
+    // Element-level observer (resizes from sidebar/code-panel drags) ...
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
     resizeObserver.observe(canvasRef.current);
-    return () => resizeObserver.disconnect();
+    // ... plus a window-resize backstop and a deferred re-measure, so opening the app in a
+    // much larger window (or a window resize the element observer is slow to report) always
+    // reflows the canvas/frustum-cull viewport instead of leaving a stale paint.
+    window.addEventListener('resize', scheduleMeasure);
+    const settle = window.setTimeout(scheduleMeasure, 250);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(settle);
+      window.removeEventListener('resize', scheduleMeasure);
+      resizeObserver.disconnect();
+    };
   }, []);
 
   // Visible bounds calculation in virtual coordinates (frustum culling)
