@@ -4,6 +4,7 @@
  */
 
 import { schemaElementToTemplate, type SchemaElement } from './lib/schemaTypes';
+import type { IntegrationContract } from './lib/contractGlue';
 
 // Node port representation
 export interface Port {
@@ -201,6 +202,8 @@ export interface ModWorkspace {
    * generated file already claims that path (the generated file wins).
    */
   passthroughFiles?: PassthroughFile[];
+  /** Lever 2: HTTP integration contract with an external local process (the studio owns the X4-side glue only). */
+  integrationContract?: IntegrationContract;
 }
 
 export interface PassthroughFile {
@@ -1482,6 +1485,15 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       ...tNode,
       includeInBuild: false // Templates must remain non-compilable by definition!
     })),
+    integrationContract: ws.integrationContract && typeof ws.integrationContract === 'object'
+      ? {
+          namespace: String(ws.integrationContract.namespace || ''),
+          baseUrl: String(ws.integrationContract.baseUrl || ''),
+          httpClientExpr: ws.integrationContract.httpClientExpr ? String(ws.integrationContract.httpClientExpr) : undefined,
+          jsonLibExpr: ws.integrationContract.jsonLibExpr ? String(ws.integrationContract.jsonLibExpr) : undefined,
+          endpoints: Array.isArray(ws.integrationContract.endpoints) ? ws.integrationContract.endpoints : []
+        }
+      : undefined,
     passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
       .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
       .map((f: any) => ({

@@ -17,6 +17,7 @@ import {
   Terminal,
   FileCode
 } from 'lucide-react';
+import { LUA_SNIPPETS, fillLuaSnippet } from '../lib/luaSnippets';
 import { UIWidget, ModWorkspace } from '../types';
 
 interface UIBuilderProps {
@@ -37,6 +38,15 @@ export default function UIBuilder({
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [activeUiSubTab, setActiveUiSubTab] = useState<'canvas' | 'lua'>('canvas');
   const [selectedLuaTemplate, setSelectedLuaTemplate] = useState<string>('standard');
+  // Pre-fill vetted-snippet placeholders from the active integration contract, if any.
+  const _contract = workspace.integrationContract;
+  const _ep0 = _contract && _contract.endpoints && _contract.endpoints[0];
+  const snippetValues: Record<string, string> = _contract ? {
+    NS: _contract.namespace || 'myext',
+    EVENT: (_ep0 && _ep0.id) || 'my_event',
+    URL: (_contract.baseUrl || 'http://127.0.0.1:8713') + ((_ep0 && _ep0.path) || '/v1/endpoint'),
+    HTTP_CLIENT: _contract.httpClientExpr || 'require("extensions.sn_mod_support_apis.lua.simple_http")'
+  } : {};
 
   const theme = workspace.uiTheme;
 
@@ -696,6 +706,17 @@ export default function UIBuilder({
                   <div className="text-[9.5px] text-slate-500 font-mono">Custom console print logger loop</div>
                 </button>
               </div>
+
+              <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5">
+                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Vetted X4 patterns (the hard ones, done right)</div>
+                {LUA_SNIPPETS.map(sn => (
+                  <button key={sn.id} type="button" onClick={() => setSelectedLuaTemplate(sn.id)}
+                    className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${selectedLuaTemplate === sn.id ? 'border-cyan-500 bg-cyan-600/10 text-cyan-300' : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'}`}>
+                    <div className="text-[11px] font-bold uppercase">{sn.title}</div>
+                    <div className="text-[9.5px] text-slate-500">{sn.description}</div>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="p-3 bg-cyan-900/15 rounded-md border border-cyan-500/20 text-[10.5px] leading-relaxed text-slate-400 space-y-1.5">
@@ -723,7 +744,9 @@ export default function UIBuilder({
             {/* Compiled code rendering */}
             <div className="flex-1 p-4 overflow-y-auto bg-black/35 font-mono text-[11px] leading-normal selection:bg-cyan-500/25 text-slate-400 select-text">
               <pre className="whitespace-pre">
-                {selectedLuaTemplate === 'standard' ? (
+                {LUA_SNIPPETS.some(sn => sn.id === selectedLuaTemplate) ? (
+                  fillLuaSnippet(selectedLuaTemplate, snippetValues)
+                ) : selectedLuaTemplate === 'standard' ? (
                   `-- X4 foundations Client Interface Controller
 -- Target Path: /ui/addon_menu.lua
 -- Binds widgets defined visually inside HUD Layout Configurator to game actions
@@ -820,7 +843,8 @@ end`
                   const code = selectedLuaTemplate === 'standard' 
                     ? `local menu = { name = "${workspace.name}" }` 
                     : `-- Custom lua addon`;
-                  navigator.clipboard.writeText(code);
+                  const snip = LUA_SNIPPETS.find(sn => sn.id === selectedLuaTemplate);
+                  navigator.clipboard.writeText(snip ? fillLuaSnippet(selectedLuaTemplate, snippetValues) : code);
                   alert("LUA Code template copied!");
                 }}
                 className="hover:text-cyan-400 font-bold uppercase transition-all cursor-pointer"

@@ -4,6 +4,7 @@
  */
 
 import { ModWorkspace, generateMDXML, generateUIXML, generateUIIndexXML, generateUILuaScript, XMLDiagnostic } from '../types';
+import { generateHttpGlueLua, generateContractMdScript, validateContract } from './contractGlue';
 
 export const toSafeModId = (name: string): string => {
   const safe = name
@@ -412,12 +413,25 @@ export const compileAndSaveAll = async (
   // 2. Mission Director (md) script
   const directorDir = await targetDir.getDirectoryHandle('md', { create: true });
   await writeTextFile(directorDir, `${modId}.xml`, generateMDXML(workspace));
+  // Lever 2: MD bridge cues for the HTTP integration contract (paired with ui/<modId>_http.lua).
+  if (workspace.integrationContract && validateContract(workspace.integrationContract).filter(fd => fd.severity === 'error').length === 0) {
+    await writeTextFile(directorDir, `${modId}_http.xml`, generateContractMdScript(workspace.integrationContract, `${modId}_http`));
+  }
 
-  // 3. UI — X4-correct: extension-root ui.xml registering a Lua entry under ui/.
-  if (workspace.uiWidgets?.length) {
-    await writeTextFile(targetDir, 'ui.xml', generateUIIndexXML(workspace, modId));
+  // 3. UI — X4-correct: extension-root ui.xml registering Lua entries under ui/.
+  //    Includes the generated HTTP-integration glue (Lever 2) when a valid contract exists.
+  const contract = workspace.integrationContract;
+  const contractValid = !!contract && validateContract(contract).filter(fd => fd.severity === 'error').length === 0;
+  const hasWidgets = !!workspace.uiWidgets?.length;
+  if (hasWidgets || contractValid) {
+    const uiFiles: string[] = [];
+    if (hasWidgets) uiFiles.push(`ui/${modId}.lua`);
+    if (contractValid) uiFiles.push(`ui/${modId}_http.lua`);
+    const uiIndex = `<?xml version="1.0" encoding="utf-8"?>\n<addon name="${modId}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../ui/core/addon.xsd">\n  <environment type="menus">\n${uiFiles.map(p => `    <file name="${p}" />`).join("\n")}\n  </environment>\n</addon>`;
+    await writeTextFile(targetDir, 'ui.xml', uiIndex);
     const uiDir = await targetDir.getDirectoryHandle('ui', { create: true });
-    await writeTextFile(uiDir, `${modId}.lua`, generateUILuaScript(workspace, modId));
+    if (hasWidgets) await writeTextFile(uiDir, `${modId}.lua`, generateUILuaScript(workspace, modId));
+    if (contractValid) await writeTextFile(uiDir, `${modId}_http.lua`, generateHttpGlueLua(contract!));
   }
 
   // 4. AIScripts behavior trees

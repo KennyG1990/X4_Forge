@@ -46,6 +46,8 @@ import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile,
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
+import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
+import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
 import {
@@ -162,7 +164,10 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/reference-selftest",
   "/agent/type-probe",
   "/agent/selftest",
-  "/agent/db-selftest"
+  "/agent/db-selftest",
+  "/agent/contract-selftest",
+  "/agent/contract-glue-sample",
+  "/agent/lua-snippets"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3116,6 +3121,44 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
 // (a required missing dependency, a duplicate id, and two mods patching the same
 // libraries/jobs.xml with an identical selector) and assert each check fires. The real
 // install is conflict-clean, so this is how we prove the positive paths actually work.
+// Lever 3 — vetted Lua snippet library (the harder X4 patterns) + its self-test.
+app.get("/api/agent/lua-snippets", (_req, res) => {
+  try {
+    res.json({ success: true, snippets: LUA_SNIPPETS, selftest: runLuaSnippetSelftest() });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "lua-snippets failed" });
+  }
+});
+
+// Lever 2 — external-integration / contract seam: validate the X4<->external HTTP/JSON
+// contract and generate the X4-side glue Lua. Read-only public GETs (no secrets, no mutation).
+app.get("/api/agent/contract-selftest", (_req, res) => {
+  try {
+    res.json(runContractGlueSelftest());
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "contract-selftest failed" });
+  }
+});
+
+app.get("/api/agent/contract-glue-sample", (_req, res) => {
+  try {
+    const sample: IntegrationContract = {
+      namespace: "myai",
+      baseUrl: "http://127.0.0.1:8713",
+      endpoints: [
+        { id: "get_status", method: "GET", path: "/v1/status", response: [{ name: "ok", type: "boolean" }] },
+        { id: "send_prompt", method: "POST", path: "/v1/prompt", request: [{ name: "text", type: "string", required: true }], response: [{ name: "reply", type: "string" }] }
+      ]
+    };
+    const findings = validateContract(sample);
+    const lua = generateHttpGlueLua(sample);
+    const mdScript = generateContractMdScript(sample, "mymod_http");
+    res.json({ success: true, contract: sample, findings, lua, mdScript });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "contract-glue-sample failed" });
+  }
+});
+
 app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
   let tmp = "";
   try {
