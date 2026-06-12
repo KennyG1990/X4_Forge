@@ -52,7 +52,7 @@ import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
-import { analyzeOverrides, runOverrideMapSelftest } from "./src/lib/overrideMap";
+import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
@@ -2931,25 +2931,7 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     // Deterministic topological sort with alphabetical tie-break; used to annotate
     // conflict findings with the actual winner (last loaded wins).
     const enabledExts = exts.filter(e => e.enabled);
-    const extByIdLower = new Map(enabledExts.map(e => [e.idLower, e]));
-    const loadOrder: string[] = [];
-    const loVisited = new Set<string>();
-    const loVisiting = new Set<string>();
-    const loVisit = (e: ExtInfo) => {
-      if (loVisited.has(e.folder)) return;
-      if (loVisiting.has(e.folder)) return; // dependency cycle — bail out of the branch
-      loVisiting.add(e.folder);
-      for (const d of [...e.deps].sort((a, b) => a.id.localeCompare(b.id))) {
-        const dep = extByIdLower.get(d.id.toLowerCase());
-        if (dep) loVisit(dep);
-      }
-      loVisiting.delete(e.folder);
-      loVisited.add(e.folder);
-      loadOrder.push(e.folder);
-    };
-    for (const e of [...enabledExts].sort((a, b) => a.folder.toLowerCase().localeCompare(b.folder.toLowerCase()))) {
-      loVisit(e);
-    }
+    const loadOrder = simulateLoadOrder(enabledExts);
     const loadRank = new Map(loadOrder.map((f, i) => [f, i]));
     const orderContested = (mods: string[]) =>
       [...mods].sort((a, b) => (loadRank.get(a) ?? -1) - (loadRank.get(b) ?? -1));
@@ -3148,6 +3130,7 @@ app.get("/api/agent/override-map", (req, res) => {
     // Targeted record collection: same enabled / ego_* / diff-selector rules as the
     // Doctor's pathMap, but checking only the requested rel path in each extension.
     const records: { folder: string; isDiff: boolean; selectors: { op: string; sel: string }[] }[] = [];
+    const extInfos: { folder: string; idLower: string; deps: { id: string }[] }[] = [];
     for (const folder of fs.readdirSync(extRoot)) {
       const absDir = path.join(extRoot, folder);
       const contentPath = path.join(absDir, "content.xml");
@@ -3158,6 +3141,7 @@ app.get("/api/agent/override-map", (req, res) => {
       if (/^ego_/i.test(id)) continue;
       const enabledAttr = cxml.match(/<content\b[^>]*\benabled\s*=\s*"([^"]+)"/i)?.[1];
       if (enabledAttr === "0" || enabledAttr === "false") continue;
+      extInfos.push({ folder, idLower: id.toLowerCase(), deps: [...cxml.matchAll(/<dependency\b[^>]*\bid\s*=\s*"([^"]+)"/gi)].map(mm => ({ id: mm[1] })) });
       const filePath = path.join(absDir, targetFile);
       if (!fs.existsSync(filePath)) continue;
       let xml = "";
@@ -3168,8 +3152,11 @@ app.get("/api/agent/override-map", (req, res) => {
         : [];
       records.push({ folder, isDiff, selectors });
     }
-    // Load order from the Doctor (cheap pass — no base resolution, no xpath evals).
-    const { loadOrder } = runExtensionDoctor(extRoot);
+    // Simulated load order — the same shared topo sort the Extension Doctor
+    // uses (simulateLoadOrder), WITHOUT re-running the Doctor's full file walk
+    // on every drill-down call. ego_* DLCs are excluded here as in the Doctor's
+    // collision pass — they never contest third-party records.
+    const loadOrder = simulateLoadOrder(extInfos);
     // Vanilla content: loose game file first, then the packed .cat/.dat archives.
     let baseContent: string | null = null;
     try {

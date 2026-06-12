@@ -144,7 +144,9 @@ export default function ContractEditor({ workspace, setWorkspace }: ContractEdit
               <input className={`${inputCls} flex-1`} value={ep.id} spellCheck={false}
                 onChange={e => updateEndpoint(i, { id: e.target.value })} placeholder="endpoint_id" />
               <select className="px-2 py-1.5 rounded bg-black/60 border border-white/10 text-fuchsia-300 font-mono text-[11px]"
-                value={ep.kind || 'http'} onChange={e => updateEndpoint(i, { kind: e.target.value as 'http' | 'ui_event' })}
+                value={ep.kind || 'http'} onChange={e => updateEndpoint(i, e.target.value === 'ui_event'
+                  ? { kind: 'ui_event', method: undefined, path: undefined }
+                  : { kind: 'http' })}
                 title="http: MD → external process. ui_event: Lua UI widget → MD cue (no HTTP).">
                 <option value="http">HTTP</option>
                 <option value="ui_event">UI EVENT</option>

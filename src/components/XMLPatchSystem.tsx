@@ -25,6 +25,7 @@ import {
   BadgeAlert
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
+import { compileDiffDocument as compileSharedDiffDocument } from '../lib/modCompiler';
 import ObjectIndexPicker from './ObjectIndexPicker';
 
 interface XMLPatchSystemProps {
@@ -720,40 +721,15 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
     savePatches([...patchBlocks, raw]);
   };
 
-  // Compile full patch document XML
-  const compileDiffDocument = (): string => {
-    const activeBlocks = patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile);
-    let xml = `<?xml version="1.0" encoding="utf-8"?>
-<!-- XML Diff patch targeting file: "${targetFile}" -->
-<!-- Applied safely into the central Egosoft index registry -->
-<diff>
-`;
-
-    activeBlocks.forEach(b => {
-      xml += `  <!-- ${b.note} -->\n`;
-      if (b.action === 'remove') {
-        xml += `  <remove sel="${b.sel}" />\n\n`;
-      } else if (b.action === 'add' && b.attrType) {
-        // Attribute-level add (T4.2): single-line <add sel type="@attr">value</add>
-        xml += `  <add sel="${b.sel}" type="${b.attrType}">${(b.content || '').trim()}</add>\n\n`;
-      } else if (b.action === 'replace' && b.sel.includes('/@')) {
-        // Attribute-value replace: single-line text body
-        xml += `  <replace sel="${b.sel}">${(b.content || '').trim()}</replace>\n\n`;
-      } else {
-        const posAttr = (b.action === 'add' && b.pos) ? ` pos="${b.pos}"` : '';
-        xml += `  <${b.action} sel="${b.sel}"${posAttr}>\n`;
-        // Indent lines
-        const lines = b.content.split('\n');
-        lines.forEach(l => {
-          xml += `    ${l}\n`;
-        });
-        xml += `  </${b.action}>\n\n`;
-      }
-    });
-
-    xml += `</diff>`;
-    return xml;
-  };
+  // Compile full patch document XML. SINGLE SOURCE OF TRUTH: the shared
+  // modCompiler.compileDiffDocument (which escapes sel/attrs and emits the
+  // attrType + attribute-replace forms). A local duplicate of this function
+  // silently diverged once (dropped type="@attr") — do not reintroduce one.
+  const compileDiffDocument = (): string =>
+    compileSharedDiffDocument(
+      patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile),
+      targetFile
+    );
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(compileDiffDocument());

@@ -13,6 +13,7 @@
 
 import * as xpathLib from "xpath";
 import { DOMParser } from "@xmldom/xmldom";
+import { selectorFor } from "./xpathSynth";
 
 export interface PatchSelector { op: string; sel: string }
 
@@ -71,38 +72,9 @@ const MAX_SELECTOR_EVALS = 200;
 const MAX_MATCHES_PER_SELECTOR = 50;
 const MAX_ENTRIES = 500;
 
-/** Stable, human-readable path for an element node: prefers @id/@name predicates,
- *  falls back to a positional index among same-named siblings. */
-function describeElementPath(node: any): string {
-  const parts: string[] = [];
-  let cur: any = node;
-  let hops = 0;
-  while (cur && cur.nodeType === 1 && hops < 32) {
-    const name = cur.nodeName;
-    const id = typeof cur.getAttribute === "function" ? (cur.getAttribute("id") || cur.getAttribute("name")) : null;
-    if (id) {
-      const attr = cur.getAttribute("id") ? "id" : "name";
-      parts.unshift(`${name}[@${attr}='${id}']`);
-    } else {
-      // positional index among same-named element siblings (1-based), omitted when unique
-      let idx = 1, count = 0;
-      const parent = cur.parentNode;
-      if (parent && parent.childNodes) {
-        for (let i = 0; i < parent.childNodes.length; i++) {
-          const sib = parent.childNodes[i];
-          if (sib.nodeType === 1 && sib.nodeName === name) {
-            count++;
-            if (sib === cur) idx = count;
-          }
-        }
-      }
-      parts.unshift(count > 1 ? `${name}[${idx}]` : name);
-    }
-    cur = cur.parentNode;
-    hops++;
-  }
-  return "/" + parts.join("/");
-}
+// Element-path identity is delegated to xpathSynth.selectorFor — one selector
+// builder for the whole codebase (review unification; a local near-duplicate
+// lived here until the 38th pass).
 
 function normalizeSel(sel: string): string {
   return sel.replace(/\s+/g, " ").trim();
@@ -167,11 +139,11 @@ export function analyzeOverrides(input: AnalyzeOverridesInput): OverrideMap {
             if (n && n.nodeType === 2) {
               // attribute node — key on owner element path + /@name
               const owner = (n as any).ownerElement;
-              const key = `${owner ? describeElementPath(owner) : ""}/@${n.nodeName}`;
+              const key = `${owner ? selectorFor(owner) : ""}/@${n.nodeName}`;
               claim(key, "attribute", c);
               matchedAny = true;
             } else if (n && n.nodeType === 1) {
-              claim(describeElementPath(n), "element", c);
+              claim(selectorFor(n), "element", c);
               matchedAny = true;
             }
           }
@@ -205,6 +177,33 @@ export function analyzeOverrides(input: AnalyzeOverridesInput): OverrideMap {
   }
 
   return { targetFile, resolution, loadOrder: fileLoadOrder, entries, counts };
+}
+
+/**
+ * X4 load order: alphabetical by folder name (case-insensitive), with declared
+ * dependencies loaded before their dependents. Deterministic topological sort —
+ * extracted (38th pass) so runExtensionDoctor and the override-map endpoint
+ * share ONE implementation instead of two copies.
+ */
+export function simulateLoadOrder(exts: { folder: string; idLower: string; deps: { id: string }[] }[]): string[] {
+  const byIdLower = new Map(exts.map(e => [e.idLower, e]));
+  const order: string[] = [];
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (e: { folder: string; idLower: string; deps: { id: string }[] }) => {
+    if (visited.has(e.folder)) return;
+    if (visiting.has(e.folder)) return; // dependency cycle — bail out of the branch
+    visiting.add(e.folder);
+    for (const d of [...e.deps].sort((a, b) => a.id.localeCompare(b.id))) {
+      const dep = byIdLower.get(d.id.toLowerCase());
+      if (dep) visit(dep);
+    }
+    visiting.delete(e.folder);
+    visited.add(e.folder);
+    order.push(e.folder);
+  };
+  for (const e of [...exts].sort((a, b) => a.folder.toLowerCase().localeCompare(b.folder.toLowerCase()))) visit(e);
+  return order;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +292,13 @@ export function runOverrideMapSelftest(): { pass: boolean; checks: SelftestCheck
   });
   ok("zero-match selector degrades to a selector-identity entry without crashing",
     m4.entries.length === 1 && m4.entries[0].kind === "selector" && m4.entries[0].winner === "mod_x");
+
+  const lo = simulateLoadOrder([
+    { folder: "mod_b", idLower: "mod_b", deps: [{ id: "zdep_id" }] },
+    { folder: "mod_z", idLower: "zdep_id", deps: [] }
+  ]);
+  ok("simulateLoadOrder: dependencies load before dependents despite alphabetical order",
+    lo.join(",") === "mod_z,mod_b", lo.join(","));
 
   return { pass: checks.every(c => c.pass), checks };
 }
