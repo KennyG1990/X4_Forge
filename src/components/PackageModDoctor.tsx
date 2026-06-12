@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X } from 'lucide-react';
+import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic, generateMDXML } from '../types';
 
 interface PackageModDoctorProps {
@@ -43,6 +43,28 @@ export default function PackageModDoctor({
       setExtFileError(err.message || 'Failed to load extension file.');
     } finally {
       setExtFileLoading(null);
+    }
+  };
+
+  // T4.4 Inc 2 — per-element override drill-down for cross-mod collision findings.
+  // Fetches /api/agent/override-map (engine: src/lib/overrideMap.ts) for the
+  // finding's contested base path: who rewrites what, who wins by load order.
+  const [ovMap, setOvMap] = useState<any>(null);
+  const [ovLoading, setOvLoading] = useState<string | null>(null);
+  const [ovError, setOvError] = useState<string | null>(null);
+
+  const openOverrideMap = async (file: string) => {
+    setOvLoading(file);
+    setOvError(null);
+    try {
+      const res = await fetch('/api/agent/override-map?file=' + encodeURIComponent(file));
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Override map failed (${res.status})`);
+      setOvMap(data);
+    } catch (err: any) {
+      setOvError(err.message || 'Override map failed.');
+    } finally {
+      setOvLoading(null);
     }
   };
 
@@ -195,12 +217,26 @@ export default function PackageModDoctor({
                         ))}
                       </div>
                     )}
+                    {f.domain === 'xml_patches' && f.filePath && (
+                      <button
+                        onClick={() => openOverrideMap(f.filePath)}
+                        disabled={ovLoading !== null}
+                        title={`Per-element override map for ${f.filePath}: who rewrites what, who wins`}
+                        className="flex items-center gap-1 font-mono text-[8.5px] text-fuchsia-300 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 px-1.5 py-0.5 rounded border border-fuchsia-500/25 cursor-pointer transition-all disabled:opacity-50 mt-1"
+                      >
+                        <Layers className={`w-2.5 h-2.5 shrink-0 ${ovLoading === f.filePath ? 'animate-pulse' : ''}`} />
+                        OVERRIDE MAP
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
             {extFileError && (
               <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{extFileError}</div>
+            )}
+            {ovError && (
+              <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{ovError}</div>
             )}
           </>
         )}
@@ -233,6 +269,86 @@ export default function PackageModDoctor({
             <pre className="flex-1 overflow-auto scrollbar-thin font-mono text-[10.5px] leading-relaxed text-slate-300 p-4 whitespace-pre min-h-0 select-text">
               {extFile.content}
             </pre>
+          </div>
+        </div>
+      )}
+
+      {/* Override-map drill-down modal (T4.4 Inc 2) */}
+      {ovMap && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
+          onClick={() => setOvMap(null)}
+        >
+          <div
+            className="bg-[#0d0f14] border border-fuchsia-500/25 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col min-h-0"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/10 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Layers className="w-4 h-4 text-fuchsia-400 shrink-0" />
+                <span className="font-mono text-[11px] text-slate-200 font-semibold truncate" title={ovMap.targetFile}>{ovMap.targetFile}</span>
+                <span
+                  className={`text-[8px] font-bold px-1.5 py-0.5 rounded border shrink-0 uppercase ${ovMap.resolution === 'base' ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' : 'text-amber-300 bg-amber-500/10 border-amber-500/25'}`}
+                  title={ovMap.resolution === 'base' ? 'Node identity resolved against the real vanilla file (loose or packed .cat/.dat)' : 'Vanilla content unavailable — entries grouped by selector string only (T4.1 VFS will sharpen this)'}
+                >
+                  {ovMap.resolution === 'base' ? 'BASE-RESOLVED' : 'SELECTOR-STRING'}
+                </span>
+              </div>
+              <button
+                onClick={() => setOvMap(null)}
+                className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition-all shrink-0 cursor-pointer"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-4 py-2 border-b border-white/5 shrink-0 font-mono text-[9px] text-slate-400 flex flex-wrap items-center gap-1">
+              LOAD ORDER:
+              {(ovMap.loadOrder || []).map((m: string, i: number) => (
+                <React.Fragment key={m}>
+                  {i > 0 && <span className="text-slate-600">→</span>}
+                  <span className="text-slate-300 bg-black/35 px-1 py-0.5 rounded border border-white/5">{m}</span>
+                </React.Fragment>
+              ))}
+              <span className="ml-auto text-slate-500">
+                {ovMap.counts?.contested ?? 0} contested · {ovMap.counts?.merged ?? 0} merged · {ovMap.counts?.single ?? 0} single
+              </span>
+            </div>
+            <div className="flex-1 overflow-auto scrollbar-thin p-3 space-y-2 min-h-0 font-sans">
+              {(ovMap.entries || []).length === 0 ? (
+                <div className="text-slate-400 text-[10px] p-3">No overriding claims found for this file.</div>
+              ) : (ovMap.entries || []).map((e: any, i: number) => (
+                <div
+                  key={i}
+                  className={`p-2.5 rounded-lg border text-[10px] space-y-1.5 ${e.contested ? 'bg-red-500/5 border-red-500/20' : e.merged ? 'bg-emerald-500/5 border-emerald-500/15' : 'bg-white/[0.02] border-white/5'}`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-[10px] text-slate-200 font-semibold truncate" title={e.node}>{e.node}</span>
+                    <span className="text-[7.5px] font-bold uppercase text-slate-400 bg-black/35 px-1 py-0.5 rounded border border-white/5 shrink-0">{e.kind}</span>
+                    {e.contested && (
+                      <span className="text-[7.5px] font-bold uppercase text-red-300 bg-red-500/10 px-1 py-0.5 rounded border border-red-500/25 shrink-0" title="2+ mods, at least one replace/remove/full-file — load order decides">CONTESTED</span>
+                    )}
+                    {e.merged && (
+                      <span className="text-[7.5px] font-bold uppercase text-emerald-300 bg-emerald-500/10 px-1 py-0.5 rounded border border-emerald-500/20 shrink-0" title="add+add — X4 merges appends, low risk">MERGED</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {(e.claims || []).map((c: any, j: number) => (
+                      <span
+                        key={j}
+                        title={c.sel}
+                        className={`font-mono text-[8.5px] px-1.5 py-0.5 rounded border ${c.folder === e.winner ? 'text-fuchsia-200 bg-fuchsia-500/15 border-fuchsia-500/30' : 'text-slate-300 bg-black/35 border-white/10'}`}
+                      >
+                        {c.folder}:{c.op}
+                      </span>
+                    ))}
+                    <span className="flex items-center gap-1 font-mono text-[8.5px] text-fuchsia-300 ml-auto shrink-0" title="Loaded last — this mod's change survives">
+                      <Crown className="w-2.5 h-2.5" /> {e.winner}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
