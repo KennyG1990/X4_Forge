@@ -48,6 +48,7 @@ import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
+import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from "./src/lib/luaStaticAnalysis";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runLiveFixesSelftest } from "./src/lib/liveFixes";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
@@ -175,6 +176,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/contract-selftest",
   "/agent/contract-glue-sample",
   "/agent/lua-snippets",
+  "/agent/lua-static-selftest",
   "/agent/cue-lineage-selftest",
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
@@ -2985,33 +2987,44 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
       extensionFiles.set(e.folder, readExtensionFilesWithPacked(e.absDir));
     }
 
-    // CHECK 2c — Lua/UI runtime hazards. X4 9.0 beta tightened verification around
-    // some online/user-item functions; when these are called from extension UI Lua,
-    // the engine aborts the call before downstream menu code runs. This catches the
-    // concrete class seen in debuglog paths such as
-    // extensions/<mod>/ui/hotkey/interface.lua.
-    const restrictedLuaCalls = ["OnlineGetUserItemAmount"];
+    // CHECK 2c — two-layer Lua analysis. Baseline layer: parser-backed syntax
+    // and undefined-global hygiene with deterministic globals only. X4 layer:
+    // engine/runtime hazards such as 9.0 restricted UI online-user-item calls.
+    const luaFiles: LuaFileInput[] = [];
     for (const e of enabledExts) {
       if (/^ego_/i.test(e.id)) continue;
       for (const file of extensionFiles.get(e.folder) || []) {
-        const relLower = file.rel.toLowerCase();
-        if (!relLower.endsWith(".lua") || !relLower.startsWith("ui/")) continue;
-        for (const fn of restrictedLuaCalls) {
-          if (!new RegExp(`\\b${fn}\\s*\\(`).test(file.text)) continue;
-          findings.push({
-            severity: "error",
-            category: "runtime",
-            code: "lua.restricted_online_call",
-            domain: "lua_ui",
-            filePath: `extensions/${e.folder}/${file.rel}`,
-            message: `${e.name || e.folder} calls restricted UI function ${fn}() from ${file.rel}${file.source === "packed" ? ` inside ${path.basename(file.sourcePath)}` : ""}. X4 can abort this call as a non-verified source; later menu_station_configuration errors are likely cascade symptoms.`,
-            sourceRef: { kind: "lua_runtime", id: fn, label: e.folder },
-            openTargets: [{ label: `${e.folder}/${file.rel}`, path: `${e.folder}/${file.rel}` }],
-            packed: file.source === "packed",
-            archive: file.source === "packed" ? path.basename(file.sourcePath) : undefined
-          });
-        }
+        if (!file.rel.toLowerCase().endsWith(".lua")) continue;
+        luaFiles.push({
+          rel: file.rel,
+          text: file.text,
+          source: file.source,
+          sourcePath: file.sourcePath,
+          extension: { folder: e.folder, id: e.id, name: e.name }
+        });
       }
+    }
+    const luaAnalysis = analyzeLuaFiles(luaFiles);
+    let undefinedGlobalInfos = 0;
+    for (const lf of luaAnalysis.findings) {
+      if (lf.code === "lua.undefined_global" && undefinedGlobalInfos++ >= 25) continue;
+      const e = luaFiles.find(f => f.rel === lf.rel && f.sourcePath === lf.sourcePath)?.extension;
+      const folder = e?.folder || "unknown";
+      findings.push({
+        severity: lf.severity,
+        category: lf.layer === "x4" ? "runtime" : "lua_hygiene",
+        code: lf.code,
+        domain: lf.layer === "x4" ? "lua_ui" : "lua",
+        filePath: `extensions/${folder}/${lf.rel}`,
+        message: `${e?.name || folder}: ${lf.message}${lf.source === "packed" ? ` (${path.basename(lf.sourcePath)})` : ""}`,
+        sourceRef: { kind: "lua_static", id: lf.symbol || lf.code, label: folder },
+        openTargets: [{ label: `${folder}/${lf.rel}`, path: `${folder}/${lf.rel}` }],
+        packed: lf.source === "packed",
+        archive: lf.source === "packed" ? path.basename(lf.sourcePath) : undefined,
+        layer: lf.layer,
+        line: lf.line,
+        column: lf.column
+      });
     }
 
     // CHECK 3 — cross-mod file/patch collisions.
@@ -3427,6 +3440,14 @@ app.get("/api/agent/lua-snippets", (_req, res) => {
     res.json({ success: true, snippets: LUA_SNIPPETS, selftest: runLuaSnippetSelftest() });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "lua-snippets failed" });
+  }
+});
+
+app.get("/api/agent/lua-static-selftest", (_req, res) => {
+  try {
+    res.json(runLuaStaticAnalysisSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "lua-static-selftest failed" });
   }
 });
 

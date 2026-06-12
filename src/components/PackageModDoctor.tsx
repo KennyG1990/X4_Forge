@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown } from 'lucide-react';
+import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown, Copy } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic, generateMDXML } from '../types';
 
 interface PackageModDoctorProps {
@@ -82,6 +82,7 @@ export default function PackageModDoctor({
     { name: 'live-fixes', path: 'live-fixes-selftest' },
     { name: 'contracts', path: 'contract-selftest' },
     { name: 'lua-snippets', path: 'lua-snippets' },
+    { name: 'lua-static', path: 'lua-static-selftest' },
     { name: 'ui-layout', path: 'ui-layout-selftest' },
     { name: 'ui-widgets', path: 'ui-widget-validate-selftest' },
     { name: 'ext-doctor', path: 'extension-doctor-selftest' },
@@ -142,6 +143,36 @@ export default function PackageModDoctor({
       : s === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25'
         : 'bg-blue-500/5 text-blue-300 border-blue-500/20';
 
+  const copyExtensionFinding = async (f: any) => {
+    const text = [
+      `[${f.severity}] ${f.code}`,
+      f.filePath ? `File: ${f.filePath}` : '',
+      f.archive ? `Archive: ${f.archive}` : '',
+      f.message || '',
+      Array.isArray(f.openTargets) && f.openTargets.length
+        ? `Open targets:\n${f.openTargets.map((t: any) => `- ${t.path}`).join('\n')}`
+        : ''
+    ].filter(Boolean).join('\n');
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+    } catch {
+      /* fall back below */
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'true');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+  };
+
   const sendDiagnosticsToAI = () => {
     if (diagnostics.length === 0) return;
     const list = diagnostics.map((d, i) =>
@@ -160,7 +191,7 @@ export default function PackageModDoctor({
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-[#080a0e] p-3 space-y-3 shrink-0 select-none font-mono text-xs">
+    <div className="flex flex-col h-full min-h-0 bg-[#080a0e] p-3 space-y-3 shrink-0 font-mono text-xs">
       {/* Header Info Card */}
       <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2.5">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
@@ -277,23 +308,33 @@ export default function PackageModDoctor({
                 <span className="w-2 h-2 rounded-full bg-blue-500 block shrink-0" /> {extScan.counts?.info ?? 0} Info
               </div>
             </div>
-            <div className="space-y-2 font-sans max-h-64 overflow-y-auto scrollbar-thin pr-1">
+            <div className="space-y-2.5 font-sans max-h-[52vh] overflow-y-auto scrollbar-thin pr-1 select-text">
               {(!extScan.findings || extScan.findings.length === 0) ? (
                 <div className="text-emerald-400/90 text-[10px] flex items-center gap-2 bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/10 font-medium">
                   <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
                   No cross-mod conflicts across {extScan.enabledCount} enabled extensions.
                 </div>
               ) : extScan.findings.map((f: any, i: number) => (
-                <div key={i} className={`p-2.5 rounded-lg border text-[10.5px] leading-relaxed flex items-start gap-2 ${sevStyle(f.severity)}`}>
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <div className="space-y-1 min-w-0">
-                    <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] leading-none mb-1">
-                      [{f.severity}] {f.code}
-                    </span>
+                <div key={i} className={`p-3 rounded-lg border text-[11.5px] leading-relaxed flex items-start gap-2 ${sevStyle(f.severity)}`}>
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-1" />
+                  <div className="space-y-2 min-w-0 flex-1">
+                    <div className="flex items-start gap-2">
+                      <span className="font-mono font-bold tracking-tight text-white uppercase block text-[9px] leading-tight break-all flex-1">
+                        [{f.severity}] {f.code}
+                      </span>
+                      <button
+                        onClick={() => copyExtensionFinding(f)}
+                        className="select-none flex items-center gap-1 font-mono text-[9px] text-slate-300 bg-black/30 hover:bg-white/10 px-1.5 py-1 rounded border border-white/10 cursor-pointer transition-all shrink-0"
+                        title="Copy finding text"
+                      >
+                        <Copy className="w-3 h-3" />
+                        Copy
+                      </button>
+                    </div>
                     {f.filePath && (
-                      <span className="font-mono text-[9px] text-slate-300 block bg-black/35 px-1 py-0.5 rounded border border-white/5 truncate max-w-full">{f.filePath}</span>
+                      <span className="font-mono text-[10px] text-slate-200 block bg-black/35 px-2 py-1 rounded border border-white/5 break-all">{f.filePath}</span>
                     )}
-                    <p className="text-slate-300 leading-normal">{f.message}</p>
+                    <p className="text-slate-200 leading-relaxed whitespace-pre-wrap break-words">{f.message}</p>
                     {Array.isArray(f.openTargets) && f.openTargets.length > 0 && (
                       <div className="flex flex-wrap gap-1 pt-1">
                         {f.openTargets.map((t: any, j: number) => (
@@ -302,10 +343,10 @@ export default function PackageModDoctor({
                             onClick={() => openExtensionFile(t.path)}
                             disabled={extFileLoading !== null}
                             title={t.path}
-                            className="flex items-center gap-1 font-mono text-[8.5px] text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/25 cursor-pointer transition-all disabled:opacity-50 max-w-full"
+                            className="select-none flex items-center gap-1 font-mono text-[10px] text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/20 px-2 py-1 rounded border border-cyan-500/25 cursor-pointer transition-all disabled:opacity-50 max-w-full"
                           >
-                            <FileCode className={`w-2.5 h-2.5 shrink-0 ${extFileLoading === t.path ? 'animate-pulse' : ''}`} />
-                            <span className="truncate">{t.label || t.path}</span>
+                            <FileCode className={`w-3 h-3 shrink-0 ${extFileLoading === t.path ? 'animate-pulse' : ''}`} />
+                            <span className="break-all text-left">{t.label || t.path}</span>
                           </button>
                         ))}
                       </div>
@@ -315,7 +356,7 @@ export default function PackageModDoctor({
                         onClick={() => openOverrideMap(f.filePath)}
                         disabled={ovLoading !== null}
                         title={`Per-element override map for ${f.filePath}: who rewrites what, who wins`}
-                        className="flex items-center gap-1 font-mono text-[8.5px] text-fuchsia-300 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 px-1.5 py-0.5 rounded border border-fuchsia-500/25 cursor-pointer transition-all disabled:opacity-50 mt-1"
+                        className="select-none flex items-center gap-1 font-mono text-[10px] text-fuchsia-300 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 px-2 py-1 rounded border border-fuchsia-500/25 cursor-pointer transition-all disabled:opacity-50 mt-1"
                       >
                         <Layers className={`w-2.5 h-2.5 shrink-0 ${ovLoading === f.filePath ? 'animate-pulse' : ''}`} />
                         OVERRIDE MAP
