@@ -48,6 +48,8 @@ import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
+import { runCueLineageSelftest } from "./src/lib/cueLineage";
+import { runLogTelemetrySelftest } from "./src/lib/logTelemetry";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
 import {
@@ -167,7 +169,9 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/db-selftest",
   "/agent/contract-selftest",
   "/agent/contract-glue-sample",
-  "/agent/lua-snippets"
+  "/agent/lua-snippets",
+  "/agent/cue-lineage-selftest",
+  "/agent/log-telemetry-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3121,6 +3125,24 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
 // (a required missing dependency, a duplicate id, and two mods patching the same
 // libraries/jobs.xml with an identical selector) and assert each check fires. The real
 // install is conflict-clean, so this is how we prove the positive paths actually work.
+// Tier 2 / T3.1 — log-telemetry parser self-test.
+app.get("/api/agent/log-telemetry-selftest", (_req, res) => {
+  try {
+    res.json(runLogTelemetrySelftest());
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "log-telemetry-selftest failed" });
+  }
+});
+
+// Tier 2 / T2.1 — structural cue-lineage analyzer self-test.
+app.get("/api/agent/cue-lineage-selftest", (_req, res) => {
+  try {
+    res.json(runCueLineageSelftest());
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "cue-lineage-selftest failed" });
+  }
+});
+
 // Lever 3 — vetted Lua snippet library (the harder X4 patterns) + its self-test.
 app.get("/api/agent/lua-snippets", (_req, res) => {
   try {
