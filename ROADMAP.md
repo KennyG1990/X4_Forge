@@ -506,6 +506,60 @@ All browser-verified at `http://localhost:3000`; all selftest oracles green at s
 - *Verified live:* `ui-layout-selftest` **19/19**, `ui-widget-validate-selftest` **9/9**, main `selftest` **10/10**; no Vite error; a single editor (no duplicate UI Layout tab).
 - **Honest residual:** the declarative grid table's full runtime payoff still needs the generic createMenu ftable loader (turns the table into real rows/cells) — that's T1.3, gated behind C2 in-game verification. The *model and bridge* are correct now; the in-game loader is the human-in-loop piece.
 
+## Tier 4 — ecosystem levers (proposed 2026-06-12, NOT yet built)
+
+Four high-value additions that round the studio out from "mod authoring" into "mod ecosystem." They are **annotated with what they extend** so we build on existing modules rather than spawn parallel ones (the lesson of the UI Layout episode). They also form a **dependency chain**, not four independent silos — order matters.
+
+**Dependency map:**  T4.1 (VFS) is the keystone — it unlocks real vanilla source for T4.2 and sharpens T4.4. T4.3 is independent and extends the contract seam we already shipped.
+
+### T4.1 — Zero-extraction vanilla VFS (`.cat`/`.dat` virtualization)
+- **Problem:** modders must externally extract gigabytes of `.cat`/`.dat` to get vanilla macros/wares/scripts. High setup friction.
+- **Plan:** a Node-side reader for X4's catalog format (`.cat` = filename/size/offset/hash index; `.dat` = concatenated blob; inner XML is often PCK/zlib-compressed) that streams individual vanilla files on demand, cached in the SQLite layer, surfaced into the existing object-index/ware/faction pickers.
+- **Extends:** the SQLite persistence layer (cache store) and the existing pickers (`ObjectIndexPicker`, patch-target picker) — they become VFS-backed instead of hardcoded lists.
+- **Effort/risk:** **HIGH lift, keystone value.** Binary format + decompression + cache invalidation. The game root with the `.cat` files is one level above the already-mounted extensions folder (`G:\SteamLibrary\steamapps\common\X4 Foundations`). Recommend a read-only **spike first**: parse one `.cat`, list its entries, extract+decompress one known XML, prove the round-trip before wiring any UI.
+- **Honesty note:** the format is community-documented, not an Egosoft public contract — version the reader defensively and degrade gracefully if a future patch changes layout.
+
+### T4.2 — Visual diff-to-patch builder (auto-XPath)
+- **Problem:** safe coexistence requires hand-written XPath `<diff>`/`<replace>`/`<add>`; error-prone.
+- **Plan:** twin-pane editor — pick a vanilla asset (via T4.1), edit it in the existing form editor, and a tree-diff → XPath synthesizer emits the minimal standard-compliant patch (add/replace/remove at element & attribute granularity).
+- **Extends:** the existing **XML Patching domain** and `modCompiler`'s diff output — this is its visual front-end, not a new patch engine.
+- **Effort/risk:** **MEDIUM, high value. Depends on T4.1** (you need the vanilla source tree to diff against). The XPath-synthesis is the interesting part: prefer stable selectors (id/name attrs) over positional `[n]` indices so patches survive vanilla reshuffles. Validate every generated patch by re-applying it to the vanilla source and asserting it reproduces the edit.
+
+### T4.3 — Real-time Lua ↔ MD logic connector
+- **Problem:** wiring a Lua UI widget to an MD cue (`event_ui_triggered`/`raiseEvent` + a listener cue) is verbose, strict, and split across two files.
+- **Plan:** draw an arrow on the canvas from a UI widget (e.g. a HUD button) to an MD action node; the studio scaffolds both ends — raises the Lua action event with packaged params, declares the listener cue + `event_ui_triggered` handler, and adds type guards.
+- **Extends:** the **contract seam we already shipped** — `contractGlue.ts` (glue-Lua + MD cue scaffold + `endpointEventNames`), `cueLineage.ts` (it already understands signal/listen edges), and the UI designer. **Do not build a third glue system**; this is `contractGlue` pointed at the in-app UI-widget→cue case instead of HTTP.
+- **Effort/risk:** **MEDIUM, partially seeded.** Independent of T4.1. Main work is the canvas interaction (cross-domain arrow) + extending the contract generator with a `ui_event` endpoint kind.
+
+### T4.4 — Active extension override visualizer
+- **Problem:** the Extension Doctor flags that two mods touch the same file, but not *how* — which exact element/line each rewrites and who wins.
+- **Plan:** overlay the document tree of a targeted vanilla file with every active mod's patch against it, highlight the precise element/attribute overlap, and resolve the winner by load-order (alphabetical + dependency constraints).
+- **Extends:** the existing **`extension-doctor` endpoint** — it already does shared-path collision detection and load-order simulation over the real 34-mod folder. This is the per-element drill-down on top of that.
+- **Effort/risk:** **MEDIUM, most immediately deliverable** — it reuses the most existing infrastructure and has real test data already mounted (the 34-mod `extensions/` folder). Mild benefit from T4.1 (resolving against true vanilla) but works on patch-vs-patch overlap without it.
+
+**Recommended build order:** T4.4 (cheapest, extends the Doctor, real test data on disk) → T4.1 spike (keystone) → T4.2 (needs T4.1) → T4.3 (independent, extends the contract seam). T4.1+T4.2 are best treated as one paired effort.
+
+### T4 — concrete increments (house pattern: engine + `run*Selftest()` + public GET, THEN UI, verified live)
+
+**T4.4 Override Visualizer (do first):**
+- *Inc 1 — engine:* `src/lib/overrideMap.ts` — `analyzeOverrides(extScanResult, targetFile)` building, per vanilla path, the list of {modId, patchKind, selector, winner} from the data `runExtensionDoctor` already collects. `runOverrideMapSelftest()` over a synthetic 3-mod collision. Public `GET /api/agent/override-map-selftest`.
+- *Inc 2 — UI:* a drill-down panel in `PackageModDoctor.tsx` (Extension Doctor card) — click a collision finding → element/attribute overlap + load-order winner. Reuses the existing `extScan` state + `/api/agent/extension-file` reader.
+
+**T4.1 Zero-extraction VFS (keystone, spike first):**
+- *Inc 0 — read-only spike:* `src/lib/catdat.ts` — parse one `.cat` index, list entries, extract+decompress one known `.dat` slice (handle PCK/zlib). `runCatDatSelftest()` against a tiny synthetic cat/dat fixture committed to the repo (NOT a shipped game file). Public GET. **Stop and confirm round-trip before any UI.**
+- *Inc 1 — cache:* fold extracted entries into `src/lib/db.ts` (SQLite) keyed by archive+path+mtime.
+- *Inc 2 — pickers:* make `ObjectIndexPicker` / patch-target picker VFS-backed (lazy, on-demand) instead of hardcoded lists.
+
+**T4.2 Diff-to-Patch (needs T4.1):**
+- *Inc 1 — engine:* `src/lib/xpathSynth.ts` — `synthesizePatch(vanillaXml, editedXml)` → minimal `<diff>` ops, preferring id/name selectors over positional `[n]`. `runXpathSynthSelftest()` must round-trip: apply the generated patch to vanilla and assert it reproduces the edit.
+- *Inc 2 — UI:* twin-pane editor reusing the existing form editor + XML Patching domain front-end.
+
+**T4.3 Lua↔MD connector (independent; extends `contractGlue`):**
+- *Inc 1 — engine:* add a `ui_event` endpoint kind to `src/lib/contractGlue.ts` (raise-event Lua + `event_ui_triggered` listener-cue scaffold + type guards). Extend `runContractSelftest()`.
+- *Inc 2 — UI:* cross-domain arrow on the canvas (UI widget → MD action node) that drives the generator. Do NOT add a new glue module.
+
+**Status:** scoped only. Each follows the house pattern — pure engine module + `run*Selftest()` oracle + public GET endpoint, THEN UI, verified live — and each must justify why it extends an existing module rather than duplicating one before any code is written.
+
 ### SQLite persistence layer (design — implemented 8th pass; awaiting native dep install)
 
 **Why.** The expensive, reusable data the studio computes — the packed `.cat/.dat` object index (694 ships, 8,616 macros, 1,950 wares, 33 factions, 3,783 sounds across 64 archives) and the extension manifest/file index — is currently rebuilt **in memory on every server boot**, and serializing a 1,294-node workspace over `/api/agent/workspace` takes seconds. None of that needs to live in the frontend; it's classic "query over tens of thousands of indexed records," which is exactly what an embedded DB is for. The mod being *edited* stays in frontend memory (it's small); the DB is a backend **cache + query layer**, not the document store.

@@ -4,6 +4,32 @@ Context for the next coding agent. This captures a review pass + a compiler/dire
 
 ---
 
+## SESSION HANDOFF — 2026-06-12 → FOR FABLE (UI bridge shipped; Tier 4 scoped & ready to build)
+
+**Read `ROADMAP.md` → "Tier 4 — ecosystem levers" + "T4 — concrete increments" first.** That section is your work queue. This block is the orientation. Everything below is on the working tree, live-verified at `http://localhost:3000`, **nothing committed — review and commit.**
+
+### What shipped this session (verified live, all green)
+- **UI Layout: merged the duplicate, then bridged it.** A parallel grid UI canvas had been built alongside the existing free-form Layout GUI Designer — that was the wrong call. It's now one pipeline: the free-form designer is the authoring surface, and the **engine-correct grid descriptor is the compile model**. `src/lib/uiLayout.ts` holds the grid model + `pixelLayoutToGrid` (quantizes free-form `x/y/w/h` widgets → validated row/col/span grid; X4 UI is fTable-native, so absolute pixels clip across resolutions). `src/lib/modCompiler.ts` now emits a responsive `ui/<id>_layout.lua` derived from the designer's widgets. `src/components/UIBuilder.tsx` shows a `→ responsive grid R×C` badge + live pixel validation (`src/lib/uiWidgetValidate.ts`).
+- **Selftest state at session end — ALL GREEN:** main `/api/agent/selftest` 10/10, `ui-layout-selftest` 19/19, `ui-widget-validate-selftest` 9/9, `contract-selftest` 19/19, `cue-lineage-selftest` 17/17, `log-telemetry-selftest` 17/17, `extension-doctor-selftest` pass, round-trip lossless. No Vite error.
+- **Tier 4 scoped into ROADMAP** (4 levers + per-lever increments + build order). Not built — that's your job.
+
+### Your queue (ranked — full detail in ROADMAP "T4 — concrete increments")
+1. **T4.4 Override Visualizer — START HERE.** Cheapest, highest infra-reuse: it extends the existing `runExtensionDoctor` in `server.ts` (already does shared-path collision + load-order sim) with a per-element "who rewrites what, who wins" drill-down. Real test data is already on disk: the mounted 34-mod `extensions/` folder. Inc 1 = `src/lib/overrideMap.ts` engine + `run*Selftest()` + public GET; Inc 2 = drill-down panel in `PackageModDoctor.tsx`.
+2. **T4.1 Zero-extraction VFS — keystone, SPIKE FIRST.** Node `.cat`/`.dat` reader (+ PCK/zlib decompress) → SQLite cache (`src/lib/db.ts`) → VFS-backed pickers. **Do Inc 0 only** (parse one cat, extract+decompress one entry against a tiny committed synthetic fixture, public GET selftest) and **stop to confirm the round-trip before any UI.** The game root with the real `.cat` files is one level above the mounted `extensions/` folder (`G:\SteamLibrary\steamapps\common\X4 Foundations`). Format is community-documented, not an Egosoft contract — version the reader defensively.
+3. **T4.2 Diff-to-Patch — needs T4.1.** `src/lib/xpathSynth.ts`: tree-diff → minimal `<diff>` ops, prefer id/name selectors over positional `[n]`; selftest must re-apply the generated patch to vanilla and reproduce the edit. Then a twin-pane UI on the existing XML Patching domain.
+4. **T4.3 Lua↔MD connector — independent, extends `contractGlue`.** Add a `ui_event` endpoint kind to `src/lib/contractGlue.ts` (raise-event Lua + `event_ui_triggered` listener-cue scaffold). **Do NOT build a third glue system** — point the existing contract generator at the UI-widget→cue case.
+
+### Hard rules (cost us time this session — heed them)
+- **One module per capability.** Before writing a new `src/lib/*.ts`, state in the changelog *which existing module it extends*. The UI Layout duplication (build → tear down → re-bridge) was the avoidable cost of skipping this.
+- **House pattern, no exceptions:** pure engine module + `run*Selftest()` oracle + public GET endpoint in `server.ts` (`PUBLIC_READONLY_GETS` allowlist), THEN UI, verified in the browser. Selftests are the fast oracle.
+- **Large CRLF files truncate under Edit/Write.** `server.ts` (~4.7k lines), `types.ts` (~1.5k), `UIBuilder.tsx` (~900). Edit these via Node bash-heredoc exact-string splices, auto-detect `CR = s.includes('\r\n') ? '\r\n' : '\n'`, parse-check after each write (`ts.createSourceFile` syntactic diags), line-count guard. Deleting a file needs the `mcp__cowork__allow_cowork_file_delete` flow (rm hits EPERM on the mount).
+- **The bash sandbox is a STALE mirror** and can't run the Windows-native `node_modules` — **verify in the browser + selftest endpoints, not bash `tsc`/node.** Host Read/Edit/Write are live; the sandbox is fine for parse-checks via the mirrored `node_modules/typescript` only.
+
+### Environment (unchanged)
+Split dev servers: Vite **3000** (UI/HMR) + API **3001** (`tsx watch`, `API_ONLY=true`). Editing `server.ts`/`src/lib/*` restarts only the API (~2-3s `/api` 503 gap), the page does not reload; frontend edits are pure HMR. Re-verify in-browser right after any large component edit.
+
+---
+
 ## SESSION HANDOFF — 2026-06-11 (8th pass, Claude/Fable: pickup list cleared) → CURRENT
 
 **Read ROADMAP.md changelog "8th pass" for full detail.** Everything on the working tree, live-verified in the browser. Nothing committed — review and commit. Summary:
@@ -145,48 +171,4 @@ Tested live against the running app + the app's own loaded `md.xsd` (398 events 
 
 ## 4. Housekeeping
 - Pre-fix leftovers in the user's game folder: `extensions/md/` and `extensions/aiscripts/` (loose, no `content.xml`) — safe to delete; they're from the old buggy auto-sync path.
-- The real end-to-end on-disk test (link sandbox folder → compile → confirm clean `<modid>/`) was **not** run — it needs the user to pick a folder via the OS picker.
-
----
-
-## 5. Source Control / GitHub integration (session 2)
-
-The SOURCE sidebar tab (`Sidebar.tsx` › `git` tab → `SourceControl.tsx`) is now the single home for all GitHub. Verified working end-to-end live (OAuth sign-in, create+publish repo, load/push, real commit graph).
-
-### 5a. Dev-environment fixes (important — these bit us repeatedly)
-- **`package.json` dev script** was `tsx server.ts` (no watch) → server.ts route changes never reloaded; new endpoints 404'd silently while the frontend hot-reloaded. Changed to **`tsx watch server.ts`**. Requires one manual restart to take effect.
-- **`server.ts` now loads `.env.local`**: `dotenv.config()` only read `.env`, but the user's keys (`GEMINI_API_KEY`, `GITHUB_CLIENT_ID`) live in `.env.local`. Added `dotenv.config({ path: '.env.local', override: true })`. **This is why AI calls and GitHub were failing server-side.**
-- **`restart-studio.bat`** (project root): force-kills whatever holds port 3000, then runs `npm run dev`. The dev server runs as a background process with no visible terminal, so this is how the user restarts it. Double-click it; leave the window open.
-
-### 5b. Auth middleware (pre-existing, discovered this session)
-- `server.ts` has `app.use("/api", authMiddleware)` + `GET /api/auth/token` (handshake, exempt). Every `/api/*` call needs `Authorization: Bearer <STUDIO_API_TOKEN>`.
-- The frontend handshake + global `fetch` override live in **`src/main.tsx`** (fetches the token into `sessionStorage`, injects the header for `/api/*`).
-- **Gotcha:** `STUDIO_API_TOKEN` regenerates on every server (re)start, so after any server restart the browser holds a stale token → 401 "Invalid token." **Fix = reload the page** (re-runs the handshake). Worth making the token stable across restarts (e.g. read from env) to remove this papercut.
-
-### 5c. New server endpoints (`server.ts`, all under the auth gate)
-- `POST /api/github/create` — create a repo from the active mod (then client pushes initial files).
-- `POST /api/github/device/start` + `POST /api/github/device/poll` — **OAuth Device Flow**. `client_id` comes from `process.env.GITHUB_CLIENT_ID` (set in `.env.local`); falls back to a request-body override. Poll also fetches `/user` to return the login for auto-filling repo owner.
-- `POST /api/github/commits` — real commit history for the connected repo/branch (drives the Graph Log).
-- (`/api/github/load` + `/api/github/push` were pre-existing.)
-
-### 5d. SourceControl.tsx features added
-- **One-click "Connect with GitHub"** (Device Flow): opens browser → user enters short code → polls → stores token as `gitPat` (so all existing load/push/create logic works unchanged). No Client-ID field in the UI (it's env-configured).
-- **Create Repo from this Mod** (Remotes tab).
-- **Remote-vs-local diff** (auto-scans on Remotes tab open; manual Rescan).
-- **AI diff summaries**: `handleGenerateDiffSummary()` uses `getAIHeaders()` (configured provider). Auto-attached on commit; shown in the diff modal. `GitCommitItem.summary` field added.
-- **Graph Log shows REAL commits** now (`handleFetchRemoteCommits` → `/api/github/commits`), auto-loads on tab open, Pull/Fetch wired. Default history is `[]` (was the fake `SEEDED_COMMIT_LOGS`).
-- **Commit messages**: `buildCommitMessage()` = user's typed commit message (title) + AI summary (body); pushes use it instead of the old hardcoded `"[Studio Commit]"` string.
-- **ErrorBoundary** (`ErrorBoundary.tsx`) wraps SourceControl in `Sidebar.tsx` so a render crash shows a fallback instead of white-screening the whole app. Also guarded `computedGraphTracks` against missing `activeTracks`.
-
-### 5e. SyncModal.tsx
-- The duplicate GitHub Repo Manager was **removed**; SyncModal is now import-only (JSON/MD XML). Its now-unused GitHub state/handlers + the `github.v3` footer are dead code to clean up.
-
-### 5f. Setup the user did (so the OAuth works)
-- Registered a GitHub **OAuth App** (not a GitHub App) with **Device Flow enabled**; callback URL is unused by device flow (set to `http://localhost:3000/`).
-- `GITHUB_CLIENT_ID="Ov23li4tJSvHMG8DUbKY"` is in `.env.local` (public, not a secret).
-
-### 5g. New TODOs from this session
-1. Make `STUDIO_API_TOKEN` stable across restarts (env-derived) so the page doesn't need a reload after every server restart.
-2. Delete dead `SEEDED_COMMIT_LOGS` (SourceControl) and SyncModal's leftover GitHub handlers/footer.
-3. The auth middleware is weak: `/api/auth/token` is unauthenticated, so any local page can grab the token. Pair with the Track B hardening (bind 127.0.0.1, lock CORS) to make it meaningful.
-4. `DirectorySettingsModal` props changed (now `modWorkspacePath`/`filesystemPath` instead of `dirHandle`); confirm `App.tsx` passes the matching props.
+- The real end-to-end on-disk test (link sandbox folder → comp
