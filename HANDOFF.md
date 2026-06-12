@@ -15,7 +15,7 @@ Context for the next coding agent. This captures a review pass + a compiler/dire
 
 ### Your queue (ranked — full detail in ROADMAP "T4 — concrete increments")
 1. **T4.4 Override Visualizer — COMPLETE (35th pass, both increments browser-verified).** Engine: `src/lib/overrideMap.ts` (per-element claims + load-order winner, base resolution via xpath/@xmldom, honest string fallback), selftest 11/11, public `GET /api/agent/override-map-selftest`, authed `GET /api/agent/override-map?file=`. UI: OVERRIDE MAP chip on `xml_patches` collision findings in `PackageModDoctor.tsx` → modal (resolution badge, load order, claims, contested/merged, crown winner). Verified on the real 34-mod install. **Next: T4.1 VFS spike (Inc 0 only — stop after the cat/dat round-trip proof).** NOTE: the Edit-truncation hazard hit `PackageModDoctor.tsx` (410 lines) — treat the node-splice recipe as the default for ANY .tsx/.ts edit, not just the big three. `server.ts` is now LF on disk and in the repo.
-2. **T4.1 Zero-extraction VFS — keystone, SPIKE FIRST.** Node `.cat`/`.dat` reader (+ PCK/zlib decompress) → SQLite cache (`src/lib/db.ts`) → VFS-backed pickers. **Do Inc 0 only** (parse one cat, extract+decompress one entry against a tiny committed synthetic fixture, public GET selftest) and **stop to confirm the round-trip before any UI.** The game root with the real `.cat` files is one level above the mounted `extensions/` folder (`G:\SteamLibrary\steamapps\common\X4 Foundations`). Format is community-documented, not an Egosoft contract — version the reader defensively.
+2. **T4.1 Zero-extraction VFS — COMPLETE (36th pass, re-scoped honestly).** The reader already existed (`x4CatDat.ts`, production-proven); the spike added the missing halves by EXTENDING it: `decodeEntryBuffer` (gzip/zlib magic-sniff, graceful raw fallback), `.pck` alias resolution, `runCatDatSelftest()` **12/12** (synthetic tmpdir fixture), public `GET /api/agent/catdat-selftest`. Inc 1 (SQLite content cache) deferred as perf-only; Inc 2 (VFS pickers) was already shipped in the 11th pass. **Next: T4.2 diff-to-patch** — its T4.1 dependency is now proven.
 3. **T4.2 Diff-to-Patch — needs T4.1.** `src/lib/xpathSynth.ts`: tree-diff → minimal `<diff>` ops, prefer id/name selectors over positional `[n]`; selftest must re-apply the generated patch to vanilla and reproduce the edit. Then a twin-pane UI on the existing XML Patching domain.
 4. **T4.3 Lua↔MD connector — independent, extends `contractGlue`.** Add a `ui_event` endpoint kind to `src/lib/contractGlue.ts` (raise-event Lua + `event_ui_triggered` listener-cue scaffold). **Do NOT build a third glue system** — point the existing contract generator at the UI-widget→cue case.
 
@@ -165,54 +165,4 @@ Tested live against the running app + the app's own loaded `md.xsd` (398 events 
 8. **Load `aiscripts.xsd`** into the schema library so AI scripts get validated; fix `<param>`/`<interrupts>` structure.
 9. **Agent API completeness:** route `/compile` + `/generate` + a new `/package` endpoint through the shared `modCompiler.ts` so all 7 domains are covered (fixes the drop/omit bugs).
 10. **Round-trip + XSD harness (Track A1/A2):** golden-file import→export→diff tests; validate generated XML against real XSDs.
-11. **Auto-sync vs validation:** `compileAndSaveAll` calls `validatePackageReadiness` which throws on errors (e.g. no cue / no name). With auto-sync on every edit, this can block snapshots mid-edit. Consider letting snapshots write even when the package isn't fully valid.
-
----
-
-## 4. Housekeeping
-- Pre-fix leftovers in the user's game folder: `extensions/md/` and `extensions/aiscripts/` (loose, no `content.xml`) — safe to delete; they're from the old buggy auto-sync path.
-- The real end-to-end on-disk test (link sandbox folder → compile → confirm clean `<modid>/`) was **not** run — it needs the user to pick a folder via the OS picker.
-
----
-
-## 5. Source Control / GitHub integration (session 2)
-
-The SOURCE sidebar tab (`Sidebar.tsx` › `git` tab → `SourceControl.tsx`) is now the single home for all GitHub. Verified working end-to-end live (OAuth sign-in, create+publish repo, load/push, real commit graph).
-
-### 5a. Dev-environment fixes (important — these bit us repeatedly)
-- **`package.json` dev script** was `tsx server.ts` (no watch) → server.ts route changes never reloaded; new endpoints 404'd silently while the frontend hot-reloaded. Changed to **`tsx watch server.ts`**. Requires one manual restart to take effect.
-- **`server.ts` now loads `.env.local`**: `dotenv.config()` only read `.env`, but the user's keys (`GEMINI_API_KEY`, `GITHUB_CLIENT_ID`) live in `.env.local`. Added `dotenv.config({ path: '.env.local', override: true })`. **This is why AI calls and GitHub were failing server-side.**
-- **`restart-studio.bat`** (project root): force-kills whatever holds port 3000, then runs `npm run dev`. The dev server runs as a background process with no visible terminal, so this is how the user restarts it. Double-click it; leave the window open.
-
-### 5b. Auth middleware (pre-existing, discovered this session)
-- `server.ts` has `app.use("/api", authMiddleware)` + `GET /api/auth/token` (handshake, exempt). Every `/api/*` call needs `Authorization: Bearer <STUDIO_API_TOKEN>`.
-- The frontend handshake + global `fetch` override live in **`src/main.tsx`** (fetches the token into `sessionStorage`, injects the header for `/api/*`).
-- **Gotcha:** `STUDIO_API_TOKEN` regenerates on every server (re)start, so after any server restart the browser holds a stale token → 401 "Invalid token." **Fix = reload the page** (re-runs the handshake). Worth making the token stable across restarts (e.g. read from env) to remove this papercut.
-
-### 5c. New server endpoints (`server.ts`, all under the auth gate)
-- `POST /api/github/create` — create a repo from the active mod (then client pushes initial files).
-- `POST /api/github/device/start` + `POST /api/github/device/poll` — **OAuth Device Flow**. `client_id` comes from `process.env.GITHUB_CLIENT_ID` (set in `.env.local`); falls back to a request-body override. Poll also fetches `/user` to return the login for auto-filling repo owner.
-- `POST /api/github/commits` — real commit history for the connected repo/branch (drives the Graph Log).
-- (`/api/github/load` + `/api/github/push` were pre-existing.)
-
-### 5d. SourceControl.tsx features added
-- **One-click "Connect with GitHub"** (Device Flow): opens browser → user enters short code → polls → stores token as `gitPat` (so all existing load/push/create logic works unchanged). No Client-ID field in the UI (it's env-configured).
-- **Create Repo from this Mod** (Remotes tab).
-- **Remote-vs-local diff** (auto-scans on Remotes tab open; manual Rescan).
-- **AI diff summaries**: `handleGenerateDiffSummary()` uses `getAIHeaders()` (configured provider). Auto-attached on commit; shown in the diff modal. `GitCommitItem.summary` field added.
-- **Graph Log shows REAL commits** now (`handleFetchRemoteCommits` → `/api/github/commits`), auto-loads on tab open, Pull/Fetch wired. Default history is `[]` (was the fake `SEEDED_COMMIT_LOGS`).
-- **Commit messages**: `buildCommitMessage()` = user's typed commit message (title) + AI summary (body); pushes use it instead of the old hardcoded `"[Studio Commit]"` string.
-- **ErrorBoundary** (`ErrorBoundary.tsx`) wraps SourceControl in `Sidebar.tsx` so a render crash shows a fallback instead of white-screening the whole app. Also guarded `computedGraphTracks` against missing `activeTracks`.
-
-### 5e. SyncModal.tsx
-- The duplicate GitHub Repo Manager was **removed**; SyncModal is now import-only (JSON/MD XML). Its now-unused GitHub state/handlers + the `github.v3` footer are dead code to clean up.
-
-### 5f. Setup the user did (so the OAuth works)
-- Registered a GitHub **OAuth App** (not a GitHub App) with **Device Flow enabled**; callback URL is unused by device flow (set to `http://localhost:3000/`).
-- `GITHUB_CLIENT_ID="Ov23li4tJSvHMG8DUbKY"` is in `.env.local` (public, not a secret).
-
-### 5g. New TODOs from this session
-1. Make `STUDIO_API_TOKEN` stable across restarts (env-derived) so the page doesn't need a reload after every server restart.
-2. Delete dead `SEEDED_COMMIT_LOGS` (SourceControl) and SyncModal's leftover GitHub handlers/footer.
-3. The auth middleware is weak: `/api/auth/token` is unauthenticated, so any local page can grab the token. Pair with the Track B hardening (bind 127.0.0.1, lock CORS) to make it meaningful.
-4. `DirectorySettingsModal` props changed (now `modWorkspacePath`/`filesystemPath` instead of `dirHandle`); confirm `App.tsx` passes the matching props.
+11. **Auto-sync vs validation:** `compileAndSaveAll` calls `validatePackageReadiness` which throws on errors (e.g. no cue / no name). With auto-sync on every edit, this can block snapshots

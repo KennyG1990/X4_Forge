@@ -517,7 +517,17 @@ All browser-verified at `http://localhost:3000`. Existing oracles green after th
 - **Inc 2 — drill-down UI — DONE (same pass, browser-verified).** `PackageModDoctor.tsx`: every `xml_patches` collision finding now renders an **OVERRIDE MAP** chip; click → fetch `/api/agent/override-map?file=<finding.filePath>` → modal showing the resolution badge (BASE-RESOLVED / SELECTOR-STRING), the file's load order, contested/merged/single counts, and per-entry rows (node, kind, claims as `folder:op` chips in load order with the surviving claim highlighted, CONTESTED/MERGED badges, crown = load-order winner). *Verified live:* DOCTOR tab → Scan → all 4 real collision findings grew chips → deadair chip opened the modal: `(entire file)` FILE CONTESTED, claims `deadair_scripts:fullfile` → `deadairdynamicuniverse:fullfile`, winner `deadairdynamicuniverse`, counts `1 contested · 0 merged · 0 single`; close-on-X and click-outside work; zero console errors. (The BASE-RESOLVED path has no reachable UI case on this install — no contested diff targets — but is API-verified on `libraries/jobs.xml`.)
 - **Process note (cost us one retry):** the host Edit tool truncated `PackageModDoctor.tsx` mid-write — the CRLF-truncation hazard is NOT limited to the big three files. Recovery: restore from HEAD + node exact-string splice (same recipe as `server.ts`). Also: `server.ts` is now **LF** in both repo and working tree (normalized during commit), and the `.git` index corrupted once more through the mount (repaired via `read-tree HEAD`, no history damage). **T4.4 is COMPLETE.**
 
-## Tier 4 — ecosystem levers (proposed 2026-06-12; T4.4 SHIPPED — next: T4.1 spike)
+### Changelog — 2026-06-12 (36th pass, Fable: T4.1 spike — cat/dat compression + round-trip oracle; lever re-scoped)
+
+All browser-verified at `http://localhost:3000`; regression sweep green after the change (main `selftest` 10/10, `override-map?file=libraries/jobs.xml` still `resolution:"base"`, object index serving live hits).
+
+- **Honest re-scope first:** T4.1's headline — zero-extraction vanilla access — **already existed in production**: `src/lib/x4CatDat.ts` powers the object index (17k rows from 66 archives), `/api/patch/base-content`, and the override-map's vanilla resolution. What was actually missing: (1) **compression handling** — the reader had none, so gzip/zlib `.pck` entries would decode as garbage; (2) **a format oracle** — no selftest proving the parse→read→decode round-trip against known bytes. The spike closed exactly those two gaps by **extending `x4CatDat.ts`** (one module per capability — no new `catdat.ts`).
+- **`decodeEntryBuffer()` (NEW in `x4CatDat.ts`):** magic-sniffing decoder (gzip `1f 8b`, zlib `78 xx` + checksum test) using node:zlib; **defensive by design** — any decompression failure falls back to raw UTF-8 instead of throwing (the format is community-documented, not an Egosoft contract). `readEntryText` now decodes transparently, upgrading every existing extraction path. Plus **`.pck` alias resolution** in `extractGameFile`/`extractBaseGameFile`: a request for `t/0001.xml` also matches a stored `t/0001.pck` (exact name wins).
+- **`runCatDatSelftest()` — 12/12 PASS** over a synthetic fixture built in `os.tmpdir()` (never shipped game data): right-tokenized paths with spaces, malformed manifest line skipped, cumulative offsets/sizes, plain/gzip/zlib round-trips, truncated-gzip graceful fallback, cat-without-dat ignored by discovery, later-archive-wins override order, and the `.pck` alias. Public `GET /api/agent/catdat-selftest` (in `PUBLIC_READONLY_GETS`).
+- **Real-data probe:** `/api/patch/base-content` returns valid XML for `t/0001-l044.xml` (680 B) and `t/0001.xml` (49 KB) from the real install. *Attribution caveat:* whether those entries are pck-stored or plain isn't observable through the endpoint — the fixture is the decompression proof; the probe proves no regression and end-to-end extraction.
+- **Remaining T4.1 increments re-scoped:** *Inc 2 (VFS-backed pickers)* — **already satisfied** by the 11th-pass object-index pickers (live-index typeaheads). *Inc 1 (SQLite content cache for extracted files)* — **deferred, perf-only**: extraction is already positioned-read (no full .dat loads) and the object index is SQLite-cached; cache file *content* only if base-content/override-map latency ever becomes a felt problem. **T4.1 is functionally complete; next lever: T4.2 diff-to-patch** (its dependency — vanilla source on demand — is now proven).
+
+## Tier 4 — ecosystem levers (proposed 2026-06-12; T4.4 + T4.1 SHIPPED — next: T4.2)
 
 Four high-value additions that round the studio out from "mod authoring" into "mod ecosystem." They are **annotated with what they extend** so we build on existing modules rather than spawn parallel ones (the lesson of the UI Layout episode). They also form a **dependency chain**, not four independent silos — order matters.
 
@@ -557,9 +567,9 @@ Four high-value additions that round the studio out from "mod authoring" into "m
 - *Inc 2 — UI:* ✅ **DONE (35th pass, browser-verified).** OVERRIDE MAP chip on every `xml_patches` collision finding → modal with resolution badge, load order, and per-entry claims/winner. See the 35th-pass changelog.
 
 **T4.1 Zero-extraction VFS (keystone, spike first):**
-- *Inc 0 — read-only spike:* `src/lib/catdat.ts` — parse one `.cat` index, list entries, extract+decompress one known `.dat` slice (handle PCK/zlib). `runCatDatSelftest()` against a tiny synthetic cat/dat fixture committed to the repo (NOT a shipped game file). Public GET. **Stop and confirm round-trip before any UI.**
-- *Inc 1 — cache:* fold extracted entries into `src/lib/db.ts` (SQLite) keyed by archive+path+mtime.
-- *Inc 2 — pickers:* make `ObjectIndexPicker` / patch-target picker VFS-backed (lazy, on-demand) instead of hardcoded lists.
+- *Inc 0 — read-only spike:* ✅ **DONE (36th pass).** Extended the EXISTING `src/lib/x4CatDat.ts` (no new module): `decodeEntryBuffer` gzip/zlib + graceful fallback, `.pck` aliases, `runCatDatSelftest()` 12/12 over a tmpdir fixture, public `GET /api/agent/catdat-selftest`. See the 36th-pass changelog.
+- *Inc 1 — cache:* **DEFERRED (perf-only).** Object index already SQLite-cached; extractions are positioned reads. Cache extracted *content* only if base-content/override-map latency becomes a felt problem.
+- *Inc 2 — pickers:* ✅ **ALREADY SHIPPED (11th pass)** — `ObjectIndexPicker` + patch-target picker are live-index typeaheads backed by the packed archives. The lever's goal predated the pass that delivered it.
 
 **T4.2 Diff-to-Patch (needs T4.1):**
 - *Inc 1 — engine:* `src/lib/xpathSynth.ts` — `synthesizePatch(vanillaXml, editedXml)` → minimal `<diff>` ops, preferring id/name selectors over positional `[n]`. `runXpathSynthSelftest()` must round-trip: apply the generated patch to vanilla and assert it reproduces the edit.
@@ -882,42 +892,4 @@ The report names six MVP components. The studio already covers four, can credibl
 - **P-F — Interop-friendly UI generation.** *(Pain #4, partial.)* Emit UI via the community callback pattern; flag whole-function Lua overrides as conflict risks.
 - *(Optional / low)* Workshop-publish GUI wrapper (#8); modified-tag explainer (#10).
 
-**Honest scope line:** P-A→P-F turn the report's "X4 is moddable but the workflow is archaeology" into "the studio *is* the workflow" for the text / XML / MD / script surface — which is exactly where the report says ~three-quarters of the friction lives. The three pains we can't touch (3D/character assets, an in-game plugin/IPC bridge, the engine-level UI hook layer) are Egosoft-platform features, and the roadmap should keep saying so rather than pretend otherwise.
-
-## Lower-priority UX polish
-
-UE5-style UX polish — drag-to-search, comment-group cards, reroute nodes, content-browser drag-drop, the cue-tree/behavior-tree view. All worth doing, but none is as important as Mod Doctor, live game feedback, game-data indexing, round-trip safety, or diff-safe patching. (Note: when we do build the graph model, lean toward MD's *declarative behavior-tree* nature rather than UE5's imperative exec-flow metaphor.)
-
----
-
-## Open questions to resolve before/early in M1
-- X4 install path + mod folder conventions on the target machine (for A3 packaging).
-- Which real Egosoft MD scripts become the golden round-trip corpus (for A1).
-- Division of labor: which track each agent/person owns.
-
----
-
-## Appendix — Compiler correctness vs Egosoft conventions
-
-Each of the eight content domains the app can emit, weighed against documented X4 modding conventions (Egosoft wiki + community patch/extension references). "DoD" = what A4 must make true. Status reflects the **current** main-branch output.
-
-| Domain | Output location | Status vs Egosoft | What's wrong / DoD |
-|---|---|---|---|
-| **content.xml / packaging** | `extensions/<id>/content.xml` | ✅ Correct core | Root attrs, `date=YYYY-MM-DD`, `save`, `enabled`, `<text language="44">`, lowercase `<id>` all good. **Fixed 2026-06-11:** `toContentVersion` now uses numeric `version × 100` conversion (`"2.5"→"250"`, `"0.25"→"25"`), verified through `/api/agent/compile`. Remaining enhancement: no `<dependency>` support yet (other extensions / DLC gating). |
-| **MD scripts** | `md/<id>.xml` | ✅ Correct | `noNamespaceSchemaLocation="md.xsd"`, folder, cue tree all valid. Most mature compiler. |
-| **UI layouts** | `ui.xml` (extension root) + `ui/<id>.lua` | ✅ Fixed 2026-06-11 | **Reworked to X4-correct packaging.** The packager now writes an extension-root `ui.xml` `<addon><environment type="menus"><file name="ui/<id>.lua"/></environment></addon>` index (format verified against the kuertee `x4-mod-ui-extensions` reference mod) plus a packaged `ui/<id>.lua` entry point that registers through X4's real `Menus` table + `Helper.registerMenu` pattern (guarded so a missing global fails soft). The previous non-standard `md_ui_layouts/<id>_ui.xml` `<ui_menu>` output (which X4 ignored) is no longer packaged — `generateUIXML` is retained only as a design-time descriptor for the in-app preview. The invented `RegisterLayout`/`RemoveAllUITriggers` calls are gone. Remaining enhancement: the Lua's `onShowMenu` widget construction is scaffolded with widget metadata; building actual widgets via `widgetSystem` and in-game verification is the next step (Mod Doctor now emits an info diagnostic saying exactly this). **[Correction 2026-06-11: this note describes only the auto-packaged `ui/<id>.lua` path. The interactive HUD & LUA UI tab — widget library, Layout GUI Designer, Lua Script Event Manager, and a syntax-validated Lua editor — does produce working in-game Lua/UI. See "Capability gaps & upgrade levers → Lever 3" up top.]** |
-| **AI scripts** | `aiscripts/<name>.xml` | ✅ Correct core | `aiscripts.xsd` ref + `<params>/<attention>/<actions>` structure broadly right. **Verified 2026-06-11:** local `aiscripts.xsd` requires `<param type=...>`, so that warning was stale. **Fixed 2026-06-11:** the shared compiler and AIScript preview no longer inject a hidden `<wait exact="5s"/><resume label="start"/>` loop into every script; generated actions now reflect only explicit user-authored behavior. Remaining enhancements: richer order-block support and deeper schema coverage for advanced AI commands. |
-| **Wares** | `libraries/wares.xml` (`<diff><add sel="/wares">`) | ✅ Correct core | Diff-as-file pattern is **correct** (X4 detects `<diff>` root and patches base `libraries/wares.xml`). **Fixed 2026-06-11:** the compiler no longer fabricates `ore`+`energycells` or hardcoded `tags="economy equipment"` for every ware. Tags, production method/name, and primary input wares are now explicit editable fields; missing inputs produce Mod Doctor warnings instead of hidden fake data. Remaining enhancement: richer schema-aware ware editor for advanced production methods/effects. |
-| **Jobs** | `libraries/jobs.xml` (`<diff><add sel="/jobs">`) | ⚠️ Valid shape, thin | Diff pattern correct. But `<expiration>`, `<loadout><level>`, `<modifiers>` hardcoded; `tags="military <shipClass>"` uses shipClass as a tag (approximate). Real jobs schema is much richer (basket, environment, location, orders). Approximation only. |
-| **Translations** | `t/0001-l<lang>.xml` | ✅ Correct core | `<language id><page id><t id>` structure correct. **Fixed 2026-06-11:** translation filenames now normalize to lowercase, zero-padded paths (`0001-l044.xml`, `0001-l049.xml`) across the shared compiler, server package manifest, deploy writer, import paths, Mod Doctor, and UI help text. Remaining enhancement: no guard pushing custom page IDs into a high range to avoid clobbering vanilla strings. |
-| **XML diff patches** | `<targetFile>` (`<diff>` w/ `add`/`replace`/`remove sel=`) | ✅ Correct core (updated) | Matches the documented patch convention (XPath `sel`, three ops). **Reconciled 2026-06-11 (was stale vs P5):** `pos="before\|after\|prepend\|append"` on `<add>` is implemented in both the editor and `compileDiffDocument`; client-side XPath validation reports 0/1/many matches and invalid-selector syntax against the resolved base file; and base-file resolution now works for **packed** targets too (`/api/patch/base-content` decodes `.cat/.dat`). Remaining: the default target `libraries/ship_macros.xml` is still a guess (that file does not exist in X4 — verified: `/api/patch/base-content` returns 404 for it), so the default should be changed and per-domain XPath diagnostics surfaced into Mod Doctor. |
-
-**Reading of the table:** the *diff-based* domains (wares, jobs, patches) are structurally on the rails but emit placeholder content; the *UI* domain is split — it already has a Lua path pointed at the right place (`/ui/`) but doesn't package it, while the thing it *does* package (`md_ui_layouts/<ui_menu>`) is non-standard; `content.xml` has a real version bug; MD is solid. So A4 isn't just "move code" — it's "move code **and** fix these per-domain correctness issues as you go," with the round-trip + XSD harness (A1/A2) as the safety net that proves each fix.
-
----
-
-## Sources
-- [Egosoft Wiki — Modding Support](https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding%20Support/)
-- [Egosoft Wiki — h2odragon's HOWTO-hackx4f](https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding%20Support/ScriptingMD/Community%20Guides/h2odragon's%20HOWTO-hackx4f/)
-- [Steam — Workshop for X Rebirth and X4 (content.xml / version)](https://steamcommunity.com/sharedfiles/filedetails/?id=245117855)
-- [kuertee/x4-mod-ui-extensions — content.xml example](https://github.com/kuertee/x4-mod-ui-extensions/blob/master/content.xml)
+**Honest scope line:** P-A→P-F turn the report's "X4 is moddable but the workflow is archaeology" into "the studio *is* the workflow" for the text / XML / MD / script surface — which is exactly where the report says ~three-quarters of the friction lives. The thre
