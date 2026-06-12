@@ -15,7 +15,6 @@ import {
   AlertCircle, 
   BookOpen, 
   HelpCircle, 
-  Sparkles,
   ToggleLeft,
   ToggleRight,
   ChevronDown,
@@ -23,8 +22,7 @@ import {
   X,
   Zap
 } from 'lucide-react';
-import { ModWorkspace, validateModWorkspace, generateMDXML, NODE_TEMPLATES, UIWidget, MDNode } from '../types';
-import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
+import { ModWorkspace, NODE_TEMPLATES, UIWidget, MDNode } from '../types';
 
 interface AgentBridgeProps {
   isOpen: boolean;
@@ -43,7 +41,7 @@ export default function AgentBridge({
   localVersion,
   setLocalVersion
 }: AgentBridgeProps) {
-  const [activeTab, setActiveTab] = useState<'docs' | 'simulator' | 'status' | 'execute'>('docs');
+  const [activeTab, setActiveTab] = useState<'docs' | 'status' | 'execute'>('docs');
   const [copiedTextId, setCopiedTextId] = useState<string | null>(null);
 
   // Surgical Console states
@@ -335,13 +333,6 @@ export default function AgentBridge({
   const [lastSyncedTime, setLastSyncedTime] = useState<string>("Never");
   const [isServerHealthy, setIsServerHealthy] = useState<boolean>(true);
   
-  // Simulator State
-  const [simPrompt, setSimPrompt] = useState<string>("Create a custom mission where the Argon faction rewards the player with 500,000 credits for entering sector player.sector, while playing an alarm_red sound.");
-  const [simLoading, setSimLoading] = useState<boolean>(false);
-  const [simError, setSimError] = useState<string | null>(null);
-  const [simSuccess, setSimSuccess] = useState<string | null>(null);
-  const [simDiagnostics, setSimDiagnostics] = useState<any[]>([]);
-
   // Documentation collapsables
   const [collapsedEndpoints, setCollapsedEndpoints] = useState<Record<string, boolean>>({
     schema: true,
@@ -415,64 +406,6 @@ export default function AgentBridge({
       setWorkspace(pendingWorkspace);
       setLocalVersion(serverVersion);
       setPendingWorkspace(null);
-      setSimSuccess("External workspace state successfully loaded!");
-      setTimeout(() => setSimSuccess(null), 3000);
-    }
-  };
-
-  // Run the Agent Simulator request directly as if it were an external client calling the generate endpoint
-  const runSimulator = async () => {
-    if (!simPrompt.trim()) return;
-    setSimLoading(true);
-    setSimError(null);
-    setSimSuccess(null);
-    setSimDiagnostics([]);
-
-    try {
-      const currentCode = generateMDXML(workspace);
-      const diagnostics = validateModWorkspace(workspace, currentCode);
-
-      const response = await fetch("/api/agent/generate", {
-        method: "POST",
-        headers: getAIHeaders(),
-        body: JSON.stringify({ 
-          prompt: simPrompt,
-          currentWorkspace: workspace,
-          diagnostics: diagnostics
-        })
-      });
-
-      const data = await handleApiResponse(response, "Failed to trigger automated generation.");
-
-      // Generation was successful and updated the server workspace state
-      setWorkspace(data.workspace);
-      setLocalVersion(data.version);
-      setServerVersion(data.version);
-      
-      const genDiagnostics = data.diagnostics || [];
-      setSimDiagnostics(genDiagnostics);
-
-      const errors = genDiagnostics.filter((d: any) => d.severity === 'error');
-      const warnings = genDiagnostics.filter((d: any) => d.severity === 'warning');
-
-      const hasIssues = errors.length > 0 || warnings.length > 0;
-      let msg = `${hasIssues ? 'Generated with issues.' : 'Success!'} The AI Agent has designed a custom mod layout named "${data.workspace.name}" with ${data.workspace.nodes.length} nodes.`;
-      if (hasIssues) {
-        msg += ` The generated layout has ${errors.length} error(s) and ${warnings.length} warning(s) remaining in Egosoft validation checks.`;
-      } else {
-        msg += ` The logic complies fully with Egosoft schema checks (0 errors/warnings).`;
-      }
-      if (data.selfHealFailed) {
-        msg += data.selfHealError
-          ? ` (Self-heal phase failed: ${data.selfHealError} — the un-healed layout was applied.)`
-          : ` (Phased auto-remedy healing failed to resolve all diagnostics.)`;
-      }
-      setSimSuccess(msg);
-    } catch (err: any) {
-      console.error(err);
-      setSimError(err.message || "Something went wrong during simulation.");
-    } finally {
-      setSimLoading(false);
     }
   };
 
@@ -565,17 +498,6 @@ export default function AgentBridge({
         >
           <BookOpen className="w-3.5 h-3.5 inline mr-1.5" />
           API Docs
-        </button>
-        <button
-          onClick={() => setActiveTab('simulator')}
-          className={`flex-1 py-1.5 rounded font-mono text-[11px] font-bold transition-all cursor-pointer ${
-            activeTab === 'simulator' 
-              ? 'bg-[#df9825]/10 text-[#df9825] border border-[#df9825]/30' 
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          <Sparkles className="w-3.5 h-3.5 inline mr-1.5" />
-          Agent Simulator
         </button>
         <button
           onClick={() => setActiveTab('execute')}
@@ -837,98 +759,6 @@ export default function AgentBridge({
                 )}
               </div>
 
-            </div>
-
-          </div>
-        )}
-
-        {/* -----------------------------------------------------
-            VIEW TAB: AGENT SIMULATOR (PLAYGROUND)
-            ----------------------------------------------------- */}
-        {activeTab === 'simulator' && (
-          <div className="space-y-4">
-            
-            <div className="p-3.5 bg-[#df9825]/5 border border-[#df9825]/20 rounded-lg space-y-2 text-[11px] font-sans">
-              <span className="font-bold text-[#df9825] uppercase tracking-wide font-mono flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-[#df9825] animate-pulse" />
-                SIMULATE EXTEMAL AGENT DEMAND
-              </span>
-              <p className="text-slate-300 leading-relaxed leading-normal">
-                Want to see how an AI agent uses this tool? Write down an instruction representing what the mod should accomplish.
-              </p>
-              <p className="text-slate-400 leading-normal text-[10px]">
-                Upon hitting the execution button below, we trigger a standard `API POST` call to our `/api/agent/generate` endpoint, which translates this into fully formatted visual nodes, wired links, and dashboard sliders!
-              </p>
-            </div>
-
-            {/* Input area */}
-            <div className="space-y-1.5">
-              <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider">Mod Logic Prompt Script:</label>
-              <textarea
-                value={simPrompt}
-                onChange={(e) => setSimPrompt(e.target.value)}
-                rows={5}
-                className="w-full bg-[#0a0c10] border border-white/10 rounded-lg p-3 text-[11px] font-sans text-white focus:outline-none focus:border-[#df9825] leading-relaxed"
-                placeholder="Give an instruction for the mission script..."
-              />
-            </div>
-
-            {/* Simulation feedback messages */}
-            {simError && (
-              <div className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-300 rounded text-[10px] transition-all flex items-start gap-1.5 leading-relaxed font-sans">
-                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                <span>{simError}</span>
-              </div>
-            )}
-
-            {simSuccess && (
-              <div className="space-y-2">
-                <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded text-[10px] transition-all flex items-start gap-1.5 leading-relaxed font-sans">
-                  <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 animate-bounce" />
-                  <span>{simSuccess}</span>
-                </div>
-                {simDiagnostics.length > 0 && (
-                  <div className="space-y-1 bg-black/40 border border-white/10 p-2.5 rounded-lg max-h-32 overflow-y-auto scrollbar-thin">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Generated Diagnostics:</span>
-                    {simDiagnostics.map((diag, idx) => {
-                      const itemStyle = diag.severity === 'error' ? 'text-red-400' : 'text-amber-400';
-                      return (
-                        <div key={idx} className={`text-[10px] leading-relaxed flex items-start gap-1 ${itemStyle}`}>
-                          <span className="shrink-0">•</span>
-                          <span>[{diag.severity.toUpperCase()}] {diag.message}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Execute Button */}
-            <button
-              onClick={runSimulator}
-              disabled={simLoading || !simPrompt.trim()}
-              className="w-full py-2.5 bg-[#df9825] hover:bg-[#df9825]/90 text-black font-bold font-mono tracking-wide rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-            >
-              {simLoading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>AGENT IS COGNIZING (GEMINI)...</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4" />
-                  <span>SIMULATE APICALL POST GENERATE</span>
-                </>
-              )}
-            </button>
-
-            {/* Hint guidelines */}
-            <div className="p-3 bg-white/[0.02] border border-white/5 rounded-lg space-y-1 text-[10px] text-slate-400 font-sans leading-normal">
-              <span className="font-bold text-slate-300 block mb-0.5 uppercase tracking-wider">TIPS FOR PROMPT DEFINITION:</span>
-              <p>• Include both MD visual nodes (e.g. spawn ships, set relations, play warning, reward player credits).</p>
-              <p>• Define some hud panel indicators (e.g. text logs, buttons to reset values or tables to list tasks).</p>
-              <p>• The agent automatically places nodes at visually structured locations so the diagram is clear.</p>
             </div>
 
           </div>
