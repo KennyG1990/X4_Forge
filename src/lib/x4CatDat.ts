@@ -19,6 +19,8 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import zlib from 'zlib';
 
 export interface CatEntry {
   /** forward-slash normalized relative path, e.g. "libraries/wares.xml" */
@@ -132,9 +134,28 @@ export function readEntryBytes(datPath: string, entry: CatEntry): Buffer {
   }
 }
 
-/** Read one entry as UTF-8 text. */
+/**
+ * Magic-sniffing decoder for packed entry bytes. X4 stores most entries as
+ * plain UTF-8, but `.pck` entries (and some others) are gzip- or zlib-
+ * compressed. Defensive by design: the cat/dat format is community-documented,
+ * not an Egosoft public contract — on any decompression failure we fall back
+ * to returning the raw bytes as UTF-8 rather than throwing.
+ */
+export function decodeEntryBuffer(buf: Buffer): { text: string; encoding: 'plain' | 'gzip' | 'zlib' } {
+  if (buf.length >= 2) {
+    if (buf[0] === 0x1f && buf[1] === 0x8b) {
+      try { return { text: zlib.gunzipSync(buf).toString('utf8'), encoding: 'gzip' }; } catch { /* fall through to raw */ }
+    }
+    if (buf[0] === 0x78 && ((buf[0] << 8) + buf[1]) % 31 === 0) {
+      try { return { text: zlib.inflateSync(buf).toString('utf8'), encoding: 'zlib' }; } catch { /* fall through to raw */ }
+    }
+  }
+  return { text: buf.toString('utf8'), encoding: 'plain' };
+}
+
+/** Read one entry as UTF-8 text, transparently decompressing gzip/zlib (.pck) entries. */
 export function readEntryText(datPath: string, entry: CatEntry): string {
-  return readEntryBytes(datPath, entry).toString('utf8');
+  return decodeEntryBuffer(readEntryBytes(datPath, entry)).text;
 }
 
 export interface ExtractMatch {
@@ -232,10 +253,24 @@ export function debugScan(roots: string[], includeSubst = false) {
  * e.g. "libraries/wares.xml". Returns the merged/overridden content (last
  * archive wins) or null if not found in any archive.
  */
+/**
+ * Candidate packed names for a requested path: X4 ships some files as
+ * compressed `.pck` siblings of their logical name (e.g. `t/0001.xml` may be
+ * stored as `t/0001.pck`). The exact name always wins over an alias.
+ */
+function pckAliases(target: string): Set<string> {
+  const out = new Set<string>([target]);
+  out.add(target + '.pck');
+  if (/\.(xml|lua)$/.test(target)) out.add(target.replace(/\.(xml|lua)$/, '.pck'));
+  return out;
+}
+
 export function extractGameFile(roots: string[], relativePath: string): ExtractMatch | null {
   const target = relativePath.replace(/\\/g, '/').toLowerCase().replace(/^\/+/, '');
-  const result = extractEntries(roots, name => name === target, { includeSubst: true });
-  return result.matches[0] || null;
+  const candidates = pckAliases(target);
+  const result = extractEntries(roots, name => candidates.has(name), { includeSubst: true });
+  const exact = result.matches.find(m => m.name.toLowerCase() === target);
+  return exact || result.matches[0] || null;
 }
 
 /**
@@ -249,6 +284,7 @@ export function extractGameFile(roots: string[], relativePath: string): ExtractM
 export function extractBaseGameFile(gameRoot: string, relativePath: string): ExtractMatch | null {
   if (!gameRoot) return null;
   const target = relativePath.replace(/\\/g, '/').toLowerCase().replace(/^\/+/, '');
+  const candidates = pckAliases(target);
   let stat: fs.Stats | undefined;
   try {
     stat = fs.statSync(gameRoot);
@@ -281,7 +317,7 @@ export function extractBaseGameFile(gameRoot: string, relativePath: string): Ext
       continue;
     }
     for (const entry of entries) {
-      if (entry.name.toLowerCase() !== target) continue;
+      if (!candidates.has(entry.name.toLowerCase())) continue;
       try {
         found = { name: entry.name, text: readEntryText(datPath, entry), catPath };
       } catch {
@@ -290,4 +326,95 @@ export function extractBaseGameFile(gameRoot: string, relativePath: string): Ext
     }
   }
   return found;
+}
+
+// ---------------------------------------------------------------------------
+// T4.1 Inc 0 — spike oracle: prove the cat parse → positioned dat read →
+// decompress round-trip against a SYNTHETIC fixture built in os.tmpdir()
+// (never a shipped game file). Covers: right-tokenized paths with spaces,
+// malformed manifest lines, cumulative offsets, plain/gzip/zlib entries,
+// truncated-compressed graceful fallback, cat-without-dat discovery, archive
+// override order, and .pck alias resolution.
+// ---------------------------------------------------------------------------
+
+export interface CatDatSelftestCheck { name: string; pass: boolean; detail?: string }
+
+export function runCatDatSelftest(): { pass: boolean; checks: CatDatSelftestCheck[] } {
+  const checks: CatDatSelftestCheck[] = [];
+  const ok = (name: string, pass: boolean, detail?: string) => checks.push({ name, pass, detail });
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4catdat-selftest-'));
+  try {
+    const plainV1 = '<wares note="v1"><ware id="a"/></wares>';
+    const plainV2 = '<wares note="v2"><ware id="a"/><ware id="b"/></wares>';
+    const mdText = '<mdscript name="Packed"><cues><cue name="C1"/></cues></mdscript>';
+    const tText = '<language id="44"><t id="1">Hello</t></language>';
+    const spacesText = '<doc kind="spaces in path"/>';
+
+    const gz = zlib.gzipSync(Buffer.from(mdText, 'utf8'));
+    const zl = zlib.deflateSync(Buffer.from(tText, 'utf8'));
+    const corrupt = zlib.gzipSync(Buffer.from('boom', 'utf8')).subarray(0, 8); // truncated gzip
+
+    // 01.cat/.dat — plain v1 + gzip + zlib(.pck) + spaces path + corrupt, then a malformed line.
+    const parts1 = [
+      { name: 'libraries/plain.xml', data: Buffer.from(plainV1, 'utf8') },
+      { name: 'md/packed.xml', data: gz },
+      { name: 't/0001.pck', data: zl },
+      { name: 'path with spaces/file.xml', data: Buffer.from(spacesText, 'utf8') },
+      { name: 'broken/corrupt.xml', data: corrupt }
+    ];
+    let catLines = '';
+    for (const p of parts1) catLines += p.name + ' ' + p.data.length + ' 1700000000 ' + '0'.repeat(32) + '\n';
+    catLines += 'malformed line\n';
+    fs.writeFileSync(path.join(tmp, '01.cat'), catLines);
+    fs.writeFileSync(path.join(tmp, '01.dat'), Buffer.concat(parts1.map(p => p.data)));
+
+    // 02.cat/.dat — overrides libraries/plain.xml (later archive must win).
+    const d2 = Buffer.from(plainV2, 'utf8');
+    fs.writeFileSync(path.join(tmp, '02.cat'), 'libraries/plain.xml ' + d2.length + ' 1700000001 ' + '1'.repeat(32) + '\n');
+    fs.writeFileSync(path.join(tmp, '02.dat'), d2);
+
+    // 03.cat with no paired .dat — discovery must ignore it.
+    fs.writeFileSync(path.join(tmp, '03.cat'), 'ghost/file.xml 4 1700000002 ' + '2'.repeat(32) + '\n');
+
+    const entries = parseCat(path.join(tmp, '01.cat'));
+    ok('parseCat: 5 entries, malformed line skipped', entries.length === 5, 'got ' + entries.length);
+    const offsetsOk = entries.length === 5 && entries.every((e, i) =>
+      e.size === parts1[i].data.length &&
+      e.offset === parts1.slice(0, i).reduce((s, p) => s + p.data.length, 0));
+    ok('parseCat: cumulative offsets and sizes correct', offsetsOk);
+    ok('parseCat: spaces-in-path name tokenized from the right',
+      entries.length === 5 && entries[3].name === 'path with spaces/file.xml', entries[3] && entries[3].name);
+
+    const datPath = path.join(tmp, '01.dat');
+    ok('positioned read: plain entry byte-identical', readEntryBytes(datPath, entries[0]).equals(parts1[0].data));
+
+    const dPlain = decodeEntryBuffer(readEntryBytes(datPath, entries[0]));
+    ok('decode: plain entry stays plain', dPlain.encoding === 'plain' && dPlain.text === plainV1, dPlain.encoding);
+    const dGz = decodeEntryBuffer(readEntryBytes(datPath, entries[1]));
+    ok('decode: gzip entry round-trips to original XML', dGz.encoding === 'gzip' && dGz.text === mdText, dGz.encoding);
+    const dZl = decodeEntryBuffer(readEntryBytes(datPath, entries[2]));
+    ok('decode: zlib .pck entry round-trips to original XML', dZl.encoding === 'zlib' && dZl.text === tText, dZl.encoding);
+    const dBad = decodeEntryBuffer(readEntryBytes(datPath, entries[4]));
+    ok('decode: truncated gzip degrades to raw bytes without throwing', dBad.encoding === 'plain');
+
+    const arcs = findCatDatArchives([tmp]);
+    ok('discovery: cat without dat ignored (2 archives found)', arcs.length === 2, 'got ' + arcs.length);
+
+    const over = extractGameFile([tmp], 'libraries/plain.xml');
+    ok('override order: later archive wins for a shared path',
+      !!over && over.text === plainV2 && /02\.cat$/i.test(over.catPath), over ? over.catPath : 'no match');
+
+    const viaAlias = extractGameFile([tmp], 't/0001.xml');
+    ok('pck alias: t/0001.xml resolves to stored t/0001.pck, decompressed',
+      !!viaAlias && viaAlias.name === 't/0001.pck' && viaAlias.text === tText, viaAlias ? viaAlias.name : 'no match');
+
+    const baseHit = extractBaseGameFile(tmp, 'md/packed.xml');
+    ok('extractBaseGameFile: gzip md entry decompressed from root archives',
+      !!baseHit && baseHit.text === mdText);
+  } catch (e: any) {
+    ok('selftest harness error: ' + String((e && e.message) || e), false);
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+  return { pass: checks.every(c => c.pass), checks };
 }

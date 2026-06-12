@@ -42,7 +42,7 @@ import {
 } from "./src/lib/modCompiler";
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
-import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat } from "./src/lib/x4CatDat";
+import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
@@ -178,7 +178,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
   "/agent/ui-layout-selftest",
-  "/agent/override-map-selftest"
+  "/agent/override-map-selftest",
+  "/agent/catdat-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3189,6 +3190,16 @@ app.get("/api/agent/override-map-selftest", (_req, res) => {
     return res.json(runOverrideMapSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "override-map-selftest failed" });
+  }
+});
+
+// T4.1 Inc 0 — cat/dat round-trip spike oracle (synthetic fixture; proves
+// parse → positioned read → gzip/zlib decompress before any VFS UI is built).
+app.get("/api/agent/catdat-selftest", (_req, res) => {
+  try {
+    return res.json(runCatDatSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "catdat-selftest failed" });
   }
 });
 
