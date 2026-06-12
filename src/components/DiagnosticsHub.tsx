@@ -10,7 +10,6 @@ import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import { toSafeModId } from '../lib/modCompiler';
 import MDScanner from './MDScanner';
 import PlaytestWorkspace from './PlaytestWorkspace';
-import CueLineageTree from './CueLineageTree';
 
 interface DiagnosticsHubProps {
   workspace: ModWorkspace;
@@ -243,8 +242,6 @@ export default function DiagnosticsHub({
       {/* Panel viewport */}
       <div className="flex-1 overflow-y-auto bg-[#06070a]/95 min-h-0">
         {currentTab === 'analyzer' ? (
-          <>
-          <CueLineageTree workspace={workspace} />
           <MDScanner
             workspace={workspace}
             analysisResult={analysisResult}
@@ -254,7 +251,6 @@ export default function DiagnosticsHub({
             isAnalysisStale={isAnalysisStale}
             cancelAnalysis={cancelAnalysis}
           />
-          </>
         ) : (
           <PlaytestWorkspace
             activeModId={toSafeModId(workspace.name)}

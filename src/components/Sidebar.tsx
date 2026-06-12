@@ -48,6 +48,7 @@ import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
 import ObjectIndexPicker from './ObjectIndexPicker';
 import PackageModDoctor from './PackageModDoctor';
+import CueLineageTree from './CueLineageTree';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
@@ -687,11 +688,14 @@ export default function Sidebar({
 
         {activeTab === 'diagnostics' && (
           <ErrorBoundary label="Mod Doctor">
-            <PackageModDoctor
-              workspace={workspace}
-              diagnostics={diagnostics}
-              diagnosticSource={diagnosticSource}
-            />
+            <div className="flex flex-col h-full min-h-0 overflow-y-auto">
+              <CueLineageTree workspace={workspace} />
+              <PackageModDoctor
+                workspace={workspace}
+                diagnostics={diagnostics}
+                diagnosticSource={diagnosticSource}
+              />
+            </div>
           </ErrorBoundary>
         )}
 

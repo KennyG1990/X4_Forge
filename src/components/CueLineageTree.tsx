@@ -12,9 +12,10 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { GitBranch, AlertTriangle, AlertCircle, Zap, Ear, Radio, ChevronRight, CheckCircle2 } from 'lucide-react';
+import { GitBranch, AlertTriangle, AlertCircle, Zap, Ear, Radio, ChevronRight, CheckCircle2, Activity, FileText } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import { analyzeCueLineage, type CueLineageCueInfo } from '../lib/cueLineage';
+import { parseLogTelemetry, type CueTelemetry } from '../lib/logTelemetry';
 
 interface CueLineageTreeProps {
   workspace: ModWorkspace;
@@ -22,6 +23,8 @@ interface CueLineageTreeProps {
 
 export default function CueLineageTree({ workspace }: CueLineageTreeProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [logText, setLogText] = useState('');
+  const [showLog, setShowLog] = useState(false);
   const result = useMemo(
     () => analyzeCueLineage(workspace.nodes || [], workspace.links || []),
     [workspace.nodes, workspace.links]
@@ -39,11 +42,19 @@ export default function CueLineageTree({ workspace }: CueLineageTreeProps) {
 
   const byId = useMemo(() => new Map(cues.map(c => [c.id, c])), [cues]);
   const roots = cues.filter(c => c.parentId === null);
+  const cueTele = useMemo(() => {
+    if (!logText.trim()) return new Map<string, CueTelemetry>();
+    const t = parseLogTelemetry(logText, cues.map(c => c.name).filter(Boolean));
+    return new Map(t.cues.map(c => [c.name, c]));
+  }, [logText, cues]);
 
-  const renderCue = (cue: CueLineageCueInfo, depth: number): React.ReactNode => (
+  const renderCue = (cue: CueLineageCueInfo, depth: number): React.ReactNode => {
+    const tele = cue.name ? cueTele.get(cue.name) : undefined;
+    const rowTint = tele ? (tele.errors > 0 ? 'border-l-2 border-red-500 bg-red-500/5' : 'border-l-2 border-emerald-500 bg-emerald-500/5') : '';
+    return (
     <div key={cue.id}>
       <div
-        className="flex items-start gap-1.5 py-1 px-1.5 rounded hover:bg-white/5"
+        className={`flex items-start gap-1.5 py-1 px-1.5 rounded hover:bg-white/5 ${rowTint}`}
         style={{ paddingLeft: 6 + depth * 16 }}
       >
         <GitBranch className="w-3 h-3 text-cyan-500/70 mt-0.5 shrink-0" />
@@ -67,12 +78,18 @@ export default function CueLineageTree({ workspace }: CueLineageTreeProps) {
                 <Radio className="w-2.5 h-2.5" />{n}{danglingRefs.has(n) ? ' ✕' : ''}
               </span>
             ))}
+            {tele && (
+              <span className={`inline-flex items-center gap-0.5 text-[8.5px] font-bold ${tele.errors > 0 ? 'text-red-400' : 'text-emerald-400'}`} title="appearances in the bound log">
+                <Activity className="w-2.5 h-2.5" />{tele.hits}×{tele.errors > 0 ? ` ${tele.errors}✕` : ''}
+              </span>
+            )}
           </span>
         </div>
       </div>
       {cue.childIds.map(cid => { const child = byId.get(cid); return child ? renderCue(child, depth + 1) : null; })}
     </div>
-  );
+    );
+  };
 
   return (
     <div className="border-b border-white/5 bg-[#0a0c11]">
@@ -112,6 +129,25 @@ export default function CueLineageTree({ workspace }: CueLineageTreeProps) {
               </div>
               <div className="px-2 pt-2 text-[8.5px] text-slate-600 leading-relaxed">
                 Structural analysis only — flags dangling local cue refs, duplicate/unnamed cues, isolated cues, and broken links. Cross-script (<code className="text-slate-500">md.Script.Cue</code>) refs are treated as external.
+              </div>
+              <div className="mx-1 mt-2 border-t border-white/5 pt-2">
+                <button onClick={() => setShowLog(v => !v)} className="flex items-center gap-1 text-[9px] font-bold uppercase text-violet-300 hover:text-violet-200">
+                  <Activity className="w-3 h-3" />{showLog ? 'Hide' : 'Bind'} game log{cueTele.size > 0 ? ` (${cueTele.size} lit)` : ''}
+                </button>
+                {showLog && (
+                  <div className="mt-1.5 space-y-1">
+                    <textarea value={logText} onChange={e => setLogText(e.target.value)} spellCheck={false}
+                      placeholder={"Paste X4 debug-log text. Lines naming a cue (or [MDStudio] cue=<Name>) light it up; errors turn it red."}
+                      className="w-full h-24 p-2 rounded bg-black/60 border border-white/10 text-slate-300 font-mono text-[10px] leading-snug outline-none resize-y" />
+                    <div className="flex items-center gap-2">
+                      <label className="text-[9px] text-cyan-400 hover:text-cyan-300 cursor-pointer flex items-center gap-1">
+                        <FileText className="w-3 h-3" />Load .log file
+                        <input type="file" accept=".log,.txt" className="hidden" onChange={e => { const fl = e.target.files?.[0]; if (fl) { const rd = new FileReader(); rd.onload = () => setLogText(String(rd.result || '')); rd.readAsText(fl); } }} />
+                      </label>
+                      {logText && <button onClick={() => setLogText('')} className="text-[9px] text-slate-500 hover:text-red-400">clear</button>}
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}

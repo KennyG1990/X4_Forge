@@ -49,7 +49,8 @@ import type { SchemaLibrary } from "./src/lib/schemaTypes";
 import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
-import { runLogTelemetrySelftest } from "./src/lib/logTelemetry";
+import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
+import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
 import {
@@ -171,7 +172,9 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/contract-glue-sample",
   "/agent/lua-snippets",
   "/agent/cue-lineage-selftest",
-  "/agent/log-telemetry-selftest"
+  "/agent/log-telemetry-selftest",
+  "/agent/log-file-selftest",
+  "/agent/ui-layout-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3125,6 +3128,73 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
 // (a required missing dependency, a duplicate id, and two mods patching the same
 // libraries/jobs.xml with an identical selector) and assert each check fires. The real
 // install is conflict-clean, so this is how we prove the positive paths actually work.
+// Tier 2 / T1.1 — UI layout-descriptor engine self-test.
+app.get("/api/agent/ui-layout-selftest", (_req, res) => {
+  try {
+    res.json(runUILayoutSelftest());
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "ui-layout-selftest failed" });
+  }
+});
+
+// Tier 2 / T3.3 — read/tail an X4 debug-log file and parse it into cue telemetry.
+function readAndParseLogFile(filePath: string, cueNames: string[], maxBytes = 262144) {
+  const stat = fs.statSync(filePath);
+  let text: string;
+  if (stat.size > maxBytes) {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buf = Buffer.alloc(maxBytes);
+      fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes);
+      text = buf.toString("utf8");
+      const nl = text.indexOf("\n"); if (nl >= 0) text = text.slice(nl + 1); // drop the partial first line
+    } finally { fs.closeSync(fd); }
+  } else {
+    text = fs.readFileSync(filePath, "utf8");
+  }
+  return parseLogTelemetry(text, Array.isArray(cueNames) ? cueNames : []);
+}
+
+function runLogFileSelftest() {
+  const checks: { name: string; pass: boolean; detail?: any }[] = [];
+  const ok = (name: string, pass: boolean, detail?: any) => checks.push({ name, pass, detail });
+  const tmp = path.join(os.tmpdir(), `mdstudio_logtest_${Date.now()}.log`);
+  let cleaned = false;
+  try {
+    fs.writeFileSync(tmp, "[General] 1.0 cue Foo started\n[=ERROR=] 2.0 error in cue Bar: nil value\n");
+    const r = readAndParseLogFile(tmp, ["Foo", "Bar"]);
+    ok("reads_two_lines", r.totals.lines === 2);
+    ok("parses_one_error", r.totals.errors === 1);
+    ok("correlates_bar_error", !!r.cues.find(c => c.name === "Bar" && c.errors === 1));
+    ok("correlates_foo_clean", !!r.cues.find(c => c.name === "Foo" && c.errors === 0));
+  } catch (e: any) { ok("no_exception", false, String(e && e.message || e)); }
+  finally { try { fs.unlinkSync(tmp); cleaned = true; } catch {} }
+  ok("temp_cleaned_up", cleaned);
+  const passed = checks.filter(c => c.pass).length;
+  return { allPassed: passed === checks.length, passed, total: checks.length, checks };
+}
+
+app.get("/api/agent/log-file-selftest", (_req, res) => {
+  try {
+    res.json(runLogFileSelftest());
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "log-file-selftest failed" });
+  }
+});
+
+// Live-tail endpoint (authed): read the tail of a user-specified log file + parse it.
+app.post("/api/agent/log-file-tail", (req, res) => {
+  try {
+    const { path: filePath, cueNames, maxBytes } = (req.body || {}) as any;
+    if (!filePath || typeof filePath !== "string") return res.status(400).json({ error: "path required" });
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "file not found" });
+    const telemetry = readAndParseLogFile(filePath, cueNames, typeof maxBytes === "number" ? maxBytes : undefined);
+    res.json({ success: true, path: filePath, telemetry: { ...telemetry, entries: telemetry.entries.slice(-500) } });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "log-file-tail failed" });
+  }
+});
+
 // Tier 2 / T3.1 — log-telemetry parser self-test.
 app.get("/api/agent/log-telemetry-selftest", (_req, res) => {
   try {
