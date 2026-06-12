@@ -3697,13 +3697,27 @@ app.get("/api/agent/reference-selftest", (req, res) => {
     // Faction: invalid vs valid literal.
     const factionBad = validateXmlAgainstSchema('<create_ship macro="ship_arg_l_destroyer_01_a_macro"><owner exact="faction.notareal"/></create_ship>', index, { references });
     const factionGood = validateXmlAgainstSchema('<create_ship macro="ship_arg_l_destroyer_01_a_macro"><owner exact="faction.argon"/></create_ship>', index, { references });
+    const macroDiagnostics = diags.filter(d => d.code === 'REF_UNKNOWN_MACRO').map(d => ({ code: d.code, severity: d.severity, ref: d.sourceRef, message: d.message.slice(0, 110) }));
+    const timeFormatDiagnostics = timeDiags.filter(d => d.code === 'XSD_TIME_FORMAT').map(d => ({ code: d.code, severity: d.severity, message: d.message.slice(0, 110) }));
+    const durationEmittedWithUnit = /duration="8s"/.test(md);
+    const factionBadDetected = factionBad.some(d => d.code === 'REF_UNKNOWN_FACTION');
+    const factionGoodClean = !factionGood.some(d => d.code === 'REF_UNKNOWN_FACTION');
+    const checks = [
+      { name: 'generator_emits_time_units', pass: durationEmittedWithUnit },
+      { name: 'unknown_macro_caught', pass: macroDiagnostics.length > 0 },
+      { name: 'bare_time_format_caught', pass: timeFormatDiagnostics.length > 0 },
+      { name: 'bad_faction_caught', pass: factionBadDetected },
+      { name: 'valid_faction_clean', pass: factionGoodClean }
+    ];
     return res.json({
-      durationEmittedWithUnit: /duration="8s"/.test(md),          // generator emits units now
+      pass: checks.every(c => c.pass),
+      checks,
+      durationEmittedWithUnit,
       durationRaw: (md.match(/duration="[^"]*"/) || [])[0] || null,
-      macroDiagnostics: diags.filter(d => d.code === 'REF_UNKNOWN_MACRO').map(d => ({ code: d.code, severity: d.severity, ref: d.sourceRef, message: d.message.slice(0, 110) })),
-      timeFormatDiagnostics: timeDiags.filter(d => d.code === 'XSD_TIME_FORMAT').map(d => ({ code: d.code, severity: d.severity, message: d.message.slice(0, 110) })),
-      factionBadDetected: factionBad.some(d => d.code === 'REF_UNKNOWN_FACTION'),
-      factionGoodClean: !factionGood.some(d => d.code === 'REF_UNKNOWN_FACTION'),
+      macroDiagnostics,
+      timeFormatDiagnostics,
+      factionBadDetected,
+      factionGoodClean,
       mdSnippet: (md.match(/<create_ship[^>]*>/) || [])[0] || null
     });
   } catch (error: any) {
@@ -3744,7 +3758,16 @@ app.get("/api/agent/patch-audit", (req, res) => {
         { id: 'p_rootmismatch', targetFile: 'libraries/wares.xml', sel: '/jobs/job', action: 'add', content: '<job/>', includeInBuild: true }
       ]
     };
-    return res.json({ diagnostics: runPatchDiagnostics(ws) });
+    const diagnostics = runPatchDiagnostics(ws);
+    const hasResolved = diagnostics.some(d => d.code === 'patch.target_resolved' && d.severity === 'info');
+    const hasMissing = diagnostics.some(d => d.code === 'patch.target_unresolved' && d.severity === 'warning');
+    const hasRootMismatch = diagnostics.some(d => d.code === 'patch.selector_root_mismatch' && d.severity === 'warning');
+    const checks = [
+      { name: 'known_target_resolves', pass: hasResolved },
+      { name: 'missing_target_warns', pass: hasMissing },
+      { name: 'selector_root_mismatch_warns', pass: hasRootMismatch }
+    ];
+    return res.json({ pass: checks.every(c => c.pass), checks, diagnostics });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'patch-audit failed' });
   }

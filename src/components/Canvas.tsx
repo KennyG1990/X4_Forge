@@ -146,7 +146,7 @@ export default function Canvas({
       if (!canvasRef.current) return;
       const rect = canvasRef.current.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      const y = e.preventDefault() || e.clientY - rect.top;
+      const y = e.clientY - rect.top;
       const gridX = Math.round((x - panOffset.x) / zoom / 10) * 10;
       const gridY = Math.round((y - panOffset.y) / zoom / 10) * 10;
 
@@ -1449,8 +1449,9 @@ export default function Canvas({
                         links: prev.links.filter(l => l.id !== link.id)
                       }));
                     }}
-                    title="Click cable directly to snip link"
-                  />
+                  >
+                    <title>Click cable directly to snip link</title>
+                  </path>
 
                   {/* Colored vector line */}
                   <path

@@ -285,7 +285,7 @@ export default function AIHelper({
                 </div>
 
                 <p className="text-[10px] text-slate-400 leading-relaxed">
-                  This action will update your canvas immediately. You can modify any nodes manually or discard at any time.
+                  This proposal is staged only. Your canvas changes only after you confirm, or you can decline it without applying anything.
                 </p>
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
