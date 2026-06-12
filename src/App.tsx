@@ -729,8 +729,21 @@ export default function App() {
         {/* Workspace Brand and Logo */}
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-cyan-600 rounded flex items-center justify-center font-bold text-white text-xs shrink-0">X4</div>
-            <span className="font-semibold text-white tracking-tight shrink-0 select-none">X4:MD STUDIO v2.4</span>
+            {/* X4 Forge mark: anvil + spark on a cyan→violet plate */}
+            <svg viewBox="0 0 24 24" className="w-6 h-6 shrink-0" aria-label="X4 Forge logo">
+              <defs>
+                <linearGradient id="x4forgeGrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stopColor="#06b6d4" />
+                  <stop offset="1" stopColor="#7c3aed" />
+                </linearGradient>
+              </defs>
+              <rect x="0.5" y="0.5" width="23" height="23" rx="5.5" fill="url(#x4forgeGrad)" />
+              <path d="M5 9h14v3h-5v2.2l3.2 2.8H6.8L10 14.2V12H5z" fill="#ffffff" />
+              <path d="M17.6 3.1l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="#fbbf24" />
+            </svg>
+            <span className="font-semibold text-white tracking-tight shrink-0 select-none">
+              X4 FORGE <span className="text-cyan-400/90 font-normal">v{__APP_VERSION__}</span>
+            </span>
           </div>
 
           {/* Global Search Tool */}

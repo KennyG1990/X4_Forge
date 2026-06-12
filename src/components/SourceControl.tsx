@@ -533,7 +533,7 @@ Guidelines:
   // Builds the commit message used for pushes: the user's typed commit message as the title,
   // with the AI diff summary as the body. Falls back to an override or a sensible default.
   const buildCommitMessage = (override?: string): string => {
-    const title = (override?.trim() || commitMessage.trim() || 'Update mod files from X4:MD Studio');
+    const title = (override?.trim() || commitMessage.trim() || 'Update mod files from X4 Forge');
     const body = diffSummary.trim();
     return body ? `${title}\n\n${body}` : title;
   };
@@ -871,7 +871,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       addLog(`🎉 Repository created: ${res.full_name}`);
       addLog(`Pushing initial mod files to ${activeBranch}...`);
       setSyncStatusMsg(`Repo "${res.full_name}" created. Pushing initial files...`);
-      await handleGithubPushMulti(`chore: initial commit of ${workspace.name || repoName} from X4:MD Studio`);
+      await handleGithubPushMulti(`chore: initial commit of ${workspace.name || repoName} from X4 Forge`);
     } catch (e: any) {
       addLog(`❌ ERROR: ${e.message}`);
       setSyncStatusMsg(`Create failed: ${e.message}`);

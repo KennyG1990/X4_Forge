@@ -1,0 +1,4 @@
+/// <reference types="vite/client" />
+
+// Compile-time constant injected by vite.config.ts define{} from package.json.
+declare const __APP_VERSION__: string;

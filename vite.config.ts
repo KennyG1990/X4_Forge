@@ -7,6 +7,17 @@ import {defineConfig, type Plugin} from 'vite';
 // API server port in split-dev mode (Vite serves the UI on 3000 and proxies /api here).
 const API_PORT = process.env.API_PORT || '3001';
 
+// Single source of truth for the app version: package.json. Injected below as
+// a compile-time constant (__APP_VERSION__) so the header (and anything else)
+// always shows the released version — bump package.json once per release.
+const APP_VERSION = (() => {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')).version || '0.0.0');
+  } catch {
+    return '0.0.0';
+  }
+})();
+
 /**
  * Dev-only: inject the shared studio API token into index.html, mirroring
  * server.ts's injectStudioToken. In split-dev mode Vite (not Express) serves the
@@ -42,6 +53,9 @@ function studioTokenPlugin(): Plugin {
 
 export default defineConfig(() => {
   return {
+    define: {
+      __APP_VERSION__: JSON.stringify(APP_VERSION),
+    },
     plugins: [react(), tailwindcss(), studioTokenPlugin()],
     resolve: {
       alias: {
