@@ -42,7 +42,7 @@ import {
 } from "./src/lib/modCompiler";
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
-import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, runCatDatSelftest } from "./src/lib/x4CatDat";
+import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
@@ -2525,6 +2525,47 @@ function walkFilesRelative(absRoot: string, rel = '', out: string[] = []): strin
   return out;
 }
 
+interface ExtensionFileView {
+  rel: string;
+  text: string;
+  source: "loose" | "packed";
+  sourcePath: string;
+}
+
+function readExtensionFilesWithPacked(absDir: string, maxBytesPerPackedEntry = 2 * 1024 * 1024): ExtensionFileView[] {
+  const byRel = new Map<string, ExtensionFileView>();
+  for (const rel of walkFilesRelative(absDir)) {
+    const relNorm = rel.replace(/\\/g, "/");
+    const lower = relNorm.toLowerCase();
+    if (lower.endsWith(".cat") || lower.endsWith(".dat")) continue;
+    const abs = path.join(absDir, relNorm);
+    try {
+      if (!fs.statSync(abs).isFile()) continue;
+      byRel.set(lower, { rel: relNorm, text: fs.readFileSync(abs, "utf8"), source: "loose", sourcePath: abs });
+    } catch {
+      /* unreadable loose file — skip */
+    }
+  }
+
+  for (const archive of findCatDatArchives([absDir], true).filter(a => path.dirname(a.catPath).toLowerCase() === absDir.toLowerCase())) {
+    let entries: ReturnType<typeof parseCat> = [];
+    try { entries = parseCat(archive.catPath); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.size <= 0 || entry.size > maxBytesPerPackedEntry) continue;
+      const relNorm = entry.name.replace(/\\/g, "/");
+      const lower = relNorm.toLowerCase();
+      if (byRel.has(lower)) continue; // Loose files override the same packed path for diagnostics/opening.
+      try {
+        byRel.set(lower, { rel: relNorm, text: readEntryText(archive.datPath, entry), source: "packed", sourcePath: archive.catPath });
+      } catch {
+        /* unreadable packed entry — skip */
+      }
+    }
+  }
+
+  return [...byRel.values()];
+}
+
 function parseContentMeta(xml: string): { name?: string; version?: string; author?: string; description?: string } {
   const attr = (a: string) => {
     const m = xml.match(new RegExp(`<content\\b[^>]*\\b${a}\\s*=\\s*"([^"]*)"`, 'i'));
@@ -2938,6 +2979,41 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     const orderContested = (mods: string[]) =>
       [...mods].sort((a, b) => (loadRank.get(a) ?? -1) - (loadRank.get(b) ?? -1));
 
+    const extensionFiles = new Map<string, ExtensionFileView[]>();
+    for (const e of exts) {
+      if (!e.enabled || /^ego_/i.test(e.id)) continue;
+      extensionFiles.set(e.folder, readExtensionFilesWithPacked(e.absDir));
+    }
+
+    // CHECK 2c — Lua/UI runtime hazards. X4 9.0 beta tightened verification around
+    // some online/user-item functions; when these are called from extension UI Lua,
+    // the engine aborts the call before downstream menu code runs. This catches the
+    // concrete class seen in debuglog paths such as
+    // extensions/<mod>/ui/hotkey/interface.lua.
+    const restrictedLuaCalls = ["OnlineGetUserItemAmount"];
+    for (const e of enabledExts) {
+      if (/^ego_/i.test(e.id)) continue;
+      for (const file of extensionFiles.get(e.folder) || []) {
+        const relLower = file.rel.toLowerCase();
+        if (!relLower.endsWith(".lua") || !relLower.startsWith("ui/")) continue;
+        for (const fn of restrictedLuaCalls) {
+          if (!new RegExp(`\\b${fn}\\s*\\(`).test(file.text)) continue;
+          findings.push({
+            severity: "error",
+            category: "runtime",
+            code: "lua.restricted_online_call",
+            domain: "lua_ui",
+            filePath: `extensions/${e.folder}/${file.rel}`,
+            message: `${e.name || e.folder} calls restricted UI function ${fn}() from ${file.rel}${file.source === "packed" ? ` inside ${path.basename(file.sourcePath)}` : ""}. X4 can abort this call as a non-verified source; later menu_station_configuration errors are likely cascade symptoms.`,
+            sourceRef: { kind: "lua_runtime", id: fn, label: e.folder },
+            openTargets: [{ label: `${e.folder}/${file.rel}`, path: `${e.folder}/${file.rel}` }],
+            packed: file.source === "packed",
+            archive: file.source === "packed" ? path.basename(file.sourcePath) : undefined
+          });
+        }
+      }
+    }
+
     // CHECK 3 — cross-mod file/patch collisions.
     // Key every (third-party) mod's XML files by the base path they occupy (rel to ext
     // root, mirroring the base-game layout). Official DLCs (ego_*) are excluded — first-
@@ -2947,7 +3023,8 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     const pathMap = new Map<string, FileRec[]>();
     for (const e of exts) {
       if (!e.enabled || /^ego_/i.test(e.id)) continue;
-      for (const rel of walkFilesRelative(e.absDir)) {
+      for (const file of extensionFiles.get(e.folder) || []) {
+        const rel = file.rel;
         const relLower = rel.toLowerCase();
         // content.xml and ui.xml are per-extension root manifests (each mod has its own;
         // they register that mod's content/UI, they don't override each other) — never a conflict.
@@ -2956,8 +3033,7 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
         // or name→path), not destructively overridden — a shared path there is not a real
         // file-level conflict, so skip them to avoid false "load order decides" warnings.
         if (relLower.startsWith("t/") || relLower.startsWith("index/")) continue;
-        let xml = "";
-        try { xml = fs.readFileSync(path.join(e.absDir, rel), "utf8"); } catch { continue; }
+        const xml = file.text;
         const isDiff = /<diff[\s>]/.test(xml);
         const selectors = isDiff
           ? [...xml.matchAll(/<(add|replace|remove)\b[^>]*\bsel\s*=\s*"([^"]+)"/gi)].map(mm => ({ op: mm[1].toLowerCase(), sel: mm[2] }))
@@ -3392,6 +3468,14 @@ app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content);
     };
+    const writeCatDat = (folder: string, catName: string, entries: { name: string; text: string }[]) => {
+      const dir = path.join(tmp, folder);
+      fs.mkdirSync(dir, { recursive: true });
+      const parts = entries.map(e => ({ name: e.name, data: Buffer.from(e.text, "utf8") }));
+      const cat = parts.map((p, i) => `${p.name} ${p.data.length} ${1700000000 + i} ${String(i).repeat(32).slice(0, 32).padEnd(32, "0")}`).join("\n") + "\n";
+      fs.writeFileSync(path.join(dir, catName), cat);
+      fs.writeFileSync(path.join(dir, catName.replace(/\.cat$/i, ".dat")), Buffer.concat(parts.map(p => p.data)));
+    };
     write("mod_a/content.xml", `<?xml version="1.0"?>\n<content id="mod_a" name="Mod A" version="100" enabled="1">\n  <dependency id="not_installed_dep" name="Ghost Dependency"/>\n</content>`);
     write("mod_a/libraries/jobs.xml", `<?xml version="1.0"?>\n<diff>\n  <add sel="/jobs"><job id="a_job"/></add>\n</diff>`);
     write("mod_b/content.xml", `<?xml version="1.0"?>\n<content id="mod_b" name="Mod B" version="100" enabled="1">\n  <dependency id="mod_z" name="Z Library"/>\n</content>`);
@@ -3416,6 +3500,11 @@ app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
     write("mod_b/t/0001.xml", `<?xml version="1.0"?>\n<language id="44"><page id="2"><t id="1">B</t></page></language>`);
     write("mod_a/ui.xml", `<?xml version="1.0"?>\n<addon><environment type="menus"><file name="ui/a.lua"/></environment></addon>`);
     write("mod_b/ui.xml", `<?xml version="1.0"?>\n<addon><environment type="menus"><file name="ui/b.lua"/></environment></addon>`);
+    write("mod_packed/content.xml", `<?xml version="1.0"?>\n<content id="mod_packed" name="Packed Runtime Mod" version="100" enabled="1"/>`);
+    writeCatDat("mod_packed", "ext_01.cat", [
+      { name: "ui/hotkey/interface.lua", text: `local amount = OnlineGetUserItemAmount("x4-example")\nreturn amount\n` },
+      { name: "md/packed.xml", text: `<?xml version="1.0"?><mdscript name="Packed"><cues/></mdscript>` }
+    ]);
 
     // Stub base resolver: the synthetic mods patch these "base game" files.
     const stubBases: Record<string, string> = {
@@ -3450,13 +3539,19 @@ app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
       xpathOverlap: has("patch.xpath_overlap", f => f.filePath === "libraries/baskets.xml" && f.severity === "warning"),
       // Different selectors hitting DIFFERENT nodes must stay an info shared-target.
       xpathNoFalsePositive: has("patch.shared_target", f => f.filePath === "libraries/god.xml")
-        && !result.findings.some((f: any) => f.code === "patch.xpath_overlap" && f.filePath === "libraries/god.xml")
+        && !result.findings.some((f: any) => f.code === "patch.xpath_overlap" && f.filePath === "libraries/god.xml"),
+      packedLuaRestrictedCall: has("lua.restricted_online_call", f =>
+        f.filePath === "extensions/mod_packed/ui/hotkey/interface.lua"
+        && f.severity === "error"
+        && f.packed === true
+        && f.archive === "ext_01.cat")
     };
     const pass = checks.missingRequiredDep && checks.duplicateId && checks.selectorCollision
       && checks.tFilesNotFlagged && checks.uiManifestNotFlagged
       && checks.folderIdMismatch && checks.depAwareLoadOrder
       && checks.selectorWinner && checks.overrideWinner
-      && checks.xpathOverlap && checks.xpathNoFalsePositive;
+      && checks.xpathOverlap && checks.xpathNoFalsePositive
+      && checks.packedLuaRestrictedCall;
     return res.json({ success: true, pass, checks, codes: result.findings.map((f: any) => f.code), result });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "extension-doctor-selftest failed" });
@@ -3508,9 +3603,26 @@ app.get("/api/agent/extension-file", (req, res) => {
     }
     const abs = path.join(extRoot, rel);
     if (!abs.startsWith(extRoot)) return res.status(400).json({ error: "Path escapes extensions root." });
-    if (!fs.existsSync(abs)) return res.status(404).json({ error: "File not found." });
-    const content = fs.readFileSync(abs, "utf8");
-    return res.json({ success: true, path: rel, name: path.basename(rel), content });
+    if (fs.existsSync(abs)) {
+      const content = fs.readFileSync(abs, "utf8");
+      return res.json({ success: true, path: rel, name: path.basename(rel), content, source: "loose" });
+    }
+
+    const parts = rel.split("/").filter(Boolean);
+    const folder = parts.shift();
+    if (!folder || !parts.length) return res.status(404).json({ error: "File not found." });
+    const extDir = path.join(extRoot, folder);
+    if (!extDir.startsWith(extRoot) || !fs.existsSync(extDir)) return res.status(404).json({ error: "File not found." });
+    const entryRel = parts.join("/").toLowerCase();
+    for (const archive of findCatDatArchives([extDir], true).filter(a => path.dirname(a.catPath).toLowerCase() === extDir.toLowerCase())) {
+      let entries: ReturnType<typeof parseCat> = [];
+      try { entries = parseCat(archive.catPath); } catch { continue; }
+      const entry = entries.find(e => e.name.toLowerCase() === entryRel);
+      if (!entry || entry.size <= 0 || entry.size > 8 * 1024 * 1024) continue;
+      const content = readEntryText(archive.datPath, entry);
+      return res.json({ success: true, path: rel, name: path.basename(entry.name), content, source: "packed", archive: path.basename(archive.catPath) });
+    }
+    return res.status(404).json({ error: "File not found." });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "extension-file read failed" });
   }
