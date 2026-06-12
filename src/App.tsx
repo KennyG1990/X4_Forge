@@ -28,7 +28,8 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
-  Settings as SettingsGear
+  Settings as SettingsGear,
+  Plug
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -39,16 +40,18 @@ import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
 import DirectorySettingsModal from './components/DirectorySettingsModal';
+import CompileConfirmationModal from './components/CompileConfirmationModal';
 import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
+import ContractEditor from './components/ContractEditor';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
-import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace } from './types';
+import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
-import { getActiveProvider, getProviderModel, getProviderReasoning } from './lib/apiHelper';
+import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse } from './lib/apiHelper';
 import { compileAndSaveAll } from './lib/modCompiler';
 
 // Default initial blank workspace schema
@@ -153,8 +156,54 @@ export default function App() {
     })();
   }, [loadSchemaLibrary]);
 
-  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki'>('blueprint');
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues'>('script');
+  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki'>('blueprint');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference'>('script');
+
+  // Diagnostics / Mod Doctor states moved to App level to share across Sidebar/CodePreview
+  const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
+  const [diagnosticSource, setDiagnosticSource] = useState<'checking' | 'package' | 'local'>('checking');
+
+  const [snapshotDiffWorkspace, setSnapshotDiffWorkspace] = useState<ModWorkspace | null>(null);
+
+  const mdCode = React.useMemo(() => {
+    try {
+      return generateMDXML(workspace);
+    } catch (e) {
+      return '';
+    }
+  }, [workspace]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const localReports = validateModWorkspace(workspace, mdCode);
+    setDiagnosticSource('checking');
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/agent/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace })
+        });
+        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[] }>(response, 'Package Mod Doctor check failed.');
+        if (!cancelled) {
+          setDiagnostics(data.diagnostics || []);
+          setDiagnosticSource('package');
+        }
+      } catch (err) {
+        console.warn('Package Mod Doctor unavailable; falling back to local MD diagnostics:', err);
+        if (!cancelled) {
+          setDiagnostics(localReports);
+          setDiagnosticSource('local');
+        }
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [workspace, mdCode]);
   const [visibleCueIds, setVisibleCueIds] = useState<string[] | null>(null);
   const [focusNodeRequest, setFocusNodeRequest] = useState<{ nodeId: string; timestamp: number } | null>(null);
 
@@ -168,6 +217,7 @@ export default function App() {
   const [compileMessage, setCompileMessage] = useState<string>('');
 
   const [selectedNode, setSelectedNode] = useState<MDNode | null>(null);
+  const [selectedCueIds, setSelectedCueIds] = useState<string[]>([]);
   const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
   const [selectedWidget, setSelectedWidget] = useState<UIWidget | null>(null);
 
@@ -176,11 +226,249 @@ export default function App() {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
   const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
+  // Bumped when Directory Settings closes so the Sidebar's read-only schema panel refreshes.
+  const [schemaConfigVersion, setSchemaConfigVersion] = useState<number>(0);
+  const [isCompileModalOpen, setIsCompileModalOpen] = useState<boolean>(false);
+
+  // Left & Right Sidebar Resizing States
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
+  const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(460);
+  const [isResizingLeft, setIsResizingLeft] = useState<boolean>(false);
+  const [isResizingRight, setIsResizingRight] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isResizingLeft) {
+        const newWidth = Math.max(200, Math.min(550, e.clientX));
+        setLeftSidebarWidth(newWidth);
+      }
+      if (isResizingRight) {
+        const newWidth = Math.max(300, Math.min(800, window.innerWidth - e.clientX));
+        setRightSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingLeft(false);
+      setIsResizingRight(false);
+    };
+
+    if (isResizingLeft || isResizingRight) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingLeft, isResizingRight]);
 
   // Active AI modeling status states
   const [activeAIProvider, setActiveAIProvider] = useState<string>('gemini');
   const [activeAIModel, setActiveAIModel] = useState<string>('gemini-3.5-flash');
   const [activeReasoning, setActiveReasoning] = useState<string>('none');
+
+  // AI Guide Shared State & Handlers
+  const [aiChatHistory, setAiChatHistory] = useState<ChatMessage[]>([
+    { 
+      role: 'assistant', 
+      text: "Hello, Captain! I am your visual X4: Foundations Mission Director digital copilot. Press '💬 ASSISTANT CHAT' for advice, or '🛠️ BUILDER ACTION PORT' to describe modifications and generate them on-the-fly." 
+    }
+  ]);
+  const [aiInputText, setAiInputText] = useState<string>('');
+  const [aiActiveMode, setAiActiveMode] = useState<'chat' | 'builder'>('chat');
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiErrorText, setAiErrorText] = useState<string | null>(null);
+  const [isAiFloatingVisible, setIsAiFloatingVisible] = useState<boolean>(false);
+  const [isAiFloatingOpen, setIsAiFloatingOpen] = useState<boolean>(false);
+
+  const handleSendChatMode = async (promptMsg: string) => {
+    setAiChatHistory(prev => [...prev, { role: 'user', text: promptMsg }]);
+    setAiLoading(true);
+    setAiInputText('');
+    setAiErrorText(null);
+
+    try {
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+
+      const response = await fetch("/api/gemini", {
+        method: "POST",
+        headers: getAIHeaders(),
+        body: JSON.stringify({ 
+          prompt: promptMsg,
+          currentWorkspace: workspace,
+          diagnostics: diagnostics
+        })
+      });
+
+      const data = await handleApiResponse(response, "Failed to establish connection.");
+      setAiChatHistory(prev => [...prev, { 
+        role: 'assistant', 
+        text: data.text,
+        actionRequired: data.actionRequired,
+        proposedWorkspace: data.proposedWorkspace,
+        proposedVersion: data.proposedVersion,
+        actionApplied: null
+      }]);
+    } catch (err: any) {
+      console.error(err);
+      setAiErrorText(err.message || "Something went wrong.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleSendBuilderMode = async (promptMsg: string) => {
+    setAiChatHistory(prev => [...prev, { role: 'user', text: `Generate workspace blueprint: ${promptMsg}` }]);
+    setAiLoading(true);
+    setAiInputText('');
+    setAiErrorText(null);
+
+    try {
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+
+      const response = await fetch("/api/agent/generate", {
+        method: "POST",
+        headers: getAIHeaders(),
+        body: JSON.stringify({ 
+          prompt: promptMsg,
+          currentWorkspace: workspace,
+          diagnostics: diagnostics
+        })
+      });
+
+      const data = await handleApiResponse(response, "Failed to trigger visual automated generator.");
+      const generatedWorkspace: ModWorkspace = data.workspace;
+      const proposedText = `I have successfully designed a new Visual Mod Workspace layout named "${generatedWorkspace.name}". It contains ${generatedWorkspace.nodes.length} functional nodes, ${generatedWorkspace.links.length} connected flow paths, and ${generatedWorkspace.uiWidgets.length} interactive dashboard widgets.\n\nPlease inspect the blueprint audit report card below to confirm and apply these visual changes directly to your active stage!`;
+      
+      setAiChatHistory(prev => [...prev, { 
+        role: 'assistant', 
+        text: proposedText,
+        actionRequired: true,
+        proposedWorkspace: generatedWorkspace,
+        proposedVersion: data.version,
+        actionApplied: null
+      }]);
+    } catch (err: any) {
+      console.error(err);
+      setAiErrorText(err.message || "Something went wrong during generation simulation.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleApplyAction = (index: number, msg: ChatMessage) => {
+    if (!msg.proposedWorkspace) return;
+    setWorkspace(msg.proposedWorkspace);
+    if (msg.proposedVersion !== undefined) {
+      setLocalVersion(msg.proposedVersion);
+    }
+    
+    setAiChatHistory(prev => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = {
+          ...updated[index],
+          actionRequired: false,
+          actionApplied: 'applied',
+          text: `Success! Proposed automated node scheme "${msg.proposedWorkspace?.name}" has been compiled and injected successfully into your visual canvas. Try navigating or adjusting the physical nodes now!`
+        };
+      }
+      return updated;
+    });
+  };
+
+  const handleDeclineAction = (index: number) => {
+    setAiChatHistory(prev => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = {
+          ...updated[index],
+          actionRequired: false,
+          actionApplied: 'declined',
+          text: `Action declined. Proposed visual modifications were successfully discarded. Feel free to re-submit your prompt with different parameters!`
+        };
+      }
+      return updated;
+    });
+  };
+
+  const handleSend = (text: string) => {
+    if (!text.trim()) return;
+    if (aiActiveMode === 'builder') {
+      handleSendBuilderMode(text);
+    } else {
+      handleSendChatMode(text);
+    }
+  };
+
+  // Listen to open-ai-chat events triggered by Wiki Browser or nodes clicks
+  useEffect(() => {
+    const handleOpenChatEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ prompt: string }>;
+      if (customEvent.detail && customEvent.detail.prompt) {
+        setActiveSidebarTab('ai');
+        handleSendChatMode(customEvent.detail.prompt);
+      }
+    };
+    window.addEventListener('open-ai-chat', handleOpenChatEvent);
+    return () => {
+      window.removeEventListener('open-ai-chat', handleOpenChatEvent);
+    };
+  }, [workspace]);
+
+  // Diagnostics click-to-navigate: Mod Doctor findings dispatch 'navigate-to-source'
+  // with the diagnostic's sourceRef; jump to the owning editor surface (and, for MD
+  // nodes, focus the node on the canvas).
+  useEffect(() => {
+    const handleNavigateToSource = (e: Event) => {
+      const { kind, id } = (e as CustomEvent<{ kind: string; id?: string; label?: string }>).detail || {};
+      if (!kind) return;
+      switch (kind) {
+        case 'md_node':
+        case 'cue':
+        case 'node': {
+          setWorkspaceView('blueprint');
+          const node = id ? workspace.nodes.find(n => n.id === id) : undefined;
+          if (node) {
+            setSelectedNode(node);
+            setFocusNodeRequest({ nodeId: node.id, timestamp: Date.now() });
+          }
+          break;
+        }
+        case 'ui_widget':
+          setWorkspaceView('ui-designer');
+          break;
+        case 'ai_script':
+        case 'ai_param':
+          setWorkspaceView('aiscripts');
+          break;
+        case 'ware':
+        case 'job':
+          setWorkspaceView('libraries');
+          break;
+        case 't_file':
+        case 't_page':
+        case 't_item':
+          setWorkspaceView('translation');
+          break;
+        case 'xml_patch':
+          setWorkspaceView('xmlpatch');
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener('navigate-to-source', handleNavigateToSource);
+    return () => window.removeEventListener('navigate-to-source', handleNavigateToSource);
+  }, [workspace]);
 
   useEffect(() => {
     const updateAIState = () => {
@@ -272,12 +560,7 @@ export default function App() {
     return () => clearTimeout(debounceTimer);
   }, [workspace]);
 
-  const handleCompileModProject = async () => {
-    if (!modWorkspacePath) {
-      setCompileStatus('error');
-      setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
-      return;
-    }
+  const executeCompileModProject = async () => {
     setCompileStatus('compiling');
     setCompileMessage('Compiling and deploying project on the server...');
     try {
@@ -298,6 +581,15 @@ export default function App() {
       setCompileStatus('error');
       setCompileMessage(e.message || 'Compilation failed. Connection error.');
     }
+  };
+
+  const handleCompileModProject = async () => {
+    if (!modWorkspacePath) {
+      setCompileStatus('error');
+      setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
+      return;
+    }
+    setIsCompileModalOpen(true);
   };
 
   // Initial load and periodic background polling of the server workspace
@@ -546,6 +838,18 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => { setWorkspaceView('contracts'); setActiveSidebarTab('config'); }}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'contracts'
+                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <Plug className="w-3.5 h-3.5" />
+            Contracts
+          </button>
+
+          <button
             onClick={() => { setWorkspaceView('translation'); setActiveSidebarTab('config'); }}
             className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
               workspaceView === 'translation'
@@ -679,7 +983,8 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         
         {/* Left Side: Drag control panel, property editor inspector */}
-            <Sidebar
+        <Sidebar
+          width={leftSidebarWidth}
           activeTab={activeSidebarTab}
           setActiveTab={setActiveSidebarTab}
           workspace={workspace}
@@ -697,22 +1002,53 @@ export default function App() {
           modWorkspacePath={modWorkspacePath}
           filesystemPath={filesystemPath}
           saveCheckpoint={saveCheckpoint}
-              workspaceView={workspaceView}
-              setWorkspaceView={setWorkspaceView}
-              schemaTemplates={schemaTemplates}
-              onSchemaConfigChanged={loadSchemaLibrary}
-              onOpenEditorFile={(file) => {
-                setActiveEditorFile(file);
-              }}
-              workspaceDirMode={workspaceDirMode}
-              setWorkspaceDirMode={setWorkspaceDirMode}
-              compileStatus={compileStatus}
-              compileMessage={compileMessage}
-              handleCompileModProject={handleCompileModProject}
-              visibleCueIds={visibleCueIds}
-              setVisibleCueIds={setVisibleCueIds}
-              setFocusNodeRequest={setFocusNodeRequest}
-            />
+          workspaceView={workspaceView}
+          setWorkspaceView={setWorkspaceView}
+          schemaTemplates={schemaTemplates}
+          onSchemaConfigChanged={loadSchemaLibrary}
+          onOpenDirectorySettings={() => setIsDirSettingsOpen(true)}
+          schemaConfigVersion={schemaConfigVersion}
+          onOpenEditorFile={(file) => {
+            setActiveEditorFile(file);
+          }}
+          workspaceDirMode={workspaceDirMode}
+          setWorkspaceDirMode={setWorkspaceDirMode}
+          compileStatus={compileStatus}
+          compileMessage={compileMessage}
+          handleCompileModProject={handleCompileModProject}
+          visibleCueIds={visibleCueIds}
+          setVisibleCueIds={setVisibleCueIds}
+          setFocusNodeRequest={setFocusNodeRequest}
+          aiChatHistory={aiChatHistory}
+          setAiChatHistory={setAiChatHistory}
+          aiInputText={aiInputText}
+          setAiInputText={setAiInputText}
+          aiActiveMode={aiActiveMode}
+          setAiActiveMode={setAiActiveMode}
+          aiLoading={aiLoading}
+          aiErrorText={aiErrorText}
+          isAiFloatingVisible={isAiFloatingVisible}
+          setIsAiFloatingVisible={setIsAiFloatingVisible}
+          isAiFloatingOpen={isAiFloatingOpen}
+          setIsAiFloatingOpen={setIsAiFloatingOpen}
+          handleSend={handleSend}
+          handleApplyAction={handleApplyAction}
+          handleDeclineAction={handleDeclineAction}
+          diagnostics={diagnostics}
+          diagnosticSource={diagnosticSource}
+          onSelectSnapshot={setSnapshotDiffWorkspace}
+        />
+
+        {/* Left Resizer Handle */}
+        <div
+          className={`w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
+            isResizingLeft ? 'bg-cyan-500 w-1.5' : ''
+          }`}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizingLeft(true);
+          }}
+        />
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
         <main className="flex-1 flex flex-col h-full overflow-hidden border-r border-white/10 bg-[#0a0c10]">
@@ -727,6 +1063,8 @@ export default function App() {
               schemaTemplates={schemaTemplates}
               visibleCueIds={visibleCueIds}
               focusNodeRequest={focusNodeRequest}
+              selectedCueIds={selectedCueIds}
+              setSelectedCueIds={setSelectedCueIds}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder
@@ -756,6 +1094,11 @@ export default function App() {
               setSelectedNode={setSelectedNode}
               setWorkspace={setWorkspace}
             />
+          ) : workspaceView === 'contracts' ? (
+            <ContractEditor
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+            />
           ) : (
             <XMLPatchSystem
               workspace={workspace}
@@ -765,8 +1108,19 @@ export default function App() {
 
         </main>
 
+        {/* Right Resizer Handle */}
+        <div
+          className={`w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
+            isResizingRight ? 'bg-cyan-500 w-1.5' : ''
+          }`}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizingRight(true);
+          }}
+        />
+
         {/* Right Side: Real-time Synchronized compiler preview output */}
-        <aside className="w-[460px] shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between">
+        <aside className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between" style={{ width: rightSidebarWidth }}>
           <CodePreview 
             workspace={workspace} 
             setWorkspace={setWorkspace} 
@@ -778,18 +1132,41 @@ export default function App() {
             activeEditorFile={activeEditorFile}
             setActiveEditorFile={setActiveEditorFile}
             selectedNode={selectedNode}
+            diagnostics={diagnostics}
+            diagnosticSource={diagnosticSource}
+            snapshotDiffWorkspace={snapshotDiffWorkspace}
+            onClearSnapshotDiff={() => setSnapshotDiffWorkspace(null)}
+            selectedCueIds={selectedCueIds}
           />
         </aside>
 
       </div>
 
       {/* Embedded Intelligent AI Guide Drawer chatbot */}
-      <AIHelper 
-        workspace={workspace}
-        setWorkspace={setWorkspace}
-        localVersion={localVersion}
-        setLocalVersion={setLocalVersion}
-      />
+      {isAiFloatingVisible && (
+        <AIHelper 
+          mode="floating"
+          workspace={workspace}
+          setWorkspace={setWorkspace}
+          localVersion={localVersion}
+          setLocalVersion={setLocalVersion}
+          chatHistory={aiChatHistory}
+          setChatHistory={setAiChatHistory}
+          inputText={aiInputText}
+          setInputText={setAiInputText}
+          activeMode={aiActiveMode}
+          setActiveMode={setAiActiveMode}
+          loading={aiLoading}
+          errorText={aiErrorText}
+          isOpen={isAiFloatingOpen}
+          setIsOpen={setIsAiFloatingOpen}
+          handleSend={handleSend}
+          handleApplyAction={handleApplyAction}
+          handleDeclineAction={handleDeclineAction}
+          isAiFloatingVisible={isAiFloatingVisible}
+          setIsAiFloatingVisible={setIsAiFloatingVisible}
+        />
+      )}
 
       {/* External AI Agent Developer Connection Gateway drawer panel */}
       <AgentBridge
@@ -820,11 +1197,21 @@ export default function App() {
       {/* Directory Settings Modal — manages every folder the studio needs */}
       <DirectorySettingsModal
         isOpen={isDirSettingsOpen}
-        onClose={() => setIsDirSettingsOpen(false)}
+        onClose={() => { setIsDirSettingsOpen(false); setSchemaConfigVersion(v => v + 1); }}
         modWorkspacePath={modWorkspacePath}
         setModWorkspacePath={setModWorkspacePath}
         filesystemPath={filesystemPath}
         setFilesystemPath={setFilesystemPath}
+      />
+
+      {/* Selectable Compile Targets Confirmation Wizard Modal */}
+      <CompileConfirmationModal
+        isOpen={isCompileModalOpen}
+        onClose={() => setIsCompileModalOpen(false)}
+        onConfirm={executeCompileModProject}
+        workspace={workspace}
+        setWorkspace={setWorkspace}
+        modWorkspacePath={modWorkspacePath}
       />
     </div>
   );

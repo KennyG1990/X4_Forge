@@ -8,24 +8,19 @@ import {
   Search, 
   Book, 
   Code, 
-  Cpu, 
   Copy, 
   Check, 
-  Map, 
   Layers, 
   Scroll, 
   Compass, 
   FileCode, 
   Globe, 
-  ExternalLink,
   ChevronRight,
-  Database,
-  Volume2,
-  Sparkles,
-  Zap,
-  Pin
+  Pin,
+  ExternalLink,
+  Sparkles
 } from 'lucide-react';
-import { X4_FACTIONS, X4_SHIP_MACROS, X4_STATION_MACROS, X4_SOUND_EFFECTS, MDNode, ModWorkspace } from '../types';
+import { MDNode, ModWorkspace } from '../types';
 
 export interface WikiTopic {
   id: string;
@@ -164,14 +159,28 @@ interface WikiBrowserProps {
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
 }
 
+interface X4IndexedObject {
+  id: string;
+  name: string;
+  kind: 'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'aiscript' | 'md_element' | 'macro';
+  sourceFile: string;
+  detail?: string;
+}
+
+interface X4ObjectIndexResponse {
+  generatedAt: string;
+  roots: string[];
+  scannedFiles: number;
+  skippedFiles: number;
+  truncated: boolean;
+  counts: Record<string, number>;
+  items: X4IndexedObject[];
+}
+
 export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspace }: WikiBrowserProps) {
-  const [activeTab, setActiveTab] = useState<'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui' | 'reference'>('mdscript');
+  const [activeTab, setActiveTab] = useState<'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui'>('mdscript');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
-  // Reference search state
-  const [refSearch, setRefSearch] = useState<string>('');
-  const [refType, setRefType] = useState<'factions' | 'ships' | 'stations' | 'sounds'>('ships');
-
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Filter topics based on category and search query
@@ -203,52 +212,6 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
     });
     window.dispatchEvent(event);
   };
-
-  // Filter reference constants
-  const filteredReferences = useMemo(() => {
-    let list: Array<{ id: string; name: string; desc?: string }> = [];
-    if (refType === 'factions') {
-      list = X4_FACTIONS.map(f => ({ 
-        id: `faction.${f}`, 
-        name: f.toUpperCase(), 
-        desc: "Faction Code Key" 
-      }));
-    } else if (refType === 'ships') {
-      list = X4_SHIP_MACROS.map(s => {
-        const parts = s.split(' ');
-        const id = parts[0];
-        const name = parts.slice(1).join(' ').replace(/[()]/g, '') || s;
-        return { 
-          id, 
-          name, 
-          desc: "Ship Component Design Macro" 
-        };
-      });
-    } else if (refType === 'stations') {
-      list = X4_STATION_MACROS.map(st => {
-        const parts = st.split(' ');
-        const id = parts[0];
-        const name = parts.slice(1).join(' ').replace(/[()]/g, '') || st;
-        return { 
-          id, 
-          name, 
-          desc: "Modular Station Layout Macro" 
-        };
-      });
-    } else if (refType === 'sounds') {
-      list = X4_SOUND_EFFECTS.map(sn => ({ 
-        id: `sound.${sn}`, 
-        name: sn.replace(/_/g, ' ').toUpperCase(), 
-        desc: "Engine Audio Loop Cue" 
-      }));
-    }
-
-    return list.filter(item => 
-      item.id.toLowerCase().includes(refSearch.toLowerCase()) || 
-      item.name.toLowerCase().includes(refSearch.toLowerCase()) ||
-      (item.desc && item.desc.toLowerCase().includes(refSearch.toLowerCase()))
-    );
-  }, [refType, refSearch]);
 
   return (
     <div id="wiki-browser-panel" className="flex flex-col h-full bg-[#0d1017] text-slate-200">
@@ -316,179 +279,50 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
             HUD & LUA
           </button>
 
-          <button
-            onClick={() => { setActiveTab('reference'); setSearchQuery(''); }}
-            className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-              activeTab === 'reference' 
-                ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30' 
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5" />
-            Wares & Sounds Lookup
-          </button>
         </div>
 
-        {/* Global keyword search bar (Omit if active tab is Reference database) */}
-        {activeTab !== 'reference' && (
-          <div className="relative w-64">
-            <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-500" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search codex indexes..."
-              className="w-full bg-[#0a0c11] border border-white/10 rounded-lg px-2 py-1 pl-8 text-[11px] font-mono text-white focus:outline-none focus:border-amber-500"
-            />
-          </div>
-        )}
+        {/* Global keyword search bar */}
+        <div className="relative w-64">
+          <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-500" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search codex indexes..."
+            className="w-full bg-[#0a0c11] border border-white/10 rounded-lg px-2 py-1 pl-8 text-[11px] font-mono text-white focus:outline-none focus:border-amber-500"
+          />
+        </div>
       </div>
 
       {/* Main split viewport area */}
       <div className="flex-1 overflow-hidden flex">
         
-        {/* IF REFERENCE TAB is selected, render our customized lookups instead of regular text articles */}
-        {activeTab === 'reference' ? (
-          <div className="flex flex-1 overflow-hidden">
-            
-            {/* Left selector sidebar: Choose factions / ships / stations / sounds */}
-            <div className="w-52 bg-[#090b11] border-r border-white/5 p-3 flex flex-col gap-1.5 shrink-0 justify-between">
-              <div className="flex flex-col gap-1 font-mono text-[10px]">
-                <span className="text-[9px] text-slate-500 uppercase font-black px-1.5 tracking-wider mb-1">Lookups Categories</span>
-                
-                <button
-                  onClick={() => { setRefType('ships'); setRefSearch(''); }}
-                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'ships' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                  }`}
-                >
-                  <Compass className="w-3.5 h-3.5" />
-                  Ship Macros ({X4_SHIP_MACROS.length})
-                </button>
-
-                <button
-                  onClick={() => { setRefType('stations'); setRefSearch(''); }}
-                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'stations' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  Station Macros ({X4_STATION_MACROS.length})
-                </button>
-
-                <button
-                  onClick={() => { setRefType('factions'); setRefSearch(''); }}
-                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'factions' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                  }`}
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                  Factions Dictionary ({X4_FACTIONS.length})
-                </button>
-
-                <button
-                  onClick={() => { setRefType('sounds'); setRefSearch(''); }}
-                  className={`p-2 rounded text-left flex items-center gap-2 cursor-pointer transition-all ${
-                    refType === 'sounds' ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                  }`}
-                >
-                  <Volume2 className="w-3.5 h-3.5" />
-                  Sound Effects ({X4_SOUND_EFFECTS.length})
-                </button>
-              </div>
-
-              <div id="quick-ref-sidebar-instruction" className="p-2 border border-[#df9825]/10 bg-amber-500/[0.02] rounded text-[10px] leading-relaxed text-slate-500 text-center font-mono">
-                Click copy icons to copy XML schema ID keys directly into code properties.
-              </div>
+        {/* Left list of matched wiki topic card buttons */}
+        <div className="w-64 bg-[#090b11] border-r border-white/5 overflow-y-auto p-2 shrink-0 custom-scrollbar flex flex-col gap-2">
+          <span className="text-[9px] text-slate-500 uppercase font-black px-1.5 tracking-wider mb-0.5 mt-1 font-mono">Codex Index matches ({filteredTopics.length})</span>
+          
+          {filteredTopics.length === 0 ? (
+            <div className="text-center py-8 text-slate-500 italic text-[11px] font-mono bg-black/10 rounded-lg">
+              No codex topics found.
             </div>
-
-            {/* List lookup area */}
-            <div className="flex-1 flex flex-col overflow-hidden bg-[#0d1017]">
-              
-              {/* Type specific search input filter */}
-              <div className="p-3 border-b border-white/5 bg-[#10141e] shrink-0">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-500" />
-                  <input
-                    type="text"
-                    value={refSearch}
-                    onChange={(e) => setRefSearch(e.target.value)}
-                    placeholder={`Fast filter X4 ${refType} entries by name, macro key, or properties...`}
-                    className="w-full bg-[#07090d] border border-white/10 rounded-lg px-2.5 py-1.5 pl-8 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
-                    autoFocus
-                  />
-                </div>
+          ) : (
+            filteredTopics.map(topic => (
+              <div
+                key={topic.id}
+                className="p-3 bg-[#111520] border border-white/[0.02] rounded-lg hover:border-amber-500/20 hover:bg-[#141b2a] group transition-all text-left flex flex-col gap-1.5"
+              >
+                <span className="font-bold text-slate-100 group-hover:text-white text-xs truncate leading-snug">{topic.title}</span>
+                <p className="text-[10px] text-slate-400 font-sans line-clamp-2 leading-relaxed shrink-0 select-none">{topic.summary}</p>
+                <a
+                  href={`#article_${topic.id}`}
+                  className="text-[9px] text-amber-500 group-hover:text-amber-400 font-mono tracking-wider font-bold uppercase flex items-center gap-1.5 mt-1 self-end select-none"
+                >
+                  READ GUIDE
+                  <ChevronRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
+                </a>
               </div>
-
-              {/* Entries Grid scroll viewport */}
-              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                {filteredReferences.length === 0 ? (
-                  <div className="h-full flex items-center justify-center p-8 bg-black/10 rounded-lg text-slate-500 italic text-xs font-mono">
-                    No registry rows fit that specific filter criteria. Try refining your spelling.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-3">
-                    {filteredReferences.map(ref => (
-                      <div 
-                        key={ref.id}
-                        className="bg-[#121622] border border-white/[0.03] rounded-lg p-3 hover:border-amber-500/20 hover:bg-[#141a28] flex items-center justify-between group transition-all"
-                      >
-                        <div className="flex flex-col gap-1 pr-4 overflow-hidden">
-                          <span className="font-bold text-white text-xs font-mono truncate">{ref.name}</span>
-                          <span className="text-[10px] text-amber-500 font-mono select-all truncate">{ref.id}</span>
-                          {ref.desc && (
-                            <span className="text-[9px] text-slate-500 font-sans truncate tracking-wider font-semibold uppercase">{ref.desc}</span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => handleCopyCode(ref.id, ref.id)}
-                          className="p-2 rounded bg-white/[0.02] border border-white/5 group-hover:border-amber-500/30 group-hover:text-amber-400 hover:bg-amber-500/10 transition-all cursor-pointer shrink-0"
-                          title="Copy reference string to Clipboard"
-                        >
-                          {copiedId === ref.id ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5 text-slate-400 group-hover:text-amber-400" />
-                          )}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-          </div>
-        ) : (
-          /* OTHERWISE, render regularly formatted Wiki Tutorial Articles */
-          <div className="flex-1 flex overflow-hidden">
-            
-            {/* Left list of matched wiki topic card buttons */}
-            <div className="w-64 bg-[#090b11] border-r border-white/5 overflow-y-auto p-2 shrink-0 custom-scrollbar flex flex-col gap-2">
-              <span className="text-[9px] text-slate-500 uppercase font-black px-1.5 tracking-wider mb-0.5 mt-1 font-mono">Codex Index matches ({filteredTopics.length})</span>
-              
-              {filteredTopics.length === 0 ? (
-                <div className="text-center py-8 text-slate-500 italic text-[11px] font-mono bg-black/10 rounded-lg">
-                  No codex topics found.
-                </div>
-              ) : (
-                filteredTopics.map(topic => (
-                  <div
-                    key={topic.id}
-                    className="p-3 bg-[#111520] border border-white/[0.02] rounded-lg hover:border-amber-500/20 hover:bg-[#141b2a] group transition-all text-left flex flex-col gap-1.5"
-                  >
-                    <span className="font-bold text-slate-100 group-hover:text-white text-xs truncate leading-snug">{topic.title}</span>
-                    <p className="text-[10px] text-slate-400 font-sans line-clamp-2 leading-relaxed shrink-0 select-none">{topic.summary}</p>
-                    <a
-                      href={`#article_${topic.id}`}
-                      className="text-[9px] text-amber-500 group-hover:text-amber-400 font-mono tracking-wider font-bold uppercase flex items-center gap-1.5 mt-1 self-end select-none"
-                    >
-                      READ GUIDE
-                      <ChevronRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
-                    </a>
-                  </div>
-                ))
-              )}
+            ))
+          )}
             </div>
 
             {/* Right side: Scrolled reader area showing extended guides data */}
@@ -636,9 +470,6 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
                 ))}
               </div>
             </div>
-
-          </div>
-        )}
 
       </div>
 

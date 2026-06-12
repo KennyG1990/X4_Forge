@@ -20,9 +20,10 @@ import {
   ToggleRight,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  Zap
 } from 'lucide-react';
-import { ModWorkspace, validateModWorkspace, generateMDXML } from '../types';
+import { ModWorkspace, validateModWorkspace, generateMDXML, NODE_TEMPLATES, UIWidget, MDNode } from '../types';
 import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 
 interface AgentBridgeProps {
@@ -42,8 +43,287 @@ export default function AgentBridge({
   localVersion,
   setLocalVersion
 }: AgentBridgeProps) {
-  const [activeTab, setActiveTab] = useState<'docs' | 'simulator' | 'status'>('docs');
+  const [activeTab, setActiveTab] = useState<'docs' | 'simulator' | 'status' | 'execute'>('docs');
   const [copiedTextId, setCopiedTextId] = useState<string | null>(null);
+
+  // Surgical Console states
+  const [consoleCommand, setConsoleCommand] = useState<string>("set includeInBuild to false on widget win_threat_monitor");
+  const [consoleLogs, setConsoleLogs] = useState<Array<{ text: string; type: 'success' | 'error' | 'info' }>>([
+    { text: "AgentRuntime initialized. Surgical executor ready.", type: 'info' }
+  ]);
+
+  // Surgical workspace manipulation APIs
+  const updateNodeProperty = (nodeIdOrName: string, key: string, value: any): boolean => {
+    let success = false;
+    setWorkspace(prev => {
+      const exists = prev.nodes.some(n => n.id === nodeIdOrName || n.properties.name === nodeIdOrName);
+      if (!exists) return prev;
+      
+      success = true;
+      return {
+        ...prev,
+        nodes: prev.nodes.map(n => {
+          if (n.id === nodeIdOrName || n.properties.name === nodeIdOrName) {
+            const topLevelKeys = ['label', 'xmlTag', 'x', 'y', 'comment', 'width', 'height', 'color', 'includeInBuild'];
+            if (topLevelKeys.includes(key)) {
+              return { ...n, [key]: value };
+            } else {
+              return {
+                ...n,
+                properties: {
+                  ...n.properties,
+                  [key]: value
+                }
+              };
+            }
+          }
+          return n;
+        })
+      };
+    });
+    return success;
+  };
+
+  const updateWidget = (widgetIdOrLabel: string, key: string, value: any): boolean => {
+    let success = false;
+    setWorkspace(prev => {
+      const exists = prev.uiWidgets.some(w => w.id === widgetIdOrLabel || w.label === widgetIdOrLabel);
+      if (!exists) return prev;
+
+      success = true;
+      return {
+        ...prev,
+        uiWidgets: prev.uiWidgets.map(w => {
+          if (w.id === widgetIdOrLabel || w.label === widgetIdOrLabel) {
+            const topLevelKeys = ['type', 'x', 'y', 'w', 'h', 'label', 'includeInBuild'];
+            if (topLevelKeys.includes(key)) {
+              return { ...w, [key]: value };
+            } else {
+              return {
+                ...w,
+                properties: {
+                  ...w.properties,
+                  [key]: value
+                }
+              };
+            }
+          }
+          return w;
+        })
+      };
+    });
+    return success;
+  };
+
+  const addNode = (xmlTagOrType: string, x?: number, y?: number, properties?: Record<string, any>): boolean => {
+    const template = NODE_TEMPLATES.find(t => t.xmlTag === xmlTagOrType || t.type === xmlTagOrType);
+    if (!template) {
+      // Create fallback generic node
+      const fallbackNode: MDNode = {
+        id: `node_gen_${Date.now()}`,
+        type: 'action',
+        label: xmlTagOrType,
+        xmlTag: xmlTagOrType,
+        x: x ?? 150,
+        y: y ?? 150,
+        properties: properties ?? {},
+        propertiesSchema: [],
+        inputs: [{ id: 'in_act', name: 'Action In', type: 'child' }],
+        outputs: [{ id: 'out_next', name: 'Next Action', type: 'flow' }]
+      };
+      setWorkspace(prev => ({
+        ...prev,
+        nodes: [...prev.nodes, fallbackNode]
+      }));
+      return true;
+    }
+    
+    const newNode: MDNode = {
+      ...template,
+      id: `${template.xmlTag}_${Date.now()}`,
+      x: x ?? 150,
+      y: y ?? 150,
+      properties: { ...template.properties, ...(properties ?? {}) }
+    } as any;
+    setWorkspace(prev => ({
+      ...prev,
+      nodes: [...prev.nodes, newNode]
+    }));
+    return true;
+  };
+
+  const runtimeExecute = (cmdStr: string): { success: boolean; message: string } => {
+    const cmd = cmdStr.trim();
+    if (!cmd) return { success: false, message: "Commands cannot be empty." };
+
+    // Parse helper for boolean/number values
+    const parseValue = (valStr: string): any => {
+      const v = valStr.trim();
+      if (v.toLowerCase() === 'true') return true;
+      if (v.toLowerCase() === 'false') return false;
+      if (!isNaN(Number(v))) return Number(v);
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        return v.substring(1, v.length - 1);
+      }
+      return v;
+    };
+
+    // --- A. WIDGET PROPERTY UPDATE CONSOLE ---
+    // Example: updateWidget win_threat_monitor includeInBuild false
+    // Example: set includeInBuild to false on widget win_threat_monitor
+    const updateWidgetRegex = /^(?:updateWidget\s+(\S+)\s+(\S+)\s+(.+))$/i;
+    const updateWidgetNaturalRegex = /^set\s+(\S+)\s+to\s+(.+?)\s+on\s+widget\s+(\S+)$/i;
+
+    let match = cmd.match(updateWidgetRegex);
+    if (match) {
+      const [, widgetIdOrLabel, key, valStr] = match;
+      const val = parseValue(valStr);
+      const ok = updateWidget(widgetIdOrLabel, key, val);
+      return {
+        success: ok,
+        message: ok 
+          ? `Successfully executed: updateWidget '${widgetIdOrLabel}' property '${key}' to '${val}'`
+          : `Failed: Could not find widget '${widgetIdOrLabel}' to update.`
+      };
+    }
+
+    match = cmd.match(updateWidgetNaturalRegex);
+    if (match) {
+      const [, key, valStr, widgetIdOrLabel] = match;
+      const val = parseValue(valStr);
+      const ok = updateWidget(widgetIdOrLabel, key, val);
+      return {
+        success: ok,
+        message: ok 
+          ? `Successfully applied natural fix: set widget '${widgetIdOrLabel}' property '${key}' to '${val}'`
+          : `Failed: Could not find widget '${widgetIdOrLabel}' for natural property fix.`
+      };
+    }
+
+    // --- B. NODE PROPERTY UPDATE CONSOLE ---
+    // Example: updateNodeProperty MyMissionCue instantiate true
+    // Example: set instantiate to true on node MyMissionCue
+    const updateNodeRegex = /^(?:updateNodeProperty\s+(\S+)\s+(\S+)\s+(.+))$/i;
+    const updateNodeNaturalRegex = /^set\s+(\S+)\s+to\s+(.+?)\s+on\s+node\s+(\S+)$/i;
+
+    match = cmd.match(updateNodeRegex);
+    if (match) {
+      const [, nodeIdOrName, key, valStr] = match;
+      const val = parseValue(valStr);
+      const ok = updateNodeProperty(nodeIdOrName, key, val);
+      return {
+        success: ok,
+        message: ok
+          ? `Successfully executed: updateNodeProperty '${nodeIdOrName}' property '${key}' to '${val}'`
+          : `Failed: Could not find node '${nodeIdOrName}' to update.`
+      };
+    }
+
+    match = cmd.match(updateNodeNaturalRegex);
+    if (match) {
+      const [, key, valStr, nodeIdOrName] = match;
+      const val = parseValue(valStr);
+      const ok = updateNodeProperty(nodeIdOrName, key, val);
+      return {
+        success: ok,
+        message: ok
+          ? `Successfully applied natural fix: set node '${nodeIdOrName}' property '${key}' to '${val}'`
+          : `Failed: Could not find node '${nodeIdOrName}' for property fix.`
+      };
+    }
+
+    // --- C. NODE INSERTION CONSOLE ---
+    // Example: addNode cue at 300, 400
+    // Example: addNode create_ship at 100, 100 with properties {"name": "$EscortShip"}
+    const addNodeRegex = /^addNode\s+(\S+)(?:\s+at\s+(\d+),\s*(\d+))?(?:\s+with\s+properties\s+(.+))?$/i;
+    match = cmd.match(addNodeRegex);
+    if (match) {
+      const [, xmlTagOrType, xStr, yStr, propsJson] = match;
+      const x = xStr ? parseInt(xStr, 10) : undefined;
+      const y = yStr ? parseInt(yStr, 10) : undefined;
+      let properties: any = undefined;
+      if (propsJson) {
+        try {
+          properties = JSON.parse(propsJson);
+        } catch {
+          // ignore
+        }
+      }
+      const ok = addNode(xmlTagOrType, x, y, properties);
+      return {
+        success: ok,
+        message: ok
+          ? `Successfully executed: Spawned new node of type '${xmlTagOrType}' at coordinates (${x ?? 150}, ${y ?? 150})`
+          : `Failed to spawn node of type '${xmlTagOrType}'`
+      };
+    }
+
+    // --- D. BUNDLED COCKPIT/THREAT WIDGET REMEDIAL SCRIPT ---
+    if (cmd.toLowerCase().includes("disable includeinbuild on widgets") || 
+        cmd.toLowerCase().includes("includeinbuild to false on every widget") ||
+        cmd.toLowerCase().includes("update widgets includeinbuild false")) {
+      
+      const widgetsToUpdate = [
+        'win_threat_monitor',
+        'hdr_threat_monitor',
+        'pb_threat_level',
+        'btn_sim_entry',
+        'btn_spawn_xenon',
+        'chk_auto_spawn',
+        'chat_diagnostics'
+      ];
+      
+      let count = 0;
+      setWorkspace(prev => ({
+        ...prev,
+        uiWidgets: prev.uiWidgets.map(w => {
+          if (widgetsToUpdate.includes(w.id) || widgetsToUpdate.includes(w.label)) {
+            count++;
+            return { ...w, includeInBuild: false };
+          }
+          return w;
+        })
+      }));
+      
+      return {
+        success: true,
+        message: `Surgically resolved warnings by disabling 'includeInBuild' on ${count} threat-monitor UI widgets.`
+      };
+    }
+
+    return {
+      success: false,
+      message: `Error: Command pattern not recognized. Supported instructions: 'updateNodeProperty', 'updateWidget', 'addNode', or natural language fixing scripts.`
+    };
+  };
+
+  // Expose AgentRuntime to global window scope so that internal guide, floating chat copilot, 
+  // or test scripts can trigger instant workspace edits surgically at runtime
+  useEffect(() => {
+    const api = {
+      execute: (cmd: string) => {
+        const result = runtimeExecute(cmd);
+        // Append log to visual console
+        setConsoleLogs(prev => [
+          ...prev, 
+          { text: result.message, type: result.success ? 'success' : 'error' }
+        ]);
+        return result;
+      },
+      updateNodeProperty,
+      updateWidget,
+      addNode,
+      getCurrentWorkspace: () => workspace
+    };
+
+    (window as any).AgentRuntime = api;
+    (window as any).AgentBridge = { execute: api.execute };
+
+    return () => {
+      delete (window as any).AgentRuntime;
+      delete (window as any).AgentBridge;
+    };
+  }, [workspace, setWorkspace]);
   
   // Settings
   const [autoSync, setAutoSync] = useState<boolean>(false);
@@ -175,14 +455,17 @@ export default function AgentBridge({
       const errors = genDiagnostics.filter((d: any) => d.severity === 'error');
       const warnings = genDiagnostics.filter((d: any) => d.severity === 'warning');
 
-      let msg = `Success! The AI Agent has designed a custom mod layout named "${data.workspace.name}" with ${data.workspace.nodes.length} nodes.`;
-      if (errors.length > 0 || warnings.length > 0) {
-        msg += ` However, the generated layout has ${errors.length} error(s) and ${warnings.length} warning(s) remaining in Egosoft validation checks.`;
+      const hasIssues = errors.length > 0 || warnings.length > 0;
+      let msg = `${hasIssues ? 'Generated with issues.' : 'Success!'} The AI Agent has designed a custom mod layout named "${data.workspace.name}" with ${data.workspace.nodes.length} nodes.`;
+      if (hasIssues) {
+        msg += ` The generated layout has ${errors.length} error(s) and ${warnings.length} warning(s) remaining in Egosoft validation checks.`;
       } else {
         msg += ` The logic complies fully with Egosoft schema checks (0 errors/warnings).`;
       }
       if (data.selfHealFailed) {
-        msg += ` (Phased auto-remedy healing failed to resolve all diagnostics.)`;
+        msg += data.selfHealError
+          ? ` (Self-heal phase failed: ${data.selfHealError} — the un-healed layout was applied.)`
+          : ` (Phased auto-remedy healing failed to resolve all diagnostics.)`;
       }
       setSimSuccess(msg);
     } catch (err: any) {
@@ -293,6 +576,17 @@ export default function AgentBridge({
         >
           <Sparkles className="w-3.5 h-3.5 inline mr-1.5" />
           Agent Simulator
+        </button>
+        <button
+          onClick={() => setActiveTab('execute')}
+          className={`flex-1 py-1.5 rounded font-mono text-[11px] font-bold transition-all cursor-pointer ${
+            activeTab === 'execute' 
+              ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' 
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5 inline mr-1.5" />
+          Surgical Execute
         </button>
         <button
           onClick={() => setActiveTab('status')}
@@ -687,6 +981,152 @@ export default function AgentBridge({
               >
                 Save JSON File
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* -----------------------------------------------------
+            VIEW TAB: SURGICAL RUNTIME EXECUTE
+            ----------------------------------------------------- */}
+        {activeTab === 'execute' && (
+          <div className="space-y-4 animate-fade-in font-mono">
+            {/* Header / Intro */}
+            <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 rounded-lg space-y-1 text-[11px] font-sans text-slate-300">
+              <span className="font-bold text-emerald-400 block uppercase font-mono text-[10px] tracking-wider">⚡ SURGICAL RUNTIME EXECUTOR</span>
+              <p className="leading-relaxed">
+                Connect external digital copilots or run custom natural language commands to update workspace states surgically. Exposes <code className="text-emerald-300 font-mono bg-black/45 px-1 rounded">window.AgentRuntime</code> with full state manipulation capabilities.
+              </p>
+            </div>
+
+            {/* Form Input for executing manual commands */}
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!consoleCommand.trim()) return;
+                const res = runtimeExecute(consoleCommand);
+                setConsoleLogs(prev => [
+                  ...prev,
+                  { text: `> ${consoleCommand}`, type: 'info' },
+                  { text: res.message, type: res.success ? 'success' : 'error' }
+                ]);
+              }}
+              className="bg-black/40 border border-white/5 rounded-lg p-3 space-y-2.5"
+            >
+              <label className="text-[10px] uppercase font-bold text-slate-400 block tracking-wide">Enter Natural or Structured Command:</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={consoleCommand}
+                  onChange={(e) => setConsoleCommand(e.target.value)}
+                  className="flex-1 bg-black/85 border border-[#10b981]/30 rounded p-2 text-[11px] text-emerald-400 focus:outline-none focus:border-emerald-500 font-mono"
+                  placeholder="e.g., set includeInBuild to false on widget win_threat_monitor"
+                />
+                <button
+                  type="submit"
+                  className="px-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold uppercase rounded flex items-center justify-center transition-all cursor-pointer text-[10px]"
+                >
+                  <Play className="w-3" />
+                </button>
+              </div>
+            </form>
+
+            {/* Structured Presets */}
+            <div className="bg-black/30 border border-white/5 rounded-lg p-3 space-y-2">
+              <span className="text-[9px] uppercase font-bold text-[#df9825] block tracking-wider">⚡ QUICK PRESETS (1-CLICK AGENT REPAIR):</span>
+              
+              <div className="space-y-1.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cmd = "disable includeInBuild on widgets";
+                    const res = runtimeExecute(cmd);
+                    setConsoleLogs(prev => [
+                      ...prev,
+                      { text: `> ${cmd}`, type: 'info' },
+                      { text: res.message, type: res.success ? 'success' : 'error' }
+                    ]);
+                  }}
+                  className="w-full text-left p-2 rounded bg-black/50 border border-[#df9825]/20 hover:bg-[#df9825]/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
+                >
+                  <span>🔧 Resolve Threat-Monitor Build Warnings</span>
+                  <span className="text-[9px] font-mono text-[#df9825] opacity-80 uppercase font-bold tracking-wider group-hover:opacity-100">RUN MACRO →</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cmd = "set instantiate to true on node MyMissionCue";
+                    const res = runtimeExecute(cmd);
+                    setConsoleLogs(prev => [
+                      ...prev,
+                      { text: `> ${cmd}`, type: 'info' },
+                      { text: res.message, type: res.success ? 'success' : 'error' }
+                    ]);
+                  }}
+                  className="w-full text-left p-2 rounded bg-black/50 border border-cyan-500/10 hover:bg-cyan-500/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
+                >
+                  <span>⚡ Instantiate Mission Cue ('MyMissionCue')</span>
+                  <span className="text-[9px] font-mono text-cyan-400 opacity-80 uppercase font-bold tracking-wider group-hover:opacity-100">RUN →</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cmd = "addNode show_notification at 250, 250";
+                    const res = runtimeExecute(cmd);
+                    setConsoleLogs(prev => [
+                      ...prev,
+                      { text: `> ${cmd}`, type: 'info' },
+                      { text: res.message, type: res.success ? 'success' : 'error' }
+                    ]);
+                  }}
+                  className="w-full text-left p-2 rounded bg-black/50 border border-purple-500/10 hover:bg-purple-500/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
+                >
+                  <span>➕ Spawn Notification visual action node</span>
+                  <span className="text-[9px] font-mono text-purple-400 opacity-80 uppercase font-bold tracking-wider group-hover:opacity-100">SPAWN →</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Execution Logger Console output */}
+            <div className="bg-black/55 border border-white/10 rounded-lg overflow-hidden flex flex-col h-[200px]">
+              <div className="bg-slate-900 border-b border-white/5 px-3 py-1.5 flex items-center justify-between text-[9px] tracking-wide text-slate-400 shrink-0 select-none">
+                <span>SURGICAL CONSOLE LOGS</span>
+                <button
+                  type="button"
+                  onClick={() => setConsoleLogs([{ text: "Console logs cleared.", type: 'info' }])}
+                  className="hover:text-white uppercase transition-all cursor-pointer"
+                >
+                  Clear Logs
+                </button>
+              </div>
+              <div className="flex-1 p-3 overflow-y-auto space-y-1.5 text-[10px] leading-relaxed select-text font-mono">
+                {consoleLogs.map((log, idx) => (
+                  <div 
+                    key={idx} 
+                    className={`${
+                      log.type === 'success' 
+                        ? 'text-emerald-400' 
+                        : log.type === 'error' 
+                        ? 'text-rose-450 font-bold' 
+                        : log.type === 'info' 
+                        ? 'text-slate-400' 
+                        : 'text-slate-300'
+                    }`}
+                  >
+                    {log.text}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Supported Commands Syntax Manual card */}
+            <div className="bg-white/[0.01] border border-white/5 rounded-lg p-3 space-y-1 text-[9px] text-slate-500 uppercase tracking-widest leading-loose select-none">
+              <span className="font-bold text-slate-400 block mb-0.5">SYNTAX CHEAT SHEET:</span>
+              <p>• <code className="text-slate-300">updateWidget &lt;widget_id_or_label&gt; &lt;key&gt; &lt;val&gt;</code></p>
+              <p>• <code className="text-slate-300">set &lt;key&gt; to &lt;val&gt; on widget &lt;widget_id_or_label&gt;</code></p>
+              <p>• <code className="text-slate-300">updateNodeProperty &lt;node_id_or_name&gt; &lt;key&gt; &lt;val&gt;</code></p>
+              <p>• <code className="text-slate-300">addNode &lt;xmlTag&gt; at &lt;x&gt;, &lt;y&gt;</code></p>
             </div>
           </div>
         )}

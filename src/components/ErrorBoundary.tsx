@@ -21,15 +21,12 @@ interface ErrorBoundaryState {
  * Catches render-time crashes in a subtree so a single broken panel shows a
  * recoverable fallback instead of white-screening the entire application.
  */
-export default class ErrorBoundary extends (React.Component as any) {
-  props: Readonly<ErrorBoundaryProps>;
-  state: ErrorBoundaryState;
-
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.props = props;
-    this.state = { hasError: false, message: '' };
-  }
+export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  // Class-field initializer only — no bare field re-declarations of props/state.
+  // (The previous `extends (React.Component as any)` + `props:`/`state:` declarations
+  // could shadow React.Component's own fields to undefined under esbuild's
+  // useDefineForClassFields semantics, making the boundary silently fail to catch.)
+  state: ErrorBoundaryState = { hasError: false, message: '' };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, message: error?.message || 'Unknown render error.' };
@@ -40,7 +37,7 @@ export default class ErrorBoundary extends (React.Component as any) {
   }
 
   handleReset = () => {
-    (this as any).setState({ hasError: false, message: '' });
+    this.setState({ hasError: false, message: '' });
   };
 
   render() {

@@ -4,7 +4,23 @@ dist/
 coverage/
 .DS_Store
 *.log
+
+# ---- Secrets & per-machine state: NEVER commit ----
+# Provider API keys live in .env.local (server) or browser localStorage (client).
 .env*
 !.env.example
+# Per-session auth token the API server writes on boot.
 .studio-api-token
+# Per-machine paths (game install, schema folder) written by the Settings modal.
+# Copy config.example.json to config.json or just use the in-app Settings.
+config.json
+
+# ---- Local caches / generated state ----
+.studio-cache/
+.snapshots/
+*.db
+.tmp_*
+temp_import/
+temp_package_test.json
+
 test_generate_api.py

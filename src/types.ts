@@ -4,6 +4,7 @@
  */
 
 import { schemaElementToTemplate, type SchemaElement } from './lib/schemaTypes';
+import type { IntegrationContract } from './lib/contractGlue';
 
 // Node port representation
 export interface Port {
@@ -17,11 +18,13 @@ export interface Port {
 export interface PropertySchema {
   key: string;
   label: string;
-  type: 'text' | 'number' | 'select' | 'boolean' | 'coordinates' | 'textarea';
+  type: 'text' | 'number' | 'select' | 'boolean' | 'coordinates' | 'textarea' | 'reference';
   options?: string[];
   placeholder?: string;
   description?: string;
   required?: boolean;
+  /** For type:'reference' — which live object-index kind to search (ship/station/ware/faction/sound/job). */
+  refKind?: 'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'macro';
 }
 
 // Visual Node representation in the blueprint editor
@@ -40,6 +43,7 @@ export interface MDNode {
   width?: number;
   height?: number;
   color?: string;
+  includeInBuild?: boolean;
 }
 
 // Connection wire representation between nodes
@@ -61,6 +65,7 @@ export interface UIWidget {
   h: number;
   label: string;
   properties: Record<string, any>;
+  includeInBuild?: boolean;
 }
 
 export interface TranslationItem {
@@ -79,6 +84,7 @@ export interface TFile {
   languageId: string;
   fileName: string;
   pages: TranslationPage[];
+  includeInBuild?: boolean;
 }
 
 export interface AIParam {
@@ -95,6 +101,15 @@ export interface AIAction {
   properties: Record<string, any>;
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  actionRequired?: boolean;
+  proposedWorkspace?: ModWorkspace;
+  proposedVersion?: number;
+  actionApplied?: 'applied' | 'declined' | null;
+}
+
 export interface AIBehaviorScript {
   id: string;
   name: string;
@@ -104,6 +119,7 @@ export interface AIBehaviorScript {
   params: AIParam[];
   interrupts: Array<{ id: string; event: string; action: string }>;
   actions: AIAction[];
+  includeInBuild?: boolean;
 }
 
 export interface WareDef {
@@ -111,12 +127,17 @@ export interface WareDef {
   name: string;
   description: string;
   transport: 'container' | 'liquid' | 'solid' | 'energy';
+  tags?: string;
   volume: number;
   minPrice: number;
   avgPrice: number;
   maxPrice: number;
   prodTime: number;
   prodAmount: number;
+  productionMethod?: string;
+  productionName?: string;
+  primaryWares?: Array<{ ware: string; amount: number | string }>;
+  includeInBuild?: boolean;
 }
 
 export interface JobDef {
@@ -129,6 +150,7 @@ export interface JobDef {
   sectorQuota: number;
   taskScript: string;
   rebuildOnDestroy: boolean;
+  includeInBuild?: boolean;
 }
 
 export interface PatchBlock {
@@ -137,7 +159,9 @@ export interface PatchBlock {
   action: 'add' | 'replace' | 'remove';
   content: string;
   note: string;
+  pos?: 'before' | 'after' | 'prepend' | 'append';
   targetFile?: string;
+  includeInBuild?: boolean;
 }
 
 // Complete Mod Workspace containing scripts and widgets state
@@ -162,6 +186,33 @@ export interface ModWorkspace {
   wares?: WareDef[];
   jobs?: JobDef[];
   xmlPatches?: PatchBlock[];
+  compileSettings?: {
+    md: boolean;
+    ui: boolean;
+    ai: boolean;
+    library: boolean;
+    translations: boolean;
+    patches: boolean;
+  };
+  templates?: MDNode[];
+  /**
+   * Files imported from an existing mod that the studio does not (yet) model as
+   * editable domains. Preserved verbatim so import -> export is lossless. On
+   * export they are written back at their original relative path, unless a
+   * generated file already claims that path (the generated file wins).
+   */
+  passthroughFiles?: PassthroughFile[];
+  /** Lever 2: HTTP integration contract with an external local process (the studio owns the X4-side glue only). */
+  integrationContract?: IntegrationContract;
+}
+
+export interface PassthroughFile {
+  /** relative path within the extension, e.g. "libraries/god.xml" */
+  path: string;
+  /** verbatim file content */
+  content: string;
+  /** classification of why this file is preserved raw rather than modeled */
+  reason?: 'unknown_domain' | 'unparsed' | 'binary' | 'partial';
 }
 
 // Built-in game variables for X4 standard database definitions
@@ -323,15 +374,15 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     xmlTag: 'create_ship',
     properties: {
       name: '$EscortShip',
-      macro: 'ship_arg_l_destroyer_01_a_macro (Behemoth Van.)',
+      macro: 'ship_arg_l_destroyer_01_a_macro',
       faction: 'player',
       sector: 'player.sector',
       coords: '0,0,1000'
     },
     propertiesSchema: [
       { key: 'name', label: 'Variable Name', type: 'text', placeholder: '$SpawnedShip' },
-      { key: 'macro', label: 'Ship Class Macro', type: 'select', options: X4_SHIP_MACROS },
-      { key: 'faction', label: 'Owner Faction', type: 'select', options: X4_FACTIONS },
+      { key: 'macro', label: 'Ship Class Macro', type: 'reference', refKind: 'ship', placeholder: 'Search ship macros… or type a variable', description: 'Searchable against the real installed game index (ships + DLC).' },
+      { key: 'faction', label: 'Owner Faction', type: 'reference', refKind: 'faction', placeholder: 'Search factions… (stores the short code)', description: 'All factions from the installed game + DLC. Stored as the short code (e.g. argon); the compiler emits faction.argon.' },
       { key: 'sector', label: 'Sector / Spawn Zone', type: 'text', placeholder: 'player.sector' },
       { key: 'coords', label: 'Relative Coordinates (X,Y,Z)', type: 'coordinates', placeholder: '0,0,1000' }
     ],
@@ -356,7 +407,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
       { key: 'money', label: 'Credits Reward', type: 'number', placeholder: '250000' },
       { key: 'notification', label: 'Display Notification', type: 'select', options: ['true', 'false'] },
       { key: 'standing', label: 'Faction Reputation Change', type: 'text', placeholder: '0.05 (Scale -1.0 to 1.0)' },
-      { key: 'faction', label: 'Reputation Faction', type: 'select', options: X4_FACTIONS }
+      { key: 'faction', label: 'Reputation Faction', type: 'reference', refKind: 'faction', placeholder: 'Search factions… (stores the short code)', description: 'All factions from the installed game + DLC. Stored as the short code (e.g. argon).' }
     ],
     inputs: [
       { id: 'in_act', name: 'Action In', type: 'child' }
@@ -409,15 +460,15 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     xmlTag: 'create_station',
     properties: {
       name: '$MyDefenseStation',
-      macro: 'station_arg_defense_01_macro (Defence Station)',
+      macro: 'defence_arg_tube_01_macro',
       faction: 'player',
       sector: 'player.sector',
       coords: '5000,0,5000'
     },
     propertiesSchema: [
       { key: 'name', label: 'Station Entity Target', type: 'text', placeholder: '$MyStation' },
-      { key: 'macro', label: 'Station Design Macro', type: 'select', options: X4_STATION_MACROS },
-      { key: 'faction', label: 'Owner Faction', type: 'select', options: X4_FACTIONS },
+      { key: 'macro', label: 'Station Design Macro', type: 'reference', refKind: 'station', placeholder: 'Search station macros… or type a variable', description: 'Searchable against the real installed game index (stations + DLC).' },
+      { key: 'faction', label: 'Owner Faction', type: 'reference', refKind: 'faction', placeholder: 'Search factions… (stores the short code)', description: 'All factions from the installed game + DLC. Stored as the short code (e.g. argon); the compiler emits faction.argon.' },
       { key: 'sector', label: 'Spawn Sector', type: 'text', placeholder: 'player.sector' },
       { key: 'coords', label: 'Coordinates (X,Y,Z)', type: 'coordinates', placeholder: '10000, 0, -5000' }
     ],
@@ -433,7 +484,7 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     label: 'Custom XML Action',
     xmlTag: 'custom_xml',
     properties: {
-      rawXml: '<show_notification text="\'Target acquired!\'" duration="5" />'
+      rawXml: '<show_notification text="\'Target acquired!\'" timeout="5s" />'
     },
     propertiesSchema: [
       { key: 'rawXml', label: 'Raw XML Snippet', type: 'textarea', placeholder: 'Enter any valid Mission Director XML block...', description: 'This block will be printed raw directly into the actions block of the cue.' }
@@ -508,8 +559,34 @@ function escapeXMLAttribute(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/**
+ * Format a value as an X4 time literal. X4 time-typed attributes (durations,
+ * delays) require a unit suffix — a bare number like "8" fails at runtime with
+ * "Evaluated value '8' is not of type time". A bare number gets "s" appended;
+ * values that already carry a unit, or are MD expressions ({...}), pass through.
+ */
+export function formatX4Time(value: unknown): string {
+  const s = String(value ?? '').trim();
+  if (!s) return '0s';
+  if (/^\d+(\.\d+)?$/.test(s)) return `${s}s`;     // bare number -> seconds
+  return s;                                          // already has a unit or is an expression
+}
+
 // Helper functions to generate the XML output cleanly
-export function generateMDXML(workspace: ModWorkspace): string {
+export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: string[]): string {
+  // Filter out any nodes where includeInBuild is false
+  const activeNodes = (originalWorkspace.nodes || []).filter(n => n.includeInBuild !== false);
+  const activeNodeIds = new Set(activeNodes.map(n => n.id));
+  const activeLinks = (originalWorkspace.links || []).filter(l => 
+    activeNodeIds.has(l.sourceNodeId) && activeNodeIds.has(l.targetNodeId)
+  );
+
+  const workspace = {
+    ...originalWorkspace,
+    nodes: activeNodes,
+    links: activeLinks
+  };
+
   function renderCue(cue: any, indentDepth: number = 2): string {
     const indent = ' '.repeat(indentDepth);
     const indentPlus = ' '.repeat(indentDepth + 2);
@@ -538,12 +615,23 @@ export function generateMDXML(workspace: ModWorkspace): string {
           } else if (targetNode.xmlTag === 'event_cue_signalled') {
             xml += `${indentDouble}<event_cue_signalled cue="${targetNode.properties.cue || 'md.Setup.Start'}" />\n`;
           } else if (targetNode.xmlTag === 'event_object_destroyed') {
-            const fac = targetNode.properties.faction && targetNode.properties.faction !== 'any' ? ` faction="faction.${targetNode.properties.faction}"` : '';
-            xml += `${indentDouble}<event_object_destroyed object="${targetNode.properties.object || 'player.target'}"${fac} />\n`;
+            // md.xsd: event_object_destroyed has no `faction` attribute; faction
+            // filtering belongs in a follow-up condition, not here.
+            xml += `${indentDouble}<event_object_destroyed object="${targetNode.properties.object || 'player.target'}" />\n`;
           } else if (targetNode.xmlTag === 'event_object_changed_sector') {
             xml += `${indentDouble}<event_object_changed_sector object="${targetNode.properties.object || 'playership'}" sector="${targetNode.properties.sector || 'player.sector'}" />\n`;
           } else if (targetNode.xmlTag === 'check_value') {
-            xml += `${indentDouble}<check_value value="${targetNode.properties.value || 'player.money'}" operator="${targetNode.properties.operator || 'ge'}" value2="${targetNode.properties.amount || 1000000}" />\n`;
+            // md.xsd: check_value compares via min/max/exact (+negate), NOT the
+            // legacy operator/value2 form.
+            const rawOp = String(targetNode.properties.operator || 'ge');
+            const op = (rawOp.match(/\((\w+)\)/)?.[1] || rawOp).toLowerCase();
+            const amt = targetNode.properties.amount ?? 1000000;
+            let cmp: string;
+            if (op === 'ge' || op === 'min' || op === 'gt') cmp = `min="${amt}"`;
+            else if (op === 'le' || op === 'max' || op === 'lt') cmp = `max="${amt}"`;
+            else if (op === 'ne') cmp = `exact="${amt}" negate="true"`;
+            else cmp = `exact="${amt}"`;
+            xml += `${indentDouble}<check_value value="${targetNode.properties.value || 'player.money'}" ${cmp} />\n`;
           } else if (!CURATED_XML_TAGS.has(targetNode.xmlTag)) {
             xml += `${renderGenericXMLNode(targetNode, indentDouble)}\n`;
           }
@@ -570,26 +658,33 @@ export function generateMDXML(workspace: ModWorkspace): string {
               xml += `${indentDouble}${l}\n`;
             });
           } else if (currentNode.xmlTag === 'create_ship') {
-            xml += `${indentDouble}<create_ship name="${currentNode.properties.name || '$EscortShip'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" faction="${currentNode.properties.faction || 'player'}">\n`;
-            xml += `${indentDouble}  <space object="${currentNode.properties.sector || 'player.sector'}" />\n`;
+            // md.xsd: owner is a child <owner exact="faction.x"/>; location via
+            // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
+            const fac = currentNode.properties.faction || 'player';
+            const sector = currentNode.properties.sector || 'player.sector';
+            xml += `${indentDouble}<create_ship name="${currentNode.properties.name || '$EscortShip'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" sector="${sector}">\n`;
+            xml += `${indentDouble}  <owner exact="faction.${fac}" />\n`;
             if (currentNode.properties.coords) {
               const xyz = currentNode.properties.coords.split(',');
               xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
             }
             xml += `${indentDouble}</create_ship>\n`;
           } else if (currentNode.xmlTag === 'reward_player') {
-            let rep = '';
-            if (currentNode.properties.standing && currentNode.properties.faction) {
-              rep = `\n${indentDouble}  <reputation faction="faction.${currentNode.properties.faction}" value="${currentNode.properties.standing}" />`;
-            }
-            xml += `${indentDouble}<reward_player money="${currentNode.properties.money || 0}" notification="${currentNode.properties.notification || 'true'}">${rep}\n${indentDouble}</reward_player>\n`;
+            // md.xsd: reward_player takes a `money` attribute and no children.
+            xml += `${indentDouble}<reward_player money="${currentNode.properties.money || 0}" />\n`;
           } else if (currentNode.xmlTag === 'play_sound') {
             xml += `${indentDouble}<play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
           } else if (currentNode.xmlTag === 'show_help') {
-            xml += `${indentDouble}<show_help text="'${currentNode.properties.text || ''}'" duration="${currentNode.properties.duration || 5}" />\n`;
+            // md.xsd: custom text goes in `custom`, not `text`. `duration` is an
+            // X4 time value — a bare number ("8") is rejected at runtime, it must
+            // carry a unit ("8s").
+            xml += `${indentDouble}<show_help custom="'${currentNode.properties.text || ''}'" duration="${formatX4Time(currentNode.properties.duration ?? 5)}" />\n`;
           } else if (currentNode.xmlTag === 'create_station') {
-            xml += `${indentDouble}<create_station name="${currentNode.properties.name || '$Station'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" faction="${currentNode.properties.faction || 'player'}">\n`;
-            xml += `${indentDouble}  <space sector="${currentNode.properties.sector || 'player.sector'}" />\n`;
+            // md.xsd: owner is a REQUIRED attribute (not a child); location via
+            // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
+            const fac = currentNode.properties.faction || 'player';
+            const sector = currentNode.properties.sector || 'player.sector';
+            xml += `${indentDouble}<create_station name="${currentNode.properties.name || '$Station'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" owner="faction.${fac}" sector="${sector}">\n`;
             if (currentNode.properties.coords) {
               const xyz = currentNode.properties.coords.split(',');
               xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
@@ -632,11 +727,13 @@ export function generateMDXML(workspace: ModWorkspace): string {
 `;
 
   const cueNodes = workspace.nodes.filter(n => n.type === 'cue');
-  const topLevelCues = cueNodes.filter(n => {
-    return !workspace.links.some(l => l.targetNodeId === n.id && l.sourcePortId === 'out_sub');
-  });
+  const targetCues = selectedCueIds && selectedCueIds.length > 0
+    ? cueNodes.filter(n => selectedCueIds.includes(n.id))
+    : cueNodes.filter(n => {
+        return !workspace.links.some(l => l.targetNodeId === n.id && l.sourcePortId === 'out_sub');
+      });
 
-  topLevelCues.forEach(cue => {
+  targetCues.forEach(cue => {
     xml += renderCue(cue, 4);
   });
 
@@ -646,7 +743,13 @@ export function generateMDXML(workspace: ModWorkspace): string {
 }
 
 // Generate the Lua config / Egosoft UI Customization parameters XML for menus
-export function generateUIXML(workspace: ModWorkspace): string {
+export function generateUIXML(originalWorkspace: ModWorkspace): string {
+  const activeWidgets = (originalWorkspace.uiWidgets || []).filter(w => w.includeInBuild !== false);
+  const workspace = {
+    ...originalWorkspace,
+    uiWidgets: activeWidgets
+  };
+
   const t = workspace.uiTheme;
   const alpha = Math.round(t.opacity * 255).toString(16).padStart(2, '0');
   
@@ -713,6 +816,96 @@ export function generateUIXML(workspace: ModWorkspace): string {
   return layoutXML;
 }
 
+/**
+ * Generate the X4 UI extension index (`ui.xml`) that lives at the extension
+ * ROOT and registers the mod's Lua menu file(s). Format verified against the
+ * kuertee x4-mod-ui-extensions reference mod: an <addon> with an
+ * <environment type="menus"> listing <file name="ui/..."/> entries, and a
+ * noNamespaceSchemaLocation pointing at the game's ui/core/addon.xsd.
+ */
+export function generateUIIndexXML(workspace: ModWorkspace, modId: string): string {
+  const luaPath = `ui/${modId}.lua`;
+  return `<?xml version="1.0" encoding="utf-8"?>
+<addon name="${modId}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../ui/core/addon.xsd">
+  <environment type="menus">
+    <file name="${luaPath}" />
+  </environment>
+</addon>`;
+}
+
+/**
+ * Generate a Lua entry point for the mod's UI, packaged at `ui/<modId>.lua` and
+ * registered by `ui.xml`. This uses X4's real menu-registration pattern (the
+ * global `Menus` table + `Helper.registerMenu`, guarded so a missing global
+ * never hard-errors) instead of the previous invented `RegisterLayout` /
+ * `RemoveAllUITriggers` calls. Widget definitions authored in the studio are
+ * emitted as a data table the menu's createMenu hook can consume; the actual
+ * widget construction is left to X4's Helper/widgetSystem API rather than
+ * fabricated here.
+ */
+export function generateUILuaScript(workspace: ModWorkspace, modId: string): string {
+  const activeWidgets = (workspace.uiWidgets || []).filter(w => w.includeInBuild !== false);
+  const luaName = modId.replace(/[^a-zA-Z0-9_]/g, '_');
+  const esc = (s: string) => String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+  const widgetLines = activeWidgets.map(w => {
+    const label = esc(w.label || '');
+    return `    { type = "${esc(w.type)}", id = "${esc(w.id)}", label = "${label}", x = ${Math.round(w.x)}, y = ${Math.round(w.y)}, width = ${Math.round(w.w)}, height = ${Math.round(w.h)} },`;
+  }).join('\n');
+
+  const t = workspace.uiTheme || ({} as any);
+
+  return `-- ${workspace.name || modId} — X4 UI extension entry point
+-- Packaged at: extensions/${modId}/ui/${modId}.lua
+-- Registered by: extensions/${modId}/ui.xml (<environment type="menus">)
+--
+-- This file uses X4's real UI menu-registration pattern. X4 exposes the global
+-- 'Menus' table and a 'Helper' library to UI Lua. We register this menu by
+-- inserting it into Menus and calling Helper.registerMenu when available.
+-- Widget construction itself must use X4's widgetSystem (see the game's
+-- ui/core scripts); the studio emits widget metadata below for that hook.
+
+local ffi = require("ffi")
+
+local widgets = {
+${widgetLines || '    -- (no widgets authored in the studio yet)'}
+}
+
+local theme = {
+  background = "${esc(t.backgroundColor || '')}",
+  border = "${esc(t.borderColor || '')}",
+  accent = "${esc(t.accentColor || '')}",
+  opacity = ${typeof t.opacity === 'number' ? t.opacity : 1},
+}
+
+local menu = {
+  name = "${luaName}_menu",
+  widgets = widgets,
+  theme = theme,
+}
+
+function menu.onShowMenu()
+  -- Build the menu frame here using Helper/widgetSystem and menu.widgets.
+  -- e.g. local frame = Helper.createFrameHandle(menu, { ... })
+end
+
+local function init()
+  -- Register with X4's menu system. Guard each global so a UI-API change or a
+  -- non-UI load context fails soft instead of throwing.
+  if type(Menus) == "table" then
+    table.insert(Menus, menu)
+  end
+  if Helper and type(Helper.registerMenu) == "function" then
+    Helper.registerMenu(menu)
+  end
+end
+
+init()
+
+return menu
+`;
+}
+
 // Validation logic returns specific diagnostics
 export interface XMLDiagnostic {
   severity: 'error' | 'warning' | 'info';
@@ -721,6 +914,17 @@ export interface XMLDiagnostic {
   nodeId?: string;
   category: 'syntax' | 'references' | 'egosoft';
 }
+
+export type PackageDiagnostic = XMLDiagnostic & {
+  code?: string;
+  domain?: string;
+  filePath?: string;
+  sourceRef?: {
+    kind: string;
+    id?: string;
+    label?: string;
+  };
+};
 
 export function validateModWorkspace(workspace: ModWorkspace, code: string): XMLDiagnostic[] {
   const diagnostics: XMLDiagnostic[] = [];
@@ -1190,7 +1394,8 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
         accentColor: '#0891b2',
         opacity: 0.95,
         showIcons: true
-      }
+      },
+      templates: []
     };
   }
 
@@ -1199,7 +1404,12 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     
     // Find matching template by xmlTag or fallback to standard mapping
     let template = NODE_TEMPLATES.find(t => t.xmlTag === node.xmlTag);
-    if (!template) {
+    // Only fall back to a same-TYPE curated template when the node carries NO schema of its
+    // own. Schema-driven nodes (the full md.xsd vocabulary) have no curated xmlTag match but
+    // DO carry their own propertiesSchema; without this guard the fallback clobbered them with
+    // the first curated template of that type (e.g. an event node got event_cue_signalled's
+    // lone "cue" field), discarding their real attributes and reference pickers.
+    if (!template && !Array.isArray(node.propertiesSchema)) {
       template = NODE_TEMPLATES.find(t => t.type === node.type);
     }
     
@@ -1211,11 +1421,21 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       x: typeof node.x === 'number' ? node.x : 100,
       y: typeof node.y === 'number' ? node.y : 100,
       properties: node.properties || (template ? { ...template.properties } : {}),
-      propertiesSchema: node.propertiesSchema || (template ? template.propertiesSchema : []),
+      // propertiesSchema is derived from the node's xmlTag (it's presentation, not user data),
+      // so always re-hydrate it from the current template when one exists. This lets template
+      // improvements (e.g. live object-index reference pickers) reach existing nodes on load,
+      // not just newly created ones; fall back to the node's own schema only if no template.
+      propertiesSchema: (template ? template.propertiesSchema : node.propertiesSchema) || [],
       inputs: node.inputs || (template ? template.inputs : []),
-      outputs: node.outputs || (template ? template.outputs : [])
+      outputs: node.outputs || (template ? template.outputs : []),
+      includeInBuild: typeof node.includeInBuild === 'boolean' ? node.includeInBuild : true
     };
   }).filter((n): n is MDNode => n !== null);
+
+  const sanitizedWidgets = (Array.isArray(ws.uiWidgets) ? ws.uiWidgets : []).map((w: any) => ({
+    ...w,
+    includeInBuild: typeof w.includeInBuild === 'boolean' ? w.includeInBuild : true
+  }));
 
   return {
     id: ws.id || `workspace_${Date.now()}`,
@@ -1225,7 +1445,7 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     description: ws.description || '',
     nodes: sanitizedNodes,
     links: Array.isArray(ws.links) ? ws.links : [],
-    uiWidgets: Array.isArray(ws.uiWidgets) ? ws.uiWidgets : [],
+    uiWidgets: sanitizedWidgets,
     uiTheme: {
       backgroundColor: ws.uiTheme?.backgroundColor || '#0F1115',
       borderColor: ws.uiTheme?.borderColor || '#06b6d4',
@@ -1233,10 +1453,53 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       opacity: typeof ws.uiTheme?.opacity === 'number' ? ws.uiTheme.opacity : 0.95,
       showIcons: typeof ws.uiTheme?.showIcons === 'boolean' ? ws.uiTheme.showIcons : true
     },
-    tFiles: Array.isArray(ws.tFiles) ? ws.tFiles : [],
-    aiScripts: Array.isArray(ws.aiScripts) ? ws.aiScripts : [],
-    wares: Array.isArray(ws.wares) ? ws.wares : [],
-    jobs: Array.isArray(ws.jobs) ? ws.jobs : [],
-    xmlPatches: Array.isArray(ws.xmlPatches) ? ws.xmlPatches : []
+    tFiles: (Array.isArray(ws.tFiles) ? ws.tFiles : []).map((tf: any) => ({
+      ...tf,
+      includeInBuild: typeof tf.includeInBuild === 'boolean' ? tf.includeInBuild : true
+    })),
+    aiScripts: (Array.isArray(ws.aiScripts) ? ws.aiScripts : []).map((as: any) => ({
+      ...as,
+      includeInBuild: typeof as.includeInBuild === 'boolean' ? as.includeInBuild : true
+    })),
+    wares: (Array.isArray(ws.wares) ? ws.wares : []).map((w: any) => ({
+      ...w,
+      includeInBuild: typeof w.includeInBuild === 'boolean' ? w.includeInBuild : true
+    })),
+    jobs: (Array.isArray(ws.jobs) ? ws.jobs : []).map((j: any) => ({
+      ...j,
+      includeInBuild: typeof j.includeInBuild === 'boolean' ? j.includeInBuild : true
+    })),
+    xmlPatches: (Array.isArray(ws.xmlPatches) ? ws.xmlPatches : []).map((xp: any) => ({
+      ...xp,
+      includeInBuild: typeof xp.includeInBuild === 'boolean' ? xp.includeInBuild : true
+    })),
+    compileSettings: {
+      md: typeof ws.compileSettings?.md === 'boolean' ? ws.compileSettings.md : true,
+      ui: typeof ws.compileSettings?.ui === 'boolean' ? ws.compileSettings.ui : true,
+      ai: typeof ws.compileSettings?.ai === 'boolean' ? ws.compileSettings.ai : true,
+      library: typeof ws.compileSettings?.library === 'boolean' ? ws.compileSettings.library : true,
+      translations: typeof ws.compileSettings?.translations === 'boolean' ? ws.compileSettings.translations : true,
+      patches: typeof ws.compileSettings?.patches === 'boolean' ? ws.compileSettings.patches : true
+    },
+    templates: (Array.isArray(ws.templates) ? ws.templates : []).map((tNode: any) => ({
+      ...tNode,
+      includeInBuild: false // Templates must remain non-compilable by definition!
+    })),
+    integrationContract: ws.integrationContract && typeof ws.integrationContract === 'object'
+      ? {
+          namespace: String(ws.integrationContract.namespace || ''),
+          baseUrl: String(ws.integrationContract.baseUrl || ''),
+          httpClientExpr: ws.integrationContract.httpClientExpr ? String(ws.integrationContract.httpClientExpr) : undefined,
+          jsonLibExpr: ws.integrationContract.jsonLibExpr ? String(ws.integrationContract.jsonLibExpr) : undefined,
+          endpoints: Array.isArray(ws.integrationContract.endpoints) ? ws.integrationContract.endpoints : []
+        }
+      : undefined,
+    passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
+      .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
+      .map((f: any) => ({
+        path: String(f.path).replace(/\\/g, '/').replace(/^\/+/, ''),
+        content: String(f.content),
+        reason: ['unknown_domain', 'unparsed', 'binary', 'partial'].includes(f.reason) ? f.reason : 'unknown_domain'
+      }))
   };
 }

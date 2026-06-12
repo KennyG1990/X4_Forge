@@ -20,6 +20,16 @@ interface ScriptAnalysis {
   tacticalInsights: string[];
 }
 
+/** Coerce any model-returned value into a safe, renderable string.
+ *  Guards against the model returning an object/array where a string is expected
+ *  (React throws "Objects are not valid as a React child" otherwise). */
+function asText(value: any): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
 interface MDScannerProps {
   workspace: ModWorkspace;
   analysisResult: ScriptAnalysis | null;
@@ -27,6 +37,7 @@ interface MDScannerProps {
   analysisError: string | null;
   triggerAnalysis: () => Promise<void>;
   isAnalysisStale: boolean;
+  cancelAnalysis?: () => void;
 }
 
 export default function MDScanner({
@@ -35,7 +46,8 @@ export default function MDScanner({
   analyzing,
   analysisError,
   triggerAnalysis,
-  isAnalysisStale
+  isAnalysisStale,
+  cancelAnalysis
 }: MDScannerProps) {
   return (
     <div className="p-4 space-y-4 font-sans select-text">
@@ -120,6 +132,14 @@ export default function MDScanner({
               De-serializing visual logic nodes and links...
             </p>
           </div>
+          {cancelAnalysis && (
+            <button
+              onClick={cancelAnalysis}
+              className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 rounded text-[10px] font-mono font-bold uppercase transition-all cursor-pointer"
+            >
+              Cancel
+            </button>
+          )}
         </div>
       )}
 
@@ -133,32 +153,32 @@ export default function MDScanner({
               <Sparkles className="w-2.5 h-2.5" /> Summary
             </div>
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Mod Description Summary</div>
-            <p className="text-slate-200 text-xs font-medium leading-relaxed font-sans">{analysisResult.summary}</p>
+            <p className="text-slate-200 text-xs font-medium leading-relaxed font-sans">{asText(analysisResult.summary)}</p>
           </div>
 
           {/* 2. TRIGGER CONDITION SECTION */}
           <div className="bg-slate-900/60 border border-white/5 p-3 rounded-lg space-y-1.5">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Activation Trigger</div>
-            <div className="text-slate-300 leading-relaxed font-medium">{analysisResult.triggerCondition}</div>
+            <div className="text-slate-300 leading-relaxed font-medium">{asText(analysisResult.triggerCondition)}</div>
           </div>
 
           {/* 3. STEP-BY-STEP CHRONOLOGY TIMELINE */}
           <div className="space-y-2.5">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono px-0.5">Logical Execution Flowchart</div>
             
-            {analysisResult.flowSteps && analysisResult.flowSteps.length > 0 ? (
+            {Array.isArray(analysisResult.flowSteps) && analysisResult.flowSteps.length > 0 ? (
               <div className="relative pl-3.5 border-l border-white/10 ml-1.5 space-y-4">
-                {analysisResult.flowSteps.map((step, idx) => (
+                {analysisResult.flowSteps.map((step: any, idx) => (
                   <div key={idx} className="relative group">
                     {/* Dot item tracker absolute positioned */}
                     <div className="absolute -left-[19.5px] top-1.5 w-2 h-2 rounded-full border border-amber-500/40 bg-[#0a0c10] group-hover:bg-amber-500 transition-colors" />
-                    
+
                     <div className="bg-[#12141a]/60 border border-white/5 p-2.5 rounded hover:border-white/10 transition-all space-y-1">
                       <div className="flex items-center justify-between text-[10px]">
-                        <span className="font-bold text-slate-200">{step.nodeLabel}</span>
-                        <span className="font-mono text-slate-500 font-bold">&lt;{step.xmlTag}&gt;</span>
+                        <span className="font-bold text-slate-200">{asText(step?.nodeLabel)}</span>
+                        <span className="font-mono text-slate-500 font-bold">&lt;{asText(step?.xmlTag)}&gt;</span>
                       </div>
-                      <p className="text-slate-400 text-[10.5px] leading-relaxed font-sans">{step.plainEnglishAction}</p>
+                      <p className="text-slate-400 text-[10.5px] leading-relaxed font-sans">{asText(step?.plainEnglishAction)}</p>
                     </div>
                   </div>
                 ))}
@@ -174,16 +194,16 @@ export default function MDScanner({
           <div className="bg-slate-900/40 border border-white/5 rounded-lg overflow-hidden space-y-2 p-3">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Mod Spawn Registry</div>
             
-            {analysisResult.entityRegistry && analysisResult.entityRegistry.length > 0 ? (
+            {Array.isArray(analysisResult.entityRegistry) && analysisResult.entityRegistry.length > 0 ? (
               <div className="space-y-2">
-                {analysisResult.entityRegistry.map((ent, idx) => (
+                {analysisResult.entityRegistry.map((ent: any, idx) => (
                   <div key={idx} className="bg-black/20 p-2 rounded-md border border-white/[0.03] flex justify-between items-start gap-2.5">
                     <div className="space-y-0.5 flex-1 text-left">
-                      <span className="font-mono text-[10px] text-cyan-400 font-bold tracking-tight block">{ent.name}</span>
-                      <p className="text-slate-400 text-[10px] leading-relaxed">{ent.detail}</p>
+                      <span className="font-mono text-[10px] text-cyan-400 font-bold tracking-tight block">{asText(ent?.name)}</span>
+                      <p className="text-slate-400 text-[10px] leading-relaxed">{asText(ent?.detail)}</p>
                     </div>
                     <span className="px-1.5 py-0.5 rounded bg-cyan-900/20 text-cyan-400 border border-cyan-500/10 text-[8px] font-mono font-bold uppercase select-none shrink-0 text-center">
-                      {ent.type}
+                      {asText(ent?.type)}
                     </span>
                   </div>
                 ))}
@@ -199,10 +219,10 @@ export default function MDScanner({
               <HelpCircle className="w-3.5 h-3.5" /> Playtester Guidance & Safety
             </div>
             
-            {analysisResult.tacticalInsights && analysisResult.tacticalInsights.length > 0 ? (
+            {Array.isArray(analysisResult.tacticalInsights) && analysisResult.tacticalInsights.length > 0 ? (
               <ul className="space-y-1.5 pl-3 list-disc text-slate-400 text-[10.5px]">
-                {analysisResult.tacticalInsights.map((insight, idx) => (
-                  <li key={idx} className="leading-relaxed font-sans text-slate-300">{insight}</li>
+                {analysisResult.tacticalInsights.map((insight: any, idx) => (
+                  <li key={idx} className="leading-relaxed font-sans text-slate-300">{asText(insight)}</li>
                 ))}
               </ul>
             ) : (

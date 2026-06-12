@@ -14,9 +14,9 @@ if (injectedToken) {
   sessionStorage.setItem('studio_session_token', injectedToken);
 }
 
-// Override fetch globally before rendering the app
+// Override fetch globally before rendering the app safely
 const originalFetch = window.fetch;
-window.fetch = function(input, init) {
+const customFetch = function(this: any, input: RequestInfo | URL, init?: RequestInit) {
   const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : input.url);
   if (url.includes('/api/')) {
     const token = sessionStorage.getItem('studio_session_token');
@@ -39,6 +39,21 @@ window.fetch = function(input, init) {
   }
   return originalFetch.call(this, input, init);
 };
+
+try {
+  Object.defineProperty(window, 'fetch', {
+    value: customFetch,
+    writable: true,
+    configurable: true,
+    enumerable: true
+  });
+} catch (e) {
+  try {
+    window.fetch = customFetch;
+  } catch (err) {
+    console.warn('Failed to intercept window.fetch safely:', err);
+  }
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -4,6 +4,63 @@ Context for the next coding agent. This captures a review pass + a compiler/dire
 
 ---
 
+## SESSION HANDOFF — 2026-06-11 (8th pass, Claude/Fable: pickup list cleared) → CURRENT
+
+**Read ROADMAP.md changelog "8th pass" for full detail.** Everything on the working tree, live-verified in the browser. Nothing committed — review and commit. Summary:
+
+- **All items from the previous handoff's pickup list are DONE** except the npm-blocked slivers:
+  1. Extension Doctor click-through UI ✅ (chips + read-only modal in `PackageModDoctor.tsx`)
+  2. SQLite layer ✅ code-complete (`src/lib/db.ts` + mirror-write + `/api/agent/db-selftest`) — **needs `npm install better-sqlite3` + restart-studio.bat**, then re-check db-selftest (`pass:true` expected)
+  3. Extension Doctor backlog ✅ folder/id mismatch + load-order winner simulation (XPath overlap still open — needs an XPath lib)
+  4. Security Track B remnant ✅ env provider keys now gated to app-UI-origin requests; external agents must send `x-custom-api-key` (**breaking** for env-key-reliant agent scripts — intentional)
+- Also done: honest reporting (generate message + selfHealError surfaced), diagnostics click-to-navigate (`navigate-to-source` event), ErrorBoundary un-broken (clean class fields), 120s AI timeouts + analyze Cancel button, CodePreview highlight/diag-map memoization.
+- **Selftest state at session end: ALL GREEN** — `/api/agent/selftest` 10/10, `extension-doctor-selftest` pass (9 checks), `round-trip-selftest` lossless, `md-audit` 0.
+- Real extension scan is now `{error:0, warning:4, info:14}` (was info:1) — the 13 new infos are accurate folder-vs-id mismatches; demote/collapse in UI if too chatty.
+- **Stale-section warning:** sections 0–5 below predate two sessions of fixes (e.g. §2's 0.0.0.0/CORS/no-auth findings are long fixed). Trust this section and ROADMAP's late changelogs over the rest of this file.
+
+**UPDATE (9th pass, same session):** deps are INSTALLED (better-sqlite3 / xpath / @xmldom — `restart-studio.bat` now npm-installs first), SQLite stages 3+4 are DONE (cold-boot restore 230 ms vs 2,156 ms full decode, live parity match), XPath-level selector overlap is DONE (selftest 11/11), and repo hygiene is COMMITTED (`a5e070e`: config.json/temp_import untracked, README + .env.example + config.example.json shipped). See ROADMAP "9th pass" changelog.
+
+**Next obvious work:** object-index-backed editor dropdowns; round-trip editability breadth (wares/jobs/aiscripts parsers); flip reference-validation/Extension-Doctor reads to SQLite; collapse folder-id-mismatch infos in the UI; C2 in-game verification (human step). **Full ranked forward plan: `ROADMAP.md` → Current State → Forward plan.**
+
+**Environment (still true — read before editing).** Split dev servers: Vite on **3000** (UI/HMR), API on **3001** (`tsx watch`, `API_ONLY=true`) — editing `server.ts`/`src/lib/*` restarts only the API (~2-3s `/api` 503 gap), the page does **not** reload; frontend edits are pure HMR. **Verify in the browser + selftest endpoints, not bash `tsc`/node** — the sandbox is a stale mirror and can't run the Windows-native `node_modules`; host Read/Edit/Write are live. The AI-editing pipeline has truncated component files before — re-verify in-browser right after any large component edit.
+
+---
+
+# Archive — superseded session notes (historical)
+
+*Everything below is older session handoffs (Codex / earlier passes) and the original numbered sections 0–5. Several items read as "to-do" but are long done — e.g. the "ONE PENDING ITEM" (click-through UI) in the next block is **DONE** (8th pass), and §2's `0.0.0.0`/CORS/no-auth findings are fixed. Trust the CURRENT section above and `ROADMAP.md` → Current State. Kept for the audit trail.*
+
+---
+
+## SESSION HANDOFF — 2026-06-11 (perf + Extension Doctor + dev-server split) → for Codex
+
+**Read `ROADMAP.md` changelogs "4th–7th pass" + "SQLite persistence layer (design)" for full detail.** Everything below is on the working tree, HMR/live-verified in the browser at `http://localhost:3000`. Nothing is committed — review and commit.
+
+### Dev environment changed (IMPORTANT)
+- **Split dev servers.** `restart-studio.bat` launches **two** processes: Vite on **3000** (UI + HMR, browser-facing) and the API on **3001** (`tsx watch server.ts` with `API_ONLY=true`; see `package.json` `dev:api`/`dev:web`). Vite proxies `/api` → 3001 (`vite.config.ts`), injects `.studio-api-token` via a dev plugin, and has a proxy error handler returning a soft 503 during the API-restart gap. Pure-backend entry files (`server.ts`, `install_mod.ts`) are in Vite's `watch.ignored` so they don't full-reload the page.
+- Net: editing `server.ts`/`src/lib/*` restarts only the API (~2-3s where `/api` 503s); the page does NOT reload. Frontend edits are pure HMR.
+
+### What landed this session (all verified live)
+1. **Large-mod performance** (deadair 868 KB / 12.6k-line MD, 1,294 nodes loads without freezing): `Canvas.tsx` — `nodeToCueMap` rewritten O(cues×links×nodes)→O(n+links) (adjacency map + index-pointer BFS); radar minimap capped to ≤500 sampled dots (`minimapNodes`). `CodePreview.tsx` — `highlightXML`/`highlightCode` skip span-coloring above 100 KB (escaped/monochrome) so big files don't freeze.
+2. **Extension Doctor (P-A)** — `server.ts` `runExtensionDoctor(extRoot)` + `GET /api/agent/extension-doctor` (read-only scan of `<x4GamePath>/extensions`): missing deps, duplicate ids, cross-mod file/patch collisions (full-file overrides + identical diff selectors; `t/`,`index/`,`content.xml`,`ui.xml` excluded as merge/per-extension). `GET /api/agent/extension-doctor-selftest` asserts 5 checks (3 positive, 2 negative) → `pass:true`. Real scan `{error:0,warning:4,info:1}`. UI: "EXTENSION DOCTOR" card in `PackageModDoctor.tsx` (DOCTOR tab).
+3. **Generated aiscript naming collision FIXED** — `namespaceModAiScripts(ws, modId)` in `server.ts`, called in `buildWorkspaceFileManifest`; prefixes the mod's own aiscript names + job `<task script>` refs with the mod id, leaves base-game refs alone. Verified `aiscripts/testmod.hunter.escort.behavior.xml`.
+
+### THE ONE PENDING ITEM (please finish)
+**Extension Doctor click-through UI.** Backend DONE: every finding has `openTargets:[{label,path}]` (ext-root-relative paths) and `GET /api/agent/extension-file?path=<extRel>` returns `{path,name,content}` (read-only, traversal-guarded — verified 200, 1768 bytes). **TODO in `PackageModDoctor.tsx`:** in the EXTENSION DOCTOR findings `.map`, render each `f.openTargets` as small clickable chips; on click `fetch('/api/agent/extension-file?path='+encodeURIComponent(t.path))` and show `content` in a read-only modal (monospace, scrollable, close). State is local to the component (mirror the existing `extScan`/`extError` useState pattern). No cross-component wiring needed.
+
+### Codex pickup list (ranked, all in ROADMAP)
+1. Finish the click-through UI (above) — small, self-contained.
+2. **SQLite persistence layer** — full design in ROADMAP ("SQLite persistence layer (design)"): `better-sqlite3`, `src/lib/db.ts`, schema DDL, mtime invalidation, integration points, 4-step migration. Solves cold-boot cat/dat re-decode + slow large-workspace serialization.
+3. Extension Doctor backlog: XPath-level match overlap, load-order winner simulation, folder-name vs id mismatch.
+4. Security gate (Track B): lock CORS, stop privileged routes falling back to env provider keys (API already binds 127.0.0.1).
+
+### Verify-as-you-go
+- Selftests are the fast oracle: `/api/agent/extension-doctor-selftest` (keep `pass:true`), `/api/agent/selftest`, `/api/agent/round-trip-selftest`.
+- The bash sandbox serves a STALE mirror and can't run the Windows-native `node_modules` — **verify in the browser, not via bash `tsc`/node.** Host Read/Edit/Write are live.
+- The AI-editing pipeline has truncated component files before — re-verify in-browser right after any large component edit.
+
+---
+
 ## 0. CRITICAL environment caveat (read first)
 
 The build/verification loop here is **non-standard**:

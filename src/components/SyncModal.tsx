@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ModWorkspace, MDNode, MDLink, NODE_TEMPLATES } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
+import { toTFileName } from '../lib/modCompiler';
 
 interface SyncModalProps {
   isOpen: boolean;
@@ -103,7 +104,7 @@ export default function SyncModal({
             
             const targetTFile = {
               languageId,
-              fileName: `0001-L0${languageId}.xml`,
+              fileName: toTFileName({ languageId }),
               pages
             };
             

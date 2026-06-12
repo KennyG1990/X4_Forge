@@ -39,6 +39,8 @@ interface CanvasProps {
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
   visibleCueIds: string[] | null;
   focusNodeRequest: { nodeId: string; timestamp: number } | null;
+  selectedCueIds: string[];
+  setSelectedCueIds: React.Dispatch<React.SetStateAction<string[]>>;
 }
 
 export default function Canvas({
@@ -49,7 +51,9 @@ export default function Canvas({
   setSelectedNode,
   schemaTemplates = [],
   visibleCueIds,
-  focusNodeRequest
+  focusNodeRequest,
+  selectedCueIds,
+  setSelectedCueIds
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   const [depPanelOpen, setDepPanelOpen] = useState<boolean>(true);
@@ -91,6 +95,44 @@ export default function Canvas({
   const simTimersRef = useRef<number[]>([]);
   const consoleBottomRef = useRef<HTMLDivElement>(null);
 
+  // Drops a template node safely from Sidebar Template Library onto coordinates clicked/positioned
+  const handleCanvasDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    try {
+      const dataStr = e.dataTransfer.getData('text/plain');
+      if (!dataStr) return;
+      const data = JSON.parse(dataStr);
+      if (data && data.type === 'x4-template-node') {
+        const templateNode = data.template;
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (rect) {
+          const clientX = e.clientX - rect.left;
+          const clientY = e.clientY - rect.top;
+          
+          // Translate client coords with panning offset and zoom scaling factor
+          const dropX = Math.round((clientX - panOffset.x) / zoom / 10) * 10;
+          const dropY = Math.round((clientY - panOffset.y) / zoom / 10) * 10;
+          
+          const newNode = {
+            ...templateNode,
+            id: `node_template_${Date.now()}`,
+            x: dropX,
+            y: dropY,
+            includeInBuild: true // Active compiled copies!
+          };
+          
+          saveCheckpoint();
+          setWorkspace(prev => ({
+            ...prev,
+            nodes: [...prev.nodes, newNode]
+          }));
+        }
+      }
+    } catch (err) {
+      console.error("Canvas dropping handle error", err);
+    }
+  };
+
   // Pan the canvas offset on clicking background dragging
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (contextMenu) {
@@ -117,6 +159,8 @@ export default function Canvas({
 
     if (e.target === canvasRef.current || (e.target as HTMLElement).id === 'grid-pattern' || (e.target as HTMLElement).tagName === 'path' || (e.target as HTMLElement).tagName === 'svg') {
       setPanning({ x: e.clientX, y: e.clientY });
+      setSelectedNode(null);
+      setSelectedCueIds([]);
     }
   };
 
@@ -152,6 +196,25 @@ export default function Canvas({
         x: n.x,
         y: n.y
       }));
+
+      const isCue = node.type === 'cue';
+      if (isCue) {
+        const isModified = e.shiftKey || e.ctrlKey || e.metaKey;
+        if (isModified) {
+          setSelectedCueIds(prev => {
+            if (prev.includes(nodeId)) {
+              return prev.filter(id => id !== nodeId);
+            } else {
+              return [...prev, nodeId];
+            }
+          });
+        } else {
+          setSelectedCueIds([nodeId]);
+        }
+      } else {
+        setSelectedCueIds([]);
+      }
+
       setSelectedNode(node);
       window.dispatchEvent(new CustomEvent('x4-node-selected', { detail: { nodeId } }));
     }
@@ -425,18 +488,37 @@ export default function Canvas({
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const updateSize = () => {
-      if (canvasRef.current) {
-        setViewportSize({
-          width: canvasRef.current.clientWidth,
-          height: canvasRef.current.clientHeight
-        });
+    let raf = 0;
+    // Measure on an animation frame (after layout settles), skip zero-size reads, and only
+    // update state when the size actually changed (avoids redundant re-renders).
+    const measure = () => {
+      const el = canvasRef.current;
+      if (!el) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0 && h > 0) {
+        setViewportSize(prev => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
       }
     };
-    updateSize();
-    const resizeObserver = new ResizeObserver(updateSize);
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
+    scheduleMeasure();
+    // Element-level observer (resizes from sidebar/code-panel drags) ...
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
     resizeObserver.observe(canvasRef.current);
-    return () => resizeObserver.disconnect();
+    // ... plus a window-resize backstop and a deferred re-measure, so opening the app in a
+    // much larger window (or a window resize the element observer is slow to report) always
+    // reflows the canvas/frustum-cull viewport instead of leaving a stale paint.
+    window.addEventListener('resize', scheduleMeasure);
+    const settle = window.setTimeout(scheduleMeasure, 250);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(settle);
+      window.removeEventListener('resize', scheduleMeasure);
+      resizeObserver.disconnect();
+    };
   }, []);
 
   // Visible bounds calculation in virtual coordinates (frustum culling)
@@ -450,45 +532,50 @@ export default function Canvas({
     return { xStart, xEnd, yStart, yEnd };
   }, [panOffset, zoom, viewportSize]);
 
-  // Map each non-cue node to the cue it belongs to
+  // Map each non-cue node to the cue it belongs to.
+  // Rewritten from O(cues × links × nodes) to O(nodes + links): prebuild a node-id
+  // lookup and an undirected adjacency list (excluding parent→sub-cue boundary links),
+  // then BFS each cue subtree with an index-pointer queue (no O(n) Array.shift).
   const nodeToCueMap = React.useMemo(() => {
     const map: Record<string, string> = {};
-    const cues = workspace.nodes.filter(n => n.type === 'cue');
-    
-    cues.forEach(cueNode => {
-      const visited = new Set<string>([cueNode.id]);
-      const queue = [cueNode.id];
+    const nodeById = new Map<string, MDNode>();
+    for (const n of workspace.nodes) nodeById.set(n.id, n);
+
+    const adj = new Map<string, string[]>();
+    const addAdj = (a: string, b: string) => {
+      let arr = adj.get(a);
+      if (!arr) { arr = []; adj.set(a, arr); }
+      arr.push(b);
+    };
+    for (const link of workspace.links) {
+      // Skip parent-subcue transitions so we stay within the cue's boundary.
+      if (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow') continue;
+      addAdj(link.sourceNodeId, link.targetNodeId);
+      addAdj(link.targetNodeId, link.sourceNodeId);
+    }
+
+    for (const cueNode of workspace.nodes) {
+      if (cueNode.type !== 'cue') continue;
       map[cueNode.id] = cueNode.id;
-      
-      while (queue.length > 0) {
-        const currentId = queue.shift()!;
-        
-        workspace.links.forEach(link => {
-          // Skip parent-subcue transitions so we stay within the cue's boundary
-          const isCueBoundary = 
-            (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow');
-            
-          if (isCueBoundary) return;
-          
-          let neighborId: string | null = null;
-          if (link.sourceNodeId === currentId) {
-            neighborId = link.targetNodeId;
-          } else if (link.targetNodeId === currentId) {
-            neighborId = link.sourceNodeId;
+      const visited = new Set<string>([cueNode.id]);
+      const queue: string[] = [cueNode.id];
+      let head = 0;
+      while (head < queue.length) {
+        const currentId = queue[head++];
+        const neighbors = adj.get(currentId);
+        if (!neighbors) continue;
+        for (const neighborId of neighbors) {
+          if (visited.has(neighborId)) continue;
+          const neighborNode = nodeById.get(neighborId);
+          if (neighborNode && neighborNode.type !== 'cue') {
+            visited.add(neighborId);
+            map[neighborId] = cueNode.id;
+            queue.push(neighborId);
           }
-          
-          if (neighborId) {
-            const neighborNode = workspace.nodes.find(n => n.id === neighborId);
-            if (neighborNode && neighborNode.type !== 'cue' && !visited.has(neighborId)) {
-              visited.add(neighborId);
-              map[neighborId] = cueNode.id;
-              queue.push(neighborId);
-            }
-          }
-        });
+        }
       }
-    });
-    
+    }
+
     return map;
   }, [workspace.nodes, workspace.links]);
 
@@ -542,6 +629,19 @@ export default function Canvas({
       );
     });
   }, [workspace.links, visibleBounds, nodesFilteredByCue, getPortCoordinates]);
+
+  // Minimap dots: cap the rendered count so a large mod doesn't paint thousands of
+  // DOM nodes on every pan/zoom. Always keep cues (structural anchors); sample the rest.
+  const minimapNodes = React.useMemo(() => {
+    const MAX = 500;
+    if (nodesFilteredByCue.length <= MAX) return nodesFilteredByCue;
+    const cues = nodesFilteredByCue.filter(n => n.type === 'cue');
+    const others = nodesFilteredByCue.filter(n => n.type !== 'cue');
+    const budget = Math.max(1, MAX - cues.length);
+    const step = Math.max(1, Math.ceil(others.length / budget));
+    const sampled = others.filter((_, i) => i % step === 0);
+    return [...cues, ...sampled];
+  }, [nodesFilteredByCue]);
 
   // Auto-Align Core Layout Math Algorithm (Tidy Graph Tool)
   const autoAlignGraph = () => {
@@ -1291,6 +1391,8 @@ export default function Canvas({
         ref={canvasRef}
         onMouseDown={handleCanvasMouseDown}
         onDoubleClick={handleCanvasDoubleClick}
+        onDragOver={e => e.preventDefault()}
+        onDrop={handleCanvasDrop}
         className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing outline-none"
         style={{
           backgroundImage: 'radial-gradient(circle, rgba(6, 182, 212, 0.15) 1px, transparent 1px)',
@@ -1495,24 +1597,24 @@ export default function Canvas({
                 );
               }
 
-              const isSelected = selectedNode?.id === node.id;
+              const isSelected = selectedNode?.id === node.id || (node.type === 'cue' && selectedCueIds.includes(node.id));
               const isGlowActive = activeNodes.includes(node.id);
               
-              let borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
-              let headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
+              let borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
+              let headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
 
               if (node.type === 'cue') {
-                borderClasses = 'border-purple-500/30 bg-[#0f1118]';
-                headingClasses = 'bg-purple-500/10 text-purple-300 border-purple-500/20';
+                borderClasses = 'border-purple-500/20 bg-[#0f1118]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'event') {
-                borderClasses = 'border-amber-500/30 bg-[#121114]';
-                headingClasses = 'bg-[#451a03]/50 text-amber-300 border-amber-500/20';
+                borderClasses = 'border-amber-500/20 bg-[#121114]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'condition') {
-                borderClasses = 'border-cyan-500/30 bg-[#0c1017]';
-                headingClasses = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
+                borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'action') {
-                borderClasses = 'border-emerald-500/30 bg-[#0c1310]';
-                headingClasses = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+                borderClasses = 'border-emerald-500/20 bg-[#0c1310]/95 backdrop-blur-sm';
+                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               }
 
               const isLowDetail = zoom < 0.45;
@@ -1583,6 +1685,9 @@ export default function Canvas({
                 return (
                   <React.Fragment key={node.id}>
                     <div
+                      data-node-id={node.id}
+                      data-node-type={node.type}
+                      data-node-label={node.label}
                       onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                       style={{ left: node.x, top: node.y }}
                       className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
@@ -1606,19 +1711,37 @@ export default function Canvas({
               return (
                 <React.Fragment key={node.id}>
                   <div
+                    data-node-id={node.id}
+                    data-node-type={node.type}
+                    data-node-label={node.label}
                     onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                     style={{ left: node.x, top: node.y }}
                     className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
                       isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
                     } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
                   >
+                    {/* Top-accent Gradient Line */}
+                    <div className={`h-[3px] rounded-t-lg w-full bg-gradient-to-r ${
+                      node.type === 'cue' 
+                        ? 'from-purple-500 to-fuchsia-500' 
+                        : node.type === 'event' 
+                        ? 'from-amber-500 to-orange-500' 
+                        : node.type === 'condition' 
+                        ? 'from-cyan-500 to-blue-500' 
+                        : 'from-emerald-500 to-teal-500'
+                    }`} />
+
                     {/* Visual node title & close handle button */}
-                    <div className={`p-2.5 rounded-t-lg border-b flex items-center justify-between cursor-grab active:cursor-grabbing ${headingClasses}`}>
+                    <div className="p-2 flex items-center justify-between border-b border-white/[0.04] cursor-grab active:cursor-grabbing bg-white/[0.01]">
                       <div className="flex items-center gap-1.5 truncate">
                         {simActive && isGlowActive && (
                           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
                         )}
-                        <span className="font-semibold text-xs tracking-tight truncate w-32">{node.label}</span>
+                        {node.type === 'cue' && <Compass className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
+                        {node.type === 'event' && <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400/20 shrink-0" />}
+                        {node.type === 'condition' && <Filter className="w-3.5 h-3.5 text-cyan-400 shrink-0" />}
+                        {node.type === 'action' && <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20 shrink-0" />}
+                        <span className="font-semibold text-[11px] tracking-tight truncate w-32 text-slate-100">{node.label}</span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         {/* Sticky Note Toggle Icon */}
@@ -1667,48 +1790,48 @@ export default function Canvas({
                     </div>
 
                     {/* Properties Inspector Preview */}
-                    <div className="p-2.5 bg-black/45 text-slate-400 space-y-1 select-none border-b border-white/[0.04]">
+                    <div className="p-2 bg-[#090b0f] text-slate-400 space-y-1 select-none border-b border-white/[0.04] font-mono text-[9px] rounded-md m-1.5">
                       {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
-                        <div key={key} className="flex justify-between">
-                          <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">{key}:</span>
-                          <span className="text-slate-300 truncate max-w-[140px] text-right font-medium" title={String(val)}>
+                        <div key={key} className="flex justify-between leading-normal">
+                          <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">{key}:</span>
+                          <span className="text-slate-300 truncate max-w-[130px] text-right font-medium" title={String(val)}>
                             {String(val)}
                           </span>
                         </div>
                       ))}
                       {Object.keys(node.properties).length === 0 && (
-                        <div className="text-slate-500 italic text-[10px] text-center">No properties configured</div>
+                        <div className="text-slate-650 italic text-[9px] text-center">No properties configured</div>
                       )}
                     </div>
 
                     {/* Ports list row layouts */}
-                    <div className="p-2 space-y-2 bg-black/15 rounded-b-lg">
+                    <div className="p-2 space-y-1.5 bg-black/10 rounded-b-lg">
                       {/* Event Inputs/Condition locks list */}
                       {(node.inputs || []).map((port) => (
                         <div key={port.id} className="flex items-center gap-2">
                            <button
                             onClick={(e) => handlePortClick(node.id, port, e)}
-                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                            className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
                               linking?.nodeId === node.id && linking?.portId === port.id 
                                 ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                                : 'bg-[#10b981]/20 hover:bg-[#10b981]/60 border-[#10b981]/50'
+                                : 'bg-[#10b981]/15 hover:bg-[#10b981]/50 border-[#10b981]/40'
                             }`}
                             title={`Connector terminal: ${port.name}`}
                           />
-                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                          <span className="text-[9.5px] text-slate-450 uppercase font-bold tracking-wider">{port.name}</span>
                         </div>
                       ))}
 
                       {/* Command outputs target lists */}
                       {(node.outputs || []).map((port) => (
                         <div key={port.id} className="flex items-center justify-end gap-2 text-right w-full">
-                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{port.name}</span>
+                          <span className="text-[9.5px] text-slate-450 uppercase font-bold tracking-wider">{port.name}</span>
                           <button
                             onClick={(e) => handlePortClick(node.id, port, e)}
-                            className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
+                            className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
                               linking?.nodeId === node.id && linking?.portId === port.id 
                                 ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                                : 'bg-cyan-500/20 hover:bg-cyan-500/60 border-cyan-500/50'
+                                : 'bg-cyan-500/15 hover:bg-cyan-500/50 border-cyan-500/40'
                             }`}
                             title={`Connector terminal: ${port.name}`}
                           />
@@ -1850,7 +1973,7 @@ export default function Canvas({
           RADAR MINIMAP
         </span>
         <div className="relative w-36 h-24 bg-[#05070a] rounded-lg border border-white/5 overflow-hidden">
-          {nodesFilteredByCue.map(node => {
+          {minimapNodes.map(node => {
             // Transform coordinates down to scale perfectly within radar dimension boundaries (144px width, 96px height)
             const nodeX = rangeX > 1 ? ((node.x - minX) / rangeX) * 120 + 8 : 10;
             const nodeY = rangeY > 1 ? ((node.y - minY) / rangeY) * 80 + 8 : 10;

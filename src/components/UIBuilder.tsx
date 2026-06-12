@@ -17,6 +17,7 @@ import {
   Terminal,
   FileCode
 } from 'lucide-react';
+import { LUA_SNIPPETS, fillLuaSnippet } from '../lib/luaSnippets';
 import { UIWidget, ModWorkspace } from '../types';
 
 interface UIBuilderProps {
@@ -37,6 +38,15 @@ export default function UIBuilder({
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [activeUiSubTab, setActiveUiSubTab] = useState<'canvas' | 'lua'>('canvas');
   const [selectedLuaTemplate, setSelectedLuaTemplate] = useState<string>('standard');
+  // Pre-fill vetted-snippet placeholders from the active integration contract, if any.
+  const _contract = workspace.integrationContract;
+  const _ep0 = _contract && _contract.endpoints && _contract.endpoints[0];
+  const snippetValues: Record<string, string> = _contract ? {
+    NS: _contract.namespace || 'myext',
+    EVENT: (_ep0 && _ep0.id) || 'my_event',
+    URL: (_contract.baseUrl || 'http://127.0.0.1:8713') + ((_ep0 && _ep0.path) || '/v1/endpoint'),
+    HTTP_CLIENT: _contract.httpClientExpr || 'require("extensions.sn_mod_support_apis.lua.simple_http")'
+  } : {};
 
   const theme = workspace.uiTheme;
 
@@ -191,80 +201,219 @@ export default function UIBuilder({
 
       {activeUiSubTab === 'canvas' ? (
         <div className="flex-1 flex overflow-hidden">
-          {/* Custom Theme sliders */}
-          <div className="w-64 border-r border-white/10 bg-[#12141a] p-4 space-y-4 font-mono text-xs shadow-inner shrink-0">
-            <h4 className="text-slate-200 uppercase font-bold text-[10px] tracking-wider mb-2 flex items-center gap-1.5 border-b border-white/5 pb-1">
-              <Palette className="w-3.5 h-3.5 text-cyan-400" /> Theme Parameters
-            </h4>
+          {/* Custom Theme sliders & HUD hierarchy tree */}
+          <div className="w-[290px] border-r border-[#1e2230]/50 bg-[#12141a] flex flex-col justify-between shadow-inner shrink-0 overflow-y-auto">
+            <div className="p-3.5 space-y-4 font-mono text-xs">
+              
+              {/* SECTION 1: Widgets Hierarchy Tree section */}
+              <div className="space-y-2">
+                <h4 className="text-slate-200 uppercase font-bold text-[10px] tracking-wider mb-2.5 flex items-center gap-1.5 border-b border-white/5 pb-1">
+                  <Layers className="w-3.5 h-3.5 text-cyan-400" /> cockpit modules tree
+                </h4>
 
-            <div className="space-y-3">
-              <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Window Background Color</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={theme.backgroundColor}
-                    onChange={e => updateThemeProp('backgroundColor', e.target.value)}
-                    className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
-                  />
-                  <span className="text-[10px] text-slate-400 uppercase">{theme.backgroundColor}</span>
+                <div className="space-y-3 font-mono text-[11px] max-h-60 overflow-y-auto custom-scrollbar pr-1">
+                  {workspace.uiWidgets.length === 0 ? (
+                    <div className="text-[10px] text-slate-500 italic p-3 text-center border border-white/5 bg-black/10 rounded">
+                      No viewport cockpit widgets created yet. Use the sidebar "+ Add Widget" to create some!
+                    </div>
+                  ) : (
+                    <>
+                      {/* Subcategory 1: Panels and Containers */}
+                      {workspace.uiWidgets.some(w => w.type === 'window' || w.type === 'table') && (
+                        <div className="space-y-1">
+                          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wide block">🖥 Layout & Panels</span>
+                          <div className="pl-2 border-l border-white/5 space-y-1">
+                            {workspace.uiWidgets
+                              .filter(w => w.type === 'window' || w.type === 'table')
+                              .map(widget => {
+                                const isSel = selectedWidget?.id === widget.id;
+                                return (
+                                  <div 
+                                    key={widget.id}
+                                    className={`flex items-center justify-between p-1 px-2 rounded group transition-all text-[10px] ${
+                                      isSel ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-bold' : 'hover:bg-white/5 text-slate-400'
+                                    }`}
+                                  >
+                                    <button 
+                                      onClick={() => setSelectedWidget(widget)}
+                                      className="flex-1 text-left cursor-pointer truncate"
+                                    >
+                                      <span>{widget.type === 'window' ? '🔲 Window' : '📊 Grid Table'}</span>
+                                      <span className="text-[8.5px] text-slate-500 font-normal block">ID: {widget.id.substring(7, 13)} ({widget.w}x{widget.h})</span>
+                                    </button>
+                                    <button 
+                                      onClick={(e) => deleteWidget(widget.id, e)}
+                                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-rose-400 transition-opacity p-0.5"
+                                      title="Delete widget node"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Subcategory 2: Interactive Controls / Actions */}
+                      {workspace.uiWidgets.some(w => w.type === 'button' || w.type === 'dropdown' || w.type === 'input') && (
+                        <div className="space-y-1 pt-1">
+                          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wide block">🔘 Signals & Controls</span>
+                          <div className="pl-2 border-l border-white/5 space-y-1">
+                            {workspace.uiWidgets
+                              .filter(w => w.type === 'button' || w.type === 'dropdown' || w.type === 'input')
+                              .map(widget => {
+                                const isSel = selectedWidget?.id === widget.id;
+                                return (
+                                  <div 
+                                    key={widget.id}
+                                    className={`flex items-center justify-between p-1 px-2 rounded group transition-all text-[10px] ${
+                                      isSel ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-bold' : 'hover:bg-white/5 text-slate-400'
+                                    }`}
+                                  >
+                                    <button 
+                                      onClick={() => setSelectedWidget(widget)}
+                                      className="flex-1 text-left cursor-pointer truncate"
+                                    >
+                                      <span className="truncate block font-medium">
+                                        {widget.type === 'button' ? '🔘 Addon Action Key' : widget.type === 'dropdown' ? '⚙ Option Selector' : '📥 Field Input'}
+                                      </span>
+                                      <span className="text-[8.5px] text-slate-500 font-normal block truncate">Label: "{widget.label || 'None'}"</span>
+                                    </button>
+                                    <button 
+                                      onClick={(e) => deleteWidget(widget.id, e)}
+                                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-rose-400 transition-opacity p-0.5"
+                                      title="Delete widget node"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Subcategory 3: Telemetry Feedback Display */}
+                      {workspace.uiWidgets.some(w => w.type === 'progressbar' || w.type === 'chat' || w.type === 'text' || w.type === 'header') && (
+                        <div className="space-y-1 pt-1">
+                          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wide block">📡 Gauges & Telemetry</span>
+                          <div className="pl-2 border-l border-white/5 space-y-1">
+                            {workspace.uiWidgets
+                              .filter(w => w.type === 'progressbar' || w.type === 'chat' || w.type === 'text' || w.type === 'header')
+                              .map(widget => {
+                                const isSel = selectedWidget?.id === widget.id;
+                                return (
+                                  <div 
+                                    key={widget.id}
+                                    className={`flex items-center justify-between p-1 px-2 rounded group transition-all text-[10px] ${
+                                      isSel ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-bold' : 'hover:bg-white/5 text-slate-400'
+                                    }`}
+                                  >
+                                    <button 
+                                      onClick={() => setSelectedWidget(widget)}
+                                      className="flex-1 text-left cursor-pointer truncate"
+                                    >
+                                      <span className="truncate block">
+                                        {widget.type === 'progressbar' ? '⚡ Shield Rate Tube' : widget.type === 'chat' ? '💬 Fleet Audio Feed' : widget.type === 'text' ? '📝 Static Title' : '🛰 Title Bar'}
+                                      </span>
+                                      <span className="text-[8.5px] text-slate-500 font-normal block truncate">ID: {widget.id.substring(7, 13)}</span>
+                                    </button>
+                                    <button 
+                                      onClick={(e) => deleteWidget(widget.id, e)}
+                                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-rose-400 transition-opacity p-0.5"
+                                      title="Delete widget node"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Primary Neon Border</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={theme.borderColor}
-                    onChange={e => updateThemeProp('borderColor', e.target.value)}
-                    className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
-                  />
-                  <span className="text-[10px] text-slate-400 uppercase">{theme.borderColor}</span>
+              {/* SECTION 2: Custom Theme Parameter selection */}
+              <div className="space-y-2 pt-2 border-t border-white/5">
+                <h4 className="text-slate-200 uppercase font-bold text-[10px] tracking-wider mb-2 flex items-center gap-1.5 pb-1">
+                  <Palette className="w-3.5 h-3.5 text-cyan-400" /> HUD Aesthetics
+                </h4>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Window Background Color</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={theme.backgroundColor}
+                        onChange={e => updateThemeProp('backgroundColor', e.target.value)}
+                        className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
+                      />
+                      <span className="text-[10px] text-slate-400 uppercase">{theme.backgroundColor}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Primary Neon Border</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={theme.borderColor}
+                        onChange={e => updateThemeProp('borderColor', e.target.value)}
+                        className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
+                      />
+                      <span className="text-[10px] text-slate-400 uppercase">{theme.borderColor}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Accent Command Elements</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={theme.accentColor}
+                        onChange={e => updateThemeProp('accentColor', e.target.value)}
+                        className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
+                      />
+                      <span className="text-[10px] text-slate-400 uppercase">{theme.accentColor}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">HUD Panel Opacity ({Math.round(theme.opacity * 100)}%)</label>
+                    <input
+                      type="range"
+                      min="0.3"
+                      max="1.0"
+                      step="0.05"
+                      value={theme.opacity}
+                      onChange={e => updateThemeProp('opacity', parseFloat(e.target.value))}
+                      className="w-full accent-cyan-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between border-t border-white/5 pt-3 mt-3">
+                    <label className="text-slate-400 uppercase text-[9px] tracking-wider">Display Interaction Icons</label>
+                    <input
+                      type="checkbox"
+                      checked={theme.showIcons}
+                      onChange={e => updateThemeProp('showIcons', e.target.checked)}
+                      className="rounded accent-cyan-500 w-3.5 h-3.5 bg-black border-slate-600 focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Accent Command Elements</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={theme.accentColor}
-                    onChange={e => updateThemeProp('accentColor', e.target.value)}
-                    className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
-                  />
-                  <span className="text-[10px] text-slate-400 uppercase">{theme.accentColor}</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">HUD Panel Opacity ({Math.round(theme.opacity * 100)}%)</label>
-                <input
-                  type="range"
-                  min="0.3"
-                  max="1.0"
-                  step="0.05"
-                  value={theme.opacity}
-                  onChange={e => updateThemeProp('opacity', parseFloat(e.target.value))}
-                  className="w-full accent-cyan-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-between border-t border-white/5 pt-3 mt-3">
-                <label className="text-slate-400 uppercase text-[9px] tracking-wider">Display Interaction Icons</label>
-                <input
-                  type="checkbox"
-                  checked={theme.showIcons}
-                  onChange={e => updateThemeProp('showIcons', e.target.checked)}
-                  className="rounded accent-cyan-500 w-3.5 h-3.5 bg-black border-slate-600 focus:outline-none"
-                />
-              </div>
             </div>
 
-            <div className="p-3 rounded bg-cyan-950/10 border border-cyan-500/20 mt-3 space-y-1.5">
-              <span className="text-cyan-400 font-bold block text-[10px] uppercase">Simulation Guide:</span>
-              <p className="text-[10px] text-slate-400 leading-relaxed font-sans">
-                Drag widgets within the cockpit window simulation framework. Use bottom resizing buttons to enlarge parameters. Changes dynamically synchronize into the generated Lua XML schema.
+            <div className="p-3 bg-cyan-950/20 border-t border-white/5 shrink-0 select-none">
+              <span className="text-cyan-400 font-bold block text-[10px] uppercase mb-1">Cockpit simulation active</span>
+              <p className="text-[9.5px] text-slate-500 leading-normal font-sans">
+                Widget parameters synchronize live. Select any element inside the cockpit simulation grid structure or direct list tree to manipulate its coordinate properties.
               </p>
             </div>
           </div>
@@ -557,6 +706,17 @@ export default function UIBuilder({
                   <div className="text-[9.5px] text-slate-500 font-mono">Custom console print logger loop</div>
                 </button>
               </div>
+
+              <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5">
+                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Vetted X4 patterns (the hard ones, done right)</div>
+                {LUA_SNIPPETS.map(sn => (
+                  <button key={sn.id} type="button" onClick={() => setSelectedLuaTemplate(sn.id)}
+                    className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${selectedLuaTemplate === sn.id ? 'border-cyan-500 bg-cyan-600/10 text-cyan-300' : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'}`}>
+                    <div className="text-[11px] font-bold uppercase">{sn.title}</div>
+                    <div className="text-[9.5px] text-slate-500">{sn.description}</div>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="p-3 bg-cyan-900/15 rounded-md border border-cyan-500/20 text-[10.5px] leading-relaxed text-slate-400 space-y-1.5">
@@ -584,7 +744,9 @@ export default function UIBuilder({
             {/* Compiled code rendering */}
             <div className="flex-1 p-4 overflow-y-auto bg-black/35 font-mono text-[11px] leading-normal selection:bg-cyan-500/25 text-slate-400 select-text">
               <pre className="whitespace-pre">
-                {selectedLuaTemplate === 'standard' ? (
+                {LUA_SNIPPETS.some(sn => sn.id === selectedLuaTemplate) ? (
+                  fillLuaSnippet(selectedLuaTemplate, snippetValues)
+                ) : selectedLuaTemplate === 'standard' ? (
                   `-- X4 foundations Client Interface Controller
 -- Target Path: /ui/addon_menu.lua
 -- Binds widgets defined visually inside HUD Layout Configurator to game actions
@@ -681,7 +843,8 @@ end`
                   const code = selectedLuaTemplate === 'standard' 
                     ? `local menu = { name = "${workspace.name}" }` 
                     : `-- Custom lua addon`;
-                  navigator.clipboard.writeText(code);
+                  const snip = LUA_SNIPPETS.find(sn => sn.id === selectedLuaTemplate);
+                  navigator.clipboard.writeText(snip ? fillLuaSnippet(selectedLuaTemplate, snippetValues) : code);
                   alert("LUA Code template copied!");
                 }}
                 className="hover:text-cyan-400 font-bold uppercase transition-all cursor-pointer"
