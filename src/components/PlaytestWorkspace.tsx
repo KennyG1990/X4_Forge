@@ -10,7 +10,9 @@ import {
   RefreshCw, 
   Wrench, 
   Cpu,
-  PackageCheck
+  PackageCheck,
+  Play,
+  Gamepad2
 } from 'lucide-react';
 
 interface LogIssue {
@@ -103,6 +105,52 @@ export default function PlaytestWorkspace({
   const [gameLogStatus, setGameLogStatus] = useState<GameLogStatus | null>(null);
   const [gameLogLoading, setGameLogLoading] = useState<boolean>(false);
   const [gameLogError, setGameLogError] = useState<string>('');
+
+  // VERIFY IN GAME — drives the external game_agent_bridge harness through
+  // POST /api/agent/game-bridge/run: launch/attach to X4, execute a JSON plan
+  // (input + observations + assert_log), return machine-checkable pass/fail
+  // with screenshot evidence. This is C2-as-a-feature.
+  const [gbStatus, setGbStatus] = useState<any>(null);
+  const [gbPlan, setGbPlan] = useState<string>('');
+  const [gbDryRun, setGbDryRun] = useState<boolean>(false);
+  const [gbRunning, setGbRunning] = useState<boolean>(false);
+  const [gbError, setGbError] = useState<string>('');
+  const [gbResult, setGbResult] = useState<any>(null);
+
+  useEffect(() => {
+    fetch('/api/agent/game-bridge/status')
+      .then(r => r.json())
+      .then(d => {
+        setGbStatus(d);
+        if (Array.isArray(d.plans) && d.plans.length && !gbPlan) {
+          const preferred = d.plans.find((p: string) => p.includes('refreshmd')) || d.plans[0];
+          setGbPlan(preferred);
+        }
+      })
+      .catch(() => setGbStatus({ available: false }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const runGameBridge = async () => {
+    if (!gbPlan || gbRunning) return;
+    setGbRunning(true);
+    setGbError('');
+    setGbResult(null);
+    try {
+      const res = await fetch('/api/agent/game-bridge/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planFile: gbPlan, dryRunActions: gbDryRun })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Bridge run failed (${res.status})`);
+      setGbResult(data);
+    } catch (err: any) {
+      setGbError(err.message || 'Bridge run failed.');
+    } finally {
+      setGbRunning(false);
+    }
+  };
 
   const refreshGameLogStatus = async () => {
     setGameLogLoading(true);
@@ -278,6 +326,83 @@ export default function PlaytestWorkspace({
                   [{issue.severity}] {issue.text}
                 </pre>
               ))}
+            </div>
+          )}
+        </div>
+
+        {/* VERIFY IN GAME — game_agent_bridge runner */}
+        <div className="rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/5 p-3 space-y-2">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
+            <Gamepad2 className="w-4 h-4 text-fuchsia-400" />
+            Verify In Game
+            {gbStatus && !gbStatus.available && (
+              <span className="text-[8px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded px-1.5 py-0.5 normal-case">
+                bridge not found — set gameBridgeRoot in config.json
+              </span>
+            )}
+          </h3>
+          <p className="text-[10px] text-slate-400 leading-normal font-sans">
+            Runs a game-agent-bridge plan against the real game: launch/attach, send input
+            (e.g. <code className="text-fuchsia-300">/refreshmd</code>), capture screenshots, and
+            <span className="text-fuchsia-300"> assert the debuglog</span> — machine-checkable pass/fail.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={gbPlan}
+              onChange={e => setGbPlan(e.target.value)}
+              disabled={!gbStatus?.available || gbRunning}
+              className="w-full min-w-0 bg-black/40 border border-white/10 rounded px-2 py-1.5 font-mono text-[10px] text-slate-200 disabled:opacity-50 cursor-pointer"
+            >
+              {(gbStatus?.plans || []).map((p: string) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <label className="flex items-center gap-1 text-[9px] font-mono text-slate-400 cursor-pointer shrink-0" title="Launch/attach and observe, but send no clicks or keys">
+              <input type="checkbox" checked={gbDryRun} onChange={e => setGbDryRun(e.target.checked)} />
+              dry actions
+            </label>
+            <button
+              onClick={runGameBridge}
+              disabled={!gbStatus?.available || !gbPlan || gbRunning}
+              className="px-3 py-1.5 bg-fuchsia-500/15 hover:bg-fuchsia-500/25 border border-fuchsia-500/30 rounded font-mono text-[10px] font-bold text-fuchsia-300 disabled:opacity-50 flex items-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <Play className={`w-3 h-3 ${gbRunning ? 'animate-pulse' : ''}`} />
+              {gbRunning ? 'RUNNING…' : 'RUN'}
+            </button>
+          </div>
+          {gbRunning && (
+            <p className="text-[9px] font-mono text-slate-500">Driving the game — launching can take a couple of minutes…</p>
+          )}
+          {gbError && (
+            <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{gbError}</div>
+          )}
+          {gbResult?.summary && (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className={`text-[9px] font-black font-mono uppercase px-2 py-0.5 rounded border ${gbResult.summary.passed ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30' : 'text-red-300 bg-red-500/10 border-red-500/30'}`}>
+                  {gbResult.summary.passed ? 'PASSED' : 'FAILED'}
+                </span>
+                <span className="text-[9px] font-mono text-slate-500 truncate" title={gbResult.summary.runDir}>{gbResult.summary.runId}</span>
+              </div>
+              {gbResult.summary.assertions.map((a: any, i: number) => (
+                <div key={i} className={`text-[9.5px] font-mono ${a.matched ? 'text-emerald-300' : 'text-red-300'}`}>
+                  {a.matched ? '✓' : '✗'} {a.label}
+                </div>
+              ))}
+              {gbResult.summary.errors.map((e: string, i: number) => (
+                <pre key={i} className="whitespace-pre-wrap rounded bg-black/35 border border-white/5 p-1.5 text-[9px] leading-tight text-red-300 font-mono">{e}</pre>
+              ))}
+              {gbResult.summary.screenshots.length > 0 && (
+                <div className="flex gap-1.5 overflow-x-auto scrollbar-thin py-1">
+                  {gbResult.summary.screenshots.map((shot: string, i: number) => (
+                    <a key={i} href={'/api/agent/game-bridge/artifact?path=' + encodeURIComponent(shot)} target="_blank" rel="noreferrer" className="shrink-0">
+                      <img
+                        src={'/api/agent/game-bridge/artifact?path=' + encodeURIComponent(shot)}
+                        alt={`evidence ${i + 1}`}
+                        className="h-16 rounded border border-white/10 hover:border-fuchsia-400/50"
+                      />
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
