@@ -18,6 +18,8 @@ interface DiagnosticsHubProps {
   modWorkspacePath: string;
   setWorkspaceView?: (view: any) => void;
   forceTab?: 'analyzer' | 'playtest';
+  autoSaveEnabled?: boolean;
+  setAutoSaveEnabled?: (val: boolean) => void;
 }
 
 /**
@@ -30,7 +32,9 @@ export default function DiagnosticsHub({
   setWorkspace,
   saveCheckpoint,
   modWorkspacePath,
-  forceTab
+  forceTab,
+  autoSaveEnabled: propAutoSaveEnabled,
+  setAutoSaveEnabled: propSetAutoSaveEnabled
 }: DiagnosticsHubProps) {
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
 
@@ -46,7 +50,10 @@ export default function DiagnosticsHub({
   // Playtest / sync state
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncErrorMsg, setSyncErrorMsg] = useState<string>('');
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(false);
+  
+  const [localAutoSaveEnabled, setLocalAutoSaveEnabled] = useState<boolean>(false);
+  const autoSaveEnabled = propAutoSaveEnabled !== undefined ? propAutoSaveEnabled : localAutoSaveEnabled;
+  const setAutoSaveEnabled = propSetAutoSaveEnabled !== undefined ? propSetAutoSaveEnabled : setLocalAutoSaveEnabled;
 
   // Log analysis state
   const [logInput, setLogInput] = useState<string>('');

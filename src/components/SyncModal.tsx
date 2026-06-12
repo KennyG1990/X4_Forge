@@ -34,6 +34,7 @@ interface SyncModalProps {
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation') => void;
   modWorkspacePath?: string;
   filesystemPath?: string;
+  setAutoSaveEnabled?: (val: boolean) => void;
 }
 
 interface FSItem {
@@ -104,7 +105,8 @@ export default function SyncModal({
   saveCheckpoint,
   setWorkspaceView,
   modWorkspacePath,
-  filesystemPath
+  filesystemPath,
+  setAutoSaveEnabled
 }: SyncModalProps) {
   const [mode, setMode] = useState<'project' | 'file'>('project');
   const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'refused' | 'info'; msg: string } | null>(null);
@@ -201,6 +203,7 @@ export default function SyncModal({
       if (!res.ok || data.error) throw new Error(data.error || `Import failed (${res.status})`);
       saveCheckpoint();
       setWorkspace(data.workspace);
+      setAutoSaveEnabled?.(false);
       if (setWorkspaceView) setWorkspaceView('blueprint');
       setStatusBanner({ type: 'success', msg: `Loaded mod folder "${selectedPath}". ${data.report?.summary || ''}` });
       onClose();
@@ -223,6 +226,7 @@ export default function SyncModal({
         if (parsed && typeof parsed === 'object' && Array.isArray(parsed.nodes)) {
           saveCheckpoint();
           setWorkspace(parsed);
+          setAutoSaveEnabled?.(false);
           setStatusBanner({ type: 'success', msg: `Workspace JSON "${parsed.name || 'mod'}" loaded with ${parsed.nodes.length} visual nodes.` });
           onClose();
         } else {
@@ -275,6 +279,7 @@ export default function SyncModal({
         if (!reconstructed || reconstructed.nodes.length === 0) throw new Error('No compatible MD cues/events/actions were identified.');
         saveCheckpoint();
         setWorkspace(reconstructed);
+        setAutoSaveEnabled?.(false);
         if (setWorkspaceView) setWorkspaceView('blueprint');
         onClose();
       }

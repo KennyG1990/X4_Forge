@@ -159,6 +159,9 @@ export default function App() {
   const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki'>('blueprint');
   const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference'>('script');
 
+  // Lifted auto-save state to synchronize settings and prevent data clobbering on load
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(false);
+
   // Diagnostics / Mod Doctor states moved to App level to share across Sidebar/CodePreview
   const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
   const [diagnosticSource, setDiagnosticSource] = useState<'checking' | 'package' | 'local'>('checking');
@@ -1048,6 +1051,8 @@ export default function App() {
           onOpenEditorFile={(file) => {
             setActiveEditorFile(file);
           }}
+          autoSaveEnabled={autoSaveEnabled}
+          setAutoSaveEnabled={setAutoSaveEnabled}
           workspaceDirMode={workspaceDirMode}
           setWorkspaceDirMode={setWorkspaceDirMode}
           compileStatus={compileStatus}
@@ -1174,6 +1179,8 @@ export default function App() {
             snapshotDiffWorkspace={snapshotDiffWorkspace}
             onClearSnapshotDiff={() => setSnapshotDiffWorkspace(null)}
             selectedCueIds={selectedCueIds}
+            autoSaveEnabled={autoSaveEnabled}
+            setAutoSaveEnabled={setAutoSaveEnabled}
           />
         </aside>
 
@@ -1225,6 +1232,7 @@ export default function App() {
         setWorkspaceView={setWorkspaceView}
         modWorkspacePath={modWorkspacePath}
         filesystemPath={filesystemPath}
+        setAutoSaveEnabled={setAutoSaveEnabled}
       />
 
       {/* AI Connection Provider Settings Modal */}

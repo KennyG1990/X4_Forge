@@ -117,6 +117,8 @@ interface SidebarProps {
   diagnostics: PackageDiagnostic[];
   diagnosticSource: 'checking' | 'package' | 'local';
   onSelectSnapshot?: (snapWS: ModWorkspace | null) => void;
+  autoSaveEnabled?: boolean;
+  setAutoSaveEnabled?: (val: boolean) => void;
 }
 
 export default function Sidebar({
@@ -166,7 +168,9 @@ export default function Sidebar({
   handleDeclineAction,
   diagnostics,
   diagnosticSource,
-  onSelectSnapshot
+  onSelectSnapshot,
+  autoSaveEnabled,
+  setAutoSaveEnabled
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -670,6 +674,8 @@ export default function Sidebar({
               modWorkspacePath={modWorkspacePath}
               setWorkspaceView={setWorkspaceView}
               forceTab="analyzer"
+              autoSaveEnabled={autoSaveEnabled}
+              setAutoSaveEnabled={setAutoSaveEnabled}
             />
           </ErrorBoundary>
         )}
@@ -683,6 +689,8 @@ export default function Sidebar({
               modWorkspacePath={modWorkspacePath}
               setWorkspaceView={setWorkspaceView}
               forceTab="playtest"
+              autoSaveEnabled={autoSaveEnabled}
+              setAutoSaveEnabled={setAutoSaveEnabled}
             />
           </ErrorBoundary>
         )}

@@ -74,6 +74,8 @@ interface CodePreviewProps {
   snapshotDiffWorkspace: ModWorkspace | null;
   onClearSnapshotDiff?: () => void;
   selectedCueIds: string[];
+  autoSaveEnabled?: boolean;
+  setAutoSaveEnabled?: (val: boolean) => void;
 }
 
 interface ScriptAnalysis {
@@ -196,7 +198,9 @@ export default function CodePreview({
   diagnosticSource,
   snapshotDiffWorkspace,
   onClearSnapshotDiff,
-  selectedCueIds
+  selectedCueIds,
+  autoSaveEnabled: propAutoSaveEnabled,
+  setAutoSaveEnabled: propSetAutoSaveEnabled
 }: CodePreviewProps) {
   const [codeActiveTab, setCodeActiveTab] = useState<'md' | 'ui' | 'node' | 'file'>('md');
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
@@ -211,7 +215,10 @@ export default function CodePreview({
   // Playtest Live Debugger states
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncErrorMsg, setSyncErrorMsg] = useState<string>('');
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(true);
+  
+  const [localAutoSaveEnabled, setLocalAutoSaveEnabled] = useState<boolean>(false);
+  const autoSaveEnabled = propAutoSaveEnabled !== undefined ? propAutoSaveEnabled : localAutoSaveEnabled;
+  const setAutoSaveEnabled = propSetAutoSaveEnabled !== undefined ? propSetAutoSaveEnabled : setLocalAutoSaveEnabled;
 
   // Snapshot / version-history (rollback) state
   const [snapshots, setSnapshots] = useState<{ name: string; savedAt: string }[]>([]);
