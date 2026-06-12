@@ -871,4 +871,84 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 
 ---
 
-## Community pain-point alignment — diff vs. the deep
+## Community pain-point alignment — diff vs. the deep-research report (2026-06-11)
+
+Source: `deep-research-report.md` (Codex) — a qualitative review of the biggest recurring X4 modding pain points, ranked into ten issues. Its thesis: *"X4 is moddable, but too much of the real workflow is pieced together from forum archaeology, extracted schemas, Discord help, and community APIs,"* with ~three-quarters of friction in three buckets: docs/discoverability, update-driven breakage, and missing first-party tooling/diagnostics.
+
+That thesis is precisely the studio's reason to exist — collapse that scattered workflow into one app. The diff below grades each documented pain against what the studio does **today** and converts the gaps into an in-scope buildlist. Verdict up front: **the studio can meaningfully address 6 of the 10 pains (plus a 7th partially); 3 are engine/asset-pipeline problems only Egosoft can own.**
+
+### Diff table
+
+| # | Report pain point (prevalence) | Studio coverage today | Gap → what we can achieve |
+|---|---|---|---|
+| 1 | Fragmented docs / discoverability (High) | **Partial** — Local Object Browser (real cat/dat index: 694 ships, 33 factions, 1950 wares, 3783 sounds), schema-derived node templates, in-app XSD element/attr/enum surfacing, Wiki/Codex tab | Productize an in-app **searchable reference**: scriptproperties / MD-action / XSD symbol search + hover docs on every node & field + task-based quickstart gallery. Directly kills "unpack the XSD and read the comments." |
+| 2 | XML/MD/XPath/Lua hard to learn (High) | **Strong (core)** — visual node-based MD authoring (no hand-written XML), 8-domain compilers, XSD-backed validation, XPath match-counting in the patch builder | Already the headline win. Extend: more templates, finish schema-valid generators, object-index-backed **typed pickers** instead of free-text fields. |
+| 3 | Major updates break mods (High) | **Partial** — validation runs against the *installed* game's XSD + object index, so references that no longer exist are catchable | Add an **"update audit"**: re-scan a mod against the current install and flag now-dangling references (removed macros/wares/factions) as a migration checklist. (Machine-readable breakage notes themselves are Egosoft's job.) |
+| 4 | UI modding unstable / conflict-prone (High) | **Weak** — packages X4-correct `ui.xml` + Lua entry point; the engine-level hook layer is Egosoft-only | **Partial only:** generate UI that uses the community **UI-callback pattern** (interop-friendly) instead of whole-function Lua overrides, and flag whole-function overrides as a conflict risk. The real fix (first-party callback layer) is out of our hands. |
+| 5 | Debugging / logging / conflict diagnosis weak (High) | **Strong (single-mod)** — Mod Doctor (XSD + reference + semantic checks with file+line+sourceRef), live `debuglog` parsing → sourceRef mapping, patch diagnostics | **Biggest new opportunity.** Extend from one mod to a cross-mod **Extension Doctor**: scan the whole `extensions/` folder for duplicate `<diff>` selectors hitting the same node across mods, folder-name collisions, unsatisfied/missing dependencies, broken DLC refs, and **load-order winner/loser ("why this file won")**. This is the report's #1 near-term recommendation and we already own the pieces (patch-target resolver + object index + mounted extensions folder). |
+| 6 | Missing first-party editors / automation (High) | **Strong** — the studio *is* the "modding workbench" the report asks for: visual editors, generators (wares/jobs), pack/validate, deploy, GitHub publish | Fill remaining scaffolds: gamestart generator, deeper ware/job models. Pack/validate/publish is largely present. |
+| 7 | Asset pipeline — ships/Blender/NPC (Medium) | **Out of scope** — text/XML/script IDE, not a 3D asset tool | Explicitly not our domain; don't overpromise. |
+| 8 | Distribution / install-path confusion (Medium) | **Partial/Strong** — path config + detection (game / workspace / extensions), deploy to `extensions/`, GitHub repo-create/push/commit-summaries, snapshots | Add: **content.xml `<dependency>`** support (gap already noted in the appendix), **version pinning**, **mod profiles / modset switching** (enable/disable named sets), and optionally a **GUI Workshop-publish wrapper** around `-buildcat`/X Catalog Tool. GitHub distribution is already done. |
+| 9 | Engine-boundary / plugin bridge (Medium) | **Out of scope** — the agent API edits mods; it is not an in-game IPC/plugin bridge | Egosoft's platform decision; not our domain. |
+| 10 | Modified-tag / trusted-mod policy (Medium) | **Mostly out of scope** — game-side policy/UX | Minor: surface a plain-language explainer + flag when a mod would trip the modified state. Low priority. |
+
+### The studio already answers most of the report's recommended MVP toolset
+
+The report names six MVP components. The studio already covers four, can credibly reach a fifth, and the sixth is an engine feature:
+
+- **Authoring + validation layer** (XSD validation, selector diagnostics, symbol search) → **have** (Mod Doctor + object index); deepen with symbol search + hover docs.
+- **Diff + patch tooling** (generate diff, apply, show selector conflicts, validate) → **have** (patch builder + XPath match counts + patch diagnostics).
+- **Extension Doctor** (dependency / path / duplicate-selector / DLC checks, profile audit) → **partial → build next** (we do it for one mod; extend to all enabled mods).
+- **GUI scaffolding workbench** (generators, templates, pack/validate/publish) → **have**.
+- **UI interoperability layer** → **engine feature (Egosoft)**; we can only emit interop-friendly UI.
+- **External integration bridge** → **engine feature (Egosoft)**; out of scope.
+
+### Prioritized buildlist (in-scope, ranked by leverage)
+
+- **P-A — Extension Doctor (cross-mod conflict scan).** *(Pains #5, #8, #1 — highest leverage.)* Scan all of `extensions/`: duplicate `<diff>` selectors across mods, folder collisions, unsatisfied/missing dependencies, broken DLC refs, and load-order winner determination. JSON report + Mod Doctor grouping. It's the report's top near-term ask and we're ~70% there.
+- **P-B — content.xml `<dependency>` + version pinning + DLC gating.** *(Pain #8.)* Add dependency metadata to the compiler and Mod Doctor checks that each dependency resolves in the install. Prerequisite for real conflict/profile work.
+- **P-C — Mod profiles / modset switching.** *(Pain #8.)* Save/restore named enable-sets across `extensions/`; one-click switch.
+- **P-D — Update-audit scan.** *(Pain #3.)* One button: re-validate the active mod against the current install's XSD + object index, output a migration checklist of dangling references.
+- **P-E — In-app searchable reference + hover docs + quickstarts.** *(Pains #1, #2.)* Symbol search over scriptproperties / MD actions / XSD; hover docs on nodes & fields; a "start here" template gallery.
+- **P-F — Interop-friendly UI generation.** *(Pain #4, partial.)* Emit UI via the community callback pattern; flag whole-function Lua overrides as conflict risks.
+- *(Optional / low)* Workshop-publish GUI wrapper (#8); modified-tag explainer (#10).
+
+**Honest scope line:** P-A→P-F turn the report's "X4 is moddable but the workflow is archaeology" into "the studio *is* the workflow" for the text / XML / MD / script surface — which is exactly where the report says ~three-quarters of the friction lives. The three pains we can't touch (3D/character assets, an in-game plugin/IPC bridge, the engine-level UI hook layer) are Egosoft-platform features, and the roadmap should keep saying so rather than pretend otherwise.
+
+## Lower-priority UX polish
+
+UE5-style UX polish — drag-to-search, comment-group cards, reroute nodes, content-browser drag-drop, the cue-tree/behavior-tree view. All worth doing, but none is as important as Mod Doctor, live game feedback, game-data indexing, round-trip safety, or diff-safe patching. (Note: when we do build the graph model, lean toward MD's *declarative behavior-tree* nature rather than UE5's imperative exec-flow metaphor.)
+
+---
+
+## Open questions to resolve before/early in M1
+- X4 install path + mod folder conventions on the target machine (for A3 packaging).
+- Which real Egosoft MD scripts become the golden round-trip corpus (for A1).
+- Division of labor: which track each agent/person owns.
+
+---
+
+## Appendix — Compiler correctness vs Egosoft conventions
+
+Each of the eight content domains the app can emit, weighed against documented X4 modding conventions (Egosoft wiki + community patch/extension references). "DoD" = what A4 must make true. Status reflects the **current** main-branch output.
+
+| Domain | Output location | Status vs Egosoft | What's wrong / DoD |
+|---|---|---|---|
+| **content.xml / packaging** | `extensions/<id>/content.xml` | ✅ Correct core | Root attrs, `date=YYYY-MM-DD`, `save`, `enabled`, `<text language="44">`, lowercase `<id>` all good. **Fixed 2026-06-11:** `toContentVersion` now uses numeric `version × 100` conversion (`"2.5"→"250"`, `"0.25"→"25"`), verified through `/api/agent/compile`. Remaining enhancement: no `<dependency>` support yet (other extensions / DLC gating). |
+| **MD scripts** | `md/<id>.xml` | ✅ Correct | `noNamespaceSchemaLocation="md.xsd"`, folder, cue tree all valid. Most mature compiler. |
+| **UI layouts** | `ui.xml` (extension root) + `ui/<id>.lua` | ✅ Fixed 2026-06-11 | **Reworked to X4-correct packaging.** The packager now writes an extension-root `ui.xml` `<addon><environment type="menus"><file name="ui/<id>.lua"/></environment></addon>` index (format verified against the kuertee `x4-mod-ui-extensions` reference mod) plus a packaged `ui/<id>.lua` entry point that registers through X4's real `Menus` table + `Helper.registerMenu` pattern (guarded so a missing global fails soft). The previous non-standard `md_ui_layouts/<id>_ui.xml` `<ui_menu>` output (which X4 ignored) is no longer packaged — `generateUIXML` is retained only as a design-time descriptor for the in-app preview. The invented `RegisterLayout`/`RemoveAllUITriggers` calls are gone. Remaining enhancement: the Lua's `onShowMenu` widget construction is scaffolded with widget metadata; building actual widgets via `widgetSystem` and in-game verification is the next step (Mod Doctor now emits an info diagnostic saying exactly this). **[Correction 2026-06-11: this note describes only the auto-packaged `ui/<id>.lua` path. The interactive HUD & LUA UI tab — widget library, Layout GUI Designer, Lua Script Event Manager, and a syntax-validated Lua editor — does produce working in-game Lua/UI. See "Capability gaps & upgrade levers → Lever 3" up top.]** |
+| **AI scripts** | `aiscripts/<name>.xml` | ✅ Correct core | `aiscripts.xsd` ref + `<params>/<attention>/<actions>` structure broadly right. **Verified 2026-06-11:** local `aiscripts.xsd` requires `<param type=...>`, so that warning was stale. **Fixed 2026-06-11:** the shared compiler and AIScript preview no longer inject a hidden `<wait exact="5s"/><resume label="start"/>` loop into every script; generated actions now reflect only explicit user-authored behavior. Remaining enhancements: richer order-block support and deeper schema coverage for advanced AI commands. |
+| **Wares** | `libraries/wares.xml` (`<diff><add sel="/wares">`) | ✅ Correct core | Diff-as-file pattern is **correct** (X4 detects `<diff>` root and patches base `libraries/wares.xml`). **Fixed 2026-06-11:** the compiler no longer fabricates `ore`+`energycells` or hardcoded `tags="economy equipment"` for every ware. Tags, production method/name, and primary input wares are now explicit editable fields; missing inputs produce Mod Doctor warnings instead of hidden fake data. Remaining enhancement: richer schema-aware ware editor for advanced production methods/effects. |
+| **Jobs** | `libraries/jobs.xml` (`<diff><add sel="/jobs">`) | ⚠️ Valid shape, thin | Diff pattern correct. But `<expiration>`, `<loadout><level>`, `<modifiers>` hardcoded; `tags="military <shipClass>"` uses shipClass as a tag (approximate). Real jobs schema is much richer (basket, environment, location, orders). Approximation only. |
+| **Translations** | `t/0001-l<lang>.xml` | ✅ Correct core | `<language id><page id><t id>` structure correct. **Fixed 2026-06-11:** translation filenames now normalize to lowercase, zero-padded paths (`0001-l044.xml`, `0001-l049.xml`) across the shared compiler, server package manifest, deploy writer, import paths, Mod Doctor, and UI help text. Remaining enhancement: no guard pushing custom page IDs into a high range to avoid clobbering vanilla strings. |
+| **XML diff patches** | `<targetFile>` (`<diff>` w/ `add`/`replace`/`remove sel=`) | ✅ Correct core (updated) | Matches the documented patch convention (XPath `sel`, three ops). **Reconciled 2026-06-11 (was stale vs P5):** `pos="before\|after\|prepend\|append"` on `<add>` is implemented in both the editor and `compileDiffDocument`; client-side XPath validation reports 0/1/many matches and invalid-selector syntax against the resolved base file; and base-file resolution now works for **packed** targets too (`/api/patch/base-content` decodes `.cat/.dat`). Remaining: the default target `libraries/ship_macros.xml` is still a guess (that file does not exist in X4 — verified: `/api/patch/base-content` returns 404 for it), so the default should be changed and per-domain XPath diagnostics surfaced into Mod Doctor. |
+
+**Reading of the table:** the *diff-based* domains (wares, jobs, patches) are structurally on the rails but emit placeholder content; the *UI* domain is split — it already has a Lua path pointed at the right place (`/ui/`) but doesn't package it, while the thing it *does* package (`md_ui_layouts/<ui_menu>`) is non-standard; `content.xml` has a real version bug; MD is solid. So A4 isn't just "move code" — it's "move code **and** fix these per-domain correctness issues as you go," with the round-trip + XSD harness (A1/A2) as the safety net that proves each fix.
+
+---
+
+## Sources
+- [Egosoft Wiki — Modding Support](https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding%20Support/)
+- [Egosoft Wiki — h2odragon's HOWTO-hackx4f](https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding%20Support/ScriptingMD/Community%20Guides/h2odragon's%20HOWTO-hackx4f/)
+- [Steam — Workshop for X Rebirth and X4 (content.xml / version)](https://steamcommunity.com/sharedfiles/filedetails/?id=245117855)
+- [kuertee/x4-mod-ui-extensions — content.xml example](https://github.com/kuertee/x4-mod-ui-extensions/blob/master/content.xml)

@@ -165,4 +165,76 @@ Tested live against the running app + the app's own loaded `md.xsd` (398 events 
 
 **Compiler correctness vs X4 (see ROADMAP appendix for the table):**
 - **MD**: curated node tags (`event_object_changed_sector`, `reward_player`, `create_ship`, …) all exist in real `md.xsd`. Good.
-- **Custom XML nodes are NOT validated**: hand-typed `set_object_shieldlevel` → 404 in loaded schema, yet app compiled "0 errors / 0 
+- **Custom XML nodes are NOT validated**: hand-typed `set_object_shieldlevel` → 404 in loaded schema, yet app compiled "0 errors / 0 warnings". The validator (`validateModWorkspace`) checks MD "laws", not the XSD.
+- **UI**: the packaged artifact is a fabricated `md_ui_layouts/<id>_ui.xml` (`<ui_menu>` schema X4 ignores). There IS a Lua path (`HUD & Lua UI` → Lua Script Event Manager → `/ui/addon_menu.lua`) but (a) the packager never writes it, (b) it calls invented functions (`RegisterLayout`, `RemoveAllUITriggers`) not X4's Helper/widgetSystem, (c) no `ui.xml` index.
+- **content.xml**: `version` must be integer = version×100. `toContentVersion` just concatenates digits → `"2.5"` → `"025"` (read as v0.25). Only correct for `X.YY`-shaped strings.
+- **Wares/Jobs/Patches**: diff-as-file pattern is correct, but production recipes, job loadouts, and tags are **hardcoded placeholders** regardless of user input.
+- **AIScripts**: `<param type=...>` likely invalid for aiscripts; `<interrupts>` placed as sibling of `<attention>` with `event="..."` attr instead of nested `<conditions><event_object_attacked/></conditions>`. App only loads `md.xsd`+`common.xsd`, **not `aiscripts.xsd`**, so AI scripts get zero schema validation.
+
+**Confabulation:** `AgentBridge` flashes green "Success! …synchronised" regardless of remaining validation diagnostics; the generate pipeline's Phase-4 self-heal swallows failures (`server.ts` ~L1140) then still reports success.
+
+---
+
+## 3. Open TODOs (recommended next, file-pointed)
+
+1. **Delete dead `MOCK_FILESYSTEM_TREE`** in `src/components/DirectoryExplorer.tsx` (~L58–200).
+2. **Demo-content exclusion** (user-requested, not built): default AI scripts `hunter.escort.behavior` + `miner.auto.harvest` are seeded in `src/components/AIScriptEditor.tsx` (~L51, L73) and compile by default. Add a per-domain/per-item "include in compile" mechanism, or stop seeding demo content. User leaning: a compile manifest with demo items excluded by default.
+3. **Retire/rename `candy` mode** (`'candy' | 'store'` in `App.tsx`/`Sidebar.tsx`/`modCompiler.ts`). `candy` dumps into the root (no mod folder) — keep `store` only, or rename for clarity.
+4. **Security hardening (Track B):** bind `127.0.0.1`, lock CORS to app origin, add a per-session token on `/api/agent/*` + `/api/github/*`, stop env-key fallback for non-UI requests.
+5. **Honest reporting:** make `AgentBridge` success copy reflect post-validation diagnostic count; surface Phase-4 self-heal failures.
+6. **UI domain decision:** make it real (`ui/` + Lua scaffold using X4's actual framework + `ui.xml` index, wired into packaging) OR reframe as MD overlay helpers and drop the `md_ui_layouts` `<ui_menu>` output.
+7. **content.xml version fix:** `toContentVersion` should parse semver and emit integer = round(major*100 + minor*... ) per Egosoft (×100 convention).
+8. **Load `aiscripts.xsd`** into the schema library so AI scripts get validated; fix `<param>`/`<interrupts>` structure.
+9. **Agent API completeness:** route `/compile` + `/generate` + a new `/package` endpoint through the shared `modCompiler.ts` so all 7 domains are covered (fixes the drop/omit bugs).
+10. **Round-trip + XSD harness (Track A1/A2):** golden-file import→export→diff tests; validate generated XML against real XSDs.
+11. **Auto-sync vs validation:** `compileAndSaveAll` calls `validatePackageReadiness` which throws on errors (e.g. no cue / no name). With auto-sync on every edit, this can block snapshots mid-edit. Consider letting snapshots write even when the package isn't fully valid.
+
+---
+
+## 4. Housekeeping
+- Pre-fix leftovers in the user's game folder: `extensions/md/` and `extensions/aiscripts/` (loose, no `content.xml`) — safe to delete; they're from the old buggy auto-sync path.
+- The real end-to-end on-disk test (link sandbox folder → compile → confirm clean `<modid>/`) was **not** run — it needs the user to pick a folder via the OS picker.
+
+---
+
+## 5. Source Control / GitHub integration (session 2)
+
+The SOURCE sidebar tab (`Sidebar.tsx` › `git` tab → `SourceControl.tsx`) is now the single home for all GitHub. Verified working end-to-end live (OAuth sign-in, create+publish repo, load/push, real commit graph).
+
+### 5a. Dev-environment fixes (important — these bit us repeatedly)
+- **`package.json` dev script** was `tsx server.ts` (no watch) → server.ts route changes never reloaded; new endpoints 404'd silently while the frontend hot-reloaded. Changed to **`tsx watch server.ts`**. Requires one manual restart to take effect.
+- **`server.ts` now loads `.env.local`**: `dotenv.config()` only read `.env`, but the user's keys (`GEMINI_API_KEY`, `GITHUB_CLIENT_ID`) live in `.env.local`. Added `dotenv.config({ path: '.env.local', override: true })`. **This is why AI calls and GitHub were failing server-side.**
+- **`restart-studio.bat`** (project root): force-kills whatever holds port 3000, then runs `npm run dev`. The dev server runs as a background process with no visible terminal, so this is how the user restarts it. Double-click it; leave the window open.
+
+### 5b. Auth middleware (pre-existing, discovered this session)
+- `server.ts` has `app.use("/api", authMiddleware)` + `GET /api/auth/token` (handshake, exempt). Every `/api/*` call needs `Authorization: Bearer <STUDIO_API_TOKEN>`.
+- The frontend handshake + global `fetch` override live in **`src/main.tsx`** (fetches the token into `sessionStorage`, injects the header for `/api/*`).
+- **Gotcha:** `STUDIO_API_TOKEN` regenerates on every server (re)start, so after any server restart the browser holds a stale token → 401 "Invalid token." **Fix = reload the page** (re-runs the handshake). Worth making the token stable across restarts (e.g. read from env) to remove this papercut.
+
+### 5c. New server endpoints (`server.ts`, all under the auth gate)
+- `POST /api/github/create` — create a repo from the active mod (then client pushes initial files).
+- `POST /api/github/device/start` + `POST /api/github/device/poll` — **OAuth Device Flow**. `client_id` comes from `process.env.GITHUB_CLIENT_ID` (set in `.env.local`); falls back to a request-body override. Poll also fetches `/user` to return the login for auto-filling repo owner.
+- `POST /api/github/commits` — real commit history for the connected repo/branch (drives the Graph Log).
+- (`/api/github/load` + `/api/github/push` were pre-existing.)
+
+### 5d. SourceControl.tsx features added
+- **One-click "Connect with GitHub"** (Device Flow): opens browser → user enters short code → polls → stores token as `gitPat` (so all existing load/push/create logic works unchanged). No Client-ID field in the UI (it's env-configured).
+- **Create Repo from this Mod** (Remotes tab).
+- **Remote-vs-local diff** (auto-scans on Remotes tab open; manual Rescan).
+- **AI diff summaries**: `handleGenerateDiffSummary()` uses `getAIHeaders()` (configured provider). Auto-attached on commit; shown in the diff modal. `GitCommitItem.summary` field added.
+- **Graph Log shows REAL commits** now (`handleFetchRemoteCommits` → `/api/github/commits`), auto-loads on tab open, Pull/Fetch wired. Default history is `[]` (was the fake `SEEDED_COMMIT_LOGS`).
+- **Commit messages**: `buildCommitMessage()` = user's typed commit message (title) + AI summary (body); pushes use it instead of the old hardcoded `"[Studio Commit]"` string.
+- **ErrorBoundary** (`ErrorBoundary.tsx`) wraps SourceControl in `Sidebar.tsx` so a render crash shows a fallback instead of white-screening the whole app. Also guarded `computedGraphTracks` against missing `activeTracks`.
+
+### 5e. SyncModal.tsx
+- The duplicate GitHub Repo Manager was **removed**; SyncModal is now import-only (JSON/MD XML). Its now-unused GitHub state/handlers + the `github.v3` footer are dead code to clean up.
+
+### 5f. Setup the user did (so the OAuth works)
+- Registered a GitHub **OAuth App** (not a GitHub App) with **Device Flow enabled**; callback URL is unused by device flow (set to `http://localhost:3000/`).
+- `GITHUB_CLIENT_ID="Ov23li4tJSvHMG8DUbKY"` is in `.env.local` (public, not a secret).
+
+### 5g. New TODOs from this session
+1. Make `STUDIO_API_TOKEN` stable across restarts (env-derived) so the page doesn't need a reload after every server restart.
+2. Delete dead `SEEDED_COMMIT_LOGS` (SourceControl) and SyncModal's leftover GitHub handlers/footer.
+3. The auth middleware is weak: `/api/auth/token` is unauthenticated, so any local page can grab the token. Pair with the Track B hardening (bind 127.0.0.1, lock CORS) to make it meaningful.
+4. `DirectorySettingsModal` props changed (now `modWorkspacePath`/`filesystemPath` instead of `dirHandle`); confirm `App.tsx` passes the matching props.
