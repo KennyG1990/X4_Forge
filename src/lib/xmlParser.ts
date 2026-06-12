@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { DOMParser as XmlDomParser, XMLSerializer as XmlDomSerializer } from '@xmldom/xmldom';
 import { ModWorkspace, MDNode, MDLink, NODE_TEMPLATES, X4_SHIP_MACROS, X4_STATION_MACROS } from '../types';
+
+const DOMParserToUse = typeof window !== 'undefined' && window.DOMParser ? window.DOMParser : XmlDomParser;
+const XMLSerializerToUse = typeof window !== 'undefined' && window.XMLSerializer ? window.XMLSerializer : XmlDomSerializer;
 
 let schemaTemplatesByTag = new Map<string, Omit<MDNode, 'id' | 'x' | 'y'>>();
 
@@ -60,8 +64,8 @@ function parseCheckValueProperties(element: Element): Record<string, any> {
 // Parser: Egosoft XML script mapping to visual flowchart nodegraph
 export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
   try {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+    const parser = new DOMParserToUse();
+    const xmlDoc = parser.parseFromString(xmlText, "text/xml") as unknown as Document;
     
     const parserError = xmlDoc.getElementsByTagName("parsererror");
     if (parserError.length > 0) {
@@ -97,7 +101,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       return depth;
     }
 
-    const serializer = new XMLSerializer();
+    const serializer = new XMLSerializerToUse();
 
     // Pass 1: Parse all cues
     for (let i = 0; i < cuesList.length; i++) {
@@ -211,7 +215,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
                 xmlTag = 'custom_condition';
                 label = 'Custom XML Condition';
               }
-              properties = { rawXml: serializer.serializeToString(child) };
+              properties = { rawXml: serializer.serializeToString(child as any) };
             }
           }
 
@@ -306,7 +310,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
             } else {
               xmlTag = 'custom_xml';
               label = 'Custom XML Action';
-              properties = { rawXml: serializer.serializeToString(child) };
+              properties = { rawXml: serializer.serializeToString(child as any) };
             }
           }
 
