@@ -47,6 +47,14 @@ export default function UIBuilder({
     URL: (_contract.baseUrl || 'http://127.0.0.1:8713') + ((_ep0 && _ep0.path) || '/v1/endpoint'),
     HTTP_CLIENT: _contract.httpClientExpr || 'require("extensions.sn_mod_support_apis.lua.simple_http")'
   } : {};
+  const [luaMode, setLuaMode] = useState<'preview' | 'edit'>('preview');
+  const insertSelectedPattern = () => {
+    const snip = LUA_SNIPPETS.find(sn => sn.id === selectedLuaTemplate);
+    const code = snip ? fillLuaSnippet(selectedLuaTemplate, snippetValues) : '';
+    if (!code) return;
+    setWorkspace(prev => ({ ...prev, customLua: (prev.customLua || '') + (prev.customLua ? '\n\n' : '') + code }));
+    setLuaMode('edit');
+  };
 
   const theme = workspace.uiTheme;
 
@@ -736,12 +744,28 @@ export default function UIBuilder({
                 <Terminal className="w-4 h-4 text-cyan-400 animate-pulse" />
                 <span className="font-sans text-xs font-bold text-slate-200">Interactive Lua Interface Controller (/ui/addon_menu.lua)</span>
               </div>
-              <span className="text-[9px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-1.5 font-bold uppercase font-mono">
-                Lua Engine Active
-              </span>
+              <div className="flex items-center gap-1.5">
+                {luaMode === 'edit' && (
+                  <button type="button" onClick={insertSelectedPattern} title="Append the selected left-hand pattern to the buffer"
+                    className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 font-bold uppercase font-mono">Insert pattern</button>
+                )}
+                <button type="button" onClick={() => setLuaMode('preview')}
+                  className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase font-mono ${luaMode === 'preview' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-500 hover:text-white'}`}>Preview</button>
+                <button type="button" onClick={() => setLuaMode('edit')}
+                  className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase font-mono ${luaMode === 'edit' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-500 hover:text-white'}`}>Edit Buffer</button>
+              </div>
             </div>
 
-            {/* Compiled code rendering */}
+            {/* Editable custom Lua buffer OR compiled-code preview */}
+            {luaMode === 'edit' ? (
+              <textarea
+                value={workspace.customLua || ''}
+                onChange={e => setWorkspace(prev => ({ ...prev, customLua: e.target.value }))}
+                spellCheck={false}
+                placeholder={"-- Your custom Lua. Packaged to ui/<id>_custom.lua on compile.\n-- Select a pattern at left, then press Insert pattern above."}
+                className="flex-1 w-full p-4 bg-black/35 font-mono text-[11px] leading-normal text-emerald-200 outline-none resize-none"
+              />
+            ) : (
             <div className="flex-1 p-4 overflow-y-auto bg-black/35 font-mono text-[11px] leading-normal selection:bg-cyan-500/25 text-slate-400 select-text">
               <pre className="whitespace-pre">
                 {LUA_SNIPPETS.some(sn => sn.id === selectedLuaTemplate) ? (
@@ -835,6 +859,7 @@ end`
                 )}
               </pre>
             </div>
+            )}
             
             <div className="p-3 border-t border-white/5 bg-[#12141a] flex justify-between shrink-0 font-mono text-[10px] text-slate-500">
               <span>Status: Synchronized with visual widget IDs</span>

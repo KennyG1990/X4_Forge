@@ -423,15 +423,18 @@ export const compileAndSaveAll = async (
   const contract = workspace.integrationContract;
   const contractValid = !!contract && validateContract(contract).filter(fd => fd.severity === 'error').length === 0;
   const hasWidgets = !!workspace.uiWidgets?.length;
-  if (hasWidgets || contractValid) {
+  const hasCustomLua = typeof workspace.customLua === 'string' && workspace.customLua.trim().length > 0;
+  if (hasWidgets || contractValid || hasCustomLua) {
     const uiFiles: string[] = [];
     if (hasWidgets) uiFiles.push(`ui/${modId}.lua`);
     if (contractValid) uiFiles.push(`ui/${modId}_http.lua`);
+    if (hasCustomLua) uiFiles.push(`ui/${modId}_custom.lua`);
     const uiIndex = `<?xml version="1.0" encoding="utf-8"?>\n<addon name="${modId}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../ui/core/addon.xsd">\n  <environment type="menus">\n${uiFiles.map(p => `    <file name="${p}" />`).join("\n")}\n  </environment>\n</addon>`;
     await writeTextFile(targetDir, 'ui.xml', uiIndex);
     const uiDir = await targetDir.getDirectoryHandle('ui', { create: true });
     if (hasWidgets) await writeTextFile(uiDir, `${modId}.lua`, generateUILuaScript(workspace, modId));
     if (contractValid) await writeTextFile(uiDir, `${modId}_http.lua`, generateHttpGlueLua(contract!));
+    if (hasCustomLua) await writeTextFile(uiDir, `${modId}_custom.lua`, workspace.customLua!);
   }
 
   // 4. AIScripts behavior trees

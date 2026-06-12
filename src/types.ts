@@ -204,6 +204,8 @@ export interface ModWorkspace {
   passthroughFiles?: PassthroughFile[];
   /** Lever 2: HTTP integration contract with an external local process (the studio owns the X4-side glue only). */
   integrationContract?: IntegrationContract;
+  /** Lever 3: a single freely-editable custom Lua buffer, packaged as ui/<id>_custom.lua. */
+  customLua?: string;
 }
 
 export interface PassthroughFile {
@@ -1494,6 +1496,7 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
           endpoints: Array.isArray(ws.integrationContract.endpoints) ? ws.integrationContract.endpoints : []
         }
       : undefined,
+    customLua: typeof ws.customLua === 'string' ? ws.customLua : undefined,
     passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
       .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
       .map((f: any) => ({

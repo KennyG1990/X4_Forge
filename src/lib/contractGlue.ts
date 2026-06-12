@@ -190,6 +190,16 @@ export function generateHttpGlueLua(contract: IntegrationContract): string {
         ]
       : [`    payload = payload or {}`];
 
+    const responseFields = (ep.response || []).map(fld => fld.name).filter(Boolean);
+    const responseCheckLines = responseFields.length > 0
+      ? [
+          `        if ok and type(decoded) == "table" then`,
+          ...responseFields.map(name =>
+            `            if decoded[${JSON.stringify(name)}] == nil then DebugError(${JSON.stringify(`[${ns}] ${ep.id}: response missing field '${name}'`)}) end`),
+          `        end`
+        ]
+      : [];
+
     fns.push([
       `-- ${ep.id}: ${ep.method} ${ep.path}${ep.description ? ` — ${luaComment(ep.description)}` : ''}`,
       `function Glue.${ep.id}(payload)`,
@@ -206,6 +216,7 @@ export function generateHttpGlueLua(contract: IntegrationContract): string {
       `            return`,
       `        end`,
       `        local ok, decoded = pcall(json.decode, response and response.body or "")`,
+      ...responseCheckLines,
       `        AddUITriggeredEvent(NS, ${JSON.stringify(`${ep.id}.response`)}, ok and decoded or {})`,
       `    end)`,
       `end`,
@@ -324,6 +335,7 @@ export function runContractGlueSelftest() {
     lua.includes('body = json.encode(payload)') && lua.includes('-- GET: no request body'));
   ok('required_field_guarded', lua.includes('missing required field: text'));
   ok('async_callback_shape', lua.includes('function(err, response)') && lua.includes('AddUITriggeredEvent('));
+  ok('response_shape_validated', lua.includes("response missing field 'reply'") && lua.includes('type(decoded) == "table"'));
 
   // validator must catch a broken contract
   const bad: IntegrationContract = {
