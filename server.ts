@@ -53,6 +53,7 @@ import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemet
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest } from "./src/lib/overrideMap";
+import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
 import {
@@ -179,7 +180,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/ui-widget-validate-selftest",
   "/agent/ui-layout-selftest",
   "/agent/override-map-selftest",
-  "/agent/catdat-selftest"
+  "/agent/catdat-selftest",
+  "/agent/xpath-synth-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3200,6 +3202,53 @@ app.get("/api/agent/catdat-selftest", (_req, res) => {
     return res.json(runCatDatSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "catdat-selftest failed" });
+  }
+});
+
+// T4.2 Diff-to-Patch — synthesize the minimal X4 <diff> turning a vanilla file
+// into the user's edited copy (engine: src/lib/xpathSynth.ts). The vanilla side
+// can be supplied inline or resolved from the game data (loose → packed).
+app.post("/api/agent/xpath-synth", (req, res) => {
+  try {
+    const editedXml = String(req.body?.editedXml || "");
+    if (!editedXml.trim()) {
+      return res.status(400).json({ error: "Missing editedXml." });
+    }
+    let vanillaXml = typeof req.body?.vanillaXml === "string" ? req.body.vanillaXml : "";
+    const targetFile = String(req.body?.targetFile || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (!vanillaXml && targetFile) {
+      if (targetFile.includes(":") || targetFile.split("/").includes("..")) {
+        return res.status(400).json({ error: "Invalid targetFile path." });
+      }
+      const resolved = resolveXsdConfig();
+      if (resolved.x4GamePath) {
+        const loose = path.join(resolved.x4GamePath, targetFile);
+        if (fs.existsSync(loose) && fs.statSync(loose).isFile()) {
+          vanillaXml = fs.readFileSync(loose, "utf8");
+        } else {
+          const packed = catDatExtractBaseGameFile(resolved.x4GamePath, targetFile);
+          if (packed) vanillaXml = packed.text;
+        }
+      }
+      if (!vanillaXml) {
+        return res.status(404).json({ error: "Could not resolve vanilla content for " + targetFile + " (loose or packed)." });
+      }
+    }
+    if (!vanillaXml) {
+      return res.status(400).json({ error: "Provide vanillaXml or a resolvable targetFile." });
+    }
+    const result = synthesizePatch(vanillaXml, editedXml);
+    return res.json({ success: true, targetFile: targetFile || null, ...result });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message || "xpath-synth failed" });
+  }
+});
+
+app.get("/api/agent/xpath-synth-selftest", (_req, res) => {
+  try {
+    return res.json(runXpathSynthSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "xpath-synth-selftest failed" });
   }
 });
 
