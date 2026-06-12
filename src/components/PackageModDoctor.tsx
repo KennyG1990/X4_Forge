@@ -79,6 +79,7 @@ export default function PackageModDoctor({
     { name: 'log-telemetry', path: 'log-telemetry-selftest' },
     { name: 'log-file', path: 'log-file-selftest' },
     { name: 'cue-lineage', path: 'cue-lineage-selftest' },
+    { name: 'semantics', path: 'semantics-selftest' },
     { name: 'live-fixes', path: 'live-fixes-selftest' },
     { name: 'contracts', path: 'contract-selftest' },
     { name: 'lua-snippets', path: 'lua-snippets' },

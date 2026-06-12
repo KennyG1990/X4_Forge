@@ -50,6 +50,7 @@ import { generateHttpGlueLua, generateContractMdScript, validateContract, runCon
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from "./src/lib/luaStaticAnalysis";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
+import { runSemanticsSelftest, listSemantics, semanticsForNode } from "./src/lib/mdSemantics";
 import { runLiveFixesSelftest } from "./src/lib/liveFixes";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
@@ -178,6 +179,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/lua-snippets",
   "/agent/lua-static-selftest",
   "/agent/cue-lineage-selftest",
+  "/agent/semantics-selftest",
+  "/agent/semantics",
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
@@ -3440,6 +3443,35 @@ app.get("/api/agent/cue-lineage-selftest", (_req, res) => {
     res.json(runCueLineageSelftest());
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "cue-lineage-selftest failed" });
+  }
+});
+
+// Determinism Doctrine / Phase 1 — MD Semantics Registry (the "Meaning" layer) self-test.
+app.get("/api/agent/semantics-selftest", (_req, res) => {
+  try {
+    res.json(runSemanticsSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "semantics-selftest failed" });
+  }
+});
+
+// Deterministic semantics lookup. No arg → the curated registry listing.
+// ?tag=<element> → curated entry or honest fallback. ?tag=&props={json} → a
+// node-style description (used to prove deterministic describe over real attributes).
+app.get("/api/agent/semantics", (req, res) => {
+  try {
+    const tag = (req.query.tag as string) || "";
+    if (!tag) {
+      return res.json({ success: true, count: listSemantics().length, registry: listSemantics() });
+    }
+    let props: Record<string, any> = {};
+    if (req.query.props) {
+      try { props = JSON.parse(req.query.props as string); } catch { props = {}; }
+    }
+    const type = (req.query.type as string) || "action";
+    res.json({ success: true, ...semanticsForNode({ xmlTag: tag, type: type as any, properties: props }) });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || "semantics lookup failed" });
   }
 });
 
