@@ -54,8 +54,6 @@ import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
-import { validateBridgePlan, summarizeBridgeReport, runGameBridgeSelftest } from "./src/lib/gameBridge";
-import { spawn } from "child_process";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
 import {
@@ -183,8 +181,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/ui-layout-selftest",
   "/agent/override-map-selftest",
   "/agent/catdat-selftest",
-  "/agent/xpath-synth-selftest",
-  "/agent/game-bridge-selftest"
+  "/agent/xpath-synth-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3239,140 +3236,6 @@ app.get("/api/agent/xpath-synth-selftest", (_req, res) => {
     return res.json(runXpathSynthSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "xpath-synth-selftest failed" });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Game-bridge seam — drives the external game_agent_bridge harness so the
-// studio can verify mods in the RUNNING game (C2 / Live Fix Loop). The engine
-// half (plan pre-flight, report summarization) is src/lib/gameBridge.ts; this
-// is the process glue. The bridge's own python validator stays authoritative.
-// ---------------------------------------------------------------------------
-
-function resolveGameBridgeRoot(): string {
-  const resolved = resolveXsdConfig() as any;
-  return String(resolved.gameBridgeRoot || "F:\\DEV_ENV\\tools\\game_agent_bridge");
-}
-
-function resolveGameBridgePython(): string {
-  const resolved = resolveXsdConfig() as any;
-  return String(resolved.gameBridgePython || "python");
-}
-
-app.get("/api/agent/game-bridge/status", (_req, res) => {
-  try {
-    const root = resolveGameBridgeRoot();
-    const runner = path.join(root, "execution", "game_agent_run.py");
-    const plansDir = path.join(root, "plans");
-    let plans: string[] = [];
-    try {
-      plans = fs.readdirSync(plansDir).filter(f => f.toLowerCase().endsWith(".json")).sort();
-    } catch { /* missing plans dir reads as empty */ }
-    return res.json({
-      success: true,
-      root,
-      available: fs.existsSync(runner),
-      python: resolveGameBridgePython(),
-      plans
-    });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message || "game-bridge status failed" });
-  }
-});
-
-// Long-running: launching X4 can take minutes. The python process prints the
-// full report JSON on stdout; we relay the summarized result.
-app.post("/api/agent/game-bridge/run", async (req, res) => {
-  try {
-    const root = resolveGameBridgeRoot();
-    const runner = path.join(root, "execution", "game_agent_run.py");
-    if (!fs.existsSync(runner)) {
-      return res.status(400).json({ error: `game_agent_bridge not found at ${root} — set gameBridgeRoot in config.json.` });
-    }
-    const { plan, planFile, dryRun, dryRunActions } = (req.body || {}) as any;
-    let planPath: string;
-    let cleanup: string | null = null;
-    if (plan && typeof plan === "object") {
-      const problems = validateBridgePlan(plan);
-      if (problems.length) return res.status(400).json({ error: "plan pre-flight failed", problems });
-      planPath = path.join(os.tmpdir(), `x4forge_plan_${Date.now()}.json`);
-      fs.writeFileSync(planPath, JSON.stringify(plan, null, 2));
-      cleanup = planPath;
-    } else if (typeof planFile === "string" && planFile.trim()) {
-      // restrict to the bridge's own plans/ directory — no traversal
-      const candidate = path.resolve(path.join(root, "plans", path.basename(planFile)));
-      if (!candidate.startsWith(path.resolve(path.join(root, "plans"))) || !fs.existsSync(candidate)) {
-        return res.status(400).json({ error: `plan file not found in bridge plans/: ${planFile}` });
-      }
-      planPath = candidate;
-    } else {
-      return res.status(400).json({ error: "Provide plan (object) or planFile (name in bridge plans/)." });
-    }
-
-    const cliArgs = [runner, planPath];
-    if (dryRun) cliArgs.push("--dry-run");
-    else if (dryRunActions) cliArgs.push("--dry-run-actions");
-
-    const TIMEOUT_MS = 6 * 60 * 1000;
-    const result = await new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolvePromise) => {
-      const child = spawn(resolveGameBridgePython(), cliArgs, { cwd: root, windowsHide: true });
-      let stdout = "";
-      let stderr = "";
-      let timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* already gone */ } }, TIMEOUT_MS);
-      child.stdout.on("data", d => { stdout += String(d); });
-      child.stderr.on("data", d => { stderr += String(d); });
-      child.on("error", err => { clearTimeout(timer); resolvePromise({ code: null, stdout, stderr: stderr + String(err), timedOut }); });
-      child.on("close", code => { clearTimeout(timer); resolvePromise({ code, stdout, stderr, timedOut }); });
-    });
-    if (cleanup) { try { fs.unlinkSync(cleanup); } catch { /* temp file */ } }
-
-    // The runner prints report JSON as the last thing on stdout.
-    let report: any = null;
-    const jsonStart = result.stdout.indexOf("{");
-    if (jsonStart >= 0) {
-      try { report = JSON.parse(result.stdout.slice(jsonStart)); } catch { report = null; }
-    }
-    if (!report) {
-      return res.status(502).json({
-        error: result.timedOut ? `bridge run timed out after ${TIMEOUT_MS / 1000}s` : "bridge produced no parseable report",
-        exitCode: result.code,
-        stderr: result.stderr.slice(-2000),
-        stdout: result.stdout.slice(-2000)
-      });
-    }
-    return res.json({ success: true, exitCode: result.code, timedOut: result.timedOut, summary: summarizeBridgeReport(report), report });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message || "game-bridge run failed" });
-  }
-});
-
-// Serve run evidence (screenshots) — read-only, locked to the bridge's .tmp dir.
-app.get("/api/agent/game-bridge/artifact", (req, res) => {
-  try {
-    const raw = String(req.query.path || "");
-    if (!raw) return res.status(400).json({ error: "path required" });
-    const root = resolveGameBridgeRoot();
-    const evidenceRoot = path.resolve(path.join(root, ".tmp"));
-    const candidate = path.resolve(raw);
-    if (!candidate.startsWith(evidenceRoot) || !fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
-      return res.status(404).json({ error: "artifact not found under the bridge evidence directory" });
-    }
-    return res.sendFile(candidate);
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message || "artifact read failed" });
-  }
-});
-
-app.get("/api/agent/game-bridge-selftest", (_req, res) => {
-  try {
-    const engine = runGameBridgeSelftest();
-    const root = resolveGameBridgeRoot();
-    const installed = fs.existsSync(path.join(root, "execution", "game_agent_run.py"));
-    // Install presence is reported, not asserted — the engine must pass everywhere.
-    return res.json({ ...engine, bridgeRoot: root, bridgeInstalled: installed });
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "game-bridge-selftest failed" });
   }
 });
 
