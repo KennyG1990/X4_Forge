@@ -1,10 +1,10 @@
-# X4 Mod Studio
+# X4 Forge
 
-X4 Mod Studio is a local visual workbench for building, validating, packaging, and deploying mods for **X4: Foundations**.
+X4 Forge is a local visual workbench for building, validating, packaging, and deploying mods for **X4: Foundations**.
 
-It is designed for the part of X4 modding that usually turns into scattered XML files, hand-written Mission Director scripts, XPath guesses, extracted game data, forum archaeology, and trial-and-error in the `extensions/` folder. The studio brings that workflow into one app: visual authoring, schema-aware editing, live diagnostics, package generation, cross-mod conflict checks, GitHub publishing, AI-assisted generation, and an agent API for automation.
+It is designed for the part of X4 modding that usually turns into scattered XML files, hand-written Mission Director scripts, XPath guesses, extracted game data, forum archaeology, and trial-and-error in the `extensions/` folder. X4 Forge brings that workflow into one app: visual authoring, schema-aware editing, live diagnostics, package generation, cross-mod conflict checks, GitHub publishing, AI-assisted generation, and an agent API for automation.
 
-The goal is simple: build a real X4 extension inside the studio, compile it, validate it, deploy it, and run it in-game with no manual file surgery.
+The goal is simple: build a real X4 extension inside X4 Forge, compile it, validate it, deploy it, and run it in-game with no manual file surgery.
 
 ## What Problems It Solves
 
@@ -18,7 +18,7 @@ X4 modding is powerful, but the normal workflow has sharp edges:
 - Generated mods often look successful even when the package is incomplete or invalid.
 - External AI agents need structured APIs, not screen scraping.
 
-X4 Mod Studio is built around those risks. It treats the local game install, XSD schemas, package manifest, and generated files as the source of truth, then keeps the UI, compiler, diagnostics, and API tied to that evidence.
+X4 Forge is built around those risks. It treats the local game install, XSD schemas, package manifest, and generated files as the source of truth, then keeps the UI, compiler, diagnostics, and API tied to that evidence.
 
 ## Who Should Use It
 
@@ -36,7 +36,7 @@ This is not a Blender replacement and it does not author 3D assets. It focuses o
 
 ## Core Workflow
 
-The studio validates this chain:
+X4 Forge validates this chain:
 
 ```text
 Author -> Compile -> Validate -> Package -> Deploy -> Run in X4 -> Round-trip
@@ -52,7 +52,7 @@ In practice:
 5. Run Mod Doctor, Extension Doctor, and relevant selftests.
 6. Sync/deploy the generated extension.
 7. Test in X4.
-8. Import or round-trip files back into the studio when needed.
+8. Import or round-trip files back into X4 Forge when needed.
 
 ## Major Features
 
@@ -134,7 +134,7 @@ The current UI/Lua surface is strongest as an authoring and packaging workflow f
 - Generate matching MD scaffolds.
 - Support `ui_event` style connections from Lua widgets into MD cues.
 
-The studio owns the X4 side of the integration and the contract. It does not build or host your external service.
+X4 Forge owns the X4 side of the integration and the contract. It does not build or host your external service.
 
 ### Extension Doctor And Override Analysis
 
@@ -150,7 +150,7 @@ This is for the common problem where a mod is technically valid by itself but be
 ### Logs And Debugging
 
 - Parse X4 debug log text into structured entries.
-- Correlate deterministic studio markers back to cue names.
+- Correlate deterministic X4 Forge markers back to cue names.
 - Summarize per-cue activity and errors.
 - Support backend live log-file tailing.
 - Bind log evidence to visual diagnostics where available.
@@ -213,7 +213,7 @@ The in-app **AGENT API** panel documents the routes, shows live state, and expos
 npm install
 ```
 
-### Run The Studio
+### Run X4 Forge
 
 On Windows, the easiest route is:
 
@@ -333,7 +333,7 @@ Launch X4, enable the extension if needed, and verify:
 - Logs show expected markers.
 - No runtime errors appear in the debug log.
 
-If runtime behavior fails, use the studio diagnostics, generated XML, and log correlation to narrow the problem.
+If runtime behavior fails, use X4 Forge diagnostics, generated XML, and log correlation to narrow the problem.
 
 ### 8. Round-Trip When Needed
 
@@ -341,7 +341,7 @@ Import existing workspace JSON, MD XML, or package files when you need to inspec
 
 ## AI Provider Setup
 
-AI is optional. The app works as a visual authoring and validation studio without it.
+AI is optional. X4 Forge works as a visual authoring and validation app without it.
 
 You can configure keys in either place:
 
@@ -363,7 +363,7 @@ OPENAI_API_KEY=""
 ANTHROPIC_API_KEY=""
 ```
 
-Restart the studio after changing `.env.local`.
+Restart X4 Forge after changing `.env.local`.
 
 ## GitHub Setup
 
@@ -383,7 +383,7 @@ The client ID is public, but it is still machine-specific configuration, so it s
 
 ## Local Security Model
 
-The studio is built for local development, but it still protects keys and privileged routes.
+X4 Forge is built for local development, but it still protects keys and privileged routes.
 
 | Location | Purpose | Committed? |
 |---|---|---|
@@ -460,12 +460,12 @@ Notes:
 - `HANDOFF.md` - session handoff notes for contributors and coding agents.
 - `config.example.json` - path configuration template.
 - `.env.example` - environment variable template.
-- `restart-studio.bat` - Windows launcher for the local studio.
+- `restart-studio.bat` - Windows launcher for the local X4 Forge setup.
 - `install_mod.ts` - helper script for installing generated mod output.
 
 ## Current Known Caveats
 
-- Final in-game behavior still needs X4 verification. The studio can prove a lot about structure, schema, and packaging, but it cannot honestly certify runtime behavior without the game.
+- Final in-game behavior still needs X4 verification. X4 Forge can prove a lot about structure, schema, and packaging, but it cannot honestly certify runtime behavior without the game.
 - The AI Guide Builder Action Port currently updates the visible workspace before `Confirm & Apply`; this is tracked for correction.
 - Some domains round-trip as preserved package data before they become fully editable graph models.
 - Runtime Lua UI construction is powerful but still needs careful in-game verification for advanced ftable/widget patterns.
@@ -473,7 +473,7 @@ Notes:
 
 ## Why Use It
 
-Use X4 Mod Studio because it compresses the hard parts of X4 text-mod development into one visible loop:
+Use X4 Forge because it compresses the hard parts of X4 text-mod development into one visible loop:
 
 - You can author visually.
 - You can inspect the generated files.
