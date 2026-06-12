@@ -11,7 +11,7 @@
  * boundary crossed; it only reads the in-memory node graph.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GitBranch, AlertTriangle, AlertCircle, Zap, Ear, Radio, ChevronRight, CheckCircle2, Activity, FileText } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import { analyzeCueLineage, type CueLineageCueInfo } from '../lib/cueLineage';
@@ -42,11 +42,60 @@ export default function CueLineageTree({ workspace }: CueLineageTreeProps) {
 
   const byId = useMemo(() => new Map(cues.map(c => [c.id, c])), [cues]);
   const roots = cues.filter(c => c.parentId === null);
-  const cueTele = useMemo(() => {
+  const pastedTele = useMemo(() => {
     if (!logText.trim()) return new Map<string, CueTelemetry>();
     const t = parseLogTelemetry(logText, cues.map(c => c.name).filter(Boolean));
     return new Map(t.cues.map(c => [c.name, c]));
   }, [logText, cues]);
+
+  // LIVE binding (watcher consolidation): subscribe to the SAME backend
+  // debuglog feed the Playtest watcher uses (game-log/status discovers the
+  // configured x4LogPath; log-file-tail reads + parses it server-side), so the
+  // app has exactly ONE log watcher. The paste box stays as an offline IMPORT
+  // for logs from other machines/sessions — an input, not a second watcher.
+  const [liveMode, setLiveMode] = useState(false);
+  const [liveTele, setLiveTele] = useState<Map<string, CueTelemetry> | null>(null);
+  const [liveStatus, setLiveStatus] = useState('');
+  const liveTick = useRef(0);
+
+  useEffect(() => {
+    if (!liveMode) { setLiveTele(null); setLiveStatus(''); return; }
+    let stopped = false;
+    const poll = async () => {
+      const tick = ++liveTick.current;
+      try {
+        const st = await fetch('/api/agent/game-log/status').then(r => r.json());
+        const logPath = st && st.selectedLogPath;
+        if (!logPath) {
+          if (!stopped && tick === liveTick.current) {
+            setLiveTele(null);
+            setLiveStatus('no debuglog found — configure the X4 log path (see the Playtest watcher)');
+          }
+          return;
+        }
+        const tail = await fetch('/api/agent/log-file-tail', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: logPath, cueNames: cues.map(c => c.name).filter(Boolean) })
+        }).then(r => r.json());
+        if (stopped || tick !== liveTick.current) return;
+        if (tail.success && tail.telemetry) {
+          setLiveTele(new Map((tail.telemetry.cues || []).map((c: CueTelemetry) => [c.name, c])));
+          setLiveStatus('live · ' + String(logPath).split(/[\\/]/).pop() + ' · ' + ((tail.telemetry.entries || []).length) + ' recent entries');
+        } else {
+          setLiveStatus(tail.error || 'tail failed');
+        }
+      } catch (e: any) {
+        if (!stopped) setLiveStatus('feed unavailable: ' + String((e && e.message) || e));
+      }
+    };
+    poll();
+    const t = window.setInterval(poll, 10000);
+    return () => { stopped = true; window.clearInterval(t); };
+  }, [liveMode, cues]);
+
+  // Live feed wins while enabled; pasted text is the offline fallback.
+  const cueTele = liveMode && liveTele ? liveTele : pastedTele;
 
   const renderCue = (cue: CueLineageCueInfo, depth: number): React.ReactNode => {
     const tele = cue.name ? cueTele.get(cue.name) : undefined;
@@ -131,9 +180,23 @@ export default function CueLineageTree({ workspace }: CueLineageTreeProps) {
                 Structural analysis only — flags dangling local cue refs, duplicate/unnamed cues, isolated cues, and broken links. Cross-script (<code className="text-slate-500">md.Script.Cue</code>) refs are treated as external.
               </div>
               <div className="mx-1 mt-2 border-t border-white/5 pt-2">
-                <button onClick={() => setShowLog(v => !v)} className="flex items-center gap-1 text-[9px] font-bold uppercase text-violet-300 hover:text-violet-200">
-                  <Activity className="w-3 h-3" />{showLog ? 'Hide' : 'Bind'} game log{cueTele.size > 0 ? ` (${cueTele.size} lit)` : ''}
-                </button>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <button
+                    onClick={() => setLiveMode(v => !v)}
+                    title="Watch the live X4 debuglog — the same feed the Playtest watcher uses — and light up cues in real time"
+                    className={`flex items-center gap-1 text-[9px] font-bold uppercase ${liveMode ? 'text-emerald-300' : 'text-slate-400 hover:text-emerald-300'}`}
+                  >
+                    <Radio className={`w-3 h-3 ${liveMode ? 'animate-pulse' : ''}`} />{liveMode ? 'Live: ON' : 'Bind live game log'}
+                  </button>
+                  <button onClick={() => setShowLog(v => !v)} className="flex items-center gap-1 text-[9px] font-bold uppercase text-violet-300 hover:text-violet-200">
+                    <Activity className="w-3 h-3" />{showLog ? 'Hide' : 'Import'} offline log{cueTele.size > 0 ? ` (${cueTele.size} lit)` : ''}
+                  </button>
+                </div>
+                {liveMode && (
+                  <div className="mt-1 text-[8.5px] font-mono text-slate-500 truncate" title={liveStatus}>
+                    {liveStatus || 'connecting to debuglog feed…'}
+                  </div>
+                )}
                 {showLog && (
                   <div className="mt-1.5 space-y-1">
                     <textarea value={logText} onChange={e => setLogText(e.target.value)} spellCheck={false}

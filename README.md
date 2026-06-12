@@ -1,43 +1,486 @@
 # X4 Mod Studio
 
-A visual IDE for building, validating, and deploying **X4: Foundations** mods — node-based Mission Director authoring, schema-backed validation against your real game install, cross-mod conflict scanning, round-trip import/export, and one-click deploy to your `extensions/` folder.
+X4 Mod Studio is a local visual workbench for building, validating, packaging, and deploying mods for **X4: Foundations**.
 
-## Quick start
+It is designed for the part of X4 modding that usually turns into scattered XML files, hand-written Mission Director scripts, XPath guesses, extracted game data, forum archaeology, and trial-and-error in the `extensions/` folder. The studio brings that workflow into one app: visual authoring, schema-aware editing, live diagnostics, package generation, cross-mod conflict checks, GitHub publishing, AI-assisted generation, and an agent API for automation.
 
+The goal is simple: build a real X4 extension inside the studio, compile it, validate it, deploy it, and run it in-game with no manual file surgery.
+
+## What Problems It Solves
+
+X4 modding is powerful, but the normal workflow has sharp edges:
+
+- Mission Director XML is easy to break and hard to visualize.
+- XPath diff patches can silently target nothing or the wrong node.
+- Game references such as wares, macros, ships, factions, and sounds are hard to discover.
+- UI/Lua integration needs exact file placement and engine conventions.
+- Several mods can patch the same vanilla file without obvious conflict signals.
+- Generated mods often look successful even when the package is incomplete or invalid.
+- External AI agents need structured APIs, not screen scraping.
+
+X4 Mod Studio is built around those risks. It treats the local game install, XSD schemas, package manifest, and generated files as the source of truth, then keeps the UI, compiler, diagnostics, and API tied to that evidence.
+
+## Who Should Use It
+
+Use this if you want to:
+
+- Build Mission Director mods visually instead of writing every cue by hand.
+- Create and inspect package-ready X4 extension files.
+- Validate generated XML against real schemas and local game data.
+- Work with X4 UI/Lua, contracts, t-files, wares, jobs, AI scripts, and XML patches from one app.
+- Audit your installed mods for conflicts and dependency problems.
+- Use AI to draft mod structures while still keeping the output visible and editable.
+- Let external tools or agents read, diagnose, patch, compile, or deploy the current workspace through a local API.
+
+This is not a Blender replacement and it does not author 3D assets. It focuses on the X4 extension surface: Mission Director, AI scripts, XML patches, wares/jobs, translations, UI/Lua, contracts, packaging, validation, and deployment.
+
+## Core Workflow
+
+The studio validates this chain:
+
+```text
+Author -> Compile -> Validate -> Package -> Deploy -> Run in X4 -> Round-trip
+ graph      XML        checks      mod dir   extensions  in-game    import
 ```
+
+In practice:
+
+1. Configure your X4 paths in **SETTINGS**.
+2. Build the mod in the visual editors.
+3. Watch diagnostics while you author.
+4. Inspect generated XML and package files.
+5. Run Mod Doctor, Extension Doctor, and relevant selftests.
+6. Sync/deploy the generated extension.
+7. Test in X4.
+8. Import or round-trip files back into the studio when needed.
+
+## Major Features
+
+### Visual Mission Director Authoring
+
+- Node-based MD canvas for cue structure and logic.
+- Schema-driven MD element coverage for a broad MD vocabulary.
+- Curated node templates for common events, conditions, and actions.
+- Connectors for trigger parents, conditions, actions, and sub-cues.
+- Generated `md/<modid>.xml` preview.
+- Editable generated XML with parser-backed apply for full MD XML.
+- Cue hierarchy previews and selected-node subtree previews.
+- Dependency graph and cue-lineage analysis.
+
+Use this when you want to design mission flow visually, then inspect the exact XML the game will receive.
+
+### Validation And Diagnostics
+
+- Real XSD validation against local schema data.
+- Semantic validation for references and time formats.
+- Package diagnostics before deployment.
+- Click-to-navigate diagnostics where supported.
+- Cue-lineage checks for missing/dangling structural relationships.
+- Mod Doctor for active package health.
+- `md-audit` and selftest endpoints for quick verification.
+
+The point is not just to generate files. The point is to know whether the generated files are credible before you load the game.
+
+### Game Data And Object Indexing
+
+- Reads local X4 data from loose files and packed `.cat/.dat` archives.
+- Handles `.pck` alias resolution and compressed entry decoding.
+- Indexes game objects such as ships, macros, wares, factions, and sounds.
+- Feeds pickers and reference validation so you do not have to guess IDs.
+- Supports base-file resolution for XML patch work.
+
+This turns the installed game into an active reference database.
+
+### XML Patching
+
+- Build X4-standard `<diff>` patches.
+- Target real base files from the game install or enabled extensions.
+- Validate XPath selectors.
+- Detect zero, one, or many XPath matches.
+- Preview patch output and applied effects.
+- Support add/replace/remove operations and add positions.
+- Use diff-to-patch tools to synthesize safer patch operations from edits.
+
+Use this for libraries such as `wares.xml`, `jobs.xml`, and other vanilla file modifications where full-file overrides would be risky.
+
+### Wares, Jobs, T-Files, And AI Scripts
+
+- Author ware and job data as workspace domains.
+- Generate translation files under `t/`.
+- Work with AI scripts under `aiscripts/`.
+- Keep these domains in the package manifest alongside MD, UI, and patches.
+- Preserve imported domains where editable graph coverage is not yet complete.
+
+These editors are intended to keep the whole extension in one workspace instead of scattering state across unrelated tools.
+
+### HUD, Lua UI, And Layout Tools
+
+- HUD and Lua UI authoring surface.
+- Widget library for common UI elements.
+- Layout GUI designer.
+- Lua script event manager.
+- Syntax-validated Lua editor.
+- Responsive grid descriptor bridge for layout compilation.
+- Packaged `ui.xml` and Lua entry points where supported.
+- Vetted Lua snippet library.
+
+The current UI/Lua surface is strongest as an authoring and packaging workflow for X4 extension UI code. Runtime widget construction still needs in-game verification for the hardest ftable cases.
+
+### Contracts And External Integration
+
+- Define HTTP/JSON contracts between X4-side Lua/MD and an external local process.
+- Validate endpoint request and response shapes.
+- Generate X4-side glue Lua.
+- Generate matching MD scaffolds.
+- Support `ui_event` style connections from Lua widgets into MD cues.
+
+The studio owns the X4 side of the integration and the contract. It does not build or host your external service.
+
+### Extension Doctor And Override Analysis
+
+- Scan installed extensions.
+- Detect missing dependencies and duplicate IDs.
+- Find cross-mod file and selector conflicts.
+- Resolve base content from vanilla and extension data.
+- Show load-order winners.
+- Drill into override claims so you can see which mod rewrites what.
+
+This is for the common problem where a mod is technically valid by itself but behaves differently because another extension wins the same file or node.
+
+### Logs And Debugging
+
+- Parse X4 debug log text into structured entries.
+- Correlate deterministic studio markers back to cue names.
+- Summarize per-cue activity and errors.
+- Support backend live log-file tailing.
+- Bind log evidence to visual diagnostics where available.
+
+This is meant to reduce the gap between "the XML compiled" and "the mod actually fired in-game."
+
+### Source Control And GitHub
+
+- GitHub device-flow connection.
+- Create a repository from the current mod.
+- Push generated files.
+- Load remote workspace data.
+- Show real commit history.
+- Generate AI-assisted commit summaries when a provider is configured.
+- Use snapshots/version history inside the local workspace.
+
+This helps turn a local mod experiment into something that can be versioned, reviewed, and shared.
+
+### AI Guide
+
+- In-app AI Guide for assistant chat and Builder Action Port generation.
+- Supports configured providers such as Gemini, OpenRouter, OpenAI, and Anthropic.
+- Generates proposed visual workspaces from natural-language prompts.
+- Keeps the generated workspace visible as nodes and XML for inspection.
+
+Current caveat: the Builder Action Port can visibly update the canvas before `Confirm & Apply`. That approval behavior is tracked in the roadmap and should be fixed so generation remains a true proposal until confirmation.
+
+### Agent API
+
+The local API lets external tools inspect and modify the workspace without scraping the UI.
+
+Important routes include:
+
+- `GET /api/agent/schema`
+- `GET /api/agent/workspace`
+- `POST /api/agent/workspace`
+- `POST /api/agent/workspace/merge`
+- `POST /api/agent/compile`
+- `POST /api/agent/package`
+- `POST /api/agent/deploy`
+- `POST /api/agent/generate`
+- Diagnostic and selftest routes under `/api/agent/*`
+
+The in-app **AGENT API** panel documents the routes, shows live state, and exposes surgical workspace operations. It is focused on real agent operations, not demo-only test runs.
+
+## Quick Start
+
+### Requirements
+
+- Windows is the primary target environment.
+- Node.js and npm.
+- A local X4: Foundations install.
+- Optional: extracted X4 schemas if you want to point directly at schema files.
+- Optional: AI provider key for AI Guide generation.
+- Optional: GitHub OAuth app client ID for GitHub integration.
+
+### Install
+
+```powershell
 npm install
 ```
 
-Double-click `restart-studio.bat` (Windows), or run the two dev servers yourself:
+### Run The Studio
 
+On Windows, the easiest route is:
+
+```text
+restart-studio.bat
 ```
-npm run dev:api   # API server on http://127.0.0.1:3001
-npm run dev:web   # UI (Vite) on http://localhost:3000
+
+Or run the servers directly:
+
+```powershell
+npm run dev:api
+npm run dev:web
 ```
 
-Open http://localhost:3000, then point the app at your install via **SETTINGS** (X4 game path, XSD schema folder, mod workspace folder). These paths are saved to `config.json`, which is **gitignored** — copy `config.example.json` if you prefer editing by hand.
+Default local addresses:
 
-## API keys & secrets — read this before worrying
+- UI: `http://localhost:3000`
+- API: `http://127.0.0.1:3001`
 
-**Nothing secret is ever committed to this repository.** The layout:
+The Vite UI proxies `/api` calls to the API server.
 
-| Where | What | Committed? |
+### Configure Paths
+
+Open `http://localhost:3000`, then use **SETTINGS** to configure:
+
+- X4 game path
+- XSD schema path
+- Mod workspace path
+
+The app writes machine-local paths to `config.json`. That file is gitignored.
+
+You can also start from:
+
+```powershell
+copy config.example.json config.json
+```
+
+Then edit `config.json` by hand if needed.
+
+## How To Use The App
+
+### 1. Start With A Workspace
+
+Use a blank workspace, a preset, an imported workspace, or AI-assisted generation.
+
+Set basic metadata such as:
+
+- Mod name
+- Version
+- Author
+- Description
+
+The mod name becomes the basis for generated file names and package IDs, so keep it stable once you start packaging.
+
+### 2. Build Mission Logic
+
+Use **MD Scripts** and the node canvas to create:
+
+- Cues
+- Events
+- Conditions
+- Actions
+- Sub-cues
+- Signal/listen relationships
+
+Use the generated XML preview to inspect what the graph compiles into.
+
+### 3. Add Supporting Domains
+
+Use the other tabs as needed:
+
+- **AIScripts** for pilot behavior scripts.
+- **Wares & Jobs** for economy and job data.
+- **HUD & LUA UI** for UI widgets, Lua code, and layout work.
+- **XML Patching** for safe vanilla file modifications.
+- **Contracts** for X4-to-external-process integration.
+- **Languages (t/)** for translation strings.
+- **X4 Wiki** and object/reference tools for lookup.
+
+### 4. Validate Continuously
+
+Watch:
+
+- Compiler status
+- Mod Doctor diagnostics
+- Schema validation
+- Reference validation
+- Cue-lineage signals
+- Patch selector checks
+- Extension Doctor findings
+
+Treat a green UI as a useful signal, not a substitute for in-game testing. The final authority for runtime behavior is still X4.
+
+### 5. Inspect Generated Files
+
+Use the code preview and package views to inspect generated artifacts such as:
+
+- `content.xml`
+- `md/<modid>.xml`
+- `aiscripts/*.xml`
+- `libraries/*.xml`
+- `t/0001-l044.xml`
+- `ui.xml`
+- `ui/*.lua`
+- README/package metadata
+
+### 6. Package Or Deploy
+
+Use compile/package/deploy flows to create the extension file manifest and write it to the configured target. If deploying to the live X4 `extensions/` folder, confirm the generated mod folder is clean and contains the expected `content.xml`.
+
+### 7. Test In Game
+
+Launch X4, enable the extension if needed, and verify:
+
+- The extension loads.
+- The cue or UI behavior actually triggers.
+- Logs show expected markers.
+- No runtime errors appear in the debug log.
+
+If runtime behavior fails, use the studio diagnostics, generated XML, and log correlation to narrow the problem.
+
+### 8. Round-Trip When Needed
+
+Import existing workspace JSON, MD XML, or package files when you need to inspect or revise existing work. Round-trip support is strongest for MD and preserved package domains; editable graph breadth for every domain is still an active roadmap item.
+
+## AI Provider Setup
+
+AI is optional. The app works as a visual authoring and validation studio without it.
+
+You can configure keys in either place:
+
+1. In the app through **AI ENGINE** / provider settings.
+2. In `.env.local`.
+
+To use `.env.local`:
+
+```powershell
+copy .env.example .env.local
+```
+
+Then fill only the providers you use:
+
+```env
+GEMINI_API_KEY=""
+OPENROUTER_API_KEY=""
+OPENAI_API_KEY=""
+ANTHROPIC_API_KEY=""
+```
+
+Restart the studio after changing `.env.local`.
+
+## GitHub Setup
+
+GitHub integration is optional.
+
+To enable one-click GitHub connection:
+
+1. Create a GitHub OAuth App.
+2. Enable Device Flow.
+3. Put the client ID in `.env.local`:
+
+```env
+GITHUB_CLIENT_ID=""
+```
+
+The client ID is public, but it is still machine-specific configuration, so it stays out of the repository.
+
+## Local Security Model
+
+The studio is built for local development, but it still protects keys and privileged routes.
+
+| Location | Purpose | Committed? |
 |---|---|---|
-| `.env.local` | Your provider API keys (Gemini/OpenRouter/OpenAI/Anthropic), GitHub OAuth Client ID | **Never** (`.env*` is gitignored; only `.env.example` is tracked) |
-| Browser localStorage | Keys entered in the in-app **AI Providers** modal, GitHub token from the device-flow sign-in | Never touches the filesystem/repo |
-| `.studio-api-token` | Per-session token authenticating your browser to your local API | **Never** (gitignored) |
-| `config.json` | Your machine's game/schema/workspace paths | **Never** (gitignored) |
+| `.env.local` | Provider keys, GitHub client ID, optional stable studio token | No |
+| Browser localStorage | Keys entered in the in-app provider modal | No |
+| `.studio-api-token` | Local API bearer token | No |
+| `config.json` | Machine-local game/schema/workspace paths | No |
 
-How keys are protected at runtime:
+Runtime behavior:
 
-- The API server binds **127.0.0.1 only** — nothing on your network can reach it.
-- Every `/api/*` call requires the session token your browser receives on page load.
-- Server-side `.env.local` keys are **Origin-gated**: they only back requests coming from the app UI in your own browser. External scripts/agents (even with the session token) must supply their own key via the `x-custom-api-key` header — they can never spend your configured keys.
-- Keys are only ever sent to the respective provider's official endpoint.
+- The API binds locally.
+- `/api/*` routes require a bearer token.
+- The browser receives the token during local startup.
+- Provider keys in `.env.local` are reserved for app-origin requests.
+- External agents must provide their own AI key through `x-custom-api-key`.
+- Keys are sent only to the selected provider endpoint.
 
-Setup: `copy .env.example .env.local`, fill in the keys you use (all optional), restart. Or skip the file and enter keys in the in-app AI Providers settings instead.
+If the server restarts and API calls start returning token errors, reload the browser page so it repeats the token handshake.
 
-## Docs
+## Agent API Basics
 
-- `ROADMAP.md` — strategy, changelogs, and the validation roadmap.
-- `HANDOFF.md` — working-state notes for contributors/agents (top section is current; lower sections are historical).
+The API is for real automation: external tools can read state, compile, package, deploy, and write workspace changes.
+
+Use the bearer token from `.studio-api-token`:
+
+```powershell
+$token = Get-Content .studio-api-token -Raw
+$headers = @{ Authorization = "Bearer $($token.Trim())" }
+Invoke-RestMethod -Uri "http://localhost:3000/api/agent/workspace" -Headers $headers
+```
+
+For AI generation from an external script, include your own provider key:
+
+```powershell
+$token = Get-Content .studio-api-token -Raw
+$headers = @{
+  Authorization = "Bearer $($token.Trim())"
+  "Content-Type" = "application/json"
+  "x-ai-provider" = "openrouter"
+  "x-ai-model" = "deepseek/deepseek-chat"
+  "x-custom-api-key" = "<your-provider-key>"
+}
+$body = @{ prompt = "Create a patrol mission with a reward cue." } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/agent/generate" -Headers $headers -Body $body
+```
+
+The in-app **AGENT API** panel contains route examples and live state.
+
+## Common Development Commands
+
+```powershell
+npm install
+npm run dev
+npm run dev:api
+npm run dev:web
+npm run build
+npm run start
+npm run lint
+```
+
+Notes:
+
+- `npm run dev` starts the API watcher.
+- `npm run dev:web` starts the Vite UI.
+- `restart-studio.bat` is the normal Windows launcher for the split local setup.
+- `npm run build` builds the frontend and bundled server output.
+- `npm run lint` currently runs `tsc --noEmit`.
+
+## Project Files
+
+- `src/` - React app, components, types, and client-side logic.
+- `server.ts` - local API server, package/build endpoints, diagnostics, selftests.
+- `ROADMAP.md` - current strategy, capability status, known gaps, changelog.
+- `HANDOFF.md` - session handoff notes for contributors and coding agents.
+- `config.example.json` - path configuration template.
+- `.env.example` - environment variable template.
+- `restart-studio.bat` - Windows launcher for the local studio.
+- `install_mod.ts` - helper script for installing generated mod output.
+
+## Current Known Caveats
+
+- Final in-game behavior still needs X4 verification. The studio can prove a lot about structure, schema, and packaging, but it cannot honestly certify runtime behavior without the game.
+- The AI Guide Builder Action Port currently updates the visible workspace before `Confirm & Apply`; this is tracked for correction.
+- Some domains round-trip as preserved package data before they become fully editable graph models.
+- Runtime Lua UI construction is powerful but still needs careful in-game verification for advanced ftable/widget patterns.
+- The app is a local development tool, not a hosted multi-user service.
+
+## Why Use It
+
+Use X4 Mod Studio because it compresses the hard parts of X4 text-mod development into one visible loop:
+
+- You can author visually.
+- You can inspect the generated files.
+- You can validate against schemas and local game data.
+- You can detect package and cross-mod problems earlier.
+- You can use AI without hiding the result.
+- You can automate through a structured local API.
+- You can deploy with a clearer idea of what will land in `extensions/`.
+
+The selling point is not that it writes XML for you. The selling point is that it makes the modding chain visible, testable, and repeatable.
