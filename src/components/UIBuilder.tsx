@@ -18,6 +18,8 @@ import {
   FileCode
 } from 'lucide-react';
 import { LUA_SNIPPETS, fillLuaSnippet } from '../lib/luaSnippets';
+import { validateUiWidgets } from '../lib/uiWidgetValidate';
+import { pixelLayoutToGrid } from '../lib/uiLayout';
 import { UIWidget, ModWorkspace } from '../types';
 
 interface UIBuilderProps {
@@ -48,6 +50,12 @@ export default function UIBuilder({
     HTTP_CLIENT: _contract.httpClientExpr || 'require("extensions.sn_mod_support_apis.lua.simple_http")'
   } : {};
   const [luaMode, setLuaMode] = useState<'preview' | 'edit'>('preview');
+  // Layout validation over the free-form designer widgets (overlap/bounds/dupes/degenerate).
+  const widgetFindings = useMemo(() => validateUiWidgets((workspace.uiWidgets || []) as any), [workspace.uiWidgets]);
+  const widgetErrors = widgetFindings.filter(fd => fd.severity === 'error').length;
+  const widgetWarns = widgetFindings.filter(fd => fd.severity === 'warning').length;
+  // Bridge: the engine-correct responsive grid this free-form layout compiles to (X4 is fTable-based).
+  const derivedGrid = useMemo(() => pixelLayoutToGrid((workspace.uiWidgets || []) as any, 'preview_layout'), [workspace.uiWidgets]);
   const insertSelectedPattern = () => {
     const snip = LUA_SNIPPETS.find(sn => sn.id === selectedLuaTemplate);
     const code = snip ? fillLuaSnippet(selectedLuaTemplate, snippetValues) : '';
@@ -184,6 +192,18 @@ export default function UIBuilder({
               LUA Script Event Manager
             </button>
           </div>
+
+          {activeUiSubTab === 'canvas' && (widgetFindings.length > 0 ? (
+            <div className="flex items-center gap-2 text-[9px] font-mono font-bold" title={widgetFindings.map(fd => fd.message).join("\n")}>
+              {widgetErrors > 0 && <span className="text-red-400">{widgetErrors} layout error{widgetErrors === 1 ? '' : 's'}</span>}
+              {widgetWarns > 0 && <span className="text-amber-400">{widgetWarns} warning{widgetWarns === 1 ? '' : 's'}</span>}
+            </div>
+          ) : ((workspace.uiWidgets || []).length > 0 ? (
+            <span className="text-[9px] text-emerald-400 font-mono font-bold">layout valid</span>
+          ) : null))}
+          {activeUiSubTab === 'canvas' && (workspace.uiWidgets || []).length > 0 && (
+            <span className="text-[9px] text-cyan-400/80 font-mono" title="X4 UI is fTable-based; your layout compiles to this responsive grid (ui/<id>_layout.lua) that scales across resolutions.">→ responsive grid {derivedGrid.rows}×{derivedGrid.cols}</span>
+          )}
 
           <div className="h-4 w-px bg-white/10" />
 
