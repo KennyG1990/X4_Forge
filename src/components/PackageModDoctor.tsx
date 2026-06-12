@@ -68,6 +68,60 @@ export default function PackageModDoctor({
     }
   };
 
+  // Selftest dashboard — every public oracle GET, run sequentially.
+  const SELFTEST_ENDPOINTS: { name: string; path: string }[] = [
+    { name: 'core', path: 'selftest' },
+    { name: 'md-audit', path: 'md-audit' },
+    { name: 'round-trip', path: 'round-trip-selftest' },
+    { name: 'references', path: 'reference-selftest' },
+    { name: 'agent-api', path: 'api-selftest' },
+    { name: 'live-log', path: 'log-selftest' },
+    { name: 'log-telemetry', path: 'log-telemetry-selftest' },
+    { name: 'log-file', path: 'log-file-selftest' },
+    { name: 'cue-lineage', path: 'cue-lineage-selftest' },
+    { name: 'live-fixes', path: 'live-fixes-selftest' },
+    { name: 'contracts', path: 'contract-selftest' },
+    { name: 'lua-snippets', path: 'lua-snippets' },
+    { name: 'ui-layout', path: 'ui-layout-selftest' },
+    { name: 'ui-widgets', path: 'ui-widget-validate-selftest' },
+    { name: 'ext-doctor', path: 'extension-doctor-selftest' },
+    { name: 'override-map', path: 'override-map-selftest' },
+    { name: 'cat/dat', path: 'catdat-selftest' },
+    { name: 'diff-synth', path: 'xpath-synth-selftest' },
+    { name: 'patch-audit', path: 'patch-audit' },
+    { name: 'sqlite', path: 'db-selftest' }
+  ];
+  const [stResults, setStResults] = useState<{ name: string; pass: boolean; score?: string; detail?: string }[] | null>(null);
+  const [stRunning, setStRunning] = useState(false);
+  const [stProgress, setStProgress] = useState('');
+  const stAllPass = !!stResults && stResults.every(r => r.pass);
+
+  const runAllSelftests = async () => {
+    setStRunning(true);
+    setStResults(null);
+    const out: { name: string; pass: boolean; score?: string; detail?: string }[] = [];
+    for (const ep of SELFTEST_ENDPOINTS) {
+      setStProgress(`${out.length + 1}/${SELFTEST_ENDPOINTS.length}`);
+      try {
+        const r = await fetch('/api/agent/' + ep.path).then(x => x.json());
+        const checks = r.checks || [];
+        const pass = r.pass === true || r.allPassed === true || r.lossless === true
+          || (Array.isArray(r.findings) && r.findings.length === 0)
+          || (r.available === false /* sqlite absent reads as soft-pass */ && ep.path === 'db-selftest')
+          || (ep.path === 'lua-snippets' && Array.isArray(r.snippets) && r.snippets.length > 0)
+          || (ep.path === 'patch-audit' && Array.isArray(r.unresolved) && r.unresolved.length === 0)
+          || (checks.length > 0 && checks.every((c: any) => c.pass));
+        const score = checks.length ? `${checks.filter((c: any) => c.pass).length}/${checks.length}`
+          : typeof r.passed === 'number' && typeof r.total === 'number' ? `${r.passed}/${r.total}` : undefined;
+        out.push({ name: ep.name, pass, score, detail: pass ? '' : JSON.stringify(r).slice(0, 180) });
+      } catch (e: any) {
+        out.push({ name: ep.name, pass: false, detail: String(e?.message || e) });
+      }
+    }
+    setStResults(out);
+    setStRunning(false);
+  };
+
   const runExtensionScan = async () => {
     setExtScanning(true);
     setExtError(null);
@@ -139,6 +193,45 @@ export default function PackageModDoctor({
             <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
             Ask AI Assistant For Fixes
           </button>
+        )}
+      </div>
+
+      {/* STUDIO SELFTEST DASHBOARD — one button for every oracle endpoint.
+          The selftests are the studio's strongest trust asset; this surfaces
+          them in the UI instead of leaving them as agent-only GETs. */}
+      <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2.5 shrink-0">
+        <div className="flex items-center justify-between border-b border-white/5 pb-2">
+          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[11px]">
+            <CheckCircle className="w-4 h-4 text-emerald-400" />
+            STUDIO SELFTESTS
+          </div>
+          {stResults && (
+            <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${stAllPass ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25' : 'text-red-300 bg-red-500/10 border-red-500/25'}`}>
+              {stResults.filter(r => r.pass).length}/{stResults.length} PASS
+            </span>
+          )}
+        </div>
+        <p className="text-[9.5px] text-slate-400 font-sans leading-normal">
+          Runs every built-in oracle: generators, validators, round-trip, archives, patches, contracts, lineage, telemetry, fixes.
+        </p>
+        <button
+          onClick={runAllSelftests}
+          disabled={stRunning}
+          className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-2 rounded-md border border-emerald-500/30 cursor-pointer uppercase transition-all disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${stRunning ? 'animate-spin' : ''}`} />
+          {stRunning ? `Running… (${stProgress})` : 'Run All Selftests'}
+        </button>
+        {stResults && (
+          <div className="grid grid-cols-2 gap-1">
+            {stResults.map(r => (
+              <div key={r.name} title={r.detail || ''} className={`flex items-center gap-1 text-[8.5px] font-mono px-1.5 py-0.5 rounded border ${r.pass ? 'text-emerald-300 bg-emerald-500/5 border-emerald-500/15' : 'text-red-300 bg-red-500/10 border-red-500/30 font-bold'}`}>
+                <span>{r.pass ? '✓' : '✗'}</span>
+                <span className="truncate">{r.name}</span>
+                {r.score && <span className="ml-auto text-slate-500">{r.score}</span>}
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

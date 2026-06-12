@@ -4,6 +4,10 @@
  */
 
 import React, { useState, useEffect } from 'react';
+
+// QoL panel cache: the FILES tree survives panel switches (background-refreshed
+// on mount instead of refetched with a visible empty state).
+const FILE_TREE_CACHE: { tree: any | null } = { tree: null };
 import { 
   FolderIcon, 
   ChevronRight, 
@@ -81,6 +85,7 @@ export default function DirectoryExplorer({
       const response = await fetch('/api/fs/list');
       if (response.ok) {
         const tree = await response.json();
+        FILE_TREE_CACHE.tree = tree;
         setFileTree(tree);
         setStatusMessage({ type: 'success', text: "Synced project filesystem!" });
       } else {
@@ -92,8 +97,10 @@ export default function DirectoryExplorer({
     }
   };
 
-  // Re-scan whenever configured paths change
+  // Re-scan whenever configured paths change. Serve the cached tree instantly
+  // (panel switches), then refresh in the background.
   useEffect(() => {
+    if (FILE_TREE_CACHE.tree) setFileTree(FILE_TREE_CACHE.tree);
     handleRefreshDirectory();
   }, [modWorkspacePath, filesystemPath]);
 

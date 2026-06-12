@@ -4,6 +4,10 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
+
+// Module-level cache so switching panels doesn't refetch the same index query
+// (the index itself is SQLite-cached server-side; this kills the UI round-trip).
+const OBJECT_INDEX_CACHE = new Map<string, any>();
 import { 
   Search, 
   Database, 
@@ -52,7 +56,16 @@ export default function ObjectBrowser() {
   };
 
   const loadObjectIndex = async () => {
-    setObjectIndexLoading(true);
+    // QoL panel cache: serve the last result for this query instantly (no
+    // spinner flash on remount), then refresh in the background.
+    const cacheKey = refType + '|' + refSearch;
+    const cached = OBJECT_INDEX_CACHE.get(cacheKey);
+    if (cached) {
+      setObjectIndex(cached);
+      setObjectIndexLoading(false);
+    } else {
+      setObjectIndexLoading(true);
+    }
     setObjectIndexError('');
     try {
       const params = new URLSearchParams({
@@ -66,6 +79,10 @@ export default function ObjectBrowser() {
         throw new Error(data.error || 'Failed to load local X4 object index.');
       }
       setObjectIndex(data);
+      OBJECT_INDEX_CACHE.set(refType + '|' + refSearch, data);
+      if (OBJECT_INDEX_CACHE.size > 40) {
+        OBJECT_INDEX_CACHE.delete(OBJECT_INDEX_CACHE.keys().next().value as string);
+      }
     } catch (err: any) {
       setObjectIndexError(err.message || 'Failed to load local X4 object index.');
       setObjectIndex(null);

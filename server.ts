@@ -49,6 +49,7 @@ import type { SchemaLibrary } from "./src/lib/schemaTypes";
 import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
+import { runLiveFixesSelftest } from "./src/lib/liveFixes";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
@@ -181,7 +182,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/ui-layout-selftest",
   "/agent/override-map-selftest",
   "/agent/catdat-selftest",
-  "/agent/xpath-synth-selftest"
+  "/agent/xpath-synth-selftest",
+  "/agent/live-fixes-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3325,6 +3327,15 @@ app.get("/api/agent/log-telemetry-selftest", (_req, res) => {
   }
 });
 
+// T5 — Live Fix Loop rule-engine self-test.
+app.get("/api/agent/live-fixes-selftest", (_req, res) => {
+  try {
+    res.json(runLiveFixesSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "live-fixes-selftest failed" });
+  }
+});
+
 // Tier 2 / T2.1 — structural cue-lineage analyzer self-test.
 app.get("/api/agent/cue-lineage-selftest", (_req, res) => {
   try {
@@ -4469,9 +4480,17 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
       console.log(`[AI-STUDIO] Verification complete: pristine schema validated on first run.`);
     }
 
-    // Apply globally to the shared space
-    activeWorkspace = combinedWorkspace;
-    workspaceVersion++;
+    // Approval-flow fix (Codex finding): the in-app AI guide sends apply:false
+    // so the generated blueprint is STAGED — returned to the client for its
+    // Confirm & Apply card — without touching the shared workspace. Previously
+    // generate committed here unconditionally, so the canvas sync adopted the
+    // change before the user approved (the approval step was not the first
+    // mutation point). External agents keep the documented apply-by-default.
+    const applyGenerated = req.body.apply !== false;
+    if (applyGenerated) {
+      activeWorkspace = combinedWorkspace;
+      workspaceVersion++;
+    }
 
     console.log(`[AI-STUDIO] Phased interpretation complete. Delivered blueprint named: ${combinedWorkspace.name}`);
 
@@ -4482,7 +4501,7 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
 
     // Honest reporting: the message must reflect the real post-validation state,
     // including a self-heal attempt that threw (previously swallowed silently).
-    let resultMessage = `AI Agent generated and applied "${combinedWorkspace.name}" (${combinedWorkspace.nodes.length} nodes) in 4 phases.`;
+    let resultMessage = `AI Agent generated${applyGenerated ? " and applied" : " (staged for approval — NOT applied)"} "${combinedWorkspace.name}" (${combinedWorkspace.nodes.length} nodes) in 4 phases.`;
     if (finalDiagnostics.length === 0) {
       resultMessage += ` Validation clean: 0 errors / 0 warnings.`;
     } else {
@@ -4495,6 +4514,7 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
     return res.json({
       success: true,
       message: resultMessage,
+      applied: applyGenerated,
       version: workspaceVersion,
       workspace: combinedWorkspace,
       diagnostics: finalDiagnostics,

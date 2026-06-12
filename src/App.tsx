@@ -352,7 +352,10 @@ export default function App() {
         body: JSON.stringify({ 
           prompt: promptMsg,
           currentWorkspace: workspace,
-          diagnostics: diagnostics
+          diagnostics: diagnostics,
+          // Approval-flow fix: stage only — the canvas must not change until
+          // the user clicks Confirm & Apply on the proposal card.
+          apply: false
         })
       });
 
@@ -568,8 +571,17 @@ export default function App() {
       }
     };
 
-    const debounceTimer = setTimeout(syncLocalEditsToServer, 1000);
-    return () => clearTimeout(debounceTimer);
+    // QoL: 300ms (was 1000ms) — the agent API and AgentBridge live view read
+    // the server copy, so client→server staleness should be near-imperceptible.
+    const debounceTimer = setTimeout(syncLocalEditsToServer, 300);
+    // Flush immediately when the tab loses visibility so an agent polling the
+    // API right after the user alt-tabs sees the latest canvas.
+    const flushOnHide = () => { if (document.visibilityState === 'hidden') syncLocalEditsToServer(); };
+    document.addEventListener('visibilitychange', flushOnHide);
+    return () => {
+      clearTimeout(debounceTimer);
+      document.removeEventListener('visibilitychange', flushOnHide);
+    };
   }, [workspace]);
 
   const executeCompileModProject = async () => {

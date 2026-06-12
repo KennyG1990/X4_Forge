@@ -144,7 +144,9 @@ export const BUILTIN_BOILERPLATES: BoilerplateSnippet[] = [
 ];
 
 export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSystemProps) {
-  const [targetFile, setTargetFile] = useState<string>('libraries/ship_macros.xml');
+  // QoL: default to a target that actually exists in vanilla (ship_macros.xml
+  // does not — first open used to show a resolution error).
+  const [targetFile, setTargetFile] = useState<string>('libraries/wares.xml');
 
   const patchBlocks = workspace.xmlPatches || [];
   const filteredBlocks = patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile);

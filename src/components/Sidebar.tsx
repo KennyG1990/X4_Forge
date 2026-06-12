@@ -48,12 +48,12 @@ import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
 import ObjectIndexPicker from './ObjectIndexPicker';
 import PackageModDoctor from './PackageModDoctor';
-import CueLineageTree from './CueLineageTree';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
 import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
+import { analyzeCueLineage } from '../lib/cueLineage';
 import AIHelper from './AIHelper';
 import ObjectBrowser from './ObjectBrowser';
 
@@ -632,6 +632,7 @@ export default function Sidebar({
             setFocusNodeRequest={setFocusNodeRequest}
             visibleCueIds={visibleCueIds}
             setVisibleCueIds={setVisibleCueIds}
+            setWorkspace={setWorkspace}
           />
         )}
 
@@ -689,7 +690,28 @@ export default function Sidebar({
         {activeTab === 'diagnostics' && (
           <ErrorBoundary label="Mod Doctor">
             <div className="flex flex-col h-full min-h-0 overflow-y-auto">
-              <CueLineageTree workspace={workspace} />
+              {/* Cue health SUMMARY only — the full tree (navigate + diagnose +
+                  live glow + fix cards) lives in the CUES tab. Consolidated
+                  2026-06-12 after Ken caught the duplicate-tree smell. */}
+              {(() => {
+                const lf = analyzeCueLineage(workspace.nodes || [], workspace.links || []).findings;
+                const errs = lf.filter(f => f.severity === 'error').length;
+                const warns = lf.filter(f => f.severity === 'warning').length;
+                return (
+                  <button
+                    onClick={() => setActiveTab('cues')}
+                    className={`mx-3 mt-3 shrink-0 flex items-center justify-between gap-2 rounded-lg border p-2.5 font-mono text-[10px] cursor-pointer transition-all hover:bg-white/5 ${
+                      errs > 0 ? 'border-red-500/25 bg-red-500/5 text-red-300'
+                        : warns > 0 ? 'border-amber-500/25 bg-amber-500/5 text-amber-300'
+                          : 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
+                    }`}
+                    title="Open the cue tree (navigate, diagnose, bind live game log)"
+                  >
+                    <span className="font-bold uppercase tracking-wide">Cue health</span>
+                    <span>{errs > 0 || warns > 0 ? `${errs} error(s) · ${warns} warning(s)` : 'clean'} → Cues tab</span>
+                  </button>
+                );
+              })()}
               <PackageModDoctor
                 workspace={workspace}
                 diagnostics={diagnostics}
