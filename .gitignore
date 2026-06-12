@@ -24,3 +24,6 @@ temp_import/
 temp_package_test.json
 
 test_generate_api.py
+
+# ---- Working docs & agent notes (kept out of version control by request) ----
+dev-docs/
