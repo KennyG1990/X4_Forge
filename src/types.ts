@@ -1429,7 +1429,14 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       // so always re-hydrate it from the current template when one exists. This lets template
       // improvements (e.g. live object-index reference pickers) reach existing nodes on load,
       // not just newly created ones; fall back to the node's own schema only if no template.
-      propertiesSchema: (template ? template.propertiesSchema : node.propertiesSchema) || [],
+      // C2-capstone fix: only adopt a template's schema when it's genuinely the SAME tag.
+      // A same-TYPE fallback template (used for label/port defaults on bare API nodes)
+      // must not impose its schema — renderGenericXMLNode filters attributes through the
+      // schema keys, so a wrong schema silently drops every property (observed:
+      // API-built debug_text nodes emitted as <debug_text /> because they wore
+      // create_ship's schema). With no matching-tag template, keep the node's own
+      // schema (or none — the renderer then falls back to Object.keys(properties)).
+      propertiesSchema: ((template && template.xmlTag === (node.xmlTag || template.xmlTag)) ? template.propertiesSchema : node.propertiesSchema) || [],
       inputs: node.inputs || (template ? template.inputs : []),
       outputs: node.outputs || (template ? template.outputs : []),
       includeInBuild: typeof node.includeInBuild === 'boolean' ? node.includeInBuild : true
