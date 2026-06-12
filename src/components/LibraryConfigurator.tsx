@@ -74,6 +74,8 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
   const [warnings, setWarnings] = useState<ConflictWarning[]>([]);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [warningsExpanded, setWarningsExpanded] = useState<boolean>(true);
+  // Inline "new item id" entry (replaces a blocking window.prompt). null = not adding.
+  const [addingId, setAddingId] = useState<string | null>(null);
 
   // High fidelity default arrays
   const defaultWares: WareDef[] = [
@@ -437,10 +439,10 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
     }));
   };
 
-  const handleCreateWare = () => {
-    const wId = prompt("Enter Unique Ware ID (e.g., ware_antimatter_capsules):", "ware_quantum_crystals");
+  const handleCreateWare = (rawId: string) => {
+    const wId = (rawId || '').trim();
     if (!wId) return;
-    
+
     const nWare: WareDef = {
       id: wId.startsWith('ware_') ? wId : `ware_${wId}`,
       name: "Quantum Focus Crystals",
@@ -463,8 +465,8 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
     setActiveItemIndex(wares.length);
   };
 
-  const handleCreateJob = () => {
-    const jId = prompt("Enter Unique Job ID (e.g., job_trader_hauler):", "job_pirate_harasser");
+  const handleCreateJob = (rawId: string) => {
+    const jId = (rawId || '').trim();
     if (!jId) return;
 
     const nJob: JobDef = {
@@ -482,6 +484,18 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
     const next = [...jobs, nJob];
     saveJobs(next);
     setActiveItemIndex(jobs.length);
+  };
+
+  // Inline-add controls (non-blocking, replaces window.prompt).
+  const beginAdd = () => setAddingId('');
+  const cancelAdd = () => setAddingId(null);
+  const commitAdd = () => {
+    const id = (addingId || '').trim();
+    if (id) {
+      if (activeSubTab === 'wares') handleCreateWare(id);
+      else handleCreateJob(id);
+    }
+    setAddingId(null);
   };
 
   const handleDeleteActiveItem = () => {
@@ -682,13 +696,44 @@ ${renderWareProduction(item, '    ')}
               {activeSubTab === 'wares' ? 'wares hierarchy' : 'npc jobs hierarchy'}
             </span>
             <button
-              onClick={activeSubTab === 'wares' ? handleCreateWare : handleCreateJob}
+              onClick={beginAdd}
               className="px-2 py-1 rounded hover:bg-[#202533] text-cyan-400 hover:text-white transition-all cursor-pointer flex items-center gap-1 text-[9px] font-bold tracking-wide border border-cyan-400/25 font-mono"
               title={`Create custom ${activeSubTab === 'wares' ? 'Ware asset ID' : 'Pilot quota Job group'}`}
             >
               <Plus className="w-3 h-3" /> ADD
             </button>
           </div>
+
+          {addingId !== null && (
+            <div className="p-2 border-b border-white/10 bg-[#0d1018] shrink-0 flex items-center gap-1.5">
+              <input
+                autoFocus
+                value={addingId}
+                spellCheck={false}
+                onChange={e => setAddingId(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') commitAdd();
+                  else if (e.key === 'Escape') cancelAdd();
+                }}
+                placeholder={activeSubTab === 'wares' ? 'ware_antimatter_capsules' : 'job_trader_hauler'}
+                className="flex-1 min-w-0 px-2 py-1 rounded bg-black border border-cyan-500/40 text-white font-mono text-[11px] focus:outline-none focus:border-cyan-400"
+              />
+              <button
+                onClick={commitAdd}
+                title="Create (Enter)"
+                className="px-2 py-1 rounded bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-400/30 text-cyan-300 text-[9px] font-bold uppercase font-mono"
+              >
+                Add
+              </button>
+              <button
+                onClick={cancelAdd}
+                title="Cancel (Esc)"
+                className="px-2 py-1 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 text-[9px] font-bold uppercase font-mono"
+              >
+                Esc
+              </button>
+            </div>
+          )}
 
           <div className="flex-1 overflow-y-auto p-2 space-y-3 font-mono text-[11px] scrollbar-thin">
             {activeSubTab === 'wares' ? (

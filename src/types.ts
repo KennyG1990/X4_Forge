@@ -1401,7 +1401,12 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     
     // Find matching template by xmlTag or fallback to standard mapping
     let template = NODE_TEMPLATES.find(t => t.xmlTag === node.xmlTag);
-    if (!template) {
+    // Only fall back to a same-TYPE curated template when the node carries NO schema of its
+    // own. Schema-driven nodes (the full md.xsd vocabulary) have no curated xmlTag match but
+    // DO carry their own propertiesSchema; without this guard the fallback clobbered them with
+    // the first curated template of that type (e.g. an event node got event_cue_signalled's
+    // lone "cue" field), discarding their real attributes and reference pickers.
+    if (!template && !Array.isArray(node.propertiesSchema)) {
       template = NODE_TEMPLATES.find(t => t.type === node.type);
     }
     
@@ -1463,26 +1468,3 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     })),
     xmlPatches: (Array.isArray(ws.xmlPatches) ? ws.xmlPatches : []).map((xp: any) => ({
       ...xp,
-      includeInBuild: typeof xp.includeInBuild === 'boolean' ? xp.includeInBuild : true
-    })),
-    compileSettings: {
-      md: typeof ws.compileSettings?.md === 'boolean' ? ws.compileSettings.md : true,
-      ui: typeof ws.compileSettings?.ui === 'boolean' ? ws.compileSettings.ui : true,
-      ai: typeof ws.compileSettings?.ai === 'boolean' ? ws.compileSettings.ai : true,
-      library: typeof ws.compileSettings?.library === 'boolean' ? ws.compileSettings.library : true,
-      translations: typeof ws.compileSettings?.translations === 'boolean' ? ws.compileSettings.translations : true,
-      patches: typeof ws.compileSettings?.patches === 'boolean' ? ws.compileSettings.patches : true
-    },
-    templates: (Array.isArray(ws.templates) ? ws.templates : []).map((tNode: any) => ({
-      ...tNode,
-      includeInBuild: false // Templates must remain non-compilable by definition!
-    })),
-    passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
-      .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
-      .map((f: any) => ({
-        path: String(f.path).replace(/\\/g, '/').replace(/^\/+/, ''),
-        content: String(f.content),
-        reason: ['unknown_domain', 'unparsed', 'binary', 'partial'].includes(f.reason) ? f.reason : 'unknown_domain'
-      }))
-  };
-}

@@ -1461,7 +1461,7 @@ export default function CodePreview({
                         setSplitEditorScroll,
                         'text-emerald-200/90'
                       )}
-                      <div className="absolute left-0 top-0 bottom-0 w-10 py-2.5 bg-[#050608] border-r border-white/5 text-right pr-2 select-none pointer-events-none font-mono text-[9.5px] leading-relaxed text-slate-650 overflow-hidden">
+                      <div className="absolute left-0 top-0 bottom-0 w-10 py-2.5 bg-[#050608] border-r border-white/5 text-right pr-2 select-none pointer-events-none font-mono text-[9.5px] leading-[19.5px] text-slate-650 overflow-hidden">
                         {activeCodeText.split('\n').slice(0, 4000).map((_, i) => (
                           <div key={i}>{i + 1}</div>
                         ))}
@@ -1559,7 +1559,7 @@ export default function CodePreview({
             ) : (
               // EDITABLE VIEWER FOR GENERATED XML TEMPLATES (MD, UI, NODE)
               <div className="relative h-full w-full overflow-hidden flex flex-1 bg-[#050608]">
-                <div className="absolute left-0 top-0 bottom-0 w-11 py-3 bg-[#050608] border-r border-white/5 text-right pr-2 select-none pointer-events-none font-mono text-[9.5px] leading-relaxed text-slate-650 overflow-hidden">
+                <div className="absolute left-0 top-0 bottom-0 w-11 py-3 bg-[#050608] border-r border-white/5 text-right pr-2 select-none pointer-events-none font-mono text-[9.5px] leading-[19.5px] text-slate-650 overflow-hidden">
                   {codeLines.slice(0, 4000).map((_, i) => (
                     <div key={i} className={lineDiagMap.has(i) ? (lineDiagMap.get(i)?.severity === 'error' ? 'text-red-400' : 'text-amber-300') : ''}>
                       {i + 1}

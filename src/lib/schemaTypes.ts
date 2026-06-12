@@ -32,14 +32,42 @@ export interface SchemaLibrary {
   error?: string;
 }
 
+/**
+ * Map an MD attribute to a live object-index picker kind, by attribute name.
+ * Conservative whitelist: only attributes that clearly reference *static game
+ * data* (factions, wares, macros, sounds) — NOT runtime refs like object/cue/
+ * entity/group, which aren't object-index kinds. md.xsd types most attributes
+ * as `expression`, so name-based inference is more reliable than type-based.
+ * Inference is non-destructive: the picker still accepts free text, so MD
+ * variables (`$ship`, `player.ship`) remain valid in these fields.
+ */
+const REF_ATTR_KINDS: Record<string, NonNullable<PropertySchema['refKind']>> = {
+  faction: 'faction',
+  ware: 'ware',
+  macro: 'macro',
+  sound: 'sound',
+  soundlibrary: 'sound'
+};
+
+function inferRefKind(attr: SchemaAttribute): PropertySchema['refKind'] | undefined {
+  const name = attr.name.toLowerCase();
+  if (REF_ATTR_KINDS[name]) return REF_ATTR_KINDS[name];
+  if (name.endsWith('faction')) return 'faction';   // e.g. defaultfaction, ownerfaction
+  return undefined;
+}
+
 export function schemaAttributeToProperty(attr: SchemaAttribute): PropertySchema {
   const enumValues = attr.enumValues?.filter(Boolean) || [];
   const looksBoolean = /boolean/i.test(attr.type) || (enumValues.length > 0 && enumValues.every(v => v === 'true' || v === 'false'));
+  // Only infer a reference picker for free/expression fields — never override a
+  // fixed enum (keep its dropdown) or a boolean.
+  const refKind = enumValues.length === 0 && !looksBoolean ? inferRefKind(attr) : undefined;
 
   return {
     key: attr.name,
     label: attr.required ? `${attr.name} *` : attr.name,
-    type: enumValues.length > 0 ? 'select' : looksBoolean ? 'boolean' : 'text',
+    type: refKind ? 'reference' : enumValues.length > 0 ? 'select' : looksBoolean ? 'boolean' : 'text',
+    refKind,
     required: attr.required,
     options: enumValues.length > 0 ? enumValues : looksBoolean ? ['true', 'false'] : undefined,
     placeholder: attr.type || attr.name,
