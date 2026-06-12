@@ -1,6 +1,7 @@
-import React from 'react';
-import { Brain, Sparkles, RefreshCw, Compass, Activity, HelpCircle, AlertTriangle } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { Brain, Sparkles, RefreshCw, Compass, Activity, HelpCircle, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { ModWorkspace } from '../types';
+import { explainWorkspace } from '../lib/mdExplain';
 
 interface ScriptAnalysis {
   summary: string;
@@ -20,9 +21,7 @@ interface ScriptAnalysis {
   tacticalInsights: string[];
 }
 
-/** Coerce any model-returned value into a safe, renderable string.
- *  Guards against the model returning an object/array where a string is expected
- *  (React throws "Objects are not valid as a React child" otherwise). */
+/** Coerce any value into a safe, renderable string. */
 function asText(value: any): string {
   if (value == null) return '';
   if (typeof value === 'string') return value;
@@ -46,192 +45,175 @@ export default function MDScanner({
   analyzing,
   analysisError,
   triggerAnalysis,
-  isAnalysisStale,
   cancelAnalysis
 }: MDScannerProps) {
+  // DETERMINISTIC explanation — computed locally from the node graph, no AI, no credits,
+  // instant, always current. Prose from the semantics registry; SEQUENCE from the edge-walk.
+  const det = useMemo(
+    () => explainWorkspace(workspace?.nodes || [], (workspace as any)?.links || []),
+    [workspace?.nodes, (workspace as any)?.links]
+  );
+
+  const hasContent = det.flowSteps.length > 0;
+  const cov = det.coverage;
+
   return (
     <div className="p-4 space-y-4 font-sans select-text">
-      {/* STALE ANALYSIS OR FRESH TRIGGER WARNING HEADER */}
-      {isAnalysisStale && (
-        <div className="flex items-center justify-between gap-2 p-2 rounded border border-amber-500/20 bg-amber-500/5 text-amber-300 text-[11px] font-mono shrink-0 animate-fade-in">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping inline-block" />
-            <span>Structural changes detected.</span>
-          </div>
-          <button 
-            onClick={triggerAnalysis} 
-            className="px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-[9px] uppercase font-bold text-amber-300 transition-all font-sans cursor-pointer hover:scale-105 active:scale-95"
-          >
-            Update Summary
-          </button>
+      {/* HEADER — deterministic trust badge */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <ShieldCheck className="w-4 h-4 text-emerald-400" />
+          <h3 className="text-xs font-bold tracking-tight text-white uppercase font-mono">Script Explanation</h3>
         </div>
-      )}
+        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 text-[8px] font-mono font-bold tracking-wider uppercase select-none border border-emerald-500/20">
+          <ShieldCheck className="w-2.5 h-2.5" /> Deterministic · No AI
+        </span>
+      </div>
 
-      {/* ERROR DISPLAY AREA */}
-      {analysisError && (
-        <div className="p-3.5 bg-red-500/5 border border-red-500/20 rounded-md text-red-300 leading-relaxed">
-          <div className="flex items-center gap-2 font-mono font-bold text-[11px] uppercase tracking-wider mb-1">
-            <AlertTriangle className="w-4 h-4 text-red-400" />
-            Scanner Error Flags
+      {!hasContent ? (
+        <div className="h-full flex flex-col items-center justify-center text-center p-4 py-10 space-y-4 max-w-sm mx-auto">
+          <div className="w-12 h-12 bg-emerald-500/10 border border-emerald-500/25 rounded-full flex items-center justify-center">
+            <Compass className="w-6 h-6 text-emerald-400" />
           </div>
-          <p className="text-[11px] font-medium font-sans">{analysisError}</p>
-          <button
-            onClick={triggerAnalysis}
-            className="mt-3.5 w-full py-1.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 rounded text-red-200 font-semibold font-mono text-[10px] uppercase transition-all cursor-pointer"
-          >
-            Retry Diagnostic Analysis
-          </button>
+          <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
+            This panel reads the node graph and explains, deterministically, what the mod is supposed to do —
+            descriptions from the schema-backed semantics registry, execution order straight from the wires.
+            No AI, no guessing. Add a cue with a trigger and actions to begin.
+          </p>
         </div>
-      )}
+      ) : (
+        <div className="space-y-4 text-[11px] leading-relaxed animate-fade-in">
 
-      {/* INTRO EMPTY STATE: TRIGGER SCRIPT SUMMARY SCAN */}
-      {!analysisResult && !analyzing && !analysisError && (
-        <div className="h-full flex flex-col items-center justify-center text-center p-4 py-8 space-y-5 animate-fade-in max-w-sm mx-auto">
-          <div className="w-14 h-14 bg-amber-500/10 border border-amber-500/30 rounded-full flex items-center justify-center shadow-[0_0_15px_rgba(245,158,11,0.05)]">
-            <Brain className="w-7 h-7 text-amber-500 animate-pulse" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold tracking-tight text-white mb-2 uppercase font-mono">Cognitive Script Summary</h3>
-            <p className="text-[11px] text-slate-400 leading-relaxed font-sans font-medium">
-              Reads the physical visual node network configurations, inputs, custom properties, and graphical links to build a comprehensive step-by-step summary in human-friendly plain English.
-            </p>
-          </div>
-          
-          <div className="w-full bg-black/35 rounded border border-white/5 p-3 space-y-2 text-left text-[10px] font-mono text-slate-400 leading-relaxed">
-            <div className="flex items-start gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-              <span>Instant logic sequence chart summaries.</span>
-            </div>
-            <div className="flex items-start gap-1.5">
-              <Compass className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-              <span>Tracks capital wings, sound cues, menus, and HUD panels designed.</span>
-            </div>
-            <div className="flex items-start gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-              <span>Highlights tactical playtesting suggestions.</span>
-            </div>
-          </div>
-
-          <button
-            onClick={triggerAnalysis}
-            className="w-full py-2.5 bg-amber-500 hover:bg-amber-500/90 text-black font-bold font-mono tracking-tight text-xs uppercase duration-150 transform rounded-lg shadow-lg active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <Sparkles className="w-4 h-4" />
-            ANALYZE WORKSPACE
-          </button>
-        </div>
-      )}
-
-      {/* SCANNING ACTIVE LOADER VIEW */}
-      {analyzing && (
-        <div className="h-full flex flex-col items-center justify-center text-center p-6 py-12 space-y-4 animate-pulse max-w-sm mx-auto">
-          <RefreshCw className="w-8 h-8 text-amber-500 animate-spin" />
-          <div>
-            <h3 className="text-xs font-mono font-bold uppercase text-white tracking-widest">Compiling Summary Output...</h3>
-            <p className="text-[10px] uppercase font-mono text-slate-500 mt-1">
-              De-serializing visual logic nodes and links...
-            </p>
-          </div>
-          {cancelAnalysis && (
-            <button
-              onClick={cancelAnalysis}
-              className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 rounded text-[10px] font-mono font-bold uppercase transition-all cursor-pointer"
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* RESULTS SCREEN BREAKDOWN DISPLAY */}
-      {analysisResult && !analyzing && !analysisError && (
-        <div className="space-y-4 text-[11px] leading-relaxed animate-fade-in font-sans">
-          
-          {/* 1. OVERALL SCRIPT OVERVIEW BANNER */}
-          <div className="bg-amber-500/[0.04] border border-amber-500/25 p-3.5 rounded-lg space-y-2 relative overflow-hidden">
-            <div className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 text-[8px] font-mono font-bold tracking-wider uppercase select-none">
-              <Sparkles className="w-2.5 h-2.5" /> Summary
-            </div>
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Mod Description Summary</div>
-            <p className="text-slate-200 text-xs font-medium leading-relaxed font-sans">{asText(analysisResult.summary)}</p>
-          </div>
-
-          {/* 2. TRIGGER CONDITION SECTION */}
-          <div className="bg-slate-900/60 border border-white/5 p-3 rounded-lg space-y-1.5">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Activation Trigger</div>
-            <div className="text-slate-300 leading-relaxed font-medium">{asText(analysisResult.triggerCondition)}</div>
-          </div>
-
-          {/* 3. STEP-BY-STEP CHRONOLOGY TIMELINE */}
-          <div className="space-y-2.5">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono px-0.5">Logical Execution Flowchart</div>
-            
-            {Array.isArray(analysisResult.flowSteps) && analysisResult.flowSteps.length > 0 ? (
-              <div className="relative pl-3.5 border-l border-white/10 ml-1.5 space-y-4">
-                {analysisResult.flowSteps.map((step: any, idx) => (
-                  <div key={idx} className="relative group">
-                    {/* Dot item tracker absolute positioned */}
-                    <div className="absolute -left-[19.5px] top-1.5 w-2 h-2 rounded-full border border-amber-500/40 bg-[#0a0c10] group-hover:bg-amber-500 transition-colors" />
-
-                    <div className="bg-[#12141a]/60 border border-white/5 p-2.5 rounded hover:border-white/10 transition-all space-y-1">
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="font-bold text-slate-200">{asText(step?.nodeLabel)}</span>
-                        <span className="font-mono text-slate-500 font-bold">&lt;{asText(step?.xmlTag)}&gt;</span>
-                      </div>
-                      <p className="text-slate-400 text-[10.5px] leading-relaxed font-sans">{asText(step?.plainEnglishAction)}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-3 text-center text-slate-500 bg-black/20 rounded border border-white/5 italic">
-                No active logical flowchart steps calculated. Add event or action nodes.
-              </div>
+          {/* coverage provenance */}
+          <div className="text-[9px] font-mono text-slate-500 flex items-center gap-2">
+            <span>{cov.curated}/{cov.total} nodes from curated semantics</span>
+            {cov.fallback > 0 && (
+              <span className="text-amber-400/80">· {cov.fallback} long-tail (generic fallback)</span>
             )}
           </div>
 
-          {/* 4. ENTITY & WIDGET REGISTRY TABLE */}
-          <div className="bg-slate-900/40 border border-white/5 rounded-lg overflow-hidden space-y-2 p-3">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Mod Spawn Registry</div>
-            
-            {Array.isArray(analysisResult.entityRegistry) && analysisResult.entityRegistry.length > 0 ? (
+          {/* 1. SUMMARY */}
+          <div className="bg-emerald-500/[0.04] border border-emerald-500/25 p-3.5 rounded-lg space-y-2">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Mod Description Summary</div>
+            <p className="text-slate-200 text-xs font-medium leading-relaxed">{asText(det.summary)}</p>
+          </div>
+
+          {/* 2. ACTIVATION TRIGGER */}
+          <div className="bg-slate-900/60 border border-white/5 p-3 rounded-lg space-y-1.5">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Activation Trigger</div>
+            <div className="text-slate-300 leading-relaxed font-medium">{asText(det.triggerCondition)}</div>
+          </div>
+
+          {/* 3. LOGICAL EXECUTION FLOWCHART — order from the edge-walk */}
+          <div className="space-y-2.5">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono px-0.5">Logical Execution Flowchart</div>
+            <div className="relative pl-3.5 border-l border-white/10 ml-1.5 space-y-3">
+              {det.flowSteps.map((step, idx) => (
+                <div key={idx} className="relative group" style={{ marginLeft: `${(step.depth || 0) * 12}px` }}>
+                  <div className={`absolute -left-[19.5px] top-1.5 w-2 h-2 rounded-full border ${step.role === 'cue' ? 'border-cyan-400/60 bg-cyan-500/20' : step.role === 'trigger' ? 'border-amber-400/50 bg-[#0a0c10]' : 'border-emerald-400/40 bg-[#0a0c10]'} group-hover:scale-125 transition-transform`} />
+                  <div className="bg-[#12141a]/60 border border-white/5 p-2.5 rounded hover:border-white/10 transition-all space-y-1">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                        <span className={`text-[7.5px] font-mono px-1 py-px rounded uppercase ${step.role === 'cue' ? 'bg-cyan-500/15 text-cyan-300' : step.role === 'trigger' ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'}`}>{step.role}</span>
+                        {asText(step.nodeLabel)}
+                      </span>
+                      <span className="font-mono text-slate-500 font-bold">&lt;{asText(step.xmlTag)}&gt;</span>
+                    </div>
+                    <p className="text-slate-400 text-[10.5px] leading-relaxed">{asText(step.plainEnglishAction)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 4. ASSET REGISTRY */}
+          <div className="bg-slate-900/40 border border-white/5 rounded-lg space-y-2 p-3">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Referenced Assets</div>
+            {det.entityRegistry.length > 0 ? (
               <div className="space-y-2">
-                {analysisResult.entityRegistry.map((ent: any, idx) => (
+                {det.entityRegistry.map((ent, idx) => (
                   <div key={idx} className="bg-black/20 p-2 rounded-md border border-white/[0.03] flex justify-between items-start gap-2.5">
                     <div className="space-y-0.5 flex-1 text-left">
-                      <span className="font-mono text-[10px] text-cyan-400 font-bold tracking-tight block">{asText(ent?.name)}</span>
-                      <p className="text-slate-400 text-[10px] leading-relaxed">{asText(ent?.detail)}</p>
+                      <span className="font-mono text-[10px] text-cyan-400 font-bold tracking-tight block">{asText(ent.name)}</span>
+                      <p className="text-slate-400 text-[10px] leading-relaxed">{asText(ent.detail)}</p>
                     </div>
                     <span className="px-1.5 py-0.5 rounded bg-cyan-900/20 text-cyan-400 border border-cyan-500/10 text-[8px] font-mono font-bold uppercase select-none shrink-0 text-center">
-                      {asText(ent?.type)}
+                      {asText(ent.type)}
                     </span>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="text-[10px] text-slate-500 italic p-1">No physical assets or customized widgets registered.</div>
+              <div className="text-[10px] text-slate-500 italic p-1">No referenced assets detected.</div>
             )}
           </div>
 
-          {/* 5. TACTICAL DEVELOPMENT TIPS */}
-          <div className="bg-amber-500/[0.02] border border-amber-500/10 p-3 rounded-lg space-y-2">
-            <div className="text-[10px] font-bold text-amber-500/90 uppercase tracking-wider font-mono flex items-center gap-1">
-              <HelpCircle className="w-3.5 h-3.5" /> Playtester Guidance & Safety
-            </div>
-            
-            {Array.isArray(analysisResult.tacticalInsights) && analysisResult.tacticalInsights.length > 0 ? (
-              <ul className="space-y-1.5 pl-3 list-disc text-slate-400 text-[10.5px]">
-                {analysisResult.tacticalInsights.map((insight: any, idx) => (
-                  <li key={idx} className="leading-relaxed font-sans text-slate-300">{asText(insight)}</li>
+          {/* 5. DETERMINISTIC NOTES — registry-sourced facts, not AI critique */}
+          {det.tacticalInsights.length > 0 && (
+            <div className="bg-amber-500/[0.02] border border-amber-500/10 p-3 rounded-lg space-y-2">
+              <div className="text-[10px] font-bold text-amber-500/90 uppercase tracking-wider font-mono flex items-center gap-1">
+                <HelpCircle className="w-3.5 h-3.5" /> Deterministic Notes
+              </div>
+              <ul className="space-y-1.5 pl-3 list-disc text-slate-300 text-[10.5px]">
+                {det.tacticalInsights.map((insight, idx) => (
+                  <li key={idx} className="leading-relaxed">{asText(insight)}</li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-[10px] text-slate-500">Workspace is fully optimized. Clear for standard testing.</p>
-            )}
-          </div>
-
+            </div>
+          )}
         </div>
       )}
+
+      {/* ---- OPTIONAL AI POLISH — explicitly subordinate, off by default, non-authoritative ---- */}
+      <div className="pt-2 border-t border-white/5 space-y-2">
+        <div className="text-[9px] font-mono text-slate-500 uppercase tracking-wider flex items-center gap-1">
+          <Sparkles className="w-3 h-3 text-amber-400/70" /> Optional AI prose
+        </div>
+
+        {analyzing ? (
+          <div className="flex items-center justify-between gap-2 p-2 rounded border border-amber-500/15 bg-amber-500/[0.03]">
+            <span className="flex items-center gap-2 text-[10px] font-mono text-amber-300/90">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Polishing into prose…
+            </span>
+            {cancelAnalysis && (
+              <button onClick={cancelAnalysis} className="px-2 py-0.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 rounded text-[9px] font-mono font-bold uppercase cursor-pointer">Cancel</button>
+            )}
+          </div>
+        ) : analysisError ? (
+          <div className="p-2.5 bg-red-500/5 border border-red-500/20 rounded text-red-300">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase mb-1"><AlertTriangle className="w-3.5 h-3.5" /> AI error</div>
+            <p className="text-[10px]">{analysisError}</p>
+            <button onClick={triggerAnalysis} className="mt-2 px-2 py-0.5 bg-red-500/15 border border-red-500/30 rounded text-red-200 text-[9px] font-mono font-bold uppercase cursor-pointer">Retry</button>
+          </div>
+        ) : analysisResult ? (
+          <div className="bg-amber-500/[0.03] border border-amber-500/15 p-3 rounded-lg space-y-1.5">
+            <div className="flex items-center gap-1 text-[8px] font-mono font-bold uppercase text-amber-400/80 tracking-wider">
+              <Brain className="w-3 h-3" /> AI polish — non-authoritative, verify against the explanation above
+            </div>
+            <p className="text-slate-300 text-[11px] leading-relaxed">{asText(analysisResult.summary)}</p>
+            {Array.isArray(analysisResult.tacticalInsights) && analysisResult.tacticalInsights.length > 0 && (
+              <ul className="space-y-1 pl-3 list-disc text-slate-400 text-[10px] pt-1">
+                {analysisResult.tacticalInsights.map((t, i) => <li key={i}>{asText(t)}</li>)}
+              </ul>
+            )}
+            <button onClick={triggerAnalysis} className="text-[9px] font-mono text-amber-400/70 hover:text-amber-300 underline cursor-pointer pt-1">Re-run AI polish</button>
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={triggerAnalysis}
+              disabled={!hasContent}
+              className="w-full py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 rounded text-[10px] font-mono font-bold uppercase transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Polish into prose with AI
+            </button>
+            <p className="text-[8.5px] text-slate-600 leading-relaxed">
+              Optional. Spends AI credits and produces non-authoritative prose for a Nexus page or summary — the
+              deterministic explanation above remains the source of truth.
+            </p>
+          </>
+        )}
+      </div>
     </div>
   );
 }

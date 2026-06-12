@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown, Copy } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown, Copy, ShieldCheck } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic, generateMDXML } from '../types';
+import { critiqueWorkspace } from '../lib/mdCritic';
 
 interface PackageModDoctorProps {
   workspace: ModWorkspace;
@@ -80,6 +81,9 @@ export default function PackageModDoctor({
     { name: 'log-file', path: 'log-file-selftest' },
     { name: 'cue-lineage', path: 'cue-lineage-selftest' },
     { name: 'semantics', path: 'semantics-selftest' },
+    { name: 'explain', path: 'explain-selftest' },
+    { name: 'critic', path: 'critic-selftest' },
+    { name: 'node-diag', path: 'node-diagnostics-selftest' },
     { name: 'live-fixes', path: 'live-fixes-selftest' },
     { name: 'contracts', path: 'contract-selftest' },
     { name: 'lua-snippets', path: 'lua-snippets' },
@@ -97,6 +101,17 @@ export default function PackageModDoctor({
   const [stRunning, setStRunning] = useState(false);
   const [stProgress, setStProgress] = useState('');
   const stAllPass = !!stResults && stResults.every(r => r.pass);
+
+  // Determinism Doctrine / Phase 3 — deterministic critic over the active workspace.
+  // Computed client-side (no AI, no network): every finding is rule-justified from the
+  // graph + semantics registry, and equivalent refs (playership ≡ player.primaryship)
+  // are never flagged.
+  const critic = useMemo(
+    () => critiqueWorkspace(workspace?.nodes || [], (workspace as any)?.links || []),
+    [workspace?.nodes, (workspace as any)?.links]
+  );
+  const criticSeverityStyle = (s: string) =>
+    s === 'warning' ? 'text-amber-300 bg-amber-500/5 border-amber-500/20' : 'text-sky-300 bg-sky-500/5 border-sky-500/15';
 
   const runAllSelftests = async () => {
     setStRunning(true);
@@ -225,6 +240,30 @@ export default function PackageModDoctor({
             <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
             Ask AI Assistant For Fixes
           </button>
+        )}
+      </div>
+
+      {/* DETERMINISTIC CRITIC (Phase 3) — rule-based, no AI. Every finding is justified
+          from the graph + semantics registry; equivalent refs are never flagged. */}
+      <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2 shrink-0">
+        <div className="flex items-center justify-between border-b border-white/5 pb-2">
+          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[11px]">
+            <ShieldCheck className="w-4 h-4 text-sky-400" />
+            DETERMINISTIC CRITIC
+          </div>
+          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 text-[8px] font-mono font-bold uppercase border border-emerald-500/20">No AI</span>
+        </div>
+        {critic.findings.length === 0 ? (
+          <p className="text-[9.5px] text-slate-500 font-sans">No deterministic findings — no ref mismatches, unbalanced one-way writes, or unguarded high-risk actions on frequent triggers.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {critic.findings.map((f, i) => (
+              <div key={i} className={`text-[9.5px] font-sans leading-snug px-2 py-1.5 rounded border ${criticSeverityStyle(f.severity)}`}>
+                <span className="font-mono font-bold uppercase text-[7.5px] mr-1.5 opacity-80">{f.code.replace(/_/g, ' ')}</span>
+                {f.message}
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

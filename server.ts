@@ -51,6 +51,9 @@ import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from "./src/lib/luaStaticAnalysis";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runSemanticsSelftest, listSemantics, semanticsForNode } from "./src/lib/mdSemantics";
+import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
+import { runCriticSelftest, critiqueWorkspace } from "./src/lib/mdCritic";
+import { validateNodesAgainstSchema, summarizeByNode, runNodeDiagnosticsSelftest, type NodeSchemaView } from "./src/lib/nodeDiagnostics";
 import { runLiveFixesSelftest } from "./src/lib/liveFixes";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
@@ -181,6 +184,9 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/cue-lineage-selftest",
   "/agent/semantics-selftest",
   "/agent/semantics",
+  "/agent/explain-selftest",
+  "/agent/critic-selftest",
+  "/agent/node-diagnostics-selftest",
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
@@ -3472,6 +3478,81 @@ app.get("/api/agent/semantics", (req, res) => {
     res.json({ success: true, ...semanticsForNode({ xmlTag: tag, type: type as any, properties: props }) });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error?.message || "semantics lookup failed" });
+  }
+});
+
+// Determinism Doctrine / Phase 2 — deterministic explainer self-test.
+app.get("/api/agent/explain-selftest", (_req, res) => {
+  try {
+    res.json(runExplainSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "explain-selftest failed" });
+  }
+});
+
+// Deterministic explanation of a posted {nodes, links} graph (no AI). Authed POST.
+app.post("/api/agent/explain", (req, res) => {
+  try {
+    const { nodes, links } = req.body || {};
+    res.json({ success: true, ...explainWorkspace(nodes || [], links || []) });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || "explain failed" });
+  }
+});
+
+// Node-level schema diagnostics — maps game-schema validation to the exact node, for
+// the in-your-face on-canvas error/warning badges. Schema-driven (md.xsd), no AI.
+function getNodeSchemaView(): NodeSchemaView {
+  try {
+    const idx = getSchemaIndex();
+    return {
+      loaded: !!idx.loaded,
+      has: (t: string) => idx.elements.has(String(t).toLowerCase()),
+      requiredAttrs: (t: string) => {
+        const spec = idx.elements.get(String(t).toLowerCase());
+        if (!spec) return [];
+        return [...spec.attributes.entries()].filter(([, a]: any) => a.required).map(([k]: any) => k);
+      },
+    };
+  } catch {
+    return { loaded: false, has: () => false, requiredAttrs: () => [] };
+  }
+}
+
+app.post("/api/agent/node-diagnostics", (req, res) => {
+  try {
+    const nodes = Array.isArray(req.body?.nodes) ? req.body.nodes : (req.body?.workspace?.nodes || []);
+    const diagnostics = validateNodesAgainstSchema(nodes, getNodeSchemaView());
+    res.json({ success: true, schemaLoaded: getNodeSchemaView().loaded, diagnostics, byNode: summarizeByNode(diagnostics) });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || "node-diagnostics failed" });
+  }
+});
+
+app.get("/api/agent/node-diagnostics-selftest", (_req, res) => {
+  try {
+    res.json(runNodeDiagnosticsSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "node-diagnostics-selftest failed" });
+  }
+});
+
+// Determinism Doctrine / Phase 3 — deterministic critic self-test.
+app.get("/api/agent/critic-selftest", (_req, res) => {
+  try {
+    res.json(runCriticSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "critic-selftest failed" });
+  }
+});
+
+// Deterministic critique of a posted {nodes, links} graph (no AI). Authed POST.
+app.post("/api/agent/critic", (req, res) => {
+  try {
+    const { nodes, links } = req.body || {};
+    res.json({ success: true, ...critiqueWorkspace(nodes || [], links || []) });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || "critic failed" });
   }
 });
 

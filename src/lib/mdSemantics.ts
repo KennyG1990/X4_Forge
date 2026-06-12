@@ -250,6 +250,43 @@ const REGISTRY: Record<string, ElementSemantics> = {
     tag: 'custom_event', kind: 'event', title: 'Custom Event', reads: ['expression'], writes: [], risk: 'safe',
     describe: (p) => `Custom trigger: ${attr(p, 'rawXml', '(custom)')}.`,
   },
+  // --- control-flow family (high-traffic in real MD). These do not mutate state
+  //     themselves; their child actions do. The linear walk lists branch contents
+  //     sequentially — the conditional GATING is not yet modeled (that is Phase 4). ---
+  do_if: {
+    tag: 'do_if', kind: 'action', title: 'If (conditional)', reads: ['expression'], writes: [], risk: 'safe',
+    describe: (p) => `Conditionally runs its actions when "${attr(p, 'value', '(condition)')}" is true.`,
+    note: 'Branch gating is not yet modeled: the actions after this are listed in sequence, but they only run when this condition holds.',
+  },
+  do_elseif: {
+    tag: 'do_elseif', kind: 'action', title: 'Else-If', reads: ['expression'], writes: [], risk: 'safe',
+    describe: (p) => `Runs its actions when prior branches were false and "${attr(p, 'value', '(condition)')}" is true.`,
+  },
+  do_else: {
+    tag: 'do_else', kind: 'action', title: 'Else', reads: [], writes: [], risk: 'safe',
+    describe: () => `Runs its actions when the preceding if/else-if branches were all false.`,
+  },
+  do_while: {
+    tag: 'do_while', kind: 'action', title: 'While (loop)', reads: ['expression'], writes: [], risk: 'safe',
+    describe: (p) => `Repeats its actions while "${attr(p, 'value', '(condition)')}" stays true.`,
+    note: 'Loop body is listed once; it actually repeats while the condition holds (iteration count is runtime-dependent).',
+  },
+  do_for_each: {
+    tag: 'do_for_each', kind: 'action', title: 'For Each', reads: ['list'], writes: [], risk: 'safe',
+    describe: (p) => `Repeats its actions once for each item in ${attr(p, 'list', attr(p, 'in', '(the list)'))}.`,
+  },
+  do_all: {
+    tag: 'do_all', kind: 'action', title: 'Do All', reads: [], writes: [], risk: 'safe',
+    describe: () => `Runs all of its child actions (a grouping block).`,
+  },
+  set_owner: {
+    tag: 'set_owner', kind: 'action', title: 'Set Owner', reads: [], writes: ['object.owner'], risk: 'state_mutation',
+    describe: (p) => `Sets the owner of ${attr(p, 'object', 'the object')} to faction ${attr(p, 'exact', attr(p, 'faction', '(faction)'))}.`,
+  },
+  remove_object: {
+    tag: 'remove_object', kind: 'action', title: 'Remove Object', reads: [], writes: ['world.objects'], risk: 'irreversible',
+    describe: (p) => `Removes ${attr(p, 'object', 'the object')} from the game (irreversible).`,
+  },
   custom_xml: {
     tag: 'custom_xml', kind: 'action', title: 'Custom XML', reads: ['unknown'], writes: ['unknown'], risk: 'state_mutation',
     // Honest fallback: we show the raw XML verbatim rather than guess what it does.
@@ -411,6 +448,17 @@ export function runSemanticsSelftest() {
   ok('risk_create_spawn', semanticsForNode(node('create_ship', {})).risk === 'spawn');
   ok('risk_destroy_irreversible', semanticsForNode(node('destroy_object', {})).risk === 'irreversible');
   ok('risk_play_sound_safe', semanticsForNode(node('play_sound', {})).risk === 'safe');
+
+  // --- cheap-win registry expansion: control-flow family + confident actions are curated ---
+  ok('control_flow_curated',
+    ['do_if', 'do_else', 'do_elseif', 'do_while', 'do_for_each', 'do_all'].every((t) => getElementSemantics(t) !== null));
+  ok('do_if_describe',
+    describeNode(node('do_if', { value: '$threat ge $maxTier' })) === `Conditionally runs its actions when "$threat ge $maxTier" is true.`,
+    describeNode(node('do_if', { value: '$threat ge $maxTier' })));
+  ok('do_if_gating_note', /gating is not yet modeled/i.test(semanticsForNode(node('do_if', {})).note || ''));
+  ok('do_while_loop_note', /repeats/i.test(semanticsForNode(node('do_while', {})).note || ''));
+  ok('remove_object_irreversible', semanticsForNode(node('remove_object', {})).risk === 'irreversible');
+  ok('set_owner_writes', semanticsForNode(node('set_owner', {})).writes.includes('object.owner'));
 
   // --- every registry entry is well-formed (no throwing describe, required fields) ---
   let wellFormed = true;
