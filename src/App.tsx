@@ -252,6 +252,9 @@ export default function App() {
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
   const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(460);
   const [codeCollapsed, setCodeCollapsed] = useState<boolean>(false);
+  // The persistent editor TOP BAR element — CodePreview portals its tabs+actions here so
+  // the editor body stays a code-only entity, and the bar survives the editor's collapse.
+  const [editorBarEl, setEditorBarEl] = useState<HTMLDivElement | null>(null);
   const [isResizingLeft, setIsResizingLeft] = useState<boolean>(false);
   const [isResizingRight, setIsResizingRight] = useState<boolean>(false);
 
@@ -1169,19 +1172,26 @@ export default function App() {
 
         {/* Right Side: Real-time Synchronized compiler preview output (collapsible) */}
         <aside
-          className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between relative transition-[width] duration-300 ease-in-out overflow-hidden"
-          style={{ width: codeCollapsed ? 48 : rightSidebarWidth }}
+          className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 relative transition-[width] duration-300 ease-in-out overflow-hidden"
+          style={{ width: codeCollapsed ? 300 : rightSidebarWidth }}
         >
-          {/* Drawer pull-tab — always visible on the panel's left edge; toggles collapse. */}
+          {/* Drawer pull-tab — toggles the code BODY (the top bar below always persists). */}
           <button
             onClick={() => setCodeCollapsed(c => !c)}
-            title={codeCollapsed ? 'Show code panel' : 'Hide code panel'}
+            title={codeCollapsed ? 'Show code editor' : 'Hide code editor'}
             className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1/2 z-50 w-5 h-14 rounded-md bg-[#1b1e26] border border-[#df9825]/30 flex items-center justify-center text-slate-400 hover:text-amber-300 hover:border-amber-400/60 shadow-lg transition-colors cursor-pointer"
           >
             {codeCollapsed ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
 
+          {/* PERSISTENT EDITOR TOP BAR — CodePreview portals its tabs+actions here. This is
+              a separate element from the editor body; it never collapses with the editor. */}
+          <div ref={setEditorBarEl} className="shrink-0 w-full bg-[#0b0d12]" />
+
+          {/* EDITOR BODY (code-only) — hidden when collapsed; the top bar above stays. */}
+          <div className={`flex-1 min-h-0 w-full overflow-hidden ${codeCollapsed ? 'hidden' : 'flex'}`}>
           <CodePreview
+            topBarTarget={editorBarEl}
             codeCollapsed={codeCollapsed}
             setCodeCollapsed={setCodeCollapsed}
             workspace={workspace}
@@ -1202,6 +1212,7 @@ export default function App() {
             autoSaveEnabled={autoSaveEnabled}
             setAutoSaveEnabled={setAutoSaveEnabled}
           />
+          </div>
         </aside>
 
       </div>
