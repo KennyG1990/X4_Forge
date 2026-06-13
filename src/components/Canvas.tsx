@@ -1332,14 +1332,13 @@ export default function Canvas({
         
         <div className="h-5 w-px bg-white/10 mx-1" />
 
-        {/* Unreal Engine 5 Style Comment Box Group Button */}
+        {/* Comment Box Group (icon-only — compact) */}
         <button
           onClick={addCommentBox}
-          title="Group Selected/Centered nodes inside a Comment Box (Shortcut: C)"
-          className="p-1.5 px-2.5 rounded bg-purple-950/20 hover:bg-purple-900/30 border border-purple-500/20 text-purple-400 hover:text-white transition-all text-[11px] font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+          title="Group selected nodes inside a Comment Box (Shortcut: C)"
+          className="p-1.5 rounded bg-purple-950/20 hover:bg-purple-900/30 border border-purple-500/20 text-purple-400 hover:text-white transition-all flex items-center cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
-          COMMENT GROUP
         </button>
 
         {/* Find in Blueprints Search Bar toggle */}
@@ -1436,11 +1435,10 @@ export default function Canvas({
 
         <button
           onClick={clearLinks}
-          title="Wipe Out all links"
-          className="p-1.5 rounded hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-all text-[11px] font-mono font-medium flex items-center gap-1 cursor-pointer"
+          title="Clear all wires/links"
+          className="p-1.5 rounded hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-all flex items-center cursor-pointer"
         >
           <Trash2 className="w-3.5 h-3.5" />
-          CLEAR WIRES
         </button>
 
         <div className="h-5 w-px bg-white/10 mx-1" />
