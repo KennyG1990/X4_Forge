@@ -1170,7 +1170,7 @@ export default function App() {
         {/* Right Side: Real-time Synchronized compiler preview output (collapsible) */}
         <aside
           className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between relative transition-[width] duration-300 ease-in-out overflow-hidden"
-          style={{ width: codeCollapsed ? 38 : rightSidebarWidth }}
+          style={{ width: codeCollapsed ? 48 : rightSidebarWidth }}
         >
           {/* Drawer pull-tab — always visible on the panel's left edge; toggles collapse. */}
           <button
@@ -1181,20 +1181,12 @@ export default function App() {
             {codeCollapsed ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
 
-          {codeCollapsed ? (
-            <button
-              onClick={() => setCodeCollapsed(false)}
-              title="Show code panel"
-              className="h-full w-full flex flex-col items-center justify-center gap-3 hover:bg-white/[0.03] transition-colors cursor-pointer group"
-            >
-              <Code2 className="w-4 h-4 text-amber-400/70 group-hover:text-amber-300" />
-              <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-mono uppercase tracking-[0.3em] text-slate-500 group-hover:text-slate-300">Code</span>
-            </button>
-          ) : (
           <CodePreview
-            workspace={workspace} 
-            setWorkspace={setWorkspace} 
-            saveCheckpoint={saveCheckpoint} 
+            codeCollapsed={codeCollapsed}
+            setCodeCollapsed={setCodeCollapsed}
+            workspace={workspace}
+            setWorkspace={setWorkspace}
+            saveCheckpoint={saveCheckpoint}
             modWorkspacePath={modWorkspacePath}
             compileStatus={compileStatus}
             compileMessage={compileMessage}
@@ -1210,7 +1202,6 @@ export default function App() {
             autoSaveEnabled={autoSaveEnabled}
             setAutoSaveEnabled={setAutoSaveEnabled}
           />
-          )}
         </aside>
 
       </div>

@@ -1385,14 +1385,13 @@ export default function Canvas({
         
         <div className="h-5 w-px bg-white/10 mx-1" />
 
-        {/* AAA Feature 1: Tidy Graph Optimizer */}
+        {/* Tidy Graph Optimizer (icon-only — compact) */}
         <button
           onClick={autoAlignGraph}
-          title="Auto-Align Nodes Layout"
-          className="p-1.5 px-2.5 rounded bg-cyan-950/20 hover:bg-cyan-900/30 border border-cyan-500/20 text-cyan-400 hover:text-white transition-all text-[11px] font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+          title="Tidy graph — auto-align node layout"
+          className="p-1.5 rounded bg-cyan-950/20 hover:bg-cyan-900/30 border border-cyan-500/20 text-cyan-400 hover:text-white transition-all flex items-center cursor-pointer"
         >
-          <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-          TIDY GRAPH
+          <Sparkles className="w-3.5 h-3.5" />
         </button>
 
         {/* AAA Feature 2: Stepped logic Flow Simulator */}
@@ -1445,15 +1444,14 @@ export default function Canvas({
 
         <button
           onClick={() => setDepPanelOpen(prev => !prev)}
-          title="Toggle selected node dependency analyzer visual graph panel"
-          className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
-            depPanelOpen 
-              ? 'bg-violet-500/15 border-violet-500/35 text-violet-400' 
+          title="Deps trace — toggle dependency analyzer panel"
+          className={`p-1.5 rounded flex items-center transition-all border cursor-pointer ${
+            depPanelOpen
+              ? 'bg-violet-500/15 border-violet-500/35 text-violet-400'
               : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
           }`}
         >
           <Filter className="w-3.5 h-3.5" />
-          <span>DEPS TRACE</span>
         </button>
       </div>
 

@@ -25,7 +25,8 @@ import {
   Cpu,
   X,
   PackageCheck,
-  Split
+  Split,
+  ChevronLeft
 } from 'lucide-react';
 import { ModWorkspace, generateMDXML, generateUIXML, validateModWorkspace, XMLDiagnostic, MDNode, PackageDiagnostic } from '../types';
 import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
@@ -76,6 +77,8 @@ interface CodePreviewProps {
   selectedCueIds: string[];
   autoSaveEnabled?: boolean;
   setAutoSaveEnabled?: (val: boolean) => void;
+  codeCollapsed?: boolean;
+  setCodeCollapsed?: (val: boolean) => void;
 }
 
 interface ScriptAnalysis {
@@ -200,7 +203,9 @@ export default function CodePreview({
   onClearSnapshotDiff,
   selectedCueIds,
   autoSaveEnabled: propAutoSaveEnabled,
-  setAutoSaveEnabled: propSetAutoSaveEnabled
+  setAutoSaveEnabled: propSetAutoSaveEnabled,
+  codeCollapsed,
+  setCodeCollapsed
 }: CodePreviewProps) {
   const [codeActiveTab, setCodeActiveTab] = useState<'md' | 'ui' | 'node' | 'file'>('md');
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
@@ -1150,6 +1155,49 @@ export default function CodePreview({
     () => computeLineDiagMap(activeCodeText, diagnostics),
     [activeCodeText, diagnostics]
   );
+
+  // COLLAPSED: the editor body is hidden, but the chrome (tabs + actions) PERSISTS as a
+  // vertical icon strip — these controls are NOT part of the collapsing editor, so they
+  // never vanish. Clicking a tab or the expand control restores the full editor.
+  if (codeCollapsed) {
+    return (
+      <div className="flex flex-col items-center h-full bg-[#0b0d12] py-2 gap-1 select-none">
+        <button onClick={() => setCodeCollapsed?.(false)} title="Show code editor" className="p-1.5 rounded text-amber-400/70 hover:text-amber-300 hover:bg-white/5 cursor-pointer mb-1">
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        {openTabs.map(tab => {
+          const isActive =
+            (tab.id === 'md' && codeActiveTab === 'md') ||
+            (tab.id === 'ui' && codeActiveTab === 'ui') ||
+            (tab.id === 'node' && codeActiveTab === 'node') ||
+            (tab.type === 'file' && codeActiveTab === 'file' && activeEditorFile?.path === tab.id);
+          return (
+            <button
+              key={tab.id}
+              onClick={() => { handleSelectTab(tab); setCodeCollapsed?.(false); }}
+              title={tab.name}
+              className={`p-1.5 rounded transition-all cursor-pointer ${isActive ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+            >
+              {tab.type === 'ui' ? <FileJson className="w-4 h-4" /> : tab.type === 'node' ? <Terminal className="w-4 h-4" /> : <FileCode className="w-4 h-4" />}
+            </button>
+          );
+        })}
+        <div className="w-5 h-px bg-white/10 my-1.5" />
+        <button onClick={() => setDiffEnabled(!diffEnabled)} title="Diff viewer" className={`p-1.5 rounded transition-all cursor-pointer ${effectiveDiffEnabled ? 'bg-amber-500/15 text-amber-400' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}>
+          <Sparkles className="w-4 h-4" />
+        </button>
+        <button onClick={onCompileModProject} disabled={compileStatus === 'compiling'} title="Compile whole workspace" className="p-1.5 rounded text-emerald-400 hover:text-white hover:bg-emerald-500/20 transition-all cursor-pointer disabled:opacity-40">
+          <PackageCheck className="w-4 h-4" />
+        </button>
+        <button onClick={copyToClipboard} title="Copy active code" className="p-1.5 rounded text-slate-400 hover:text-cyan-400 hover:bg-white/5 transition-all cursor-pointer">
+          {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Clipboard className="w-4 h-4" />}
+        </button>
+        <button onClick={downloadFile} title="Download active file" className="p-1.5 rounded text-slate-400 hover:text-cyan-400 hover:bg-white/5 transition-all cursor-pointer">
+          <Download className="w-4 h-4" />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#0b0d12] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
