@@ -26,9 +26,18 @@ import {
   AlertTriangle,
   CheckCircle2,
   Filter,
-  MessageSquare
+  MessageSquare,
+  AlignStartVertical,
+  AlignCenterVertical,
+  AlignEndVertical,
+  AlignStartHorizontal,
+  AlignCenterHorizontal,
+  AlignEndHorizontal,
+  AlignHorizontalDistributeCenter,
+  AlignVerticalDistributeCenter
 } from 'lucide-react';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES } from '../types';
+import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 
 interface CanvasProps {
   workspace: ModWorkspace;
@@ -57,6 +66,9 @@ export default function Canvas({
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   const [depPanelOpen, setDepPanelOpen] = useState<boolean>(true);
+  // General multi-node selection (ANY node type) for alignment — parallel to the
+  // cue-only `selectedCueIds`, so the cue-specific behaviour is untouched.
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [panning, setPanning] = useState<{ x: number; y: number } | null>(null);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -161,6 +173,7 @@ export default function Canvas({
       setPanning({ x: e.clientX, y: e.clientY });
       setSelectedNode(null);
       setSelectedCueIds([]);
+      setSelectedNodeIds([]);
     }
   };
 
@@ -213,6 +226,14 @@ export default function Canvas({
         }
       } else {
         setSelectedCueIds([]);
+      }
+
+      // General multi-selection for alignment (any node type, shift/ctrl to add).
+      const isMulti = e.shiftKey || e.ctrlKey || e.metaKey;
+      if (isMulti) {
+        setSelectedNodeIds(prev => prev.includes(nodeId) ? prev.filter(id => id !== nodeId) : [...prev, nodeId]);
+      } else {
+        setSelectedNodeIds([nodeId]);
       }
 
       setSelectedNode(node);
@@ -1128,6 +1149,70 @@ export default function Canvas({
     return list;
   }, [workspace.nodes, workspace.links]);
 
+  // Schema-driven per-node diagnostics (md.xsd, no AI) — fetched so the canvas can show
+  // an in-your-face badge on the exact offending node instead of burying it in the Doctor.
+  const [schemaNodeDiags, setSchemaNodeDiags] = useState<Record<string, { severity: 'error' | 'warning'; messages: string[] }>>({});
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      try {
+        const tok = (window as any).__STUDIO_API_TOKEN__;
+        const res = await fetch('/api/agent/node-diagnostics', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) },
+          body: JSON.stringify({ nodes: workspace.nodes }),
+        });
+        const data = await res.json();
+        setSchemaNodeDiags(data && data.byNode ? data.byNode : {});
+      } catch { /* offline / no schema — leave as-is */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [workspace.nodes]);
+
+  // Merge client heuristics + schema diagnostics into one per-node severity/message map.
+  const nodeDiagMap = React.useMemo(() => {
+    const m: Record<string, { severity: 'error' | 'warning'; messages: string[] }> = {};
+    const add = (nodeId: string, severity: 'error' | 'warning', message: string) => {
+      const cur = m[nodeId] || { severity: 'warning' as 'error' | 'warning', messages: [] };
+      cur.messages.push(message);
+      if (severity === 'error') cur.severity = 'error';
+      m[nodeId] = cur;
+    };
+    for (const d of diagnostics) {
+      if (!d.nodeId || d.type === 'info') continue;
+      add(d.nodeId, d.type === 'error' ? 'error' : 'warning', d.message);
+    }
+    for (const [nodeId, v] of Object.entries(schemaNodeDiags)) {
+      for (const msg of v.messages) add(nodeId, v.severity, msg);
+    }
+    return m;
+  }, [diagnostics, schemaNodeDiags]);
+
+  // Selective node alignment/distribution (UE5-style) over the multi-selection.
+  const applyAlignment = React.useCallback((mode: AlignMode) => {
+    const ids = selectedNodeIds || [];
+    if (ids.length < 2) return;
+    // Measure REAL node dimensions from the DOM (cards vary in height) and convert
+    // screen px → canvas coords by dividing out the current zoom, so dimension-based
+    // alignment (right/bottom/center) is exact rather than using a fixed default.
+    const measure = (id: string): { width?: number; height?: number } => {
+      const el = document.querySelector(`[data-node-id="${id}"]`);
+      if (!el) return {};
+      const r = el.getBoundingClientRect();
+      const z = zoom || 1;
+      return { width: r.width / z, height: r.height / z };
+    };
+    const moves = computeAlignment(
+      workspace.nodes.map(n => ({ id: n.id, x: n.x, y: n.y, ...measure(n.id) })),
+      ids, mode
+    );
+    if (Object.keys(moves).length === 0) return;
+    saveCheckpoint();
+    setWorkspace(prev => ({
+      ...prev,
+      nodes: prev.nodes.map(n => moves[n.id] ? { ...n, x: moves[n.id].x, y: moves[n.id].y } : n)
+    }));
+  }, [selectedNodeIds, workspace.nodes, saveCheckpoint, setWorkspace, zoom]);
+
   // Add Comment Box bounding group, matching Unreal Engine box boundaries
   const addCommentBox = React.useCallback(() => {
     saveCheckpoint();
@@ -1374,6 +1459,48 @@ export default function Canvas({
         </button>
       </div>
 
+      {/* Selective node ALIGNMENT toolbar — appears when 2+ nodes are selected (UE5-style). */}
+      {(selectedNodeIds?.length || 0) >= 2 && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 bg-[#0c0e14]/95 border border-cyan-500/25 rounded-lg px-1.5 py-1 shadow-2xl backdrop-blur-sm animate-fade-in">
+          <span className="text-[8px] font-mono uppercase tracking-wider text-cyan-400/80 px-1.5 select-none">align {selectedNodeIds.length}</span>
+          <span className="h-4 w-px bg-white/10 mx-0.5" />
+          {([
+            { mode: 'left', Icon: AlignStartVertical, title: 'Align left edges' },
+            { mode: 'hcenter', Icon: AlignCenterVertical, title: 'Align horizontal centers' },
+            { mode: 'right', Icon: AlignEndVertical, title: 'Align right edges' },
+            { mode: 'top', Icon: AlignStartHorizontal, title: 'Align top edges' },
+            { mode: 'vcenter', Icon: AlignCenterHorizontal, title: 'Align vertical centers' },
+            { mode: 'bottom', Icon: AlignEndHorizontal, title: 'Align bottom edges' },
+          ] as const).map(({ mode, Icon, title }) => (
+            <button
+              key={mode}
+              onClick={() => applyAlignment(mode as AlignMode)}
+              title={title}
+              className="p-1.5 rounded hover:bg-cyan-500/15 text-slate-400 hover:text-cyan-300 transition-all cursor-pointer"
+            >
+              <Icon className="w-3.5 h-3.5" />
+            </button>
+          ))}
+          <span className="h-4 w-px bg-white/10 mx-0.5" />
+          <button
+            onClick={() => applyAlignment('distribute-h')}
+            disabled={selectedNodeIds.length < 3}
+            title="Distribute horizontally (needs 3+)"
+            className="p-1.5 rounded hover:bg-cyan-500/15 text-slate-400 hover:text-cyan-300 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <AlignHorizontalDistributeCenter className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => applyAlignment('distribute-v')}
+            disabled={selectedNodeIds.length < 3}
+            title="Distribute vertically (needs 3+)"
+            className="p-1.5 rounded hover:bg-cyan-500/15 text-slate-400 hover:text-cyan-300 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <AlignVerticalDistributeCenter className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Visual Linking indicator notification banner */}
       { linking && (
         <div className="absolute top-4 right-4 z-10 font-mono text-[10px] uppercase bg-cyan-950/70 text-cyan-400 px-3 py-1.5 rounded-lg border border-cyan-500/30 animate-pulse flex items-center gap-2 shadow-2xl glass-effect">
@@ -1598,9 +1725,10 @@ export default function Canvas({
                 );
               }
 
-              const isSelected = selectedNode?.id === node.id || (node.type === 'cue' && selectedCueIds.includes(node.id));
+              const isSelected = selectedNode?.id === node.id || (node.type === 'cue' && selectedCueIds.includes(node.id)) || selectedNodeIds.includes(node.id);
               const isGlowActive = activeNodes.includes(node.id);
-              
+              const nodeDiag = nodeDiagMap[node.id];
+
               let borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
               let headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
 
@@ -1719,8 +1847,26 @@ export default function Canvas({
                     style={{ left: node.x, top: node.y }}
                     className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
                       isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
-                    } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
+                    } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''} ${
+                      nodeDiag ? (nodeDiag.severity === 'error'
+                        ? 'ring-2 ring-red-500/90 !border-red-500/70 shadow-[0_0_22px_rgba(239,68,68,0.55)] z-20'
+                        : 'ring-2 ring-amber-400/90 !border-amber-400/70 shadow-[0_0_18px_rgba(251,191,36,0.45)] z-20') : ''
+                    }`}
                   >
+                    {/* In-your-face schema diagnostic badge — floats on the node corner. */}
+                    {nodeDiag && (
+                      <div
+                        title={nodeDiag.messages.join('\n')}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        className={`absolute -top-2.5 -right-2.5 z-40 flex items-center gap-0.5 px-1.5 py-1 rounded-full text-[8.5px] font-bold font-mono uppercase shadow-lg cursor-help select-none ${
+                          nodeDiag.severity === 'error' ? 'bg-red-500 text-white animate-pulse' : 'bg-amber-400 text-black'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        {nodeDiag.messages.length > 1 ? nodeDiag.messages.length : ''}
+                      </div>
+                    )}
+
                     {/* Top-accent Gradient Line */}
                     <div className={`h-[3px] rounded-t-lg w-full bg-gradient-to-r ${
                       node.type === 'cue' 

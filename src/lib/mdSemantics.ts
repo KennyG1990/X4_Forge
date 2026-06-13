@@ -52,6 +52,13 @@ export interface ElementSemantics {
   describe: (props: Record<string, any>) => string;
   /** Optional clarifying note surfaced to the user (still deterministic, no AI). */
   note?: string;
+  /**
+   * Marks an entry whose element name is NOT declared in the game md.xsd (verified by
+   * cross-checking the schema). Kept for description value, but the explainer/diagnostics
+   * flag it so the registry never silently implies a fabricated element is valid. The
+   * schema-driven node-diagnostics remain the authority on correctness.
+   */
+  notInSchema?: boolean;
 }
 
 /* ------------------------------------------------------------------ *
@@ -193,10 +200,12 @@ const REGISTRY: Record<string, ElementSemantics> = {
       return `Sets ${obj}'s shield level to ${attr(p, 'level', '(unset)')}.`;
     },
     note: 'One-way write: this does not restore shields afterward. Pair with a restore step if the drop is meant to be temporary.',
+    notInSchema: true,
   },
   set_object_hulllevel: {
     tag: 'set_object_hulllevel', kind: 'action', title: 'Set Hull Level', reads: [], writes: ['object.hull'], risk: 'state_mutation',
     describe: (p) => `Sets ${attr(p, 'object', 'the object')}'s hull level to ${attr(p, 'level', '(unset)')}.`,
+    notInSchema: true,
   },
   create_ship: {
     tag: 'create_ship', kind: 'action', title: 'Create Ship', reads: [], writes: ['world.objects'], risk: 'spawn',
@@ -233,10 +242,6 @@ const REGISTRY: Record<string, ElementSemantics> = {
     tag: 'set_value', kind: 'action', title: 'Set Variable', reads: [], writes: ['variable'], risk: 'state_mutation',
     describe: (p) => `Sets variable ${attr(p, 'name', '(unset)')}` +
       (p?.exact !== undefined ? ` to ${attr(p, 'exact')}.` : (p?.min !== undefined ? ` to a value in [${attr(p, 'min')}, ${attr(p, 'max', '?')}].` : `.`)),
-  },
-  add_value: {
-    tag: 'add_value', kind: 'action', title: 'Add To Variable', reads: ['variable'], writes: ['variable'], risk: 'state_mutation',
-    describe: (p) => `Adds to variable ${attr(p, 'name', '(unset)')}.`,
   },
   remove_value: {
     tag: 'remove_value', kind: 'action', title: 'Remove Variable', reads: [], writes: ['variable'], risk: 'state_mutation',
@@ -286,6 +291,8 @@ const REGISTRY: Record<string, ElementSemantics> = {
   remove_object: {
     tag: 'remove_object', kind: 'action', title: 'Remove Object', reads: [], writes: ['world.objects'], risk: 'irreversible',
     describe: (p) => `Removes ${attr(p, 'object', 'the object')} from the game (irreversible).`,
+    note: 'The real X4 element for despawning is <destroy_object>; "remove_object" is not a declared md.xsd element.',
+    notInSchema: true,
   },
   custom_xml: {
     tag: 'custom_xml', kind: 'action', title: 'Custom XML', reads: ['unknown'], writes: ['unknown'], risk: 'state_mutation',
@@ -365,6 +372,7 @@ export function semanticsForNode(node: Pick<MDNode, 'xmlTag' | 'type' | 'propert
     writes: sem.writes,
     risk: sem.risk,
     note: sem.note,
+    notInSchema: !!sem.notInSchema,
     curated: getElementSemantics(tag) !== null,
   };
 }
@@ -459,6 +467,12 @@ export function runSemanticsSelftest() {
   ok('do_while_loop_note', /repeats/i.test(semanticsForNode(node('do_while', {})).note || ''));
   ok('remove_object_irreversible', semanticsForNode(node('remove_object', {})).risk === 'irreversible');
   ok('set_owner_writes', semanticsForNode(node('set_owner', {})).writes.includes('object.owner'));
+
+  // --- schema reconciliation: fabricated element removed; known-fakes are flagged notInSchema ---
+  ok('add_value_removed', getElementSemantics('add_value') === null);
+  ok('shieldlevel_flagged_notInSchema', semanticsForNode(node('set_object_shieldlevel', {})).notInSchema === true);
+  ok('remove_object_flagged_notInSchema', semanticsForNode(node('remove_object', {})).notInSchema === true);
+  ok('real_element_not_flagged', semanticsForNode(node('reward_player', {})).notInSchema === false);
 
   // --- every registry entry is well-formed (no throwing describe, required fields) ---
   let wellFormed = true;

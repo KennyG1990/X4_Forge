@@ -355,14 +355,19 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
 
     if (!spec) {
       if (reportUnknownEl && !ALWAYS_KNOWN.has(lname)) {
+        // WARNING (not info): an element the game schema doesn't recognize is a real
+        // risk — almost always a typo or a fabricated element name. Surfacing it as a
+        // warning makes it count in the Doctor and matches the on-canvas node badge,
+        // instead of being buried as info. The wording stays honest about the rare
+        // schema-incompleteness case.
         out.push({
-          severity: 'info',
+          severity: 'warning',
           domain,
           filePath,
           line: tag.line,
           sourceRef: `${tag.name}`,
           code: 'XSD_UNKNOWN_ELEMENT',
-          message: `Element <${tag.name}> is not declared in the loaded schema (md.xsd/common.xsd). It may be valid in another schema, a typo, or a custom element.`
+          message: `Element <${tag.name}> is not declared in the game schema (md.xsd/common.xsd) — likely a typo or wrong element name. (If it is a deliberate custom element, it can be ignored.)`
         });
       }
       continue;

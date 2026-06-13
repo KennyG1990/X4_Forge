@@ -29,7 +29,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Settings as SettingsGear,
-  Plug
+  Plug,
+  ChevronRight,
+  ChevronLeft,
+  Code2
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -248,6 +251,7 @@ export default function App() {
   // Left & Right Sidebar Resizing States
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
   const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(460);
+  const [codeCollapsed, setCodeCollapsed] = useState<boolean>(false);
   const [isResizingLeft, setIsResizingLeft] = useState<boolean>(false);
   const [isResizingRight, setIsResizingRight] = useState<boolean>(false);
 
@@ -1150,20 +1154,44 @@ export default function App() {
 
         </main>
 
-        {/* Right Resizer Handle */}
-        <div
-          className={`w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
-            isResizingRight ? 'bg-cyan-500 w-1.5' : ''
-          }`}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            setIsResizingRight(true);
-          }}
-        />
+        {/* Right Resizer Handle — hidden when the code panel is collapsed (nothing to resize). */}
+        {!codeCollapsed && (
+          <div
+            className={`w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
+              isResizingRight ? 'bg-cyan-500 w-1.5' : ''
+            }`}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setIsResizingRight(true);
+            }}
+          />
+        )}
 
-        {/* Right Side: Real-time Synchronized compiler preview output */}
-        <aside className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between" style={{ width: rightSidebarWidth }}>
-          <CodePreview 
+        {/* Right Side: Real-time Synchronized compiler preview output (collapsible) */}
+        <aside
+          className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 justify-between relative transition-[width] duration-300 ease-in-out overflow-hidden"
+          style={{ width: codeCollapsed ? 38 : rightSidebarWidth }}
+        >
+          {/* Drawer pull-tab — always visible on the panel's left edge; toggles collapse. */}
+          <button
+            onClick={() => setCodeCollapsed(c => !c)}
+            title={codeCollapsed ? 'Show code panel' : 'Hide code panel'}
+            className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1/2 z-50 w-5 h-14 rounded-md bg-[#1b1e26] border border-[#df9825]/30 flex items-center justify-center text-slate-400 hover:text-amber-300 hover:border-amber-400/60 shadow-lg transition-colors cursor-pointer"
+          >
+            {codeCollapsed ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+
+          {codeCollapsed ? (
+            <button
+              onClick={() => setCodeCollapsed(false)}
+              title="Show code panel"
+              className="h-full w-full flex flex-col items-center justify-center gap-3 hover:bg-white/[0.03] transition-colors cursor-pointer group"
+            >
+              <Code2 className="w-4 h-4 text-amber-400/70 group-hover:text-amber-300" />
+              <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-mono uppercase tracking-[0.3em] text-slate-500 group-hover:text-slate-300">Code</span>
+            </button>
+          ) : (
+          <CodePreview
             workspace={workspace} 
             setWorkspace={setWorkspace} 
             saveCheckpoint={saveCheckpoint} 
@@ -1182,6 +1210,7 @@ export default function App() {
             autoSaveEnabled={autoSaveEnabled}
             setAutoSaveEnabled={setAutoSaveEnabled}
           />
+          )}
         </aside>
 
       </div>

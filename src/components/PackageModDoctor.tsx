@@ -84,6 +84,7 @@ export default function PackageModDoctor({
     { name: 'explain', path: 'explain-selftest' },
     { name: 'critic', path: 'critic-selftest' },
     { name: 'node-diag', path: 'node-diagnostics-selftest' },
+    { name: 'node-align', path: 'node-align-selftest' },
     { name: 'live-fixes', path: 'live-fixes-selftest' },
     { name: 'contracts', path: 'contract-selftest' },
     { name: 'lua-snippets', path: 'lua-snippets' },
@@ -530,11 +531,19 @@ export default function PackageModDoctor({
       {/* Issues list container */}
       <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-1 transition-all scrollbar-thin">
         {diagnostics.length === 0 ? (
-          <div className="text-emerald-400/90 text-[10.5px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-emerald-500/5 p-4 rounded-lg border border-emerald-500/10 font-sans font-medium h-32">
-            <CheckCircle className="w-7 h-7 text-emerald-400 shrink-0 mb-1" />
-            <span className="font-mono font-bold uppercase text-[9px] text-emerald-300 tracking-wider">Mod Status Clean</span>
-            <span>All generated mod files comply with X4 system validation schemas.</span>
-          </div>
+          diagnosticSource === 'local' ? (
+            <div className="text-amber-300/90 text-[10.5px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-amber-500/5 p-4 rounded-lg border border-amber-500/20 font-sans font-medium h-32">
+              <AlertTriangle className="w-7 h-7 text-amber-400 shrink-0 mb-1" />
+              <span className="font-mono font-bold uppercase text-[9px] text-amber-300 tracking-wider">Schema Check Offline</span>
+              <span>The game-schema validation didn't run (backend reloading). This is <b>not</b> a clean-schema confirmation — only local heuristics ran. It re-checks automatically.</span>
+            </div>
+          ) : (
+            <div className="text-emerald-400/90 text-[10.5px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-emerald-500/5 p-4 rounded-lg border border-emerald-500/10 font-sans font-medium h-32">
+              <CheckCircle className="w-7 h-7 text-emerald-400 shrink-0 mb-1" />
+              <span className="font-mono font-bold uppercase text-[9px] text-emerald-300 tracking-wider">Mod Status Clean</span>
+              <span>All generated mod files comply with X4 system validation schemas.</span>
+            </div>
+          )
         ) : (
           <div className="space-y-2 font-sans">
             {diagnostics.map((diag, index) => {

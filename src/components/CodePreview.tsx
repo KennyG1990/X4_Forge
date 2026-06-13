@@ -1152,35 +1152,11 @@ export default function CodePreview({
   );
 
   return (
-    <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#050608] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
+    <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#0b0d12] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
       {/* ================================================================ */}
-      {/* WINDOW TITLE BAR HEADER (ANALYTIC & PRECISE)                     */}
+      {/* IDE TAB STRIP + COMPACT ACTIONS (single consolidated bar)        */}
       {/* ================================================================ */}
-      <div className="bg-[#090b10] border-b border-black py-2 px-4 flex items-center justify-between shrink-0 select-none">
-        <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#27c93f]" />
-        </div>
-        <div className="text-[10px] font-mono text-slate-400 font-semibold tracking-wider uppercase truncate max-w-[65%]">
-          {workspace.name ? workspace.name.replace(/_/g, '-') : 'X4-MOD-STUDIO'} - Antigravity IDE - {
-            codeActiveTab === 'md' ? 'MD.xml' :
-            codeActiveTab === 'ui' ? 'UI_LAYOUT.xml' :
-            codeActiveTab === 'node' ? `NODE-${selectedNode?.xmlTag || 'PREVIEW'}.XML` :
-            activeEditorFile ? activeEditorFile.name : 'CODEPREVIEW.TSX'
-          }{
-            (codeActiveTab === 'file' && activeEditorFile && openFilesMap[activeEditorFile.path]?.content !== openFilesMap[activeEditorFile.path]?.originalContent) ? ' •' : ''
-          }
-        </div>
-        <div className="text-[9px] font-mono text-cyan-500/80 font-black uppercase tracking-widest pl-2.5 border-l border-white/5 bg-cyan-950/20 px-2 py-0.5 rounded">
-          X4-MDR
-        </div>
-      </div>
-
-      {/* ================================================================ */}
-      {/* IDE TABS SELECTION ROW                                           */}
-      {/* ================================================================ */}
-      <div className="bg-[#0c0e14] border-b border-white/5 select-none shrink-0 flex items-center justify-between pl-1">
+      <div className="bg-[#0b0d12] border-b border-white/5 select-none shrink-0 flex items-center justify-between pl-1">
         <div className="flex items-center divide-x divide-white/5 overflow-x-auto scrollbar-none flex-1">
           {openTabs.map(tab => {
             const isActive = 
@@ -1236,8 +1212,10 @@ export default function CodePreview({
           })}
         </div>
 
-        {/* IDE Action Control Widgets */}
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-black/25 shrink-0 select-none border-l border-white/5">
+      </div>
+
+      {/* SEPARATED ACTION TOOLBAR — decoupled from the tab strip & editor (IDE-style) */}
+      <div className="bg-[#0b0d12] border-b border-white/5 px-3 py-1.5 flex items-center justify-end gap-1.5 shrink-0 select-none">
           {/* Diff Power Switch */}
           <button
             onClick={() => setDiffEnabled(!diffEnabled)}
@@ -1305,13 +1283,12 @@ export default function CodePreview({
             <Download className="w-3 h-3" />
             DL
           </button>
-        </div>
       </div>
 
       {/* ================================================================ */}
       {/* BREADCRUMB PATHBAR ROW                                           */}
       {/* ================================================================ */}
-      <div className="bg-[#10121a] py-1 px-4 text-[9px] text-slate-500 font-mono border-b border-white/5 flex items-center justify-between select-none shrink-0">
+      <div className="bg-[#0b0d12] py-1 px-4 text-[9px] text-slate-500 font-mono border-b border-white/5 flex items-center justify-between select-none shrink-0">
         <div className="flex items-center gap-1 truncate max-w-[65%]">
           <Folder className="w-3.5 h-3.5 text-cyan-500/80 shrink-0" />
           <span className="text-slate-600 hover:text-slate-400 transition-colors uppercase">workspace</span>
@@ -1351,32 +1328,7 @@ export default function CodePreview({
           )}
         </div>
 
-        {/* Diagnostic reference selections */}
-        <div className="flex items-center gap-3 font-mono">
-          {effectiveDiffEnabled && !snapshotDiffWorkspace && (
-            <div className="flex items-center gap-1.5 border-r border-[#1a1c29] pr-3 select-none">
-              <span className="text-slate-650 uppercase text-[8px] font-extrabold tracking-wider">diff reference:</span>
-              <select
-                value={diffBaseType}
-                onChange={(e) => setDiffBaseType(e.target.value as 'compile' | 'original')}
-                className="bg-[#0c0d12] border border-white/10 text-[9px] text-[#cbd5e1]/70 rounded px-1.5 py-0.5 outline-none font-mono focus:border-cyan-500/50 cursor-pointer text-slate-300"
-              >
-                <option value="compile">Last Compiled Build</option>
-                <option value="original">Initial Loaded Template</option>
-              </select>
-            </div>
-          )}
-
-          <span>UTF-8</span>
-          <span className="text-slate-755 font-black select-none">•</span>
-          <span>
-            {codeActiveTab === 'file' && activeEditorFile?.name.endsWith('.json') ? 'JSON' : 'XML / STRUCT'}
-          </span>
-          <span className="text-slate-755 font-black select-none">•</span>
-          <span>
-            {diffEnabled ? 'DIFF_ACTIVE' : `LINES: ${codeLines.length}`}
-          </span>
-        </div>
+        {/* status moved to the bottom status bar (VS Code style) */}
       </div>
 
       {/* ================================================================ */}
@@ -1405,7 +1357,7 @@ export default function CodePreview({
       {/* ================================================================ */}
       {/* VIEWPANE STAGE (DIFF MODE OR NORMAL CODE EDITOR)                  */}
       {/* ================================================================ */}
-      <div id="xml_code_viewport" className="flex-1 flex min-h-0 relative select-text overflow-hidden">
+      <div id="xml_code_viewport" className="flex-1 flex min-h-0 relative select-text overflow-hidden m-2 rounded-lg border border-white/10 bg-[#050608] shadow-[0_3px_14px_rgba(0,0,0,0.45)]">
         {effectiveDiffEnabled ? (
           diffMode === 'split' ? (
             // ==================== SIDE-BY-SIDE DIFF MODE ====================
@@ -1614,6 +1566,32 @@ export default function CodePreview({
             {renderMinimap(codeLines.map(l => ({ value: l })))}
           </div>
         )}
+      </div>
+
+      {/* BOTTOM STATUS BAR — VS Code-style; file meta lives here now, not on the editor. */}
+      <div className="bg-[#0b0d12] border-t border-white/5 px-4 py-1 flex items-center justify-between font-mono text-[9px] text-slate-500 select-none shrink-0">
+        <div className="flex items-center gap-3">
+          {effectiveDiffEnabled && !snapshotDiffWorkspace && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-600 uppercase text-[8px] font-extrabold tracking-wider">diff ref:</span>
+              <select
+                value={diffBaseType}
+                onChange={(e) => setDiffBaseType(e.target.value as 'compile' | 'original')}
+                className="bg-[#0c0d12] border border-white/10 text-[9px] text-slate-300 rounded px-1.5 py-0.5 outline-none font-mono focus:border-cyan-500/50 cursor-pointer"
+              >
+                <option value="compile">Last Compiled Build</option>
+                <option value="original">Initial Loaded Template</option>
+              </select>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span>UTF-8</span>
+          <span className="text-slate-700">•</span>
+          <span>{codeActiveTab === 'file' && activeEditorFile?.name.endsWith('.json') ? 'JSON' : 'XML / STRUCT'}</span>
+          <span className="text-slate-700">•</span>
+          <span>{diffEnabled ? 'DIFF_ACTIVE' : `LINES: ${codeLines.length}`}</span>
+        </div>
       </div>
     </div>
   );

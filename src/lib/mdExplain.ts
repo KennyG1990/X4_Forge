@@ -142,9 +142,10 @@ export function explainWorkspace(nodes: MDNode[], links: MDLink[]): ExplainResul
   const describeAndTrack = (n: MDNode): string => {
     const text = describeNode(n);
     described++;
-    if (semanticsForNode(n).curated) curated++; else fallbackCount++;
-    const note = semanticsForNode(n).note;
-    if (note) insights.push(`${labelOf(n)} (<${n.xmlTag}>): ${note}`);
+    const sem = semanticsForNode(n);
+    if (sem.curated) curated++; else fallbackCount++;
+    if (sem.note) insights.push(`${labelOf(n)} (<${n.xmlTag}>): ${sem.note}`);
+    if (sem.notInSchema) insights.push(`⚠ ${labelOf(n)} (<${n.xmlTag}>): not a declared md.xsd element — the game schema does not recognize it (see canvas diagnostics).`);
     harvestAssets(n);
     return text;
   };

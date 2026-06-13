@@ -54,6 +54,7 @@ import { runSemanticsSelftest, listSemantics, semanticsForNode } from "./src/lib
 import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
 import { runCriticSelftest, critiqueWorkspace } from "./src/lib/mdCritic";
 import { validateNodesAgainstSchema, summarizeByNode, runNodeDiagnosticsSelftest, type NodeSchemaView } from "./src/lib/nodeDiagnostics";
+import { runNodeAlignSelftest } from "./src/lib/nodeAlign";
 import { runLiveFixesSelftest } from "./src/lib/liveFixes";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
@@ -187,6 +188,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/explain-selftest",
   "/agent/critic-selftest",
   "/agent/node-diagnostics-selftest",
+  "/agent/node-align-selftest",
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
@@ -3534,6 +3536,15 @@ app.get("/api/agent/node-diagnostics-selftest", (_req, res) => {
     res.json(runNodeDiagnosticsSelftest());
   } catch (error: any) {
     res.status(500).json({ pass: false, error: error?.message || "node-diagnostics-selftest failed" });
+  }
+});
+
+// Selective node alignment/distribution geometry oracle (UE5-style align tools).
+app.get("/api/agent/node-align-selftest", (_req, res) => {
+  try {
+    res.json(runNodeAlignSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "node-align-selftest failed" });
   }
 });
 
