@@ -91,6 +91,12 @@ const BLANK_WORKSPACE: ModWorkspace = {
 
 export default function App() {
   const [schemaTemplates, setSchemaTemplates] = useState<Omit<MDNode, 'id' | 'x' | 'y'>[]>([]);
+  // A4.5/A4.2 — the live md.xsd-derived valid tag set, so the AI review's unknown-tag
+  // check never false-flags legitimate schema tags outside the curated palette.
+  const aiKnownTags = React.useMemo(
+    () => new Set(schemaTemplates.map(t => (t as any).xmlTag).filter(Boolean) as string[]),
+    [schemaTemplates]
+  );
   const loadSchemaLibrary = React.useCallback(async () => {
     try {
       const res = await fetch('/api/schema/library');
@@ -395,12 +401,13 @@ export default function App() {
       const generatedWorkspace: ModWorkspace = data.workspace;
       const proposedText = `I have successfully designed a new Visual Mod Workspace layout named "${generatedWorkspace.name}". It contains ${generatedWorkspace.nodes.length} functional nodes, ${generatedWorkspace.links.length} connected flow paths, and ${generatedWorkspace.uiWidgets.length} interactive dashboard widgets.\n\nPlease inspect the blueprint audit report card below to confirm and apply these visual changes directly to your active stage!`;
       
-      setAiChatHistory(prev => [...prev, { 
-        role: 'assistant', 
+      setAiChatHistory(prev => [...prev, {
+        role: 'assistant',
         text: proposedText,
         actionRequired: true,
         proposedWorkspace: generatedWorkspace,
         proposedVersion: data.version,
+        requirements: data.requirements,
         actionApplied: null
       }]);
     } catch (err: any) {
@@ -1126,6 +1133,7 @@ export default function App() {
           setIsAiFloatingVisible={setIsAiFloatingVisible}
           isAiFloatingOpen={isAiFloatingOpen}
           setIsAiFloatingOpen={setIsAiFloatingOpen}
+          aiKnownTags={aiKnownTags}
           handleSend={handleSend}
           handleApplyAction={handleApplyAction}
           handleDeclineAction={handleDeclineAction}
@@ -1286,6 +1294,7 @@ export default function App() {
           handleDeclineAction={handleDeclineAction}
           isAiFloatingVisible={isAiFloatingVisible}
           setIsAiFloatingVisible={setIsAiFloatingVisible}
+          knownTags={aiKnownTags}
         />
       )}
 

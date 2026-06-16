@@ -59,6 +59,8 @@ interface SidebarProps {
   width?: number;
   /** A4.1 — AI presence gate. When false (tier=off), the AI Co-pilot tab is absent. */
   aiEnabled?: boolean;
+  /** Live md.xsd tag set for the AI review's unknown-tag check (forwarded to AIHelper). */
+  aiKnownTags?: Set<string>;
   activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference';
   setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference') => void;
   workspace: ModWorkspace;
@@ -124,6 +126,7 @@ interface SidebarProps {
 export default function Sidebar({
   width,
   aiEnabled = false,
+  aiKnownTags,
   activeTab,
   setActiveTab,
   workspace,
@@ -1383,6 +1386,7 @@ export default function Sidebar({
             handleDeclineAction={handleDeclineAction}
             isAiFloatingVisible={isAiFloatingVisible}
             setIsAiFloatingVisible={setIsAiFloatingVisible}
+            knownTags={aiKnownTags}
           />
         )}
 

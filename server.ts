@@ -41,6 +41,7 @@ import {
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, runObjectIndexSelftest, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
 import { runProposalReviewSelftest } from "./src/lib/proposalReview";
+import { runIntentCheckSelftest } from "./src/lib/intentCheck";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -210,6 +211,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/catdat-selftest",
   "/agent/object-index-selftest",
   "/agent/proposal-review-selftest",
+  "/agent/intent-check-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -3357,6 +3359,16 @@ app.get("/api/agent/proposal-review-selftest", (_req, res) => {
   }
 });
 
+// A4.9 — intent-satisfaction checker oracle (synthetic; verifies requirement
+// pattern assertions incl. the Codex 'missing game-start trigger → FAIL' case).
+app.get("/api/agent/intent-check-selftest", (_req, res) => {
+  try {
+    return res.json(runIntentCheckSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "intent-check-selftest failed" });
+  }
+});
+
 // T4.2 Diff-to-Patch — synthesize the minimal X4 <diff> turning a vanilla file
 // into the user's edited copy (engine: src/lib/xpathSynth.ts). The vanilla side
 // can be supplied inline or resolved from the game data (loose → packed).
@@ -4986,6 +4998,53 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
       resultMessage += ` Self-heal phase failed (${selfHealError}); the un-healed layout was applied.`;
     }
 
+    // A4.9b — extract checkable requirements from the ORIGINAL prompt (separate
+    // from generation) so the review can verify INTENT, not just legality. The
+    // client runs these deterministically via checkIntent against the output.
+    let intentRequirements: any[] = [];
+    try {
+      const reqSystem = `Convert an X4 mod request into a SHORT list (3-6) of checkable requirements. For each pick a verification "kind":
+- "triggerWired": the cue must be triggered by an event of a given xmlTag (e.g. event_game_started, event_object_changed_sector, event_object_destroyed).
+- "actionInChain": the cue must run an action of a given xmlTag (e.g. show_help, reward_player, create_ship, play_sound, create_station).
+- "nodePresent": a node of a given xmlTag must exist.
+- "nodePropPositive": a node of xmlTag must have a positive numeric property "prop" (e.g. reward_player money).
+- "manual": subjective/unverifiable (tone, "fun", balance).
+Use real X4 Mission Director xmlTags. Each requirement: {id, label (plain English), kind, xmlTag (omit for manual), prop (only nodePropPositive)}.`;
+      const reqSchema = {
+        type: Type.OBJECT,
+        required: ["requirements"],
+        properties: {
+          requirements: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              required: ["id", "label", "kind"],
+              properties: {
+                id: { type: Type.STRING },
+                label: { type: Type.STRING },
+                kind: { type: Type.STRING, description: "triggerWired|actionInChain|nodePresent|nodePropPositive|manual" },
+                xmlTag: { type: Type.STRING },
+                prop: { type: Type.STRING }
+              }
+            }
+          }
+        }
+      };
+      const reqRaw = await callMultiProviderAI(req, reqSystem, `User request: "${prompt}"`, "json", reqSchema);
+      const reqParsed = JSON.parse(reqRaw.trim());
+      const ALLOWED = new Set(["nodePresent", "nodePropPositive", "triggerWired", "actionInChain", "manual"]);
+      intentRequirements = (Array.isArray(reqParsed.requirements) ? reqParsed.requirements : []).slice(0, 8).map((r: any, i: number) => {
+        let kind = ALLOWED.has(r?.kind) ? r.kind : "manual";
+        const check: any = { kind };
+        if (kind !== "manual") check.xmlTag = String(r?.xmlTag || "").trim();
+        if (kind === "nodePropPositive") check.prop = String(r?.prop || "").trim();
+        if (kind !== "manual" && !check.xmlTag) check.kind = "manual"; // can't check without a tag
+        return { id: String(r?.id || `req_${i}`), label: String(r?.label || "Requirement"), check };
+      });
+    } catch (e) {
+      console.warn("[AI-STUDIO] requirement extraction failed (non-fatal):", e);
+    }
+
     return res.json({
       success: true,
       message: resultMessage,
@@ -4993,6 +5052,7 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
       version: workspaceVersion,
       workspace: combinedWorkspace,
       diagnostics: finalDiagnostics,
+      requirements: intentRequirements,
       selfHealFailed: (validationDiagnostics.length > 0 && finalDiagnostics.length > 0) || !!selfHealError,
       selfHealError
     });

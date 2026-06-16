@@ -41,6 +41,9 @@ interface AIHelperProps {
   handleDeclineAction: (index: number) => void;
   isAiFloatingVisible: boolean;
   setIsAiFloatingVisible: (visible: boolean) => void;
+  /** Live md.xsd-derived valid tag set, so the review's unknown-tag check doesn't
+   *  false-flag legitimate schema tags outside the curated palette. */
+  knownTags?: Set<string>;
 }
 
 export default function AIHelper({
@@ -57,7 +60,8 @@ export default function AIHelper({
   setIsOpen,
   handleSend,
   handleApplyAction,
-  handleDeclineAction
+  handleDeclineAction,
+  knownTags
 }: AIHelperProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -256,7 +260,7 @@ export default function AIHelper({
 
             {/* A4.2 — Review panel: diff + deterministic verdicts BEFORE apply. */}
             {item.actionRequired && item.proposedWorkspace && (() => {
-              const review = reviewProposal(workspace, item.proposedWorkspace as ModWorkspace);
+              const review = reviewProposal(workspace, item.proposedWorkspace as ModWorkspace, { knownTags, requirements: item.requirements });
               const vClass: Record<VerdictStatus, string> = {
                 pass: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10',
                 warn: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
@@ -291,6 +295,23 @@ export default function AIHelper({
                   <Badge name="Graph" v={review.verdicts.graph} />
                   <Badge name="Intent" v={review.verdicts.intent} />
                 </div>
+
+                {/* Intent requirement checklist (A4.9) — what the request asked vs what the output satisfies */}
+                {review.intentResults && review.intentResults.length > 0 && (
+                  <div className="bg-black/30 border border-white/5 rounded p-2 space-y-1">
+                    <div className="text-[8.5px] font-mono font-bold uppercase tracking-wider text-slate-500">Requirements checked</div>
+                    {review.intentResults.map(r => (
+                      <div key={r.id} className="flex items-start gap-1.5 text-[10px] leading-snug">
+                        <span className={`shrink-0 font-bold ${r.status === 'pass' ? 'text-emerald-400' : r.status === 'fail' ? 'text-red-400' : 'text-slate-500'}`}>
+                          {r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '—'}
+                        </span>
+                        <span className={r.status === 'fail' ? 'text-red-300' : 'text-slate-300'}>
+                          {r.label}{r.status === 'not-verified' ? ' (not machine-verified)' : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* Unknown / likely-hallucinated tags */}
                 {review.unknownTags.length > 0 && (

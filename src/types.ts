@@ -111,6 +111,8 @@ export interface ChatMessage {
   proposedWorkspace?: ModWorkspace;
   proposedVersion?: number;
   actionApplied?: 'applied' | 'declined' | null;
+  /** A4.9b — AI-extracted intent requirements verified against the proposal. */
+  requirements?: any[];
 }
 
 export interface AIBehaviorScript {

@@ -15,6 +15,7 @@
  */
 import { ModWorkspace, generateMDXML, validateModWorkspace, sanitizeWorkspace, NODE_TEMPLATES } from '../types';
 import { analyzeCueLineage } from './cueLineage';
+import { checkIntent, type IntentRequirement, type IntentRequirementResult } from './intentCheck';
 
 // A4.5 — boundary hardening. The curated visual vocabulary; combined at call time
 // with the live md.xsd element set so legitimate schema-driven tags are NOT
@@ -38,6 +39,8 @@ export interface ProposalReview {
   verdicts: { schema: ProposalVerdict; graph: ProposalVerdict; intent: ProposalVerdict };
   /** A4.5 — nodes whose xmlTag is unrecognized (likely hallucinated); flagged, not silently carried. */
   unknownTags: NodeBrief[];
+  /** A4.9 — per-requirement intent results when requirements are supplied. */
+  intentResults?: IntentRequirementResult[];
   /** Safe to apply outright = no hard schema/graph error AND no unknown tags. */
   applySafe: boolean;
 }
@@ -74,7 +77,7 @@ function toVerdict(errors: number, warnings: number, detail?: string): ProposalV
  * Never throws — verdict computation is individually guarded so a malformed
  * proposal degrades to a 'fail' verdict rather than crashing the review.
  */
-export function reviewProposal(base: ModWorkspace, proposed: ModWorkspace, opts?: { knownTags?: Set<string> }): ProposalReview {
+export function reviewProposal(base: ModWorkspace, proposed: ModWorkspace, opts?: { knownTags?: Set<string>; requirements?: IntentRequirement[] }): ProposalReview {
   const baseNodes = new Map<string, any>((base?.nodes || []).map(n => [n.id, n]));
   const propNodes = new Map<string, any>((proposed?.nodes || []).map(n => [n.id, n]));
 
@@ -114,15 +117,24 @@ export function reviewProposal(base: ModWorkspace, proposed: ModWorkspace, opts?
     graph = { status: 'fail', errors: 1, warnings: 0, detail: e?.message || 'graph check threw' };
   }
 
-  // Intent verdict — A4.9 requirement-pattern assertions. Not yet implemented:
-  // surfaced honestly as 'not-checked' so a green Schema/Graph can NEVER imply
-  // the prompt was satisfied (the Codex semantic-compliance gap).
-  const intent: ProposalVerdict = {
-    status: 'not-checked',
-    errors: 0,
-    warnings: 0,
-    detail: 'Intent verification (A4.9) not yet implemented — output legality does not prove the request was satisfied.',
-  };
+  // Intent verdict — A4.9 requirement-pattern assertions. When requirements are
+  // supplied (extracted from the prompt), each is verified deterministically; a
+  // green Schema/Graph can NEVER imply the prompt was satisfied. With no
+  // requirements it stays 'not-checked' (honest — never "pass").
+  let intent: ProposalVerdict;
+  let intentResults: IntentRequirementResult[] | undefined;
+  if (opts?.requirements && opts.requirements.length > 0) {
+    const report = checkIntent(proposed, opts.requirements);
+    intent = { status: report.verdict.status, errors: report.verdict.errors, warnings: report.verdict.warnings, detail: report.verdict.detail };
+    intentResults = report.results;
+  } else {
+    intent = {
+      status: 'not-checked',
+      errors: 0,
+      warnings: 0,
+      detail: 'No requirements supplied — output legality does not prove the request was satisfied.',
+    };
+  }
 
   const unknownTags = findUnknownTags(proposed, opts?.knownTags);
 
@@ -131,6 +143,10 @@ export function reviewProposal(base: ModWorkspace, proposed: ModWorkspace, opts?
     nodeCounts: { base: baseNodes.size, proposed: propNodes.size },
     verdicts: { schema, graph, intent },
     unknownTags,
+    intentResults,
+    // applySafe gates on hard legality (schema/graph/unknown tags). Intent failures
+    // are surfaced loudly but do NOT hard-block apply — a valid-but-incomplete build
+    // is safe to apply and iterate on (the user decides), per A4.2.
     applySafe: schema.status !== 'fail' && graph.status !== 'fail' && unknownTags.length === 0,
   };
 }
@@ -198,6 +214,11 @@ export function runProposalReviewSelftest(): {
   // Injected knownTags (schema-derived) suppress the flag.
   const hr2 = reviewProposal(base, halluc, { knownTags: new Set(['set_god_mode']) });
   expect('knownTags suppresses flag', hr2.unknownTags.length === 0);
+
+  // A4.9 integration: supplied requirements drive the Intent verdict (base has a 'cue').
+  const reqReview = reviewProposal(base, base, { requirements: [{ id: 'r', label: 'has a cue', check: { kind: 'nodePresent', xmlTag: 'cue' } }] });
+  expect('intent verdict from requirements', reqReview.verdicts.intent.status !== 'not-checked' && Array.isArray(reqReview.intentResults), JSON.stringify(reqReview.verdicts.intent));
+  expect('intent default not-checked w/o reqs', reviewProposal(base, base).verdicts.intent.status === 'not-checked');
 
   // A workspace whose graph has a hard error (dangling link) must NOT be applySafe.
   const broken = mkWs(
