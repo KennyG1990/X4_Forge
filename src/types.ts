@@ -4,6 +4,7 @@
  */
 
 import { schemaElementToTemplate, type SchemaElement } from './lib/schemaTypes';
+import { isContainerTag } from './lib/portSemantics';
 import type { IntegrationContract } from './lib/contractGlue';
 
 // Node port representation
@@ -535,6 +536,79 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
     outputs: [
       { id: 'out_flow', name: 'Passed Flow', type: 'flow' }
     ]
+  },
+  // ── Control-flow containers (50th pass) ──────────────────────────────────
+  // First-class spawnable branch/loop nodes. The `out_body` port is the chain
+  // of actions INSIDE the branch; `out_next` is the sibling AFTER it closes.
+  // This is what makes deterministic branch gating + body nesting reachable.
+  {
+    type: 'action',
+    label: 'If (conditional)',
+    xmlTag: 'do_if',
+    properties: { value: '$threat ge 3' },
+    propertiesSchema: [
+      { key: 'value', label: 'Condition (expression)', type: 'text', placeholder: '$threat ge 3', description: 'Branch runs when this expression is true. Wire the body to the "Branch Body" port.' }
+    ],
+    inputs: [{ id: 'in_act', name: 'Action In', type: 'child' }],
+    outputs: [
+      { id: 'out_body', name: 'Branch Body', type: 'child' },
+      { id: 'out_next', name: 'Next Action', type: 'flow' }
+    ]
+  },
+  {
+    type: 'action',
+    label: 'Else-If',
+    xmlTag: 'do_elseif',
+    properties: { value: '$threat ge 1' },
+    propertiesSchema: [
+      { key: 'value', label: 'Condition (expression)', type: 'text', placeholder: '$threat ge 1', description: 'Runs when prior branches were false and this expression is true.' }
+    ],
+    inputs: [{ id: 'in_act', name: 'Action In', type: 'child' }],
+    outputs: [
+      { id: 'out_body', name: 'Branch Body', type: 'child' },
+      { id: 'out_next', name: 'Next Action', type: 'flow' }
+    ]
+  },
+  {
+    type: 'action',
+    label: 'Else',
+    xmlTag: 'do_else',
+    properties: {},
+    propertiesSchema: [],
+    inputs: [{ id: 'in_act', name: 'Action In', type: 'child' }],
+    outputs: [
+      { id: 'out_body', name: 'Branch Body', type: 'child' },
+      { id: 'out_next', name: 'Next Action', type: 'flow' }
+    ]
+  },
+  {
+    type: 'action',
+    label: 'While (loop)',
+    xmlTag: 'do_while',
+    properties: { value: '$count lt 5' },
+    propertiesSchema: [
+      { key: 'value', label: 'Condition (expression)', type: 'text', placeholder: '$count lt 5', description: 'Body repeats while this expression stays true. Iteration count is runtime-dependent.' }
+    ],
+    inputs: [{ id: 'in_act', name: 'Action In', type: 'child' }],
+    outputs: [
+      { id: 'out_body', name: 'Loop Body', type: 'child' },
+      { id: 'out_next', name: 'Next Action', type: 'flow' }
+    ]
+  },
+  {
+    type: 'action',
+    label: 'For Each',
+    xmlTag: 'do_for_each',
+    properties: { exact: '', counter: '$i' },
+    propertiesSchema: [
+      { key: 'exact', label: 'List / source', type: 'text', placeholder: '$ships', description: 'The list to iterate over.' },
+      { key: 'counter', label: 'Counter variable', type: 'text', placeholder: '$i', description: 'Optional loop counter variable.' }
+    ],
+    inputs: [{ id: 'in_act', name: 'Action In', type: 'child' }],
+    outputs: [
+      { id: 'out_body', name: 'Loop Body', type: 'child' },
+      { id: 'out_next', name: 'Next Action', type: 'flow' }
+    ]
   }
 ];
 
@@ -646,64 +720,85 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
       xml += `${indentPlus}</conditions>\n`;
     }
     
-    // Actions block parsing (find first action connected to out_act)
+    // Actions block — recursive emit so control-flow containers (do_if/do_while/…)
+    // nest their out_body chain INSIDE the element; out_next continues the sibling
+    // chain exactly as before. Cycle-safe via a single shared `emitSeen` set.
     const actLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_act');
     if (actLinks.length > 0) {
       xml += `${indentPlus}<actions>\n`;
-      actLinks.forEach(firstLink => {
-        let currentNode = workspace.nodes.find(n => n.id === firstLink.targetNodeId);
-        const seen = new Set<string>();
-        
-        while (currentNode && !seen.has(currentNode.id)) {
-          seen.add(currentNode.id);
-          
-          if (currentNode.xmlTag === 'custom_xml') {
-            const raw = currentNode.properties.rawXml || '';
-            const lines = raw.trim().split('\n');
-            lines.forEach((l: string) => {
-              xml += `${indentDouble}${l}\n`;
-            });
-          } else if (currentNode.xmlTag === 'create_ship') {
-            // md.xsd: owner is a child <owner exact="faction.x"/>; location via
-            // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
-            const fac = currentNode.properties.faction || 'player';
-            const sector = currentNode.properties.sector || 'player.sector';
-            xml += `${indentDouble}<create_ship name="${currentNode.properties.name || '$EscortShip'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" sector="${sector}">\n`;
-            xml += `${indentDouble}  <owner exact="faction.${fac}" />\n`;
-            if (currentNode.properties.coords) {
-              const xyz = currentNode.properties.coords.split(',');
-              xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
-            }
-            xml += `${indentDouble}</create_ship>\n`;
-          } else if (currentNode.xmlTag === 'reward_player') {
-            // md.xsd: reward_player takes a `money` attribute and no children.
-            xml += `${indentDouble}<reward_player money="${currentNode.properties.money || 0}" />\n`;
-          } else if (currentNode.xmlTag === 'play_sound') {
-            xml += `${indentDouble}<play_sound object="${currentNode.properties.object || 'playership'}" sound="${currentNode.properties.sound || 'notification_generic'}" />\n`;
-          } else if (currentNode.xmlTag === 'show_help') {
-            // md.xsd: custom text goes in `custom`, not `text`. `duration` is an
-            // X4 time value — a bare number ("8") is rejected at runtime, it must
-            // carry a unit ("8s").
-            xml += `${indentDouble}<show_help custom="'${currentNode.properties.text || ''}'" duration="${formatX4Time(currentNode.properties.duration ?? 5)}" />\n`;
-          } else if (currentNode.xmlTag === 'create_station') {
-            // md.xsd: owner is a REQUIRED attribute (not a child); location via
-            // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
-            const fac = currentNode.properties.faction || 'player';
-            const sector = currentNode.properties.sector || 'player.sector';
-            xml += `${indentDouble}<create_station name="${currentNode.properties.name || '$Station'}" macro="${(currentNode.properties.macro || '').split(' (')[0]}" owner="faction.${fac}" sector="${sector}">\n`;
-            if (currentNode.properties.coords) {
-              const xyz = currentNode.properties.coords.split(',');
-              xml += `${indentDouble}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
-            }
-            xml += `${indentDouble}</create_station>\n`;
-          } else if (!CURATED_XML_TAGS.has(currentNode.xmlTag)) {
-            xml += `${renderGenericXMLNode(currentNode, indentDouble)}\n`;
+      const emitSeen = new Set<string>();
+
+      const emitNode = (node: any, ind: string): void => {
+        const tag = node.xmlTag;
+        // ── control-flow container: open tag → nest out_body chain → close tag ──
+        if (isContainerTag(tag)) {
+          const attrs = Object.entries(node.properties || {})
+            .filter(([k, v]) => v !== undefined && v !== null && String(v) !== '' && k !== 'rawXml')
+            .map(([k, v]) => `${k}="${v}"`)
+            .join(' ');
+          const bodyLink = workspace.links.find(l => l.sourceNodeId === node.id && l.sourcePortId === 'out_body');
+          if (bodyLink) {
+            xml += `${ind}<${tag}${attrs ? ' ' + attrs : ''}>\n`;
+            emitChain(bodyLink.targetNodeId, ind + '  ');
+            xml += `${ind}</${tag}>\n`;
+          } else {
+            // body not wired → empty branch (honest: nothing runs inside)
+            xml += `${ind}<${tag}${attrs ? ' ' + attrs : ''} />\n`;
           }
-          
-          const nextLink = workspace.links.find(l => l.sourceNodeId === currentNode!.id && l.sourcePortId === 'out_next');
-          currentNode = nextLink ? workspace.nodes.find(n => n.id === nextLink.targetNodeId) : undefined;
+          return;
         }
-      });
+        if (tag === 'custom_xml') {
+          const raw = node.properties.rawXml || '';
+          raw.trim().split('\n').forEach((l: string) => { xml += `${ind}${l}\n`; });
+        } else if (tag === 'create_ship') {
+          // md.xsd: owner is a child <owner exact="faction.x"/>; location via
+          // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
+          const fac = node.properties.faction || 'player';
+          const sector = node.properties.sector || 'player.sector';
+          xml += `${ind}<create_ship name="${node.properties.name || '$EscortShip'}" macro="${(node.properties.macro || '').split(' (')[0]}" sector="${sector}">\n`;
+          xml += `${ind}  <owner exact="faction.${fac}" />\n`;
+          if (node.properties.coords) {
+            const xyz = node.properties.coords.split(',');
+            xml += `${ind}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
+          }
+          xml += `${ind}</create_ship>\n`;
+        } else if (tag === 'reward_player') {
+          // md.xsd: reward_player takes a `money` attribute and no children.
+          xml += `${ind}<reward_player money="${node.properties.money || 0}" />\n`;
+        } else if (tag === 'play_sound') {
+          xml += `${ind}<play_sound object="${node.properties.object || 'playership'}" sound="${node.properties.sound || 'notification_generic'}" />\n`;
+        } else if (tag === 'show_help') {
+          // md.xsd: custom text goes in `custom`, not `text`. `duration` is an
+          // X4 time value — a bare number ("8") is rejected at runtime, it must
+          // carry a unit ("8s").
+          xml += `${ind}<show_help custom="'${node.properties.text || ''}'" duration="${formatX4Time(node.properties.duration ?? 5)}" />\n`;
+        } else if (tag === 'create_station') {
+          // md.xsd: owner is a REQUIRED attribute (not a child); location via
+          // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
+          const fac = node.properties.faction || 'player';
+          const sector = node.properties.sector || 'player.sector';
+          xml += `${ind}<create_station name="${node.properties.name || '$Station'}" macro="${(node.properties.macro || '').split(' (')[0]}" owner="faction.${fac}" sector="${sector}">\n`;
+          if (node.properties.coords) {
+            const xyz = node.properties.coords.split(',');
+            xml += `${ind}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
+          }
+          xml += `${ind}</create_station>\n`;
+        } else if (!CURATED_XML_TAGS.has(tag)) {
+          xml += `${renderGenericXMLNode(node, ind)}\n`;
+        }
+      };
+
+      const emitChain = (startId: string, ind: string): void => {
+        let node = workspace.nodes.find(n => n.id === startId);
+        while (node && !emitSeen.has(node.id)) {
+          emitSeen.add(node.id);
+          emitNode(node, ind);
+          const nextLink = workspace.links.find(l => l.sourceNodeId === node!.id && l.sourcePortId === 'out_next');
+          node = nextLink ? workspace.nodes.find(n => n.id === nextLink.targetNodeId) : undefined;
+        }
+      };
+
+      actLinks.forEach(firstLink => emitChain(firstLink.targetNodeId, indentDouble));
       xml += `${indentPlus}</actions>\n`;
     }
     

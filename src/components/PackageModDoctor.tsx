@@ -223,10 +223,16 @@ export default function PackageModDoctor({
         </div>
 
         <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
-          <div className="flex items-center gap-2 text-slate-200 bg-red-500/10 p-2 rounded border border-red-500/20">
+          <button
+            type="button"
+            onClick={() => { const t = errors.find(e => (e as any).nodeId); if ((t as any)?.nodeId) window.dispatchEvent(new CustomEvent('forge-focus-node', { detail: { nodeId: (t as any).nodeId } })); }}
+            disabled={!errors.some(e => (e as any).nodeId)}
+            title={errors.some(e => (e as any).nodeId) ? 'Click to jump to the first flagged node' : 'No node-located errors'}
+            className="flex items-center gap-2 text-slate-200 bg-red-500/10 p-2 rounded border border-red-500/20 text-left enabled:hover:bg-red-500/20 enabled:cursor-pointer transition-colors disabled:opacity-100"
+          >
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse block shrink-0" />
             <span>{errors.length} Errors</span>
-          </div>
+          </button>
           <div className="flex items-center gap-2 text-slate-200 bg-amber-500/10 p-2 rounded border border-amber-500/20">
             <span className="w-2 h-2 rounded-full bg-amber-500 block shrink-0" />
             <span>{warnings.length} Warnings</span>

@@ -374,7 +374,8 @@ export function evaluateValue(expr: string | undefined | null, vars: VarState): 
  * ============================================================================ */
 
 import type { MDNode, MDLink } from '../types';
-import { triggerNodesOf, actionChainOf } from './mdExplain';
+import { triggerNodesOf } from './mdExplain';
+import { isContainerTag } from './portSemantics';
 
 const PORT_SUB = 'out_sub';
 
@@ -440,7 +441,6 @@ function snapshot(vars: VarState): { name: string; value: string }[] {
 }
 
 const GUARD_TAGS = new Set(['do_if', 'do_elseif', 'do_while']);
-const BRANCH_TAGS = new Set(['do_if', 'do_elseif', 'do_else', 'do_while', 'do_for_each']);
 
 function subCuesOf(cueId: string, nodeById: Map<string, MDNode>, links: MDLink[]): MDNode[] {
   return links
@@ -564,62 +564,127 @@ export function simulateWorkspace(
     cueStep.verdict = triggerVerdict === 'never' ? 'never' : (parentReachable ? (triggerVerdict === 'fires' ? 'fires' : 'unknown') : 'unknown');
     const cueFires = triggerVerdict !== 'never' && parentReachable;
 
-    // action chain (flat). taint once a non-asserted guard appears.
-    let tainted = false;
-    const actions = actionChainOf(cue.id, nodeById, links);
-    for (const a of actions) {
-      actionsWalked++;
-      const tag = a.xmlTag;
-      if (GUARD_TAGS.has(tag)) {
-        const expr = a.properties?.value;
-        const res = evaluateExpr(expr === undefined ? undefined : String(expr), vars);
-        conditionsEvaluated++;
-        if (res === 'unknown') conditionsUnknown++;
-        if (res !== true) tainted = true; // body membership unknown ⇒ taint downstream writes
-        if (res === false) {
-          findings.push({
-            kind: 'dead_branch_guard', severity: 'warning', nodeId: a.id,
-            message: `<${tag}> guard "${expr ?? ''}" is provably false under the current seed — its branch never runs (dead code).`,
+    // Action walk with PRECISE branch gating. A control-flow container gates its
+    // out_body chain by the guard; its out_next SIBLINGS continue at the PARENT gate
+    // (untainted) — that is the precision the port-semantics layer buys. A legacy
+    // container with no out_body falls back to the old conservative flat taint, so
+    // imported graphs behave exactly as before.
+    type Gate = 'run' | 'skip' | 'cond';
+    const nextOf = (n: MDNode): MDNode | undefined => {
+      const nl = links.find((l) => l.sourceNodeId === n.id && l.sourcePortId === 'out_next');
+      return nl ? nodeById.get(nl.targetNodeId) : undefined;
+    };
+    const walkActions = (startId: string | undefined, gate: Gate, seen: Set<string>) => {
+      let node = startId ? nodeById.get(startId) : undefined;
+      // if/else-if/else chain state, so the branches are MUTUALLY EXCLUSIVE:
+      //   'none' not in a chain · 'no' nothing matched yet · 'yes' a branch already won
+      //   · 'maybe' a prior guard was unknown so we can't tell if one matched.
+      let group: 'none' | 'no' | 'yes' | 'maybe' = 'none';
+      while (node && !seen.has(node.id)) {
+        seen.add(node.id);
+        actionsWalked++;
+        const a = node;
+        const tag = a.xmlTag;
+        // a chain only continues through consecutive do_elseif/do_else; anything else ends it
+        if (tag !== 'do_elseif' && tag !== 'do_else') group = 'none';
+
+        if (isContainerTag(tag)) {
+          const isElse = tag === 'do_else';
+          const isLoop = tag === 'do_while' || tag === 'do_for_each';
+          const isGuarded = GUARD_TAGS.has(tag); // do_if / do_elseif / do_while carry a value
+          const expr = a.properties?.value;
+          let guard: Tri = 'unknown';
+          if (isGuarded) {
+            guard = evaluateExpr(expr === undefined ? undefined : String(expr), vars);
+            conditionsEvaluated++;
+            if (guard === 'unknown') conditionsUnknown++;
+          }
+
+          let bodyGate: Gate;
+          let liveDead = false; // does a provably-false guard HERE mean dead code?
+          if (isLoop) {
+            bodyGate = gate === 'skip' ? 'skip' : (isGuarded ? (guard === true ? 'run' : guard === false ? 'skip' : 'cond') : 'cond');
+            liveDead = isGuarded && gate === 'run';
+          } else if (gate === 'skip' || group === 'yes') {
+            bodyGate = 'skip';                              // outer skip, or a prior branch already matched
+          } else if (group === 'maybe') {
+            bodyGate = 'cond';                              // a prior branch might have matched — undetermined
+          } else {                                         // group 'no' / 'none' → this is the live branch under test
+            bodyGate = isElse ? 'run' : (guard === true ? 'run' : guard === false ? 'skip' : 'cond');
+            liveDead = !isElse && gate === 'run';
+          }
+
+          // advance the chain state for the next do_elseif/do_else
+          if (!isLoop) {
+            if (isElse) group = 'none';
+            else if (group === 'no' || group === 'none') group = bodyGate === 'run' ? 'yes' : bodyGate === 'cond' ? 'maybe' : 'no';
+            // group 'yes'/'maybe' are sticky until the chain ends
+          }
+
+          if (liveDead && guard === false) {
+            findings.push({
+              kind: 'dead_branch_guard', severity: 'warning', nodeId: a.id,
+              message: `<${tag}> guard "${expr ?? ''}" is provably false under the current seed — its branch never runs (dead code).`,
+            });
+          }
+
+          const verdict: SimVerdict = bodyGate === 'run' ? 'ran' : bodyGate === 'skip' ? 'skipped' : 'conditional';
+          const detail = isLoop
+            ? `<${tag}> loop — body ${bodyGate === 'skip' ? 'skipped' : bodyGate === 'run' ? 'runs (iteration count is runtime-dependent)' : 'conditional'}.`
+            : isElse
+              ? `<do_else> — ${bodyGate === 'run' ? 'all prior branches were false ⇒ runs' : bodyGate === 'skip' ? 'a prior branch already matched ⇒ skipped' : 'a prior branch is undetermined ⇒ conditional'}.`
+              : `<${tag}> "${expr ?? ''}" ⇒ ${guard === 'unknown' ? 'UNKNOWN' : String(guard).toUpperCase()} (body ${bodyGate === 'run' ? 'runs' : bodyGate === 'skip' ? 'skipped (else-branch won, or guard false)' : 'conditional'})`;
+          trace.push({
+            nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
+            verdict, condition: isGuarded ? guard : undefined, detail, vars: snapshot(vars),
+          });
+
+          const bodyFirst = links.find((l) => l.sourceNodeId === a.id && l.sourcePortId === 'out_body');
+          if (bodyFirst) {
+            walkActions(bodyFirst.targetNodeId, bodyGate, seen);  // gate the body
+            node = nextOf(a);                                     // siblings keep PARENT gate
+            continue;
+          }
+          // legacy flat container (no out_body): conservatively taint downstream siblings
+          gate = gate === 'skip' ? 'skip' : (bodyGate === 'run' ? gate : 'cond');
+          node = nextOf(a);
+          continue;
+        }
+
+        // regular action
+        if (gate === 'skip') {
+          trace.push({
+            nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
+            verdict: 'skipped',
+            detail: `<${tag}> is inside a branch that never runs under the current seed.`,
+          });
+          node = nextOf(a);
+          continue;
+        }
+        const tainted = gate === 'cond';
+        const eff = applyValueEffect(a, vars, tainted);
+        if (eff) {
+          effectsApplied++;
+          trace.push({
+            nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
+            verdict: tainted ? 'conditional' : 'ran',
+            detail: tainted
+              ? `Would set ${eff.name} (conditional — under a branch whose guard isn't asserted, so ${eff.name} is now unknown).`
+              : `Sets ${eff.name} = ${valueToString(eff.assigned)}.`,
+            vars: snapshot(vars),
+          });
+        } else {
+          trace.push({
+            nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
+            verdict: tainted ? 'conditional' : 'ran',
+            detail: tainted ? `<${tag}> reached (conditional — may not run).` : `<${tag}> reached.`,
           });
         }
-        trace.push({
-          nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
-          verdict: res === true ? 'ran' : res === false ? 'skipped' : 'conditional',
-          condition: res,
-          detail: `Guard <${tag}> "${expr ?? ''}" ⇒ ${res === 'unknown' ? 'UNKNOWN' : String(res).toUpperCase()}`,
-          vars: snapshot(vars),
-        });
-        continue;
+        node = nextOf(a);
       }
-      if (tag === 'do_else' || tag === 'do_for_each') {
-        tainted = true; // conditional/looping region ⇒ taint
-        trace.push({
-          nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
-          verdict: 'conditional',
-          detail: `<${tag}> — conditional/looping region (body runs depending on prior branches / iteration; not asserted).`,
-          vars: snapshot(vars),
-        });
-        continue;
-      }
-      const eff = applyValueEffect(a, vars, tainted);
-      if (eff) {
-        effectsApplied++;
-        trace.push({
-          nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
-          verdict: tainted ? 'conditional' : 'ran',
-          detail: tainted
-            ? `Would set ${eff.name} (conditional — under a branch whose guard isn't asserted, so ${eff.name} is now unknown).`
-            : `Sets ${eff.name} = ${valueToString(eff.assigned)}.`,
-          vars: snapshot(vars),
-        });
-      } else {
-        trace.push({
-          nodeId: a.id, label: labelOf(a), xmlTag: tag, role: 'action', depth: depth + 1,
-          verdict: tainted ? 'conditional' : 'ran',
-          detail: tainted ? `<${tag}> reached (conditional — may not run).` : `<${tag}> reached.`,
-        });
-      }
-    }
+    };
+    const firstActs = links.filter((l) => l.sourceNodeId === cue.id && l.sourcePortId === 'out_act');
+    for (const fl of firstActs) walkActions(fl.targetNodeId, 'run', new Set<string>());
 
     // sub-cues
     for (const sub of subCuesOf(cue.id, nodeById, links)) {
@@ -636,7 +701,7 @@ export function simulateWorkspace(
   for (const root of rootCues) walkCue(root, 0, true);
 
   const limitations = [
-    'Action chains are a flat sibling list in Forge — a do_if body is not structurally distinct from following actions. Once a non-asserted guard appears, downstream variable writes are conservatively marked `unknown` rather than asserted.',
+    'Branch gating is PRECISE when a control-flow node wires its `out_body` port: a false guard skips only that body (siblings via `out_next` are unaffected), a true guard runs it, an unknown guard marks the body conditional. A legacy/imported control-flow node with no `out_body` falls back to the conservative flat behavior — downstream writes are tainted to `unknown` rather than asserted.',
     'Game-object properties, faction relations, event payloads, timers, custom_xml internals, and any unlisted MD function are out of scope and resolve to `unknown` (never guessed).',
     'Loop iteration counts (do_while / do_for_each) are not simulated — the body is treated as a conditional region.',
     'Findings only fire when state is sufficient to PROVE a result (e.g. a condition is false). With an empty seed most conditions are `unknown`, so the simulator reports no false positives.',
@@ -800,6 +865,109 @@ export function runSimulateSelftest() {
     const r = simulateWorkspace(nodes, links);
     ok('exec_true_guard_no_taint', r.finalState.find((v) => v.name === '$x')?.value === '9', r.finalState);
     ok('exec_limitations_present', r.limitations.length >= 3);
+  }
+
+  /* ---- P1-D4: PRECISE branch gating via out_body (the payoff) ---- */
+  // false guard + out_body: body is SKIPPED (its write never happens), but the
+  // out_next SIBLING stays DEFINITE — siblings are no longer tainted by the branch.
+  {
+    const nodes = [
+      N('c', 'cue', 'cue', { name: 'C' }),
+      N('g', 'action', 'do_if', { value: '1 gt 5' }),     // provably false
+      N('bw', 'action', 'set_value', { name: '$bodyflag', exact: '1' }), // inside branch
+      N('sw', 'action', 'set_value', { name: '$sib', exact: '7' }),      // sibling AFTER branch
+    ];
+    const links = [
+      L('la', 'c', 'out_act', 'g', 'in_act'),
+      L('lb', 'g', 'out_body', 'bw', 'in_act'),
+      L('ln', 'g', 'out_next', 'sw', 'in_act'),
+    ];
+    const r = simulateWorkspace(nodes, links);
+    ok('precise_skip_body', r.trace.find((s) => s.nodeId === 'bw')?.verdict === 'skipped', r.trace.find((s) => s.nodeId === 'bw'));
+    ok('precise_body_var_unset', !r.finalState.some((v) => v.name === '$bodyflag'), r.finalState);
+    ok('precise_sibling_definite', r.finalState.find((v) => v.name === '$sib')?.value === '7', r.finalState); // KEY: sibling NOT tainted
+    ok('precise_dead_branch_finding', r.findings.some((f) => f.kind === 'dead_branch_guard' && f.nodeId === 'g'));
+  }
+  // true guard + out_body: body RUNS and its write is definite.
+  {
+    const nodes = [
+      N('c', 'cue', 'cue', { name: 'C' }),
+      N('g', 'action', 'do_if', { value: '3 gt 1' }),     // provably true
+      N('bw', 'action', 'set_value', { name: '$bodyflag', exact: '1' }),
+    ];
+    const links = [
+      L('la', 'c', 'out_act', 'g', 'in_act'),
+      L('lb', 'g', 'out_body', 'bw', 'in_act'),
+    ];
+    const r = simulateWorkspace(nodes, links);
+    ok('precise_run_body', r.finalState.find((v) => v.name === '$bodyflag')?.value === '1', r.finalState);
+    ok('precise_run_verdict', r.trace.find((s) => s.nodeId === 'g')?.verdict === 'ran');
+  }
+  // unknown guard + out_body: body is CONDITIONAL (its write ⇒ unknown), but the
+  // sibling AFTER the branch is still DEFINITE. This is the whole point of the layer.
+  {
+    const nodes = [
+      N('c', 'cue', 'cue', { name: 'C' }),
+      N('g', 'action', 'do_if', { value: '$u ge 1' }),    // unmodeled ⇒ unknown
+      N('bw', 'action', 'set_value', { name: '$bodyflag', exact: '1' }),
+      N('sw', 'action', 'set_value', { name: '$sib', exact: '7' }),
+    ];
+    const links = [
+      L('la', 'c', 'out_act', 'g', 'in_act'),
+      L('lb', 'g', 'out_body', 'bw', 'in_act'),
+      L('ln', 'g', 'out_next', 'sw', 'in_act'),
+    ];
+    const r = simulateWorkspace(nodes, links); // no seed ⇒ $u unknown
+    ok('precise_cond_body_unknown', r.finalState.find((v) => v.name === '$bodyflag')?.value === 'unknown', r.finalState);
+    ok('precise_cond_sibling_definite', r.finalState.find((v) => v.name === '$sib')?.value === '7', r.finalState); // KEY
+    ok('precise_cond_no_dead_finding', !r.findings.some((f) => f.kind === 'dead_branch_guard'), r.findings); // unknown ≠ dead
+  }
+
+  /* ---- if / else-if / else are MUTUALLY EXCLUSIVE (only one branch runs) ---- */
+  // build: cue → do_if(g1)[body $a=1] → do_elseif(g2)[body $b=2] → do_else[body $c=3]
+  const ifChain = (g1: string, g2: string) => {
+    const nodes = [
+      N('c', 'cue', 'cue', { name: 'C' }),
+      N('i', 'action', 'do_if', { value: g1 }),
+      N('ba', 'action', 'set_value', { name: '$a', exact: '1' }),
+      N('e', 'action', 'do_elseif', { value: g2 }),
+      N('bb', 'action', 'set_value', { name: '$b', exact: '2' }),
+      N('z', 'action', 'do_else', {}),
+      N('bc', 'action', 'set_value', { name: '$c', exact: '3' }),
+    ];
+    const links = [
+      L('la', 'c', 'out_act', 'i', 'in_act'),
+      L('l1', 'i', 'out_body', 'ba', 'in_act'),
+      L('l2', 'i', 'out_next', 'e', 'in_act'),
+      L('l3', 'e', 'out_body', 'bb', 'in_act'),
+      L('l4', 'e', 'out_next', 'z', 'in_act'),
+      L('l5', 'z', 'out_body', 'bc', 'in_act'),
+    ];
+    return simulateWorkspace(nodes, links);
+  };
+  const vd = (r: any, id: string) => r.trace.find((s: any) => s.nodeId === id)?.verdict;
+  const fs = (r: any, name: string) => r.finalState.find((v: any) => v.name === name)?.value;
+  {
+    // if TRUE ⇒ only the if-body runs; elseif & else are skipped even though g2 is also true
+    const r = ifChain('3 gt 1', '3 gt 1');
+    ok('chain_if_wins_verdicts', vd(r, 'i') === 'ran' && vd(r, 'e') === 'skipped' && vd(r, 'z') === 'skipped', r.trace.map((s:any)=>s.nodeId+':'+s.verdict));
+    ok('chain_if_wins_state', fs(r, '$a') === '1' && !r.finalState.some((v:any)=>v.name==='$b') && !r.finalState.some((v:any)=>v.name==='$c'), r.finalState);
+  }
+  {
+    // if FALSE, elseif TRUE ⇒ only the elseif-body runs
+    const r = ifChain('1 gt 5', '3 gt 1');
+    ok('chain_elseif_wins', vd(r, 'i') === 'skipped' && vd(r, 'e') === 'ran' && vd(r, 'z') === 'skipped' && fs(r, '$b') === '2', r.trace.map((s:any)=>s.nodeId+':'+s.verdict));
+  }
+  {
+    // if FALSE, elseif FALSE ⇒ the else-body runs
+    const r = ifChain('1 gt 5', '1 gt 5');
+    ok('chain_else_wins', vd(r, 'z') === 'ran' && fs(r, '$c') === '3', r.trace.map((s:any)=>s.nodeId+':'+s.verdict));
+  }
+  {
+    // if UNKNOWN ⇒ the whole chain is undetermined (every branch conditional, nothing asserted)
+    const r = ifChain('$u ge 1', '3 gt 1');
+    ok('chain_unknown_all_conditional', vd(r, 'i') === 'conditional' && vd(r, 'e') === 'conditional' && vd(r, 'z') === 'conditional', r.trace.map((s:any)=>s.nodeId+':'+s.verdict));
+    ok('chain_unknown_no_dead', !r.findings.some((f:any)=>f.kind==='dead_branch_guard'), r.findings);
   }
 
   const passed = checks.filter((c) => c.pass).length;

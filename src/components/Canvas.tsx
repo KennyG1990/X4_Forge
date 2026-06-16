@@ -33,11 +33,14 @@ import {
   AlignCenterHorizontal,
   AlignEndHorizontal,
   AlignHorizontalDistributeCenter,
-  AlignVerticalDistributeCenter
+  AlignVerticalDistributeCenter,
+  GitBranch,
+  Repeat
 } from 'lucide-react';
-import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES } from '../types';
+import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML } from '../types';
 import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
+import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
 
 type Pt = { x: number; y: number };
 
@@ -273,12 +276,14 @@ export default function Canvas({
         setSelectedCueIds([]);
       }
 
-      // General multi-selection for alignment (any node type, shift/ctrl to add).
+      // General multi-selection (any node type, shift/ctrl to add). On a PLAIN grab of a
+      // node that's already part of a multi-selection, keep the selection so the group can
+      // be dragged together (UE5-style); otherwise select just this node.
       const isMulti = e.shiftKey || e.ctrlKey || e.metaKey;
       if (isMulti) {
         setSelectedNodeIds(prev => prev.includes(nodeId) ? prev.filter(id => id !== nodeId) : [...prev, nodeId]);
       } else {
-        setSelectedNodeIds([nodeId]);
+        setSelectedNodeIds(prev => (prev.length > 1 && prev.includes(nodeId)) ? prev : [nodeId]);
       }
 
       setSelectedNode(node);
@@ -364,12 +369,16 @@ export default function Canvas({
               })
             }));
           } else {
-            // Standard individual dragging
+            // Standard dragging — if the grabbed node is part of a multi-selection,
+            // move the WHOLE selection together (UE5-style); else move just this node.
+            const sel = selectedNodeIds || [];
+            const groupMove = sel.length > 1 && draggedNodeId != null && sel.includes(draggedNodeId);
+            const moveSet = new Set<string>(groupMove ? sel : [draggedNodeId as string]);
             setWorkspace(prev => ({
               ...prev,
               nodes: prev.nodes.map(n => {
                 const startingInfo = draggedNodesStartOffset.current.find(s => s.id === n.id);
-                if (startingInfo && n.id === draggedNodeId) {
+                if (startingInfo && moveSet.has(n.id)) {
                   return { ...n, x: startingInfo.x + virtualDx, y: startingInfo.y + virtualDy };
                 }
                 return n;
@@ -425,7 +434,7 @@ export default function Canvas({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes, draggingWaypoint]);
+  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes, draggingWaypoint, selectedNodeIds]);
 
   // Handle intuitive smooth zoom-to-cursor via mouse scroll wheel
   useEffect(() => {
@@ -540,8 +549,16 @@ export default function Canvas({
   };
 
   // Get source or target coordinates of ports
+  // O(1) node lookup. getPortCoordinates is called twice per wire every render; a linear
+  // `nodes.find` made wire rendering O(links × nodes). The memoized map makes it O(links).
+  const nodeById = React.useMemo(() => {
+    const m = new Map<string, MDNode>();
+    for (const n of workspace.nodes) m.set(n.id, n);
+    return m;
+  }, [workspace.nodes]);
+
   const getPortCoordinates = (nodeId: string, portId: string, isSource: boolean) => {
-    const node = workspace.nodes.find(n => n.id === nodeId);
+    const node = nodeById.get(nodeId);
     if (!node) return { x: 0, y: 0 };
 
     const width = 240;
@@ -1083,6 +1100,18 @@ export default function Canvas({
     }
   }, [focusNodeRequest, workspace.nodes, focusNode]);
 
+  // Jump-to-node from anywhere (error indicators, Doctor) via a decoupled window event.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent)?.detail?.nodeId;
+      if (!id) return;
+      const node = workspace.nodes.find(n => n.id === id);
+      if (node) focusNode(node);
+    };
+    window.addEventListener('forge-focus-node', handler);
+    return () => window.removeEventListener('forge-focus-node', handler);
+  }, [workspace.nodes, focusNode]);
+
   // Cue & Variable dependency analysis builder
   const dependencies = React.useMemo(() => {
     if (!selectedNode) return [];
@@ -1257,7 +1286,22 @@ export default function Canvas({
     return () => clearTimeout(t);
   }, [workspace.nodes]);
 
-  // Merge client heuristics + schema diagnostics into one per-node severity/message map.
+  // MD "LAW" validation (validateModWorkspace) — the same errors the Doctor and the
+  // MD Scripts top-bar count. These carry a nodeId but previously only showed in the
+  // Doctor list, never on the node. Surface them on-canvas like everything else.
+  // DEBOUNCED: validateModWorkspace + generateMDXML are heavy (full compile), so we must
+  // NOT run them on every workspace change — a node drag fires dozens per second. Recompute
+  // 400ms after edits settle (same pattern as the schema-diagnostics fetch above).
+  const [lawDiags, setLawDiags] = useState<ReturnType<typeof validateModWorkspace>>([]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { setLawDiags(validateModWorkspace(workspace, generateMDXML(workspace))); }
+      catch { setLawDiags([]); }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [workspace]);
+
+  // Merge client heuristics + schema diagnostics + LAW validation into one per-node map.
   const nodeDiagMap = React.useMemo(() => {
     const m: Record<string, { severity: 'error' | 'warning'; messages: string[] }> = {};
     const add = (nodeId: string, severity: 'error' | 'warning', message: string) => {
@@ -1273,8 +1317,12 @@ export default function Canvas({
     for (const [nodeId, v] of Object.entries(schemaNodeDiags)) {
       for (const msg of v.messages) add(nodeId, v.severity, msg);
     }
+    for (const d of lawDiags) {
+      if (!d.nodeId || d.severity === 'info') continue;
+      add(d.nodeId, d.severity === 'error' ? 'error' : 'warning', d.message);
+    }
     return m;
-  }, [diagnostics, schemaNodeDiags]);
+  }, [diagnostics, schemaNodeDiags, lawDiags]);
 
   // Selective node alignment/distribution (UE5-style) over the multi-selection.
   const applyAlignment = React.useCallback((mode: AlignMode) => {
@@ -1392,10 +1440,18 @@ export default function Canvas({
   }, [schemaTemplates]);
 
   // Filter right click context spawn options
-  const filteredTemplates = allTemplates.filter(
+  // Base search filter (label/tag substring).
+  const searchedTemplates = allTemplates.filter(
     t => t.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
          t.xmlTag.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  // #2 drag-off-pin: when the spawn menu was opened by dragging a wire off a port,
+  // narrow to nodes that port can actually connect to (port-semantics layer). The
+  // typed-connector map guarantees this never empties on flow-type drags (out_next →
+  // every action), which is what made the earlier coarse-type attempt unusable.
+  const filteredTemplates = pendingLinkTarget
+    ? compatibleTemplates(pendingLinkTarget.portId, searchedTemplates)
+    : searchedTemplates;
 
   // Dynamic Minimap calculation helpers
   const xs = nodesFilteredByCue.map(n => n.x);
@@ -2017,14 +2073,17 @@ export default function Canvas({
                       </div>
                     )}
 
-                    {/* Top-accent Gradient Line */}
+                    {/* Top-accent Gradient Line. Control-flow (if/loop) nodes get their own
+                        indigo accent so a decision/loop never looks like a plain action. */}
                     <div className={`h-[3px] rounded-t-lg w-full bg-gradient-to-r ${
-                      node.type === 'cue' 
-                        ? 'from-purple-500 to-fuchsia-500' 
-                        : node.type === 'event' 
-                        ? 'from-amber-500 to-orange-500' 
-                        : node.type === 'condition' 
-                        ? 'from-cyan-500 to-blue-500' 
+                      isContainerTag(node.xmlTag)
+                        ? 'from-indigo-500 to-violet-500'
+                        : node.type === 'cue'
+                        ? 'from-purple-500 to-fuchsia-500'
+                        : node.type === 'event'
+                        ? 'from-amber-500 to-orange-500'
+                        : node.type === 'condition'
+                        ? 'from-cyan-500 to-blue-500'
                         : 'from-emerald-500 to-teal-500'
                     }`} />
 
@@ -2037,7 +2096,14 @@ export default function Canvas({
                         {node.type === 'cue' && <Compass className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
                         {node.type === 'event' && <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400/20 shrink-0" />}
                         {node.type === 'condition' && <Filter className="w-3.5 h-3.5 text-cyan-400 shrink-0" />}
-                        {node.type === 'action' && <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20 shrink-0" />}
+                        {/* Control-flow gets a branch/loop glyph (indigo); plain actions keep the Play glyph. */}
+                        {node.type === 'action' && (
+                          isContainerTag(node.xmlTag)
+                            ? ((node.xmlTag === 'do_while' || node.xmlTag === 'do_for_each')
+                                ? <Repeat className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
+                                : <GitBranch className="w-3.5 h-3.5 text-indigo-300 shrink-0" />)
+                            : <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20 shrink-0" />
+                        )}
                         <span className="font-semibold text-[11px] tracking-tight truncate w-32 text-slate-100">{node.label}</span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">

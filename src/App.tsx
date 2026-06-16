@@ -34,6 +34,7 @@ import {
   ChevronLeft
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
+import FpsMeter from './components/FpsMeter';
 import SyncModal from './components/SyncModal';
 import Canvas from './components/Canvas';
 import UIBuilder from './components/UIBuilder';
@@ -741,9 +742,22 @@ export default function App() {
 
   const mdErrorCount = mdDiagnostics.filter(d => d.severity === 'error').length;
   const mdWarningCount = mdDiagnostics.filter(d => d.severity === 'warning').length;
+  // First diagnostic that points at a node, so the indicators can jump straight to it.
+  const firstFlaggedNodeId =
+    (mdDiagnostics.find(d => d.severity === 'error' && (d as any).nodeId) as any)?.nodeId ||
+    (mdDiagnostics.find(d => d.severity === 'warning' && (d as any).nodeId) as any)?.nodeId;
+  const jumpToFlaggedNode = React.useCallback(() => {
+    setWorkspaceView('blueprint');
+    setActiveSidebarTab('script');
+    if (firstFlaggedNodeId) {
+      // let the blueprint view mount/lay out before centering on the node
+      setTimeout(() => window.dispatchEvent(new CustomEvent('forge-focus-node', { detail: { nodeId: firstFlaggedNodeId } })), 80);
+    }
+  }, [firstFlaggedNodeId]);
 
   return (
     <div className="w-screen h-screen flex flex-col bg-[#0F1115] text-slate-300 font-sans">
+      <FpsMeter />
       {/* Upper Technical Header */}
       <header className="h-12 border-b border-white/10 bg-[#161920] px-4 flex items-center justify-between shrink-0 font-mono">
         
@@ -824,9 +838,9 @@ export default function App() {
             
             return (
               <button
-                onClick={() => { setWorkspaceView('blueprint'); setActiveSidebarTab('script'); }}
+                onClick={() => { if (firstFlaggedNodeId) { jumpToFlaggedNode(); } else { setWorkspaceView('blueprint'); setActiveSidebarTab('script'); } }}
                 className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-2 transition-all cursor-pointer ${btnClass}`}
-                title={tooltip}
+                title={firstFlaggedNodeId ? tooltip + ' — click to jump to the flagged node' : tooltip}
               >
                 <GitFork className="w-3.5 h-3.5" />
                 <span>MD Scripts</span>

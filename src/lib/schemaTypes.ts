@@ -1,5 +1,6 @@
 import type { MDNode, PropertySchema } from '../types';
 import { isContainerTag } from './portSemantics';
+import { friendlyName } from './mdFriendlyNames';
 
 export type SchemaCategory = 'event' | 'condition' | 'action' | 'control_flow';
 
@@ -104,7 +105,7 @@ export function schemaElementToTemplate(element: SchemaElement): Omit<MDNode, 'i
 
   return {
     type,
-    label: element.tag,
+    label: friendlyName(element.tag), // plain-English display name; raw tag kept as xmlTag
     xmlTag: element.tag,
     properties,
     propertiesSchema: element.attributes.map(schemaAttributeToProperty),
