@@ -711,7 +711,8 @@ export default function App() {
   };
 
   // Load sample presets
-  const handleLoadPreset = (key: 'escort' | 'mission' | 'blank') => {
+  const handleLoadPreset = (key: 'escort' | 'mission' | 'blank' | '__current') => {
+    if (key === '__current') return; // label-only option for the loaded workspace; not a load action
     saveCheckpoint();
     if (key === 'blank') {
       handleClearWorkspace();
@@ -969,9 +970,12 @@ export default function App() {
           <div className="flex items-center gap-1.5 bg-black/35 rounded border border-white/10 p-1">
             <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1">Preset:</span>
             <select
+              value="__current"
               onChange={(e) => handleLoadPreset(e.target.value as any)}
               className="bg-[#0F1115] border border-white/10 p-1 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
             >
+              {/* H6: show the actually-loaded workspace, not a stale "Blank Workspace" label */}
+              <option value="__current">{workspace.name || 'Current Workspace'}</option>
               <option value="blank">Blank Workspace</option>
               <option value="escort">Elite Fighter Wing Escort</option>
               <option value="mission">Argon Sector Bounty System</option>
