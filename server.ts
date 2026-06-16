@@ -439,10 +439,10 @@ function readTail(filePath: string, maxBytes: number): string {
  * 'sector_bounty_hunter' ... line 18" or "(md.Foo.Cue): ...". Deterministic, no AI.
  */
 function mapLogLineToSourceRef(text: string): { kind: string; file?: string; line?: number; label?: string } | undefined {
-  const scriptQuoted = text.match(/(?:md script|script)\s+'([\w.\-]+)'/i)?.[1]
+  const scriptQuoted = text.match(/(?:md script|script)\s+'([\w.-]+)'/i)?.[1]
     || text.match(/\bmd\.([\w]+)\b/i)?.[1];
   const lineNo = text.match(/\bline\s+(\d+)/i)?.[1];
-  const cue = text.match(/cue\s+'([\w.\-]+)'/i)?.[1];
+  const cue = text.match(/cue\s+'([\w.-]+)'/i)?.[1];
   if (scriptQuoted) {
     const base = scriptQuoted.replace(/^md\./i, '');
     return { kind: 'md_file', file: `md/${base}.xml`, line: lineNo ? Number(lineNo) : undefined, label: cue ? `cue ${cue}` : undefined };
@@ -778,6 +778,18 @@ function runSchemaValidation(files: Record<string, string>, modId: string): any[
   return out;
 }
 
+/**
+ * True iff `child` is the same path as `root` or lives strictly inside it.
+ * Uses a separator-anchored boundary so a sibling like `/mods/myMod-secret`
+ * does NOT pass containment for root `/mods/myMod` (a bare startsWith prefix
+ * check would wrongly accept it — the classic path-traversal edge case).
+ */
+function isPathWithin(child: string, root: string): boolean {
+  const rootAbs = path.resolve(root);
+  const childAbs = path.resolve(child);
+  return childAbs === rootAbs || childAbs.startsWith(rootAbs + path.sep);
+}
+
 /** Resolve an XML patch target's base content from loose files or packed archives. */
 function resolvePatchBaseContent(targetFile: string): { content: string; source: 'loose' | 'packed'; sourcePath: string } | null {
   const normalized = path.normalize(targetFile);
@@ -839,8 +851,8 @@ function runPatchDiagnostics(ws: any): any[] {
     // Root-element sanity check: the selector's first segment should match the
     // base file's root (or a <diff> wrapper).
     const sel = String(patch.sel || patch.selector || '').trim();
-    const firstSeg = sel.replace(/^\/+/, '').split(/[\/\[]/)[0]?.toLowerCase();
-    const rootMatch = base.content.match(/<\s*([a-zA-Z_][\w.\-]*)/);
+    const firstSeg = sel.replace(/^\/+/, '').split(/[/[]/)[0]?.toLowerCase();
+    const rootMatch = base.content.match(/<\s*([a-zA-Z_][\w.-]*)/);
     const root = rootMatch ? rootMatch[1].toLowerCase() : '';
     if (firstSeg && root && root !== 'diff' && root !== firstSeg && !base.content.toLowerCase().includes(`<${firstSeg}`)) {
       out.push({
@@ -2000,7 +2012,7 @@ app.get("/api/fs/read", (req, res) => {
     }
     
     const safePath = path.resolve(rootPath, relativePath);
-    if (!safePath.startsWith(path.resolve(rootPath))) {
+    if (!isPathWithin(safePath, rootPath)) {
       return res.status(403).json({ error: "Forbidden: Directory traversal detected." });
     }
     
@@ -2096,7 +2108,7 @@ app.post("/api/fs/write", (req, res) => {
     }
     
     const safePath = path.resolve(rootPath, relativePath);
-    if (!safePath.startsWith(path.resolve(rootPath))) {
+    if (!isPathWithin(safePath, rootPath)) {
       return res.status(403).json({ error: "Forbidden: Directory traversal detected." });
     }
     
@@ -2127,7 +2139,7 @@ app.post("/api/fs/create", (req, res) => {
     }
     
     const safePath = path.resolve(rootPath, cleanName);
-    if (!safePath.startsWith(path.resolve(rootPath))) {
+    if (!isPathWithin(safePath, rootPath)) {
       return res.status(403).json({ error: "Forbidden: Directory traversal detected." });
     }
     
@@ -2825,10 +2837,17 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
       const identical = present && outFiles[rel] === content;
       if (!present) lossless = false;
       if (!mayDiffer && present && !identical) lossless = false;
-      checks.push({ path: rel, class: cls, present, byteIdentical: identical });
+      const pass = present && (mayDiffer || identical);
+      checks.push({ name: rel, pass, path: rel, class: cls, present, byteIdentical: identical });
     }
 
+    const passed = checks.filter((c: any) => c.pass).length;
+    // House selftest contract (allPassed/passed/total) alongside the richer lossless report,
+    // so a generic dashboard/agent doesn't misread {lossless:true} as a failure (H9).
     return res.json({
+      allPassed: lossless,
+      passed,
+      total: checks.length,
       lossless,
       inputFiles: Object.keys(files).length,
       outputFiles: Object.keys(outFiles).length,
@@ -3132,7 +3151,7 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
         // //job[@id='x']). Evaluate every selector against the resolved base
         // content and flag nodes claimed by >=2 mods where at least one op is
         // replace/remove (add+add to a shared parent merges and is fine).
-        let xpathConflicts: { nodeName: string; folders: string[]; sels: string[] }[] = [];
+        const xpathConflicts: { nodeName: string; folders: string[]; sels: string[] }[] = [];
         const baseContent = opts?.resolveBaseContent ? opts.resolveBaseContent(tf) : null;
         if (baseContent && baseContent.length <= 2_000_000) {
           try {
@@ -3844,7 +3863,7 @@ app.get("/api/agent/extension-file", (req, res) => {
       return res.status(400).json({ error: "Invalid path." });
     }
     const abs = path.join(extRoot, rel);
-    if (!abs.startsWith(extRoot)) return res.status(400).json({ error: "Path escapes extensions root." });
+    if (!isPathWithin(abs, extRoot)) return res.status(400).json({ error: "Path escapes extensions root." });
     if (fs.existsSync(abs)) {
       const content = fs.readFileSync(abs, "utf8");
       return res.json({ success: true, path: rel, name: path.basename(rel), content, source: "loose" });
@@ -3854,7 +3873,7 @@ app.get("/api/agent/extension-file", (req, res) => {
     const folder = parts.shift();
     if (!folder || !parts.length) return res.status(404).json({ error: "File not found." });
     const extDir = path.join(extRoot, folder);
-    if (!extDir.startsWith(extRoot) || !fs.existsSync(extDir)) return res.status(404).json({ error: "File not found." });
+    if (!isPathWithin(extDir, extRoot) || !fs.existsSync(extDir)) return res.status(404).json({ error: "File not found." });
     const entryRel = parts.join("/").toLowerCase();
     for (const archive of findCatDatArchives([extDir], true).filter(a => path.dirname(a.catPath).toLowerCase() === extDir.toLowerCase())) {
       let entries: ReturnType<typeof parseCat> = [];

@@ -281,7 +281,7 @@ interface RawTag {
 function scanTags(xml: string): RawTag[] {
   const tags: RawTag[] = [];
   // match opening or self-closing tags, skip closing tags, comments, PIs, declarations
-  const re = /<([a-zA-Z_][\w.\-]*)((?:\s+[\w.\-:]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
+  const re = /<([a-zA-Z_][\w.-]*)((?:\s+[\w.\-:]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml)) !== null) {
     const before = xml.slice(0, m.index);

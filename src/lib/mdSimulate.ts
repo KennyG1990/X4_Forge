@@ -123,7 +123,7 @@ function tokenize(src: string): Tok[] | null {
     if (c === '$' || /[A-Za-z_]/.test(c)) {
       let j = i + 1;
       while (j < n && /[A-Za-z0-9_.]/.test(src[j])) j++;
-      let word = src.slice(i, j);
+      const word = src.slice(i, j);
       // function call? consume a balanced (...) and mark the whole thing opaque/unknown
       if (src[j] === '(') {
         let depth = 0, k = j;
