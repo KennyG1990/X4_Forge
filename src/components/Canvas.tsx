@@ -44,6 +44,7 @@ import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
 import { STARTER_TAGS } from '../lib/mdFriendlyNames';
 import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
+import { computeAutoLayout } from '../lib/mdAutoLayout';
 
 type Pt = { x: number; y: number };
 
@@ -748,105 +749,18 @@ export default function Canvas({
     return [...cues, ...sampled];
   }, [nodesFilteredByCue]);
 
-  // Auto-Align Core Layout Math Algorithm (Tidy Graph Tool)
+  // Tidy Graph — deterministic, no-overlap tiered layout (G11). Pure logic lives in
+  // mdAutoLayout.computeAutoLayout (covered by runAutoLayoutSelftest); comment frames stay put.
   const autoAlignGraph = () => {
     saveCheckpoint();
-    
-    const cues = workspace.nodes.filter(n => n.type === 'cue');
-    const positionedIds = new Set<string>();
-    const newNodes = [...workspace.nodes];
-
-    // Find top level cues (no incoming links to 'in_flow')
-    const topLevelCues = cues.filter(c => {
-      return !workspace.links.some(l => l.targetNodeId === c.id && l.targetPortId === 'in_flow');
-    });
-
-    let currentY = 80;
-
-    function layoutCue(cueId: string, depth: number): number {
-      const idx = newNodes.findIndex(n => n.id === cueId);
-      if (idx === -1 || positionedIds.has(cueId)) return 0;
-
-      const x = 100 + depth * 1500;
-      newNodes[idx] = { ...newNodes[idx], x, y: currentY };
-      positionedIds.add(cueId);
-      const cueY = currentY;
-
-      // Position Conditions connected to out_cond (Column 2)
-      const condLinks = workspace.links.filter(l => l.sourceNodeId === cueId && l.sourcePortId === 'out_cond');
-      condLinks.forEach((link, cIdx) => {
-        const condNodeIdx = newNodes.findIndex(n => n.id === link.targetNodeId);
-        if (condNodeIdx !== -1 && !positionedIds.has(link.targetNodeId)) {
-          newNodes[condNodeIdx] = {
-            ...newNodes[condNodeIdx],
-            x: x + 300,
-            y: cueY + cIdx * 150
-          };
-          positionedIds.add(link.targetNodeId);
-        }
-      });
-
-      // Position Actions connected to out_act (Column 3+)
-      const actLinks = workspace.links.filter(l => l.sourceNodeId === cueId && l.sourcePortId === 'out_act');
-      actLinks.forEach((firstLink) => {
-        let actionNodeId = firstLink.targetNodeId;
-        let actionIdx = 0;
-        const seenActions = new Set<string>();
-        
-        while (actionNodeId && !seenActions.has(actionNodeId)) {
-          seenActions.add(actionNodeId);
-          const actNodeIdx = newNodes.findIndex(n => n.id === actionNodeId);
-          if (actNodeIdx !== -1 && !positionedIds.has(actionNodeId)) {
-            newNodes[actNodeIdx] = {
-              ...newNodes[actNodeIdx],
-              x: x + 600 + actionIdx * 300,
-              y: cueY
-            };
-            positionedIds.add(actionNodeId);
-          }
-          
-          const nextLink = workspace.links.find(l => l.sourceNodeId === actionNodeId && l.sourcePortId === 'out_next');
-          actionNodeId = nextLink ? nextLink.targetNodeId : '';
-          actionIdx++;
-        }
-      });
-
-      // Find children cues connected via out_sub to in_flow
-      const childLinks = workspace.links.filter(l => l.sourceNodeId === cueId && l.sourcePortId === 'out_sub');
-      if (childLinks.length > 0) {
-        childLinks.forEach((link, childIdx) => {
-          if (childIdx > 0) {
-            currentY += 450;
-          }
-          layoutCue(link.targetNodeId, depth + 1);
-        });
-      }
-      return currentY;
-    }
-
-    topLevelCues.forEach((cue, idx) => {
-      if (idx > 0) {
-        currentY += 500;
-      }
-      layoutCue(cue.id, 0);
-    });
-
-    // Cluster unconnected floating elements at base
-    let baseFloaterX = 80;
-    let baseFloaterY = currentY + 300;
-    newNodes.forEach((node) => {
-      if (!positionedIds.has(node.id)) {
-        node.x = baseFloaterX;
-        node.y = baseFloaterY;
-        baseFloaterX += 250;
-        if (baseFloaterX > 1100) {
-          baseFloaterX = 80;
-          baseFloaterY += 220;
-        }
-      }
-    });
-
-    setWorkspace(prev => ({ ...prev, nodes: newNodes }));
+    const pos = computeAutoLayout(workspace.nodes, workspace.links);
+    setWorkspace(prev => ({
+      ...prev,
+      nodes: prev.nodes.map(n => {
+        const p = pos.get(n.id);
+        return p ? { ...n, x: p.x, y: p.y } : n;
+      }),
+    }));
   };
 
   // Launch Right-Click Spawn Context Menu Selection Handler with automatic link routing completion

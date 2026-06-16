@@ -307,6 +307,80 @@ const REGISTRY: Record<string, ElementSemantics> = {
     },
     note: 'Custom XML is shown verbatim rather than paraphrased — the studio does not guess the meaning of un-templated elements.',
   },
+
+  // --- G12 semantics-depth batch: high-traffic real MD actions (all verified present in
+  //     md.xsd). Descriptions stay attribute-driven with safe fallbacks; long tail still
+  //     degrades to fallbackSemantics. ---
+  transfer_money: {
+    tag: 'transfer_money', kind: 'action', title: 'Transfer Money', reads: [], writes: ['player.money'], risk: 'economy',
+    describe: (p) => `Transfers ${attr(p, 'money', attr(p, 'exact', 'an amount of'))} credits` +
+      (p?.from ? ` from ${attr(p, 'from')}` : '') + (p?.to ? ` to ${attr(p, 'to')}` : '') + `.`,
+  },
+  add_blueprints: {
+    tag: 'add_blueprints', kind: 'action', title: 'Add Blueprints', reads: [], writes: ['player.blueprints'], risk: 'state_mutation',
+    describe: (p) => `Unlocks blueprint(s) ${attr(p, 'wares', attr(p, 'blueprints', '(unset)'))}` +
+      (p?.faction ? ` for faction ${attr(p, 'faction')}` : '') + `.`,
+  },
+  set_object_commander: {
+    tag: 'set_object_commander', kind: 'action', title: 'Set Commander', reads: [], writes: ['object.commander'], risk: 'state_mutation',
+    describe: (p) => `Assigns ${attr(p, 'object', 'the object')} as a subordinate of commander ${attr(p, 'commander', '(unset)')}.`,
+  },
+  commandeer_object: {
+    tag: 'commandeer_object', kind: 'action', title: 'Commandeer Object', reads: [], writes: ['object.owner'], risk: 'state_mutation',
+    describe: (p) => `Takes control of ${attr(p, 'object', 'the object')}` +
+      (p?.commander ? ` under commander ${attr(p, 'commander')}` : '') + `.`,
+  },
+  write_incoming_message: {
+    tag: 'write_incoming_message', kind: 'action', title: 'Incoming Message', reads: [], writes: ['ui.message'], risk: 'safe',
+    describe: (p) => `Sends an incoming comm message to the player` +
+      (p?.author ? ` from ${attr(p, 'author')}` : '') + (p?.text ? `: "${attr(p, 'text')}"` : '') + `.`,
+  },
+  show_notification: {
+    tag: 'show_notification', kind: 'action', title: 'Show Notification', reads: [], writes: ['ui.notification'], risk: 'safe',
+    describe: (p) => `Shows a UI notification` + (p?.text ? `: "${attr(p, 'text')}".` : `.`),
+  },
+  show_interactive_notification: {
+    tag: 'show_interactive_notification', kind: 'action', title: 'Interactive Notification', reads: [], writes: ['ui.notification'], risk: 'safe',
+    describe: (p) => `Shows an interactive notification the player can act on` + (p?.text ? `: "${attr(p, 'text')}".` : `.`),
+  },
+  remove_message: {
+    tag: 'remove_message', kind: 'action', title: 'Remove Message', reads: [], writes: ['ui.message'], risk: 'safe',
+    describe: (p) => `Removes a previously-shown message` + (p?.message ? ` (${attr(p, 'message')}).` : `.`),
+  },
+  create_object: {
+    tag: 'create_object', kind: 'action', title: 'Create Object', reads: [], writes: ['world.objects'], risk: 'spawn',
+    describe: (p) => `Spawns an object` + (p?.macro ? ` (${attr(p, 'macro')})` : '') +
+      (p?.faction ? ` for faction ${attr(p, 'faction')}` : '') + `.`,
+  },
+  start_conversation: {
+    tag: 'start_conversation', kind: 'action', title: 'Start Conversation', reads: [], writes: ['ui.conversation'], risk: 'safe',
+    describe: (p) => `Starts a conversation` + (p?.actor ? ` with ${attr(p, 'actor')}` : '') +
+      (p?.conversation ? ` (${attr(p, 'conversation')})` : '') + `.`,
+  },
+  set_relation_boost: {
+    tag: 'set_relation_boost', kind: 'action', title: 'Set Relation Boost', reads: [], writes: ['faction.relations'], risk: 'state_mutation',
+    describe: (p) => `Applies a temporary relation boost between ${attr(p, 'object', 'an object')} and ${attr(p, 'otherobject', attr(p, 'faction', 'another party'))}.`,
+  },
+  remove_from_group: {
+    tag: 'remove_from_group', kind: 'action', title: 'Remove From Group', reads: [], writes: ['group'], risk: 'state_mutation',
+    describe: (p) => `Removes ${attr(p, 'object', 'the object')} from group ${attr(p, 'group', '(unset)')}.`,
+  },
+  find_object: {
+    tag: 'find_object', kind: 'action', title: 'Find Object', reads: ['world.objects'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Searches for an object matching the given filters and stores the result in ${attr(p, 'result', 'a variable')}.`,
+  },
+  find_ship: {
+    tag: 'find_ship', kind: 'action', title: 'Find Ship', reads: ['world.objects'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Searches for a ship matching the given filters and stores the result in ${attr(p, 'result', 'a variable')}.`,
+  },
+  set_skill: {
+    tag: 'set_skill', kind: 'action', title: 'Set Skill', reads: [], writes: ['npc.skill'], risk: 'state_mutation',
+    describe: (p) => `Sets the skill level of ${attr(p, 'object', attr(p, 'entity', 'an NPC'))}.`,
+  },
+  add_npc_line: {
+    tag: 'add_npc_line', kind: 'action', title: 'Add NPC Line', reads: [], writes: ['ui.conversation'], risk: 'safe',
+    describe: (p) => `Queues an NPC dialogue line` + (p?.actor ? ` for ${attr(p, 'actor')}` : '') + `.`,
+  },
 };
 
 /** Humanize an unknown tag deterministically: snake_case → "Snake Case". */
@@ -467,6 +541,22 @@ export function runSemanticsSelftest() {
   ok('do_while_loop_note', /repeats/i.test(semanticsForNode(node('do_while', {})).note || ''));
   ok('remove_object_irreversible', semanticsForNode(node('remove_object', {})).risk === 'irreversible');
   ok('set_owner_writes', semanticsForNode(node('set_owner', {})).writes.includes('object.owner'));
+
+  // --- G12 semantics-depth batch: new real actions are curated, attribute-driven, real-schema ---
+  ok('g12_batch_curated',
+    ['transfer_money', 'add_blueprints', 'set_object_commander', 'commandeer_object', 'write_incoming_message',
+     'show_notification', 'show_interactive_notification', 'remove_message', 'create_object', 'start_conversation',
+     'set_relation_boost', 'remove_from_group', 'find_object', 'find_ship', 'set_skill', 'add_npc_line']
+      .every((t) => getElementSemantics(t) !== null));
+  ok('g12_transfer_money_economy', semanticsForNode(node('transfer_money', {})).risk === 'economy');
+  ok('g12_create_object_spawn', semanticsForNode(node('create_object', {})).risk === 'spawn');
+  ok('g12_find_object_reads', semanticsForNode(node('find_object', {})).reads.includes('world.objects'));
+  ok('g12_show_notification_desc',
+    describeNode(node('show_notification', { text: 'Hi' })) === `Shows a UI notification: "Hi".`,
+    describeNode(node('show_notification', { text: 'Hi' })));
+  ok('g12_batch_real_schema',
+    ['transfer_money', 'add_blueprints', 'create_object', 'find_object', 'set_skill']
+      .every((t) => semanticsForNode(node(t, {})).notInSchema === false));
 
   // --- schema reconciliation: fabricated element removed; known-fakes are flagged notInSchema ---
   ok('add_value_removed', getElementSemantics('add_value') === null);
