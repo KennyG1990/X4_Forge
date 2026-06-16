@@ -41,6 +41,7 @@ import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspac
 import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
 import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
+import { STARTER_TAGS } from '../lib/mdFriendlyNames';
 
 type Pt = { x: number; y: number };
 
@@ -142,6 +143,9 @@ export default function Canvas({
   // Quick Spawn Context Menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; gridX: number; gridY: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  // Spawn palette: show only the curated friendly "starter" set by default; Advanced reveals
+  // the full ~785-element md.xsd vocabulary. (Search always searches everything.)
+  const [showAdvancedPalette, setShowAdvancedPalette] = useState<boolean>(false);
 
   // Script Evaluation Mock Simulator state
   const [simActive, setSimActive] = useState<boolean>(false);
@@ -1440,8 +1444,13 @@ export default function Canvas({
   }, [schemaTemplates]);
 
   // Filter right click context spawn options
+  // Curation: by default show only the curated "starter" set so newcomers aren't drowned
+  // in the full md.xsd vocabulary. Advanced toggle OR an active search reveals everything.
+  const baseTemplates = (showAdvancedPalette || searchQuery.trim())
+    ? allTemplates
+    : allTemplates.filter(t => STARTER_TAGS.has(t.xmlTag));
   // Base search filter (label/tag substring).
-  const searchedTemplates = allTemplates.filter(
+  const searchedTemplates = baseTemplates.filter(
     t => t.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
          t.xmlTag.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -2240,6 +2249,19 @@ export default function Canvas({
               className="w-full bg-[#07090e] border border-white/10 rounded-lg px-2.5 py-1.5 pl-8 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
             />
           </div>
+
+          {/* Curated starter vs full vocabulary toggle (hidden while searching — search hits everything) */}
+          {!searchQuery.trim() && (
+            <button
+              type="button"
+              onClick={() => setShowAdvancedPalette(v => !v)}
+              title="Toggle between the curated starter blocks and the full game vocabulary"
+              className="shrink-0 w-full flex items-center justify-between text-[9px] font-mono px-2 py-1 rounded border border-white/5 bg-white/[0.02] text-slate-400 hover:text-cyan-300 hover:border-cyan-500/30 transition-colors cursor-pointer"
+            >
+              <span>{showAdvancedPalette ? 'All game elements' : 'Starter blocks'}</span>
+              <span className="text-cyan-400/80">{showAdvancedPalette ? '↩ Show starters' : `Advanced · ${allTemplates.length} ▸`}</span>
+            </button>
+          )}
 
           {/* Search elements viewport lists */}
           <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar max-h-56 mt-1">

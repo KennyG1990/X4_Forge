@@ -59,6 +59,13 @@ export const FRIENDLY_NAMES: Record<string, string> = {
   custom_xml: 'Custom XML',
 };
 
+/**
+ * The "starter" palette: the common, friendly-named tags shown by default so newcomers
+ * aren't drowned in the full ~785-element md.xsd vocabulary. The Advanced toggle reveals
+ * everything; search always searches everything regardless.
+ */
+export const STARTER_TAGS: Set<string> = new Set(Object.keys(FRIENDLY_NAMES));
+
 /** Verb prefixes we rewrite to friendly leading words in the humanizer fallback. */
 const PREFIX_VERBS: Array<[string, string]> = [
   ['event_', 'On '],
