@@ -55,7 +55,8 @@ import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
 import { runCriticSelftest, critiqueWorkspace } from "./src/lib/mdCritic";
 import { runSimulateSelftest, simulateWorkspace } from "./src/lib/mdSimulate";
 import { runPortSemanticsSelftest } from "./src/lib/portSemantics";
-import { runFriendlyNamesSelftest } from "./src/lib/mdFriendlyNames"; // port-semantics layer (50th pass)
+import { runFriendlyNamesSelftest } from "./src/lib/mdFriendlyNames";
+import { runCompileSelftest } from "./src/lib/mdCompileSelftest"; // port-semantics layer (50th pass)
 import { validateNodesAgainstSchema, summarizeByNode, runNodeDiagnosticsSelftest, type NodeSchemaView } from "./src/lib/nodeDiagnostics";
 import { runNodeAlignSelftest } from "./src/lib/nodeAlign";
 import { runLiveFixesSelftest } from "./src/lib/liveFixes";
@@ -195,6 +196,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/simulate-selftest",
   "/agent/port-semantics-selftest",
   "/agent/friendly-names-selftest",
+  "/agent/compile-selftest",
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
@@ -3551,6 +3553,15 @@ app.get("/api/agent/node-align-selftest", (_req, res) => {
     res.json(runNodeAlignSelftest());
   } catch (error: any) {
     res.status(500).json({ pass: false, error: error?.message || "node-align-selftest failed" });
+  }
+});
+
+// Compiled-XML self-test (52nd pass, gap G2) — asserts what generateMDXML actually emits.
+app.get("/api/agent/compile-selftest", (_req, res) => {
+  try {
+    res.json(runCompileSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "compile-selftest failed" });
   }
 });
 

@@ -701,17 +701,30 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
           } else if (targetNode.xmlTag === 'event_object_changed_sector') {
             xml += `${indentDouble}<event_object_changed_sector object="${targetNode.properties.object || 'playership'}" sector="${targetNode.properties.sector || 'player.sector'}" />\n`;
           } else if (targetNode.xmlTag === 'check_value') {
-            // md.xsd: check_value compares via min/max/exact (+negate), NOT the
-            // legacy operator/value2 form.
-            const rawOp = String(targetNode.properties.operator || 'ge');
-            const op = (rawOp.match(/\((\w+)\)/)?.[1] || rawOp).toLowerCase();
-            const amt = targetNode.properties.amount ?? 1000000;
-            let cmp: string;
-            if (op === 'ge' || op === 'min' || op === 'gt') cmp = `min="${amt}"`;
-            else if (op === 'le' || op === 'max' || op === 'lt') cmp = `max="${amt}"`;
-            else if (op === 'ne') cmp = `exact="${amt}" negate="true"`;
-            else cmp = `exact="${amt}"`;
-            xml += `${indentDouble}<check_value value="${targetNode.properties.value || 'player.money'}" ${cmp} />\n`;
+            // md.xsd: check_value can be EITHER a standalone boolean expression in `value`
+            // (`value="$x ge 5"`) OR an operand `value` + a comparison attr (min/max/exact).
+            // BUG FIX (G1): if `value` already contains a comparison/boolean operator it IS a
+            // full expression — emit it standalone. Only add min/max/exact when the node was
+            // authored with an explicit operator+amount AND value is a bare operand. (Previously
+            // a default min="1000000" was always appended, making expression conditions never true.)
+            const rawVal = String(targetNode.properties.value || 'player.money');
+            const isExpression = /\b(ge|gt|le|lt|eq|ne|and|or|not)\b/.test(rawVal) || /(<=|>=|==|!=|<|>)/.test(rawVal);
+            const hasOperator = targetNode.properties.operator !== undefined && String(targetNode.properties.operator) !== '';
+            const hasAmount = targetNode.properties.amount !== undefined && String(targetNode.properties.amount) !== '';
+            if (isExpression || (!hasOperator && !hasAmount)) {
+              // full boolean expression, or a bare truthiness check — emit standalone
+              xml += `${indentDouble}<check_value value="${rawVal}" />\n`;
+            } else {
+              const rawOp = String(targetNode.properties.operator || 'ge');
+              const op = (rawOp.match(/\((\w+)\)/)?.[1] || rawOp).toLowerCase();
+              const amt = targetNode.properties.amount ?? 0;
+              let cmp: string;
+              if (op === 'ge' || op === 'min' || op === 'gt') cmp = `min="${amt}"`;
+              else if (op === 'le' || op === 'max' || op === 'lt') cmp = `max="${amt}"`;
+              else if (op === 'ne') cmp = `exact="${amt}" negate="true"`;
+              else cmp = `exact="${amt}"`;
+              xml += `${indentDouble}<check_value value="${rawVal}" ${cmp} />\n`;
+            }
           } else if (!CURATED_XML_TAGS.has(targetNode.xmlTag)) {
             xml += `${renderGenericXMLNode(targetNode, indentDouble)}\n`;
           }

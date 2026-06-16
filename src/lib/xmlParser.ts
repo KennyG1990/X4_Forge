@@ -5,6 +5,7 @@
 
 import { DOMParser as XmlDomParser, XMLSerializer as XmlDomSerializer } from '@xmldom/xmldom';
 import { ModWorkspace, MDNode, MDLink, NODE_TEMPLATES, X4_SHIP_MACROS, X4_STATION_MACROS } from '../types';
+import { isContainerTag } from './portSemantics';
 
 const DOMParserToUse = typeof window !== 'undefined' && window.DOMParser ? window.DOMParser : XmlDomParser;
 const XMLSerializerToUse = typeof window !== 'undefined' && window.XMLSerializer ? window.XMLSerializer : XmlDomSerializer;
@@ -254,11 +255,10 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       const actionsElement = Array.from(cue.children).find(c => c.tagName === "actions");
       if (actionsElement) {
         const actionChildren = Array.from(actionsElement.children);
-        let prevActionId = cueId;
-        let prevPortId = 'out_act';
         let actIndex = 0;
 
-        actionChildren.forEach(child => {
+        // Build a single action node from an <actions> child element (returns null if untemplated).
+        const buildActionNode = (child: any): MDNode | null => {
           const tag = child.tagName;
           let xmlTag = tag;
           let label = tag;
@@ -300,6 +300,12 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
             const posEl = child.getElementsByTagName("position")[0];
             const coords = posEl ? `${posEl.getAttribute("x") || 0},${posEl.getAttribute("y") || 0},${posEl.getAttribute("z") || 0}` : '5000,0,5000';
             properties = { name, macro: matchingMacro, faction, sector: spaceObj, coords };
+          } else if (isContainerTag(tag)) {
+            // control-flow container (do_if/do_while/…): keep its own attributes (e.g. value);
+            // its body is parsed separately into out_body by the recursive walker below.
+            const t = NODE_TEMPLATES.find(n => n.xmlTag === tag);
+            label = t ? t.label : tag;
+            properties = attributesToProperties(child);
           } else {
             // Unrecognized / escape hatch
             const schemaTemplate = schemaTemplatesByTag.get(tag);
@@ -315,36 +321,48 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
           }
 
           const template = NODE_TEMPLATES.find(t => t.xmlTag === xmlTag) || schemaTemplatesByTag.get(xmlTag);
-          if (template) {
-            const actNodeId = `${xmlTag}_${Date.now()}_${i}_${actIndex}`;
-            const actNode: MDNode = {
-              id: actNodeId,
-              type: 'action',
-              label,
-              xmlTag,
-              x: cueNode.x + 600 + actIndex * 300,
-              y: cueNode.y,
-              properties,
-              propertiesSchema: template.propertiesSchema,
-              inputs: template.inputs,
-              outputs: template.outputs
-            };
-            nodes.push(actNode);
+          if (!template) return null;
+          const actNodeId = `${xmlTag}_${Date.now()}_${i}_${actIndex}`;
+          actIndex++;
+          const actNode: MDNode = {
+            id: actNodeId,
+            type: 'action',
+            label,
+            xmlTag,
+            x: cueNode.x + 600 + actIndex * 300,
+            y: cueNode.y,
+            properties,
+            propertiesSchema: template.propertiesSchema,
+            inputs: template.inputs,
+            outputs: template.outputs
+          };
+          nodes.push(actNode);
+          return actNode;
+        };
 
-            // Connect previous node to this action
+        // Recursive walk: chain siblings via out_next (first via parentPort). A control-flow
+        // container recurses its element children into out_body, so nested do_if/do_while
+        // round-trips losslessly instead of dropping its body (gap G3).
+        const walkActions = (children: any[], parentId: string, parentPort: string) => {
+          let prevId = parentId, prevPort = parentPort;
+          for (const child of children) {
+            const node = buildActionNode(child);
+            if (!node) continue;
             links.push({
-              id: `link_act_${Date.now()}_${prevActionId}_${actNodeId}`,
-              sourceNodeId: prevActionId,
-              sourcePortId: prevPortId,
-              targetNodeId: actNodeId,
+              id: `link_act_${Date.now()}_${prevId}_${node.id}`,
+              sourceNodeId: prevId,
+              sourcePortId: prevPort,
+              targetNodeId: node.id,
               targetPortId: 'in_act'
             });
-
-            prevActionId = actNodeId;
-            prevPortId = 'out_next';
-            actIndex++;
+            if (isContainerTag(node.xmlTag)) {
+              walkActions(Array.from(child.children || []), node.id, 'out_body');
+            }
+            prevId = node.id;
+            prevPort = 'out_next';
           }
-        });
+        };
+        walkActions(actionChildren, cueId, 'out_act');
       }
     }
     

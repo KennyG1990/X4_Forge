@@ -275,6 +275,24 @@ export default function CodePreview({
   
   const effectiveDiffEnabled = diffEnabled || !!snapshotDiffWorkspace;
 
+  // Auto-hide the code minimap in a narrow panel (G8b): the VS Code–style overview steals
+  // ~40px and is low-value below this width. A CALLBACK ref reliably attaches a ResizeObserver
+  // the moment the root mounts (a plain ref + [] effect missed it when the root rendered after
+  // an early return), so the width tracks live as the user resizes the panel.
+  const [editorWidth, setEditorWidth] = React.useState<number>(9999);
+  const minimapObserverRef = React.useRef<ResizeObserver | null>(null);
+  const setEditorRoot = React.useCallback((el: HTMLDivElement | null) => {
+    minimapObserverRef.current?.disconnect();
+    if (el && typeof ResizeObserver !== 'undefined') {
+      setEditorWidth(el.getBoundingClientRect().width);
+      minimapObserverRef.current = new ResizeObserver(entries => {
+        for (const e of entries) setEditorWidth(e.contentRect.width);
+      });
+      minimapObserverRef.current.observe(el);
+    }
+  }, []);
+  const showMinimap = editorWidth >= 560;
+
   // Baseline copies for live modifications comparisons
   const [initialMDCode, setInitialMDCode] = useState<string>('');
   const [initialUICode, setInitialUICode] = useState<string>('');
@@ -1162,7 +1180,7 @@ export default function CodePreview({
   );
 
   return (
-    <div id="antigravity_ide_container" className="flex flex-col h-full min-h-0 bg-[#0b0d12] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
+    <div ref={setEditorRoot} id="antigravity_ide_container" className="flex flex-col flex-1 w-full min-w-0 h-full min-h-0 bg-[#0b0d12] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
       {/* Tab strip + compact actions — PORTALED into the persistent top bar (App) so the
           editor body is a code-only entity. Inline fallback when no portal target. */}
       {(topBarTarget ? createPortal : ((c: any): any => c))((
@@ -1386,7 +1404,7 @@ export default function CodePreview({
               </div>
 
               {/* Synchronous Minimap */}
-              {renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).modifiedLines)}
+              {showMinimap && renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).modifiedLines)}
             </div>
           ) : (
             // ==================== UNIFIED STACKED DIFF MODE ====================
@@ -1433,7 +1451,7 @@ export default function CodePreview({
               </div>
 
               {/* Unified Minimap */}
-              {renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).unifiedLines)}
+              {showMinimap && renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).unifiedLines)}
             </div>
           )
         ) : (
@@ -1516,8 +1534,8 @@ export default function CodePreview({
               </div>
             )}
 
-            {/* Render CSS Visual Code-Strips Minimap */}
-            {renderMinimap(codeLines.map(l => ({ value: l })))}
+            {/* Render CSS Visual Code-Strips Minimap (auto-hidden in a narrow panel — G8b) */}
+            {showMinimap && renderMinimap(codeLines.map(l => ({ value: l })))}
           </div>
         )}
       </div>
