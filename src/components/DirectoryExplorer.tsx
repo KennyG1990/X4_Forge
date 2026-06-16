@@ -8,26 +8,21 @@ import React, { useState, useEffect } from 'react';
 // QoL panel cache: the FILES tree survives panel switches (background-refreshed
 // on mount instead of refetched with a visible empty state).
 const FILE_TREE_CACHE: { tree: any | null } = { tree: null };
-import { 
-  FolderIcon, 
-  ChevronRight, 
-  ChevronDown, 
-  FileJson, 
-  FileCode, 
-  FileText, 
-  Search, 
-  Plus, 
-  RefreshCw, 
-  Save, 
-  Trash2, 
-  FolderOpen, 
-  ExternalLink,
+import {
+  FolderIcon,
+  ChevronRight,
+  ChevronDown,
+  FileJson,
+  FileCode,
+  FileText,
+  Search,
+  Save,
   CheckCircle,
   AlertTriangle
 } from 'lucide-react';
 import { ModWorkspace, sanitizeWorkspace } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
-import { generateMDXML, generateUIXML } from '../types';
+import { generateMDXML } from '../types';
 
 export interface FSItem {
   name: string;

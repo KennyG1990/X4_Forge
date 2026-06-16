@@ -4,18 +4,14 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  GitCommit, 
-  RotateCcw, 
-  Trash2, 
-  FileDiff, 
-  Save, 
-  Plus, 
-  Check, 
+import {
+  GitCommit,
+  RotateCcw,
+  Trash2,
+  FileDiff,
+  Plus,
   Calendar,
-  AlertCircle,
-  Code2,
-  FolderLock
+  Code2
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import { generateMDXML } from '../types';

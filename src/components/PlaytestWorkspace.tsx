@@ -9,8 +9,7 @@ import {
   Save, 
   RefreshCw, 
   Wrench, 
-  Cpu,
-  PackageCheck
+  Cpu
 } from 'lucide-react';
 
 interface LogIssue {

@@ -4,25 +4,19 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  GitFork, 
-  Plus, 
-  Trash, 
-  Sliders, 
-  Sparkles, 
-  HelpCircle, 
-  Database, 
-  Code2, 
-  Check, 
-  Flame,
-  Globe,
-  Settings,
+import {
+  GitFork,
+  Plus,
+  Trash,
+  Sliders,
+  Sparkles,
+  HelpCircle,
+  Check,
   Bookmark,
   Search,
   Copy,
   PlusCircle,
-  FileText,
-  BadgeAlert
+  FileText
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import { compileDiffDocument as compileSharedDiffDocument } from '../lib/modCompiler';

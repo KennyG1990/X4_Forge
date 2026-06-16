@@ -4,16 +4,12 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { 
-  Palette, 
-  Trash2, 
-  Layers, 
-  Eye, 
-  Maximize2,
+import {
+  Palette,
+  Trash2,
+  Layers,
   Trash,
-  Move,
   Cpu,
-  Code2,
   Terminal,
   FileCode
 } from 'lucide-react';

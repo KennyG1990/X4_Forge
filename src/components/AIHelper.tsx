@@ -42,12 +42,7 @@ interface AIHelperProps {
 
 export default function AIHelper({
   mode,
-  workspace,
-  setWorkspace,
-  localVersion,
-  setLocalVersion,
   chatHistory,
-  setChatHistory,
   inputText,
   setInputText,
   activeMode,
@@ -58,9 +53,7 @@ export default function AIHelper({
   setIsOpen,
   handleSend,
   handleApplyAction,
-  handleDeclineAction,
-  isAiFloatingVisible,
-  setIsAiFloatingVisible
+  handleDeclineAction
 }: AIHelperProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 

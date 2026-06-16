@@ -3,36 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { 
-  Clipboard, 
-  Check, 
-  Download, 
-  Terminal, 
-  AlertTriangle, 
-  CheckCircle,
+import {
+  Clipboard,
+  Check,
+  Download,
+  Terminal,
   FileCode,
   FileJson,
-  Brain,
   Sparkles,
-  RefreshCw,
-  Compass,
-  Activity,
   Folder,
   Save,
-  Wrench,
-  Upload,
-  Cpu,
   X,
   PackageCheck,
-  Split,
-  ChevronLeft
+  Split
 } from 'lucide-react';
-import { ModWorkspace, generateMDXML, generateUIXML, validateModWorkspace, XMLDiagnostic, MDNode, PackageDiagnostic } from '../types';
+import { ModWorkspace, generateMDXML, generateUIXML, MDNode, PackageDiagnostic } from '../types';
 import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
-import { 
+import {
   toSafeModId,
   generateContentXML,
   compileScriptToXML,
@@ -42,8 +32,6 @@ import {
   compileDiffDocument,
   toTFileName
 } from '../lib/modCompiler';
-import MDScanner from './MDScanner';
-import PlaytestWorkspace from './PlaytestWorkspace';
 
 export interface EditorFile {
   name: string;

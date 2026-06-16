@@ -4,17 +4,15 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Cpu, 
-  Terminal, 
-  Copy, 
-  Check, 
-  Wifi, 
-  RefreshCw, 
-  Play, 
-  AlertCircle, 
-  BookOpen, 
-  HelpCircle, 
+import {
+  Cpu,
+  Terminal,
+  Copy,
+  Check,
+  RefreshCw,
+  Play,
+  AlertCircle,
+  BookOpen,
   ToggleLeft,
   ToggleRight,
   ChevronDown,
@@ -22,7 +20,7 @@ import {
   X,
   Zap
 } from 'lucide-react';
-import { ModWorkspace, NODE_TEMPLATES, UIWidget, MDNode } from '../types';
+import { ModWorkspace, NODE_TEMPLATES, MDNode } from '../types';
 
 interface AgentBridgeProps {
   isOpen: boolean;

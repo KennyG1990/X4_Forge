@@ -13,7 +13,7 @@ import {
   CornerDownLeft,
   ArrowRight
 } from 'lucide-react';
-import { ModWorkspace, MDNode, UIWidget, PatchBlock } from '../types';
+import { ModWorkspace, MDNode, UIWidget } from '../types';
 
 interface GlobalSearchProps {
   workspace: ModWorkspace;

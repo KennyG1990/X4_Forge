@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Brain, Sparkles, RefreshCw, Compass, Activity, HelpCircle, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Brain, Sparkles, RefreshCw, Compass, HelpCircle, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import { explainWorkspace } from '../lib/mdExplain';
 

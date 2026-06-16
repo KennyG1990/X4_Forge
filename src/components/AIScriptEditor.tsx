@@ -4,19 +4,14 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Play, 
-  Trash, 
-  Plus, 
-  Move, 
-  Eye, 
-  Compass, 
-  ShieldAlert, 
-  Settings, 
-  Sparkles, 
-  Code2, 
-  Cpu, 
-  Terminal,
+import {
+  Trash,
+  Plus,
+  Compass,
+  Settings,
+  Sparkles,
+  Code2,
+  Cpu,
   HelpCircle,
   Bot
 } from 'lucide-react';

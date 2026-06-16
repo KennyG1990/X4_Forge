@@ -16,7 +16,6 @@ import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdC
 // Import types & helpers from the frontend shared file
 import {
   generateMDXML,
-  generateUIXML,
   generateUIIndexXML,
   generateUILuaScript,
   validateModWorkspace,
@@ -37,12 +36,11 @@ import {
   compileWaresXML,
   compileJobsXML,
   compileTFileXML,
-  compileDiffDocument,
-  validatePackageReadiness
+  compileDiffDocument
 } from "./src/lib/modCompiler";
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, runObjectIndexSelftest, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
-import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
+import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";

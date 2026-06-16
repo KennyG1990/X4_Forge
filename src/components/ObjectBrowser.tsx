@@ -8,18 +8,11 @@ import React, { useState, useMemo, useEffect } from 'react';
 // Module-level cache so switching panels doesn't refetch the same index query
 // (the index itself is SQLite-cached server-side; this kills the UI round-trip).
 const OBJECT_INDEX_CACHE = new Map<string, any>();
-import { 
-  Search, 
-  Database, 
-  Check, 
-  Copy, 
-  Compass, 
-  Layers, 
-  Globe, 
-  Volume2, 
-  Scroll, 
-  FileCode,
-  RefreshCw 
+import {
+  Search,
+  Check,
+  Copy,
+  RefreshCw
 } from 'lucide-react';
 import { X4_FACTIONS, X4_SHIP_MACROS, X4_STATION_MACROS, X4_SOUND_EFFECTS } from '../types';
 

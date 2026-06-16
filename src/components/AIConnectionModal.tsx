@@ -4,19 +4,14 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Sparkles, 
-  X, 
-  Key, 
-  Database, 
-  Check, 
-  ShieldCheck, 
-  Lock, 
-  Layers, 
-  Wifi, 
-  Cpu, 
-  AlertTriangle,
-  Info
+import {
+  Sparkles,
+  X,
+  Key,
+  Check,
+  ShieldCheck,
+  Layers,
+  Cpu
 } from 'lucide-react';
 import { 
   AIProviderId, 

@@ -4,21 +4,18 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Globe, 
-  Languages, 
-  Plus, 
-  Search, 
-  Trash2, 
-  Copy, 
-  Check, 
-  FileCode, 
-  Sparkles, 
-  BookOpen, 
+import {
+  Globe,
+  Languages,
+  Plus,
+  Search,
+  Trash2,
+  Copy,
+  Check,
+  FileCode,
+  Sparkles,
   AlertCircle,
-  HelpCircle,
-  Save,
-  MessageSquare
+  HelpCircle
 } from 'lucide-react';
 import { ModWorkspace, TFile, TranslationPage, TranslationItem } from '../types';
 import { toTFileName } from '../lib/modCompiler';

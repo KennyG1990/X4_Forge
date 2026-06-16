@@ -16,7 +16,6 @@ import {
   Wrench,
   CheckCircle,
   Folder,
-  Sliders,
   CheckSquare,
   Square
 } from 'lucide-react';

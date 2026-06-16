@@ -15,8 +15,6 @@ import {
   Play,
   Square,
   Terminal as TerminalIcon,
-  ChevronDown,
-  ChevronUp,
   Search,
   Plus,
   Compass,

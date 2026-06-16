@@ -4,21 +4,15 @@
  */
 
 import React, { useState } from 'react';
-import { 
-  Settings, 
-  Trash, 
-  Plus, 
-  Wrench, 
-  Sparkles, 
-  Database, 
-  HelpCircle, 
-  ShoppingBag, 
-  Anchor, 
-  Code2, 
-  ChevronRight,
+import {
+  Trash,
+  Plus,
+  Sparkles,
+  Database,
+  HelpCircle,
+  Code2,
   GitPullRequest,
-  BadgeAlert,
-  AlertTriangle
+  BadgeAlert
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import ObjectIndexPicker from './ObjectIndexPicker';

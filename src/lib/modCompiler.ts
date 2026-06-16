@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ModWorkspace, generateMDXML, generateUIXML, generateUIIndexXML, generateUILuaScript, XMLDiagnostic } from '../types';
+import { ModWorkspace, generateMDXML, generateUILuaScript, XMLDiagnostic } from '../types';
 import { generateHttpGlueLua, generateContractMdScript, validateContract } from './contractGlue';
 import { generateLayoutLua, pixelLayoutToGrid } from './uiLayout';
 
