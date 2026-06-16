@@ -604,7 +604,7 @@ function getObjectIndex(): X4ObjectIndex {
     resolved.modWorkspacePath || "",
     resolved.filesystemPath || ""
   ];
-  const cacheKey = JSON.stringify({ roots, schemaLoaded: schemaLibrary.loaded, schemaCounts: {
+  const cacheKey = JSON.stringify({ roots, indexerVersion: 4, schemaLoaded: schemaLibrary.loaded, schemaCounts: {
     events: schemaLibrary.events.length,
     conditions: schemaLibrary.conditions.length,
     actions: schemaLibrary.actions.length,

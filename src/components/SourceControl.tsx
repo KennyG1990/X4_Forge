@@ -684,7 +684,7 @@ Guidelines:
             setWorkspace(prev => {
               const currentTFiles = prev.tFiles || [];
               const existsIdx = currentTFiles.findIndex(f => f.languageId === languageId);
-              let newTFiles = [...currentTFiles];
+              const newTFiles = [...currentTFiles];
               if (existsIdx !== -1) {
                 newTFiles[existsIdx] = targetTFile;
               } else {
@@ -1105,6 +1105,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       <div className="flex border-b border-white/5 bg-transparent">
         <button
           onClick={() => setActiveTab2('sourceControl')}
+          title="Diff between the current workspace and the loaded baseline snapshot, regenerated from your nodes/layout. This is a compiled diff, not git working-tree status."
           className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
             activeTab === 'sourceControl'
               ? 'border-cyan-500 text-white bg-cyan-600/5'
@@ -1112,7 +1113,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           }`}
         >
           <GitCommit className="w-3.5 h-3.5" />
-          Changes ({workingChanges.length})
+          Diff ({workingChanges.length})
         </button>
         <button
           onClick={() => setActiveTab2('remotes')}
@@ -1232,7 +1233,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           {/* Active changes lists */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-slate-400 font-sans font-bold uppercase text-[9.5px] tracking-wider border-b border-white/5 pb-1">
-              <span className="flex items-center gap-1">
+              <span className="flex items-center gap-1" title="Files whose compiled XML differs from the loaded baseline snapshot — not git's working tree.">
                 <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
                 Working Changeset
               </span>
@@ -1242,8 +1243,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             {workingChanges.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-6 text-center text-slate-550 border border-dashed border-white/5 rounded-lg bg-black/10">
                 <Check className="w-6 h-6 text-emerald-500/40 mb-1" />
-                <p className="text-[10px] font-mono font-bold text-slate-400">CLEAN HEAD WORKSPACE</p>
-                <p className="text-[9px] text-slate-500 leading-normal mt-0.5">Edit flowchart nodes or layout menus to draft commit diffs.</p>
+                <p className="text-[10px] font-mono font-bold text-slate-400">NO DIFF VS BASELINE</p>
+                <p className="text-[9px] text-slate-500 leading-normal mt-0.5">Compiled XML matches the loaded baseline. Edit nodes or layout menus to draft commit diffs.</p>
               </div>
             ) : (
               <div className="space-y-1 font-mono text-[10.5px]">

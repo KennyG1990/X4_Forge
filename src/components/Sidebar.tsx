@@ -47,13 +47,12 @@ import {
 import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
 import ObjectIndexPicker from './ObjectIndexPicker';
-import PackageModDoctor from './PackageModDoctor';
+import DiagnosticsCenter from './DiagnosticsCenter';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
 import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
-import { analyzeCueLineage } from '../lib/cueLineage';
 import AIHelper from './AIHelper';
 import ObjectBrowser from './ObjectBrowser';
 
@@ -509,19 +508,6 @@ export default function Sidebar({
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">CO-PILOT</span>
         </button>
         <button
-          id="tab_mdscanner"
-          onClick={() => setActiveTab('mdscanner')}
-          className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
-            activeTab === 'mdscanner'
-              ? 'text-amber-400 bg-amber-950/20 border-l-2 border-amber-500 font-bold'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-          }`}
-          title="MD Scanner"
-        >
-          <Brain className="w-4 h-4 shrink-0" />
-          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full font-mono">SCANNER</span>
-        </button>
-        <button
           id="tab_playtest"
           onClick={() => setActiveTab('playtest')}
           className={`w-10 h-11 rounded-lg flex flex-col items-center justify-center transition-all duration-150 cursor-pointer ${
@@ -542,10 +528,10 @@ export default function Sidebar({
               ? 'text-cyan-400 bg-cyan-950/20 border-l-2 border-cyan-500 font-bold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
-          title="Package Mod Doctor Diagnostics"
+          title="Diagnostics — script, package & install checks"
         >
           <Activity className="w-4 h-4 shrink-0" />
-          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">DOCTOR</span>
+          <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">DIAGNOSE</span>
         </button>
         <button
           id="tab_reference"
@@ -590,9 +576,9 @@ export default function Sidebar({
               {activeTab === 'git' && 'Source Control'}
               {activeTab === 'templates' && 'Blueprints'}
               {activeTab === 'ai' && 'AI Co-pilot'}
-              {activeTab === 'mdscanner' && 'MD Scanner'}
+              {activeTab === 'mdscanner' && 'Script Diagnostics'}
               {activeTab === 'playtest' && 'Playtest Workspace'}
-              {activeTab === 'diagnostics' && 'Mod Doctor'}
+              {activeTab === 'diagnostics' && 'Diagnostics'}
               {activeTab === 'reference' && 'Object Browser'}
             </div>
             <div className="text-[9px] text-slate-500 font-sans mt-0.5 leading-none">
@@ -606,7 +592,7 @@ export default function Sidebar({
               {activeTab === 'ai' && 'AI-assisted logic & templates'}
               {activeTab === 'mdscanner' && 'Deep logic cognitive scanning & telemetry'}
               {activeTab === 'playtest' && 'Directory sync, manual syncer, and log parser'}
-              {activeTab === 'diagnostics' && 'Package-wide syntax and reference check'}
+              {activeTab === 'diagnostics' && 'Scripts, package & cross-mod install checks'}
               {activeTab === 'reference' && 'Browse local ships, wares, factions, and code references'}
             </div>
           </div>
@@ -665,21 +651,6 @@ export default function Sidebar({
           </ErrorBoundary>
         )}
 
-        {activeTab === 'mdscanner' && (
-          <ErrorBoundary label="MD Scanner">
-            <DiagnosticsHub
-              workspace={workspace}
-              setWorkspace={setWorkspace}
-              saveCheckpoint={saveCheckpoint}
-              modWorkspacePath={modWorkspacePath}
-              setWorkspaceView={setWorkspaceView}
-              forceTab="analyzer"
-              autoSaveEnabled={autoSaveEnabled}
-              setAutoSaveEnabled={setAutoSaveEnabled}
-            />
-          </ErrorBoundary>
-        )}
-
         {activeTab === 'playtest' && (
           <ErrorBoundary label="Playtest Workspace">
             <DiagnosticsHub
@@ -696,36 +667,19 @@ export default function Sidebar({
         )}
 
         {activeTab === 'diagnostics' && (
-          <ErrorBoundary label="Mod Doctor">
-            <div className="flex flex-col h-full min-h-0 overflow-y-auto">
-              {/* Cue health SUMMARY only — the full tree (navigate + diagnose +
-                  live glow + fix cards) lives in the CUES tab. Consolidated
-                  2026-06-12 after Ken caught the duplicate-tree smell. */}
-              {(() => {
-                const lf = analyzeCueLineage(workspace.nodes || [], workspace.links || []).findings;
-                const errs = lf.filter(f => f.severity === 'error').length;
-                const warns = lf.filter(f => f.severity === 'warning').length;
-                return (
-                  <button
-                    onClick={() => setActiveTab('cues')}
-                    className={`mx-3 mt-3 shrink-0 flex items-center justify-between gap-2 rounded-lg border p-2.5 font-mono text-[10px] cursor-pointer transition-all hover:bg-white/5 ${
-                      errs > 0 ? 'border-red-500/25 bg-red-500/5 text-red-300'
-                        : warns > 0 ? 'border-amber-500/25 bg-amber-500/5 text-amber-300'
-                          : 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
-                    }`}
-                    title="Open the cue tree (navigate, diagnose, bind live game log)"
-                  >
-                    <span className="font-bold uppercase tracking-wide">Cue health</span>
-                    <span>{errs > 0 || warns > 0 ? `${errs} error(s) · ${warns} warning(s)` : 'clean'} → Cues tab</span>
-                  </button>
-                );
-              })()}
-              <PackageModDoctor
-                workspace={workspace}
-                diagnostics={diagnostics}
-                diagnosticSource={diagnosticSource}
-              />
-            </div>
+          <ErrorBoundary label="Diagnostics">
+            <DiagnosticsCenter
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              saveCheckpoint={saveCheckpoint}
+              modWorkspacePath={modWorkspacePath}
+              setWorkspaceView={setWorkspaceView}
+              autoSaveEnabled={autoSaveEnabled}
+              setAutoSaveEnabled={setAutoSaveEnabled}
+              diagnostics={diagnostics}
+              diagnosticSource={diagnosticSource}
+              onOpenCues={() => setActiveTab('cues')}
+            />
           </ErrorBoundary>
         )}
 

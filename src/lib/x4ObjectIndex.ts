@@ -52,6 +52,94 @@ function isWantedPackedEntry(name: string): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Localization (t/) resolution — H8.
+// X4 display names live in t-files keyed by {page,id} refs. Without resolving
+// them the browser shows raw refs like `{20201,401}` and human search
+// ("behemoth", "energy cells") matches nothing. We index the English text
+// (…-l044.xml) into a {page,id}->text map and resolve name refs to readable text.
+// ---------------------------------------------------------------------------
+const LOCALIZATION_FILE_RE = /(?:^|[\\/])t[\\/]\d{4}-l044\.xml$/i;
+const LOC_REF = /\{\s*(\d+)\s*,\s*(\d+)\s*\}/;
+const LOC_REF_GLOBAL = /\{\s*(\d+)\s*,\s*(\d+)\s*\}/g;
+
+export type LocalizationMap = Map<string, string>;
+
+function isLocalizationFile(name: string): boolean {
+  return LOCALIZATION_FILE_RE.test(name);
+}
+
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return _m; } })
+    .replace(/&#(\d+);/g, (_m, d) => { try { return String.fromCodePoint(parseInt(d, 10)); } catch { return _m; } })
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/** Parse an X4 t-file (`<page id><t id>text</t></page>`) into the loc map. Later
+ *  calls override earlier entries for the same key (DLC/extension text wins). */
+function parseLocalizationXml(xml: string, map: LocalizationMap): void {
+  for (const pageMatch of xml.matchAll(/<page\b[^>]*\bid\s*=\s*"(\d+)"[^>]*>([\s\S]*?)<\/page>/gi)) {
+    const page = pageMatch[1];
+    const body = pageMatch[2];
+    for (const tMatch of body.matchAll(/<t\b[^>]*\bid\s*=\s*"(\d+)"[^>]*>([\s\S]*?)<\/t>/gi)) {
+      map.set(`${page},${tMatch[1]}`, tMatch[2]);
+    }
+  }
+}
+
+/** Recursively replace {page,id} refs with their text (t-strings can nest refs). */
+function expandLocRefs(raw: string, map: LocalizationMap, depth = 0): string {
+  if (!raw || depth > 5 || raw.indexOf('{') === -1) return raw;
+  return raw.replace(LOC_REF_GLOBAL, (full, p, i) => {
+    const v = map.get(`${p},${i}`);
+    return v == null ? full : expandLocRefs(v, map, depth + 1);
+  });
+}
+
+/**
+ * Strip X4 localization comments. X4 treats text inside unescaped parentheses
+ * `( … )` as a non-displayed comment (removed before display); a literal
+ * parenthesis is escaped as `\(` / `\)`. Comments may nest. e.g.
+ * "(Behemoth Vanguard)Behemoth Vanguard" → "Behemoth Vanguard".
+ */
+function stripX4Comments(s: string): string {
+  let out = '';
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\\' && (s[i + 1] === '(' || s[i + 1] === ')')) {
+      if (depth === 0) out += s[i + 1]; // escaped paren is a literal char
+      i++;
+      continue;
+    }
+    if (c === '(') { depth++; continue; }
+    if (c === ')') { if (depth > 0) depth--; continue; }
+    if (depth === 0) out += c;
+  }
+  return out;
+}
+
+/**
+ * Resolve a raw `name` attribute that is (or contains) a {page,id} ref into
+ * readable text. Returns null when the input isn't a ref or can't be resolved,
+ * so callers can fall back to a sensible label. Decodes entities and removes
+ * X4 parenthetical comments.
+ */
+function resolveLocName(rawName: string, map: LocalizationMap | undefined): string | null {
+  if (!rawName || !map || !LOC_REF.test(rawName)) return null;
+  const expanded = expandLocRefs(rawName.trim(), map);
+  if (expanded.indexOf('{') !== -1) return null; // a ref stayed unresolved
+  const text = stripX4Comments(decodeXmlEntities(expanded))
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text || null;
+}
+
 function addUnique(items: X4IndexedObject[], seen: Set<string>, item: X4IndexedObject) {
   const key = `${item.kind}:${item.id}`.toLowerCase();
   if (seen.has(key)) return;
@@ -126,7 +214,7 @@ function scanMacroIndex(xml: string, sourceFile: string, items: X4IndexedObject[
 }
 
 /** Core content scanner shared by loose-file and packed-archive paths. */
-function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, items: X4IndexedObject[], seen: Set<string>) {
+function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, items: X4IndexedObject[], seen: Set<string>, locMap?: LocalizationMap) {
   const relative = sourceFile;
   const lowerPath = lowerPathHint;
 
@@ -146,9 +234,18 @@ function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, 
       : id.startsWith('station_') || macroClass === 'station'
         ? 'station'
         : 'macro';
+    // Pull the human display name from this macro's <identification name="{page,id}"/>
+    // (the first one after the <macro> tag — correct for the usual one-macro-per-file).
+    let displayName = labelFromId(id);
+    const idStart = (match.index ?? 0) + tag.length;
+    const idMatch = xml.slice(idStart).match(/<identification\b[^>]*\bname\s*=\s*"([^"]+)"/i);
+    if (idMatch) {
+      const resolved = resolveLocName(idMatch[1], locMap);
+      if (resolved) displayName = resolved;
+    }
     addUnique(items, seen, {
       id,
-      name: labelFromId(id),
+      name: displayName,
       kind,
       sourceFile: relative,
       detail: macroClass ? `macro class=${macroClass}` : 'macro'
@@ -158,9 +255,13 @@ function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, 
   for (const match of xml.matchAll(/<ware\b[^>]*\bid\s*=\s*"([^"]+)"[^>]*>/gi)) {
     const tag = match[0];
     const id = match[1];
+    const rawName = extractAttr(tag, 'name');
+    const resolved = resolveLocName(rawName, locMap);
+    // Prefer resolved display name; never surface a raw {page,id} ref.
+    const name = resolved || (rawName && !LOC_REF.test(rawName) ? rawName : labelFromId(id));
     addUnique(items, seen, {
       id,
-      name: extractAttr(tag, 'name') || labelFromId(id),
+      name,
       kind: 'ware',
       sourceFile: relative,
       detail: extractAttr(tag, 'transport') ? `transport=${extractAttr(tag, 'transport')}` : 'ware'
@@ -170,9 +271,12 @@ function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, 
   for (const match of xml.matchAll(/<faction\b[^>]*\bid\s*=\s*"([^"]+)"[^>]*>/gi)) {
     const tag = match[0];
     const id = match[1];
+    const rawName = extractAttr(tag, 'name');
+    const resolved = resolveLocName(rawName, locMap);
+    const name = resolved || (rawName && !LOC_REF.test(rawName) ? rawName : id.toUpperCase());
     addUnique(items, seen, {
       id: `faction.${id}`,
-      name: extractAttr(tag, 'name') || id.toUpperCase(),
+      name,
       kind: 'faction',
       sourceFile: relative,
       detail: 'faction'
@@ -218,13 +322,15 @@ function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, 
   }
 }
 
-function scanXmlFile(filePath: string, items: X4IndexedObject[], seen: Set<string>) {
+function scanXmlFile(filePath: string, items: X4IndexedObject[], seen: Set<string>, locMap?: LocalizationMap) {
   const stat = fs.statSync(filePath);
   if (stat.size > MAX_FILE_BYTES) return false;
   const xml = fs.readFileSync(filePath, 'utf8');
-  scanXmlContent(xml, filePath, filePath.toLowerCase(), items, seen);
+  scanXmlContent(xml, filePath, filePath.toLowerCase(), items, seen, locMap);
   return true;
 }
+
+const MAX_LOC_FILE_BYTES = 64 * 1024 * 1024; // t-files can be several MB
 
 export function buildX4ObjectIndex(
   roots: string[],
@@ -244,38 +350,81 @@ export function buildX4ObjectIndex(
   const seen = new Set<string>();
   let scannedFiles = 0;
 
+  // ---- Pass 1: build the localization map (loose t-files) so display names
+  // and search resolve to readable text instead of raw {page,id} refs (H8). ----
+  const locMap: LocalizationMap = new Map();
+  const looseItemFiles: string[] = [];
   for (const file of files) {
-    try {
-      if (scanXmlFile(file, items, seen)) scannedFiles++;
-    } catch {
-      state.skipped++;
+    if (isLocalizationFile(file.toLowerCase())) {
+      try {
+        const stat = fs.statSync(file);
+        if (stat.size <= MAX_LOC_FILE_BYTES) parseLocalizationXml(fs.readFileSync(file, 'utf8'), locMap);
+      } catch {
+        state.skipped++;
+      }
+    } else {
+      looseItemFiles.push(file);
     }
   }
 
   // Packed .cat/.dat archives: extract a small whitelist of high-value catalog
-  // and library files so ships/stations/factions/wares/sounds populate even
-  // when the install ships them packed (the default for a Steam X4 install).
+  // and library files (plus the English t-files) so ships/stations/factions/
+  // wares/sounds populate with readable names even when the install ships them
+  // packed (the default for a Steam X4 install).
   let packedArchives = 0;
   let packedEntriesScanned = 0;
+  const packedItemMatches: { name: string; text: string }[] = [];
   const packedRoots = catDatRoots
     .filter(Boolean)
     .map(r => path.normalize(r))
     .filter((r, i, list) => list.findIndex(o => o.toLowerCase() === r.toLowerCase()) === i);
   if (packedRoots.length) {
     try {
-      const result = extractEntries(packedRoots, isWantedPackedEntry, { dedupeByName: false });
+      const result = extractEntries(packedRoots, n => isWantedPackedEntry(n) || isLocalizationFile(n), { dedupeByName: false });
       packedArchives = result.archiveCount;
       for (const match of result.matches) {
-        try {
-          scanXmlContent(match.text, match.name, match.name.toLowerCase(), items, seen);
-          packedEntriesScanned++;
-        } catch {
-          state.skipped++;
+        if (isLocalizationFile(match.name.toLowerCase())) {
+          try { parseLocalizationXml(match.text, locMap); } catch { state.skipped++; }
+        } else {
+          packedItemMatches.push(match);
         }
       }
     } catch {
       /* archive scan failed — fall back to loose-only index */
     }
+  }
+
+  // ---- Pass 2: scan item-bearing files with the loc map in hand. ----
+  for (const file of looseItemFiles) {
+    try {
+      if (scanXmlFile(file, items, seen, locMap)) scannedFiles++;
+    } catch {
+      state.skipped++;
+    }
+  }
+  for (const match of packedItemMatches) {
+    try {
+      scanXmlContent(match.text, match.name, match.name.toLowerCase(), items, seen, locMap);
+      packedEntriesScanned++;
+    } catch {
+      state.skipped++;
+    }
+  }
+
+  // Enrich ship/station display names from their matching ware entry. On packed
+  // installs ships/stations come from index/macros.xml (no <identification>), so
+  // they fall back to id-derived labels; the ware in libraries/wares.xml carries
+  // the localized name. Ware id == macro id without the trailing `_macro`.
+  const wareNameById = new Map<string, string>();
+  for (const it of items) {
+    if (it.kind === 'ware') wareNameById.set(it.id.toLowerCase(), it.name);
+  }
+  for (const it of items) {
+    if (it.kind !== 'ship' && it.kind !== 'station') continue;
+    if (it.name !== labelFromId(it.id)) continue; // already has a real display name
+    const wareId = it.id.toLowerCase().replace(/_macro$/, '');
+    const wareName = wareNameById.get(wareId);
+    if (wareName && wareName !== labelFromId(wareId)) it.name = wareName;
   }
 
   schemaElements.forEach(element => {

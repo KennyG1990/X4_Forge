@@ -137,7 +137,7 @@ export default function App() {
 
   const setWorkspace = React.useCallback((value: React.SetStateAction<ModWorkspace>) => {
     setRawWorkspace(prev => {
-      const next = typeof value === 'function' ? (value as Function)(prev) : value;
+      const next = typeof value === 'function' ? (value as (p: ModWorkspace) => ModWorkspace)(prev) : value;
       return sanitizeWorkspace(next);
     });
   }, []);
@@ -806,7 +806,7 @@ export default function App() {
               btnClass = isActive
                 ? 'bg-red-500/15 text-red-400 border border-red-500/50 shadow-[0_0_8px_rgba(239,68,68,0.15)] hover:bg-red-500/25'
                 : 'bg-red-500/5 text-red-400/80 hover:text-red-300 border border-red-500/20 hover:border-red-500/40';
-              tooltip = `MD Scripts — ${mdErrorCount} validation error${mdErrorCount > 1 ? 's' : ''} detected! Click to view workspace flow errors.`;
+              tooltip = `Editor Diagnostics — ${mdErrorCount} live validation error${mdErrorCount > 1 ? 's' : ''} detected! Click to view workspace flow errors.`;
               indicatorDot = (
                 <span className="relative flex h-2 w-2 shrink-0">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
@@ -818,7 +818,7 @@ export default function App() {
               btnClass = isActive
                 ? 'bg-amber-500/15 text-amber-400 border border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.1)] hover:bg-amber-500/25'
                 : 'bg-amber-500/5 text-amber-400/80 hover:text-amber-300 border border-amber-500/15 hover:border-amber-500/35';
-              tooltip = `MD Scripts — ${mdWarningCount} validation warning${mdWarningCount > 1 ? 's' : ''} active. Click to view rules advisory.`;
+              tooltip = `Editor Diagnostics — ${mdWarningCount} live validation warning${mdWarningCount > 1 ? 's' : ''} active. Click to view rules advisory.`;
               indicatorDot = (
                 <span className="relative flex h-2 w-2 shrink-0">
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
@@ -829,7 +829,7 @@ export default function App() {
               btnClass = isActive
                 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.1)] hover:bg-emerald-500/25'
                 : 'text-slate-400 hover:text-emerald-400 border border-transparent hover:border-emerald-500/20';
-              tooltip = "MD Scripts — All flowchart script validation laws satisfied (valid).";
+              tooltip = "Editor Diagnostics — all live flowchart script validation checks satisfied (valid).";
               indicatorDot = (
                 <span className="relative flex h-2 w-2 shrink-0">
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>

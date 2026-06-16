@@ -12,13 +12,20 @@ interface PackageModDoctorProps {
   workspace: ModWorkspace;
   diagnostics: PackageDiagnostic[];
   diagnosticSource: 'checking' | 'package' | 'local';
+  /** H7: which diagnostics scope to render. 'package' = this mod's build/critic/
+   *  selftests; 'install' = the cross-mod Install Diagnostics (Extension Doctor);
+   *  'all' (default) = both, for standalone use. */
+  focus?: 'package' | 'install' | 'all';
 }
 
 export default function PackageModDoctor({
   workspace,
   diagnostics,
-  diagnosticSource
+  diagnosticSource,
+  focus = 'all'
 }: PackageModDoctorProps) {
+  const showPackage = focus !== 'install';
+  const showInstall = focus !== 'package';
   const errors = diagnostics.filter(d => d.severity === 'error');
   const warnings = diagnostics.filter(d => d.severity === 'warning');
 
@@ -210,6 +217,7 @@ export default function PackageModDoctor({
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#080a0e] p-3 space-y-3 shrink-0 font-mono text-xs">
+      {showPackage && (<>
       {/* Header Info Card */}
       <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2.5">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
@@ -314,12 +322,15 @@ export default function PackageModDoctor({
         )}
       </div>
 
-      {/* CROSS-MOD EXTENSION DOCTOR */}
+      </>)}
+
+      {/* INSTALL DIAGNOSTICS — cross-mod conflicts (was "Extension Doctor") */}
+      {showInstall && (
       <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2.5 shrink-0">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
           <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[11px]">
             <Boxes className="w-4 h-4 text-cyan-400" />
-            EXTENSION DOCTOR
+            INSTALL DIAGNOSTICS
           </div>
           {extScan && (
             <span className="text-[9px] font-bold text-slate-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
@@ -423,6 +434,7 @@ export default function PackageModDoctor({
           </>
         )}
       </div>
+      )}
 
       {/* Read-only extension file viewer modal */}
       {extFile && (
@@ -535,7 +547,8 @@ export default function PackageModDoctor({
         </div>
       )}
 
-      {/* Issues list container */}
+      {/* Issues list container (package diagnostics detail) */}
+      {showPackage && (
       <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-1 transition-all scrollbar-thin">
         {diagnostics.length === 0 ? (
           diagnosticSource === 'local' ? (
@@ -594,6 +607,7 @@ export default function PackageModDoctor({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

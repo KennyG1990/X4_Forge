@@ -189,7 +189,7 @@ export default function DirectoryExplorer({
               setWorkspace(prev => {
                 const currentTFiles = prev.tFiles || [];
                 const existsIdx = currentTFiles.findIndex(f => f.languageId === languageId);
-                let newTFiles = [...currentTFiles];
+                const newTFiles = [...currentTFiles];
                 if (existsIdx !== -1) {
                   newTFiles[existsIdx] = targetTFile;
                 } else {

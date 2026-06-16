@@ -2468,7 +2468,7 @@ export default function Canvas({
           <div className="flex items-center justify-between border-b border-white/5 pb-2">
             <span className="font-bold text-slate-100 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-              Compiler Diagnostics
+              Editor Diagnostics
             </span>
             <button
               onClick={() => setDiagnosticPanelOpen(false)}
@@ -2482,7 +2482,7 @@ export default function Canvas({
             {diagnostics.length === 0 ? (
               <div className="flex flex-col items-center justify-center text-center py-6 bg-emerald-500/5 rounded-lg border border-emerald-500/20 text-emerald-400">
                 <CheckCircle2 className="w-6 h-6 mb-1.5 animate-pulse" />
-                <span className="font-bold uppercase text-[10px]">ALL LOGS GOCLEAN</span>
+                <span className="font-bold uppercase text-[10px]">ALL CHECKS CLEAR</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">0 errors, 0 logic warnings</span>
               </div>
             ) : (

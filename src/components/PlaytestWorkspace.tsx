@@ -61,6 +61,18 @@ interface GameLogStatus {
   error?: string;
 }
 
+// H9: honest log-status labels. This panel only reports what the X4 debug log
+// shows for THIS mod — it is not a statement that the mod is deployed, loaded,
+// or schema-valid. "clean" specifically means "no active-mod log issues".
+const GAME_LOG_STATUS_LABELS: Record<GameLogStatus['status'], string> = {
+  no_log: 'NO LOG FOUND',
+  stale: 'LOG STALE',
+  clean: 'NO LOG ISSUES',
+  warnings: 'LOG WARNINGS',
+  errors: 'LOG ERRORS',
+  error: 'LOG READ ERROR',
+};
+
 interface PlaytestWorkspaceProps {
   activeModId: string;
   modWorkspacePath: string;
@@ -245,8 +257,8 @@ export default function PlaytestWorkspace({
         <div className={`rounded-lg border p-3 space-y-2 ${gameLogTone}`}>
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-0.5 min-w-0">
-              <div className="font-mono text-[9px] uppercase font-black tracking-wider text-white">
-                Live X4 Log Status: {gameLogStatus?.status || 'checking'}
+              <div className="font-mono text-[9px] uppercase font-black tracking-wider text-white" title="Reflects only this mod's entries in the X4 debug log — not whether the mod is deployed, loaded in-game, or schema-valid.">
+                Active-Mod Log Status: {gameLogStatus ? (GAME_LOG_STATUS_LABELS[gameLogStatus.status] || gameLogStatus.status) : 'CHECKING'}
               </div>
               <p className="text-[10px] leading-relaxed text-slate-300">
                 {gameLogError || gameLogStatus?.summary || 'Reading recent debuglog.txt output...'}
