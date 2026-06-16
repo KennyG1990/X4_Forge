@@ -29,7 +29,6 @@ import {
   Library,
   Trash2,
   Activity,
-  Brain,
   Terminal,
   Database
 } from 'lucide-react';
@@ -58,8 +57,8 @@ import ObjectBrowser from './ObjectBrowser';
 
 interface SidebarProps {
   width?: number;
-  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference';
-  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference') => void;
+  activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference';
+  setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   onAddNode: (template: any) => void;
@@ -563,7 +562,6 @@ export default function Sidebar({
               {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-cyan-400" />}
               {activeTab === 'ai' && <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
-              {activeTab === 'mdscanner' && <Brain className="w-3.5 h-3.5 text-amber-500" />}
               {activeTab === 'playtest' && <Terminal className="w-3.5 h-3.5 text-emerald-400" />}
               {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-cyan-405" />}
               {activeTab === 'reference' && <Database className="w-3.5 h-3.5 text-amber-400" />}
@@ -576,7 +574,6 @@ export default function Sidebar({
               {activeTab === 'git' && 'Source Control'}
               {activeTab === 'templates' && 'Blueprints'}
               {activeTab === 'ai' && 'AI Co-pilot'}
-              {activeTab === 'mdscanner' && 'Script Diagnostics'}
               {activeTab === 'playtest' && 'Playtest Workspace'}
               {activeTab === 'diagnostics' && 'Diagnostics'}
               {activeTab === 'reference' && 'Object Browser'}
@@ -590,7 +587,6 @@ export default function Sidebar({
               {activeTab === 'git' && 'Staged changes & remotes'}
               {activeTab === 'templates' && 'Manage reusable subgraphs'}
               {activeTab === 'ai' && 'AI-assisted logic & templates'}
-              {activeTab === 'mdscanner' && 'Deep logic cognitive scanning & telemetry'}
               {activeTab === 'playtest' && 'Directory sync, manual syncer, and log parser'}
               {activeTab === 'diagnostics' && 'Scripts, package & cross-mod install checks'}
               {activeTab === 'reference' && 'Browse local ships, wares, factions, and code references'}

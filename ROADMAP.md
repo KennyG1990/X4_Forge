@@ -1375,10 +1375,22 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 - ✅ H8 — Object Browser human-searchability DONE & browser-verified (loc-map resolves `{page,id}`; "behemoth"/"elite"/"energy cells" now searchable; wares/factions/ships read in plain English). `src/lib/x4ObjectIndex.ts` + indexerVersion bump in `server.ts`.
 - ✅ H7 — diagnostics taxonomy consolidated DONE & browser-verified. One scoped "Diagnostics" hub (`DiagnosticsCenter.tsx`): Scripts / Package / Install tabs; Editor scope = canvas ("Editor Diagnostics", typo fixed). `PackageModDoctor` `focus` prop; Sidebar merged to a single "DIAGNOSE" entry.
 
-**ALL H6–H9 + G7 items for this grind are now DONE & browser-verified. Remaining open:**
-- H8 follow-up (minor) — station build-module display names (per-macro identification extraction, packed).
-- 750-warning eslint triage (separate pass).
-- Infra: H3 API/Vite boot race; H4 PerformanceObserver supplement for FpsMeter.
+**Post-review hardening (Codex pass, 2026-06-16):**
+- H8: bounded the macro `<identification>` lookup to the current `</macro>` block (was an unbounded `xml.slice(afterTag)` that could bleed a later macro's name onto an earlier one in multi-macro files). `x4ObjectIndex.ts`.
+- H7: removed the dead `mdscanner` remnants (type-union members in `App.tsx`/`Sidebar.tsx` + the orphaned header conditionals + now-unused `Brain` import). Zero `mdscanner` refs remain.
+- Verified host-side by Codex: `npm run typecheck` pass, `npm run lint` 0 errors / 752 warnings, full browser sweep green. (NB: in-sandbox `ts.createSourceFile` reported phantom "Invalid character" diags on Sidebar/App — the documented H1 stale-read artifact, NOT real; host typecheck is authoritative.)
+- Acceptable debt (not blockers): regex-based XML/loc parsing in `x4ObjectIndex.ts` deserves follow-up tests around multi-macro + loc edge cases; `indexerVersion` cache-bust is a manual bump.
+
+**ALL H6–H9 + G7 items for this grind are now DONE & browser-verified.**
+
+### Scoped next-work queue (2026-06-16, ranked by value × verifiability)
+
+- **N1 (P0) — Object-index selftest oracle.** Retire the Codex-flagged debt: the new regex XML/loc parsing in `x4ObjectIndex.ts` has no oracle. Add `runObjectIndexSelftest()` (pure, synthetic in-memory fixtures — NO disk/install dependency) covering: loc-map parse, `{page,id}` resolution incl. nested refs, X4 `(…)`/`\(…\)` comment stripping, **multi-macro `<identification>` bounding** (regression guard for the bug just fixed), ware-name enrichment (ship/station macro id ↔ ware id minus `_macro`), faction resolution, and the "raw ref never leaks" invariant. Wire a public `GET /api/agent/object-index-selftest` (house pattern: engine → oracle → endpoint). **Verify:** endpoint returns `{allPassed:true}`; appears in the Studio Selftests dashboard. *Highest value: converts brittle regex into a deterministic, browser-checkable guarantee.*
+- **N2 (P1) — H8 follow-up: station build-module display names.** Build-modules (no ware entry) still show id-labels. Decide a bounded fix (identification extraction for station macro files, or a station-specific name source) without re-reading thousands of packed files. **Verify:** `/api/agent/object-index?kind=station` shows readable names; covered by N1 oracle.
+- **N3 (P2) — H4 FpsMeter reconcile.** Codex saw two FPS indicators disagree (banner ~low during canvas work vs bottom badge 160–180). Identify both sources, mark one authoritative, surface the "cadence indicator, not profiler" caveat in-UI; optional `PerformanceObserver` longtask supplement. **Verify:** browser — only one authoritative number, caveat visible.
+- **N4 (P2) — H3 API/Vite boot race.** Smooth the ~2–3s `ECONNREFUSED 127.0.0.1:3001` window on startup (wait-on/retry or ordering). **Verify:** cold start shows no `/api` 503 burst.
+- **Backlog:** 750-warning eslint triage; G13 editable wares/jobs/aiscripts graphs; G14 UI/interaction test coverage; C2 in-game verification (human).
+
 - All edits this session are files-only — Antigravity owns git/commits (H1/H2).
 
 **Infra / environment (H1-H4):**

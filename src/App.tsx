@@ -160,7 +160,7 @@ export default function App() {
   }, [loadSchemaLibrary]);
 
   const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki'>('blueprint');
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'mdscanner' | 'playtest' | 'reference'>('script');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference'>('script');
 
   // Lifted auto-save state to synchronize settings and prevent data clobbering on load
   const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(false);

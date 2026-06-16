@@ -234,11 +234,14 @@ function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, 
       : id.startsWith('station_') || macroClass === 'station'
         ? 'station'
         : 'macro';
-    // Pull the human display name from this macro's <identification name="{page,id}"/>
-    // (the first one after the <macro> tag — correct for the usual one-macro-per-file).
+    // Pull the human display name from this macro's <identification name="{page,id}"/>.
+    // Bound the search to THIS macro's block (up to its </macro>) so a multi-macro
+    // file can't bleed a later macro's identification onto an earlier one.
     let displayName = labelFromId(id);
     const idStart = (match.index ?? 0) + tag.length;
-    const idMatch = xml.slice(idStart).match(/<identification\b[^>]*\bname\s*=\s*"([^"]+)"/i);
+    const macroEnd = xml.indexOf('</macro>', idStart);
+    const region = macroEnd === -1 ? xml.slice(idStart) : xml.slice(idStart, macroEnd);
+    const idMatch = region.match(/<identification\b[^>]*\bname\s*=\s*"([^"]+)"/i);
     if (idMatch) {
       const resolved = resolveLocName(idMatch[1], locMap);
       if (resolved) displayName = resolved;
@@ -411,21 +414,7 @@ export function buildX4ObjectIndex(
     }
   }
 
-  // Enrich ship/station display names from their matching ware entry. On packed
-  // installs ships/stations come from index/macros.xml (no <identification>), so
-  // they fall back to id-derived labels; the ware in libraries/wares.xml carries
-  // the localized name. Ware id == macro id without the trailing `_macro`.
-  const wareNameById = new Map<string, string>();
-  for (const it of items) {
-    if (it.kind === 'ware') wareNameById.set(it.id.toLowerCase(), it.name);
-  }
-  for (const it of items) {
-    if (it.kind !== 'ship' && it.kind !== 'station') continue;
-    if (it.name !== labelFromId(it.id)) continue; // already has a real display name
-    const wareId = it.id.toLowerCase().replace(/_macro$/, '');
-    const wareName = wareNameById.get(wareId);
-    if (wareName && wareName !== labelFromId(wareId)) it.name = wareName;
-  }
+  enrichMacroDisplayNames(items);
 
   schemaElements.forEach(element => {
     addUnique(items, seen, {
@@ -453,6 +442,119 @@ export function buildX4ObjectIndex(
     counts,
     items: items.sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id))
   };
+}
+
+/**
+ * Enrich ship/station display names from their matching ware entry. On packed
+ * installs ships/stations come from index/macros.xml (no <identification>), so
+ * they fall back to id-derived labels; the ware in libraries/wares.xml carries
+ * the localized name. Ware id == macro id without the trailing `_macro`.
+ * Mutates `items` in place. Pure (no I/O) so it's unit-testable.
+ */
+function enrichMacroDisplayNames(items: X4IndexedObject[]): void {
+  const wareNameById = new Map<string, string>();
+  for (const it of items) {
+    if (it.kind === 'ware') wareNameById.set(it.id.toLowerCase(), it.name);
+  }
+  for (const it of items) {
+    if (it.kind !== 'ship' && it.kind !== 'station') continue;
+    if (it.name !== labelFromId(it.id)) continue; // already has a real display name
+    const wareId = it.id.toLowerCase().replace(/_macro$/, '');
+    const wareName = wareNameById.get(wareId);
+    if (wareName && wareName !== labelFromId(wareId)) it.name = wareName;
+  }
+}
+
+/**
+ * Deterministic oracle for the H8 object-index name-resolution path. Runs on
+ * synthetic in-memory fixtures only (NO disk/install dependency), so it is a
+ * stable regression guard for the regex XML/localization parsing — including
+ * the multi-macro `<identification>` bounding bug fixed in the 2026-06-16
+ * Codex pass. House shape: { allPassed, passed, total, checks[] }.
+ */
+export function runObjectIndexSelftest(): {
+  allPassed: boolean;
+  pass: boolean;
+  passed: number;
+  total: number;
+  checks: { name: string; pass: boolean; detail?: string }[];
+} {
+  const checks: { name: string; pass: boolean; detail?: string }[] = [];
+  const expect = (name: string, cond: boolean, detail?: string) => checks.push({ name, pass: !!cond, detail });
+
+  // Synthetic English t-file: page 1 with a few entries, incl. a nested ref.
+  const tFile = `<?xml version="1.0"?>
+<language id="44">
+  <page id="1">
+    <t id="10">Energy Cells</t>
+    <t id="20">Argon Federation</t>
+    <t id="30">(comment)Behemoth Vanguard</t>
+    <t id="40">{1,20} Destroyer</t>
+    <t id="50">Keep \\(this\\)</t>
+  </page>
+</language>`;
+  const locMap: LocalizationMap = new Map();
+  parseLocalizationXml(tFile, locMap);
+  expect('loc-map parsed entries', locMap.size === 5, `size=${locMap.size}`);
+
+  // Comment stripping (plain, nested, escaped).
+  expect('strip leading paren comment', stripX4Comments('(Behemoth Vanguard)Behemoth Vanguard') === 'Behemoth Vanguard');
+  expect('strip nested paren comment', stripX4Comments('Elite Sport(same as (Elite Sport)x)') === 'Elite Sport');
+  expect('escaped parens kept literal', stripX4Comments('Keep \\(this\\)') === 'Keep (this)');
+
+  // Ref resolution: direct, nested, non-ref, unresolved.
+  expect('resolve direct ref', resolveLocName('{1,10}', locMap) === 'Energy Cells', resolveLocName('{1,10}', locMap) || '');
+  expect('resolve nested ref', resolveLocName('{1,40}', locMap) === 'Argon Federation Destroyer', resolveLocName('{1,40}', locMap) || '');
+  expect('resolve strips comment', resolveLocName('{1,30}', locMap) === 'Behemoth Vanguard', resolveLocName('{1,30}', locMap) || '');
+  expect('non-ref returns null', resolveLocName('PlainName', locMap) === null);
+  expect('unresolved ref returns null', resolveLocName('{9,99}', locMap) === null);
+
+  // Ware + faction name resolution via scanXmlContent.
+  const wfItems: X4IndexedObject[] = []; const wfSeen = new Set<string>();
+  scanXmlContent(
+    `<wares><ware id="energycells" name="{1,10}" transport="container"/><ware id="mysteryware" name="{9,99}"/></wares>`,
+    'libraries/wares.xml', 'libraries/wares.xml', wfItems, wfSeen, locMap
+  );
+  scanXmlContent(
+    `<factions><faction id="argon" name="{1,20}"/></factions>`,
+    'libraries/factions.xml', 'libraries/factions.xml', wfItems, wfSeen, locMap
+  );
+  const energy = wfItems.find(i => i.id === 'energycells');
+  const mystery = wfItems.find(i => i.id === 'mysteryware');
+  const argon = wfItems.find(i => i.id === 'faction.argon');
+  expect('ware ref resolved', energy?.name === 'Energy Cells', energy?.name);
+  expect('faction ref resolved', argon?.name === 'Argon Federation', argon?.name);
+  // Invariant: a raw {page,id} ref must NEVER leak into a name.
+  const anyRawRef = wfItems.some(i => /\{\s*\d+\s*,\s*\d+\s*\}/.test(i.name));
+  expect('no raw {page,id} leaks', !anyRawRef && mystery?.name === 'Mysteryware', mystery?.name);
+
+  // CRITICAL regression guard for the unbounded-identification bug: macro A has
+  // NO <identification>, while a LATER macro B does. The old unbounded slice
+  // would wrongly assign B's name to A. Bounded lookup must leave A on its
+  // id-label and give B its own resolved name.
+  const mItems: X4IndexedObject[] = []; const mSeen = new Set<string>();
+  const multiMacro = `<macros>
+    <macro name="ship_a_macro" class="ship"><properties><physics/></properties></macro>
+    <macro name="ship_b_macro" class="ship"><properties><identification name="{1,20}"/></properties></macro>
+  </macros>`;
+  scanXmlContent(multiMacro, 'assets/ships.xml', 'assets/ships.xml', mItems, mSeen, locMap);
+  const macroA = mItems.find(i => i.id === 'ship_a_macro');
+  const macroB = mItems.find(i => i.id === 'ship_b_macro');
+  expect('macro A keeps label (no id, no bleed)', macroA?.name === labelFromId('ship_a_macro'), macroA?.name);
+  expect('macro B gets its own name', macroB?.name === 'Argon Federation', macroB?.name);
+
+  // Ware-enrichment: a packed ship macro (placeholder label) inherits the ware name.
+  const enrichItems: X4IndexedObject[] = [
+    { id: 'ship_beh_destroyer_01_a_macro', name: labelFromId('ship_beh_destroyer_01_a_macro'), kind: 'ship', sourceFile: 'index/macros.xml' },
+    { id: 'ship_beh_destroyer_01_a', name: 'Behemoth Vanguard', kind: 'ware', sourceFile: 'libraries/wares.xml' },
+  ];
+  enrichMacroDisplayNames(enrichItems);
+  const enrichedShip = enrichItems.find(i => i.kind === 'ship');
+  expect('ware-enrichment fills macro name', enrichedShip?.name === 'Behemoth Vanguard', enrichedShip?.name);
+
+  const passed = checks.filter(c => c.pass).length;
+  const allPassed = passed === checks.length;
+  return { allPassed, pass: allPassed, passed, total: checks.length, checks };
 }
 
 export function filterX4ObjectIndex(index: X4ObjectIndex, options: { q?: string; kind?: string; limit?: number }): X4ObjectIndex {
