@@ -14,8 +14,11 @@ import {
   CheckCircle,
   AlertTriangle,
   Save,
+  Sparkles,
   Settings as SettingsIcon
 } from 'lucide-react';
+
+type AiTier = 'off' | 'explain' | 'assist' | 'cobuild';
 
 interface DirectorySettingsModalProps {
   isOpen: boolean;
@@ -24,7 +27,19 @@ interface DirectorySettingsModalProps {
   setModWorkspacePath: (path: string) => void;
   filesystemPath: string;
   setFilesystemPath: (path: string) => void;
+  aiTier: AiTier;
+  setAiTier: (t: AiTier) => void;
+  /** Opens the AI provider/model/API-key modal. Reachable here at ALL tiers (incl. off). */
+  onOpenAIConfig: () => void;
 }
+
+// A4.1 — opt-in AI presence tiers. Off by default; determinism is never gated by this.
+const AI_TIERS: { id: AiTier; label: string; desc: string }[] = [
+  { id: 'off', label: 'Off', desc: 'No AI anywhere. Forge stays a fully deterministic editor.' },
+  { id: 'explain', label: 'Explain', desc: 'Read-only. AI explains errors/nodes on request — never changes your work.' },
+  { id: 'assist', label: 'Assist', desc: 'AI may propose changes — staged, validated, applied only on your confirm.' },
+  { id: 'cobuild', label: 'Co-build', desc: 'Step-by-step Architect drafting, still verified before anything applies.' },
+];
 
 /**
  * One row per directory the application can require. Each row carries a hover
@@ -64,7 +79,10 @@ export default function DirectorySettingsModal({
   modWorkspacePath,
   setModWorkspacePath,
   filesystemPath,
-  setFilesystemPath
+  setFilesystemPath,
+  aiTier,
+  setAiTier,
+  onOpenAIConfig
 }: DirectorySettingsModalProps) {
   const [gamePath, setGamePath] = useState('');
   const [schemaPath, setSchemaPath] = useState('');
@@ -214,6 +232,50 @@ export default function DirectorySettingsModal({
                 )}
               </div>
             )}
+          </DirectoryRow>
+
+          {/* AI Assistant — opt-in tiers (off by default). Applied immediately (client-side). */}
+          <DirectoryRow
+            icon={<Sparkles className="w-4 h-4" />}
+            title="AI Assistant (optional)"
+            tooltip="Off by default. Controls how much AI assistance Forge offers. Determinism — validation, diagnostics, compile, the object browser, selftests — always works fully regardless of this setting. Your choice is saved on this device and applied immediately."
+          >
+            <div className="grid grid-cols-2 gap-1.5">
+              {AI_TIERS.map(t => {
+                const active = aiTier === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setAiTier(t.id)}
+                    title={t.desc}
+                    className={`text-left p-2 rounded border transition-all cursor-pointer ${
+                      active
+                        ? 'bg-amber-500/10 border-amber-500/50 text-amber-300'
+                        : 'bg-[#0F1115] border-white/10 text-slate-300 hover:border-amber-500/30'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wide">
+                      {active && <CheckCircle className="w-3 h-3" />}
+                      {t.label}
+                    </div>
+                    <div className="text-[9.5px] text-slate-400 font-sans leading-snug mt-0.5">{t.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[9px] text-slate-500 font-sans mt-1.5 leading-relaxed">
+              AI is a convenience layer beside Forge's deterministic core, never in front of it. At <span className="text-slate-300 font-mono">Off</span> there is no AI anywhere in the app.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenAIConfig}
+              title="Provider, model and API key — configurable at any tier, including Off."
+              className="mt-2 w-full px-2.5 py-1.5 rounded border border-amber-500/25 bg-amber-500/[0.04] hover:bg-amber-500/10 hover:border-amber-500/50 text-amber-300 text-[10.5px] font-mono font-bold uppercase tracking-wide transition-all cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <Sparkles className="w-3 h-3" />
+              Configure AI engine — provider, model &amp; API key
+            </button>
           </DirectoryRow>
 
           {/* Status + Save */}

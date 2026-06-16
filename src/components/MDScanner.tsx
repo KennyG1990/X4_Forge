@@ -37,6 +37,9 @@ interface MDScannerProps {
   triggerAnalysis: () => Promise<void>;
   isAnalysisStale: boolean;
   cancelAnalysis?: () => void;
+  /** A4.10/M-DET-2 — when false (AI tier off), the optional AI-polish affordance is absent.
+   *  The deterministic explanation above always renders. */
+  aiEnabled?: boolean;
 }
 
 export default function MDScanner({
@@ -45,7 +48,8 @@ export default function MDScanner({
   analyzing,
   analysisError,
   triggerAnalysis,
-  cancelAnalysis
+  cancelAnalysis,
+  aiEnabled = false
 }: MDScannerProps) {
   // DETERMINISTIC explanation — computed locally from the node graph, no AI, no credits,
   // instant, always current. Prose from the semantics registry; SEQUENCE from the edge-walk.
@@ -164,7 +168,8 @@ export default function MDScanner({
         </div>
       )}
 
-      {/* ---- OPTIONAL AI POLISH — explicitly subordinate, off by default, non-authoritative ---- */}
+      {/* ---- OPTIONAL AI POLISH — explicitly subordinate, non-authoritative; ABSENT when AI tier is off (M-DET-2) ---- */}
+      {aiEnabled && (
       <div className="pt-2 border-t border-white/5 space-y-2">
         <div className="text-[9px] font-mono text-slate-500 uppercase tracking-wider flex items-center gap-1">
           <Sparkles className="w-3 h-3 text-amber-400/70" /> Optional AI prose
@@ -214,6 +219,7 @@ export default function MDScanner({
           </>
         )}
       </div>
+      )}
     </div>
   );
 }

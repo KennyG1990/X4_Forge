@@ -4,18 +4,21 @@
  */
 
 import React, { useState } from 'react';
-import { 
-  Sparkles, 
-  Send, 
-  Bot, 
-  X, 
-  RefreshCw, 
-  Cpu, 
-  Check, 
-  Copy, 
-  ChevronRight 
+import {
+  Sparkles,
+  Send,
+  Bot,
+  X,
+  RefreshCw,
+  Cpu,
+  Check,
+  Copy,
+  ChevronRight,
+  AlertTriangle,
+  ShieldCheck
 } from 'lucide-react';
 import { ModWorkspace, ChatMessage } from '../types';
+import { reviewProposal, type VerdictStatus } from '../lib/proposalReview';
 
 interface AIHelperProps {
   mode: 'floating' | 'sidebar';
@@ -42,6 +45,7 @@ interface AIHelperProps {
 
 export default function AIHelper({
   mode,
+  workspace,
   chatHistory,
   inputText,
   setInputText,
@@ -250,45 +254,70 @@ export default function AIHelper({
               <span className="whitespace-pre-line font-medium leading-relaxed font-sans select-text">{item.text}</span>
             </div>
 
-            {/* Proposed Workspace Action Card Block */}
-            {item.actionRequired && item.proposedWorkspace && (
-              <div className="max-w-[90%] self-start mr-auto bg-[#0a1018] border border-emerald-500/20 rounded-lg p-3.5 space-y-3 font-sans animate-fade-in shadow-lg">
-                <div className="flex items-center gap-1.5 text-emerald-400 font-mono text-[10px] font-bold uppercase tracking-wider">
-                  <Cpu className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
-                  <span>PROPOSED WORKSPACE BLUEPRINT</span>
+            {/* A4.2 — Review panel: diff + deterministic verdicts BEFORE apply. */}
+            {item.actionRequired && item.proposedWorkspace && (() => {
+              const review = reviewProposal(workspace, item.proposedWorkspace as ModWorkspace);
+              const vClass: Record<VerdictStatus, string> = {
+                pass: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10',
+                warn: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
+                fail: 'text-red-300 border-red-500/30 bg-red-500/10',
+                'not-checked': 'text-slate-400 border-white/10 bg-white/5',
+              };
+              const vLabel: Record<VerdictStatus, string> = { pass: 'PASS', warn: 'WARN', fail: 'FAIL', 'not-checked': 'N/A' };
+              const Badge = ({ name, v }: { name: string; v: { status: VerdictStatus; errors: number; warnings: number } }) => (
+                <span className={`px-1.5 py-0.5 rounded border text-[8.5px] font-mono font-bold uppercase tracking-wide ${vClass[v.status]}`}
+                  title={v.status === 'not-checked' ? 'Not machine-verified' : `${v.errors} error(s), ${v.warnings} warning(s)`}>
+                  {name}: {vLabel[v.status]}
+                </span>
+              );
+              return (
+              <div className="max-w-[90%] self-start mr-auto bg-[#0a1018] border border-white/10 rounded-lg p-3.5 space-y-3 font-sans animate-fade-in shadow-lg">
+                <div className="flex items-center gap-1.5 text-slate-200 font-mono text-[10px] font-bold uppercase tracking-wider">
+                  <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Proposed changes — review before applying</span>
                 </div>
 
-                <div className="bg-black/40 border border-white/5 rounded p-2.5 space-y-1.5 font-mono text-[10px]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Namespace:</span>
-                    <span className="text-slate-200 font-bold truncate max-w-[150px]">{item.proposedWorkspace.name}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Visual Nodes:</span>
-                    <span className="text-slate-200 font-bold">{item.proposedWorkspace.nodes?.length || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Flow Paths:</span>
-                    <span className="text-slate-200 font-bold">{item.proposedWorkspace.links?.length || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">UI Controls:</span>
-                    <span className="text-slate-200 font-bold">{item.proposedWorkspace.uiWidgets?.length || 0}</span>
-                  </div>
+                {/* Diff summary */}
+                <div className="bg-black/40 border border-white/5 rounded p-2.5 font-mono text-[10px] flex items-center gap-3">
+                  <span className="text-emerald-400 font-bold">+{review.diff.added.length} added</span>
+                  <span className="text-red-400 font-bold">−{review.diff.removed.length} removed</span>
+                  <span className="text-amber-400 font-bold">~{review.diff.changed.length} changed</span>
+                  <span className="ml-auto text-slate-500">{review.nodeCounts.base}→{review.nodeCounts.proposed} nodes</span>
                 </div>
 
-                <p className="text-[10px] text-slate-400 leading-relaxed">
-                  This proposal is staged only. Your canvas changes only after you confirm, or you can decline it without applying anything.
+                {/* Three deterministic verdicts */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge name="Schema" v={review.verdicts.schema} />
+                  <Badge name="Graph" v={review.verdicts.graph} />
+                  <Badge name="Intent" v={review.verdicts.intent} />
+                </div>
+
+                {/* Unknown / likely-hallucinated tags */}
+                {review.unknownTags.length > 0 && (
+                  <div className="text-[9.5px] text-red-300 bg-red-500/5 border border-red-500/20 rounded p-2 leading-relaxed flex items-start gap-1.5">
+                    <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                    <span>Unrecognized tag(s): {review.unknownTags.map(u => u.xmlTag).join(', ')} — not in the X4 schema (likely invented). Blocked from apply.</span>
+                  </div>
+                )}
+
+                <p className="text-[9.5px] text-slate-500 leading-relaxed">
+                  Staged only — nothing changes until you apply. <span className="text-slate-400">Intent</span> is not machine-verified: a green Schema/Graph proves the XML is valid, not that it does what you asked.
                 </p>
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     type="button"
+                    disabled={!review.applySafe}
                     onClick={() => handleApplyAction(idx, item)}
-                    className="py-1.5 text-center text-[10px] bg-emerald-500 hover:bg-emerald-400 text-black font-bold rounded font-mono uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer transition-all"
+                    title={review.applySafe ? 'Apply to the canvas (reversible via Undo)' : 'Resolve the schema/graph errors or unknown tags first'}
+                    className={`py-1.5 text-center text-[10px] font-bold rounded font-mono uppercase tracking-wider flex items-center justify-center gap-1 transition-all ${
+                      review.applySafe
+                        ? 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer'
+                        : 'bg-slate-800 text-slate-500 border border-white/10 cursor-not-allowed'
+                    }`}
                   >
-                    <Check className="w-3" />
-                    Confirm & Apply
+                    {review.applySafe ? <Check className="w-3" /> : <ShieldCheck className="w-3" />}
+                    {review.applySafe ? 'Confirm & Apply' : 'Review before applying'}
                   </button>
                   <button
                     type="button"
@@ -300,7 +329,8 @@ export default function AIHelper({
                   </button>
                 </div>
               </div>
-            )}
+              );
+            })()}
           </div>
         ))}
 

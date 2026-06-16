@@ -32,6 +32,8 @@ interface DiagnosticsCenterProps {
   diagnosticSource: 'checking' | 'package' | 'local';
   /** Jump to the Cues tab (the cue-health summary deep-links there). */
   onOpenCues?: () => void;
+  /** A4.10 — gates the optional AI-polish affordance in the Scripts (MDScanner) view. */
+  aiEnabled?: boolean;
 }
 
 type Scope = 'scripts' | 'package' | 'install';
@@ -53,6 +55,7 @@ export default function DiagnosticsCenter({
   diagnostics,
   diagnosticSource,
   onOpenCues,
+  aiEnabled = false,
 }: DiagnosticsCenterProps) {
   const [scope, setScope] = useState<Scope>('scripts');
 
@@ -92,6 +95,7 @@ export default function DiagnosticsCenter({
             forceTab="analyzer"
             autoSaveEnabled={autoSaveEnabled}
             setAutoSaveEnabled={setAutoSaveEnabled}
+            aiEnabled={aiEnabled}
           />
         )}
 

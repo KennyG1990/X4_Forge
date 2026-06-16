@@ -57,6 +57,8 @@ import ObjectBrowser from './ObjectBrowser';
 
 interface SidebarProps {
   width?: number;
+  /** A4.1 — AI presence gate. When false (tier=off), the AI Co-pilot tab is absent. */
+  aiEnabled?: boolean;
   activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference';
   setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference') => void;
   workspace: ModWorkspace;
@@ -121,6 +123,7 @@ interface SidebarProps {
 
 export default function Sidebar({
   width,
+  aiEnabled = false,
   activeTab,
   setActiveTab,
   workspace,
@@ -493,6 +496,7 @@ export default function Sidebar({
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">TEMPLATES</span>
         </button>
 
+        {aiEnabled && (
         <button
           id="tab_ai"
           onClick={() => setActiveTab('ai')}
@@ -506,6 +510,7 @@ export default function Sidebar({
           <Sparkles className="w-4 h-4 shrink-0" />
           <span className="text-[7.5px] font-mono tracking-tighter uppercase font-bold mt-1 text-center truncate w-full">CO-PILOT</span>
         </button>
+        )}
         <button
           id="tab_playtest"
           onClick={() => setActiveTab('playtest')}
@@ -675,6 +680,7 @@ export default function Sidebar({
               diagnostics={diagnostics}
               diagnosticSource={diagnosticSource}
               onOpenCues={() => setActiveTab('cues')}
+              aiEnabled={aiEnabled}
             />
           </ErrorBoundary>
         )}
@@ -1355,7 +1361,7 @@ export default function Sidebar({
         )}
 
         {/* AI CO-PILOT (Tab: ai) */}
-        {activeTab === 'ai' && (
+        {aiEnabled && activeTab === 'ai' && (
           <AIHelper
             mode="sidebar"
             workspace={workspace}

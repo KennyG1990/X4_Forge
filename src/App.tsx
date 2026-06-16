@@ -309,6 +309,28 @@ export default function App() {
   const [isAiFloatingVisible, setIsAiFloatingVisible] = useState<boolean>(false);
   const [isAiFloatingOpen, setIsAiFloatingOpen] = useState<boolean>(false);
 
+  // A4.1 — AI presence tier (opt-in; default OFF for an AI-skeptical community).
+  // Persisted so the choice survives reload/restart. Gates ALL AI-assistant
+  // surfaces; deterministic features (validate/diagnostics/compile/object browser/
+  // selftests) are NEVER affected by this.
+  const [aiTier, setAiTierState] = useState<'off' | 'explain' | 'assist' | 'cobuild'>(() => {
+    try {
+      const v = localStorage.getItem('x4_ai_tier');
+      if (v === 'off' || v === 'explain' || v === 'assist' || v === 'cobuild') return v;
+    } catch { /* ignore */ }
+    return 'off';
+  });
+  const setAiTier = (t: 'off' | 'explain' | 'assist' | 'cobuild') => {
+    setAiTierState(t);
+    try { localStorage.setItem('x4_ai_tier', t); } catch { /* ignore */ }
+    if (t === 'off') {
+      // Tearing AI down should leave no surface behind.
+      setIsAiFloatingVisible(false);
+      setActiveSidebarTab(prev => (prev === 'ai' ? 'script' : prev));
+    }
+  };
+  const aiEnabled = aiTier !== 'off';
+
   const handleSendChatMode = async (promptMsg: string) => {
     setAiChatHistory(prev => [...prev, { role: 'user', text: promptMsg }]);
     setAiLoading(true);
@@ -391,6 +413,10 @@ export default function App() {
 
   const handleApplyAction = (index: number, msg: ChatMessage) => {
     if (!msg.proposedWorkspace) return;
+    // M-SAFE-2: checkpoint the CURRENT workspace before the AI replaces it, so the
+    // apply is reversible (Codex observed Ctrl+Z did not restore an AI apply — it
+    // never recorded a checkpoint). Undo (Ctrl+Z / Undo button) now restores it.
+    saveCheckpoint();
     setWorkspace(msg.proposedWorkspace);
     if (msg.proposedVersion !== undefined) {
       setLocalVersion(msg.proposedVersion);
@@ -991,6 +1017,7 @@ export default function App() {
             SYNC MOD
           </button>
 
+          {aiEnabled && (
           <button
             onClick={() => setIsAIConfigOpen(true)}
             className="px-3 py-1 border border-amber-500/25 hover:border-[#df9825] bg-amber-500/5 text-amber-400 rounded font-mono text-[11px] hover:bg-amber-500/15 transition-all flex flex-col justify-center items-start text-left cursor-pointer select-none leading-tight gap-0.5"
@@ -1009,6 +1036,7 @@ export default function App() {
               )}
             </div>
           </button>
+          )}
 
           <button
             onClick={() => setIsAgentBridgeOpen(prev => !prev)}
@@ -1049,6 +1077,7 @@ export default function App() {
         {/* Left Side: Drag control panel, property editor inspector */}
         <Sidebar
           width={leftSidebarWidth}
+          aiEnabled={aiEnabled}
           activeTab={activeSidebarTab}
           setActiveTab={setActiveSidebarTab}
           workspace={workspace}
@@ -1235,8 +1264,8 @@ export default function App() {
       </div>
 
       {/* Embedded Intelligent AI Guide Drawer chatbot */}
-      {isAiFloatingVisible && (
-        <AIHelper 
+      {aiEnabled && isAiFloatingVisible && (
+        <AIHelper
           mode="floating"
           workspace={workspace}
           setWorkspace={setWorkspace}
@@ -1297,6 +1326,9 @@ export default function App() {
         setModWorkspacePath={setModWorkspacePath}
         filesystemPath={filesystemPath}
         setFilesystemPath={setFilesystemPath}
+        aiTier={aiTier}
+        setAiTier={setAiTier}
+        onOpenAIConfig={() => { setIsDirSettingsOpen(false); setIsAIConfigOpen(true); }}
       />
 
       {/* Selectable Compile Targets Confirmation Wizard Modal */}

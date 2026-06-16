@@ -40,6 +40,7 @@ import {
 } from "./src/lib/modCompiler";
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, runObjectIndexSelftest, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
+import { runProposalReviewSelftest } from "./src/lib/proposalReview";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -208,6 +209,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/override-map-selftest",
   "/agent/catdat-selftest",
   "/agent/object-index-selftest",
+  "/agent/proposal-review-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -3342,6 +3344,16 @@ app.get("/api/agent/object-index-selftest", (_req, res) => {
     return res.json(runObjectIndexSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "object-index-selftest failed" });
+  }
+});
+
+// A4.2 — proposal-review engine oracle (synthetic fixtures; verifies the node
+// diff + Schema/Graph verdicts + applySafe contract that gates AI applies).
+app.get("/api/agent/proposal-review-selftest", (_req, res) => {
+  try {
+    return res.json(runProposalReviewSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "proposal-review-selftest failed" });
   }
 });
 

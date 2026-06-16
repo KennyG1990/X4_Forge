@@ -20,6 +20,8 @@ interface DiagnosticsHubProps {
   forceTab?: 'analyzer' | 'playtest';
   autoSaveEnabled?: boolean;
   setAutoSaveEnabled?: (val: boolean) => void;
+  /** A4.10 — gates the optional AI-polish affordance inside MDScanner. */
+  aiEnabled?: boolean;
 }
 
 /**
@@ -34,7 +36,8 @@ export default function DiagnosticsHub({
   modWorkspacePath,
   forceTab,
   autoSaveEnabled: propAutoSaveEnabled,
-  setAutoSaveEnabled: propSetAutoSaveEnabled
+  setAutoSaveEnabled: propSetAutoSaveEnabled,
+  aiEnabled = false
 }: DiagnosticsHubProps) {
   const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
 
@@ -257,6 +260,7 @@ export default function DiagnosticsHub({
             triggerAnalysis={triggerAnalysis}
             isAnalysisStale={isAnalysisStale}
             cancelAnalysis={cancelAnalysis}
+            aiEnabled={aiEnabled}
           />
         ) : (
           <PlaytestWorkspace
