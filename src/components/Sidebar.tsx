@@ -61,6 +61,8 @@ interface SidebarProps {
   aiEnabled?: boolean;
   /** Live md.xsd tag set for the AI review's unknown-tag check (forwarded to AIHelper). */
   aiKnownTags?: Set<string>;
+  /** A4.7 — abort the in-flight AI request (forwarded to AIHelper). */
+  onAiCancel?: () => void;
   activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference';
   setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference') => void;
   workspace: ModWorkspace;
@@ -127,6 +129,7 @@ export default function Sidebar({
   width,
   aiEnabled = false,
   aiKnownTags,
+  onAiCancel,
   activeTab,
   setActiveTab,
   workspace,
@@ -1387,6 +1390,7 @@ export default function Sidebar({
             isAiFloatingVisible={isAiFloatingVisible}
             setIsAiFloatingVisible={setIsAiFloatingVisible}
             knownTags={aiKnownTags}
+            onCancel={onAiCancel}
           />
         )}
 

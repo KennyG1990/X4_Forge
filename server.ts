@@ -42,6 +42,7 @@ import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, runObjectIndexSelftest, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
 import { runProposalReviewSelftest } from "./src/lib/proposalReview";
 import { runIntentCheckSelftest } from "./src/lib/intentCheck";
+import { runBlueprintSelftest } from "./src/lib/modBlueprint";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -212,6 +213,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/object-index-selftest",
   "/agent/proposal-review-selftest",
   "/agent/intent-check-selftest",
+  "/agent/blueprint-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);

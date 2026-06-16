@@ -337,11 +337,18 @@ export default function App() {
   };
   const aiEnabled = aiTier !== 'off';
 
+  // A4.7 — cancelable AI generation. The Builder runs several model passes (slow);
+  // this lets the user abort instead of waiting out an uncancelable request.
+  const aiAbortRef = React.useRef<AbortController | null>(null);
+  const cancelAiRequest = () => { aiAbortRef.current?.abort(); };
+
   const handleSendChatMode = async (promptMsg: string) => {
     setAiChatHistory(prev => [...prev, { role: 'user', text: promptMsg }]);
     setAiLoading(true);
     setAiInputText('');
     setAiErrorText(null);
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
 
     try {
       const currentCode = generateMDXML(workspace);
@@ -350,7 +357,8 @@ export default function App() {
       const response = await fetch("/api/gemini", {
         method: "POST",
         headers: getAIHeaders(),
-        body: JSON.stringify({ 
+        signal: controller.signal,
+        body: JSON.stringify({
           prompt: promptMsg,
           currentWorkspace: workspace,
           diagnostics: diagnostics
@@ -358,8 +366,8 @@ export default function App() {
       });
 
       const data = await handleApiResponse(response, "Failed to establish connection.");
-      setAiChatHistory(prev => [...prev, { 
-        role: 'assistant', 
+      setAiChatHistory(prev => [...prev, {
+        role: 'assistant',
         text: data.text,
         actionRequired: data.actionRequired,
         proposedWorkspace: data.proposedWorkspace,
@@ -367,9 +375,14 @@ export default function App() {
         actionApplied: null
       }]);
     } catch (err: any) {
-      console.error(err);
-      setAiErrorText(err.message || "Something went wrong.");
+      if (err?.name === 'AbortError') {
+        setAiChatHistory(prev => [...prev, { role: 'assistant', text: 'Request cancelled.' }]);
+      } else {
+        console.error(err);
+        setAiErrorText(err.message || "Something went wrong.");
+      }
     } finally {
+      aiAbortRef.current = null;
       setAiLoading(false);
     }
   };
@@ -379,6 +392,8 @@ export default function App() {
     setAiLoading(true);
     setAiInputText('');
     setAiErrorText(null);
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
 
     try {
       const currentCode = generateMDXML(workspace);
@@ -387,7 +402,8 @@ export default function App() {
       const response = await fetch("/api/agent/generate", {
         method: "POST",
         headers: getAIHeaders(),
-        body: JSON.stringify({ 
+        signal: controller.signal,
+        body: JSON.stringify({
           prompt: promptMsg,
           currentWorkspace: workspace,
           diagnostics: diagnostics,
@@ -399,8 +415,8 @@ export default function App() {
 
       const data = await handleApiResponse(response, "Failed to trigger visual automated generator.");
       const generatedWorkspace: ModWorkspace = data.workspace;
-      const proposedText = `I have successfully designed a new Visual Mod Workspace layout named "${generatedWorkspace.name}". It contains ${generatedWorkspace.nodes.length} functional nodes, ${generatedWorkspace.links.length} connected flow paths, and ${generatedWorkspace.uiWidgets.length} interactive dashboard widgets.\n\nPlease inspect the blueprint audit report card below to confirm and apply these visual changes directly to your active stage!`;
-      
+      const proposedText = `Drafted a proposal: "${generatedWorkspace.name}" — ${generatedWorkspace.nodes.length} nodes, ${generatedWorkspace.links.length} links, ${generatedWorkspace.uiWidgets.length} widgets. Review the diff and verdicts below before applying.`;
+
       setAiChatHistory(prev => [...prev, {
         role: 'assistant',
         text: proposedText,
@@ -411,9 +427,14 @@ export default function App() {
         actionApplied: null
       }]);
     } catch (err: any) {
-      console.error(err);
-      setAiErrorText(err.message || "Something went wrong during generation simulation.");
+      if (err?.name === 'AbortError') {
+        setAiChatHistory(prev => [...prev, { role: 'assistant', text: 'Generation cancelled.' }]);
+      } else {
+        console.error(err);
+        setAiErrorText(err.message || "Something went wrong during generation.");
+      }
     } finally {
+      aiAbortRef.current = null;
       setAiLoading(false);
     }
   };
@@ -1134,6 +1155,7 @@ export default function App() {
           isAiFloatingOpen={isAiFloatingOpen}
           setIsAiFloatingOpen={setIsAiFloatingOpen}
           aiKnownTags={aiKnownTags}
+          onAiCancel={cancelAiRequest}
           handleSend={handleSend}
           handleApplyAction={handleApplyAction}
           handleDeclineAction={handleDeclineAction}
@@ -1295,6 +1317,7 @@ export default function App() {
           isAiFloatingVisible={isAiFloatingVisible}
           setIsAiFloatingVisible={setIsAiFloatingVisible}
           knownTags={aiKnownTags}
+          onCancel={cancelAiRequest}
         />
       )}
 
