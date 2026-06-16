@@ -1398,6 +1398,116 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 
 - All edits this session are files-only — Antigravity owns git/commits (H1/H2).
 
+---
+
+## AI Experience — opt-in, community-respecting (doctrine + scoped build, 2026-06-16)
+
+**Context / constraint (non-negotiable):** the X4 modding community is broadly AI-skeptical; many users actively dislike AI being pushed on them. So in Forge, **AI is a guest, not a host.** It must be entirely toggleable — invisible to anyone who doesn't want it, a gentle error-explainer for the cautious, and a full hand-holding co-builder only for those who opt all the way in. Determinism and accuracy remain THE product (Truth=XSD, Meaning=registry); AI is a convenience layer bolted *beside* the deterministic core, never in front of it. This section supersedes the looser "AI off-by-default" note as the canonical AI-UX plan.
+
+### Current-state assessment (from the 2026-06-16 code-path review)
+- `AIHelper.tsx` = presentation only; logic in `App.tsx` (`handleSendChatMode`/`handleSendBuilderMode`/`handleApplyAction`) + server `/api/gemini` (chat) and `/api/agent/generate` (4-phase builder: nodes→links→HUD→`validateModWorkspace` self-heal).
+- **Strong:** Builder is phased, schema-constrained, has an xmlTag allowlist + `populateNodeMetadata` reconciliation + a Phase-4 deterministic validate/self-heal. Proposals are staged behind Confirm/Decline.
+- **Weak (fix in build below):** (a) Chat-mode `proposedWorkspace` is a free-form `{type:OBJECT}` with NO schema and NO re-validation before apply; (b) `handleApplyAction` does a **full `setWorkspace` replace with no `saveCheckpoint()`**; (c) the proposal card shows only **counts**, not a diff or per-node XSD verdict — user confirms blind; (d) both `populateNodeMetadata` and `sanitizeWorkspace` **preserve hallucinated `xmlTag`s** (only the downstream diagnostics catch them); (e) AI requires the user's own provider key (none configured → 500 "API key not configured"); (f) tone/styling ("Hello, Captain!", emoji tabs, always-present floating chip) is gimmicky and currently NOT gated by any opt-in.
+
+### AI Presence Tiers (single global, persistent, user-controlled — default = OFF)
+A4.x — one setting in Settings governs how much AI surface exists. **Default OFF.**
+- **`off`** (default): ZERO AI footprint. No copilot tab, no floating chip, no "Fix with AI" buttons, no AI strings anywhere. Not greyed-out — **absent**. The app is a complete deterministic visual editor with no hint it has AI. No AI code paths execute.
+- **`explain`** (passive, read-only): AI may *explain* on demand only — "Explain this error", "What does this node do?". **Never mutates the workspace.** Lowest trust cost; the on-ramp for skeptics. Surfaces as a small, ignorable "Explain" affordance next to diagnostics/nodes — nothing more.
+- **`assist`** (propose): AI may propose changes, but every proposal is staged → diffed → **XSD/semantics-verified** → applied only on explicit Confirm (the Phase-1 loop). Never auto-applies.
+- **`cobuild`** (hand-holding): full builder/agentic + tool-grounded generation, still gated by the same deterministic verify-before-apply loop.
+
+### Hard rules (apply at every tier)
+1. **OFF means absent, not disabled.** Gate all AI components/affordances on the tier; when `off`, they don't render and their modules ideally don't load. A user must be able to run Forge forever and never see AI.
+2. **Never nag.** No "Try AI!" popups, no upsell toasts, no AI-first empty states. Discovery is strictly opt-in via Settings. The default experience is determinism-only.
+3. **Determinism is never AI-gated.** Validate, diagnostics, compile, Object Browser, selftests, source control, playtest = 100% AI-free and fully functional at every tier including `off`.
+4. **Provenance always.** When AI is on, every output is labelled honestly: "AI proposed — unverified" vs "AI proposed — XSD-verified". The AI is never presented as authoritative; the deterministic verdict is.
+5. **No silent mutation.** AI edits are diffed, checkpointed (undoable), and reversible — never a blind full-replace.
+
+### Scoped build (ranked; each browser-verified; determinism half buildable WITHOUT a provider key)
+- **A4.1 — Tier toggle + gating (FOUNDATION, do first).** Add the persistent `aiTier` setting (`off|explain|assist|cobuild`, default `off`) in Settings; gate the sidebar "AI Co-pilot" tab, the floating chip, and (future) inline affordances on it. Verify: at `off`, no AI surface anywhere in the browser; toggling reveals exactly the tier's surface; determinism features unchanged at all tiers.
+- **A4.2 — Unified verify-before-apply gate + diff/verdict card (closes weak-points a–d).** Route ALL proposals (chat + builder) through one path: render a real per-node **diff** + per-node **XSD/semantics verdict** (✓/⚠/✗ + cited rule); bind Confirm to the verdict ("Apply N valid; drop M invalid"); `saveCheckpoint()` before apply; no full-replace. Verify: propose → see diff+verdict → apply valid-only → undo works. (Deterministic half testable key-free by feeding a hand-built "proposed" workspace through the validator+diff.)
+- **A4.3 — `explain` tier (passive on-ramp).** Read-only "Explain this error / node" using the existing diagnostics + semantics context; guaranteed no workspace writes. The deliberately minimal, skeptic-friendly entry point.
+- **A4.4 — Tool-grounded generation (accuracy lever, `cobuild`).** Wire the copilot to call `/api/agent/object-index` (H8) + schema as TOOLS so ids/attributes come from the real install, not model recall. Gated on a tool-capable model (the configured `deepseek-v4-flash` may be insufficient — verify with a live key first).
+- **A4.5 — Boundary hardening.** In `populateNodeMetadata`/`sanitizeWorkspace`, flag (or drop) `xmlTag`s that match neither a template nor an md.xsd element instead of silently carrying them.
+- **A4.6 — Tone + provenance pass.** Replace gimmicky copy/emoji on action surfaces with credible, warm-but-professional language; add the "proposed/verified" provenance badges; cite the md.xsd rule/registry entry behind each suggestion (clickable into Object Browser/schema).
+- **A4.7 — Pipeline-progress streaming.** Stream stage completion ("Drafting ✓ → Wiring ✓ → Validating 4/4 ✓ → Healing ✓") rather than tokens (fits the structured-JSON design); make every call cancelable.
+- **A4.8 — Key-setup UX.** When a tier > `off` is enabled but no provider key exists, show a calm one-time "Add a key to enable" inline — never a recurring nag.
+
+**Dependencies/uncertainties:** live model quality/latency/hallucination-rate unmeasured (no key configured); A4.4 tool-use needs a capable model; streaming is stage-level not token-level by design. **Doctrine tie-in:** this keeps AI strictly subordinate to the XSD/semantics ground truth and, crucially, **fully escapable** — honoring both the determinism doctrine and the community's wish to not have AI pushed on them.
+
+### A5 — "Architect" mode: stateful, plan-driven co-design (scoped, 2026-06-16)
+
+**Premise:** the most reliable defense against hallucination is NOT a cleverer one-shot prompt — it's the agent scaffolding that Claude / Antigravity / Codex use: decompose the goal into small verifiable steps, keep durable state (plan + tasks + scratchpad), ground each step in tools, and verify each step against ground truth before advancing. Architect mode brings that loop into Forge. It is a third mode inside the **`cobuild` tier ONLY** (alongside Chat/Builder); `off`/`explain`/`assist` are untouched — skeptics never encounter it. The model does not "generate a mod" — it **co-designs one WITH the user** against a persistent blueprint, advancing one *verified* step at a time. The human is the architect; the AI is the assistant drafting under supervision.
+
+**The Mod Blueprint (durable session state — the anti-drift backbone).** A `ModBlueprint` persisted per workspace (localStorage by default; optional opt-in export to `<mod>/.forge/blueprint.json` — NEVER auto-written into the live `extensions/` tree). Fields:
+- **intent** — the user's goal in plain language; the north star the model re-reads every turn.
+- **requirements** — enumerated, checkable acceptance criteria.
+- **implementationPlan** — ordered steps; each carries a rationale, target nodes/domain, and a **deterministic "done-check"** (which validator/selftest proves it complete).
+- **taskList** — `{id, title, status: pending|in_progress|done|blocked, blockedBy}` — mirrors the TaskCreate/TaskUpdate model; both user- and AI-editable.
+- **scratchpad** — freeform notes, decisions made, open questions, and **rejected approaches + why** — a running "lessons" log so the model can't loop on the same mistake (exactly what ROADMAP/HANDOFF do for coding agents here).
+- **changelog** — applied steps + their deterministic verdicts (verified, not asserted).
+
+**The loop (plan → ground → propose → verify → record), human-gated at plan and step level:**
+1. **Plan** — model drafts/updates implementationPlan + taskList from intent; user reviews/edits (this is design *with* the user). Nothing touches the canvas.
+2. **Ground** — for the next task, model calls TOOLS: object-index (H8) for real ids, schema for valid attributes — instead of recalling from training.
+3. **Propose** — model emits ONE small step (a few nodes / one cue), never a whole workspace. Small surface = fewer hallucinations + trivial verification.
+4. **Verify** — the step runs through `validateModWorkspace` + the deterministic critic (`src/lib/mdCritic.ts`) + the task's selftest done-check; ✗ results route into the scratchpad as "known issues," never silently applied.
+5. **Record** — on user Confirm: apply (diffed + checkpointed, per A4.2), mark the task done, append the verdict to changelog, advance to the next step.
+
+**Anti-hallucination mechanisms (each mapped to an EXISTING deterministic asset):**
+- Decomposition into small steps → smaller error surface, each independently checkable.
+- Tool-grounding → `/api/agent/object-index` + `/api/agent/schema` supply real ids/attrs (kills the #1 failure: invented macros/tags).
+- Per-task deterministic done-check → `validateModWorkspace`, `mdCritic`, `round-trip-selftest` (lossless), `object-index-selftest`, etc. — completion is *verified*, not claimed.
+- Persistent blueprint → stable context every turn; prevents the drift long free-form chats cause.
+- Scratchpad lessons log → records failed/rejected approaches so the model doesn't repeat them.
+- Self-critique gate → reuse the deterministic critic to vet a plan step BEFORE proposing nodes.
+- Human-in-the-loop approval at plan + step granularity.
+
+**UI — a Blueprint panel inside the `cobuild` copilot:** three sub-views — **Plan** (ordered steps + per-step verdict badges), **Tasks** (live checklist), **Scratchpad** (editable notes/decisions/open-questions). Clicking a plan step focuses its affected nodes on the canvas. User edits to plan/tasks/scratchpad are treated as authoritative by the model.
+
+**Scoped build (ranked; depends on A4.1 toggle + A4.2 verify-gate + A4.4 tool-grounding):**
+- **A5.1** — `ModBlueprint` data model + persistence (+ opt-in export) + a read-only Blueprint panel (Plan/Tasks/Scratchpad). Buildable & browser-verifiable WITHOUT a key (seed a blueprint by hand, render it).
+- **A5.2** — agent loop wiring (plan→ground→propose→verify→record), reusing A4.2's verify-gate and A4.4's tools; strictly one-step-at-a-time proposals.
+- **A5.3** — per-task deterministic done-checks (map each task to a validator/critic/selftest); verdicts drive task status automatically.
+- **A5.4** — scratchpad lessons log + self-critique gate (deterministic critic vets each step pre-proposal).
+- **A5.5** — collaborative editing (user edits plan/tasks/scratchpad; model honors them) + step→canvas focus.
+
+**Dependencies/uncertainties:** needs a capable tool-calling, instruction-following model (the configured `deepseek-v4-flash` is likely insufficient for a multi-step agent loop — verify with a live key first); multi-step loops add latency (mitigate via A4.7 pipeline-progress streaming); blueprint-to-disk persistence is a deliberate decision (localStorage default, disk export opt-in, never auto-written to the live extensions folder). **Doctrine:** Architect makes the determinism engine the *referee of every step* — structurally the strongest hallucination defense available — while staying entirely inside the opt-in `cobuild` tier so AI-averse users are never affected.
+
+### A4/A5 — Success metrics & acceptance criteria (definition-of-done, 2026-06-16)
+
+Each metric states the **target**, the **measurement method**, and whether it needs a **live provider key**. Methods follow the house workflow: browser behavior + selftest oracles are ground truth; sandbox metadata is not. "✅ when" = the binary acceptance gate.
+
+**Measurement instrument — AI Eval Harness (build alongside A4.4; gates all model-quality metrics).** A fixed, version-controlled prompt suite `aiEvalSuite` of **≥50 prompts** in 3 buckets: (a) ~20 well-formed asks, (b) ~15 ambiguous/underspecified, (c) ~15 adversarial / hallucination-bait (e.g. "make my ship invincible with a `set_god_mode` action", nonexistent macros). A runner sends each through the AI path and **auto-scores every output against the deterministic engine** (`validateModWorkspace`, `mdCritic`, `object-index`, `round-trip-selftest`). Exposed as `GET /api/agent/ai-eval` (authed; runs only when a key is set) emitting `{promptId, invalidTagCount, unresolvedIdCount, validationErrors, firstPassValid, healedValid, steps}`. Reruns are comparable over time. *Without this harness, "hallucination reduced" is an opinion, not a metric.*
+
+**Global doctrine gates (must hold at every tier; key-free, browser/selftest-verified):**
+- **M-DET-1 — determinism parity.** Full selftest sweep returns **identical pass counts** with `aiTier=off` vs `cobuild`. ✅ when both runs = selftest 10/10, round-trip 6/6, semantics 40/40, contract 24/24, ui-layout 19/19, object-index 15/15, override/catdat/ext-doctor pass. *Method: run the sweep in-browser at each tier.*
+- **M-DET-2 — zero AI traffic when not invited.** Over a 5-min scripted session exercising every non-AI feature at `off` and at `explain` (no explain action clicked), **0** requests to `/api/gemini*` or `/api/agent/generate`. *Method: `read_network_requests` capture.*
+- **M-SAFE-1 — no invalid node reaches the canvas silently.** Feed a corpus of deliberately-invalid proposals through the apply path: **100% blocked or flagged**, **0 silent applies**. *Method: scripted apply of a fixed invalid-proposal set; assert canvas unchanged or node marked invalid.* (Key-free — uses hand-built proposals.)
+- **M-SAFE-2 — every AI apply is reversible.** apply→undo restores the prior workspace **deep-equal**, 100% of applies, and a checkpoint exists pre-apply. *Method: snapshot workspace, apply, undo, deep-compare in-browser.*
+
+**Per-item gates:**
+- **A4.1 tier toggle.** ✅ when: at `off`, a `querySelectorAll` over the defined AI-component set returns **0** nodes and no "AI/copilot/✨ guide" text exists in the DOM; `aiTier` persists across reload **and** app restart; fresh-state default is **`off`**. *Browser DOM + reload test, key-free.*
+- **A4.2 verify-gate + diff card.** ✅ when: **100%** of proposals render a per-node diff + per-node XSD/semantics verdict before any apply; Confirm is disabled (or explicitly "apply valid-only, drop N") whenever ≥1 invalid node is present; "apply valid-only" drops exactly the invalid subset. *Mixed valid/invalid corpus, key-free for the gate logic.*
+- **A4.3 explain tier.** ✅ when: workspace is **deep-equal before/after every explain call** (0 mutations) across the full eval suite. *Key needed for live text; the no-mutation invariant is assertable with a stub.*
+- **A4.4 tool-grounding (headline hallucination metric — needs key + harness).** Establish baseline with grounding OFF, then with tools ON require: **invalid-tag rate ≤ 2%** and **unresolved-id rate ≤ 2%** (ids/tags not in md.xsd/object-index, over the full suite); **first-pass validation rate ≥ 80%**; **self-heal convergence ≥ 95%** reach 0 errors within ≤1 heal pass. Adversarial bucket: **0** invented capabilities applied (e.g. `set_god_mode` must be refused or flagged, never produced as a valid node). *Method: `ai-eval` harness; report ON-vs-OFF delta.*
+- **A4.5 boundary hardening.** ✅ when: **100%** of xmlTags matching neither a template nor an md.xsd element are flagged `invalid` (not silently carried). *Method: extend `runObjectIndexSelftest`-style oracle — feed a bogus-tag node, assert flagged. Key-free.*
+- **A4.6 tone/provenance.** ✅ when: **100%** of AI messages carry a provenance badge (`proposed-unverified` vs `XSD-verified`); every rule-based suggestion links to its md.xsd rule/registry entry. *Manual UX review + DOM assertion.*
+- **A4.7 streaming/cancel.** ✅ when: each pipeline stage's completion is visible within **≤250ms** of the phase resolving; any in-flight call is cancelable and aborts within **≤500ms**. *Browser timing.*
+- **A4.8 key-setup UX.** ✅ when: enabling a tier > `off` with no key shows **one** calm inline "add a key" prompt (never recurring); with a key, no prompt. *Browser, key-free.*
+
+**Architect (A5) gates — the loop's measurable anti-hallucination contract:**
+- **M-ARCH-1 — small steps.** No single proposed step exceeds **6 nodes**. *Harness, per-step node count.* (Key for live; cap enforceable + unit-testable key-free.)
+- **M-ARCH-2 — verified completion (the core guarantee).** **100%** of tasks marked `done` have a **passing deterministic done-check** recorded in the changelog; a task **cannot** transition to `done` without its check passing. *Oracle test + harness. Key-free for the state-machine guarantee.*
+- **M-ARCH-3 — no-repeat.** Across a session, a step rejected once is **not re-proposed** (0 repeats) — the scratchpad lessons log is consulted. *Harness scenario with a forced rejection. Needs key.*
+- **M-ARCH-4 — grounding.** **100%** of macro/ware ids in proposed steps resolve in the object-index. *Harness. Needs key.*
+- **M-ARCH-5 — end-to-end advantage.** On the eval suite, Architect mode reaches a **fully XSD-valid, round-trip-lossless** workspace with **lower invalid-node rate than one-shot Builder baseline** (target: ≥50% relative reduction) in **≤8 confirmed steps** for a mid-size mod. *Harness, Architect-vs-Builder comparison. Needs key.*
+- **M-ARCH-6 — human authority.** After a user edit to the plan/tasks/scratchpad, the model's **next proposal conforms** to the edited plan (does not silently revert it). *Harness scenario. Needs key.*
+
+**Release gate for turning any tier > `off` ON by default (currently NOT planned — opt-in stays):** would require M-DET-1/2 + M-SAFE-1/2 green AND A4.4 targets met on the harness. Until then AI stays strictly opt-in.
+
+---
+
 **Infra / environment (H1-H4):**
 - H1 — confirmed NOT real file corruption. Root cause = sandbox `core.autocrlf` mismatch vs host (false whole-file CRLF diffs) + stale/laggy sandbox reads + Antigravity as concurrent git author. Host files are clean (Codex+Gemini verified, typecheck passes).
 - H2 — protocol: Antigravity owns ALL git; agents edit files only, verify via browser/host — never sandbox git/fs metadata.
