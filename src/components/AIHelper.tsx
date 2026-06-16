@@ -178,8 +178,8 @@ export default function AIHelper({
           title="Drag from header to move guide window"
         >
           <div className="flex items-center gap-1.5 font-bold text-[#df9825] pointer-events-none">
-            <Sparkles className="w-4 h-4 animate-pulse" />
-            <span>X4 INTELLIGENT AI GUIDE</span>
+            <Sparkles className="w-4 h-4" />
+            <span>FORGE AI ASSISTANT</span>
           </div>
           <button 
             type="button"
@@ -197,8 +197,8 @@ export default function AIHelper({
           className="bg-[#df9825]/5 border-b border-white/5 p-3 flex items-center justify-between shrink-0 select-none"
         >
           <div className="flex items-center gap-1.5 font-bold text-[#df9825] pointer-events-none">
-            <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-            <span>X4 INTELLIGENT AI GUIDE</span>
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>FORGE AI ASSISTANT</span>
           </div>
         </div>
       )}
@@ -212,7 +212,7 @@ export default function AIHelper({
             activeMode === 'chat' ? 'text-[#df9825] bg-[#df9825]/5 font-bold' : 'text-slate-400 hover:bg-white/5'
           }`}
         >
-          💬 ASSISTANT CHAT
+          CHAT
         </button>
         <button
           type="button"
@@ -221,7 +221,7 @@ export default function AIHelper({
             activeMode === 'builder' ? 'text-emerald-400 bg-emerald-500/5 font-bold' : 'text-slate-450 hover:bg-white/5'
           }`}
         >
-          🛠️ BUILDER ACTION PORT
+          BUILDER
         </button>
       </div>
 
@@ -370,8 +370,8 @@ export default function AIHelper({
             <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#df9825]" />
             <span className="text-[10px] font-mono">
               {activeMode === 'builder' 
-                ? 'Automating mission node linkages...' 
-                : 'Querying Egosoft compiler schemas...'
+                ? 'Drafting and verifying proposal…'
+                : 'Working…'
               }
             </span>
           </div>
@@ -470,7 +470,7 @@ export default function AIHelper({
           title="Drag anywhere; click to open AI Guide"
         >
           <Bot className="w-4.5 h-4.5 pointer-events-none" />
-          <span className="pointer-events-none">X4 AI GUIDE</span>
+          <span className="pointer-events-none">FORGE AI</span>
         </button>
       )}
     </div>

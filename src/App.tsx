@@ -305,7 +305,7 @@ export default function App() {
   const [aiChatHistory, setAiChatHistory] = useState<ChatMessage[]>([
     { 
       role: 'assistant', 
-      text: "Hello, Captain! I am your visual X4: Foundations Mission Director digital copilot. Press '💬 ASSISTANT CHAT' for advice, or '🛠️ BUILDER ACTION PORT' to describe modifications and generate them on-the-fly." 
+      text: "Forge AI assistant. Use CHAT for X4 scripting questions, or BUILDER to describe a change and get a proposal you review — diffed and verified against the schema — before anything is applied."
     }
   ]);
   const [aiInputText, setAiInputText] = useState<string>('');
@@ -436,7 +436,7 @@ export default function App() {
           ...updated[index],
           actionRequired: false,
           actionApplied: 'applied',
-          text: `Success! Proposed automated node scheme "${msg.proposedWorkspace?.name}" has been compiled and injected successfully into your visual canvas. Try navigating or adjusting the physical nodes now!`
+          text: `Applied "${msg.proposedWorkspace?.name}" to the canvas. This change is reversible — Undo (Ctrl+Z) reverts it.`
         };
       }
       return updated;
