@@ -53,6 +53,8 @@ import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runSemanticsSelftest, listSemantics, semanticsForNode } from "./src/lib/mdSemantics";
 import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
 import { runCriticSelftest, critiqueWorkspace } from "./src/lib/mdCritic";
+import { runSimulateSelftest, simulateWorkspace } from "./src/lib/mdSimulate";
+import { runPortSemanticsSelftest } from "./src/lib/portSemantics"; // port-semantics layer (50th pass)
 import { validateNodesAgainstSchema, summarizeByNode, runNodeDiagnosticsSelftest, type NodeSchemaView } from "./src/lib/nodeDiagnostics";
 import { runNodeAlignSelftest } from "./src/lib/nodeAlign";
 import { runLiveFixesSelftest } from "./src/lib/liveFixes";
@@ -189,6 +191,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/critic-selftest",
   "/agent/node-diagnostics-selftest",
   "/agent/node-align-selftest",
+  "/agent/simulate-selftest",
+  "/agent/port-semantics-selftest",
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
@@ -3545,6 +3549,35 @@ app.get("/api/agent/node-align-selftest", (_req, res) => {
     res.json(runNodeAlignSelftest());
   } catch (error: any) {
     res.status(500).json({ pass: false, error: error?.message || "node-align-selftest failed" });
+  }
+});
+
+// Port-semantics layer (50th pass) — typed-connector + branch-body model self-test.
+app.get("/api/agent/port-semantics-selftest", (_req, res) => {
+  try {
+    res.json(runPortSemanticsSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "port-semantics-selftest failed" });
+  }
+});
+
+// Determinism Doctrine / Phase 4 — deterministic MD simulator self-test.
+app.get("/api/agent/simulate-selftest", (_req, res) => {
+  try {
+    res.json(runSimulateSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "simulate-selftest failed" });
+  }
+});
+
+// Deterministic simulation of a posted {nodes, links, seed} graph (no AI). Authed POST.
+// seed pre-loads known variable values (e.g. {"$threat": 5}); unseeded ⇒ unknown.
+app.post("/api/agent/simulate", (req, res) => {
+  try {
+    const { nodes, links, seed } = req.body || {};
+    res.json({ success: true, ...simulateWorkspace(nodes || [], links || [], seed || {}) });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || "simulate failed" });
   }
 });
 

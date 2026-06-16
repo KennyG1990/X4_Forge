@@ -7,9 +7,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   X, 
   RefreshCw, 
-  ZoomIn, 
-  ZoomOut, 
-  Move,
+  ZoomIn,
+  ZoomOut,
   Link2,
   Trash2,
   Sparkles,
@@ -38,6 +37,45 @@ import {
 } from 'lucide-react';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES } from '../types';
 import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
+import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
+
+type Pt = { x: number; y: number };
+
+/**
+ * Build the SVG path for a wire that routes through optional waypoints.
+ * - 2 points (no waypoints): the original cubic with horizontal tangents.
+ * - 3+ points: a Catmull-Rom spline (converted to cubic Béziers) for a smooth wire.
+ */
+function buildWirePath(points: Pt[]): string {
+  if (points.length < 2) return '';
+  if (points.length === 2) {
+    const [a, b] = points;
+    const dx = Math.abs(b.x - a.x) * 0.52;
+    return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+  }
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2.x} ${p2.y}`;
+  }
+  return d;
+}
+
+/** Insert a new waypoint into a link's list, ordered by projection along the start→end axis. */
+function orderedWaypoints(existing: Pt[], add: Pt, start: Pt, end: Pt): Pt[] {
+  const all = [...existing, add];
+  const vx = end.x - start.x, vy = end.y - start.y;
+  const len2 = vx * vx + vy * vy || 1;
+  const t = (p: Pt) => ((p.x - start.x) * vx + (p.y - start.y) * vy) / len2;
+  return all.sort((a, b) => t(a) - t(b));
+}
 
 interface CanvasProps {
   workspace: ModWorkspace;
@@ -88,8 +126,15 @@ export default function Canvas({
   // Scaling comment boxes
   const [resizingComment, setResizingComment] = useState<{ id: string; startWidth: number; startHeight: number; clientX: number; clientY: number } | null>(null);
 
+  // Wire reroute/bend points (#3): drag a waypoint; snip-debounce distinguishes click(snip) vs dblclick(add point)
+  const [draggingWaypoint, setDraggingWaypoint] = useState<{ linkId: string; index: number } | null>(null);
+  const snipTimer = useRef<number | null>(null);
+
   // Ref container to track starting offsets of nodes to avoid drift during multi-drag inside group comment boxes
   const draggedNodesStartOffset = useRef<{ id: string; x: number; y: number }[]>([]);
+
+  // Last known cursor position (screen coords) — lets the spacebar quick-add palette (#4) open at the cursor
+  const lastMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Quick Spawn Context Menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; gridX: number; gridY: number } | null>(null);
@@ -261,6 +306,7 @@ export default function Canvas({
   // Sync mouse interactions (panning, resizing comment groups, dragging node clusters, and wiring live line mouse tracers)
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      lastMouseRef.current = { x: e.clientX, y: e.clientY };
       if (resizingComment) {
         const dx = (e.clientX - resizingComment.clientX) / zoom;
         const dy = (e.clientY - resizingComment.clientY) / zoom;
@@ -331,6 +377,20 @@ export default function Canvas({
             }));
           }
         }
+      } else if (draggingWaypoint) {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (rect) {
+          const x = (e.clientX - rect.left - panOffset.x) / zoom;
+          const y = (e.clientY - rect.top - panOffset.y) / zoom;
+          setWorkspace(prev => ({
+            ...prev,
+            links: prev.links.map(l => {
+              if (l.id !== draggingWaypoint.linkId || !l.waypoints) return l;
+              const wp = l.waypoints.map((p, i) => i === draggingWaypoint.index ? { x, y } : p);
+              return { ...l, waypoints: wp };
+            })
+          }));
+        }
       } else if (panning) {
         const dx = e.clientX - panning.x;
         const dy = e.clientY - panning.y;
@@ -350,12 +410,13 @@ export default function Canvas({
     };
 
     const handleMouseUp = () => {
-      if (draggedNodeId || resizingComment) {
+      if (draggedNodeId || resizingComment || draggingWaypoint) {
         saveCheckpoint();
       }
       setDraggedNodeId(null);
       setResizingComment(null);
       setPanning(null);
+      setDraggingWaypoint(null);
     };
 
     window.addEventListener('mousemove', handleMouseMove);
@@ -364,7 +425,7 @@ export default function Canvas({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes]);
+  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes, draggingWaypoint]);
 
   // Handle intuitive smooth zoom-to-cursor via mouse scroll wheel
   useEffect(() => {
@@ -853,7 +914,17 @@ export default function Canvas({
       setSimLogs(prev => [...prev, { id: `log_${Date.now()}_${Math.random()}`, time: stamp, text, type }]);
     };
 
-    log("⚡ INIT: Initializing visual script compiler loop context...", "info");
+    log("⚡ DETERMINISTIC SIMULATION — evaluating cue logic against modeled state (no AI).", "info");
+
+    // Deterministic engine: evaluate the workspace once, then surface its verdicts as
+    // each node lights up. This replaces the old structural-playback theatre (which always
+    // logged "0 warnings, 0 crash errors") with real tri-state results.
+    const sim = simulateWorkspace(workspace.nodes, workspace.links);
+    const stepByNode = new Map<string, SimStep>();
+    sim.trace.forEach(s => { if (!stepByNode.has(s.nodeId)) stepByNode.set(s.nodeId, s); });
+    const glyph = (v: SimVerdict) => (v === 'fires' || v === 'ran') ? '✓' : (v === 'never' || v === 'skipped') ? '✗' : '?';
+    const vtype = (v: SimVerdict): 'info' | 'success' | 'warn' | 'action' =>
+      (v === 'never' || v === 'skipped') ? 'warn' : (v === 'unknown' || v === 'conditional') ? 'info' : 'success';
 
     const cues = workspace.nodes.filter(n => n.type === 'cue');
     const startCue = startNodeId ? cues.find(c => c.id === startNodeId) : null;
@@ -897,13 +968,19 @@ export default function Canvas({
               Object.entries(condNode.properties).forEach(([k, v]) => {
                 log(`  ${k}: ${v}`, "info");
               });
+              const st = stepByNode.get(condNode.id);
+              if (st) log(`  ⮑ ${glyph(st.verdict)} ${st.detail}`, vtype(st.verdict));
             }, delayCounter);
             delayCounter += 1000;
           }
         });
 
         scheduleStep(() => {
-          log(`✔️ [CONDITIONS PASSED] All trigger conditions satisfied.`, "success");
+          const cs = stepByNode.get(cue.id);
+          const v: SimVerdict = cs ? cs.verdict : 'unknown';
+          if (v === 'never') log(`✗ [DEAD CUE] This cue can never fire under the current seed — a required condition is provably false.`, "warn");
+          else if (v === 'fires') log(`✓ [TRIGGERS] All modeled trigger conditions hold.`, "success");
+          else log(`? [RUNTIME] Trigger depends on unmodeled runtime state (events / object properties) — cannot assert deterministically; treated as firing for this walk.`, "info");
         }, delayCounter);
         delayCounter += 600;
       } else {
@@ -933,6 +1010,11 @@ export default function Canvas({
              Object.entries(nodeToGlow.properties).forEach(([k, v]) => {
                log(`  ${k}: ${v}`, "action");
              });
+             const st = stepByNode.get(nodeToGlow.id);
+             if (st) {
+               log(`  ⮑ ${glyph(st.verdict)} ${st.detail}`, vtype(st.verdict));
+               if (st.vars && st.vars.length) log(`  vars: ${st.vars.map(x => `${x.name}=${x.value}`).join(', ')}`, "info");
+             }
           }, delayCounter);
           delayCounter += 1000;
 
@@ -961,7 +1043,14 @@ export default function Canvas({
     });
 
     scheduleStep(() => {
-      log("🥇 SUCCESS: Virtual script evaluation successfully completed. 0 warnings, 0 crash errors.", "success");
+      if (sim.findings.length === 0) {
+        log(`✓ SIMULATION COMPLETE — no provable defects under the current seed. (${sim.coverage.conditionsEvaluated} condition(s) evaluated, ${sim.coverage.conditionsUnknown} unknown, ${sim.coverage.effectsApplied} state effect(s) applied.)`, "success");
+      } else {
+        log(`⚠ SIMULATION COMPLETE — ${sim.findings.length} deterministic finding(s):`, "warn");
+        sim.findings.forEach(f => log(`  • [${f.kind}] ${f.message}`, "warn"));
+      }
+      if (sim.finalState.length) log(`📦 Final modeled variables: ${sim.finalState.map(v => `${v.name}=${v.value}`).join(', ')}`, "info");
+      log(`ℹ Honesty boundary: ${sim.limitations[0]}`, "info");
       setSimActive(false);
       setActiveNodes([]);
       setPulsingLinks([]);
@@ -1268,6 +1357,22 @@ export default function Canvas({
       } else if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
         addCommentBox();
+      } else if (e.key === ' ' || e.code === 'Space') {
+        // Spacebar opens the quick-add node palette AT THE CURSOR (Unreal-style), keyboard-driven.
+        e.preventDefault();
+        if (!canvasRef.current) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        let cx = lastMouseRef.current.x - rect.left;
+        let cy = lastMouseRef.current.y - rect.top;
+        // cursor outside the canvas (or never moved) ⇒ fall back to viewport center
+        if (cx < 0 || cy < 0 || cx > rect.width || cy > rect.height) {
+          cx = rect.width / 2;
+          cy = rect.height / 2;
+        }
+        const gridX = Math.round((cx - panOffset.x) / zoom / 10) * 10;
+        const gridY = Math.round((cy - panOffset.y) / zoom / 10) * 10;
+        setSearchQuery('');
+        setContextMenu({ x: cx, y: cy, gridX, gridY });
       }
     };
 
@@ -1275,7 +1380,7 @@ export default function Canvas({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [addCommentBox]);
+  }, [addCommentBox, panOffset, zoom]);
 
   const allTemplates = React.useMemo(() => {
     const byTag = new Map<string, Omit<MDNode, 'id' | 'x' | 'y'>>();
@@ -1288,7 +1393,7 @@ export default function Canvas({
 
   // Filter right click context spawn options
   const filteredTemplates = allTemplates.filter(
-    t => t.label.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    t => t.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
          t.xmlTag.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -1550,14 +1655,15 @@ export default function Canvas({
               const start = getPortCoordinates(link.sourceNodeId, link.sourcePortId, true);
               const end = getPortCoordinates(link.targetNodeId, link.targetPortId, false);
 
-              const dx = Math.abs(end.x - start.x) * 0.52;
-              const pathData = `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}`;
-              
+              const waypoints = link.waypoints || [];
+              const pathData = buildWirePath([start, ...waypoints, end]);
+
               const isPulsing = pulsingLinks.includes(link.id);
 
               return (
                 <g key={link.id} className="group pointer-events-auto">
-                  {/* Thick Invisible path helper to ease click detections */}
+                  {/* Thick Invisible path helper to ease click detections.
+                      Single click (debounced) snips the cable; double-click adds a reroute/bend point. */}
                   <path
                     d={pathData}
                     fill="none"
@@ -1566,14 +1672,31 @@ export default function Canvas({
                     className="cursor-pointer"
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (snipTimer.current) window.clearTimeout(snipTimer.current);
+                      const id = link.id;
+                      snipTimer.current = window.setTimeout(() => {
+                        saveCheckpoint();
+                        setWorkspace(prev => ({ ...prev, links: prev.links.filter(l => l.id !== id) }));
+                        snipTimer.current = null;
+                      }, 220);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      if (snipTimer.current) { window.clearTimeout(snipTimer.current); snipTimer.current = null; }
+                      const rect = canvasRef.current?.getBoundingClientRect();
+                      if (!rect) return;
+                      const px = (e.clientX - rect.left - panOffset.x) / zoom;
+                      const py = (e.clientY - rect.top - panOffset.y) / zoom;
                       saveCheckpoint();
                       setWorkspace(prev => ({
                         ...prev,
-                        links: prev.links.filter(l => l.id !== link.id)
+                        links: prev.links.map(l => l.id === link.id
+                          ? { ...l, waypoints: orderedWaypoints(l.waypoints || [], { x: px, y: py }, start, end) }
+                          : l)
                       }));
                     }}
                   >
-                    <title>Click cable directly to snip link</title>
+                    <title>Click to snip · double-click to add a reroute point</title>
                   </path>
 
                   {/* Colored vector line */}
@@ -1590,6 +1713,38 @@ export default function Canvas({
                   />
                   <circle cx={start.x} cy={start.y} r={isPulsing ? "5" : "3.5"} fill={isPulsing ? "#38bdf8" : "#06b6d4"} />
                   <circle cx={end.x} cy={end.y} r={isPulsing ? "5" : "3.5"} fill={isPulsing ? "#10b981" : "#10b981"} />
+
+                  {/* Reroute/bend handles: drag to move, right-click to remove */}
+                  {waypoints.map((wp, i) => (
+                    <circle
+                      key={`${link.id}_wp_${i}`}
+                      cx={wp.x}
+                      cy={wp.y}
+                      r={draggingWaypoint?.linkId === link.id && draggingWaypoint.index === i ? 7 : 4.5}
+                      fill="#0b0d12"
+                      stroke="#06b6d4"
+                      strokeWidth="2"
+                      className="cursor-grab opacity-70 group-hover:opacity-100 hover:!opacity-100 transition-all"
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        if (e.button !== 0) return;
+                        setDraggingWaypoint({ linkId: link.id, index: i });
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        saveCheckpoint();
+                        setWorkspace(prev => ({
+                          ...prev,
+                          links: prev.links.map(l => l.id === link.id
+                            ? { ...l, waypoints: (l.waypoints || []).filter((_, idx) => idx !== i) }
+                            : l)
+                        }));
+                      }}
+                    >
+                      <title>Drag to reroute · right-click to remove</title>
+                    </circle>
+                  ))}
                 </g>
               );
             })}
@@ -1599,8 +1754,7 @@ export default function Canvas({
               (() => {
                 const start = getPortCoordinates(linking.nodeId, linking.portId, true);
                 const end = mousePos;
-                const dx = Math.abs(end.x - start.x) * 0.52;
-                const pathData = `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}`;
+                const pathData = buildWirePath([start, end]);
                 return (
                   <path
                     d={pathData}

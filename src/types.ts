@@ -53,6 +53,8 @@ export interface MDLink {
   sourcePortId: string;
   targetNodeId: string;
   targetPortId: string;
+  /** Optional user-placed reroute/bend points (canvas coords) the wire routes through. Purely visual. */
+  waypoints?: { x: number; y: number }[];
 }
 
 // UI Mod Widget representation for the layout builder

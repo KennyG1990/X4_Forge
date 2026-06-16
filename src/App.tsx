@@ -31,8 +31,7 @@ import {
   Settings as SettingsGear,
   Plug,
   ChevronRight,
-  ChevronLeft,
-  Code2
+  ChevronLeft
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import SyncModal from './components/SyncModal';
@@ -1172,7 +1171,7 @@ export default function App() {
 
         {/* Right Side: Real-time Synchronized compiler preview output (collapsible) */}
         <aside
-          className="shrink-0 flex flex-col h-full bg-[#12141a] border-l border-[#df9825]/10 relative transition-[width] duration-300 ease-in-out overflow-hidden"
+          className={`shrink-0 flex flex-col bg-[#12141a] border-l border-[#df9825]/10 relative transition-[width] duration-300 ease-in-out overflow-hidden ${codeCollapsed ? 'self-start rounded-bl-lg shadow-lg' : 'h-full'}`}
           style={{ width: codeCollapsed ? 300 : rightSidebarWidth }}
         >
           {/* Drawer pull-tab — toggles the code BODY (the top bar below always persists). */}

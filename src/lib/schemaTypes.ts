@@ -1,4 +1,5 @@
 import type { MDNode, PropertySchema } from '../types';
+import { isContainerTag } from './portSemantics';
 
 export type SchemaCategory = 'event' | 'condition' | 'action' | 'control_flow';
 
@@ -87,7 +88,12 @@ export function schemaElementToTemplate(element: SchemaElement): Omit<MDNode, 'i
     : [{ id: 'in_cond', name: 'Condition In', type: 'child' as const }];
 
   const outputs = type === 'action'
-    ? [{ id: 'out_next', name: 'Next Action', type: 'flow' as const }]
+    ? [
+        { id: 'out_next', name: 'Next Action', type: 'flow' as const },
+        // Control-flow containers (do_if, do_while, …) get a dedicated BODY port so the
+        // actions inside the branch are structurally distinct from the next sibling.
+        ...(isContainerTag(element.tag) ? [{ id: 'out_body', name: 'Branch Body', type: 'child' as const }] : []),
+      ]
     : [{ id: 'out_flow', name: type === 'event' ? 'Trigger Actions' : 'Passed Flow', type: 'flow' as const }];
 
   const properties = Object.fromEntries(

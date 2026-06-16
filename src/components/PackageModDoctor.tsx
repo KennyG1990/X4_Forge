@@ -83,6 +83,7 @@ export default function PackageModDoctor({
     { name: 'semantics', path: 'semantics-selftest' },
     { name: 'explain', path: 'explain-selftest' },
     { name: 'critic', path: 'critic-selftest' },
+    { name: 'simulate', path: 'simulate-selftest' },
     { name: 'node-diag', path: 'node-diagnostics-selftest' },
     { name: 'node-align', path: 'node-align-selftest' },
     { name: 'live-fixes', path: 'live-fixes-selftest' },
