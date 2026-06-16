@@ -57,7 +57,9 @@ import { runSimulateSelftest, simulateWorkspace } from "./src/lib/mdSimulate";
 import { runPortSemanticsSelftest } from "./src/lib/portSemantics";
 import { runFriendlyNamesSelftest } from "./src/lib/mdFriendlyNames";
 import { runCompileSelftest } from "./src/lib/mdCompileSelftest";
-import { runModTemplatesSelftest } from "./src/lib/modTemplates"; // port-semantics layer (50th pass)
+import { runModTemplatesSelftest } from "./src/lib/modTemplates";
+import { runCompositeBlocksSelftest } from "./src/lib/compositeBlocks";
+import { runAutoLayoutSelftest } from "./src/lib/mdAutoLayout"; // port-semantics layer (50th pass)
 import { validateNodesAgainstSchema, summarizeByNode, runNodeDiagnosticsSelftest, type NodeSchemaView } from "./src/lib/nodeDiagnostics";
 import { runNodeAlignSelftest } from "./src/lib/nodeAlign";
 import { runLiveFixesSelftest } from "./src/lib/liveFixes";
@@ -199,6 +201,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/friendly-names-selftest",
   "/agent/compile-selftest",
   "/agent/mod-templates-selftest",
+  "/agent/composite-blocks-selftest",
+  "/agent/auto-layout-selftest",
   "/agent/log-telemetry-selftest",
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
@@ -3555,6 +3559,24 @@ app.get("/api/agent/node-align-selftest", (_req, res) => {
     res.json(runNodeAlignSelftest());
   } catch (error: any) {
     res.status(500).json({ pass: false, error: error?.message || "node-align-selftest failed" });
+  }
+});
+
+// Graph auto-layout (53rd pass, gap G11) — deterministic tiered layout; no-overlap oracle.
+app.get("/api/agent/auto-layout-selftest", (_req, res) => {
+  try {
+    res.json(runAutoLayoutSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "auto-layout-selftest failed" });
+  }
+});
+
+// Composite blocks (53rd pass, gap G10) — one-click multi-node patterns; structural + compile checks.
+app.get("/api/agent/composite-blocks-selftest", (_req, res) => {
+  try {
+    res.json(runCompositeBlocksSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "composite-blocks-selftest failed" });
   }
 });
 

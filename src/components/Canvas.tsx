@@ -43,6 +43,7 @@ import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimul
 import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
 import { STARTER_TAGS } from '../lib/mdFriendlyNames';
 import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
+import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
 
 type Pt = { x: number; y: number };
 
@@ -911,6 +912,22 @@ export default function Canvas({
 
     setContextMenu(null);
     setSelectedNode(newNode);
+  };
+
+  // Insert a composite block (a whole wired pattern) at the spawn position (G10).
+  const handleSpawnComposite = (composite: typeof COMPOSITE_BLOCKS[number]) => {
+    if (!contextMenu) return;
+    saveCheckpoint();
+    const seed = 'cmp_' + Date.now().toString(36);
+    const { nodes, links } = composite.build(seed, contextMenu.gridX, contextMenu.gridY);
+    const extra: MDLink[] = [];
+    // If opened by dragging off an output port, wire that port to the composite's entry node.
+    if (pendingLinkTarget && pendingLinkTarget.portId.startsWith('out')) {
+      extra.push({ id: `lk_pending_${seed}`, sourceNodeId: pendingLinkTarget.nodeId, sourcePortId: pendingLinkTarget.portId, targetNodeId: composite.entryId(seed), targetPortId: 'in_act' });
+    }
+    setWorkspace(prev => ({ ...prev, nodes: [...prev.nodes, ...(nodes as any)], links: [...prev.links, ...links, ...extra] }));
+    setContextMenu(null);
+    setPendingLinkTarget(null);
   };
 
   // Run Stepped Visual Action Logic Evaluation Simulator
@@ -2289,6 +2306,34 @@ export default function Canvas({
               <span className="text-cyan-400/80">{showAdvancedPalette ? '↩ Show starters' : `Advanced · ${allTemplates.length} ▸`}</span>
             </button>
           )}
+
+          {/* Patterns group (composite blocks) — one click drops a whole wired pattern (G10). */}
+          {(() => {
+            const q = searchQuery.toLowerCase();
+            const comps = COMPOSITE_BLOCKS.filter(c => !q || c.title.toLowerCase().includes(q) || c.blurb.toLowerCase().includes(q) || 'pattern'.includes(q));
+            if (comps.length === 0) return null;
+            return (
+              <div className="shrink-0 mt-1">
+                <div className="text-[8.5px] font-bold text-violet-300/80 uppercase tracking-wider px-1 pb-1">Patterns</div>
+                <div className="space-y-1">
+                  {comps.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => handleSpawnComposite(c)}
+                      className="w-full text-left p-1.5 rounded hover:bg-violet-500/10 flex items-center justify-between text-[11px] group transition-colors cursor-pointer border border-violet-500/15"
+                    >
+                      <div className="flex flex-col truncate pr-1">
+                        <span className="text-white font-bold group-hover:text-violet-300 transition-colors truncate">{c.title}</span>
+                        <span className="text-[9px] text-slate-500 font-sans truncate">{c.blurb}</span>
+                      </div>
+                      <span className="text-[8px] font-bold p-0.5 px-1 truncate rounded scale-90 bg-violet-500/10 text-violet-300 border border-violet-500/25">PATTERN</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-white/5 mt-1.5" />
+              </div>
+            );
+          })()}
 
           {/* Search elements viewport lists */}
           <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar max-h-56 mt-1">
