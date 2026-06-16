@@ -1352,37 +1352,33 @@ Checked against the running browser app at `http://127.0.0.1:3000/` and current 
 - **Node.js XML parser polyfill (critical fix).** `src/lib/xmlParser.ts` now detects the execution environment and conditionally imports `DOMParser`/`XMLSerializer` from `@xmldom/xmldom` when running server-side (Node.js). Previously, `parseXMLToWorkspace` threw a silent `ReferenceError` on the server, causing `importModFolder` to return a null workspace model — the graph appeared empty with compiler errors despite the mod files being readable. TypeScript casting (`as unknown as Document`, `as any`) added for cross-environment type safety.
 - **Root-resolution fix (43rd-pass follow-up).** `resolveModFolder()` now tries both configured roots (`modWorkspacePath` and `filesystemPath`) with path-containment checks. This fixes the mismatch where `/api/fs/list` could list a folder from the X4 extensions root but `/api/agent/round-trip-check` resolved the same relative path against the other root and returned `Folder not found`.
 - **Browser-verified.** Both import paths tested on `localhost:3000`: (1) clicking `alarm_shields_reward.xml` in the file explorer populated the graph with all 5 cue/action/event nodes, and (2) using Load Mod Project to import the full `alarm_shields_reward` candidate directory produced an identical graph. `npm run typecheck` and `npm run build` both pass.
-- **Current evidence check.** Direct API validation against the real packed mod `sn_mod_support_apis` returns `success: true`, `lossless: true`, `inputFileCount: 8`, `generated: 1`, `passthrough: 5`, `binary: 2`, and no dropped files. `npm run typecheck` and `npm run build` pass. The follow-up resolver fix was API/build-verified; it was not re-clicked through the browser because the local Playwright dependency surface was incomplete in this Codex runtime.
+- **Current evidence check.** Direct API validation against the real packed mod `sn_mod_support_apis` returns `success: true`, `lossless: true`, `inputFileCount: 8`, `generated: 1`, `passthrough: 5`, `binary: 2`, and no dropped files. `npm run typecheck` and `npm run build` pass. The follow-up resolver fix was API/build-verified; it was not re-clicked through the
+---
 
-### P5 — Diff-Safe XML Patch Builder
+## Session task scope snapshot — 2026-06-16 (handoff to fresh session)
 
-**User value:** XML patching is one of X4's most powerful features, but bad selectors fail silently or patch the wrong thing. The Studio should make patches inspectable before deployment.
+**Done & committed (commit d0f3ef9):**
+- H5 — path-traversal containment fix (`isPathWithin`, separator-anchored); verified via live 403s + full selftest sweep green.
+- G7 (partial) — 8 of 11 eslint errors fixed in `server.ts`, `mdSimulate.ts`, `xsdValidate.ts` (useless-escape / prefer-const; preserved the `[\w.\-:]` range-guard).
+- H9 part 1 — round-trip selftest now emits the house `{allPassed,passed,total}` shape alongside `lossless`.
 
-**Current code surfaces to build on:**
-- `src/components/XMLPatchSystem.tsx` edits `workspace.xmlPatches`.
-- `src/lib/modCompiler.ts` and `server.ts` use `compileDiffDocument(patches, targetFile)`.
-- `server.ts` file APIs can read configured filesystem roots.
-- `src/components/WikiBrowser.tsx` already explains XML diff basics.
-- `src/components/GlobalSearch.tsx` indexes XML patches for search.
+**Done, pending commit (clean ~6-line diff on host, host-verified by Codex+Gemini):**
+- H6 — preset-dropdown desync fixed: controlled `<select value="__current">` + dynamic `{workspace.name}` option in `App.tsx`; browser-verified (dropdown shows the loaded workspace, not "Blank Workspace").
 
-**Roadmap detail:**
-- Add target-file resolution against the local game index: when the target is `libraries/wares.xml`, load the actual base file from the X4 install.
-- Add XPath selector checking: zero matches, one match, many matches, and invalid selector syntax.
-- Add a before/after preview for `add`, `replace`, and `remove`.
-- Support `<add pos="before|after|prepend|append">` and expose it in the editor.
-- Warn when a patch targets a generated file in the same mod where normal generation would be clearer.
+**Deferred — frontend, pick up next session:**
+- H7 — diagnostics taxonomy consolidation (compiler/Doctor/Scanner/critic naming).
+- H8 — Object Browser human-searchability (display-name index + resolve `{page,id}` localization refs).
+- H9 parts 2-3 — Playtest "CLEAN" wording (means "no active-mod log issues", not deployed/loaded/valid) + Source "CHANGES (n)" label (generated-diff, not git).
+- G7 remainder — 3 eslint errors (`App.tsx:140` Function-type, `DirectoryExplorer.tsx:192`, `SourceControl.tsx:687` prefer-const) + 750-warning triage.
 
-**Definition of done:**
-- Every XML patch can be previewed against a real target file before compile.
-- Bad selectors produce warnings in Mod Doctor and `/api/agent/compile`.
-- The patch builder can show exactly what nodes will be inserted/replaced/removed.
+**Infra / environment (H1-H4):**
+- H1 — confirmed NOT real file corruption. Root cause = sandbox `core.autocrlf` mismatch vs host (false whole-file CRLF diffs) + stale/laggy sandbox reads + Antigravity as concurrent git author. Host files are clean (Codex+Gemini verified, typecheck passes).
+- H2 — protocol: Antigravity owns ALL git; agents edit files only, verify via browser/host — never sandbox git/fs metadata.
+- H3 — API(3001)/Vite(3000) boot race (open). H4 — FpsMeter is cadence, not profiler (documented).
+- ACTION: add root `.gitattributes` (`* text=auto`, `*.ts/tsx/json text eol=lf`) to stop sandboxed agents seeing phantom diffs.
 
-**2026-06-10 implementation note:**
-- Added `/api/patch/base-content` in `server.ts` to locate and read game base files across the workspace, main game install, and enabled extensions.
-- Integrated browser-side `DOMParser` and `document.evaluate` to count XPath matches (reporting 0, 1, or many matches) and report invalid selector syntax in real-time.
-- Implemented a client-side RFC 5261 patch application algorithm in the DOM to execute proposed block changes (supporting `add`, `replace`, and `remove` actions).
-- Added support for the position (`pos="before|after|prepend|append"`) selector attribute inside both the React UI editor and compiler.
-- Created a tabbed sidebar in the right-hand panel, toggling between **Patch XML** (raw compiled diff XML) and **Applied Preview** (unified diff snippet with surrounding lines of context).
+**Lesson:** trust the browser (behavior) and host-side checks; the sandbox's `git diff`/file-reads are not ground truth here.
+a tabbed sidebar in the right-hand panel, toggling between **Patch XML** (raw compiled diff XML) and **Applied Preview** (unified diff snippet with surrounding lines of context).
 - Enabled block-level warning/error messaging to report selector validation and content syntax problems on individual card items.
 
 ### P6 — Agent-First Automation API
