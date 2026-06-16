@@ -102,6 +102,7 @@ export default function PackageModDoctor({
     { name: 'ext-doctor', path: 'extension-doctor-selftest' },
     { name: 'override-map', path: 'override-map-selftest' },
     { name: 'cat/dat', path: 'catdat-selftest' },
+    { name: 'object-index', path: 'object-index-selftest' },
     { name: 'diff-synth', path: 'xpath-synth-selftest' },
     { name: 'patch-audit', path: 'patch-audit' },
     { name: 'sqlite', path: 'db-selftest' }

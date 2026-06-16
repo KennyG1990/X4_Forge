@@ -41,7 +41,7 @@ import {
   validatePackageReadiness
 } from "./src/lib/modCompiler";
 import { runModDoctor } from "./src/lib/modDoctor";
-import { buildX4ObjectIndex, filterX4ObjectIndex, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
+import { buildX4ObjectIndex, filterX4ObjectIndex, runObjectIndexSelftest, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
 import { debugScan as catDatDebugScan, extractGameFile as catDatExtractGameFile, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -209,6 +209,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/ui-layout-selftest",
   "/agent/override-map-selftest",
   "/agent/catdat-selftest",
+  "/agent/object-index-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -3333,6 +3334,16 @@ app.get("/api/agent/catdat-selftest", (_req, res) => {
     return res.json(runCatDatSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "catdat-selftest failed" });
+  }
+});
+
+// H8 — object-index name-resolution oracle (synthetic fixtures; guards the regex
+// XML/localization parsing incl. the multi-macro identification bounding fix).
+app.get("/api/agent/object-index-selftest", (_req, res) => {
+  try {
+    return res.json(runObjectIndexSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "object-index-selftest failed" });
   }
 });
 

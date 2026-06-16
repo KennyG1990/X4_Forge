@@ -14,11 +14,26 @@ if (injectedToken) {
   sessionStorage.setItem('studio_session_token', injectedToken);
 }
 
-// Override fetch globally before rendering the app safely
+// Override fetch globally before rendering the app safely.
 const originalFetch = window.fetch;
-const customFetch = function(this: any, input: RequestInfo | URL, init?: RequestInit) {
+
+// H3 boot-race: Vite (3000) starts proxying before the tsx API (3001) finishes
+// transpiling server.ts (~2-3s), so early /api calls hit the proxy's soft 503
+// ("API server is restarting") or a transient connection error. We transparently
+// retry — but ONLY idempotent /api GETs, with a small capped backoff. Mutations
+// (POST/PUT/PATCH/DELETE) are NEVER auto-retried (could double-apply a change).
+const API_BOOT_BACKOFFS_MS = [200, 350, 500, 650]; // ~1.7s total, within the boot window
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
+  const m = init?.method || (typeof input === 'object' && input instanceof Request ? input.method : undefined) || 'GET';
+  return m.toUpperCase();
+}
+
+const customFetch = async function(this: any, input: RequestInfo | URL, init?: RequestInit) {
   const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : input.url);
-  if (url.includes('/api/')) {
+  const isApi = url.includes('/api/');
+  if (isApi) {
     const token = sessionStorage.getItem('studio_session_token');
     if (token) {
       init = init || {};
@@ -37,7 +52,30 @@ const customFetch = function(this: any, input: RequestInfo | URL, init?: Request
       }
     }
   }
-  return originalFetch.call(this, input, init);
+
+  // Fast path: anything that isn't an idempotent /api GET goes straight through.
+  if (!isApi || methodOf(input, init) !== 'GET') {
+    return originalFetch.call(this, input, init);
+  }
+
+  // Bounded retry for the API boot/restart window only.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await originalFetch.call(this, input, init);
+      if (res.status === 503 && attempt < API_BOOT_BACKOFFS_MS.length) {
+        await delay(API_BOOT_BACKOFFS_MS[attempt]);
+        continue;
+      }
+      return res;
+    } catch (err) {
+      // Transient connection error (API socket not up yet) — retry within budget.
+      if (attempt < API_BOOT_BACKOFFS_MS.length) {
+        await delay(API_BOOT_BACKOFFS_MS[attempt]);
+        continue;
+      }
+      throw err;
+    }
+  }
 };
 
 try {
