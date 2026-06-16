@@ -1506,6 +1506,46 @@ Each metric states the **target**, the **measurement method**, and whether it ne
 
 **Release gate for turning any tier > `off` ON by default (currently NOT planned — opt-in stays):** would require M-DET-1/2 + M-SAFE-1/2 green AND A4.4 targets met on the harness. Until then AI stays strictly opt-in.
 
+### Cross-agent review — Codex (GPT-5.5), 2026-06-16: semantic-compliance gap + current-state correction
+
+Codex independently drove the live AI in-browser. It confirmed the architecture/safety reads (chat free-form proposal; `populateNodeMetadata` preserves hallucinated tags; count-only proposal card; no checkpoint — **empirically: applied a Builder result, `Ctrl+Z` did NOT restore the prior graph**, so M-SAFE-2 is a real observed defect, not just a code-read inference). Two corrections banked:
+
+1. **Current state was under-described (own it).** AI is still front-and-center by default — header `AI ENGINE`, sidebar `CO-PILOT`, panel `X4 INTELLIGENT AI GUIDE`. The opt-in/`off`-default + tone work (A4.1/A4.6) is **scoped only, NOT implemented**. Honest status: the app today ships exactly the loud, always-on AI the roadmap intends to retire. UX-fit for AI-skeptical users is low until A4.1 lands. (My earlier read was too generous about the shipped experience vs the planned one.)
+
+2. **The important miss — semantic noncompliance while compiler-valid.** Observed: prompt "on game start, show help" → Builder applied a `show_help` action under a cue with **no `event_game_started` trigger**, yet the UI showed `COMPILER: OK`. The deterministic engine proves the XML is **legal**, not that it **satisfies intent**. My hallucination framing was too narrow (invalid tags/ids); the more dangerous failure is **valid-but-wrong**, which XSD/validate cannot catch and which the `COMPILER: OK` badge actively papers over (an H9 label-honesty problem). **The success metrics as written (invalid-tag/id rate, validation pass rate) would score this failure as a PASS — a real hole.**
+
+**New scoped work:**
+- **A4.9 — Intent-satisfaction checker (deterministic-where-possible).** Decompose the prompt into structured requirements; compile each to a **graph-pattern assertion** where feasible (e.g. trigger=game_start ⇒ an `event_game_started` wired into the target cue; "reward" ⇒ a `reward_player` with credits>0; "on player enters sector" ⇒ an `event_object_changed_sector`/equivalent on the cue). Run these alongside XSD validation. Requirements that can't be reduced to a deterministic pattern are surfaced as **"AI-claimed — not machine-verified,"** never as satisfied. Reuses `mdSemantics.ts` / `cueLineage.ts` / `mdCritic.ts` patterns.
+- **Relabel the misleading verdict (H9 cluster + A4.6 provenance).** `COMPILER: OK` → two honest badges: **"XML valid"** (XSD) and **"Intent: N/M requirements verified"** (A4.9), with the unverified requirements listed explicitly. A green compiler must never imply the prompt was satisfied.
+- **Architect (A5) done-checks must split legality from intent.** A task is `done` only when its **XSD/validate check** AND its **A4.9 intent-pattern check** both pass — or the unverifiable remainder is explicitly accepted by the user. (Amends M-ARCH-2.)
+
+**New success metric:**
+- **M-SEM-1 — intent-satisfaction rate (needs key + harness).** Extend the AI Eval Harness: each suite prompt carries a set of **expected graph-pattern assertions**; score = % of required assertions present in the output. Targets (with A4.9 + tool-grounding): **≥90%** of required patterns satisfied on the well-formed bucket, and **0** prompts where a trigger/condition the user explicitly named is silently dropped while a green verdict shows. This converts "did it do what I asked" from a vibe into a number and directly targets the Codex-observed failure.
+
+**Calibrated current-state confidence (Codex live test, banked as baseline):** Builder utility ~65% · Chat accuracy ~45% · Apply safety ~40% · UX-fit for AI-skeptics ~25% · Roadmap direction ~85%. Strategy is right; the shipped software does not yet live up to it; "valid ≠ correct" is the headline gap to close.
+
+### Cross-agent review — Codex round 2 (advice), 2026-06-16: reframe to a verified drafting layer
+
+**Organizing-principle update (supersedes the "ambient copilot" framing):** AI is a **verified drafting/explaining layer surfaced through deterministic ACTIONS — not a chatbot.** The model's prose is never the artifact; the deterministic verdict is. This refines (does not replace) the A4 tiers / A5 Architect / A4.9 intent-checker already scoped. Merges below by item number to avoid duplication.
+
+- **A4.0 — Action-first surface (NEW; reframes A4's entry model).** The primary AI surface is contextual verbs, not a chat window: **Explain this error · Suggest fix · Draft node chain · Review this cue · Find missing trigger · Convert idea to plan.** These attach to the thing in context (a diagnostic, a node, a cue). **Demote chat** from the default surface to a single *constrained* "Convert idea to plan" affordance that feeds A5 (Architect) — keep conversation as a planning on-ramp, not the front door. *Open product question (validate, don't assume): do X4 users want assistant-chat at all? Codex's read = they prefer Explain/Fix/Verify actions. Measure before committing to delete chat.*
+
+- **A4.10 — Deterministic-explanation-first, AI-as-translation (NEW; strongest doctrine lever).** For diagnostics/explanations, show the app's **rule-based explanation first** (reuse `src/lib/mdExplain.ts` + the existing diagnostic rule messages). AI may then "translate into plain English," **labeled as polish, not authority** (e.g. a "plain-English (AI)" toggle under the deterministic text). The deterministic explanation must stand alone with AI off. *✅ when: every AI explanation is visibly anchored to a deterministic source; turning AI off leaves a complete rule-based explanation.*
+
+- **Three-verdict model (supersedes A4.9's two-badge relabel).** Every proposal/diagnostic surfaces three independent, separately-sourced verdicts:
+  1. **Schema valid** — XSD legality (`validateXmlAgainstSchema`/`validateModWorkspace`).
+  2. **Graph valid** — ports/links/lineage coherent (`cueLineage` + `mdCritic`).
+  3. **Intent matched** — requirement graph-pattern assertions pass (A4.9).
+  Today the app surfaces #1 (sometimes #2) and never #3. The misleading single `COMPILER: OK` badge is replaced by these three. A green #1 must never imply #2 or #3.
+
+- **A4.2 sharpened → "Review panel" (replaces the count-only proposal card).** Must show: added/removed/changed nodes (real diff) · generated **XML preview** · the **requirement checklist** with per-item pass/fail (A4.9) · the three verdicts above · **Apply disabled when a critical requirement or schema/graph check fails** · "Apply valid parts only" offered *only when partial application is coherent*.
+
+- **M-SAFE-2 sharpened → named, visible rollback.** Every AI apply creates a named checkpoint (`Before AI Apply: <prompt summary>`) and the success card shows an explicit **"Undo AI Change"** button (not just relying on global Ctrl-Z, which Codex observed does NOT currently restore an AI apply). *✅ when: one click on the success card fully restores the pre-apply graph (deep-equal).*
+
+- **A4.6 sharpened → concrete tone vocabulary.** Drop "Captain", pulsing sparkles, "intelligent", "injected successfully". Use understated, credible status language: **`Draft proposed` · `XSD verified` · `Intent incomplete` · `Review before applying`**. For this community, understated credibility beats personality.
+
+**Net (Codex round 2):** the target feeling is not "AI is here" but "Forge can explain, draft, check, and roll back changes when I ask." Verbs + deterministic-first + three verdicts + real rollback. All still gated behind the opt-in tier model (default `off`); nothing built — scoped only.
+
 ---
 
 **Infra / environment (H1-H4):**
