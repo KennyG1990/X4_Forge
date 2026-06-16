@@ -261,6 +261,8 @@ export default function AIHelper({
             {/* A4.2 — Review panel: diff + deterministic verdicts BEFORE apply. */}
             {item.actionRequired && item.proposedWorkspace && (() => {
               const review = reviewProposal(workspace, item.proposedWorkspace as ModWorkspace, { knownTags, requirements: item.requirements });
+              const intentChecked = !!(review.intentResults && review.intentResults.length);
+              const intentFail = review.verdicts.intent.status === 'fail';
               const vClass: Record<VerdictStatus, string> = {
                 pass: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10',
                 warn: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
@@ -322,7 +324,9 @@ export default function AIHelper({
                 )}
 
                 <p className="text-[9.5px] text-slate-500 leading-relaxed">
-                  Staged only — nothing changes until you apply. <span className="text-slate-400">Intent</span> is not machine-verified: a green Schema/Graph proves the XML is valid, not that it does what you asked.
+                  Staged only — nothing changes until you apply. {intentChecked
+                    ? <>Requirements above are machine-checked against the output (rows marked <span className="text-slate-400">—</span> aren't verifiable). A green Schema/Graph means valid XML — the <span className="text-slate-400">Intent</span> result is what tells you it matches your request.</>
+                    : <><span className="text-slate-400">Intent</span> is not machine-verified here: a green Schema/Graph proves the XML is valid, not that it does what you asked.</>}
                 </p>
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
@@ -330,15 +334,21 @@ export default function AIHelper({
                     type="button"
                     disabled={!review.applySafe}
                     onClick={() => handleApplyAction(idx, item)}
-                    title={review.applySafe ? 'Apply to the canvas (reversible via Undo)' : 'Resolve the schema/graph errors or unknown tags first'}
+                    title={
+                      !review.applySafe ? 'Resolve the schema/graph errors or unknown tags first'
+                        : intentFail ? 'Valid XML, but it does NOT satisfy all your requirements. Apply only if you intend to finish it yourself (reversible via Undo).'
+                          : 'Apply to the canvas (reversible via Undo)'
+                    }
                     className={`py-1.5 text-center text-[10px] font-bold rounded font-mono uppercase tracking-wider flex items-center justify-center gap-1 transition-all ${
-                      review.applySafe
-                        ? 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer'
-                        : 'bg-slate-800 text-slate-500 border border-white/10 cursor-not-allowed'
+                      !review.applySafe
+                        ? 'bg-slate-800 text-slate-500 border border-white/10 cursor-not-allowed'
+                        : intentFail
+                          ? 'bg-amber-500 hover:bg-amber-400 text-black cursor-pointer'
+                          : 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer'
                     }`}
                   >
-                    {review.applySafe ? <Check className="w-3" /> : <ShieldCheck className="w-3" />}
-                    {review.applySafe ? 'Confirm & Apply' : 'Review before applying'}
+                    {!review.applySafe ? <ShieldCheck className="w-3" /> : intentFail ? <AlertTriangle className="w-3" /> : <Check className="w-3" />}
+                    {!review.applySafe ? 'Review before applying' : intentFail ? 'Apply anyway — intent incomplete' : 'Confirm & Apply'}
                   </button>
                   <button
                     type="button"
