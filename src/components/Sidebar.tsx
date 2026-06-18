@@ -54,6 +54,7 @@ import ErrorBoundary from './ErrorBoundary';
 import CueViewer from './CueViewer';
 import AIHelper from './AIHelper';
 import ObjectBrowser from './ObjectBrowser';
+import { explainNode } from '../lib/mdExplain';
 
 interface SidebarProps {
   width?: number;
@@ -61,6 +62,18 @@ interface SidebarProps {
   aiEnabled?: boolean;
   /** Live md.xsd tag set for the AI review's unknown-tag check (forwarded to AIHelper). */
   aiKnownTags?: Set<string>;
+  /** A4.3 — active AI presence tier (forwarded to AIHelper to gate Builder/Architect surfaces). */
+  aiTier?: 'off' | 'explain' | 'assist' | 'cobuild';
+  /** A5.2 — Architect blueprint + agent-loop controls (forwarded to AIHelper). */
+  architectBlueprint?: any;
+  onBlueprintChange?: (b: any) => void;
+  onRunArchitectStep?: () => void;
+  architectRunning?: boolean;
+  architectStep?: any;
+  onConfirmArchitectStep?: () => void;
+  onDeclineArchitectStep?: () => void;
+  architectCanRun?: boolean;
+  architectRunDisabledReason?: string;
   /** A4.7 — abort the in-flight AI request (forwarded to AIHelper). */
   onAiCancel?: () => void;
   activeTab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference';
@@ -129,6 +142,16 @@ export default function Sidebar({
   width,
   aiEnabled = false,
   aiKnownTags,
+  aiTier,
+  architectBlueprint,
+  onBlueprintChange,
+  onRunArchitectStep,
+  architectRunning,
+  architectStep,
+  onConfirmArchitectStep,
+  onDeclineArchitectStep,
+  architectCanRun,
+  architectRunDisabledReason,
   onAiCancel,
   activeTab,
   setActiveTab,
@@ -201,6 +224,8 @@ export default function Sidebar({
   const [schemaMessage, setSchemaMessage] = useState<string>('');
   const [schemaMessageType, setSchemaMessageType] = useState<'success' | 'error'>('success');
   const [savingSchema, setSavingSchema] = useState<boolean>(false);
+  // A4.0 — "Explain this node" verb: deterministic single-node explanation, collapsible.
+  const [explainOpen, setExplainOpen] = useState<boolean>(false);
 
   const compileSettings = workspace.compileSettings || {
     md: true,
@@ -1390,6 +1415,16 @@ export default function Sidebar({
             isAiFloatingVisible={isAiFloatingVisible}
             setIsAiFloatingVisible={setIsAiFloatingVisible}
             knownTags={aiKnownTags}
+            aiTier={aiTier}
+            architectBlueprint={architectBlueprint}
+            onBlueprintChange={onBlueprintChange}
+            onRunArchitectStep={onRunArchitectStep}
+            architectRunning={architectRunning}
+            architectStep={architectStep}
+            onConfirmArchitectStep={onConfirmArchitectStep}
+            onDeclineArchitectStep={onDeclineArchitectStep}
+            architectCanRun={architectCanRun}
+            architectRunDisabledReason={architectRunDisabledReason}
             onCancel={onAiCancel}
           />
         )}
@@ -1401,6 +1436,57 @@ export default function Sidebar({
               <Sliders className="w-3.5 h-3.5" />
               PROPERTIES INSPECTOR
             </h3>
+
+            {/* A4.0 — "Explain this node" contextual verb. Deterministic (no AI), available at every tier. */}
+            {selectedNode && (
+              <div className="mb-3">
+                <button
+                  type="button"
+                  onClick={() => setExplainOpen(o => !o)}
+                  className="w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-amber-500/25 bg-amber-500/[0.06] hover:bg-amber-500/[0.12] text-amber-300 text-[10px] font-mono font-bold uppercase tracking-wider cursor-pointer transition-all"
+                >
+                  <Lightbulb className="w-3.5 h-3.5" />
+                  Explain this node
+                  <ChevronRight className={`w-3 h-3 ml-auto transition-transform ${explainOpen ? 'rotate-90' : ''}`} />
+                </button>
+                {explainOpen && (() => {
+                  const x = explainNode(selectedNode.id, workspace.nodes, workspace.links || []);
+                  const riskColor = x.risk === 'irreversible' ? 'text-red-300' : x.risk === 'safe' ? 'text-emerald-300' : 'text-amber-300';
+                  return (
+                    <div className="mt-1.5 p-2.5 rounded border border-white/10 bg-[#0F1115] space-y-2 font-sans text-[10.5px] text-slate-300 leading-relaxed">
+                      <div className="text-[8px] font-mono uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                        Deterministic · no AI · <span className="text-cyan-400/70">&lt;{x.xmlTag}&gt;</span>
+                      </div>
+                      <div className="text-slate-200">{x.summary}</div>
+                      {!x.schemaRecognized && (
+                        <div className="text-red-300/90 flex items-start gap-1">
+                          <Info className="w-3 h-3 mt-0.5 shrink-0" />
+                          <span>This tag is not a declared md.xsd element — the game schema may not recognize it.</span>
+                        </div>
+                      )}
+                      {x.note && <div className="text-amber-300/90">⚠ {x.note}</div>}
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9.5px] font-mono pt-0.5 border-t border-white/5">
+                        <span className="text-slate-500">role</span><span className="text-slate-300">{x.role}</span>
+                        <span className="text-slate-500">risk</span><span className={riskColor}>{x.risk}</span>
+                        {x.writes.length > 0 && (<><span className="text-slate-500">writes</span><span className="text-slate-300">{x.writes.join(', ')}</span></>)}
+                        {x.reads.length > 0 && (<><span className="text-slate-500">reads</span><span className="text-slate-300">{x.reads.join(', ')}</span></>)}
+                      </div>
+                      <div className="text-[9.5px] text-slate-400 pt-0.5 border-t border-white/5">
+                        {x.role === 'cue'
+                          ? 'Wiring: this is a cue (a root container for triggers + actions).'
+                          : x.wiring.wiredToCue
+                            ? <>Wiring: wired as a <span className="text-emerald-300">trigger</span> of cue <span className="text-slate-200">{x.wiring.wiredToCue}</span>.</>
+                            : x.wiring.inChainOf
+                              ? <>Wiring: part of the <span className="text-emerald-300">action chain</span> of cue <span className="text-slate-200">{x.wiring.inChainOf}</span>.</>
+                              : x.wiring.orphan
+                                ? <span className="text-red-300/90">Wiring: orphaned — nothing points at this node, so it will never run.</span>
+                                : 'Wiring: not currently wired into a cue.'}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             <div className="space-y-3 bg-[#0F1115] p-3 rounded border border-white/10 font-mono text-[11px]">
               <div>

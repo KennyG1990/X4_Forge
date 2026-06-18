@@ -200,6 +200,80 @@ export function explainWorkspace(nodes: MDNode[], links: MDLink[]): ExplainResul
 }
 
 /* ------------------------------------------------------------------ *
+ * A4.0 — single-node deterministic explanation (the "Explain this node" verb).
+ * Built only from describeNode/semanticsForNode + a graph-edge walk; never AI.
+ * ------------------------------------------------------------------ */
+export interface NodeExplanation {
+  found: boolean;
+  nodeId: string;
+  label: string;
+  xmlTag: string;
+  role: 'cue' | 'trigger' | 'action' | 'unknown';
+  /** Deterministic plain-English description (mdSemantics.describeNode). */
+  summary: string;
+  /** Whether <xmlTag> is a declared md.xsd element (false ⇒ likely invented). */
+  schemaRecognized: boolean;
+  /** Registry note (e.g. "one-way write"), if any. */
+  note?: string;
+  /** Coarse risk class from the registry: safe | state_mutation | economy | spawn | irreversible | unknown. */
+  risk: string;
+  reads: string[];
+  writes: string[];
+  /** Graph context, edge-walked. */
+  wiring: {
+    /** Cue id this node is wired into as a trigger (out_cond), if any. */
+    wiredToCue?: string;
+    /** Cue id whose action chain (out_act/out_next) contains this node, if any. */
+    inChainOf?: string;
+    /** True when the node is a non-cue with no incoming wiring (won't run). */
+    orphan: boolean;
+  };
+}
+
+/** Explain a single node deterministically, in the context of the whole graph. */
+export function explainNode(nodeId: string, nodes: MDNode[], links: MDLink[]): NodeExplanation {
+  nodes = Array.isArray(nodes) ? nodes : [];
+  links = Array.isArray(links) ? links : [];
+  const node = nodes.find((n) => n && n.id === nodeId);
+  if (!node) {
+    return { found: false, nodeId, label: nodeId, xmlTag: '', role: 'unknown', summary: 'Node not found.',
+      schemaRecognized: false, risk: 'unknown', reads: [], writes: [], wiring: { orphan: true } };
+  }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const sem = semanticsForNode(node);
+  const role: NodeExplanation['role'] =
+    node.type === 'cue' ? 'cue' : node.type === 'condition' || node.type === 'event' ? 'trigger'
+      : node.type === 'action' ? 'action' : 'unknown';
+
+  // Edge-walk the graph for this node's context (same ports the compiler uses).
+  let wiredToCue: string | undefined;
+  let inChainOf: string | undefined;
+  const cues = nodes.filter((n) => n.type === 'cue');
+  for (const cue of cues) {
+    if (triggerNodesOf(cue.id, nodeById, links).some((t) => t.id === nodeId)) wiredToCue = cue.id;
+    if (actionChainOf(cue.id, nodeById, links).some((a) => a.id === nodeId)) inChainOf = cue.id;
+  }
+  // Orphan = a non-cue node that nothing points at (so it never runs). Cues are roots, never orphans.
+  const hasIncoming = links.some((l) => l.targetNodeId === nodeId);
+  const orphan = node.type !== 'cue' && !hasIncoming;
+
+  return {
+    found: true,
+    nodeId,
+    label: labelOf(node),
+    xmlTag: node.xmlTag,
+    role,
+    summary: describeNode(node),
+    schemaRecognized: !sem.notInSchema,
+    note: sem.note || undefined,
+    risk: sem.risk || 'unknown',
+    reads: Array.isArray(sem.reads) ? sem.reads : [],
+    writes: Array.isArray(sem.writes) ? sem.writes : [],
+    wiring: { wiredToCue, inChainOf, orphan },
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Self-test oracle. House contract: { allPassed, passed, total, checks }.
  * ------------------------------------------------------------------ */
 export function runExplainSelftest() {
@@ -305,6 +379,34 @@ export function runExplainSelftest() {
   // ---- empty workspace degrades honestly ----
   const r4 = explainWorkspace([], []);
   ok('empty_honest', /No cues/.test(r4.summary) && r4.flowSteps.length === 0);
+
+  // ---- A4.0: explainNode (single-node deterministic verb), reusing the alarm cue graph ----
+  const eAction = explainNode('a2', nodes, links); // set_object_shieldlevel
+  ok('explainNode_role_action', eAction.role === 'action', eAction.role);
+  ok('explainNode_in_chain', eAction.wiring.inChainOf === 'c1' && !eAction.wiring.orphan, eAction.wiring);
+  ok('explainNode_summary_deterministic',
+    eAction.summary === `Sets player.primaryship's shield level to 0 (drops its shields completely).`, eAction.summary);
+  ok('explainNode_note_and_write', !!eAction.note && eAction.writes.includes('object.shields') && eAction.risk === 'state_mutation', eAction);
+  // set_object_shieldlevel is curated-but-not-a-declared-md.xsd element → schemaRecognized false (honest).
+  ok('explainNode_schema_flag', eAction.schemaRecognized === false, eAction.schemaRecognized);
+
+  const eTrig = explainNode('ev', nodes, links); // event_object_changed_sector wired as the cue's trigger
+  ok('explainNode_trigger_wired', eTrig.role === 'trigger' && eTrig.wiring.wiredToCue === 'c1', eTrig.wiring);
+
+  const eCue = explainNode('c1', nodes, links);
+  ok('explainNode_cue_not_orphan', eCue.role === 'cue' && eCue.wiring.orphan === false, eCue.wiring);
+
+  // a safe, curated, in-schema action reads cleanly (play_sound)
+  const eSafe = explainNode('a1', nodes, links);
+  ok('explainNode_safe_recognized', eSafe.schemaRecognized === true && eSafe.risk === 'safe', eSafe);
+
+  // orphan: an action nothing points at never runs — flagged honestly
+  const eOrphan = explainNode('lonely', [N('lonely', 'action', 'play_sound', { sound: 'beep' })], []);
+  ok('explainNode_orphan', eOrphan.wiring.orphan === true && !eOrphan.wiring.inChainOf, eOrphan.wiring);
+
+  // missing node degrades honestly
+  const eMiss = explainNode('nope', nodes, links);
+  ok('explainNode_missing', eMiss.found === false && /not found/i.test(eMiss.summary), eMiss);
 
   const passed = checks.filter((c) => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

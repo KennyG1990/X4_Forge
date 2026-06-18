@@ -43,6 +43,7 @@ import { buildX4ObjectIndex, filterX4ObjectIndex, runObjectIndexSelftest, type X
 import { runProposalReviewSelftest } from "./src/lib/proposalReview";
 import { runIntentCheckSelftest } from "./src/lib/intentCheck";
 import { runBlueprintSelftest } from "./src/lib/modBlueprint";
+import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -214,6 +215,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/proposal-review-selftest",
   "/agent/intent-check-selftest",
   "/agent/blueprint-selftest",
+  "/agent/architect-loop-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -3368,6 +3370,23 @@ app.get("/api/agent/intent-check-selftest", (_req, res) => {
     return res.json(runIntentCheckSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "intent-check-selftest failed" });
+  }
+});
+
+// A5.1 — Architect ModBlueprint oracle (sanitize + the canMarkDone M-ARCH-2 guarantee).
+app.get("/api/agent/blueprint-selftest", (_req, res) => {
+  try {
+    return res.json(runBlueprintSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "blueprint-selftest failed" });
+  }
+});
+
+app.get("/api/agent/architect-loop-selftest", (_req, res) => {
+  try {
+    return res.json(runArchitectLoopSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "architect-loop-selftest failed" });
   }
 });
 

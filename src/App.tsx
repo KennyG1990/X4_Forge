@@ -54,8 +54,11 @@ import GlobalSearch from './components/GlobalSearch';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
-import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse } from './lib/apiHelper';
+import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse, getProviderKey } from './lib/apiHelper';
 import { compileAndSaveAll } from './lib/modCompiler';
+import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluateBlueprintChecks, type ModBlueprint } from './lib/modBlueprint';
+import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
+import type { ArchitectStepView } from './components/BlueprintPanel';
 
 // Default initial blank workspace schema
 const BLANK_WORKSPACE: ModWorkspace = {
@@ -309,7 +312,7 @@ export default function App() {
     }
   ]);
   const [aiInputText, setAiInputText] = useState<string>('');
-  const [aiActiveMode, setAiActiveMode] = useState<'chat' | 'builder'>('chat');
+  const [aiActiveMode, setAiActiveMode] = useState<'chat' | 'builder' | 'architect'>('chat');
   const [aiLoading, setAiLoading] = useState<boolean>(false);
   const [aiErrorText, setAiErrorText] = useState<string | null>(null);
   const [isAiFloatingVisible, setIsAiFloatingVisible] = useState<boolean>(false);
@@ -341,6 +344,95 @@ export default function App() {
   // this lets the user abort instead of waiting out an uncancelable request.
   const aiAbortRef = React.useRef<AbortController | null>(null);
   const cancelAiRequest = () => { aiAbortRef.current?.abort(); };
+
+  // A5.2 — Architect blueprint is owned HERE (single source of truth) so the agent loop and
+  // the BlueprintPanel share one object. Persisted on every change (localStorage).
+  const [architectBlueprint, setArchitectBlueprintState] = useState<ModBlueprint>(() => loadBlueprint() || sampleBlueprint());
+  const setArchitectBlueprint = (b: ModBlueprint) => { setArchitectBlueprintState(b); saveBlueprint(b); };
+  const [architectRunning, setArchitectRunning] = useState<boolean>(false);
+  const [architectStep, setArchitectStep] = useState<ArchitectStepView | null>(null);
+  // A proposal accepted by the referee, awaiting the user's Confirm (checkpoint-before-apply).
+  const architectPendingRef = React.useRef<{ proposed: ModWorkspace; version?: number; taskId: string | null } | null>(null);
+
+  // A5.2 D2/D3 — one Architect step: pick the next open task → ask the model for JUST that
+  // task's nodes (grounded on the goal + task + lessons log) → run the deterministic referee
+  // (vetTaskProposal) → accept (stage for confirm) or revise/reject (log the lesson, apply nothing).
+  const runArchitectStep = async () => {
+    setArchitectRunning(true);
+    setArchitectStep(null);
+    architectPendingRef.current = null;
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    try {
+      // Pick the next task from statuses DERIVED from the live workspace (a task already
+      // satisfied by the current canvas must not be re-attempted) — not the raw stored ones.
+      const bp = evaluateBlueprintChecks(architectBlueprint, workspace);
+      const task = nextActiveTask(bp);
+      if (!task) {
+        setArchitectStep({ decision: 'reject', reason: 'No open task — the plan is complete or remaining tasks are blocked. Add a task or edit the goal.' });
+        return;
+      }
+      const lessons = bp.scratchpad.rejected.length
+        ? `\nDo NOT repeat these rejected approaches: ${bp.scratchpad.rejected.join('; ')}.` : '';
+      const prompt = `Mod goal: ${bp.intent}\nWork ONLY on this task: "${task.title}".${task.doneCheck ? ` Success check: ${task.doneCheck}.` : ''}${lessons}\nProduce the minimal node graph that satisfies this task, building on the current workspace.`;
+      const currentCode = generateMDXML(workspace);
+      const diagnostics = validateModWorkspace(workspace, currentCode);
+      const response = await fetch('/api/agent/generate', {
+        method: 'POST', headers: getAIHeaders(), signal: controller.signal,
+        body: JSON.stringify({ prompt, currentWorkspace: workspace, diagnostics, apply: false }),
+      });
+      const data = await handleApiResponse(response, 'Architect generation failed.');
+      const proposed: ModWorkspace = data.workspace;
+      const vet = vetTaskProposal({ base: workspace, proposed, blueprint: bp, activeTaskId: task.id, knownTags: aiKnownTags, requirements: data.requirements });
+      const verdicts = { schema: vet.review.verdicts.schema.status, graph: vet.review.verdicts.graph.status, intent: vet.review.verdicts.intent.status };
+      const nodeCount = proposed?.nodes?.length ?? 0;
+      const addedTags = (proposed?.nodes || []).filter((n: any) => !workspace.nodes.some(b => b.id === n.id)).map((n: any) => n.xmlTag).filter(Boolean).join('+');
+
+      if (vet.decision === 'accept') {
+        architectPendingRef.current = { proposed, version: data.version, taskId: task.id };
+        setArchitectStep({ decision: 'accept', reason: vet.reason, taskTitle: task.title, verdicts, nodeCount });
+      } else if (vet.decision === 'reject') {
+        // A genuinely rejected approach (already in the lessons log, or a known-bad pattern)
+        // → record the approach signature so it is never re-proposed (blocking).
+        setArchitectBlueprint(recordRejection(architectBlueprint, addedTags || `${task.title}: ${vet.reason}`));
+        setArchitectStep({ decision: 'reject', reason: vet.reason, taskTitle: task.title, verdicts, nodeCount });
+      } else {
+        // 'revise' = fixable (invalid XML, or valid-but-incomplete). NOT a blocking lesson —
+        // the model should refine and may legitimately reuse the same tags. Log a non-blocking
+        // note for context; apply nothing.
+        setArchitectBlueprint({
+          ...architectBlueprint,
+          scratchpad: { ...architectBlueprint.scratchpad, notes: [...architectBlueprint.scratchpad.notes, `Revised "${task.title}": ${vet.reason}`] },
+        });
+        setArchitectStep({ decision: 'revise', reason: vet.reason, taskTitle: task.title, verdicts, nodeCount });
+      }
+    } catch (err: any) {
+      // A network/model failure is an ERROR, not a referee rejection — never touch the lessons log.
+      if (err?.name === 'AbortError') setArchitectStep({ decision: 'error', reason: 'Step cancelled.' });
+      else setArchitectStep({ decision: 'error', reason: `${err?.message || 'Architect step failed'} — the model request didn't complete. Run again to retry.` });
+    } finally {
+      aiAbortRef.current = null;
+      setArchitectRunning(false);
+    }
+  };
+
+  const confirmArchitectStep = () => {
+    const pending = architectPendingRef.current;
+    if (!pending) return;
+    saveCheckpoint(); // M-SAFE-2: reversible apply
+    setWorkspace(pending.proposed);
+    if (pending.version !== undefined) setLocalVersion(pending.version);
+    // The BlueprintPanel re-runs evaluateBlueprintChecks against the NEW workspace and
+    // auto-advances the task to `done` iff its deterministic check passes (M-ARCH-2).
+    setArchitectBlueprint({
+      ...architectBlueprint,
+      changelog: [...architectBlueprint.changelog, { at: new Date().toISOString().slice(0, 10), entry: `Applied step: ${architectStep?.taskTitle || 'task'}`, verdict: 'applied' }],
+    });
+    architectPendingRef.current = null;
+    setArchitectStep(null);
+  };
+  const declineArchitectStep = () => { architectPendingRef.current = null; setArchitectStep(null); };
+  const architectCanRun = !!getProviderKey(getActiveProvider());
 
   const handleSendChatMode = async (promptMsg: string) => {
     setAiChatHistory(prev => [...prev, { role: 'user', text: promptMsg }]);
@@ -1155,10 +1247,20 @@ export default function App() {
           isAiFloatingOpen={isAiFloatingOpen}
           setIsAiFloatingOpen={setIsAiFloatingOpen}
           aiKnownTags={aiKnownTags}
+          aiTier={aiTier}
           onAiCancel={cancelAiRequest}
           handleSend={handleSend}
           handleApplyAction={handleApplyAction}
           handleDeclineAction={handleDeclineAction}
+          architectBlueprint={architectBlueprint}
+          onBlueprintChange={setArchitectBlueprint}
+          onRunArchitectStep={runArchitectStep}
+          architectRunning={architectRunning}
+          architectStep={architectStep}
+          onConfirmArchitectStep={confirmArchitectStep}
+          onDeclineArchitectStep={declineArchitectStep}
+          architectCanRun={architectCanRun}
+          architectRunDisabledReason={architectCanRun ? undefined : 'No AI key set — add one in Settings → AI Assistant → Configure AI engine.'}
           diagnostics={diagnostics}
           diagnosticSource={diagnosticSource}
           onSelectSnapshot={setSnapshotDiffWorkspace}
@@ -1318,6 +1420,16 @@ export default function App() {
           setIsAiFloatingVisible={setIsAiFloatingVisible}
           knownTags={aiKnownTags}
           onCancel={cancelAiRequest}
+          aiTier={aiTier}
+          architectBlueprint={architectBlueprint}
+          onBlueprintChange={setArchitectBlueprint}
+          onRunArchitectStep={runArchitectStep}
+          architectRunning={architectRunning}
+          architectStep={architectStep}
+          onConfirmArchitectStep={confirmArchitectStep}
+          onDeclineArchitectStep={declineArchitectStep}
+          architectCanRun={architectCanRun}
+          architectRunDisabledReason={architectCanRun ? undefined : 'No AI key set — add one in Settings → AI Assistant → Configure AI engine.'}
         />
       )}
 

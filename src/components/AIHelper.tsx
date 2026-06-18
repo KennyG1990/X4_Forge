@@ -20,6 +20,8 @@ import {
 import { ModWorkspace, ChatMessage } from '../types';
 import { reviewProposal, type VerdictStatus } from '../lib/proposalReview';
 import { getActiveProvider, getProviderKey } from '../lib/apiHelper';
+import BlueprintPanel, { type ArchitectStepView } from './BlueprintPanel';
+import { loadBlueprint, sampleBlueprint, type ModBlueprint } from '../lib/modBlueprint';
 
 interface AIHelperProps {
   mode: 'floating' | 'sidebar';
@@ -31,8 +33,8 @@ interface AIHelperProps {
   setChatHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   inputText: string;
   setInputText: (text: string) => void;
-  activeMode: 'chat' | 'builder';
-  setActiveMode: (mode: 'chat' | 'builder') => void;
+  activeMode: 'chat' | 'builder' | 'architect';
+  setActiveMode: (mode: 'chat' | 'builder' | 'architect') => void;
   loading: boolean;
   errorText: string | null;
   isOpen: boolean;
@@ -47,6 +49,22 @@ interface AIHelperProps {
   knownTags?: Set<string>;
   /** A4.7 — abort the in-flight AI request (Builder runs several slow passes). */
   onCancel?: () => void;
+  /** A4.3 — the active AI presence tier. Gates which surfaces are exposed:
+   *  explain = read-only chat (no apply, no Builder/Architect);
+   *  assist  = chat + Builder (staged proposals you can apply);
+   *  cobuild = chat + Builder + Architect. Defaults to cobuild if unset. */
+  aiTier?: 'off' | 'explain' | 'assist' | 'cobuild';
+  /** A5.2 — Architect blueprint, owned by App (single source of truth shared with the loop). */
+  architectBlueprint?: ModBlueprint;
+  onBlueprintChange?: (b: ModBlueprint) => void;
+  /** A5.2 D3 — Architect agent-loop controls (wired by App at cobuild tier). */
+  onRunArchitectStep?: () => void;
+  architectRunning?: boolean;
+  architectStep?: ArchitectStepView | null;
+  onConfirmArchitectStep?: () => void;
+  onDeclineArchitectStep?: () => void;
+  architectCanRun?: boolean;
+  architectRunDisabledReason?: string;
 }
 
 export default function AIHelper({
@@ -65,9 +83,32 @@ export default function AIHelper({
   handleApplyAction,
   handleDeclineAction,
   knownTags,
-  onCancel
+  onCancel,
+  aiTier = 'cobuild',
+  architectBlueprint: architectBlueprintProp,
+  onBlueprintChange,
+  onRunArchitectStep,
+  architectRunning,
+  architectStep,
+  onConfirmArchitectStep,
+  onDeclineArchitectStep,
+  architectCanRun,
+  architectRunDisabledReason,
 }: AIHelperProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // A4.3 — tier-gated surfaces. explain = read-only chat; assist adds Builder; cobuild adds Architect.
+  const canBuild = aiTier === 'assist' || aiTier === 'cobuild';
+  const canArchitect = aiTier === 'cobuild';
+  // Coerce the active mode down to one this tier actually exposes (e.g. a persisted
+  // 'architect' selection when the user later drops to 'explain').
+  React.useEffect(() => {
+    if (activeMode === 'architect' && !canArchitect) setActiveMode(canBuild ? 'builder' : 'chat');
+    else if (activeMode === 'builder' && !canBuild) setActiveMode('chat');
+  }, [activeMode, canBuild, canArchitect, setActiveMode]);
+  // A5.1/A5.2 — Architect blueprint. Prefer App's (single source of truth, shared with the
+  // agent loop); fall back to a persisted/sample one so the panel still renders standalone.
+  const fallbackBlueprint = React.useMemo(() => loadBlueprint() || sampleBlueprint(), []);
+  const architectBlueprint = architectBlueprintProp ?? fallbackBlueprint;
 
   // Quick prompt suggestions
   const SUGGESTIONS = {
@@ -218,16 +259,36 @@ export default function AIHelper({
         >
           CHAT
         </button>
-        <button
-          type="button"
-          onClick={() => setActiveMode('builder')}
-          className={`flex-1 py-1.5 text-center font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-            activeMode === 'builder' ? 'text-emerald-400 bg-emerald-500/5 font-bold' : 'text-slate-450 hover:bg-white/5'
-          }`}
-        >
-          BUILDER
-        </button>
+        {canBuild && (
+          <button
+            type="button"
+            onClick={() => setActiveMode('builder')}
+            className={`flex-1 py-1.5 text-center font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+              activeMode === 'builder' ? 'text-emerald-400 bg-emerald-500/5 font-bold' : 'text-slate-450 hover:bg-white/5'
+            }`}
+          >
+            BUILDER
+          </button>
+        )}
+        {canArchitect && (
+          <button
+            type="button"
+            onClick={() => setActiveMode('architect')}
+            className={`flex-1 py-1.5 text-center border-l border-white/5 font-semibold transition-all cursor-pointer ${
+              activeMode === 'architect' ? 'text-cyan-400 bg-cyan-500/5 font-bold' : 'text-slate-450 hover:bg-white/5'
+            }`}
+          >
+            ARCHITECT
+          </button>
+        )}
       </div>
+      {/* A4.3 — explain tier: a calm note that this is a read-only on-ramp (no canvas changes). */}
+      {!canBuild && (
+        <div className="shrink-0 px-3.5 py-2 bg-cyan-500/[0.05] border-b border-cyan-500/15 text-[10px] text-cyan-300/80 font-sans leading-relaxed flex items-start gap-1.5">
+          <ShieldCheck className="w-3 h-3 mt-0.5 shrink-0 text-cyan-400/70" />
+          <span>Explain mode — read-only. The assistant answers questions and explains errors but never changes your canvas. Switch to <b>Assist</b> or <b>Co-build</b> in Settings to let it propose edits.</span>
+        </div>
+      )}
 
       {/* A4.8 — calm, upfront key-setup nudge (no recurring popups; just a static banner while no key is set). */}
       {!getProviderKey(getActiveProvider()) && (
@@ -237,9 +298,24 @@ export default function AIHelper({
         </div>
       )}
 
+      {activeMode === 'architect' ? (
+        <BlueprintPanel
+          blueprint={architectBlueprint}
+          workspace={workspace}
+          onChange={onBlueprintChange}
+          onRunStep={onRunArchitectStep}
+          running={architectRunning}
+          step={architectStep}
+          onConfirmStep={onConfirmArchitectStep}
+          onDeclineStep={onDeclineArchitectStep}
+          canRun={architectCanRun}
+          runDisabledReason={architectRunDisabledReason}
+        />
+      ) : (
+      <>
       {/* Prompt/Chat response viewarea */}
       <div className="flex-1 p-3.5 overflow-y-auto space-y-3.5 bg-black/45 flex flex-col min-h-0">
-        
+
         {chatHistory.map((item, idx) => (
           <div key={idx} className="flex flex-col gap-1.5 w-full">
             <div 
@@ -344,23 +420,24 @@ export default function AIHelper({
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     type="button"
-                    disabled={!review.applySafe}
+                    disabled={!canBuild || !review.applySafe}
                     onClick={() => handleApplyAction(idx, item)}
                     title={
-                      !review.applySafe ? 'Resolve the schema/graph errors or unknown tags first'
-                        : intentFail ? 'Valid XML, but it does NOT satisfy all your requirements. Apply only if you intend to finish it yourself (reversible via Undo).'
-                          : 'Apply to the canvas (reversible via Undo)'
+                      !canBuild ? 'Explain tier is read-only — switch to Assist or Co-build in Settings to apply changes'
+                        : !review.applySafe ? 'Resolve the schema/graph errors or unknown tags first'
+                          : intentFail ? 'Valid XML, but it does NOT satisfy all your requirements. Apply only if you intend to finish it yourself (reversible via Undo).'
+                            : 'Apply to the canvas (reversible via Undo)'
                     }
                     className={`py-1.5 text-center text-[10px] font-bold rounded font-mono uppercase tracking-wider flex items-center justify-center gap-1 transition-all ${
-                      !review.applySafe
+                      !canBuild || !review.applySafe
                         ? 'bg-slate-800 text-slate-500 border border-white/10 cursor-not-allowed'
                         : intentFail
                           ? 'bg-amber-500 hover:bg-amber-400 text-black cursor-pointer'
                           : 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer'
                     }`}
                   >
-                    {!review.applySafe ? <ShieldCheck className="w-3" /> : intentFail ? <AlertTriangle className="w-3" /> : <Check className="w-3" />}
-                    {!review.applySafe ? 'Review before applying' : intentFail ? 'Apply anyway — intent incomplete' : 'Confirm & Apply'}
+                    {!canBuild || !review.applySafe ? <ShieldCheck className="w-3" /> : intentFail ? <AlertTriangle className="w-3" /> : <Check className="w-3" />}
+                    {!canBuild ? 'Read-only (Explain tier)' : !review.applySafe ? 'Review before applying' : intentFail ? 'Apply anyway — intent incomplete' : 'Confirm & Apply'}
                   </button>
                   <button
                     type="button"
@@ -451,6 +528,8 @@ export default function AIHelper({
           <Send className="w-3.5 h-3.5" />
         </button>
       </form>
+      </>
+      )}
     </>
   );
 

@@ -105,6 +105,7 @@ export default function PackageModDoctor({
     { name: 'object-index', path: 'object-index-selftest' },
     { name: 'proposal-review', path: 'proposal-review-selftest' },
     { name: 'intent-check', path: 'intent-check-selftest' },
+    { name: 'blueprint', path: 'blueprint-selftest' },
     { name: 'diff-synth', path: 'xpath-synth-selftest' },
     { name: 'patch-audit', path: 'patch-audit' },
     { name: 'sqlite', path: 'db-selftest' }
