@@ -144,9 +144,13 @@ Determinism note carried throughout: the deterministic engine is the referee of 
 
 ---
 
-## 9. Open / blocked
+## 9. Open / blocked  *(updated 2026-06-17 after host restart)*
 
-- **A5.2 D4 (live end-to-end happy path):** PARTIAL. Revise path verified live. The accept → Confirm → task-flips-to-`done` path and post-fix correct-task targeting are **blocked** — the dev API server (:3001) went down mid-validation (repeated `tsx` restarts from rapid edits → slow/stuck boot; `/api/agent/blueprint-selftest` timed out ~14s across 3 probes over ~80s). API runs on the host; can't be restarted from the agent sandbox. Resolution: host `restart-studio.bat`, then one accepted step → Confirm → confirm the task advances.
-- **N2 (station-module display names):** not started; queued after A5.2 D4.
+- **A5.2 D4 (live end-to-end):** ✅ MOSTLY VERIFIED. After the host restart, re-confirmed `architect-loop-selftest` 14/14 live, then ran the loop on "Game-start trigger wired":
+  - Correct-task targeting (bug #1 fix) verified live.
+  - **Headline guarantee verified live on 3 consecutive real model outputs** — deepseek-v4-pro returned valid proposals (incl. SCHEMA PASS · GRAPH PASS · INTENT FAIL) and the referee sent every one back, applied nothing, advanced no task, polluted no lessons log. M-ARCH-2 working on live output.
+  - **Accept → Confirm → advance NOT captured live** because deepseek-v4-pro never produced an intent-satisfying proposal (0/3). Accept decision is oracle-proven (14/14); Confirm→apply reuses the verified A4.2 checkpoint+setWorkspace + A5.3 auto-advance. The live `2/3 → 3/3` screenshot is gated on a stronger model. This confirms the roadmap's documented model-capability dependency.
+  - **Decision pending:** accept the oracle-proven accept-path + documented model limitation, OR point the loop at a stronger model and re-run for the happy-path screenshot.
+- **N2 (station-module display names):** not started; queued next.
 
 All code changes above are written to disk; nothing in this changelog requires the dev server. Per-item roadmap entries in `ROADMAP.md` carry the same detail.
