@@ -33,3 +33,6 @@ dev-docs/
 forge-skills/
 tests/e2e/handoff-gap-analysis.spec.ts
 .kilo/plans/gap-analysis-roadmap-realignment.md
+
+# generated lint artifacts
+.lint-*.json
