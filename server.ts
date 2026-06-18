@@ -26,6 +26,7 @@ import {
   NODE_TEMPLATES,
   PRESETS,
   ModWorkspace,
+  PatchBlock,
   sanitizeWorkspace
 } from "./src/types";
 import {
@@ -47,8 +48,9 @@ import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
 import { runCanvasInteractionSelftest } from "./src/lib/canvasInteractions";
 import { runWaresJobsRoundtripSelftest, parseWaresXml, parseJobsXml } from "./src/lib/waresJobsParser";
 import { runModFixesSelftest } from "./src/lib/modFixes";
-import { runAiScriptRoundtripSelftest, parseAiScriptXml } from "./src/lib/aiScriptParser";
+import { runAiScriptRoundtripSelftest } from "./src/lib/aiScriptParser";
 import { runLuaMdBindingSelftest } from "./src/lib/luaMdBinding";
+import { runPositionPickerSelftest } from "./src/lib/positionPicker";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -116,6 +118,10 @@ function loadStudioApiToken(): string {
 
 const STUDIO_API_TOKEN = loadStudioApiToken();
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function injectStudioToken(html: string): string {
   const tokenScript = `<script>window.__STUDIO_API_TOKEN__=${JSON.stringify(STUDIO_API_TOKEN)};</script>`;
   return html.replace("</head>", `  ${tokenScript}\n  </head>`);
@@ -127,9 +133,10 @@ function loadCurrentSchemaLibrary(): SchemaLibrary {
     const library = loadSchemaLibrary(resolved.schemaDir, resolved.schemaFiles || ['md.xsd', 'common.xsd']);
     console.log(`[AI-STUDIO] Loaded XSD schema library: ${library.events.length} events, ${library.conditions.length} conditions, ${library.actions.length} actions.`);
     return library;
-  } catch (error: any) {
-    console.warn(`[AI-STUDIO] XSD schema library unavailable: ${error.message || error}`);
-    return createEmptySchemaLibrary(error.message || String(error));
+  } catch (error) {
+    const message = errorMessage(error);
+    console.warn(`[AI-STUDIO] XSD schema library unavailable: ${message}`);
+    return createEmptySchemaLibrary(message);
   }
 }
 
@@ -226,6 +233,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/mod-fixes-selftest",
   "/agent/aiscript-roundtrip-selftest",
   "/agent/lua-md-binding-selftest",
+  "/agent/position-picker-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -252,6 +260,20 @@ app.use("/api", authMiddleware);
 
 type CompiledFileManifest = Record<string, string>;
 
+type ServerDiagnostic = {
+  severity: "error" | "warning" | "info";
+  category: string;
+  code: string;
+  domain: string;
+  filePath: string;
+  message: string;
+  sourceRef?: { kind: string; id?: string; label?: string };
+};
+
+type PatchDiagnosticBlock = Pick<PatchBlock, "id" | "sel" | "targetFile" | "includeInBuild"> & {
+  selector?: string;
+};
+
 type LastDeployInfo = {
   modId: string;
   workspaceName: string;
@@ -262,7 +284,7 @@ type LastDeployInfo = {
 
 let lastDeployInfo: LastDeployInfo | null = null;
 
-function activeBuildWorkspace(workspaceInput: any): ModWorkspace {
+function activeBuildWorkspace(workspaceInput: unknown): ModWorkspace {
   const sanitized = sanitizeWorkspace(workspaceInput);
   return {
     ...sanitized,
@@ -283,12 +305,12 @@ function activeBuildWorkspace(workspaceInput: any): ModWorkspace {
  * Doctor flags. Base-game script refs (move.*, order.*, etc.) are NOT the mod's own and
  * are left untouched. `ws` is a fresh sanitized copy, so mutating it here is safe.
  */
-function namespaceModAiScripts(ws: any, modId: string): void {
+function namespaceModAiScripts(ws: ModWorkspace, modId: string): void {
   const scripts = ws.aiScripts || [];
   if (!scripts.length) return;
   const prefix = `${modId}.`;
   const rename = (n: string) => (n && !n.startsWith(prefix)) ? `${prefix}${n}` : n;
-  const ownNames = new Set<string>(scripts.map((s: any) => s.name).filter(Boolean));
+  const ownNames = new Set<string>(scripts.map(s => s.name).filter(Boolean));
   for (const s of scripts) {
     if (s.name) s.name = rename(s.name);
   }
@@ -299,7 +321,7 @@ function namespaceModAiScripts(ws: any, modId: string): void {
   }
 }
 
-function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files: CompiledFileManifest } {
+function buildWorkspaceFileManifest(workspaceInput: unknown): { modId: string; files: CompiledFileManifest } {
   const ws = activeBuildWorkspace(workspaceInput);
   const modId = toSafeModId(ws.name);
   namespaceModAiScripts(ws, modId);
@@ -345,8 +367,8 @@ function buildWorkspaceFileManifest(workspaceInput: any): { modId: string; files
   }
 
   if (settings.patches && ws.xmlPatches?.length) {
-    const patchesByFile: Record<string, any[]> = {};
-    ws.xmlPatches.forEach((patch: any) => {
+    const patchesByFile: Record<string, PatchBlock[]> = {};
+    ws.xmlPatches.forEach((patch) => {
       const file = patch.targetFile || "libraries/wares.xml";
       if (!patchesByFile[file]) {
         patchesByFile[file] = [];
@@ -754,8 +776,8 @@ function getReferenceSets(): { macros: Set<string>; wares: Set<string>; factions
   return { macros, wares, factions };
 }
 
-function runSchemaValidation(files: Record<string, string>, modId: string): any[] {
-  const out: any[] = [];
+function runSchemaValidation(files: Record<string, string>, modId: string): ServerDiagnostic[] {
+  const out: ServerDiagnostic[] = [];
   let index: SchemaIndex;
   try {
     index = getSchemaIndex();
@@ -848,9 +870,9 @@ function resolvePatchBaseContent(targetFile: string): { content: string; source:
  * root element. Full XPath match-counting runs client-side; this surfaces the
  * highest-value server-checkable issues into /api/agent/compile and Mod Doctor.
  */
-function runPatchDiagnostics(ws: any): any[] {
-  const out: any[] = [];
-  const patches = (ws.xmlPatches || []).filter((p: any) => p.includeInBuild !== false);
+function runPatchDiagnostics(ws: { xmlPatches?: PatchDiagnosticBlock[] }): ServerDiagnostic[] {
+  const out: ServerDiagnostic[] = [];
+  const patches: PatchDiagnosticBlock[] = (ws.xmlPatches || []).filter(p => p.includeInBuild !== false);
   if (!patches.length) return out;
   const baseCache = new Map<string, ReturnType<typeof resolvePatchBaseContent>>();
   for (const patch of patches) {
@@ -895,11 +917,11 @@ function runPatchDiagnostics(ws: any): any[] {
  * game has no macro for (which fails at runtime as "No ship generated"). These
  * are exactly the deterministic runtime failures worth catching before deploy.
  */
-function runReferenceDiagnostics(ws: any): any[] {
-  const out: any[] = [];
-  const nodes = (ws.nodes || []).filter((n: any) => n.includeInBuild !== false);
-  const shipNodes = nodes.filter((n: any) => n.xmlTag === 'create_ship');
-  const stationNodes = nodes.filter((n: any) => n.xmlTag === 'create_station');
+function runReferenceDiagnostics(ws: ModWorkspace): ServerDiagnostic[] {
+  const out: ServerDiagnostic[] = [];
+  const nodes = (ws.nodes || []).filter(n => n.includeInBuild !== false);
+  const shipNodes = nodes.filter(n => n.xmlTag === 'create_ship');
+  const stationNodes = nodes.filter(n => n.xmlTag === 'create_station');
   if (!shipNodes.length && !stationNodes.length) return out;
 
   let index: X4ObjectIndex;
@@ -916,7 +938,7 @@ function runReferenceDiagnostics(ws: any): any[] {
   }
   if (anyMacros.size === 0) return out; // no index — can't validate, stay silent
 
-  const cleanMacro = (raw: any) => String(raw || '').split(' (')[0].trim().toLowerCase();
+  const cleanMacro = (raw: unknown) => String(raw || '').split(' (')[0].trim().toLowerCase();
 
   for (const node of shipNodes) {
     const macro = cleanMacro(node.properties?.macro);
@@ -3370,16 +3392,16 @@ app.get("/api/agent/override-map", (req, res) => {
       }
     } catch { baseContent = null; }
     return res.json({ success: true, ...analyzeOverrides({ targetFile, records, loadOrder, baseContent }) });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message || "override-map failed" });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "override-map failed" });
   }
 });
 
 app.get("/api/agent/override-map-selftest", (_req, res) => {
   try {
     return res.json(runOverrideMapSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "override-map-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "override-map-selftest failed" });
   }
 });
 
@@ -3388,8 +3410,8 @@ app.get("/api/agent/override-map-selftest", (_req, res) => {
 app.get("/api/agent/catdat-selftest", (_req, res) => {
   try {
     return res.json(runCatDatSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "catdat-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "catdat-selftest failed" });
   }
 });
 
@@ -3398,8 +3420,8 @@ app.get("/api/agent/catdat-selftest", (_req, res) => {
 app.get("/api/agent/object-index-selftest", (_req, res) => {
   try {
     return res.json(runObjectIndexSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "object-index-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "object-index-selftest failed" });
   }
 });
 
@@ -3408,8 +3430,8 @@ app.get("/api/agent/object-index-selftest", (_req, res) => {
 app.get("/api/agent/proposal-review-selftest", (_req, res) => {
   try {
     return res.json(runProposalReviewSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "proposal-review-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "proposal-review-selftest failed" });
   }
 });
 
@@ -3418,8 +3440,8 @@ app.get("/api/agent/proposal-review-selftest", (_req, res) => {
 app.get("/api/agent/intent-check-selftest", (_req, res) => {
   try {
     return res.json(runIntentCheckSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "intent-check-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "intent-check-selftest failed" });
   }
 });
 
@@ -3427,56 +3449,64 @@ app.get("/api/agent/intent-check-selftest", (_req, res) => {
 app.get("/api/agent/blueprint-selftest", (_req, res) => {
   try {
     return res.json(runBlueprintSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "blueprint-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "blueprint-selftest failed" });
   }
 });
 
 app.get("/api/agent/architect-loop-selftest", (_req, res) => {
   try {
     return res.json(runArchitectLoopSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "architect-loop-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "architect-loop-selftest failed" });
   }
 });
 
 app.get("/api/agent/canvas-interaction-selftest", (_req, res) => {
   try {
     return res.json(runCanvasInteractionSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "canvas-interaction-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "canvas-interaction-selftest failed" });
   }
 });
 
 app.get("/api/agent/wares-jobs-roundtrip-selftest", (_req, res) => {
   try {
     return res.json(runWaresJobsRoundtripSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "wares-jobs-roundtrip-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "wares-jobs-roundtrip-selftest failed" });
   }
 });
 
 app.get("/api/agent/mod-fixes-selftest", (_req, res) => {
   try {
     return res.json(runModFixesSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "mod-fixes-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "mod-fixes-selftest failed" });
   }
 });
 
 app.get("/api/agent/aiscript-roundtrip-selftest", (_req, res) => {
   try {
     return res.json(runAiScriptRoundtripSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "aiscript-roundtrip-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "aiscript-roundtrip-selftest failed" });
   }
 });
 
 app.get("/api/agent/lua-md-binding-selftest", (_req, res) => {
   try {
     return res.json(runLuaMdBindingSelftest());
-  } catch (error: any) {
-    return res.status(500).json({ pass: false, error: error.message || "lua-md-binding-selftest failed" });
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "lua-md-binding-selftest failed" });
+  }
+});
+
+app.get("/api/agent/position-picker-selftest", (_req, res) => {
+  try {
+    return res.json(runPositionPickerSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "position-picker-selftest failed" });
   }
 });
 

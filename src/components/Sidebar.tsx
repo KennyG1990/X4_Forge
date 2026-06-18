@@ -46,6 +46,7 @@ import {
 import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
 import ObjectIndexPicker from './ObjectIndexPicker';
+import PositionPicker from './PositionPicker';
 import DiagnosticsCenter from './DiagnosticsCenter';
 import { WIKI_TOPICS } from './WikiBrowser';
 import SnapshotManager from './SnapshotManager';
@@ -1641,13 +1642,22 @@ export default function Sidebar({
                   )}
 
                   {schema.type === 'coordinates' && (
-                    <input
-                      type="text"
-                      value={(selectedNode.properties || {})[schema.key] || ''}
-                      onChange={e => handlePropChange(schema.key, e.target.value)}
-                      placeholder="X,Y,Z offset"
-                      className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500"
-                    />
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={(selectedNode.properties || {})[schema.key] || ''}
+                        onChange={e => handlePropChange(schema.key, e.target.value)}
+                        placeholder="X,Y,Z offset"
+                        className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500"
+                      />
+                      {(selectedNode.xmlTag === 'create_ship' || selectedNode.xmlTag === 'create_station') && (
+                        <PositionPicker
+                          value={(selectedNode.properties || {})[schema.key] || ''}
+                          nodeTag={selectedNode.xmlTag}
+                          onChange={v => handlePropChange(schema.key, v)}
+                        />
+                      )}
+                    </div>
                   )}
                 </div>
               ))}

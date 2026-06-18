@@ -67,8 +67,8 @@ export function runLuaMdBindingSelftest(): {
 } {
   const checks: { name: string; pass: boolean; detail?: string }[] = [];
   const ok = (name: string, cond: boolean, detail?: string) => checks.push({ name, pass: !!cond, detail });
-  const N = (id: string, type: any, props: any = {}): MDNode =>
-    ({ id, type, xmlTag: type, properties: props, label: id, x: 0, y: 0, propertiesSchema: [], inputs: [], outputs: [] } as any);
+  const N = (id: string, type: MDNode['type'], props: Record<string, unknown> = {}): MDNode =>
+    ({ id, type, xmlTag: type, properties: props, label: id, x: 0, y: 0, propertiesSchema: [], inputs: [], outputs: [] });
 
   const cue = N('c1', 'cue', { name: 'On Player Docks', namespace: 'myext' });
   const b = luaMdBinding(cue)!;

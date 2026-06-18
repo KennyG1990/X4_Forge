@@ -98,8 +98,8 @@ export function runModFixesSelftest(): {
 } {
   const checks: { name: string; pass: boolean; detail?: string }[] = [];
   const ok = (name: string, cond: boolean, detail?: string) => checks.push({ name, pass: !!cond, detail });
-  const N = (id: string, type: any, xmlTag: string, properties: any = {}): MDNode =>
-    ({ id, type, xmlTag, properties, label: id, x: 0, y: 0, propertiesSchema: [], inputs: [], outputs: [] } as any);
+  const N = (id: string, type: MDNode['type'], xmlTag: string, properties: Record<string, unknown> = {}): MDNode =>
+    ({ id, type, xmlTag, properties, label: id, x: 0, y: 0, propertiesSchema: [], inputs: [], outputs: [] });
   const L = (id: string, s: string, sp: string, t: string, tp = 'in'): MDLink =>
     ({ id, sourceNodeId: s, sourcePortId: sp, targetNodeId: t, targetPortId: tp });
 

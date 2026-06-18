@@ -60,6 +60,14 @@ import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluat
 import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
 import type { ArchitectStepView } from './components/BlueprintPanel';
 
+type ForgeE2EWindow = Window & {
+  __X4_E2E__?: {
+    getWorkspace: () => ModWorkspace;
+    setWorkspace: (workspace: ModWorkspace) => void;
+    getMdCode: () => string;
+  };
+};
+
 // Default initial blank workspace schema
 const BLANK_WORKSPACE: ModWorkspace = {
   id: 'workspace_default',
@@ -187,6 +195,15 @@ export default function App() {
       return '';
     }
   }, [workspace]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as ForgeE2EWindow).__X4_E2E__ = {
+      getWorkspace: () => workspace,
+      setWorkspace: (next: ModWorkspace) => setWorkspace(sanitizeWorkspace(next)),
+      getMdCode: () => mdCode,
+    };
+  }, [workspace, mdCode, setWorkspace]);
 
   useEffect(() => {
     let cancelled = false;

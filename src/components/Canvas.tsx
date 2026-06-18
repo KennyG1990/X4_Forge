@@ -1628,6 +1628,7 @@ export default function Canvas({
       {/* Main Draggable Workspace Grid Canvas Area */}
       <div
         id="grid-canvas"
+        data-testid="grid-canvas"
         ref={canvasRef}
         onMouseDown={handleCanvasMouseDown}
         onDoubleClick={handleCanvasDoubleClick}
@@ -1979,6 +1980,7 @@ export default function Canvas({
                       data-node-id={node.id}
                       data-node-type={node.type}
                       data-node-label={node.label}
+                      data-testid={`canvas-node-${node.id}`}
                       onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                       style={{ left: node.x, top: node.y }}
                       className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
@@ -2005,6 +2007,7 @@ export default function Canvas({
                     data-node-id={node.id}
                     data-node-type={node.type}
                     data-node-label={node.label}
+                    data-testid={`canvas-node-${node.id}`}
                     onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                     style={{ left: node.x, top: node.y }}
                     className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
@@ -2129,7 +2132,8 @@ export default function Canvas({
                       {(node.inputs || []).map((port) => (
                         <div key={port.id} className="flex items-center gap-2">
                            <button
-                            onClick={(e) => handlePortClick(node.id, port, e)}
+                           onClick={(e) => handlePortClick(node.id, port, e)}
+                            data-testid={`canvas-port-${node.id}-${port.id}`}
                             className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
                               linking?.nodeId === node.id && linking?.portId === port.id 
                                 ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
@@ -2147,6 +2151,7 @@ export default function Canvas({
                           <span className="text-[9.5px] text-slate-450 uppercase font-bold tracking-wider">{port.name}</span>
                           <button
                             onClick={(e) => handlePortClick(node.id, port, e)}
+                            data-testid={`canvas-port-${node.id}-${port.id}`}
                             className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
                               linking?.nodeId === node.id && linking?.portId === port.id 
                                 ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
@@ -2168,6 +2173,7 @@ export default function Canvas({
       {/* AAA Feature 3: Unreal Engine-Style Searchable Context Menu Spawn Drawer on Canvas Right Click */}
       {contextMenu && (
         <div
+          data-testid="canvas-quick-spawn"
           className="absolute z-50 w-72 bg-[#121620]/95 border border-cyan-500/30 rounded-xl shadow-2xl p-3 select-none flex flex-col gap-2 font-mono text-xs glass-effect text-slate-300 animate-terminal-line max-h-96"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
@@ -2223,6 +2229,7 @@ export default function Canvas({
                     <button
                       key={c.id}
                       onClick={() => handleSpawnComposite(c)}
+                      data-testid={`canvas-pattern-${c.id}`}
                       className="w-full text-left p-1.5 rounded hover:bg-violet-500/10 flex items-center justify-between text-[11px] group transition-colors cursor-pointer border border-violet-500/15"
                     >
                       <div className="flex flex-col truncate pr-1">
@@ -2251,6 +2258,7 @@ export default function Canvas({
                   <button
                     key={`${item.xmlTag}_${idx}`}
                     onClick={() => handleQuickSpawn(item)}
+                    data-testid={`canvas-palette-${item.xmlTag}`}
                     className="w-full text-left p-1.5 rounded hover:bg-cyan-500/10 flex items-center justify-between text-[11px] group transition-colors cursor-pointer"
                   >
                     <div className="flex flex-col truncate pr-1">

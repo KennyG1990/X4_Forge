@@ -99,7 +99,7 @@ export function parseAiScriptXml(content: string): AIBehaviorScript | null {
 }
 
 function parseActionSegment(id: string, label: string, seg: string): AIAction {
-  const mk = (command: AIAction['command'], properties: Record<string, any>): AIAction => ({ id, command, label, properties });
+  const mk = (command: AIAction['command'], properties: AIAction['properties']): AIAction => ({ id, command, label, properties });
   if (/<move_to\b/i.test(seg)) {
     const t = seg.match(/<move_to\b[^>]*>/i)![0];
     return mk('move_to', { destination: attr(t, 'destination') });
