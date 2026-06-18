@@ -381,6 +381,37 @@ const REGISTRY: Record<string, ElementSemantics> = {
     tag: 'add_npc_line', kind: 'action', title: 'Add NPC Line', reads: [], writes: ['ui.conversation'], risk: 'safe',
     describe: (p) => `Queues an NPC dialogue line` + (p?.actor ? ` for ${attr(p, 'actor')}` : '') + `.`,
   },
+  // G12+ batch (2026-06-18): high-traffic actions, each verified present in the parsed
+  // md.xsd schema (schema_node_templates) before adding → none flagged notInSchema.
+  add_to_group: {
+    tag: 'add_to_group', kind: 'action', title: 'Add To Group', reads: [], writes: ['group.membership'], risk: 'state_mutation',
+    describe: (p) => {
+      const what = p?.object ? attr(p, 'object')
+        : p?.group ? `group ${attr(p, 'group')}`
+        : p?.list ? `list ${attr(p, 'list')}` : 'an object';
+      return `Adds ${what} to group ${attr(p, 'groupname', '(unset)')}` +
+        (String(p?.replace) === 'true' ? ' (replacing existing members).' : '.');
+    },
+  },
+  append_to_list: {
+    tag: 'append_to_list', kind: 'action', title: 'Append To List', reads: ['variable'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Appends ${p?.exact ? `"${attr(p, 'exact')}"` : 'a value'} to list ${attr(p, 'name', '(unset)')}` +
+      (String(p?.create) === 'true' ? ' (creating it if absent).' : '.'),
+  },
+  remove_from_list: {
+    tag: 'remove_from_list', kind: 'action', title: 'Remove From List', reads: ['variable'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Removes ${p?.exact ? `"${attr(p, 'exact')}"` : 'matching entries'} from list ${attr(p, 'name', '(unset)')}.`,
+  },
+  debug_to_file: {
+    tag: 'debug_to_file', kind: 'action', title: 'Debug To File', reads: [], writes: ['debug.file'], risk: 'safe',
+    describe: (p) => `Writes debug output to file ${attr(p, 'name', '(unset)')}` + (p?.text ? `: "${attr(p, 'text')}".` : '.'),
+    note: 'Diagnostic output (also used by the file-bridge transport pattern); not a gameplay effect.',
+  },
+  raise_lua_event: {
+    tag: 'raise_lua_event', kind: 'action', title: 'Raise Lua Event', reads: [], writes: ['ui.lua_event'], risk: 'safe',
+    describe: (p) => `Raises Lua UI event ${attr(p, 'name', '(unset)')}` + (p?.param ? ` with param ${attr(p, 'param')}` : '') +
+      ' (the MD → Lua/UI bridge).',
+  },
 };
 
 /** Humanize an unknown tag deterministically: snake_case → "Snake Case". */
@@ -557,6 +588,24 @@ export function runSemanticsSelftest() {
   ok('g12_batch_real_schema',
     ['transfer_money', 'add_blueprints', 'create_object', 'find_object', 'set_skill']
       .every((t) => semanticsForNode(node(t, {})).notInSchema === false));
+
+  // --- G12+ batch (2026-06-18): list/group/bridge actions, all real-schema ---
+  ok('g12plus_batch_curated',
+    ['add_to_group', 'append_to_list', 'remove_from_list', 'debug_to_file', 'raise_lua_event']
+      .every((t) => getElementSemantics(t) !== null));
+  ok('g12plus_batch_real_schema',
+    ['add_to_group', 'append_to_list', 'remove_from_list', 'debug_to_file', 'raise_lua_event']
+      .every((t) => semanticsForNode(node(t, {})).notInSchema === false));
+  ok('g12plus_add_to_group_desc',
+    describeNode(node('add_to_group', { object: '$ship', groupname: '$fleet' })) === `Adds $ship to group $fleet.`,
+    describeNode(node('add_to_group', { object: '$ship', groupname: '$fleet' })));
+  ok('g12plus_append_to_list_desc',
+    describeNode(node('append_to_list', { name: '$targets', exact: '$ship' })) === `Appends "$ship" to list $targets.`,
+    describeNode(node('append_to_list', { name: '$targets', exact: '$ship' })));
+  ok('g12plus_raise_lua_event_desc',
+    /Raises Lua UI event \$foo with param \$bar/.test(describeNode(node('raise_lua_event', { name: '$foo', param: '$bar' }))),
+    describeNode(node('raise_lua_event', { name: '$foo', param: '$bar' })));
+  ok('g12plus_add_to_group_state_mutation', semanticsForNode(node('add_to_group', {})).risk === 'state_mutation');
 
   // --- schema reconciliation: fabricated element removed; known-fakes are flagged notInSchema ---
   ok('add_value_removed', getElementSemantics('add_value') === null);
