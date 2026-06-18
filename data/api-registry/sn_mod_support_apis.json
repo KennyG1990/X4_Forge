@@ -1,0 +1,230 @@
+{
+  "$schema": "forge-external-api/v1",
+  "extensionId": "sn_mod_support_apis",
+  "name": "SirNukes Mod Support APIs",
+  "author": "SirNukes, bvbohnen, et al.",
+  "source": "https://github.com/bvbohnen/x4-projects/tree/master/extensions/sn_mod_support_apis",
+  "dependsOn": [],
+  "components": [
+    {
+      "id": "lua_loader",
+      "title": "Lua Loader API",
+      "summary": "Load loose Lua files and register require/Init hooks.",
+      "symbols": [
+        {
+          "name": "Lua_Loader.Load",
+          "kind": "lua_event",
+          "summary": "Trigger a load of a loose Lua file by dotted path (legacy pre-7.5 loader).",
+          "detect": [
+            "Lua_Loader.Load"
+          ],
+          "scaffold": "<cue name=\"Load_Lua_Files\" instantiate=\"true\">\n  <conditions>\n    <event_ui_triggered screen=\"'Lua_Loader'\" control=\"'Ready'\" />\n  </conditions>\n  <actions>\n    <raise_lua_event name=\"'Lua_Loader.Load'\" param=\"'extensions.your_ext.your_lua_file'\" />\n  </actions>\n</cue>"
+        },
+        {
+          "name": "Register_OnLoad_Init",
+          "kind": "lua_global",
+          "summary": "Defer an Init function until after the game has loaded.",
+          "detect": [
+            "Register_OnLoad_Init"
+          ]
+        },
+        {
+          "name": "Register_Require_Response",
+          "kind": "lua_global",
+          "summary": "Expose a value to require() under a registered path (protected-UI safe).",
+          "detect": [
+            "Register_Require_Response"
+          ]
+        },
+        {
+          "name": "Register_Require_With_Init",
+          "kind": "lua_global",
+          "summary": "Combination of Register_Require_Response + Register_OnLoad_Init.",
+          "detect": [
+            "Register_Require_With_Init"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "simple_menu",
+      "title": "Simple Menu API",
+      "summary": "Build standalone menus and Extension Options entries from MD scripts.",
+      "requiresProtectedUiDisabled": true,
+      "symbols": [
+        {
+          "name": "md.Simple_Menu_API.Create_Menu",
+          "kind": "md_cue",
+          "summary": "Open a new standalone menu, closing any others.",
+          "detect": [
+            "Simple_Menu_API.Create_Menu"
+          ],
+          "scaffold": "<signal_cue_instantly\n  cue=\"md.Simple_Menu_API.Create_Menu\"\n  param=\"table[$columns = 1, $title = 'My Menu', $width = 500]\" />"
+        },
+        {
+          "name": "md.Simple_Menu_API.Add_Row",
+          "kind": "md_cue",
+          "summary": "Add a row to the open menu.",
+          "detect": [
+            "Simple_Menu_API.Add_Row"
+          ]
+        },
+        {
+          "name": "md.Simple_Menu_API.Make_Text",
+          "kind": "md_cue",
+          "summary": "Add a text widget to the current row.",
+          "detect": [
+            "Simple_Menu_API.Make_Text"
+          ]
+        },
+        {
+          "name": "md.Simple_Menu_API.Register_Options_Menu",
+          "kind": "md_cue",
+          "summary": "Register a menu under the standard Extension Options page.",
+          "detect": [
+            "Simple_Menu_API.Register_Options_Menu"
+          ]
+        },
+        {
+          "name": "md.Simple_Menu_API.Reloaded",
+          "kind": "md_cue",
+          "summary": "Signalled when the menu backend (re)loads — re-register here.",
+          "detect": [
+            "Simple_Menu_API.Reloaded"
+          ]
+        },
+        {
+          "name": "md.Simple_Menu_Options.Register_Option",
+          "kind": "md_cue",
+          "summary": "Register a single button/slider option in the Extension Options menu.",
+          "detect": [
+            "Simple_Menu_Options.Register_Option"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "interact_menu",
+      "title": "Interact Menu API",
+      "summary": "Add custom right-click (interact) menu actions from MD.",
+      "symbols": [
+        {
+          "name": "md.Interact_Menu_API.Get_Actions",
+          "kind": "md_cue",
+          "summary": "Signalled when an interact menu opens — add actions in response.",
+          "detect": [
+            "Interact_Menu_API.Get_Actions"
+          ]
+        },
+        {
+          "name": "md.Interact_Menu_API.Add_Action",
+          "kind": "md_cue",
+          "summary": "Add a custom action with a callback cue.",
+          "detect": [
+            "Interact_Menu_API.Add_Action"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "named_pipes",
+      "title": "Named Pipes API",
+      "summary": "Two-way IPC with an external process via Windows named pipes.",
+      "windowsOnly": true,
+      "requiresProtectedUiDisabled": true,
+      "symbols": [
+        {
+          "name": "Named_Pipes.xml",
+          "kind": "md_cue",
+          "summary": "MD wrapper for reading/writing named pipes (X4 acts as client).",
+          "detect": [
+            "Named_Pipes."
+          ]
+        },
+        {
+          "name": "Pipe_Server_Host",
+          "kind": "md_cue",
+          "summary": "Register a Python module with the external pipe host server.",
+          "detect": [
+            "Pipe_Server_Host"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hotkey",
+      "title": "Hotkey API",
+      "summary": "Register custom hotkeys (key capture via the external pipe server).",
+      "windowsOnly": true,
+      "requiresProtectedUiDisabled": true,
+      "symbols": [
+        {
+          "name": "md.Hotkey_API.Register_Action",
+          "kind": "md_cue",
+          "summary": "Register a hotkey action that appears in the controls menu.",
+          "detect": [
+            "Hotkey_API.Register_Action"
+          ]
+        },
+        {
+          "name": "md.Hotkey_API.Register_Key",
+          "kind": "md_cue",
+          "summary": "Directly bind a key/combination to a registered action.",
+          "detect": [
+            "Hotkey_API.Register_Key"
+          ]
+        },
+        {
+          "name": "md.Hotkey_API.Reloaded",
+          "kind": "md_cue",
+          "summary": "Signalled when the hotkey backend (re)loads — re-register here.",
+          "detect": [
+            "Hotkey_API.Reloaded"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "title": "Time API",
+      "summary": "Real-time timers/alarms that keep running while the game is paused.",
+      "requiresProtectedUiDisabled": true,
+      "symbols": [
+        {
+          "name": "'Time.getEngineTime'",
+          "kind": "lua_event",
+          "summary": "Get seconds since X4 booted (captured via event_ui_triggered screen \"Time\").",
+          "detect": [
+            "Time.getEngineTime"
+          ],
+          "scaffold": "<raise_lua_event name=\"'Time.getEngineTime'\" param=\"'my_id'\" />\n<!-- capture: <event_ui_triggered screen=\"'Time'\" control=\"'my_id'\" /> -> event.param3 -->"
+        },
+        {
+          "name": "'Time.setAlarm'",
+          "kind": "lua_event",
+          "summary": "Fire an alarm after a delay in seconds (works while paused).",
+          "detect": [
+            "Time.setAlarm"
+          ],
+          "scaffold": "<raise_lua_event name=\"'Time.setAlarm'\" param=\"'my_alarm:5'\" />"
+        },
+        {
+          "name": "'Time.startTimer'",
+          "kind": "lua_event",
+          "summary": "Start a named timer instance.",
+          "detect": [
+            "Time.startTimer"
+          ]
+        },
+        {
+          "name": "'Time.getTimer'",
+          "kind": "lua_event",
+          "summary": "Read accumulated time on a named timer.",
+          "detect": [
+            "Time.getTimer"
+          ]
+        }
+      ]
+    }
+  ]
+}

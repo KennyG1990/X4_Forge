@@ -11,8 +11,8 @@
  * external agents.
  */
 
-import { useMemo } from 'react';
-import { FolderTree, FileCode, FileText, Box, Link2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { FolderTree, FileCode, FileText, Box, Link2, AlertTriangle, CheckCircle2, Plug } from 'lucide-react';
 import { ModWorkspace, generateMDXML } from '../types';
 import {
   classifyPath,
@@ -23,6 +23,17 @@ import {
   type ProjectFile,
   type ProjectFileKind,
 } from '../lib/extensionProject';
+import {
+  detectProjectApis,
+  validateExternalApiUsage,
+  getActiveRegistry,
+  type ExternalApiEntry,
+} from '../lib/externalApiRegistry';
+
+interface ApiRegistrySources {
+  builtin: number; dataDir: number; folder: number; endpoint: number;
+  errors: { source: string; file?: string; errors: string[] }[];
+}
 
 function toSafeModId(name: string): string {
   return (name || 'my_extension').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'my_extension';
@@ -70,6 +81,27 @@ export default function ProjectInspector({ workspace }: ProjectInspectorProps) {
   const project = useMemo(() => projectFromWorkspace(workspace), [workspace]);
   const structure = useMemo(() => validateProjectStructure(project), [project]);
   const cueIndex = useMemo(() => indexCueReferences(project), [project]);
+
+  // The dynamically-loaded API defs live on the server; fetch the merged registry
+  // so the client validates against the same set (built-ins + dropped-in defs).
+  const [apiRegistry, setApiRegistry] = useState<ExternalApiEntry[]>(() => getActiveRegistry());
+  const [apiSources, setApiSources] = useState<ApiRegistrySources | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/agent/external-api-registry?full=1')
+      .then(r => r.json())
+      .then(d => {
+        if (!alive || !d?.success) return;
+        if (Array.isArray(d.apis)) setApiRegistry(d.apis as ExternalApiEntry[]);
+        if (d.sources) setApiSources(d.sources as ApiRegistrySources);
+      })
+      .catch(() => { /* offline / API down — fall back to built-in client registry */ });
+    return () => { alive = false; };
+  }, []);
+
+  const detectedApis = useMemo(() => detectProjectApis(project, apiRegistry), [project, apiRegistry]);
+  const apiFindings = useMemo(() => validateExternalApiUsage(project, apiRegistry), [project, apiRegistry]);
+  const apiWarnings = apiFindings.filter(f => f.severity === 'warning');
 
   const structuralErrors = structure.filter(i => i.severity === 'error');
   const ok = structuralErrors.length === 0 && cueIndex.unresolved.length === 0;
@@ -175,6 +207,66 @@ export default function ProjectInspector({ workspace }: ProjectInspectorProps) {
           </div>
         </section>
       </div>
+
+      {/* P4 — third-party API usage (◐ heuristic, curated registry, not exhaustive) */}
+      <section data-testid="external-api-usage" className="rounded border border-white/10 bg-black/30 p-3">
+        <h3 className="flex items-center gap-1.5 text-[11px] font-bold font-mono uppercase text-slate-400 mb-2">
+          <Plug className="w-3 h-3" /> Third-party API usage
+          <span className="ml-1 rounded bg-slate-700/60 px-1.5 py-0.5 text-[9px] text-slate-300" title="Heuristic, curated registry — not schema-grade.">◐ soft</span>
+        </h3>
+
+        {/* loaded registry provenance — confirms dropped-in defs took effect */}
+        <div className="text-[10px] font-mono text-slate-500 mb-2">
+          {apiRegistry.length} APIs loaded
+          {apiSources && (
+            <span> · {apiSources.builtin} built-in
+              {apiSources.dataDir > 0 && <span> · {apiSources.dataDir} data-dir</span>}
+              {apiSources.folder > 0 && <span> · {apiSources.folder} folder</span>}
+              {apiSources.endpoint > 0 && <span> · {apiSources.endpoint} runtime</span>}
+            </span>
+          )}
+        </div>
+        {apiSources && apiSources.errors.length > 0 && (
+          <div className="mb-2 text-[11px] text-rose-300">
+            {apiSources.errors.length} API def file(s) failed to load — check data/api-registry.
+          </div>
+        )}
+
+        {detectedApis.length === 0 ? (
+          <div className="text-[12px] text-slate-500 italic">
+            No known community APIs (sn_mod_support_apis, kuertee) detected in this project.
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1.5 mb-3">
+              {detectedApis.map(api => (
+                <div key={api.extensionId} className="text-[12px] font-mono">
+                  <span className="text-cyan-300">{api.name}</span>
+                  <span className="text-slate-500"> — {api.components.map(c => c.title).join(', ')}</span>
+                </div>
+              ))}
+            </div>
+
+            {apiWarnings.length > 0 && (
+              <div className="rounded border border-amber-500/30 bg-amber-500/10 p-2">
+                <div className="text-[10px] font-bold font-mono uppercase text-amber-300 mb-1">
+                  Dependency warnings ({apiWarnings.length})
+                </div>
+                <ul className="space-y-1">
+                  {apiWarnings.map((f, i) => (
+                    <li key={i} className="text-[12px] text-amber-200">
+                      <span className="text-amber-400">⚠</span> {f.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {apiWarnings.length === 0 && (
+              <div className="text-[12px] text-emerald-300">✓ Detected APIs have their content.xml dependencies declared.</div>
+            )}
+          </>
+        )}
+      </section>
     </div>
   );
 }

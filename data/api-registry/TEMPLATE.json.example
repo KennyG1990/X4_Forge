@@ -1,0 +1,32 @@
+{
+  "$schema": "forge-external-api/v1",
+  "extensionId": "some_community_api",
+  "name": "Some Community API",
+  "author": "author name",
+  "source": "https://github.com/.../some_community_api",
+  "dependsOn": ["sn_mod_support_apis"],
+  "components": [
+    {
+      "id": "core",
+      "title": "Core API",
+      "summary": "What this component does.",
+      "requiresProtectedUiDisabled": false,
+      "windowsOnly": false,
+      "symbols": [
+        {
+          "name": "md.Some_Community_API.Do_Thing",
+          "kind": "md_cue",
+          "summary": "Signal this cue to do the thing.",
+          "detect": ["Some_Community_API.Do_Thing"],
+          "scaffold": "<signal_cue_instantly cue=\"md.Some_Community_API.Do_Thing\" param=\"table[$arg = 1]\" />"
+        },
+        {
+          "name": "'Some_Community_API.event'",
+          "kind": "lua_event",
+          "summary": "A raise_lua_event the API listens for.",
+          "detect": ["Some_Community_API.event"]
+        }
+      ]
+    }
+  ]
+}

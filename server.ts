@@ -84,6 +84,17 @@ import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from
 import { runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
+import {
+  runExternalApiRegistrySelftest,
+  EXTERNAL_API_REGISTRY,
+  validateApiDefinition,
+  mergeRegistries,
+  setActiveRegistry,
+  getActiveRegistry,
+  deriveApiDefinition,
+  type ApiDefinition,
+  type ApiOrigin,
+} from "./src/lib/externalApiRegistry";
 import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
@@ -251,7 +262,9 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/galaxy-map-selftest",
   "/agent/extension-project-selftest",
   "/agent/project-orchestration-selftest",
-  "/agent/project-crossfile-selftest"
+  "/agent/project-crossfile-selftest",
+  "/agent/external-api-registry-selftest",
+  "/agent/external-api-registry"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3612,6 +3625,236 @@ app.get("/api/agent/project-crossfile-selftest", (_req, res) => {
     return res.json(runProjectCrossFileSelftest());
   } catch (error) {
     return res.status(500).json({ pass: false, error: errorMessage(error) || "project-crossfile-selftest failed" });
+  }
+});
+
+// P4 — third-party API registry (palettization). Curated registry + ◐ heuristic
+// dependency/usage validation for community library mods (sn_mod_support_apis, kuertee).
+app.get("/api/agent/external-api-registry-selftest", (_req, res) => {
+  try {
+    return res.json(runExternalApiRegistrySelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "external-api-registry-selftest failed" });
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * P4 dynamic registry — DUMP IN new API defs from three sources, all merged
+ * onto the built-in seed through the same validate→merge pipeline:
+ *   1. bundled repo dir  data/api-registry/*.json
+ *   2. configured folder config.apiRegistryPath (optional)
+ *   3. runtime endpoint  POST /api/agent/external-api/register  (in-memory)
+ * Plus derive→refine: GET /api/agent/external-api/derive reads an installed mod.
+ * ------------------------------------------------------------------ */
+
+// in-memory defs registered at runtime via the endpoint (source 3)
+const runtimeApiDefs: ApiDefinition[] = [];
+// last load report (for the listing endpoint)
+let apiRegistrySources: {
+  builtin: number; dataDir: number; folder: number; endpoint: number;
+  errors: { source: string; file?: string; errors: string[] }[];
+  conflicts: { extensionId: string; kind: string; detail: string }[];
+} = { builtin: EXTERNAL_API_REGISTRY.length, dataDir: 0, folder: 0, endpoint: 0, errors: [], conflicts: [] };
+
+/** Read + validate every *.json def in a directory. Bad files are reported, never fatal. */
+function loadApiDefsFromDir(dir: string, origin: ApiOrigin): { defs: ApiDefinition[]; errors: { source: string; file?: string; errors: string[] }[] } {
+  const defs: ApiDefinition[] = [];
+  const errors: { source: string; file?: string; errors: string[] }[] = [];
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(dir).filter(f => {
+      const lower = f.toLowerCase();
+      // skip the JSON Schema + any underscore-prefixed helper files
+      return lower.endsWith(".json") && lower !== "schema.json" && !f.startsWith("_");
+    });
+  } catch { return { defs, errors }; } // dir missing is fine
+  for (const f of entries) {
+    const full = path.join(dir, f);
+    try {
+      const raw = fs.readFileSync(full, "utf8");
+      const parsed = JSON.parse(raw);
+      const v = validateApiDefinition(parsed, origin);
+      if (v.ok && v.normalized) defs.push(v.normalized);
+      else errors.push({ source: origin, file: f, errors: v.errors });
+    } catch (e) {
+      errors.push({ source: origin, file: f, errors: [errorMessage(e) || "unreadable / invalid JSON"] });
+    }
+  }
+  return { defs, errors };
+}
+
+/** Rebuild + apply the active registry from all three sources. Idempotent. */
+function loadAndApplyExternalApiRegistry(): void {
+  const errors: { source: string; file?: string; errors: string[] }[] = [];
+  const conflictsAll: { extensionId: string; kind: string; detail: string }[] = [];
+
+  const dataDir = path.join(process.cwd(), "data", "api-registry");
+  const fromData = loadApiDefsFromDir(dataDir, "data-dir");
+  errors.push(...fromData.errors);
+
+  let fromFolder = { defs: [] as ApiDefinition[], errors: [] as typeof errors };
+  try {
+    const cfg = readXsdConfig() as Record<string, unknown>;
+    const folder = typeof cfg.apiRegistryPath === "string" ? cfg.apiRegistryPath.trim() : "";
+    if (folder) { fromFolder = loadApiDefsFromDir(folder, "folder"); errors.push(...fromFolder.errors); }
+  } catch { /* no config */ }
+
+  // merge in order: data-dir → folder → endpoint
+  let merged = EXTERNAL_API_REGISTRY.map(e => ({ ...e, origin: "builtin" as ApiOrigin })) as ApiDefinition[];
+  for (const layer of [fromData.defs, fromFolder.defs, runtimeApiDefs]) {
+    const r = mergeRegistries(merged, layer);
+    merged = r.registry;
+    conflictsAll.push(...r.conflicts);
+  }
+  setActiveRegistry(merged);
+
+  apiRegistrySources = {
+    builtin: EXTERNAL_API_REGISTRY.length,
+    dataDir: fromData.defs.length,
+    folder: fromFolder.defs.length,
+    endpoint: runtimeApiDefs.length,
+    errors,
+    conflicts: conflictsAll,
+  };
+
+  // Load-time guards (curated built-ins now ship as data files): make a missing or
+  // malformed registry LOUD instead of silently degrading the validators.
+  if (merged.length === 0) {
+    console.error("[external-api-registry] WARNING: active registry is EMPTY — no API defs loaded (check data/api-registry/).");
+  } else if (fromData.defs.length === 0) {
+    console.warn(`[external-api-registry] No built-in API defs loaded from ${dataDir} — only ${merged.length} API(s) from other sources.`);
+  }
+  if (errors.length > 0) {
+    console.warn(`[external-api-registry] ${errors.length} API def file(s) failed validation:`, errors.map(e => `${e.source}/${e.file || "?"}`).join(", "));
+  }
+}
+loadAndApplyExternalApiRegistry();
+
+// Public read-only: the merged active registry + where each entry came from + load report.
+app.get("/api/agent/external-api-registry", (req, res) => {
+  try {
+    const registry = getActiveRegistry();
+    const full = String(req.query.full || "") === "1" || req.query.full === "true";
+    return res.json({
+      success: true,
+      count: registry.length,
+      // ?full=1 returns the complete entries (with symbols) so the UI can run the
+      // same detect/validate the server would; default returns a light summary.
+      apis: full
+        ? registry
+        : registry.map(e => ({
+            extensionId: e.extensionId,
+            name: e.name,
+            origin: (e as ApiDefinition).origin || "builtin",
+            dependsOn: e.dependsOn,
+            components: e.components.map(c => ({ id: c.id, title: c.title, symbols: c.symbols.length })),
+          })),
+      sources: apiRegistrySources,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: errorMessage(error) || "external-api-registry failed" });
+  }
+});
+
+// Authenticated: register an API def at runtime (in-memory; not persisted to disk).
+app.post("/api/agent/external-api/register", (req, res) => {
+  try {
+    const v = validateApiDefinition(req.body, "endpoint");
+    if (!v.ok || !v.normalized) {
+      return res.status(400).json({ success: false, ok: false, errors: v.errors });
+    }
+    // replace any existing runtime def with the same id, then re-merge
+    const idx = runtimeApiDefs.findIndex(d => d.extensionId.toLowerCase() === v.normalized!.extensionId.toLowerCase());
+    if (idx >= 0) runtimeApiDefs[idx] = v.normalized; else runtimeApiDefs.push(v.normalized);
+    loadAndApplyExternalApiRegistry();
+    return res.json({
+      success: true, ok: true,
+      registered: v.normalized.extensionId,
+      totalApis: getActiveRegistry().length,
+      sources: apiRegistrySources,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: errorMessage(error) || "external-api register failed" });
+  }
+});
+
+// Authenticated: derive a DRAFT API def from an installed extension's loose files.
+app.get("/api/agent/external-api/derive", (req, res) => {
+  try {
+    const ext = String(req.query.ext || "").trim();
+    if (!ext || /[\\/]|\.\./.test(ext)) {
+      return res.status(400).json({ success: false, error: "provide ?ext=<extension_folder_name> (no path separators)" });
+    }
+    const resolved = resolveXsdConfig();
+    const candidates = [
+      resolved.filesystemPath ? path.join(resolved.filesystemPath, ext) : "",
+      resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions", ext) : "",
+      resolved.modWorkspacePath ? path.join(resolved.modWorkspacePath, ext) : "",
+    ].filter(Boolean);
+    const extRoot = candidates.find(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+    if (!extRoot) {
+      return res.status(404).json({ success: false, error: `extension "${ext}" not found under configured roots`, searched: candidates });
+    }
+    // collect loose .xml/.lua files (packed cat/dat not read here — honest limitation)
+    const files: { path: string; content: string }[] = [];
+    const MAX_FILES = 400, MAX_BYTES = 2_000_000;
+    let bytes = 0;
+    const walk = (dir: string, rel: string) => {
+      if (files.length >= MAX_FILES || bytes >= MAX_BYTES) return;
+      let ents: fs.Dirent[] = [];
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const d of ents) {
+        if (files.length >= MAX_FILES || bytes >= MAX_BYTES) break;
+        const abs = path.join(dir, d.name);
+        const r = rel ? `${rel}/${d.name}` : d.name;
+        if (d.isDirectory()) { walk(abs, r); continue; }
+        if (!/\.(xml|lua)$/i.test(d.name)) continue;
+        try {
+          const sz = fs.statSync(abs).size;
+          if (sz > 500_000) continue;
+          const content = fs.readFileSync(abs, "utf8");
+          bytes += content.length;
+          files.push({ path: r, content });
+        } catch { /* skip unreadable */ }
+      }
+    };
+    walk(extRoot, "");
+    // Also read PACKED .xml/.lua from the extension's own .cat/.dat (published mods —
+    // sn/kuertee on Steam Workshop — ship packed, so loose-only would find nothing).
+    let packedFiles = 0;
+    try {
+      for (const archive of findCatDatArchives([extRoot], true).filter(a => path.dirname(a.catPath).toLowerCase() === extRoot.toLowerCase())) {
+        if (bytes >= MAX_BYTES || files.length >= MAX_FILES) break;
+        let entries: ReturnType<typeof parseCat> = [];
+        try { entries = parseCat(archive.catPath); } catch { continue; }
+        for (const entry of entries) {
+          if (bytes >= MAX_BYTES || files.length >= MAX_FILES) break;
+          if (!/\.(xml|lua)$/i.test(entry.name)) continue;
+          try {
+            const content = readEntryText(archive.datPath, entry);
+            if (!content || content.length > 500_000) continue;
+            bytes += content.length;
+            packedFiles++;
+            files.push({ path: entry.name.replace(/\\/g, "/"), content });
+          } catch { /* skip unreadable entry */ }
+        }
+      }
+    } catch { /* no packed archives */ }
+    const { definition, notes } = deriveApiDefinition(ext, files);
+    const validation = validateApiDefinition(definition, "derived");
+    return res.json({
+      success: true,
+      extensionRoot: extRoot,
+      filesScanned: files.length,
+      packedFilesScanned: packedFiles,
+      definition,
+      notes,
+      validates: validation.ok,
+      validationErrors: validation.errors,
+      note: "DRAFT — reads loose + packed (.cat/.dat) .xml/.lua. Refine summaries + detect tokens, then POST to /api/agent/external-api/register.",
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: errorMessage(error) || "external-api derive failed" });
   }
 });
 

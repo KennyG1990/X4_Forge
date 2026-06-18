@@ -1,0 +1,76 @@
+{
+  "$schema": "forge-external-api/v1",
+  "extensionId": "kuertee_ui_extensions",
+  "name": "kuertee UI Extensions and HUD",
+  "author": "kuertee, et al.",
+  "source": "https://github.com/kuertee/x4-mod-ui-extensions",
+  "dependsOn": [
+    "sn_mod_support_apis"
+  ],
+  "components": [
+    {
+      "id": "ui_callbacks",
+      "title": "UI menu callbacks",
+      "summary": "Register Lua callbacks into patched egosoft menus so multiple mods can co-edit the same UI element. Loaded via sn_mod_support_apis Lua Loader.",
+      "requiresProtectedUiDisabled": true,
+      "symbols": [
+        {
+          "name": "menu.registerCallback",
+          "kind": "lua_callback",
+          "summary": "Register a callback into a kuertee-patched menu hook (optionally with an id).",
+          "detect": [
+            "registerCallback(",
+            "registerCallback ("
+          ]
+        },
+        {
+          "name": "menu.deregisterCallback",
+          "kind": "lua_callback",
+          "summary": "Remove a previously registered callback by id.",
+          "detect": [
+            "deregisterCallback"
+          ]
+        },
+        {
+          "name": "extensions.kuertee_ui_extensions.ui",
+          "kind": "lua_event",
+          "summary": "Lua_Loader path for kuertee customised menu Lua files.",
+          "detect": [
+            "extensions.kuertee_ui_extensions"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "interact_groups",
+      "title": "Custom interact-menu action groups",
+      "summary": "Add nested custom action/order groups to the interact menu (kuertee extension).",
+      "symbols": [
+        {
+          "name": "Interact_Menu_API.Add_Custom_Actions_Group_Id",
+          "kind": "lua_event",
+          "summary": "Register a top-level custom actions/orders group.",
+          "detect": [
+            "Add_Custom_Actions_Group_Id"
+          ]
+        },
+        {
+          "name": "Interact_Menu_API.Add_Custom_Actions_SubGroup_Id_to_Group_Id",
+          "kind": "lua_event",
+          "summary": "Register a nested sub-group (\"parentId;subGroupId\").",
+          "detect": [
+            "Add_Custom_Actions_SubGroup_Id_to_Group_Id"
+          ]
+        },
+        {
+          "name": "Interact_Menu_API.Existence_Query",
+          "kind": "lua_event",
+          "summary": "Detect whether the kuertee UIX is present at runtime.",
+          "detect": [
+            "Interact_Menu_API.Existence_Query"
+          ]
+        }
+      ]
+    }
+  ]
+}
