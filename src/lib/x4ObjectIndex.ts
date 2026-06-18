@@ -198,11 +198,24 @@ function classifyMacroName(id: string): X4ObjectKind {
  * every macro/component name to a source path via `<entry name="..." value="..."/>`
  * and are the cheapest way to enumerate all ships/stations in a packed install.
  */
-function scanMacroIndex(xml: string, sourceFile: string, items: X4IndexedObject[], seen: Set<string>) {
+function scanMacroIndex(xml: string, sourceFile: string, items: X4IndexedObject[], seen: Set<string>, macroPaths?: Map<string, string>) {
+  // N2: index/components.xml lists the component twins of station macros (e.g.
+  // `prod_arg_foodrations` vs `prod_arg_foodrations_macro`) which have no
+  // <identification> and can never resolve — keep them OUT of the 'station' kind
+  // so they don't clutter station results with id-labels.
+  const isComponents = /components\.xml$/i.test(sourceFile);
   for (const match of xml.matchAll(/<entry\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>/gi)) {
+    const tag = match[0];
     const id = match[1];
     if (!id) continue;
-    const kind = classifyMacroName(id);
+    let kind = classifyMacroName(id);
+    if (isComponents && kind === 'station') kind = 'macro';
+    // N2: capture the macro's source-file path (`value`, no extension, backslashes) so a
+    // bounded second pass can read its <identification name="{page,id}"/> for a real name.
+    if (macroPaths && (kind === 'station' || kind === 'ship')) {
+      const value = extractAttr(tag, 'value');
+      if (value) macroPaths.set(id, value.replace(/\\/g, '/').toLowerCase() + '.xml');
+    }
     addUnique(items, seen, {
       id,
       name: labelFromId(id),
@@ -213,8 +226,62 @@ function scanMacroIndex(xml: string, sourceFile: string, items: X4IndexedObject[
   }
 }
 
+/**
+ * N2 second pass: station/ship macros enumerated from index/macros.xml carry only
+ * id-labels because their real <identification> lives in their own macro file (not in
+ * the cheap catalog). For those still on an id-label, do ONE bounded archive pass over
+ * exactly their source files, parse each `<macro>`'s bounded <identification>, and UPDATE
+ * the item's name via the loc map. Pure read; never throws past its own guard.
+ */
+/**
+ * Pure helper (oracle-testable, no I/O): given one macro file's text, parse each
+ * `<macro name>`'s BOUNDED <identification name="{page,id}"/> and UPDATE the matching
+ * item's name via the loc map — but only items still on an id-label (never clobber an
+ * already-resolved name). Bounding to each macro's own block prevents a later macro's
+ * identification bleeding onto an earlier one (the N1 multi-macro regression). Returns
+ * the number of items updated.
+ */
+function updateNamesFromMacroFile(byId: Map<string, X4IndexedObject>, fileText: string, locMap?: LocalizationMap): number {
+  let updated = 0;
+  for (const mm of fileText.matchAll(/<macro\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>/gi)) {
+    const it = byId.get(mm[1]);
+    if (!it || it.name !== labelFromId(it.id)) continue; // only touch un-resolved items
+    const start = (mm.index ?? 0) + mm[0].length;
+    const end = fileText.indexOf('</macro>', start);
+    const region = end === -1 ? fileText.slice(start) : fileText.slice(start, end); // bound to THIS macro
+    const idMatch = region.match(/<identification\b[^>]*\bname\s*=\s*"([^"]+)"/i);
+    if (idMatch) {
+      const resolved = resolveLocName(idMatch[1], locMap);
+      if (resolved) { it.name = resolved; updated++; }
+    }
+  }
+  return updated;
+}
+
+function resolveStationMacroNames(packedRoots: string[], items: X4IndexedObject[], locMap: LocalizationMap | undefined, macroPaths: Map<string, string>): number {
+  if (!packedRoots.length || !macroPaths.size) return 0;
+  const byId = new Map(items.map(it => [it.id, it]));
+  // archivePath -> still want it (item exists, kind ship/station, still id-labelled)
+  const wanted = new Set<string>();
+  for (const it of items) {
+    if (it.kind !== 'station' && it.kind !== 'ship') continue;
+    if (it.name !== labelFromId(it.id)) continue; // already resolved elsewhere
+    const p = macroPaths.get(it.id);
+    if (p) wanted.add(p);
+  }
+  if (!wanted.size) return 0;
+  let updated = 0;
+  try {
+    const result = extractEntries(packedRoots, n => wanted.has(n), { dedupeByName: false });
+    for (const m of result.matches) updated += updateNamesFromMacroFile(byId, m.text, locMap);
+  } catch {
+    /* archive re-scan failed — keep id-labels (no worse than before) */
+  }
+  return updated;
+}
+
 /** Core content scanner shared by loose-file and packed-archive paths. */
-function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, items: X4IndexedObject[], seen: Set<string>, locMap?: LocalizationMap) {
+function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, items: X4IndexedObject[], seen: Set<string>, locMap?: LocalizationMap, macroPaths?: Map<string, string>) {
   const relative = sourceFile;
   const lowerPath = lowerPathHint;
 
@@ -222,7 +289,7 @@ function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, 
   const isCatalogPath = /(?:^|[\\/])index[\\/](?:macros|components)\.xml$/i.test(lowerPath);
   const looksLikeCatalog = /<index\b/i.test(xml) && /<entry\b[^>]*\bname=/i.test(xml) && !/<macro\b/i.test(xml);
   if (isCatalogPath || looksLikeCatalog) {
-    scanMacroIndex(xml, sourceFile, items, seen);
+    scanMacroIndex(xml, sourceFile, items, seen, macroPaths);
   }
 
   for (const match of xml.matchAll(/<macro\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>/gi)) {
@@ -325,11 +392,11 @@ function scanXmlContent(xml: string, sourceFile: string, lowerPathHint: string, 
   }
 }
 
-function scanXmlFile(filePath: string, items: X4IndexedObject[], seen: Set<string>, locMap?: LocalizationMap) {
+function scanXmlFile(filePath: string, items: X4IndexedObject[], seen: Set<string>, locMap?: LocalizationMap, macroPaths?: Map<string, string>) {
   const stat = fs.statSync(filePath);
   if (stat.size > MAX_FILE_BYTES) return false;
   const xml = fs.readFileSync(filePath, 'utf8');
-  scanXmlContent(xml, filePath, filePath.toLowerCase(), items, seen, locMap);
+  scanXmlContent(xml, filePath, filePath.toLowerCase(), items, seen, locMap, macroPaths);
   return true;
 }
 
@@ -351,6 +418,9 @@ export function buildX4ObjectIndex(
 
   const items: X4IndexedObject[] = [];
   const seen = new Set<string>();
+  // N2: catalog macro-id → archive file path, captured during scanning so station/ship
+  // macros still on id-labels can be name-resolved by a bounded second archive pass.
+  const macroPaths = new Map<string, string>();
   let scannedFiles = 0;
 
   // ---- Pass 1: build the localization map (loose t-files) so display names
@@ -400,19 +470,23 @@ export function buildX4ObjectIndex(
   // ---- Pass 2: scan item-bearing files with the loc map in hand. ----
   for (const file of looseItemFiles) {
     try {
-      if (scanXmlFile(file, items, seen, locMap)) scannedFiles++;
+      if (scanXmlFile(file, items, seen, locMap, macroPaths)) scannedFiles++;
     } catch {
       state.skipped++;
     }
   }
   for (const match of packedItemMatches) {
     try {
-      scanXmlContent(match.text, match.name, match.name.toLowerCase(), items, seen, locMap);
+      scanXmlContent(match.text, match.name, match.name.toLowerCase(), items, seen, locMap, macroPaths);
       packedEntriesScanned++;
     } catch {
       state.skipped++;
     }
   }
+
+  // ---- N2: bounded second archive pass to resolve station/ship macro display names
+  // from each macro's own <identification> (the catalog only carries id-labels). ----
+  resolveStationMacroNames(packedRoots, items, locMap, macroPaths);
 
   enrichMacroDisplayNames(items);
 
@@ -551,6 +625,53 @@ export function runObjectIndexSelftest(): {
   enrichMacroDisplayNames(enrichItems);
   const enrichedShip = enrichItems.find(i => i.kind === 'ship');
   expect('ware-enrichment fills macro name', enrichedShip?.name === 'Behemoth Vanguard', enrichedShip?.name);
+
+  // ---- N2: catalog `value` capture, components reclassification, second-pass name update ----
+  const catItems: X4IndexedObject[] = []; const catSeen = new Set<string>(); const catPaths = new Map<string, string>();
+  scanMacroIndex(
+    `<index><entry name="prod_arg_foodrations_macro" value="assets\\structures\\macros\\prod_arg_foodrations_macro" /></index>`,
+    'index/macros.xml', catItems, catSeen, catPaths,
+  );
+  // D1: value captured as forward-slashed, lowercased, with .xml appended.
+  expect('N2 catalog value→archive path captured',
+    catPaths.get('prod_arg_foodrations_macro') === 'assets/structures/macros/prod_arg_foodrations_macro.xml',
+    catPaths.get('prod_arg_foodrations_macro'));
+  expect('N2 macros.xml entry classified station',
+    catItems.find(i => i.id === 'prod_arg_foodrations_macro')?.kind === 'station');
+
+  // D2: the components.xml twin is reclassified OUT of 'station' (→ macro) to cut noise.
+  const compItems: X4IndexedObject[] = []; const compSeen = new Set<string>();
+  scanMacroIndex(
+    `<index><entry name="prod_arg_foodrations" value="assets\\structures\\components\\prod_arg_foodrations" /></index>`,
+    'index/components.xml', compItems, compSeen,
+  );
+  expect('N2 components.xml twin not a station',
+    compItems.find(i => i.id === 'prod_arg_foodrations')?.kind === 'macro');
+
+  // D3: second-pass update — an id-labelled station gets its real name from its macro
+  // file's bounded <identification>; an already-resolved item is NOT clobbered.
+  const stItems: X4IndexedObject[] = [
+    { id: 'prod_arg_foodrations_macro', name: labelFromId('prod_arg_foodrations_macro'), kind: 'station', sourceFile: 'index/macros.xml' },
+    { id: 'ship_already_named', name: 'Custom Carrier', kind: 'ship', sourceFile: 'index/macros.xml' },
+  ];
+  const stById = new Map(stItems.map(it => [it.id, it]));
+  const macroFile = `<macros>
+    <macro name="prod_arg_foodrations_macro" class="production"><properties><identification name="{1,10}"/></properties></macro>
+    <macro name="ship_already_named" class="ship"><properties><identification name="{1,20}"/></properties></macro>
+  </macros>`;
+  const nUpdated = updateNamesFromMacroFile(stById, macroFile, locMap);
+  expect('N2 second-pass resolves id-labelled station', stItems[0].name === 'Energy Cells', stItems[0].name);
+  expect('N2 second-pass does NOT clobber resolved name', stItems[1].name === 'Custom Carrier', stItems[1].name);
+  expect('N2 second-pass update count = 1', nUpdated === 1, String(nUpdated));
+
+  // D3 bounding regression: a station macro with NO <identification> must not inherit a
+  // later macro's name from the same file.
+  const stItems2: X4IndexedObject[] = [
+    { id: 'prod_a_macro', name: labelFromId('prod_a_macro'), kind: 'station', sourceFile: 'index/macros.xml' },
+  ];
+  updateNamesFromMacroFile(new Map(stItems2.map(it => [it.id, it])),
+    `<macros><macro name="prod_a_macro" class="production"><properties/></macro><macro name="prod_b_macro"><properties><identification name="{1,10}"/></properties></macro></macros>`, locMap);
+  expect('N2 no-identification station keeps id-label', stItems2[0].name === labelFromId('prod_a_macro'), stItems2[0].name);
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

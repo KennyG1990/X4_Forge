@@ -119,8 +119,8 @@ interface SidebarProps {
   setAiChatHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   aiInputText: string;
   setAiInputText: (text: string) => void;
-  aiActiveMode: 'chat' | 'builder';
-  setAiActiveMode: (mode: 'chat' | 'builder') => void;
+  aiActiveMode: 'chat' | 'builder' | 'architect';
+  setAiActiveMode: (mode: 'chat' | 'builder' | 'architect') => void;
   aiLoading: boolean;
   aiErrorText: string | null;
   isAiFloatingVisible: boolean;
