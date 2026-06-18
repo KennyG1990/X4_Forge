@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { confirmDialog } from '../lib/uiDialogs';
 import {
   GitCommit,
   RotateCcw,
@@ -229,7 +230,7 @@ export default function SnapshotManager({
   // Clear all checkpoints from server
   const handleClearAll = async () => {
     if (!modWorkspacePath) return;
-    if (confirm("Are you sure you want to permanently clear all snapshots for this mod? This is irreversible.")) {
+    if (await confirmDialog("Are you sure you want to permanently clear all snapshots for this mod? This is irreversible.", { okLabel: 'Clear all', cancelLabel: 'Keep' })) {
       for (const snap of snapshots) {
         try {
           await fetch('/api/fs/delete-snapshot', {

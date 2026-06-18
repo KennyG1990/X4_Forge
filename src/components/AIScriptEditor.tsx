@@ -16,6 +16,8 @@ import {
   Bot
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
+import { promptDialog } from '../lib/uiDialogs';
+import { escapeXmlAttr, escapeXmlText } from '../lib/modCompiler';
 
 interface AIScriptEditorProps {
   workspace: ModWorkspace;
@@ -245,8 +247,8 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
     saveScriptsState(updated);
   };
 
-  const handleCreateNewScript = () => {
-    const name = prompt("Enter Name for new Behavior AIScript (e.g., trader.escort.patrol):", "trader.auto.haul");
+  const handleCreateNewScript = async () => {
+    const name = await promptDialog("Enter Name for new Behavior AIScript (e.g., trader.escort.patrol):", "trader.auto.haul");
     if (!name) return;
     
     const nScript = {
@@ -300,14 +302,14 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
   // Compile individual script into standard Egosoft aiscripts.xsd conforming XML
   const compileScriptToXML = (script: typeof activeScript): string => {
     let xml = `<?xml version="1.0" encoding="utf-8"?>
-<aiscript name="${script.name}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">
+<aiscript name="${escapeXmlAttr(script.name)}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">
   <!-- X4 Foundations Autopilot & Task Script Behavior -->
   <!-- Generated visually using X4 Mod Studio Behaviors Suite -->
   <params>
 `;
 
     script.params.forEach(p => {
-      xml += `    <param name="${p.name}" type="${p.type}" default="${p.defaultValue}" comment="${p.comment}" />\n`;
+      xml += `    <param name="${escapeXmlAttr(p.name)}" type="${escapeXmlAttr(p.type)}" default="${escapeXmlAttr(p.defaultValue)}" comment="${escapeXmlAttr(p.comment)}" />\n`;
     });
 
     xml += `  </params>\n`;
@@ -315,14 +317,14 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
     if (script.interrupts.length > 0) {
       xml += `  <interrupts>\n`;
       script.interrupts.forEach(int => {
-        xml += `    <handler event="${int.event}">\n`;
+        xml += `    <handler event="${escapeXmlAttr(int.event)}">\n`;
         xml += `      <actions>\n`;
         if (int.action === 'flee') {
           xml += `        <run_script name="'move.flee'" />\n`;
         } else if (int.action === 'dock_at_safety') {
           xml += `        <run_script name="'move.dockat'" />\n`;
         } else {
-          xml += `        <write_to_logbook text="'Interrupt event fired: ${int.event}'" />\n`;
+          xml += `        <write_to_logbook text="'Interrupt event fired: ${escapeXmlAttr(int.event)}'" />\n`;
         }
         xml += `      </actions>\n`;
         xml += `    </handler>\n`;
@@ -330,15 +332,15 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
       xml += `  </interrupts>\n`;
     }
 
-    xml += `  <attention min="${script.attentionLevel}">\n`;
+    xml += `  <attention min="${escapeXmlAttr(script.attentionLevel)}">\n`;
     xml += `    <actions>\n`;
     xml += `      <label name="start" />\n`;
 
     script.actions.forEach(act => {
-      xml += `      <!-- Action: ${act.label} -->\n`;
+      xml += `      <!-- Action: ${escapeXmlText(act.label)} -->\n`;
       switch (act.command) {
         case 'move_to':
-          xml += `      <move_to object="this.ship" destination="${act.properties.destination || '$target'}" forceposition="false" finishonfound="true">\n`;
+          xml += `      <move_to object="this.ship" destination="${escapeXmlAttr(act.properties.destination || '$target')}" forceposition="false" finishonfound="true">\n`;
           xml += `        <interrupt_after_time time="10s" />\n`;
           xml += `      </move_to>\n`;
           break;
@@ -346,20 +348,20 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
           xml += `      <run_script name="'move.flee'" />\n`;
           break;
         case 'shoot':
-          xml += `      <shoot_at object="this.ship" target="${act.properties.target || '$enemy'}" turretmode="attackhostile" />\n`;
+          xml += `      <shoot_at object="this.ship" target="${escapeXmlAttr(act.properties.target || '$enemy')}" turretmode="attackhostile" />\n`;
           break;
         case 'dock_at':
-          xml += `      <dock_at object="this.ship" station="${act.properties.station || '$station'}" />\n`;
+          xml += `      <dock_at object="this.ship" station="${escapeXmlAttr(act.properties.station || '$station')}" />\n`;
           break;
         case 'wait':
           if (act.properties.exact) {
-            xml += `      <wait exact="${act.properties.exact}" />\n`;
+            xml += `      <wait exact="${escapeXmlAttr(act.properties.exact)}" />\n`;
           } else {
-            xml += `      <wait min="${act.properties.min || '2s'}" max="${act.properties.max || '10s'}" />\n`;
+            xml += `      <wait min="${escapeXmlAttr(act.properties.min || '2s')}" max="${escapeXmlAttr(act.properties.max || '10s')}" />\n`;
           }
           break;
         case 'find_objects':
-          xml += `      <find_object name="$targets" class="class.${act.properties.class || 'ship'}" space="player.sector" multiple="true" />\n`;
+          xml += `      <find_object name="$targets" class="class.${escapeXmlAttr(act.properties.class || 'ship')}" space="player.sector" multiple="true" />\n`;
           break;
         case 'custom_xml':
           xml += `      ${act.properties.rawXml || '<!-- custom nodes -->'}\n`;

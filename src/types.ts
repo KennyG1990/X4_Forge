@@ -683,10 +683,10 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     
     const cueName = cue.properties.name || cue.id;
     const inst = cue.properties.instantiate === 'true' ? ' instantiate="true"' : '';
-    const ns = cue.properties.namespace ? ` namespace="${cue.properties.namespace}"` : '';
-    const state = cue.properties.state && cue.properties.state !== 'active' ? ` state="${cue.properties.state}"` : '';
-    
-    let xml = `${indent}<cue name="${cueName}"${inst}${ns}${state}>\n`;
+    const ns = cue.properties.namespace ? ` namespace="${escapeXMLAttribute(String(cue.properties.namespace))}"` : '';
+    const state = cue.properties.state && cue.properties.state !== 'active' ? ` state="${escapeXMLAttribute(String(cue.properties.state))}"` : '';
+
+    let xml = `${indent}<cue name="${escapeXMLAttribute(String(cueName))}"${inst}${ns}${state}>\n`;
     
     // Conditions block parsing (find all nodes connected to out_cond)
     const condLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_cond');
@@ -702,13 +702,13 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
               xml += `${indentDouble}${l}\n`;
             });
           } else if (targetNode.xmlTag === 'event_cue_signalled') {
-            xml += `${indentDouble}<event_cue_signalled cue="${targetNode.properties.cue || 'md.Setup.Start'}" />\n`;
+            xml += `${indentDouble}<event_cue_signalled cue="${escapeXMLAttribute(String(targetNode.properties.cue || 'md.Setup.Start'))}" />\n`;
           } else if (targetNode.xmlTag === 'event_object_destroyed') {
             // md.xsd: event_object_destroyed has no `faction` attribute; faction
             // filtering belongs in a follow-up condition, not here.
-            xml += `${indentDouble}<event_object_destroyed object="${targetNode.properties.object || 'player.target'}" />\n`;
+            xml += `${indentDouble}<event_object_destroyed object="${escapeXMLAttribute(String(targetNode.properties.object || 'player.target'))}" />\n`;
           } else if (targetNode.xmlTag === 'event_object_changed_sector') {
-            xml += `${indentDouble}<event_object_changed_sector object="${targetNode.properties.object || 'playership'}" sector="${targetNode.properties.sector || 'player.sector'}" />\n`;
+            xml += `${indentDouble}<event_object_changed_sector object="${escapeXMLAttribute(String(targetNode.properties.object || 'playership'))}" sector="${escapeXMLAttribute(String(targetNode.properties.sector || 'player.sector'))}" />\n`;
           } else if (targetNode.xmlTag === 'check_value') {
             // md.xsd: check_value can be EITHER a standalone boolean expression in `value`
             // (`value="$x ge 5"`) OR an operand `value` + a comparison attr (min/max/exact).
@@ -722,7 +722,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
             const hasAmount = targetNode.properties.amount !== undefined && String(targetNode.properties.amount) !== '';
             if (isExpression || (!hasOperator && !hasAmount)) {
               // full boolean expression, or a bare truthiness check — emit standalone
-              xml += `${indentDouble}<check_value value="${rawVal}" />\n`;
+              xml += `${indentDouble}<check_value value="${escapeXMLAttribute(rawVal)}" />\n`;
             } else {
               const rawOp = String(targetNode.properties.operator || 'ge');
               const op = (rawOp.match(/\((\w+)\)/)?.[1] || rawOp).toLowerCase();
@@ -732,7 +732,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
               else if (op === 'le' || op === 'max' || op === 'lt') cmp = `max="${amt}"`;
               else if (op === 'ne') cmp = `exact="${amt}" negate="true"`;
               else cmp = `exact="${amt}"`;
-              xml += `${indentDouble}<check_value value="${rawVal}" ${cmp} />\n`;
+              xml += `${indentDouble}<check_value value="${escapeXMLAttribute(rawVal)}" ${cmp} />\n`;
             }
           } else if (!CURATED_XML_TAGS.has(targetNode.xmlTag)) {
             xml += `${renderGenericXMLNode(targetNode, indentDouble)}\n`;
@@ -756,7 +756,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
         if (isContainerTag(tag)) {
           const attrs = Object.entries(node.properties || {})
             .filter(([k, v]) => v !== undefined && v !== null && String(v) !== '' && k !== 'rawXml')
-            .map(([k, v]) => `${k}="${v}"`)
+            .map(([k, v]) => `${k}="${escapeXMLAttribute(String(v))}"`)
             .join(' ');
           const bodyLink = workspace.links.find(l => l.sourceNodeId === node.id && l.sourcePortId === 'out_body');
           if (bodyLink) {
@@ -777,32 +777,32 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
           // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
           const fac = node.properties.faction || 'player';
           const sector = node.properties.sector || 'player.sector';
-          xml += `${ind}<create_ship name="${node.properties.name || '$EscortShip'}" macro="${(node.properties.macro || '').split(' (')[0]}" sector="${sector}">\n`;
-          xml += `${ind}  <owner exact="faction.${fac}" />\n`;
+          xml += `${ind}<create_ship name="${escapeXMLAttribute(String(node.properties.name || '$EscortShip'))}" macro="${escapeXMLAttribute(String((node.properties.macro || '').split(' (')[0]))}" sector="${escapeXMLAttribute(String(sector))}">\n`;
+          xml += `${ind}  <owner exact="faction.${escapeXMLAttribute(String(fac))}" />\n`;
           if (node.properties.coords) {
             const xyz = node.properties.coords.split(',');
-            xml += `${ind}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
+            xml += `${ind}  <position x="${escapeXMLAttribute(String(xyz[0] || '0'))}" y="${escapeXMLAttribute(String(xyz[1] || '0'))}" z="${escapeXMLAttribute(String(xyz[2] || '0'))}" />\n`;
           }
           xml += `${ind}</create_ship>\n`;
         } else if (tag === 'reward_player') {
           // md.xsd: reward_player takes a `money` attribute and no children.
-          xml += `${ind}<reward_player money="${node.properties.money || 0}" />\n`;
+          xml += `${ind}<reward_player money="${escapeXMLAttribute(String(node.properties.money || 0))}" />\n`;
         } else if (tag === 'play_sound') {
-          xml += `${ind}<play_sound object="${node.properties.object || 'playership'}" sound="${node.properties.sound || 'notification_generic'}" />\n`;
+          xml += `${ind}<play_sound object="${escapeXMLAttribute(String(node.properties.object || 'playership'))}" sound="${escapeXMLAttribute(String(node.properties.sound || 'notification_generic'))}" />\n`;
         } else if (tag === 'show_help') {
           // md.xsd: custom text goes in `custom`, not `text`. `duration` is an
           // X4 time value — a bare number ("8") is rejected at runtime, it must
           // carry a unit ("8s").
-          xml += `${ind}<show_help custom="'${node.properties.text || ''}'" duration="${formatX4Time(node.properties.duration ?? 5)}" />\n`;
+          xml += `${ind}<show_help custom="'${escapeXMLAttribute(String(node.properties.text || ''))}'" duration="${escapeXMLAttribute(formatX4Time(node.properties.duration ?? 5))}" />\n`;
         } else if (tag === 'create_station') {
           // md.xsd: owner is a REQUIRED attribute (not a child); location via
           // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
           const fac = node.properties.faction || 'player';
           const sector = node.properties.sector || 'player.sector';
-          xml += `${ind}<create_station name="${node.properties.name || '$Station'}" macro="${(node.properties.macro || '').split(' (')[0]}" owner="faction.${fac}" sector="${sector}">\n`;
+          xml += `${ind}<create_station name="${escapeXMLAttribute(String(node.properties.name || '$Station'))}" macro="${escapeXMLAttribute(String((node.properties.macro || '').split(' (')[0]))}" owner="faction.${escapeXMLAttribute(String(fac))}" sector="${escapeXMLAttribute(String(sector))}">\n`;
           if (node.properties.coords) {
             const xyz = node.properties.coords.split(',');
-            xml += `${ind}  <position x="${xyz[0] || '0'}" y="${xyz[1] || '0'}" z="${xyz[2] || '0'}" />\n`;
+            xml += `${ind}  <position x="${escapeXMLAttribute(String(xyz[0] || '0'))}" y="${escapeXMLAttribute(String(xyz[1] || '0'))}" z="${escapeXMLAttribute(String(xyz[2] || '0'))}" />\n`;
           }
           xml += `${ind}</create_station>\n`;
         } else if (!CURATED_XML_TAGS.has(tag)) {
@@ -842,7 +842,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
   }
 
   let xml = `<?xml version="1.0" encoding="utf-8"?>
-<mdscript name="${workspace.name || 'Sample_Mod'}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+<mdscript name="${escapeXMLAttribute(String(workspace.name || 'Sample_Mod'))}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
   <!-- Generated by X4 Foundations Mod Studio (version ${workspace.version || '1.0.0'}) -->
   <!-- Author: ${workspace.author || 'Mod Creator'} -->
   <!-- Description: ${workspace.description || 'Custom MD Script'} -->

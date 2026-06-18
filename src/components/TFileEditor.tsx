@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ModWorkspace, TFile, TranslationPage, TranslationItem } from '../types';
 import { toTFileName } from '../lib/modCompiler';
+import { confirmDialog, promptDialog } from '../lib/uiDialogs';
 
 interface TFileEditorProps {
   workspace: ModWorkspace;
@@ -116,13 +117,13 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   const activePage = activeFile?.pages.find(p => p.id === activePageId) || activeFile?.pages[0];
 
   // Actions: Add New Language file
-  const handleAddLanguageFile = () => {
+  const handleAddLanguageFile = async () => {
     const nextUnusedLang = LANGUAGES_SUPPORT.find(l => !tFiles.some(tf => tf.languageId === l.id));
     const langId = nextUnusedLang?.id || '44';
     const langName = nextUnusedLang?.name || 'English';
     const suffix = nextUnusedLang?.suffix || 'L044';
 
-    const newLangId = prompt(`Enter Language ID Code (e.g., 44: English, 49: German, 33: French):`, langId);
+    const newLangId = await promptDialog(`Enter Language ID Code (e.g., 44: English, 49: German, 33: French):`, langId);
     if (!newLangId) return;
 
     const matchedLang = LANGUAGES_SUPPORT.find(l => l.id === newLangId);
@@ -156,12 +157,12 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   };
 
   // Delete Language File
-  const handleDeleteLanguageFile = (idx: number) => {
+  const handleDeleteLanguageFile = async (idx: number) => {
     if (tFiles.length <= 1) {
       alert("At least one language T-File must remain configured.");
       return;
     }
-    const confirmed = confirm(`Are you sure you want to delete translation file: "${tFiles[idx].fileName}"?`);
+    const confirmed = await confirmDialog(`Are you sure you want to delete translation file: "${tFiles[idx].fileName}"?`, { okLabel: 'Delete', cancelLabel: 'Keep' });
     if (!confirmed) return;
 
     const nextFiles = tFiles.filter((_, i) => i !== idx);
@@ -170,8 +171,8 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   };
 
   // Add translation page to active file
-  const handleAddPage = () => {
-    const pageId = prompt(`Enter unused Page ID (X4 standard mod pages are usually 20000+):`, '20003');
+  const handleAddPage = async () => {
+    const pageId = await promptDialog(`Enter unused Page ID (X4 standard mod pages are usually 20000+):`, '20003');
     if (!pageId || isNaN(Number(pageId))) {
       if (pageId) alert("Page ID must be a numeric string.");
       return;
@@ -182,7 +183,7 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
       return;
     }
 
-    const pageTitle = prompt(`Enter descriptive label for Page ${pageId}:`, 'Custom Dialogues');
+    const pageTitle = await promptDialog(`Enter descriptive label for Page ${pageId}:`, 'Custom Dialogues');
     if (pageTitle === null) return;
 
     const newPage: TranslationPage = {
@@ -206,12 +207,12 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   };
 
   // Delete active page
-  const handleDeletePage = (pageId: string) => {
+  const handleDeletePage = async (pageId: string) => {
     if (activeFile.pages.length <= 1) {
       alert("At least one translation page must exist inside this L0xx language schema.");
       return;
     }
-    if (!confirm(`Verify discarding Page ID ${pageId} ("${activePage?.title}") and all its translations?`)) {
+    if (!(await confirmDialog(`Verify discarding Page ID ${pageId} ("${activePage?.title}") and all its translations?`, { okLabel: 'Discard', cancelLabel: 'Keep' }))) {
       return;
     }
 
@@ -228,14 +229,14 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   };
 
   // Add Item to current Page
-  const handleAddItem = () => {
+  const handleAddItem = async () => {
     if (!activePage) return;
-    
+
     // Find next available numeric ID in the current page items
     const ids = activePage.items.map(i => Number(i.id)).filter(n => !isNaN(n));
     const nextId = ids.length > 0 ? (Math.max(...ids) + 1).toString() : '1';
 
-    const newId = prompt("Enter Unique String Key ID (Numeric):", nextId);
+    const newId = await promptDialog("Enter Unique String Key ID (Numeric):", nextId);
     if (!newId || isNaN(Number(newId))) {
       if (newId) alert("Key ID must be a valid number.");
       return;
@@ -246,7 +247,7 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
       return;
     }
 
-    const textValue = prompt("Enter translation text:", "New Text");
+    const textValue = await promptDialog("Enter translation text:", "New Text");
     if (textValue === null) return;
 
     const newItem: TranslationItem = {

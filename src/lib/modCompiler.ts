@@ -16,6 +16,25 @@ import {
 } from '../types';
 import { generateHttpGlueLua, generateContractMdScript, validateContract } from './contractGlue';
 import { generateLayoutLua, pixelLayoutToGrid, type PixelWidget } from './uiLayout';
+import { DOMParser as XmlDOMParser } from '@xmldom/xmldom';
+
+/**
+ * P4 guard: is `content` a well-formed XML fragment? Wrap it as a single <root> (same
+ * shape the XML-Patch "Applied Preview" uses) and parse-check it. Matches xpathSynth's
+ * xmldom `onError` pattern so it works identically in the browser and in Node. An empty
+ * body is treated as valid (self-closing intent).
+ */
+function isWellFormedXmlFragment(content: string): boolean {
+  const raw = (content || '').trim();
+  if (!raw) return true;
+  let fatal = false;
+  try {
+    new XmlDOMParser({
+      onError: (level: string) => { if (level === 'fatalError') fatal = true; },
+    }).parseFromString(`<root>${raw}</root>`, 'text/xml');
+  } catch { fatal = true; }
+  return !fatal;
+}
 
 interface WritableFileHandle {
   write(content: string): Promise<void>;
@@ -277,12 +296,19 @@ export const compileDiffDocument = (patches: PatchBlock[], targetFile: string): 
       xml += `  <replace sel="${escapeXmlAttr(b.sel)}">${escapeXmlText((b.content || '').trim())}</replace>\n\n`;
     } else {
       const posAttr = (b.action === 'add' && b.pos) ? ` pos="${escapeXmlAttr(b.pos)}"` : '';
-      xml += `  <${b.action} sel="${escapeXmlAttr(b.sel)}"${posAttr}>\n`;
-      const lines = (b.content || '').split('\n').filter((l: string) => l.trim().length > 0);
-      lines.forEach((l: string) => {
-        xml += `    ${l}\n`;
-      });
-      xml += `  </${b.action}>\n\n`;
+      const raw = (b.content || '').trim();
+      // P4: malformed content must NOT compile silently into <diff>. Emit a loud comment
+      // marker instead of a broken element (`--` neutralised so it can't close the comment).
+      if (!isWellFormedXmlFragment(raw)) {
+        xml += `  <!-- INVALID PATCH CONTENT (sel="${escapeXmlAttr(b.sel)}") — fix in the XML Patching workbench before shipping: ${escapeXmlText(raw).replace(/--/g, '- -')} -->\n\n`;
+      } else {
+        xml += `  <${b.action} sel="${escapeXmlAttr(b.sel)}"${posAttr}>\n`;
+        const lines = raw.split('\n').filter((l: string) => l.trim().length > 0);
+        lines.forEach((l: string) => {
+          xml += `    ${l}\n`;
+        });
+        xml += `  </${b.action}>\n\n`;
+      }
     }
   });
   xml += `</diff>`;

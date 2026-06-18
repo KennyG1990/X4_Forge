@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import FpsMeter from './components/FpsMeter';
+import DialogHost from './lib/uiDialogs';
 import SyncModal from './components/SyncModal';
 import Canvas from './components/Canvas';
 import UIBuilder from './components/UIBuilder';
@@ -931,6 +932,7 @@ export default function App() {
   return (
     <div className="w-screen h-screen flex flex-col bg-[#0F1115] text-slate-300 font-sans">
       <FpsMeter />
+      <DialogHost />
       {/* Upper Technical Header */}
       <header className="h-12 border-b border-white/10 bg-[#161920] px-4 flex items-center justify-between shrink-0 font-mono">
         

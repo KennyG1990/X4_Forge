@@ -4,6 +4,27 @@ Context for the next coding agent. This captures a review pass + a compiler/dire
 
 ---
 
+## ⚠ STANDING RULE — close EVERY task with `x4-forge-confirm` (2026-06-18)
+
+**Before marking ANY task done, run the `x4-forge-confirm` skill:** open the exact UI you
+just changed in Claude in Chrome, click/use it like a user, **screenshot and SEE it does
+exactly what you intended**, confirm the back-end effect (read the file/endpoint via
+`/api/run_command`), run the cheap host gate (`typecheck` + the relevant `*-selftest`;
+`test:canvas` if you touched the canvas), then update `ROADMAP.md` with the verification
+line. A green badge / passing oracle is a claim; the visual confirmation is the proof. This
+is the mandatory close-out — not optional, every task. (Whole-app adversarial pass =
+`x4-forge-calibrate`; full release discipline = `x4-forge-validate`.)
+
+## ⚠ VALIDATION DISCIPLINE — CORRECTED 2026-06-18 (supersedes the "verify in the browser, not tsc / sandbox can't run node_modules" lines in every older entry below)
+
+**"Validate through the browser" means VISUALLY verify with Claude in Chrome — actually SEE it.** For any UI change: navigate the running app, **click through the real control, and take a screenshot and look at it.** Reading DOM text / `data-testid` via `javascript_tool` is a weak proxy, not the bar. If a user would see it, you look at it.
+
+**The agent CAN run the full host toolchain — do NOT punt gates to the operator.** The Forge server runs on the Windows host and exposes `GET /api/run_command?cmd=...` (Node `child_process.exec`, cwd = repo root). Through Chrome in-page `fetch` the agent runs the REAL Windows toolchain and reads results (response `error` === null ⇒ exit 0):
+- `npm run typecheck`, `npm run lint`, `npm run precommit:check`, `npm run test:canvas`, `node scripts/oracle-sweep.mjs`.
+Run them yourself after every code change and self-correct. This is also the truncation safety net (typecheck after each write catches a truncated file immediately). The sandbox `bash` is a stale Linux mirror that can't run the Windows `node_modules` — quick reads only; host `run_command` + the browser are the source of truth. (NOTE: editing the `x4-forge-validate` skill prompt doesn't persist from a session — update it via Settings → Capabilities; this entry is the persistent record.)
+
+---
+
 ## SESSION HANDOFF — 2026-06-12 (43rd pass: Load Mod Project + import integrity)
 
 **What shipped this session (all browser-verified on `localhost:3000`):**

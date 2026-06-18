@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ModWorkspace, sanitizeWorkspace, TranslationItem, TranslationPage, TFile } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
+import { confirmDialog, promptDialog } from '../lib/uiDialogs';
 import { generateMDXML } from '../types';
 
 export interface FSItem {
@@ -329,10 +330,10 @@ export default function DirectoryExplorer({
     }
   };
 
-  const handleCreatePrompt = () => {
-    const filename = prompt("Enter name for a new blueprint/script file (e.g., custom_patrol):", "custom_patrol");
+  const handleCreatePrompt = async () => {
+    const filename = await promptDialog("Enter name for a new blueprint/script file (e.g., custom_patrol):", "custom_patrol");
     if (!filename) return;
-    const selectType = confirm("Create as a Visual JSON Blueprint (OK) or raw Egosoft MD Script XML (Cancel)?");
+    const selectType = await confirmDialog("Create as a Visual JSON Blueprint, or raw Egosoft MD Script XML?", { okLabel: 'JSON Blueprint', cancelLabel: 'MD Script XML' });
     handleAddNewFile(filename, selectType ? 'json' : 'xml');
   };
 

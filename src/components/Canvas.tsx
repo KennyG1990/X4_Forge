@@ -40,6 +40,7 @@ import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
 import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
 import { orientConnection, linkExists as linkAlreadyExists } from '../lib/canvasInteractions';
+import { promptDialog } from '../lib/uiDialogs';
 import { STARTER_TAGS } from '../lib/mdFriendlyNames';
 import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
@@ -1939,9 +1940,9 @@ export default function Canvas({
                     </span>
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          const text = window.prompt(`Edit Sticky Note Annotation for "${node.label}":`, node.comment);
+                          const text = await promptDialog(`Edit Sticky Note Annotation for "${node.label}":`, node.comment);
                           if (text !== null) {
                             saveCheckpoint();
                             setWorkspace(prev => ({
@@ -2075,10 +2076,10 @@ export default function Canvas({
                       <div className="flex items-center gap-1 shrink-0">
                         {/* Sticky Note Toggle Icon */}
                         <button
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
                             const existingComment = node.comment || '';
-                            const text = window.prompt(`Attach Yellow Sticky Note to "${node.label}" script step:`, existingComment);
+                            const text = await promptDialog(`Attach Yellow Sticky Note to "${node.label}" script step:`, existingComment);
                             if (text !== null) {
                               saveCheckpoint();
                               setWorkspace(prev => ({

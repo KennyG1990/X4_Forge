@@ -2,6 +2,14 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { toast } from './lib/uiDialogs';
+
+// Calibration L4: route any native alert() — legacy or stray — to a non-blocking in-app
+// toast. Native alert/confirm/prompt freeze the renderer; confirm/prompt are converted to
+// in-app async modals at their call sites (see uiDialogs: confirmDialog/promptDialog).
+try {
+  window.alert = (msg?: unknown) => toast(String(msg ?? ''));
+} catch { /* non-writable in some envs */ }
 
 declare global {
   interface Window {
