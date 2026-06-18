@@ -76,7 +76,8 @@ import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemet
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
-import { runModDependencyGraphSelftest } from "./src/lib/modDependencyGraph";
+import { analyzeModDependencies, runModDependencyGraphSelftest } from "./src/lib/modDependencyGraph";
+import { buildGalaxyMap, runGalaxyMapSelftest } from "./src/lib/galaxyMap";
 import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
@@ -237,7 +238,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/position-picker-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest",
-  "/agent/mod-dependency-selftest"
+  "/agent/mod-dependency-selftest",
+  "/agent/galaxy-map-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3115,6 +3117,28 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     const orderContested = (mods: string[]) =>
       [...mods].sort((a, b) => (loadRank.get(a) ?? -1) - (loadRank.get(b) ?? -1));
 
+    // CHECK 2d — dependency CYCLES. simulateLoadOrder silently bails out of a cyclic
+    // branch (so the load order above hides cycles); the modDependencyGraph analyzer
+    // surfaces them explicitly. Reuses ONE detection path (the same engine behind
+    // /api/agent/mod-dependency-selftest) rather than a second copy here.
+    const depGraph = analyzeModDependencies(enabledExts.map(e => ({
+      folder: e.folder, id: e.id, version: e.version, name: e.name, enabled: e.enabled,
+      deps: e.deps.map(d => ({ id: d.id, optional: d.optional, name: d.name })),
+    })));
+    for (const cyc of depGraph.cycles) {
+      const folders = cyc.slice(0, -1); // drop the repeated closing folder
+      findings.push({
+        severity: "error",
+        category: "dependency",
+        code: "dep.cycle",
+        domain: "extension",
+        filePath: folders.map(f => `extensions/${f}/content.xml`).join(", "),
+        message: `Dependency cycle: ${cyc.join(" → ")}. X4 has no valid load order for these extensions — one will load before its dependency is ready.`,
+        sourceRef: { kind: "dependency", id: folders[0] },
+        openTargets: folders.map(f => ({ label: f, path: `${f}/content.xml` }))
+      });
+    }
+
     const extensionFiles = new Map<string, ExtensionFileView[]>();
     for (const e of exts) {
       if (!e.enabled || /^ego_/i.test(e.id)) continue;
@@ -3509,6 +3533,32 @@ app.get("/api/agent/mod-dependency-selftest", (_req, res) => {
     return res.json(runModDependencyGraphSelftest());
   } catch (error) {
     return res.status(500).json({ pass: false, error: errorMessage(error) || "mod-dependency-selftest failed" });
+  }
+});
+
+app.get("/api/agent/galaxy-map-selftest", (_req, res) => {
+  try {
+    return res.json(runGalaxyMapSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "galaxy-map-selftest failed" });
+  }
+});
+
+// #64 Phase 1 — real-data galaxy/sector map built from the installed universe files.
+// Read-only; reads base-game maps/xu_ep2_universe/{galaxy,clusters}.xml via cat/dat.
+app.get("/api/agent/galaxy-map", (_req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    if (!resolved.x4GamePath) return res.status(400).json({ error: "X4 game path not set." });
+    const galaxyHit = catDatExtractBaseGameFile(resolved.x4GamePath, "maps/xu_ep2_universe/galaxy.xml");
+    const clustersHit = catDatExtractBaseGameFile(resolved.x4GamePath, "maps/xu_ep2_universe/clusters.xml");
+    if (!galaxyHit || !clustersHit) {
+      return res.status(404).json({ error: "Universe files not found in the configured game path." });
+    }
+    const map = buildGalaxyMap(galaxyHit.text, clustersHit.text);
+    return res.json({ success: true, counts: map.counts, bounds: map.bounds, clusters: map.clusters, sectors: map.sectors });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "galaxy-map failed" });
   }
 });
 
@@ -4409,6 +4459,27 @@ app.get("/api/agent/catdat-debug", (req, res) => {
   try {
     const resolved = resolveXsdConfig();
     const roots = [resolved.x4GamePath || "", resolved.modWorkspacePath || ""].filter(Boolean);
+
+    // Optional ?file=<relpath> — read-only probe of a single base-game file (loose or
+    // packed). Used to ground deterministic parsers (e.g. #64 galaxy map) against the
+    // real installed universe files instead of assumed shapes. Base-game files only,
+    // path-traversal guarded, output capped.
+    const fileParam = String(req.query.file || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (fileParam) {
+      if (!resolved.x4GamePath) return res.status(400).json({ error: "X4 game path not set." });
+      if (fileParam.includes(":") || fileParam.split("/").includes("..")) {
+        return res.status(400).json({ error: "Invalid file path." });
+      }
+      const hit = catDatExtractBaseGameFile(resolved.x4GamePath, fileParam);
+      if (!hit) return res.json({ file: fileParam, found: false });
+      const MAX = 200_000;
+      const text = hit.text || "";
+      return res.json({
+        file: fileParam, found: true, bytes: text.length,
+        truncated: text.length > MAX, text: text.slice(0, MAX),
+      });
+    }
+
     const report = catDatDebugScan(roots);
     // Trim to keep payload reasonable: only show archives that have entries or errors.
     return res.json(report);

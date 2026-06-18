@@ -212,7 +212,7 @@ export function simulateLoadOrder(exts: { folder: string; idLower: string; deps:
 
 export interface SelftestCheck { name: string; pass: boolean; detail?: string }
 
-export function runOverrideMapSelftest(): { pass: boolean; checks: SelftestCheck[] } {
+export function runOverrideMapSelftest(): { allPassed: boolean; pass: boolean; passed: number; total: number; checks: SelftestCheck[] } {
   const checks: SelftestCheck[] = [];
   const ok = (name: string, pass: boolean, detail?: string) => checks.push({ name, pass, detail });
 
@@ -300,5 +300,7 @@ export function runOverrideMapSelftest(): { pass: boolean; checks: SelftestCheck
   ok("simulateLoadOrder: dependencies load before dependents despite alphabetical order",
     lo.join(",") === "mod_z,mod_b", lo.join(","));
 
-  return { pass: checks.every(c => c.pass), checks };
+  const passed = checks.filter(c => c.pass).length;
+  const allPassed = passed === checks.length;
+  return { allPassed, pass: allPassed, passed, total: checks.length, checks };
 }

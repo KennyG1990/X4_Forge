@@ -201,7 +201,7 @@ export function applyLiveFix<T extends Pick<ModWorkspace, 'nodes'>>(workspace: T
 
 export interface LiveFixesCheck { name: string; pass: boolean; detail?: string }
 
-export function runLiveFixesSelftest(): { pass: boolean; checks: LiveFixesCheck[] } {
+export function runLiveFixesSelftest(): { allPassed: boolean; pass: boolean; passed: number; total: number; checks: LiveFixesCheck[] } {
   const checks: LiveFixesCheck[] = [];
   const ok = (name: string, pass: boolean, detail?: string) => checks.push({ name, pass, detail });
 
@@ -263,5 +263,7 @@ export function runLiveFixesSelftest(): { pass: boolean; checks: LiveFixesCheck[
   const twice = classifyLiveFixes([entries[0], entries[0]], ws);
   ok('duplicate log lines dedupe to one card', twice.length === 1);
 
-  return { pass: checks.every(c => c.pass), checks };
+  const passed = checks.filter(c => c.pass).length;
+  const allPassed = passed === checks.length;
+  return { allPassed, pass: allPassed, passed, total: checks.length, checks };
 }
