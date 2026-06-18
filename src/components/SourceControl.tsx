@@ -45,7 +45,7 @@ interface SourceControlProps {
   setWorkspace: (updater: ModWorkspace | ((prev: ModWorkspace) => ModWorkspace)) => void;
   onOpenEditorFile?: (file: { name: string; path: string; content: string }) => void;
   saveCheckpoint?: (customTarget?: ModWorkspace) => void;
-  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'translation' | 'wiki') => void;
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy') => void;
 }
 
 // Simple line diff helper

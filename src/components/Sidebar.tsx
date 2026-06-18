@@ -94,8 +94,8 @@ interface SidebarProps {
   modWorkspacePath: string;
   filesystemPath: string;
   saveCheckpoint: (customTarget?: ModWorkspace) => void;
-  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project';
-  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project') => void;
+  workspaceView?: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy';
+  setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy') => void;
   schemaTemplates?: Omit<MDNode, 'id' | 'x' | 'y'>[];
   onSchemaConfigChanged?: () => Promise<void> | void;
   /** Opens the Directory Settings modal — the single authority for the XSD schema directory. */

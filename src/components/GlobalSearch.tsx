@@ -17,8 +17,8 @@ import { ModWorkspace, MDNode, UIWidget } from '../types';
 
 interface GlobalSearchProps {
   workspace: ModWorkspace;
-  workspaceView: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project';
-  setWorkspaceView: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project') => void;
+  workspaceView: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy';
+  setWorkspaceView: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy') => void;
   setActiveSidebarTab: (tab: 'script' | 'ui' | 'config' | 'filesystem') => void;
   setSelectedNode: (node: MDNode | null) => void;
   setSelectedWidget: (widget: UIWidget | null) => void;

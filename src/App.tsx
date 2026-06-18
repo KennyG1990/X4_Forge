@@ -30,6 +30,7 @@ import {
   CheckCircle2,
   Settings as SettingsGear,
   Plug,
+  Map as MapIcon,
   ChevronRight,
   ChevronLeft
 } from 'lucide-react';
@@ -48,6 +49,7 @@ import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
 import ProjectInspector from './components/ProjectInspector';
+import GalaxyMapView from './components/GalaxyMapView';
 import ContractEditor from './components/ContractEditor';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
@@ -59,6 +61,7 @@ import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders
 import { compileAndSaveAll } from './lib/modCompiler';
 import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluateBlueprintChecks, type ModBlueprint } from './lib/modBlueprint';
 import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
+import { getE2EPerfCounters, resetE2EPerfCounters, type E2EPerfCounters } from './lib/e2ePerfCounters';
 import type { ArchitectStepView } from './components/BlueprintPanel';
 
 type ForgeE2EWindow = Window & {
@@ -66,6 +69,8 @@ type ForgeE2EWindow = Window & {
     getWorkspace: () => ModWorkspace;
     setWorkspace: (workspace: ModWorkspace) => void;
     getMdCode: () => string;
+    resetPerfCounters: () => E2EPerfCounters;
+    getPerfCounters: () => E2EPerfCounters;
   };
 };
 
@@ -177,7 +182,7 @@ export default function App() {
     })();
   }, [loadSchemaLibrary]);
 
-  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project'>('blueprint');
+  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy'>('blueprint');
   const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference'>('script');
 
   // Lifted auto-save state to synchronize settings and prevent data clobbering on load
@@ -203,6 +208,8 @@ export default function App() {
       getWorkspace: () => workspace,
       setWorkspace: (next: ModWorkspace) => setWorkspace(sanitizeWorkspace(next)),
       getMdCode: () => mdCode,
+      resetPerfCounters: resetE2EPerfCounters,
+      getPerfCounters: getE2EPerfCounters,
     };
   }, [workspace, mdCode, setWorkspace]);
 
@@ -1076,6 +1083,18 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => { setWorkspaceView('galaxy'); setActiveSidebarTab('reference'); }}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'galaxy'
+                ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <MapIcon className="w-3.5 h-3.5" />
+            Galaxy
+          </button>
+
+          <button
             onClick={() => { setWorkspaceView('contracts'); setActiveSidebarTab('config'); }}
             className={`px-2.5 py-1 rounded text-[11px] font-bold font-mono uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
               workspaceView === 'contracts'
@@ -1359,6 +1378,8 @@ export default function App() {
             />
           ) : workspaceView === 'project' ? (
             <ProjectInspector workspace={workspace} />
+          ) : workspaceView === 'galaxy' ? (
+            <GalaxyMapView />
           ) : (
             <XMLPatchSystem
               workspace={workspace}

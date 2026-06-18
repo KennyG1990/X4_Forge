@@ -65,6 +65,24 @@ export interface GalaxyMap {
   /** x/z bounds across all sectors (for map fit-to-view); zeros when empty */
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   counts: { clusters: number; sectors: number; placedClusters: number };
+  sources?: GalaxyMapSourceSummary;
+}
+
+export interface GalaxyMapSource {
+  path: string;
+  text: string;
+  source?: string;
+}
+
+export interface GalaxyMapSourceSummary {
+  baseFiles: number;
+  extensionFiles: number;
+  galaxyDiffsApplied: number;
+  clusterMacroFilesApplied: number;
+  galaxyConnectionsAdded: number;
+  clusterMacrosAdded: number;
+  ignoredFiles: string[];
+  appliedFiles: string[];
 }
 
 const ZERO: Vec3 = { x: 0, y: 0, z: 0 };
@@ -142,7 +160,10 @@ export function parseUniverseMacros(xml: string): UniverseMacro[] {
 export function buildGalaxyMap(galaxyXml: string, clustersXml: string): GalaxyMap {
   const galaxyMacros = parseUniverseMacros(galaxyXml);
   const clusterMacros = parseUniverseMacros(clustersXml);
+  return buildGalaxyMapFromMacros(galaxyMacros, clusterMacros);
+}
 
+function buildGalaxyMapFromMacros(galaxyMacros: UniverseMacro[], clusterMacros: UniverseMacro[]): GalaxyMap {
   // cluster macro name -> its sector connections (from clusters.xml)
   const clusterByName = new Map<string, UniverseMacro>();
   for (const m of clusterMacros) clusterByName.set(m.name, m);
@@ -189,6 +210,116 @@ export function buildGalaxyMap(galaxyXml: string, clustersXml: string): GalaxyMa
     : { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
 
   return { clusters, sectors, bounds, counts: { clusters: clusters.length, sectors: sectors.length, placedClusters } };
+}
+
+function cloneMacro(macro: UniverseMacro): UniverseMacro {
+  return {
+    name: macro.name,
+    class: macro.class,
+    connections: macro.connections.map(c => ({
+      name: c.name,
+      ref: c.ref,
+      macroRef: c.macroRef,
+      offset: c.offset ? { ...c.offset } : null,
+    })),
+  };
+}
+
+function parseGalaxyConnectionAdds(diffXml: string): UniverseConnection[] {
+  if (!diffXml || typeof diffXml !== 'string') return [];
+  let doc: ReturnType<DOMParser['parseFromString']>;
+  try {
+    doc = new DOMParser({ onError: () => { /* tolerate recoverable noise */ } })
+      .parseFromString(diffXml, 'text/xml');
+  } catch { return []; }
+  const root = doc?.documentElement;
+  if (!root || root.nodeName !== 'diff') return [];
+
+  const out: UniverseConnection[] = [];
+  for (const addEl of directChildren(root, 'add')) {
+    const sel = String(addEl.getAttribute('sel') || '');
+    if (!/\/macros\/macro\[@name=['"]XU_EP2_universe_macro['"]\]\/connections/i.test(sel)) continue;
+    for (const connEl of directChildren(addEl, 'connection')) {
+      if (connEl.getAttribute('ref') !== 'clusters') continue;
+      const childMacro = directChildren(connEl, 'macro')[0];
+      const macroRef = childMacro?.getAttribute('ref') || '';
+      if (!macroRef) continue;
+      out.push({
+        name: connEl.getAttribute('name') || undefined,
+        ref: connEl.getAttribute('ref') || undefined,
+        macroRef,
+        offset: readOffset(connEl),
+      });
+    }
+  }
+  return out;
+}
+
+function isGalaxyDiffSource(source: GalaxyMapSource): boolean {
+  return /(^|\/)galaxy\.xml$/i.test(source.path) && /<diff[\s>]/i.test(source.text);
+}
+
+function isClusterMacroSource(source: GalaxyMapSource): boolean {
+  return /(^|\/)(clusters|[^/]*_clusters)\.xml$/i.test(source.path) && /<macros[\s>]/i.test(source.text);
+}
+
+/**
+ * Merge the base universe map with extension/DLC map sources.
+ * Real DLC shape observed in packed archives:
+ *   - maps/xu_ep2_universe/galaxy.xml is a <diff> adding cluster connections.
+ *   - maps/xu_ep2_universe/*_clusters.xml is a standalone <macros> file with cluster macros.
+ */
+export function buildMergedGalaxyMap(baseGalaxyXml: string, baseClustersXml: string, extensionSources: GalaxyMapSource[]): GalaxyMap {
+  const galaxyMacros = parseUniverseMacros(baseGalaxyXml).map(cloneMacro);
+  const clusterMacros = parseUniverseMacros(baseClustersXml).map(cloneMacro);
+  const galaxy = galaxyMacros.find(m => m.class === 'galaxy')
+    || galaxyMacros.find(m => m.connections.some(c => c.ref === 'clusters'))
+    || galaxyMacros[0];
+
+  const summary: GalaxyMapSourceSummary = {
+    baseFiles: 2,
+    extensionFiles: extensionSources.length,
+    galaxyDiffsApplied: 0,
+    clusterMacroFilesApplied: 0,
+    galaxyConnectionsAdded: 0,
+    clusterMacrosAdded: 0,
+    ignoredFiles: [],
+    appliedFiles: [],
+  };
+
+  for (const source of extensionSources) {
+    const normalizedPath = source.path.replace(/\\/g, '/');
+    if (isGalaxyDiffSource({ ...source, path: normalizedPath })) {
+      const adds = parseGalaxyConnectionAdds(source.text);
+      if (adds.length && galaxy) {
+        galaxy.connections.push(...adds);
+        summary.galaxyDiffsApplied += 1;
+        summary.galaxyConnectionsAdded += adds.length;
+        summary.appliedFiles.push(source.source || normalizedPath);
+      } else {
+        summary.ignoredFiles.push(source.source || normalizedPath);
+      }
+      continue;
+    }
+
+    if (isClusterMacroSource({ ...source, path: normalizedPath })) {
+      const macros = parseUniverseMacros(source.text).filter(m => m.class === 'cluster' || m.connections.some(c => c.ref === 'sectors'));
+      if (macros.length) {
+        clusterMacros.push(...macros.map(cloneMacro));
+        summary.clusterMacroFilesApplied += 1;
+        summary.clusterMacrosAdded += macros.length;
+        summary.appliedFiles.push(source.source || normalizedPath);
+      } else {
+        summary.ignoredFiles.push(source.source || normalizedPath);
+      }
+      continue;
+    }
+
+    summary.ignoredFiles.push(source.source || normalizedPath);
+  }
+
+  const map = buildGalaxyMapFromMacros(galaxyMacros, clusterMacros);
+  return { ...map, sources: summary };
 }
 
 /* ------------------------------------------------------------------ *
@@ -283,6 +414,46 @@ export function runGalaxyMapSelftest(): {
 
   // degrades safely
   ok('empty/garbage input → empty map', buildGalaxyMap('', '').counts.sectors === 0 && parseUniverseMacros('<x/>').length === 0);
+
+  // DLC/extension merge: real DLCs add galaxy cluster connections via a <diff>, then
+  // ship the referenced clusters in standalone *_clusters.xml macro files.
+  const dlcGalaxyDiff = `<?xml version="1.0" encoding="utf-8"?>
+<diff>
+  <add sel="/macros/macro[@name='XU_EP2_universe_macro']/connections">
+    <connection name="Cluster_900_connection" ref="clusters">
+      <offset><position x="42000000" y="0" z="-7000000" /></offset>
+      <macro ref="Cluster_900_macro" connection="galaxy" />
+    </connection>
+  </add>
+  <replace sel="/macros/macro[@name='XU_EP2_universe_macro']/component"><component ref="ignored"/></replace>
+</diff>`;
+  const dlcClusters = `<?xml version="1.0" encoding="utf-8"?>
+<macros>
+  <macro name="Cluster_900_macro" class="cluster">
+    <connections>
+      <connection name="C900_Sector001_connection" ref="sectors">
+        <offset><position x="100" y="0" z="200" /></offset>
+        <macro ref="Cluster_900_Sector001_macro" connection="cluster" />
+      </connection>
+    </connections>
+  </macro>
+</macros>`;
+  const merged = buildMergedGalaxyMap(galaxyXml, clustersXml, [
+    { path: 'maps/xu_ep2_universe/galaxy.xml', source: 'ego_dlc_test/galaxy.xml', text: dlcGalaxyDiff },
+    { path: 'maps/xu_ep2_universe/dlc_test_clusters.xml', source: 'ego_dlc_test/dlc_test_clusters.xml', text: dlcClusters },
+  ]);
+  const dlcSector = merged.sectors.find(s => s.macro === 'Cluster_900_Sector001_macro');
+  ok('extension merge adds galaxy diff cluster connection', merged.counts.clusters === 3, JSON.stringify(merged.counts));
+  ok('extension merge adds standalone cluster macro sectors', merged.counts.sectors === 4, JSON.stringify(merged.counts));
+  ok('extension sector absolute = DLC cluster offset + sector offset',
+    dlcSector?.pos.x === 42000100 && dlcSector?.pos.z === -6999800, JSON.stringify(dlcSector?.pos));
+  ok('extension merge summary counts applied files',
+    merged.sources?.galaxyDiffsApplied === 1 && merged.sources.clusterMacroFilesApplied === 1
+      && merged.sources.galaxyConnectionsAdded === 1 && merged.sources.clusterMacrosAdded === 1,
+    JSON.stringify(merged.sources));
+  ok('unsupported diff ops ignored safely',
+    !merged.sources?.ignoredFiles.includes('ego_dlc_test/galaxy.xml') && merged.sources?.appliedFiles.length === 2,
+    JSON.stringify(merged.sources));
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

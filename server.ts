@@ -51,7 +51,7 @@ import { runModFixesSelftest } from "./src/lib/modFixes";
 import { runAiScriptRoundtripSelftest } from "./src/lib/aiScriptParser";
 import { runLuaMdBindingSelftest } from "./src/lib/luaMdBinding";
 import { runPositionPickerSelftest } from "./src/lib/positionPicker";
-import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
+import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, extractEntries as catDatExtractEntries, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
@@ -79,7 +79,7 @@ import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest } from "./src/lib/modDependencyGraph";
-import { buildGalaxyMap, runGalaxyMapSelftest } from "./src/lib/galaxyMap";
+import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
 import { runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -3728,7 +3728,8 @@ app.post("/api/agent/project/content-xml", (req, res) => {
 });
 
 // #64 Phase 1 — real-data galaxy/sector map built from the installed universe files.
-// Read-only; reads base-game maps/xu_ep2_universe/{galaxy,clusters}.xml via cat/dat.
+// Read-only; reads base-game maps/xu_ep2_universe/{galaxy,clusters}.xml plus
+// packed DLC/extension galaxy diffs and *_clusters.xml macro files via cat/dat.
 app.get("/api/agent/galaxy-map", (_req, res) => {
   try {
     const resolved = resolveXsdConfig();
@@ -3738,8 +3739,19 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
     if (!galaxyHit || !clustersHit) {
       return res.status(404).json({ error: "Universe files not found in the configured game path." });
     }
-    const map = buildGalaxyMap(galaxyHit.text, clustersHit.text);
-    return res.json({ success: true, counts: map.counts, bounds: map.bounds, clusters: map.clusters, sectors: map.sectors });
+    const extensionMatches = catDatExtractEntries(
+      [resolved.x4GamePath],
+      name => name.startsWith("maps/xu_ep2_universe/")
+        && (/(^|\/)galaxy\.xml$/i.test(name) || /(^|\/)[^/]*_clusters\.xml$/i.test(name)),
+      { dedupeByName: false, includeSubst: true, maxBytesPerEntry: 8 * 1024 * 1024 }
+    ).matches.filter(match => /[\\/]extensions[\\/]/i.test(match.catPath));
+    const extensionSources: GalaxyMapSource[] = extensionMatches.map(match => ({
+      path: match.name,
+      text: match.text,
+      source: `${path.basename(path.dirname(match.catPath))}/${match.name}`,
+    }));
+    const map = buildMergedGalaxyMap(galaxyHit.text, clustersHit.text, extensionSources);
+    return res.json({ success: true, counts: map.counts, bounds: map.bounds, clusters: map.clusters, sectors: map.sectors, sources: map.sources });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "galaxy-map failed" });
   }

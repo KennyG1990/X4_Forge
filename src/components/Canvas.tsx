@@ -44,6 +44,7 @@ import { STARTER_TAGS } from '../lib/mdFriendlyNames';
 import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
 import { computeAutoLayout } from '../lib/mdAutoLayout';
+import { markE2EPerfCounter } from '../lib/e2ePerfCounters';
 
 type Pt = { x: number; y: number };
 
@@ -1219,12 +1220,18 @@ export default function Canvas({
   // 400ms after edits settle (same pattern as the schema-diagnostics fetch above).
   const [lawDiags, setLawDiags] = useState<ReturnType<typeof validateModWorkspace>>([]);
   useEffect(() => {
+    if (draggedNodeId || resizingComment || draggingWaypoint || panning) return;
     const t = setTimeout(() => {
-      try { setLawDiags(validateModWorkspace(workspace, generateMDXML(workspace))); }
+      try {
+        markE2EPerfCounter('generateMDXML', 'Canvas.lawDiagnostics');
+        const mdCode = generateMDXML(workspace);
+        markE2EPerfCounter('validateModWorkspace', 'Canvas.lawDiagnostics');
+        setLawDiags(validateModWorkspace(workspace, mdCode));
+      }
       catch { setLawDiags([]); }
     }, 400);
     return () => clearTimeout(t);
-  }, [workspace]);
+  }, [workspace, draggedNodeId, resizingComment, draggingWaypoint, panning]);
 
   // Merge client heuristics + schema diagnostics + LAW validation into one per-node map.
   const nodeDiagMap = React.useMemo(() => {

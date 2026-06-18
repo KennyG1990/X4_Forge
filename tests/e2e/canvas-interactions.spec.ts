@@ -49,7 +49,15 @@ type E2EWindow = Window & {
     getWorkspace: () => E2EWorkspace;
     setWorkspace: (workspace: E2EWorkspace) => void;
     getMdCode: () => string;
+    resetPerfCounters: () => E2EPerfCounters;
+    getPerfCounters: () => E2EPerfCounters;
   };
+};
+
+type E2EPerfCounters = {
+  generateMDXML: number;
+  validateModWorkspace: number;
+  bySource: Record<string, number>;
 };
 
 const controlledWorkspace: E2EWorkspace = {
@@ -182,7 +190,17 @@ async function workspace(page: Page): Promise<E2EWorkspace> {
   return page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspace());
 }
 
-test('real canvas interactions create oriented links, move groups, add from palette, and avoid per-frame compile requests', async ({ page }) => {
+async function resetPerfCounters(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as E2EWindow).__X4_E2E__!.resetPerfCounters();
+  });
+}
+
+async function perfCounters(page: Page): Promise<E2EPerfCounters> {
+  return page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getPerfCounters());
+}
+
+test('real canvas interactions create oriented links, move groups, add from palette, and avoid per-frame canvas diagnostics', async ({ page }) => {
   let compileRequests = 0;
   const isolatedWorkspacePosts = await isolateControlledWorkspacePosts(page);
   await page.route('**/api/agent/compile', async (route) => {
@@ -214,6 +232,7 @@ test('real canvas interactions create oriented links, move groups, add from pale
     const beforeDrag = await workspace(page);
     const cueBefore = beforeDrag.nodes.find((node) => node.id === 'cue_e2e')!;
     const eventBefore = beforeDrag.nodes.find((node) => node.id === 'event_e2e')!;
+    await resetPerfCounters(page);
 
     await cue.click({ modifiers: ['Shift'] });
     await event.click({ modifiers: ['Shift'] });
@@ -231,7 +250,16 @@ test('real canvas interactions create oriented links, move groups, add from pale
     expect(eventAfter.x - eventBefore.x).toBe(cueAfter.x - cueBefore.x);
     expect(eventAfter.y - eventBefore.y).toBe(cueAfter.y - cueBefore.y);
 
+    const dragPerfCounters = await perfCounters(page);
+    expect(dragPerfCounters.bySource['Canvas.lawDiagnostics'] || 0).toBe(0);
+    expect(dragPerfCounters.generateMDXML).toBe(0);
+    expect(dragPerfCounters.validateModWorkspace).toBe(0);
+
     await page.waitForTimeout(700);
+    const settledPerfCounters = await perfCounters(page);
+    expect(settledPerfCounters.bySource['Canvas.lawDiagnostics']).toBe(2);
+    expect(settledPerfCounters.generateMDXML).toBe(1);
+    expect(settledPerfCounters.validateModWorkspace).toBe(1);
     expect(compileRequests).toBeLessThanOrEqual(2);
 
     await page.getByTestId('grid-canvas').click({
