@@ -79,7 +79,7 @@ import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemet
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
-import { analyzeModDependencies, runModDependencyGraphSelftest } from "./src/lib/modDependencyGraph";
+import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
 import { runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
@@ -264,7 +264,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/project-orchestration-selftest",
   "/agent/project-crossfile-selftest",
   "/agent/external-api-registry-selftest",
-  "/agent/external-api-registry"
+  "/agent/external-api-registry",
+  "/agent/mod-dependency-graph"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3419,6 +3420,34 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
     return res.json({ success: true, extensionsRoot: extRoot, ...runExtensionDoctor(extRoot, { resolveBaseContent }) });
   } catch (error: any) {
     return res.status(500).json({ error: error.message || "extension-doctor scan failed" });
+  }
+});
+
+// #71 — multi-mod project view. Exposes the FULL dependency graph (nodes + resolved
+// load order + cycles + missing/optional-dep issues) across the installed extensions,
+// so the UI can show the mod ecosystem, not just the cycle findings the Doctor folds in.
+app.get("/api/agent/mod-dependency-graph", (_req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const extRoot = resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "";
+    if (!extRoot || !fs.existsSync(extRoot)) {
+      return res.status(400).json({ success: false, error: "X4 extensions folder not found. Set the X4 game path in Settings." });
+    }
+    const present: ModManifest[] = [];
+    for (const folder of fs.readdirSync(extRoot)) {
+      const absDir = path.join(extRoot, folder);
+      try { if (!fs.statSync(absDir).isDirectory()) continue; } catch { continue; }
+      const contentPath = path.join(absDir, "content.xml");
+      if (!fs.existsSync(contentPath)) continue;
+      try {
+        const man = parseModManifest(folder, fs.readFileSync(contentPath, "utf8"));
+        if (man) present.push(man);
+      } catch { /* skip unreadable extension */ }
+    }
+    const graph = analyzeModDependencies(present);
+    return res.json({ success: true, extensionsRoot: extRoot, ...graph });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message || "mod-dependency-graph scan failed" });
   }
 });
 

@@ -29,6 +29,7 @@ import {
   getActiveRegistry,
   type ExternalApiEntry,
 } from '../lib/externalApiRegistry';
+import ModDependencyView from './ModDependencyView';
 
 interface ApiRegistrySources {
   builtin: number; dataDir: number; folder: number; endpoint: number;
@@ -267,6 +268,11 @@ export default function ProjectInspector({ workspace }: ProjectInspectorProps) {
           </>
         )}
       </section>
+
+      {/* #71 — multi-mod ecosystem: dependency graph across all installed extensions */}
+      <div className="rounded border border-white/10 bg-black/20">
+        <ModDependencyView />
+      </div>
     </div>
   );
 }
