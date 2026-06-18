@@ -18,6 +18,68 @@ interface PackageModDoctorProps {
   focus?: 'package' | 'install' | 'all';
 }
 
+interface ExtensionOpenTarget {
+  path: string;
+  label?: string;
+}
+
+interface ExtensionFinding {
+  severity: string;
+  code: string;
+  filePath?: string;
+  archive?: string;
+  message?: string;
+  domain?: string;
+  openTargets?: ExtensionOpenTarget[];
+}
+
+interface ExtensionScanResult {
+  counts?: Partial<Record<'error' | 'warning' | 'info', number>>;
+  enabledCount?: number;
+  extensionsScanned?: number;
+  findings?: ExtensionFinding[];
+}
+
+interface OverrideClaim {
+  folder: string;
+  op: string;
+  sel: string;
+}
+
+interface OverrideEntry {
+  node: string;
+  kind: string;
+  winner?: string;
+  contested?: boolean;
+  merged?: boolean;
+  claims?: OverrideClaim[];
+}
+
+interface OverrideMapResult {
+  targetFile?: string;
+  resolution?: 'base' | 'selector';
+  loadOrder?: string[];
+  counts?: { contested?: number; merged?: number; single?: number };
+  entries?: OverrideEntry[];
+}
+
+interface SelftestResponse {
+  pass?: boolean;
+  allPassed?: boolean;
+  lossless?: boolean;
+  available?: boolean;
+  findings?: unknown[];
+  snippets?: unknown[];
+  unresolved?: unknown[];
+  checks?: { pass?: boolean }[];
+  passed?: number;
+  total?: number;
+}
+
+function messageFromUnknown(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export default function PackageModDoctor({
   workspace,
   diagnostics,
@@ -28,9 +90,12 @@ export default function PackageModDoctor({
   const showInstall = focus !== 'package';
   const errors = diagnostics.filter(d => d.severity === 'error');
   const warnings = diagnostics.filter(d => d.severity === 'warning');
+  const firstNodeError = errors.find((e): e is PackageDiagnostic & { nodeId: string } =>
+    typeof (e as PackageDiagnostic & { nodeId?: unknown }).nodeId === 'string'
+  );
 
   // Extension Doctor — cross-mod conflict scan over the whole installed extensions/ folder.
-  const [extScan, setExtScan] = useState<any>(null);
+  const [extScan, setExtScan] = useState<ExtensionScanResult | null>(null);
   const [extScanning, setExtScanning] = useState(false);
   const [extError, setExtError] = useState<string | null>(null);
 
@@ -47,8 +112,8 @@ export default function PackageModDoctor({
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Failed to load file (${res.status})`);
       setExtFile(data);
-    } catch (err: any) {
-      setExtFileError(err.message || 'Failed to load extension file.');
+    } catch (err) {
+      setExtFileError(messageFromUnknown(err, 'Failed to load extension file.'));
     } finally {
       setExtFileLoading(null);
     }
@@ -57,7 +122,7 @@ export default function PackageModDoctor({
   // T4.4 Inc 2 — per-element override drill-down for cross-mod collision findings.
   // Fetches /api/agent/override-map (engine: src/lib/overrideMap.ts) for the
   // finding's contested base path: who rewrites what, who wins by load order.
-  const [ovMap, setOvMap] = useState<any>(null);
+  const [ovMap, setOvMap] = useState<OverrideMapResult | null>(null);
   const [ovLoading, setOvLoading] = useState<string | null>(null);
   const [ovError, setOvError] = useState<string | null>(null);
 
@@ -69,8 +134,8 @@ export default function PackageModDoctor({
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Override map failed (${res.status})`);
       setOvMap(data);
-    } catch (err: any) {
-      setOvError(err.message || 'Override map failed.');
+    } catch (err) {
+      setOvError(messageFromUnknown(err, 'Override map failed.'));
     } finally {
       setOvLoading(null);
     }
@@ -119,9 +184,11 @@ export default function PackageModDoctor({
   // Computed client-side (no AI, no network): every finding is rule-justified from the
   // graph + semantics registry, and equivalent refs (playership ≡ player.primaryship)
   // are never flagged.
+  const workspaceNodes = workspace.nodes;
+  const workspaceLinks = workspace.links;
   const critic = useMemo(
-    () => critiqueWorkspace(workspace?.nodes || [], (workspace as any)?.links || []),
-    [workspace?.nodes, (workspace as any)?.links]
+    () => critiqueWorkspace(workspaceNodes || [], workspaceLinks || []),
+    [workspaceNodes, workspaceLinks]
   );
   const criticSeverityStyle = (s: string) =>
     s === 'warning' ? 'text-amber-300 bg-amber-500/5 border-amber-500/20' : 'text-sky-300 bg-sky-500/5 border-sky-500/15';
@@ -133,19 +200,19 @@ export default function PackageModDoctor({
     for (const ep of SELFTEST_ENDPOINTS) {
       setStProgress(`${out.length + 1}/${SELFTEST_ENDPOINTS.length}`);
       try {
-        const r = await fetch('/api/agent/' + ep.path).then(x => x.json());
+        const r: SelftestResponse = await fetch('/api/agent/' + ep.path).then(x => x.json());
         const checks = r.checks || [];
         const pass = r.pass === true || r.allPassed === true || r.lossless === true
           || (Array.isArray(r.findings) && r.findings.length === 0)
           || (r.available === false /* sqlite absent reads as soft-pass */ && ep.path === 'db-selftest')
           || (ep.path === 'lua-snippets' && Array.isArray(r.snippets) && r.snippets.length > 0)
           || (ep.path === 'patch-audit' && Array.isArray(r.unresolved) && r.unresolved.length === 0)
-          || (checks.length > 0 && checks.every((c: any) => c.pass));
-        const score = checks.length ? `${checks.filter((c: any) => c.pass).length}/${checks.length}`
+          || (checks.length > 0 && checks.every(c => c.pass));
+        const score = checks.length ? `${checks.filter(c => c.pass).length}/${checks.length}`
           : typeof r.passed === 'number' && typeof r.total === 'number' ? `${r.passed}/${r.total}` : undefined;
         out.push({ name: ep.name, pass, score, detail: pass ? '' : JSON.stringify(r).slice(0, 180) });
-      } catch (e: any) {
-        out.push({ name: ep.name, pass: false, detail: String(e?.message || e) });
+      } catch (e) {
+        out.push({ name: ep.name, pass: false, detail: messageFromUnknown(e, String(e)) });
       }
     }
     setStResults(out);
@@ -160,8 +227,8 @@ export default function PackageModDoctor({
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Scan failed (${res.status})`);
       setExtScan(data);
-    } catch (err: any) {
-      setExtError(err.message || 'Extension scan failed.');
+    } catch (err) {
+      setExtError(messageFromUnknown(err, 'Extension scan failed.'));
     } finally {
       setExtScanning(false);
     }
@@ -172,14 +239,14 @@ export default function PackageModDoctor({
       : s === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25'
         : 'bg-blue-500/5 text-blue-300 border-blue-500/20';
 
-  const copyExtensionFinding = async (f: any) => {
+  const copyExtensionFinding = async (f: ExtensionFinding) => {
     const text = [
       `[${f.severity}] ${f.code}`,
       f.filePath ? `File: ${f.filePath}` : '',
       f.archive ? `Archive: ${f.archive}` : '',
       f.message || '',
       Array.isArray(f.openTargets) && f.openTargets.length
-        ? `Open targets:\n${f.openTargets.map((t: any) => `- ${t.path}`).join('\n')}`
+        ? `Open targets:\n${f.openTargets.map(t => `- ${t.path}`).join('\n')}`
         : ''
     ].filter(Boolean).join('\n');
     try {
@@ -213,7 +280,7 @@ export default function PackageModDoctor({
     let currentCode = '';
     try {
       currentCode = generateMDXML(workspace);
-    } catch (_) {}
+    } catch {}
 
     const prompt = `My X4 Foundations mod "${workspace.name || 'mod'}" has these Mod Doctor validation issues:\n\n${list}\n\n${currentCode ? `Here is the current Mission Director logic XML:\n\`\`\`xml\n${currentCode}\n\`\`\`\n\n` : ''}For each issue, explain plainly what's wrong and exactly how to fix it (which node, property, or value to change). Keep it concise.`;
     window.dispatchEvent(new CustomEvent('open-ai-chat', { detail: { prompt } }));
@@ -237,9 +304,9 @@ export default function PackageModDoctor({
         <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
           <button
             type="button"
-            onClick={() => { const t = errors.find(e => (e as any).nodeId); if ((t as any)?.nodeId) window.dispatchEvent(new CustomEvent('forge-focus-node', { detail: { nodeId: (t as any).nodeId } })); }}
-            disabled={!errors.some(e => (e as any).nodeId)}
-            title={errors.some(e => (e as any).nodeId) ? 'Click to jump to the first flagged node' : 'No node-located errors'}
+            onClick={() => { if (firstNodeError) window.dispatchEvent(new CustomEvent('forge-focus-node', { detail: { nodeId: firstNodeError.nodeId } })); }}
+            disabled={!firstNodeError}
+            title={firstNodeError ? 'Click to jump to the first flagged node' : 'No node-located errors'}
             className="flex items-center gap-2 text-slate-200 bg-red-500/10 p-2 rounded border border-red-500/20 text-left enabled:hover:bg-red-500/20 enabled:cursor-pointer transition-colors disabled:opacity-100"
           >
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse block shrink-0" />
@@ -377,7 +444,7 @@ export default function PackageModDoctor({
                   <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
                   No cross-mod conflicts across {extScan.enabledCount} enabled extensions.
                 </div>
-              ) : extScan.findings.map((f: any, i: number) => (
+              ) : extScan.findings.map((f, i) => (
                 <div key={i} className={`p-3 rounded-lg border text-[11.5px] leading-relaxed flex items-start gap-2 ${sevStyle(f.severity)}`}>
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-1" />
                   <div className="space-y-2 min-w-0 flex-1">
@@ -400,7 +467,7 @@ export default function PackageModDoctor({
                     <p className="text-slate-200 leading-relaxed whitespace-pre-wrap break-words">{f.message}</p>
                     {Array.isArray(f.openTargets) && f.openTargets.length > 0 && (
                       <div className="flex flex-wrap gap-1 pt-1">
-                        {f.openTargets.map((t: any, j: number) => (
+                        {f.openTargets.map((t, j) => (
                           <button
                             key={j}
                             onClick={() => openExtensionFile(t.path)}
@@ -515,7 +582,7 @@ export default function PackageModDoctor({
             <div className="flex-1 overflow-auto scrollbar-thin p-3 space-y-2 min-h-0 font-sans">
               {(ovMap.entries || []).length === 0 ? (
                 <div className="text-slate-400 text-[10px] p-3">No overriding claims found for this file.</div>
-              ) : (ovMap.entries || []).map((e: any, i: number) => (
+              ) : (ovMap.entries || []).map((e, i) => (
                 <div
                   key={i}
                   className={`p-2.5 rounded-lg border text-[10px] space-y-1.5 ${e.contested ? 'bg-red-500/5 border-red-500/20' : e.merged ? 'bg-emerald-500/5 border-emerald-500/15' : 'bg-white/[0.02] border-white/5'}`}
@@ -531,7 +598,7 @@ export default function PackageModDoctor({
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-1">
-                    {(e.claims || []).map((c: any, j: number) => (
+                    {(e.claims || []).map((c, j) => (
                       <span
                         key={j}
                         title={c.sel}

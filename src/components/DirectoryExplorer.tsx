@@ -3,11 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-
-// QoL panel cache: the FILES tree survives panel switches (background-refreshed
-// on mount instead of refetched with a visible empty state).
-const FILE_TREE_CACHE: { tree: any | null } = { tree: null };
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   FolderIcon,
   ChevronRight,
@@ -20,7 +16,7 @@ import {
   CheckCircle,
   AlertTriangle
 } from 'lucide-react';
-import { ModWorkspace, sanitizeWorkspace } from '../types';
+import { ModWorkspace, sanitizeWorkspace, TranslationItem, TranslationPage, TFile } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
 import { generateMDXML } from '../types';
 
@@ -28,11 +24,31 @@ export interface FSItem {
   name: string;
   kind: 'file' | 'directory';
   path: string;
-  handle?: any; // FileSystemFileHandle or FileSystemDirectoryHandle
+  handle?: unknown; // FileSystemFileHandle or FileSystemDirectoryHandle
   children?: FSItem[];
   isMock?: boolean;
   content?: string; // For mock files
 }
+
+// QoL panel cache: the FILES tree survives panel switches (background-refreshed
+// on mount instead of refetched with a visible empty state).
+const FILE_TREE_CACHE: { tree: FSItem[] | null } = { tree: null };
+
+interface FileReadResponse {
+  content?: unknown;
+}
+
+interface ErrorResponse {
+  error?: unknown;
+}
+
+const messageFromUnknown = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const responseErrorMessage = async (response: Response, fallback: string): Promise<string> => {
+  const body = await response.json().catch((): ErrorResponse => ({})) as ErrorResponse;
+  return typeof body.error === 'string' ? body.error : fallback;
+};
 
 interface DirectoryExplorerProps {
   modWorkspacePath: string;
@@ -46,7 +62,7 @@ interface DirectoryExplorerProps {
     name: string;
     path: string;
     content: string;
-    handle?: any;
+    handle?: unknown;
     isMock?: boolean;
   }) => void;
 }
@@ -59,7 +75,7 @@ export default function DirectoryExplorer({
   workspace,
   setWorkspace,
   saveCheckpoint,
-  workspaceView,
+  workspaceView: _workspaceView,
   setWorkspaceView,
   onOpenEditorFile
 }: DirectoryExplorerProps) {
@@ -70,7 +86,7 @@ export default function DirectoryExplorer({
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  const handleRefreshDirectory = async () => {
+  const handleRefreshDirectory = useCallback(async () => {
     if (!filesystemPath && !modWorkspacePath) {
       setFileTree([]);
       return;
@@ -79,7 +95,10 @@ export default function DirectoryExplorer({
     try {
       const response = await fetch('/api/fs/list');
       if (response.ok) {
-        const tree = await response.json();
+        const tree = await response.json() as unknown;
+        if (!Array.isArray(tree)) {
+          throw new Error("Filesystem tree response was not an array.");
+        }
         FILE_TREE_CACHE.tree = tree;
         setFileTree(tree);
         setStatusMessage({ type: 'success', text: "Synced project filesystem!" });
@@ -87,17 +106,17 @@ export default function DirectoryExplorer({
         throw new Error("Failed to load filesystem tree.");
       }
       setTimeout(() => setStatusMessage(null), 2000);
-    } catch (e: any) {
-      setStatusMessage({ type: 'error', text: `Sync failed: ${e.message}` });
+    } catch (error: unknown) {
+      setStatusMessage({ type: 'error', text: `Sync failed: ${messageFromUnknown(error)}` });
     }
-  };
+  }, [filesystemPath, modWorkspacePath]);
 
   // Re-scan whenever configured paths change. Serve the cached tree instantly
   // (panel switches), then refresh in the background.
   useEffect(() => {
     if (FILE_TREE_CACHE.tree) setFileTree(FILE_TREE_CACHE.tree);
     handleRefreshDirectory();
-  }, [modWorkspacePath, filesystemPath]);
+  }, [handleRefreshDirectory]);
 
   const toggleFolder = (path: string) => {
     setExpandedPaths(prev => ({
@@ -116,8 +135,8 @@ export default function DirectoryExplorer({
       if (!response.ok) {
         throw new Error("Could not read file from server.");
       }
-      const data = await response.json();
-      const fileText = data.content || '';
+      const data = await response.json() as FileReadResponse;
+      const fileText = typeof data.content === 'string' ? data.content : '';
 
       onOpenEditorFile?.({
         name: file.name,
@@ -138,8 +157,8 @@ export default function DirectoryExplorer({
           } else {
             throw new Error("Invalid Mod Workspace configuration root.");
           }
-        } catch (e: any) {
-          setStatusMessage({ type: 'error', text: `JSON parse failed: ${e.message}` });
+        } catch (error: unknown) {
+          setStatusMessage({ type: 'error', text: `JSON parse failed: ${messageFromUnknown(error)}` });
         }
       } else if (fileExtension === 'xml') {
         const isTFile = file.path.includes('/t/') || fileText.includes('<language');
@@ -154,14 +173,14 @@ export default function DirectoryExplorer({
             if (langEl) {
               const languageId = langEl.getAttribute("id") || "44";
               const pagesList = langEl.getElementsByTagName("page");
-              const pages: any[] = [];
+              const pages: TranslationPage[] = [];
               
               for (let i = 0; i < pagesList.length; i++) {
                 const pEl = pagesList[i];
                 const pageId = pEl.getAttribute("id") || "20001";
                 const pageTitle = pEl.getAttribute("title") || `Page ${pageId}`;
                 const itemsList = pEl.getElementsByTagName("t");
-                const items: any[] = [];
+                const items: TranslationItem[] = [];
                 
                 for (let j = 0; j < itemsList.length; j++) {
                   const tEl = itemsList[j];
@@ -175,7 +194,7 @@ export default function DirectoryExplorer({
                 pages.push({ id: pageId, title: pageTitle, items });
               }
               
-              const targetTFile = {
+              const targetTFile: TFile = {
                 languageId,
                 fileName: file.name,
                 pages
@@ -200,8 +219,8 @@ export default function DirectoryExplorer({
             } else {
               throw new Error("No language root tag identified.");
             }
-          } catch (err: any) {
-            setStatusMessage({ type: 'error', text: `Could not parse Language XML: ${err.message}` });
+          } catch (error: unknown) {
+            setStatusMessage({ type: 'error', text: `Could not parse Language XML: ${messageFromUnknown(error)}` });
           }
           setTimeout(() => setStatusMessage(null), 2500);
         } else if (isAIScript) {
@@ -238,9 +257,9 @@ export default function DirectoryExplorer({
         setStatusMessage({ type: 'info', text: `Inspected text: ${file.name} (Opening in graph is restricted)` });
         setTimeout(() => setStatusMessage(null), 2000);
       }
-    } catch (err: any) {
-      console.error(err);
-      setStatusMessage({ type: 'error', text: `Failed opening file: ${err.message}` });
+    } catch (error: unknown) {
+      console.error(error);
+      setStatusMessage({ type: 'error', text: `Failed opening file: ${messageFromUnknown(error)}` });
     }
   };
 
@@ -265,12 +284,11 @@ export default function DirectoryExplorer({
       if (response.ok) {
         setStatusMessage({ type: 'success', text: `Saved file: ${activeFilePath.split('/').pop()}` });
       } else {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to write file on server.");
+        throw new Error(await responseErrorMessage(response, "Failed to write file on server."));
       }
       setTimeout(() => setStatusMessage(null), 2500);
-    } catch (err: any) {
-      setStatusMessage({ type: 'error', text: `Save failed: ${err.message}` });
+    } catch (error: unknown) {
+      setStatusMessage({ type: 'error', text: `Save failed: ${messageFromUnknown(error)}` });
     }
   };
 
@@ -291,8 +309,7 @@ export default function DirectoryExplorer({
         body: JSON.stringify({ name: filename, type: 'file' })
       });
       if (!createResponse.ok) {
-        const err = await createResponse.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to create file on server.");
+        throw new Error(await responseErrorMessage(createResponse, "Failed to create file on server."));
       }
 
       const writeResponse = await fetch('/api/fs/write', {
@@ -307,8 +324,8 @@ export default function DirectoryExplorer({
       await handleRefreshDirectory();
       setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
       setTimeout(() => setStatusMessage(null), 2500);
-    } catch (err: any) {
-      setStatusMessage({ type: 'error', text: `Could not create file: ${err.message}` });
+    } catch (error: unknown) {
+      setStatusMessage({ type: 'error', text: `Could not create file: ${messageFromUnknown(error)}` });
     }
   };
 

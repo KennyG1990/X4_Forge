@@ -54,6 +54,34 @@ interface DiffLine {
   value: string;
 }
 
+interface GitHubCreateResult {
+  error?: string;
+  owner?: string;
+  repo?: string;
+  full_name?: string;
+}
+
+interface RemoteLoadResult {
+  error?: string;
+  content?: string;
+}
+
+interface RemoteCommitResponse {
+  error?: string;
+  commits?: {
+    sha: string;
+    message: string;
+    author: string;
+    email: string;
+    date: string;
+    body?: string;
+  }[];
+}
+
+function messageFromUnknown(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 function computeSimpleDiff(oldStr: string, newStr: string): DiffLine[] {
   const oldLines = (oldStr || '').split('\n');
   const newLines = (newStr || '').split('\n');
@@ -117,7 +145,7 @@ function computeSimpleDiff(oldStr: string, newStr: string): DiffLine[] {
 export default function SourceControl({
   workspace,
   setWorkspace,
-  onOpenEditorFile,
+  onOpenEditorFile: _onOpenEditorFile,
   saveCheckpoint,
   setWorkspaceView
 }: SourceControlProps) {
@@ -135,16 +163,16 @@ export default function SourceControl({
   const [syncStatusMsg, setSyncStatusMsg] = useState<string>('');
 
   // OAuth Device Flow (one-click "Connect with GitHub") state
-  const [gitClientId, setGitClientId] = useState<string>(() => localStorage.getItem('x4_github_client_id') || '');
+  const [gitClientId] = useState<string>(() => localStorage.getItem('x4_github_client_id') || '');
   const [deviceFlow, setDeviceFlow] = useState<{ userCode: string; verificationUri: string } | null>(null);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
-  const pollTimerRef = useRef<any>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Local workspace diffing / staging baseline
   const [gitBaseline, setGitBaseline] = useState<ModWorkspace | null>(() => {
     const raw = localStorage.getItem('x4_git_baseline');
     if (raw) {
-      try { return JSON.parse(raw); } catch (e) { return null; }
+      try { return JSON.parse(raw); } catch { return null; }
     }
     return null;
   });
@@ -183,7 +211,7 @@ export default function SourceControl({
         if (parsed && Array.isArray(parsed) && parsed.length > 0) {
           return parsed;
         }
-      } catch (e) {}
+      } catch {}
     }
     return [];
   });
@@ -328,7 +356,7 @@ Guidelines:
       // Clean any potential quotes
       const cleaned = textVal.replace(/^["']|["']$/g, '');
       setCommitMessage(cleaned || 'feat: finalize mod updates');
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
       setCommitMessage('feat: update tactical script elements');
     } finally {
@@ -419,7 +447,7 @@ Guidelines:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(clientId ? { client_id: clientId, scope: 'repo' } : { scope: 'repo' })
       });
-      let start: any = null;
+      let start: { error?: string; device_code?: string; user_code?: string; verification_uri?: string; interval?: number; expires_in?: number } | null = null;
       try { start = await startRes.json(); } catch { start = null; }
 
       if (!start) {
@@ -490,10 +518,10 @@ Guidelines:
       };
 
       pollTimerRef.current = setTimeout(poll, intervalMs);
-    } catch (e: any) {
+    } catch (e) {
       setIsConnecting(false);
       setDeviceFlow(null);
-      setSyncStatusMsg(`Connect failed: ${e.message}`);
+      setSyncStatusMsg(`Connect failed: ${messageFromUnknown(e, String(e))}`);
     }
   };
 
@@ -566,8 +594,8 @@ Guidelines:
       }
 
       setSyncStatusMsg(`Success! Synchronized files to branch: ${activeBranch}`);
-    } catch (err: any) {
-      setSyncStatusMsg(`Push failed: ${err.message || err}`);
+    } catch (err) {
+      setSyncStatusMsg(`Push failed: ${messageFromUnknown(err, String(err))}`);
     } finally {
       setSyncLoading(false);
     }
@@ -598,7 +626,7 @@ Guidelines:
         })
       });
 
-      const result = await response.json();
+      const result: RemoteLoadResult = await response.json();
       if (!response.ok) {
         throw new Error(result.error || `Server returned error status ${response.status}`);
       }
@@ -639,14 +667,14 @@ Guidelines:
           if (langEl) {
             const languageId = langEl.getAttribute("id") || "44";
             const pagesList = langEl.getElementsByTagName("page");
-            const pages: any[] = [];
+            const pages: { id: string; title: string; items: { id: string; value: string; description: string }[] }[] = [];
             
             for (let i = 0; i < pagesList.length; i++) {
               const pEl = pagesList[i];
               const pageId = pEl.getAttribute("id") || "20001";
               const pageTitle = pEl.getAttribute("title") || `Page ${pageId}`;
               const itemsList = pEl.getElementsByTagName("t");
-              const items: any[] = [];
+              const items: { id: string; value: string; description: string }[] = [];
               
               for (let j = 0; j < itemsList.length; j++) {
                 const tEl = itemsList[j];
@@ -716,10 +744,11 @@ Guidelines:
           }
         }
       }
-    } catch (err: any) {
+    } catch (err) {
       addLog(`❌ ERROR: Fetch operation failed.`);
-      addLog(`Details: ${err.message}`);
-      setSyncStatusMsg(`Fetch Failed: ${err.message}`);
+      const message = messageFromUnknown(err, String(err));
+      addLog(`Details: ${message}`);
+      setSyncStatusMsg(`Fetch Failed: ${message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -793,7 +822,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       }
 
       addLog(`Merged changes recursively to GitHub!`);
-      result.results?.forEach((f: any) => {
+      result.results?.forEach(f => {
         addLog(` => [COMMITTED] ${f.path}`);
       });
       addLog(`🎉 SUCCESS: All sources merged cleanly! Mod update is live.`);
@@ -803,10 +832,11 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       const stringified = JSON.stringify(workspace);
       localStorage.setItem('x4_git_baseline', stringified);
       setGitBaseline(workspace);
-    } catch (err: any) {
+    } catch (err) {
       addLog(`❌ ERROR: Push operation failed.`);
-      addLog(`Details: ${err.message}`);
-      setSyncStatusMsg(`Sync Push Failed: ${err.message}`);
+      const message = messageFromUnknown(err, String(err));
+      addLog(`Details: ${message}`);
+      setSyncStatusMsg(`Sync Push Failed: ${message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -834,7 +864,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
     setTerminalLogs([]);
     addLog(`Creating new GitHub repository "${repoName}"...`);
     try {
-      const res = await fetch('/api/github/create', {
+      const res: GitHubCreateResult = await fetch('/api/github/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -858,9 +888,10 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       addLog(`Pushing initial mod files to ${activeBranch}...`);
       setSyncStatusMsg(`Repo "${res.full_name}" created. Pushing initial files...`);
       await handleGithubPushMulti(`chore: initial commit of ${workspace.name || repoName} from X4 Forge`);
-    } catch (e: any) {
-      addLog(`❌ ERROR: ${e.message}`);
-      setSyncStatusMsg(`Create failed: ${e.message}`);
+    } catch (e) {
+      const message = messageFromUnknown(e, String(e));
+      addLog(`❌ ERROR: ${message}`);
+      setSyncStatusMsg(`Create failed: ${message}`);
     } finally {
       setCreatingRepo(false);
     }
@@ -872,7 +903,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
     setIsDiffLoading(true);
     setRemoteDiffChecked(true);
     try {
-      const remote = await fetch('/api/github/load', {
+      const remote: RemoteLoadResult = await fetch('/api/github/load', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pat: gitPat, owner: gitOwner, repo: gitRepo, branch: activeBranch, path: 'ais_workspace.json' })
@@ -883,8 +914,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       if (remote.error || !remote.content) {
         items.push({ type: 'add', text: 'ais_workspace.json not found on remote — a push will create it.' });
       } else {
-        let remoteWs: any = null;
-        try { remoteWs = JSON.parse(remote.content); } catch { /* not json */ }
+        let remoteWs: ModWorkspace | null = null;
+        try { remoteWs = JSON.parse(remote.content) as ModWorkspace; } catch { /* not json */ }
         if (!remoteWs || !Array.isArray(remoteWs.nodes)) {
           items.push({ type: 'modify', text: 'Remote workspace file is unreadable; a push will overwrite it.' });
         } else {
@@ -913,8 +944,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
         items.push({ type: 'modify', text: 'In sync — local workspace matches the remote repository.' });
       }
       setDiffItems(items);
-    } catch (e: any) {
-      setSyncStatusMsg(`Remote diff failed: ${e.message}`);
+    } catch (e) {
+      setSyncStatusMsg(`Remote diff failed: ${messageFromUnknown(e, String(e))}`);
     } finally {
       setIsDiffLoading(false);
     }
@@ -957,8 +988,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       const text = (data.text || '').trim().replace(/^["']|["']$/g, '');
       setDiffSummary(text);
       return text;
-    } catch (e: any) {
-      setSyncStatusMsg(`Summary generation failed: ${e.message}`);
+    } catch (e) {
+      setSyncStatusMsg(`Summary generation failed: ${messageFromUnknown(e, String(e))}`);
       return '';
     } finally {
       setGeneratingSummary(false);
@@ -987,14 +1018,14 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
     }
     setSyncStatusMsg(`Fetching commit history from ${gitOwner}/${gitRepo}…`);
     try {
-      const res = await fetch('/api/github/commits', {
+      const res: RemoteCommitResponse = await fetch('/api/github/commits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pat: gitPat, owner: gitOwner, repo: gitRepo, branch: activeBranch })
       }).then(r => r.json());
       if (res.error) throw new Error(res.error);
 
-      const mapped: GitCommitItem[] = (res.commits || []).map((c: any) => {
+      const mapped: GitCommitItem[] = (res.commits || []).map(c => {
         const bodyLines = (c.body || '').split('\n').slice(1).join(' ').trim();
         return {
           sha: c.sha,
@@ -1013,8 +1044,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       setSyncStatusMsg(mapped.length
         ? `Loaded ${mapped.length} commits from ${gitOwner}/${gitRepo}.`
         : 'No commits on this branch yet.');
-    } catch (e: any) {
-      setSyncStatusMsg(`Fetch commits failed: ${e.message}`);
+    } catch (e) {
+      setSyncStatusMsg(`Fetch commits failed: ${messageFromUnknown(e, String(e))}`);
     }
   };
 
@@ -1041,7 +1072,6 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
 
       if (!next) continue;
 
-      const xCurrent = paddingLeft + current.track * trackWidth;
       const yCurrent = i * rowHeight + 22;
 
       // Vertical line for active track continuation
@@ -1770,7 +1800,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                     : 'Connect a GitHub repo in the Remotes tab to view its commit history here.'}
                 </div>
               )}
-              {localHistory.map((commit, index) => {
+              {localHistory.map((commit) => {
                 const nodeX = 14 + commit.track * 14;
                 const nodeY = 22;
                 const strokeColor = commit.track === 0 ? '#06b6d4' : (commit.track === 1 ? '#f97316' : '#ec4899');

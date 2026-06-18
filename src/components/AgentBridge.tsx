@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Cpu,
   Terminal,
@@ -31,6 +31,50 @@ interface AgentBridgeProps {
   setLocalVersion: (v: number) => void;
 }
 
+type AgentRuntimeValue = string | number | boolean | null | Record<string, unknown> | AgentRuntimeValue[];
+type AgentRuntimeProperties = Record<string, AgentRuntimeValue>;
+type AgentRuntimeResult = { success: boolean; message: string };
+
+interface AgentRuntimeApi {
+  execute: (cmd: string) => AgentRuntimeResult;
+  updateNodeProperty: (nodeIdOrName: string, key: string, value: AgentRuntimeValue) => boolean;
+  updateWidget: (widgetIdOrLabel: string, key: string, value: AgentRuntimeValue) => boolean;
+  addNode: (xmlTagOrType: string, x?: number, y?: number, properties?: AgentRuntimeProperties) => boolean;
+  getCurrentWorkspace: () => ModWorkspace;
+}
+
+interface AgentWorkspaceResponse {
+  version?: unknown;
+  workspace?: unknown;
+}
+
+declare global {
+  interface Window {
+    AgentRuntime?: AgentRuntimeApi;
+    AgentBridge?: Pick<AgentRuntimeApi, 'execute'>;
+  }
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isModWorkspace = (value: unknown): value is ModWorkspace =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.name === 'string' &&
+  typeof value.version === 'string' &&
+  typeof value.author === 'string' &&
+  typeof value.description === 'string' &&
+  Array.isArray(value.nodes) &&
+  Array.isArray(value.links) &&
+  Array.isArray(value.uiWidgets) &&
+  isRecord(value.uiTheme);
+
+const parsePropertiesJson = (text: string): AgentRuntimeProperties | undefined => {
+  const parsed: unknown = JSON.parse(text);
+  return isRecord(parsed) ? parsed as AgentRuntimeProperties : undefined;
+};
+
 export default function AgentBridge({
   isOpen,
   onClose,
@@ -49,7 +93,7 @@ export default function AgentBridge({
   ]);
 
   // Surgical workspace manipulation APIs
-  const updateNodeProperty = (nodeIdOrName: string, key: string, value: any): boolean => {
+  const updateNodeProperty = useCallback((nodeIdOrName: string, key: string, value: AgentRuntimeValue): boolean => {
     let success = false;
     setWorkspace(prev => {
       const exists = prev.nodes.some(n => n.id === nodeIdOrName || n.properties.name === nodeIdOrName);
@@ -78,9 +122,9 @@ export default function AgentBridge({
       };
     });
     return success;
-  };
+  }, [setWorkspace]);
 
-  const updateWidget = (widgetIdOrLabel: string, key: string, value: any): boolean => {
+  const updateWidget = useCallback((widgetIdOrLabel: string, key: string, value: AgentRuntimeValue): boolean => {
     let success = false;
     setWorkspace(prev => {
       const exists = prev.uiWidgets.some(w => w.id === widgetIdOrLabel || w.label === widgetIdOrLabel);
@@ -109,9 +153,9 @@ export default function AgentBridge({
       };
     });
     return success;
-  };
+  }, [setWorkspace]);
 
-  const addNode = (xmlTagOrType: string, x?: number, y?: number, properties?: Record<string, any>): boolean => {
+  const addNode = useCallback((xmlTagOrType: string, x?: number, y?: number, properties?: AgentRuntimeProperties): boolean => {
     const template = NODE_TEMPLATES.find(t => t.xmlTag === xmlTagOrType || t.type === xmlTagOrType);
     if (!template) {
       // Create fallback generic node
@@ -140,20 +184,20 @@ export default function AgentBridge({
       x: x ?? 150,
       y: y ?? 150,
       properties: { ...template.properties, ...(properties ?? {}) }
-    } as any;
+    };
     setWorkspace(prev => ({
       ...prev,
       nodes: [...prev.nodes, newNode]
     }));
     return true;
-  };
+  }, [setWorkspace]);
 
-  const runtimeExecute = (cmdStr: string): { success: boolean; message: string } => {
+  const runtimeExecute = useCallback((cmdStr: string): AgentRuntimeResult => {
     const cmd = cmdStr.trim();
     if (!cmd) return { success: false, message: "Commands cannot be empty." };
 
     // Parse helper for boolean/number values
-    const parseValue = (valStr: string): any => {
+    const parseValue = (valStr: string): AgentRuntimeValue => {
       const v = valStr.trim();
       if (v.toLowerCase() === 'true') return true;
       if (v.toLowerCase() === 'false') return false;
@@ -237,10 +281,10 @@ export default function AgentBridge({
       const [, xmlTagOrType, xStr, yStr, propsJson] = match;
       const x = xStr ? parseInt(xStr, 10) : undefined;
       const y = yStr ? parseInt(yStr, 10) : undefined;
-      let properties: any = undefined;
+      let properties: AgentRuntimeProperties | undefined = undefined;
       if (propsJson) {
         try {
-          properties = JSON.parse(propsJson);
+          properties = parsePropertiesJson(propsJson);
         } catch {
           // ignore
         }
@@ -291,7 +335,7 @@ export default function AgentBridge({
       success: false,
       message: `Error: Command pattern not recognized. Supported instructions: 'updateNodeProperty', 'updateWidget', 'addNode', or natural language fixing scripts.`
     };
-  };
+  }, [addNode, updateNodeProperty, updateWidget, setWorkspace]);
 
   // Expose AgentRuntime to global window scope so that internal guide, floating chat copilot, 
   // or test scripts can trigger instant workspace edits surgically at runtime
@@ -312,14 +356,14 @@ export default function AgentBridge({
       getCurrentWorkspace: () => workspace
     };
 
-    (window as any).AgentRuntime = api;
-    (window as any).AgentBridge = { execute: api.execute };
+    window.AgentRuntime = api;
+    window.AgentBridge = { execute: api.execute };
 
     return () => {
-      delete (window as any).AgentRuntime;
-      delete (window as any).AgentBridge;
+      delete window.AgentRuntime;
+      delete window.AgentBridge;
     };
-  }, [workspace, setWorkspace]);
+  }, [addNode, runtimeExecute, updateNodeProperty, updateWidget, workspace]);
   
   // Settings
   const [autoSync, setAutoSync] = useState<boolean>(false);
@@ -363,14 +407,14 @@ export default function AgentBridge({
         const res = await fetch("/api/agent/workspace");
         if (!res.ok) throw new Error("Offline");
         
-        const data = await res.json();
+        const data = await res.json() as AgentWorkspaceResponse;
         if (!isActive) return;
 
         setIsServerHealthy(true);
         setLastSyncedTime(new Date().toLocaleTimeString());
 
         // Check if server version is newer
-        if (data.version > localVersion) {
+        if (typeof data.version === 'number' && data.version > localVersion && isModWorkspace(data.workspace)) {
           setServerVersion(data.version);
           if (autoSync) {
             setWorkspace(data.workspace);
@@ -383,7 +427,7 @@ export default function AgentBridge({
           setPendingWorkspace(null);
           setServerVersion(data.version);
         }
-      } catch (err) {
+      } catch {
         if (!isActive) return;
         setIsServerHealthy(false);
       }
@@ -396,7 +440,7 @@ export default function AgentBridge({
       isActive = false;
       clearInterval(interval);
     };
-  }, [isPolling, localVersion, autoSync, isOpen]);
+  }, [isPolling, localVersion, autoSync, isOpen, setLocalVersion, setWorkspace]);
 
   // Manually apply pending external changes
   const applyPendingChanges = () => {
