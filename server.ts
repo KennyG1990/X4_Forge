@@ -60,6 +60,7 @@ import { runFileBridgeTransportSelftest } from "./src/lib/fileBridgeTransport";
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import { runLuaLogicBlocksSelftest } from "./src/lib/luaLogicBlocks";
 import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from "./src/lib/luaStaticAnalysis";
+import { runLuaRuntimeLogSelftest } from "./src/lib/luaRuntimeLog";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runSemanticsSelftest, listSemantics, semanticsForNode } from "./src/lib/mdSemantics";
 import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
@@ -212,6 +213,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/lua-snippets",
   "/agent/lua-logic-blocks-selftest",
   "/agent/lua-static-selftest",
+  "/agent/lua-runtime-log-selftest",
   "/agent/cue-lineage-selftest",
   "/agent/semantics-selftest",
   "/agent/semantics",
@@ -4117,6 +4119,14 @@ app.get("/api/agent/lua-static-selftest", (_req, res) => {
     res.json(runLuaStaticAnalysisSelftest());
   } catch (error: any) {
     res.status(500).json({ pass: false, error: error?.message || "lua-static-selftest failed" });
+  }
+});
+
+app.get("/api/agent/lua-runtime-log-selftest", (_req, res) => {
+  try {
+    return res.json(runLuaRuntimeLogSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "lua-runtime-log-selftest failed" });
   }
 });
 

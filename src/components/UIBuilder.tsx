@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { LUA_SNIPPETS, fillLuaSnippet } from '../lib/luaSnippets';
 import { analyzeLuaFiles } from '../lib/luaStaticAnalysis';
+import { analyzeLuaRuntimeLog } from '../lib/luaRuntimeLog';
 import { aiInfluenceChatBlocks, buildLuaLogicScript } from '../lib/luaLogicBlocks';
 import { validateUiWidgets } from '../lib/uiWidgetValidate';
 import { pixelLayoutToGrid } from '../lib/uiLayout';
@@ -38,6 +39,7 @@ export default function UIBuilder({
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [activeUiSubTab, setActiveUiSubTab] = useState<'canvas' | 'lua'>('canvas');
   const [selectedLuaTemplate, setSelectedLuaTemplate] = useState<string>('standard');
+  const [runtimeLogText, setRuntimeLogText] = useState<string>('');
   // Pre-fill vetted-snippet placeholders from the active integration contract, if any.
   const _contract = workspace.integrationContract;
   const _ep0 = _contract && _contract.endpoints && _contract.endpoints[0];
@@ -63,6 +65,15 @@ export default function UIBuilder({
   const customLuaFindings = customLuaText.trim() ? customLuaAnalysis.findings : [];
   const customLuaErrors = customLuaFindings.filter(fd => fd.severity === 'error').length;
   const customLuaWarnings = customLuaFindings.filter(fd => fd.severity === 'warning').length;
+  const runtimeLuaFile = useMemo(() => ({
+    rel: `ui/${workspace.id || 'custom'}_custom.lua`,
+    text: customLuaText,
+    source: 'workspace'
+  }), [customLuaText, workspace.id]);
+  const runtimeLogAnalysis = useMemo(
+    () => analyzeLuaRuntimeLog(runtimeLogText, [runtimeLuaFile]),
+    [runtimeLogText, runtimeLuaFile]
+  );
   // Bridge: the engine-correct responsive grid this free-form layout compiles to (X4 is fTable-based).
   const derivedGrid = useMemo(() => pixelLayoutToGrid((workspace.uiWidgets || []) as any, 'preview_layout'), [workspace.uiWidgets]);
   const insertSelectedPattern = () => {
@@ -915,6 +926,48 @@ end`
                     {fd.code}{fd.line ? `:${fd.line}` : ''} {fd.message}
                   </div>
                 ))}
+                <div data-testid="lua-runtime-log-inspector" className="mt-2 pt-2 border-t border-white/10 grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_minmax(260px,1fr)] gap-2">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-slate-300 uppercase">Runtime log paste</span>
+                      <button
+                        type="button"
+                        onClick={() => setRuntimeLogText('')}
+                        className="text-[9px] px-1.5 py-0.5 rounded border border-white/10 text-slate-500 hover:text-white hover:bg-white/5 uppercase"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <textarea
+                      data-testid="lua-runtime-log-input"
+                      value={runtimeLogText}
+                      onChange={event => setRuntimeLogText(event.target.value)}
+                      spellCheck={false}
+                      placeholder={`ui/${workspace.id || 'custom'}_custom.lua:42: attempt to index a nil value`}
+                      className="h-24 w-full resize-none rounded border border-white/10 bg-black/45 p-2 text-[10px] leading-normal text-slate-300 outline-none focus:border-cyan-500/50"
+                    />
+                  </div>
+                  <div data-testid="lua-runtime-log-summary" className="rounded border border-white/10 bg-black/25 p-2 overflow-hidden">
+                    <div className={`font-bold ${runtimeLogAnalysis.totals.errors ? 'text-red-400' : runtimeLogAnalysis.totals.warnings ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      Runtime log: {runtimeLogText.trim() ? `${runtimeLogAnalysis.totals.errors} errors / ${runtimeLogAnalysis.totals.warnings} warnings / ${runtimeLogAnalysis.totals.matchedFiles} matched files` : 'empty'}
+                    </div>
+                    <div className="mt-1 max-h-20 overflow-y-auto space-y-1">
+                      {runtimeLogAnalysis.issues.slice(0, 4).map((issue, idx) => (
+                        <div key={`${issue.lineNo}-${idx}`} className={issue.severity === 'error' ? 'text-red-300' : issue.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
+                          {issue.code}{issue.line ? `:${issue.line}` : ''}{issue.matchedRel ? ` ${issue.matchedRel}` : ''} {issue.restrictedFunction ? `${issue.restrictedFunction} ` : ''}{issue.message}
+                          {issue.frames.length > 0 && (
+                            <span className="block text-slate-500">
+                              frame {issue.frames[0].matchedRel || issue.frames[0].file}{issue.frames[0].line ? `:${issue.frames[0].line}` : ''}{issue.frames[0].functionName ? ` ${issue.frames[0].functionName}` : ''}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                      {runtimeLogText.trim() && runtimeLogAnalysis.issues.length === 0 && (
+                        <div className="text-slate-500">No Lua/XPL runtime findings parsed.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             

@@ -37,7 +37,7 @@ export interface EditorFile {
   name: string;
   path: string;
   content: string;
-  handle?: any;
+  handle?: unknown;
   isMock?: boolean;
 }
 
@@ -111,6 +111,10 @@ interface LogAnalysisResult {
   parsedLogsCount: number;
   summaryOfGameMDReload: string;
   issues: LogIssue[];
+}
+
+function messageFromUnknown(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function getSnapshotContentForPath(snapWS: ModWorkspace, relativePath: string): string {
@@ -535,9 +539,9 @@ export default function CodePreview({
         const err = await response.json().catch(() => ({}));
         throw new Error(err.error || "Failed to write file on server.");
       }
-    } catch (err: any) {
+    } catch (err) {
       setEditorSaveStatus('error');
-      setEditorError(err.message || 'Save failed.');
+      setEditorError(messageFromUnknown(err, 'Save failed.'));
     }
   };
 
@@ -606,9 +610,9 @@ export default function CodePreview({
       setGeneratedApplyStatus('applied');
       setGeneratedApplyMessage(`Applied ${parsed.nodes.length} parsed MD nodes back into the workspace.`);
       setTimeout(() => setGeneratedApplyStatus('idle'), 2500);
-    } catch (err: any) {
+    } catch (err) {
       setGeneratedApplyStatus('error');
-      setGeneratedApplyMessage(err.message || 'Could not apply edited XML.');
+      setGeneratedApplyMessage(messageFromUnknown(err, 'Could not apply edited XML.'));
     }
   };
 
@@ -816,9 +820,9 @@ export default function CodePreview({
       const data = await handleApiResponse(response, "Failed to establish telemetry connection to server.");
       setAnalysisResult(data.analysis);
       setLastAnalyzedWorkspace(workspaceSerialized);
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setAnalysisError(err.message || "Failed to catalog script outline. Verify telemetry status.");
+      setAnalysisError(messageFromUnknown(err, "Failed to catalog script outline. Verify telemetry status."));
     } finally {
       setAnalyzing(false);
     }
@@ -844,11 +848,11 @@ export default function CodePreview({
       } else {
         throw new Error(deployData.error || "Failed to deploy on server.");
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Playtest Directory Sync Error:", err);
       if (showFeedback) {
         setSyncStatus('error');
-        setSyncErrorMsg(err.message || "Disk write access refused.");
+        setSyncErrorMsg(messageFromUnknown(err, "Disk write access refused."));
         setTimeout(() => setSyncStatus('idle'), 5000);
       }
     }
@@ -895,8 +899,8 @@ export default function CodePreview({
         }
       }
       throw new Error("Failed to restore snapshot on server.");
-    } catch (err: any) {
-      setSnapshotMsg(err.message || 'Could not restore snapshot.');
+    } catch (err) {
+      setSnapshotMsg(messageFromUnknown(err, 'Could not restore snapshot.'));
       setTimeout(() => setSnapshotMsg(''), 3500);
     }
   };
@@ -913,15 +917,15 @@ export default function CodePreview({
       });
       const data = await handleApiResponse(response, "Log parsing request rejected.");
       setLogAnalysis(data.analysis);
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setDiagnosticError(err.message || "Failed to analyze X4 script logs via Gemini.");
+      setDiagnosticError(messageFromUnknown(err, "Failed to analyze X4 script logs via Gemini."));
     } finally {
       setDiagnosingLogs(false);
     }
   };
 
-  const handleApplyAutoFix = (fix: any) => {
+  const handleApplyAutoFix = (fix: NonNullable<LogIssue['autoFix']>) => {
     if (!setWorkspace || !saveCheckpoint) {
       console.warn("Auto-fix not supported in this frame state.");
       return;
@@ -1166,12 +1170,15 @@ export default function CodePreview({
     () => computeLineDiagMap(activeCodeText, diagnostics),
     [activeCodeText, diagnostics]
   );
+  const renderTopBar = (content: React.ReactNode) => (
+    topBarTarget ? createPortal(content, topBarTarget) : content
+  );
 
   return (
     <div ref={setEditorRoot} id="antigravity_ide_container" className="flex flex-col flex-1 w-full min-w-0 h-full min-h-0 bg-[#0b0d12] text-slate-100 rounded-lg overflow-hidden border border-white/5 shadow-2xl relative">
       {/* Tab strip + compact actions — PORTALED into the persistent top bar (App) so the
           editor body is a code-only entity. Inline fallback when no portal target. */}
-      {(topBarTarget ? createPortal : ((c: any): any => c))((
+      {renderTopBar((
         <div className="bg-[#0b0d12] border-b border-white/5 select-none flex items-center justify-between w-full pl-1">
         <div className="flex items-center divide-x divide-white/5 overflow-x-auto scrollbar-none flex-1">
           {openTabs.map(tab => {
@@ -1273,7 +1280,7 @@ export default function CodePreview({
           </button>
         </div>
         </div>
-      ), topBarTarget as any)}
+      ))}
 
       {/* Breadcrumb removed — the active tab already names the file; keeps the editor window clean.
           Kept only for directory-file editing, where the full path matters. */}
