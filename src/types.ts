@@ -125,6 +125,13 @@ export interface AIBehaviorScript {
   interrupts: Array<{ id: string; event: string; action: string }>;
   actions: AIAction[];
   includeInBuild?: boolean;
+  /**
+   * #65 — provenance flag. When true, `name` is already FINAL (e.g. an imported
+   * script another mod already namespaced as `<owner>.<name>`, or one the studio has
+   * already namespaced): export must NOT re-prefix it with the workspace modId.
+   * Authored scripts leave this unset and get namespaced on export.
+   */
+  namespaced?: boolean;
 }
 
 export interface WareDef {

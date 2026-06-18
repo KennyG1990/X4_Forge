@@ -27,13 +27,15 @@ import {
   PRESETS,
   ModWorkspace,
   PatchBlock,
-  sanitizeWorkspace
+  sanitizeWorkspace,
+  type AIBehaviorScript
 } from "./src/types";
 import {
   toSafeModId,
   toTFileName,
   generateContentXML,
   compileScriptToXML,
+  namespaceAiScriptName,
   compileWaresXML,
   compileJobsXML,
   compileTFileXML,
@@ -48,7 +50,7 @@ import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
 import { runCanvasInteractionSelftest } from "./src/lib/canvasInteractions";
 import { runWaresJobsRoundtripSelftest, parseWaresXml, parseJobsXml } from "./src/lib/waresJobsParser";
 import { runModFixesSelftest } from "./src/lib/modFixes";
-import { runAiScriptRoundtripSelftest } from "./src/lib/aiScriptParser";
+import { runAiScriptRoundtripSelftest, parseAiScriptXml } from "./src/lib/aiScriptParser";
 import { runLuaMdBindingSelftest } from "./src/lib/luaMdBinding";
 import { runPositionPickerSelftest } from "./src/lib/positionPicker";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, extractEntries as catDatExtractEntries, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
@@ -338,15 +340,21 @@ function activeBuildWorkspace(workspaceInput: unknown): ModWorkspace {
 function namespaceModAiScripts(ws: ModWorkspace, modId: string): void {
   const scripts = ws.aiScripts || [];
   if (!scripts.length) return;
-  const prefix = `${modId}.`;
-  const rename = (n: string) => (n && !n.startsWith(prefix)) ? `${prefix}${n}` : n;
-  const ownNames = new Set<string>(scripts.map(s => s.name).filter(Boolean));
+  // #65: imported scripts (namespaced:true) keep their FINAL name — never re-prefix a
+  // foreign-namespaced script with this workspace's modId. Authored scripts get prefixed
+  // and then flagged final (idempotent). Job task-refs that point at an own script that
+  // actually got renamed are updated to match.
+  const renames = new Map<string, string>();
   for (const s of scripts) {
-    if (s.name) s.name = rename(s.name);
+    if (!s.name) continue;
+    const final = namespaceAiScriptName(s.name, modId, s.namespaced === true);
+    if (final !== s.name) renames.set(s.name, final);
+    s.name = final;
+    s.namespaced = true;
   }
   for (const job of ws.jobs || []) {
-    if (job.taskScript && ownNames.has(job.taskScript)) {
-      job.taskScript = rename(job.taskScript);
+    if (job.taskScript && renames.has(job.taskScript)) {
+      job.taskScript = renames.get(job.taskScript)!;
     }
   }
 }
@@ -2793,14 +2801,27 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   const jobsRel = relFiles.find(f => f.toLowerCase() === 'libraries/jobs.xml');
   if (jobsRel) { try { importedJobs = parseJobsXml(fs.readFileSync(path.join(absDir, jobsRel), 'utf8')); } catch { /* passthrough */ } }
 
-  // #52 — aiscripts deliberately stay PASSTHROUGH on import. The parser (parseAiScriptXml)
-  // round-trips the studio emit (oracle: compile-idempotent), BUT the export pipeline
-  // namespaces aiscripts (namespaceModAiScripts: name → "<modId>.<name>"), so a re-export
-  // would change the file's path + content — NOT a faithful round-trip, and modeling it
-  // editable while preserving the original would emit two divergent files. So the
-  // determinism-safe choice is passthrough (lossless), same principle that makes
-  // wares/jobs safe (those use FIXED paths with no rename). The parser is kept for a future
-  // explicit "make this aiscript editable" flow that also reconciles namespacing.
+  // #65 — aiscripts import as EDITABLE when faithfulness-safe, else passthrough. Two
+  // determinism guards so re-export can't diverge from the original: (1) the parsed model
+  // must re-compile BYTE-IDENTICALLY, and (2) name === the file's stem so the regenerated
+  // file lands at the SAME path. Imported names are already final → flagged `namespaced`
+  // so the export pipeline never re-prefixes them with this workspace's modId (the old
+  // round-trip break). Anything that fails a guard stays passthrough (lossless).
+  let importedAiScripts: AIBehaviorScript[] | null = null;
+  for (const rel of relFiles) {
+    if (!/^aiscripts\/.+\.xml$/i.test(rel.replace(/\\/g, '/'))) continue;
+    try {
+      const content = fs.readFileSync(path.join(absDir, rel), 'utf8');
+      const parsed = parseAiScriptXml(content);
+      if (!parsed) continue;
+      const stem = path.basename(rel).replace(/\.xml$/i, '');
+      if (parsed.name !== stem) continue;                      // guard 2: name === filename
+      if (compileScriptToXML(parsed) !== content) continue;    // guard 1: byte-faithful re-compile
+      if (!importedAiScripts) importedAiScripts = [];
+      importedAiScripts.push({ ...parsed, namespaced: true, includeInBuild: true });
+    } catch { /* unreadable → passthrough */ }
+  }
+
   const ws: ModWorkspace = sanitizeWorkspace({
     ...(baseWorkspace || {}),
     name: meta.name || baseWorkspace?.name || path.basename(absDir),
@@ -2810,6 +2831,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     tFiles,
     ...(importedWares ? { wares: importedWares } : {}),
     ...(importedJobs ? { jobs: importedJobs } : {}),
+    ...(importedAiScripts ? { aiScripts: importedAiScripts } : {}),
   });
 
   // Only regenerate domains we actually modeled. If the MD didn't parse, turn MD
@@ -2819,7 +2841,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   ws.compileSettings = {
     md: mdParsed,
     ui: false,
-    ai: false, // #52: aiscripts stay passthrough (export namespacing prevents a faithful round-trip)
+    ai: !!importedAiScripts, // #65: regenerate the aiscripts we parsed to editable (namespaced-safe); others stay passthrough
     library: !!(importedWares || importedJobs), // G13: regenerate wares/jobs we parsed to editable
     translations: tFiles.length > 0,
     patches: false
@@ -2979,11 +3001,13 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
     checks.push({ name: 'G13 wares→editable model', pass: !!waresOk, class: classOf('libraries/wares.xml'), wares: (workspace.wares || []).length });
     checks.push({ name: 'G13 jobs→editable model', pass: !!jobsOk, class: classOf('libraries/jobs.xml'), jobs: (workspace.jobs || []).length });
 
-    // #52: aiscripts intentionally stay PASSTHROUGH (export namespacing prevents a faithful
-    // round-trip). Assert the file is preserved verbatim (class 'partial', not modeled), which
-    // is the lossless choice — the parser/oracle proves reversibility separately.
-    const aiOk = classOf('aiscripts/rt_patrol.xml') === 'partial' && (!workspace.aiScripts || workspace.aiScripts.length === 0);
-    checks.push({ name: '#52 aiscript→passthrough (lossless)', pass: !!aiOk, class: classOf('aiscripts/rt_patrol.xml'), aiScripts: (workspace.aiScripts || []).length });
+    // #65: a faithfulness-safe aiscript (re-compiles byte-identically AND name === file stem)
+    // now imports as EDITABLE — modeled into workspace.aiScripts and regenerated on export
+    // (class 'generated'/'editable'), with namespaced:true so export won't re-prefix it.
+    const aiCls = classOf('aiscripts/rt_patrol.xml');
+    const aiOk = (aiCls === 'generated' || aiCls === 'editable')
+      && (workspace.aiScripts || []).some(s => s.name === 'rt_patrol' && s.namespaced === true);
+    checks.push({ name: '#65 aiscript→editable (faithful, namespaced)', pass: !!aiOk, class: aiCls, aiScripts: (workspace.aiScripts || []).length });
 
     const passed = checks.filter((c: any) => c.pass).length;
     // House selftest contract (allPassed/passed/total) alongside the richer lossless report,

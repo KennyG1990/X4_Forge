@@ -98,6 +98,21 @@ export const generateContentXML = (modId: string, workspace: ModWorkspace): stri
   return `<?xml version="1.0" encoding="utf-8"?>\n<content id="${escapeXmlAttr(modId)}" name="${escapeXmlAttr(displayName)}" description="${escapeXmlAttr(description)}" author="${escapeXmlAttr(author)}" version="${toContentVersion(workspace.version)}" date="${today}" save="0" enabled="1">\n  <text language="44" name="${escapeXmlAttr(displayName)}" description="${escapeXmlAttr(description)}" author="${escapeXmlAttr(author)}" />\n</content>\n`;
 };
 
+/**
+ * #65 — provenance-aware aiscript namespacing. Returns the FINAL aiscript name for
+ * export: a bare authored name is prefixed `<modId>.<name>` (so two studio mods don't
+ * ship colliding generic filenames); a name that already carries the modId prefix — or
+ * any name marked final via `alreadyNamespaced` (e.g. an imported foreign-namespaced
+ * script) — is returned unchanged. Pure + idempotent: f(f(x)) === f(x).
+ */
+export const namespaceAiScriptName = (name: string, modId: string, alreadyNamespaced = false): string => {
+  const n = (name || '').trim();
+  if (!n || !modId) return n;
+  const prefix = `${modId}.`;
+  if (alreadyNamespaced || n.startsWith(prefix)) return n;
+  return `${prefix}${n}`;
+};
+
 export const compileScriptToXML = (script: AIBehaviorScript): string => {
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
   xml += `<aiscript name="${escapeXmlAttr(script.name)}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">\n`;
@@ -484,12 +499,16 @@ export const compileAndSaveAll = async (
     if (hasLayout) await writeTextFile(uiDir, `${modId}_layout.lua`, responsiveLayoutLua);
   }
 
-  // 4. AIScripts behavior trees
+  // 4. AIScripts behavior trees. #65: namespace the mod's own scripts (collision-safe),
+  // matching the agent/manifest export path. Operate on copies — never rename the user's
+  // live workspace models. Imported scripts (namespaced:true) keep their final name.
   if (workspace.aiScripts?.length) {
     const aiDir = await targetDir.getDirectoryHandle('aiscripts', { create: true });
     for (const script of workspace.aiScripts) {
-      const fileName = script.name.endsWith('.xml') ? script.name : `${script.name}.xml`;
-      await writeTextFile(aiDir, fileName, compileScriptToXML(script));
+      const finalName = namespaceAiScriptName(script.name, modId, script.namespaced === true);
+      const emit = finalName === script.name ? script : { ...script, name: finalName };
+      const fileName = finalName.endsWith('.xml') ? finalName : `${finalName}.xml`;
+      await writeTextFile(aiDir, fileName, compileScriptToXML(emit));
     }
   }
 

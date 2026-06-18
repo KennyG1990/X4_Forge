@@ -16,7 +16,7 @@
  */
 
 import type { AIBehaviorScript, AIParam, AIAction } from '../types';
-import { compileScriptToXML } from './modCompiler';
+import { compileScriptToXML, namespaceAiScriptName } from './modCompiler';
 
 function attr(tag: string, name: string): string {
   const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i'));
@@ -180,6 +180,19 @@ export function runAiScriptRoundtripSelftest(): {
   // null on non-aiscript content
   ok('non-aiscript → null', parseAiScriptXml('<mdscript name="X"><cues/></mdscript>') === null);
   ok('empty → null', parseAiScriptXml('') === null);
+
+  // #65 — provenance-aware namespacing helper
+  ok('ns prefixes a bare authored name', namespaceAiScriptName('patrol', 'mymod') === 'mymod.patrol');
+  ok('ns is idempotent on own prefix', namespaceAiScriptName('mymod.patrol', 'mymod') === 'mymod.patrol');
+  ok('ns respects alreadyNamespaced (foreign import)', namespaceAiScriptName('foo.patrol', 'mymod', true) === 'foo.patrol');
+  ok('ns no-op on empty name', namespaceAiScriptName('', 'mymod') === '');
+  ok('ns no-op without modId', namespaceAiScriptName('patrol', '') === 'patrol');
+  ok('ns f(f(x)) === f(x)',
+    namespaceAiScriptName(namespaceAiScriptName('patrol', 'mymod'), 'mymod') === namespaceAiScriptName('patrol', 'mymod'));
+  // an already-namespaced (imported) script still re-compiles byte-faithfully
+  const imported: AIBehaviorScript = { ...fixture, name: 'foreignmod.patrol', namespaced: true };
+  ok('imported (namespaced) script compile-idempotent',
+    compileScriptToXML(parseAiScriptXml(compileScriptToXML(imported))!) === compileScriptToXML(imported));
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;
