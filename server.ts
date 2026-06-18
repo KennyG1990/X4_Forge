@@ -56,7 +56,9 @@ import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
+import { runFileBridgeTransportSelftest } from "./src/lib/fileBridgeTransport";
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
+import { runLuaLogicBlocksSelftest } from "./src/lib/luaLogicBlocks";
 import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from "./src/lib/luaStaticAnalysis";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runSemanticsSelftest, listSemantics, semanticsForNode } from "./src/lib/mdSemantics";
@@ -79,6 +81,8 @@ import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./s
 import { analyzeModDependencies, runModDependencyGraphSelftest } from "./src/lib/modDependencyGraph";
 import { buildGalaxyMap, runGalaxyMapSelftest } from "./src/lib/galaxyMap";
 import { runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
+import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
+import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
 import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
@@ -203,8 +207,10 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/selftest",
   "/agent/db-selftest",
   "/agent/contract-selftest",
+  "/agent/file-bridge-transport-selftest",
   "/agent/contract-glue-sample",
   "/agent/lua-snippets",
+  "/agent/lua-logic-blocks-selftest",
   "/agent/lua-static-selftest",
   "/agent/cue-lineage-selftest",
   "/agent/semantics-selftest",
@@ -241,7 +247,9 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/live-fixes-selftest",
   "/agent/mod-dependency-selftest",
   "/agent/galaxy-map-selftest",
-  "/agent/extension-project-selftest"
+  "/agent/extension-project-selftest",
+  "/agent/project-orchestration-selftest",
+  "/agent/project-crossfile-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -1755,6 +1763,41 @@ app.get("/api/agent/schema", (req, res) => {
         auth: true,
         body: { workspace: "optional ModWorkspace; defaults to active workspace" },
         purpose: "Alias of compile for agents that want a package/file-manifest vocabulary."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/project/create",
+        auth: true,
+        body: { meta: "content/project metadata: id, name, version, author, description, deps" },
+        purpose: "Create a stateless multi-file ExtensionProject with content.xml already authored."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/project/file/create",
+        auth: true,
+        body: { project: "ExtensionProject", file: "{ path, kind?, content? }" },
+        purpose: "Return a new ExtensionProject with one file added/replaced and path-kind classified."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/project/generate",
+        auth: true,
+        body: { spec: "ProjectGenerationSpec; default kind ai_influence_starter" },
+        purpose: "Generate a bounded multi-file AI Influence starter project: content.xml, MD, contract Lua/MD, and ai_influence_chat.lua."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/project/package",
+        auth: true,
+        body: { project: "ExtensionProject" },
+        purpose: "Validate and return a file manifest for a multi-file ExtensionProject without mutating active workspace."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/project/validate-crossfile",
+        auth: true,
+        body: { project: "ExtensionProject" },
+        purpose: "Project-level diagnostics for structure, cross-file cue refs, MD-to-Lua RegisterEvent coverage, Lua-to-MD event_ui_triggered coverage, and content.xml dependency sanity."
       },
       {
         method: "POST",
@@ -3554,10 +3597,89 @@ app.get("/api/agent/extension-project-selftest", (_req, res) => {
   }
 });
 
+app.get("/api/agent/project-orchestration-selftest", (_req, res) => {
+  try {
+    return res.json(runProjectOrchestrationSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "project-orchestration-selftest failed" });
+  }
+});
+
+app.get("/api/agent/project-crossfile-selftest", (_req, res) => {
+  try {
+    return res.json(runProjectCrossFileSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "project-crossfile-selftest failed" });
+  }
+});
+
 // P0c — project-level agent API. Stateless: the agent holds the project (create + add
 // files client-side) and POSTs it here to validate as a unit. Returns BOTH structural
 // issues AND the cross-file cue index (defined/references/unresolved) as first-class
 // results — the cross-file linkage is the keystone's actual value-add over per-file checks.
+app.post("/api/agent/project/create", (req, res) => {
+  try {
+    const meta = req.body?.meta || req.body || {};
+    if (!meta.id) return res.status(400).json({ error: "Body must include { meta: { id, name?, version?, deps? } } or top-level id." });
+    const project = createAgentProject(meta);
+    return res.json({ success: true, project });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "project create failed" });
+  }
+});
+
+app.post("/api/agent/project/file/create", (req, res) => {
+  try {
+    const project = req.body?.project as ExtensionProject | undefined;
+    const file = req.body?.file;
+    if (!project || !Array.isArray(project.files) || !file?.path) {
+      return res.status(400).json({ error: "Body must be { project, file: { path, content?, kind? } }." });
+    }
+    return res.json({ success: true, project: createProjectFile(project, file) });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "project file/create failed" });
+  }
+});
+
+app.post("/api/agent/project/generate", (req, res) => {
+  try {
+    const spec = req.body?.spec || req.body || {};
+    const project = generateAgentProject(spec);
+    const packaged = packageAgentProject(project);
+    return res.json({ success: true, project, summary: packaged.summary, validation: packaged.validation });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "project generate failed" });
+  }
+});
+
+app.post("/api/agent/project/package", (req, res) => {
+  try {
+    const project = req.body?.project as ExtensionProject | undefined;
+    if (!project || !Array.isArray(project.files)) {
+      return res.status(400).json({ error: "Body must be { project: { id, name, files } }." });
+    }
+    const packaged = packageAgentProject(project);
+    return res.json({ success: true, ...packaged });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "project package failed" });
+  }
+});
+
+app.post("/api/agent/project/validate-crossfile", (req, res) => {
+  try {
+    const project = req.body?.project as ExtensionProject | undefined;
+    if (!project || typeof project !== "object" || !Array.isArray(project.files)) {
+      return res.status(400).json({ error: "Body must be { project: { id, name, files: [{ path, kind, content? }, ...] } }." });
+    }
+    if (project.files.length > 2000) {
+      return res.status(413).json({ error: "Project has too many files (>2000)." });
+    }
+    return res.json(validateProjectCrossFile(project));
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "project cross-file validate failed" });
+  }
+});
+
 app.post("/api/agent/project/validate", (req, res) => {
   try {
     const project = req.body?.project as ExtensionProject | undefined;
@@ -3569,18 +3691,23 @@ app.post("/api/agent/project/validate", (req, res) => {
     }
     const structure = validateProjectStructure(project);
     const cueIndex = indexCueReferences(project);
+    const crossFile = validateProjectCrossFile(project);
     const structuralErrors = structure.filter(i => i.severity === "error").length;
     return res.json({
-      ok: structuralErrors === 0 && cueIndex.unresolved.length === 0,
+      ok: structuralErrors === 0 && cueIndex.unresolved.length === 0 && crossFile.ok,
       summary: {
         files: project.files.length,
         structuralErrors,
         definedCues: cueIndex.defined.length,
         cueReferences: cueIndex.references.length,
         unresolvedCueRefs: cueIndex.unresolved.length,
+        crossFileErrors: crossFile.summary.errors,
+        mdLuaMissingRegisters: crossFile.summary.mdLuaMissingRegisters,
+        luaMdMissingListeners: crossFile.summary.luaMdMissingListeners,
       },
       structure,
       cueIndex, // { defined, references, unresolved } — cross-file linkage, first-class
+      crossFile,
     });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project validate failed" });
@@ -3981,6 +4108,14 @@ app.get("/api/agent/lua-static-selftest", (_req, res) => {
   }
 });
 
+app.get("/api/agent/lua-logic-blocks-selftest", (_req, res) => {
+  try {
+    res.json(runLuaLogicBlocksSelftest());
+  } catch (error: any) {
+    res.status(500).json({ pass: false, error: error?.message || "lua-logic-blocks-selftest failed" });
+  }
+});
+
 // Lever 2 — external-integration / contract seam: validate the X4<->external HTTP/JSON
 // contract and generate the X4-side glue Lua. Read-only public GETs (no secrets, no mutation).
 app.get("/api/agent/contract-selftest", (_req, res) => {
@@ -3991,6 +4126,14 @@ app.get("/api/agent/contract-selftest", (_req, res) => {
   }
 });
 
+app.get("/api/agent/file-bridge-transport-selftest", (_req, res) => {
+  try {
+    res.json(runFileBridgeTransportSelftest());
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "file-bridge-transport-selftest failed" });
+  }
+});
+
 app.get("/api/agent/contract-glue-sample", (_req, res) => {
   try {
     const sample: IntegrationContract = {
@@ -3998,7 +4141,9 @@ app.get("/api/agent/contract-glue-sample", (_req, res) => {
       baseUrl: "http://127.0.0.1:8713",
       endpoints: [
         { id: "get_status", method: "GET", path: "/v1/status", response: [{ name: "ok", type: "boolean" }] },
-        { id: "send_prompt", method: "POST", path: "/v1/prompt", request: [{ name: "text", type: "string", required: true }], response: [{ name: "reply", type: "string" }] }
+        { id: "send_prompt", method: "POST", path: "/v1/prompt", request: [{ name: "text", type: "string", required: true }], response: [{ name: "reply", type: "string" }] },
+        { id: "file_prompt", kind: "file_bridge", request: [{ name: "text", type: "string", required: true }], response: [{ name: "reply", type: "string" }],
+          fileBridge: { directory: "x4_forge_bridge", requestFile: "prompt_request.json", responseFile: "prompt_response.json", pollInterval: "0.5s", timeout: "8s" } }
       ]
     };
     const findings = validateContract(sample);

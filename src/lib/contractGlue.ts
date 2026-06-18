@@ -18,6 +18,10 @@
  * community djfhe_http mod, or any other), so the studio never hard-codes a runtime.
  */
 
+import { endpointEventNames } from './contractEvents';
+import { buildActionWhitelistLua, buildFileBridgePollingSubgraph, validateFileBridgePollingOptions } from './fileBridgeTransport';
+export { endpointEventNames } from './contractEvents';
+
 export type ContractFieldType = 'string' | 'number' | 'boolean' | 'object' | 'array';
 export type ContractMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -36,8 +40,10 @@ export interface ContractEndpoint {
    * 'ui_event' (T4.3): an in-game Lua UI widget calls Glue.<id>(payload); the glue
    * type-guards the payload and forwards it to MD via AddUITriggeredEvent — the
    * SAME contract seam pointed at the widget→cue case (no external process).
+   * 'file_bridge' (P1): MD writes a request file and polls through a bounded
+   * bridge event path. The action id stays whitelisted in generated Lua.
    */
-  kind?: 'http' | 'ui_event';
+  kind?: 'http' | 'ui_event' | 'file_bridge';
   method?: ContractMethod;
   /** Path appended to baseUrl, e.g. "/v1/status". Must start with "/". */
   path?: string;
@@ -46,6 +52,13 @@ export interface ContractEndpoint {
   request?: ContractField[];
   /** Expected JSON response fields (documentation + future response validation). */
   response?: ContractField[];
+  fileBridge?: {
+    directory?: string;
+    requestFile?: string;
+    responseFile?: string;
+    pollInterval?: string;
+    timeout?: string;
+  };
 }
 
 export interface IntegrationContract {
@@ -79,6 +92,22 @@ const NS_RE = /^[a-z][a-z0-9_]*$/;
 const METHODS: ContractMethod[] = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
 const FIELD_TYPES: ContractFieldType[] = ['string', 'number', 'boolean', 'object', 'array'];
 
+function fileBridgeDefaults(ep: ContractEndpoint) {
+  return {
+    directory: ep.fileBridge?.directory || 'x4_forge_bridge',
+    requestFile: ep.fileBridge?.requestFile || `${ep.id || 'endpoint'}_request.json`,
+    responseFile: ep.fileBridge?.responseFile || `${ep.id || 'endpoint'}_response.json`,
+    pollInterval: ep.fileBridge?.pollInterval || '1s',
+    timeout: ep.fileBridge?.timeout || '10s',
+  };
+}
+
+function mdPayloadExpr(ep: ContractEndpoint): string {
+  const req = ep.request || [];
+  const fields = [`action='${ep.id}'`, ...req.map(fld => `${fld.name}=$${fld.name}`)];
+  return `table[${fields.join(', ')}]`;
+}
+
 /**
  * Validate a contract so neither end can drift. Returns findings (errors block
  * generation; warnings are advisory). An empty array means the contract is clean.
@@ -93,8 +122,8 @@ export function validateContract(contract: IntegrationContract): ContractFinding
     findings.push({ severity: 'error', message: `namespace "${contract.namespace ?? ''}" must match ${NS_RE} (lowercase, starts with a letter).` });
   }
   const endpoints = Array.isArray(contract.endpoints) ? contract.endpoints : [];
-  // ui_event endpoints live entirely in-game; baseUrl only matters when at
-  // least one endpoint actually goes over HTTP (T4.3).
+  // Non-HTTP endpoints live entirely in-game or through local file exchange;
+  // baseUrl only matters when at least one endpoint actually goes over HTTP.
   const hasHttp = endpoints.some(ep => ep && (ep.kind || 'http') === 'http');
   if (hasHttp) {
     if (!contract.baseUrl || !/^https?:\/\/.+/i.test(contract.baseUrl)) {
@@ -121,7 +150,7 @@ export function validateContract(contract: IntegrationContract): ContractFinding
       seen.add(ep.id);
     }
     const kind = ep.kind || 'http';
-    if (kind !== 'http' && kind !== 'ui_event') {
+    if (kind !== 'http' && kind !== 'ui_event' && kind !== 'file_bridge') {
       findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" has invalid kind "${String(ep.kind)}".` });
     }
     if (kind === 'http') {
@@ -132,7 +161,22 @@ export function validateContract(contract: IntegrationContract): ContractFinding
         findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" path "${ep.path ?? ''}" must start with "/".` });
       }
     } else if (ep.method || ep.path) {
-      findings.push({ severity: 'warning', endpointId: ep.id, message: `endpoint "${ep.id}" is a ui_event; method/path are ignored.` });
+      findings.push({ severity: 'warning', endpointId: ep.id, message: `endpoint "${ep.id}" is a ${kind}; method/path are ignored.` });
+    }
+    if (kind === 'file_bridge' && ID_RE.test(ep.id || '')) {
+      const fb = fileBridgeDefaults(ep);
+      for (const message of validateFileBridgePollingOptions({
+        namespace: contract.namespace || 'invalid',
+        actionId: ep.id,
+        directory: fb.directory,
+        requestFile: fb.requestFile,
+        responseFile: fb.responseFile,
+        requestPayloadExpr: mdPayloadExpr(ep),
+        pollInterval: fb.pollInterval,
+        timeout: fb.timeout,
+      })) {
+        findings.push({ severity: 'error', endpointId: ep.id, message });
+      }
     }
     const bodyMethods: ContractMethod[] = ['POST', 'PUT', 'PATCH'];
     if (kind === 'http' && ep.request && ep.request.length > 0 && !bodyMethods.includes(ep.method as ContractMethod)) {
@@ -148,15 +192,6 @@ export function validateContract(contract: IntegrationContract): ContractFinding
 
 function luaComment(s: string): string {
   return String(s).replace(/\r?\n/g, ' ').replace(/--\[\[|\]\]/g, '');
-}
-
-/** Lua names for an endpoint's events, derived from namespace + id. */
-export function endpointEventNames(namespace: string, id: string) {
-  return {
-    request: `${namespace}.${id}`,
-    response: `${namespace}.${id}.response`,
-    error: `${namespace}.${id}.error`
-  };
 }
 
 /**
@@ -195,6 +230,11 @@ export function generateHttpGlueLua(contract: IntegrationContract): string {
 
   const fns: string[] = [];
   const registrations: string[] = [];
+  const fileBridgeEndpoints = contract.endpoints.filter(ep => (ep.kind || 'http') === 'file_bridge');
+  if (fileBridgeEndpoints.length > 0) {
+    fns.push(buildActionWhitelistLua({ namespace: ns, actions: fileBridgeEndpoints.map(ep => ep.id) }));
+    fns.push('');
+  }
 
   const luaTypeOf = (t: ContractFieldType): string =>
     t === 'number' ? 'number' : t === 'boolean' ? 'boolean' : (t === 'object' || t === 'array') ? 'table' : 'string';
@@ -228,6 +268,31 @@ export function generateHttpGlueLua(contract: IntegrationContract): string {
         ``
       ].join('\n'));
       registrations.push(ev.request);
+      continue;
+    }
+
+    if ((ep.kind || 'http') === 'file_bridge') {
+      fns.push([
+        `-- ${ep.id}: file_bridge${ep.description ? ` — ${luaComment(ep.description)}` : ''} (MD writes request file, Lua/runtime polls response)`,
+        `function Glue.${ep.id}_poll(payload)`,
+        `    payload = payload or {}`,
+        `    if not isAllowedAction(payload.action or ${JSON.stringify(ep.id)}) then DebugError(${JSON.stringify(`[${ns}] ${ep.id}: blocked file-bridge action`)}); return end`,
+        `    AddUITriggeredEvent(NS, ${JSON.stringify(`${ep.id}.poll`)}, payload)`,
+        `end`,
+        ``,
+        `function Glue.${ep.id}_timeout(message)`,
+        `    AddUITriggeredEvent(NS, ${JSON.stringify(`${ep.id}.error`)}, tostring(message or "file bridge timeout"))`,
+        `end`,
+        ``,
+        `RegisterEvent(${JSON.stringify(`${ev.request}.poll`)}, function(_, param)`,
+        `    Glue.${ep.id}_poll(param)`,
+        `end)`,
+        `RegisterEvent(${JSON.stringify(`${ev.request}.timeout`)}, function(_, param)`,
+        `    Glue.${ep.id}_timeout(param)`,
+        `end)`,
+        ``
+      ].join('\n'));
+      registrations.push(`${ev.request}.poll`, `${ev.request}.timeout`);
       continue;
     }
 
@@ -339,6 +404,47 @@ export function generateContractMdScript(contract: IntegrationContract, modId: s
         `    </cue>`
       ].join('\n');
     }
+    if ((ep.kind || 'http') === 'file_bridge') {
+      const fb = fileBridgeDefaults(ep);
+      const respFields = (ep.response || []).map(fld => fld.name).join(', ') || 'no declared fields';
+      return [
+        `    <!-- file_bridge ${ep.id} — write request file and poll for ${fb.responseFile}. -->`,
+        `    <library name="Call_${ep.id}">`,
+        req.length ? `      <params>\n${req.map(fld => `        <param name="${fld.name}" />`).join('\n')}\n      </params>` : `      <!-- no request fields -->`,
+        `      <actions>`,
+        buildFileBridgePollingSubgraph({
+          namespace: ns,
+          actionId: ep.id,
+          directory: fb.directory,
+          requestFile: fb.requestFile,
+          responseFile: fb.responseFile,
+          requestPayloadExpr: mdPayloadExpr(ep),
+          pollInterval: fb.pollInterval,
+          timeout: fb.timeout,
+        }).split('\n').map(line => `        ${line}`).join('\n'),
+        `      </actions>`,
+        `    </library>`,
+        ``,
+        `    <!-- response for ${ep.id} via file bridge (fields: ${respFields}) -->`,
+        `    <cue name="On_${ep.id}_response">`,
+        `      <conditions>`,
+        `        <event_ui_triggered screen="'${ns}'" control="'${ep.id}.response'" />`,
+        `      </conditions>`,
+        `      <actions>`,
+        `        <debug_text text="'${ep.id} file response: '+event.param3" filter="general" />`,
+        `      </actions>`,
+        `    </cue>`,
+        ``,
+        `    <cue name="On_${ep.id}_error">`,
+        `      <conditions>`,
+        `        <event_ui_triggered screen="'${ns}'" control="'${ep.id}.error'" />`,
+        `      </conditions>`,
+        `      <actions>`,
+        `        <debug_text text="'${ep.id} file error: '+event.param3" filter="general" />`,
+        `      </actions>`,
+        `    </cue>`
+      ].join('\n');
+    }
     const paramDecls = req.map(fld => `        <param name="${fld.name}" />`).join('\n');
     const payload = req.length
       ? `table[${req.map(fld => `$${fld.name}=$${fld.name}`).join(', ')}]`
@@ -362,6 +468,15 @@ export function generateContractMdScript(contract: IntegrationContract, modId: s
       `        <!-- event.param3 holds the decoded JSON response from AddUITriggeredEvent -->`,
       `        <debug_text text="'${ep.id} response: '+event.param3" filter="general" />`,
       `      </actions>`,
+      `    </cue>`,
+      ``,
+      `    <cue name="On_${ep.id}_error">`,
+      `      <conditions>`,
+      `        <event_ui_triggered screen="'${ns}'" control="'${ep.id}.error'" />`,
+      `      </conditions>`,
+      `      <actions>`,
+      `        <debug_text text="'${ep.id} error: '+event.param3" filter="general" />`,
+      `      </actions>`,
       `    </cue>`
     ].join('\n');
   }).join('\n\n');
@@ -378,7 +493,9 @@ export function runContractGlueSelftest() {
     endpoints: [
       { id: 'get_status', method: 'GET', path: '/v1/status', response: [{ name: 'ok', type: 'boolean' }] },
       { id: 'send_prompt', method: 'POST', path: '/v1/prompt', request: [{ name: 'text', type: 'string', required: true }], response: [{ name: 'reply', type: 'string' }] },
-      { id: 'hud_button_clicked', kind: 'ui_event', description: 'HUD button -> MD', request: [{ name: 'button_id', type: 'string', required: true }, { name: 'count', type: 'number' }] }
+      { id: 'hud_button_clicked', kind: 'ui_event', description: 'HUD button -> MD', request: [{ name: 'button_id', type: 'string', required: true }, { name: 'count', type: 'number' }] },
+      { id: 'file_prompt', kind: 'file_bridge', description: 'File bridge prompt', request: [{ name: 'text', type: 'string', required: true }], response: [{ name: 'reply', type: 'string' }],
+        fileBridge: { directory: 'x4_forge_bridge', requestFile: 'prompt_request.json', responseFile: 'prompt_response.json', pollInterval: '0.5s', timeout: '8s' } }
     ]
   };
 
@@ -394,9 +511,10 @@ export function runContractGlueSelftest() {
     const ev = endpointEventNames(good.namespace, ep.id);
     const base = lua.includes(`RegisterEvent(${JSON.stringify(ev.request)}`)
       && lua.includes(`function Glue.${ep.id}(`);
-    return (ep.kind || 'http') === 'http'
-      ? base && lua.includes(JSON.stringify(`${ep.id}.response`))
-      : base;
+    const kind = ep.kind || 'http';
+    if (kind === 'http') return base && lua.includes(JSON.stringify(`${ep.id}.response`));
+    if (kind === 'file_bridge') return lua.includes(`RegisterEvent(${JSON.stringify(`${ev.request}.poll`)}`) && lua.includes(`function Glue.${ep.id}_poll(`);
+    return base;
   });
   ok('all_endpoints_wired', allEndpointsWired);
 
@@ -436,6 +554,8 @@ export function runContractGlueSelftest() {
   ok('md_is_mdscript', md.includes('<mdscript name="mymod_http"') && md.includes('</mdscript>'));
   ok('md_wires_call_and_response', good.endpoints.every(ep => (ep.kind || 'http') === 'ui_event'
     ? (md.includes(`<cue name="On_${ep.id}">`) && md.includes(`control="'${ep.id}'"`) && !md.includes(`<library name="Call_${ep.id}">`))
+    : (ep.kind || 'http') === 'file_bridge'
+      ? (md.includes(`<library name="Call_${ep.id}">`) && md.includes('<debug_to_file') && md.includes(`control="'${ep.id}.response'"`))
     : (md.includes(`<library name="Call_${ep.id}">`) && md.includes(`name="'${good.namespace}.${ep.id}'"`) && md.includes(`control="'${ep.id}.response'"`))));
   ok('md_passes_request_params', md.includes('<param name="text" />') && md.includes('$text=$text'));
   let mdBadThrew = false;
@@ -462,6 +582,20 @@ export function runContractGlueSelftest() {
   ok('ui_event_method_warns', validateContract({
     namespace: 'x1', baseUrl: '', endpoints: [{ id: 'a', kind: 'ui_event', method: 'GET' }]
   }).some(f => f.severity === 'warning' && /ignored/.test(f.message)));
+  // P1 — file_bridge endpoint kind: same contract seam, local file-poll transport.
+  ok('file_bridge_lua_whitelists_action',
+    lua.includes('local ALLOWED_ACTIONS') && lua.includes('["file_prompt"] = true') && lua.includes('blocked file-bridge action'));
+  ok('file_bridge_lua_registers_poll_and_timeout',
+    lua.includes('RegisterEvent("myai.file_prompt.poll"') && lua.includes('RegisterEvent("myai.file_prompt.timeout"'));
+  ok('file_bridge_md_writes_request_file',
+    md.includes('<debug_to_file') && md.includes(`name="'prompt_request.json'"`) && md.includes('prompt_response.json'));
+  ok('file_bridge_md_has_bounded_poll',
+    md.includes('<do_while value="player.age lt $file_prompt_file_bridge_deadline">') && md.includes('<delay exact="0.5s" />') && md.includes('player.age + 8s'));
+  const pureFile: IntegrationContract = { namespace: 'fileonly', baseUrl: '', endpoints: [{ id: 'ask', kind: 'file_bridge', request: [] }] };
+  ok('pure_file_bridge_contract_needs_no_baseurl', validateContract(pureFile).filter(f => f.severity === 'error').length === 0);
+  ok('file_bridge_method_warns', validateContract({
+    namespace: 'x1', baseUrl: '', endpoints: [{ id: 'a', kind: 'file_bridge', method: 'GET' }]
+  }).some(f => f.severity === 'warning' && /ignored/.test(f.message)));
   const passed = checks.filter(c => c.pass).length;
-  return { allPassed: passed === checks.length, passed, total: checks.length, checks };
+  return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
 }

@@ -14,6 +14,8 @@ import {
   FileCode
 } from 'lucide-react';
 import { LUA_SNIPPETS, fillLuaSnippet } from '../lib/luaSnippets';
+import { analyzeLuaFiles } from '../lib/luaStaticAnalysis';
+import { aiInfluenceChatBlocks, buildLuaLogicScript } from '../lib/luaLogicBlocks';
 import { validateUiWidgets } from '../lib/uiWidgetValidate';
 import { pixelLayoutToGrid } from '../lib/uiLayout';
 import { UIWidget, ModWorkspace } from '../types';
@@ -50,6 +52,17 @@ export default function UIBuilder({
   const widgetFindings = useMemo(() => validateUiWidgets((workspace.uiWidgets || []) as any), [workspace.uiWidgets]);
   const widgetErrors = widgetFindings.filter(fd => fd.severity === 'error').length;
   const widgetWarns = widgetFindings.filter(fd => fd.severity === 'warning').length;
+  const customLuaText = workspace.customLua || '';
+  const customLuaAnalysis = useMemo(() => analyzeLuaFiles([{
+    rel: `ui/${workspace.id || 'custom'}_custom.lua`,
+    text: customLuaText,
+    source: 'loose',
+    sourcePath: 'workspace',
+    extension: { folder: workspace.id || 'workspace', id: workspace.id || 'workspace', name: workspace.name }
+  }]), [customLuaText, workspace.id, workspace.name]);
+  const customLuaFindings = customLuaText.trim() ? customLuaAnalysis.findings : [];
+  const customLuaErrors = customLuaFindings.filter(fd => fd.severity === 'error').length;
+  const customLuaWarnings = customLuaFindings.filter(fd => fd.severity === 'warning').length;
   // Bridge: the engine-correct responsive grid this free-form layout compiles to (X4 is fTable-based).
   const derivedGrid = useMemo(() => pixelLayoutToGrid((workspace.uiWidgets || []) as any, 'preview_layout'), [workspace.uiWidgets]);
   const insertSelectedPattern = () => {
@@ -58,6 +71,12 @@ export default function UIBuilder({
     if (!code) return;
     setWorkspace(prev => ({ ...prev, customLua: (prev.customLua || '') + (prev.customLua ? '\n\n' : '') + code }));
     setLuaMode('edit');
+  };
+  const insertAiInfluenceBlocks = () => {
+    const script = buildLuaLogicScript(aiInfluenceChatBlocks());
+    setWorkspace(prev => ({ ...prev, customLua: (prev.customLua || '') + (prev.customLua ? '\n\n' : '') + script }));
+    setLuaMode('edit');
+    setSelectedLuaTemplate('ai_influence_blocks');
   };
 
   const theme = workspace.uiTheme;
@@ -732,6 +751,15 @@ export default function UIBuilder({
               </div>
 
               <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5">
+                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Structured Lua logic blocks</div>
+                <button type="button" onClick={insertAiInfluenceBlocks}
+                  className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${selectedLuaTemplate === 'ai_influence_blocks' ? 'border-emerald-500 bg-emerald-600/10 text-emerald-300' : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'}`}>
+                  <div className="text-[11px] font-bold uppercase">AI Influence chat script</div>
+                  <div className="text-[9.5px] text-slate-500">Event handler + djfhe_http call + JSON parse + response poll.</div>
+                </button>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5">
                 <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Vetted X4 patterns (the hard ones, done right)</div>
                 {LUA_SNIPPETS.map(sn => (
                   <button key={sn.id} type="button" onClick={() => setSelectedLuaTemplate(sn.id)}
@@ -875,6 +903,19 @@ end`
                 )}
               </pre>
             </div>
+            )}
+
+            {luaMode === 'edit' && (
+              <div className="shrink-0 border-t border-white/10 bg-black/40 px-3 py-2 text-[10px] font-mono">
+                <div className={`font-bold ${customLuaErrors ? 'text-red-400' : customLuaWarnings ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  Lua analysis: {customLuaText.trim() ? `${customLuaErrors} errors / ${customLuaWarnings} warnings / ${customLuaFindings.length} findings` : 'empty buffer'}
+                </div>
+                {customLuaFindings.slice(0, 3).map((fd, idx) => (
+                  <div key={idx} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
+                    {fd.code}{fd.line ? `:${fd.line}` : ''} {fd.message}
+                  </div>
+                ))}
+              </div>
             )}
             
             <div className="p-3 border-t border-white/5 bg-[#12141a] flex justify-between shrink-0 font-mono text-[10px] text-slate-500">

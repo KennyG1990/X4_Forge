@@ -13,6 +13,7 @@
 
 import type { MDNode, MDLink, ModWorkspace } from '../types';
 import { sanitizeWorkspace, generateMDXML, validateModWorkspace } from '../types';
+import { buildFileBridgePollingSubgraph } from './fileBridgeTransport';
 
 export interface CompositeBlock {
   id: string;
@@ -87,6 +88,30 @@ export const COMPOSITE_BLOCKS: CompositeBlock[] = [
       links: [L(`${s}_while`, 'out_body', `${s}_inc`, 'in_act')],
     }),
   },
+  {
+    id: 'file_bridge_poll',
+    title: 'File Bridge Poll',
+    blurb: 'Write a request file, poll for a response, then timeout cleanly.',
+    entryId: (s) => `${s}_cue`,
+    build: (s, x, y) => ({
+      nodes: [
+        N(`${s}_cue`, 'cue', 'cue', x, y, { name: 'File_Bridge_Request', namespace: 'this' }),
+        N(`${s}_poll`, 'action', 'custom_xml', x, y + 220, {
+          rawXml: buildFileBridgePollingSubgraph({
+            namespace: 'x4forge_bridge',
+            actionId: 'send_prompt',
+            directory: 'x4_forge_bridge',
+            requestFile: 'send_prompt_request.json',
+            responseFile: 'send_prompt_response.json',
+            requestPayloadExpr: `table[action='send_prompt', prompt=$prompt]`,
+            pollInterval: '1s',
+            timeout: '10s',
+          }),
+        }),
+      ],
+      links: [L(`${s}_cue`, 'out_act', `${s}_poll`, 'in_act')],
+    }),
+  },
 ];
 
 /* ============================================================================ *
@@ -115,13 +140,19 @@ export function runCompositeBlocksSelftest() {
     }
     try {
       const ws = sanitizeWorkspace({ name: 'CompTest', nodes: wsNodes, links: wsLinks, uiWidgets: [] } as Partial<ModWorkspace>);
-      const errors = validateModWorkspace(ws, generateMDXML(ws)).filter((d) => d.severity === 'error');
+      const xml = generateMDXML(ws);
+      const errors = validateModWorkspace(ws, xml).filter((d) => d.severity === 'error');
       ok(`${c.id}_compiles_clean`, errors.length === 0, errors.map((e) => e.message));
+      if (c.id === 'file_bridge_poll') {
+        ok('file_bridge_poll_writes_request', xml.includes('<debug_to_file') && xml.includes(`send_prompt_request.json`));
+        ok('file_bridge_poll_has_timeout', xml.includes('player.age + 10s') && xml.includes(`'x4forge_bridge.send_prompt.timeout'`));
+        ok('file_bridge_poll_uses_contract_event_name', xml.includes(`'x4forge_bridge.send_prompt.poll'`));
+      }
     } catch (e: any) {
       ok(`${c.id}_compiles_clean`, false, 'threw: ' + (e?.message || e));
     }
   }
 
   const passed = checks.filter((c) => c.pass).length;
-  return { allPassed: passed === checks.length, passed, total: checks.length, checks };
+  return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
 }

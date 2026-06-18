@@ -1614,7 +1614,20 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
           baseUrl: String(ws.integrationContract.baseUrl || ''),
           httpClientExpr: ws.integrationContract.httpClientExpr ? String(ws.integrationContract.httpClientExpr) : undefined,
           jsonLibExpr: ws.integrationContract.jsonLibExpr ? String(ws.integrationContract.jsonLibExpr) : undefined,
-          endpoints: Array.isArray(ws.integrationContract.endpoints) ? ws.integrationContract.endpoints : []
+          endpoints: Array.isArray(ws.integrationContract.endpoints)
+            ? ws.integrationContract.endpoints.map((ep: any) => ({
+                ...ep,
+                fileBridge: ep?.fileBridge && typeof ep.fileBridge === 'object'
+                  ? {
+                      directory: ep.fileBridge.directory ? String(ep.fileBridge.directory) : undefined,
+                      requestFile: ep.fileBridge.requestFile ? String(ep.fileBridge.requestFile) : undefined,
+                      responseFile: ep.fileBridge.responseFile ? String(ep.fileBridge.responseFile) : undefined,
+                      pollInterval: ep.fileBridge.pollInterval ? String(ep.fileBridge.pollInterval) : undefined,
+                      timeout: ep.fileBridge.timeout ? String(ep.fileBridge.timeout) : undefined
+                    }
+                  : undefined
+              }))
+            : []
         }
       : undefined,
     customLua: typeof ws.customLua === 'string' ? ws.customLua : undefined,

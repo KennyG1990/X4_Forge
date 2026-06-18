@@ -114,6 +114,47 @@ const controlledWorkspace: E2EWorkspace = {
   compileSettings: { md: true, ui: false, ai: false, library: false, translations: false, patches: false },
 };
 
+const fallbackRestoreWorkspace: E2EWorkspace = {
+  ...controlledWorkspace,
+  id: 'e2e_restore_baseline',
+  name: 'E2E_Restore_Baseline',
+  author: 'Playwright',
+  description: 'Neutral baseline used only when a prior run already leaked E2E_Canvas.',
+  nodes: [],
+  links: [],
+};
+
+async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number }> {
+  let blocked = 0;
+  await page.route('**/api/agent/workspace', async (route) => {
+    const request = route.request();
+    if (request.method() === 'POST') {
+      let payload: { workspace?: { name?: string } } = {};
+      try {
+        payload = JSON.parse(request.postData() || '{}') as { workspace?: { name?: string } };
+      } catch {
+        payload = {};
+      }
+      if (payload.workspace?.name === controlledWorkspace.name) {
+        blocked += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            applied: false,
+            version: 900000,
+            message: 'E2E fixture workspace sync isolated from shared server state.',
+          }),
+        });
+        return;
+      }
+    }
+    await route.continue();
+  });
+  return { count: () => blocked };
+}
+
 async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
   await page.addInitScript(() => {
     localStorage.removeItem('x4_mod_studio_workspace');
@@ -122,12 +163,13 @@ async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
   await page.goto('/');
   await expect(page.getByTestId('grid-canvas')).toBeVisible();
   await page.waitForFunction(() => !!(window as E2EWindow).__X4_E2E__);
-  const original = await page.evaluate(async () => {
+  const original = await page.evaluate(async ({ controlledName, fallback }) => {
     const response = await fetch('/api/agent/workspace');
     if (!response.ok) throw new Error(`workspace fetch failed: ${response.status}`);
     const data = await response.json();
-    return data.workspace as E2EWorkspace;
-  });
+    const serverWorkspace = data.workspace as E2EWorkspace;
+    return serverWorkspace.name === controlledName ? fallback : serverWorkspace;
+  }, { controlledName: controlledWorkspace.name, fallback: fallbackRestoreWorkspace });
   await page.evaluate((workspace) => {
     (window as E2EWindow).__X4_E2E__!.setWorkspace(workspace);
   }, controlledWorkspace);
@@ -142,6 +184,7 @@ async function workspace(page: Page): Promise<E2EWorkspace> {
 
 test('real canvas interactions create oriented links, move groups, add from palette, and avoid per-frame compile requests', async ({ page }) => {
   let compileRequests = 0;
+  const isolatedWorkspacePosts = await isolateControlledWorkspacePosts(page);
   await page.route('**/api/agent/compile', async (route) => {
     compileRequests += 1;
     await route.fulfill({ json: { diagnostics: [] } });
@@ -211,5 +254,14 @@ test('real canvas interactions create oriented links, move groups, add from pale
       if (!response.ok) throw new Error(`workspace restore failed: ${response.status}`);
     }, originalWorkspace);
     await page.waitForTimeout(800);
+    const restored = await page.evaluate(async () => {
+      const response = await fetch('/api/agent/workspace');
+      if (!response.ok) throw new Error(`workspace verify failed: ${response.status}`);
+      const data = await response.json();
+      return data.workspace as E2EWorkspace;
+    });
+    expect(restored.name).toBe(originalWorkspace.name);
+    expect(restored.name).not.toBe(controlledWorkspace.name);
+    expect(isolatedWorkspacePosts.count()).toBeGreaterThan(0);
   }
 });

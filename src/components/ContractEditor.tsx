@@ -32,6 +32,13 @@ interface ContractEditorProps {
 
 const METHODS: ContractMethod[] = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
 const FIELD_TYPES: ContractFieldType[] = ['string', 'number', 'boolean', 'object', 'array'];
+const DEFAULT_FILE_BRIDGE = {
+  directory: 'x4_forge_bridge',
+  requestFile: 'request.json',
+  responseFile: 'response.json',
+  pollInterval: '1s',
+  timeout: '10s'
+};
 
 const EMPTY_CONTRACT: IntegrationContract = {
   namespace: 'myext',
@@ -144,12 +151,27 @@ export default function ContractEditor({ workspace, setWorkspace }: ContractEdit
               <input className={`${inputCls} flex-1`} value={ep.id} spellCheck={false}
                 onChange={e => updateEndpoint(i, { id: e.target.value })} placeholder="endpoint_id" />
               <select className="px-2 py-1.5 rounded bg-black/60 border border-white/10 text-fuchsia-300 font-mono text-[11px]"
-                value={ep.kind || 'http'} onChange={e => updateEndpoint(i, e.target.value === 'ui_event'
-                  ? { kind: 'ui_event', method: undefined, path: undefined }
-                  : { kind: 'http' })}
-                title="http: MD → external process. ui_event: Lua UI widget → MD cue (no HTTP).">
+                value={ep.kind || 'http'} onChange={e => {
+                  const kind = e.target.value;
+                  if (kind === 'ui_event') updateEndpoint(i, { kind: 'ui_event', method: undefined, path: undefined });
+                  else if (kind === 'file_bridge') updateEndpoint(i, {
+                    kind: 'file_bridge',
+                    method: undefined,
+                    path: undefined,
+                    fileBridge: {
+                      directory: ep.fileBridge?.directory || DEFAULT_FILE_BRIDGE.directory,
+                      requestFile: ep.fileBridge?.requestFile || `${ep.id || 'endpoint'}_request.json`,
+                      responseFile: ep.fileBridge?.responseFile || `${ep.id || 'endpoint'}_response.json`,
+                      pollInterval: ep.fileBridge?.pollInterval || DEFAULT_FILE_BRIDGE.pollInterval,
+                      timeout: ep.fileBridge?.timeout || DEFAULT_FILE_BRIDGE.timeout
+                    }
+                  });
+                  else updateEndpoint(i, { kind: 'http' });
+                }}
+                title="http: MD → external process. ui_event: Lua UI widget → MD cue. file_bridge: request file + bounded poll.">
                 <option value="http">HTTP</option>
                 <option value="ui_event">UI EVENT</option>
+                <option value="file_bridge">FILE</option>
               </select>
               {(ep.kind || 'http') === 'http' && (
                 <select className="px-2 py-1.5 rounded bg-black/60 border border-white/10 text-cyan-300 font-mono text-[11px]"
@@ -167,6 +189,17 @@ export default function ContractEditor({ workspace, setWorkspace }: ContractEdit
                 <input className={inputCls} value={ep.path || ''} spellCheck={false}
                   onChange={e => updateEndpoint(i, { path: e.target.value })} placeholder="/v1/path" />
                 <FieldListEditor label="Request body fields" fields={ep.request || []}
+                  onChange={fs => updateFieldList(i, 'request', fs)} />
+                <FieldListEditor label="Response fields" fields={ep.response || []}
+                  onChange={fs => updateFieldList(i, 'response', fs)} />
+              </>
+            ) : (ep.kind || 'http') === 'file_bridge' ? (
+              <>
+                <div className="text-[9px] text-slate-500 font-sans leading-snug">
+                  FILE BRIDGE: MD writes a request file, raises a whitelisted poll event, and times out if no response arrives.
+                </div>
+                <FileBridgeSettingsEditor endpoint={ep} onChange={patch => updateEndpoint(i, { fileBridge: { ...(ep.fileBridge || {}), ...patch } })} inputCls={inputCls} labelCls={labelCls} />
+                <FieldListEditor label="Request payload fields" fields={ep.request || []}
                   onChange={fs => updateFieldList(i, 'request', fs)} />
                 <FieldListEditor label="Response fields" fields={ep.response || []}
                   onChange={fs => updateFieldList(i, 'response', fs)} />
@@ -213,9 +246,50 @@ export default function ContractEditor({ workspace, setWorkspace }: ContractEdit
         </div>
 
         <div className="px-3 py-1.5 border-t border-white/10 text-[9px] text-slate-500 leading-relaxed">
-          Packaged into the mod build as <code className="text-cyan-500">ui/&lt;id&gt;_http.lua</code> on compile. MD drives a call via
+          Packaged into the mod build as <code className="text-cyan-500">ui/&lt;id&gt;_http.lua</code> and <code className="text-cyan-500">md/&lt;id&gt;_http.xml</code> on compile. MD drives HTTP/file calls via
           <code className="text-cyan-500"> raise_lua_event name="{contract.namespace || 'ns'}.&lt;id&gt;"</code>; the response returns on
           <code className="text-cyan-500"> {contract.namespace || 'ns'}.&lt;id&gt;.response</code>.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FileBridgeSettingsEditor({ endpoint, onChange, inputCls, labelCls }: {
+  endpoint: ContractEndpoint;
+  onChange: (patch: NonNullable<ContractEndpoint['fileBridge']>) => void;
+  inputCls: string;
+  labelCls: string;
+}) {
+  const cfg = endpoint.fileBridge || {};
+  const set = (key: keyof NonNullable<ContractEndpoint['fileBridge']>, value: string) => onChange({ [key]: value });
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <div>
+        <label className={labelCls}>Directory</label>
+        <input className={inputCls} value={cfg.directory || DEFAULT_FILE_BRIDGE.directory} spellCheck={false}
+          onChange={e => set('directory', e.target.value)} />
+      </div>
+      <div>
+        <label className={labelCls}>Request File</label>
+        <input className={inputCls} value={cfg.requestFile || `${endpoint.id || 'endpoint'}_request.json`} spellCheck={false}
+          onChange={e => set('requestFile', e.target.value)} />
+      </div>
+      <div>
+        <label className={labelCls}>Response File</label>
+        <input className={inputCls} value={cfg.responseFile || `${endpoint.id || 'endpoint'}_response.json`} spellCheck={false}
+          onChange={e => set('responseFile', e.target.value)} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className={labelCls}>Poll</label>
+          <input className={inputCls} value={cfg.pollInterval || DEFAULT_FILE_BRIDGE.pollInterval} spellCheck={false}
+            onChange={e => set('pollInterval', e.target.value)} />
+        </div>
+        <div>
+          <label className={labelCls}>Timeout</label>
+          <input className={inputCls} value={cfg.timeout || DEFAULT_FILE_BRIDGE.timeout} spellCheck={false}
+            onChange={e => set('timeout', e.target.value)} />
         </div>
       </div>
     </div>

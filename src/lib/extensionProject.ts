@@ -199,10 +199,10 @@ function mdScriptName(content: string): string {
   return content.match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '';
 }
 
-/** All `<cue name="...">` (and library cues) defined in one MD file. */
+/** All `<cue name="...">` and `<library name="...">` entries defined in one MD file. */
 function definedCueNames(content: string): string[] {
   const out: string[] = [];
-  const re = /<cue\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
+  const re = /<(?:cue|library)\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) out.push(m[1]);
   return out;
