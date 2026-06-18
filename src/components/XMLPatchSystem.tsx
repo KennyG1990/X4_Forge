@@ -34,7 +34,33 @@ export interface PatchBlock {
   content: string;
   note: string;
   pos?: 'before' | 'after' | 'prepend' | 'append';
+  attrType?: string;
   targetFile?: string;
+  includeInBuild?: boolean;
+}
+
+interface SynthesizedPatchOp {
+  type: 'add' | 'replace' | 'remove';
+  sel: string;
+  pos?: 'child' | 'before';
+  attrType?: string;
+  content?: string;
+}
+
+interface SynthesizedPatchResult {
+  success?: boolean;
+  targetFile?: string | null;
+  ops: SynthesizedPatchOp[];
+  diffXml: string;
+  warnings?: string[];
+}
+
+const MERGE_PANE_PREVIEW_LIMIT = 12000;
+
+function previewPaneText(value: string | null | undefined): string {
+  const text = value || '';
+  if (text.length <= MERGE_PANE_PREVIEW_LIMIT) return text;
+  return `${text.slice(0, MERGE_PANE_PREVIEW_LIMIT)}\n\n... preview truncated at ${MERGE_PANE_PREVIEW_LIMIT.toLocaleString()} characters; synthesis still uses the full file ...`;
 }
 
 export interface BoilerplateSnippet {
@@ -151,14 +177,14 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
   const [isPacked, setIsPacked] = useState<boolean>(false);
   const [rightPanelTab, setRightPanelTab] = useState<'patch' | 'preview' | 'difftool'>('patch');
 
-  // T4.2 Inc 2 — Diff→Patch twin-pane: the user edits a copy of the vanilla
+  // T4.2 Inc 2 — Diff→Patch merge view: the user edits a copy of the vanilla
   // file and the studio synthesizes the minimal <diff> ops via
   // POST /api/agent/xpath-synth (engine: src/lib/xpathSynth.ts).
   const [dtEdited, setDtEdited] = useState<string>('');
   const [dtSeededFor, setDtSeededFor] = useState<string | null>(null);
   const [dtBusy, setDtBusy] = useState(false);
   const [dtError, setDtError] = useState<string | null>(null);
-  const [dtResult, setDtResult] = useState<any>(null);
+  const [dtResult, setDtResult] = useState<SynthesizedPatchResult | null>(null);
 
   useEffect(() => {
     if (baseFileContent && dtSeededFor !== targetFile) {
@@ -193,7 +219,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
   const adoptSynthesizedOps = () => {
     if (!dtResult?.ops?.length) return;
     const stamp = Date.now();
-    const blocks = dtResult.ops.map((op: any, i: number) => ({
+    const blocks: PatchBlock[] = dtResult.ops.map((op, i) => ({
       id: `dt_${stamp}_${i}`,
       sel: op.sel,
       action: op.type,
@@ -207,6 +233,14 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
     setDtResult(null);
     setRightPanelTab('patch');
   };
+
+  const dtChangedLineCount = useMemo(() => {
+    if (!baseFileContent || !dtEdited) return 0;
+    return computeSimpleDiff(baseFileContent, dtEdited).filter(line => line.type !== 'normal').length;
+  }, [baseFileContent, dtEdited]);
+
+  const dtBasePreview = useMemo(() => previewPaneText(baseFileContent), [baseFileContent]);
+  const dtPatchPreview = useMemo(() => previewPaneText(dtResult?.diffXml), [dtResult]);
 
   useEffect(() => {
     if (!targetFile) return;
@@ -393,8 +427,8 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
   };
 
   function computeSimpleDiff(oldStr: string, newStr: string) {
-    const oldLines = (oldStr || '').split('\n');
-    const newLines = (newStr || '').split('\n');
+    const oldLines = (oldStr || '').split(/\r?\n/);
+    const newLines = (newStr || '').split(/\r?\n/);
     const result: { type: 'addition' | 'deletion' | 'normal'; value: string }[] = [];
     let i = 0;
     let j = 0;
@@ -1326,56 +1360,93 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
 
           {rightPanelTab === 'difftool' ? (
             <div className="flex-1 flex flex-col gap-2 min-h-0">
-              <div className="text-[9px] uppercase tracking-wide text-slate-500 font-bold shrink-0">
-                Edit a copy of {targetFile} — the studio computes the minimal patch
-              </div>
-              <textarea
-                value={dtEdited}
-                onChange={e => setDtEdited(e.target.value)}
-                spellCheck={false}
-                disabled={!baseFileContent}
-                placeholder={baseFileLoading ? 'Loading vanilla content…' : (baseFileError || 'No vanilla content available for this target.')}
-                className="flex-1 bg-black/50 border border-white/10 rounded-lg p-2 font-mono text-[10px] text-slate-300 resize-none focus:outline-none focus:border-fuchsia-500/50 custom-scrollbar min-h-0"
-              />
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={runDiffToPatch}
-                  disabled={dtBusy || !baseFileContent}
-                  className="flex-1 px-2.5 py-1.5 rounded bg-fuchsia-500/15 hover:bg-fuchsia-500/25 font-bold uppercase text-[9.5px] border border-fuchsia-500/30 text-fuchsia-300 cursor-pointer transition-all disabled:opacity-50"
-                >
-                  {dtBusy ? 'Synthesizing…' : 'Synthesize Patch'}
-                </button>
-                <button
-                  onClick={() => { setDtEdited(baseFileContent || ''); setDtResult(null); setDtError(null); }}
-                  disabled={!baseFileContent}
-                  className="px-2.5 py-1.5 rounded bg-black/45 hover:bg-black/80 font-bold uppercase text-[9.5px] border border-white/10 text-slate-300 cursor-pointer transition-all disabled:opacity-50"
-                >
-                  Reset
-                </button>
-              </div>
-              {dtError && (
-                <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans shrink-0">{dtError}</div>
-              )}
-              {dtResult && (
-                <div className="shrink-0 max-h-60 overflow-y-auto custom-scrollbar bg-black/50 border border-fuchsia-500/25 rounded-lg p-2 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[9px] font-bold uppercase text-fuchsia-300">
-                      {dtResult.ops.length} op(s){dtResult.warnings?.length ? ` · ${dtResult.warnings.length} warning(s)` : ''}
-                    </span>
-                    <button
-                      onClick={adoptSynthesizedOps}
-                      disabled={!dtResult.ops.length}
-                      className="px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 font-bold uppercase text-[9px] border border-emerald-500/30 text-emerald-300 cursor-pointer transition-all disabled:opacity-50"
-                    >
-                      Add to Workspace
-                    </button>
+              <div className="flex flex-col gap-2 shrink-0">
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-wide text-slate-500 font-bold truncate">
+                    Three-pane merge: base file {'->'} edited candidate {'->'} generated patch
                   </div>
-                  {(dtResult.warnings || []).map((w: string, i: number) => (
-                    <div key={i} className="text-amber-300 text-[9px] font-sans leading-snug">⚠ {w}</div>
-                  ))}
-                  <pre className="whitespace-pre-wrap font-mono text-[9.5px] text-slate-300 select-text">{dtResult.diffXml}</pre>
+                  <div className="flex items-center gap-2 text-[9px] font-mono uppercase mt-1">
+                    <span className="rounded border border-white/10 bg-black/35 px-1.5 py-0.5 text-slate-400">
+                      {dtChangedLineCount} line delta(s)
+                    </span>
+                    <span className={`rounded border px-1.5 py-0.5 ${dtResult ? 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300' : 'border-white/10 bg-black/35 text-slate-500'}`}>
+                      {dtResult ? `${dtResult.ops.length} op(s)` : 'not synthesized'}
+                    </span>
+                  </div>
                 </div>
-              )}
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={runDiffToPatch}
+                    disabled={dtBusy || !baseFileContent}
+                    className="px-2.5 py-1.5 rounded bg-fuchsia-500/15 hover:bg-fuchsia-500/25 font-bold uppercase text-[9.5px] border border-fuchsia-500/30 text-fuchsia-300 cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    {dtBusy ? 'Synthesizing...' : 'Synthesize Patch'}
+                  </button>
+                  <button
+                    onClick={() => { setDtEdited(baseFileContent || ''); setDtResult(null); setDtError(null); }}
+                    disabled={!baseFileContent}
+                    className="px-2.5 py-1.5 rounded bg-black/45 hover:bg-black/80 font-bold uppercase text-[9.5px] border border-white/10 text-slate-300 cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={adoptSynthesizedOps}
+                    disabled={!dtResult?.ops.length}
+                    className="px-2.5 py-1.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 font-bold uppercase text-[9.5px] border border-emerald-500/30 text-emerald-300 cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    Add to Workspace
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-rows-3 gap-2 flex-1 min-h-0">
+                <div className="min-w-0 flex flex-col rounded-lg border border-white/10 bg-black/45 overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-white/10 px-2 py-1.5 font-mono text-[9px] uppercase">
+                    <span className="font-bold text-slate-400">Base XML</span>
+                    <span className="truncate text-slate-600" title={targetFile}>{targetFile}</span>
+                  </div>
+                  <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2 font-mono text-[9.5px] leading-relaxed text-slate-400 whitespace-pre-wrap break-all select-text">
+                    {baseFileLoading ? 'Loading vanilla content...' : (baseFileError || dtBasePreview || 'No vanilla content loaded.')}
+                  </pre>
+                </div>
+
+                <div className="min-w-0 flex flex-col rounded-lg border border-fuchsia-500/25 bg-black/45 overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-fuchsia-500/20 px-2 py-1.5 font-mono text-[9px] uppercase">
+                    <span className="font-bold text-fuchsia-300">Edited XML</span>
+                    <span className="text-slate-600">candidate</span>
+                  </div>
+                  <textarea
+                    value={dtEdited}
+                    onChange={e => { setDtEdited(e.target.value); setDtResult(null); setDtError(null); }}
+                    spellCheck={false}
+                    disabled={!baseFileContent}
+                    placeholder={baseFileLoading ? 'Loading vanilla content...' : (baseFileError || 'No vanilla content available for this target.')}
+                    className="flex-1 min-h-0 bg-transparent p-2 font-mono text-[9.5px] leading-relaxed text-slate-200 resize-none focus:outline-none custom-scrollbar"
+                  />
+                </div>
+
+                <div className="min-w-0 flex flex-col rounded-lg border border-emerald-500/20 bg-black/45 overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-emerald-500/15 px-2 py-1.5 font-mono text-[9px] uppercase">
+                    <span className="font-bold text-emerald-300">Patch XML</span>
+                    <span className="text-slate-600">generated</span>
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2">
+                    {dtError ? (
+                      <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{dtError}</div>
+                    ) : dtResult ? (
+                      <div className="space-y-1.5">
+                        {(dtResult.warnings || []).map((w, i) => (
+                          <div key={i} className="text-amber-300 text-[9px] font-sans leading-snug">{w}</div>
+                        ))}
+                        <pre className="whitespace-pre-wrap break-all font-mono text-[9.5px] leading-relaxed text-slate-300 select-text">{dtPatchPreview}</pre>
+                      </div>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-center text-[10px] font-mono text-slate-600 px-4">
+                        Run synthesis to generate the minimal X4 diff patch for the edited candidate.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           ) : rightPanelTab === 'patch' ? (
             <div className="flex-1 bg-black/50 rounded-lg p-3 font-mono text-[10.5px] text-slate-400 overflow-y-auto relative custom-scrollbar border border-white/5 leading-normal select-text selection:bg-emerald-500/25">
