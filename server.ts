@@ -46,6 +46,9 @@ import { runBlueprintSelftest } from "./src/lib/modBlueprint";
 import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
 import { runCanvasInteractionSelftest } from "./src/lib/canvasInteractions";
 import { runWaresJobsRoundtripSelftest, parseWaresXml, parseJobsXml } from "./src/lib/waresJobsParser";
+import { runModFixesSelftest } from "./src/lib/modFixes";
+import { runAiScriptRoundtripSelftest, parseAiScriptXml } from "./src/lib/aiScriptParser";
+import { runLuaMdBindingSelftest } from "./src/lib/luaMdBinding";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -220,6 +223,9 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/architect-loop-selftest",
   "/agent/canvas-interaction-selftest",
   "/agent/wares-jobs-roundtrip-selftest",
+  "/agent/mod-fixes-selftest",
+  "/agent/aiscript-roundtrip-selftest",
+  "/agent/lua-md-binding-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -2700,6 +2706,14 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   const jobsRel = relFiles.find(f => f.toLowerCase() === 'libraries/jobs.xml');
   if (jobsRel) { try { importedJobs = parseJobsXml(fs.readFileSync(path.join(absDir, jobsRel), 'utf8')); } catch { /* passthrough */ } }
 
+  // #52 — aiscripts deliberately stay PASSTHROUGH on import. The parser (parseAiScriptXml)
+  // round-trips the studio emit (oracle: compile-idempotent), BUT the export pipeline
+  // namespaces aiscripts (namespaceModAiScripts: name → "<modId>.<name>"), so a re-export
+  // would change the file's path + content — NOT a faithful round-trip, and modeling it
+  // editable while preserving the original would emit two divergent files. So the
+  // determinism-safe choice is passthrough (lossless), same principle that makes
+  // wares/jobs safe (those use FIXED paths with no rename). The parser is kept for a future
+  // explicit "make this aiscript editable" flow that also reconciles namespacing.
   const ws: ModWorkspace = sanitizeWorkspace({
     ...(baseWorkspace || {}),
     name: meta.name || baseWorkspace?.name || path.basename(absDir),
@@ -2718,7 +2732,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   ws.compileSettings = {
     md: mdParsed,
     ui: false,
-    ai: false,
+    ai: false, // #52: aiscripts stay passthrough (export namespacing prevents a faithful round-trip)
     library: !!(importedWares || importedJobs), // G13: regenerate wares/jobs we parsed to editable
     translations: tFiles.length > 0,
     patches: false
@@ -2838,6 +2852,8 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
       // G13: studio-emit wares/jobs should import as EDITABLE (parsed into WareDef/JobDef).
       'libraries/wares.xml': compileWaresXML([{ id: 'rt_ware', name: 'RT Ware', description: 'rt', transport: 'container', volume: 5, minPrice: 10, avgPrice: 20, maxPrice: 30, prodTime: 60, prodAmount: 100, productionMethod: 'default', includeInBuild: true }]),
       'libraries/jobs.xml': compileJobsXML([{ id: 'rt_job', name: 'RT Job', faction: 'argon', shipClass: 'fighter', shipMacro: '', galaxyQuota: 3, sectorQuota: 1, taskScript: 'masstraffic.generic', rebuildOnDestroy: false, includeInBuild: true }]),
+      // #52: studio-emit aiscript should import as EDITABLE (faithfulness-guarded). name === filename stem.
+      'aiscripts/rt_patrol.xml': compileScriptToXML({ id: 'rt_patrol', name: 'rt_patrol', description: '', command: '', attentionLevel: 'low', params: [{ name: '$t', type: 'object', defaultValue: 'null', comment: 'tgt' }], interrupts: [], actions: [{ id: 'a0', command: 'flee', label: 'Run', properties: {} }], includeInBuild: true }),
       't/0001-l044.xml': tFileXml,
       'subscripts/custom_helper.lua': customLua,
       'unknown_top_level.xml': `<?xml version="1.0"?>\n<weird custom="data"/>\n`
@@ -2876,11 +2892,17 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
     checks.push({ name: 'G13 wares→editable model', pass: !!waresOk, class: classOf('libraries/wares.xml'), wares: (workspace.wares || []).length });
     checks.push({ name: 'G13 jobs→editable model', pass: !!jobsOk, class: classOf('libraries/jobs.xml'), jobs: (workspace.jobs || []).length });
 
+    // #52: aiscripts intentionally stay PASSTHROUGH (export namespacing prevents a faithful
+    // round-trip). Assert the file is preserved verbatim (class 'partial', not modeled), which
+    // is the lossless choice — the parser/oracle proves reversibility separately.
+    const aiOk = classOf('aiscripts/rt_patrol.xml') === 'partial' && (!workspace.aiScripts || workspace.aiScripts.length === 0);
+    checks.push({ name: '#52 aiscript→passthrough (lossless)', pass: !!aiOk, class: classOf('aiscripts/rt_patrol.xml'), aiScripts: (workspace.aiScripts || []).length });
+
     const passed = checks.filter((c: any) => c.pass).length;
     // House selftest contract (allPassed/passed/total) alongside the richer lossless report,
     // so a generic dashboard/agent doesn't misread {lossless:true} as a failure (H9).
     return res.json({
-      allPassed: lossless && waresOk && jobsOk,
+      allPassed: lossless && waresOk && jobsOk && aiOk,
       passed,
       total: checks.length,
       lossless,
@@ -3431,6 +3453,30 @@ app.get("/api/agent/wares-jobs-roundtrip-selftest", (_req, res) => {
     return res.json(runWaresJobsRoundtripSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "wares-jobs-roundtrip-selftest failed" });
+  }
+});
+
+app.get("/api/agent/mod-fixes-selftest", (_req, res) => {
+  try {
+    return res.json(runModFixesSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "mod-fixes-selftest failed" });
+  }
+});
+
+app.get("/api/agent/aiscript-roundtrip-selftest", (_req, res) => {
+  try {
+    return res.json(runAiScriptRoundtripSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "aiscript-roundtrip-selftest failed" });
+  }
+});
+
+app.get("/api/agent/lua-md-binding-selftest", (_req, res) => {
+  try {
+    return res.json(runLuaMdBindingSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "lua-md-binding-selftest failed" });
   }
 });
 

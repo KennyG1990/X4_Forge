@@ -55,6 +55,8 @@ import CueViewer from './CueViewer';
 import AIHelper from './AIHelper';
 import ObjectBrowser from './ObjectBrowser';
 import { explainNode } from '../lib/mdExplain';
+import { suggestFixes } from '../lib/modFixes';
+import { luaMdBinding } from '../lib/luaMdBinding';
 import type { ModBlueprint } from '../lib/modBlueprint';
 import type { ArchitectStepView } from './BlueprintPanel';
 
@@ -1484,6 +1486,35 @@ export default function Sidebar({
                                 ? <span className="text-red-300/90">Wiring: orphaned — nothing points at this node, so it will never run.</span>
                                 : 'Wiring: not currently wired into a cue.'}
                       </div>
+                      {/* T4.3 "Bind to UI (Lua)" — for a cue, the deterministic two-way Lua↔MD glue (verified snippets). */}
+                      {x.role === 'cue' && (() => {
+                        const bind = luaMdBinding(selectedNode);
+                        if (!bind) return null;
+                        return (
+                          <details className="pt-0.5 border-t border-white/5 text-cyan-300/80">
+                            <summary className="text-[8px] font-mono uppercase tracking-wider cursor-pointer select-none">🔗 Bind to UI (Lua)</summary>
+                            <div className="mt-1 space-y-1.5 text-[9px] font-sans text-slate-300">
+                              <div className="text-slate-400">Trigger this cue <b>from</b> a UI widget — MD listens:</div>
+                              <pre className="bg-black/40 rounded p-1.5 text-[8.5px] font-mono text-emerald-300/90 whitespace-pre-wrap break-all">{bind.fromUi.md}</pre>
+                              <div className="text-slate-400">Notify a UI widget <b>from</b> this cue — MD action:</div>
+                              <pre className="bg-black/40 rounded p-1.5 text-[8.5px] font-mono text-emerald-300/90 whitespace-pre-wrap break-all">{bind.toUi.md}</pre>
+                              <div className="text-slate-500 text-[8.5px]">Lua side: use the "MD → Lua / Lua → MD" patterns in HUD &amp; LUA UI (event <span className="text-cyan-300">{bind.ns}.{bind.event}</span>).</div>
+                            </div>
+                          </details>
+                        );
+                      })()}
+                      {/* A4.0 "Suggest fix" verb — deterministic remedy for the selected node, if any. */}
+                      {(() => {
+                        const fix = suggestFixes(workspace.nodes, workspace.links || []).find(f => f.nodeId === selectedNode.id);
+                        if (!fix) return null;
+                        return (
+                          <div className={`pt-0.5 border-t border-white/5 ${fix.severity === 'warning' ? 'text-amber-300/90' : 'text-cyan-300/80'}`}>
+                            <div className="text-[8px] font-mono uppercase tracking-wider flex items-center gap-1">💡 Suggest fix</div>
+                            <div className="text-[9.5px]">{fix.issue}</div>
+                            <div className="text-[9.5px] text-slate-300 mt-0.5">→ {fix.suggestion}</div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })()}

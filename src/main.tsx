@@ -32,7 +32,15 @@ function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
 
 const customFetch = async function(this: any, input: RequestInfo | URL, init?: RequestInit) {
   const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : input.url);
-  const isApi = url.includes('/api/');
+  // Security: only attach the session token to SAME-ORIGIN /api/ requests. A bare
+  // url.includes('/api/') would leak the bearer token to any future cross-origin URL
+  // that happens to contain '/api/' (a plugin/analytics script). Resolve against the
+  // app origin and require both same-origin AND an /api/ path prefix.
+  let isApi = false;
+  try {
+    const u = new URL(url, location.origin);
+    isApi = u.origin === location.origin && u.pathname.startsWith('/api/');
+  } catch { isApi = false; } // unparseable URL → never treat as our API
   if (isApi) {
     const token = sessionStorage.getItem('studio_session_token');
     if (token) {
