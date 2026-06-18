@@ -31,5 +31,3 @@ dev-docs/
 # ---- Cowork session artifacts (kept out of version control by request) ----
 # Draft Cowork skills (install via Settings > Capabilities, not committed).
 forge-skills/
-# Local oracle sweep helper. NOTE: scripts/precommit-check.mjs stays tracked (git hook).
-scripts/oracle-sweep.mjs
