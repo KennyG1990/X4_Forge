@@ -17,7 +17,15 @@
 // server.ts (public selftest GET, authed synth POST), THEN UI.
 
 import * as xpathLib from 'xpath';
-import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
+import {
+  DOMParser,
+  XMLSerializer,
+  type Document as XmlDocument,
+  type Element as XmlElement,
+  type Node as XmlNode,
+  type Text as XmlText,
+  type CDATASection as XmlCdataSection
+} from '@xmldom/xmldom';
 
 export interface PatchOp {
   type: 'add' | 'replace' | 'remove';
@@ -41,7 +49,7 @@ export interface SynthesizedPatch {
 
 const serializer = new XMLSerializer();
 
-function parseDoc(xml: string): any {
+function parseDoc(xml: string): XmlDocument {
   let fatal: string | null = null;
   const doc = new DOMParser({
     onError: (level: string, msg: string) => { if (level === 'fatalError') fatal = msg; }
@@ -52,26 +60,28 @@ function parseDoc(xml: string): any {
   return doc;
 }
 
-function isElement(n: any): boolean { return !!n && n.nodeType === 1; }
-function isText(n: any): boolean { return !!n && (n.nodeType === 3 || n.nodeType === 4); }
+function isElement(n: XmlNode | null | undefined): n is XmlElement { return !!n && n.nodeType === 1; }
+function isText(n: XmlNode | null | undefined): n is XmlText | XmlCdataSection { return !!n && (n.nodeType === 3 || n.nodeType === 4); }
 
-function elementChildren(el: any): any[] {
-  const out: any[] = [];
+function elementChildren(el: XmlElement): XmlElement[] {
+  const out: XmlElement[] = [];
   for (let i = 0; i < el.childNodes.length; i++) {
-    if (isElement(el.childNodes[i])) out.push(el.childNodes[i]);
+    const child = el.childNodes[i];
+    if (isElement(child)) out.push(child);
   }
   return out;
 }
 
-function directText(el: any): string {
+function directText(el: XmlElement): string {
   let t = '';
   for (let i = 0; i < el.childNodes.length; i++) {
-    if (isText(el.childNodes[i])) t += String(el.childNodes[i].data || '');
+    const child = el.childNodes[i];
+    if (isText(child)) t += String(child.data || '');
   }
   return t.trim();
 }
 
-function attrMap(el: any): Map<string, string> {
+function attrMap(el: XmlElement): Map<string, string> {
   const m = new Map<string, string>();
   if (el.attributes) {
     for (let i = 0; i < el.attributes.length; i++) {
@@ -83,7 +93,7 @@ function attrMap(el: any): Map<string, string> {
 }
 
 /** Identity key for sibling matching: tag name + @id/@name when present. */
-function elKey(el: any): string {
+function elKey(el: XmlElement): string {
   const id = el.getAttribute && (el.getAttribute('id') || el.getAttribute('name'));
   return id ? el.nodeName + '#' + id : el.nodeName;
 }
@@ -100,9 +110,9 @@ function escapeXPathLiteral(v: string): string {
  * [@name] predicates; positional [n] only when an element has no identity
  * among same-named siblings (recorded in `warnings`).
  */
-export function selectorFor(el: any, warnings?: string[]): string {
+export function selectorFor(el: XmlElement, warnings?: string[]): string {
   const parts: string[] = [];
-  let cur: any = el;
+  let cur: XmlNode | null = el;
   let hops = 0;
   while (cur && isElement(cur) && hops < 64) {
     const name = cur.nodeName;
@@ -137,12 +147,12 @@ export function selectorFor(el: any, warnings?: string[]): string {
   return '/' + parts.join('/');
 }
 
-function serializeEl(el: any): string {
+function serializeEl(el: XmlNode): string {
   return String(serializer.serializeToString(el));
 }
 
 /** Recursive diff of two matched elements; emits minimal ops. */
-function diffElements(vanEl: any, edEl: any, ops: PatchOp[], warnings: string[]): void {
+function diffElements(vanEl: XmlElement, edEl: XmlElement, ops: PatchOp[], warnings: string[]): void {
   const vanChildren = elementChildren(vanEl);
   const edChildren = elementChildren(edEl);
 
@@ -173,8 +183,8 @@ function diffElements(vanEl: any, edEl: any, ops: PatchOp[], warnings: string[])
 
   // Child element matching by identity key (first unconsumed same-key wins).
   const consumed = new Set<number>();
-  const matchedPairs: { van: any; ed: any }[] = [];
-  const edMatched: (any | null)[] = edChildren.map(() => null);
+  const matchedPairs: { van: XmlElement; ed: XmlElement }[] = [];
+  const edMatched: (XmlElement | null)[] = edChildren.map(() => null);
 
   for (let e = 0; e < edChildren.length; e++) {
     const key = elKey(edChildren[e]);
@@ -200,7 +210,7 @@ function diffElements(vanEl: any, edEl: any, ops: PatchOp[], warnings: string[])
   // insert before the next MATCHED edited sibling's vanilla node; else append.
   for (let e = 0; e < edChildren.length; e++) {
     if (edMatched[e]) continue;
-    let anchorVan: any = null;
+    let anchorVan: XmlElement | null = null;
     for (let k = e + 1; k < edChildren.length; k++) {
       if (edMatched[k]) { anchorVan = edMatched[k]; break; }
     }
@@ -303,15 +313,20 @@ export function applyPatch(vanillaXml: string, ops: PatchOp[]): string {
   return String(serializer.serializeToString(doc));
 }
 
-function selectOne(doc: any, sel: string, op: PatchOp): any {
-  let matches: any;
-  try { matches = xpathLib.select(sel, doc); } catch (e: any) {
-    throw new Error('bad selector "' + sel + '": ' + String((e && e.message) || e));
+function selectOne(doc: XmlDocument, sel: string, op: PatchOp): XmlElement {
+  let matches: unknown;
+  try { matches = xpathLib.select(sel, doc as unknown as Node); } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error('bad selector "' + sel + '": ' + message);
   }
   if (!Array.isArray(matches) || matches.length === 0) {
     throw new Error(op.type + ' selector matched nothing: ' + sel);
   }
-  return matches[0];
+  const first = matches[0];
+  if (!isElement(first as XmlNode)) {
+    throw new Error(op.type + ' selector did not resolve to an element: ' + sel);
+  }
+  return first as XmlElement;
 }
 
 /** Structural equality: same tree ignoring attribute order, whitespace-only
@@ -322,7 +337,7 @@ export function structuralDiff(aXml: string, bXml: string): string | null {
   return cmpEl(a, b, '/' + a.nodeName);
 }
 
-function cmpEl(a: any, b: any, where: string): string | null {
+function cmpEl(a: XmlElement, b: XmlElement, where: string): string | null {
   if (a.nodeName !== b.nodeName) return where + ': tag ' + a.nodeName + ' != ' + b.nodeName;
   const aA = attrMap(a), bA = attrMap(b);
   if (aA.size !== bA.size) return where + ': attribute count ' + aA.size + ' != ' + bA.size;
@@ -358,8 +373,8 @@ export function runXpathSynthSelftest(): { pass: boolean; checks: XpathSynthChec
       if (sd) { ok(name, false, 'round-trip mismatch: ' + sd); return; }
       const opErr = assertOps ? assertOps(p) : null;
       ok(name, !opErr, opErr || (p.ops.length + ' op(s)' + (p.warnings.length ? ', ' + p.warnings.length + ' warning(s)' : '')));
-    } catch (e: any) {
-      ok(name, false, String((e && e.message) || e));
+    } catch (error: unknown) {
+      ok(name, false, error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -409,7 +424,7 @@ export function runXpathSynthSelftest(): { pass: boolean; checks: XpathSynthChec
 
   roundTrip('combined multi-op edit round-trips', base,
     '<jobs><job id="a"><orders count="9"/></job><job id="c"><orders count="7" mode="patrol"/></job></jobs>',
-    null as any);
+    undefined);
 
   try {
     synthesizePatch('<a/>', '<b/>');

@@ -3,9 +3,43 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ModWorkspace, generateMDXML, generateUILuaScript, XMLDiagnostic } from '../types';
+import {
+  ModWorkspace,
+  generateMDXML,
+  generateUILuaScript,
+  XMLDiagnostic,
+  AIBehaviorScript,
+  JobDef,
+  PatchBlock,
+  TFile,
+  WareDef
+} from '../types';
 import { generateHttpGlueLua, generateContractMdScript, validateContract } from './contractGlue';
-import { generateLayoutLua, pixelLayoutToGrid } from './uiLayout';
+import { generateLayoutLua, pixelLayoutToGrid, type PixelWidget } from './uiLayout';
+
+interface WritableFileHandle {
+  write(content: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+interface FileHandleLike {
+  kind?: string;
+  getFile(): Promise<{ text(): Promise<string> }>;
+  createWritable(): Promise<WritableFileHandle>;
+}
+
+interface DirectoryHandleLike {
+  kind?: string;
+  getFileHandle(filename: string, options?: { create?: boolean }): Promise<FileHandleLike>;
+  getDirectoryHandle(dirname: string, options?: { create?: boolean }): Promise<DirectoryHandleLike>;
+  entries(): AsyncIterableIterator<[string, FileHandleLike | DirectoryHandleLike]>;
+  removeEntry(filename: string): Promise<void>;
+}
+
+interface TFileNameInput {
+  fileName?: string;
+  languageId?: string;
+}
 
 export const toSafeModId = (name: string): string => {
   const safe = name
@@ -42,7 +76,7 @@ export const escapeXmlText = (str: string): string => {
     .replace(/>/g, '&gt;');
 };
 
-export const toTFileName = (file: any): string => {
+export const toTFileName = (file: TFileNameInput): string => {
   const explicitName = String(file?.fileName || '').trim();
   if (explicitName) {
     const match = explicitName.match(/^(.+?)-[lL](\d+)\.xml$/);
@@ -64,20 +98,20 @@ export const generateContentXML = (modId: string, workspace: ModWorkspace): stri
   return `<?xml version="1.0" encoding="utf-8"?>\n<content id="${escapeXmlAttr(modId)}" name="${escapeXmlAttr(displayName)}" description="${escapeXmlAttr(description)}" author="${escapeXmlAttr(author)}" version="${toContentVersion(workspace.version)}" date="${today}" save="0" enabled="1">\n  <text language="44" name="${escapeXmlAttr(displayName)}" description="${escapeXmlAttr(description)}" author="${escapeXmlAttr(author)}" />\n</content>\n`;
 };
 
-export const compileScriptToXML = (script: any): string => {
+export const compileScriptToXML = (script: AIBehaviorScript): string => {
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
   xml += `<aiscript name="${escapeXmlAttr(script.name)}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">\n`;
   xml += `  <!-- X4 Foundations Autopilot & Task Script Behavior -->\n`;
   xml += `  <!-- Generated visually using X4 Mod Studio Behaviors Suite -->\n`;
   xml += `  <params>\n`;
-  (script.params || []).forEach((p: any) => {
+  (script.params || []).forEach((p) => {
     xml += `    <param name="${escapeXmlAttr(p.name)}" type="${escapeXmlAttr(p.type)}" default="${escapeXmlAttr(p.defaultValue)}" comment="${escapeXmlAttr(p.comment)}" />\n`;
   });
   xml += `  </params>\n`;
 
   if (script.interrupts && script.interrupts.length > 0) {
     xml += `  <interrupts>\n`;
-    script.interrupts.forEach((int: any) => {
+    script.interrupts.forEach((int) => {
       xml += `    <handler event="${escapeXmlAttr(int.event)}">\n`;
       xml += `      <actions>\n`;
       if (int.action === 'flee') {
@@ -97,7 +131,7 @@ export const compileScriptToXML = (script: any): string => {
   xml += `    <actions>\n`;
   xml += `      <label name="start" />\n`;
 
-  (script.actions || []).forEach((act: any) => {
+  (script.actions || []).forEach((act) => {
     xml += `      <!-- Action: ${escapeXmlText(act.label)} -->\n`;
     switch (act.command) {
       case 'move_to':
@@ -136,17 +170,17 @@ export const compileScriptToXML = (script: any): string => {
   return xml;
 };
 
-export const compileWaresXML = (wares: any[]): string => {
+export const compileWaresXML = (wares: WareDef[]): string => {
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
   xml += `<diff>\n`;
   xml += `  <!-- XML Diff Patch adding to core wares database file: libraries/wares.xml -->\n`;
   xml += `  <add sel="/wares">\n`;
-  wares.forEach((item: any) => {
+  wares.forEach((item) => {
     const tagsAttr = item.tags ? ` tags="${escapeXmlAttr(item.tags)}"` : '';
     const productionMethod = item.productionMethod || 'default';
     const productionNameAttr = item.productionName ? ` name="${escapeXmlAttr(item.productionName)}"` : '';
     const primaryWares = Array.isArray(item.primaryWares)
-      ? item.primaryWares.filter((ware: any) => String(ware?.ware || '').trim() && Number(ware?.amount) > 0)
+      ? item.primaryWares.filter((ware) => String(ware?.ware || '').trim() && Number(ware?.amount) > 0)
       : [];
 
     xml += `    <ware id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" description="${escapeXmlAttr(item.description)}" transport="${escapeXmlAttr(item.transport)}" volume="${item.volume}"${tagsAttr}>\n`;
@@ -157,7 +191,7 @@ export const compileWaresXML = (wares: any[]): string => {
     } else {
       xml += `>\n`;
       xml += `        <primary>\n`;
-      primaryWares.forEach((ware: any) => {
+      primaryWares.forEach((ware) => {
         xml += `          <ware ware="${escapeXmlAttr(ware.ware)}" amount="${escapeXmlAttr(String(ware.amount))}" />\n`;
       });
       xml += `        </primary>\n`;
@@ -170,12 +204,12 @@ export const compileWaresXML = (wares: any[]): string => {
   return xml;
 };
 
-export const compileJobsXML = (jobs: any[]): string => {
+export const compileJobsXML = (jobs: JobDef[]): string => {
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
   xml += `<diff>\n`;
   xml += `  <!-- XML Diff Patch adding new AI pilot squad to core jobs database: libraries/jobs.xml -->\n`;
   xml += `  <add sel="/jobs">\n`;
-  jobs.forEach((item: any) => {
+  jobs.forEach((item) => {
     xml += `    <job id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" active="true">\n`;
     xml += `      <expiration min="7200" max="14400" />\n`;
     xml += `      <modifiers rebuild="${item.rebuildOnDestroy ? 'true' : 'false'}" />\n`;
@@ -194,13 +228,13 @@ export const compileJobsXML = (jobs: any[]): string => {
   return xml;
 };
 
-export const compileTFileXML = (file: any): string => {
+export const compileTFileXML = (file: TFile): string => {
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
   xml += `<language id="${escapeXmlAttr(file.languageId)}">\n`;
-  (file.pages || []).forEach((page: any) => {
+  (file.pages || []).forEach((page) => {
     const title = page.title ? ` title="${escapeXmlAttr(page.title)}"` : '';
     xml += `  <page id="${escapeXmlAttr(page.id)}"${title}>\n`;
-    (page.items || []).forEach((item: any) => {
+    (page.items || []).forEach((item) => {
       const comment = item.description ? ` <!-- ${escapeXmlText(item.description)} -->` : '';
       xml += `    <t id="${escapeXmlAttr(item.id)}">${escapeXmlText(item.value)}</t>${comment}\n`;
     });
@@ -210,11 +244,11 @@ export const compileTFileXML = (file: any): string => {
   return xml;
 };
 
-export const compileDiffDocument = (patches: any[], targetFile: string): string => {
+export const compileDiffDocument = (patches: PatchBlock[], targetFile: string): string => {
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
   xml += `<!-- XML Diff patch targeting file: "${escapeXmlAttr(targetFile)}" -->\n`;
   xml += `<diff>\n\n`;
-  patches.forEach((b: any) => {
+  patches.forEach((b) => {
     if (b.note) {
       xml += `  <!-- Patch Note: ${escapeXmlText(b.note)} -->\n`;
     }
@@ -240,14 +274,14 @@ export const compileDiffDocument = (patches: any[], targetFile: string): string 
   return xml;
 };
 
-export const writeTextFile = async (directoryHandle: any, filename: string, content: string) => {
+export const writeTextFile = async (directoryHandle: DirectoryHandleLike, filename: string, content: string) => {
   const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
   const writable = await fileHandle.createWritable();
   await writable.write(content);
   await writable.close();
 };
 
-export const writeTextFileAtPath = async (baseHandle: any, filePath: string, content: string) => {
+export const writeTextFileAtPath = async (baseHandle: DirectoryHandleLike, filePath: string, content: string) => {
   const parts = filePath.split('/');
   let currentDir = baseHandle;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -314,7 +348,7 @@ const MAX_SNAPSHOTS = 30;
  * Used to build a durable, rollback-able version history alongside the mod.
  * Non-fatal: a snapshot failure never blocks a compile.
  */
-export const writeSnapshot = async (targetDir: any, workspace: ModWorkspace): Promise<void> => {
+export const writeSnapshot = async (targetDir: DirectoryHandleLike, workspace: ModWorkspace): Promise<void> => {
   try {
     const snapDir = await targetDir.getDirectoryHandle('.snapshots', { create: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -325,14 +359,14 @@ export const writeSnapshot = async (targetDir: any, workspace: ModWorkspace): Pr
     );
     // Prune oldest snapshots beyond the cap (names sort chronologically by ISO stamp).
     const names: string[] = [];
-    for await (const [name, handle] of (snapDir as any).entries()) {
-      if ((handle as any).kind === 'file' && name.startsWith('snapshot_') && name.endsWith('.json')) {
+    for await (const [name, handle] of snapDir.entries()) {
+      if (handle.kind === 'file' && name.startsWith('snapshot_') && name.endsWith('.json')) {
         names.push(name);
       }
     }
     names.sort();
     for (let i = 0; i < names.length - MAX_SNAPSHOTS; i++) {
-      await (snapDir as any).removeEntry(names[i]);
+      await snapDir.removeEntry(names[i]);
     }
   } catch (err) {
     console.warn('Snapshot write failed (non-fatal):', err);
@@ -340,13 +374,13 @@ export const writeSnapshot = async (targetDir: any, workspace: ModWorkspace): Pr
 };
 
 /** Lists available snapshots for a mod, newest first. */
-export const listSnapshots = async (dirHandle: any, modId: string): Promise<{ name: string; savedAt: string }[]> => {
+export const listSnapshots = async (dirHandle: DirectoryHandleLike, modId: string): Promise<{ name: string; savedAt: string }[]> => {
   try {
     const modDir = await dirHandle.getDirectoryHandle(modId);
     const snapDir = await modDir.getDirectoryHandle('.snapshots');
     const out: { name: string; savedAt: string }[] = [];
-    for await (const [name, handle] of (snapDir as any).entries()) {
-      if ((handle as any).kind === 'file' && name.endsWith('.json')) {
+    for await (const [name, handle] of snapDir.entries()) {
+      if (handle.kind === 'file' && name.endsWith('.json')) {
         out.push({ name, savedAt: name.replace('snapshot_', '').replace('.json', '') });
       }
     }
@@ -357,7 +391,7 @@ export const listSnapshots = async (dirHandle: any, modId: string): Promise<{ na
 };
 
 /** Reads a single snapshot back into a workspace object for restore. */
-export const readSnapshot = async (dirHandle: any, modId: string, snapshotName: string): Promise<ModWorkspace | null> => {
+export const readSnapshot = async (dirHandle: DirectoryHandleLike, modId: string, snapshotName: string): Promise<ModWorkspace | null> => {
   try {
     const modDir = await dirHandle.getDirectoryHandle(modId);
     const snapDir = await modDir.getDirectoryHandle('.snapshots');
@@ -372,7 +406,7 @@ export const readSnapshot = async (dirHandle: any, modId: string, snapshotName: 
 
 export const compileAndSaveAll = async (
   originalWorkspace: ModWorkspace,
-  dirHandle: any,
+  dirHandle: DirectoryHandleLike,
   mode: 'candy' | 'store',
   options: { snapshot?: boolean } = {}
 ): Promise<{ success: boolean; message: string }> => {
@@ -433,7 +467,7 @@ export const compileAndSaveAll = async (
   const hasCustomLua = typeof workspace.customLua === 'string' && workspace.customLua.trim().length > 0;
   // Bridge: derive the engine-correct responsive grid layout from the free-form designer widgets.
   let responsiveLayoutLua = '';
-  if (hasWidgets) { try { responsiveLayoutLua = generateLayoutLua(pixelLayoutToGrid((workspace.uiWidgets || []) as any, `${modId}_layout`), modId); } catch { responsiveLayoutLua = ''; } }
+  if (hasWidgets) { try { responsiveLayoutLua = generateLayoutLua(pixelLayoutToGrid((workspace.uiWidgets || []) as PixelWidget[], `${modId}_layout`), modId); } catch { responsiveLayoutLua = ''; } }
   const hasLayout = responsiveLayoutLua.length > 0;
   if (hasWidgets || contractValid || hasCustomLua || hasLayout) {
     const uiFiles: string[] = [];
@@ -480,8 +514,8 @@ export const compileAndSaveAll = async (
 
   // 7. XML diff patches grouped by file
   if (workspace.xmlPatches?.length) {
-    const patchesByFile: Record<string, any[]> = {};
-    workspace.xmlPatches.forEach((patch: any) => {
+    const patchesByFile: Record<string, PatchBlock[]> = {};
+    workspace.xmlPatches.forEach((patch) => {
       const file = patch.targetFile || 'libraries/wares.xml';
       if (!patchesByFile[file]) {
         patchesByFile[file] = [];
