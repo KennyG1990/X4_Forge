@@ -76,6 +76,7 @@ import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemet
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
+import { runModDependencyGraphSelftest } from "./src/lib/modDependencyGraph";
 import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
@@ -235,7 +236,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/lua-md-binding-selftest",
   "/agent/position-picker-selftest",
   "/agent/xpath-synth-selftest",
-  "/agent/live-fixes-selftest"
+  "/agent/live-fixes-selftest",
+  "/agent/mod-dependency-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3499,6 +3501,14 @@ app.get("/api/agent/lua-md-binding-selftest", (_req, res) => {
     return res.json(runLuaMdBindingSelftest());
   } catch (error) {
     return res.status(500).json({ pass: false, error: errorMessage(error) || "lua-md-binding-selftest failed" });
+  }
+});
+
+app.get("/api/agent/mod-dependency-selftest", (_req, res) => {
+  try {
+    return res.json(runModDependencyGraphSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "mod-dependency-selftest failed" });
   }
 });
 
