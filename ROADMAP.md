@@ -66,6 +66,79 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ---
 
+## North Star Realignment v2 + VERIFIED gap analysis (2026-06-18, 54th pass)
+
+*Origin: GLM/Kilo gap analysis (`dev-docs/gap-analysis-roadmap-realignment.md`, v2) → Claude review (4 corrections) → **Claude live verification of every claimed gap against the running source** (the step GLM couldn't do; it is read-only and downgraded its own confidence to ~70%). This section records the VERIFIED picture. Additive only — nothing below this is stripped; #64/#65/#67, G9–G12, C2, model/game/host-gated items all stay.*
+
+### Realigned North Star (additive, bounded)
+> Forge is complete when an AI agent can drive it via the API to build **a specific, bounded complex multi-file X4 extension — concretely, AI Influence** — end-to-end: MD scripts, Lua logic, UI addons, config, and manifest, with validation at every step (schema-grade where the schema exists, ◐ softer where it doesn't, honestly labeled), producing an installable extension that runs in-game.
+
+The original North Star (single MD file, human builder) is a **subset**, not replaced. "Any complex mod" is explicitly NOT the done-line (asymptotic); **AI Influence is the bounded, testable criterion.** Positioning (public framing, whether to surface AI openly) is decoupled and out of scope here — the capabilities are built because tedium-reduction + failure-prevention hold regardless.
+
+### Verified gap verdict (Claude, live source — supersedes GLM's hypotheses)
+Confidence ~90% (source-decisive) vs GLM's ~70% (read-only). Evidence: `server.ts` routes, `src/types.ts` (`ModWorkspace`), `src/lib/contractGlue.ts`, `compositeBlocks.ts`, `modDoctor.ts`, `cueLineage.ts`.
+
+| Tier | Verdict | Note |
+|---|---|---|
+| **1 — project model** | ✅ CONFIRMED gap | `ModWorkspace` = one `nodes/links` MD graph → one `md/<id>.xml`; imports kept as verbatim `passthroughFiles` (not editable); no `/api/agent/project*`. **The keystone.** |
+| **2 — transport nodes** | ◐ PARTIAL (GLM over-scoped) | `contractGlue.ts` (Lever 2 / T4.3) ALREADY generates MD→Lua→async-HTTP→external round-trips with type-guarded JSON contracts + library-agnostic client (names djfhe_http); `http` is the default kind. **Real remainder is narrow:** file-bridge (file-polling) transport + exposing the contract as canvas nodes. |
+| **3 — Lua logic authoring** | ✅ CONFIRMED gap | `ModWorkspace.customLua` = one free-text buffer; `uiWidgets` = layout; + snippets. No structured logic authoring. **Blocks-first** (not node-canvas — GLM conceded). |
+| **4 — external API registry** | ✅ CONFIRMED (partial) | No external-API registry; palette is md.xsd-driven. djfhe_http already handled via contract → real gap is kuertee/SirNukes palettization. Lower priority. |
+| **5 — agent multi-file API** | ✅ CONFIRMED gap | Agent routes all single-workspace (`/generate`,`/compile`,`/package`,`/deploy`). **Depends on Tier 1.** |
+| **6 — cross-file validation** | ✅ CONFIRMED but MOOT until Tier 1 | `cueLineage` validates within the one graph; no MD↔Lua handler-match check. Cross-*file* validation is meaningless until multi-file projects exist. **Depends on Tier 1.** |
+| **7 — bridge seam** | ◐ LARGELY COVERED | Same `contractGlue` finding: HTTP/JSON seam is built. Remainder: file-bridge transport + action-whitelist integration. Heavily overlaps Tier 2. |
+
+**Two corrections to GLM that change scope:** (1) the HTTP/JSON transport seam is *already built* (`contractGlue.ts`) — Tiers 2 & 7 shrink to "file-bridge + node-ify the existing contract," not "build HTTP transport"; the contract also already moves JSON encode/decode into generated Lua glue, defusing the AI-Influence JSON-in-MD tedium. (2) Tiers 5 & 6 are **not independent** — both are gated behind Tier 1, so the dependency chain (P0 → P3 → P5) is real and P0 is correctly the keystone.
+
+### Honest determinism scope (the load-bearing caveat)
+`md.xsd` is schema-truth for MD authoring/semantics/reference validation (✅). The new tiers go where the schema doesn't reach: Lua logic (luaparse syntax + curated rules), HTTP/JSON contracts (our own assertions), third-party APIs (curated registry). Those are **◐ softer guarantees, not ✅ schema-grade** — and must be labeled ◐. "Deterministic validation at every step" is aspirational for that half; overselling it is exactly the false-success failure the doctrine exists to prevent.
+
+### Realigned phase plan (layers ON TOP of existing roadmap)
+- **P0 — Project authoring foundation (Tier 1, KEYSTONE):** extension-project model (collection of files, composing existing per-file pieces) + cross-file cue reference index + content.xml-with-deps authoring + project-level agent API. *Accept:* agent creates a project, adds 2 MD files with a cross-file cue ref, validates as a unit.
+- **P1 — Transport remainder (Tiers 2/7, RESCOPED — small):** file-bridge round-trip composite + action-whitelist seam + node-ify the existing `contractGlue`. NOT "build HTTP" (done). *Accept:* file-bridge node generates correct polling subgraph with escaping + timeout.
+- **P2 — Lua logic authoring (Tier 3, blocks-first):** structured idiom blocks (djfhe_http call, JSON parse, response-poll, event-handler) + text surface with author-time luaparse + snippet library. Node-canvas gated behind proof blocks are insufficient. *Accept:* agent authors `ai_influence_chat.lua`, output passes luaparse.
+- **P3 — Agent multi-file orchestration (Tier 5):** project-level generation API + multi-file gen + Lua endpoint + packaging. *Depends on P0.*
+- **P4 — Third-party API palettization (Tier 4):** external API registry (kuertee/SirNukes) + ◐ validation.
+- **P5 — Cross-file validation (Tier 6):** cross-file cue refs + MD↔Lua event-contract match + dep validation. *Depends on P0.*
+- **P6 — Capstone (C2 redefined):** agent builds AI Influence via Forge API, compiles/installs/runs in-game, zero hand-editing, validation honestly labeled. When true, Forge is done. (Original C2 remains a subset milestone.)
+
+**Active: P0**, built house-pattern (pure model + oracle + GET → UI/agent-API) so each increment is browser-validatable.
+
+**P0a KEYSTONE DONE (2026-06-18):** added pure `src/lib/extensionProject.ts` — `ExtensionProject` = a collection of typed `ProjectFile`s (md/lua/ui/content/t/library/aiscript); immutable `createProject`/`addFile`/`removeFile`/`getFile`; `classifyPath`; `validateProjectStructure` (missing content.xml, duplicate paths, path traversal, kind/path mismatch); and the part the single-file model never had — `indexCueReferences`: parses each MD file's `<mdscript name>` + `<cue name>` defs and `signal_cue`/`reset_cue`/`cancel_cue` refs, classifies each ref as **local** (resolve within the same script — `this.` is correctly scoped to its OWN script), **cross_file** (`md.<script>.<cue>` → resolve against another project file), or **external** (script not in project → never flagged), and reports the actionable `unresolved` subset. Reuses `cueLineage.parseSignalCueRefs`. Wired `GET /api/agent/extension-project-selftest` (allowlisted). Verification: isolated `tsc` on the module → exit 0; live oracle **21/21**; the oracle caught a fixture bug (a `this.` ref pointing at another file's cue) → fixed + added an explicit per-script `this.`-scoping test. Host `tsc`/precommit is the commit gate (sandbox truncates server.ts).
+
+**P0b DONE (2026-06-18):** `extensionProject.ts` gained `buildContentXml(meta)` — emits a content.xml WITH `<dependency>` children (which `modCompiler.generateContentXML` never did) + `toContentVersion` (1.2.0→120) + attr escaping. Validated by **build→parse-back idempotence**: the emitted content.xml is parsed back through `modDependencyGraph.parseModManifest` and must reproduce the same id + deps + optional flags. Live oracle now **27/27**.
+
+**P0c DONE (2026-06-18):** project-level agent API. `POST /api/agent/project/validate` (stateless — agent holds the project, POSTs it) returns BOTH `structure` (ProjectIssue[]) AND the `cueIndex` (`defined`/`references`/`unresolved`) as **first-class** results + an `ok`/`summary` — per review flag, the cross-file cue linkage (the keystone's value-add) is surfaced, not buried behind structural checks. `POST /api/agent/project/content-xml` authors a deps-bearing content.xml from declarative meta. Inline `this.`-stripping in `indexCueReferences` now carries a comment explaining why it deliberately does NOT reuse `normalizeLocalCueRef` (which collapses cross_file→external). Live validation: POSTed a 3-file project (2 MD + content.xml) with one valid + one broken cross-file ref → response `ok:false`, `unresolvedCueRefs:1` = `md.Chat.NoSuchCue`, valid `md.Worker.DoFetch` resolved, 2 defined cues indexed across files; content-xml endpoint emitted deps + optional + normalized version. **This meets the P0 acceptance criterion.** Host `tsc`/precommit is the commit gate.
+
+**P0d DONE (2026-06-18) → P0 COMPLETE.** Added `src/components/ProjectInspector.tsx` + a top-level **Project** tab (`workspaceView==='project'`, `FolderGit2` icon) in App.tsx. Assembles the live workspace as an `ExtensionProject` (authored content.xml + compiled main MD via `generateMDXML` + customLua + classified `passthroughFiles`) and runs the pure engine **client-side** (no network) to render: a status banner (validates-as-a-unit vs N errors), a file tree grouped by kind, and the **cross-file cue reference** panel (defined cues, per-ref resolved/unresolved with broken refs in red). Live browser proof: Project tab active, inspector mounted, status "Project validates as a unit — structure sound, all cross-file cue references resolve.", files `content.xml` + `md/e2e_canvas.xml`, no Vite error overlay. The broken-ref red path renders `cueIndex.unresolved` (same output proven by the oracle 21/27 checks + the `/api/agent/project/validate` live test). **P0 keystone is now end-to-end: pure model → oracle (27/27) → agent API → UI, all validated.** Host `tsc`/precommit is the commit gate (App.tsx + server.ts both edited; sandbox truncates server.ts). NEXT: P1 (transport remainder — file-bridge composite + node-ify contractGlue).
+
+### Open remaining tasks (snapshot, 2026-06-18 post-P0)
+
+**🔒 BLOCKING checkpoint gate (do FIRST, your side / H1):**
+- Run host `npm run precommit:check` (authoritative host `tsc` + truncation guards) on the uncommitted tree. The sandbox CANNOT verify `server.ts` (truncated mount → phantom `'}'`/`unterminated-string` errors at files already proven green live). If green, **commit P0 as a milestone** (`feat(project): multi-file extension model + cross-file cue index + agent API + inspector (P0)`) — this is #59 for the P0 slice. **P1 is held until this passes** (avoid accreting P1 on an unverified foundation).
+  - **Gate run by Codex (2026-06-18): GREEN after narrow host fixes.** First `npm run precommit:check` found real host `tsc` errors, not sandbox truncation: `App.tsx` passed the new `workspaceView='project'` into `GlobalSearch`/`Sidebar`/`DirectoryExplorer` prop unions that did not include `project`, and ignored handoff artifact `tests/e2e/handoff-gap-analysis.spec.ts` still contained undeclared `describe`/`it`/`expect` despite saying it was not a real test. Fixed only those gate issues (widened the affected view unions; removed the bogus test block from the handoff artifact). Re-run `npm run precommit:check` → **exit 0**; host `tsc --noEmit` clean; size guard passed (`server.ts` **5740 lines / 254877 bytes**, `src/lib/mdSemantics.ts` **578 lines / 31690 bytes**). Additional current proof: `GET http://localhost:3001/api/agent/extension-project-selftest` → **allPassed true, 27/27**; `node scripts/oracle-sweep.mjs` → **43/43 green**; in-app browser Project tab renders the Project inspector with `content.xml`, `md/e2e_canvas.xml`, cross-file cue reference panel, and status **"Project validates as a unit — structure sound, all cross-file cue references resolve."**, console errors **0**. Honest caveat: the browser/server state is still on the known `E2E_Canvas` fixture leak (#70), so P1 remains held; commit P0 first with `git add .gitignore ROADMAP.md server.ts src/App.tsx src/components/DirectoryExplorer.tsx src/components/GlobalSearch.tsx src/components/Sidebar.tsx src/components/ProjectInspector.tsx src/lib/extensionProject.ts && git commit -m "feat(project): multi-file extension model + cross-file cue index + agent API + inspector (P0)"`. Keep the ignored local `tests/e2e/handoff-gap-analysis.spec.ts` gate fix in the working copy if the file remains present locally, but do **not** include unrelated `.kilo/plans/conan-ue5-ai-agent-landscape.md`.
+
+**Realignment phases (additive; P0 DONE):**
+- **P1** — transport remainder (RESCOPED small): file-bridge polling composite + action-whitelist seam + node-ify `contractGlue` (HTTP/JSON already built). House pattern + oracle.
+- **P2** — Lua logic authoring, BLOCKS-FIRST (idiom blocks: djfhe_http call, JSON parse, response-poll, event-handler + text surface w/ author-time luaparse). Node-canvas gated behind proof blocks insufficient.
+- **P3** — agent multi-file orchestration (`/api/agent/project/{create,file/create,generate,package}`); depends on P0 ✅.
+- **P5** — cross-file validation (MD↔Lua event-contract match, cross-file cue refs as diagnostics); depends on P0 ✅. Builds on `extensionProject.indexCueReferences`.
+- **P4** — third-party API palettization (kuertee/SirNukes registry; ◐ softer validation). Lower priority.
+- **P6** — capstone: agent builds AI Influence via Forge API, runs in-game (game-gated; the done-criterion).
+
+**#64 galaxy map remainder (parser DONE):** Phase 1 rendering UI (2D map binding `/api/agent/galaxy-map`) + DLC/extension sector merge (base file shows 76; DLC sectors are diff-patched from `ego_dlc_*`). Phase 2 editor stays gated (valid≠placement).
+
+**Host/folder follow-ups → Codex (need Playwright / extensions folder):**
+- **#69** — rewrite canvas perf guard to catch the in-render `generateMDXML` regression class (not `/api/agent/compile` count).
+- **#70** — fix E2E server-side workspace restore (fixture leak: `GET /api/agent/workspace` holds `E2E_Canvas`).
+- **#71** — multi-mod project-view UI (Doctor cycle-surfacing DONE; UI remains, folder-gated).
+
+**Pre-existing open (unchanged):** #65 AIScript editor (blocked on aiscript namespacing round-trip), #67 Lua inspector (parser part agent-buildable), #60 distribution, #61/#62 release security; #45–47 model-gated; #48–51 game-gated.
+
+**Maintenance/quality (non-blocking):** lint triage beyond first pass (#56 was FIRST PASS, ~638 warnings remain); `scripts/oracle-sweep.mjs` exists (run on host to sweep all ~43 oracles).
+
+---
+
 ## Pre-public-beta gap analysis (52nd pass — everything that's left EXCEPT in-game C2 verification)
 
 *Honest inventory of what stands between current state and a credible public beta for X4 modders. The human-gated "build it and run it in X4" capstone (C2) is deliberately excluded here — this is the rest. Ranked by how much it threatens the core promise.*

@@ -78,6 +78,7 @@ import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest } from "./src/lib/modDependencyGraph";
 import { buildGalaxyMap, runGalaxyMapSelftest } from "./src/lib/galaxyMap";
+import { runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { synthesizePatch, runXpathSynthSelftest } from "./src/lib/xpathSynth";
 import * as xpathLib from "xpath";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
@@ -239,7 +240,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest",
   "/agent/mod-dependency-selftest",
-  "/agent/galaxy-map-selftest"
+  "/agent/galaxy-map-selftest",
+  "/agent/extension-project-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -3541,6 +3543,60 @@ app.get("/api/agent/galaxy-map-selftest", (_req, res) => {
     return res.json(runGalaxyMapSelftest());
   } catch (error) {
     return res.status(500).json({ pass: false, error: errorMessage(error) || "galaxy-map-selftest failed" });
+  }
+});
+
+app.get("/api/agent/extension-project-selftest", (_req, res) => {
+  try {
+    return res.json(runExtensionProjectSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "extension-project-selftest failed" });
+  }
+});
+
+// P0c — project-level agent API. Stateless: the agent holds the project (create + add
+// files client-side) and POSTs it here to validate as a unit. Returns BOTH structural
+// issues AND the cross-file cue index (defined/references/unresolved) as first-class
+// results — the cross-file linkage is the keystone's actual value-add over per-file checks.
+app.post("/api/agent/project/validate", (req, res) => {
+  try {
+    const project = req.body?.project as ExtensionProject | undefined;
+    if (!project || typeof project !== "object" || !Array.isArray(project.files)) {
+      return res.status(400).json({ error: "Body must be { project: { id, name, files: [{ path, kind, content? }, ...] } }." });
+    }
+    if (project.files.length > 2000) {
+      return res.status(413).json({ error: "Project has too many files (>2000)." });
+    }
+    const structure = validateProjectStructure(project);
+    const cueIndex = indexCueReferences(project);
+    const structuralErrors = structure.filter(i => i.severity === "error").length;
+    return res.json({
+      ok: structuralErrors === 0 && cueIndex.unresolved.length === 0,
+      summary: {
+        files: project.files.length,
+        structuralErrors,
+        definedCues: cueIndex.defined.length,
+        cueReferences: cueIndex.references.length,
+        unresolvedCueRefs: cueIndex.unresolved.length,
+      },
+      structure,
+      cueIndex, // { defined, references, unresolved } — cross-file linkage, first-class
+    });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "project validate failed" });
+  }
+});
+
+// P0b/P0c — author a content.xml (with <dependency> children) from declarative meta.
+app.post("/api/agent/project/content-xml", (req, res) => {
+  try {
+    const meta = req.body?.meta;
+    if (!meta || typeof meta !== "object" || !meta.id) {
+      return res.status(400).json({ error: "Body must be { meta: { id, name?, version?, author?, description?, deps? } }." });
+    }
+    return res.json({ contentXml: buildContentXml(meta) });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "content-xml authoring failed" });
   }
 });
 

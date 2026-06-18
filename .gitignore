@@ -31,3 +31,5 @@ dev-docs/
 # ---- Cowork session artifacts (kept out of version control by request) ----
 # Draft Cowork skills (install via Settings > Capabilities, not committed).
 forge-skills/
+tests/e2e/handoff-gap-analysis.spec.ts
+.kilo/plans/gap-analysis-roadmap-realignment.md
