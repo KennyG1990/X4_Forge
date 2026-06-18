@@ -44,6 +44,7 @@ import { runProposalReviewSelftest } from "./src/lib/proposalReview";
 import { runIntentCheckSelftest } from "./src/lib/intentCheck";
 import { runBlueprintSelftest } from "./src/lib/modBlueprint";
 import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
+import { runCanvasInteractionSelftest } from "./src/lib/canvasInteractions";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -216,6 +217,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/intent-check-selftest",
   "/agent/blueprint-selftest",
   "/agent/architect-loop-selftest",
+  "/agent/canvas-interaction-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -3387,6 +3389,14 @@ app.get("/api/agent/architect-loop-selftest", (_req, res) => {
     return res.json(runArchitectLoopSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "architect-loop-selftest failed" });
+  }
+});
+
+app.get("/api/agent/canvas-interaction-selftest", (_req, res) => {
+  try {
+    return res.json(runCanvasInteractionSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "canvas-interaction-selftest failed" });
   }
 });
 

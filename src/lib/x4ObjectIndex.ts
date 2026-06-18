@@ -1,6 +1,9 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * X4 object index: enumerate ships/stations/wares/factions/jobs/sounds from loose
+ * files + packed .cat/.dat archives, resolving display names via the localization map.
  */
 
 import fs from 'fs';

@@ -39,6 +39,7 @@ import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspac
 import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
 import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
+import { orientConnection, linkExists as linkAlreadyExists } from '../lib/canvasInteractions';
 import { STARTER_TAGS } from '../lib/mdFriendlyNames';
 import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
@@ -525,28 +526,18 @@ export default function Canvas({
     if (!linking) {
       setLinking({ nodeId, portId: port.id, type: port.type });
     } else {
-      if (linking.nodeId !== nodeId) {
+      // G14: validate + orient via the shared rule (output→input only; correct source/target
+      // regardless of click order). Invalid pairs (out↔out, in↔in, self-link) create nothing.
+      const oriented = orientConnection(
+        { nodeId: linking.nodeId, portId: linking.portId },
+        { nodeId, portId: port.id }
+      );
+      if (oriented) {
         saveCheckpoint();
         setWorkspace(prev => {
-          const linkExists = prev.links.some(
-            l => l.sourceNodeId === linking.nodeId && 
-                 l.sourcePortId === linking.portId && 
-                 l.targetNodeId === nodeId && 
-                 l.targetPortId === port.id
-          );
-          if (linkExists) return prev;
-
-          const newLink: MDLink = {
-            id: `link_${Date.now()}`,
-            sourceNodeId: linking.nodeId,
-            sourcePortId: linking.portId,
-            targetNodeId: nodeId,
-            targetPortId: port.id
-          };
-          return {
-            ...prev,
-            links: [...prev.links, newLink]
-          };
+          if (linkAlreadyExists(prev.links, oriented)) return prev;
+          const newLink: MDLink = { id: `link_${Date.now()}`, ...oriented };
+          return { ...prev, links: [...prev.links, newLink] };
         });
       }
       setLinking(null);
