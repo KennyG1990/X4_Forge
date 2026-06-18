@@ -184,6 +184,9 @@ export function validateContract(contract: IntegrationContract): ContractFinding
     }
     for (const f of [...(ep.request || []), ...(ep.response || [])]) {
       if (!f.name) findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" has a field with no name.` });
+      // P8: field names are emitted raw as MD <param name="…"> and as $<name> variables, so
+      // they must be valid identifiers — otherwise a name like `a" />` injects into the MD.
+      else if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(f.name)) findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" field "${f.name}" is not a valid identifier (letters, digits, underscore; cannot start with a digit) — it is emitted as an MD <param> name and a $variable.` });
       if (!FIELD_TYPES.includes(f.type)) findings.push({ severity: 'error', endpointId: ep.id, message: `endpoint "${ep.id}" field "${f.name}" has invalid type "${f.type}".` });
     }
   }
@@ -541,6 +544,19 @@ export function runContractGlueSelftest() {
   ok('validator_flags_bad_method', badFindings.some(f => /invalid method/.test(f.message)));
   ok('validator_flags_bad_path', badFindings.some(f => /must start with/.test(f.message)));
   ok('validator_flags_duplicate_id', badFindings.some(f => /duplicate endpoint id/.test(f.message)));
+
+  // P8: a field name that isn't a valid identifier must be rejected (it is emitted raw as
+  // an MD <param> name + $variable; a name like `a" />` would inject into the MD).
+  const injectionContract = {
+    namespace: 'myns', baseUrl: 'https://x', endpoints: [
+      { id: 'go', method: 'POST' as ContractMethod, path: '/go', request: [{ name: 'a" />', type: 'string' as ContractFieldType, required: true }] },
+    ],
+  };
+  ok('validator_flags_injection_field_name',
+    validateContract(injectionContract).some(f => /not a valid identifier/.test(f.message)));
+  ok('validator_allows_valid_field_name',
+    !validateContract({ namespace: 'myns', baseUrl: 'https://x', endpoints: [{ id: 'go', method: 'POST' as ContractMethod, path: '/go', request: [{ name: 'good_field', type: 'string' as ContractFieldType }] }] })
+      .some(f => /not a valid identifier/.test(f.message)));
 
   let badThrew = false;
   try { generateHttpGlueLua(bad); } catch { badThrew = true; }

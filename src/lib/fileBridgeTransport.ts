@@ -28,8 +28,12 @@ export interface FileBridgeActionWhitelist {
 }
 
 const ID_RE = /^[a-z][a-z0-9_]*$/;
-const FILE_RE = /^[a-z0-9_.-]+$/;
-const DIR_RE = /^[a-z0-9_.-]+$/;
+// P7: a safe path SEGMENT must start with an alnum/underscore (no leading dot) and
+// contain no ".." sequence, so a directory/file name can never be "..", "...", ".hidden"
+// or "a..b" and thus can never escape its intended folder. `/` and `\` are already
+// excluded by the charset.
+const SAFE_SEGMENT_RE = /^[a-z0-9_][a-z0-9_.-]*$/;
+const isUnsafeSegment = (s: string): boolean => !SAFE_SEGMENT_RE.test(s) || s.includes('..');
 
 function escapeXmlAttr(value: string): string {
   return String(value ?? '')
@@ -54,9 +58,9 @@ export function validateFileBridgePollingOptions(options: FileBridgePollingOptio
   const errors: string[] = [];
   if (!ID_RE.test(options.namespace || '')) errors.push('namespace must be lowercase snake_case and start with a letter.');
   if (!ID_RE.test(options.actionId || '')) errors.push('actionId must be lowercase snake_case and start with a letter.');
-  if (!DIR_RE.test(options.directory || '')) errors.push('directory must be a safe single folder name.');
-  if (!FILE_RE.test(options.requestFile || '')) errors.push('requestFile must be a safe file name.');
-  if (!FILE_RE.test(options.responseFile || '')) errors.push('responseFile must be a safe file name.');
+  if (isUnsafeSegment(options.directory || '')) errors.push('directory must be a safe single folder name (no "..", no leading dot).');
+  if (isUnsafeSegment(options.requestFile || '')) errors.push('requestFile must be a safe file name (no "..", no leading dot).');
+  if (isUnsafeSegment(options.responseFile || '')) errors.push('responseFile must be a safe file name (no "..", no leading dot).');
   if (!String(options.requestPayloadExpr || '').trim()) errors.push('requestPayloadExpr is required.');
   return errors;
 }
@@ -143,6 +147,17 @@ export function runFileBridgeTransportSelftest() {
 
   const bad = validateFileBridgePollingOptions({ ...opts, actionId: '../bad' });
   ok('validator_blocks_unsafe_action', bad.some(e => /actionId/.test(e)), bad);
+
+  // P7: path-traversal segments must be rejected for directory + file names.
+  ok('validator_blocks_dotdot_directory',
+    validateFileBridgePollingOptions({ ...opts, directory: '..' }).some(e => /directory/.test(e)));
+  ok('validator_blocks_traversal_file',
+    validateFileBridgePollingOptions({ ...opts, requestFile: 'a..b.json' }).some(e => /requestFile/.test(e)));
+  ok('validator_blocks_leading_dot_file',
+    validateFileBridgePollingOptions({ ...opts, responseFile: '.secret' }).some(e => /responseFile/.test(e)));
+  ok('validator_allows_safe_names',
+    validateFileBridgePollingOptions({ ...opts, directory: 'x4_forge_bridge', requestFile: 'req.json', responseFile: 'resp.json' })
+      .every(e => !/directory|requestFile|responseFile/.test(e)));
 
   let lua = '';
   let luaThrew = false;
