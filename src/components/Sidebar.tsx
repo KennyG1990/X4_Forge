@@ -55,6 +55,8 @@ import CueViewer from './CueViewer';
 import AIHelper from './AIHelper';
 import ObjectBrowser from './ObjectBrowser';
 import { explainNode } from '../lib/mdExplain';
+import type { ModBlueprint } from '../lib/modBlueprint';
+import type { ArchitectStepView } from './BlueprintPanel';
 
 interface SidebarProps {
   width?: number;
@@ -65,11 +67,11 @@ interface SidebarProps {
   /** A4.3 — active AI presence tier (forwarded to AIHelper to gate Builder/Architect surfaces). */
   aiTier?: 'off' | 'explain' | 'assist' | 'cobuild';
   /** A5.2 — Architect blueprint + agent-loop controls (forwarded to AIHelper). */
-  architectBlueprint?: any;
-  onBlueprintChange?: (b: any) => void;
+  architectBlueprint?: ModBlueprint;
+  onBlueprintChange?: (b: ModBlueprint) => void;
   onRunArchitectStep?: () => void;
   architectRunning?: boolean;
-  architectStep?: any;
+  architectStep?: ArchitectStepView | null;
   onConfirmArchitectStep?: () => void;
   onDeclineArchitectStep?: () => void;
   architectCanRun?: boolean;
@@ -80,7 +82,7 @@ interface SidebarProps {
   setActiveTab: (tab: 'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference') => void;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
-  onAddNode: (template: any) => void;
+  onAddNode: (template: Omit<MDNode, 'id' | 'x' | 'y'>) => void;
   onAddUIWidget: (type: string) => void;
   selectedNode: MDNode | null;
   setSelectedNode: React.Dispatch<React.SetStateAction<MDNode | null>>;
@@ -101,7 +103,7 @@ interface SidebarProps {
     name: string;
     path: string;
     content: string;
-    handle?: any;
+    handle?: FileSystemFileHandle;
     isMock?: boolean;
     isSaved?: boolean;
   }) => void;
@@ -323,8 +325,8 @@ export default function Sidebar({
       });
       setSchemaMessage('');
       setSchemaMessageType('success');
-    } catch (error: any) {
-      setSchemaMessage(error.message || 'Failed to load schema settings.');
+    } catch (error: unknown) {
+      setSchemaMessage(error instanceof Error ? error.message : 'Failed to load schema settings.');
       setSchemaMessageType('error');
     }
   }, []);
@@ -366,8 +368,8 @@ export default function Sidebar({
       setSchemaMessage(data.loaded ? 'Schema library reloaded.' : data.error || 'Schema settings saved, but library did not load.');
       setSchemaMessageType(data.loaded ? 'success' : 'error');
       await onSchemaConfigChanged?.();
-    } catch (error: any) {
-      setSchemaMessage(error.message || 'Failed to save schema settings.');
+    } catch (error: unknown) {
+      setSchemaMessage(error instanceof Error ? error.message : 'Failed to save schema settings.');
       setSchemaMessageType('error');
     } finally {
       setSavingSchema(false);
@@ -375,7 +377,7 @@ export default function Sidebar({
   };
 
   // Property editor change handling
-  const handlePropChange = (key: string, value: any) => {
+  const handlePropChange = (key: string, value: unknown) => {
     if (selectedNode) {
       setWorkspace(prev => ({
         ...prev,

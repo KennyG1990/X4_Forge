@@ -14,7 +14,7 @@
  * satisfy the task's intent is sent back, never accepted (the Codex finding).
  */
 
-import type { ModWorkspace } from '../types';
+import type { MDNode, ModWorkspace } from '../types';
 import type { IntentRequirement } from './intentCheck';
 import { reviewProposal, type ProposalReview } from './proposalReview';
 import {
@@ -44,10 +44,10 @@ export interface VetResult {
 /** A short signature for a proposal: the sorted set of node tags it ADDS. Used to
  *  match against the lessons log so the loop can't re-propose a rejected idea. */
 export function deriveApproach(base: ModWorkspace, proposed: ModWorkspace): string {
-  const baseIds = new Set((base?.nodes || []).map((n: any) => n.id));
+  const baseIds = new Set((base?.nodes || []).map((n) => n.id));
   const addedTags = (proposed?.nodes || [])
-    .filter((n: any) => !baseIds.has(n.id))
-    .map((n: any) => String(n?.xmlTag || ''))
+    .filter((n) => !baseIds.has(n.id))
+    .map((n) => String(n?.xmlTag || ''))
     .filter(Boolean)
     .sort();
   return Array.from(new Set(addedTags)).join('+');
@@ -148,11 +148,11 @@ export function runArchitectLoopSelftest(): {
   const checks: { name: string; pass: boolean; detail?: string }[] = [];
   const ok = (name: string, pass: boolean, detail?: string) => checks.push({ name, pass: !!pass, detail });
 
-  const mkN = (id: string, type: string, xmlTag: string, props: any = {}) =>
-    ({ id, type, label: id, xmlTag, x: 0, y: 0, properties: props });
-  const baseWs = (over: any = {}): any => ({
+  const mkN = (id: string, type: MDNode['type'], xmlTag: string, props: Record<string, unknown> = {}) =>
+    ({ id, type, label: id, xmlTag, x: 0, y: 0, properties: props, propertiesSchema: [], inputs: [], outputs: [] });
+  const baseWs = (over: Partial<ModWorkspace> = {}): ModWorkspace => ({
     id: 'w', name: 'W_Test', version: '1.0.0', author: '', description: '',
-    uiWidgets: [], uiTheme: {}, templates: [], nodes: [], links: [], ...over,
+    uiWidgets: [], uiTheme: { backgroundColor: '', borderColor: '', accentColor: '', opacity: 1, showIcons: true }, templates: [], nodes: [], links: [], ...over,
   });
 
   // A blueprint with one task gated on a game-start trigger being wired (intent check).

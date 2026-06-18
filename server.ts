@@ -41,10 +41,11 @@ import {
 import { runModDoctor } from "./src/lib/modDoctor";
 import { buildX4ObjectIndex, filterX4ObjectIndex, runObjectIndexSelftest, type X4ObjectIndex } from "./src/lib/x4ObjectIndex";
 import { runProposalReviewSelftest } from "./src/lib/proposalReview";
-import { runIntentCheckSelftest } from "./src/lib/intentCheck";
+import { runIntentCheckSelftest, type IntentRequirement, type IntentCheckSpec } from "./src/lib/intentCheck";
 import { runBlueprintSelftest } from "./src/lib/modBlueprint";
 import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
 import { runCanvasInteractionSelftest } from "./src/lib/canvasInteractions";
+import { runWaresJobsRoundtripSelftest, parseWaresXml, parseJobsXml } from "./src/lib/waresJobsParser";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
 import { parseXMLToWorkspace } from "./src/lib/xmlParser";
@@ -218,6 +219,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/blueprint-selftest",
   "/agent/architect-loop-selftest",
   "/agent/canvas-interaction-selftest",
+  "/agent/wares-jobs-roundtrip-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest"
 ]);
@@ -2687,13 +2689,26 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     } catch { /* leave as passthrough */ }
   }
 
+  // Editable wares/jobs (G13): parse libraries/wares.xml & libraries/jobs.xml into the
+  // WareDef/JobDef models so a studio-authored economy mod round-trips as EDITABLE rather
+  // than preserved-raw. parse* returns null for unrecognized content → falls back to
+  // passthrough (lossless), so external files carrying unmodeled fields are never flattened.
+  let importedWares: any[] | null = null;
+  let importedJobs: any[] | null = null;
+  const waresRel = relFiles.find(f => f.toLowerCase() === 'libraries/wares.xml');
+  if (waresRel) { try { importedWares = parseWaresXml(fs.readFileSync(path.join(absDir, waresRel), 'utf8')); } catch { /* passthrough */ } }
+  const jobsRel = relFiles.find(f => f.toLowerCase() === 'libraries/jobs.xml');
+  if (jobsRel) { try { importedJobs = parseJobsXml(fs.readFileSync(path.join(absDir, jobsRel), 'utf8')); } catch { /* passthrough */ } }
+
   const ws: ModWorkspace = sanitizeWorkspace({
     ...(baseWorkspace || {}),
     name: meta.name || baseWorkspace?.name || path.basename(absDir),
     version: meta.version || baseWorkspace?.version,
     author: meta.author || baseWorkspace?.author,
     description: meta.description || baseWorkspace?.description,
-    tFiles
+    tFiles,
+    ...(importedWares ? { wares: importedWares } : {}),
+    ...(importedJobs ? { jobs: importedJobs } : {}),
   });
 
   // Only regenerate domains we actually modeled. If the MD didn't parse, turn MD
@@ -2704,7 +2719,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     md: mdParsed,
     ui: false,
     ai: false,
-    library: false,
+    library: !!(importedWares || importedJobs), // G13: regenerate wares/jobs we parsed to editable
     translations: tFiles.length > 0,
     patches: false
   };
@@ -2820,6 +2835,9 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
       'content.xml': `<?xml version="1.0" encoding="utf-8"?>\n<content id="roundtrip_test" name="RoundTrip_Test" author="tester" version="100" date="2026-06-11" save="0"/>`,
       'md/roundtrip_test.xml': mdXml,
       'libraries/god.xml': godXml,
+      // G13: studio-emit wares/jobs should import as EDITABLE (parsed into WareDef/JobDef).
+      'libraries/wares.xml': compileWaresXML([{ id: 'rt_ware', name: 'RT Ware', description: 'rt', transport: 'container', volume: 5, minPrice: 10, avgPrice: 20, maxPrice: 30, prodTime: 60, prodAmount: 100, productionMethod: 'default', includeInBuild: true }]),
+      'libraries/jobs.xml': compileJobsXML([{ id: 'rt_job', name: 'RT Job', faction: 'argon', shipClass: 'fighter', shipMacro: '', galaxyQuota: 3, sectorQuota: 1, taskScript: 'masstraffic.generic', rebuildOnDestroy: false, includeInBuild: true }]),
       't/0001-l044.xml': tFileXml,
       'subscripts/custom_helper.lua': customLua,
       'unknown_top_level.xml': `<?xml version="1.0"?>\n<weird custom="data"/>\n`
@@ -2850,11 +2868,19 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
       checks.push({ name: rel, pass, path: rel, class: cls, present, byteIdentical: identical });
     }
 
+    // G13: assert the wares/jobs imported as EDITABLE models (not preserved-raw passthrough).
+    const waresOk = Array.isArray(workspace.wares) && workspace.wares.length === 1 && workspace.wares[0].id === 'rt_ware'
+      && (classOf('libraries/wares.xml') === 'generated' || classOf('libraries/wares.xml') === 'editable');
+    const jobsOk = Array.isArray(workspace.jobs) && workspace.jobs.length === 1 && workspace.jobs[0].id === 'rt_job'
+      && (classOf('libraries/jobs.xml') === 'generated' || classOf('libraries/jobs.xml') === 'editable');
+    checks.push({ name: 'G13 wares→editable model', pass: !!waresOk, class: classOf('libraries/wares.xml'), wares: (workspace.wares || []).length });
+    checks.push({ name: 'G13 jobs→editable model', pass: !!jobsOk, class: classOf('libraries/jobs.xml'), jobs: (workspace.jobs || []).length });
+
     const passed = checks.filter((c: any) => c.pass).length;
     // House selftest contract (allPassed/passed/total) alongside the richer lossless report,
     // so a generic dashboard/agent doesn't misread {lossless:true} as a failure (H9).
     return res.json({
-      allPassed: lossless,
+      allPassed: lossless && waresOk && jobsOk,
       passed,
       total: checks.length,
       lossless,
@@ -3397,6 +3423,14 @@ app.get("/api/agent/canvas-interaction-selftest", (_req, res) => {
     return res.json(runCanvasInteractionSelftest());
   } catch (error: any) {
     return res.status(500).json({ pass: false, error: error.message || "canvas-interaction-selftest failed" });
+  }
+});
+
+app.get("/api/agent/wares-jobs-roundtrip-selftest", (_req, res) => {
+  try {
+    return res.json(runWaresJobsRoundtripSelftest());
+  } catch (error: any) {
+    return res.status(500).json({ pass: false, error: error.message || "wares-jobs-roundtrip-selftest failed" });
   }
 });
 
@@ -5032,7 +5066,14 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
     // A4.9b — extract checkable requirements from the ORIGINAL prompt (separate
     // from generation) so the review can verify INTENT, not just legality. The
     // client runs these deterministically via checkIntent against the output.
-    let intentRequirements: any[] = [];
+    type RawIntentRequirement = {
+      id?: unknown;
+      label?: unknown;
+      kind?: unknown;
+      xmlTag?: unknown;
+      prop?: unknown;
+    };
+    let intentRequirements: IntentRequirement[] = [];
     try {
       const reqSystem = `Convert an X4 mod request into a SHORT list (3-6) of checkable requirements. For each pick a verification "kind":
 - "triggerWired": the cue must be triggered by an event of a given xmlTag (e.g. event_game_started, event_object_changed_sector, event_object_destroyed).
@@ -5063,14 +5104,18 @@ Use real X4 Mission Director xmlTags. Each requirement: {id, label (plain Englis
       };
       const reqRaw = await callMultiProviderAI(req, reqSystem, `User request: "${prompt}"`, "json", reqSchema);
       const reqParsed = JSON.parse(reqRaw.trim());
-      const ALLOWED = new Set(["nodePresent", "nodePropPositive", "triggerWired", "actionInChain", "manual"]);
-      intentRequirements = (Array.isArray(reqParsed.requirements) ? reqParsed.requirements : []).slice(0, 8).map((r: any, i: number) => {
-        let kind = ALLOWED.has(r?.kind) ? r.kind : "manual";
-        const check: any = { kind };
-        if (kind !== "manual") check.xmlTag = String(r?.xmlTag || "").trim();
-        if (kind === "nodePropPositive") check.prop = String(r?.prop || "").trim();
-        if (kind !== "manual" && !check.xmlTag) check.kind = "manual"; // can't check without a tag
-        return { id: String(r?.id || `req_${i}`), label: String(r?.label || "Requirement"), check };
+      const reqObj = reqParsed && typeof reqParsed === "object" ? reqParsed as { requirements?: unknown } : {};
+      const ALLOWED = new Set<IntentCheckSpec["kind"]>(["nodePresent", "nodePropPositive", "triggerWired", "actionInChain", "manual"]);
+      intentRequirements = (Array.isArray(reqObj.requirements) ? reqObj.requirements : []).slice(0, 8).map((raw, i: number) => {
+        const r = raw && typeof raw === "object" ? raw as RawIntentRequirement : {};
+        const kind = ALLOWED.has(r.kind as IntentCheckSpec["kind"]) ? r.kind as IntentCheckSpec["kind"] : "manual";
+        const xmlTag = String(r.xmlTag || "").trim();
+        const check: IntentCheckSpec = kind === "manual" || !xmlTag
+          ? { kind: "manual" }
+          : kind === "nodePropPositive"
+            ? { kind, xmlTag, prop: String(r.prop || "").trim() }
+            : { kind, xmlTag };
+        return { id: String(r.id || `req_${i}`), label: String(r.label || "Requirement"), check };
       });
     } catch (e) {
       console.warn("[AI-STUDIO] requirement extraction failed (non-fatal):", e);

@@ -277,10 +277,10 @@ export function explainNode(nodeId: string, nodes: MDNode[], links: MDLink[]): N
  * Self-test oracle. House contract: { allPassed, passed, total, checks }.
  * ------------------------------------------------------------------ */
 export function runExplainSelftest() {
-  const checks: { name: string; pass: boolean; detail?: any }[] = [];
-  const ok = (name: string, pass: boolean, detail?: any) => checks.push({ name, pass, detail });
-  const N = (id: string, type: any, xmlTag: string, properties: any = {}): MDNode =>
-    ({ id, type, xmlTag, properties, label: id, x: 0, y: 0, propertiesSchema: [], inputs: [], outputs: [] } as any);
+  const checks: { name: string; pass: boolean; detail?: unknown }[] = [];
+  const ok = (name: string, pass: boolean, detail?: unknown) => checks.push({ name, pass, detail });
+  const N = (id: string, type: MDNode['type'], xmlTag: string, properties: Record<string, unknown> = {}): MDNode =>
+    ({ id, type, xmlTag, properties, label: id, x: 0, y: 0, propertiesSchema: [], inputs: [], outputs: [] });
   const L = (id: string, s: string, sp: string, t: string, tp = 'in'): MDLink =>
     ({ id, sourceNodeId: s, sourcePortId: sp, targetNodeId: t, targetPortId: tp });
 

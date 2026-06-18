@@ -97,7 +97,7 @@ export default function App() {
   // A4.5/A4.2 — the live md.xsd-derived valid tag set, so the AI review's unknown-tag
   // check never false-flags legitimate schema tags outside the curated palette.
   const aiKnownTags = React.useMemo(
-    () => new Set(schemaTemplates.map(t => (t as any).xmlTag).filter(Boolean) as string[]),
+    () => new Set(schemaTemplates.map(t => t.xmlTag).filter(Boolean)),
     [schemaTemplates]
   );
   const loadSchemaLibrary = React.useCallback(async () => {
@@ -386,7 +386,7 @@ export default function App() {
       const vet = vetTaskProposal({ base: workspace, proposed, blueprint: bp, activeTaskId: task.id, knownTags: aiKnownTags, requirements: data.requirements });
       const verdicts = { schema: vet.review.verdicts.schema.status, graph: vet.review.verdicts.graph.status, intent: vet.review.verdicts.intent.status };
       const nodeCount = proposed?.nodes?.length ?? 0;
-      const addedTags = (proposed?.nodes || []).filter((n: any) => !workspace.nodes.some(b => b.id === n.id)).map((n: any) => n.xmlTag).filter(Boolean).join('+');
+      const addedTags = (proposed?.nodes || []).filter((n) => !workspace.nodes.some(b => b.id === n.id)).map((n) => n.xmlTag).filter(Boolean).join('+');
 
       if (vet.decision === 'accept') {
         architectPendingRef.current = { proposed, version: data.version, taskId: task.id };
@@ -406,10 +406,10 @@ export default function App() {
         });
         setArchitectStep({ decision: 'revise', reason: vet.reason, taskTitle: task.title, verdicts, nodeCount });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // A network/model failure is an ERROR, not a referee rejection — never touch the lessons log.
-      if (err?.name === 'AbortError') setArchitectStep({ decision: 'error', reason: 'Step cancelled.' });
-      else setArchitectStep({ decision: 'error', reason: `${err?.message || 'Architect step failed'} — the model request didn't complete. Run again to retry.` });
+      if (err instanceof DOMException && err.name === 'AbortError') setArchitectStep({ decision: 'error', reason: 'Step cancelled.' });
+      else setArchitectStep({ decision: 'error', reason: `${err instanceof Error ? err.message : 'Architect step failed'} — the model request didn't complete. Run again to retry.` });
     } finally {
       aiAbortRef.current = null;
       setArchitectRunning(false);
@@ -434,7 +434,7 @@ export default function App() {
   const declineArchitectStep = () => { architectPendingRef.current = null; setArchitectStep(null); };
   const architectCanRun = !!getProviderKey(getActiveProvider());
 
-  const handleSendChatMode = async (promptMsg: string) => {
+  const handleSendChatMode = React.useCallback(async (promptMsg: string) => {
     setAiChatHistory(prev => [...prev, { role: 'user', text: promptMsg }]);
     setAiLoading(true);
     setAiInputText('');
@@ -466,18 +466,18 @@ export default function App() {
         proposedVersion: data.proposedVersion,
         actionApplied: null
       }]);
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
         setAiChatHistory(prev => [...prev, { role: 'assistant', text: 'Request cancelled.' }]);
       } else {
         console.error(err);
-        setAiErrorText(err.message || "Something went wrong.");
+        setAiErrorText(err instanceof Error ? err.message : "Something went wrong.");
       }
     } finally {
       aiAbortRef.current = null;
       setAiLoading(false);
     }
-  };
+  }, [workspace]);
 
   const handleSendBuilderMode = async (promptMsg: string) => {
     setAiChatHistory(prev => [...prev, { role: 'user', text: `Generate workspace blueprint: ${promptMsg}` }]);
@@ -518,12 +518,12 @@ export default function App() {
         requirements: data.requirements,
         actionApplied: null
       }]);
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
         setAiChatHistory(prev => [...prev, { role: 'assistant', text: 'Generation cancelled.' }]);
       } else {
         console.error(err);
-        setAiErrorText(err.message || "Something went wrong during generation.");
+        setAiErrorText(err instanceof Error ? err.message : "Something went wrong during generation.");
       }
     } finally {
       aiAbortRef.current = null;
@@ -593,7 +593,7 @@ export default function App() {
     return () => {
       window.removeEventListener('open-ai-chat', handleOpenChatEvent);
     };
-  }, [workspace]);
+  }, [workspace, handleSendChatMode]);
 
   // Diagnostics click-to-navigate: Mod Doctor findings dispatch 'navigate-to-source'
   // with the diagnostic's sourceRef; jump to the owning editor surface (and, for MD
@@ -667,7 +667,7 @@ export default function App() {
     setFutureStates([]);
   };
 
-  const handleUndo = () => {
+  const handleUndo = React.useCallback(() => {
     if (pastStates.length === 0) return;
     const previous = pastStates[pastStates.length - 1];
     const newPast = pastStates.slice(0, pastStates.length - 1);
@@ -675,9 +675,9 @@ export default function App() {
     setFutureStates(prev => [JSON.parse(JSON.stringify(workspace)), ...prev]);
     setPastStates(newPast);
     setWorkspace(previous);
-  };
+  }, [pastStates, workspace, setWorkspace]);
 
-  const handleRedo = () => {
+  const handleRedo = React.useCallback(() => {
     if (futureStates.length === 0) return;
     const next = futureStates[0];
     const newFuture = futureStates.slice(1);
@@ -685,7 +685,7 @@ export default function App() {
     setPastStates(prev => [...prev, JSON.parse(JSON.stringify(workspace))]);
     setFutureStates(newFuture);
     setWorkspace(next);
-  };
+  }, [futureStates, workspace, setWorkspace]);
 
   // Setup keyboard modifiers for general OS accessibility (Ctrl+Z and Ctrl+Y)
   useEffect(() => {
@@ -704,7 +704,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pastStates, futureStates, workspace]);
+  }, [handleUndo, handleRedo]);
 
   // Sync to local storage and do debounced sync with the server database
   useEffect(() => {
@@ -757,9 +757,9 @@ export default function App() {
         setCompileStatus('error');
         setCompileMessage(deployData.error || 'Compilation or deployment failed.');
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       setCompileStatus('error');
-      setCompileMessage(e.message || 'Compilation failed. Connection error.');
+      setCompileMessage(e instanceof Error ? e.message : 'Compilation failed. Connection error.');
     }
   };
 
@@ -798,7 +798,7 @@ export default function App() {
   }, [localVersion, setWorkspace]);
 
   // Command node addition handler
-  const handleAddNode = (template: any) => {
+  const handleAddNode = (template: Omit<MDNode, 'id' | 'x' | 'y'>) => {
     saveCheckpoint();
     const newNode: MDNode = {
       ...template,
@@ -833,9 +833,10 @@ export default function App() {
     };
 
     const defaults = getWidgetDefaults();
+    const widgetType = type as UIWidget['type'];
     const newWidget: UIWidget = {
       id: `widget_${Date.now()}`,
-      type: type as any,
+      type: widgetType,
       x: 50 + Math.round(Math.random() * 40),
       y: 80 + Math.round(Math.random() * 40),
       ...defaults
@@ -878,7 +879,7 @@ export default function App() {
 
 
   // MD Scripts Validation State calculations
-  const mdDiagnostics = React.useMemo(() => {
+  const mdDiagnostics = React.useMemo<PackageDiagnostic[]>(() => {
     try {
       const code = generateMDXML(workspace);
       return validateModWorkspace(workspace, code);
@@ -891,8 +892,8 @@ export default function App() {
   const mdWarningCount = mdDiagnostics.filter(d => d.severity === 'warning').length;
   // First diagnostic that points at a node, so the indicators can jump straight to it.
   const firstFlaggedNodeId =
-    (mdDiagnostics.find(d => d.severity === 'error' && (d as any).nodeId) as any)?.nodeId ||
-    (mdDiagnostics.find(d => d.severity === 'warning' && (d as any).nodeId) as any)?.nodeId;
+    mdDiagnostics.find(d => d.severity === 'error' && d.nodeId)?.nodeId ||
+    mdDiagnostics.find(d => d.severity === 'warning' && d.nodeId)?.nodeId;
   const jumpToFlaggedNode = React.useCallback(() => {
     setWorkspaceView('blueprint');
     setActiveSidebarTab('script');
@@ -1117,7 +1118,7 @@ export default function App() {
             <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1">Preset:</span>
             <select
               value="__current"
-              onChange={(e) => handleLoadPreset(e.target.value as any)}
+              onChange={(e) => handleLoadPreset(e.target.value as 'escort' | 'mission' | 'blank' | '__current')}
               className="bg-[#0F1115] border border-white/10 p-1 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
             >
               {/* H6: show the actually-loaded workspace, not a stale "Blank Workspace" label */}

@@ -440,7 +440,7 @@ export default function Canvas({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes, draggingWaypoint, selectedNodeIds]);
+  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes, draggingWaypoint, selectedNodeIds, setWorkspace]);
 
   // Handle intuitive smooth zoom-to-cursor via mouse scroll wheel
   useEffect(() => {
@@ -553,7 +553,7 @@ export default function Canvas({
     return m;
   }, [workspace.nodes]);
 
-  const getPortCoordinates = (nodeId: string, portId: string, isSource: boolean) => {
+  const getPortCoordinates = React.useCallback((nodeId: string, portId: string, isSource: boolean) => {
     const node = nodeById.get(nodeId);
     if (!node) return { x: 0, y: 0 };
 
@@ -576,7 +576,7 @@ export default function Canvas({
       x: node.x + xOffset,
       y: node.y + yOffset
     };
-  };
+  }, [nodeById]);
 
   // Viewport tracking for optimization
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 1200, height: 800 });
