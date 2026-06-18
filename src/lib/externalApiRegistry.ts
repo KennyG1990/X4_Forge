@@ -685,20 +685,20 @@ const FIXTURE_REGISTRY: ExternalApiEntry[] = [
     extensionId: 'fix_core', name: 'Fixture Core API', author: 'test', source: '', dependsOn: [],
     components: [
       {
-        id: 'menu', title: 'Menu', requiresProtectedUiDisabled: true,
+        id: 'menu', title: 'Menu', summary: 'Menu summary', requiresProtectedUiDisabled: true,
         symbols: [
           { name: 'md.Simple_Menu_API.Create_Menu', kind: 'md_cue', summary: '', detect: ['Simple_Menu_API.Create_Menu'] },
           { name: 'md.Simple_Menu_API.Add_Row', kind: 'md_cue', summary: '', detect: ['Simple_Menu_API.Add_Row'] },
         ],
       },
       {
-        id: 'time', title: 'Time',
+        id: 'time', title: 'Time', summary: 'Time summary',
         symbols: [
           { name: "'Time.getEngineTime'", kind: 'lua_event', summary: '', detect: ['Time.getEngineTime'] },
         ],
       },
       {
-        id: 'pipes', title: 'Named Pipes', windowsOnly: true,
+        id: 'pipes', title: 'Named Pipes', summary: 'Pipes summary', windowsOnly: true,
         symbols: [
           { name: 'Named_Pipes.Write', kind: 'md_cue', summary: '', detect: ['Named_Pipes.'] },
         ],
@@ -709,7 +709,7 @@ const FIXTURE_REGISTRY: ExternalApiEntry[] = [
     extensionId: 'fix_ui', name: 'Fixture UI', author: 'test', source: '', dependsOn: ['fix_core'],
     components: [
       {
-        id: 'cb', title: 'Callbacks',
+        id: 'cb', title: 'Callbacks', summary: 'Callback summary',
         symbols: [
           { name: 'menu.registerCallback', kind: 'lua_callback', summary: '', detect: ['registerCallback('] },
         ],
