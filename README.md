@@ -147,6 +147,25 @@ X4 Forge owns the X4 side of the integration and the contract. It does not build
 
 This is for the common problem where a mod is technically valid by itself but behaves differently because another extension wins the same file or node.
 
+### Third-Party API Awareness
+
+Many real extensions depend on community library mods (for example SirNukes' `sn_mod_support_apis` and kuertee's UI extensions) that expose their own Mission Director cues, Lua events, and Lua globals. The game schema knows nothing about these, so the most common silent break is using such an API without declaring its `content.xml` dependency — in-game it simply no-ops.
+
+X4 Forge keeps a curated, loadable registry of these APIs and uses it to:
+
+- Detect when a project uses a known API (heuristic literal-token scan of your MD/Lua).
+- Warn when a used API has no `content.xml` dependency declared, including transitive dependencies (for example kuertee depends on `sn_mod_support_apis`).
+- Flag Windows-only components (named pipes, hotkeys) and unknown members under a known namespace.
+
+The registry is **data, not code**, so you can extend it without rebuilding:
+
+- Drop a JSON definition in `data/api-registry/` (see `data/api-registry/README.md` and `schema.json`).
+- Point `apiRegistryPath` in `config.json` at any folder of definitions.
+- Register one at runtime via `POST /api/agent/external-api/register`.
+- Or let Forge derive a draft from an installed mod: `GET /api/agent/external-api/derive?ext=<extension_folder>` reads the mod's loose and packed files and returns a starting definition to refine.
+
+This layer is honestly **softer than schema validation** — it is curated, heuristic, and intentionally not exhaustive — so its findings are labelled accordingly (an unknown symbol is informational, never a hard error).
+
 ### Logs And Debugging
 
 - Parse X4 debug log text into structured entries.
