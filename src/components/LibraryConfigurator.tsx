@@ -157,7 +157,23 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
       const list = wareDefsMap.get(w.id) || [];
       list.push({ id: w.id, name: w.name, source: 'Workspace Registry' });
       wareDefsMap.set(w.id, list);
-      
+
+      // P6: NaN/blank numeric fields evade every comparison guard below (NaN >= NaN is
+      // false), so they'd ship as attr="NaN". Catch them explicitly.
+      const nanFields = (['volume', 'minPrice', 'avgPrice', 'maxPrice', 'prodTime', 'prodAmount'] as const)
+        .filter(k => !Number.isFinite(Number((w as any)[k])));
+      if (nanFields.length > 0) {
+        foundWarnings.push({
+          id: `nan_ware_${w.id}`,
+          severity: 'error',
+          category: 'validation',
+          title: 'Non-numeric ware field',
+          message: `Ware '${w.id}' has non-numeric ${nanFields.join(', ')} — X4 rejects "NaN". Enter a number.`,
+          affectedIds: [w.id],
+          location: 'Workspace Registry'
+        });
+      }
+
       // Pricing rules validation
       if (w.minPrice >= w.maxPrice) {
         foundWarnings.push({
@@ -187,6 +203,21 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
       const list = jobDefsMap.get(j.id) || [];
       list.push({ id: j.id, name: j.name, source: 'Workspace Registry', details: j });
       jobDefsMap.set(j.id, list);
+
+      // P6: NaN/blank quotas evade the comparison guards below.
+      const nanJobFields = (['galaxyQuota', 'sectorQuota'] as const)
+        .filter(k => !Number.isFinite(Number((j as any)[k])));
+      if (nanJobFields.length > 0) {
+        foundWarnings.push({
+          id: `nan_job_${j.id}`,
+          severity: 'error',
+          category: 'validation',
+          title: 'Non-numeric job quota',
+          message: `Job '${j.id}' has non-numeric ${nanJobFields.join(', ')} — enter a number.`,
+          affectedIds: [j.id],
+          location: 'Workspace Registry'
+        });
+      }
 
       // Validation warnings
       if (j.galaxyQuota <= 0) {
@@ -348,6 +379,18 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
             affectedIds: [wareId],
             location: distinctSources.join(' vs ')
           });
+        } else {
+          // P12: same-source duplicate (e.g. two wares with the same id in this workspace) —
+          // previously unflagged; X4 silently keeps only one definition.
+          foundWarnings.push({
+            id: `dup_ware_${wareId}`,
+            severity: 'error',
+            category: 'id_collision',
+            title: `Duplicate Ware ID: '${wareId}'`,
+            message: `Ware ID '${wareId}' is defined ${sources.length} times in ${distinctSources[0]}. X4 keeps only one — give each ware a unique id.`,
+            affectedIds: [wareId],
+            location: distinctSources[0]
+          });
         }
       }
     });
@@ -364,6 +407,17 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
             message: `This Pilot Squad Job ID is declared in multiple file locations: ${distinctSources.join(' AND ')}. Engine parses only one.`,
             affectedIds: [jobId],
             location: distinctSources.join(' vs ')
+          });
+        } else {
+          // P12: same-source duplicate job id — previously unflagged.
+          foundWarnings.push({
+            id: `dup_job_${jobId}`,
+            severity: 'error',
+            category: 'id_collision',
+            title: `Duplicate Job ID: '${jobId}'`,
+            message: `Job ID '${jobId}' is defined ${sources.length} times in ${distinctSources[0]}. X4 keeps only one — give each job a unique id.`,
+            affectedIds: [jobId],
+            location: distinctSources[0]
           });
         }
       }
