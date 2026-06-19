@@ -107,7 +107,7 @@ export default function SnapshotManager({
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'saves' | 'diff'>('saves');
   const [showFeedback, setShowFeedback] = useState<'saved' | 'restored' | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [, setLoading] = useState<boolean>(false);
 
   const modId = useMemo(() => toSafeModId(workspace.name), [workspace.name]);
 
@@ -138,6 +138,8 @@ export default function SnapshotManager({
     if (onSelectSnapshot) {
       onSelectSnapshot(null);
     }
+    // reason: fetchSnapshots is a non-memoized component-body function and onSelectSnapshot is a parent callback; the reset+refetch is intended only when the target mod (modWorkspacePath/modId) changes, and adding them risks a refetch loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modWorkspacePath, modId]);
 
   // Create a new snapshot of the current workspace state on the server
@@ -163,11 +165,6 @@ export default function SnapshotManager({
     } catch (e) {
       console.error("Failed to save snapshot on server:", e);
     }
-  };
-
-  // Create an automatic snapshot on manual trigger or changes
-  const handleAutoSnapshot = () => {
-    handleCreateSnapshot(`Auto-backup (${new Date().toLocaleTimeString()})`);
   };
 
   // Roll back the active workspace to the selected snapshot
@@ -241,7 +238,7 @@ export default function SnapshotManager({
               snapshotName: snap.id
             })
           });
-        } catch (e) {
+        } catch {
           // ignore individual snapshot delete failures
         }
       }

@@ -111,7 +111,7 @@ export default function CueViewer({
       m.set(f.cueId, arr);
     }
     return m;
-  }, [lineage.findings]);
+  }, [lineage]);
   const errorCount = lineage.findings.filter(f => f.severity === 'error').length;
   const warnCount = lineage.findings.filter(f => f.severity === 'warning').length;
 
@@ -157,7 +157,7 @@ export default function CueViewer({
         } else {
           setLiveStatus(tail.error || 'tail failed');
         }
-      } catch (e: any) {
+      } catch (e) {
         if (!stopped) setLiveStatus('feed unavailable: ' + String((e && e.message) || e));
       }
     };
@@ -184,7 +184,7 @@ export default function CueViewer({
     try {
       setWorkspace(prev => applyLiveFix(prev, fix));
       setFixMsg(`Applied: ${fix.apply?.propertyKey} → ${fix.apply?.newValue}. Deploy, then run /refreshmd in-game to re-test live.`);
-    } catch (e: any) {
+    } catch (e) {
       setFixMsg(`Apply failed: ${e?.message || e}`);
     }
   };
@@ -197,7 +197,7 @@ export default function CueViewer({
       setFixMsg(d.success
         ? 'Deployed. In game: Enter (chat) → type /refreshmd → Enter. The glow above shows the result live.'
         : `Deploy failed: ${d.error || r.status}`);
-    } catch (e: any) {
+    } catch (e) {
       setFixMsg(`Deploy failed: ${e?.message || e}`);
     }
   };

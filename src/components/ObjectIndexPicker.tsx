@@ -64,6 +64,8 @@ export default function ObjectIndexPicker({ value, onChange, kind, placeholder, 
       }
     }, 200);
     return () => { cancelled = true; clearTimeout(t); };
+    // reason: endpoint is a stable config prop read inside the fetch; re-running the debounced search only on query/kind/open is the intended behavior.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, kind, open]);
 
   // Close on outside click.

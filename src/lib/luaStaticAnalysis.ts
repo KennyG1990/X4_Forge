@@ -123,7 +123,7 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
     let ast: any;
     try {
       ast = parseLua(file.text);
-    } catch (error: any) {
+    } catch (error) {
       findings.push({
         layer: 'baseline',
         severity: 'error',

@@ -948,67 +948,6 @@ function runPatchDiagnostics(ws: { xmlPatches?: PatchDiagnosticBlock[] }): Serve
   return out;
 }
 
-/**
- * Reference diagnostics: cross-check object references the studio emits against
- * the real game index (packed + loose). Catches things static schema validation
- * can't — e.g. a `create_ship macro="ship_xen_i_destroyer_01_macro"` that the
- * game has no macro for (which fails at runtime as "No ship generated"). These
- * are exactly the deterministic runtime failures worth catching before deploy.
- */
-function runReferenceDiagnostics(ws: ModWorkspace): ServerDiagnostic[] {
-  const out: ServerDiagnostic[] = [];
-  const nodes = (ws.nodes || []).filter(n => n.includeInBuild !== false);
-  const shipNodes = nodes.filter(n => n.xmlTag === 'create_ship');
-  const stationNodes = nodes.filter(n => n.xmlTag === 'create_station');
-  if (!shipNodes.length && !stationNodes.length) return out;
-
-  let index: X4ObjectIndex;
-  try { index = getObjectIndex(); } catch { return out; }
-  // Only validate when we actually have a macro index (game path configured).
-  const shipMacros = new Set<string>();
-  const stationMacros = new Set<string>();
-  const anyMacros = new Set<string>();
-  for (const item of index.items) {
-    const id = item.id.toLowerCase();
-    if (item.kind === 'ship') shipMacros.add(id);
-    if (item.kind === 'station') stationMacros.add(id);
-    if (item.kind === 'ship' || item.kind === 'station' || item.kind === 'macro') anyMacros.add(id);
-  }
-  if (anyMacros.size === 0) return out; // no index — can't validate, stay silent
-
-  const cleanMacro = (raw: unknown) => String(raw || '').split(' (')[0].trim().toLowerCase();
-
-  for (const node of shipNodes) {
-    const macro = cleanMacro(node.properties?.macro);
-    if (!macro) continue;
-    if (!anyMacros.has(macro)) {
-      out.push({
-        severity: 'error', category: 'reference', code: 'ref.unknown_ship_macro', domain: 'mission_director',
-        filePath: `md/${toSafeModId(ws.name)}.xml`, sourceRef: { kind: 'md_node', id: node.id, label: 'create_ship.macro' },
-        message: `create_ship references macro "${macro}" which does not exist in the indexed game data (${shipMacros.size} ship macros known). X4 will generate no ship at runtime. Pick a real macro from the Object Browser.`
-      });
-    } else if (!shipMacros.has(macro)) {
-      out.push({
-        severity: 'warning', category: 'reference', code: 'ref.macro_not_ship', domain: 'mission_director',
-        filePath: `md/${toSafeModId(ws.name)}.xml`, sourceRef: { kind: 'md_node', id: node.id, label: 'create_ship.macro' },
-        message: `create_ship macro "${macro}" exists but is not classified as a ship macro — verify it is spawnable as a ship.`
-      });
-    }
-  }
-  for (const node of stationNodes) {
-    const macro = cleanMacro(node.properties?.macro);
-    if (!macro) continue;
-    if (!anyMacros.has(macro)) {
-      out.push({
-        severity: 'error', category: 'reference', code: 'ref.unknown_station_macro', domain: 'mission_director',
-        filePath: `md/${toSafeModId(ws.name)}.xml`, sourceRef: { kind: 'md_node', id: node.id, label: 'create_station.macro' },
-        message: `create_station references macro "${macro}" which does not exist in the indexed game data (${stationMacros.size} station macros known). X4 will create no station at runtime.`
-      });
-    }
-  }
-  return out;
-}
-
 // Server-persisted active workspace (in-memory, preloaded with the Escort project)
 const DEFAULT_WORKSPACE: ModWorkspace = {
   id: "workspace_default",
@@ -1106,7 +1045,7 @@ async function generateContentWithRetry(ai: any, params: any, maxRetries = 2) {
           model: modelName,
         });
         return response;
-      } catch (error: any) {
+      } catch (error) {
         lastError = error;
         const errMessage = error.message || "";
         const errString = JSON.stringify(error) || "";
@@ -1468,7 +1407,7 @@ Please respond accurately to the user query using the above active workspace sta
     } catch {
       return res.json({ text: responseText, actionRequired: false, proposedWorkspace: null });
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error("Multi-Provider chat routing error: ", error);
     return res.status(500).json({ error: error.message || "Failed to trigger AI compilation." });
   }
@@ -1544,7 +1483,7 @@ Be highly precise and translate technical terms to clear logical human outcomes.
     const analysisResult = JSON.parse(textOutput.trim());
     return res.json({ analysis: analysisResult });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error("AI script analysis request error: ", error);
     return res.status(500).json({ error: error.message || "Failed to analyze mod script using AI." });
   }
@@ -1635,7 +1574,7 @@ Analyze this trace and return the structured issues diagnostics and suggestions.
     const parsedOutput = JSON.parse(textOutput.trim());
     return res.json({ analysis: parsedOutput });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error("AI log analysis error: ", error);
     return res.status(500).json({ error: error.message || "Failed to analyze X4 reload logs via AI compiler." });
   }
@@ -1998,7 +1937,7 @@ app.get("/api/schema/config", (req, res) => {
       loaded: schemaLibrary.loaded,
       error: schemaLibrary.error
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to read schema config." });
   }
 });
@@ -2045,7 +1984,7 @@ app.post("/api/schema/config", (req, res) => {
       loaded: library.loaded,
       error: library.error
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to update schema config." });
   }
 });
@@ -2105,7 +2044,7 @@ app.get("/api/fs/list", (req, res) => {
     }
     const tree = scanDirectory(rootPath, rootPath);
     return res.json(tree);
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to list filesystem." });
   }
 });
@@ -2134,7 +2073,7 @@ app.get("/api/fs/read", (req, res) => {
     
     const content = fs.readFileSync(safePath, 'utf8');
     return res.json({ content });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to read file." });
   }
 });
@@ -2169,7 +2108,7 @@ app.get("/api/patch/base-content", (req, res) => {
           for (const ext of extensions) {
             pathsToCheck.push(path.join(extPath, ext, targetFile));
           }
-        } catch (e) {
+        } catch {
           // Ignore
         }
       }
@@ -2194,13 +2133,13 @@ app.get("/api/patch/base-content", (req, res) => {
             note: 'Extracted from packed base-game .cat/.dat archives. DLC additions are not merged into this preview.'
           });
         }
-      } catch (e) {
+      } catch {
         // fall through to 404
       }
     }
 
     return res.status(404).json({ error: `File '${targetFile}' not found in loose files or packed game archives (.cat/.dat).`, isPacked: true });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to find target base file." });
   }
 });
@@ -2231,7 +2170,7 @@ app.post("/api/fs/write", (req, res) => {
     
     fs.writeFileSync(safePath, content, 'utf8');
     return res.json({ success: true });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to write file." });
   }
 });
@@ -2270,7 +2209,7 @@ app.post("/api/fs/create", (req, res) => {
     }
     
     return res.json({ success: true, path: cleanName });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to create resource." });
   }
 });
@@ -2312,7 +2251,7 @@ app.get("/api/fs/snapshots", (req, res) => {
           workspace: parsed.workspace || parsed,
           modId: parsed.modId
         };
-      } catch (e) {
+      } catch {
         return null;
       }
     }).filter(Boolean);
@@ -2322,7 +2261,7 @@ app.get("/api/fs/snapshots", (req, res) => {
 
     filteredList.sort((a, b) => b.id.localeCompare(a.id));
     return res.json(filteredList);
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to list snapshots." });
   }
 });
@@ -2380,7 +2319,7 @@ app.post("/api/fs/snapshot", (req, res) => {
     }
 
     return res.json({ success: true });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to save snapshot." });
   }
 });
@@ -2411,7 +2350,7 @@ app.post("/api/fs/restore-snapshot", (req, res) => {
     workspaceVersion++;
     
     return res.json({ success: true, workspace: activeWorkspace });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to restore snapshot." });
   }
 });
@@ -2433,7 +2372,7 @@ app.post("/api/fs/delete-snapshot", (req, res) => {
       fs.unlinkSync(snapFile);
     }
     return res.json({ success: true });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to delete snapshot." });
   }
 });
@@ -2571,7 +2510,7 @@ app.get("/api/agent/diagnostics", (req, res) => {
   try {
     const diagnostics = computeWorkspaceDiagnostics(activeWorkspace);
     return res.json({ version: workspaceVersion, summary: summarizeDiagnostics(diagnostics), diagnostics });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'diagnostics failed' });
   }
 });
@@ -2585,7 +2524,7 @@ app.get("/api/agent/game-log/status", (req, res) => {
   try {
     const modId = typeof req.query.modId === "string" ? req.query.modId : undefined;
     return res.json(getGameLogStatus(modId));
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({
       status: "error",
       error: error.message || "Failed to read X4 game log status."
@@ -2606,7 +2545,7 @@ app.get("/api/agent/object-index", (req, res) => {
       limit: typeof req.query.limit === "string" ? Number(req.query.limit) : 500
     });
     return res.json(filtered);
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({
       error: error.message || "Failed to build X4 object index."
     });
@@ -2649,7 +2588,7 @@ app.get("/api/agent/patch-targets", (req, res) => {
     let paths = listBasePatchTargets();
     if (q) paths = paths.filter(p => p.toLowerCase().includes(q));
     return res.json({ success: true, total: paths.length, items: paths.slice(0, limit).map(p => ({ id: p, name: "" })) });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "patch-targets listing failed" });
   }
 });
@@ -2847,7 +2786,6 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     patches: false
   };
 
-  const modId = toSafeModId(ws.name);
   // Paths the manifest will regenerate from the parsed/modeled domains.
   const regenPaths = new Set<string>(Object.keys(buildWorkspaceFileManifest(ws).files).map(p => p.toLowerCase()));
 
@@ -2928,7 +2866,7 @@ app.post("/api/agent/mod-folder/import", (req, res) => {
     if ('error' in r) return res.status(r.status).json({ error: r.error });
     const { workspace, report } = importModFolder(r.abs);
     return res.json({ success: true, workspace, report });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'mod-folder import failed' });
   }
 });
@@ -3024,7 +2962,7 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
       importSummary: report.summary,
       importReport: report
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'selftest failed', stack: String(error?.stack || '').slice(0, 500) });
   } finally {
     if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } }
@@ -3081,7 +3019,7 @@ app.post("/api/agent/round-trip-check", (req, res) => {
       droppedFiles,
       importReport: report
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'round-trip-check failed' });
   }
 });
@@ -3442,7 +3380,7 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
       return out;
     };
     return res.json({ success: true, extensionsRoot: extRoot, ...runExtensionDoctor(extRoot, { resolveBaseContent }) });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "extension-doctor scan failed" });
   }
 });
@@ -3470,7 +3408,7 @@ app.get("/api/agent/mod-dependency-graph", (_req, res) => {
     }
     const graph = analyzeModDependencies(present);
     return res.json({ success: true, extensionsRoot: extRoot, ...graph });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ success: false, error: error.message || "mod-dependency-graph scan failed" });
   }
 });
@@ -4097,7 +4035,7 @@ app.post("/api/agent/xpath-synth", (req, res) => {
     }
     const result = synthesizePatch(vanillaXml, editedXml);
     return res.json({ success: true, targetFile: targetFile || null, ...result });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(400).json({ error: error.message || "xpath-synth failed" });
   }
 });
@@ -4105,7 +4043,7 @@ app.post("/api/agent/xpath-synth", (req, res) => {
 app.get("/api/agent/xpath-synth-selftest", (_req, res) => {
   try {
     return res.json(runXpathSynthSelftest());
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ pass: false, error: error.message || "xpath-synth-selftest failed" });
   }
 });
@@ -4117,14 +4055,14 @@ app.get("/api/agent/xpath-synth-selftest", (_req, res) => {
 // UI layout (grid descriptor + pixel->grid bridge) self-test.
 app.get("/api/agent/ui-layout-selftest", (_req, res) => {
   try { res.json(runUILayoutSelftest()); }
-  catch (error: any) { res.status(500).json({ error: error?.message || "ui-layout-selftest failed" }); }
+  catch (error) { res.status(500).json({ error: error?.message || "ui-layout-selftest failed" }); }
 });
 
 // HUD & LUA UI Layout Designer — widget validation self-test.
 app.get("/api/agent/ui-widget-validate-selftest", (_req, res) => {
   try {
     res.json(runUiWidgetValidateSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "ui-widget-validate-selftest failed" });
   }
 });
@@ -4159,7 +4097,7 @@ function runLogFileSelftest() {
     ok("parses_one_error", r.totals.errors === 1);
     ok("correlates_bar_error", !!r.cues.find(c => c.name === "Bar" && c.errors === 1));
     ok("correlates_foo_clean", !!r.cues.find(c => c.name === "Foo" && c.errors === 0));
-  } catch (e: any) { ok("no_exception", false, String(e && e.message || e)); }
+  } catch (e) { ok("no_exception", false, String(e && e.message || e)); }
   finally { try { fs.unlinkSync(tmp); cleaned = true; } catch {} }
   ok("temp_cleaned_up", cleaned);
   const passed = checks.filter(c => c.pass).length;
@@ -4169,7 +4107,7 @@ function runLogFileSelftest() {
 app.get("/api/agent/log-file-selftest", (_req, res) => {
   try {
     res.json(runLogFileSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "log-file-selftest failed" });
   }
 });
@@ -4182,7 +4120,7 @@ app.post("/api/agent/log-file-tail", (req, res) => {
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: "file not found" });
     const telemetry = readAndParseLogFile(filePath, cueNames, typeof maxBytes === "number" ? maxBytes : undefined);
     res.json({ success: true, path: filePath, telemetry: { ...telemetry, entries: telemetry.entries.slice(-500) } });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "log-file-tail failed" });
   }
 });
@@ -4191,7 +4129,7 @@ app.post("/api/agent/log-file-tail", (req, res) => {
 app.get("/api/agent/log-telemetry-selftest", (_req, res) => {
   try {
     res.json(runLogTelemetrySelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "log-telemetry-selftest failed" });
   }
 });
@@ -4200,7 +4138,7 @@ app.get("/api/agent/log-telemetry-selftest", (_req, res) => {
 app.get("/api/agent/live-fixes-selftest", (_req, res) => {
   try {
     res.json(runLiveFixesSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "live-fixes-selftest failed" });
   }
 });
@@ -4209,7 +4147,7 @@ app.get("/api/agent/live-fixes-selftest", (_req, res) => {
 app.get("/api/agent/cue-lineage-selftest", (_req, res) => {
   try {
     res.json(runCueLineageSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "cue-lineage-selftest failed" });
   }
 });
@@ -4218,7 +4156,7 @@ app.get("/api/agent/cue-lineage-selftest", (_req, res) => {
 app.get("/api/agent/semantics-selftest", (_req, res) => {
   try {
     res.json(runSemanticsSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "semantics-selftest failed" });
   }
 });
@@ -4238,7 +4176,7 @@ app.get("/api/agent/semantics", (req, res) => {
     }
     const type = (req.query.type as string) || "action";
     res.json({ success: true, ...semanticsForNode({ xmlTag: tag, type: type as any, properties: props }) });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ success: false, error: error?.message || "semantics lookup failed" });
   }
 });
@@ -4247,7 +4185,7 @@ app.get("/api/agent/semantics", (req, res) => {
 app.get("/api/agent/explain-selftest", (_req, res) => {
   try {
     res.json(runExplainSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "explain-selftest failed" });
   }
 });
@@ -4257,7 +4195,7 @@ app.post("/api/agent/explain", (req, res) => {
   try {
     const { nodes, links } = req.body || {};
     res.json({ success: true, ...explainWorkspace(nodes || [], links || []) });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ success: false, error: error?.message || "explain failed" });
   }
 });
@@ -4286,7 +4224,7 @@ app.post("/api/agent/node-diagnostics", (req, res) => {
     const nodes = Array.isArray(req.body?.nodes) ? req.body.nodes : (req.body?.workspace?.nodes || []);
     const diagnostics = validateNodesAgainstSchema(nodes, getNodeSchemaView());
     res.json({ success: true, schemaLoaded: getNodeSchemaView().loaded, diagnostics, byNode: summarizeByNode(diagnostics) });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ success: false, error: error?.message || "node-diagnostics failed" });
   }
 });
@@ -4294,7 +4232,7 @@ app.post("/api/agent/node-diagnostics", (req, res) => {
 app.get("/api/agent/node-diagnostics-selftest", (_req, res) => {
   try {
     res.json(runNodeDiagnosticsSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "node-diagnostics-selftest failed" });
   }
 });
@@ -4303,7 +4241,7 @@ app.get("/api/agent/node-diagnostics-selftest", (_req, res) => {
 app.get("/api/agent/node-align-selftest", (_req, res) => {
   try {
     res.json(runNodeAlignSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "node-align-selftest failed" });
   }
 });
@@ -4312,7 +4250,7 @@ app.get("/api/agent/node-align-selftest", (_req, res) => {
 app.get("/api/agent/auto-layout-selftest", (_req, res) => {
   try {
     res.json(runAutoLayoutSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "auto-layout-selftest failed" });
   }
 });
@@ -4321,7 +4259,7 @@ app.get("/api/agent/auto-layout-selftest", (_req, res) => {
 app.get("/api/agent/composite-blocks-selftest", (_req, res) => {
   try {
     res.json(runCompositeBlocksSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "composite-blocks-selftest failed" });
   }
 });
@@ -4330,7 +4268,7 @@ app.get("/api/agent/composite-blocks-selftest", (_req, res) => {
 app.get("/api/agent/mod-templates-selftest", (_req, res) => {
   try {
     res.json(runModTemplatesSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "mod-templates-selftest failed" });
   }
 });
@@ -4339,7 +4277,7 @@ app.get("/api/agent/mod-templates-selftest", (_req, res) => {
 app.get("/api/agent/compile-selftest", (_req, res) => {
   try {
     res.json(runCompileSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "compile-selftest failed" });
   }
 });
@@ -4348,7 +4286,7 @@ app.get("/api/agent/compile-selftest", (_req, res) => {
 app.get("/api/agent/friendly-names-selftest", (_req, res) => {
   try {
     res.json(runFriendlyNamesSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "friendly-names-selftest failed" });
   }
 });
@@ -4357,7 +4295,7 @@ app.get("/api/agent/friendly-names-selftest", (_req, res) => {
 app.get("/api/agent/port-semantics-selftest", (_req, res) => {
   try {
     res.json(runPortSemanticsSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "port-semantics-selftest failed" });
   }
 });
@@ -4366,7 +4304,7 @@ app.get("/api/agent/port-semantics-selftest", (_req, res) => {
 app.get("/api/agent/simulate-selftest", (_req, res) => {
   try {
     res.json(runSimulateSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "simulate-selftest failed" });
   }
 });
@@ -4377,7 +4315,7 @@ app.post("/api/agent/simulate", (req, res) => {
   try {
     const { nodes, links, seed } = req.body || {};
     res.json({ success: true, ...simulateWorkspace(nodes || [], links || [], seed || {}) });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ success: false, error: error?.message || "simulate failed" });
   }
 });
@@ -4386,7 +4324,7 @@ app.post("/api/agent/simulate", (req, res) => {
 app.get("/api/agent/critic-selftest", (_req, res) => {
   try {
     res.json(runCriticSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "critic-selftest failed" });
   }
 });
@@ -4396,7 +4334,7 @@ app.post("/api/agent/critic", (req, res) => {
   try {
     const { nodes, links } = req.body || {};
     res.json({ success: true, ...critiqueWorkspace(nodes || [], links || []) });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ success: false, error: error?.message || "critic failed" });
   }
 });
@@ -4405,7 +4343,7 @@ app.post("/api/agent/critic", (req, res) => {
 app.get("/api/agent/lua-snippets", (_req, res) => {
   try {
     res.json({ success: true, snippets: LUA_SNIPPETS, selftest: runLuaSnippetSelftest() });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "lua-snippets failed" });
   }
 });
@@ -4413,7 +4351,7 @@ app.get("/api/agent/lua-snippets", (_req, res) => {
 app.get("/api/agent/lua-static-selftest", (_req, res) => {
   try {
     res.json(runLuaStaticAnalysisSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "lua-static-selftest failed" });
   }
 });
@@ -4429,7 +4367,7 @@ app.get("/api/agent/lua-runtime-log-selftest", (_req, res) => {
 app.get("/api/agent/lua-logic-blocks-selftest", (_req, res) => {
   try {
     res.json(runLuaLogicBlocksSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ pass: false, error: error?.message || "lua-logic-blocks-selftest failed" });
   }
 });
@@ -4439,7 +4377,7 @@ app.get("/api/agent/lua-logic-blocks-selftest", (_req, res) => {
 app.get("/api/agent/contract-selftest", (_req, res) => {
   try {
     res.json(runContractGlueSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "contract-selftest failed" });
   }
 });
@@ -4447,7 +4385,7 @@ app.get("/api/agent/contract-selftest", (_req, res) => {
 app.get("/api/agent/file-bridge-transport-selftest", (_req, res) => {
   try {
     res.json(runFileBridgeTransportSelftest());
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "file-bridge-transport-selftest failed" });
   }
 });
@@ -4468,7 +4406,7 @@ app.get("/api/agent/contract-glue-sample", (_req, res) => {
     const lua = generateHttpGlueLua(sample);
     const mdScript = generateContractMdScript(sample, "mymod_http");
     res.json({ success: true, contract: sample, findings, lua, mdScript });
-  } catch (error: any) {
+  } catch (error) {
     res.status(500).json({ error: error?.message || "contract-glue-sample failed" });
   }
 });
@@ -4567,7 +4505,7 @@ app.get("/api/agent/extension-doctor-selftest", (_req, res) => {
       && checks.xpathOverlap && checks.xpathNoFalsePositive
       && checks.packedLuaRestrictedCall;
     return res.json({ success: true, pass, checks, codes: result.findings.map((f: any) => f.code), result });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "extension-doctor-selftest failed" });
   } finally {
     if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
@@ -4598,7 +4536,7 @@ app.get("/api/agent/db-selftest", (_req, res) => {
     } catch { /* parity is informational */ }
 
     return res.json({ success: true, ...result, liveCache: getStudioDb()?.path || null, liveParity });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "db-selftest failed" });
   }
 });
@@ -4637,7 +4575,7 @@ app.get("/api/agent/extension-file", (req, res) => {
       return res.json({ success: true, path: rel, name: path.basename(entry.name), content, source: "packed", archive: path.basename(archive.catPath) });
     }
     return res.status(404).json({ error: "File not found." });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "extension-file read failed" });
   }
 });
@@ -4695,7 +4633,7 @@ app.get("/api/agent/md-audit", (req, res) => {
       schemaTruth,
       md
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'md-audit failed', stack: String(error?.stack || '').slice(0, 400) });
   }
 });
@@ -4717,7 +4655,7 @@ app.get("/api/agent/api-selftest", (req, res) => {
     const merge = applyWorkspaceMutation({ version: '7.7.7' }, { expectedVersion: savedVer, merge: true });
     results.push({ test: 'mergeApply', pass: merge.status === 200 && merge.body.applied === true && workspaceVersion === savedVer + 1 && activeWorkspace.version === '7.7.7', detail: { applied: merge.body.applied, newVersion: workspaceVersion, mergedVersion: activeWorkspace.version } });
     return res.json({ allPassed: results.every(r => r.pass), results });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'api-selftest failed' });
   } finally {
     // Always restore live state.
@@ -4732,7 +4670,7 @@ app.get("/api/agent/api-selftest", (req, res) => {
 // Consolidated regression: runs every public self-test and reports one verdict.
 app.get("/api/agent/selftest", async (req, res) => {
   const base = `http://127.0.0.1:${PORT}/api/agent`;
-  const get = async (p: string) => { try { const r = await fetch(`${base}/${p}`); return await r.json(); } catch (e: any) { return { __error: String(e?.message || e) }; } };
+  const get = async (p: string) => { try { const r = await fetch(`${base}/${p}`); return await r.json(); } catch (e) { return { __error: String(e?.message || e) }; } };
   try {
     const [md, ref, api, log, rt, patch] = await Promise.all([
       get('md-audit'), get('reference-selftest'), get('api-selftest'), get('log-selftest'), get('round-trip-selftest'), get('patch-audit')
@@ -4750,7 +4688,7 @@ app.get("/api/agent/selftest", async (req, res) => {
       { name: 'patch_diagnostics', pass: Array.isArray(patch.diagnostics) && patch.diagnostics.some((d: any) => d.code === 'patch.target_unresolved') && patch.diagnostics.some((d: any) => d.code === 'patch.selector_root_mismatch') }
     ];
     return res.json({ allPassed: checks.every(c => c.pass), passed: checks.filter(c => c.pass).length, total: checks.length, checks });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'selftest failed' });
   }
 });
@@ -4793,7 +4731,7 @@ app.get("/api/agent/type-probe", (req, res) => {
       anyStations,
       sampleArgonShips: sampleShips
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'type-probe failed' });
   }
 });
@@ -4846,7 +4784,7 @@ app.get("/api/agent/reference-selftest", (req, res) => {
       factionGoodClean,
       mdSnippet: (md.match(/<create_ship[^>]*>/) || [])[0] || null
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'reference-selftest failed', stack: String(error?.stack||'').slice(0,300) });
   }
 });
@@ -4870,7 +4808,7 @@ app.get("/api/agent/log-selftest", (req, res) => {
       { test: 'notSeen', pass: !notSeen.seenByX4 && !notSeen.loadedCleanly, detail: notSeen }
     ];
     return res.json({ allPassed: results.every(r => r.pass), results });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'log-selftest failed' });
   }
 });
@@ -4894,7 +4832,7 @@ app.get("/api/agent/patch-audit", (req, res) => {
       { name: 'selector_root_mismatch_warns', pass: hasRootMismatch }
     ];
     return res.json({ pass: checks.every(c => c.pass), checks, diagnostics });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'patch-audit failed' });
   }
 });
@@ -4916,7 +4854,7 @@ app.post("/api/agent/xsd-lookup", (req, res) => {
         : { inIndex: false };
     }
     return res.json({ loaded: index.loaded, elementCount: index.elementCount, elements: out });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'xsd-lookup failed' });
   }
 });
@@ -4934,7 +4872,7 @@ app.get("/api/agent/xsd-debug", (req, res) => {
         const term = String(req.query.search || req.query.el);
         const i = xsd.toLowerCase().indexOf(String(term).toLowerCase());
         rawHit = i >= 0 ? xsd.slice(Math.max(0, i - 30), i + 300).replace(/\s+/g, ' ') : 'NOT_FOUND_IN_md.xsd';
-      } catch (e: any) { rawHit = 'read_err:' + e.message; }
+      } catch (e) { rawHit = 'read_err:' + e.message; }
       return res.json({
         element: req.query.el,
         inIndex: Boolean(spec),
@@ -4969,7 +4907,7 @@ app.get("/api/agent/xsd-debug", (req, res) => {
       } : 'NOT_IN_INDEX';
     }
     return res.json({ loaded: index.loaded, elementCount: index.elementCount, sourceFiles: index.sourceFiles, knownSamples, sampleDiagnostics: diags });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || 'xsd-debug failed', stack: String(error?.stack || '').slice(0, 400) });
   }
 });
@@ -5002,7 +4940,7 @@ app.get("/api/agent/catdat-debug", (req, res) => {
     const report = catDatDebugScan(roots);
     // Trim to keep payload reasonable: only show archives that have entries or errors.
     return res.json(report);
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "catdat-debug failed" });
   }
 });
@@ -5288,7 +5226,7 @@ app.post("/api/agent/deploy", (req, res) => {
       deployedPath: deployedPath || stagingPath,
       lastDeploy: lastDeployInfo
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({
       success: false,
       error: error.message || "Failed to compile/deploy mod."
@@ -5325,7 +5263,7 @@ app.post("/api/agent/compile", (req, res) => {
       },
       diagnostics
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({
       success: false,
       error: error.message || "Failed to compile workspace schema to XML."
@@ -5350,7 +5288,7 @@ app.post("/api/agent/package", (req, res) => {
       files,
       diagnostics
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({
       success: false,
       error: error.message || "Failed to package workspace schema to file manifest."
@@ -5397,7 +5335,7 @@ function populateNodeMetadata(nodes: any[]): any[] {
  * into a highly complex, logical ModWorkspace structured JSON value.
  */
 app.post("/api/agent/generate", async (req, res) => {
-  const { prompt, currentWorkspace, diagnostics } = req.body;
+  const { prompt, currentWorkspace } = req.body;
   if (!prompt) {
     return res.status(400).json({ error: "Missing 'prompt' body parameter." });
   }
@@ -5700,7 +5638,7 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
           uiTheme: phase4Result.uiTheme || combinedWorkspace.uiTheme
         };
         console.log(`[AI-STUDIO] Phased Auto-Remedy cycle completed successfully.`);
-      } catch (repairErr: any) {
+      } catch (repairErr) {
         selfHealError = repairErr?.message || String(repairErr);
         console.warn(`[AI-STUDIO] Self-heal attempt failed (falling back to base layout):`, repairErr);
       }
@@ -5809,7 +5747,7 @@ Use real X4 Mission Director xmlTags. Each requirement: {id, label (plain Englis
       selfHealError
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error("AI Agent layout generation error: ", error);
     return res.status(500).json({
       error: error.message || "Failed to trigger automated workspace planner in phased execution mode."
@@ -5863,7 +5801,7 @@ app.post("/api/github/load", async (req, res) => {
       content: decoded,
       fileName: data.name
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("GitHub file load error: ", error);
     return res.status(500).json({ error: error.message || "Failed to load file from GitHub." });
   }
@@ -5908,7 +5846,7 @@ app.post("/api/github/push", async (req, res) => {
           const getData: any = await getRes.json();
           currentSha = getData.sha;
         }
-      } catch (getErr) {
+      } catch {
         // Log error but ignore (might be new file)
         console.log(`Pre-fetch SHA failed for ${filePath}, assuming new file.`);
       }
@@ -5955,7 +5893,7 @@ app.post("/api/github/push", async (req, res) => {
       results
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error("GitHub push error: ", error);
     return res.status(500).json({ error: error.message || "Failed to commit files to GitHub." });
   }
@@ -6010,7 +5948,7 @@ app.post("/api/github/create", async (req, res) => {
       html_url: data.html_url,
       default_branch: data.default_branch || "main"
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("GitHub create-repo error: ", error);
     return res.status(500).json({ error: error.message || "Failed to create GitHub repository." });
   }
@@ -6040,7 +5978,7 @@ app.post("/api/github/device/start", async (req, res) => {
     }
     // data: device_code, user_code, verification_uri, expires_in, interval
     return res.json(data);
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Device authorization request failed." });
   }
 });
@@ -6089,7 +6027,7 @@ app.post("/api/github/device/poll", async (req, res) => {
 
     // Still waiting / throttled / expired — surface the GitHub error code to the poller.
     return res.json({ pending: true, error: data.error, interval: data.interval });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Device token poll failed." });
   }
 });
@@ -6128,7 +6066,7 @@ app.post("/api/github/commits", async (req, res) => {
       html_url: c.html_url
     }));
     return res.json({ commits });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to fetch repository commits." });
   }
 });
@@ -6188,7 +6126,7 @@ app.get("/api/run_command", async (req, res) => {
         stderr
       });
     });
-  } catch (e: any) {
+  } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
 });

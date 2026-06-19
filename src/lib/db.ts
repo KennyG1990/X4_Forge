@@ -37,7 +37,7 @@ function loadDriver(): any {
   try {
     const require = createRequire(import.meta.url);
     BetterSqlite3 = require('better-sqlite3');
-  } catch (err: any) {
+  } catch (err) {
     loadError = err?.message || String(err);
   }
   return BetterSqlite3;
@@ -334,7 +334,7 @@ export function dbSelfTest(): { available: boolean; reason?: string; pass?: bool
     };
     db.raw.close();
     return { available: true, pass: Object.values(checks).every(Boolean), checks };
-  } catch (err: any) {
+  } catch (err) {
     return { available: true, pass: false, checks: { exception: false }, reason: err?.message || String(err) };
   } finally {
     if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }

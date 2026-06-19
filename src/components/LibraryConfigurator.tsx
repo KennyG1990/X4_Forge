@@ -71,73 +71,6 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
   // Inline "new item id" entry (replaces a blocking window.prompt). null = not adding.
   const [addingId, setAddingId] = useState<string | null>(null);
 
-  // High fidelity default arrays
-  const defaultWares: WareDef[] = [
-    {
-      id: 'ware_quantum_injectors',
-      name: 'Quantum Engine Injectors',
-      description: 'Super-efficient fuel compression injectors used in advanced high-speed capital engines.',
-      transport: 'container',
-      tags: 'economy equipment',
-      volume: 8,
-      minPrice: 420,
-      avgPrice: 850,
-      maxPrice: 1600,
-      prodTime: 45,
-      prodAmount: 4,
-      productionMethod: 'default',
-      productionName: 'Assembly output',
-      primaryWares: [
-        { ware: 'ore', amount: 15 },
-        { ware: 'energycells', amount: 40 }
-      ]
-    },
-    {
-      id: 'ware_fusion_conductors',
-      name: 'High-Temp Fusion Conductors',
-      description: 'Superconducting alloy links that distribute stable energy payloads to magnetic rail accelerators.',
-      transport: 'container',
-      tags: 'economy equipment',
-      volume: 12,
-      minPrice: 800,
-      avgPrice: 1250,
-      maxPrice: 2400,
-      prodTime: 60,
-      prodAmount: 2,
-      productionMethod: 'default',
-      productionName: 'Assembly output',
-      primaryWares: [
-        { ware: 'ore', amount: 15 },
-        { ware: 'energycells', amount: 40 }
-      ]
-    }
-  ];
-
-  const defaultJobs: JobDef[] = [
-    {
-      id: 'job_argon_patrol_elite_escort',
-      name: 'Argon Vanguard Strategic Escort Force',
-      faction: 'argon',
-      shipClass: 'fighter',
-      shipMacro: 'ship_arg_s_fighter_01_a_macro',
-      galaxyQuota: 12,
-      sectorQuota: 3,
-      taskScript: 'hunter.escort.behavior',
-      rebuildOnDestroy: true
-    },
-    {
-      id: 'job_xenon_destroyer_offensive',
-      name: 'Xenon Sector Harassment Fleet',
-      faction: 'xenon',
-      shipClass: 'destroyer',
-      shipMacro: 'ship_xen_k_destroyer_01_macro',
-      galaxyQuota: 4,
-      sectorQuota: 1,
-      taskScript: 'commander.patrol.xenon',
-      rebuildOnDestroy: true
-    }
-  ];
-
   const wares = workspace.wares || [];
   const jobs = workspace.jobs || [];
 
@@ -471,6 +404,8 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
 
   React.useEffect(() => {
     scanProjectFilesForConflicts();
+    // reason: scanProjectFilesForConflicts is a non-memoized component-body function; re-running only on the actual scan inputs (wares/jobs/xmlPatches) is intended and avoids a per-render rescan loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.wares, workspace.jobs, workspace.xmlPatches]);
 
   const saveWares = (newWares: WareDef[]) => {

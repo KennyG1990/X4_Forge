@@ -55,6 +55,8 @@ export default function MDScanner({
   // instant, always current. Prose from the semantics registry; SEQUENCE from the edge-walk.
   const det = useMemo(
     () => explainWorkspace(workspace?.nodes || [], (workspace as any)?.links || []),
+    // reason: the memo only consumes workspace.nodes/links; depending on the whole workspace object would recompute on unrelated field changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [workspace?.nodes, (workspace as any)?.links]
   );
 

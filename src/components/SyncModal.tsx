@@ -137,6 +137,8 @@ export default function SyncModal({
   useEffect(() => {
     if (!isOpen) return;
     void loadProjectTree();
+    // reason: loadProjectTree is a non-memoized component-body function; the tree should reload only when the modal opens or its path inputs (modWorkspacePath/filesystemPath) change, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, modWorkspacePath, filesystemPath]);
 
   useEffect(() => {
@@ -154,7 +156,7 @@ export default function SyncModal({
       if (!res.ok) throw new Error(data?.error || `Filesystem scan failed (${res.status})`);
       setFileTree(Array.isArray(data) ? data : []);
       setStatusBanner({ type: 'info', msg: `Scanned configured mod workspace: ${filesystemPath || modWorkspacePath || 'unset'}` });
-    } catch (e: any) {
+    } catch (e) {
       setStatusBanner({ type: 'refused', msg: e.message || 'Failed to scan mod workspace.' });
     } finally {
       setLoadingTree(false);
@@ -175,7 +177,7 @@ export default function SyncModal({
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Preview failed (${res.status})`);
       setPreviewReport(data);
-    } catch (e: any) {
+    } catch (e) {
       setStatusBanner({ type: 'refused', msg: e.message || 'Project preview failed.' });
     } finally {
       setPreviewLoading(false);
@@ -207,7 +209,7 @@ export default function SyncModal({
       if (setWorkspaceView) setWorkspaceView('blueprint');
       setStatusBanner({ type: 'success', msg: `Loaded mod folder "${selectedPath}". ${data.report?.summary || ''}` });
       onClose();
-    } catch (e: any) {
+    } catch (e) {
       setStatusBanner({ type: 'refused', msg: e.message || 'Project import failed.' });
     } finally {
       setImportLoading(false);
@@ -267,13 +269,13 @@ export default function SyncModal({
         if (setWorkspaceView) setWorkspaceView('translation');
         onClose();
       } else if (isAIScript) {
-        if (setWorkspaceView) setWorkspaceView('aiscripts');
-        setStatusBanner({ type: 'success', msg: 'AIScript XML identified. Routed to Behavior Tree builder.' });
-        onClose();
+        // P10: this path used to claim success ("Routed to Behavior Tree builder") while
+        // importing NOTHING — the pasted XML was discarded. Be honest: single-paste AIScript
+        // import isn't wired here; point the user at the real import flow.
+        setStatusBanner({ type: 'refused', msg: 'Detected an AIScript, but pasting a single AIScript here does not import it. Use Load Mod Project to import an AIScript from a mod folder.' });
       } else if (isLibrary) {
-        if (setWorkspaceView) setWorkspaceView('xmlpatch');
-        setStatusBanner({ type: 'success', msg: 'XML diff patch identified. Routed to XML Patching.' });
-        onClose();
+        // P10: same — a pasted <diff> was not imported despite the old success message.
+        setStatusBanner({ type: 'refused', msg: 'Detected an XML diff patch, but pasting it here does not import it. Use Load Mod Project, or author patches in the XML Patching tab.' });
       } else {
         const reconstructed = parseXMLToWorkspace(textToImport);
         if (!reconstructed || reconstructed.nodes.length === 0) throw new Error('No compatible MD cues/events/actions were identified.');
@@ -283,7 +285,7 @@ export default function SyncModal({
         if (setWorkspaceView) setWorkspaceView('blueprint');
         onClose();
       }
-    } catch (e: any) {
+    } catch (e) {
       setStatusBanner({ type: 'refused', msg: `Parse error: ${e.message || 'Ensure correct XML structure.'}` });
     }
   };

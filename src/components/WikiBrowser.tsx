@@ -159,24 +159,6 @@ interface WikiBrowserProps {
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
 }
 
-interface X4IndexedObject {
-  id: string;
-  name: string;
-  kind: 'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'aiscript' | 'md_element' | 'macro';
-  sourceFile: string;
-  detail?: string;
-}
-
-interface X4ObjectIndexResponse {
-  generatedAt: string;
-  roots: string[];
-  scannedFiles: number;
-  skippedFiles: number;
-  truncated: boolean;
-  counts: Record<string, number>;
-  items: X4IndexedObject[];
-}
-
 export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspace }: WikiBrowserProps) {
   const [activeTab, setActiveTab] = useState<'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui'>('mdscript');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -328,7 +310,7 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
             {/* Right side: Scrolled reader area showing extended guides data */}
             <div className="flex-1 overflow-y-auto p-6 bg-[#0d1017] custom-scrollbar scroll-smooth">
               <div className="max-w-3xl mx-auto space-y-12">
-                {filteredTopics.map((topic, offsetIdx) => (
+                {filteredTopics.map((topic, _offsetIdx) => (
                   <article 
                     id={`article_${topic.id}`}
                     key={topic.id} 

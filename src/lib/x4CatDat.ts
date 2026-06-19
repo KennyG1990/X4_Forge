@@ -229,7 +229,7 @@ export function debugScan(roots: string[], includeSubst = false) {
     let parseError: string | null = null;
     try {
       entries = parseCat(a.catPath);
-    } catch (e: any) {
+    } catch (e) {
       parseError = String(e?.message || e);
     }
     const names = entries.map(e => e.name.toLowerCase());
@@ -411,7 +411,7 @@ export function runCatDatSelftest(): { pass: boolean; checks: CatDatSelftestChec
     const baseHit = extractBaseGameFile(tmp, 'md/packed.xml');
     ok('extractBaseGameFile: gzip md entry decompressed from root archives',
       !!baseHit && baseHit.text === mdText);
-  } catch (e: any) {
+  } catch (e) {
     ok('selftest harness error: ' + String((e && e.message) || e), false);
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }

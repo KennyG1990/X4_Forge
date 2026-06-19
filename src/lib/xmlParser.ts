@@ -383,7 +383,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
         showIcons: true
       }
     };
-  } catch (err: any) {
+  } catch (err) {
     console.warn("XML Import Parsing Error: ", err);
     return null;
   }

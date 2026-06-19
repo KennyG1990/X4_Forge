@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Trash,
   Plus,
@@ -95,7 +95,7 @@ const defaultAIScripts: AIBehaviorScript[] = [
 ];
 
 export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEditorProps) {
-  const scripts = workspace.aiScripts || [];
+  const scripts = useMemo(() => workspace.aiScripts || [], [workspace.aiScripts]);
 
   // Setup selected state, prioritizing first custom script, or null
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(() => {

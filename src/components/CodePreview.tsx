@@ -20,7 +20,6 @@ import {
   Split
 } from 'lucide-react';
 import { ModWorkspace, generateMDXML, generateUIXML, MDNode, PackageDiagnostic } from '../types';
-import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
 import {
   toSafeModId,
@@ -71,46 +70,6 @@ interface CodePreviewProps {
   /** When provided, the tab+action chrome bar renders into THIS element (a persistent
    *  top bar outside the editor) instead of inline — so the editor stays code-only. */
   topBarTarget?: HTMLElement | null;
-}
-
-interface ScriptAnalysis {
-  summary: string;
-  triggerCondition: string;
-  flowSteps: Array<{
-    nodeId: string;
-    nodeLabel: string;
-    xmlTag: string;
-    plainEnglishAction: string;
-    sequenceOrder: number;
-  }>;
-  entityRegistry: Array<{
-    name: string;
-    type: string;
-    detail: string;
-  }>;
-}
-
-interface LogIssue {
-  id: string;
-  severity: 'error' | 'warning';
-  title: string;
-  errorLogSnippet: string;
-  explanation: string;
-  impact: string;
-  suggestedAction: string;
-  affectedNodeId?: string;
-  autoFix?: {
-    type: 'update_node_property';
-    nodeId: string;
-    propertyKey: string;
-    propertyValue: string;
-  };
-}
-
-interface LogAnalysisResult {
-  parsedLogsCount: number;
-  summaryOfGameMDReload: string;
-  issues: LogIssue[];
 }
 
 function messageFromUnknown(error: unknown, fallback: string): string {
@@ -191,47 +150,29 @@ export default function CodePreview({
   setActiveEditorFile,
   selectedNode,
   compileStatus,
-  compileMessage,
+  compileMessage: _compileMessage,
   handleCompileModProject,
   diagnostics,
-  diagnosticSource,
+  diagnosticSource: _diagnosticSource,
   snapshotDiffWorkspace,
   onClearSnapshotDiff,
   selectedCueIds,
   autoSaveEnabled: propAutoSaveEnabled,
-  setAutoSaveEnabled: propSetAutoSaveEnabled,
-  codeCollapsed,
-  setCodeCollapsed,
+  setAutoSaveEnabled: _propSetAutoSaveEnabled,
+  codeCollapsed: _codeCollapsed,
+  setCodeCollapsed: _setCodeCollapsed,
   topBarTarget
 }: CodePreviewProps) {
   const [codeActiveTab, setCodeActiveTab] = useState<'md' | 'ui' | 'node' | 'file'>('md');
-  const [toolActiveTab, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
+  const [, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
   const [copied, setCopied] = useState<boolean>(false);
-  
-  // Cognitive Analyzer states
-  const [analysisResult, setAnalysisResult] = useState<ScriptAnalysis | null>(null);
-  const [analyzing, setAnalyzing] = useState<boolean>(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [lastAnalyzedWorkspace, setLastAnalyzedWorkspace] = useState<string>('');
 
   // Playtest Live Debugger states
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
-  const [syncErrorMsg, setSyncErrorMsg] = useState<string>('');
-  
-  const [localAutoSaveEnabled, setLocalAutoSaveEnabled] = useState<boolean>(false);
-  const autoSaveEnabled = propAutoSaveEnabled !== undefined ? propAutoSaveEnabled : localAutoSaveEnabled;
-  const setAutoSaveEnabled = propSetAutoSaveEnabled !== undefined ? propSetAutoSaveEnabled : setLocalAutoSaveEnabled;
+  const [, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [, setSyncErrorMsg] = useState<string>('');
 
-  // Snapshot / version-history (rollback) state
-  const [snapshots, setSnapshots] = useState<{ name: string; savedAt: string }[]>([]);
-  const [showSnapshots, setShowSnapshots] = useState<boolean>(false);
-  const [snapshotMsg, setSnapshotMsg] = useState<string>('');
-  
-  const [logInput, setLogInput] = useState<string>('');
-  const [diagnosingLogs, setDiagnosingLogs] = useState<boolean>(false);
-  const [logAnalysis, setLogAnalysis] = useState<LogAnalysisResult | null>(null);
-  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
-  const [successfulFixApplied, setSuccessfulFixApplied] = useState<string | null>(null);
+  const [localAutoSaveEnabled] = useState<boolean>(false);
+  const autoSaveEnabled = propAutoSaveEnabled !== undefined ? propAutoSaveEnabled : localAutoSaveEnabled;
 
   // File Editor states
   const [editorContent, setEditorContent] = useState<string>('');
@@ -298,32 +239,22 @@ export default function CodePreview({
     if (!initialWorkspace && workspace) {
       setInitialWorkspace(JSON.parse(JSON.stringify(workspace)));
     }
+    // reason: one-shot baseline capture; re-running on initialWorkspace would clobber the baseline.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace]);
 
   useEffect(() => {
     if (compileStatus === 'success') {
       setLastCompiledWorkspace(JSON.parse(JSON.stringify(workspace)));
     }
+    // reason: snapshot must capture workspace at the moment of compile only; adding workspace would re-snapshot on every edit and break the "last compiled" baseline.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compileStatus]);
 
   const mdCode = selectedCueIds && selectedCueIds.length > 0
     ? generateMDXML(workspace, selectedCueIds)
     : generateMDXML(workspace);
   const uiCode = generateUIXML(workspace);
-
-  const generateNodeXMLPreview = (node: MDNode) => {
-    let xml = `<${node.xmlTag}`;
-    Object.entries(node.properties || {}).forEach(([k, v]) => {
-      if (v !== undefined && v !== null && v !== '') {
-        xml += ` ${k}="${v}"`;
-      }
-    });
-    if (node.comment) {
-      xml += ` comment="${node.comment}"`;
-    }
-    xml += ` />`;
-    return xml;
-  };
 
   const collectDownstreamNodeIds = (startIds: string[], sourceWorkspace: ModWorkspace = workspace): Set<string> => {
     const ids = new Set<string>(startIds);
@@ -445,18 +376,13 @@ export default function CodePreview({
     }
   }, [codeActiveTab, currentCode, generatedDraftDirty, generatedDraftKey, generatedDraftSourceKey]);
 
-  const isAnalysisStale = analysisResult !== null && lastAnalyzedWorkspace !== workspaceSerialized;
-
-  // Check if File System Access API is supported
-  const isFileSystemAccessSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
-
-
-
   // Handle automatic synchronization to folder on workspace edits
   useEffect(() => {
     if (autoSaveEnabled && modWorkspacePath) {
       saveToDirectory(false);
     }
+    // reason: saveToDirectory is a plain function recreated each render; adding it would run the effect every render. Effect should fire only when the serialized workspace or autosave flags change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceSerialized, autoSaveEnabled, modWorkspacePath]);
 
   // Synchronise base template references initially or on compile
@@ -473,6 +399,8 @@ export default function CodePreview({
     if (!originalUI && uiCode) {
       setOriginalUI(uiCode);
     }
+    // reason: one-shot baseline capture; re-running on the initial*/original* deps would clobber the captured baselines.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mdCode, uiCode]);
 
   // Synchronise files selected in the project sidebar
@@ -505,45 +433,9 @@ export default function CodePreview({
       setEditorSaveStatus('idle');
       setEditorError('');
     }
+    // reason: intentionally keyed on the file path only — this effect should fire when the selected file changes, not on unrelated identity changes of the activeEditorFile object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeEditorFile?.path]);
-
-  const saveActiveEditorFile = async () => {
-    if (!activeEditorFile) return;
-    setEditorSaveStatus('saving');
-    try {
-      const response = await fetch('/api/fs/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: activeEditorFile.path,
-          content: editorContent
-        })
-      });
-      if (response.ok) {
-        activeEditorFile.content = editorContent;
-        // Update cache originalContents to clear modified indicator bullet (•)
-        setOpenFilesMap(prev => {
-          if (!prev[activeEditorFile.path]) return prev;
-          return {
-            ...prev,
-            [activeEditorFile.path]: {
-              ...prev[activeEditorFile.path],
-              content: editorContent,
-              originalContent: editorContent
-            }
-          };
-        });
-        setEditorSaveStatus('saved');
-        setTimeout(() => setEditorSaveStatus('idle'), 2000);
-      } else {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to write file on server.");
-      }
-    } catch (err) {
-      setEditorSaveStatus('error');
-      setEditorError(messageFromUnknown(err, 'Save failed.'));
-    }
-  };
 
   const handleEditorContentChange = (val: string) => {
     setEditorContent(val);
@@ -808,26 +700,6 @@ export default function CodePreview({
     return { original, current };
   };
 
-  const triggerAnalysis = async () => {
-    setAnalyzing(true);
-    setAnalysisError(null);
-    try {
-      const response = await fetch('/api/gemini/analyze', {
-        method: 'POST',
-        headers: getAIHeaders(),
-        body: JSON.stringify({ workspace })
-      });
-      const data = await handleApiResponse(response, "Failed to establish telemetry connection to server.");
-      setAnalysisResult(data.analysis);
-      setLastAnalyzedWorkspace(workspaceSerialized);
-    } catch (err) {
-      console.error(err);
-      setAnalysisError(messageFromUnknown(err, "Failed to catalog script outline. Verify telemetry status."));
-    } finally {
-      setAnalyzing(false);
-    }
-  };
-
   const saveToDirectory = async (showFeedback: boolean) => {
     if (!modWorkspacePath) return;
     if (showFeedback) {
@@ -856,139 +728,6 @@ export default function CodePreview({
         setTimeout(() => setSyncStatus('idle'), 5000);
       }
     }
-  };
-
-  // Load the on-disk snapshot list for the current mod from <modid>/.snapshots/
-  const toggleSnapshots = async () => {
-    const next = !showSnapshots;
-    setShowSnapshots(next);
-    if (next && modWorkspacePath) {
-      try {
-        const response = await fetch(`/api/fs/snapshots?modId=${encodeURIComponent(toSafeModId(workspace.name))}`);
-        if (response.ok) {
-          const list = await response.json();
-          setSnapshots(list);
-        }
-      } catch (err) {
-        console.error("Failed to load snapshots:", err);
-      }
-    }
-  };
-
-  // Restore the workspace from a chosen snapshot (pushes an undo checkpoint first)
-  const restoreSnapshot = async (snapshotName: string) => {
-    if (!modWorkspacePath || !setWorkspace) return;
-    try {
-      const response = await fetch('/api/fs/restore-snapshot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          modId: toSafeModId(workspace.name),
-          snapshotName
-        })
-      });
-      if (response.ok) {
-        const resData = await response.json();
-        if (resData.success && resData.workspace) {
-          if (saveCheckpoint) saveCheckpoint();
-          setWorkspace(resData.workspace);
-          setSnapshotMsg(`Restored snapshot from ${snapshotName.replace('snapshot_', '').replace('.json', '')}`);
-          setShowSnapshots(false);
-          setTimeout(() => setSnapshotMsg(''), 3500);
-          return;
-        }
-      }
-      throw new Error("Failed to restore snapshot on server.");
-    } catch (err) {
-      setSnapshotMsg(messageFromUnknown(err, 'Could not restore snapshot.'));
-      setTimeout(() => setSnapshotMsg(''), 3500);
-    }
-  };
-
-  const handleTriggerLogAnalysis = async () => {
-    if (!logInput.trim()) return;
-    setDiagnosingLogs(true);
-    setDiagnosticError(null);
-    try {
-      const response = await fetch('/api/gemini/analyze-log', {
-        method: 'POST',
-        headers: getAIHeaders(),
-        body: JSON.stringify({ workspace, logs: logInput })
-      });
-      const data = await handleApiResponse(response, "Log parsing request rejected.");
-      setLogAnalysis(data.analysis);
-    } catch (err) {
-      console.error(err);
-      setDiagnosticError(messageFromUnknown(err, "Failed to analyze X4 script logs via Gemini."));
-    } finally {
-      setDiagnosingLogs(false);
-    }
-  };
-
-  const handleApplyAutoFix = (fix: NonNullable<LogIssue['autoFix']>) => {
-    if (!setWorkspace || !saveCheckpoint) {
-      console.warn("Auto-fix not supported in this frame state.");
-      return;
-    }
-
-    if (fix.type === 'update_node_property' && fix.nodeId && fix.propertyKey) {
-      saveCheckpoint();
-      setWorkspace(prev => {
-        const updatedNodes = prev.nodes.map(n => {
-          if (n.id === fix.nodeId) {
-            return {
-              ...n,
-              properties: {
-                ...n.properties,
-                [fix.propertyKey]: fix.propertyValue
-              }
-            };
-          }
-          return n;
-        });
-        return {
-          ...prev,
-          nodes: updatedNodes
-        };
-      });
-
-      setSuccessfulFixApplied(`Successfully repaired property '${fix.propertyKey}' to '${fix.propertyValue}'!`);
-      setTimeout(() => setSuccessfulFixApplied(null), 4000);
-
-      if (logAnalysis) {
-        setLogAnalysis(prev => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            issues: prev.issues.filter(issue => issue.autoFix?.nodeId !== fix.nodeId || issue.autoFix?.propertyKey !== fix.propertyKey)
-          };
-        });
-      }
-    }
-  };
-
-  const insertDemoX4Log = () => {
-    const defaultCueName = workspace.nodes.find(n => n.type === 'cue')?.properties?.name || "My_Custom_Cue";
-    const demoText = `[General] 2045.29: ==========================================
-[General] 2045.29: X4: Foundations v6.20 Hotfix 1 (512390)
-[General] 2045.29: Command Line: -debug all -logfile uidata.log -reloaddirector
-[General] 2045.29: ==========================================
-[MD Engine] Error: Parsing XML file extensions\\${workspace.name || 'X4_My_Custom_Mod'}\\md\\${workspace.name || 'X4_My_Custom_Mod'}.xml
-*** Context:md.${defaultCueName}: cue has active state but 'instantiate' attribute is currently 'false'. Re-instantiation will fail on game reloads! Correct setting is recommended to be 'true' for persistent script triggers.
-[MD Engine] Warning: Property 'faction' has unrecognized faction code 'ARGON_MILITARY' in cue '${defaultCueName}'. X4 standard code is 'argon'.
-*** Context:md.Spawn_Escort_Ships: missing macro definition 'ship_arg_s_fighter_01_a'. Verify model path.`;
-    setLogInput(demoText);
-  };
-
-  const handleLogFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const text = evt.target?.result as string;
-      setLogInput(text);
-    };
-    reader.readAsText(file);
   };
 
   // NOTE: All packaging/compiler helpers (mod id, content.xml, per-domain XML generators,
@@ -1168,6 +907,8 @@ export default function CodePreview({
   const codeLines = React.useMemo(() => activeCodeText.split('\n'), [activeCodeText]);
   const lineDiagMap = React.useMemo(
     () => computeLineDiagMap(activeCodeText, diagnostics),
+    // reason: computeLineDiagMap is a plain function recreated each render; the real inputs are activeCodeText and diagnostics, so memoizing on those is correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeCodeText, diagnostics]
   );
   const renderTopBar = (content: React.ReactNode) => (

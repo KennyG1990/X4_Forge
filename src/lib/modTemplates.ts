@@ -129,7 +129,7 @@ export function runModTemplatesSelftest() {
       const errors = diags.filter((d) => d.severity === 'error');
       ok(`template_${tpl.id}_compiles_clean`, errors.length === 0, errors.map((e) => e.message));
       ok(`template_${tpl.id}_has_nodes`, ws.nodes.length > 0);
-    } catch (e: any) {
+    } catch (e) {
       ok(`template_${tpl.id}_compiles_clean`, false, 'threw: ' + (e?.message || e));
     }
   }

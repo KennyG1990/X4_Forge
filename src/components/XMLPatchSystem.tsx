@@ -209,7 +209,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Synthesis failed (${res.status})`);
       setDtResult(data);
-    } catch (err: any) {
+    } catch (err) {
       setDtError(err.message || 'Patch synthesis failed.');
     } finally {
       setDtBusy(false);
@@ -383,7 +383,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
             }
           }
         }
-      } catch (err: any) {
+      } catch (err) {
         errors[b.id] = err.message || String(err);
       }
     });
@@ -421,7 +421,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
       } else {
         return { status: 'warn', message: `⚠️ Selector matches multiple elements (${count} matches). Patch will apply to all of them.`, count };
       }
-    } catch (err: any) {
+    } catch (err) {
       return { status: 'error', message: `❌ Invalid XPath selector syntax: ${err.message || err}` };
     }
   };
@@ -568,7 +568,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
     try {
       const saved = localStorage.getItem('x4_custom_xml_snippets');
       return saved ? JSON.parse(saved) : [];
-    } catch (e) {
+    } catch {
       return [];
     }
   });
@@ -645,24 +645,6 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
     setCopiedSnippetId(bp.id);
     setTimeout(() => setCopiedSnippetId(null), 1500);
   };
-
-  // Custom patch block states
-  const defaultPatches: PatchBlock[] = [
-    {
-      id: 'patch_1',
-      sel: '/macros/macro[@name="ship_arg_s_fighter_01_a_macro"]/properties/cargo',
-      action: 'replace',
-      content: '<cargo size="450" />',
-      note: 'Double Fighter cargo hold capacity for mining loops'
-    },
-    {
-      id: 'patch_2',
-      sel: '/macros/macro[@name="ship_arg_s_fighter_01_a_macro"]/properties/shield',
-      action: 'add',
-      content: '<rebuild rate="15" delay="2s" />',
-      note: 'Add super-shield auxiliary regeneration layers'
-    }
-  ];
 
   const savePatches = (newPatches: PatchBlock[]) => {
     setWorkspace(prev => ({

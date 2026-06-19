@@ -4,19 +4,12 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Compass, 
-  Layers, 
-  GitFork, 
-  Trash, 
-  Layout, 
-  FileCode, 
-  Play, 
-  Zap, 
-  Bot,
-  HelpCircle,
+import {
+  GitFork,
+  Trash,
+  Layout,
+  FileCode,
   Cpu,
-  Info,
   Undo2,
   Redo2,
   FolderGit2,
@@ -25,9 +18,6 @@ import {
   Package,
   Globe,
   BookOpen,
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
   Settings as SettingsGear,
   Plug,
   Map as MapIcon,
@@ -59,7 +49,6 @@ import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorksp
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse, getProviderKey } from './lib/apiHelper';
-import { compileAndSaveAll } from './lib/modCompiler';
 import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluateBlueprintChecks, type ModBlueprint } from './lib/modBlueprint';
 import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
 import { getE2EPerfCounters, resetE2EPerfCounters, type E2EPerfCounters } from './lib/e2ePerfCounters';
@@ -144,16 +133,16 @@ export default function App() {
     const legacyPatches = localStorage.getItem('x4_mod_studio_xml_patches');
 
     if (legacyAIScripts && (!parsed.aiScripts || parsed.aiScripts.length === 0)) {
-      try { parsed.aiScripts = JSON.parse(legacyAIScripts); } catch(e){}
+      try { parsed.aiScripts = JSON.parse(legacyAIScripts); } catch{}
     }
     if (legacyWares && (!parsed.wares || parsed.wares.length === 0)) {
-      try { parsed.wares = JSON.parse(legacyWares); } catch(e){}
+      try { parsed.wares = JSON.parse(legacyWares); } catch{}
     }
     if (legacyJobs && (!parsed.jobs || parsed.jobs.length === 0)) {
-      try { parsed.jobs = JSON.parse(legacyJobs); } catch(e){}
+      try { parsed.jobs = JSON.parse(legacyJobs); } catch{}
     }
     if (legacyPatches && (!parsed.xmlPatches || parsed.xmlPatches.length === 0)) {
-      try { parsed.xmlPatches = JSON.parse(legacyPatches); } catch(e){}
+      try { parsed.xmlPatches = JSON.parse(legacyPatches); } catch{}
     }
 
     return sanitizeWorkspace(parsed);
@@ -177,7 +166,7 @@ export default function App() {
           setModWorkspacePath(res.config.modWorkspacePath || '');
           setFilesystemPath(res.config.filesystemPath || '');
         }
-      } catch (err) {
+      } catch {
         console.warn("Could not load initial directory settings from server.");
       }
     })();
@@ -198,7 +187,7 @@ export default function App() {
   const mdCode = React.useMemo(() => {
     try {
       return generateMDXML(workspace);
-    } catch (e) {
+    } catch {
       return '';
     }
   }, [workspace]);
@@ -748,7 +737,7 @@ export default function App() {
           setLocalVersion(data.version);
           localStorage.setItem('x4_mod_studio_version', String(data.version));
         }
-      } catch (err) {
+      } catch {
         console.warn("Could not synchronize local edits to server workspace space.");
       }
     };
@@ -813,7 +802,7 @@ export default function App() {
             localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(data.workspace));
           }
         }
-      } catch (err) {
+      } catch {
         // Silently ignore background polling connection issues
       }
     };

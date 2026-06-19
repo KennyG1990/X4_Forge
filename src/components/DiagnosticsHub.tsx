@@ -83,7 +83,7 @@ export default function DiagnosticsHub({
       const data = await handleApiResponse(response, 'Failed to establish telemetry connection to server.');
       setAnalysisResult(data.analysis);
       setLastAnalyzedWorkspace(workspaceSerialized);
-    } catch (err: any) {
+    } catch (err) {
       if (err?.name === 'AbortError') {
         setAnalysisError('Analysis cancelled.');
       } else {
@@ -118,7 +118,7 @@ export default function DiagnosticsHub({
       } else {
         throw new Error(deployData.error || 'Failed to deploy on server.');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Playtest Directory Sync Error:', err);
       if (showFeedback) {
         setSyncStatus('error');
@@ -140,7 +140,7 @@ export default function DiagnosticsHub({
       });
       const data = await handleApiResponse(response, 'Log parsing request rejected.');
       setLogAnalysis(data.analysis);
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
       setDiagnosticError(err.message || 'Failed to analyze X4 script logs.');
     } finally {

@@ -362,21 +362,6 @@ export function generateHttpGlueLua(contract: IntegrationContract): string {
 }
 
 /**
- * Self-test oracle for the contract-glue engine. Mirrors the studio's other
- * `*-selftest` endpoints: builds known-good and known-bad contracts and asserts the
- * validator + generator behave. Returns { allPassed, passed, total, checks }.
- */
-function sampleForType(t: ContractFieldType): string {
-  switch (t) {
-    case 'number': return '0';
-    case 'boolean': return 'true';
-    case 'array': return '[]';
-    case 'object': return 'table[]';
-    default: return "''";
-  }
-}
-
-/**
  * Generate the MD-side scaffold for a contract: per endpoint, a `<library>` cue that
  * raises the Lua call event (with the request fields as params) and a response-handler
  * cue that listens for the Lua-fired `<ns>.<id>.response` via `event_ui_triggered`.

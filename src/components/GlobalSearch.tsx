@@ -43,7 +43,7 @@ const DEFAULT_PATCHES: any[] = [
 
 export default function GlobalSearch({
   workspace,
-  workspaceView,
+  workspaceView: _workspaceView,
   setWorkspaceView,
   setActiveSidebarTab,
   setSelectedNode,

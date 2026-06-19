@@ -113,6 +113,8 @@ export default function DialogHost() {
   // keep the local input seeded when a prompt opens
   useEffect(() => {
     if (activeRequest?.kind === 'prompt') setInputValue(activeRequest.defaultValue ?? '');
+    // reason: activeRequest is a module-level mutable (non-reactive) value; the input should be seeded only when a new request opens, identified by its stable id. kind/defaultValue are read once at open and adding them is redundant with id (and could re-seed mid-edit).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRequest?.id]);
 
   const req = activeRequest;

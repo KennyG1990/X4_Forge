@@ -38,48 +38,6 @@ const LANGUAGES_SUPPORT = [
 ];
 
 export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProps) {
-  // Initial fallback mock data for T-files
-  const defaultTFiles: TFile[] = [
-    {
-      languageId: '44',
-      fileName: '0001-l044.xml',
-      pages: [
-        {
-          id: '20001',
-          title: 'Weapon and Item Names',
-          items: [
-            { id: '1', value: 'Antimatter Disrupter Cannon', description: 'Heavy capital ship interceptor weapon' },
-            { id: '2', value: 'Heavy Plasma Battery MK2', description: 'Station siege plasma cannon names' },
-            { id: '3', value: 'Nanotech Hull Shielding', description: 'Adaptive player shielding item' }
-          ]
-        },
-        {
-          id: '20002',
-          title: 'Dialogue and Messages',
-          items: [
-            { id: '1001', value: 'Warning. Incoming hazardous solar wind storm in 30 seconds!', description: 'Sector entry notification alert' },
-            { id: '1002', value: 'Acolyte Squadron commander speaking. Standing by for flight vectors.', description: 'Pilot response message' },
-            { id: '1003', value: 'Argon Protection bounty cleared. Credits transferred.', description: 'Bounty reward log feedback' }
-          ]
-        }
-      ]
-    },
-    {
-      languageId: '49',
-      fileName: '0001-l049.xml',
-      pages: [
-        {
-          id: '20001',
-          title: 'Weapon and Item Names (DE)',
-          items: [
-            { id: '1', value: 'Antimaterie-Disruptor-Kanone', description: 'Schwere GKS-Abfangwaffe' },
-            { id: '2', value: 'Schwere Plasmabatterie MK2', description: 'Stationen-Belagerungswaffen' }
-          ]
-        }
-      ]
-    }
-  ];
-
   // Initialize from workspace if present, or fallback and initialize workspace state
   const [tFiles, setTFiles] = useState<TFile[]>(() => {
     return workspace.tFiles || [];
@@ -120,8 +78,6 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
   const handleAddLanguageFile = async () => {
     const nextUnusedLang = LANGUAGES_SUPPORT.find(l => !tFiles.some(tf => tf.languageId === l.id));
     const langId = nextUnusedLang?.id || '44';
-    const langName = nextUnusedLang?.name || 'English';
-    const suffix = nextUnusedLang?.suffix || 'L044';
 
     const newLangId = await promptDialog(`Enter Language ID Code (e.g., 44: English, 49: German, 33: French):`, langId);
     if (!newLangId) return;

@@ -76,9 +76,9 @@ function DirectoryRow({
 export default function DirectorySettingsModal({
   isOpen,
   onClose,
-  modWorkspacePath,
+  modWorkspacePath: _modWorkspacePath,
   setModWorkspacePath,
-  filesystemPath,
+  filesystemPath: _filesystemPath,
   setFilesystemPath,
   aiTier,
   setAiTier,
@@ -127,12 +127,24 @@ export default function DirectorySettingsModal({
         setResolved(res.resolved || null);
         setModWorkspacePath(workspaceInput.trim());
         setFilesystemPath(filesystemInput.trim());
-        setStatus({
-          type: 'success',
-          msg: `Saved. Schema library reloaded: ${res.schema_counts?.events ?? 0} events, ${res.schema_counts?.conditions ?? 0} conditions, ${res.schema_counts?.actions ?? 0} actions.`
-        });
+        const events = res.schema_counts?.events ?? 0;
+        const conditions = res.schema_counts?.conditions ?? 0;
+        const actions = res.schema_counts?.actions ?? 0;
+        // P11: a save that loads ZERO schema elements is a broken config (empty or invalid
+        // schema path), not a clean success — surface it as an error instead of green "Saved".
+        if (events === 0 && conditions === 0 && actions === 0) {
+          setStatus({
+            type: 'error',
+            msg: `Saved, but 0 schema elements loaded — the Schema Directory looks empty or invalid (${schemaPath.trim() || 'no path set'}). Schema-aware validation will not work until this resolves.`
+          });
+        } else {
+          setStatus({
+            type: 'success',
+            msg: `Saved. Schema library reloaded: ${events} events, ${conditions} conditions, ${actions} actions.`
+          });
+        }
       }
-    } catch (err: any) {
+    } catch (err) {
       setStatus({ type: 'error', msg: err.message || 'Failed to save directory settings.' });
     }
   };

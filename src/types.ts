@@ -874,9 +874,8 @@ export function generateUIXML(originalWorkspace: ModWorkspace): string {
   };
 
   const t = workspace.uiTheme;
-  const alpha = Math.round(t.opacity * 255).toString(16).padStart(2, '0');
-  
-  let layoutXML = `<?xml version="1.0" encoding="utf-8"?>
+
+  let layoutXML =`<?xml version="1.0" encoding="utf-8"?>
 <ui_menu name="${workspace.name || 'Sample_Menu'}" version="${workspace.version || '1.0.0'}">
   <!-- X4 Foundations Theme Style Settings -->
   <theme>
@@ -1132,11 +1131,24 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
 
   cueNodes.forEach(cue => {
     const cueName = cue.properties.name || cue.id;
+    const hasName = !!(cue.properties.name && String(cue.properties.name).trim());
     const conditionNodes = getConditionNodes(cue);
     const actionNodes = getActionChain(cue);
 
-    // ── LAW 1: Cue name must start with uppercase letter ──
-    if (cueName && !/^[A-Z]/.test(cueName)) {
+    // ── P3: empty cue name silently falls back to the internal machine id (cue.id) and
+    // ships as the cue's <name>. Flag it clearly instead of leaving the user to wonder. ──
+    if (!hasName) {
+      diagnostics.push({
+        severity: 'error',
+        message: `Cue has no name — it would ship as the internal id "${cue.id}". Give the cue a name starting with an uppercase letter.`,
+        nodeId: cue.id,
+        category: 'egosoft'
+      });
+    }
+
+    // ── LAW 1: Cue name must start with uppercase letter (only when a name is set; an
+    // unnamed cue is already covered by the empty-name error above) ──
+    if (hasName && !/^[A-Z]/.test(cueName)) {
       diagnostics.push({
         severity: 'error',
         message: `Cue name "${cueName}" must start with an uppercase letter. The X4 engine requires this for all <cue name="..."> attributes.`,

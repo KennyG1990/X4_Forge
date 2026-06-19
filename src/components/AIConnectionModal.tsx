@@ -123,7 +123,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
     const stored = localStorage.getItem('google_oauth_user');
     return stored ? JSON.parse(stored) : null;
   });
-  const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthLoading] = useState(false); // P9: OAuth is not implemented; loading state never engages.
   const [showKeyVisible, setShowKeyVisible] = useState<Record<AIProviderId, boolean>>({
     gemini: false,
     claude: false,
@@ -233,20 +233,12 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
   if (!isOpen) return null;
 
-  // Handles Google Login OAuth popup flow simulation
+  // P9: there is NO real Google OAuth backend wired up. The previous version fabricated a
+  // signed-in identity (hardcoded user) and claimed success — a lie. Be honest instead:
+  // tell the user it isn't available and point them at the provider API key below.
   const handleGoogleOAuthLogin = () => {
-    setOauthLoading(true);
-    setTimeout(() => {
-      const mockUser = {
-        name: 'Kenny Smith',
-        email: 'KennySmith.1911@gmail.com'
-      };
-      localStorage.setItem('google_oauth_user', JSON.stringify(mockUser));
-      setGoogleUser(mockUser);
-      setOauthLoading(false);
-      setSuccessMsg("Google OAuth identity synchronized successfully!");
-      setTimeout(() => setSuccessMsg(null), 3000);
-    }, 1200);
+    setSuccessMsg("Google sign-in isn't available yet — connect a provider with an API key below.");
+    setTimeout(() => setSuccessMsg(null), 3500);
   };
 
   const handleDisconnectGoogle = () => {
@@ -276,7 +268,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
     setTimeout(() => {
       setSaving(false);
-      setSuccessMsg("AI credentials, chosen models, and reasoning parameters saved successfully!");
+      setSuccessMsg("AI settings saved locally. Keys are stored in this browser and are not verified against the provider.");
       setTimeout(() => {
         setSuccessMsg(null);
         onClose();

@@ -115,7 +115,7 @@ export async function handleApiResponse<T = any>(response: Response, defaultErro
       try {
         const data = await response.json();
         errMsg = data.error || errMsg;
-      } catch (_) {
+      } catch {
         // failed to parse JSON
       }
     } else {
@@ -126,7 +126,7 @@ export async function handleApiResponse<T = any>(response: Response, defaultErro
         } else {
           errMsg = `HTTP Error ${response.status}: ${response.statusText || "Unresolved"}`;
         }
-      } catch (_) {
+      } catch {
         errMsg = `HTTP Error ${response.status}: ${response.statusText || "Unresolved"}`;
       }
     }

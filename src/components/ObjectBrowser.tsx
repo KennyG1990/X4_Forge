@@ -76,7 +76,7 @@ export default function ObjectBrowser() {
       if (OBJECT_INDEX_CACHE.size > 40) {
         OBJECT_INDEX_CACHE.delete(OBJECT_INDEX_CACHE.keys().next().value as string);
       }
-    } catch (err: any) {
+    } catch (err) {
       setObjectIndexError(err.message || 'Failed to load local X4 object index.');
       setObjectIndex(null);
     } finally {
@@ -87,6 +87,8 @@ export default function ObjectBrowser() {
   useEffect(() => {
     const timer = window.setTimeout(loadObjectIndex, 250);
     return () => window.clearTimeout(timer);
+    // reason: loadObjectIndex is a non-memoized component-body function; the debounced load should re-fire only when the query inputs (refType/refSearch) change, not every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refType, refSearch]);
 
   const categories = useMemo(() => [

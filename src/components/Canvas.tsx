@@ -555,7 +555,7 @@ export default function Canvas({
     return m;
   }, [workspace.nodes]);
 
-  const getPortCoordinates = React.useCallback((nodeId: string, portId: string, isSource: boolean) => {
+  const getPortCoordinates = React.useCallback((nodeId: string, portId: string, _isSource: boolean) => {
     const node = nodeById.get(nodeId);
     if (!node) return { x: 0, y: 0 };
 
@@ -1093,7 +1093,7 @@ export default function Canvas({
     otherNodes.forEach(other => {
       const otherName = other.properties?.name || other.properties?.value || other.label;
       if (otherName && typeof otherName === 'string') {
-        const refsOther = Object.entries(selectedNode.properties).some(([k, v]) => 
+        const refsOther = Object.entries(selectedNode.properties).some(([_k, v]) =>
           typeof v === 'string' && (v === otherName || v.includes(otherName))
         );
         if (refsOther) {
@@ -1109,7 +1109,7 @@ export default function Canvas({
       }
 
       if (cueName && typeof cueName === 'string') {
-        const otherRefsUs = Object.entries(other.properties).some(([k, v]) => 
+        const otherRefsUs = Object.entries(other.properties).some(([_k, v]) =>
           typeof v === 'string' && (v === cueName || v.includes(cueName))
         );
         if (otherRefsUs) {
@@ -1901,20 +1901,15 @@ export default function Canvas({
               const nodeDiag = nodeDiagMap[node.id];
 
               let borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
-              let headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
 
               if (node.type === 'cue') {
                 borderClasses = 'border-purple-500/20 bg-[#0f1118]/95 backdrop-blur-sm';
-                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'event') {
                 borderClasses = 'border-amber-500/20 bg-[#121114]/95 backdrop-blur-sm';
-                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'condition') {
                 borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
-                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               } else if (node.type === 'action') {
                 borderClasses = 'border-emerald-500/20 bg-[#0c1310]/95 backdrop-blur-sm';
-                headingClasses = 'bg-white/[0.02] text-slate-200 border-white/[0.03]';
               }
 
               const isLowDetail = zoom < 0.45;

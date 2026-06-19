@@ -101,7 +101,7 @@ try {
     configurable: true,
     enumerable: true
   });
-} catch (e) {
+} catch {
   try {
     window.fetch = customFetch;
   } catch (err) {

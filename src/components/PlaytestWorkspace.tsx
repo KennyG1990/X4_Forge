@@ -125,7 +125,7 @@ export default function PlaytestWorkspace({
         throw new Error(data.error || 'Failed to read X4 debug log status.');
       }
       setGameLogStatus(data);
-    } catch (err: any) {
+    } catch (err) {
       setGameLogError(err.message || 'Failed to read X4 debug log status.');
     } finally {
       setGameLogLoading(false);
@@ -136,6 +136,8 @@ export default function PlaytestWorkspace({
     refreshGameLogStatus();
     const timer = window.setInterval(refreshGameLogStatus, 15000);
     return () => window.clearInterval(timer);
+    // reason: refreshGameLogStatus is a non-memoized component-body function; the polling interval should reset only on activeModId change, not every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeModId]);
 
   const gameLogTone = gameLogStatus?.status === 'errors'

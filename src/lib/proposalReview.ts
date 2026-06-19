@@ -101,7 +101,7 @@ export function reviewProposal(base: ModWorkspace, proposed: ModWorkspace, opts?
       diags.filter(d => d.severity === 'error').length,
       diags.filter(d => d.severity === 'warning').length,
     );
-  } catch (e: any) {
+  } catch (e) {
     schema = { status: 'fail', errors: 1, warnings: 0, detail: e?.message || 'schema check threw' };
   }
 
@@ -113,7 +113,7 @@ export function reviewProposal(base: ModWorkspace, proposed: ModWorkspace, opts?
       findings.filter(f => f.severity === 'error').length,
       findings.filter(f => f.severity === 'warning').length,
     );
-  } catch (e: any) {
+  } catch (e) {
     graph = { status: 'fail', errors: 1, warnings: 0, detail: e?.message || 'graph check threw' };
   }
 

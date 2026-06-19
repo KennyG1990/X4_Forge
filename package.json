@@ -14,7 +14,7 @@
     "lint": "eslint src server.ts",
     "typecheck": "tsc --noEmit",
     "precommit:check": "node scripts/precommit-check.mjs",
-    "test:canvas": "playwright test tests/e2e/canvas-interactions.spec.ts"
+    "test:canvas": "playwright test tests/e2e/canvas-interactions.spec.ts tests/e2e/canvas-coverage.spec.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -16,6 +16,7 @@ import {
 } from '../types';
 import { generateHttpGlueLua, generateContractMdScript, validateContract } from './contractGlue';
 import { generateLayoutLua, pixelLayoutToGrid, type PixelWidget } from './uiLayout';
+import { analyzeLuaFiles } from './luaStaticAnalysis';
 import { DOMParser as XmlDOMParser } from '@xmldom/xmldom';
 
 /**
@@ -377,6 +378,29 @@ export const validatePackageReadiness = (workspace: ModWorkspace): XMLDiagnostic
       message: 'Compiled MD package has no cue nodes. The extension can load, but the MD script has no executable entry point.',
       category: 'egosoft'
     });
+  }
+
+  // P5: custom Lua is written verbatim to ui/<id>_custom.lua regardless of the analyzer, so
+  // broken Lua would ship while the package badge stays green. Surface syntax errors here.
+  if (workspace.customLua && workspace.customLua.trim()) {
+    try {
+      const lua = analyzeLuaFiles([{
+        rel: `ui/${modId}_custom.lua`,
+        text: workspace.customLua,
+        source: 'loose',
+        sourcePath: `ui/${modId}_custom.lua`,
+        extension: { folder: modId, id: modId, name: workspace.name },
+      }]);
+      for (const f of lua.findings) {
+        if (f.severity === 'error') {
+          reports.push({
+            severity: 'error',
+            message: `Custom Lua won't compile (${f.message}). It ships verbatim — fix it before packaging.`,
+            category: 'egosoft'
+          });
+        }
+      }
+    } catch { /* analyzer unavailable — never block the readiness report */ }
   }
 
   return reports;

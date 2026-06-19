@@ -148,7 +148,7 @@ export function runCompositeBlocksSelftest() {
         ok('file_bridge_poll_has_timeout', xml.includes('player.age + 10s') && xml.includes(`'x4forge_bridge.send_prompt.timeout'`));
         ok('file_bridge_poll_uses_contract_event_name', xml.includes(`'x4forge_bridge.send_prompt.poll'`));
       }
-    } catch (e: any) {
+    } catch (e) {
       ok(`${c.id}_compiles_clean`, false, 'threw: ' + (e?.message || e));
     }
   }

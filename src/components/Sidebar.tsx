@@ -24,7 +24,6 @@ import {
   Folder,
   HardDrive,
   GitBranch,
-  GitCommit,
   Compass,
   Library,
   Trash2,
@@ -33,11 +32,8 @@ import {
   Database
 } from 'lucide-react';
 import { 
-  NODE_TEMPLATES, 
-  X4_FACTIONS, 
-  X4_SHIP_MACROS, 
-  X4_STATION_MACROS, 
-  ModWorkspace, 
+  NODE_TEMPLATES,
+  ModWorkspace,
   MDNode, 
   UIWidget,
   ChatMessage,
@@ -174,7 +170,7 @@ export default function Sidebar({
   workspaceView,
   setWorkspaceView,
   schemaTemplates,
-  onSchemaConfigChanged,
+  onSchemaConfigChanged: _onSchemaConfigChanged,
   onOpenDirectorySettings,
   schemaConfigVersion,
   onOpenEditorFile,
@@ -196,8 +192,8 @@ export default function Sidebar({
   aiErrorText,
   isAiFloatingVisible,
   setIsAiFloatingVisible,
-  isAiFloatingOpen,
-  setIsAiFloatingOpen,
+  isAiFloatingOpen: _isAiFloatingOpen,
+  setIsAiFloatingOpen: _setIsAiFloatingOpen,
   handleSend,
   handleApplyAction,
   handleDeclineAction,
@@ -228,7 +224,6 @@ export default function Sidebar({
   }>({});
   const [schemaMessage, setSchemaMessage] = useState<string>('');
   const [schemaMessageType, setSchemaMessageType] = useState<'success' | 'error'>('success');
-  const [savingSchema, setSavingSchema] = useState<boolean>(false);
   // A4.0 — "Explain this node" verb: deterministic single-node explanation, collapsible.
   const [explainOpen, setExplainOpen] = useState<boolean>(false);
 
@@ -337,47 +332,6 @@ export default function Sidebar({
   useEffect(() => {
     loadSchemaConfig();
   }, [loadSchemaConfig, schemaConfigVersion]);
-
-  const saveSchemaConfig = async () => {
-    setSavingSchema(true);
-    setSchemaMessage('');
-    try {
-      const response = await fetch('/api/schema/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schemaDir })
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setSchemaStatus(prev => ({
-          ...prev,
-          mdXsdPath: data.resolved?.mdXsdPath,
-          commonXsdPath: data.resolved?.commonXsdPath,
-          mdExists: data.resolved?.mdExists,
-          commonExists: data.resolved?.commonExists
-        }));
-        throw new Error(data.error || 'Failed to save schema settings.');
-      }
-
-      setSchemaStatus({
-        mdXsdPath: data.resolved?.mdXsdPath,
-        commonXsdPath: data.resolved?.commonXsdPath,
-        mdExists: data.resolved?.mdExists,
-        commonExists: data.resolved?.commonExists,
-        loaded: data.loaded,
-        counts: data.schema_counts,
-        error: data.error
-      });
-      setSchemaMessage(data.loaded ? 'Schema library reloaded.' : data.error || 'Schema settings saved, but library did not load.');
-      setSchemaMessageType(data.loaded ? 'success' : 'error');
-      await onSchemaConfigChanged?.();
-    } catch (error: unknown) {
-      setSchemaMessage(error instanceof Error ? error.message : 'Failed to save schema settings.');
-      setSchemaMessageType('error');
-    } finally {
-      setSavingSchema(false);
-    }
-  };
 
   // Property editor change handling
   const handlePropChange = (key: string, value: unknown) => {
