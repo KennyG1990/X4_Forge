@@ -134,7 +134,9 @@ export default function PlaytestWorkspace({
 
   useEffect(() => {
     refreshGameLogStatus();
-    const timer = window.setInterval(refreshGameLogStatus, 15000);
+    // Poll every 4s so the watcher feels live during an in-game test (was 15s, which read
+    // as "not automatic"). The tail is byte-bounded, so a fast poll is cheap.
+    const timer = window.setInterval(refreshGameLogStatus, 4000);
     return () => window.clearInterval(timer);
     // reason: refreshGameLogStatus is a non-memoized component-body function; the polling interval should reset only on activeModId change, not every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps

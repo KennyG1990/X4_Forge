@@ -240,12 +240,21 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     const lname = name.toLowerCase();
     const prev = elements.get(lname);
     if (prev) {
-      for (const [k, v] of attrs) {
+      // The same element name can have context-dependent definitions in md.xsd — e.g.
+      // <param> under <library><params> takes name+default, but under <run_actions> it
+      // requires `value`. This index is keyed by name only, so an attribute is required in
+      // the merged spec ONLY if it is present-and-required in EVERY definition. Walk the
+      // UNION of keys so an attr required in one def but ABSENT in another is relaxed to
+      // optional (the old loop visited only the new def's attrs, leaving a prev-only required
+      // attr stuck required — the source of the false "param missing required value" warning).
+      const keys = new Set<string>([...prev.attributes.keys(), ...attrs.keys()]);
+      for (const k of keys) {
         const p = prev.attributes.get(k);
+        const v = attrs.get(k);
         prev.attributes.set(k, {
-          required: Boolean(p?.required) && Boolean(v.required),
-          enumValues: v.enumValues || p?.enumValues,
-          type: v.type || p?.type
+          required: Boolean(p?.required) && Boolean(v?.required),
+          enumValues: (v?.enumValues) || p?.enumValues,
+          type: (v?.type) || p?.type
         });
       }
       prev.openAttributes = prev.openAttributes || open;

@@ -79,7 +79,21 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
     }
 
     const modName = mdscript.getAttribute("name") || "Parsed_X4_Mod";
-    const cuesList = xmlDoc.getElementsByTagName("cue");
+    // Treat <library> as a cue variant so reusable-subroutine cues model + round-trip like
+    // any other cue. Collect <cue> and <library> in DOCUMENT ORDER (not cues-then-libraries)
+    // so the regenerated MD preserves the author's top-level ordering — required for the
+    // byte-fidelity (emit-original-when-unedited) path.
+    const cuesList: any[] = [];
+    const walkCueLike = (node: any) => {
+      const kids = (node && node.childNodes) ? Array.from(node.childNodes) : [];
+      for (const ch of kids as any[]) {
+        if (ch && ch.nodeType === 1) {
+          if (ch.tagName === "cue" || ch.tagName === "library") cuesList.push(ch);
+          walkCueLike(ch);
+        }
+      }
+    };
+    walkCueLike(mdscript);
     
     const nodes: MDNode[] = [];
     const links: MDLink[] = [];
@@ -110,7 +124,28 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       const name = cue.getAttribute("name") || `cue_${i}`;
       const instantiate = cue.getAttribute("instantiate") || "false";
       const namespace = cue.getAttribute("namespace") || "this";
-      
+
+      // <delay> (md.xsd cue order: conditions, delay, actions) — model as editable cue
+      // fields so timed cues round-trip instead of silently losing their timer.
+      const delayEl = Array.from(cue.children).find((c: any) => c.tagName === 'delay');
+      const delayProps: Record<string, any> = delayEl ? {
+        delayExact: delayEl.getAttribute('exact') || '',
+        delayMin: delayEl.getAttribute('min') || '',
+        delayMax: delayEl.getAttribute('max') || '',
+      } : {};
+
+      // <library> = a reusable-subroutine cue variant. Preserve its <documentation>/<params>
+      // header verbatim; its <actions> flow through the normal action parser as editable boxes.
+      const isLibrary = cue.tagName === 'library';
+      const libProps: Record<string, any> = {};
+      if (isLibrary) {
+        const paramsEl = Array.from(cue.children).find((c: any) => c.tagName === 'params');
+        const docEl = Array.from(cue.children).find((c: any) => c.tagName === 'documentation');
+        libProps.isLibrary = 'true';
+        libProps.libParamsXml = paramsEl ? serializer.serializeToString(paramsEl as any) : '';
+        libProps.libDocXml = docEl ? serializer.serializeToString(docEl as any) : '';
+      }
+
       const cueId = `cue_${Date.now()}_${i}`;
       elementToId.set(cue, cueId);
       
@@ -125,11 +160,13 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       const cueNode: MDNode = {
         id: cueId,
         type: 'cue',
-        label: cue.getAttribute("name") ? `Cue: ${cue.getAttribute("name")}` : 'Mission Cue',
+        label: isLibrary
+          ? `Library: ${cue.getAttribute("name") || name}`
+          : (cue.getAttribute("name") ? `Cue: ${cue.getAttribute("name")}` : 'Mission Cue'),
         xmlTag: 'cue',
         x,
         y,
-        properties: { name, instantiate, namespace },
+        properties: { name, instantiate, namespace, ...delayProps, ...libProps },
         propertiesSchema: NODE_TEMPLATES[0].propertiesSchema,
         inputs: NODE_TEMPLATES[0].inputs,
         outputs: NODE_TEMPLATES[0].outputs

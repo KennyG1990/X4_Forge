@@ -1,0 +1,63 @@
+{
+  "$schema": "forge-external-api/v1",
+  "extensionId": "djfhe_http",
+  "name": "djfhe HTTP Client",
+  "author": "djfhe",
+  "source": "X4 extension: non-blocking http/https client (luasocket + luasec) with a callback interface",
+  "dependsOn": [],
+  "components": [
+    {
+      "id": "http_request",
+      "title": "HTTP Request (Lua)",
+      "summary": "Non-blocking HTTP client. require('djfhe.http.request') then build with the FLUENT API: Request.new(METHOD):setUrl(url):setBody(table):send(callback). Callback is (response, err); response:getBody() / response:getJson() read the result. Polled every 50ms; Protected UI must be disabled (loads native dlls).",
+      "requiresProtectedUiDisabled": true,
+      "windowsOnly": true,
+      "symbols": [
+        {
+          "name": "djfhe.http.request",
+          "kind": "lua_global",
+          "summary": "The request module. require it: local Request = require('djfhe.http.request').",
+          "detect": ["djfhe.http.request"]
+        },
+        {
+          "name": "Request.new",
+          "kind": "lua_global",
+          "summary": "Construct a request. Signature: Request.new(method, headers?, url?, parameters?, body?). Use DOT call with a METHOD STRING (Request.new('POST')) — NOT colon-with-a-table (Request:new({...}) is wrong).",
+          "detect": ["Request.new("],
+          "scaffold": "local Request = require(\"djfhe.http.request\")\nlocal json = require(\"jsonlua.json\")\nRequest.new(\"POST\"):setUrl(\"http://127.0.0.1:8713/v1/request\"):setBody({ key = \"value\" }):send(function(response, err)\n  if err then return end\n  local data = response:getJson()\nend)"
+        },
+        {
+          "name": ":setUrl",
+          "kind": "lua_global",
+          "summary": "Set the target URL. Returns self (chainable).",
+          "detect": [":setUrl("]
+        },
+        {
+          "name": ":setBody",
+          "kind": "lua_global",
+          "summary": "Set the request body; a table is JSON-encoded automatically. Returns self.",
+          "detect": [":setBody("]
+        },
+        {
+          "name": ":send",
+          "kind": "lua_callback",
+          "summary": "Fire the request asynchronously. send(function(response, err) ... end). On success response:getBody()/getJson(); on failure err is a string.",
+          "detect": [":send("]
+        }
+      ]
+    },
+    {
+      "id": "http_internal",
+      "title": "Client update loop",
+      "summary": "Internal: the MD-driven 50ms poll that advances open requests. Consumers don't call this.",
+      "symbols": [
+        {
+          "name": "'djfhe.http.client.update'",
+          "kind": "lua_event",
+          "summary": "Internal poll event raised by djfhe's own MD script every 50ms. Not for consumer use.",
+          "detect": ["djfhe.http.client.update"]
+        }
+      ]
+    }
+  ]
+}

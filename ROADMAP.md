@@ -29,6 +29,119 @@ Foundation-first means: before adding polish, every link above has to be *correc
 >
 > **Doc layout:** this Current State block is the source of truth. Below it, the most recent initiative sections are kept newest-relevant first (50th port-semantics, 52nd gap analysis, 53rd UX grind, then the 49th/51st detail sections), and everything under the *Archive* divider is append-only dated history. Where anything conflicts, this block wins.*
 
+### MD round-trip fidelity + script-name correctness (2026-06-22)
+
+**The gap.** The MD importer modeled the first `md/*.xml` into the node graph with **no faithfulness guard** (unlike the aiscript path, #65). Any construct the node model didn't represent — `<delay>`, `<library>`, `<params>` — was silently dropped when the graph was recompiled on export. A polling cue lost its `<delay>`, turning a throttled 1 s loop into a tight infinite loop; a `<library>` and its callers became a dangling reference. Separately, an editable MD file was re-emitted as `md/<modId>.xml` with `<mdscript name="<mod display title>">`, renaming the script + file and tripping a "contains spaces" error — because the **display title** (allowed spaces; also content.xml's `name`) was being validated as if it were the **script name**.
+
+**Fixes (Forge only).**
+- **Faithfulness guard for MD import** (`server.ts` `importModFolder`): added `mdElementCounts` / `mdRoundTripPreservesElements`; an md file is adopted as *editable* only if regenerating from its nodes drops no element — else it stays *passthrough* (lossless). Mirrors the aiscript #65 guard but whitespace/attr-order-immune (element-multiset compare).
+- **`<delay>` modeled as editable cue fields** (`xmlParser.ts` captures `<delay>`; `types.ts` cue template gains `delayExact/delayMin/delayMax`; `generateMDXML` emits `<delay>` in md.xsd order conditions→delay→actions).
+- **`<library>` modeled as a cue variant** (`xmlParser.ts` collects `<library>` alongside `<cue>`, preserves `<params>`/`<documentation>` verbatim; `generateMDXML` emits `<library name>` with that header + the normal cue body; node labelled `Library: <name>`).
+- **Script identity preserved through the round-trip** (`ModWorkspace.mdScriptName` + `mdFileStem`, threaded through `sanitizeWorkspace`; `importModFolder` captures the parsed `<mdscript name>` + original file stem; `buildWorkspaceFileManifest` emits at the original `md/<stem>.xml`; schema validation iterates the emitted md files instead of hardcoding `md/<modId>.xml`).
+- **Script-name validator fixed at the source** (`types.ts`): shared `safeMdScriptName` + `effectiveMdScriptName` exports; `generateMDXML` and `validateModWorkspace` both emit/validate the *effective* script name (imported name, else sanitized title), so a human-readable mod title no longer throws a false "contains spaces" error.
+- **New oracle**: `GET /api/agent/md-faithfulness-selftest`.
+
+**Verification (live, 2026-06-22).**
+- `GET /api/agent/md-faithfulness-selftest` → 200, **4/4** (delay_roundtrips, library_roundtrips, exotic_guard_backstop, clean_md_stays_faithful).
+- `GET /api/agent/selftest` (consolidated) → **10/10**; `GET /api/agent/round-trip-selftest` → pass (no regression); `GET /api/agent/compile-selftest` → pass.
+- Re-import `ai_influence_test`: `md/ai_influence_test_chat.xml` classifies **editable**; manifest emits all three md files at their **real names**; regen contains `<delay exact="1s">`, `<library name="Open_chat">` + both `<param>`s; `mdScriptName="ai_influence_test_chat"`; diagnostics **0 errors** on BOTH the fresh import and a stale active workspace (the spaces error is eliminated at the validator source, not worked around).
+
+**Honest limitations / gotchas.**
+- Library **sub-cues** and **alternating multi-`<delay>`/`<actions>`** blocks are still not modeled → the faithfulness guard keeps such files passthrough (lossless, not graph-editable). Proven by the `exotic_guard_backstop` check.
+- 2 residual **warnings** (not errors): the XSD validator flags library `<param name= default=>` as "missing required value" — a context-resolution false positive on valid X4 library-param syntax; left as-is.
+- The React frontend keeps its own workspace copy and auto-saves it, so an already-open tab holds a pre-fix snapshot until a fresh re-import — but the validator fix means even a stale workspace no longer throws the spaces error.
+
+### Lossless graph round-trip — byte-fidelity achieved (2026-06-22)
+
+The compile/deploy path is now safe to use as intended on hand-authored mods. Proven on the
+real `ai_influence_test` mod: `import → graph → compile` reproduces the source **byte-for-byte**
+when unedited, and regenerates faithfully when actually edited.
+
+- **content.xml `id` preserved** (`effectiveModId` from the imported `content.xml`, not
+  `toSafeModId(displayName)`) → deploy lands in the SAME extension folder with the SAME id,
+  not a renamed `<name>_mod` duplicate. Threaded via `parseContentMeta.id` → `ws.contentId`.
+- **Document-order cue/library collection** (`xmlParser.ts`) — `<cue>`/`<library>` are now
+  gathered in source order (a recursive walk), not cues-then-libraries, so top-level ordering
+  survives the round-trip.
+- **Byte-fidelity emit** (`buildWorkspaceFileManifest`): the editable MD file's ORIGINAL bytes
+  are captured on import (`ws.mdOriginal`) and re-emitted verbatim when `canonicalMd(regen) ===
+  canonicalMd(original)` — i.e. the graph wasn't semantically edited. `canonicalMd` strips
+  comments, sorts attributes, collapses whitespace, and **drops X4 default attributes**
+  (`namespace="this"`, `instantiate="false"`, `state="active"`) so a default the regen adds but
+  the source omits doesn't read as an edit. Any real edit changes the canonical form → faithful
+  regen instead.
+- Net: **comments, whitespace, attribute order all preserved** on unedited export; the lossy
+  reputation of the graph compiler is closed for this mod class.
+
+**Verification (live, 2026-06-22):** `import(ai_influence_test) → compile` ⇒ chat MD
+`emitted === original` (byte-identical, inline comments intact); `content_id = ai_influence_test`
+(not `_mod`); `GET /api/agent/round-trip-selftest` → allPassed **incl. new
+`md byte-fidelity (unedited→verbatim)` check**; consolidated `GET /api/agent/selftest` → **10/10**.
+
+**Honest limitation:** byte-fidelity is implemented for the single editable MD file
+(`ws.mdOriginal`). A mod with multiple hand-authored MD files keeps the others as passthrough
+(also verbatim), so they're safe — but only the first editable one rides the canonical
+emit-original path; generalizing to per-file originals is the next step if needed.
+
+### Validator coverage + live-log watcher hardening (2026-06-22)
+
+Closed real gaps surfaced by taking a hand-authored mod (`ai_influence_test`, a djfhe-HTTP +
+Player2 chat window) all the way into X4. Principle reinforced: `md.xsd` structural validity
+is necessary but NOT sufficient — Lua runtime hazards and X4 engine semantics live outside the
+schema, and the live-log watcher is the backstop, so it must not lie.
+
+**New validator rules (the two blind spots, now covered):**
+- **Lua: `lua.djfhe_internal_require`** (`luaStaticAnalysis.ts`, x4 layer, error) — flags
+  `require("djfhe.http.client")`. djfhe's client is INTERNAL; requiring it poisons djfhe's
+  module cache and breaks its 50ms update loop every tick ("loop or previous error loading
+  module"). Consumers must require only `djfhe.http.request` and use the fluent
+  `Request.new(M):setUrl():setBody():send(cb)`. Companion rule **`lua.broad_package_path`**
+  (warning) flags a broad `extensions/?.lua` on `package.path` (shadows/loops other extensions).
+- **MD: `instantiate_reload`** (`mdCritic.ts`, deterministic critic, warning) — a cue with a
+  sub-cue tree but `instantiate="false"` can fail re-instantiation on save/game reload (X4's
+  own MD-engine warning, which the XSD does not encode). The usual offender is a static cue
+  holding a persistent loop (self-resetting poll). Mirrors the engine rule pre-launch.
+
+**Live-log watcher (`game-log/status`) fixes:**
+- **False all-clear bug** — it matched log lines by `toSafeModId(workspace.name)` (e.g.
+  `ai_influence_test_mod` from the display name "AI Influence Test Mod"), but the real
+  extension folder is `ai_influence_test`. The substring filter never matched, so the mod's
+  real errors were silently uncounted → a dangerous "0 issues". Now `analyzeGameLog` /
+  `computeGameStates` match a SET of candidate ids (display name, space/underscore forms,
+  trailing-`_mod` stripped). On the live log this flipped status clean→errors and surfaced 10
+  real lines the old filter hid (the djfhe Lua load failures + benign unsigned-file signature
+  warnings).
+- **Poll cadence** 15s → 4s (`PlaytestWorkspace.tsx`) so the watcher feels live during an
+  in-game test (tail is byte-bounded, so a fast poll is cheap).
+
+**Demo-log de-fang (`DiagnosticsHub.tsx`):** the "Load Demo Log" button interpolated the
+user's REAL `workspace.name` + first cue name + a hardcoded `ARGON_MILITARY` into a fake error
+template — indistinguishable from real X4 output, and a genuine source of confusion (hours lost
+chasing a "phantom" extension that never existed). Rewritten to use obviously-fake identifiers
+(`Demo_Sample_Mod`, `Demo_Sample_Cue`, `DEMO_FACTION`) under a loud `SAMPLE / DEMO LOG — NOT
+from your game` banner.
+
+**Library-param XSD false positive (`xsdValidate.ts`):** `<param>` has two context-dependent
+md.xsd definitions (library `name`+`default` vs `run_actions` `name`+`value`-required). The
+name-keyed merge left `value` stuck required, so valid library params were flagged "missing
+required value". Now the merge walks the UNION of attributes, so an attr required in one
+context but absent in another is correctly optional.
+
+**Verification (live, 2026-06-22):**
+- `GET /api/agent/lua-static-selftest` → PASS (incl. `djfhe_internal_require_detected`,
+  `broad_package_path_detected`).
+- `GET /api/agent/critic-selftest` → allPassed (incl. `instantiate_reload_fires` +
+  `..._suppressed_when_true`).
+- `GET /api/agent/log-selftest` → PASS after the candidate-id signature change.
+- `GET /api/agent/selftest` (consolidated) → **10/10**, no regression, across every change.
+
+**Honest limitation:** the Lua rules are pattern/regex-based (text scan), not full data-flow —
+they catch the known high-impact hazards (djfhe-internal require, broad package.path), not
+arbitrary runtime faults. The `instantiate_reload` rule runs on the node-graph critic, so it
+covers graph-modeled cues; a hand-authored MD file that imports as passthrough is preserved
+verbatim and isn't node-linted (the faithfulness guard keeps it lossless, but it won't get the
+semantic warning until it's modeled). Both are the right next coverage steps.
+
 **Where we are.** **All planned capability work is built.** Every tier on this roadmap — the correctness backend, the ergonomics levers (1–3), Tier 2 visual analysis (T2 cue lineage, T3 log telemetry), the T1 layout bridge, and the Tier 4 ecosystem levers (override visualizer, zero-extraction vanilla access, diff-to-patch, Lua↔MD connector) — is shipped, selftest-covered, and browser-verified. The project's phase shifted from *building capability* to *hardening it*, and then to a new strategic thrust: **the Determinism Doctrine** (see its dedicated section below) — making the studio's analysis surfaces deterministic-not-AI. **Phases 1–3 are shipped and browser-verified (46th pass):** the MD Semantics Registry (the "Meaning" layer), the deterministic explainer (the SCANNER now explains mods with no AI, AI demoted to an optional labeled toggle), and the deterministic critic (a no-AI lint card in the Doctor whose headline property is that it does *not* false-positive the way the AI did). **Phase 4 (the deterministic MD simulator) is now SHIPPED and browser-verified (49th pass):** `mdSimulate.ts` evaluates cue logic against a small modeled state with a tri-state (true/false/**unknown**) Kleene evaluator, walks the cue/action graph applying `set_value` effects and `do_if`/`do_while` guards, and surfaces deterministic findings (never-satisfiable cue, dead-branch guard, unreachable sub-cue). Its cardinal rule is honesty over coverage — unmodeled operands resolve to `unknown`, never a guess — and it states its own structural limit (Forge's flat action-chain can't encode branch-body membership, so it conservatively taints downstream variable writes rather than assert them). PLAY SIMULATION now drives its log from this engine (the old hardcoded "0 warnings, 0 crash errors" theatre is gone). Phase 5 (live in-game loop) and the human-gated C2 in-game capstone remain parked on game time.
 
 **Milestones**
@@ -37,7 +150,7 @@ Foundation-first means: before adding polish, every link above has to be *correc
 - **M2 — Loop trustworthy: DONE in depth, one residual.** Round-trip lossless, `md-audit` 0, XSD + semantic reference validation, patch diagnostics, format oracles for every engine. Residual: round-trip *editability* breadth (wares/jobs/aiscripts import as preserved passthrough, not yet editable graphs).
 - **M3 — Prototype validated: OPEN — the capstone.** Gated on **C2**: a new non-trivial mod built entirely in-studio, run in X4, documented. Human-in-the-loop. This is the last milestone and it is deliberately not automatable.
 
-**What the program does today** (each area selftest-backed; current browser dashboard: **26/26 PASS**; core 10/10 · references 5/5 · patch-audit 3/3 · lua-static 5/5 · override-map 12/12 · catdat 12/12 · xpath-synth 12/12 · contract 24/24 · round-trip lossless · ui-layout 19/19 · ui-widget-validate 9/9 · cue-lineage 17/17 · **semantics 34/34** · **explain 20/20** · **critic 10/10** · **node-diagnostics 13/13** · **node-align 10/10** · log-telemetry 17/17 · log-file 5/5 · live-fixes 9/9 · md-audit 0 · db-selftest pass):
+**What the program does today** (each area selftest-backed; current browser dashboard: **27/27 PASS**; core 10/10 · references 5/5 · patch-audit 3/3 · lua-static 5/5 · override-map 12/12 · catdat 12/12 · xpath-synth 12/12 · contract 24/24 · round-trip lossless · **md-faithfulness 4/4** · ui-layout 19/19 · ui-widget-validate 9/9 · cue-lineage 17/17 · **semantics 34/34** · **explain 20/20** · **critic 10/10** · **node-diagnostics 13/13** · **node-align 10/10** · log-telemetry 17/17 · log-file 5/5 · live-fixes 9/9 · md-audit 0 · db-selftest pass):
 - **Authoring.** Visual node canvas for the **full `md.xsd` vocabulary** (~1,478 schema-driven elements with real attributes — Lever 1), reference fields as live typed pickers backed by the installed game's object index (694 ships / 8.6k macros / 1.9k wares / 33 factions from packed archives) so invalid references can't be typed; wares/jobs/t-files/aiscripts/XML-patch editors; HUD & Lua UI designer with a snap-grid layout bridge (free-form designer → engine-correct responsive grid descriptor, T1.1–T1.2); vetted Lua snippet library; editable persisted custom-Lua buffer.
 - **Correctness.** Real XSD validation (md + aiscripts), semantic reference + time-format validation, package diagnostics with click-to-navigate, structural cue-lineage analysis with a red broken-lineage tree (T2), honest success reporting throughout.
 - **Vanilla access (T4.1).** Zero-extraction reads of the game's `.cat/.dat` archives — positioned reads, gzip/zlib `.pck` decompression with graceful fallback, `.pck` alias resolution — feeding the object index, base-content resolution, and pickers; SQLite-cached (cold boot 230 ms vs 2.2 s).

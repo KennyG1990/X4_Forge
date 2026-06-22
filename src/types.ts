@@ -210,6 +210,26 @@ export interface ModWorkspace {
   };
   templates?: MDNode[];
   /**
+   * Preserved from import so an editable MD file round-trips to the SAME identity it had:
+   * `mdScriptName` is the original `<mdscript name="...">`, `mdFileStem` is the original
+   * file's basename (without .xml). Without these, export renames the script + file after
+   * the mod's display title (spaces and all → invalid). New mods leave them undefined and
+   * fall back to a sanitized name derived from the workspace.
+   */
+  mdScriptName?: string;
+  mdFileStem?: string;
+  /** Preserved content.xml id (the extension folder name). Keeps export from renaming the
+   *  mod's folder/id after the display title. Undefined for new mods → derived from name. */
+  contentId?: string;
+  /** The editable MD file's ORIGINAL raw bytes + path, captured on import. On export, if the
+   *  graph wasn't semantically edited, these exact bytes are re-emitted (true byte-fidelity:
+   *  comments, whitespace, attribute order all preserved). Only a real edit triggers regen. */
+  mdOriginal?: { path: string; content: string };
+  /** content.xml's ORIGINAL raw bytes, captured on import. Re-emitted verbatim when the mod
+   *  metadata is unedited — preserves <dependency> elements + formatting that generateContentXML
+   *  would otherwise drop. */
+  contentOriginal?: string;
+  /**
    * Files imported from an existing mod that the studio does not (yet) model as
    * editable domains. Preserved verbatim so import -> export is lossless. On
    * export they are written back at their original relative path, unless a
@@ -285,13 +305,23 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
       name: 'MyMissionCue',
       instantiate: 'false',
       namespace: 'this',
-      state: 'active'
+      state: 'active',
+      delayExact: '',
+      delayMin: '',
+      delayMax: '',
+      isLibrary: 'false',
+      libParamsXml: ''
     },
     propertiesSchema: [
       { key: 'name', label: 'Cue ID / Name', type: 'text', placeholder: 'e.g. MyCue_Start' },
       { key: 'instantiate', label: 'Instantiate', type: 'select', options: ['true', 'false'], description: 'Creates a dynamic copy of this cue each time context occurs' },
       { key: 'namespace', label: 'Namespace', type: 'select', options: ['this', 'player', 'cue'] },
-      { key: 'state', label: 'Initial State', type: 'select', options: ['active', 'inactive', 'waiting'] }
+      { key: 'state', label: 'Initial State', type: 'select', options: ['active', 'inactive', 'waiting'] },
+      { key: 'delayExact', label: 'Delay (exact)', type: 'text', placeholder: 'e.g. 1s', description: 'Wait this long between trigger and actions. X4 time, e.g. 5s, 1min. Use this OR min+max.' },
+      { key: 'delayMin', label: 'Delay (min)', type: 'text', placeholder: 'e.g. 3s', description: 'Random delay lower bound (pairs with Delay max).' },
+      { key: 'delayMax', label: 'Delay (max)', type: 'text', placeholder: 'e.g. 8s', description: 'Random delay upper bound (pairs with Delay min).' },
+      { key: 'isLibrary', label: 'Is Library', type: 'select', options: ['false', 'true'], description: 'Emit as <library> (a reusable subroutine called by signal_cue) instead of <cue>.' },
+      { key: 'libParamsXml', label: 'Library Params (raw XML)', type: 'text', placeholder: '<params><param name="x" default="0"/></params>', description: 'Only used when Is Library = true. The <params> block, kept verbatim.' }
     ],
     inputs: [
       { id: 'in_flow', name: 'Trigger Parent', type: 'parent' }
@@ -623,6 +653,23 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
 
 const CURATED_XML_TAGS = new Set(NODE_TEMPLATES.map(template => template.xmlTag));
 
+/**
+ * Derive a VALID X4 MD script name (for <mdscript name="...">) from an arbitrary string.
+ * The mod's display title (workspace.name, also used for content.xml) may contain spaces
+ * and punctuation; the script name may not. An already-valid name is returned unchanged.
+ */
+export function safeMdScriptName(raw: string): string {
+  const s = String(raw || '').trim();
+  if (/^[A-Za-z][A-Za-z0-9_]*$/.test(s)) return s; // already a valid script name → unchanged
+  const cleaned = s.replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return /^[A-Za-z]/.test(cleaned) ? cleaned : (cleaned ? `md_${cleaned}` : 'Sample_Mod');
+}
+
+/** The actual <mdscript name> a workspace emits: the imported name, else a sanitized title. */
+export function effectiveMdScriptName(workspace: { mdScriptName?: string; name?: string }): string {
+  return workspace.mdScriptName || safeMdScriptName(workspace.name || 'Sample_Mod');
+}
+
 export function templateFromSchemaElement(element: SchemaElement): Omit<MDNode, 'id' | 'x' | 'y'> {
   return schemaElementToTemplate(element);
 }
@@ -682,11 +729,22 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     const indentDouble = ' '.repeat(indentDepth + 4);
     
     const cueName = cue.properties.name || cue.id;
+    const isLib = cue.properties.isLibrary === 'true' || cue.properties.isLibrary === true;
     const inst = cue.properties.instantiate === 'true' ? ' instantiate="true"' : '';
     const ns = cue.properties.namespace ? ` namespace="${escapeXMLAttribute(String(cue.properties.namespace))}"` : '';
     const state = cue.properties.state && cue.properties.state !== 'active' ? ` state="${escapeXMLAttribute(String(cue.properties.state))}"` : '';
 
-    let xml = `${indent}<cue name="${escapeXMLAttribute(String(cueName))}"${inst}${ns}${state}>\n`;
+    // <library> is a cue variant: name only (no instantiate/namespace/state), with an
+    // optional <documentation>/<params> header preserved verbatim before the cue body.
+    const reindent = (raw: string, ind: string) =>
+      String(raw || '').trim().split('\n').map(l => `${ind}${l.trim()}`).join('\n');
+    let xml = isLib
+      ? `${indent}<library name="${escapeXMLAttribute(String(cueName))}">\n`
+      : `${indent}<cue name="${escapeXMLAttribute(String(cueName))}"${inst}${ns}${state}>\n`;
+    if (isLib) {
+      if (cue.properties.libDocXml) xml += `${reindent(cue.properties.libDocXml, indentPlus)}\n`;
+      if (cue.properties.libParamsXml) xml += `${reindent(cue.properties.libParamsXml, indentPlus)}\n`;
+    }
     
     // Conditions block parsing (find all nodes connected to out_cond)
     const condLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_cond');
@@ -742,6 +800,21 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
       xml += `${indentPlus}</conditions>\n`;
     }
     
+    // <delay> — md.xsd cue order is conditions, delay, actions. Emitted from editable
+    // cue fields so a timed cue keeps its timer on round-trip.
+    {
+      const dExact = cue.properties.delayExact, dMin = cue.properties.delayMin, dMax = cue.properties.delayMax;
+      const has = (v: any) => v !== undefined && v !== null && String(v).trim() !== '';
+      if (has(dExact) || has(dMin) || has(dMax)) {
+        const da = [
+          has(dExact) ? `exact="${escapeXMLAttribute(String(dExact))}"` : '',
+          has(dMin) ? `min="${escapeXMLAttribute(String(dMin))}"` : '',
+          has(dMax) ? `max="${escapeXMLAttribute(String(dMax))}"` : '',
+        ].filter(Boolean).join(' ');
+        xml += `${indentPlus}<delay ${da} />\n`;
+      }
+    }
+
     // Actions block — recursive emit so control-flow containers (do_if/do_while/…)
     // nest their out_body chain INSIDE the element; out_next continues the sibling
     // chain exactly as before. Cycle-safe via a single shared `emitSeen` set.
@@ -836,13 +909,17 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
       });
       xml += `${indentPlus}</cues>\n`;
     }
-    
-    xml += `${indent}</cue>\n`;
+
+    xml += isLib ? `${indent}</library>\n` : `${indent}</cue>\n`;
     return xml;
   }
 
+  // MD script name: keep the imported `<mdscript name>` verbatim; otherwise derive a
+  // VALID name from the workspace title (X4 forbids spaces/punctuation in script names).
+  const mdName = effectiveMdScriptName(workspace);
+
   let xml = `<?xml version="1.0" encoding="utf-8"?>
-<mdscript name="${escapeXMLAttribute(String(workspace.name || 'Sample_Mod'))}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+<mdscript name="${escapeXMLAttribute(String(mdName))}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
   <!-- Generated by X4 Foundations Mod Studio (version ${workspace.version || '1.0.0'}) -->
   <!-- Author: ${workspace.author || 'Mod Creator'} -->
   <!-- Description: ${workspace.description || 'Custom MD Script'} -->
@@ -1054,6 +1131,11 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
   // ──────────────────────────────────────────────────────────────────
   // LAW 1: Script Name — Uppercase, no spaces, non-empty
   // ──────────────────────────────────────────────────────────────────
+  // Validate the ACTUAL emitted <mdscript name> — the imported name if preserved, otherwise
+  // a sanitized form of the display title. The display title (workspace.name, also used for
+  // content.xml) is allowed spaces/punctuation; only the derived script name must be strict.
+  // Since the script name is now auto-derived-valid, this only errors on a genuinely bad
+  // imported name, and never punishes a human-readable mod title.
   if (!workspace.name) {
     diagnostics.push({
       severity: 'error',
@@ -1061,23 +1143,24 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
       category: 'syntax'
     });
   } else {
-    if (!/^[A-Za-z]/.test(workspace.name)) {
+    const mdName = effectiveMdScriptName(workspace);
+    if (!/^[A-Za-z]/.test(mdName)) {
       diagnostics.push({
         severity: 'error',
-        message: `Script name "${workspace.name}" must start with a letter. The X4 MD engine requires <mdscript name="..."> to begin with [A-Z].`,
+        message: `MD script name "${mdName}" must start with a letter. The X4 MD engine requires <mdscript name="..."> to begin with [A-Z].`,
         category: 'egosoft'
       });
     }
-    if (/\s/.test(workspace.name)) {
+    if (/\s/.test(mdName)) {
       diagnostics.push({
         severity: 'error',
-        message: `Script name "${workspace.name}" contains spaces. MD script names must not contain spaces so they can be used as references.`,
+        message: `MD script name "${mdName}" contains spaces. MD script names must not contain spaces so they can be used as references.`,
         category: 'egosoft'
       });
-    } else if (!/^[A-Za-z0-9_]+$/.test(workspace.name)) {
+    } else if (!/^[A-Za-z0-9_]+$/.test(mdName)) {
       diagnostics.push({
         severity: 'warning',
-        message: 'Script name contains special characters. Use only alphanumeric characters and underscores (e.g. My_Custom_Script).',
+        message: 'MD script name contains special characters. Use only alphanumeric characters and underscores (e.g. My_Custom_Script).',
         category: 'syntax'
       });
     }
@@ -1585,6 +1668,11 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     version: ws.version || '1.0.0',
     author: ws.author || 'Space_Pilot',
     description: ws.description || '',
+    ...(ws.mdScriptName ? { mdScriptName: ws.mdScriptName } : {}),
+    ...(ws.mdFileStem ? { mdFileStem: ws.mdFileStem } : {}),
+    ...(ws.contentId ? { contentId: ws.contentId } : {}),
+    ...(ws.mdOriginal && ws.mdOriginal.content ? { mdOriginal: ws.mdOriginal } : {}),
+    ...(ws.contentOriginal ? { contentOriginal: ws.contentOriginal } : {}),
     nodes: sanitizedNodes,
     links: Array.isArray(ws.links) ? ws.links : [],
     uiWidgets: sanitizedWidgets,

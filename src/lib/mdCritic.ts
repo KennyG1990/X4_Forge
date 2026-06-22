@@ -134,6 +134,19 @@ export function critiqueWorkspace(nodes: MDNode[], links: MDLink[]): CriticResul
         }
       }
     }
+
+    // --- (d) instantiate_reload — engine semantic the XSD doesn't encode. A cue with a
+    // sub-cue tree that isn't instantiated can fail re-instantiation on a save/game reload
+    // ("cue has active state but instantiate is false" — X4's own MD-engine warning). The
+    // usual offender is a static cue holding a persistent loop (e.g. a self-resetting poll).
+    const hasSubCues = links.some((l) => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+    const instantiated = String(cue.properties?.instantiate) === 'true';
+    if (hasSubCues && !instantiated) {
+      findings.push({
+        severity: 'warning', code: 'instantiate_reload', cueId: cue.id, cueName, nodeId: cue.id,
+        message: `Cue "${cueName}" has sub-cues but instantiate="false". X4 warns this cue's active state can fail to re-instantiate on a save/game reload. Set instantiate="true" if the cue + its sub-cue tree should re-establish on load.`,
+      });
+    }
   }
 
   const summary: Record<string, number> = {};
@@ -215,6 +228,18 @@ export function runCriticSelftest() {
     [L('p1', 'c6', 'out_cond', 'e6', 'in_cond'), L('p2', 'c6', 'out_cond', 'chk', 'in_cond'), L('p3', 'c6', 'out_act', 'cs3', 'in_act')]
   );
   ok('unguarded_suppressed_by_condition', !has(guardedCheck, 'unguarded_high_risk'), guardedCheck.findings);
+
+  // ---- (d) instantiate_reload: fires for a cue with sub-cues + instantiate=false, suppressed when instantiate=true ----
+  const reloadUnsafe = critiqueWorkspace(
+    [N('cb', 'cue', 'cue', { name: 'Boot', instantiate: 'false' }), N('sub', 'cue', 'cue', { name: 'Poll' })],
+    [L('s1', 'cb', 'out_sub', 'sub', 'in_flow')]
+  );
+  ok('instantiate_reload_fires', has(reloadUnsafe, 'instantiate_reload', 'cb'), reloadUnsafe.findings);
+  const reloadSafe = critiqueWorkspace(
+    [N('cb2', 'cue', 'cue', { name: 'Boot', instantiate: 'true' }), N('sub2', 'cue', 'cue', { name: 'Poll' })],
+    [L('s2', 'cb2', 'out_sub', 'sub2', 'in_flow')]
+  );
+  ok('instantiate_reload_suppressed_when_true', !has(reloadSafe, 'instantiate_reload'), reloadSafe.findings);
 
   // non-frequent trigger: high-risk action is NOT flagged by rule (c)
   const infreq = critiqueWorkspace(

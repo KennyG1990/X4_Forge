@@ -173,6 +173,30 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
         });
       }
     }
+
+    if (relLower.endsWith('.lua')) {
+      // djfhe_http hazard: requiring the INTERNAL client module poisons djfhe's own module
+      // cache and breaks its 50ms update loop FOREVER ("loop or previous error loading module
+      // 'djfhe.http.client'"). Consumers must require only "djfhe.http.request" and drive it
+      // with the fluent Request.new(METHOD):setUrl():setBody():send(callback) API.
+      if (/require\s*\(\s*['"]djfhe\.http\.client['"]\s*\)/.test(file.text)) {
+        findings.push({
+          layer: 'x4', severity: 'error', code: 'lua.djfhe_internal_require', rel: file.rel,
+          message: `${file.rel} requires djfhe's INTERNAL module "djfhe.http.client". This poisons djfhe's module cache and breaks its update loop every tick. Require only "djfhe.http.request" and use Request.new(M):setUrl():setBody():send(cb).`,
+          symbol: 'djfhe.http.client', source: file.source, sourcePath: file.sourcePath
+        });
+      }
+      // A broad "extensions/?.lua" on package.path can shadow or create require-loops for
+      // OTHER extensions' modules (it contributed to the djfhe cache poisoning above). Add
+      // only the specific dependency path, e.g. "extensions/<dep>/lua/?.lua".
+      if (/extensions\/\?\.lua/.test(file.text)) {
+        findings.push({
+          layer: 'x4', severity: 'warning', code: 'lua.broad_package_path', rel: file.rel,
+          message: `${file.rel} adds a broad "extensions/?.lua" to package.path, which can shadow or create require-loops for other extensions. Add only the specific dependency path (e.g. "extensions/<dep>/lua/?.lua").`,
+          source: file.source, sourcePath: file.sourcePath
+        });
+      }
+    }
   }
 
   return { filesScanned: files.length, globalAllowlistSize: allow.size, findings };
@@ -200,6 +224,13 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
       source: 'loose',
       sourcePath: 'broken',
       extension: { folder: 'broken', id: 'broken' }
+    },
+    {
+      rel: 'ui/djfhe_bad.lua',
+      text: 'local c = require("djfhe.http.client")\npackage.path = package.path .. ";extensions/?.lua"\n',
+      source: 'loose',
+      sourcePath: 'djfhe_bad',
+      extension: { folder: 'djfhe_bad', id: 'djfhe_bad' }
     }
   ];
   const result = analyzeLuaFiles(files);
@@ -210,7 +241,9 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
     { name: 'restricted_x4_call_detected', pass: has('lua.restricted_online_call', f => f.rel === 'ui/bad.lua' && f.layer === 'x4' && f.severity === 'error') },
     { name: 'undefined_global_detected', pass: has('lua.undefined_global', f => f.symbol === 'MissingGlobalCall' && f.layer === 'baseline') },
     { name: 'x4_seed_global_not_flagged', pass: !result.findings.some(f => f.code === 'lua.undefined_global' && f.symbol === 'Helper') },
-    { name: 'scanned_global_definition_not_flagged', pass: !result.findings.some(f => f.code === 'lua.undefined_global' && f.symbol === 'MyGlobal') }
+    { name: 'scanned_global_definition_not_flagged', pass: !result.findings.some(f => f.code === 'lua.undefined_global' && f.symbol === 'MyGlobal') },
+    { name: 'djfhe_internal_require_detected', pass: has('lua.djfhe_internal_require', f => f.rel === 'ui/djfhe_bad.lua' && f.layer === 'x4' && f.severity === 'error') },
+    { name: 'broad_package_path_detected', pass: has('lua.broad_package_path', f => f.rel === 'ui/djfhe_bad.lua' && f.severity === 'warning') }
   ];
   return { pass: checks.every(c => c.pass), checks };
 }

@@ -175,14 +175,22 @@ export default function DiagnosticsHub({
   };
 
   const insertDemoX4Log = () => {
-    const defaultCueName = workspace.nodes.find(n => n.type === 'cue')?.properties?.name || 'My_Custom_Cue';
-    const demoText = `[General] 2045.29: ==========================================
-[General] 2045.29: X4: Foundations v6.20 Hotfix 1 (512390)
-[General] 2045.29: Command Line: -debug all -logfile uidata.log -reloaddirector
-[General] 2045.29: ==========================================
-[MD Engine] Error: Parsing XML file extensions\\${workspace.name || 'X4_My_Custom_Mod'}\\md\\${workspace.name || 'X4_My_Custom_Mod'}.xml
-*** Context:md.${defaultCueName}: cue has active state but 'instantiate' attribute is currently 'false'. Re-instantiation will fail on game reloads!
-[MD Engine] Warning: Property 'faction' has unrecognized faction code 'ARGON_MILITARY' in cue '${defaultCueName}'. X4 standard code is 'argon'.`;
+    // Use OBVIOUSLY-FAKE identifiers (not the user's real mod/cue names) and a loud banner,
+    // so this sample can never be mistaken for real X4 output. (Interpolating the real
+    // workspace.name + first cue name made the demo look like genuine errors against the
+    // user's own mod — a real source of confusion.)
+    const demoText = `### ====================================================================
+### SAMPLE / DEMO LOG — this is EXAMPLE text to show the parser format.
+### It is NOT from your game and contains NO real errors about your mod.
+### Use "Browse debug.log" or the auto-watcher to see your actual X4 log.
+### ====================================================================
+[General] 0000.00: ==========================================
+[General] 0000.00: X4: Foundations vX.XX (000000)
+[General] 0000.00: Command Line: -debug all -logfile uidata.log -reloaddirector
+[General] 0000.00: ==========================================
+[MD Engine] Error: Parsing XML file extensions\\Demo_Sample_Mod\\md\\demo_sample_mod.xml
+*** Context:md.Demo_Sample_Cue: cue has active state but 'instantiate' attribute is currently 'false'. Re-instantiation will fail on game reloads!
+[MD Engine] Warning: Property 'faction' has unrecognized faction code 'DEMO_FACTION' in cue 'Demo_Sample_Cue'. X4 standard code is 'argon'.`;
     setLogInput(demoText);
   };
 
