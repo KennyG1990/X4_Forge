@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  X4:MD Studio - clean restart (split dev servers)
+REM  X4 Forge - clean restart (split dev servers)
 REM    API server : http://localhost:3001  (Express, /api/* only)
 REM    Web / Vite : http://localhost:3000  (UI + HMR, proxies /api -> 3001)
 REM

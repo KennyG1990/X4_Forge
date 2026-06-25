@@ -57,6 +57,11 @@ interface GameLogStatus {
   };
   issues?: GameLogIssue[];
   recentGlobalIssues?: GameLogIssue[];
+  diagnosis?: {
+    filesLoaded: boolean;
+    markersSeen: boolean;
+    hypotheses: { code: string; confidence: 'high' | 'medium'; evidence: string; explanation: string; suggestion: string }[];
+  };
   error?: string;
 }
 
@@ -114,6 +119,62 @@ export default function PlaytestWorkspace({
   const [gameLogStatus, setGameLogStatus] = useState<GameLogStatus | null>(null);
   const [gameLogLoading, setGameLogLoading] = useState<boolean>(false);
   const [gameLogError, setGameLogError] = useState<string>('');
+  const [pastedDiagnosis, setPastedDiagnosis] = useState<GameLogStatus['diagnosis'] | null>(null);
+  const [diagnosingPasted, setDiagnosingPasted] = useState<boolean>(false);
+
+  const [verifyPath, setVerifyPath] = useState<string>('');
+  const [verifying, setVerifying] = useState<boolean>(false);
+  const [verifyResult, setVerifyResult] = useState<any>(null);
+
+  const [harvesting, setHarvesting] = useState<boolean>(false);
+  const [harvestResult, setHarvestResult] = useState<any>(null);
+
+  const harvestVanillaUi = async () => {
+    setHarvesting(true);
+    setHarvestResult(null);
+    try {
+      const r = await fetch('/api/agent/vanilla-ui-harvest?limit=24');
+      setHarvestResult(await r.json());
+    } catch (e: any) {
+      setHarvestResult({ error: e?.message || 'request failed' });
+    } finally {
+      setHarvesting(false);
+    }
+  };
+
+  const deployAndVerify = async () => {
+    setVerifying(true);
+    setVerifyResult(null);
+    try {
+      const r = await fetch('/api/agent/deploy-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(verifyPath.trim() ? { path: verifyPath.trim() } : {}),
+      });
+      setVerifyResult(await r.json());
+    } catch (e: any) {
+      setVerifyResult({ ok: false, stage: 'network', error: e?.message || 'request failed' });
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const diagnosePastedTrace = async () => {
+    setDiagnosingPasted(true);
+    try {
+      const r = await fetch('/api/agent/log-diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tail: logInput, modId: activeModId }),
+      });
+      const data = await r.json();
+      setPastedDiagnosis(data.diagnosis || null);
+    } catch {
+      setPastedDiagnosis(null);
+    } finally {
+      setDiagnosingPasted(false);
+    }
+  };
 
   const refreshGameLogStatus = async () => {
     setGameLogLoading(true);
@@ -205,6 +266,63 @@ export default function PlaytestWorkspace({
                 Save XML
               </button>
             </div>
+
+            {/* A1 — deploy + verify in one shot: import → compile gate → deploy → doctor → bytes confirm. */}
+            <div className="pt-2 border-t border-white/5 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={verifyPath}
+                  onChange={(e) => setVerifyPath(e.target.value)}
+                  placeholder="mod folder (relative, blank = active)"
+                  data-testid="verify-path-input"
+                  className="flex-1 px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-cyan-500"
+                />
+                <button
+                  onClick={deployAndVerify}
+                  disabled={verifying}
+                  data-testid="deploy-verify-btn"
+                  className="px-3 py-1 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-40 font-sans text-black font-bold text-[10px] rounded transition-all whitespace-nowrap"
+                >
+                  {verifying ? 'Verifying…' : 'Deploy + Verify'}
+                </button>
+              </div>
+              {verifyResult && (
+                <div data-testid="verify-result" className={`rounded border p-1.5 text-[9px] font-mono leading-tight ${verifyResult.ok ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-200' : 'border-red-500/40 bg-red-500/5 text-red-200'}`}>
+                  <div className="font-bold">{verifyResult.ok ? '✓ VERIFIED' : `✗ FAILED @ ${verifyResult.stage || 'error'}`}</div>
+                  {verifyResult.modId && <div className="text-slate-300">mod: {verifyResult.modId}</div>}
+                  {verifyResult.deployedPath && <div className="text-slate-400 truncate" title={verifyResult.deployedPath}>→ {verifyResult.deployedPath}</div>}
+                  {typeof verifyResult.bytesConfirmed === 'boolean' && <div className="text-slate-400">bytes confirmed: {String(verifyResult.bytesConfirmed)} ({verifyResult.deployedBytes}b) · doctor blocking: {verifyResult.doctor?.blocking?.length ?? '—'}</div>}
+                  {verifyResult.error && <div className="text-red-300">{verifyResult.error}</div>}
+                  {verifyResult.compileErrors?.length > 0 && <div className="text-red-300">{verifyResult.compileErrors[0].message}</div>}
+                </div>
+              )}
+            </div>
+
+            {/* Vanilla-UI reference: validate our UI schema against REAL game menus harvested from the .cat/.dat. */}
+            <div className="pt-2 border-t border-white/5 space-y-1.5">
+              <button
+                onClick={harvestVanillaUi}
+                disabled={harvesting}
+                data-testid="vanilla-ui-harvest-btn"
+                className="w-full px-3 py-1 bg-violet-500 hover:bg-violet-600 disabled:opacity-40 font-sans text-black font-bold text-[10px] rounded transition-all"
+              >
+                {harvesting ? 'Harvesting…' : 'Harvest Vanilla UI Reference'}
+              </button>
+              {harvestResult && !harvestResult.error && (
+                <div data-testid="vanilla-ui-result" className="rounded border border-violet-500/40 bg-violet-500/5 p-1.5 text-[9px] font-mono leading-tight text-violet-100">
+                  <div className="font-bold">✓ {harvestResult.menusProfiled} vanilla menus profiled (scanned {harvestResult.scanned})</div>
+                  {(harvestResult.evidence || []).map((ev: any) => (
+                    <div key={ev.element} className={ev.universal ? 'text-emerald-300' : 'text-amber-300'}>
+                      {ev.element}: {ev.presentIn}/{ev.total} {ev.universal ? '· universal' : '· NOT universal'}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {harvestResult?.error && (
+                <div className="rounded border border-red-500/40 bg-red-500/5 p-1.5 text-[9px] font-mono text-red-200">{harvestResult.error}</div>
+              )}
+            </div>
           </div>
         ) : (
           <div className="space-y-3">
@@ -295,6 +413,37 @@ export default function PlaytestWorkspace({
               ))}
             </div>
           )}
+
+          {/* A2 — deterministic root-cause layer (named hypotheses, NOT AI). Pasted-trace
+              result takes precedence over the live watcher so a dev can diagnose on demand. */}
+          {(() => {
+            const diag = pastedDiagnosis || gameLogStatus?.diagnosis;
+            if (!diag) return null;
+            return (
+              <div className="mt-1 space-y-1.5" data-testid="log-diagnosis">
+                <div className="flex items-center gap-2 text-[9px] font-mono">
+                  <span className="text-slate-500">ROOT-CAUSE {pastedDiagnosis ? '(pasted)' : '(live)'}</span>
+                  <span className={diag.filesLoaded ? 'text-cyan-300' : 'text-slate-500'}>
+                    files {diag.filesLoaded ? 'loaded' : '—'}
+                  </span>
+                  <span className={diag.markersSeen ? 'text-emerald-300' : 'text-amber-300'}>
+                    markers {diag.markersSeen ? 'seen' : 'not seen'}
+                  </span>
+                </div>
+                {diag.hypotheses.length === 0 ? (
+                  <div className="text-[9px] font-mono text-slate-500">No root-cause hypotheses for this mod.</div>
+                ) : (
+                  diag.hypotheses.map((h, i) => (
+                    <div key={`${h.code}-${i}`} className="rounded border border-amber-500/30 bg-amber-500/5 p-1.5 text-[9px] font-mono leading-tight">
+                      <div className="text-amber-300">{h.code} <span className="text-slate-500">· {h.confidence}</span></div>
+                      <div className="text-slate-300 mt-0.5">{h.explanation}</div>
+                      <div className="text-cyan-300/90 mt-0.5">→ {h.suggestion}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* LOG TEXTAREA BUFFER */}
@@ -305,6 +454,21 @@ export default function PlaytestWorkspace({
             placeholder="Paste X4 Foundations debug trace here (e.g. cue failures, properties missing in extensions...)"
             className="w-full h-32 p-2 bg-[#08090d] border border-white/10 text-emerald-400 rounded-md font-mono text-[10px] focus:outline-none focus:border-cyan-500 select-text leading-tight leading-relaxed"
           />
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={diagnosePastedTrace}
+              disabled={diagnosingPasted || !logInput.trim()}
+              data-testid="diagnose-trace-btn"
+              className="px-2 py-1 bg-cyan-600/20 border border-cyan-500/40 hover:bg-cyan-600/30 disabled:opacity-40 disabled:cursor-not-allowed text-[10px] font-mono text-cyan-200 rounded transition-all"
+            >
+              {diagnosingPasted ? 'Diagnosing…' : 'Diagnose trace (deterministic)'}
+            </button>
+            {pastedDiagnosis && (
+              <button type="button" onClick={() => setPastedDiagnosis(null)} className="text-[9px] font-mono text-slate-500 hover:text-slate-300">clear</button>
+            )}
+          </div>
 
           <div className="flex items-center justify-between gap-3">
             {/* File Upload Watcher Input */}

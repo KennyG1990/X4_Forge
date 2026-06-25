@@ -772,7 +772,7 @@ Guidelines:
 *Version: ${workspace.version || '1.0.0'}*
 
 ## Description
-${workspace.description || 'Custom mod developed inside X4 Foundations Mod Studio Visual Node Editor.'}
+${workspace.description || 'Custom mod developed inside X4 Forge Visual Node Editor.'}
 
 ## Visual Graph Layout
 This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${workspace.links.length}\` wiring layouts. Redefine dynamically.

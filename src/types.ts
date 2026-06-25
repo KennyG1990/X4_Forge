@@ -218,6 +218,12 @@ export interface ModWorkspace {
    */
   mdScriptName?: string;
   mdFileStem?: string;
+  /** Absolute path of the folder this workspace was imported from (shown in the UI so the
+   * user can always see WHICH project + directory is open). Undefined for new/blank mods. */
+  sourceFolder?: string;
+  /** content.xml <dependency> declarations, parsed on import + emitted on export so they
+   * survive regeneration (otherwise the mod silently no-ops dependent APIs in-game). */
+  dependencies?: { id: string; version?: string; optional?: boolean; name?: string }[];
   /** Preserved content.xml id (the extension folder name). Keeps export from renaming the
    *  mod's folder/id after the display title. Undefined for new mods → derived from name. */
   contentId?: string;
@@ -248,7 +254,11 @@ export interface PassthroughFile {
   /** verbatim file content */
   content: string;
   /** classification of why this file is preserved raw rather than modeled */
-  reason?: 'unknown_domain' | 'unparsed' | 'binary' | 'partial';
+  reason?: 'unknown_domain' | 'unparsed' | 'binary' | 'partial' | 'too_large';
+  /** true when the file is tracked on disk but not loaded into memory (e.g. binary/too-large); content is absent and must never be overwritten with empty output */
+  omitted?: boolean;
+  /** size on disk in bytes (recorded for omitted/preserved files) */
+  bytes?: number;
 }
 
 // Built-in game variables for X4 standard database definitions
@@ -576,6 +586,27 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
       { id: 'out_flow', name: 'Passed Flow', type: 'flow' }
     ]
   },
+  {
+    // Generic cue: a whole <cue>/<library> preserved verbatim when the node model can't
+    // decompose it yet. Lossless by construction → the importer never needs passthrough.
+    type: 'cue',
+    label: 'Custom XML Cue',
+    xmlTag: 'custom_xml_cue',
+    properties: {
+      name: 'RawCue',
+      rawXml: '<cue name="RawCue">\n  <!-- raw MD preserved verbatim -->\n</cue>'
+    },
+    propertiesSchema: [
+      { key: 'name', label: 'Cue ID / Name', type: 'text', placeholder: 'e.g. MyCue' },
+      { key: 'rawXml', label: 'Raw Cue XML', type: 'textarea', placeholder: 'A whole <cue>…</cue> or <library>…</library> block', description: 'This entire cue is preserved verbatim — used when the node model cannot decompose it yet. Edit the XML directly.' }
+    ],
+    inputs: [
+      { id: 'in_flow', name: 'Trigger Parent', type: 'parent' }
+    ],
+    outputs: [
+      { id: 'out_sub', name: 'Sub Cues', type: 'child' }
+    ]
+  },
   // ── Control-flow containers (50th pass) ──────────────────────────────────
   // First-class spawnable branch/loop nodes. The `out_body` port is the chain
   // of actions INSIDE the branch; `out_next` is the sibling AFTER it closes.
@@ -709,7 +740,7 @@ export function formatX4Time(value: unknown): string {
 }
 
 // Helper functions to generate the XML output cleanly
-export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: string[]): string {
+export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: string[], scriptNameOverride?: string): string {
   // Filter out any nodes where includeInBuild is false
   const activeNodes = (originalWorkspace.nodes || []).filter(n => n.includeInBuild !== false);
   const activeNodeIds = new Set(activeNodes.map(n => n.id));
@@ -727,7 +758,14 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     const indent = ' '.repeat(indentDepth);
     const indentPlus = ' '.repeat(indentDepth + 2);
     const indentDouble = ' '.repeat(indentDepth + 4);
-    
+
+    // Generic cue node: a whole <cue>/<library> the importer couldn't decompose into typed
+    // nodes is preserved verbatim here. Lossless by construction → no cue is ever "too hard
+    // to represent", so passthrough is never needed.
+    if (cue.xmlTag === 'custom_xml_cue') {
+      return String(cue.properties?.rawXml || '').replace(/\r\n/g, '\n').split('\n').map(l => (l.trim() ? indent + l : l)).join('\n') + '\n';
+    }
+
     const cueName = cue.properties.name || cue.id;
     const isLib = cue.properties.isLibrary === 'true' || cue.properties.isLibrary === true;
     const inst = cue.properties.instantiate === 'true' ? ' instantiate="true"' : '';
@@ -738,8 +776,11 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     // optional <documentation>/<params> header preserved verbatim before the cue body.
     const reindent = (raw: string, ind: string) =>
       String(raw || '').trim().split('\n').map(l => `${ind}${l.trim()}`).join('\n');
+    // A library called via <run_actions ref> needs purpose="run_actions"; preserve whatever purpose
+    // was captured on import so the generated <library> keeps it (else the cue fails at runtime).
+    const libPurpose = cue.properties.libPurpose ? ` purpose="${escapeXMLAttribute(String(cue.properties.libPurpose))}"` : '';
     let xml = isLib
-      ? `${indent}<library name="${escapeXMLAttribute(String(cueName))}">\n`
+      ? `${indent}<library name="${escapeXMLAttribute(String(cueName))}"${libPurpose}>\n`
       : `${indent}<cue name="${escapeXMLAttribute(String(cueName))}"${inst}${ns}${state}>\n`;
     if (isLib) {
       if (cue.properties.libDocXml) xml += `${reindent(cue.properties.libDocXml, indentPlus)}\n`;
@@ -916,11 +957,11 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
 
   // MD script name: keep the imported `<mdscript name>` verbatim; otherwise derive a
   // VALID name from the workspace title (X4 forbids spaces/punctuation in script names).
-  const mdName = effectiveMdScriptName(workspace);
+  const mdName = scriptNameOverride || effectiveMdScriptName(workspace); // scriptNameOverride: per-script export (multi-script support)
 
   let xml = `<?xml version="1.0" encoding="utf-8"?>
 <mdscript name="${escapeXMLAttribute(String(mdName))}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
-  <!-- Generated by X4 Foundations Mod Studio (version ${workspace.version || '1.0.0'}) -->
+  <!-- Generated by X4 Forge (version ${workspace.version || '1.0.0'}) -->
   <!-- Author: ${workspace.author || 'Mod Creator'} -->
   <!-- Description: ${workspace.description || 'Custom MD Script'} -->
   <cues>
@@ -1278,7 +1319,14 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
     }
 
     // ── LAW 5: Non-event cues with only checks MUST have onfail or checkinterval ──
-    if (hasConditions && !hasEvents && hasChecks) {
+    // A custom_condition imported from XML can embed events inside a check_any/check_all
+    // wrapper (e.g. <check_any><event_game_loaded/></check_any>) — it collapses to ONE
+    // node whose rawXml carries the event. Such a cue IS event-driven, so it must not be
+    // flagged as check-only. Detect embedded events in any condition node's rawXml.
+    const conditionEmbedsEvent = conditionNodes.some(n =>
+      /<(?:event_|custom_event\b)/.test(String(n.properties?.rawXml ?? '')),
+    );
+    if (hasConditions && !hasEvents && hasChecks && !conditionEmbedsEvent) {
       const hasOnfail = cue.properties.onfail && cue.properties.onfail.trim().length > 0;
       const hasCheckinterval = cue.properties.checkinterval && cue.properties.checkinterval.trim().length > 0;
       if (!hasOnfail && !hasCheckinterval) {
@@ -1308,7 +1356,8 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
     }
 
     // ── LAW 7: Safe instantiation — only on event-based cues ──
-    if (cue.properties.instantiate === 'true' && !hasEvents) {
+    // (events embedded in an imported check_any custom_condition count — see LAW 5)
+    if (cue.properties.instantiate === 'true' && !hasEvents && !conditionEmbedsEvent) {
       diagnostics.push({
         severity: 'warning',
         message: `Cue "${cueName}" uses instantiate="true" but has no event conditions. Instantiation on check-only or unconditional cues can cause memory leaks. Use events or remove instantiate.`,
@@ -1602,7 +1651,7 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       name: 'X4_My_Custom_Mod',
       version: '1.0.0',
       author: 'Space_Pilot',
-      description: 'Custom script developed using X4 Foundations Mod Studio visual nodes generator',
+      description: 'Custom script developed using X4 Forge visual nodes generator',
       nodes: [],
       links: [],
       uiWidgets: [],
@@ -1670,6 +1719,8 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     description: ws.description || '',
     ...(ws.mdScriptName ? { mdScriptName: ws.mdScriptName } : {}),
     ...(ws.mdFileStem ? { mdFileStem: ws.mdFileStem } : {}),
+    ...(ws.sourceFolder ? { sourceFolder: ws.sourceFolder } : {}),
+    ...(Array.isArray(ws.dependencies) && ws.dependencies.length ? { dependencies: ws.dependencies } : {}),
     ...(ws.contentId ? { contentId: ws.contentId } : {}),
     ...(ws.mdOriginal && ws.mdOriginal.content ? { mdOriginal: ws.mdOriginal } : {}),
     ...(ws.contentOriginal ? { contentOriginal: ws.contentOriginal } : {}),

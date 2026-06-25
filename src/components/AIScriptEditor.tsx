@@ -304,7 +304,7 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
     let xml = `<?xml version="1.0" encoding="utf-8"?>
 <aiscript name="${escapeXmlAttr(script.name)}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">
   <!-- X4 Foundations Autopilot & Task Script Behavior -->
-  <!-- Generated visually using X4 Mod Studio Behaviors Suite -->
+  <!-- Generated visually using X4 Forge Behaviors Suite -->
   <params>
 `;
 

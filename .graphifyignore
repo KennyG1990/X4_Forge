@@ -1,0 +1,20 @@
+# Exclude documentation and assets to allow code-only AST extraction
+*.md
+*.MD
+docs/
+dev-docs/
+assets/
+*.png
+*.jpg
+*.webp
+*.gif
+*.txt
+*.json
+.agents/
+.claude/
+.codex/
+.kilo/
+*.html
+*.svg
+*.svg.import
+*.import

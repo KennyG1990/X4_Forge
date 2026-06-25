@@ -289,11 +289,19 @@ interface RawTag {
 /** Lightweight scanner: yields each opening/self-closing tag with line numbers. */
 function scanTags(xml: string): RawTag[] {
   const tags: RawTag[] = [];
+  // Mask out comment / CDATA / PI spans so their contents are not scanned as real
+  // tags (e.g. a doc comment mentioning "<do_if>" must not be flagged as an element
+  // missing its "value" attribute). Replace non-newline chars with spaces to keep
+  // byte offsets and line numbers identical to the source.
+  const masked = xml.replace(
+    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g,
+    (s) => s.replace(/[^\n]/g, ' '),
+  );
   // match opening or self-closing tags, skip closing tags, comments, PIs, declarations
   const re = /<([a-zA-Z_][\w.-]*)((?:\s+[\w.\-:]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) !== null) {
-    const before = xml.slice(0, m.index);
+  while ((m = re.exec(masked)) !== null) {
+    const before = masked.slice(0, m.index);
     const line = before.split('\n').length;
     const name = m[1];
     const attrStr = m[2] || '';

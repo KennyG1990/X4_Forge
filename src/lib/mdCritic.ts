@@ -29,8 +29,8 @@ import type { MDNode, MDLink } from '../types';
 import { areEquivalentRefs, semanticsForNode } from './mdSemantics';
 import { triggerNodesOf, actionChainOf } from './mdExplain';
 
-export type CriticSeverity = 'info' | 'warning';
-export type CriticCode = 'ref_mismatch' | 'oneway_no_restore' | 'unguarded_high_risk';
+export type CriticSeverity = 'info' | 'warning' | 'error';
+export type CriticCode = 'ref_mismatch' | 'oneway_no_restore' | 'unguarded_high_risk' | 'instantiate_reload' | 'game_loaded_no_refresh' | 'illegal_instantiate' | 'no_event_condition';
 
 export interface CriticFinding {
   severity: CriticSeverity;
@@ -135,16 +135,64 @@ export function critiqueWorkspace(nodes: MDNode[], links: MDLink[]): CriticResul
       }
     }
 
-    // --- (d) instantiate_reload — engine semantic the XSD doesn't encode. A cue with a
-    // sub-cue tree that isn't instantiated can fail re-instantiation on a save/game reload
-    // ("cue has active state but instantiate is false" — X4's own MD-engine warning). The
-    // usual offender is a static cue holding a persistent loop (e.g. a self-resetting poll).
+    // Instantiate-eligibility: X4 only permits instantiate="true" on a cue that has an EVENT
+    // condition or a checkinterval. (An "instance" is spun up each time the trigger fires; with
+    // neither there is no trigger to instance on.) These flags drive rules (d), (f) and (g).
+    const hasEventCondition = triggers.some((t) => t.type === 'event' || String(t.xmlTag || '').startsWith('event_'));
+    const checkIntervalRaw = cue.properties?.checkinterval;
+    const hasCheckInterval = checkIntervalRaw != null && String(checkIntervalRaw).trim() !== '';
+    const hasAnyCondition = triggers.length > 0;
+    const instantiateEligible = hasEventCondition || hasCheckInterval;
     const hasSubCues = links.some((l) => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
     const instantiated = String(cue.properties?.instantiate) === 'true';
-    if (hasSubCues && !instantiated) {
+
+    // --- (d) instantiate_reload — ONLY for instantiate-eligible cues. A cue that DOES have an
+    // event condition / checkinterval and holds a sub-cue tree but is instantiate="false" can
+    // fail to re-establish its instanced state on reload; recommending instantiate="true" is
+    // legal there. For a conditionless cue this advice would be ILLEGAL (see rule f), so we no
+    // longer emit it — fixing the bad guidance that produced the unloadable Chat_boot.
+    if (hasSubCues && !instantiated && instantiateEligible) {
       findings.push({
         severity: 'warning', code: 'instantiate_reload', cueId: cue.id, cueName, nodeId: cue.id,
-        message: `Cue "${cueName}" has sub-cues but instantiate="false". X4 warns this cue's active state can fail to re-instantiate on a save/game reload. Set instantiate="true" if the cue + its sub-cue tree should re-establish on load.`,
+        message: `Cue "${cueName}" has sub-cues and an event condition/checkinterval but instantiate="false". X4 can fail to re-instantiate this cue's active state on a save/game reload. Set instantiate="true" so the cue + its sub-cue tree re-establish on load.`,
+      });
+    }
+
+    // --- (f) illegal_instantiate (ERROR) — X4 hard-rejects instantiate="true" on a cue with
+    // neither an event condition nor a checkinterval: "would instantiate without either an event
+    // condition or a check interval". The cue then fails to load. This is the exact defect our
+    // own (now-fixed) instantiate_reload advice introduced into Chat_boot.
+    if (instantiated && !instantiateEligible) {
+      findings.push({
+        severity: 'error', code: 'illegal_instantiate', cueId: cue.id, cueName, nodeId: cue.id,
+        message: `Cue "${cueName}" sets instantiate="true" but has no event condition and no checkinterval. X4 rejects this ("would instantiate without either an event condition or a check interval") and the cue fails to load. Remove instantiate (a conditionless cue runs on load AND on refreshmd), or add an event condition / checkinterval.`,
+      });
+    }
+
+    // --- (g) no_event_condition (ERROR) — a cue WITH a <conditions> block whose only entries are
+    // non-event checks (e.g. a bare <check_value>) and that has no checkinterval is illegal: X4
+    // needs an event to trigger on, or a checkinterval to poll the check. A conditionless cue
+    // (zero conditions = "instantly true") is fine and is NOT flagged. This is the Save_identity
+    // defect: <check_value> as a root cue's sole condition.
+    if (hasAnyCondition && !hasEventCondition && !hasCheckInterval) {
+      findings.push({
+        severity: 'error', code: 'no_event_condition', cueId: cue.id, cueName, nodeId: cue.id,
+        message: `Cue "${cueName}" has only non-event conditions and no checkinterval. X4 requires an event condition OR a checkinterval — a bare <check_value> as a cue's sole condition is illegal ("event condition required"). Add an event condition, add a checkinterval to poll the check, or move the check into a <do_if> guard inside the actions of a conditionless cue.`,
+      });
+    }
+
+    // --- (e) game_loaded_no_refresh — engine semantic the XSD/Lua can't see. event_game_loaded
+    // (and event_game_started) DO NOT fire on `refreshmd`, the in-game MD hot-reload. A cue that
+    // bootstraps a driver (raises a lua UI event, runs a library, or starts a sub-cue loop) gated
+    // SOLELY on game-load therefore stays dead through every refreshmd — exactly the bug that left
+    // the AI-Influence chat window unopenable. Advisory only: event_game_loaded is still the right
+    // trigger for save-restore cues, so this is a warning, not an error.
+    const loadTrigger = triggers.find((t) => t.xmlTag === 'event_game_loaded' || t.xmlTag === 'event_game_started');
+    const drivesSomething = hasSubCues || actions.some((a) => a.xmlTag === 'raise_lua_event' || a.xmlTag === 'run_actions');
+    if (loadTrigger && drivesSomething) {
+      findings.push({
+        severity: 'warning', code: 'game_loaded_no_refresh', cueId: cue.id, cueName, nodeId: cue.id,
+        message: `Cue "${cueName}" bootstraps a driver (UI event / library / sub-cue loop) but is gated on <${loadTrigger.xmlTag}>, which does NOT fire on \`refreshmd\`. It stays dead through hot-reloads until a full save reload. For dev-testable bootstrap use a conditionless cue (fires on load AND refreshmd); keep <${loadTrigger.xmlTag}> only if this is purely save-restore.`,
       });
     }
   }
@@ -229,17 +277,101 @@ export function runCriticSelftest() {
   );
   ok('unguarded_suppressed_by_condition', !has(guardedCheck, 'unguarded_high_risk'), guardedCheck.findings);
 
-  // ---- (d) instantiate_reload: fires for a cue with sub-cues + instantiate=false, suppressed when instantiate=true ----
+  // ---- (d) instantiate_reload: fires ONLY for an instantiate-eligible cue (event cond / checkinterval)
+  // with sub-cues + instantiate=false; suppressed when instantiate=true AND suppressed for a
+  // conditionless cue (where instantiate would be illegal — see rule f). ----
+  // Eligible (has event condition) + sub-cues + instantiate=false → fires.
   const reloadUnsafe = critiqueWorkspace(
-    [N('cb', 'cue', 'cue', { name: 'Boot', instantiate: 'false' }), N('sub', 'cue', 'cue', { name: 'Poll' })],
-    [L('s1', 'cb', 'out_sub', 'sub', 'in_flow')]
+    [N('cb', 'cue', 'cue', { name: 'Boot', instantiate: 'false' }),
+     N('cbe', 'event', 'event_cue_signalled', { cue: 'md.X.Y' }),
+     N('sub', 'cue', 'cue', { name: 'Poll' })],
+    [L('s0', 'cb', 'out_cond', 'cbe', 'in_cond'), L('s1', 'cb', 'out_sub', 'sub', 'in_flow')]
   );
-  ok('instantiate_reload_fires', has(reloadUnsafe, 'instantiate_reload', 'cb'), reloadUnsafe.findings);
+  ok('instantiate_reload_fires_when_eligible', has(reloadUnsafe, 'instantiate_reload', 'cb'), reloadUnsafe.findings);
+  // Eligible + instantiate=true → instantiate_reload suppressed (and NOT illegal_instantiate).
   const reloadSafe = critiqueWorkspace(
-    [N('cb2', 'cue', 'cue', { name: 'Boot', instantiate: 'true' }), N('sub2', 'cue', 'cue', { name: 'Poll' })],
-    [L('s2', 'cb2', 'out_sub', 'sub2', 'in_flow')]
+    [N('cb2', 'cue', 'cue', { name: 'Boot', instantiate: 'true' }),
+     N('cbe2', 'event', 'event_cue_signalled', { cue: 'md.X.Y' }),
+     N('sub2', 'cue', 'cue', { name: 'Poll' })],
+    [L('s2c', 'cb2', 'out_cond', 'cbe2', 'in_cond'), L('s2', 'cb2', 'out_sub', 'sub2', 'in_flow')]
   );
   ok('instantiate_reload_suppressed_when_true', !has(reloadSafe, 'instantiate_reload'), reloadSafe.findings);
+  ok('eligible_instantiate_true_not_illegal', !has(reloadSafe, 'illegal_instantiate'), reloadSafe.findings);
+  // Conditionless cue with sub-cues + instantiate=false → instantiate_reload must NOT fire
+  // (recommending instantiate here would be the illegal advice we removed).
+  const conditionlessReload = critiqueWorkspace(
+    [N('cb3', 'cue', 'cue', { name: 'Chat_boot', instantiate: 'false' }), N('sub3', 'cue', 'cue', { name: 'Poll' })],
+    [L('s3', 'cb3', 'out_sub', 'sub3', 'in_flow')]
+  );
+  ok('instantiate_reload_not_for_conditionless', !has(conditionlessReload, 'instantiate_reload'), conditionlessReload.findings);
+
+  // ---- (f) illegal_instantiate (ERROR): instantiate=true with no event condition + no checkinterval ----
+  const illegalInst = critiqueWorkspace(
+    [N('ci', 'cue', 'cue', { name: 'Chat_boot', instantiate: 'true' }), N('subi', 'cue', 'cue', { name: 'Poll' })],
+    [L('f1', 'ci', 'out_sub', 'subi', 'in_flow')]
+  );
+  ok('illegal_instantiate_fires', has(illegalInst, 'illegal_instantiate', 'ci'), illegalInst.findings);
+  // Suppressed by a checkinterval (instantiate-eligible without an event).
+  const instWithInterval = critiqueWorkspace(
+    [N('ci2', 'cue', 'cue', { name: 'Poller', instantiate: 'true', checkinterval: '1s' }),
+     N('chkv', 'condition', 'check_value', { value: '$x' })],
+    [L('f2', 'ci2', 'out_cond', 'chkv', 'in_cond')]
+  );
+  ok('illegal_instantiate_suppressed_by_checkinterval', !has(instWithInterval, 'illegal_instantiate'), instWithInterval.findings);
+
+  // ---- (g) no_event_condition (ERROR): only non-event conditions + no checkinterval ----
+  // Positive: a bare check_value as the sole condition (the Save_identity defect).
+  const bareCheck = critiqueWorkspace(
+    [N('bc', 'cue', 'cue', { name: 'Save_identity' }),
+     N('bcv', 'condition', 'check_value', { value: 'not $save_uuid?' })],
+    [L('g1', 'bc', 'out_cond', 'bcv', 'in_cond')]
+  );
+  ok('no_event_condition_fires', has(bareCheck, 'no_event_condition', 'bc'), bareCheck.findings);
+  // Suppressed when there IS an event condition.
+  const eventGated = critiqueWorkspace(
+    [N('eg', 'cue', 'cue', { name: 'Save_identity' }),
+     N('egl', 'event', 'event_game_loaded', {})],
+    [L('g2', 'eg', 'out_cond', 'egl', 'in_cond')]
+  );
+  ok('no_event_condition_suppressed_by_event', !has(eventGated, 'no_event_condition'), eventGated.findings);
+  // Suppressed when the non-event check is polled by a checkinterval.
+  const polledCheck = critiqueWorkspace(
+    [N('pc', 'cue', 'cue', { name: 'Poller', checkinterval: '2s' }),
+     N('pcv', 'condition', 'check_value', { value: '$x' })],
+    [L('g3', 'pc', 'out_cond', 'pcv', 'in_cond')]
+  );
+  ok('no_event_condition_suppressed_by_checkinterval', !has(polledCheck, 'no_event_condition'), polledCheck.findings);
+  // Suppressed for a conditionless cue (zero conditions = instantly true, legal).
+  const conditionlessClean = critiqueWorkspace(
+    [N('cc', 'cue', 'cue', { name: 'Chat_boot' }), N('ccs', 'cue', 'cue', { name: 'Poll' })],
+    [L('g4', 'cc', 'out_sub', 'ccs', 'in_flow')]
+  );
+  ok('no_event_condition_not_for_conditionless', !has(conditionlessClean, 'no_event_condition'), conditionlessClean.findings);
+
+  // ---- (e) game_loaded_no_refresh: fires for a load-gated driver cue, suppressed when conditionless or non-driver ----
+  // Positive: event_game_loaded + raise_lua_event (a UI driver) → flagged (the chat-window bug).
+  const loadDriver = critiqueWorkspace(
+    [N('cl', 'cue', 'cue', { name: 'Chat_boot' }),
+     N('el', 'event', 'event_game_loaded', {}),
+     N('rl', 'action', 'raise_lua_event', { name: "'AIChat.open'" })],
+    [L('z1', 'cl', 'out_cond', 'el', 'in_cond'), L('z2', 'cl', 'out_act', 'rl', 'in_act')]
+  );
+  ok('game_loaded_no_refresh_fires', has(loadDriver, 'game_loaded_no_refresh', 'cl'), loadDriver.findings);
+  // Suppressed: conditionless cue with the same driver action → fires on load AND refreshmd, not flagged.
+  const conditionlessDriver = critiqueWorkspace(
+    [N('cl2', 'cue', 'cue', { name: 'Chat_boot' }),
+     N('rl2', 'action', 'raise_lua_event', { name: "'AIChat.open'" })],
+    [L('z3', 'cl2', 'out_act', 'rl2', 'in_act')]
+  );
+  ok('game_loaded_no_refresh_suppressed_conditionless', !has(conditionlessDriver, 'game_loaded_no_refresh'), conditionlessDriver.findings);
+  // Suppressed: load-gated but NOT a driver (pure save-restore state write) → not flagged.
+  const loadRestore = critiqueWorkspace(
+    [N('cl3', 'cue', 'cue', { name: 'Restore' }),
+     N('el3', 'event', 'event_game_loaded', {}),
+     N('sv', 'action', 'set_value', { name: '$x', exact: '1' })],
+    [L('z4', 'cl3', 'out_cond', 'el3', 'in_cond'), L('z5', 'cl3', 'out_act', 'sv', 'in_act')]
+  );
+  ok('game_loaded_no_refresh_suppressed_nondriver', !has(loadRestore, 'game_loaded_no_refresh'), loadRestore.findings);
 
   // non-frequent trigger: high-risk action is NOT flagged by rule (c)
   const infreq = critiqueWorkspace(

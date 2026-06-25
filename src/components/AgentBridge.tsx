@@ -1007,7 +1007,7 @@ export default function AgentBridge({
 
       {/* Footer copyright */}
       <div className="bg-[#12161f] border-t border-white/5 p-3.5 text-center text-[10px] text-slate-500 font-mono">
-        X4 Foundations Mod Studio Developer Gateway
+        X4 Forge Developer Gateway
       </div>
       
     </div>

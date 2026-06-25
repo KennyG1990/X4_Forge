@@ -6,6 +6,7 @@
 import { DOMParser as XmlDomParser, XMLSerializer as XmlDomSerializer } from '@xmldom/xmldom';
 import { ModWorkspace, MDNode, MDLink, NODE_TEMPLATES, X4_SHIP_MACROS, X4_STATION_MACROS } from '../types';
 import { isContainerTag } from './portSemantics';
+import { checkXmlWellformed } from './xmlWellformed';
 
 const DOMParserToUse = typeof window !== 'undefined' && window.DOMParser ? window.DOMParser : XmlDomParser;
 const XMLSerializerToUse = typeof window !== 'undefined' && window.XMLSerializer ? window.XMLSerializer : XmlDomSerializer;
@@ -63,11 +64,47 @@ function parseCheckValueProperties(element: Element): Record<string, any> {
 }
 
 // Parser: Egosoft XML script mapping to visual flowchart nodegraph
-export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
+/**
+ * Extract every TOP-LEVEL <cue>/<library> from an mdscript as verbatim XML. Used by the
+ * lossless generic-cue fallback: when a file can't be decomposed into typed nodes, each cue
+ * is preserved whole as a custom_xml_cue node — so the import never falls back to passthrough.
+ */
+export function extractTopLevelCueXml(xmlText: string): { name: string; xml: string }[] {
   try {
     const parser = new DOMParserToUse();
+    const doc = parser.parseFromString(xmlText, 'text/xml') as unknown as Document;
+    const md = doc.getElementsByTagName('mdscript')[0];
+    if (!md) return [];
+    const ser = new XMLSerializerToUse();
+    const out: { name: string; xml: string }[] = [];
+    const cuesEls = (Array.from((md as any).childNodes || []) as any[]).filter((n: any) => n && n.nodeType === 1 && n.tagName === 'cues');
+    for (const cuesEl of cuesEls) {
+      for (const ch of Array.from((cuesEl as any).childNodes || []) as any[]) {
+        if (ch && ch.nodeType === 1 && (ch.tagName === 'cue' || ch.tagName === 'library')) {
+          out.push({ name: ch.getAttribute('name') || 'Cue', xml: ser.serializeToString(ch) });
+        }
+      }
+    }
+    return out;
+  } catch { return []; }
+}
+
+export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
+  try {
+    // Well-formedness gate FIRST. @xmldom/xmldom (the Node-side parser) does not emit a
+    // <parsererror> element for a mismatched/unclosed tag — it warns and returns a partial
+    // tree — so a malformed file (e.g. <do_if>…</do_elseif>, which X4 rejects on load) would
+    // otherwise import "successfully". This deterministic scan closes that gap on both host
+    // and browser. (The browser DOMParser parsererror check below stays as a backstop.)
+    const wf = checkXmlWellformed(xmlText);
+    if (!wf.ok) {
+      const first = wf.errors.slice(0, 3).map((e) => `${e.message} (line ${e.line}, col ${e.col})`).join('; ');
+      throw new Error(`Malformed XML — not well-formed: ${first}`);
+    }
+
+    const parser = new DOMParserToUse();
     const xmlDoc = parser.parseFromString(xmlText, "text/xml") as unknown as Document;
-    
+
     const parserError = xmlDoc.getElementsByTagName("parsererror");
     if (parserError.length > 0) {
       throw new Error("Malformatted XML script syntax.");
@@ -127,7 +164,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
 
       // <delay> (md.xsd cue order: conditions, delay, actions) — model as editable cue
       // fields so timed cues round-trip instead of silently losing their timer.
-      const delayEl = Array.from(cue.children).find((c: any) => c.tagName === 'delay');
+      const delayEl = Array.from(cue.children as HTMLCollectionOf<Element>).find((c: Element) => c.tagName === 'delay');
       const delayProps: Record<string, any> = delayEl ? {
         delayExact: delayEl.getAttribute('exact') || '',
         delayMin: delayEl.getAttribute('min') || '',
@@ -139,9 +176,14 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       const isLibrary = cue.tagName === 'library';
       const libProps: Record<string, any> = {};
       if (isLibrary) {
-        const paramsEl = Array.from(cue.children).find((c: any) => c.tagName === 'params');
-        const docEl = Array.from(cue.children).find((c: any) => c.tagName === 'documentation');
+        const paramsEl = Array.from(cue.children as HTMLCollectionOf<Element>).find((c: Element) => c.tagName === 'params');
+        const docEl = Array.from(cue.children as HTMLCollectionOf<Element>).find((c: Element) => c.tagName === 'documentation');
         libProps.isLibrary = 'true';
+        // A library invoked via <run_actions ref="..."> REQUIRES purpose="run_actions" — the X4
+        // engine refuses to run a purposeless library's actions ("library requires purpose
+        // 'run_actions'"). Capture it so the node round-trip never drops it.
+        const purpose = cue.getAttribute('purpose');
+        if (purpose) libProps.libPurpose = purpose;
         libProps.libParamsXml = paramsEl ? serializer.serializeToString(paramsEl as any) : '';
         libProps.libDocXml = docEl ? serializer.serializeToString(docEl as any) : '';
       }
@@ -166,7 +208,7 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
         xmlTag: 'cue',
         x,
         y,
-        properties: { name, instantiate, namespace, ...delayProps, ...libProps },
+        properties: { name, instantiate, namespace, mdScript: modName, ...delayProps, ...libProps },
         propertiesSchema: NODE_TEMPLATES[0].propertiesSchema,
         inputs: NODE_TEMPLATES[0].inputs,
         outputs: NODE_TEMPLATES[0].outputs
@@ -207,11 +249,11 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       const cueNode = nodes.find(n => n.id === cueId)!;
 
       // Parse conditions
-      const conditionsElement = Array.from(cue.children).find(c => c.tagName === "conditions");
+      const conditionsElement = Array.from(cue.children as HTMLCollectionOf<Element>).find((c: Element) => c.tagName === "conditions");
       if (conditionsElement) {
-        const conditionChildren = Array.from(conditionsElement.children);
+        const conditionChildren = Array.from(conditionsElement.children as HTMLCollectionOf<Element>);
         let condIndex = 0;
-        conditionChildren.forEach(child => {
+        conditionChildren.forEach((child: Element) => {
           const tag = child.tagName;
           let nodeType: MDNode['type'] = 'condition';
           let xmlTag = tag;
@@ -289,9 +331,9 @@ export function parseXMLToWorkspace(xmlText: string): ModWorkspace | null {
       }
 
       // Parse actions
-      const actionsElement = Array.from(cue.children).find(c => c.tagName === "actions");
+      const actionsElement = Array.from(cue.children as HTMLCollectionOf<Element>).find((c: Element) => c.tagName === "actions");
       if (actionsElement) {
-        const actionChildren = Array.from(actionsElement.children);
+        const actionChildren = Array.from(actionsElement.children as HTMLCollectionOf<Element>);
         let actIndex = 0;
 
         // Build a single action node from an <actions> child element (returns null if untemplated).

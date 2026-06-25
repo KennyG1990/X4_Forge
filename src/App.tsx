@@ -70,7 +70,7 @@ const BLANK_WORKSPACE: ModWorkspace = {
   name: 'X4_My_Custom_Mod',
   version: '1.0.0',
   author: 'Space_Pilot',
-  description: 'Custom script developed using X4 Foundations Mod Studio visual nodes generator',
+  description: 'Custom script developed using X4 Forge visual nodes generator',
   nodes: [
     {
       id: "cue_first",
@@ -248,6 +248,8 @@ export default function App() {
 
   const [selectedNode, setSelectedNode] = useState<MDNode | null>(null);
   const [selectedCueIds, setSelectedCueIds] = useState<string[]>([]);
+  // Active MD script filter (file stem) shared by the code panel dropdown + the canvas; null = all.
+  const [activeMdScript, setActiveMdScript] = useState<string | null>(null);
   const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
   const [selectedWidget, setSelectedWidget] = useState<UIWidget | null>(null);
 
@@ -943,6 +945,15 @@ export default function App() {
             <span className="font-semibold text-white tracking-tight shrink-0 select-none">
               X4 FORGE <span className="text-cyan-400/90 font-normal">v{__APP_VERSION__}</span>
             </span>
+            {workspace.sourceFolder && (
+              <span
+                className="hidden lg:inline-flex items-center gap-1 ml-2 px-2 py-0.5 rounded bg-white/5 border border-white/10 text-[11px] text-slate-300 max-w-[460px] shrink min-w-0"
+                title={'Open project folder: ' + workspace.sourceFolder}
+              >
+                <span className="text-cyan-400/80 font-medium shrink-0">Open:</span>
+                <span className="truncate font-mono">{workspace.sourceFolder}</span>
+              </span>
+            )}
           </div>
 
           {/* Global Search Tool */}
@@ -1333,6 +1344,7 @@ export default function App() {
               focusNodeRequest={focusNodeRequest}
               selectedCueIds={selectedCueIds}
               setSelectedCueIds={setSelectedCueIds}
+              activeMdScript={activeMdScript}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder
@@ -1419,6 +1431,8 @@ export default function App() {
             setCodeCollapsed={setCodeCollapsed}
             workspace={workspace}
             setWorkspace={setWorkspace}
+            activeMdScript={activeMdScript}
+            setActiveMdScript={setActiveMdScript}
             saveCheckpoint={saveCheckpoint}
             modWorkspacePath={modWorkspacePath}
             compileStatus={compileStatus}

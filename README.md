@@ -77,6 +77,7 @@ Use this when you want to design mission flow visually, then inspect the exact X
 - Click-to-navigate diagnostics where supported.
 - Cue-lineage checks for missing/dangling structural relationships.
 - Mod Doctor for active package health.
+- Deterministic Lua rules (in Extension Doctor): djfhe transport hazards, broad `package.path`, and an **X4 UI validator** against the known-working menu configuration — flags a menu that builds a frame but is never opened via `OpenMenu(name)` (so it would never render in-game), and calls to non-existent X4 UI functions (`RegisterLayout`, `AddUITrigger`, `OpenUIFrame`, …).
 - `md-audit` and selftest endpoints for quick verification.
 
 The point is not just to generate files. The point is to know whether the generated files are credible before you load the game.
@@ -123,8 +124,9 @@ These editors are intended to keep the whole extension in one workspace instead 
 - Responsive grid descriptor bridge for layout compilation.
 - Packaged `ui.xml` and Lua entry points where supported.
 - Vetted Lua snippet library.
+- Generates **real, openable** standalone-menu Lua: the verified `register (Helper.registerMenu) -> OpenMenu(name) -> onShowMenu -> Helper.createFrameHandle -> frame:display()` pattern (the only mechanism X4 actually uses to show a standalone window), with designer buttons wired to `AddUITriggeredEvent` for Lua→MD. No placeholder/invented API. Pattern grounded in the SirNukes Simple Menu API.
 
-The current UI/Lua surface is strongest as an authoring and packaging workflow for X4 extension UI code. Runtime widget construction still needs in-game verification for the hardest ftable cases.
+The UI/Lua surface is an authoring + packaging workflow whose generated menu code follows the engine's real open mechanism. Runtime widget construction (pixel-level render of the hardest ftable cases) still needs in-game verification.
 
 ### Contracts And External Integration
 

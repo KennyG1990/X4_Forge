@@ -9,6 +9,7 @@ import {
   RefreshCw, 
   ZoomIn,
   ZoomOut,
+  Maximize2,
   Link2,
   Trash2,
   Sparkles,
@@ -96,6 +97,8 @@ interface CanvasProps {
   focusNodeRequest: { nodeId: string; timestamp: number } | null;
   selectedCueIds: string[];
   setSelectedCueIds: React.Dispatch<React.SetStateAction<string[]>>;
+  /** When set, only show cues from this MD script (file stem); null = all scripts. */
+  activeMdScript?: string | null;
 }
 
 export default function Canvas({
@@ -108,7 +111,8 @@ export default function Canvas({
   visibleCueIds,
   focusNodeRequest,
   selectedCueIds,
-  setSelectedCueIds
+  setSelectedCueIds,
+  activeMdScript = null
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   const [depPanelOpen, setDepPanelOpen] = useState<boolean>(true);
@@ -678,15 +682,27 @@ export default function Canvas({
 
   // Nodes that are active in the workspace (not hidden by cue filter)
   const nodesFilteredByCue = React.useMemo(() => {
-    if (!visibleCueIds) return workspace.nodes;
-    return workspace.nodes.filter(node => {
-      const cueId = nodeToCueMap[node.id];
-      if (cueId) {
-        return visibleCueIds.includes(cueId);
-      }
-      return true;
-    });
-  }, [workspace.nodes, visibleCueIds, nodeToCueMap]);
+    let nodes = workspace.nodes;
+    if (visibleCueIds) {
+      nodes = nodes.filter(node => {
+        const cueId = nodeToCueMap[node.id];
+        if (cueId) return visibleCueIds.includes(cueId);
+        return true;
+      });
+    }
+    // When a single MD script is selected (dropdown in the code panel), show ONLY that
+    // script's cues + their children. Each cue carries properties.mdFileStem; child nodes
+    // resolve to their cue via nodeToCueMap.
+    if (activeMdScript) {
+      const cueById = new Map(workspace.nodes.filter(n => n.type === 'cue').map(n => [n.id, n] as const));
+      const stemOf = (node: MDNode): string | undefined => {
+        const cue = node.type === 'cue' ? node : cueById.get(nodeToCueMap[node.id]);
+        return (cue?.properties as any)?.mdFileStem;
+      };
+      nodes = nodes.filter(node => stemOf(node) === activeMdScript);
+    }
+    return nodes;
+  }, [workspace.nodes, visibleCueIds, nodeToCueMap, activeMdScript]);
 
   // Nodes falling inside the visible bounds
   const visibleNodes = React.useMemo(() => {
@@ -1016,6 +1032,36 @@ export default function Canvas({
     setPanOffset({ x: newPanX, y: newPanY });
     setSelectedNode(node);
   }, [setSelectedNode]);
+
+  // Frame a set of nodes: pan + zoom so their bounding box fits the viewport. Used by the
+  // fit-view button and by auto-fit when the script selection changes.
+  const fitToNodes = React.useCallback((targets: MDNode[]) => {
+    if (!canvasRef.current || !targets || targets.length === 0) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const pad = 90;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of targets) {
+      const w = n.type === 'comment' ? (n.width || 400) : 260;
+      const h = n.type === 'comment' ? (n.height || 300) : 210;
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + w); maxY = Math.max(maxY, n.y + h);
+    }
+    const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+    const z = Math.max(0.35, Math.min(1.2, Math.min((rect.width - pad * 2) / bw, (rect.height - pad * 2) / bh)));
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    setZoom(z);
+    setPanOffset({ x: rect.width / 2 - cx * z, y: rect.height / 2 - cy * z });
+  }, []);
+
+  // Auto-fit when the MD-script selection changes, so switching scripts never lands you on an
+  // empty viewport (the nodes are filtered in, just off-screen). Skips the initial mount.
+  const didMountFitRef = React.useRef(false);
+  useEffect(() => {
+    if (!didMountFitRef.current) { didMountFitRef.current = true; return; }
+    const t = setTimeout(() => fitToNodes(nodesFilteredByCue), 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMdScript]);
 
   // Trigger camera focus / fit when focusNodeRequest is updated from the Sidebar Tree
   useEffect(() => {
@@ -1445,6 +1491,13 @@ export default function Canvas({
           className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
         >
           <ZoomOut className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => fitToNodes(nodesFilteredByCue)}
+          title="Fit view to nodes (frame all)"
+          className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
+        >
+          <Maximize2 className="w-4 h-4" />
         </button>
         <button
           onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
@@ -2219,13 +2272,17 @@ export default function Canvas({
             </button>
           )}
 
+          {/* Scrollable body: PATTERNS + node results scroll together. Previously PATTERNS was a
+              shrink-0 block above a separately-scrolling list, so when patterns showed they filled
+              the max-h-96 popup and clipped the list with no way to scroll. */}
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1 -mr-1 mt-1 space-y-1">
           {/* Patterns group (composite blocks) — one click drops a whole wired pattern (G10). */}
           {(() => {
             const q = searchQuery.toLowerCase();
             const comps = COMPOSITE_BLOCKS.filter(c => !q || c.title.toLowerCase().includes(q) || c.blurb.toLowerCase().includes(q) || 'pattern'.includes(q));
             if (comps.length === 0) return null;
             return (
-              <div className="shrink-0 mt-1">
+              <div className="mt-0">
                 <div className="text-[8.5px] font-bold text-violet-300/80 uppercase tracking-wider px-1 pb-1">Patterns</div>
                 <div className="space-y-1">
                   {comps.map(c => (
@@ -2249,7 +2306,7 @@ export default function Canvas({
           })()}
 
           {/* Search elements viewport lists */}
-          <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar max-h-56 mt-1">
+          <div className="space-y-1">
             {filteredTemplates.length > 0 ? (
               filteredTemplates.map((item, idx) => {
                 let badgeStyle = 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/25';
@@ -2277,6 +2334,7 @@ export default function Canvas({
             ) : (
               <span className="text-slate-500 text-[10px] text-center block py-4 bg-black/10 rounded-lg">No matching script node found</span>
             )}
+          </div>
           </div>
           <div className="text-[9px] text-slate-500 border-t border-white/5 pt-1.5 text-center leading-normal">
             Coords: x:{contextMenu.gridX} y:{contextMenu.gridY}

@@ -36,3 +36,8 @@ tests/e2e/handoff-gap-analysis.spec.ts
 
 # generated lint artifacts
 .lint-*.json
+
+# ---- graphify knowledge graph (regenerable via `graphify update .`) ----
+# ~2.3MB of generated graph.json/graph.html/report — rebuild anytime, don't commit.
+# (.graphifyignore stays tracked; the AGENTS/CLAUDE/GEMINI.md instruction files do too.)
+graphify-out/

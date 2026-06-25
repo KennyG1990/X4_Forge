@@ -50,6 +50,8 @@ export interface DiffLine {
 interface CodePreviewProps {
   workspace: ModWorkspace;
   setWorkspace?: React.Dispatch<React.SetStateAction<ModWorkspace>>;
+  activeMdScript?: string | null;
+  setActiveMdScript?: (s: string | null) => void;
   saveCheckpoint?: (customTarget?: ModWorkspace) => void;
   modWorkspacePath: string;
   activeEditorFile: EditorFile | null;
@@ -141,10 +143,12 @@ function getSnapshotContentForPath(snapWS: ModWorkspace, relativePath: string): 
   return '';
 }
 
-export default function CodePreview({ 
-  workspace, 
-  setWorkspace, 
-  saveCheckpoint, 
+export default function CodePreview({
+  workspace,
+  setWorkspace,
+  activeMdScript = null,
+  setActiveMdScript,
+  saveCheckpoint,
   modWorkspacePath,
   activeEditorFile,
   setActiveEditorFile,
@@ -164,6 +168,7 @@ export default function CodePreview({
   topBarTarget
 }: CodePreviewProps) {
   const [codeActiveTab, setCodeActiveTab] = useState<'md' | 'ui' | 'node' | 'file'>('md');
+  // activeMdScript / setActiveMdScript now come from props (shared with the canvas).
   const [, setToolActiveTab] = useState<'analyzer' | 'playtest'>('analyzer');
   const [copied, setCopied] = useState<boolean>(false);
 
@@ -251,9 +256,29 @@ export default function CodePreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compileStatus]);
 
+  // Multi-script "view all": when the workspace holds cues from >1 script (tagged mdFileStem
+  // on import), render EACH as its own <mdscript> with a file header — so the panel shows the
+  // real per-file output, not one wrong mashed-together script. Single-script mods unchanged.
+  const buildAllScriptsMd = (ws: ModWorkspace): string => {
+    const cues = (ws.nodes || []).filter(n => n.type === 'cue');
+    const subIds = new Set((ws.links || []).filter(l => l.sourcePortId === 'out_sub').map(l => l.targetNodeId));
+    const stems = Array.from(new Set(cues.map(c => (c.properties as any)?.mdFileStem).filter((s: any): s is string => typeof s === 'string')));
+    if (stems.length <= 1) return generateMDXML(ws);
+    return stems.map(stem => {
+      const top = cues.filter(c => (c.properties as any)?.mdFileStem === stem && !subIds.has(c.id)).map(c => c.id);
+      const name = (cues.find(c => (c.properties as any)?.mdFileStem === stem)?.properties as any)?.mdScript || stem;
+      return `<!-- ════════ md/${stem}.xml ════════ -->\n` + generateMDXML(ws, top, name);
+    }).join('\n\n');
+  };
   const mdCode = selectedCueIds && selectedCueIds.length > 0
     ? generateMDXML(workspace, selectedCueIds)
-    : generateMDXML(workspace);
+    : (activeMdScript
+        ? generateMDXML(
+            workspace,
+            (workspace.nodes || []).filter(n => n.type === 'cue' && (n.properties as any)?.mdFileStem === activeMdScript && !new Set((workspace.links || []).filter(l => l.sourcePortId === 'out_sub').map(l => l.targetNodeId)).has(n.id)).map(n => n.id),
+            activeMdScript
+          )
+        : buildAllScriptsMd(workspace));
   const uiCode = generateUIXML(workspace);
 
   const collectDownstreamNodeIds = (startIds: string[], sourceWorkspace: ModWorkspace = workspace): Set<string> => {
@@ -994,6 +1019,25 @@ export default function CodePreview({
               <Split className="w-3.5 h-3.5" />
             </button>
           )}
+          {codeActiveTab === 'md' && (() => {
+            const cues = (workspace.nodes || []).filter(n => n.type === 'cue');
+            const stems = Array.from(new Set(cues.map(c => (c.properties as any)?.mdFileStem).filter((s: any): s is string => typeof s === 'string')));
+            if (stems.length <= 1) return null;
+            return (
+              <>
+                <span className="w-px h-4 bg-white/10 mx-0.5" />
+                <select
+                  value={activeMdScript ?? '__all__'}
+                  onChange={e => setActiveMdScript?.(e.target.value === '__all__' ? null : e.target.value)}
+                  title="View all scripts together, or one at a time"
+                  className="bg-slate-800 text-slate-200 text-xs rounded px-1 py-0.5 border border-white/10 cursor-pointer max-w-[160px]"
+                >
+                  <option value="__all__">All scripts ({stems.length})</option>
+                  {stems.map(s => <option key={s} value={s}>{s}.xml</option>)}
+                </select>
+              </>
+            );
+          })()}
           <span className="w-px h-4 bg-white/10 mx-0.5" />
           <button
             onClick={onCompileModProject}

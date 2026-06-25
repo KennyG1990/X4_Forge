@@ -1,4 +1,4 @@
-# X4 Mod Studio — Handoff Notes
+# X4 Forge — Handoff Notes
 
 Context for the next coding agent. This captures a review pass + a compiler/directory refactor done on the `main` branch working tree. Pair this with `ROADMAP.md` (strategy) — this file is the "what changed and what's left" companion.
 

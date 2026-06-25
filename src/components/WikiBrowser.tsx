@@ -45,7 +45,7 @@ export const WIKI_TOPICS: WikiTopic[] = [
   </conditions>
   <actions>
     <!-- Log verification message to the modding developer debug logbook -->
-    <write_to_logbook category="general" text="'X4: Foundations Mod Studio - Active Workspace Loaded'" />
+    <write_to_logbook category="general" text="'X4 Forge - Active Workspace Loaded'" />
   </actions>
 </cue>`,
     egosoftUrl: "https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding/Mission%20Director%20Introduction/"

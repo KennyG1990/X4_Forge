@@ -48,7 +48,7 @@ function projectFromWorkspace(ws: ModWorkspace): ExtensionProject {
   files.push({
     path: 'content.xml',
     kind: 'content',
-    content: buildContentXml({ id, name: ws.name, version: ws.version, author: ws.author, description: ws.description }),
+    content: buildContentXml({ id, name: ws.name, version: ws.version, author: ws.author, description: ws.description, deps: ws.dependencies?.map(d => ({ ...d, optional: d.optional ?? false })) }),
   });
 
   if ((ws.nodes || []).length > 0) {

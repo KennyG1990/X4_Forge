@@ -27,7 +27,9 @@ export type ProjectCrossFileFindingCode =
   | 'lua_md.missing_listener'
   | 'dep.missing_content_xml'
   | 'dep.duplicate'
-  | 'dep.self';
+  | 'dep.self'
+  | 'md.signal_library'
+  | 'md.run_actions_nonlibrary';
 
 export interface ProjectCrossFileFinding {
   code: ProjectCrossFileFindingCode;
@@ -240,6 +242,47 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
     }
   }
 
+  // X4 engine semantic the XSD can't express: you SIGNAL cues, you RUN_ACTIONS libraries.
+  // signal_cue / signal_cue_instantly aimed at a <library> errors in-game ("Signalled cue …
+  // has no corresponding library"); run_actions aimed at a non-library cue is also wrong.
+  {
+    const kindByQName = new Map<string, 'library' | 'cue'>();
+    for (const f of mdFiles) {
+      const script = (f.content!.match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '').toLowerCase();
+      const re = /<(cue|library)\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(f.content!)) !== null) {
+        kindByQName.set(`${script}.${m[2].toLowerCase()}`, m[1].toLowerCase() === 'library' ? 'library' : 'cue');
+      }
+    }
+    const qnameOf = (ref: string, ownScript: string): string | null => {
+      const r = (ref || '').trim();
+      const cross = r.match(/^md\.([^.]+)\.([^.\s"']+)/i);
+      if (cross) return `${cross[1].toLowerCase()}.${cross[2].toLowerCase()}`;
+      const local = r.startsWith('this.') ? r.slice(5) : r;
+      if (/^[A-Za-z_]\w*$/.test(local)) return `${ownScript.toLowerCase()}.${local.toLowerCase()}`;
+      return null; // parent./static./expression → can't resolve statically; don't flag
+    };
+    for (const f of mdFiles) {
+      const ownScript = f.content!.match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '';
+      let m: RegExpExecArray | null;
+      const sigRe = /<signal_cue(?:_instantly)?\b[^>]*\bcue\s*=\s*"([^"]+)"/gi;
+      while ((m = sigRe.exec(f.content!)) !== null) {
+        if (kindByQName.get(qnameOf(m[1], ownScript) || '') === 'library') {
+          findings.push({ code: 'md.signal_library', severity: 'error', file: f.path,
+            detail: `signal_cue targets the <library> "${m[1]}". Libraries are invoked via <run_actions ref="…"> (with purpose="run_actions"), not signalled — X4 errors with "Signalled cue … has no corresponding library".` });
+        }
+      }
+      const raRe = /<run_actions\b[^>]*\bref\s*=\s*"([^"]+)"/gi;
+      while ((m = raRe.exec(f.content!)) !== null) {
+        if (kindByQName.get(qnameOf(m[1], ownScript) || '') === 'cue') {
+          findings.push({ code: 'md.run_actions_nonlibrary', severity: 'warning', file: f.path,
+            detail: `run_actions ref "${m[1]}" resolves to a <cue>, not a <library>. <run_actions> targets a library declared with purpose="run_actions".` });
+        }
+      }
+    }
+  }
+
   const errors = findings.filter(f => f.severity === 'error').length;
   return {
     ok: errors === 0,
@@ -274,13 +317,13 @@ function fixtureProject(): ExtensionProject {
   project = addFile(project, {
     path: 'md/main.xml',
     kind: 'md',
-    content: `<mdscript name="Main"><cues><cue name="Start"><actions><signal_cue cue="md.Contract.Call_chat" /></actions></cue></cues></mdscript>`,
+    content: `<mdscript name="Main"><cues><cue name="Start"><actions><run_actions ref="md.Contract.Call_chat" /></actions></cue></cues></mdscript>`,
   });
   project = addFile(project, {
     path: 'md/contract.xml',
     kind: 'md',
     content: `<mdscript name="Contract"><cues>
-      <library name="Call_chat"><actions><raise_lua_event name="'ai_influence.chat'" param="table[prompt=$prompt]" /></actions></library>
+      <library name="Call_chat" purpose="run_actions"><actions><raise_lua_event name="'ai_influence.chat'" param="table[prompt=$prompt]" /></actions></library>
       <cue name="On_chat_response"><conditions><event_ui_triggered screen="'ai_influence'" control="'chat.response'" /></conditions></cue>
     </cues></mdscript>`,
   });
@@ -325,6 +368,24 @@ export function runProjectCrossFileSelftest() {
   });
   const unresolved = validateProjectCrossFile(brokenCue);
   ok('keeps_unresolved_cross_file_cue_diagnostic', !unresolved.ok && unresolved.findings.some(f => f.code === 'cue.unresolved'), unresolved.findings);
+
+  // signal_cue aimed at a <library> is the in-game "no corresponding library" error.
+  const signalLibrary = addFile(fixtureProject(), {
+    path: 'md/bad_signal.xml',
+    kind: 'md',
+    content: '<mdscript name="Bad"><cues><cue name="Go"><actions><signal_cue cue="md.Contract.Call_chat" /></actions></cue></cues></mdscript>',
+  });
+  const sigLib = validateProjectCrossFile(signalLibrary);
+  ok('flags_signal_cue_targeting_library', !sigLib.ok && sigLib.findings.some(f => f.code === 'md.signal_library'), sigLib.findings);
+
+  // run_actions aimed at a plain <cue> (not a library) is the inverse mistake.
+  const runActionsCue = addFile(fixtureProject(), {
+    path: 'md/bad_run.xml',
+    kind: 'md',
+    content: '<mdscript name="BadRun"><cues><cue name="Go"><actions><run_actions ref="md.Contract.On_chat_response" /></actions></cue></cues></mdscript>',
+  });
+  const raCue = validateProjectCrossFile(runActionsCue);
+  ok('flags_run_actions_targeting_nonlibrary', raCue.findings.some(f => f.code === 'md.run_actions_nonlibrary' && f.severity === 'warning'), raCue.findings);
 
   const duplicateDeps = addFile(fixtureProject(), {
     path: 'content.xml',
