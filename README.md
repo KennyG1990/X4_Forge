@@ -217,6 +217,20 @@ Important routes include:
 
 The in-app **AGENT API** panel documents the routes, shows live state, and exposes surgical workspace operations. It is focused on real agent operations, not demo-only test runs.
 
+## 💡 Case Study: Building "AI Influence" (Player2 AI Integration)
+
+To understand the power of X4 Forge, look at **AI Influence** (`x4_ai_influence`)—a complex extension that connects X4's live engine to a local **Player2 AI** server for real-time natural language diplomacy and fleet commands. 
+
+Building a mod of this scale using traditional hand-written text editors would result in broken cues, XML syntax crashes, and silent UI failures. X4 Forge turned this ambitious concept into a stable, working reality:
+
+* **Visual MD Cue Mapping:** The intricate dialogue trees, suggestions pre-fetchers, and state-synchronization loops in `ai_influence_conversation.xml` and `ai_influence_chat.xml` were wired visually on the Forge MD canvas. The compiler automatically generated clean XML, preventing syntax and trigger-casing errors.
+* **Lua UI & Standalone Menu Compilation:** The custom comm-link panels (`aic_menu.lua` and `aic_uix.lua`) were compiled using Forge's layout compiler, ensuring they registered correctly with the engine's strict `Helper.registerMenu -> OpenMenu` workflow rather than silently failing to render.
+* **API Dependency Verification:** The Extension Doctor audited the mod's `content.xml`, verifying load-order priority and flagging required dependencies like `x4_neural_link` (the core bridge) and `djfhe_http` (the HTTP transport library).
+* **Deterministic Reference Audits:** When writing the economy and military action executors (`ai_influence_contract.xml`), X4 Forge checked all ware, faction, and macro IDs against the game's actual unpacked assets, catching misspelled references (like `energy_cells` instead of `energycells`) before launch.
+* **Real-time Log Correlation:** When debugging the HTTP response loop, the developer tail-correlated X4's runtime debug logs back to the visual canvas cues, tracing exactly where transaction payloads were parsed or rejected.
+
+---
+
 ## Quick Start
 
 ### Requirements
