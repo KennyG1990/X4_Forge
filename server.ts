@@ -590,6 +590,22 @@ interface LogHypothesis {
   suggestion: string;
 }
 
+type DebugTimelineKind = "deploy" | "file_load" | "marker" | "cue" | "issue" | "runtime_fault";
+
+type DebugTimelineItem = {
+  kind: DebugTimelineKind;
+  severity: "info" | "warning" | "error";
+  label: string;
+  lineNumber?: number;
+  evidence: string;
+};
+
+type ExpectedDebugStep = {
+  step: string;
+  seen: boolean;
+  evidence?: string;
+};
+
 /**
  * Deterministic root-cause layer over the live log. NOT an AI guess — a fixed
  * symptom→cause table plus a markersSeen signal. Each hypothesis is something a
@@ -660,17 +676,142 @@ function computeGameStates(args: { tail: string; modIds: string[]; deployed: boo
   };
 }
 
+// Cue/library names the DEPLOYED mod defines — read straight from its md/*.xml on disk. Lets the
+// watcher report CUE LIVENESS (are the mod's cues actually firing in the log?) independent of whether
+// the mod prints its own name or emits debug markers. This is the signal that catches a silently-dead
+// cue (e.g. an event handler that isn't instantiate="true", or one whose body skips on a bad read) —
+// exactly the class of bug the error-grep + markersSeen heuristics miss.
+function collectDeployedModCueNames(modId: string): string[] {
+  const resolved = resolveXsdConfig();
+  const names = new Set<string>();
+  const roots = [resolved.filesystemPath, resolved.modWorkspacePath].filter(Boolean) as string[];
+  const re = /<(?:cue|library)\b[^>]*\bname\s*=\s*"([^"]+)"/g;
+  const readMdDir = (mdDir: string): boolean => {
+    let files: string[] = [];
+    try { files = fs.readdirSync(mdDir).filter(f => f.toLowerCase().endsWith(".xml")); } catch { return false; }
+    for (const f of files.slice(0, 60)) {
+      try {
+        const txt = fs.readFileSync(path.join(mdDir, f), "utf8");
+        let m: RegExpExecArray | null; re.lastIndex = 0;
+        while ((m = re.exec(txt))) { if (m[1] && m[1].length >= 2) names.add(m[1]); }
+      } catch { /* skip unreadable file */ }
+    }
+    return files.length > 0;
+  };
+  // The watcher modId (content.xml id, e.g. "ai_influence") often differs from the deployed FOLDER
+  // name (e.g. "x4_ai_influence"). Try the obvious folder variants, then a bounded name-contains scan.
+  const bare = modId.toLowerCase().replace(/^x4_/, "");
+  const candidates = Array.from(new Set([modId, `x4_${modId}`, `${modId}_mod`, bare]));
+  for (const root of roots) {
+    for (const folder of candidates) {
+      readMdDir(path.join(root, folder, "md"));
+      if (names.size > 0) return Array.from(names);
+    }
+    try {
+      for (const entry of fs.readdirSync(root)) {
+        if (entry.toLowerCase().includes(bare)) {
+          readMdDir(path.join(root, entry, "md"));
+          if (names.size > 0) return Array.from(names);
+        }
+      }
+    } catch { /* root unreadable */ }
+  }
+  return Array.from(names);
+}
+
+// The mod's own LOG MARKER(s) — mods print under an arbitrary prefix (e.g. `DebugError("[AICHAT][UIX] …")`),
+// NOT their extension id, so an id-grep never sees them. Scan the deployed mod's Lua for the bracket prefix
+// used in DebugError/print calls so the watcher can recognise the mod's lines (and the errors next to them).
+function collectModLogMarkers(modId: string): string[] {
+  const resolved = resolveXsdConfig();
+  const roots = [resolved.filesystemPath, resolved.modWorkspacePath].filter(Boolean) as string[];
+  const bare = modId.toLowerCase().replace(/^x4_/, "");
+  const markers = new Set<string>();
+  const callRe = /(?:DebugError|print)\s*\(\s*["'`]\s*\[([A-Za-z][A-Za-z0-9_]{3,})\]/g;
+  const scanLua = (dir: string, depth: number) => {
+    if (depth > 4) return;
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries.slice(0, 300)) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) scanLua(full, depth + 1);
+      else if (/\.lua$/i.test(e.name)) {
+        try {
+          const txt = fs.readFileSync(full, "utf8");
+          let m: RegExpExecArray | null; callRe.lastIndex = 0;
+          while ((m = callRe.exec(txt))) markers.add(m[1].toLowerCase());
+        } catch { /* skip */ }
+      }
+    }
+  };
+  const candidates = Array.from(new Set([modId, `x4_${modId}`, `${modId}_mod`, bare]));
+  for (const root of roots) {
+    let modDir = "";
+    for (const folder of candidates) {
+      const d = path.join(root, folder);
+      try { if (fs.statSync(d).isDirectory()) { modDir = d; break; } } catch { /* */ }
+    }
+    if (!modDir) {
+      try { for (const ent of fs.readdirSync(root)) { if (ent.toLowerCase().includes(bare)) { const d = path.join(root, ent); if (fs.statSync(d).isDirectory()) { modDir = d; break; } } } } catch { /* */ }
+    }
+    if (modDir) { scanLua(path.join(modDir, "ui"), 0); if (markers.size) break; }
+  }
+  return Array.from(markers);
+}
+
+// A REAL engine/Lua fault signature — phrases the ENGINE emits, not text a mod author chose to print.
+// Crucial in X4: mods can only log via DebugError (which the engine stamps "[=ERROR=]"), so the "[=ERROR=]"
+// prefix and the bare word "error" appear on the mod's BENIGN heartbeat too and cannot be the signal. A
+// genuine fault carries one of these distinctive engine strings instead.
+const ENGINE_FAULT_SIG = /invalid argument|got cdata|cannot run actions|error in (md|ai) (cue|script)|attempt to (call|index)|stack traceback|a nil value|no corresponding library|couldn't find end|not well-formed|premature end|unknown (parameter|keyword)|failed to (load|run|parse|compile)/i;
+
+// Attribute genuine engine faults to the mod by PROXIMITY to its own log markers: a
+// "GetComponentData(): Invalid argument … got cdata" thrown inside the mod's UIX reader is logged with no
+// cue/mod name, but right next to a "[AICHAT][UIX] …" line. Count only fault-signature lines adjacent to a
+// marker (the marker line itself is the mod's benign info, excluded) → precise RED, no heartbeat noise.
+function countModRuntimeErrors(tail: string, markers: string[]): { count: number; markerLines: number; samples: string[] } {
+  if (!markers.length) return { count: 0, markerLines: 0, samples: [] };
+  const lines = String(tail || "").split(/\r?\n/).slice(-2000);
+  const lc = lines.map(l => l.toLowerCase());
+  const markerIdx = new Set<number>();
+  for (let i = 0; i < lines.length; i++) if (markers.some(m => lc[i].includes(m))) markerIdx.add(i);
+  if (!markerIdx.size) return { count: 0, markerLines: 0, samples: [] };
+  const samples: string[] = [];
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (markerIdx.has(i)) continue;            // the mod's own marker line = benign info, never the fault
+    if (!ENGINE_FAULT_SIG.test(lines[i])) continue;
+    let near = false;
+    for (let d = -3; d <= 3; d++) if (markerIdx.has(i + d)) { near = true; break; }
+    if (near) { count++; if (samples.length < 6) samples.push(lines[i].trim().slice(0, 200)); }
+  }
+  return { count, markerLines: markerIdx.size, samples };
+}
+
 function getGameLogStatus(modIdInput?: string) {
   const raw = String(modIdInput || lastDeployInfo?.workspaceName || activeWorkspace.name || '');
   const modId = toSafeModId(raw); // primary id for display
   // Candidate identifiers the log line might actually use — covers the display name, its
   // space/underscore forms, and the common display-name→folder-id drift (a trailing "_mod"
   // that the real extension folder doesn't have). Matching any of these avoids false all-clear.
+  const bareId = modId.replace(/_mod$/, '');
+  // The mod's OWN log marker(s), scanned from its Lua (e.g. "aichat" from `DebugError("[AICHAT][UIX] …")`).
+  // This is what X4 actually prints — mods log under a prefix, not their extension id — so matching it is
+  // how the watcher recognises the mod's lines + the errors next to them. (Ken: "it's looking for ai_influence".)
+  const modMarkers = collectModLogMarkers(modId);
   const modIds = Array.from(new Set([
     modId,
     raw.toLowerCase().trim(),
     raw.toLowerCase().trim().replace(/\s+/g, '_'),
-    modId.replace(/_mod$/, ''),
+    bareId,
+    // X4's log uses the DEPLOYED FOLDER id, which is often the metadata name with an `x4_` prefix
+    // (e.g. metadata "AI Influence" → folder "x4_ai_influence").
+    `x4_${modId}`,
+    `x4_${bareId}`,
+    // NOTE: deliberately NOT including the mod's DebugError marker (e.g. "aichat") here. X4 emits EVERY
+    // mod DebugError line as "[=ERROR=] … [AICHAT][UIX] …" — the only log channel a mod has — so matching
+    // the marker in this generic error grep flags the mod's normal heartbeat as 34 false "errors". The
+    // marker is used for liveness (markersSeen) and precise runtime-fault attribution below, not here.
   ].filter(s => s && s.length >= 3)));
   const candidates = findDebugLogCandidates();
   const selectedLogPath = candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
@@ -692,9 +833,38 @@ function getGameLogStatus(modIdInput?: string) {
   const stat = fs.statSync(selectedLogPath);
   const tail = readTail(selectedLogPath, 256 * 1024);
   const { issues, tailLines } = analyzeGameLog(tail, modIds);
+  // CUE-CORRELATED ERRORS — tie each X4 error line back to the mod CUE that threw it (the error
+  // line names the cue, e.g. "Error in MD cue ...worldsync.Tick: Cannot run actions of library
+  // ...Do_sync"). This is the RED signal: which of the mod's own cues are failing, by name.
+  // NOTE: we deliberately do NOT treat cue-SILENCE as a fault — a healthy mod that doesn't print
+  // debug markers logs nothing, so "0 cues seen" is normal and must never raise a false "inert".
+  const modCueNames = collectDeployedModCueNames(modId);
+  const cueTelemetry = modCueNames.length ? parseLogTelemetry(tail, modCueNames).cues : [];
+  const erroringCues = cueTelemetry.filter(c => c.errors > 0).sort((a, b) => b.errors - a.errors);
+  const firingCues = cueTelemetry.filter(c => c.hits > 0 && c.errors === 0).sort((a, b) => b.hits - a.hits);
+  const cueLiveness = {
+    totalCues: modCueNames.length,
+    erroringCount: erroringCues.length,
+    firingCount: firingCues.length,
+    // RED — cues with errors in the log (clickable → navigate to the node).
+    erroring: erroringCues.slice(0, 16).map(c => ({ name: c.name, errors: c.errors, hits: c.hits, lastLineNo: c.lastLineNo })),
+    // GREEN — cues observed firing cleanly.
+    firing: firingCues.slice(0, 16).map(c => ({ name: c.name, hits: c.hits })),
+  };
+  // RUNTIME (Lua) ERRORS — the mod's own DebugError/print marker (e.g. "[AICHAT][UIX]") tags its lines,
+  // but a Lua engine error it triggers (e.g. "GetComponentData(): Invalid argument … got cdata") is logged
+  // as a bare [=ERROR=] line that names NO cue and NO mod. Attribute [=ERROR=] lines that sit right next to
+  // the mod's marker lines to the mod → this is the RED Ken wanted (errors the cue-grep alone can't see).
+  const runtime = countModRuntimeErrors(tail, modMarkers);
+  // BENIGN LOG NOISE — X4 logs "[error] [FileIO] Failed to verify the file signature for file … (error: 14)"
+  // for EVERY unsigned loose mod file at load. It's harmless (the mod still loads in modified mode) and
+  // PERMANENT for any dev mod, so counting it would pin the watcher red forever. A file that's actually broken
+  // surfaces as an XML-parse / cue error instead (still caught). Exclude signature-verification noise from RED.
+  const BENIGN_LOG_NOISE = /verify the file signature/i;
   const activeIssues = issues.filter(issue => issue.matchesActiveMod);
-  const activeErrors = activeIssues.filter(issue => issue.severity === "error");
-  const activeWarnings = activeIssues.filter(issue => issue.severity === "warning");
+  const signatureNotices = activeIssues.filter(issue => BENIGN_LOG_NOISE.test(issue.text));
+  const activeErrors = activeIssues.filter(issue => issue.severity === "error" && !BENIGN_LOG_NOISE.test(issue.text));
+  const activeWarnings = activeIssues.filter(issue => issue.severity === "warning" && !BENIGN_LOG_NOISE.test(issue.text));
   const logUpdatedAt = stat.mtime.toISOString();
   const staleForLastDeploy = Boolean(relevantLastDeploy?.deployedAt && new Date(logUpdatedAt).getTime() < new Date(relevantLastDeploy.deployedAt).getTime());
 
@@ -703,13 +873,29 @@ function getGameLogStatus(modIdInput?: string) {
   else if (activeErrors.length > 0) status = "errors";
   else if (activeWarnings.length > 0) status = "warnings";
 
-  const summary = status === "stale"
+  const baseSummary = status === "stale"
     ? "A log file was found, but it has not changed since the last Studio deploy."
     : status === "errors"
       ? `${activeErrors.length} active-mod error(s) found in recent X4 log output.`
       : status === "warnings"
         ? `${activeWarnings.length} active-mod warning(s) found in recent X4 log output.`
         : `No recent X4 errors or warnings mentioning "${modId}" were found in the tailed log.`;
+  // Per-cue ERRORS are the real RED signal — a cue throwing in the log is a fault regardless of the
+  // mod-name grep. Escalate to errors and name the failing cues. Cue SILENCE is NOT a fault.
+  if (cueLiveness.erroringCount > 0 && status !== "stale") status = "errors";
+  // Runtime Lua errors adjacent to the mod's marker are RED too, even when no cue is named.
+  if (runtime.count > 0 && status !== "stale") status = "errors";
+  const runtimeNote = runtime.count > 0
+    ? ` ✗ ${runtime.count} runtime error(s) logged next to the mod's "${modMarkers.join('/')}" marker (likely the mod's Lua): ${runtime.samples.slice(0, 2).join(' | ')}`
+    : "";
+  const cueNote = cueLiveness.erroringCount > 0
+    ? ` ✗ ${cueLiveness.erroringCount} of the mod's cues are THROWING ERRORS: ${cueLiveness.erroring.map(c => `${c.name}(${c.errors})`).join(', ')}.`
+    : cueLiveness.firingCount > 0
+      ? ` ${cueLiveness.firingCount} of the mod's cues are firing cleanly.`
+      : cueLiveness.totalCues > 0
+        ? ` (No cue activity for this mod in the tail — a healthy mod that emits no debug markers logs nothing, so this alone is not a fault.)`
+        : "";
+  const summary = baseSummary + cueNote + runtimeNote;
 
   const states = computeGameStates({ tail, modIds, deployed: Boolean(relevantLastDeploy), stale: staleForLastDeploy });
 
@@ -717,6 +903,10 @@ function getGameLogStatus(modIdInput?: string) {
     status,
     modId,
     summary,
+    cueLiveness,
+    // Mod runtime (Lua) errors detected by marker-proximity — RED even when no cue is named.
+    modMarkers,
+    modRuntime: { markersSeen: runtime.markerLines > 0, markerLines: runtime.markerLines, errorCount: runtime.count, samples: runtime.samples },
     // Explicit pipeline states: Compiled -> Deployed -> Seen by X4 -> Loaded cleanly -> Runtime errors.
     states,
     selectedLogPath,
@@ -724,6 +914,8 @@ function getGameLogStatus(modIdInput?: string) {
     logUpdatedAt,
     logBytes: stat.size,
     lastDeploy: relevantLastDeploy,
+    // Benign: unsigned-file signature notices X4 logs at load for every loose mod file (not a fault).
+    signatureNotices: signatureNotices.length,
     counts: {
       allIssues: issues.length,
       activeIssues: activeIssues.length,
@@ -733,8 +925,143 @@ function getGameLogStatus(modIdInput?: string) {
     issues: activeIssues.slice(-50),
     recentGlobalIssues: issues.slice(-20),
     // Deterministic root-cause layer: named hypotheses + markersSeen (did the mod's own code run?).
-    diagnosis: deriveLogDiagnosis(tail, modIds, activeIssues),
+    // Pass the mod's DebugError marker alongside the ids so "markers seen" reflects the mod actually
+    // logging (its "[AICHAT][UIX] …" lines), even though the marker is kept out of the error grep above.
+    diagnosis: deriveLogDiagnosis(tail, [...modIds, ...modMarkers], activeIssues),
     tailLines
+  };
+}
+
+function classifyTimelineLine(line: string, lineNumber: number, modIds: string[], markers: string[], cueNames: string[]): DebugTimelineItem | null {
+  const raw = String(line || "").trim();
+  if (!raw) return null;
+  const lc = raw.toLowerCase();
+  const modHit = modIds.some(m => m && lc.includes(m.toLowerCase()));
+  const markerHit = markers.find(m => m && lc.includes(m.toLowerCase()));
+  const cueHit = cueNames.find(c => c && new RegExp(`(^|[^A-Za-z0-9_])${c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Za-z0-9_]|$)`).test(raw));
+  const isFileLoad = lc.includes("[fileio") || lc.includes("signature") || lc.includes("loading extension") || lc.includes(".xml'") || lc.includes(".lua'");
+  const isIssue = /\b(error|warning|failed|exception|invalid|not allowed|rejected|could not|unable to)\b/i.test(raw);
+
+  if (ENGINE_FAULT_SIG.test(raw) && (markerHit || cueHit || modHit)) {
+    return { kind: "runtime_fault", severity: "error", label: "Runtime fault", lineNumber, evidence: raw.slice(0, 240) };
+  }
+  if (cueHit && isIssue) {
+    return { kind: "cue", severity: /warn/i.test(raw) && !/error/i.test(raw) ? "warning" : "error", label: `Cue ${cueHit}`, lineNumber, evidence: raw.slice(0, 240) };
+  }
+  if (cueHit) {
+    return { kind: "cue", severity: "info", label: `Cue ${cueHit}`, lineNumber, evidence: raw.slice(0, 240) };
+  }
+  if (markerHit) {
+    return { kind: "marker", severity: isIssue ? "warning" : "info", label: `[${markerHit.toUpperCase()}] marker`, lineNumber, evidence: raw.slice(0, 240) };
+  }
+  if (modHit && isFileLoad) {
+    return { kind: "file_load", severity: "info", label: "Mod file seen by X4", lineNumber, evidence: raw.slice(0, 240) };
+  }
+  if (modHit && isIssue && !/verify the file signature/i.test(raw)) {
+    return { kind: "issue", severity: /warn/i.test(raw) && !/error/i.test(raw) ? "warning" : "error", label: "Active-mod issue", lineNumber, evidence: raw.slice(0, 240) };
+  }
+  return null;
+}
+
+function buildDebugWatcherBrief(modIdInput?: string, expectedInput: string[] = []) {
+  const status: any = getGameLogStatus(modIdInput);
+  if (!status.selectedLogPath || !fs.existsSync(status.selectedLogPath)) {
+    return {
+      ok: status.status !== "error",
+      status,
+      brief: status.summary || "No X4 debug log found.",
+      timeline: [],
+      expectedChain: [],
+      sinceDeploy: { hasDeploy: Boolean(status.lastDeploy), changedSinceDeploy: false, summary: "No readable log to compare with deploy state." },
+      artifact: `Debug Watcher Brief\nStatus: ${status.status}\nSummary: ${status.summary || ""}\n`
+    };
+  }
+
+  const modId = status.modId || toSafeModId(String(modIdInput || ""));
+  const bareId = String(modId).replace(/_mod$/, "");
+  const raw = String(modIdInput || lastDeployInfo?.workspaceName || activeWorkspace.name || "");
+  const modIds = Array.from(new Set([
+    modId,
+    raw.toLowerCase().trim(),
+    raw.toLowerCase().trim().replace(/\s+/g, "_"),
+    bareId,
+    `x4_${modId}`,
+    `x4_${bareId}`,
+  ].filter(s => s && s.length >= 3)));
+  const markers = Array.isArray(status.modMarkers) ? status.modMarkers : collectModLogMarkers(modId);
+  const cueNames = collectDeployedModCueNames(modId);
+  const tail = readTail(status.selectedLogPath, 256 * 1024);
+  const lines = tail.split(/\r?\n/).filter(l => l.trim().length > 0);
+  const baseLine = Math.max(1, lines.length - 399);
+  const timeline = lines.slice(-400)
+    .map((line, i) => classifyTimelineLine(line, baseLine + i, modIds, markers, cueNames))
+    .filter(Boolean)
+    .slice(-80) as DebugTimelineItem[];
+
+  const firedCueNames = new Set<string>((status.cueLiveness?.firing || []).map((c: any) => String(c.name)));
+  const errorCueNames = new Set<string>((status.cueLiveness?.erroring || []).map((c: any) => String(c.name)));
+  const searchableEvidence = [
+    ...timeline.map(t => `${t.label} ${t.evidence}`),
+    ...(status.modMarkers || []),
+  ].join("\n").toLowerCase();
+  const expectedChain: ExpectedDebugStep[] = expectedInput
+    .map(s => String(s || "").trim())
+    .filter(Boolean)
+    .map(step => {
+      const bare = step.replace(/^(cue|marker):/i, "").trim();
+      const seen = firedCueNames.has(bare) || errorCueNames.has(bare) || searchableEvidence.includes(bare.toLowerCase());
+      const ev = timeline.find(t => t.evidence.toLowerCase().includes(bare.toLowerCase()) || t.label.toLowerCase().includes(bare.toLowerCase()));
+      return { step, seen, evidence: ev?.evidence };
+    });
+
+  const logTime = status.logUpdatedAt ? new Date(status.logUpdatedAt).getTime() : 0;
+  const deployTime = status.lastDeploy?.deployedAt ? new Date(status.lastDeploy.deployedAt).getTime() : 0;
+  const changedSinceDeploy = Boolean(deployTime && logTime && logTime >= deployTime);
+  const sinceDeploy = {
+    hasDeploy: Boolean(status.lastDeploy),
+    changedSinceDeploy,
+    deployedAt: status.lastDeploy?.deployedAt,
+    logUpdatedAt: status.logUpdatedAt,
+    summary: !status.lastDeploy
+      ? "No Studio deploy metadata is available for this mod."
+      : changedSinceDeploy
+        ? "The log has changed since the last Studio deploy; current findings are relevant to this deploy window."
+        : "The log has not changed since the last Studio deploy; findings may be stale."
+  };
+
+  const topEvidence = [
+    ...(status.cueLiveness?.erroring || []).map((c: any) => `Cue error: ${c.name} (${c.errors})`),
+    ...(status.modRuntime?.samples || []).map((s: string) => `Runtime: ${s}`),
+    ...(status.diagnosis?.hypotheses || []).map((h: any) => `Hypothesis ${h.code}: ${h.explanation}`),
+    ...timeline.slice(-8).map(t => `${t.kind}: ${t.evidence}`),
+  ].slice(0, 16);
+
+  const artifact = [
+    "Debug Watcher Brief",
+    `Mod: ${modId}`,
+    `Status: ${status.status}`,
+    `Summary: ${status.summary || ""}`,
+    `Log: ${status.selectedLogPath || ""}`,
+    `Updated: ${status.logUpdatedAt || ""}`,
+    `Deploy: ${status.lastDeploy?.deployedAt || "none"}`,
+    `Since deploy: ${sinceDeploy.summary}`,
+    "",
+    "Expected Chain:",
+    ...(expectedChain.length ? expectedChain.map(s => `${s.seen ? "PASS" : "MISS"} ${s.step}${s.evidence ? ` :: ${s.evidence}` : ""}`) : ["(none configured)"]),
+    "",
+    "Evidence:",
+    ...(topEvidence.length ? topEvidence : ["No high-signal evidence in the current tail."]),
+  ].join("\n");
+
+  return {
+    ok: status.status !== "error",
+    status,
+    brief: status.summary || "",
+    timeline,
+    expectedChain,
+    sinceDeploy,
+    evidence: topEvidence,
+    artifact,
   };
 }
 
@@ -1885,6 +2212,12 @@ app.get("/api/agent/schema", (req, res) => {
       },
       {
         method: "GET",
+        path: "/api/agent/debug-watcher/brief?modId=<optionalModId>&expect=<commaSeparatedCueOrMarkerNames>",
+        auth: true,
+        purpose: "Headless debug watcher report for agents: active-mod status, timeline, expected-chain pass/miss, since-deploy freshness, and copyable evidence artifact."
+      },
+      {
+        method: "GET",
         path: "/api/agent/object-index?q=<optional>&kind=<optional>&limit=<optional>",
         auth: true,
         purpose: "Search local X4 loose XML data and schema elements for object ids external agents can use in generated mods."
@@ -2666,6 +2999,23 @@ app.get("/api/agent/game-log/status", (req, res) => {
       status: "error",
       error: error.message || "Failed to read X4 game log status."
     });
+  }
+});
+
+/**
+ * GET /api/agent/debug-watcher/brief
+ * Headless, agent-friendly debug-log watcher report. Extends game-log/status with
+ * a compact timeline, optional expected-chain checks, deploy freshness, and a
+ * copyable evidence artifact. Deterministic only; no AI provider involved.
+ */
+app.get("/api/agent/debug-watcher/brief", (req, res) => {
+  try {
+    const modId = typeof req.query.modId === "string" ? req.query.modId : undefined;
+    const expectRaw = typeof req.query.expect === "string" ? req.query.expect : "";
+    const expected = expectRaw.split(",").map(s => s.trim()).filter(Boolean);
+    return res.json(buildDebugWatcherBrief(modId, expected));
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "debug-watcher brief failed" });
   }
 });
 

@@ -55,6 +55,15 @@ interface GameLogStatus {
     activeErrors: number;
     activeWarnings: number;
   };
+  cueLiveness?: {
+    totalCues: number;
+    erroringCount: number;
+    firingCount: number;
+    erroring: { name: string; errors: number; hits: number; lastLineNo?: number }[];
+    firing: { name: string; hits: number }[];
+  };
+  modMarkers?: string[];
+  modRuntime?: { markersSeen: boolean; markerLines: number; errorCount: number; samples: string[] };
   issues?: GameLogIssue[];
   recentGlobalIssues?: GameLogIssue[];
   diagnosis?: {
@@ -62,6 +71,16 @@ interface GameLogStatus {
     markersSeen: boolean;
     hypotheses: { code: string; confidence: 'high' | 'medium'; evidence: string; explanation: string; suggestion: string }[];
   };
+  error?: string;
+}
+
+interface DebugWatcherBrief {
+  brief?: string;
+  timeline?: { kind: string; severity: 'info' | 'warning' | 'error'; label: string; lineNumber?: number; evidence: string }[];
+  expectedChain?: { step: string; seen: boolean; evidence?: string }[];
+  sinceDeploy?: { hasDeploy: boolean; changedSinceDeploy: boolean; summary: string; deployedAt?: string; logUpdatedAt?: string };
+  evidence?: string[];
+  artifact?: string;
   error?: string;
 }
 
@@ -119,6 +138,7 @@ export default function PlaytestWorkspace({
   const [gameLogStatus, setGameLogStatus] = useState<GameLogStatus | null>(null);
   const [gameLogLoading, setGameLogLoading] = useState<boolean>(false);
   const [gameLogError, setGameLogError] = useState<string>('');
+  const [debugBrief, setDebugBrief] = useState<DebugWatcherBrief | null>(null);
   const [pastedDiagnosis, setPastedDiagnosis] = useState<GameLogStatus['diagnosis'] | null>(null);
   const [diagnosingPasted, setDiagnosingPasted] = useState<boolean>(false);
 
@@ -193,11 +213,23 @@ export default function PlaytestWorkspace({
     }
   };
 
+  const refreshDebugBrief = async () => {
+    try {
+      const expected = ['Save_identity', 'Chat_boot', 'Poll_tick', 'On_action'].join(',');
+      const response = await fetch(`/api/agent/debug-watcher/brief?modId=${encodeURIComponent(activeModId)}&expect=${encodeURIComponent(expected)}`);
+      const data = await response.json();
+      setDebugBrief(data);
+    } catch (err) {
+      setDebugBrief({ error: err?.message || 'Failed to read debug watcher brief.' });
+    }
+  };
+
   useEffect(() => {
     refreshGameLogStatus();
+    refreshDebugBrief();
     // Poll every 4s so the watcher feels live during an in-game test (was 15s, which read
     // as "not automatic"). The tail is byte-bounded, so a fast poll is cheap.
-    const timer = window.setInterval(refreshGameLogStatus, 4000);
+    const timer = window.setInterval(() => { refreshGameLogStatus(); refreshDebugBrief(); }, 4000);
     return () => window.clearInterval(timer);
     // reason: refreshGameLogStatus is a non-memoized component-body function; the polling interval should reset only on activeModId change, not every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -404,6 +436,72 @@ export default function PlaytestWorkspace({
             {gameLogStatus?.counts && <span>ACTIVE ISSUES: {gameLogStatus.counts.activeIssues}</span>}
           </div>
 
+          {/* CUE STATUS — RED for the mod's own cues that are THROWING ERRORS in the live log (tied
+              to the cue by name), GREEN for cues seen firing cleanly. Cue silence is NOT flagged —
+              a healthy mod that emits no debug markers logs nothing, so absence ≠ fault. */}
+          {gameLogStatus?.cueLiveness && gameLogStatus.cueLiveness.totalCues > 0 && (
+            <div className="mt-1 space-y-1" data-testid="cue-liveness">
+              <div className="flex items-center gap-2 text-[9px] font-mono">
+                <span className="text-slate-500">CUE STATUS</span>
+                {gameLogStatus.cueLiveness.erroringCount > 0 ? (
+                  <span className="text-red-300">✗ {gameLogStatus.cueLiveness.erroringCount} cue(s) failing</span>
+                ) : gameLogStatus.cueLiveness.firingCount > 0 ? (
+                  <span className="text-emerald-300">✓ {gameLogStatus.cueLiveness.firingCount} firing cleanly</span>
+                ) : (
+                  <span className="text-slate-500">no cue activity in tail</span>
+                )}
+              </div>
+              {gameLogStatus.cueLiveness.erroring && gameLogStatus.cueLiveness.erroring.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {gameLogStatus.cueLiveness.erroring.map((c) => (
+                    <span
+                      key={c.name}
+                      title={`${c.errors} error(s) in the log`}
+                      className="rounded px-1 py-0.5 text-[9px] font-mono border border-red-500/50 bg-red-500/15 text-red-300"
+                    >
+                      {c.name} ✗{c.errors}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {gameLogStatus.cueLiveness.firing && gameLogStatus.cueLiveness.firing.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {gameLogStatus.cueLiveness.firing.map((c) => (
+                    <span
+                      key={c.name}
+                      title={`${c.hits} fires`}
+                      className="rounded px-1 py-0.5 text-[9px] font-mono border border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                    >
+                      {c.name} ✓{c.hits}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* RUNTIME ERRORS — genuine engine/Lua faults (e.g. GetComponentData: Invalid argument got cdata)
+              logged right next to the mod's own DebugError marker. These name no cue, so the cue panel can't
+              catch them; proximity to the mod's marker attributes them. RED = the mod is throwing in-game. */}
+          {gameLogStatus?.modRuntime && gameLogStatus.modRuntime.errorCount > 0 && (
+            <div className="mt-1 space-y-1" data-testid="mod-runtime-errors">
+              <div className="flex items-center gap-2 text-[9px] font-mono">
+                <span className="text-slate-500">RUNTIME</span>
+                <span className="text-red-300">
+                  ✗ {gameLogStatus.modRuntime.errorCount} engine error(s) next to mod marker
+                  {gameLogStatus.modMarkers && gameLogStatus.modMarkers.length > 0 ? ` [${gameLogStatus.modMarkers.join('/')}]` : ''}
+                </span>
+              </div>
+              <div className="space-y-1">
+                {gameLogStatus.modRuntime.samples.slice(0, 4).map((s, i) => (
+                  <pre key={i} className="whitespace-pre-wrap rounded border border-red-500/50 bg-red-500/15 p-1.5 text-[9px] leading-tight text-red-200 font-mono">
+                    {s}
+                  </pre>
+                ))}
+              </div>
+            </div>
+          )}
+
           {gameLogStatus?.issues && gameLogStatus.issues.length > 0 && (
             <div className="space-y-1 max-h-28 overflow-y-auto scrollbar-thin">
               {gameLogStatus.issues.slice(-3).map((issue, index) => (
@@ -444,6 +542,67 @@ export default function PlaytestWorkspace({
               </div>
             );
           })()}
+
+          {/* Agent-facing watcher brief — the same deterministic endpoint external agents can call
+              headlessly. This is intentionally compact: sequence/proof first, raw log last. */}
+          {debugBrief && !debugBrief.error && (
+            <div className="mt-2 space-y-2 rounded border border-cyan-500/20 bg-cyan-500/5 p-2" data-testid="debug-watcher-brief">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[9px] font-mono uppercase tracking-wider text-cyan-200">Agent Debug Brief</div>
+                <div className={debugBrief.sinceDeploy?.changedSinceDeploy ? 'text-[9px] font-mono text-emerald-300' : 'text-[9px] font-mono text-amber-300'}>
+                  {debugBrief.sinceDeploy?.changedSinceDeploy ? 'fresh since deploy' : 'stale / no deploy proof'}
+                </div>
+              </div>
+              {debugBrief.sinceDeploy?.summary && (
+                <div className="text-[9px] font-mono text-slate-300 leading-tight">{debugBrief.sinceDeploy.summary}</div>
+              )}
+
+              {debugBrief.expectedChain && debugBrief.expectedChain.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[9px] font-mono text-slate-500">EXPECTED CHAIN</div>
+                  <div className="flex flex-wrap gap-1">
+                    {debugBrief.expectedChain.map((step) => (
+                      <span
+                        key={step.step}
+                        title={step.evidence || (step.seen ? 'seen in current log tail' : 'not seen in current log tail')}
+                        className={`rounded border px-1 py-0.5 text-[9px] font-mono ${step.seen ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}
+                      >
+                        {step.seen ? '✓' : '·'} {step.step}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {debugBrief.timeline && debugBrief.timeline.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[9px] font-mono text-slate-500">RECENT HIGH-SIGNAL TIMELINE</div>
+                  <div className="max-h-24 space-y-1 overflow-y-auto scrollbar-thin">
+                    {debugBrief.timeline.slice(-8).map((item, index) => (
+                      <div key={`${item.lineNumber}-${index}`} className="grid grid-cols-[70px_1fr] gap-2 text-[9px] font-mono leading-tight">
+                        <span className={item.severity === 'error' ? 'text-red-300' : item.severity === 'warning' ? 'text-amber-300' : 'text-cyan-300'}>
+                          {item.kind}{item.lineNumber ? `:${item.lineNumber}` : ''}
+                        </span>
+                        <span className="text-slate-300 truncate" title={item.evidence}>{item.evidence}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {debugBrief.artifact && (
+                <details className="rounded border border-white/10 bg-black/20 p-1.5">
+                  <summary className="cursor-pointer text-[9px] font-mono text-cyan-300">copyable agent artifact</summary>
+                  <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-[9px] leading-tight text-slate-300">{debugBrief.artifact}</pre>
+                </details>
+              )}
+            </div>
+          )}
+          {debugBrief?.error && (
+            <div className="mt-2 rounded border border-red-500/30 bg-red-500/10 p-2 text-[9px] font-mono text-red-200">
+              Debug watcher brief failed: {debugBrief.error}
+            </div>
+          )}
         </div>
 
         {/* LOG TEXTAREA BUFFER */}

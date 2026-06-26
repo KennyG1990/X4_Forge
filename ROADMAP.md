@@ -57,6 +57,109 @@ What changed:
 - **[by design]** Historical archive entries (this ROADMAP's Archive, `HANDOFF.md`, session changelogs) still contain legacy names — kept as audit trail, not normalized.
 - **[regenerable]** `.lint-*.json` and `graphify-out/cache` still reference old `C:\` paths — rebuild via `npm run lint` / `graphify update .`.
 
+### ⚠ FORGE GAPS found via the `x4_ai_influence` ACTUATION bug-hunt (2026-06-25) — validator missed 3 real MD bugs + the debug-log watcher couldn't show them
+Building SPEC 1d-W2 (autonomous decisions → real `set_faction_relation`), THREE genuine MD semantic bugs were
+baked into a mod that **`/api/agent/project/validate` passed with `ok:true, 0 errors` every time**, and the
+**Game Debug Log Watcher reported "NO LOG ISSUES / markers not seen"** the whole time the mod was silently
+broken. The bugs threw ZERO X4 errors (a dead/skipping cue logs nothing), so neither tool surfaced them. It took
+hand-reading the raw log tail + grounding against a known-good cue to find them. Both tools need to get smarter.
+
+**A. VALIDATOR (XSD-valid ≠ behaviourally-correct) — add MD semantic lints. The 3 bugs, each a candidate lint:**
+1. **`event_ui_triggered` (any `event_*`) cue without `instantiate="true"` → WARN.** Such a cue fires ONCE then
+   completes forever. A UI/event *handler* almost always needs `instantiate="true"`; a one-shot handler is
+   nearly always a bug. (This left `On_action` dead after one early firing.)
+2. **Instantiated cue that sets local `$vars` but lacks `namespace="this"` → WARN.** Per-instance scoping.
+3. **★ The silent killer — Lua-table key access off `event.param3`.** When a cue does `$x = event.param3` (a Lua
+   table from `AddUITriggeredEvent`) and then reads `$x.barekey`, that's a PROPERTY lookup (almost always
+   nonexistent → expression is false) — the author meant `$x.$barekey`. X4 raises no error; the branch just
+   skips. **Lint:** flag `$var.identifier` where `$var` is assigned from `event.param3` and `identifier` isn't a
+   known component/faction property — suggest `$var.$identifier`. (This is what made the relation block skip; the
+   proven `On_suggestions` reader uses `$d.$l1`/`$d.$n`, which is what gave it away.)
+   → Validate against vanilla/known-good cues: the lints must NOT false-positive on `$fac.relationto.{$x}` etc.
+
+**B. GAME DEBUG LOG WATCHER — it "isn't loading the log like it should" (Ken):**
+4. **Status heuristic is error-only → misses SILENT failures.** "No recent errors mentioning `ai_influence`" is
+   reported as healthy even when the mod's cues never fire. The watcher should report **cue liveness** — the
+   backend `/api/agent/log-file-tail` ALREADY computes per-cue fire/error correlation (it's how the actuation
+   was finally proven: `On_action` 6 hits, 0 errors). Surface that: "On_action fired 6× (0 err)" / "Expected cue
+   X: NOT firing" — not just an error grep.
+5. **Not live-tailing.** The panel needs manual Refresh/Browse and shows a summary, not the rolling tail. It
+   should poll the resolved log path (`game-log/status` already finds it) on an interval and render recent
+   entries + the per-cue counts. The data path works (`log-file-tail`); the UI just isn't wired to it live.
+6. **Marker dependence.** "ROOT-CAUSE (live) — markers not seen" assumes the mod emits debug markers; most don't.
+   Liveness/correlation (item 4) shouldn't depend on the mod self-instrumenting.
+
+**Why this matters for the North Star:** the Forge's pitch is "we keep your mod valid." XSD-valid-but-dead cues
+that the validator passes AND the watcher calls healthy is exactly the failure that erodes that trust. These
+lints + a liveness-aware watcher are integrity-tier, not polish.
+
+#### ✅ SHIPPED 2026-06-25 — Watcher CUE LIVENESS (item B-4 above). The watcher now catches silent-dead cues.
+`getGameLogStatus` (server.ts) now reads the DEPLOYED mod's cue names (`collectDeployedModCueNames` — globs the
+mod folder's `md/*.xml`, resolving the metadata-name→folder-id drift, e.g. "AI Influence" → `x4_ai_influence`)
+and runs `parseLogTelemetry(tail, cueNames)` to report **which cues are firing vs silent**. Response gains
+`cueLiveness {totalCues, firingCount, silentCount, firing:[{name,hits,errors}], silent:[...]}`; a loaded mod with
+0 cues firing is escalated from a false "clean" to **`warnings`** with "⚠ loaded but INERT". Frontend
+(`PlaytestWorkspace.tsx`) renders a CUE LIVENESS row (green firing chips / amber silent list). **Verified:** found
+the mod's 28 cues, correctly flagged "0/28 firing — INERT" + listed `On_action`/`Open_chat`/… as silent — i.e. it
+would have caught tonight's dead-cue bug at a glance. Also fixed the error-grep modId set to include `x4_<id>`.
+
+#### ✅ SHIPPED 2026-06-26 — Watcher CORRECTION: kill false-INERT, detect the mod's REAL log marker + attribute its runtime errors
+The INERT escalation above was WRONG and is REVERSED. Ground truth (verified against the live 2MB debuglog): the
+proven, healthy `x4_ai_influence` mod emits **zero lines containing its id** in normal operation and logs **every**
+line — heartbeat included — through `DebugError`, which X4 stamps `[=ERROR=]`. So two opposite false signals were
+possible: (a) cue-silence → false "INERT" (now removed); (b) grepping the mod's marker as an error → the mod's
+benign `[=ERROR=] … [AICHAT][UIX] sectors_sync` heartbeat counted as **34 false errors**. Both fixed:
+- **Marker scan (`collectModLogMarkers`)** — reads the deployed mod's `ui/**/*.lua` and extracts the actual
+  `DebugError("[AICHAT][UIX] …")` bracket prefix → marker `aichat`. The mod logs under a *prefix*, never its
+  extension id (Ken: "it's looking for ai_influence … that is the metadata name"), so this is the only thing that
+  actually appears in the log. Used for **liveness** (`markersSeen`) — NOT added to the generic error grep (doing
+  so is what caused the 34-false-error flood).
+- **Runtime-fault attribution (`countModRuntimeErrors`)** — a genuine engine/Lua fault (e.g.
+  `GetComponentData(): Invalid argument #1 … got cdata`) names no cue and no mod, but is logged right next to a
+  `[AICHAT][UIX]` line. Count only **engine-fault-signature** lines (`ENGINE_FAULT_SIG`: invalid argument / got
+  cdata / cannot run actions / error in MD cue / stack traceback / …) that sit within ±3 lines of a marker → the
+  mod's runtime errors, no heartbeat noise. Response gains `modMarkers` + `modRuntime {markersSeen, markerLines,
+  errorCount, samples}`; status escalates to `errors` on `errorCount>0`.
+- **Frontend (`PlaytestWorkspace.tsx`)** renders a red `RUNTIME` panel (`data-testid=mod-runtime-errors`) with the
+  fault samples; `cueLiveness` "no cue activity" is now neutral, never a false warning.
+- **Benign-noise exclusion (2026-06-26 follow-on)** — X4 logs `[error] [FileIO] Failed to verify the file
+  signature for file '…\x4_ai_influence\md\*.xml' (error: 14)` for EVERY unsigned loose mod file at load. It's
+  harmless (mod still loads in modified mode) and PERMANENT for a dev mod, so it was wrongly padding the
+  active-error count (Ken's screenshot: "ACTIVE ISSUES: 8" were all signature notices). Added `BENIGN_LOG_NOISE
+  =/verify the file signature/i` → excluded from `activeErrors`/`activeWarnings` (so it never drives red) and
+  surfaced separately as a benign `signatureNotices` count. A truly broken file still surfaces as an XML-parse /
+  cue error (unaffected). Verified: status now `errors` driven ONLY by `modRuntime.errorCount:12` (the real cdata
+  bug); `activeErrors:0`, `signatureNotices:16`.
+- **VALIDATED two ways (2026-06-26):** (1) Forge diagnostics — `GET /api/agent/game-log/status?modId=ai_influence`
+  → `status:"errors"`, `modMarkers:["aichat"]`, `modRuntime.errorCount:15`, `markerLines:28`, `diagnosis.markersSeen:true`,
+  no false hypotheses, **zero** heartbeat false-positives. (2) In-browser — the PlaytestWorkspace RUNTIME panel shows
+  RED "✗ 13 engine error(s) next to mod marker [aichat]" with the live `GetComponentData … got cdata` lines
+  (screenshot confirmed). This is the RED Ken demanded — driven by REAL debuglog faults, not the heartbeat and not
+  silence. **NOTE — real mod bug surfaced:** those `GetComponentData(): Invalid argument got cdata` faults are a
+  genuine `aic_uix.lua` reader bug (passing a cdata object-id where a component ref is expected) — fix tracked next.
+
+#### ◐ NEXT (Ken 2026-06-25) — LIVE-LOG ERROR → CUE → CANVAS ALERT + CLICK-TO-NAVIGATE
+Ken's ask: when the live log shows an error tied to a cue, surface it in the watcher, **ping the failing cue**,
+and drive the SAME on-canvas alert system the validator uses (red/yellow rings on the node) so clicking the
+warning **pans the graph to the node, highlights + selects it**. All integration points are FOUND (it reuses
+proven infra, no new canvas engine):
+- **Data:** `parseLogTelemetry` already returns per-cue `errors`. Add `cueLiveness.failing = cues with errors>0`
+  to the status response (server.ts) — the watcher already has it, just not surfaced separately.
+- **Navigate (proven pattern, App.tsx ~L627):** `setSelectedNode(node)` + `setFocusNodeRequest({nodeId,
+  timestamp})` where `node = workspace.nodes.find(n => n.id === <cueNodeId>)`. The Canvas already consumes
+  `focusNodeRequest` to pan/center.
+- **Highlight (red/yellow rings):** the Canvas already highlights nodes from the `diagnostics: PackageDiagnostic[]`
+  array (App → Canvas). Merge the live cue-errors into that array (a `source:'live-log'` diagnostic per failing
+  cue) so the existing alert rings + click-to-navigate light up — no new highlight code.
+- **Cue→node map:** `workspace.nodes` carry the cue name (node.properties/data name) → node id.
+- **Wiring:** prop-drill `setFocusNodeRequest` + `setSelectedNode` (or one `onNavigateToCue(name)` cb) from
+  **App → DiagnosticsHub → PlaytestWorkspace**; make the watcher's failing/firing cue chips clickable → navigate.
+- **"Ping":** reuse/extend the diagnostics node pulse; a brief CSS pulse on the focused node.
+**Build order:** (1) backend `cueLiveness.failing`; (2) App passes navigate cb + merges live cue-errors into
+`diagnostics`; (3) PlaytestWorkspace clickable chips. Verify: trigger an erroring cue in X4 → watcher shows it
+red → click → graph pans to + selects that node with an alert ring. *(Deferred to a focused pass — it's a
+careful cross-cutting UI change; scoped here with exact integration points so it builds clean, not half-baked.)*
+
 ### CRITICAL round-trip fix — `<library>` lost `purpose="run_actions"` on node round-trip (2026-06-24)
 
 Deploying the real `x4_ai_influence` through the Forge (import → `/api/agent/deploy`) **broke the mod in-game**:
