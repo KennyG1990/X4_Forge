@@ -380,6 +380,7 @@ export default function AgentBridge({
     schema: true,
     getWorkspace: false,
     postWorkspace: true,
+    debugWatcher: false,
     generate: false,
     compile: true,
   });
@@ -729,7 +730,51 @@ export default function AgentBridge({
                 )}
               </div>
 
-              {/* ENDPOINT 4: POST GENERATE (Gemini automation helper) */}
+              {/* ENDPOINT 4: GET DEBUG WATCHER BRIEF */}
+              <div className="border border-cyan-500/10 rounded-lg bg-black/35 overflow-hidden">
+                <button
+                  onClick={() => toggleEndpoint('debugWatcher')}
+                  className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
+                    <span className="text-white text-xs font-bold font-mono">/api/agent/debug-watcher/brief</span>
+                  </div>
+                  {collapsedEndpoints.debugWatcher ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </button>
+
+                {!collapsedEndpoints.debugWatcher && (
+                  <div className="p-3 border-t border-cyan-500/10 space-y-2 bg-[#071013]">
+                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                      Headless version of the Game Debug Log Watcher for agents and users: active-mod status, high-signal timeline, expected cue/marker chain, deploy freshness, and copyable evidence artifact.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 text-[10px] font-sans text-slate-400">
+                      <div className="rounded bg-black/30 border border-white/5 p-2">
+                        <span className="block font-mono font-bold text-cyan-300 uppercase mb-1">Query</span>
+                        <span><code className="text-slate-200">modId</code> scopes the log to a mod id or marker.</span>
+                      </div>
+                      <div className="rounded bg-black/30 border border-white/5 p-2">
+                        <span className="block font-mono font-bold text-cyan-300 uppercase mb-1">Expect</span>
+                        <span><code className="text-slate-200">expect</code> is a comma-separated cue/marker chain to prove.</span>
+                      </div>
+                    </div>
+                    <div className="relative">
+                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                        {`curl -X GET "${appOrigin}/api/agent/debug-watcher/brief?modId=ai_influence&expect=Save_identity,Chat_boot,Poll_tick,On_action" \\
+     ${authCurlHeader}`}
+                      </pre>
+                      <button
+                        onClick={() => handleCopy(`curl -X GET "${appOrigin}/api/agent/debug-watcher/brief?modId=ai_influence&expect=Save_identity,Chat_boot,Poll_tick,On_action" ${authCurlHeader}`, 'curl_debug_watcher')}
+                        className="absolute right-2 top-2 p-1 rounded bg-black/45 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
+                      >
+                        {copiedTextId === 'curl_debug_watcher' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ENDPOINT 5: POST GENERATE (Gemini automation helper) */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
                 <button 
                   onClick={() => toggleEndpoint('generate')}
@@ -765,7 +810,7 @@ export default function AgentBridge({
                 )}
               </div>
 
-              {/* ENDPOINT 5: POST COMPILE */}
+              {/* ENDPOINT 6: POST COMPILE */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
                 <button 
                   onClick={() => toggleEndpoint('compile')}
