@@ -48,6 +48,7 @@ import GlobalSearch from './components/GlobalSearch';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
+import { resolveCueToNodeId } from './lib/liveLogNav';
 import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse, getProviderKey } from './lib/apiHelper';
 import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluateBlueprintChecks, type ModBlueprint } from './lib/modBlueprint';
 import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
@@ -624,7 +625,12 @@ export default function App() {
         case 'cue':
         case 'node': {
           setWorkspaceView('blueprint');
-          const node = id ? workspace.nodes.find(n => n.id === id) : undefined;
+          let node = id ? workspace.nodes.find(n => n.id === id) : undefined;
+          // #23: a live-log alert passes the CUE NAME (not a node id) — resolve it to the owning cue node.
+          if (!node && id) {
+            const nid = resolveCueToNodeId(id, workspace.nodes);
+            node = nid ? workspace.nodes.find(n => n.id === nid) : undefined;
+          }
           if (node) {
             setSelectedNode(node);
             setFocusNodeRequest({ nodeId: node.id, timestamp: Date.now() });

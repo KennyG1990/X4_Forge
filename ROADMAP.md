@@ -2875,3 +2875,31 @@ a tabbed sidebar in the right-hand panel, toggling between **Patch XML** (raw co
 **Current code surfaces to build on:**
 - `server.ts` exposes `/api/agent/schema`, `/api/agent/workspace`, `/api/agent/compile`, `/api/agent/package`, `/api/agent/deploy`, and `/api/agent/generate`.
 - `AgentBridge.tsx` docum
+
+---
+
+### #23 — live-log error → cue → canvas alert + click-to-navigate (✅ DONE 2026-06-26)
+**Resources used (stuck to):** the x4-forge-**house** pattern (pure engine + oracle + allowlisted read-only
+endpoint + UI readout), x4-forge-**validate** (live proof), and Codex's committed **debug-watcher** as the
+error→cue backend. Canonical tree only (`F:\DEV_ENV\X4_Forge`); Codex's dev build is a separate copy (merge later).
+- **RECONCILE (caught real things before building):** (a) I was first pointed at the DEPRECATED scratch copy
+  (`…/scratch/X4-Foundations-Mod-Studio`, `_DEPRECATED__MOVED_TO_F-DEV_ENV-X4_Forge.md`) — wrong tree. (b) The
+  watcher already attributes errors→cues with `sourceRef`; the failing-cue chips already render in
+  `PlaytestWorkspace`, but as NON-clickable `<span>`s; (c) `Canvas` already has `focusNodeRequest` and App already
+  has a global `navigate-to-source` CustomEvent bus (`handleNavigateToSource`) powering diagnostics
+  click-to-navigate. So the gap was narrow: resolve a cue NAME → canvas node id, and make the chips fire the
+  existing bus. NOT greenfield, NOT already done.
+- **Implement:** `src/lib/liveLogNav.ts` (pure engine: `resolveCueToNodeId(cueName, nodes)` +
+  `buildLiveLogAlerts(watcher, nodes)` → navigable alert list) + `runLiveLogNavSelftest()` oracle. Endpoint
+  `/api/agent/live-log-nav-selftest` added to `PUBLIC_READONLY_GETS` + route. `App.handleNavigateToSource` `'cue'`
+  case now resolves a cue NAME (backward-compatible with node-id nav). `PlaytestWorkspace` failing-cue chips are
+  now `<button>`s (↗, hover) that dispatch `navigate-to-source {kind:'cue', id:cueName}`.
+- **Validate (CITED):** (1) **Oracle live** `GET /api/agent/live-log-nav-selftest` **11/11** (resolve exact/case-
+  insensitive/unknown-null/non-cue-ignored/empty-safe; alerts navigable, unmapped→null node, timeline error cue
+  navigable, info excluded, dedup, garbage-safe). (2) **Host compile** — Vite reloaded clean, app mounted, no
+  error overlay (TSX valid). (3) **Browser smoke** — with `ai_influence_chat` loaded, dispatching the exact chip
+  event for cue `Poll_tick` focused the right node (class → `ring-2 ring-cyan-500/70 scale-[1.015]`); a
+  non-existent cue is a graceful no-op.
+- **SECOND-LAYER PASS:** headline (failing-cue alert → click → canvas focus by cue name) delivered + proven live;
+  reuses the existing nav bus (consistent w/ diagnostics). ◐ follow-ups (not the headline): wire the secondary
+  *timeline* cue-items clickable (same engine+event); optional literal floating on-canvas alert overlay.

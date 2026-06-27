@@ -48,6 +48,7 @@ import { runIntentCheckSelftest, type IntentRequirement, type IntentCheckSpec } 
 import { runBlueprintSelftest } from "./src/lib/modBlueprint";
 import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
 import { runCanvasInteractionSelftest } from "./src/lib/canvasInteractions";
+import { runLiveLogNavSelftest } from "./src/lib/liveLogNav";
 import { runWaresJobsRoundtripSelftest, parseWaresXml, parseJobsXml } from "./src/lib/waresJobsParser";
 import { runModFixesSelftest } from "./src/lib/modFixes";
 import { runAiScriptRoundtripSelftest, parseAiScriptXml } from "./src/lib/aiScriptParser";
@@ -272,7 +273,8 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/project-crossfile-selftest",
   "/agent/external-api-registry-selftest",
   "/agent/external-api-registry",
-  "/agent/mod-dependency-graph"
+  "/agent/mod-dependency-graph",
+  "/agent/live-log-nav-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -4251,6 +4253,15 @@ app.get("/api/agent/canvas-interaction-selftest", (_req, res) => {
     return res.json(runCanvasInteractionSelftest());
   } catch (error) {
     return res.status(500).json({ pass: false, error: errorMessage(error) || "canvas-interaction-selftest failed" });
+  }
+});
+
+// #23 — live-log error -> cue -> canvas navigation oracle (the deterministic core of the alert+jump feature).
+app.get("/api/agent/live-log-nav-selftest", (_req, res) => {
+  try {
+    return res.json(runLiveLogNavSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "live-log-nav-selftest failed" });
   }
 });
 

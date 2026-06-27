@@ -454,13 +454,15 @@ export default function PlaytestWorkspace({
               {gameLogStatus.cueLiveness.erroring && gameLogStatus.cueLiveness.erroring.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {gameLogStatus.cueLiveness.erroring.map((c) => (
-                    <span
+                    <button
                       key={c.name}
-                      title={`${c.errors} error(s) in the log`}
-                      className="rounded px-1 py-0.5 text-[9px] font-mono border border-red-500/50 bg-red-500/15 text-red-300"
+                      type="button"
+                      onClick={() => window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: { kind: 'cue', id: c.name } }))}
+                      title={`${c.errors} error(s) in the log — click to jump to this cue on the canvas`}
+                      className="rounded px-1 py-0.5 text-[9px] font-mono border border-red-500/50 bg-red-500/15 text-red-300 cursor-pointer hover:bg-red-500/30 hover:border-red-400 transition-colors"
                     >
-                      {c.name} ✗{c.errors}
-                    </span>
+                      {c.name} ✗{c.errors} ↗
+                    </button>
                   ))}
                 </div>
               )}
