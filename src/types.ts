@@ -235,6 +235,10 @@ export interface ModWorkspace {
    *  metadata is unedited — preserves <dependency> elements + formatting that generateContentXML
    *  would otherwise drop. */
   contentOriginal?: string;
+  /** Original bytes for files that were also parsed into editable models. If the model's
+   *  import-time fingerprint is unchanged, export writes these bytes verbatim instead of
+   *  dirtying hand-authored files with a graph/compiler rewrite. */
+  originalFiles?: OriginalModeledFile[];
   /**
    * Files imported from an existing mod that the studio does not (yet) model as
    * editable domains. Preserved verbatim so import -> export is lossless. On
@@ -248,11 +252,19 @@ export interface ModWorkspace {
   customLua?: string;
 }
 
+export interface OriginalModeledFile {
+  path: string;
+  content: string;
+  kind: 'content' | 'md' | 'tfile' | 'readme';
+  fingerprint?: string;
+  stem?: string;
+}
+
 export interface PassthroughFile {
   /** relative path within the extension, e.g. "libraries/god.xml" */
   path: string;
-  /** verbatim file content */
-  content: string;
+  /** verbatim file content; omitted for tracked-on-disk oversized files */
+  content?: string;
   /** classification of why this file is preserved raw rather than modeled */
   reason?: 'unknown_domain' | 'unparsed' | 'binary' | 'partial' | 'too_large';
   /** true when the file is tracked on disk but not loaded into memory (e.g. binary/too-large); content is absent and must never be overwritten with empty output */
@@ -1724,6 +1736,15 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     ...(ws.contentId ? { contentId: ws.contentId } : {}),
     ...(ws.mdOriginal && ws.mdOriginal.content ? { mdOriginal: ws.mdOriginal } : {}),
     ...(ws.contentOriginal ? { contentOriginal: ws.contentOriginal } : {}),
+    originalFiles: (Array.isArray(ws.originalFiles) ? ws.originalFiles : [])
+      .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
+      .map((f: any) => ({
+        path: String(f.path).replace(/\\/g, '/').replace(/^\/+/, ''),
+        content: String(f.content),
+        kind: ['content', 'md', 'tfile', 'readme'].includes(f.kind) ? f.kind : 'readme',
+        ...(typeof f.fingerprint === 'string' ? { fingerprint: f.fingerprint } : {}),
+        ...(typeof f.stem === 'string' ? { stem: f.stem } : {})
+      })),
     nodes: sanitizedNodes,
     links: Array.isArray(ws.links) ? ws.links : [],
     uiWidgets: sanitizedWidgets,
@@ -1790,11 +1811,13 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       : undefined,
     customLua: typeof ws.customLua === 'string' ? ws.customLua : undefined,
     passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
-      .filter((f: any) => f && typeof f.path === 'string' && typeof f.content === 'string')
+      .filter((f: any) => f && typeof f.path === 'string' && (typeof f.content === 'string' || f.omitted === true))
       .map((f: any) => ({
         path: String(f.path).replace(/\\/g, '/').replace(/^\/+/, ''),
-        content: String(f.content),
-        reason: ['unknown_domain', 'unparsed', 'binary', 'partial'].includes(f.reason) ? f.reason : 'unknown_domain'
+        ...(typeof f.content === 'string' ? { content: String(f.content) } : {}),
+        reason: ['unknown_domain', 'unparsed', 'binary', 'partial', 'too_large'].includes(f.reason) ? f.reason : 'unknown_domain',
+        ...(f.omitted === true ? { omitted: true } : {}),
+        ...(Number.isFinite(Number(f.bytes)) ? { bytes: Number(f.bytes) } : {})
       }))
   };
 }

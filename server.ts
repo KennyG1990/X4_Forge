@@ -460,6 +460,8 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): { modId: string; f
     }
   }
 
+  applyOriginalModeledFiles(ws, files);
+
   return { modId, files };
 }
 
@@ -2165,6 +2167,19 @@ app.get("/api/agent/schema", (req, res) => {
         purpose: "Alias of compile for agents that want a package/file-manifest vocabulary."
       },
       {
+        method: "GET",
+        path: "/api/agent/round-trip-selftest",
+        auth: false,
+        purpose: "Run the compiler/import faithfulness selftest, including byte-fidelity checks for unchanged MD, content.xml, README, and t-files."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/round-trip-check",
+        auth: true,
+        body: { path: "mod folder under the configured mod workspace/filesystem root" },
+        purpose: "Import a real mod folder, compile it to an in-memory manifest, and report lossless/strictLossless status, dropped files, omitted preserved files, and modeled byte changes."
+      },
+      {
         method: "POST",
         path: "/api/agent/project/create",
         auth: true,
@@ -3204,6 +3219,91 @@ function contentXmlFor(modId: string, ws: any): string {
   return generateContentXML(modId, ws);
 }
 
+function stableStringify(value: any): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function contentFingerprint(ws: any): string {
+  return stableStringify({
+    contentId: ws?.contentId || '',
+    name: ws?.name || '',
+    version: ws?.version || '',
+    author: ws?.author || '',
+    description: ws?.description || '',
+    dependencies: (ws?.dependencies || []).map((d: any) => ({
+      id: d?.id || '',
+      version: d?.version || '',
+      optional: d?.optional === true,
+      name: d?.name || ''
+    }))
+  });
+}
+
+function tFileFingerprint(tFile: any): string {
+  return stableStringify({
+    languageId: tFile?.languageId || '',
+    fileName: tFile?.fileName || '',
+    pages: (tFile?.pages || []).map((p: any) => ({
+      id: p?.id || '',
+      title: p?.title || '',
+      items: (p?.items || []).map((i: any) => ({
+        id: i?.id || '',
+        value: i?.value || '',
+        description: i?.description || ''
+      }))
+    }))
+  });
+}
+
+function mdStemFingerprint(ws: any, stem: string): string {
+  const nodes = (ws?.nodes || [])
+    .filter((n: any) => n?.type === 'cue' && n?.properties?.mdFileStem === stem)
+    .map((n: any) => ({
+      id: n.id,
+      type: n.type,
+      xmlTag: n.xmlTag,
+      label: n.label,
+      includeInBuild: n.includeInBuild !== false,
+      properties: n.properties || {}
+    }))
+    .sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+  const ids = new Set(nodes.map((n: any) => n.id));
+  const links = (ws?.links || [])
+    .filter((l: any) => ids.has(l.sourceNodeId) && ids.has(l.targetNodeId))
+    .map((l: any) => ({
+      sourceNodeId: l.sourceNodeId,
+      sourcePortId: l.sourcePortId,
+      targetNodeId: l.targetNodeId,
+      targetPortId: l.targetPortId
+    }))
+    .sort((a: any, b: any) => stableStringify(a).localeCompare(stableStringify(b)));
+  return stableStringify({ stem, nodes, links });
+}
+
+function applyOriginalModeledFiles(ws: any, files: CompiledFileManifest): void {
+  for (const original of ws?.originalFiles || []) {
+    if (!original || typeof original.path !== 'string' || typeof original.content !== 'string') continue;
+    const rel = original.path.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!rel || rel.includes('..')) continue;
+    if (files[rel] === undefined) continue;
+    if (original.kind === 'content') {
+      if (!original.fingerprint || original.fingerprint === contentFingerprint(ws)) files[rel] = original.content;
+    } else if (original.kind === 'md') {
+      const stem = original.stem || rel.replace(/^md\//i, '').replace(/\.xml$/i, '');
+      if (!original.fingerprint || original.fingerprint === mdStemFingerprint(ws, stem)) files[rel] = original.content;
+    } else if (original.kind === 'tfile') {
+      const tFile = (ws.tFiles || []).find((tf: any) => `t/${toTFileName(tf)}`.toLowerCase() === rel.toLowerCase());
+      if (tFile && (!original.fingerprint || original.fingerprint === tFileFingerprint(tFile))) files[rel] = original.content;
+    } else if (original.kind === 'readme') {
+      files[rel] = original.content;
+    }
+  }
+}
+
 function decodeXmlEntities(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 }
@@ -3467,6 +3567,56 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     patches: false
   };
 
+  const originalFiles: any[] = [];
+  if (contentRel && contentOriginalText) {
+    originalFiles.push({
+      path: contentRel,
+      content: contentOriginalText,
+      kind: 'content',
+      fingerprint: contentFingerprint(ws)
+    });
+  }
+  for (const rel of mdRels) {
+    const lower = rel.toLowerCase();
+    if (!editableMdRels.has(lower)) continue;
+    try {
+      const stem = rel.replace(/^md\//i, '').replace(/\.xml$/i, '');
+      originalFiles.push({
+        path: rel,
+        content: fs.readFileSync(path.join(absDir, rel), 'utf8'),
+        kind: 'md',
+        stem,
+        fingerprint: mdStemFingerprint(ws, stem)
+      });
+    } catch { /* ignore unreadable originals */ }
+  }
+  for (const rel of relFiles) {
+    const lower = rel.toLowerCase();
+    if (!editableTPaths.has(lower)) continue;
+    const fileName = rel.replace(/^t\//i, '');
+    const parsed = tFiles.find((tf: any) => String(tf.fileName || '').toLowerCase() === fileName.toLowerCase());
+    if (!parsed) continue;
+    try {
+      originalFiles.push({
+        path: rel,
+        content: fs.readFileSync(path.join(absDir, rel), 'utf8'),
+        kind: 'tfile',
+        fingerprint: tFileFingerprint(parsed)
+      });
+    } catch { /* ignore unreadable originals */ }
+  }
+  const readmeRel = relFiles.find(f => f.toLowerCase() === 'readme.md');
+  if (readmeRel) {
+    try {
+      originalFiles.push({
+        path: readmeRel,
+        content: fs.readFileSync(path.join(absDir, readmeRel), 'utf8'),
+        kind: 'readme'
+      });
+    } catch { /* ignore unreadable readme */ }
+  }
+  ws.originalFiles = originalFiles;
+
   // Paths the manifest will regenerate from the parsed/modeled domains.
   const regenPaths = new Set<string>(Object.keys(buildWorkspaceFileManifest(ws).files).map(p => p.toLowerCase()));
 
@@ -3607,7 +3757,8 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
       'aiscripts/rt_patrol.xml': compileScriptToXML({ id: 'rt_patrol', name: 'rt_patrol', description: '', command: '', attentionLevel: 'low', params: [{ name: '$t', type: 'object', defaultValue: 'null', comment: 'tgt' }], interrupts: [], actions: [{ id: 'a0', command: 'flee', label: 'Run', properties: {} }], includeInBuild: true }),
       't/0001-l044.xml': tFileXml,
       'subscripts/custom_helper.lua': customLua,
-      'unknown_top_level.xml': `<?xml version="1.0"?>\n<weird custom="data"/>\n`
+      'unknown_top_level.xml': `<?xml version="1.0"?>\n<weird custom="data"/>\n`,
+      'README.md': `# RoundTrip Test\n\nHand-authored README that must not be replaced by generated boilerplate.\n`
     };
     for (const [rel, content] of Object.entries(files)) {
       const abs = path.join(tmp, rel);
@@ -3655,12 +3806,18 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
     // (comments/whitespace/attribute-order preserved), not a reformatted regen.
     const mdByteFaithful = outFiles['md/roundtrip_test.xml'] === files['md/roundtrip_test.xml'];
     checks.push({ name: 'md byte-fidelity (unedited→verbatim)', pass: !!mdByteFaithful, path: 'md/roundtrip_test.xml' });
+    const contentByteFaithful = outFiles['content.xml'] === files['content.xml'];
+    checks.push({ name: 'content.xml byte-fidelity (unedited→verbatim)', pass: !!contentByteFaithful, path: 'content.xml' });
+    const readmeByteFaithful = outFiles['README.md'] === files['README.md'];
+    checks.push({ name: 'README byte-fidelity (unedited→verbatim)', pass: !!readmeByteFaithful, path: 'README.md' });
+    const tFileByteFaithful = outFiles['t/0001-l044.xml'] === files['t/0001-l044.xml'];
+    checks.push({ name: 't-file byte-fidelity (unedited→verbatim)', pass: !!tFileByteFaithful, path: 't/0001-l044.xml' });
 
     const passed = checks.filter((c: any) => c.pass).length;
     // House selftest contract (allPassed/passed/total) alongside the richer lossless report,
     // so a generic dashboard/agent doesn't misread {lossless:true} as a failure (H9).
     return res.json({
-      allPassed: lossless && waresOk && jobsOk && aiOk && mdByteFaithful,
+      allPassed: lossless && waresOk && jobsOk && aiOk && mdByteFaithful && contentByteFaithful && readmeByteFaithful && tFileByteFaithful,
       passed,
       total: checks.length,
       lossless,
@@ -3689,13 +3846,22 @@ app.post("/api/agent/round-trip-check", (req, res) => {
     const inputFiles = walkFilesRelative(r.abs);
     const droppedFiles: string[] = [];
     const passthroughVerified: string[] = [];
+    const omittedPreserved: string[] = [];
     const passthroughMismatch: any[] = [];
     const modeledChanged: string[] = [];
+    const modeledByteChanged: any[] = [];
+    const modeledByteIdentical: string[] = [];
 
     for (const rel of inputFiles) {
       const ext = path.extname(rel).toLowerCase();
+      const inputAbs = path.join(r.abs, rel);
+      const inputContent = ROUND_TRIP_TEXT_EXTS.has(ext) ? fs.readFileSync(inputAbs, 'utf8') : undefined;
       const inPassthrough = (workspace.passthroughFiles || []).find(p => p.path.toLowerCase() === rel.toLowerCase());
       if (inPassthrough) {
+        if (inPassthrough.omitted) {
+          omittedPreserved.push(rel);
+          continue;
+        }
         const outContent = files[inPassthrough.path] ?? files[rel];
         if (outContent === undefined) {
           droppedFiles.push(rel);
@@ -3708,6 +3874,19 @@ app.post("/api/agent/round-trip-check", (req, res) => {
       }
       if (outPaths.has(rel.toLowerCase())) {
         modeledChanged.push(rel); // present in output but regenerated/modeled
+        if (inputContent !== undefined) {
+          const outKey = Object.keys(files).find(p => p.toLowerCase() === rel.toLowerCase()) || rel;
+          const outContent = files[outKey];
+          if (outContent === inputContent) {
+            modeledByteIdentical.push(rel);
+          } else {
+            modeledByteChanged.push({
+              path: rel,
+              inLen: inputContent.length,
+              outLen: String(outContent ?? '').length
+            });
+          }
+        }
       } else if (!ROUND_TRIP_TEXT_EXTS.has(ext)) {
         // binary, intentionally not modeled — report separately, not a "drop"
         modeledChanged.push(rel + ' (binary, not modeled)');
@@ -3717,14 +3896,21 @@ app.post("/api/agent/round-trip-check", (req, res) => {
     }
 
     const lossless = droppedFiles.length === 0 && passthroughMismatch.length === 0;
+    const strictLossless = lossless && modeledByteChanged.length === 0;
     return res.json({
       success: true,
       lossless,
+      strictLossless,
       inputFileCount: inputFiles.length,
       outputFileCount: Object.keys(files).length,
       passthroughVerified: passthroughVerified.length,
+      omittedPreserved: omittedPreserved.length,
+      omittedPreservedFiles: omittedPreserved,
       passthroughMismatch,
       modeledOrRegenerated: modeledChanged.length,
+      modeledOrRegeneratedFiles: modeledChanged,
+      modeledByteIdentical,
+      modeledByteChanged,
       droppedFiles,
       importReport: report
     });
