@@ -2,15 +2,15 @@
 
 > Entry point for AI agents working in this repo. Read at session start. (Mirror to CLAUDE.md / GEMINI.md if your harness reads those instead.)
 
-## ⛔ HARD RULE — The `x4_ai_influence` mod is built ONLY through this Forge's UI (the 1.0 proving factor)
+## Building the `x4_ai_influence` mod — agent API allowed (UI-only mandate LIFTED 2026-06-24)
 
-The X4 mod (`x4_ai_influence`, in-game MD/Lua/content) MUST be authored, validated, and deployed
-**entirely through the Forge's user-facing UI** — real mouse clicks + keyboard via Claude-in-Chrome —
-**NOT the `/api/agent/*` HTTP API.** This mod is the validation that the Forge is shippable at **1.0**: if a
-real mod can't be built through the product UI, the product isn't done. Treat any step that's impossible in
-the UI as a **Forge bug to fix here**, not a reason to use the API. (Verification — driving X4, reading the
-debuglog, querying the bridge DB — is fine; that tests results, it doesn't build the mod. The Python bridge
-is not a Forge artifact and is edited normally.)
+**UPDATE 2026-06-24 (Ken): the old "build the mod ONLY through this Forge's UI" HARD RULE is REVERSED.** It
+contradicted `F:\DEV_ENV\CLAUDE.md`, which is authoritative — both now agree. You **may use the Forge agent API
+(`/api/agent/*`) to author, validate, and deploy** the `x4_ai_influence` mod (in-game MD/Lua/content), and use
+mouse clicks (Claude-in-Chrome / computer-use) for *validation*. Pure-canvas building was too slow. The Forge is
+still proven by building a real mod end-to-end — but via the API is fine; a UI gap found while building is worth
+fixing in the Forge (log it in ROADMAP) but no longer blocks. (Verification — driving X4, reading the debuglog,
+querying the bridge DB — tests results, not the build. The Python bridge is not a Forge artifact, edited normally.)
 
 ## Code knowledge graph (graphify)
 
