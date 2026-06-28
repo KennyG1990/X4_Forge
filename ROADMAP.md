@@ -41,6 +41,30 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ FIX (2026-06-28) — NPC Identity Probe `parse-save` now streams large saves (was: 512MB string overflow)
+Codex's `parse-save` did `gunzipSync(...).toString("utf8")` on the WHOLE decompressed save (server.ts ~3186).
+Real X4 saves decompress past Node's max string length (~512MB) → every real save threw *"Cannot create a
+string longer than 0x1fffffe8 characters."* The selftest passed only because it used a tiny synthetic save.
+**Fix (Ken-approved):** `readNpcSaveBuffer` returns the decompressed **Buffer**; `parseNpcSaveCandidatesFromBuffer`
+scans it in 32MB slices with a 64KB overlap (covers the 16KB back-scan + names spanning a slice boundary) and
+stringifies only one window at a time, relabeling offsets to GLOBAL so dedup/`rawPath`/`candidateId` semantics
+are identical to the old whole-string path. **Validated:** selftest still 6/6; real quicksave (70.8MB gz →
+**585.9MB** decompressed) parses; `parse-save targetName="Manda Smitt"` → `<component id="[0x6fd55]">`
+(owner argon) + `<ref 89760>`; full `correlate` runs end-to-end on the 586MB save (conf 0.9). *typecheck note:*
+the sandbox bash mount truncates server.ts (>360KB) so sandbox `tsc` shows a phantom EOF error — host file is
+intact (ends clean at L7702) and `tsx watch` serves the new code, which is the authoritative compile signal.
+**Finding for #99/#97 — RESOLVED 2026-06-28 (controlled reload test):** correlated Ken's BEFORE (save_006) vs
+AFTER (save_007) for Manda Smitt → `stableSaveIdFound=false`. Her save component id CHANGED across reload:
+BEFORE `[0x803c91b]`=134465819, AFTER `[0xe18084e]`=236456014 — and each EQUALS that session's runtime A3b probe.
+So the save "id" IS the volatile runtime UniverseID (hex); it regenerates every reload. Conclusion: generic NPCs
+have NO stable cross-reload identity (runtime volatile, idcode empty, save persists the volatile id). #99 closed;
+NPC memory binding stays on the composite key (name+faction+role).
+**ENHANCEMENT (probe verdict, not yet built — needs Ken's ok):** the probe returned "Ambiguous, needs better test
+subject" because two same-name candidates tied at 0.33 — it can't distinguish "two different NPCs, same name" from
+"one NPC whose id changed across reload." Discriminator: if each save candidate's id == its session's runtime raw
+reading, the verdict should be "Runtime id only, session-bound," not "ambiguous." Worth adding to
+`correlateNpcIdentity`.
+
 *Authoritative snapshot — updated 2026-06-13. Recent passes: **50th** (port-semantics layer + first-class control-flow nodes + precise branch gating + compatible-node quick-add + FPS meter + ~1048× wire-render optimization); **51st** (Approachability: friendly node names, curated starter palette + Advanced toggle, on-canvas error highlighting + click-to-navigate, control-flow nodes visually distinct, UE5-style multi-select group-move); **52nd** (a demo mod that doubled as a test — caught & fixed an if/else-if/else exclusivity bug — plus the **Pre-public-beta gap analysis** below: read it for what's actually left). This is the one place to read for where the project is and where it's going. The dated changelogs in the Archive below are the verification record; where they conflict with this section, this section is correct.*
 
 > **READ NEXT for "what's left":** the **Pre-public-beta gap analysis (52nd pass)** below — strategic verdict + ranked gaps G1–G14 with live status. Headline: Forge is "the deterministic X4 mod editor," not a UE5 rival; the architecture is sound; the integrity tier (G1–G4, G8) is now CLOSED. **Active work: the UX Grind (53rd pass) — G9 onboarding/templates → G10 composite blocks → G11 auto-layout → G12 semantics depth.** LICENSE set (PolyForm Noncommercial). The lone real gate on "is this real" is C2 (run a Forge mod in X4 — human + game).

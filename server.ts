@@ -3169,7 +3169,13 @@ function parseNpcProbeLogFromFile(inputPath: unknown, targetName?: string, limit
   };
 }
 
-function readNpcSaveText(savePathInput: unknown): { savePath: string; text: string; gzipped: boolean; bytesRead: number; warnings: string[] } {
+// Real X4 saves decompress to XML far larger than Node's max string length (~512MB), so a
+// whole-file `.toString()` overflowed ("Cannot create a string longer than 0x1fffffe8 characters").
+// Keep the decompressed BUFFER and let the scanner stringify only bounded windows around hits.
+const NPC_SAVE_SCAN_SLICE = 32 * 1024 * 1024;  // 32MB per stringified slice — safely under the 512MB string cap
+const NPC_SAVE_SCAN_OVERLAP = 64 * 1024;       // 64KB context margin: covers the 16KB back-scan + a name spanning a slice boundary
+
+function readNpcSaveBuffer(savePathInput: unknown): { savePath: string; decoded: Buffer; gzipped: boolean; bytesRead: number; warnings: string[] } {
   const savePath = resolveNpcProbeInputPath(savePathInput, "save");
   const bytes = fs.readFileSync(savePath);
   const gzipped = savePath.toLowerCase().endsWith(".gz") || bytes.subarray(0, 2).equals(Buffer.from([0x1f, 0x8b]));
@@ -3181,9 +3187,9 @@ function readNpcSaveText(savePathInput: unknown): { savePath: string; text: stri
     throw new Error(`Failed to decompress save file: ${error?.message || error}`);
   }
   if (decoded.length > 300 * 1024 * 1024) {
-    warnings.push(`Large decompressed save (${decoded.length} bytes); parsing is bounded to candidate windows.`);
+    warnings.push(`Large decompressed save (${decoded.length} bytes); scanning in bounded ${NPC_SAVE_SCAN_SLICE}-byte windows.`);
   }
-  return { savePath, text: decoded.toString("utf8"), gzipped, bytesRead: bytes.length, warnings };
+  return { savePath, decoded, gzipped, bytesRead: bytes.length, warnings };
 }
 
 function parseXmlishAttributes(openTag: string): Record<string, string> {
@@ -3288,45 +3294,60 @@ function makeNpcSaveCandidate(text: string, offset: number, targetName?: string)
   };
 }
 
-function parseNpcSaveCandidatesFromText(text: string, targetName?: string): { candidates: NpcSaveCandidate[]; warnings: string[] } {
+function parseNpcSaveCandidatesFromBuffer(decoded: Buffer, targetName?: string): { candidates: NpcSaveCandidate[]; warnings: string[] } {
   const warnings: string[] = [];
-  const offsets: number[] = [];
-  if (targetName && targetName.trim()) {
-    const escaped = targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(escaped, "gi");
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(text))) {
-      offsets.push(match.index);
-      if (offsets.length >= 200) {
-        warnings.push("Candidate scan stopped at 200 name hits.");
-        break;
-      }
-    }
-  } else {
-    const re = /<(person|character|npc|crew|pilot|marine|manager)\b[^>]*>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(text))) {
-      offsets.push(match.index);
-      if (offsets.length >= 100) {
-        warnings.push("No targetName supplied; candidate scan capped at 100 identity-like tags.");
-        break;
-      }
-    }
-  }
+  const candidates: NpcSaveCandidate[] = [];
   const seen = new Set<string>();
-  const candidates = offsets.map(offset => makeNpcSaveCandidate(text, offset, targetName)).filter(candidate => {
-    const key = `${candidate.candidateId}:${candidate.sourceOffset}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const total = decoded.length;
+  const hasTarget = Boolean(targetName && targetName.trim());
+  const cap = hasTarget ? 200 : 100;
+  const capWarning = hasTarget
+    ? "Candidate scan stopped at 200 name hits."
+    : "No targetName supplied; candidate scan capped at 100 identity-like tags.";
+  const makeRe = () => hasTarget
+    ? new RegExp(targetName!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")
+    : /<(person|character|npc|crew|pilot|marine|manager)\b[^>]*>/gi;
+  // Scan the decompressed BUFFER in bounded slices, stringifying only one slice (+overlap) at a
+  // time so we never exceed Node's max string length on a real (multi-hundred-MB) save XML.
+  let base = 0;
+  let stopped = false;
+  while (base < total && !stopped) {
+    const sliceEnd = Math.min(total, base + NPC_SAVE_SCAN_SLICE);
+    const winStart = Math.max(0, base - NPC_SAVE_SCAN_OVERLAP);
+    const winEnd = Math.min(total, sliceEnd + NPC_SAVE_SCAN_OVERLAP);
+    const window = decoded.toString("utf8", winStart, winEnd);
+    const re = makeRe();
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(window))) {
+      const globalOffset = winStart + match.index;
+      // Only emit hits anchored in THIS slice [base, sliceEnd); the overlap margins exist for
+      // context/back-scan and are re-scanned by the adjacent slice, so this avoids double-counting.
+      if (globalOffset < base || globalOffset >= sliceEnd) continue;
+      const candidate = makeNpcSaveCandidate(window, match.index, targetName);
+      // Relabel offset-derived fields to GLOBAL offsets so dedup keys + rawPath match whole-file semantics.
+      const globalLabel = `${candidate.tag}@${globalOffset}`;
+      if (!candidate.explicitId) candidate.candidateId = globalLabel;
+      candidate.rawPath = globalLabel;
+      candidate.sourceOffset = globalOffset;
+      const key = `${candidate.candidateId}:${candidate.sourceOffset}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(candidate);
+      if (candidates.length >= cap) {
+        warnings.push(capWarning);
+        stopped = true;
+        break;
+      }
+    }
+    base = sliceEnd;
+  }
   if (!candidates.length) warnings.push(targetName ? `No save candidate contained targetName "${targetName}".` : "No identity-like save candidates found.");
   return { candidates, warnings };
 }
 
 function parseNpcSaveFile(savePath: unknown, targetName?: string): { savePath: string; gzipped: boolean; bytesRead: number; candidates: NpcSaveCandidate[]; warnings: string[] } {
-  const save = readNpcSaveText(savePath);
-  const parsed = parseNpcSaveCandidatesFromText(save.text, targetName);
+  const save = readNpcSaveBuffer(savePath);
+  const parsed = parseNpcSaveCandidatesFromBuffer(save.decoded, targetName);
   return { savePath: save.savePath, gzipped: save.gzipped, bytesRead: save.bytesRead, candidates: parsed.candidates, warnings: [...save.warnings, ...parsed.warnings] };
 }
 
