@@ -141,6 +141,13 @@ export default function PlaytestWorkspace({
   const [debugBrief, setDebugBrief] = useState<DebugWatcherBrief | null>(null);
   const [pastedDiagnosis, setPastedDiagnosis] = useState<GameLogStatus['diagnosis'] | null>(null);
   const [diagnosingPasted, setDiagnosingPasted] = useState<boolean>(false);
+  const [npcTargetName, setNpcTargetName] = useState<string>('');
+  const [npcBeforeSavePath, setNpcBeforeSavePath] = useState<string>('');
+  const [npcAfterSavePath, setNpcAfterSavePath] = useState<string>('');
+  const [npcProbeReadings, setNpcProbeReadings] = useState<any[]>([]);
+  const [npcProbeReport, setNpcProbeReport] = useState<any>(null);
+  const [npcProbeLoading, setNpcProbeLoading] = useState<boolean>(false);
+  const [npcProbeError, setNpcProbeError] = useState<string>('');
 
   const [verifyPath, setVerifyPath] = useState<string>('');
   const [verifying, setVerifying] = useState<boolean>(false);
@@ -222,6 +229,60 @@ export default function PlaytestWorkspace({
     } catch (err) {
       setDebugBrief({ error: err?.message || 'Failed to read debug watcher brief.' });
     }
+  };
+
+  const useLatestNpcProbes = async () => {
+    setNpcProbeLoading(true);
+    setNpcProbeError('');
+    setNpcProbeReport(null);
+    try {
+      const response = await fetch('/api/agent/npc-identity-probe/parse-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetName: npcTargetName.trim() || undefined, limit: 8 }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw new Error(data.error || 'Failed to parse NPC probe log.');
+      setNpcProbeReadings(data.readings || []);
+      if (!npcTargetName.trim() && data.readings?.length) setNpcTargetName(data.readings[data.readings.length - 1].name || '');
+    } catch (err: any) {
+      setNpcProbeError(err?.message || 'Failed to parse NPC probe log.');
+    } finally {
+      setNpcProbeLoading(false);
+    }
+  };
+
+  const runNpcCorrelation = async () => {
+    setNpcProbeLoading(true);
+    setNpcProbeError('');
+    try {
+      const readings = npcProbeReadings || [];
+      const beforeLogReading = readings.length >= 2 ? readings[readings.length - 2] : readings[0];
+      const afterLogReading = readings.length >= 2 ? readings[readings.length - 1] : readings[1];
+      const response = await fetch('/api/agent/npc-identity-probe/correlate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          beforeLogReading,
+          afterLogReading,
+          beforeSavePath: npcBeforeSavePath.trim(),
+          afterSavePath: npcAfterSavePath.trim(),
+          targetName: npcTargetName.trim() || beforeLogReading?.name || afterLogReading?.name,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw new Error(data.error || 'NPC identity correlation failed.');
+      setNpcProbeReport(data);
+    } catch (err: any) {
+      setNpcProbeError(err?.message || 'NPC identity correlation failed.');
+    } finally {
+      setNpcProbeLoading(false);
+    }
+  };
+
+  const copyNpcProbeReport = async () => {
+    if (!npcProbeReport) return;
+    await navigator.clipboard?.writeText(JSON.stringify(npcProbeReport, null, 2));
   };
 
   useEffect(() => {
@@ -605,6 +666,126 @@ export default function PlaytestWorkspace({
               Debug watcher brief failed: {debugBrief.error}
             </div>
           )}
+
+          <div className="mt-3 rounded-lg border border-sky-500/25 bg-sky-500/[0.04] p-3 space-y-3" data-testid="npc-identity-probe-panel">
+            <div className="space-y-1">
+              <div className="text-[9px] font-mono uppercase tracking-wider text-sky-200 font-black">NPC Identity Probe</div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Deterministically compares A3b runtime probe logs with before/after save XML. Evidence-only: reads logs and saves, does not compile, deploy, migrate memory, or call an AI provider.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2">
+              <input
+                value={npcTargetName}
+                onChange={(e) => setNpcTargetName(e.target.value)}
+                placeholder="target NPC name, e.g. Manda Smitt"
+                data-testid="npc-probe-target"
+                className="px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-sky-500"
+              />
+              <input
+                value={npcBeforeSavePath}
+                onChange={(e) => setNpcBeforeSavePath(e.target.value)}
+                placeholder="before save path (.xml, .xml.gz, .gz)"
+                data-testid="npc-probe-before-save"
+                className="px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-sky-500"
+              />
+              <input
+                value={npcAfterSavePath}
+                onChange={(e) => setNpcAfterSavePath(e.target.value)}
+                placeholder="after reload save path (.xml, .xml.gz, .gz)"
+                data-testid="npc-probe-after-save"
+                className="px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-sky-500"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={useLatestNpcProbes}
+                disabled={npcProbeLoading}
+                data-testid="npc-probe-use-latest"
+                className="px-2 py-1 bg-sky-600/20 border border-sky-500/40 hover:bg-sky-600/30 disabled:opacity-40 text-[10px] font-mono text-sky-200 rounded transition-all"
+              >
+                {npcProbeLoading ? 'Reading…' : 'Use latest debuglog probes'}
+              </button>
+              <button
+                type="button"
+                onClick={runNpcCorrelation}
+                disabled={npcProbeLoading || !npcBeforeSavePath.trim() || !npcAfterSavePath.trim()}
+                data-testid="npc-probe-run"
+                className="px-2 py-1 bg-emerald-600/20 border border-emerald-500/40 hover:bg-emerald-600/30 disabled:opacity-40 text-[10px] font-mono text-emerald-200 rounded transition-all"
+              >
+                {npcProbeLoading ? 'Running…' : 'Run correlation'}
+              </button>
+              {npcProbeReport && (
+                <button
+                  type="button"
+                  onClick={copyNpcProbeReport}
+                  className="px-2 py-1 bg-black/25 border border-white/10 hover:border-white/20 text-[10px] font-mono text-slate-300 rounded transition-all"
+                >
+                  Copy JSON report
+                </button>
+              )}
+            </div>
+
+            {npcProbeError && (
+              <div className="rounded border border-red-500/35 bg-red-500/10 p-2 text-[9px] font-mono text-red-200" data-testid="npc-probe-error">
+                {npcProbeError}
+              </div>
+            )}
+
+            {npcProbeReadings.length > 0 && (
+              <div className="rounded border border-white/10 bg-black/25 p-2 space-y-1" data-testid="npc-probe-readings">
+                <div className="text-[9px] font-mono text-slate-500">RUNTIME READINGS</div>
+                {npcProbeReadings.slice(-4).map((r, i) => (
+                  <div key={`${r.lineNumber}-${i}`} className="grid grid-cols-[52px_1fr] gap-2 text-[9px] font-mono leading-tight">
+                    <span className="text-sky-300">line {r.lineNumber}</span>
+                    <span className="text-slate-300 truncate" title={r.line}>
+                      raw={r.raw || '—'} idcode={r.idcode || '—'} name={r.name || '—'} owner={r.owner || '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {npcProbeReport && (
+              <div className="rounded border border-white/10 bg-black/30 p-2 space-y-2" data-testid="npc-probe-report">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[9px] font-mono text-slate-500">VERDICT</span>
+                  <span className={`rounded border px-2 py-0.5 text-[9px] font-mono font-bold ${
+                    npcProbeReport.recommendation === 'Use save XML id'
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                      : npcProbeReport.recommendation === 'Ambiguous, needs better test subject'
+                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                        : 'border-slate-500/40 bg-slate-500/10 text-slate-300'
+                  }`}>
+                    {npcProbeReport.recommendation}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[9px] font-mono text-slate-300">
+                  <span>runtime stable: {String(npcProbeReport.runtimeIdStable)}</span>
+                  <span>idcode present: {String(npcProbeReport.idcodePresent)}</span>
+                  <span>stable save id: {String(npcProbeReport.stableSaveIdFound)}</span>
+                  <span>confidence: {Number(npcProbeReport.mappingConfidence || 0).toFixed(2)}</span>
+                </div>
+                {npcProbeReport.warnings?.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] font-mono text-amber-300">WARNINGS</div>
+                    {npcProbeReport.warnings.slice(0, 4).map((w: string, i: number) => (
+                      <div key={i} className="text-[9px] font-mono text-amber-200/90 leading-tight">{w}</div>
+                    ))}
+                  </div>
+                )}
+                <details>
+                  <summary className="cursor-pointer text-[9px] font-mono text-sky-300">copyable JSON report</summary>
+                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-white/10 bg-black/30 p-2 text-[9px] leading-tight text-slate-300">
+                    {JSON.stringify(npcProbeReport, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* LOG TEXTAREA BUFFER */}
