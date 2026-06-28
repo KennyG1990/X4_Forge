@@ -28,6 +28,15 @@ Author → Compile → Validate → Package → Run in X4 → (Round-trip back)
 
 Foundation-first means: before adding polish, every link above has to be *correct and honest*. A tool whose pitch is "we keep your mod valid" cannot itself produce invalid output or claim false success.
 
+> **⚠ TOOL GAP — MD scriptproperty validation (from the x4_ai_influence AAR, 2026-06-27).** The Forge validates
+> XSD structure + cross-file cues, but NOT MD **property access** against the game's `scriptproperties.xml`. So a
+> wrong-but-schema-legal property (`$station.controlentity`, `$station.manager` on an AI-faction station) PASSES
+> `project/validate` and only fails IN-GAME — it cost 3 `/refreshmd` cycles while building the NPC census. **Fix:**
+> validate `$obj.property` chains in MD/AIScript against `scriptproperties.xml` (the Forge already reads cat/dat +
+> indexes game objects, so the data is in hand); flag unknown/type-wrong properties as warnings with the valid
+> options. Converts "discover the property in-game over N reloads" → "caught offline at author time" — squarely
+> the North Star (a tool that claims to keep your mod valid must validate what it claims to).
+
 ---
 
 ## Current State
