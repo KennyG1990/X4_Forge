@@ -2936,3 +2936,20 @@ error→cue backend. Canonical tree only (`F:\DEV_ENV\X4_Forge`); Codex's dev bu
 - **SECOND-LAYER PASS:** headline (failing-cue alert → click → canvas focus by cue name) delivered + proven live;
   reuses the existing nav bus (consistent w/ diagnostics). ◐ follow-ups (not the headline): wire the secondary
   *timeline* cue-items clickable (same engine+event); optional literal floating on-canvas alert overlay.
+
+## 🛠️ TOOL-IMPROVEMENT (banked 2026-06-29 from x4_neural_link Phase 6/7 AAR) — Lua syntax lint for UI-addon Lua
+- GAP: `project/validate` covers MD/XSD + md↔lua binding, but does NOT syntax-check `ui/addons/**/*.lua` (the X4 UI
+  Lua, e.g. `aic_uix.lua`). Today a typo there is only caught in-game via the debuglog on reload — a slow, host-gated
+  loop, and the sandbox has no offline luac/lua and no network for lupa.
+- ASK: add a Lua parse pass (luac -p, or a bundled/pure-JS Lua parser) for `kind:"lua"` files (and/or ui/addons) in
+  `project/validate` → surface syntax errors offline as structErrors, so a UI-Lua typo is caught before a reload.
+- Until shipped, the standing workaround is manual re-read + the in-game debuglog as the syntax gate (state it
+  honestly in closes — don't claim "syntax validated" for UI Lua when only MD/binding was checked).
+
+## 🛠️ TOOL-IMPROVEMENT (2026-06-29) — MD/Lua scriptproperty validation now has a catalog to use
+The authoritative property catalog is available unpacked at
+`F:\DEV_ENV\Games\X4 Foundations\Files\unpacked\libraries\scriptproperties.xml` (~3.2k props). The Forge could
+ingest it to validate MD `$obj.property` access (and flag `GetComponentData(x,"<field>")` against the entity
+property set) — catching wrong-but-XSD-legal accessors offline (e.g. `manager`/bare `controlentity` are NOT
+valid; `tradenpc`/`shiptrader`/`pilot`/`controlentity.default` are). This closes the same class as the UI-Lua
+lint gap: a wrong property is caught at validate time, not after N in-game reloads.
