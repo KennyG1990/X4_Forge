@@ -2953,3 +2953,31 @@ ingest it to validate MD `$obj.property` access (and flag `GetComponentData(x,"<
 property set) — catching wrong-but-XSD-legal accessors offline (e.g. `manager`/bare `controlentity` are NOT
 valid; `tradenpc`/`shiptrader`/`pilot`/`controlentity.default` are). This closes the same class as the UI-Lua
 lint gap: a wrong property is caught at validate time, not after N in-game reloads.
+
+## 🛠️ FORGE VALIDATION GAPS (found 2026-06-29 while validating x4_ai_influence OPORD MD/aiscript) — fix later
+Surfaced while schema-validating hand-authored MD/aiscript for the OPORD build. None block, but each makes
+validation give FALSE confidence; log + fix.
+
+1. **`mod-folder/import` reads `modWorkspacePath`, NOT the deployed `filesystemPath` (game extensions dir).**
+   Importing `x4_ai_influence` + a full `workspace` dryRun returned **0 errors / 25 files**, BUT the files I had
+   just deployed to `G:\…\extensions\x4_ai_influence\…` (aic_opord_execution.xml, order.aic.opord.protectposition.xml,
+   edited combat/hotkey/worldsync) came back **`(not listed)`** in `report.classification` — i.e. the whole-mod
+   validate silently validated an OLDER/other copy and MISSED the deployed files. A "0 errors" full-mod verdict can
+   therefore be meaningless for hand-deployed work. FIX: let import target the deployed extension (filesystemPath),
+   OR explicitly report which root was read + which expected files were skipped, so a green verdict is trustworthy.
+
+2. **`project/validate` has no clean multi-file / deployed-extension mode → always emits single-file artifacts.**
+   Validating one file at a time always returns `missing_content_xml` (struct error) + `crossFileErrors` +
+   `md_lua.missing_register` findings that are pure single-file-isolation ARTIFACTS (the referenced cues/Lua handlers
+   exist, just not in the one-file payload). Callers must hand-filter to find real errors. FIX: a "validate this set
+   of files as a deployed extension" mode that resolves cross-file + suppresses content.xml when validating a subset.
+
+3. **Validates XSD STRUCTURE, not scriptproperty access / runtime semantics.** A wrong-but-XSD-legal property
+   (`$ship.idcode`, `faction.{$fid}`, `controlentity.{controlpost.X}`, a bad `create_order id`, wrong
+   `move.seekenemies` params) passes Forge validation and only fails in-game. The authoritative catalog is now
+   available at `F:\DEV_ENV\Games\X4 Foundations\Files\unpacked\libraries\scriptproperties.xml` (~3.2k props) — ingest
+   it to flag scriptproperty access offline. (Dovetails with the earlier UI-Lua-lint tool-improvement above.)
+
+4. **aiscript validation looks shallow.** Validating an `.aiscript`/order file (kind="aiscript") returned
+   `definedCues:0` and no aiscript-specific findings — suggests basic XML parse rather than full `aiscripts.xsd`
+   validation (orders/params/refs). CONFIRM aiscript files get true aiscripts.xsd validation; if not, add it.
