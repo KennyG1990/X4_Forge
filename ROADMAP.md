@@ -41,6 +41,17 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ⚠ TOOL-IMPROVEMENTS logged from x4_ai_influence in-game verification (2026-07-01, AAR step 8 — logged, not built)
+1. **No AISCRIPT validation path.** `project/validate` kinds are content|md|lua|ui; `Schemas/` has only md.xsd+common.xsd.
+   The game found 4 real order-param errors in `order.aic.opord.protectposition.xml` (non-internal params need `text`
+   attrs; `type="text"` is not a legal order-param type) that the Forge never checked. Want: aiscripts.xsd (harvest
+   from unpacked vanilla) + `kind:"aiscript"` in validate + order-param lint (text attr present, type in the legal set).
+2. **Dynamic Lua event names false-positive the cross-file check.** aic_uix.lua dispatches `log_<category>`;
+   `lua_md.missing_listener` flags "ai_influence.log_" though MD listens per-category (galaxynews). Want: treat a
+   trailing-underscore/concat event as a PREFIX and match any MD listener with that prefix (or downgrade to warning).
+3. (From #64 tail, still open) "Harvest Vanilla UI Reference" writes into the live `extensions/` dir; should target a
+   reference-only dir so a harvest can't become an active mod.
+
 ### ✅ FIX (2026-06-28) — NPC Identity Probe `parse-save` now streams large saves (was: 512MB string overflow)
 Codex's `parse-save` did `gunzipSync(...).toString("utf8")` on the WHOLE decompressed save (server.ts ~3186).
 Real X4 saves decompress past Node's max string length (~512MB) → every real save threw *"Cannot create a
