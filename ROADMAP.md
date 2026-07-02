@@ -37,9 +37,41 @@ Foundation-first means: before adding polish, every link above has to be *correc
 > options. Converts "discover the property in-game over N reloads" → "caught offline at author time" — squarely
 > the North Star (a tool that claims to keep your mod valid must validate what it claims to).
 
+> **⚠ TOOL GAPS #8/#9 — from the x4_ai_influence G3 accept→claim hunt (AAR 2026-07-01).**
+> **#8 XSD attribute requiredness not enforced:** a bare `<event_offer_accepted/>` passed `project/validate`
+> although md.xsd marks `cue` `use="required"` — the schema-illegal listener silently never registers in-game and
+> cost one full live-test cycle (of six attempts total). Enforce `use="required"` on event-condition attributes.
+> **#9 `parent` keyword false-positive:** the cue-ref resolver flags the legal MD structural keyword `parent`
+> (also `this`, `static`) as an unresolved cue reference. Whitelist the keywords.
+> **#4 upgraded with ground truth:** lint `event_offer_accepted` usage in mod (non-vanilla) MD and suggest the
+> working pattern — `<event_object_signalled object="$Client" param="'accept'"/>` + `create_mission` +
+> `set_objective_from_briefing` (source: kuertee_emergent_missions_escort.xml:325-352 "event_offer_accepted
+> doesn't work"; proven in-game in x4_ai_influence 2026-07-01).
+
 ---
 
 ## Current State
+
+### ⚠ TOOL-IMPROVEMENTS from the v1.0-RC dogfood (2026-07-01 late session — mission-offer build via agent API)
+7. **Lua-staleness detector (RC-killer class).** X4 quickload re-parses MD but does NOT reliably reload
+   ui/*.lua — the resident Lua can be a version behind disk, so the mod's MD and Lua halves silently run
+   MISMATCHED versions during F5/F9 iteration (cost this project ~4 ghost-chase reload cycles: missing event
+   fields, dead pollers). Want: the debug-log watcher fingerprints a version marker the Lua logs at boot
+   (e.g. LUAV=n) vs a hash/marker of the on-disk file and WARNS "resident Lua ≠ deployed Lua — full restart
+   required". Cheap to implement, kills an entire confusion class for every Forge user.
+4. **Offer-accept listener lint.** A cue listening `<event_offer_accepted cue="parent"/>` from a child of the
+   offer-creating instance validates clean but NEVER FIRES in-game; the working shape is vanilla's variable form
+   (`<set_value name="$OfferCue" exact="this"/>` + `cue="$OfferCue"`). Cost a full reload cycle to diagnose.
+   Want: a lint that flags `parent`/`this` keyword refs in offer/mission event conditions and suggests the
+   variable idiom (or better: the validator KNOWS which event conditions resolve cue keywords at register time).
+5. **mod-folder/import can't import the LIVE mod.** Import resolves under modWorkspacePath only; a mod deployed
+   and iterated in the game's extensions/ dir (exactly the RC workflow) can't be round-tripped back into a
+   workspace without a manual copy — and the F:-side copy silently goes stale. Want: import path relative to
+   filesystemPath too (or a "import from extensions" toggle), plus a staleness warning when workspace ≠ deployed.
+6. **project/validate payloads want a server-side file source.** Hand-inlined payloads hit both the ~20KB inline
+   ceiling AND sandbox-mount staleness (a stale Lua produced 12 false missing-register findings). The reliable
+   pattern turned out to be in-page fs/read → validate (host-truth). Want: `POST /api/agent/project/validate
+   {fromPath: "extensions/x4_ai_influence"}` — server reads the files itself, no payload at all.
 
 ### ⚠ TOOL-IMPROVEMENTS logged from x4_ai_influence in-game verification (2026-07-01, AAR step 8 — logged, not built)
 1. **No AISCRIPT validation path.** `project/validate` kinds are content|md|lua|ui; `Schemas/` has only md.xsd+common.xsd.
