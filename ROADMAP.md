@@ -53,6 +53,11 @@ Foundation-first means: before adding polish, every link above has to be *correc
 ## Current State
 
 ### ⚠ TOOL-IMPROVEMENTS from the v1.0-RC dogfood (2026-07-01 late session — mission-offer build via agent API)
+8. **Cue-ref resolver flags MD KEYWORDS as unresolved cues (2026-07-02, x4_ai_influence Orphan_check validate).**
+   `cue.unresolved "parent"` errors ×3 on `<remove_offer cue="parent"/>` / `<cancel_cue cue="parent"/>` —
+   engine-legal keyword forms that ship and run in-game (Cleanup_on_load precedent). Every hand-authored
+   validate cries wolf, training users to ignore errors. Want: the resolver knows the cue-keyword set
+   (`parent`/`this`/`static`/`namespace`) as always-resolved (complementary to item 4's register-time nuance).
 7. **Lua-staleness detector (RC-killer class).** X4 quickload re-parses MD but does NOT reliably reload
    ui/*.lua — the resident Lua can be a version behind disk, so the mod's MD and Lua halves silently run
    MISMATCHED versions during F5/F9 iteration (cost this project ~4 ghost-chase reload cycles: missing event
