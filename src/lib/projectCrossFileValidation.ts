@@ -43,6 +43,12 @@ export interface ProjectCrossFileFinding {
 export interface ProjectEventRef {
   event: string;
   file: string;
+  /**
+   * True when the Lua event name is built dynamically (string concatenation, e.g.
+   * `RegisterEvent(NS .. suffix, …)` / `"log_" .. category`) — `event` is then the
+   * literal PREFIX, and matching must be prefix-based, not exact (ROADMAP AAR item #2).
+   */
+  prefix?: boolean;
 }
 
 export interface ProjectUiEventRef {
@@ -50,6 +56,8 @@ export interface ProjectUiEventRef {
   control: string;
   event: string;
   file: string;
+  /** True when the control name is dynamic (concat / trailing underscore) — see ProjectEventRef.prefix. */
+  prefix?: boolean;
 }
 
 export interface ProjectCrossFileValidationResult {
@@ -127,11 +135,19 @@ function parseLuaLocalStrings(content: string): Map<string, string> {
   return vars;
 }
 
+/** True when the source right after `endIndex` continues with a Lua `..` concatenation. */
+function continuesWithConcat(content: string, endIndex: number): boolean {
+  return /^\s*\.\./.test((content || '').slice(endIndex, endIndex + 8));
+}
+
 function parseLuaRegisteredEvents(content: string, file: string): ProjectEventRef[] {
   const out: ProjectEventRef[] = [];
   const re = /\bRegisterEvent\s*\(\s*["']([^"']+)["']/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(content || '')) !== null) out.push({ event: m[1], file });
+  while ((m = re.exec(content || '')) !== null) {
+    const prefix = continuesWithConcat(content, re.lastIndex) || undefined;
+    out.push({ event: m[1], file, ...(prefix ? { prefix } : {}) });
+  }
   return out;
 }
 
@@ -144,7 +160,10 @@ function parseLuaUiEmits(content: string, file: string): ProjectUiEventRef[] {
   while ((m = re.exec(content || '')) !== null) {
     const namespace = m[1] || m[2] || vars.get(m[3] || '') || '';
     const control = m[4] || m[5] || vars.get(m[6] || '') || '';
-    if (namespace && control) out.push({ namespace, control, event: `${namespace}.${control}`, file });
+    // Dynamic control name: literal followed by `..` concat (e.g. "log_" .. category),
+    // or a trailing-underscore literal — the literal is only the event-name PREFIX.
+    const prefix = (continuesWithConcat(content, re.lastIndex) || /_$/.test(control)) || undefined;
+    if (namespace && control) out.push({ namespace, control, event: `${namespace}.${control}`, file, ...(prefix ? { prefix } : {}) });
   }
   return out;
 }
@@ -186,8 +205,17 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
 
   const registeredEvents = new Set(registered.map(r => r.event));
   const listenedEvents = new Set(listened.map(r => r.event));
-  const missingRegisters = raised.filter(r => !registeredEvents.has(r.event));
-  const missingListeners = emitted.filter(r => !listenedEvents.has(r.event));
+  // Dynamic (concat-built) names match by PREFIX: `RegisterEvent(NS .. x)` with literal
+  // prefix "ai_influence." satisfies any raised event starting with it, and a dynamic
+  // emit "ai_influence.log_" is satisfied by ANY MD listener with that prefix
+  // (ROADMAP AAR #2: aic_uix.lua `log_<category>` false-positived the exact match).
+  const registeredPrefixes = registered.filter(r => r.prefix).map(r => r.event);
+  const listenedList = [...listenedEvents];
+  const missingRegisters = raised.filter(r => !registeredEvents.has(r.event)
+    && !registeredPrefixes.some(p => r.event.startsWith(p)));
+  const missingListeners = emitted.filter(r => r.prefix
+    ? !listenedList.some(e => e.startsWith(r.event))
+    : !listenedEvents.has(r.event));
 
   for (const event of missingRegisters) {
     findings.push({
@@ -201,10 +229,15 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
   for (const event of missingListeners) {
     findings.push({
       code: 'lua_md.missing_listener',
-      severity: 'error',
+      // A dynamic (prefix) emit with no matching listener is suspicious but can be
+      // legitimately handled by fully-dynamic listeners the static scan can't see —
+      // warning, not error (honest per the determinism-scope doctrine).
+      severity: event.prefix ? 'warning' : 'error',
       file: event.file,
       event: event.event,
-      detail: `Lua emits UI event "${event.event}" but no project MD file listens for it.`,
+      detail: event.prefix
+        ? `Lua emits dynamically-named UI events with prefix "${event.event}…" but no project MD file listens for any event with that prefix.`
+        : `Lua emits UI event "${event.event}" but no project MD file listens for it.`,
     });
   }
 
@@ -360,6 +393,43 @@ export function runProjectCrossFileSelftest() {
   };
   const missingListener = validateProjectCrossFile(noMdListener);
   ok('flags_lua_emit_without_md_listener', !missingListener.ok && missingListener.findings.some(f => f.code === 'lua_md.missing_listener' && f.event === 'ai_influence.chat.response'), missingListener.findings);
+
+  // Dynamic (concat) Lua event names are PREFIXES, not exact names (AAR #2 fix).
+  const dynamicEmit: ExtensionProject = addFile(addFile(fixtureProject(), {
+    path: 'ui/uix.lua',
+    kind: 'lua',
+    content: `local NS = "ai_influence"\nAddUITriggeredEvent(NS, "log_" .. category, payload)`,
+  }), {
+    path: 'md/news.xml',
+    kind: 'md',
+    content: `<mdscript name="News"><cues><cue name="OnNews"><conditions><event_ui_triggered screen="'ai_influence'" control="'log_galaxynews'" /></conditions></cue></cues></mdscript>`,
+  });
+  const dyn = validateProjectCrossFile(dynamicEmit);
+  ok('dynamic_concat_emit_matches_listener_by_prefix',
+    !dyn.findings.some(f => f.code === 'lua_md.missing_listener' && String(f.event).startsWith('ai_influence.log_')),
+    dyn.findings);
+  const dynamicNoListener: ExtensionProject = addFile(fixtureProject(), {
+    path: 'ui/uix.lua',
+    kind: 'lua',
+    content: `local NS = "ai_influence"\nAddUITriggeredEvent(NS, "log_" .. category, payload)`,
+  });
+  const dynMiss = validateProjectCrossFile(dynamicNoListener);
+  ok('dynamic_emit_with_no_prefix_listener_is_warning_not_error',
+    dynMiss.findings.some(f => f.code === 'lua_md.missing_listener' && f.severity === 'warning' && f.event === 'ai_influence.log_')
+    && !dynMiss.findings.some(f => f.code === 'lua_md.missing_listener' && f.severity === 'error'),
+    dynMiss.findings);
+  // Dynamic RegisterEvent prefix satisfies raised events under it.
+  const dynamicRegister: ExtensionProject = {
+    ...fixtureProject(),
+    files: fixtureProject().files.map(f => f.path === 'ui/chat.lua' ? {
+      ...f,
+      content: `local NS = "ai_influence"\nRegisterEvent("ai_influence." .. channel, handler)\nAddUITriggeredEvent(NS, "chat.response", { reply = "ok" })`,
+    } : f),
+  };
+  const dynReg = validateProjectCrossFile(dynamicRegister);
+  ok('dynamic_concat_register_satisfies_raised_event_by_prefix',
+    !dynReg.findings.some(f => f.code === 'md_lua.missing_register'),
+    dynReg.findings);
 
   const brokenCue = addFile(fixtureProject(), {
     path: 'md/broken.xml',

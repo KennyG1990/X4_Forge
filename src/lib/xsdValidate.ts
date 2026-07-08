@@ -106,13 +106,55 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
   const attributeGroups = new Map<string, AnyNode>();
   const complexTypes = new Map<string, AnyNode>();
   const groups = new Map<string, AnyNode>();
+  // Named simpleTypes resolve in two passes because of xs:union types: a union's
+  // enum set is sound ONLY if EVERY member type is itself fully enumerated. X4's
+  // classlookup is `<xs:union memberTypes="positionalclasslookup expression">` plus a
+  // tiny inline restriction — collecting just the descendants yielded 2 values and
+  // false-errored legal classes (match class="class.spacesuit", proven in-game), while
+  // the `expression` member actually makes ANY value legal → no enum restriction at all.
+  const simpleTypeRaw = new Map<string, AnyNode>();
   for (const root of roots) {
     arrayOf(root['xs:schema']?.['xs:simpleType']).forEach((st: AnyNode) => {
-      if (st.name) {
-        const e = collectEnums(st);
-        if (e.length) simpleTypeEnums[st.name] = e;
-      }
+      if (st.name && !simpleTypeRaw.has(st.name)) simpleTypeRaw.set(st.name, st);
     });
+  }
+  const resolvedSimpleEnums = new Map<string, string[] | null>(); // null = unrestricted
+  const enumsOfSimpleType = (name: string, stack: Set<string>): string[] | null => {
+    if (resolvedSimpleEnums.has(name)) return resolvedSimpleEnums.get(name)!;
+    const st = simpleTypeRaw.get(name);
+    if (!st || stack.has(name)) return null; // unknown / xs:* / cyclic → unrestricted
+    stack.add(name);
+    let result: string[] | null = null;
+    const unionNode = arrayOf(st['xs:union'])[0] as AnyNode | undefined;
+    if (unionNode) {
+      let all: string[] = [];
+      let sound = true;
+      for (const mem of String(unionNode.memberTypes || '').split(/\s+/).filter(Boolean)) {
+        const e = enumsOfSimpleType(mem, stack);
+        if (!e) { sound = false; break; }
+        all = all.concat(e);
+      }
+      if (sound) {
+        for (const inline of arrayOf(unionNode['xs:simpleType'])) {
+          const e = collectEnums(inline as AnyNode);
+          if (!e.length) { sound = false; break; }
+          all = all.concat(e);
+        }
+      }
+      result = sound && all.length ? Array.from(new Set(all)) : null;
+    } else {
+      const e = collectEnums(st);
+      result = e.length ? e : null;
+    }
+    stack.delete(name);
+    resolvedSimpleEnums.set(name, result);
+    return result;
+  };
+  for (const name of simpleTypeRaw.keys()) {
+    const e = enumsOfSimpleType(name, new Set());
+    if (e && e.length) simpleTypeEnums[name] = e;
+  }
+  for (const root of roots) {
     arrayOf(root['xs:schema']?.['xs:attributeGroup']).forEach((g: AnyNode) => {
       if (g.name) attributeGroups.set(g.name, g);
     });
@@ -169,9 +211,22 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     const enumValues = inlineEnums.length ? inlineEnums : typeEnums;
     const lname = String(attr.name).toLowerCase();
     const prev = into.get(lname);
+    // The same attribute can be declared by MULTIPLE attributeGroups within one type
+    // (e.g. matchsubfilter pulls class type="classlookup" via findarbitrary AND
+    // class type="entityclasslookup" via matchfilter). Replacement kept whichever came
+    // last and false-errored legal values (match class="class.spacesuit", proven
+    // in-game). Union when both declare enums; unrestricted when either doesn't.
+    let mergedEnums: string[] | undefined;
+    if (prev) {
+      mergedEnums = (prev.enumValues?.length && enumValues?.length)
+        ? Array.from(new Set([...prev.enumValues, ...enumValues]))
+        : undefined; // either declaration unrestricted → unrestricted
+    } else {
+      mergedEnums = enumValues && enumValues.length ? enumValues : undefined;
+    }
     into.set(lname, {
       required: Boolean(prev?.required) || attr.use === 'required',
-      enumValues: enumValues && enumValues.length ? enumValues : prev?.enumValues,
+      enumValues: mergedEnums,
       type: attr.type || prev?.type
     });
   };
@@ -251,9 +306,24 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
       for (const k of keys) {
         const p = prev.attributes.get(k);
         const v = attrs.get(k);
+        // Enum merge must be the UNION of the definitions that declare the attribute —
+        // the same element name has context-dependent enums in the schemas (e.g. <match>
+        // class allows different classlookup subsets per context), and this index is
+        // keyed by name only. Replacement kept only one context's enum and false-errored
+        // legal, in-game-proven values (found grounding against x4_ai_influence). If a
+        // definition declares the attr WITHOUT an enum restriction, the merged attr is
+        // unrestricted (an unrestricted context makes any value legal somewhere).
+        let enumValues: string[] | undefined;
+        if (p && v) {
+          enumValues = (p.enumValues?.length && v.enumValues?.length)
+            ? Array.from(new Set([...p.enumValues, ...v.enumValues]))
+            : undefined;
+        } else {
+          enumValues = (p?.enumValues) || (v?.enumValues);
+        }
         prev.attributes.set(k, {
           required: Boolean(p?.required) && Boolean(v?.required),
-          enumValues: (v?.enumValues) || p?.enumValues,
+          enumValues: enumValues && enumValues.length ? enumValues : undefined,
           type: (v?.type) || p?.type
         });
       }
@@ -413,8 +483,9 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
         }
         continue;
       }
-      if (aspec.enumValues && aspec.enumValues.length && attr.value && !/\{/.test(attr.value)) {
-        // skip MD expressions like {param.x}; only validate literal values
+      if (aspec.enumValues && aspec.enumValues.length && attr.value && !/[{[$]/.test(attr.value)) {
+        // skip MD expressions like {param.x}, list literals like [class.ship_l, class.ship_m],
+        // and $variable values; only validate plain literal values
         const ok = aspec.enumValues.some(v => v.toLowerCase() === attr.value.toLowerCase());
         if (!ok) {
           out.push({
@@ -477,17 +548,24 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       }
     }
 
-    // required attribute presence
+    // required attribute presence.
+    // On event-condition elements (event_*) this is an ERROR, not a warning: a listener
+    // missing a schema-required attribute (e.g. bare <event_offer_accepted/> without
+    // `cue`) silently never registers in-game — the mod looks fine and does nothing
+    // (ROADMAP gap #8, x4_ai_influence G3 AAR 2026-07-01: cost a full live-test cycle).
     for (const [aname, aspec] of spec.attributes) {
       if (aspec.required && !present.has(aname)) {
+        const isEventCondition = lname.startsWith('event_');
         out.push({
-          severity: 'warning',
+          severity: isEventCondition ? 'error' : 'warning',
           domain,
           filePath,
           line: tag.line,
           sourceRef: `${tag.name}@${aname}`,
           code: 'XSD_MISSING_REQUIRED',
-          message: `<${tag.name}> is missing required attribute "${aname}" per the schema.`
+          message: isEventCondition
+            ? `<${tag.name}> is missing required attribute "${aname}" per the schema. An event condition missing a required attribute silently never registers in-game — the cue will never fire.`
+            : `<${tag.name}> is missing required attribute "${aname}" per the schema.`
         });
       }
     }

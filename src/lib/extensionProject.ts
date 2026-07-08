@@ -17,7 +17,7 @@
  * extraction. Pure: no fs/network. House pattern: engine + oracle + public GET, then UI/API.
  */
 
-import { parseSignalCueRefs } from './cueLineage';
+import { MD_CUE_KEYWORDS, parseSignalCueRefs } from './cueLineage';
 import { parseModManifest, type ModDependency } from './modDependencyGraph';
 
 export type ProjectFileKind = 'md' | 'lua' | 'ui' | 'content' | 't' | 'library' | 'aiscript' | 'other';
@@ -253,7 +253,13 @@ export function indexCueReferences(project: ExtensionProject): CueReferenceIndex
       const local = ref.startsWith('this.') ? ref.slice(5) : ref;
       const cross = ref.match(/^md\.([^.]+)\.(.+)$/i);
 
-      if (cross) {
+      // Exact lowercase tokens only — a CamelCase "Parent" is a cue NAME, not the keyword.
+      if (MD_CUE_KEYWORDS.has(ref)) {
+        // Engine cue keyword (`parent`/`this`/`static`/`namespace`) — legal, resolved at
+        // runtime, never a name lookup. Flagging these trains users to ignore errors
+        // (ROADMAP #8, 2026-07-02: cue.unresolved "parent" ×3 on shipping in-game code).
+        scope = 'external'; resolved = true;
+      } else if (cross) {
         // md.<script>.<cue...> — cross-file within the project if the script is ours.
         const [, script, cuePath] = cross;
         const firstCue = cuePath.split('.')[0];
@@ -345,6 +351,27 @@ export function runExtensionProjectSelftest(): {
   ok('cross-file ref to NON-existent cue is unresolved',
     idx.unresolved.some(r => r.ref === 'md.WorkerScript.NoSuchCue'), JSON.stringify(idx.unresolved));
   ok('only one unresolved ref total', idx.unresolved.length === 1, JSON.stringify(idx.unresolved.map(r => r.ref)));
+
+  // MD engine cue KEYWORDS (parent/this/static/namespace) are always-resolved keyword
+  // forms — the resolver must NOT flag them (ROADMAP #8: cried wolf on shipping code).
+  {
+    const kwFile = `<mdscript name="KW"><cues>
+      <cue name="Cleanup"><actions>
+        <cancel_cue cue="parent"/><reset_cue cue="this"/>
+        <signal_cue cue="static"/><cancel_cue cue="namespace"/>
+      </actions></cue>
+    </cues></mdscript>`;
+    let pk = createProject('pk', 'PK');
+    pk = addFile(pk, { path: 'content.xml', kind: 'content', content: '<content id="pk"/>' });
+    pk = addFile(pk, { path: 'md/kw.xml', kind: 'md', content: kwFile });
+    const kidx = indexCueReferences(pk);
+    ok('cue keywords (parent/this/static/namespace) are never unresolved',
+      kidx.unresolved.length === 0, JSON.stringify(kidx.unresolved.map(r => r.ref)));
+    ok('cue keywords classified external+resolved',
+      kidx.references.filter(r => ['parent', 'this', 'static', 'namespace'].includes(r.ref))
+        .every(r => r.resolved && r.scope === 'external'),
+      JSON.stringify(kidx.references));
+  }
 
   // external ref to a script NOT in the project is never flagged
   let p3 = createProject('p3', 'P3');

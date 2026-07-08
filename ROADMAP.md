@@ -28,7 +28,7 @@ Author → Compile → Validate → Package → Run in X4 → (Round-trip back)
 
 Foundation-first means: before adding polish, every link above has to be *correct and honest*. A tool whose pitch is "we keep your mod valid" cannot itself produce invalid output or claim false success.
 
-> **⚠ TOOL GAP — MD scriptproperty validation (from the x4_ai_influence AAR, 2026-06-27).** The Forge validates
+> **⚠ TOOL GAP — ✅ CLOSED 2026-07-08 (Validator Gap Closure Pass in Current State) — MD scriptproperty validation (from the x4_ai_influence AAR, 2026-06-27).** The Forge validates
 > XSD structure + cross-file cues, but NOT MD **property access** against the game's `scriptproperties.xml`. So a
 > wrong-but-schema-legal property (`$station.controlentity`, `$station.manager` on an AI-faction station) PASSES
 > `project/validate` and only fails IN-GAME — it cost 3 `/refreshmd` cycles while building the NPC census. **Fix:**
@@ -37,7 +37,7 @@ Foundation-first means: before adding polish, every link above has to be *correc
 > options. Converts "discover the property in-game over N reloads" → "caught offline at author time" — squarely
 > the North Star (a tool that claims to keep your mod valid must validate what it claims to).
 
-> **⚠ TOOL GAPS #8/#9 — from the x4_ai_influence G3 accept→claim hunt (AAR 2026-07-01).**
+> **⚠ TOOL GAPS #8/#9 — ✅ BOTH CLOSED 2026-07-08 (Validator Gap Closure Pass in Current State) — from the x4_ai_influence G3 accept→claim hunt (AAR 2026-07-01).**
 > **#8 XSD attribute requiredness not enforced:** a bare `<event_offer_accepted/>` passed `project/validate`
 > although md.xsd marks `cue` `use="required"` — the schema-illegal listener silently never registers in-game and
 > cost one full live-test cycle (of six attempts total). Enforce `use="required"` on event-condition attributes.
@@ -52,8 +52,59 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ VALIDATOR GAP CLOSURE PASS (2026-07-08 — Claude/Cowork session; five logged gaps closed + stage-1 server split)
+
+All five items shipped as house-pattern engines (pure lib + oracle + public GET), wired into
+`POST /api/agent/project/validate`, and **live-verified against the real deployed `x4_ai_influence` mod**:
+
+1. **✅ Cue-keyword whitelist (item #8, 2026-07-02).** `MD_CUE_KEYWORDS` (`parent`/`this`/`static`/`namespace`,
+   exact-lowercase — CamelCase `Parent` stays a cue NAME) in `cueLineage.normalizeLocalCueRef` +
+   `extensionProject.indexCueReferences`. `<cancel_cue cue="parent"/>` no longer cries wolf.
+2. **✅ XSD attribute requiredness (gap #8, G3 AAR).** Root cause found: `project/validate` NEVER ran the XSD
+   validator (structure+cue+crossfile only). It now validates every md/aiscript file's content against the real
+   schema index; missing-required on `event_*` conditions is an **error** (a silently-never-registering listener),
+   elsewhere stays warning. Bare `<event_offer_accepted/>` → `ok:false` (was `ok:true`), verified live.
+3. **✅ Dynamic Lua event-name prefix matching (AAR item #2).** Concat-built names (`"log_" .. category`) and
+   trailing-underscore literals are PREFIXES: prefix-match against MD listeners, prefix-miss downgraded to warning;
+   symmetric for `RegisterEvent(NS .. x)` satisfying raised events. `projectCrossFileValidation.ts`.
+4. **✅ AISCRIPT validation path (AAR item #1).** `getAiSchemaIndex` now **harvests `libraries/aiscripts.xsd` from
+   cat/dat** (cached at `data/harvested-schemas/`) when the schema dir lacks it — live: 1381 elements indexed.
+   aiscript files validate against it in project/validate. NEW `src/lib/aiscriptLint.ts`: order-param lint
+   (missing type / illegal type incl. `type="text"` / non-internal param without `text` — internal params may omit
+   it, vanilla `move.flee.xml` precedent). Oracle 12/12; `GET /api/agent/aiscript-lint-selftest`.
+5. **✅ Scriptproperty validation (the 2026-06-27 TOOL GAP).** NEW `src/lib/scriptProperties.ts`: parses the game's
+   real `libraries/scriptproperties.xml` (87 keywords / 171 datatypes / 2333 properties live), lints `$obj.prop`
+   chains in MD+AIScript. Union check for untyped `$var` roots, typed first-segment for static keyword roots
+   (`event.param4` → flagged w/ suggestions), **continuation-required heads** (bare `$station.controlentity` →
+   "requires sub-selector (.default/.{$controlpost})" — the exact AAR failure), `[...]`/`{...}`/`$var` dynamic
+   segments, quoted-string/comment masking. All findings WARNING (import-generated props are invisible — honesty
+   scope). Oracle 32/32; `GET /api/agent/scriptproperties-selftest`, `-status` probe.
+
+**Bonus integrity fixes found by grounding against the real mod (cry-wolf killers):**
+- **✅ XSD enum-merge unsoundness.** (a) `xs:union` simpleTypes: enum set is sound only if EVERY member is fully
+  enumerated — X4's `classlookup` unions `expression`, so it's UNRESTRICTED (was: 2-value inline subset false-erroring
+  `match class="class.spacesuit"`, in-game-proven legal). (b) Same-attr declared by multiple attributeGroups /
+  element defs → UNION of enums, unrestricted if any declaration is. (c) List literals `[class.ship_l, …]` and
+  `$var` values skip enum checks. `xsdValidate.ts`.
+- **Grounding result:** full real-mod validate = **0 schema errors, 0 aiscript errors, 3 scriptproperty warnings —
+  and all 3 are the REAL `$st.manager` bug still living in `ai_influence_worldsync.xml`** (the AAR's exact failure,
+  now caught offline). Positive controls verified firing (`cue@onfail="bogus"` → enum error; bare event listener →
+  required error).
+
+**◐ Server modularization — STAGE 1 only.** NEW `src/server/validationRoutes.ts` owns the validation services
+(ai-schema harvest, scriptproperty cache, order-param types) + its 3 routes via `registerValidationAgentRoutes(app)`;
+server.ts composes. This is the extraction TEMPLATE — the remaining ~7.6k-line monolith split is future staged work,
+deliberately not attempted mid-session (H1 Edit-truncation risk on server.ts + Antigravity git contention).
+
+*Verification (live, in-page fetch): 21/21 public oracles PASS post-refactor (scriptproperties 32/32, aiscript-lint
+12/12, cue-lineage 21/21, extension-project 29/29, project-crossfile 13/13, compile 12/12, simulate 59/59,
+semantics 46/46, port-semantics 26/26, round-trip 17/17, + 11 more); app renders clean (canvas + COMPILER: OK,
+0 console errors). **Host `tsc --noEmit` NOT run this session** — the sandbox mount serves truncated views of
+edited files (H1 class; phantom EOF errors), so typecheck is Ken-gated: run `npm run typecheck` host-side.
+No git operations (Antigravity owns the index per H1/H2).*
+
 ### ⚠ TOOL-IMPROVEMENTS from the v1.0-RC dogfood (2026-07-01 late session — mission-offer build via agent API)
-8. **Cue-ref resolver flags MD KEYWORDS as unresolved cues (2026-07-02, x4_ai_influence Orphan_check validate).**
+8. **✅ CLOSED 2026-07-08 (see Validator Gap Closure Pass above).** Cue-ref resolver flags MD KEYWORDS as unresolved cues (2026-07-02, x4_ai_influence Orphan_check validate).
    `cue.unresolved "parent"` errors ×3 on `<remove_offer cue="parent"/>` / `<cancel_cue cue="parent"/>` —
    engine-legal keyword forms that ship and run in-game (Cleanup_on_load precedent). Every hand-authored
    validate cries wolf, training users to ignore errors. Want: the resolver knows the cue-keyword set
@@ -79,11 +130,11 @@ Foundation-first means: before adding polish, every link above has to be *correc
    {fromPath: "extensions/x4_ai_influence"}` — server reads the files itself, no payload at all.
 
 ### ⚠ TOOL-IMPROVEMENTS logged from x4_ai_influence in-game verification (2026-07-01, AAR step 8 — logged, not built)
-1. **No AISCRIPT validation path.** `project/validate` kinds are content|md|lua|ui; `Schemas/` has only md.xsd+common.xsd.
+1. **✅ CLOSED 2026-07-08 (see Validator Gap Closure Pass).** No AISCRIPT validation path. `project/validate` kinds are content|md|lua|ui; `Schemas/` has only md.xsd+common.xsd.
    The game found 4 real order-param errors in `order.aic.opord.protectposition.xml` (non-internal params need `text`
    attrs; `type="text"` is not a legal order-param type) that the Forge never checked. Want: aiscripts.xsd (harvest
    from unpacked vanilla) + `kind:"aiscript"` in validate + order-param lint (text attr present, type in the legal set).
-2. **Dynamic Lua event names false-positive the cross-file check.** aic_uix.lua dispatches `log_<category>`;
+2. **✅ CLOSED 2026-07-08 (see Validator Gap Closure Pass).** Dynamic Lua event names false-positive the cross-file check. aic_uix.lua dispatches `log_<category>`;
    `lua_md.missing_listener` flags "ai_influence.log_" though MD listens per-category (galaxynews). Want: treat a
    trailing-underscore/concat event as a PREFIX and match any MD listener with that prefix (or downgrade to warning).
 3. (From #64 tail, still open) "Harvest Vanilla UI Reference" writes into the live `extensions/` dir; should target a

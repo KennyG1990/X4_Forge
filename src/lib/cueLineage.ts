@@ -84,13 +84,26 @@ export function parseSignalCueRefs(rawXml: string): string[] {
 }
 
 /**
+ * MD structural cue KEYWORDS the engine resolves at runtime — these are legal wherever a
+ * cue reference is accepted (`<cancel_cue cue="parent"/>`, `<remove_offer cue="parent"/>`,
+ * `<reset_cue cue="this"/>`, …) and must NEVER be flagged as unresolved cue names.
+ * Source: shipping, in-game-proven usage (x4_ai_influence Cleanup_on_load precedent;
+ * ROADMAP tool-improvement #8, 2026-07-02 — the resolver cried wolf on these ×3).
+ */
+export const MD_CUE_KEYWORDS = new Set(['this', 'parent', 'static', 'namespace']);
+
+/**
  * Resolve a cue reference to a *local* candidate name, or null if it should be treated
  * as external/qualified (and therefore never flagged). Strips a leading `this.`; any
  * remaining dot (e.g. `md.X.Y`, `parent.X`, `static.X`) means external/qualified.
+ * Bare engine keywords (`parent`, `this`, `static`, `namespace`) are always-resolved
+ * keyword forms, not local names — they return null so no resolver flags them.
  */
 export function normalizeLocalCueRef(ref: string): string | null {
   if (!ref || typeof ref !== 'string') return null;
   let r = ref.trim();
+  // Engine keywords are the exact LOWERCASE tokens; a CamelCase "Parent" is a cue NAME.
+  if (MD_CUE_KEYWORDS.has(r)) return null; // engine keyword — always resolved
   if (r.startsWith('this.')) r = r.slice(5);
   if (r.length === 0) return null;
   if (r.includes('.')) return null; // qualified / cross-script — external
@@ -322,6 +335,10 @@ export function runCueLineageSelftest() {
   // helpers
   ok('normalize_strips_this', normalizeLocalCueRef('this.Foo') === 'Foo');
   ok('normalize_external_is_null', normalizeLocalCueRef('md.Setup.Start') === null);
+  ok('normalize_keyword_parent_is_null', normalizeLocalCueRef('parent') === null);
+  ok('normalize_keyword_this_is_null', normalizeLocalCueRef('this') === null);
+  ok('normalize_keyword_static_is_null', normalizeLocalCueRef('static') === null);
+  ok('normalize_keyword_namespace_is_null', normalizeLocalCueRef('namespace') === null);
   ok('parse_signal_multi', parseSignalCueRefs('<signal_cue cue="A"/><cancel_cue cue="B" />').join(',') === 'A,B');
 
   // structured signal node (not custom_xml): signal_cue with properties.cue

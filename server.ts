@@ -87,7 +87,10 @@ import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
-import { runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
+import { classifyPath, runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
+import { lintScriptPropertyChains, type ScriptPropertyFinding } from "./src/lib/scriptProperties";
+import { lintAiscriptOrderParams, type AiscriptLintFinding } from "./src/lib/aiscriptLint";
+import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
 import {
@@ -276,7 +279,10 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/external-api-registry",
   "/agent/mod-dependency-graph",
   "/agent/live-log-nav-selftest",
-  "/agent/npc-identity-probe/selftest"
+  "/agent/npc-identity-probe/selftest",
+  "/agent/scriptproperties-selftest",
+  "/agent/aiscript-lint-selftest",
+  "/agent/scriptproperties-status"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -1219,15 +1225,9 @@ function getSchemaIndex(): SchemaIndex {
   return buildSchemaIndex([resolved.mdXsdPath, resolved.commonXsdPath].filter(Boolean));
 }
 
-// AI scripts use a different schema (aiscripts.xsd). Validate against it only
-// when it exists in the configured schema dir; never fall back to md.xsd, which
-// would produce false positives on AI-specific elements/attributes.
-function getAiSchemaIndex(): SchemaIndex | null {
-  const resolved = resolveXsdConfig();
-  const aiXsd = path.join(resolved.schemaDir || "", "aiscripts.xsd");
-  if (!fs.existsSync(aiXsd)) return null;
-  return buildSchemaIndex([aiXsd, resolved.commonXsdPath].filter(Boolean));
-}
+// AI schema index (with cat/dat harvest fallback), order-param types, and the
+// scriptproperty index live in src/server/validationRoutes.ts — stage 1 of the
+// server modularization (module owns its services + routes; server.ts composes).
 
 /**
  * Real XSD-backed validation of the generated package. Validates the MD file and
@@ -5394,8 +5394,65 @@ app.post("/api/agent/project/validate", (req, res) => {
     const cueIndex = indexCueReferences(project);
     const crossFile = validateProjectCrossFile(project);
     const structuralErrors = structure.filter(i => i.severity === "error").length;
+
+    // ROADMAP gap #8 fix — project/validate now runs REAL XSD validation on md/aiscript
+    // file contents (it previously checked only structure + cue refs + cross-file wiring,
+    // which is how a schema-illegal bare <event_offer_accepted/> passed with ok:true and
+    // silently never registered in-game). Plus the two offline-catch layers from the AARs:
+    // scriptproperty chain lint (warnings — 2026-06-27 gap) and aiscript order-param lint
+    // (errors — 2026-07-01 gap). Each layer degrades honestly when its data source is
+    // unavailable (`available:false`), never claiming a check it didn't run.
+    const schemaFindings: Array<{ severity: string; filePath?: string; message: string; line?: number; code?: string; sourceRef?: string }> = [];
+    let mdSchemaAvailable = false;
+    let aiSchemaAvailable = false;
+    try {
+      const mdIndex = getSchemaIndex();
+      mdSchemaAvailable = !!mdIndex.loaded && mdIndex.elements.size > 0;
+      const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+      if (mdSchemaAvailable) {
+        for (const f of project.files) {
+          if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
+            schemaFindings.push(...validateXmlAgainstSchema(f.content, mdIndex, { filePath: f.path, domain: "mission_director", reportUnknownElements: true, references }));
+          }
+        }
+      }
+      const aiIndex = getAiSchemaIndex();
+      aiSchemaAvailable = !!aiIndex?.loaded;
+      if (aiIndex && aiSchemaAvailable) {
+        for (const f of project.files) {
+          if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
+            schemaFindings.push(...validateXmlAgainstSchema(f.content, aiIndex, { filePath: f.path, domain: "ai_scripts", reportUnknownElements: true, references }));
+          }
+        }
+      }
+    } catch { /* schema layer unavailable — reported via available flags */ }
+
+    const aiscriptLint: AiscriptLintFinding[] = [];
+    try {
+      const legalTypes = getAiOrderParamTypes(aiSchemaAvailable ? getAiSchemaIndex() : null);
+      for (const f of project.files) {
+        if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
+          aiscriptLint.push(...lintAiscriptOrderParams(f.content, legalTypes));
+        }
+      }
+    } catch { /* lint is pure; only reachable on truly malformed input */ }
+
+    const scriptPropertyFindings: ScriptPropertyFinding[] = [];
+    const spIndex = getScriptPropertyIndex();
+    if (spIndex) {
+      for (const f of project.files) {
+        const k = f.kind || classifyPath(f.path);
+        if ((k === "md" || k === "aiscript") && typeof f.content === "string") {
+          scriptPropertyFindings.push(...lintScriptPropertyChains(f.content, spIndex, { filePath: f.path }));
+        }
+      }
+    }
+
+    const schemaErrors = schemaFindings.filter(d => d.severity === "error").length;
+    const aiscriptErrors = aiscriptLint.filter(d => d.severity === "error").length;
     return res.json({
-      ok: structuralErrors === 0 && cueIndex.unresolved.length === 0 && crossFile.ok,
+      ok: structuralErrors === 0 && cueIndex.unresolved.length === 0 && crossFile.ok
+        && schemaErrors === 0 && aiscriptErrors === 0,
       summary: {
         files: project.files.length,
         structuralErrors,
@@ -5405,10 +5462,17 @@ app.post("/api/agent/project/validate", (req, res) => {
         crossFileErrors: crossFile.summary.errors,
         mdLuaMissingRegisters: crossFile.summary.mdLuaMissingRegisters,
         luaMdMissingListeners: crossFile.summary.luaMdMissingListeners,
+        schemaErrors,
+        schemaWarnings: schemaFindings.filter(d => d.severity === "warning").length,
+        aiscriptErrors,
+        scriptPropertyWarnings: scriptPropertyFindings.length,
       },
       structure,
       cueIndex, // { defined, references, unresolved } — cross-file linkage, first-class
       crossFile,
+      schema: { mdAvailable: mdSchemaAvailable, aiscriptAvailable: aiSchemaAvailable, findings: schemaFindings },
+      aiscript: { findings: aiscriptLint },
+      scriptProperties: { available: !!spIndex, findings: scriptPropertyFindings },
     });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project validate failed" });
@@ -5465,6 +5529,10 @@ app.get("/api/agent/position-picker-selftest", (_req, res) => {
     return res.status(500).json({ pass: false, error: errorMessage(error) || "position-picker-selftest failed" });
   }
 });
+
+// scriptproperties-selftest, aiscript-lint-selftest, scriptproperties-status —
+// registered by the validation module (src/server/validationRoutes.ts, stage-1 split).
+registerValidationAgentRoutes(app);
 
 // T4.2 Diff-to-Patch — synthesize the minimal X4 <diff> turning a vanilla file
 // into the user's edited copy (engine: src/lib/xpathSynth.ts). The vanilla side
