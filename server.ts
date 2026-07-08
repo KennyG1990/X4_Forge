@@ -87,10 +87,19 @@ import { runUILayoutSelftest } from "./src/lib/uiLayout";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
-import { classifyPath, runExtensionProjectSelftest, validateProjectStructure, indexCueReferences, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
-import { lintScriptPropertyChains, type ScriptPropertyFinding } from "./src/lib/scriptProperties";
-import { lintAiscriptOrderParams, type AiscriptLintFinding } from "./src/lib/aiscriptLint";
-import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
+import { classifyPath, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
+import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
+import { computeModDrift, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { runModDriftSelftest } from "./src/lib/modDrift";
+import { assessLuaStaleness, injectLuaVersionMarker, runLuaStalenessSelftest } from "./src/lib/luaStalenessCheck";
+import { registerGithubRoutes } from "./src/server/githubRoutes";
+import { runLiveCanvasTelemetrySelftest } from "./src/lib/liveCanvasTelemetry";
+import { runBridgeLiveStateSelftest } from "./src/lib/bridgeLiveState";
+import { getBridgeLiveState } from "./src/server/liveBridge";
+import { parseForgeWatches, runForgeWatchSelftest } from "./src/lib/forgeWatch";
+import { suggestExpression, runExpressionSuggestSelftest } from "./src/lib/expressionSuggest";
+import { listQuickFixes, runWorkspaceQuickFixesSelftest } from "./src/lib/workspaceQuickFixes";
+import { parse as luaParse } from "luaparse";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
 import {
@@ -282,7 +291,15 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/npc-identity-probe/selftest",
   "/agent/scriptproperties-selftest",
   "/agent/aiscript-lint-selftest",
-  "/agent/scriptproperties-status"
+  "/agent/scriptproperties-status",
+  "/agent/md-pitfall-selftest",
+  "/agent/lua-staleness-selftest",
+  "/agent/mod-drift-selftest",
+  "/agent/live-canvas-selftest",
+  "/agent/bridge-live-state-selftest",
+  "/agent/forge-watch-selftest",
+  "/agent/expression-suggest-selftest",
+  "/agent/quick-fixes-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -771,6 +788,50 @@ function collectModLogMarkers(modId: string): string[] {
   return Array.from(markers);
 }
 
+/** Resolve the deployed folder for a mod id (same candidate logic as the marker scan). */
+function findDeployedModDir(modId: string): string {
+  const resolved = resolveXsdConfig();
+  const roots = [resolved.filesystemPath, resolved.modWorkspacePath].filter(Boolean) as string[];
+  const bare = modId.toLowerCase().replace(/^x4_/, "");
+  const candidates = Array.from(new Set([modId, `x4_${modId}`, `${modId}_mod`, bare]));
+  for (const root of roots) {
+    for (const folder of candidates) {
+      const d = path.join(root, folder);
+      try { if (fs.statSync(d).isDirectory()) return d; } catch { /* */ }
+    }
+    try {
+      for (const ent of fs.readdirSync(root)) {
+        if (ent.toLowerCase().includes(bare)) {
+          const d = path.join(root, ent);
+          if (fs.statSync(d).isDirectory()) return d;
+        }
+      }
+    } catch { /* */ }
+  }
+  return "";
+}
+
+/** The deployed mod's ui *.lua files (path relative to mod dir + source), for staleness checks. */
+function collectModLuaFiles(modId: string): { path: string; source: string; absPath: string }[] {
+  const modDir = findDeployedModDir(modId);
+  if (!modDir) return [];
+  const out: { path: string; source: string; absPath: string }[] = [];
+  const scan = (dir: string, depth: number) => {
+    if (depth > 4 || out.length >= 50) return;
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries.slice(0, 300)) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) scan(full, depth + 1);
+      else if (/\.lua$/i.test(e.name)) {
+        try { out.push({ path: path.relative(modDir, full).replace(/\\/g, "/"), source: fs.readFileSync(full, "utf8"), absPath: full }); } catch { /* skip */ }
+      }
+    }
+  };
+  scan(path.join(modDir, "ui"), 0);
+  return out;
+}
+
 // A REAL engine/Lua fault signature — phrases the ENGINE emits, not text a mod author chose to print.
 // Crucial in X4: mods can only log via DebugError (which the engine stamps "[=ERROR=]"), so the "[=ERROR=]"
 // prefix and the bare word "error" appear on the mod's BENIGN heartbeat too and cannot be the signal. A
@@ -868,6 +929,11 @@ function getGameLogStatus(modIdInput?: string) {
   // as a bare [=ERROR=] line that names NO cue and NO mod. Attribute [=ERROR=] lines that sit right next to
   // the mod's marker lines to the mod → this is the RED Ken wanted (errors the cue-grep alone can't see).
   const runtime = countModRuntimeErrors(tail, modMarkers);
+  // LUA STALENESS (#7, RC-killer class) — compare the RESIDENT Lua version the game
+  // logged at boot (FORGE-LUAV marker) against the current on-disk file. X4 quickload
+  // does NOT reload ui/*.lua, so a mismatch means the MD and Lua halves are running
+  // different versions — full restart required. Honest tri-state when uninstrumented.
+  const luaStaleness = assessLuaStaleness(collectModLuaFiles(modId).map(f => ({ path: f.path, source: f.source })), tail);
   // BENIGN LOG NOISE — X4 logs "[error] [FileIO] Failed to verify the file signature for file … (error: 14)"
   // for EVERY unsigned loose mod file at load. It's harmless (the mod still loads in modified mode) and
   // PERMANENT for any dev mod, so counting it would pin the watcher red forever. A file that's actually broken
@@ -897,6 +963,8 @@ function getGameLogStatus(modIdInput?: string) {
   if (cueLiveness.erroringCount > 0 && status !== "stale") status = "errors";
   // Runtime Lua errors adjacent to the mod's marker are RED too, even when no cue is named.
   if (runtime.count > 0 && status !== "stale") status = "errors";
+  // Resident-Lua staleness is at least a WARNING — the mod halves are running mismatched versions.
+  if (luaStaleness.restartRequired && status === "clean") status = "warnings";
   const runtimeNote = runtime.count > 0
     ? ` ✗ ${runtime.count} runtime error(s) logged next to the mod's "${modMarkers.join('/')}" marker (likely the mod's Lua): ${runtime.samples.slice(0, 2).join(' | ')}`
     : "";
@@ -907,7 +975,8 @@ function getGameLogStatus(modIdInput?: string) {
       : cueLiveness.totalCues > 0
         ? ` (No cue activity for this mod in the tail — a healthy mod that emits no debug markers logs nothing, so this alone is not a fault.)`
         : "";
-  const summary = baseSummary + cueNote + runtimeNote;
+  const staleNote = luaStaleness.restartRequired ? ` ${luaStaleness.summary}` : "";
+  const summary = baseSummary + cueNote + runtimeNote + staleNote;
 
   const states = computeGameStates({ tail, modIds, deployed: Boolean(relevantLastDeploy), stale: staleForLastDeploy });
 
@@ -919,6 +988,8 @@ function getGameLogStatus(modIdInput?: string) {
     // Mod runtime (Lua) errors detected by marker-proximity — RED even when no cue is named.
     modMarkers,
     modRuntime: { markersSeen: runtime.markerLines > 0, markerLines: runtime.markerLines, errorCount: runtime.count, samples: runtime.samples },
+    // Resident-vs-disk Lua version check (#7). unknown_* verdicts are honest, not faults.
+    luaStaleness,
     // Explicit pipeline states: Compiled -> Deployed -> Seen by X4 -> Loaded cleanly -> Runtime errors.
     states,
     selectedLogPath,
@@ -1220,10 +1291,8 @@ function getObjectIndex(): X4ObjectIndex {
   return index;
 }
 
-function getSchemaIndex(): SchemaIndex {
-  const resolved = resolveXsdConfig();
-  return buildSchemaIndex([resolved.mdXsdPath, resolved.commonXsdPath].filter(Boolean));
-}
+// getSchemaIndex moved to src/server/projectValidation.ts (stage-2 modularization);
+// imported above so every existing call site keeps working unchanged.
 
 // AI schema index (with cat/dat harvest fallback), order-param types, and the
 // scriptproperty index live in src/server/validationRoutes.ts — stage 1 of the
@@ -3980,12 +4049,30 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   // WareDef/JobDef models so a studio-authored economy mod round-trips as EDITABLE rather
   // than preserved-raw. parse* returns null for unrecognized content → falls back to
   // passthrough (lossless), so external files carrying unmodeled fields are never flattened.
+  // BYTE-FAITHFUL GUARD (2026-07-09, same standard as the aiscripts import below): a
+  // parse is only accepted as EDITABLE when re-compiling the parsed model reproduces the
+  // original file EXACTLY — otherwise regeneration would silently drop unmodeled fields
+  // (grounding found vanilla wares.xml losing 67% through the old unguarded path).
+  // Foreign/vanilla/diff files therefore stay passthrough (lossless); studio-emitted
+  // files round-trip byte-identically and stay editable.
   let importedWares: any[] | null = null;
   let importedJobs: any[] | null = null;
   const waresRel = relFiles.find(f => f.toLowerCase() === 'libraries/wares.xml');
-  if (waresRel) { try { importedWares = parseWaresXml(fs.readFileSync(path.join(absDir, waresRel), 'utf8')); } catch { /* passthrough */ } }
+  if (waresRel) {
+    try {
+      const waresText = fs.readFileSync(path.join(absDir, waresRel), 'utf8');
+      const parsed = parseWaresXml(waresText);
+      if (parsed && compileWaresXML(parsed) === waresText) importedWares = parsed;
+    } catch { /* passthrough */ }
+  }
   const jobsRel = relFiles.find(f => f.toLowerCase() === 'libraries/jobs.xml');
-  if (jobsRel) { try { importedJobs = parseJobsXml(fs.readFileSync(path.join(absDir, jobsRel), 'utf8')); } catch { /* passthrough */ } }
+  if (jobsRel) {
+    try {
+      const jobsText = fs.readFileSync(path.join(absDir, jobsRel), 'utf8');
+      const parsed = parseJobsXml(jobsText);
+      if (parsed && compileJobsXML(parsed) === jobsText) importedJobs = parsed;
+    } catch { /* passthrough */ }
+  }
 
   // #65 — aiscripts import as EDITABLE when faithfulness-safe, else passthrough. Two
   // determinism guards so re-export can't diverge from the original: (1) the parsed model
@@ -5381,99 +5468,44 @@ app.post("/api/agent/project/validate-crossfile", (req, res) => {
   }
 });
 
+// Full validation layering (structure → cues → cross-file → XSD md/aiscript →
+// aiscript order-param lint → scriptproperty chains) lives in
+// src/server/projectValidation.ts (stage-2 modularization). Two input modes:
+//   { project: {...} }        — inline payload (as before)
+//   { fromPath: "x4_ai_influence" } — server reads the mod folder ITSELF from the
+//     configured roots (mod workspace / live extensions dir) — ROADMAP tool-improvement
+//     #6 (no ~20KB inline ceiling, no sandbox staleness) and the #5 "validate the LIVE
+//     deployed mod" workflow. Path-containment guarded; never reads outside the roots.
 app.post("/api/agent/project/validate", (req, res) => {
   try {
-    const project = req.body?.project as ExtensionProject | undefined;
+    let project = req.body?.project as ExtensionProject | undefined;
+    let source: { mode: "inline" } | { mode: "fromPath"; root: string; loaded: string[]; skipped: { path: string; reason: string }[] } = { mode: "inline" };
+
+    const fromPath = typeof req.body?.fromPath === "string" ? req.body.fromPath.trim() : "";
+    if (fromPath) {
+      const resolvedFolder = resolveModFolder(fromPath);
+      if ("error" in resolvedFolder) {
+        return res.status(resolvedFolder.status).json({ error: resolvedFolder.error });
+      }
+      const load = loadProjectFromDisk(resolvedFolder.abs);
+      project = load.project;
+      source = { mode: "fromPath", root: load.root, loaded: load.loaded, skipped: load.skipped };
+    }
+
     if (!project || typeof project !== "object" || !Array.isArray(project.files)) {
-      return res.status(400).json({ error: "Body must be { project: { id, name, files: [{ path, kind, content? }, ...] } }." });
+      return res.status(400).json({ error: "Body must be { project: { id, name, files: [...] } } or { fromPath: \"<mod folder>\" }." });
     }
     if (project.files.length > 2000) {
       return res.status(413).json({ error: "Project has too many files (>2000)." });
     }
-    const structure = validateProjectStructure(project);
-    const cueIndex = indexCueReferences(project);
-    const crossFile = validateProjectCrossFile(project);
-    const structuralErrors = structure.filter(i => i.severity === "error").length;
 
-    // ROADMAP gap #8 fix — project/validate now runs REAL XSD validation on md/aiscript
-    // file contents (it previously checked only structure + cue refs + cross-file wiring,
-    // which is how a schema-illegal bare <event_offer_accepted/> passed with ok:true and
-    // silently never registered in-game). Plus the two offline-catch layers from the AARs:
-    // scriptproperty chain lint (warnings — 2026-06-27 gap) and aiscript order-param lint
-    // (errors — 2026-07-01 gap). Each layer degrades honestly when its data source is
-    // unavailable (`available:false`), never claiming a check it didn't run.
-    const schemaFindings: Array<{ severity: string; filePath?: string; message: string; line?: number; code?: string; sourceRef?: string }> = [];
-    let mdSchemaAvailable = false;
-    let aiSchemaAvailable = false;
-    try {
-      const mdIndex = getSchemaIndex();
-      mdSchemaAvailable = !!mdIndex.loaded && mdIndex.elements.size > 0;
-      const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-      if (mdSchemaAvailable) {
-        for (const f of project.files) {
-          if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
-            schemaFindings.push(...validateXmlAgainstSchema(f.content, mdIndex, { filePath: f.path, domain: "mission_director", reportUnknownElements: true, references }));
-          }
-        }
-      }
-      const aiIndex = getAiSchemaIndex();
-      aiSchemaAvailable = !!aiIndex?.loaded;
-      if (aiIndex && aiSchemaAvailable) {
-        for (const f of project.files) {
-          if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
-            schemaFindings.push(...validateXmlAgainstSchema(f.content, aiIndex, { filePath: f.path, domain: "ai_scripts", reportUnknownElements: true, references }));
-          }
-        }
-      }
-    } catch { /* schema layer unavailable — reported via available flags */ }
-
-    const aiscriptLint: AiscriptLintFinding[] = [];
-    try {
-      const legalTypes = getAiOrderParamTypes(aiSchemaAvailable ? getAiSchemaIndex() : null);
-      for (const f of project.files) {
-        if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
-          aiscriptLint.push(...lintAiscriptOrderParams(f.content, legalTypes));
-        }
-      }
-    } catch { /* lint is pure; only reachable on truly malformed input */ }
-
-    const scriptPropertyFindings: ScriptPropertyFinding[] = [];
-    const spIndex = getScriptPropertyIndex();
-    if (spIndex) {
-      for (const f of project.files) {
-        const k = f.kind || classifyPath(f.path);
-        if ((k === "md" || k === "aiscript") && typeof f.content === "string") {
-          scriptPropertyFindings.push(...lintScriptPropertyChains(f.content, spIndex, { filePath: f.path }));
-        }
-      }
-    }
-
-    const schemaErrors = schemaFindings.filter(d => d.severity === "error").length;
-    const aiscriptErrors = aiscriptLint.filter(d => d.severity === "error").length;
-    return res.json({
-      ok: structuralErrors === 0 && cueIndex.unresolved.length === 0 && crossFile.ok
-        && schemaErrors === 0 && aiscriptErrors === 0,
-      summary: {
-        files: project.files.length,
-        structuralErrors,
-        definedCues: cueIndex.defined.length,
-        cueReferences: cueIndex.references.length,
-        unresolvedCueRefs: cueIndex.unresolved.length,
-        crossFileErrors: crossFile.summary.errors,
-        mdLuaMissingRegisters: crossFile.summary.mdLuaMissingRegisters,
-        luaMdMissingListeners: crossFile.summary.luaMdMissingListeners,
-        schemaErrors,
-        schemaWarnings: schemaFindings.filter(d => d.severity === "warning").length,
-        aiscriptErrors,
-        scriptPropertyWarnings: scriptPropertyFindings.length,
-      },
-      structure,
-      cueIndex, // { defined, references, unresolved } — cross-file linkage, first-class
-      crossFile,
-      schema: { mdAvailable: mdSchemaAvailable, aiscriptAvailable: aiSchemaAvailable, findings: schemaFindings },
-      aiscript: { findings: aiscriptLint },
-      scriptProperties: { available: !!spIndex, findings: scriptPropertyFindings },
-    });
+    const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+    const result = runProjectValidation(project, { references });
+    // Drift-as-first-class-state: when the validated mod exists as BOTH a workspace copy
+    // and a deployed copy, report their divergence alongside the verdict — validating a
+    // stale copy without knowing it is the trap (ROADMAP #5, confirmed 2026-07-09).
+    const drift = source.mode === "fromPath" ? computeModDrift(path.basename(source.root)) : null;
+    return res.json({ ...result, source, ...(drift ? { drift } : {}) });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project validate failed" });
   }
@@ -5533,6 +5565,177 @@ app.get("/api/agent/position-picker-selftest", (_req, res) => {
 // scriptproperties-selftest, aiscript-lint-selftest, scriptproperties-status —
 // registered by the validation module (src/server/validationRoutes.ts, stage-1 split).
 registerValidationAgentRoutes(app);
+
+app.get("/api/agent/mod-drift-selftest", (_req, res) => {
+  try {
+    return res.json(runModDriftSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "mod-drift-selftest failed" });
+  }
+});
+
+// Drift report for one mod present in BOTH the workspace and deployed roots.
+app.get("/api/agent/mod-drift", (req, res) => {
+  try {
+    const mod = String(req.query.mod || "").trim();
+    if (!mod) return res.status(400).json({ error: "Query ?mod=<folder name> required." });
+    const report = computeModDrift(mod);
+    if (!report) return res.status(404).json({ error: `"${mod}" is not present in both the mod workspace and the deployed extensions root (nothing to compare).` });
+    return res.json(report);
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "mod-drift failed" });
+  }
+});
+
+// LIVE cue telemetry for the canvas (Play-In-Editor-adjacent, slice 1): the Canvas
+// posts ITS OWN cue names and gets back per-cue fire/error counts from the debug-log
+// tail, plus a `live` freshness flag (log written within the last 2 minutes = the game
+// is actively playing). Works for undeployed workspaces too — names come from the graph.
+app.post("/api/agent/live/cue-telemetry", async (req, res) => {
+  try {
+    const cueNames = Array.isArray(req.body?.cueNames)
+      ? req.body.cueNames.map((n: unknown) => String(n || "").trim()).filter(Boolean).slice(0, 500)
+      : [];
+    if (!cueNames.length) return res.status(400).json({ error: "Body must be { cueNames: string[] }." });
+    const bridge = await getBridgeLiveState(); // cached ~10s; never throws
+    const candidates = findDebugLogCandidates();
+    const logPath = candidates.find(c => { try { return fs.statSync(c).isFile(); } catch { return false; } });
+    if (!logPath) return res.json({ available: false, live: false, reason: "No X4 debuglog found in the known locations.", cues: [], watches: [], bridge });
+    const stat = fs.statSync(logPath);
+    const tail = readTail(logPath, 256 * 1024);
+    const telemetry = parseLogTelemetry(tail, cueNames);
+    return res.json({
+      available: true,
+      logPath,
+      logUpdatedAt: stat.mtime.toISOString(),
+      live: (Date.now() - stat.mtimeMs) < 120_000,
+      cues: telemetry.cues,
+      totals: telemetry.totals,
+      // FORGE-WATCH protocol values (slice 3) — latest per name from the tail.
+      watches: parseForgeWatches(tail),
+      // game←→bridge chain freshness (slice 2).
+      bridge,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "live cue-telemetry failed" });
+  }
+});
+
+// Expression autocomplete (beta-UX pass): legal property continuations for the text
+// being typed, from the REAL scriptproperties index — the "Gmail completion" for MD.
+app.post("/api/agent/suggest/expression", (req, res) => {
+  try {
+    const text = String(req.body?.text ?? "");
+    const caret = Number.isFinite(req.body?.caret) ? Number(req.body.caret) : text.length;
+    if (text.length > 4000) return res.json({ suggestions: [] });
+    const spIndex = getScriptPropertyIndex();
+    if (!spIndex) return res.json({ suggestions: [], available: false });
+    return res.json({ available: true, suggestions: suggestExpression(text, caret, spIndex) });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "expression suggest failed" });
+  }
+});
+
+// Quick-fix listing (beta-UX): descriptors for one-click repairs on the workspace graph.
+// Listing runs here (the scriptproperty union lives server-side); application is the
+// client's pure applyQuickFix inside an undo checkpoint.
+app.post("/api/agent/quick-fixes", (req, res) => {
+  try {
+    const ws = req.body?.workspace;
+    if (!ws || !Array.isArray(ws.nodes)) return res.status(400).json({ error: "Body must be { workspace: { nodes, links } }." });
+    const spIndex = getScriptPropertyIndex();
+    return res.json({ fixes: listQuickFixes(ws, { propertyUnion: spIndex?.union }) });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "quick-fixes failed" });
+  }
+});
+
+app.get("/api/agent/quick-fixes-selftest", (_req, res) => {
+  try {
+    return res.json(runWorkspaceQuickFixesSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "quick-fixes-selftest failed" });
+  }
+});
+
+app.get("/api/agent/expression-suggest-selftest", (_req, res) => {
+  try {
+    const spIndex = getScriptPropertyIndex();
+    if (!spIndex) return res.json({ allPassed: false, pass: false, passed: 0, total: 0, checks: [], error: "scriptproperty index unavailable" });
+    return res.json(runExpressionSuggestSelftest(spIndex));
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "expression-suggest-selftest failed" });
+  }
+});
+
+app.get("/api/agent/live/bridge-state", async (_req, res) => {
+  try {
+    return res.json(await getBridgeLiveState());
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "bridge-state failed" });
+  }
+});
+
+app.get("/api/agent/bridge-live-state-selftest", (_req, res) => {
+  try {
+    return res.json(runBridgeLiveStateSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "bridge-live-state-selftest failed" });
+  }
+});
+
+app.get("/api/agent/forge-watch-selftest", (_req, res) => {
+  try {
+    return res.json(runForgeWatchSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "forge-watch-selftest failed" });
+  }
+});
+
+app.get("/api/agent/live-canvas-selftest", (_req, res) => {
+  try {
+    return res.json(runLiveCanvasTelemetrySelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "live-canvas-selftest failed" });
+  }
+});
+
+app.get("/api/agent/lua-staleness-selftest", (_req, res) => {
+  try {
+    return res.json(runLuaStalenessSelftest());
+  } catch (error) {
+    return res.status(500).json({ pass: false, error: errorMessage(error) || "lua-staleness-selftest failed" });
+  }
+});
+
+// Instrument a deployed mod's ui *.lua with FORGE-LUAV boot markers so the game-log
+// watcher can detect resident-vs-disk staleness (#7). Idempotent; every rewritten file
+// must pass luaparse BEFORE it is written (never break a live mod), else it's skipped.
+app.post("/api/agent/lua-staleness/instrument", (req, res) => {
+  try {
+    const modId = toSafeModId(String(req.body?.modId || ""));
+    if (!modId) return res.status(400).json({ error: "Body must be { modId }." });
+    const files = collectModLuaFiles(modId);
+    if (!files.length) return res.status(404).json({ error: `No ui *.lua files found for mod "${modId}".` });
+    const prefix = (collectModLogMarkers(modId)[0] || "FORGE").toUpperCase();
+    const results: { path: string; action: string; hash?: string; error?: string }[] = [];
+    for (const f of files) {
+      const injected = injectLuaVersionMarker(f.source, prefix);
+      if (injected.source === f.source) { results.push({ path: f.path, action: "unchanged", hash: injected.hash }); continue; }
+      try {
+        luaParse(injected.source, { luaVersion: "5.2" });
+      } catch (err) {
+        results.push({ path: f.path, action: "SKIPPED (instrumented source failed luaparse — file left untouched)", error: errorMessage(err) });
+        continue;
+      }
+      fs.writeFileSync(f.absPath, injected.source, "utf8");
+      results.push({ path: f.path, action: "instrumented", hash: injected.hash });
+    }
+    return res.json({ modId, prefix, results, note: "Markers log at next game boot; the watcher then reports resident-vs-disk staleness." });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "lua-staleness instrument failed" });
+  }
+});
 
 // T4.2 Diff-to-Patch — synthesize the minimal X4 <diff> turning a vanilla file
 // into the user's edited copy (engine: src/lib/xpathSynth.ts). The vanilla side
@@ -6728,6 +6931,28 @@ app.post("/api/agent/deploy", (req, res) => {
     }
 
     const modId = effectiveModId(ws);
+
+    // SAFETY GATE (2026-07-09): refuse to write malformed XML over an installed mod.
+    // Passthrough imports carry their original bytes into the deploy payload, so a
+    // corrupted source file (truncated mid-tag — the H1 damage class, found live in the
+    // forked x4_ai_influence workspace copy) would silently clobber a WORKING deployed
+    // mod. Same check the preflight chain runs; here it guards the legacy route too.
+    {
+      const gate = buildWorkspaceFileManifest(ws);
+      const malformed: string[] = [];
+      for (const [rel, content] of Object.entries(gate.files)) {
+        if (!/\.xml$/i.test(rel)) continue;
+        if (!checkXmlWellformed(String(content)).ok) malformed.push(rel);
+      }
+      if (malformed.length > 0) {
+        return res.status(422).json({
+          success: false,
+          error: `Deploy blocked: ${malformed.length} emitted XML file(s) are malformed (likely corrupted/truncated source): ${malformed.slice(0, 5).join(', ')}. Deploying would overwrite the installed mod with broken files. Fix or re-import the source first (use Deploy + Verify for the full preflight).`,
+          malformed,
+        });
+      }
+    }
+
     let stagingPath = '';
     let deployedPath = '';
 
@@ -6793,11 +7018,35 @@ app.post("/api/agent/deploy", (req, res) => {
 // (auto-FAIL on duplicate-id / folder-id-mismatch). Returns a single pass/fail verdict so the
 // agent/UI never skips the doctor. On-demand only (not a hot poll), so full-folder scan is fine.
 app.post("/api/agent/deploy-verify", (req, res) => {
+  // PREFLIGHT CHECKLIST (beta-UX bundle C, 2026-07-09): every stage reports into an
+  // ordered walkaround card — pass/warn/fail per check, later stages 'skipped' on a
+  // failure — so the user sees the whole preflight, not just the first red light.
+  const checklist: Array<{ id: string; label: string; status: 'pass' | 'warn' | 'fail' | 'skipped'; detail: string }> = [];
+  const check = (id: string, label: string, status: 'pass' | 'warn' | 'fail', detail: string) =>
+    checklist.push({ id, label, status, detail });
+  const STAGES: Array<[string, string]> = [
+    ['config', 'Paths configured'], ['import', 'Mod source read'], ['wellformed', 'XML well-formed'],
+    ['compile', 'Compile diagnostics'], ['preflight', 'Full validation (schema/cues/lints)'],
+    ['deploy', 'Written to staging + extensions'], ['bytes', 'Deployed bytes confirmed'],
+    ['doctor', 'Extension doctor'], ['drift', 'Workspace/deployed sync'],
+  ];
+  const failWith = (stageId: string, payload: Record<string, unknown>) => {
+    let hit = false;
+    for (const [id, label] of STAGES) {
+      if (id === stageId) { hit = true; continue; }
+      if (hit && !checklist.some(c => c.id === id)) checklist.push({ id, label, status: 'skipped', detail: 'Not reached — fix the failure above first.' });
+    }
+    return { ok: false, stage: stageId, checklist, ...payload };
+  };
   try {
     const resolved = resolveXsdConfig();
     const x4GamePath = resolved.x4GamePath;
     const modWorkspacePath = resolved.modWorkspacePath;
-    if (!x4GamePath) return res.status(400).json({ ok: false, stage: 'config', error: 'X4 Game Installation path not configured.' });
+    if (!x4GamePath) {
+      check('config', 'Paths configured', 'fail', 'X4 Game Installation path not configured.');
+      return res.status(400).json(failWith('config', { error: 'X4 Game Installation path not configured.' }));
+    }
+    check('config', 'Paths configured', 'pass', `game=${x4GamePath}${modWorkspacePath ? ' · staging=' + modWorkspacePath : ''}`);
 
     // 1. Resolve workspace: fresh import-by-path if given, else the active workspace.
     let ws: any;
@@ -6805,11 +7054,16 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     const reqPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
     if (reqPath) {
       const r = resolveModFolder(reqPath);
-      if ('error' in r) return res.status(r.status).json({ ok: false, stage: 'import', error: r.error });
+      if ('error' in r) {
+        check('import', 'Mod source read', 'fail', r.error);
+        return res.status(r.status).json(failWith('import', { error: r.error }));
+      }
       modSourceDir = r.abs;
       ws = importModFolder(r.abs).workspace;
+      check('import', 'Mod source read', 'pass', `fresh from ${reqPath} (${(ws.nodes || []).length} nodes)`);
     } else {
       ws = sanitizeWorkspace(activeWorkspace);
+      check('import', 'Mod source read', 'pass', `active workspace "${ws.name}"`);
     }
 
     // 1b. Well-formedness gate on the SOURCE .xml files on disk. importModFolder keeps MD as
@@ -6839,8 +7093,10 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         }
       }
       if (malformed.length > 0) {
-        return res.json({ ok: false, stage: 'wellformed', modId: ws?.name || reqPath, malformed });
+        check('wellformed', 'XML well-formed', 'fail', malformed.map(m => m.file).join(', '));
+        return res.json(failWith('wellformed', { modId: ws?.name || reqPath, malformed }));
       }
+      check('wellformed', 'XML well-formed', 'pass', `${xmlFiles.length} source XML file(s) parse cleanly`);
     }
 
     // 2. Compile gate — reuse the exact diagnostics the /compile route runs, but gate on the
@@ -6848,13 +7104,59 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     // graph), so runModDoctor's "no cue nodes" (package.readiness) false-fires even though the
     // deployed file has cues. Exclude that one code when the emitted MD actually contains cues.
     const { modId, files } = buildWorkspaceFileManifest(ws);
+
+    // 1c. Wellformedness over the EMITTED manifest — closes the passthrough hole: a
+    // byte-fidelity import carries its ORIGINAL (possibly truncated/corrupted) files
+    // straight into the deploy payload, so "well-formed by construction" is only true
+    // for generated XML. Found live 2026-07-09: the forked workspace copy of
+    // x4_ai_influence contains truncated files an active-workspace deploy would have
+    // written OVER the working in-game mod. This gate makes that impossible.
+    {
+      const emittedMalformed: Array<{ file: string; errors: unknown[] }> = [];
+      for (const [rel, content] of Object.entries(files)) {
+        if (!/\.xml$/i.test(rel)) continue;
+        const wf = checkXmlWellformed(String(content));
+        if (!wf.ok) emittedMalformed.push({ file: rel, errors: wf.errors.slice(0, 3) });
+      }
+      if (emittedMalformed.length > 0) {
+        check('wellformed', 'XML well-formed', 'fail', 'EMITTED files malformed (corrupted passthrough?): ' + emittedMalformed.map(m => m.file).join(', '));
+        return res.json(failWith('wellformed', { modId: ws?.name || reqPath, malformed: emittedMalformed }));
+      }
+      if (!checklist.some(c => c.id === 'wellformed')) {
+        check('wellformed', 'XML well-formed', 'pass', `${Object.keys(files).filter(k => /\.xml$/i.test(k)).length} emitted XML file(s) parse cleanly`);
+      }
+    }
+
     const emittedMd = Object.entries(files).filter(([k]) => /^md\/.*\.xml$/i.test(k)).map(([, v]) => String(v)).join('\n');
     const hasCuesInEmitted = /<cue\b|<library\b/i.test(emittedMd);
     const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId), ...runPatchDiagnostics(ws)];
     const compileErrors = diagnostics.filter((d: any) => d.severity === 'error' && !(d.code === 'package.readiness' && hasCuesInEmitted));
     if (compileErrors.length > 0) {
-      return res.json({ ok: false, stage: 'compile', modId, compileErrors: compileErrors.slice(0, 10) });
+      check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
+      return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
     }
+    check('compile', 'Compile diagnostics', 'pass', `0 errors across doctor/schema/patch (${diagnostics.length} total findings)`);
+
+    // 2b. PREFLIGHT — the FULL validation stack over the emitted manifest (same engine as
+    // project/validate: structure, cue refs, MD↔Lua wiring, XSD md+aiscript, order-param
+    // lint, scriptproperty chains, pitfall lints). Errors block; warnings surface.
+    const manifestProject = {
+      id: modId,
+      name: modId,
+      files: Object.entries(files).map(([p, c]) => ({ path: p, kind: classifyPath(p), content: String(c) })),
+    };
+    const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+    const preflight = runProjectValidation(manifestProject as any, { references });
+    const pfWarnings = preflight.summary.schemaWarnings + preflight.summary.scriptPropertyWarnings + preflight.summary.mdPitfallWarnings;
+    if (!preflight.ok) {
+      check('preflight', 'Full validation (schema/cues/lints)', 'fail',
+        `${preflight.summary.schemaErrors} schema, ${preflight.summary.unresolvedCueRefs} cue, ${preflight.summary.crossFileErrors} cross-file, ${preflight.summary.aiscriptErrors} aiscript error(s)`);
+      return res.json(failWith('preflight', { modId, preflight: { summary: preflight.summary, findings: [...preflight.schema.findings, ...preflight.crossFile.findings].slice(0, 10) } }));
+    }
+    check('preflight', 'Full validation (schema/cues/lints)', pfWarnings > 0 ? 'warn' : 'pass',
+      pfWarnings > 0
+        ? `0 errors; ${pfWarnings} warning(s) — ${preflight.summary.scriptPropertyWarnings} scriptproperty, ${preflight.summary.mdPitfallWarnings} pitfall, ${preflight.summary.schemaWarnings} schema`
+        : '0 errors, 0 warnings across the full stack');
 
     // 3. Deploy — staging (writeSnapshots) + game extensions (clean), same as /deploy.
     let stagingPath = '';
@@ -6877,10 +7179,26 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     const modFindings = (doctor.findings || []).filter((f: any) => JSON.stringify(f).toLowerCase().includes(modId.toLowerCase()));
     const blocking = modFindings.filter((f: any) => f.severity === 'error' || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
 
+    check('deploy', 'Written to staging + extensions', 'pass', deployedPath + (stagingPath ? ` (+ staging)` : ''));
+    check('bytes', 'Deployed bytes confirmed', bytesConfirmed ? 'pass' : 'fail',
+      bytesConfirmed ? `content.xml ${deployedBytes}b, id "${deployedId}"` : `content.xml missing/empty or id mismatch (got "${deployedId}", want "${modId}")`);
+    check('doctor', 'Extension doctor', blocking.length === 0 ? 'pass' : 'fail',
+      blocking.length === 0 ? `${modFindings.length} finding(s) for this mod, none blocking` : blocking.map((f: any) => f.code).join(', '));
+
+    // 6. Drift — after a deploy the workspace and deployed copies should agree.
+    const driftReport = computeModDrift(path.basename(deployedPath));
+    if (driftReport) {
+      check('drift', 'Workspace/deployed sync', driftReport.verdict === 'identical' ? 'pass' : 'warn', driftReport.summary);
+    } else {
+      check('drift', 'Workspace/deployed sync', 'pass', 'single-copy mod (nothing to compare)');
+    }
+
     const ok = bytesConfirmed && blocking.length === 0;
     lastDeployInfo = { modId, workspaceName: ws.name, deployedAt: new Date().toISOString(), stagingPath: stagingPath || undefined, deployedPath: deployedPath || undefined };
     return res.json({
       ok, stage: 'done', modId, deployedPath, stagingPath, bytesConfirmed, deployedBytes,
+      checklist,
+      preflightWarnings: pfWarnings,
       compileErrors: [],
       doctor: {
         scanned: doctor.findings?.length || 0,
@@ -7411,321 +7729,11 @@ Use real X4 Mission Director xmlTags. Each requirement: {id, label (plain Englis
 });
 
 
-// -----------------------------------------------------
-// 3. SECURE GITHUB API SYSTEM PROXY
-// -----------------------------------------------------
-
-app.post("/api/github/load", async (req, res) => {
-  const { pat, owner, repo, path: filePath, branch } = req.body;
-  
-  if (!owner || !repo || !filePath) {
-    return res.status(400).json({ error: "Missing repo parameters (owner, repo, or path)." });
-  }
-
-  // Token is optional if repo is public, but helpful to configure
-  const headers: Record<string, string> = {
-    "Accept": "application/vnd.github.v3+json",
-    "User-Agent": "x4-md-studio-proxy"
-  };
-
-  if (pat) {
-    headers["Authorization"] = `token ${pat}`;
-  }
-
-  try {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch || "main"}`;
-    const response = await fetch(url, { headers });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      return res.status(response.status).json({
-        error: `GitHub returned error: ${response.statusText}`,
-        details: errorText
-      });
-    }
-    
-    const data: any = await response.json();
-    if (data.type !== "file") {
-      return res.status(400).json({ error: "Selected path is not a single file." });
-    }
-
-    const decoded = Buffer.from(data.content, "base64").toString("utf-8");
-    return res.json({
-      success: true,
-      sha: data.sha,
-      content: decoded,
-      fileName: data.name
-    });
-  } catch (error) {
-    console.error("GitHub file load error: ", error);
-    return res.status(500).json({ error: error.message || "Failed to load file from GitHub." });
-  }
-});
-
-app.post("/api/github/push", async (req, res) => {
-  const { pat, owner, repo, branch, commitMessage, files } = req.body;
-
-  if (!pat) {
-    return res.status(400).json({ error: "GitHub Personal Access Token (PAT) is required." });
-  }
-  if (!owner || !repo) {
-    return res.status(400).json({ error: "Owner and repository name are required." });
-  }
-  if (!files || !Array.isArray(files) || files.length === 0) {
-    return res.status(400).json({ error: "No files provided to push." });
-  }
-
-  const selectedBranch = branch || "main";
-  const msg = commitMessage || "Update mod files from X4 Forge";
-  const results: any[] = [];
-
-  try {
-    // For each file, we'll sequentially commit it
-    for (const file of files) {
-      const { path: filePath, content } = file;
-      if (!filePath || content === undefined) continue;
-
-      const headers: Record<string, string> = {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": `token ${pat}`,
-        "User-Agent": "x4-md-studio-proxy"
-      };
-
-      // 1. Get the pre-existing SHA if it exists
-      let currentSha: string | undefined;
-      const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${selectedBranch}`;
-      
-      try {
-        const getRes = await fetch(getUrl, { headers });
-        if (getRes.status === 200) {
-          const getData: any = await getRes.json();
-          currentSha = getData.sha;
-        }
-      } catch {
-        // Log error but ignore (might be new file)
-        console.log(`Pre-fetch SHA failed for ${filePath}, assuming new file.`);
-      }
-
-      // 2. Put file contents back
-      const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
-      const base64Content = Buffer.from(content).toString("base64");
-      
-      const bodyPayload: any = {
-        message: msg,
-        content: base64Content,
-        branch: selectedBranch
-      };
-      
-      if (currentSha) {
-        bodyPayload.sha = currentSha;
-      }
-
-      const putRes = await fetch(putUrl, {
-        method: "PUT",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(bodyPayload)
-      });
-
-      if (!putRes.ok) {
-        const errDetails = await putRes.text();
-        throw new Error(`Failed to push file: ${filePath}. Status: ${putRes.status}, Response: ${errDetails}`);
-      }
-
-      const putData: any = await putRes.json();
-      results.push({
-        path: filePath,
-        sha: putData.content.sha,
-        success: true
-      });
-    }
-
-    return res.json({
-      success: true,
-      message: `Successfully pushed ${results.length} files to ${owner}/${repo} on branch ${selectedBranch}.`,
-      results
-    });
-
-  } catch (error) {
-    console.error("GitHub push error: ", error);
-    return res.status(500).json({ error: error.message || "Failed to commit files to GitHub." });
-  }
-});
-
-
-/**
- * POST /api/github/create
- * Creates a new GitHub repository under the authenticated user (from the PAT),
- * so a mod-in-progress can be published as a fresh repo in one click.
- */
-app.post("/api/github/create", async (req, res) => {
-  const { pat, name, description, private: isPrivate } = req.body;
-
-  if (!pat) {
-    return res.status(400).json({ error: "GitHub Personal Access Token (PAT) is required." });
-  }
-  if (!name) {
-    return res.status(400).json({ error: "Repository name is required." });
-  }
-
-  try {
-    const response = await fetch("https://api.github.com/user/repos", {
-      method: "POST",
-      headers: {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": `token ${pat}`,
-        "User-Agent": "x4-md-studio-proxy",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        name,
-        description: description || "X4 Foundations mod created with X4 Forge",
-        private: !!isPrivate,
-        auto_init: false
-      })
-    });
-
-    const data: any = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: data?.message || `GitHub returned error code ${response.status}`,
-        details: data?.errors
-      });
-    }
-
-    return res.json({
-      success: true,
-      owner: data.owner?.login,
-      repo: data.name,
-      full_name: data.full_name,
-      html_url: data.html_url,
-      default_branch: data.default_branch || "main"
-    });
-  } catch (error) {
-    console.error("GitHub create-repo error: ", error);
-    return res.status(500).json({ error: error.message || "Failed to create GitHub repository." });
-  }
-});
-
-
-/**
- * POST /api/github/device/start
- * Begins the GitHub OAuth Device Flow: requests a device + user code so the user can
- * authorize in their browser (no PAT copy-paste, no client secret needed).
- */
-app.post("/api/github/device/start", async (req, res) => {
-  const clientId = String(req.body?.client_id || process.env.GITHUB_CLIENT_ID || "").trim();
-  const scope = String(req.body?.scope || "repo").trim();
-  if (!clientId) {
-    return res.status(400).json({ error: "Missing GitHub OAuth Client ID. Register an OAuth App (with Device Flow enabled) and provide its Client ID." });
-  }
-  try {
-    const response = await fetch("https://github.com/login/device/code", {
-      method: "POST",
-      headers: { "Accept": "application/json", "Content-Type": "application/json", "User-Agent": "x4-md-studio" },
-      body: JSON.stringify({ client_id: clientId, scope })
-    });
-    const data: any = await response.json();
-    if (!response.ok || data.error) {
-      return res.status(400).json({ error: data.error_description || data.error || "Failed to start GitHub device authorization." });
-    }
-    // data: device_code, user_code, verification_uri, expires_in, interval
-    return res.json(data);
-  } catch (error) {
-    return res.status(500).json({ error: error.message || "Device authorization request failed." });
-  }
-});
-
-/**
- * POST /api/github/device/poll
- * Polls GitHub for the device-flow access token. Returns { pending: true } until the
- * user approves, then { access_token, login } once authorized.
- */
-app.post("/api/github/device/poll", async (req, res) => {
-  const clientId = String(req.body?.client_id || process.env.GITHUB_CLIENT_ID || "").trim();
-  const deviceCode = String(req.body?.device_code || "").trim();
-  if (!clientId || !deviceCode) {
-    return res.status(400).json({ error: "Missing client_id or device_code." });
-  }
-  try {
-    const response = await fetch("https://github.com/login/oauth/access_token", {
-      method: "POST",
-      headers: { "Accept": "application/json", "Content-Type": "application/json", "User-Agent": "x4-md-studio" },
-      body: JSON.stringify({
-        client_id: clientId,
-        device_code: deviceCode,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-      })
-    });
-    const data: any = await response.json();
-
-    if (data.access_token) {
-      // Fetch the authenticated user's login so the client can auto-fill the repo owner.
-      let login: string | undefined;
-      try {
-        const userRes = await fetch("https://api.github.com/user", {
-          headers: {
-            "Accept": "application/vnd.github.v3+json",
-            "Authorization": `token ${data.access_token}`,
-            "User-Agent": "x4-md-studio"
-          }
-        });
-        const userData: any = await userRes.json();
-        login = userData?.login;
-      } catch {
-        // Non-fatal; owner can be entered manually.
-      }
-      return res.json({ access_token: data.access_token, token_type: data.token_type, scope: data.scope, login });
-    }
-
-    // Still waiting / throttled / expired — surface the GitHub error code to the poller.
-    return res.json({ pending: true, error: data.error, interval: data.interval });
-  } catch (error) {
-    return res.status(500).json({ error: error.message || "Device token poll failed." });
-  }
-});
-
-
-/**
- * POST /api/github/commits
- * Returns the real commit history for the connected repo/branch so the Graph Log
- * reflects the actual mod repository instead of seeded placeholder data.
- */
-app.post("/api/github/commits", async (req, res) => {
-  const { pat, owner, repo, branch } = req.body;
-  if (!pat || !owner || !repo) {
-    return res.status(400).json({ error: "Missing pat, owner, or repo." });
-  }
-  try {
-    const url = `https://api.github.com/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch || "main")}&per_page=50`;
-    const response = await fetch(url, {
-      headers: {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": `token ${pat}`,
-        "User-Agent": "x4-md-studio-proxy"
-      }
-    });
-    const data: any = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json({ error: data?.message || `GitHub returned ${response.status}` });
-    }
-    const commits = (Array.isArray(data) ? data : []).map((c: any) => ({
-      sha: (c.sha || "").substring(0, 7),
-      message: (c.commit?.message || "").split("\n")[0],
-      body: c.commit?.message || "",
-      author: c.commit?.author?.name || c.author?.login || "unknown",
-      email: c.commit?.author?.email || "",
-      date: c.commit?.author?.date || "",
-      html_url: c.html_url
-    }));
-    return res.json({ commits });
-  } catch (error) {
-    return res.status(500).json({ error: error.message || "Failed to fetch repository commits." });
-  }
-});
-
+// GitHub proxy routes (load/push/create/device-flow/commits) moved to
+// src/server/githubRoutes.ts — stage-3 modularization (2026-07-08).
+// (2026-07-09: comment touch to wake tsx after a child-process kill test — tsx watch
+// waits for a file change after its child dies; the supervisor guards full-tree death.)
+registerGithubRoutes(app);
 
 // Configure Vite middleware or static serving
 async function setupDevOrProd() {
@@ -7770,21 +7778,28 @@ async function setupDevOrProd() {
 }
 
 
-app.get("/api/run_command", async (req, res) => {
-  const cmd = String(req.query.cmd || "");
-  try {
-    const { exec } = await import("child_process");
-    exec(cmd, (err, stdout, stderr) => {
-      res.json({
-        error: err ? err.message : null,
-        stdout,
-        stderr
+// Host-toolchain gate for local agents (HANDOFF protocol: typecheck/lint/tests run
+// through here). DEV-ONLY BY DESIGN: arbitrary command execution must never ship in a
+// packaged/production build (G5 security item, 2026-07-08) — under NODE_ENV=production
+// the route is not registered at all unless FORGE_ALLOW_RUN_COMMAND=true is set
+// explicitly. Dev workflow (restart-studio.bat / tsx watch) is unchanged.
+if (process.env.NODE_ENV !== "production" || process.env.FORGE_ALLOW_RUN_COMMAND === "true") {
+  app.get("/api/run_command", async (req, res) => {
+    const cmd = String(req.query.cmd || "");
+    try {
+      const { exec } = await import("child_process");
+      exec(cmd, (err, stdout, stderr) => {
+        res.json({
+          error: err ? err.message : null,
+          stdout,
+          stderr
+        });
       });
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message || String(e) });
-  }
-});
+    } catch (e) {
+      res.status(500).json({ error: e.message || String(e) });
+    }
+  });
+}
 
 setupDevOrProd().then(() => {
   app.listen(PORT, "127.0.0.1", () => {

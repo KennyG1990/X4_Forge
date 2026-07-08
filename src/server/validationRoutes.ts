@@ -22,6 +22,7 @@ import { buildSchemaIndex, type SchemaIndex } from "../lib/xsdValidate";
 import { extractBaseGameFile as catDatExtractBaseGameFile } from "../lib/x4CatDat";
 import { buildScriptPropertyIndex, runScriptPropertiesSelftest, type ScriptPropertyIndex } from "../lib/scriptProperties";
 import { ORDER_PARAM_TYPES, runAiscriptLintSelftest } from "../lib/aiscriptLint";
+import { runMdPitfallSelftest } from "../lib/mdPitfallLints";
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -86,6 +87,14 @@ export function registerValidationAgentRoutes(app: Express): void {
       return res.json(runScriptPropertiesSelftest());
     } catch (error) {
       return res.status(500).json({ pass: false, error: errText(error) || "scriptproperties-selftest failed" });
+    }
+  });
+
+  app.get("/api/agent/md-pitfall-selftest", (_req: Request, res: Response) => {
+    try {
+      return res.json(runMdPitfallSelftest());
+    } catch (error) {
+      return res.status(500).json({ pass: false, error: errText(error) || "md-pitfall-selftest failed" });
     }
   });
 

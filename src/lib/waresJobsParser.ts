@@ -35,9 +35,29 @@ function decodeXmlAttr(s: string): string {
 
 const TRANSPORTS = new Set(['container', 'liquid', 'solid', 'energy']);
 
+/**
+ * True when the document is a FOREIGN `<diff>` patch — one using operations beyond the
+ * studio's own canonical emit (`<diff><add sel="/wares|/jobs">` with whole elements).
+ * Foreign patches (replace/remove ops, selectors into specific nodes/attributes) belong
+ * to the XML-patching domain and must stay passthrough: modeling them as flat defs and
+ * regenerating would change patch semantics (found by real-data grounding, 2026-07-09).
+ * The studio's own add-to-root diff shape stays parseable so studio-authored economy
+ * mods round-trip as editable (field fidelity is enforced at import by the byte-guard).
+ */
+function isForeignDiff(content: string, rootSel: '/wares' | '/jobs'): boolean {
+  const text = String(content || '');
+  if (!/<diff[\s>]/i.test(text.slice(0, 4096))) return false; // not a diff at all
+  if (/<(replace|remove)\b/i.test(text)) return true;
+  for (const m of text.matchAll(/<add\b[^>]*\bsel\s*=\s*"([^"]*)"/gi)) {
+    if (m[1].trim() !== rootSel) return true;
+  }
+  return false;
+}
+
 /** Parse a wares XML document into editable WareDefs, or null if none found. */
 export function parseWaresXml(content: string): WareDef[] | null {
   if (!content || !/<ware\b[^>]*\bid\s*=/i.test(content)) return null;
+  if (isForeignDiff(content, '/wares')) return null; // foreign patch — passthrough, never flatten
   const wares: WareDef[] = [];
   // Top-level wares carry an `id`; inner <primary> wares carry `ware=`/`amount=` and are
   // self-closing, so a non-greedy </ware> reliably bounds each top-level ware block.
@@ -80,12 +100,20 @@ export function parseWaresXml(content: string): WareDef[] | null {
     if (primaryWares.length) ware.primaryWares = primaryWares;
     wares.push(ware);
   }
+  // COMPLETENESS GUARD: the paired-tag regex cannot see self-closing top-level wares
+  // (vanilla has thousands: grounding found 1397/4277 parsed — a silent 67% loss if
+  // regenerated). If we didn't capture EVERY id-bearing ware, the model is incomplete
+  // → null so the caller keeps the original bytes (passthrough is lossless; a partial
+  // parse is data loss dressed as success).
+  const idBearing = (content.match(/<ware\b[^>]*\bid\s*=/gi) || []).length;
+  if (wares.length !== idBearing) return null;
   return wares.length ? wares : null;
 }
 
 /** Parse a jobs XML document into editable JobDefs, or null if none found. */
 export function parseJobsXml(content: string): JobDef[] | null {
   if (!content || !/<job\b[^>]*\bid\s*=/i.test(content)) return null;
+  if (isForeignDiff(content, '/jobs')) return null; // foreign patch — passthrough, never flatten
   const jobs: JobDef[] = [];
   const re = /<job\b([^>]*\bid\s*=\s*"[^"]+"[^>]*)>([\s\S]*?)<\/job>/gi;
   let m: RegExpExecArray | null;
@@ -115,6 +143,9 @@ export function parseJobsXml(content: string): JobDef[] | null {
       includeInBuild: true,
     });
   }
+  // COMPLETENESS GUARD (same rationale as wares): partial capture → null → passthrough.
+  const idBearing = (content.match(/<job\b[^>]*\bid\s*=/gi) || []).length;
+  if (jobs.length !== idBearing) return null;
   return jobs.length ? jobs : null;
 }
 
@@ -179,6 +210,20 @@ export function runWaresJobsRoundtripSelftest(): {
   ok('non-wares content → null', parseWaresXml('<jobs><job id="x"/></jobs>') === null);
   ok('non-jobs content → null', parseJobsXml('<wares><ware id="x"/></wares>') === null);
   ok('empty → null', parseWaresXml('') === null && parseJobsXml('') === null);
+
+  // ---- integrity guards (real-data grounding, 2026-07-09) ----
+  // FOREIGN diffs (replace/remove ops or non-root selectors) must never be flattened;
+  // the studio's own add-to-root diff emit stays parseable.
+  const foreignJobs = `<?xml version="1.0"?><diff><replace sel="/jobs/job[@id='x']/@name">Y</replace></diff>`;
+  ok('foreign diff (replace op) → null', parseJobsXml(foreignJobs) === null);
+  const foreignWares = `<?xml version="1.0"?><diff><add sel="/wares/ware[@id='energycells']/production"><production time="1" amount="1"/></add><add sel="/wares"><ware id="w1" name="W" transport="container" volume="1"><price min="1" average="2" max="3"/></ware></add></diff>`;
+  ok('foreign diff (node-targeted add selector) → null', parseWaresXml(foreignWares) === null);
+  const studioDiff = `<?xml version="1.0"?><diff><add sel="/wares"><ware id="w1" name="W" transport="container" volume="1"><price min="1" average="2" max="3"/><production time="1" amount="1" method="default"/></ware></add></diff>`;
+  ok('studio add-to-root diff still parses', parseWaresXml(studioDiff)?.[0]?.id === 'w1', JSON.stringify(parseWaresXml(studioDiff)));
+  // Self-closing top-level wares (the vanilla shape the regex can't model) → null,
+  // not a PARTIAL parse — a partial parse is data loss dressed as success.
+  const vanillaShaped = `<wares><ware id="paired" name="P" transport="container" volume="1"><price min="1" average="2" max="3"/></ware><ware id="selfclosing" name="S" transport="container" volume="1" tags="module" /></wares>`;
+  ok('incomplete capture (self-closing top-level ware) → null', parseWaresXml(vanillaShaped) === null);
 
   // ---- multi-ware + xml-attr escaping survives ----
   const multi: WareDef[] = [

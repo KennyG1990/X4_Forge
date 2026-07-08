@@ -25,6 +25,56 @@ Run them yourself after every code change and self-correct. This is also the tru
 
 ---
 
+## PASS-4 ADDENDUM (2026-07-09, after Ken woke) — canvas suite 4/4 GREEN, drift detector live, wares/jobs import guarded
+
+- Canvas e2e fixed (real UX bug: Dependency Graph overlay defaulted open + ate clicks → now defaults closed).
+- `GET /api/agent/mod-drift?mod=x4_ai_influence` → verdict **FORKED** (not merely stale) — reconcile deliberately;
+  fromPath validation now includes the drift report automatically.
+- Wares/jobs imports are byte-guarded: foreign/vanilla/diff files can no longer become silently-lossy "editable".
+- C2 recorded as VERIFIED per Ken (AI Influence runs in-game) — stale "C2 open" language corrected in ROADMAP.
+- Note: tonight's failing e2e runs clobbered the live workspace once (restored + browser-verified); G14 follow-up
+  logged to isolate test workspaces.
+- Final gates: tsc CLEAN, eslint CLEAN, oracles 29/29, e2e 10/10.
+
+## SESSION HANDOFF — 2026-07-08/09 OVERNIGHT (Claude/Cowork — design-review recommendations, 3 passes) — READ THIS FIRST, KEN
+
+**TL;DR for the morning:** every actionable recommendation from the design review is built and verified.
+Full detail in ROADMAP → Current State (three ✅ sections dated 2026-07-08). Nothing was committed to git
+(Antigravity owns it); working tree has the changes. Final gates: host `tsc` CLEAN, `eslint` CLEAN,
+**27/27 oracles**, new API e2e 6/6, app renders clean.
+
+**What you got overnight (headlines):**
+- **Five validator gaps closed** (scriptproperty chains, aiscript path incl. auto-harvested aiscripts.xsd,
+  XSD requiredness — bare `<event_offer_accepted/>` now FAILS validate, cue-keyword whitelist, dynamic-Lua
+  prefix matching) + XSD enum-merge false positives fixed (union types, multi-declaration unions).
+- **Validation engine is now a product**: shared core → `POST /api/agent/project/validate {fromPath}` (server
+  reads the mod folder itself — validate the LIVE mod with no payload) + `npm run validate:mod -- "<folder>"`
+  standalone CLI (CI-ready, exit codes).
+- **Corpus-grounded pitfall lints** (dead UI listeners / offer-accept keyword / param3 bare-key) — 0 vanilla
+  false positives by construction; two ROADMAP lint ideas were FALSIFIED by grounding and recorded as such.
+- **Lua-staleness detector (#7)** live in the log watcher. **ACTION FOR YOU:** run
+  `POST /api/agent/lua-staleness/instrument {"modId":"ai_influence"}` (or ask the agent) when you're ready —
+  it wasn't run unattended because it rewrites the deployed mod's ui *.lua (luaparse-gated, reversible).
+- **Ship-shape**: `START-X4FORGE.cmd` runs the BUILT app (one server, no dev tooling — proven on :3100);
+  `/api/run_command` is dev-only now (verified 404 in the production bundle).
+- **Monolith shrinking**: validation services/core + GitHub routes extracted to `src/server/*` (3 stages);
+  server.ts is now below the sandbox-truncation threshold.
+
+**⚠ Findings needing a human decision (deliberately not "fixed" overnight):**
+1. **The 3 real `$st.manager` reads in `md/ai_influence_worldsync.xml`** (deployed + workspace) — the
+   scriptproperty lint flags them; `manager` isn't in scriptproperties.xml. If worldsync works in-game anyway,
+   tell the agent and we'll whitelist the pattern with ground truth; if it's dead code from the AAR hunt, delete.
+2. **Canvas e2e suite is red (pre-existing)**: `npm run test:canvas` = 1/4, three deterministic timeouts on
+   committed, tonight-untouched code. Traces in `test-results/*/trace.zip`. Needs a daytime bisect.
+3. **Workspace hygiene**: `X4Mods\x4_ai_influence` is stale vs the deployed copy (fromPath validate shows real
+   drift: 1 unresolved cue + md↔lua wiring gaps) and contains a stray nested `x4_neural_link/` folder;
+   `X4Mods\x4_neural_link` staging dir is empty (real dev lives in the deployed dir). Decide which copy is canon.
+
+**New public endpoints:** `md-pitfall-selftest`, `lua-staleness-selftest`, `scriptproperties-selftest`,
+`aiscript-lint-selftest`, `scriptproperties-status`. New tests: `tests/e2e/project-validate.spec.ts`.
+
+---
+
 ## SESSION HANDOFF — 2026-06-12 (43rd pass: Load Mod Project + import integrity)
 
 **What shipped this session (all browser-verified on `localhost:3000`):**

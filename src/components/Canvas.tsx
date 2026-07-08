@@ -34,8 +34,10 @@ import {
   AlignHorizontalDistributeCenter,
   AlignVerticalDistributeCenter,
   GitBranch,
-  Repeat
+  Repeat,
+  Activity
 } from 'lucide-react';
+import { mapTelemetryToNodes, type LiveNodeBadge } from '../lib/liveCanvasTelemetry';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML } from '../types';
 import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
@@ -115,7 +117,49 @@ export default function Canvas({
   activeMdScript = null
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
-  const [depPanelOpen, setDepPanelOpen] = useState<boolean>(true);
+  // Dependency-graph panel defaults CLOSED: open-by-default it floats at z-40 over the
+  // canvas showing only its empty placeholder ("select a node…") while SILENTLY EATING
+  // pointer events — node/port/delete clicks under its 320×380px footprint retried until
+  // timeout (found via the canvas e2e suite, 2026-07-09: 3/4 tests red on exactly this).
+  // The toolbar Filter toggle (violet when open) remains the way in.
+  const [depPanelOpen, setDepPanelOpen] = useState<boolean>(false);
+  // LIVE game telemetry (Play-In-Editor-adjacent, 2026-07-09): when ON, the canvas polls
+  // the X4 debug log and lights up cue nodes that are firing (green ▶ hits) or erroring
+  // (red ✗) IN THE RUNNING GAME. Silence is not a fault — silent cues get no badge.
+  const [liveMode, setLiveMode] = useState<boolean>(false);
+  const [liveBadges, setLiveBadges] = useState<Record<string, LiveNodeBadge>>({});
+  const [liveStatus, setLiveStatus] = useState<{ available: boolean; live: boolean; updatedAt?: string; bridge?: { bridgeUp: boolean; gameActive: boolean; summary: string } } | null>(null);
+  const [liveWatches, setLiveWatches] = useState<{ name: string; value: string }[]>([]);
+
+  useEffect(() => {
+    if (!liveMode) { setLiveBadges({}); setLiveStatus(null); setLiveWatches([]); return; }
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const cueNames = workspace.nodes
+          .filter(n => n.type === 'cue')
+          .map(n => String(n.properties?.name ?? '').trim())
+          .filter(Boolean);
+        if (!cueNames.length) { setLiveBadges({}); return; }
+        const res = await fetch('/api/agent/live/cue-telemetry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cueNames }),
+        });
+        if (!res.ok || stopped) return;
+        const data = await res.json();
+        if (stopped) return;
+        setLiveStatus({ available: !!data.available, live: !!data.live, updatedAt: data.logUpdatedAt, bridge: data.bridge });
+        setLiveWatches(Array.isArray(data.watches) ? data.watches : []);
+        const next: Record<string, LiveNodeBadge> = {};
+        for (const badge of mapTelemetryToNodes(workspace.nodes, data.cues || [])) next[badge.nodeId] = badge;
+        setLiveBadges(next);
+      } catch { /* transient poll failure — keep last state */ }
+    };
+    poll();
+    const interval = setInterval(poll, 2500);
+    return () => { stopped = true; clearInterval(interval); };
+  }, [liveMode, workspace.nodes]);
   // General multi-node selection (ANY node type) for alignment — parallel to the
   // cue-only `selectedCueIds`, so the cue-specific behaviour is untouched.
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -1631,6 +1675,24 @@ export default function Canvas({
         >
           <Filter className="w-3.5 h-3.5" />
         </button>
+
+        <button
+          onClick={() => setLiveMode(prev => !prev)}
+          data-testid="canvas-live-toggle"
+          title={liveMode
+            ? `LIVE game telemetry ON — ${liveStatus ? (liveStatus.available ? (liveStatus.live ? 'debug log is ACTIVE (game writing now)' : `log found, last update ${liveStatus.updatedAt || 'unknown'}`) : 'no X4 debug log found') : 'connecting…'}. ${liveStatus?.bridge ? liveStatus.bridge.summary + ' ' : ''}Firing cues get green ▶ badges, erroring cues red ✗ — straight from the running game.`
+            : 'LIVE — light up cue nodes from the running game\'s debug log (Play-In-Editor mode)'}
+          className={`p-1.5 rounded flex items-center gap-1 transition-all border cursor-pointer ${
+            liveMode
+              ? (liveStatus?.live
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+                : 'bg-amber-500/10 border-amber-500/35 text-amber-400')
+              : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
+          }`}
+        >
+          <Activity className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />
+          <span className="text-[8px] font-mono font-bold tracking-wider">LIVE</span>
+        </button>
       </div>
 
       {/* Selective node ALIGNMENT toolbar — appears when 2+ nodes are selected (UE5-style). */}
@@ -2074,6 +2136,24 @@ export default function Canvas({
                         : 'ring-2 ring-amber-400/90 !border-amber-400/70 shadow-[0_0_18px_rgba(251,191,36,0.45)] z-20') : ''
                     }`}
                   >
+                    {/* LIVE game telemetry badge (top-LEFT corner; diagnostics own top-right):
+                        green ▶ = cue observed firing in the running game's log, red ✗ = erroring. */}
+                    {liveBadges[node.id] && (
+                      <div
+                        title={liveBadges[node.id].state === 'erroring'
+                          ? `${liveBadges[node.id].cueName}: ${liveBadges[node.id].errors} error(s) in the game log (line ~${liveBadges[node.id].lastLineNo}), ${liveBadges[node.id].hits} hit(s)`
+                          : `${liveBadges[node.id].cueName}: fired ${liveBadges[node.id].hits}× in the game log (line ~${liveBadges[node.id].lastLineNo})`}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        className={`absolute -top-2.5 -left-2.5 z-40 flex items-center gap-0.5 px-1.5 py-1 rounded-full text-[8.5px] font-bold font-mono shadow-lg cursor-help select-none ${
+                          liveBadges[node.id].state === 'erroring'
+                            ? 'bg-red-500 text-white animate-pulse'
+                            : 'bg-emerald-500 text-black'
+                        }`}
+                      >
+                        {liveBadges[node.id].state === 'erroring' ? `✗ ${liveBadges[node.id].errors}` : `▶ ${liveBadges[node.id].hits}`}
+                      </div>
+                    )}
+
                     {/* In-your-face schema diagnostic badge — floats on the node corner. */}
                     {nodeDiag && (
                       <div
@@ -2577,6 +2657,24 @@ export default function Canvas({
             )}
           </div>
           <span className="text-[9px] text-slate-500 text-center leading-snug">Evaluates connected script graphs real-time to prevent broken XML references in X4 Foundations load processes.</span>
+        </div>
+      )}
+
+      {/* LIVE watched variables (FORGE-WATCH protocol) — latest in-game values while playing. */}
+      {liveMode && liveWatches.length > 0 && (
+        <div
+          data-testid="canvas-live-watches"
+          className="absolute bottom-24 left-4 z-30 max-w-xs bg-[#0c1017]/95 border border-emerald-500/25 rounded-lg shadow-2xl px-3 py-2 font-mono text-[10px] text-slate-300 pointer-events-none"
+        >
+          <div className="flex items-center gap-1.5 text-emerald-400 font-bold uppercase tracking-wider text-[9px] mb-1">
+            <Activity className="w-3 h-3" /> Watches (in-game)
+          </div>
+          {liveWatches.slice(0, 12).map(w => (
+            <div key={w.name} className="flex justify-between gap-3">
+              <span className="text-slate-400 truncate">{w.name}</span>
+              <span className="text-emerald-300 font-bold truncate">{w.value}</span>
+            </div>
+          ))}
         </div>
       )}
 

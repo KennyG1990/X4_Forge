@@ -34,8 +34,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo Starting API server (port 3001)...
-start "X4 API (3001)" cmd /k "set API_ONLY=true&& set PORT=3001&& npm run dev:api"
+echo Starting API server (port 3001, SUPERVISED - self-restarts if it ever dies)...
+start "X4 API (3001)" cmd /k "run-api-supervised.cmd"
 
 echo Starting Web / Vite server (port 3000)...
 start "X4 Web (3000)" cmd /k "npm run dev:web"

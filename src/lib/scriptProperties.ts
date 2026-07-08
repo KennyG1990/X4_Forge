@@ -34,6 +34,8 @@ export interface SPEntry {
   parent?: string;
   /** literal HEAD tokens of this entry's own property names ("isclass.{$class}" → "isclass") */
   heads: Set<string>;
+  /** head → `result` documentation text (for autocomplete; first definition wins) */
+  headDocs: Map<string, string>;
   /** full property names as written (for suggestions/diagnostics) */
   propNames: string[];
   /** has a pure-placeholder property like "{$numeric}" — any segment is legal here */
@@ -52,6 +54,8 @@ export interface ScriptPropertyIndex {
   model: ScriptPropertyModel;
   /** union of every literal property head across all keywords + datatypes */
   union: Set<string>;
+  /** head → first `result` doc seen (for autocomplete detail text; first wins) */
+  docs: Map<string, string>;
   /** heads that exist as a COMPLETE bare property name on at least one type ("exists") */
   bareOk: Set<string>;
   /**
@@ -120,6 +124,7 @@ export function parseScriptProperties(xml: string): ScriptPropertyModel {
       name,
       parent: (node.getAttribute('type') || '').toLowerCase() || undefined,
       heads: new Set<string>(),
+      headDocs: new Map<string, string>(),
       propNames: [],
       wildcard: false,
       dynamic: false,
@@ -137,8 +142,11 @@ export function parseScriptProperties(xml: string): ScriptPropertyModel {
       model.parsedProperties++;
       entry.propNames.push(pname);
       const head = propertyHead(pname);
-      if (head) entry.heads.add(head);
-      else entry.wildcard = true; // pure placeholder like "{$numeric}"
+      if (head) {
+        entry.heads.add(head);
+        const doc = kid.getAttribute('result') || '';
+        if (doc && !entry.headDocs.has(head)) entry.headDocs.set(head, doc);
+      } else entry.wildcard = true; // pure placeholder like "{$numeric}"
     }
     (kind === 'keyword' ? model.keywords : model.datatypes).set(name, entry);
   }
@@ -161,10 +169,15 @@ export function resolveDatatypeHeads(model: ScriptPropertyModel, name: string): 
 export function buildScriptPropertyIndex(xml: string): ScriptPropertyIndex {
   const model = parseScriptProperties(xml);
   const union = new Set<string>();
+  const docs = new Map<string, string>();
   const bareOk = new Set<string>();
   const continuations = new Map<string, Set<string>>();
   for (const entry of [...model.keywords.values(), ...model.datatypes.values()]) {
-    for (const h of entry.heads) union.add(h);
+    for (const h of entry.heads) {
+      union.add(h);
+      const d = entry.headDocs.get(h);
+      if (d && !docs.has(h)) docs.set(h, d);
+    }
     for (const pname of entry.propNames) {
       const head = propertyHead(pname);
       if (!head) continue;
@@ -177,7 +190,7 @@ export function buildScriptPropertyIndex(xml: string): ScriptPropertyIndex {
       continuations.set(head, contSet);
     }
   }
-  return { model, union, bareOk, continuations, loaded: union.size > 0 };
+  return { model, union, docs, bareOk, continuations, loaded: union.size > 0 };
 }
 
 /* ------------------------------------------------------------------ *

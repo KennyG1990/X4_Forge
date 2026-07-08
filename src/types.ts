@@ -1293,16 +1293,22 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
       });
     }
 
-    // ── LAW 1: Cue names must be unique within the script ──
-    if (cueNamesSeen.has(cueName)) {
+    // ── LAW 1: Cue names must be unique within the SCRIPT — a multi-script workspace
+    // (imported mod with several md files) carries per-cue `mdScript`, and the same cue
+    // name in DIFFERENT scripts is legal (ground truth 2026-07-09: x4_ai_influence ships
+    // "State" in both ai_influence_combat and ai_influence_conversation and runs in-game).
+    // Scope the uniqueness key by the cue's script so multi-file imports don't cry wolf. ──
+    const scriptScope = String((cue.properties as Record<string, unknown> | undefined)?.mdScript ?? '');
+    const scopedCueName = `${scriptScope}::${cueName}`;
+    if (cueNamesSeen.has(scopedCueName)) {
       diagnostics.push({
         severity: 'error',
-        message: `Duplicate cue name "${cueName}". All cue names must be unique within their script file.`,
+        message: `Duplicate cue name "${cueName}"${scriptScope ? ` in script "${scriptScope}"` : ''}. All cue names must be unique within their script file.`,
         nodeId: cue.id,
         category: 'egosoft'
       });
     }
-    cueNamesSeen.add(cueName);
+    cueNamesSeen.add(scopedCueName);
 
     // Classify condition nodes as events vs checks
     const eventNodes = conditionNodes.filter(n => n.xmlTag && n.xmlTag.startsWith('event_'));

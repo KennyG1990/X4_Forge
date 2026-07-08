@@ -262,9 +262,13 @@ test('real canvas interactions create oriented links, move groups, add from pale
     expect(settledPerfCounters.validateModWorkspace).toBe(1);
     expect(compileRequests).toBeLessThanOrEqual(2);
 
+    // Right-click a spot that is free canvas at the default 1280px viewport: x=720 was
+    // UNDER the docked code-editor <aside> (which fills the panel since the G8 width fix),
+    // so the click was intercepted and retried until the 60s timeout (found 2026-07-09).
+    // (300, 520) sits below the seeded fixture nodes and left of the code panel.
     await page.getByTestId('grid-canvas').click({
       button: 'right',
-      position: { x: 720, y: 180 },
+      position: { x: 300, y: 520 },
     });
     await expect(page.getByTestId('canvas-quick-spawn')).toBeVisible();
     await page.getByPlaceholder('Search egosoft logic parameters...').fill('reward_player');

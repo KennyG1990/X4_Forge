@@ -42,6 +42,7 @@ import {
 import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
 import ObjectIndexPicker from './ObjectIndexPicker';
+import ExpressionInput from './ExpressionInput';
 import PositionPicker from './PositionPicker';
 import DiagnosticsCenter from './DiagnosticsCenter';
 import { WIKI_TOPICS } from './WikiBrowser';
@@ -53,6 +54,7 @@ import AIHelper from './AIHelper';
 import ObjectBrowser from './ObjectBrowser';
 import { explainNode } from '../lib/mdExplain';
 import { suggestFixes } from '../lib/modFixes';
+import { listQuickFixes, applyQuickFix } from '../lib/workspaceQuickFixes';
 import { luaMdBinding } from '../lib/luaMdBinding';
 import type { ModBlueprint } from '../lib/modBlueprint';
 import type { ArchitectStepView } from './BlueprintPanel';
@@ -1477,6 +1479,39 @@ export default function Sidebar({
             )}
 
             <div className="space-y-3 bg-[#0F1115] p-3 rounded border border-white/10 font-mono text-[11px]">
+              {/* ONE-CLICK quick-fixes (beta-UX): deterministic repairs with an undo
+                  checkpoint — spellcheck's "did you mean", applied. Top of the inspector
+                  so a flagged node's remedy is the FIRST thing the user sees. */}
+              {selectedNode && (() => {
+                const nodeFixes = listQuickFixes(workspace).filter(f => f.nodeId === selectedNode.id);
+                if (!nodeFixes.length) return null;
+                return (
+                  <div className="space-y-1.5" data-testid="quick-fixes">
+                    <div className="text-[8px] font-mono uppercase tracking-wider text-emerald-300 flex items-center gap-1">🔧 One-click fixes</div>
+                    {nodeFixes.map(f => (
+                      <div key={f.id} className="rounded border border-emerald-500/20 bg-emerald-500/[0.05] p-1.5 space-y-1">
+                        <div className="text-[9.5px] text-slate-200 font-semibold">{f.title}</div>
+                        <div className="text-[9px] text-slate-400 leading-snug">{f.detail}</div>
+                        <button
+                          type="button"
+                          data-testid={`apply-fix-${f.code}`}
+                          onClick={() => {
+                            saveCheckpoint();
+                            setWorkspace(prev => applyQuickFix(prev, f));
+                            setSelectedNode(prev => prev && prev.id === f.nodeId
+                              ? applyQuickFix({ nodes: [prev] }, f).nodes[0]
+                              : prev);
+                          }}
+                          className="px-2 py-0.5 rounded bg-emerald-600/25 border border-emerald-500/40 hover:bg-emerald-600/40 text-[9px] font-mono font-bold text-emerald-200 transition-all"
+                        >
+                          APPLY FIX
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
               <div>
                 <label className="text-slate-400 block mb-1 font-semibold uppercase text-[9px] tracking-wider">Display Label</label>
                 <input
@@ -1532,12 +1567,20 @@ export default function Sidebar({
                   </label>
 
                   {schema.type === 'text' && (
-                    <input
-                      type="text"
-                      value={(selectedNode.properties || {})[schema.key] || ''}
-                      onChange={e => handlePropChange(schema.key, e.target.value)}
+                    <ExpressionInput
+                      value={String((selectedNode.properties || {})[schema.key] ?? '')}
+                      onChange={v => handlePropChange(schema.key, v)}
                       placeholder={schema.placeholder}
-                      className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
+                      // Cue-reference fields complete from the WORKSPACE's own cues +
+                      // the engine keywords; everything else gets $chain completion.
+                      localSuggestions={/(^|_)cue$/i.test(schema.key)
+                        ? [
+                            ...['parent', 'this', 'static', 'namespace'].map(k => ({ insert: k, label: k, detail: 'engine cue keyword' })),
+                            ...workspace.nodes
+                              .filter(n => n.type === 'cue' && String(n.properties?.name ?? '').trim())
+                              .map(n => ({ insert: String(n.properties!.name), label: String(n.properties!.name), detail: 'cue in this mod' })),
+                          ]
+                        : undefined}
                     />
                   )}
 

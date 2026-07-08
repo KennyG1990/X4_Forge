@@ -256,6 +256,12 @@ On Windows, the easiest route is:
 restart-studio.bat
 ```
 
+To run the **built app** (one server, no dev tooling/watchers — builds on first run):
+
+```text
+START-X4FORGE.cmd
+```
+
 Or run the servers directly:
 
 ```powershell
@@ -466,6 +472,22 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/agent/generate" -
 ```
 
 The in-app **AGENT API** panel contains route examples and live state.
+
+## Standalone CLI Validation
+
+The full deterministic validation stack (structure, cross-file cues, MD↔Lua event wiring,
+md.xsd + aiscripts.xsd, order-param lint, scriptproperty chains) runs without the UI:
+
+```powershell
+npm run validate:mod -- "F:\path\to\your\mod_folder"
+npm run validate:mod -- "F:\path\to\your\mod_folder" --json
+```
+
+Exit code 0 = valid, 1 = validation errors, 2 = usage/load failure — CI-friendly. The same
+verdict is available over the API with no payload: `POST /api/agent/project/validate
+{ "fromPath": "<mod folder name>" }` (resolved inside the configured mod workspace /
+extensions roots). Game-object reference checks (macros/wares/factions) need the Forge's
+object index and run only in the app.
 
 ## Common Development Commands
 

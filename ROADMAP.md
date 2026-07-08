@@ -96,12 +96,255 @@ All five items shipped as house-pattern engines (pure lib + oracle + public GET)
 server.ts composes. This is the extraction TEMPLATE — the remaining ~7.6k-line monolith split is future staged work,
 deliberately not attempted mid-session (H1 Edit-truncation risk on server.ts + Antigravity git contention).
 
+#### SECOND PASS same day (2026-07-08) — "engine as the product" stage 1 + G5 stage 1 (all host-verified via /api/run_command)
+
+- **✅ Stage-2 modularization — shared validation core.** NEW `src/server/projectValidation.ts`:
+  `runProjectValidation(project, {references})` owns the FULL layering (structure → cues → cross-file → XSD
+  md/aiscript → order-param lint → scriptproperty chains) so route, fromPath and CLI give the SAME verdict;
+  `loadProjectFromDisk` turns a real mod folder into a project envelope (bounded: 500 files / 4MB each);
+  `getSchemaIndex` moved here (server.ts imports it — all call sites unchanged).
+- **✅ Tool-improvement #6 SHIPPED — `POST /api/agent/project/validate {fromPath}`.** Server reads the mod folder
+  ITSELF from the configured roots (reuses the existing containment-guarded `resolveModFolder`; no inline-payload
+  ceiling, no sandbox staleness). Verified live: `{fromPath:"x4_ai_influence"}` → 19 files loaded server-side,
+  full verdict incl. the 3 real `$st.manager` warnings; response carries `source.{mode,root,loaded,skipped}`.
+  Also #5 partially: the LIVE-vs-workspace drift now SHOWS UP (the stale F:-side copy reports real unresolved-cue
+  + md↔lua wiring errors the deployed copy doesn't) — remaining #5 nicety: an explicit root selector.
+- **✅ Standalone CLI validator — `npm run validate:mod -- "<mod folder>" [--json]`** (`scripts/x4validate.ts`).
+  The deterministic checker with NO UI — terminal/CI usable, exit 0/1/2, prints per-layer availability honestly
+  (game-object reference checks are Forge-only and say so). Host-verified: real run against the x4_ai_influence
+  workspace copy → 19 files, 22 findings, exit 1.
+- **✅ G5 STAGE 1 — the built app runs without dev tooling.** `START-X4FORGE.cmd` (build-if-needed →
+  `NODE_ENV=production node dist/server.cjs` — the static-serving branch already existed in `setupDevOrProd`) +
+  `npm run start:prod`. **Proven, not assumed:** `npm run build` clean (vite 1776 modules + esbuild, 6s); booted
+  the BUILT bundle on :3100 → UI 200, `scriptproperties-selftest` **32/32 inside the bundle**, scriptproperties
+  + harvested aiscripts.xsd both armed; smoke instance killed after. Remaining G5: installer/single-binary + a
+  packaged-mode security review (dev-oriented `/api/run_command` MUST be disabled outside dev) — G5 stays ◐ overall.
+- **Correction to the earlier session note:** host `tsc` IS agent-runnable via `GET /api/run_command` (HANDOFF
+  protocol — I missed it first pass). This pass ran typecheck host-side after every change: **CLEAN throughout**,
+  including retroactively for the first pass's files. The "Ken-gated typecheck" punt above is RESOLVED.
+
+*Verification: host `tsc --noEmit` clean ×4 runs; 21/21 oracle sweep green on the dev server post-refactor;
+fromPath + CLI + built-bundle acceptance all exercised against real data as listed above.*
+
 *Verification (live, in-page fetch): 21/21 public oracles PASS post-refactor (scriptproperties 32/32, aiscript-lint
 12/12, cue-lineage 21/21, extension-project 29/29, project-crossfile 13/13, compile 12/12, simulate 59/59,
 semantics 46/46, port-semantics 26/26, round-trip 17/17, + 11 more); app renders clean (canvas + COMPILER: OK,
 0 console errors). **Host `tsc --noEmit` NOT run this session** — the sandbox mount serves truncated views of
 edited files (H1 class; phantom EOF errors), so typecheck is Ken-gated: run `npm run typecheck` host-side.
 No git operations (Antigravity owns the index per H1/H2).*
+
+### ✅ OVERNIGHT PASS 3 (2026-07-08/09 — Claude/Cowork, Ken asleep; the remaining design-review recommendations)
+
+All host-verified (`tsc` clean, `eslint` clean, **27/27 oracle sweep**, real-mod grounding stable at
+19 files / 0 schema errors / 3 real `$st.manager` warnings / 0 pitfall FPs):
+
+1. **✅ MD pitfall lints (corpus-grounded) — NEW `src/lib/mdPitfallLints.ts`**, wired into project/validate
+   (`pitfalls.findings`, `summary.mdPitfallWarnings`), oracle 16/16, `GET /api/agent/md-pitfall-selftest`.
+   Shipped only the shapes that ground to **0 vanilla false positives** (full unpacked-9.00 md/ corpus):
+   - `ui_listener_one_shot` — root-level `<event_ui_triggered>` cue without instantiate, never reset (incl.
+     keyword self-resets): fires once then goes dead (the 2026-06-25 On_action bug). Vanilla: 0/516.
+   - `offer_accepted_keyword_cue` — `<event_offer_accepted cue="parent|this|static">` never fires in-game
+     (ROADMAP #4 ground truth); suggests the proven `event_object_signalled`/`$OfferCue` idiom. Vanilla: 0.
+   - `param3_table_barekey` — `$x = event.param3` then `$x.barekey` where barekey isn't a script property
+     (union-aware via the scriptproperty index) → meant `$x.$barekey` (the silent killer). Vanilla-clean.
+   **FALSIFIED by grounding, deliberately NOT shipped** (recorded so nobody re-adds them): broad
+   "event_* without instantiate" (6321 vanilla uses) and "instantiated cue setting $vars w/o namespace"
+   (1345 vanilla uses). Grounding also verified 0 findings on deadair_scripts/sirnukes/x4_ai_influence.
+2. **✅ Lua-staleness detector (#7, RC-killer) — NEW `src/lib/luaStalenessCheck.ts`** (oracle 14/14,
+   `GET /api/agent/lua-staleness-selftest`): FORGE-LUAV boot-marker fingerprint (idempotent injection) +
+   debuglog comparison → per-file tri-state (match / STALE=restart-required / honest unknown). Integrated
+   into `getGameLogStatus` (`luaStaleness` field; escalates clean→warnings when resident≠disk) — live-verified:
+   found the deployed mod's 3 ui lua files, reports "unknown — not instrumented". **Instrumentation endpoint**
+   `POST /api/agent/lua-staleness/instrument {modId}` (luaparse-gated: never writes a file that doesn't parse).
+   **Deliberately NOT run against the live mod unattended — Ken triggers it when ready**, then the next full
+   game boot arms the watcher.
+3. **✅ `/api/run_command` gated out of production** (G5 security item): not registered under
+   NODE_ENV=production unless `FORGE_ALLOW_RUN_COMMAND=true`. Proven live: rebuilt, booted the bundle on :3100 —
+   authed `run_command` → **404** while authed control route → 200; dev workflow unchanged (gates still run).
+4. **✅ Modularization stage 3 — GitHub routes** → `src/server/githubRoutes.ts` (6 routes, extracted via a
+   guarded host-side script; 11,065 chars out of server.ts, which is now BELOW the ~360KB sandbox-truncation
+   threshold). Live-verified: device-flow start responded through the module path; tsc/oracles green.
+5. **✅ G14 slice — API regression net**: NEW `tests/e2e/project-validate.spec.ts` (6 tests: requiredness stays
+   closed, keyword whitelist, pitfall fire/quiet, fromPath real-mod read, fromPath containment, all new
+   selftests green) — **6/6 passed in 3.7s** on the host.
+   **⚠ FINDING (pre-existing, NOT from tonight): the committed canvas suite is red** — `npm run test:canvas`
+   = 1/4 pass; 3 deterministic 60s timeouts (interactions spec + coverage delete/link tests), reproduced solo.
+   Working tree was clean (Canvas.tsx + specs unchanged since their commit d9c4f72), and tonight's changes are
+   backend-only — so this predates tonight. Traces retained under `test-results/*/trace.zip` for a proper
+   daytime bisect. This is exactly the G14 gap surfacing itself.
+
+**Spec-sheet audit note (docs/plans, 2026-06-18):** both mod implementation plans audit as essentially
+complete/overtaken-by-events — deployed `x4_neural_link` is a mature live bridge (health OK, v0.1.0, embedding
+retriever), boundaries clean (no faction logic bridge-side, no bridge runtime in ai_influence), configs present.
+Residuals: the workspace `X4Mods\x4_neural_link` staging copy is empty (dev happened in the deployed dir) and the
+workspace `x4_ai_influence` copy contains a stray nested `x4_neural_link/` folder + is stale vs deployed (fromPath
+validation now SHOWS the drift). Left untouched — housekeeping for a human decision, flagged in HANDOFF.
+
+### ✅ PASS 4 (2026-07-09 — Claude/Cowork; the three remaining design-review items + a C2 correction)
+
+**★ C2 CORRECTION (Ken, 2026-07-09): the North Star is ALREADY TRUE.** Ken confirms the Forge-built
+`x4_ai_influence` mod runs in-game — built in the Forge, verified live (the AAR archive sessions were that
+verification). The "lone real gate is C2" language in older sections is STALE; the capstone is closed.
+Remaining trust items are per-feature (e.g. control-flow in-game confirmation), not the existence proof.
+
+1. **✅ Canvas e2e suite red → GREEN (4/4, was 1/4)** — two real root causes, found via trace/DEBUG=pw:api:
+   - **Real UX bug:** the Dependency Graph overlay (`Canvas.tsx`, z-40, 320×380px) defaulted OPEN on every
+     load showing only its empty placeholder while SILENTLY EATING pointer events — node/port/delete clicks
+     under it hung for users and tests alike. Fix: defaults CLOSED; the toolbar Filter toggle opens it.
+     Browser-verified: fresh load shows clear canvas; toggle works.
+   - Test-geometry: the interactions spec right-clicked x=720 which sits UNDER the docked code editor at the
+     1280px viewport since the G8 width fix → moved to free canvas (300,520) with an explanatory comment.
+   - **⚠ G14 follow-up (logged):** failing e2e runs can CLOBBER the live server workspace (the finally-restore
+     dies with the browser) — tonight it reset Ken's loaded AI Influence workspace (restored via
+     mod-folder/import + workspace POST, browser-verified). Tests need isolated workspace contexts.
+2. **✅ Drift as first-class state** — NEW `src/lib/modDrift.ts` (oracle 8/8, `GET /api/agent/mod-drift-selftest`):
+   per-file hash/mtime comparison of the workspace vs deployed copies with honest canon HINTS (mtime is a hint,
+   not proof; forked copies say "reconcile by hand", never pick a side). `GET /api/agent/mod-drift?mod=<id>` +
+   fingerprinting in `projectValidation.ts`; **fromPath validation now carries a `drift` report automatically.**
+   Real-data: x4_ai_influence verdict = **FORKED** (11 differ, 16 workspace-only, 1 deployed-only, mtimes both
+   ways) — worse than the assumed "workspace stale"; reconciliation is a human decision, now visibly flagged.
+3. **✅ G13 integrity slice — wares/jobs import is now GUARDED, not silently lossy.** Real-data grounding found
+   the old path would have (a) dropped unmodeled FIELDS from any foreign wares/jobs file (vanilla wares.xml:
+   only the modeled subset of 1397 wares' fields survives regeneration) and (b) mis-modeled foreign `<diff>`
+   patches (deadair). Fixes in `waresJobsParser.ts` + `importModFolder`:
+   - foreign-diff guard (replace/remove ops or non-root selectors → null; the studio's own
+     `<add sel="/wares|/jobs">` emit still parses);
+   - element-completeness guard (partial capture → null — "a partial parse is data loss dressed as success");
+   - **byte-faithful import gate** (same standard as the #65 aiscripts guard): editable ONLY when
+     `compile(parse(text)) === text`; everything else stays passthrough (lossless).
+   Verified: oracle 15/15 (3 new integrity checks); deadair imports 0 editable/19 passthrough; a
+   studio-emitted control mod imports 1 ware + 1 job editable with library compile ON. G13 residual is now
+   honestly scoped: broaden the MODELED FIELD SET (so foreign files can pass the byte gate), not plumbing.
+
+*Verification: host tsc CLEAN, eslint CLEAN, **29/29 oracle sweep**, **e2e 10/10** (project-validate 6 +
+canvas 4, 23.7s), app browser-verified with the AI Influence workspace restored and rendering.*
+
+### ✅ PASS 5 (2026-07-09 — LIVE MODE: the Play-In-Editor layer, Ken's original vision, 3 slices shipped)
+
+The editor now has a **LIVE toggle** (canvas toolbar, Activity icon): while ON, the canvas polls the game's
+debug log + the neural-link bridge every 2.5s and the GRAPH LIGHTS UP from the running game.
+
+1. **✅ Slice 1 — live cue telemetry on the nodes.** NEW `src/lib/liveCanvasTelemetry.ts` (oracle 10/10) maps
+   the log watcher's per-cue fire/error counts onto canvas cue nodes: green **▶ hits** badge on firing cues,
+   red **✗ errors** (pulsing) on erroring ones — silence is never a fault (no badge). NEW
+   `POST /api/agent/live/cue-telemetry` (canvas posts its OWN cue names — works for undeployed workspaces;
+   `live` flag = log written <2 min ago). **Browser-verified with real data:** the AI Influence workspace's
+   `Census_officers` library renders a green **▶ 12** from the last real game session's log.
+2. **✅ Slice 2 — game↔bridge chain freshness in the editor.** NEW `src/lib/bridgeLiveState.ts` (oracle 7/7) +
+   `src/server/liveBridge.ts`: /health of the x4_neural_link bridge + READ-ONLY reads of its telemetry SQLite
+   (`bridge_events`, probed real shape) → bridgeUp / player2Ok / gameActive (event <5 min) / events+errors last
+   hour, cached 10s. Surfaced in the LIVE toggle tooltip + `GET /api/agent/live/bridge-state`. Live-verified
+   against the running bridge (UP, Player2 OK, game idle — honest window wording).
+3. **✅ Slice 3 — watched variables (FORGE-WATCH protocol).** NEW `src/lib/forgeWatch.ts` (oracle 8/8):
+   a mod emits `debug_text text="'FORGE-WATCH name=' + ($expr)"` (generator: `buildWatchActionXml`) and the
+   canvas shows a floating WATCHES panel with the latest value per name, updating while the game runs.
+   Parse side + panel shipped and oracle-covered; **the full in-game loop needs a watch action in a deployed
+   mod + a play session — Ken-gated,** like all runtime truth.
+
+*Verification: host tsc CLEAN, eslint CLEAN, **32/32 oracle sweep**, **e2e 10/10** (23.7s), LIVE badge
+browser-verified on real data. Note: the log tail is 256KB — very chatty sessions can age telemetry out;
+bounded-window semantics are documented in the endpoint. Follow-ups parked: galaxy-map live overlay (bridge
+worldsync → map), watch-action palette snippet, log tail streaming (fs.watch) instead of polling.*
+
+**✅ G14 workspace-clobber leak CLOSED (root-caused, third occurrence was the charm).** Serial workers alone
+didn't fix it — the app under test SYNCS ITS OWN default workspace to the server on boot from a fresh browser
+profile, so merely running the suite replaced the user's loaded workspace. Fix: playwright `globalSetup`/
+`globalTeardown` (`tests/e2e/workspace-guard.ts`) snapshots the server workspace pre-suite and restores it
+post-suite, plus `workers: 1` for the shared-state race. **Proven: 10/10 passed AND the loaded AI Influence
+workspace (152 nodes) survived the run intact** — previously it was reset to the default every time. The
+boot-sync behavior itself is the single-workspace architecture issue (one more datapoint for the
+one-project-model refactor).
+
+### ✅ CLEANUP (2026-07-09, Ken's call) — NPC Identity Probe UI REMOVED from the product surface
+The probe panel in PlaytestWorkspace (target/before/after inputs + correlation verdict card) was a one-off
+research rig from the cross-session NPC-id investigation — never meant to ship. UI fully removed (states,
+handlers, panel); **the agent API endpoints (`/api/agent/npc-identity-probe/*`) and their selftest REMAIN**
+for agent-side use — say the word if those should go too. Also: the LIVE toggle now shows its label even when
+off (discoverability — Ken couldn't find it). Verified: tsc CLEAN, eslint CLEAN, e2e 10/10, Playtest panel
+browser-confirmed probe-free, workspace intact (AI Influence/152 nodes).
+
+### ◐ PASS 6 IN PROGRESS (2026-07-09 — beta-UX bundles; INTERRUPTED by dev-server crash, needs `restart-studio.bat`)
+
+**Ken's four beta-UX bundles, audience = public beta.** Status at the moment the host dev-server process tree
+died (the known tsx-watcher crash class, H-series — NOT a code error; last host `tsc` run was CLEAN):
+
+- **✅ A — Autocomplete + dropdowns (VERIFIED before the crash).** Grounding first: enum dropdowns, boolean
+  toggles, and faction/ware/macro reference pickers ALREADY existed (schemaTypes → select/reference fields).
+  Built the missing piece: **expression autocomplete** — NEW `src/lib/expressionSuggest.ts` (oracle **13/13**;
+  context-aware: `$var.` → union+docs, `event.` → its typed heads, `…controlentity.` → continuations,
+  dynamic/unknown roots stay quiet), `POST /api/agent/suggest/expression`, public
+  `/api/agent/expression-suggest-selftest`, NEW `ExpressionInput.tsx` (debounced dropdown, ↑/↓/Enter/Esc)
+  wired into the Properties Inspector for ALL text fields; cue-reference fields complete from the workspace's
+  own cues + engine keywords. Scriptproperty index now carries per-head DOCS (parser captures `result`).
+  **Browser-verified live:** typing `$station.cont` in an If-node condition popped container/controlentity/…
+  with doc lines. (Incident during verify: typing mutated the real workspace node — restored from disk
+  immediately, 0 tainted nodes; lesson noted: verify inputs on scratch state.)
+- **✅ B — Fix-it buttons (VERIFIED after restart, 2026-07-09).** Oracle **12/12**; host tsc CLEAN. Real-mod
+  grounding caught a FALSE-POSITIVE class before shipping: imported mods carry events inside custom_condition
+  rawXml blobs (Save_identity's `<check_any><event_game_started/>`), so the first listing offered 11 bogus
+  checkinterval fixes on the PROVEN mod — fixed with conservative event detection (rawXml scanned for `<event_`;
+  any unreadable blob ⇒ "unknown", and unknown never produces a fix). Re-grounded: **0 fixes on AI Influence**.
+  **Visual APPLY loop confirmed end-to-end** on a scratch workspace: flagged cue (red ring) → 🔧 One-click fixes
+  at the TOP of the Properties Inspector (moved out of the collapsed Explain panel where it was buried) →
+  APPLY FIX → checkinterval="1s" set, block disappears, red ring clears, server synced. Workspace restored from
+  disk afterward.
+  **⚠ H-class lead (logged):** the dev-server crashed twice today, both times immediately after heavy
+  workspace-import/POST activity — suspect the tsx watcher restarting on import-written files and wedging.
+  Next session: check tsx --ignore coverage for `.studio-mod-id`/`.forgekeep`/import artifacts.
+- **(previous status, superseded) ◐ B — Fix-it buttons (CODE COMPLETE, live verify pending restart).** NEW `src/lib/workspaceQuickFixes.ts`:
+  descriptor-based one-click repairs (checkinterval on check-only cues; forbidden onfail/checkinterval/checktime
+  removal on event cues; instantiate+namespace on one-shot UI listeners; union-aware `$x.key`→`$x.$key` param3
+  rewrites) + pure `applyQuickFix` + oracle (10 checks, NOT yet run). Server: `POST /api/agent/quick-fixes`
+  (listing with the sp-union) + public `quick-fixes-selftest` (allowlisted). UI: "🔧 One-click fixes" block with
+  APPLY buttons (undo-checkpointed) in the Properties Inspector. **Pending: host tsc on the last 4 edits,
+  selftest run, real-workspace listing, visual APPLY confirm.**
+- **✅ C — Preflight & Deploy (VERIFIED 2026-07-09, and it saved the mod on first use).** `deploy-verify` is now a
+  9-stage PREFLIGHT CHECKLIST (config → source read → XML well-formed → compile → FULL validation stack →
+  deploy → bytes → extension doctor → drift), every stage reporting pass/warn/fail into an ordered card
+  (later stages 'skipped' on failure) rendered in the Playtest panel. New `preflight` stage runs
+  runProjectValidation over the EMITTED manifest (schema/cues/cross-file/aiscript/scriptproperty/pitfalls).
+  **First real run BLOCKED a catastrophic deploy:** the workspace copy of x4_ai_influence contains TRUNCATED
+  files (unterminated tags/comments — the H1 damage class: order.aic.opord.protectposition.xml,
+  aic_contracts.xml, aic_opord_execution.xml, ai_influence_hotkey.xml); deploying would have overwritten the
+  WORKING in-game mod with broken XML. Found + closed the passthrough hole: wellformedness now checks the
+  EMITTED files (not just source dirs), and the legacy `/api/agent/deploy` route carries the same 422 gate.
+  Verified both directions: corrupted active-workspace deploy → REFUSED on both routes; clean control mod →
+  all 9 stages green end-to-end (control deployed + removed). Gates: tsc CLEAN, eslint CLEAN, oracles green.
+  **✅ RECONCILED (same session, Ken-approved; git backs everything):** deployed canon robocopied over the
+  workspace copy (26 files, no deletions); the stray nested `x4_neural_link/` (boundary violation per the
+  2026-06-18 spec) MOVED to `X4Mods\Backups\_stray_nested_x4_neural_link_moved_20260709`; drift now clean
+  (only `.studio-mod-id` metadata). Reconciliation surfaced + fixed a validator FALSE POSITIVE: **LAW 1
+  (duplicate cue names) now scopes by per-cue `mdScript`** — "State" exists legally in BOTH
+  ai_influence_combat and ai_influence_conversation (separate scripts, runs in-game); the old
+  workspace-global check cried wolf on every multi-script import. **Final: full 9-stage preflight on the
+  repaired real mod = ALL GREEN** (7 honest warnings: the 3 known $st.manager + 4 schema), both copies in
+  sync; re-import now yields 218 nodes (was 152 — the truncated files finally parse whole). Gates: tsc CLEAN,
+  eslint CLEAN, 15-oracle sweep, e2e 10/10 with the workspace guard holding. (One libuv teardown assert crashed
+  a playwright run mid-suite — runner-level flake, passed clean on retry; noted for G14.)
+- **▢ D — Walkaround card + recipe wizards: not started** (modTemplates + /api/agent/diagnostics are the bases).
+
+**RESTART CHECKLIST for the next session (in order):** `restart-studio.bat` → `npm run typecheck` via
+`/api/run_command` (expect CLEAN; if quick-fixes edits broke anything, the 4 suspect files are
+workspaceQuickFixes.ts / server.ts routes / Sidebar.tsx block / expressionSuggest.ts) → `GET
+/api/agent/quick-fixes-selftest` (expect 10/10) → POST quick-fixes with the live workspace → visual APPLY on a
+seeded scratch node → then bundles C and D.
+
+### ✅ DEV-SERVER STABILITY FIX (2026-07-09, Ken: "the server needs to update itself, I've never restarted it this often")
+**Root cause (owned): agent-INDUCED self-restart loops.** The tsx watcher restarts the API on ANY non-ignored
+file change — and this week's work started WRITING files into the watched tree at runtime: `data/harvested-schemas/`
+(the server writes its own aiscripts.xsd harvest → restarts itself mid-request), `test-results/` (playwright + the
+workspace-guard snapshot), root scratch `pw-*.txt` (agent test redirects), and `.lint-*.json` (every lint run).
+Rapid-fire edits + mid-request restarts occasionally wedged the whole `npm run dev` process → the manual restarts.
+The SQLite cache was never a factor (lives in os.tmpdir).
+**Fixes (take effect on the NEXT restart-studio.bat, then never again):**
+1. `package.json` dev/dev:api ignores now cover every runtime-written path: `data/**`, `test-results/**`,
+   `playwright-report/**`, `graphify-out/**`, `**/*.txt`, `.lint-*.json` (plus the existing set).
+2. **Self-healing supervisor** — NEW `run-api-supervised.cmd`: the API watcher runs in a respawn loop (2s backoff,
+   history in supervisor.log); `restart-studio.bat` now launches it. If the watcher ever dies again, it revives
+   itself — no human restart.
+3. Agent protocol note: scratch output belongs in `temp_import/` (ignored), never the repo root.
+*Verification pending the one final manual restart (config-level change; no code path to oracle). ◐ until a
+session runs on the supervisor and observes an edit-restart cycle without manual intervention.*
 
 ### ⚠ TOOL-IMPROVEMENTS from the v1.0-RC dogfood (2026-07-01 late session — mission-offer build via agent API)
 8. **✅ CLOSED 2026-07-08 (see Validator Gap Closure Pass above).** Cue-ref resolver flags MD KEYWORDS as unresolved cues (2026-07-02, x4_ai_influence Orphan_check validate).
