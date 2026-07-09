@@ -45,7 +45,7 @@ import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
 import { orientConnection, linkExists as linkAlreadyExists } from '../lib/canvasInteractions';
 import { promptDialog } from '../lib/uiDialogs';
 import { STARTER_TAGS } from '../lib/mdFriendlyNames';
-import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
+import CanvasOnboarding from './CanvasOnboarding';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
 import { computeAutoLayout } from '../lib/mdAutoLayout';
 import { markE2EPerfCounter } from '../lib/e2ePerfCounters';
@@ -130,6 +130,7 @@ export default function Canvas({
   const [liveBadges, setLiveBadges] = useState<Record<string, LiveNodeBadge>>({});
   const [liveStatus, setLiveStatus] = useState<{ available: boolean; live: boolean; updatedAt?: string; bridge?: { bridgeUp: boolean; gameActive: boolean; summary: string } } | null>(null);
   const [liveWatches, setLiveWatches] = useState<{ name: string; value: string }[]>([]);
+  // (Recipe-wizard state lives inside CanvasOnboarding since the A7 extraction.)
 
   useEffect(() => {
     if (!liveMode) { setLiveBadges({}); setLiveStatus(null); setLiveWatches([]); return; }
@@ -1494,32 +1495,10 @@ export default function Canvas({
   return (
     <div className="flex-1 bg-[#07090d] relative overflow-hidden flex flex-col h-full select-none" onContextMenu={handleCanvasContextMenu}>
 
-      {/* Empty-canvas onboarding: starter templates + a hint (G9). Shown only when there are no nodes. */}
+      {/* Empty-canvas onboarding (G9 + recipes) — extracted to CanvasOnboarding (audit A7). */}
       {workspace.nodes.filter(n => n.type !== 'comment').length === 0 && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
-          <div className="pointer-events-auto w-[460px] max-w-[82%] bg-[#0f131a]/97 border border-cyan-500/25 rounded-xl shadow-2xl glass-effect p-5">
-            <div className="text-center mb-3.5">
-              <div className="text-white font-bold text-sm tracking-wide">Start a new mod</div>
-              <div className="text-slate-400 text-[11px] mt-1 leading-relaxed">
-                Pick a starter to begin with a working example — or press <span className="px-1 py-0.5 rounded bg-white/10 text-slate-200 font-mono text-[9px]">Space</span> on the canvas to drop a node.
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              {MOD_TEMPLATES.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => { saveCheckpoint(); setWorkspace(buildTemplateWorkspace(t.id)); }}
-                  className="text-left p-2.5 rounded-lg border border-white/10 bg-white/[0.02] hover:border-cyan-500/40 hover:bg-cyan-500/5 transition-colors group cursor-pointer"
-                >
-                  <div className="text-cyan-300 font-semibold text-xs group-hover:text-cyan-200">{t.title}</div>
-                  <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">{t.blurb}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        <CanvasOnboarding onLoad={ws => { saveCheckpoint(); setWorkspace(ws); }} />
       )}
-
       {/* Canvas Top Controls Toolbar */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-[#0f131a]/95 border border-cyan-500/20 p-2 rounded-lg shadow-2xl glass-effect">
         <button

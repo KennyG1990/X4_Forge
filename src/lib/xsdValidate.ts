@@ -83,7 +83,12 @@ function collectEnums(node: AnyNode | undefined): string[] {
   return Array.from(new Set(enums));
 }
 
-let cached: { key: string; index: SchemaIndex } | null = null;
+// MULTI-SLOT cache (audit A1, 2026-07-09): the old single-slot `cached` let the md and
+// aiscripts indexes EVICT EACH OTHER, so every validate/preflight/health-card request
+// re-parsed ~2.1MB of XSD (measured: 245-273ms per warm request, dominated by reparse).
+// Keyed by the file-path SET; the mtime-key still invalidates on schema edits. Bounded.
+const indexCache = new Map<string, { key: string; index: SchemaIndex }>();
+const INDEX_CACHE_MAX = 8;
 
 /**
  * Build (and cache) a schema element/attribute index from the given XSD files.
@@ -94,9 +99,11 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
   if (!existing.length) {
     return { elements: new Map(), loaded: false, sourceFiles: [], elementCount: 0 };
   }
+  const slot = existing.join('|');
   const key = existing.map(p => {
     try { return `${p}:${fs.statSync(p).mtimeMs}`; } catch { return p; }
   }).join('|');
+  const cached = indexCache.get(slot);
   if (cached && cached.key === key) return cached.index;
 
   const roots = existing.map(p => parser.parse(fs.readFileSync(p, 'utf8')));
@@ -345,7 +352,11 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
   }
 
   const index: SchemaIndex = { elements, loaded: true, sourceFiles: existing, elementCount: elements.size };
-  cached = { key, index };
+  if (indexCache.size >= INDEX_CACHE_MAX && !indexCache.has(slot)) {
+    const oldest = indexCache.keys().next().value;
+    if (oldest !== undefined) indexCache.delete(oldest);
+  }
+  indexCache.set(slot, { key, index });
   return index;
 }
 

@@ -23,6 +23,7 @@
  */
 
 import type { MDNode, MDLink } from '../types';
+import { parseXmlLenient, walkElements } from './xmlLite';
 
 export type CueLineageSeverity = 'error' | 'warning';
 export type CueLineageCode =
@@ -73,13 +74,43 @@ export interface CueLineageResult {
 
 const SIGNAL_TAGS = ['signal_cue_instantly', 'signal_cue', 'reset_cue', 'cancel_cue'];
 
-/** Extract cue="X" targets from raw signal/reset/cancel XML inside a custom_xml node. */
+/** Extract cue="X" targets from raw signal/reset/cancel XML inside a custom_xml node,
+ * plus <run_actions ref="X"> / <include_actions ref="X"> library invocations — those are
+ * cue-graph references too (definedCueNames indexes <library> alongside <cue>, so they
+ * resolve through the same machinery; audit R1 side-find 2026-07-08).
+ *
+ * B6 (2026-07-09): DOM-first scan — the input is parsed with xmldom and WALKED, so
+ * comments and CDATA are structurally invisible (regex could only approximate this; the
+ * doc-comment-indexed-as-ref FP was the lived mechanism). Unparseable input degrades to
+ * the old comment-stripped regex so malformed blobs never lose refs. */
+const SIGNAL_REF_TAGS = new Set(['signal_cue_instantly', 'signal_cue', 'reset_cue', 'cancel_cue']);
+const ACTION_REF_TAGS = new Set(['run_actions', 'include_actions']);
+
 export function parseSignalCueRefs(rawXml: string): string[] {
   if (!rawXml || typeof rawXml !== 'string') return [];
   const refs: string[] = [];
+
+  const root = parseXmlLenient(rawXml);
+  if (root) {
+    walkElements(root, el => {
+      if (SIGNAL_REF_TAGS.has(el.nodeName)) {
+        const cue = el.getAttribute('cue');
+        if (cue) refs.push(cue);
+      } else if (ACTION_REF_TAGS.has(el.nodeName)) {
+        const ref = el.getAttribute('ref');
+        if (ref) refs.push(ref);
+      }
+    });
+    return refs;
+  }
+
+  // Degrade path: comment-strip + regex (never lose refs on malformed input).
+  const text = rawXml.replace(/<!--[\s\S]*?-->/g, '');
   const re = /<\s*(signal_cue_instantly|signal_cue|reset_cue|cancel_cue)\b[^>]*\bcue\s*=\s*"([^"]+)"/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(rawXml)) !== null) refs.push(m[2]);
+  while ((m = re.exec(text)) !== null) refs.push(m[2]);
+  const raRe = /<\s*(run_actions|include_actions)\b[^>]*\bref\s*=\s*"([^"]+)"/g;
+  while ((m = raRe.exec(text)) !== null) refs.push(m[2]);
   return refs;
 }
 
@@ -93,6 +124,30 @@ export function parseSignalCueRefs(rawXml: string): string[] {
 export const MD_CUE_KEYWORDS = new Set(['this', 'parent', 'static', 'namespace']);
 
 /**
+ * THE shared cue-reference classifier (audit A2, 2026-07-09). Three resolvers used to
+ * carry their own drifting copies of this logic (this file, extensionProject's index,
+ * projectCrossFileValidation's qnameOf) — the keyword whitelist had to be fixed twice
+ * and the multi-script duplicate fix reached only one of them. One classifier, three
+ * consumers, one semantics.
+ */
+export type CueRefClass =
+  | { kind: 'keyword' }                              // parent/this/static/namespace (exact lowercase)
+  | { kind: 'local'; cue: string }                   // bare name or this.Name
+  | { kind: 'cross'; script: string; cue: string }   // md.<script>.<cue>[.deeper]
+  | { kind: 'external' };                            // $expr, {…}, other-qualified — never flagged
+
+export function classifyCueRef(raw: string): CueRefClass {
+  const ref = String(raw ?? '').trim();
+  if (!ref) return { kind: 'external' };
+  if (MD_CUE_KEYWORDS.has(ref)) return { kind: 'keyword' };
+  const cross = ref.match(/^md\.([^.]+)\.(.+)$/i);
+  if (cross) return { kind: 'cross', script: cross[1], cue: cross[2].split('.')[0] };
+  const local = ref.startsWith('this.') ? ref.slice(5) : ref;
+  if (!local || local.includes('.') || local.startsWith('$') || local.startsWith('{')) return { kind: 'external' };
+  return { kind: 'local', cue: local };
+}
+
+/**
  * Resolve a cue reference to a *local* candidate name, or null if it should be treated
  * as external/qualified (and therefore never flagged). Strips a leading `this.`; any
  * remaining dot (e.g. `md.X.Y`, `parent.X`, `static.X`) means external/qualified.
@@ -100,16 +155,8 @@ export const MD_CUE_KEYWORDS = new Set(['this', 'parent', 'static', 'namespace']
  * keyword forms, not local names — they return null so no resolver flags them.
  */
 export function normalizeLocalCueRef(ref: string): string | null {
-  if (!ref || typeof ref !== 'string') return null;
-  let r = ref.trim();
-  // Engine keywords are the exact LOWERCASE tokens; a CamelCase "Parent" is a cue NAME.
-  if (MD_CUE_KEYWORDS.has(r)) return null; // engine keyword — always resolved
-  if (r.startsWith('this.')) r = r.slice(5);
-  if (r.length === 0) return null;
-  if (r.includes('.')) return null; // qualified / cross-script — external
-  // MD expressions / variables aren't cue names
-  if (r.startsWith('$') || r.startsWith('{')) return null;
-  return r;
+  const c = classifyCueRef(ref);
+  return c.kind === 'local' ? c.cue : null;
 }
 
 /** Map each node id to the cue id that owns it (BFS over links, excluding out_sub→in_flow). */
@@ -159,13 +206,14 @@ export function analyzeCueLineage(nodes: MDNode[], links: MDLink[]): CueLineageR
     }
   }
 
-  // --- local cue name index ---
+  // --- local cue name index (duplicate counting scoped by per-cue mdScript — A2) ---
   const cueByName = new Map<string, string>(); // name -> cueId (first wins)
   const nameCounts = new Map<string, number>();
   for (const c of cueNodes) {
     const name = (c.properties?.name ?? '').toString().trim();
     if (name) {
-      nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+      const scope = (c.properties?.mdScript ?? '').toString();
+      nameCounts.set(`${scope}::${name}`, (nameCounts.get(`${scope}::${name}`) || 0) + 1);
       if (!cueByName.has(name)) cueByName.set(name, c.id);
     }
   }
@@ -248,10 +296,15 @@ export function analyzeCueLineage(nodes: MDNode[], links: MDLink[]): CueLineageR
     }
   }
 
-  // --- duplicate / unnamed cue names ---
-  for (const [name, count] of nameCounts) {
-    if (count > 1) findings.push({ severity: 'error', code: 'duplicate_cue_name', ref: name,
-      message: `Cue name "${name}" is used by ${count} cues; cue names must be unique within a script.` });
+  // --- duplicate / unnamed cue names (scoped by SCRIPT, matching LAW 1: the same name
+  // in DIFFERENT mdScript files is legal — audit A2 closed the divergence where this
+  // check stayed workspace-global after types.ts was fixed) ---
+  for (const [scopedName, count] of nameCounts) {
+    if (count > 1) {
+      const name = scopedName.split('::').pop() || scopedName;
+      findings.push({ severity: 'error', code: 'duplicate_cue_name', ref: name,
+        message: `Cue name "${name}" is used by ${count} cues; cue names must be unique within a script.` });
+    }
   }
   for (const c of cueNodes) {
     const name = (c.properties?.name ?? '').toString().trim();
@@ -339,6 +392,22 @@ export function runCueLineageSelftest() {
   ok('normalize_keyword_this_is_null', normalizeLocalCueRef('this') === null);
   ok('normalize_keyword_static_is_null', normalizeLocalCueRef('static') === null);
   ok('normalize_keyword_namespace_is_null', normalizeLocalCueRef('namespace') === null);
+  // shared classifier (A2) — the one semantics all three resolvers consume
+  ok('classify_keyword', classifyCueRef('parent').kind === 'keyword');
+  ok('classify_local_bare', JSON.stringify(classifyCueRef('MyCue')) === JSON.stringify({ kind: 'local', cue: 'MyCue' }));
+  ok('classify_local_this', JSON.stringify(classifyCueRef('this.MyCue')) === JSON.stringify({ kind: 'local', cue: 'MyCue' }));
+  ok('classify_cross', JSON.stringify(classifyCueRef('md.SomeScript.SomeCue.Deep')) === JSON.stringify({ kind: 'cross', script: 'SomeScript', cue: 'SomeCue' }));
+  ok('classify_external_expr', classifyCueRef('$OfferCue').kind === 'external' && classifyCueRef('static.X').kind === 'external');
+  ok('classify_camel_parent_is_local', classifyCueRef('Parent').kind === 'local');
+  // duplicate scoping (A2): same name in DIFFERENT scripts is legal; same script flags
+  {
+    const dn = (id: string, name: string, mdScript: string): MDNode =>
+      ({ id, type: 'cue', xmlTag: 'cue', label: name, x: 0, y: 0, inputs: [], outputs: [], properties: { name, mdScript } } as unknown as MDNode);
+    const multi = analyzeCueLineage([dn('m1', 'State', 'combat'), dn('m2', 'State', 'conversation')], []);
+    ok('multiscript_same_name_not_flagged', !multi.findings.some(f => f.code === 'duplicate_cue_name'), JSON.stringify(multi.findings));
+    const same = analyzeCueLineage([dn('s1', 'State', 'combat'), dn('s2', 'State', 'combat')], []);
+    ok('same_script_duplicate_flagged', same.findings.some(f => f.code === 'duplicate_cue_name' && f.ref === 'State'), JSON.stringify(same.findings));
+  }
   ok('parse_signal_multi', parseSignalCueRefs('<signal_cue cue="A"/><cancel_cue cue="B" />').join(',') === 'A,B');
 
   // structured signal node (not custom_xml): signal_cue with properties.cue
@@ -353,6 +422,20 @@ export function runCueLineageSelftest() {
   const sr = analyzeCueLineage(sNodes, sLinks);
   ok('structured_signal_resolves', sr.edges.some(e => e.kind === 'signal' && e.toRef === 'Target' && e.toCueId === 'sc2'));
   ok('structured_signal_dangling_flagged', sr.findings.some(f => f.code === 'dangling_cue_ref' && f.ref === 'NoStruct'));
+
+  // ---- B6: DOM-first ref scanning — comments/CDATA structurally invisible ----
+  ok('b6_commented_signal_not_indexed',
+    parseSignalCueRefs('<actions><!-- <signal_cue cue="Ghost"/> --><signal_cue cue="Real"/></actions>').join(',') === 'Real');
+  ok('b6_doc_comment_ref_not_indexed (the lived FP)',
+    parseSignalCueRefs('<actions><!-- invoke via <run_actions ref="…"> with params --><run_actions ref="md.X.Lib"/></actions>').join(',') === 'md.X.Lib');
+  ok('b6_cdata_not_indexed',
+    parseSignalCueRefs('<actions><debug_text text="x"><![CDATA[ <signal_cue cue="InCdata"/> ]]></debug_text></actions>').length === 0);
+  ok('b6_multi_top_level_fragment_parses',
+    parseSignalCueRefs('<signal_cue cue="A"/><cancel_cue cue="B"/>').join(',') === 'A,B');
+  ok('b6_run_and_include_actions_captured',
+    parseSignalCueRefs('<x><run_actions ref="R1"/><include_actions ref="R2"/></x>').join(',') === 'R1,R2');
+  ok('b6_malformed_degrades_to_regex_without_losing_refs',
+    parseSignalCueRefs('<broken <signal_cue cue="StillFound"/>').includes('StillFound'));
 
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

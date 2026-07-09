@@ -104,19 +104,21 @@ export default function DiagnosticsHub({
     if (!modWorkspacePath) return;
     if (showFeedback) setSyncStatus('syncing');
     try {
-      const deployRes = await fetch('/api/agent/deploy', {
+      // Audit R4: deploy-verify (full 9-stage preflight) replaces the deprecated /deploy.
+      const deployRes = await fetch('/api/agent/deploy-verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace })
       });
       const deployData = await deployRes.json();
-      if (deployRes.ok && deployData.success) {
+      if (deployRes.ok && deployData.ok) {
         if (showFeedback) {
           setSyncStatus('success');
           setTimeout(() => setSyncStatus('idle'), 2000);
         }
       } else {
-        throw new Error(deployData.error || 'Failed to deploy on server.');
+        const failed = (deployData.checklist || []).find((c: { status: string }) => c.status === 'fail');
+        throw new Error(deployData.error || (failed ? `${failed.label}: ${failed.detail}` : 'Failed to deploy on server.'));
       }
     } catch (err) {
       console.error('Playtest Directory Sync Error:', err);

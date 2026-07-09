@@ -397,7 +397,7 @@ export function generateContractMdScript(contract: IntegrationContract, modId: s
       const respFields = (ep.response || []).map(fld => fld.name).join(', ') || 'no declared fields';
       return [
         `    <!-- file_bridge ${ep.id} — write request file and poll for ${fb.responseFile}. -->`,
-        `    <library name="Call_${ep.id}">`,
+        `    <library name="Call_${ep.id}" purpose="run_actions">`,
         req.length ? `      <params>\n${req.map(fld => `        <param name="${fld.name}" />`).join('\n')}\n      </params>` : `      <!-- no request fields -->`,
         `      <actions>`,
         buildFileBridgePollingSubgraph({
@@ -439,8 +439,8 @@ export function generateContractMdScript(contract: IntegrationContract, modId: s
       : 'null';
     const respFields = (ep.response || []).map(fld => fld.name).join(', ') || 'no declared fields';
     return [
-      `    <!-- ${ep.method} ${ep.path} — call ${ep.id}: signal this library (with params) to fire the request. -->`,
-      `    <library name="Call_${ep.id}">`,
+      `    <!-- ${ep.method} ${ep.path} — call ${ep.id}: invoke via <run_actions ref="…"> with params (libraries are never signal_cue'd). -->`,
+      `    <library name="Call_${ep.id}" purpose="run_actions">`,
       req.length ? `      <params>\n${paramDecls}\n      </params>` : `      <!-- no request fields -->`,
       `      <actions>`,
       `        <raise_lua_event name="'${ev.request}'" param="${payload}" />`,
@@ -554,10 +554,10 @@ export function runContractGlueSelftest() {
   ok('md_generates_without_throwing', !mdThrew && md.length > 0);
   ok('md_is_mdscript', md.includes('<mdscript name="mymod_http"') && md.includes('</mdscript>'));
   ok('md_wires_call_and_response', good.endpoints.every(ep => (ep.kind || 'http') === 'ui_event'
-    ? (md.includes(`<cue name="On_${ep.id}">`) && md.includes(`control="'${ep.id}'"`) && !md.includes(`<library name="Call_${ep.id}">`))
+    ? (md.includes(`<cue name="On_${ep.id}">`) && md.includes(`control="'${ep.id}'"`) && !md.includes(`<library name="Call_${ep.id}" purpose="run_actions">`))
     : (ep.kind || 'http') === 'file_bridge'
-      ? (md.includes(`<library name="Call_${ep.id}">`) && md.includes('<debug_to_file') && md.includes(`control="'${ep.id}.response'"`))
-    : (md.includes(`<library name="Call_${ep.id}">`) && md.includes(`name="'${good.namespace}.${ep.id}'"`) && md.includes(`control="'${ep.id}.response'"`))));
+      ? (md.includes(`<library name="Call_${ep.id}" purpose="run_actions">`) && md.includes('<debug_to_file') && md.includes(`control="'${ep.id}.response'"`))
+    : (md.includes(`<library name="Call_${ep.id}" purpose="run_actions">`) && md.includes(`name="'${good.namespace}.${ep.id}'"`) && md.includes(`control="'${ep.id}.response'"`))));
   ok('md_passes_request_params', md.includes('<param name="text" />') && md.includes('$text=$text'));
   let mdBadThrew = false;
   try { generateContractMdScript(bad, 'x'); } catch { mdBadThrew = true; }

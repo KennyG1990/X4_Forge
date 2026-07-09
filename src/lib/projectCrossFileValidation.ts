@@ -19,6 +19,8 @@ import {
   type ExtensionProject,
 } from './extensionProject';
 import { parseModManifest, type ModDependency, type ModManifest } from './modDependencyGraph';
+import { classifyCueRef } from './cueLineage';
+import { normPath } from './xmlLite';
 
 export type ProjectCrossFileFindingCode =
   | 'project.structure'
@@ -88,9 +90,7 @@ export interface ProjectCrossFileValidationResult {
   };
 }
 
-function normPath(path: string): string {
-  return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
-}
+// normPath: shared via xmlLite (audit R2).
 
 function stripMdLiteral(value: string | undefined): string {
   const raw = String(value || '').trim();
@@ -288,13 +288,12 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
         kindByQName.set(`${script}.${m[2].toLowerCase()}`, m[1].toLowerCase() === 'library' ? 'library' : 'cue');
       }
     }
+    // ONE classifier for all resolvers (audit A2).
     const qnameOf = (ref: string, ownScript: string): string | null => {
-      const r = (ref || '').trim();
-      const cross = r.match(/^md\.([^.]+)\.([^.\s"']+)/i);
-      if (cross) return `${cross[1].toLowerCase()}.${cross[2].toLowerCase()}`;
-      const local = r.startsWith('this.') ? r.slice(5) : r;
-      if (/^[A-Za-z_]\w*$/.test(local)) return `${ownScript.toLowerCase()}.${local.toLowerCase()}`;
-      return null; // parent./static./expression → can't resolve statically; don't flag
+      const c = classifyCueRef(ref);
+      if (c.kind === 'cross') return `${c.script.toLowerCase()}.${c.cue.toLowerCase()}`;
+      if (c.kind === 'local') return `${ownScript.toLowerCase()}.${c.cue.toLowerCase()}`;
+      return null; // keyword/external → can't resolve statically; don't flag
     };
     for (const f of mdFiles) {
       const ownScript = f.content!.match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '';

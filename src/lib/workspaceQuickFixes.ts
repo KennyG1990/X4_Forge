@@ -17,22 +17,30 @@
  *   qf.event_attrs      — event-based cue carrying forbidden onfail/checkinterval/checktime → remove them
  *   qf.instantiate_ui   — root one-shot <event_ui_triggered> listener → instantiate="true" + namespace="this"
  *   qf.param3_barekey   — `$x.key` read off event.param3 where key isn't a property → `$x.$key`
+ *   qf.missing_trigger  — cue with NO wired trigger → add + wire an event node (GRAPH mutation;
+ *                         audit R3 2026-07-09 — absorbed from modFixes.ts, now MECHANICAL)
+ *   qf.orphan_node      — unconnected non-cue node → advice-only (where to wire is the user's
+ *                         intent; a mechanical guess would be wrong more than right)
  */
 
 import type { MDNode, MDLink, ModWorkspace } from '../types';
 
 export interface QuickFixDescriptor {
   id: string;
-  code: 'qf.checkinterval' | 'qf.event_attrs' | 'qf.instantiate_ui' | 'qf.param3_barekey';
+  code: 'qf.checkinterval' | 'qf.event_attrs' | 'qf.instantiate_ui' | 'qf.param3_barekey' | 'qf.missing_trigger' | 'qf.orphan_node';
   nodeId: string;
   nodeLabel: string;
   title: string;
   detail: string;
-  /** property operations to apply, in order */
+  /** true → no APPLY button; the descriptor is deterministic ADVICE (folded 💡, audit R3) */
+  adviceOnly?: boolean;
+  /** operations to apply, in order (property-level and graph-level) */
   ops: Array<
     | { op: 'set_property'; key: string; value: string }
     | { op: 'delete_property'; key: string }
     | { op: 'replace_in_property'; key: string; from: string; to: string }
+    | { op: 'add_node'; node: MDNode }
+    | { op: 'add_link'; link: MDLink }
   >;
 }
 
@@ -62,6 +70,26 @@ function definitelyCheckOnly(conditions: MDNode[]): boolean {
   );
 }
 
+/** The exact toolbox "Event: Game Started" shape (event_cue_signalled on md.Setup.Start —
+ * the vanilla-proven fires-on-start trigger) so a mechanical fix adds the SAME node a user
+ * would drag from the palette. Placed left of the cue it repairs. */
+function makeStarterTriggerNode(cue: MDNode): MDNode {
+  return {
+    id: `qf_trigger_${cue.id}`,
+    type: 'event',
+    label: 'Event: Game Started',
+    xmlTag: 'event_cue_signalled',
+    x: (Number(cue.x) || 0) - 280,
+    y: (Number(cue.y) || 0) + 40,
+    properties: { cue: 'md.Setup.Start' },
+    propertiesSchema: [
+      { key: 'cue', label: 'Signaling Cue', type: 'text', placeholder: 'md.Setup.Start', description: 'Triggered when this standard system startup cue completes' },
+    ],
+    inputs: [{ id: 'in_cond', name: 'Condition In', type: 'child' }],
+    outputs: [{ id: 'out_flow', name: 'Trigger Actions', type: 'flow' }],
+  } as unknown as MDNode;
+}
+
 export function listQuickFixes(
   workspace: Pick<ModWorkspace, 'nodes' | 'links'>,
   opts: { propertyUnion?: Set<string> } = {},
@@ -69,11 +97,33 @@ export function listQuickFixes(
   const out: QuickFixDescriptor[] = [];
   const nodes = workspace.nodes || [];
   const links = workspace.links || [];
+  const subTargets = new Set(links.filter(l => l.sourcePortId === 'out_sub').map(l => l.targetNodeId));
+  const hasIncoming = new Set(links.map(l => l.targetNodeId));
 
   for (const cue of nodes) {
     if (cue.type !== 'cue') continue;
     const name = String(cue.properties?.name ?? cue.label ?? cue.id);
     const conditions = cueConditionNodes(cue, nodes, links);
+
+    // qf.missing_trigger (audit R3, absorbed from modFixes): a root cue with no wired
+    // trigger never fires. MECHANICAL: add the toolbox starter event + wire it. Sub-cues
+    // (driven by a parent's out_sub) are legitimately trigger-less. Raw-cue nodes carry
+    // their conditions inside rawXml — never flag those.
+    if (!subTargets.has(cue.id) && conditions.length === 0 && !String(cue.properties?.rawXml ?? '').trim()) {
+      const trigger = makeStarterTriggerNode(cue);
+      out.push({
+        id: `qf.missing_trigger:${cue.id}`,
+        code: 'qf.missing_trigger',
+        nodeId: cue.id,
+        nodeLabel: name,
+        title: `Add a trigger to "${name}" (event: game started)`,
+        detail: 'This cue has no trigger wired, so it will NEVER fire. This adds the standard game-start event (event_cue_signalled on md.Setup.Start) and wires it to CONDITIONS — swap the event type afterwards if you meant a different trigger.',
+        ops: [
+          { op: 'add_node', node: trigger },
+          { op: 'add_link', link: { id: `qf_link_${cue.id}`, sourceNodeId: cue.id, sourcePortId: 'out_cond', targetNodeId: trigger.id, targetPortId: 'in_cond' } as unknown as MDLink },
+        ],
+      });
+    }
     const hasEvent = conditions.some(conditionBearsEvent);
     const hasCheckCondition = definitelyCheckOnly(conditions);
     const props = cue.properties || {};
@@ -129,6 +179,26 @@ export function listQuickFixes(
     }
   }
 
+  // qf.orphan_node (audit R3, absorbed from modFixes): unconnected non-cue nodes never run.
+  // ADVICE-ONLY — where it belongs is the user's intent; a mechanical guess would mislead.
+  for (const n of nodes) {
+    if (n.type === 'cue') continue;
+    if (hasIncoming.has(n.id)) continue;
+    const label = String(n.properties?.name ?? n.label ?? n.id);
+    out.push({
+      id: `qf.orphan_node:${n.id}`,
+      code: 'qf.orphan_node',
+      nodeId: n.id,
+      nodeLabel: label,
+      adviceOnly: true,
+      title: `"${label}" (<${n.xmlTag}>) is not connected — it never runs`,
+      detail: n.type === 'action'
+        ? `Link it into a cue's ACTIONS chain (cue out_act → this node's in_act), or delete it.`
+        : `Wire it into a cue (a condition/event belongs on a cue's CONDITIONS port), or delete it.`,
+      ops: [],
+    });
+  }
+
   // Pitfall — param3 bare-key reads inside node property VALUES (needs the union)
   if (opts.propertyUnion?.size) {
     const union = opts.propertyUnion;
@@ -169,21 +239,29 @@ export function listQuickFixes(
   return out;
 }
 
-/** Pure application: returns a NEW workspace with the descriptor's ops applied. */
-export function applyQuickFix<T extends Pick<ModWorkspace, 'nodes'>>(workspace: T, fix: QuickFixDescriptor): T {
-  return {
-    ...workspace,
-    nodes: workspace.nodes.map(n => {
-      if (n.id !== fix.nodeId) return n;
-      const props: Record<string, unknown> = { ...(n.properties || {}) };
-      for (const op of fix.ops) {
-        if (op.op === 'set_property') props[op.key] = op.value;
-        else if (op.op === 'delete_property') delete props[op.key];
-        else if (op.op === 'replace_in_property') props[op.key] = String(props[op.key] ?? '').split(op.from).join(op.to);
-      }
-      return { ...n, properties: props };
-    }),
-  };
+/** Pure application: returns a NEW workspace with the descriptor's ops applied.
+ * Property ops target fix.nodeId; graph ops (add_node/add_link) extend the workspace —
+ * idempotent by id, so double-applying never duplicates (audit R3). */
+export function applyQuickFix<T extends Pick<ModWorkspace, 'nodes'> & Partial<Pick<ModWorkspace, 'links'>>>(workspace: T, fix: QuickFixDescriptor): T {
+  let nodes = workspace.nodes.map(n => {
+    if (n.id !== fix.nodeId) return n;
+    const props: Record<string, unknown> = { ...(n.properties || {}) };
+    for (const op of fix.ops) {
+      if (op.op === 'set_property') props[op.key] = op.value;
+      else if (op.op === 'delete_property') delete props[op.key];
+      else if (op.op === 'replace_in_property') props[op.key] = String(props[op.key] ?? '').split(op.from).join(op.to);
+    }
+    return { ...n, properties: props };
+  });
+  let links = workspace.links ? [...workspace.links] : undefined;
+  for (const op of fix.ops) {
+    if (op.op === 'add_node' && !nodes.some(n => n.id === op.node.id)) nodes = [...nodes, op.node];
+    else if (op.op === 'add_link') {
+      if (!links) links = [];
+      if (!links.some(l => l.id === op.link.id)) links.push(op.link);
+    }
+  }
+  return { ...workspace, nodes, ...(links !== undefined ? { links } : {}) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -239,13 +317,53 @@ export function runWorkspaceQuickFixesSelftest(): {
   const applied4 = applyQuickFix(ws, byCode('qf.param3_barekey')[0]);
   ok('apply rewrites only the bare key', String(applied4.nodes.find(n => n.id === 'd1')!.properties!.value) === "$d.$l1 == 'relation' and $d.count gt 0");
 
-  // fixed workspace produces no repeat fixes
+  // R3: the fixture's unwired s1/d1 are now correctly flagged as orphan ADVICE (no button)
+  ok('orphan non-cue nodes → advice-only descriptors (folded 💡)',
+    byCode('qf.orphan_node').every(f => f.adviceOnly === true && f.ops.length === 0)
+    && byCode('qf.orphan_node').some(f => f.nodeId === 's1') && byCode('qf.orphan_node').some(f => f.nodeId === 'd1'),
+    JSON.stringify(byCode('qf.orphan_node').map(f => f.nodeId)));
+  ok('wired condition/event nodes are NOT flagged orphan',
+    !byCode('qf.orphan_node').some(f => ['k1', 'e2', 'e3'].includes(f.nodeId)));
+
+  // fixed workspace produces no repeat MECHANICAL fixes (advice entries have no apply)
   let clean = ws as typeof ws;
-  for (const f of fixes) clean = applyQuickFix(clean, f) as typeof ws;
-  ok('after applying all fixes, none remain', listQuickFixes(clean, { propertyUnion: union }).length === 0,
-    JSON.stringify(listQuickFixes(clean, { propertyUnion: union }).map(f => f.code)));
+  for (const f of fixes.filter(x => x.ops.length > 0)) clean = applyQuickFix(clean, f) as typeof ws;
+  const remaining = listQuickFixes(clean, { propertyUnion: union }).filter(f => f.ops.length > 0);
+  ok('after applying all mechanical fixes, none remain', remaining.length === 0, JSON.stringify(remaining.map(f => f.code)));
 
   ok('degrades on empty workspace', listQuickFixes({ nodes: [], links: [] }).length === 0);
+
+  // R3 — qf.missing_trigger: mechanical graph mutation (absorbed from modFixes)
+  const mtWs = {
+    nodes: [
+      N('mt1', 'cue', 'cue', { name: 'NoTrigger', x: 500, y: 300 }),
+      N('mtp', 'cue', 'cue', { name: 'Parent' }),
+      N('mtpe', 'event', 'event_game_started', {}),
+      N('mts', 'cue', 'cue', { name: 'Child' }),
+      N('mtr', 'cue', 'custom_xml_cue', { name: 'RawCue', rawXml: '<cue name="RawCue"><conditions><event_game_started/></conditions></cue>' }),
+    ],
+    links: [
+      L('mtl1', 'mtp', 'out_cond', 'mtpe', 'in_cond'),
+      L('mtl2', 'mtp', 'out_sub', 'mts', 'in_flow'),
+    ],
+  };
+  const mtFixes = listQuickFixes(mtWs).filter(f => f.code === 'qf.missing_trigger');
+  ok('trigger-less root cue → mechanical missing-trigger fix (add_node + add_link)',
+    mtFixes.length === 1 && mtFixes[0].nodeId === 'mt1'
+    && mtFixes[0].ops.some(o => o.op === 'add_node') && mtFixes[0].ops.some(o => o.op === 'add_link'),
+    JSON.stringify(mtFixes.map(f => f.nodeId)));
+  ok('sub-cue and raw-cue are NOT flagged missing-trigger',
+    !mtFixes.some(f => f.nodeId === 'mts' || f.nodeId === 'mtr' || f.nodeId === 'mtp'));
+  const mtApplied = applyQuickFix(mtWs, mtFixes[0]);
+  ok('apply adds the wired toolbox trigger (event_cue_signalled on md.Setup.Start)',
+    mtApplied.nodes.some(n => n.id === `qf_trigger_mt1` && n.xmlTag === 'event_cue_signalled' && String(n.properties?.cue) === 'md.Setup.Start')
+    && (mtApplied.links || []).some(l => l.sourceNodeId === 'mt1' && l.sourcePortId === 'out_cond' && l.targetNodeId === 'qf_trigger_mt1'));
+  ok('apply is idempotent (double-apply never duplicates)',
+    applyQuickFix(mtApplied, mtFixes[0]).nodes.length === mtApplied.nodes.length
+    && (applyQuickFix(mtApplied, mtFixes[0]).links || []).length === (mtApplied.links || []).length);
+  ok('after the fix, the cue is no longer missing a trigger',
+    !listQuickFixes(mtApplied).some(f => f.code === 'qf.missing_trigger' && f.nodeId === 'mt1'));
+  ok('apply did not mutate the input workspace', mtWs.nodes.length === 5 && mtWs.links.length === 2);
 
   // imported-mod shape: events hidden in custom_condition rawXml (the Save_identity FP)
   const blobWs = {

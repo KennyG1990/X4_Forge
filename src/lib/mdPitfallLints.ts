@@ -44,23 +44,7 @@ export interface MdPitfallFinding {
   detail: string;
 }
 
-interface ElementLike {
-  nodeType: number;
-  nodeName: string;
-  getAttribute(name: string): string | null;
-  getElementsByTagName(name: string): ArrayLike<ElementLike>;
-  childNodes: ArrayLike<ElementLike>;
-  toString(): string;
-}
-
-function directElementChildren(el: ElementLike, name?: string): ElementLike[] {
-  const out: ElementLike[] = [];
-  for (let i = 0; i < el.childNodes.length; i++) {
-    const kid = el.childNodes[i];
-    if (kid.nodeType === 1 && (!name || kid.nodeName === name)) out.push(kid);
-  }
-  return out;
-}
+import { directElementChildren, type ElementLike } from './xmlLite';
 
 function lineOf(haystack: string, needleIndex: number): number {
   return haystack.slice(0, Math.max(0, needleIndex)).split('\n').length;

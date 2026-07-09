@@ -51,7 +51,6 @@ import { runArchitectLoopSelftest } from "./src/lib/architectLoop";
 import { runCanvasInteractionSelftest } from "./src/lib/canvasInteractions";
 import { runLiveLogNavSelftest } from "./src/lib/liveLogNav";
 import { runWaresJobsRoundtripSelftest, parseWaresXml, parseJobsXml } from "./src/lib/waresJobsParser";
-import { runModFixesSelftest } from "./src/lib/modFixes";
 import { runAiScriptRoundtripSelftest, parseAiScriptXml } from "./src/lib/aiScriptParser";
 import { runLuaMdBindingSelftest } from "./src/lib/luaMdBinding";
 import { runPositionPickerSelftest } from "./src/lib/positionPicker";
@@ -89,7 +88,9 @@ import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
 import { classifyPath, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
-import { computeModDrift, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { computeModDrift, fingerprintModFolder, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
+import { workspaceContentHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
 import { runModDriftSelftest } from "./src/lib/modDrift";
 import { assessLuaStaleness, injectLuaVersionMarker, runLuaStalenessSelftest } from "./src/lib/luaStalenessCheck";
 import { registerGithubRoutes } from "./src/server/githubRoutes";
@@ -99,7 +100,11 @@ import { getBridgeLiveState } from "./src/server/liveBridge";
 import { parseForgeWatches, runForgeWatchSelftest } from "./src/lib/forgeWatch";
 import { suggestExpression, runExpressionSuggestSelftest } from "./src/lib/expressionSuggest";
 import { listQuickFixes, runWorkspaceQuickFixesSelftest } from "./src/lib/workspaceQuickFixes";
+import { buildHealthCard, runHealthCardSelftest } from "./src/lib/healthCard";
+import { runModRecipesSelftest } from "./src/lib/modRecipes";
 import { parse as luaParse } from "luaparse";
+import { registerNpcIdentityProbeRoutes } from "./src/server/npcIdentityProbe";
+import { registerSelftests } from "./src/server/selftestRegistry";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
 import {
@@ -242,7 +247,6 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/lua-snippets",
   "/agent/lua-logic-blocks-selftest",
   "/agent/lua-static-selftest",
-  "/agent/lua-runtime-log-selftest",
   "/agent/cue-lineage-selftest",
   "/agent/semantics-selftest",
   "/agent/semantics",
@@ -264,42 +268,16 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/log-file-selftest",
   "/agent/ui-widget-validate-selftest",
   "/agent/ui-layout-selftest",
-  "/agent/override-map-selftest",
-  "/agent/catdat-selftest",
-  "/agent/object-index-selftest",
-  "/agent/proposal-review-selftest",
-  "/agent/intent-check-selftest",
-  "/agent/blueprint-selftest",
-  "/agent/architect-loop-selftest",
-  "/agent/canvas-interaction-selftest",
-  "/agent/wares-jobs-roundtrip-selftest",
-  "/agent/mod-fixes-selftest",
-  "/agent/aiscript-roundtrip-selftest",
-  "/agent/lua-md-binding-selftest",
-  "/agent/position-picker-selftest",
   "/agent/xpath-synth-selftest",
   "/agent/live-fixes-selftest",
-  "/agent/mod-dependency-selftest",
-  "/agent/galaxy-map-selftest",
-  "/agent/extension-project-selftest",
-  "/agent/project-orchestration-selftest",
-  "/agent/project-crossfile-selftest",
-  "/agent/external-api-registry-selftest",
   "/agent/external-api-registry",
   "/agent/mod-dependency-graph",
-  "/agent/live-log-nav-selftest",
   "/agent/npc-identity-probe/selftest",
   "/agent/scriptproperties-selftest",
   "/agent/aiscript-lint-selftest",
   "/agent/scriptproperties-status",
   "/agent/md-pitfall-selftest",
-  "/agent/lua-staleness-selftest",
-  "/agent/mod-drift-selftest",
-  "/agent/live-canvas-selftest",
-  "/agent/bridge-live-state-selftest",
-  "/agent/forge-watch-selftest",
   "/agent/expression-suggest-selftest",
-  "/agent/quick-fixes-selftest"
 ]);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -752,38 +730,12 @@ function collectDeployedModCueNames(modId: string): string[] {
 // NOT their extension id, so an id-grep never sees them. Scan the deployed mod's Lua for the bracket prefix
 // used in DebugError/print calls so the watcher can recognise the mod's lines (and the errors next to them).
 function collectModLogMarkers(modId: string): string[] {
-  const resolved = resolveXsdConfig();
-  const roots = [resolved.filesystemPath, resolved.modWorkspacePath].filter(Boolean) as string[];
-  const bare = modId.toLowerCase().replace(/^x4_/, "");
+  // Audit A8: dir resolution deduped — findDeployedModDir owns the candidate logic.
   const markers = new Set<string>();
   const callRe = /(?:DebugError|print)\s*\(\s*["'`]\s*\[([A-Za-z][A-Za-z0-9_]{3,})\]/g;
-  const scanLua = (dir: string, depth: number) => {
-    if (depth > 4) return;
-    let entries: fs.Dirent[] = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries.slice(0, 300)) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) scanLua(full, depth + 1);
-      else if (/\.lua$/i.test(e.name)) {
-        try {
-          const txt = fs.readFileSync(full, "utf8");
-          let m: RegExpExecArray | null; callRe.lastIndex = 0;
-          while ((m = callRe.exec(txt))) markers.add(m[1].toLowerCase());
-        } catch { /* skip */ }
-      }
-    }
-  };
-  const candidates = Array.from(new Set([modId, `x4_${modId}`, `${modId}_mod`, bare]));
-  for (const root of roots) {
-    let modDir = "";
-    for (const folder of candidates) {
-      const d = path.join(root, folder);
-      try { if (fs.statSync(d).isDirectory()) { modDir = d; break; } } catch { /* */ }
-    }
-    if (!modDir) {
-      try { for (const ent of fs.readdirSync(root)) { if (ent.toLowerCase().includes(bare)) { const d = path.join(root, ent); if (fs.statSync(d).isDirectory()) { modDir = d; break; } } } } catch { /* */ }
-    }
-    if (modDir) { scanLua(path.join(modDir, "ui"), 0); if (markers.size) break; }
+  for (const f of collectModLuaFiles(modId)) {
+    let m: RegExpExecArray | null; callRe.lastIndex = 0;
+    while ((m = callRe.exec(f.source))) markers.add(m[1].toLowerCase());
   }
   return Array.from(markers);
 }
@@ -1534,7 +1486,11 @@ const DEFAULT_WORKSPACE: ModWorkspace = {
 
 let activeWorkspace: ModWorkspace = JSON.parse(JSON.stringify(DEFAULT_WORKSPACE));
 // Track version counter to help with client-side merge prompts
-let workspaceVersion = 1;
+// P0 2026-07-09: Date.now() seed, NOT 1 — a restart-reset counter closed the client's
+// "adopt server workspace when version > stored" gate forever (browser localStorage held a
+// higher number from before the restart), silently pinning the canvas to an ancient graph.
+// A monotonic-across-restarts seed keeps the adoption gate working after every restart.
+let workspaceVersion = Date.now();
 
 // -----------------------------------------------------
 // Helper to call generateContent with retry and fallback model capability
@@ -2981,10 +2937,23 @@ app.get("/api/schema/element/:tag", (req, res) => {
  * GET /api/agent/workspace
  * Retrieves the currently active, synchronized workspace state.
  */
+// B1 sync-trust: content hash of the active workspace, cached per version so the 3s
+// client poll never re-stringifies a 200KB workspace needlessly.
+let cachedWorkspaceHash: { version: number; hash: string } | null = null;
+function activeWorkspaceHash(): string {
+  if (!cachedWorkspaceHash || cachedWorkspaceHash.version !== workspaceVersion) {
+    cachedWorkspaceHash = { version: workspaceVersion, hash: workspaceContentHash(sanitizeWorkspace(activeWorkspace)) };
+  }
+  return cachedWorkspaceHash.hash;
+}
+
 app.get("/api/agent/workspace", (req, res) => {
   return res.json({
     workspace: activeWorkspace,
     version: workspaceVersion,
+    // B1: lets the client DETECT canvas↔server divergence instead of trusting the bare
+    // version counter (the stale-canvas incident class). Hash both sides post-sanitize.
+    workspaceHash: activeWorkspaceHash(),
     lastUpdated: new Date().toISOString()
   });
 });
@@ -3134,470 +3103,8 @@ app.get("/api/agent/debug-watcher/brief", (req, res) => {
   }
 });
 
-type NpcProbeReading = {
-  raw: string;
-  idcode: string;
-  name: string;
-  owner: string;
-  lineNumber: number;
-  line: string;
-  sourcePath?: string;
-  timestamp?: string;
-};
-
-type NpcSaveCandidate = {
-  candidateId: string;
-  explicitId: boolean;
-  tag: string;
-  name: string;
-  owner: string;
-  role?: string;
-  assignment?: string;
-  ship?: string;
-  station?: string;
-  sector?: string;
-  skills?: Record<string, string>;
-  fields: Record<string, string>;
-  rawPath: string;
-  context: string;
-  sourceOffset: number;
-  score?: number;
-  scoreReasons?: string[];
-};
-
-type NpcCandidateMatch = {
-  candidateId: string;
-  beforeCandidate?: NpcSaveCandidate;
-  afterCandidate?: NpcSaveCandidate;
-  score: number;
-  reasons: string[];
-};
-
-const NPC_PROBE_CONFIDENCE_THRESHOLD = 0.75;
-const NPC_NEAR_TIE_DELTA = 0.05;
-const A3B_PROBE_RE = /A3b probe\s*=>\s*raw=([^\s]+)\s+idcode=([^\s]*)\s+name=(.*?)\s+owner=([^\s]*)/i;
-
-function normalizeProbeText(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function parseNpcProbeLines(text: string, options: { targetName?: string; limit?: number; sourcePath?: string } = {}): NpcProbeReading[] {
-  const target = normalizeProbeText(options.targetName);
-  const readings: NpcProbeReading[] = [];
-  const lines = String(text || "").split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const match = line.match(A3B_PROBE_RE);
-    if (!match) continue;
-    const reading: NpcProbeReading = {
-      raw: match[1] || "",
-      idcode: match[2] || "",
-      name: (match[3] || "").trim(),
-      owner: match[4] || "",
-      lineNumber: i + 1,
-      line,
-      sourcePath: options.sourcePath,
-      timestamp: line.match(/^\s*(?:\[[^\]]+\]\s*)?(\d+(?:\.\d+)?|\d{1,2}:\d{2}:\d{2})/)?.[1]
-    };
-    if (target && !normalizeProbeText(reading.name).includes(target)) continue;
-    readings.push(reading);
-  }
-  const limit = Math.max(0, Math.min(Number(options.limit || readings.length) || readings.length, 500));
-  return limit > 0 ? readings.slice(-limit) : readings;
-}
-
-function resolveNpcProbeInputPath(input: unknown, purpose: "log" | "save"): string {
-  const raw = String(input || "").trim();
-  if (!raw) throw new Error(`${purpose}Path is required.`);
-  const candidates: string[] = [];
-  if (path.isAbsolute(raw)) candidates.push(path.normalize(raw));
-  candidates.push(path.resolve(process.cwd(), raw));
-  const resolved = resolveXsdConfig();
-  if (resolved.modWorkspacePath) candidates.push(path.resolve(resolved.modWorkspacePath, raw));
-  if (resolved.filesystemPath) candidates.push(path.resolve(resolved.filesystemPath, raw));
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
-  }
-  throw new Error(`No readable ${purpose} file found for: ${raw}`);
-}
-
-function parseNpcProbeLogFromFile(inputPath: unknown, targetName?: string, limit?: number): { readings: NpcProbeReading[]; sourcePath: string; bytesRead: number } {
-  let selected = "";
-  if (inputPath) {
-    selected = resolveNpcProbeInputPath(inputPath, "log");
-  } else {
-    selected = findDebugLogCandidates().find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) || "";
-  }
-  if (!selected) return { readings: [], sourcePath: "", bytesRead: 0 };
-  const stat = fs.statSync(selected);
-  const tail = readTail(selected, 1024 * 1024);
-  return {
-    readings: parseNpcProbeLines(tail, { targetName, limit, sourcePath: selected }),
-    sourcePath: selected,
-    bytesRead: Math.min(stat.size, 1024 * 1024)
-  };
-}
-
-// Real X4 saves decompress to XML far larger than Node's max string length (~512MB), so a
-// whole-file `.toString()` overflowed ("Cannot create a string longer than 0x1fffffe8 characters").
-// Keep the decompressed BUFFER and let the scanner stringify only bounded windows around hits.
-const NPC_SAVE_SCAN_SLICE = 32 * 1024 * 1024;  // 32MB per stringified slice — safely under the 512MB string cap
-const NPC_SAVE_SCAN_OVERLAP = 64 * 1024;       // 64KB context margin: covers the 16KB back-scan + a name spanning a slice boundary
-
-function readNpcSaveBuffer(savePathInput: unknown): { savePath: string; decoded: Buffer; gzipped: boolean; bytesRead: number; warnings: string[] } {
-  const savePath = resolveNpcProbeInputPath(savePathInput, "save");
-  const bytes = fs.readFileSync(savePath);
-  const gzipped = savePath.toLowerCase().endsWith(".gz") || bytes.subarray(0, 2).equals(Buffer.from([0x1f, 0x8b]));
-  const warnings: string[] = [];
-  let decoded: Buffer;
-  try {
-    decoded = gzipped ? zlib.gunzipSync(bytes) : bytes;
-  } catch (error) {
-    throw new Error(`Failed to decompress save file: ${error?.message || error}`);
-  }
-  if (decoded.length > 300 * 1024 * 1024) {
-    warnings.push(`Large decompressed save (${decoded.length} bytes); scanning in bounded ${NPC_SAVE_SCAN_SLICE}-byte windows.`);
-  }
-  return { savePath, decoded, gzipped, bytesRead: bytes.length, warnings };
-}
-
-function parseXmlishAttributes(openTag: string): Record<string, string> {
-  const fields: Record<string, string> = {};
-  const attrRe = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-  let match: RegExpExecArray | null;
-  while ((match = attrRe.exec(openTag))) {
-    fields[match[1]] = match[2] ?? match[3] ?? "";
-  }
-  return fields;
-}
-
-function findClosestXmlOpenTag(text: string, offset: number): { tag: string; openTag: string; fields: Record<string, string>; start: number } {
-  const openStart = text.lastIndexOf("<", offset);
-  const openEnd = text.indexOf(">", offset);
-  if (openStart >= 0 && openEnd > offset && openEnd - openStart < 4000) {
-    const openTag = text.slice(openStart, openEnd + 1);
-    const current = openTag.match(/^<([A-Za-z_][\w:.-]*)\b[^<>]*>$/);
-    if (current && !openTag.startsWith("</") && !openTag.startsWith("<?") && !openTag.startsWith("<!--")) {
-      return { tag: current[1], openTag, fields: parseXmlishAttributes(openTag), start: openStart };
-    }
-  }
-  const start = Math.max(0, offset - 16000);
-  const prefix = text.slice(start, offset);
-  const tagMatches = Array.from(prefix.matchAll(/<([A-Za-z_][\w:.-]*)\b[^<>]*>/g));
-  for (let i = tagMatches.length - 1; i >= 0; i--) {
-    const match = tagMatches[i];
-    const tag = match[1];
-    if (/^(component|person|character|npc|entity|crew|pilot|marine|manager|employee|connection)$/i.test(tag)) {
-      const openTag = match[0];
-      return { tag, openTag, fields: parseXmlishAttributes(openTag), start: start + (match.index || 0) };
-    }
-  }
-  const fallback = tagMatches[tagMatches.length - 1];
-  if (fallback) {
-    return { tag: fallback[1], openTag: fallback[0], fields: parseXmlishAttributes(fallback[0]), start: start + (fallback.index || 0) };
-  }
-  return { tag: "context", openTag: "", fields: {}, start: offset };
-}
-
-function extractNamedField(context: string, fields: Record<string, string>, names: string[]): string {
-  for (const name of names) {
-    const direct = fields[name] ?? fields[name.toLowerCase()] ?? fields[name.toUpperCase()];
-    if (direct) return String(direct);
-  }
-  for (const name of names) {
-    const attr = context.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "i"))?.[1];
-    if (attr) return attr;
-    const tag = context.match(new RegExp(`<${name}\\b[^>]*>([^<]+)</${name}>`, "i"))?.[1];
-    if (tag) return tag.trim();
-  }
-  return "";
-}
-
-function extractSkillFields(context: string): Record<string, string> {
-  const skills: Record<string, string> = {};
-  const skillRe = /\b(boarding|engineering|management|morale|piloting|combat|leadership|navigation)\b\s*=\s*["']?([\w.+-]+)["']?/gi;
-  let match: RegExpExecArray | null;
-  while ((match = skillRe.exec(context))) skills[match[1].toLowerCase()] = match[2];
-  return skills;
-}
-
-function explicitCandidateId(fields: Record<string, string>): string {
-  const keys = ["id", "idcode", "code", "uniqueid", "uid", "ref", "component", "macro"];
-  for (const key of keys) {
-    if (fields[key]) return fields[key];
-  }
-  return "";
-}
-
-function makeNpcSaveCandidate(text: string, offset: number, targetName?: string): NpcSaveCandidate {
-  const closest = findClosestXmlOpenTag(text, offset);
-  const start = Math.max(0, Math.min(closest.start, offset) - 3000);
-  const end = Math.min(text.length, offset + 3000);
-  const context = text.slice(start, end);
-  const fields = { ...parseXmlishAttributes(context), ...closest.fields };
-  const explicitId = explicitCandidateId(fields);
-  const name = extractNamedField(context, fields, ["name", "knownname", "firstname", "lastname"]) || String(targetName || "");
-  const owner = extractNamedField(context, fields, ["owner", "faction", "race"]);
-  const role = extractNamedField(context, fields, ["role", "type"]);
-  const assignment = extractNamedField(context, fields, ["assignment", "task"]);
-  const ship = extractNamedField(context, fields, ["ship", "shipid", "commander", "container"]);
-  const station = extractNamedField(context, fields, ["station", "stationid"]);
-  const sector = extractNamedField(context, fields, ["sector", "zone", "location"]);
-  const fallbackId = `${closest.tag}@${offset}`;
-  return {
-    candidateId: explicitId || fallbackId,
-    explicitId: Boolean(explicitId),
-    tag: closest.tag,
-    name,
-    owner,
-    role,
-    assignment,
-    ship,
-    station,
-    sector,
-    skills: extractSkillFields(context),
-    fields,
-    rawPath: `${closest.tag}@${offset}`,
-    context: context.slice(0, 2500),
-    sourceOffset: offset
-  };
-}
-
-function parseNpcSaveCandidatesFromBuffer(decoded: Buffer, targetName?: string): { candidates: NpcSaveCandidate[]; warnings: string[] } {
-  const warnings: string[] = [];
-  const candidates: NpcSaveCandidate[] = [];
-  const seen = new Set<string>();
-  const total = decoded.length;
-  const hasTarget = Boolean(targetName && targetName.trim());
-  const cap = hasTarget ? 200 : 100;
-  const capWarning = hasTarget
-    ? "Candidate scan stopped at 200 name hits."
-    : "No targetName supplied; candidate scan capped at 100 identity-like tags.";
-  const makeRe = () => hasTarget
-    ? new RegExp(targetName!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")
-    : /<(person|character|npc|crew|pilot|marine|manager)\b[^>]*>/gi;
-  // Scan the decompressed BUFFER in bounded slices, stringifying only one slice (+overlap) at a
-  // time so we never exceed Node's max string length on a real (multi-hundred-MB) save XML.
-  let base = 0;
-  let stopped = false;
-  while (base < total && !stopped) {
-    const sliceEnd = Math.min(total, base + NPC_SAVE_SCAN_SLICE);
-    const winStart = Math.max(0, base - NPC_SAVE_SCAN_OVERLAP);
-    const winEnd = Math.min(total, sliceEnd + NPC_SAVE_SCAN_OVERLAP);
-    const window = decoded.toString("utf8", winStart, winEnd);
-    const re = makeRe();
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(window))) {
-      const globalOffset = winStart + match.index;
-      // Only emit hits anchored in THIS slice [base, sliceEnd); the overlap margins exist for
-      // context/back-scan and are re-scanned by the adjacent slice, so this avoids double-counting.
-      if (globalOffset < base || globalOffset >= sliceEnd) continue;
-      const candidate = makeNpcSaveCandidate(window, match.index, targetName);
-      // Relabel offset-derived fields to GLOBAL offsets so dedup keys + rawPath match whole-file semantics.
-      const globalLabel = `${candidate.tag}@${globalOffset}`;
-      if (!candidate.explicitId) candidate.candidateId = globalLabel;
-      candidate.rawPath = globalLabel;
-      candidate.sourceOffset = globalOffset;
-      const key = `${candidate.candidateId}:${candidate.sourceOffset}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      candidates.push(candidate);
-      if (candidates.length >= cap) {
-        warnings.push(capWarning);
-        stopped = true;
-        break;
-      }
-    }
-    base = sliceEnd;
-  }
-  if (!candidates.length) warnings.push(targetName ? `No save candidate contained targetName "${targetName}".` : "No identity-like save candidates found.");
-  return { candidates, warnings };
-}
-
-function parseNpcSaveFile(savePath: unknown, targetName?: string): { savePath: string; gzipped: boolean; bytesRead: number; candidates: NpcSaveCandidate[]; warnings: string[] } {
-  const save = readNpcSaveBuffer(savePath);
-  const parsed = parseNpcSaveCandidatesFromBuffer(save.decoded, targetName);
-  return { savePath: save.savePath, gzipped: save.gzipped, bytesRead: save.bytesRead, candidates: parsed.candidates, warnings: [...save.warnings, ...parsed.warnings] };
-}
-
-function scoreNpcCandidate(candidate: NpcSaveCandidate, reading?: NpcProbeReading, targetName?: string): { score: number; reasons: string[] } {
-  let score = 0;
-  const reasons: string[] = [];
-  const target = normalizeProbeText(targetName || reading?.name);
-  if (target && normalizeProbeText(candidate.name) === target) { score += 0.35; reasons.push("exact name match"); }
-  else if (target && normalizeProbeText(candidate.context).includes(target)) { score += 0.2; reasons.push("target name present in candidate context"); }
-  const owner = normalizeProbeText(reading?.owner);
-  const candidateOwner = normalizeProbeText(candidate.owner);
-  if (owner && candidateOwner && owner === candidateOwner) { score += 0.2; reasons.push("owner/faction match"); }
-  else if (owner && normalizeProbeText(candidate.context).includes(owner)) { score += 0.1; reasons.push("owner present in context"); }
-  if (reading?.idcode && normalizeProbeText(candidate.context).includes(normalizeProbeText(reading.idcode))) { score += 0.2; reasons.push("runtime idcode present in save context"); }
-  if (candidate.role || candidate.assignment || candidate.ship || candidate.station || candidate.sector) { score += 0.05; reasons.push("assignment/location fields present"); }
-  if (candidate.skills && Object.keys(candidate.skills).length > 0) { score += 0.05; reasons.push("skill vector fields present"); }
-  if (!candidate.explicitId) { score -= 0.15; reasons.push("no explicit save-side id"); }
-  return { score: Math.max(0, Math.min(1, score)), reasons };
-}
-
-function correlateNpcIdentity(input: { beforeLogReading?: NpcProbeReading; afterLogReading?: NpcProbeReading; beforeSavePath: string; afterSavePath: string; targetName?: string; threshold?: number }) {
-  const threshold = Number(input.threshold || NPC_PROBE_CONFIDENCE_THRESHOLD);
-  const beforeReading = input.beforeLogReading;
-  const afterReading = input.afterLogReading;
-  const targetName = input.targetName || beforeReading?.name || afterReading?.name || "";
-  const beforeSave = parseNpcSaveFile(input.beforeSavePath, targetName);
-  const afterSave = parseNpcSaveFile(input.afterSavePath, targetName);
-  const warnings = [...beforeSave.warnings.map(w => `before: ${w}`), ...afterSave.warnings.map(w => `after: ${w}`)];
-  const beforeById = new Map(beforeSave.candidates.filter(c => c.explicitId).map(c => [c.candidateId, c]));
-  const afterById = new Map(afterSave.candidates.filter(c => c.explicitId).map(c => [c.candidateId, c]));
-  const ids = Array.from(new Set([...beforeById.keys(), ...afterById.keys()]));
-  const matches: NpcCandidateMatch[] = [];
-
-  for (const id of ids) {
-    const beforeCandidate = beforeById.get(id);
-    const afterCandidate = afterById.get(id);
-    const beforeScore = beforeCandidate ? scoreNpcCandidate(beforeCandidate, beforeReading, targetName) : { score: 0, reasons: ["missing before candidate"] };
-    const afterScore = afterCandidate ? scoreNpcCandidate(afterCandidate, afterReading, targetName) : { score: 0, reasons: ["missing after candidate"] };
-    const stableBonus = beforeCandidate && afterCandidate ? 0.25 : 0;
-    const score = Math.min(1, ((beforeScore.score + afterScore.score) / 2) + stableBonus);
-    matches.push({
-      candidateId: id,
-      beforeCandidate,
-      afterCandidate,
-      score,
-      reasons: Array.from(new Set([...beforeScore.reasons, ...afterScore.reasons, stableBonus ? "same explicit save id appears before and after" : "save id not stable across snapshots"]))
-    });
-  }
-
-  // If there are no explicit ids, still expose the strongest contextual candidates as failed evidence.
-  if (!matches.length) {
-    const contextual = [...beforeSave.candidates, ...afterSave.candidates]
-      .map(candidate => {
-        const scored = scoreNpcCandidate(candidate, candidate.rawPath.startsWith("before") ? beforeReading : afterReading, targetName);
-        return { candidateId: candidate.candidateId, beforeCandidate: beforeSave.candidates.includes(candidate) ? candidate : undefined, afterCandidate: afterSave.candidates.includes(candidate) ? candidate : undefined, score: scored.score, reasons: scored.reasons };
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
-    matches.push(...contextual);
-  }
-
-  matches.sort((a, b) => b.score - a.score);
-  const top = matches[0];
-  const second = matches[1];
-  const runtimeIdStable = Boolean(beforeReading?.raw && afterReading?.raw && beforeReading.raw === afterReading.raw);
-  const idcodePresent = Boolean(beforeReading?.idcode || afterReading?.idcode);
-  const stableSaveIdFound = Boolean(top?.beforeCandidate?.explicitId && top?.afterCandidate?.explicitId && top.beforeCandidate.candidateId === top.afterCandidate.candidateId);
-  const nearTie = Boolean(top && second && top.score - second.score <= NPC_NEAR_TIE_DELTA);
-  if (nearTie) warnings.push(`Ambiguous candidate tie: top ${top?.candidateId}=${top?.score.toFixed(2)}, second ${second?.candidateId}=${second?.score.toFixed(2)}.`);
-  const runtimeToSaveMappingPossible = Boolean(top && top.score >= threshold && stableSaveIdFound && !nearTie);
-  const recommendation = runtimeToSaveMappingPossible
-    ? "Use save XML id"
-    : nearTie
-      ? "Ambiguous, needs better test subject"
-      : runtimeIdStable
-        ? "Runtime id only, session-bound"
-        : "No reliable generic NPC identity";
-
-  return {
-    runtimeIdStable,
-    idcodePresent,
-    stableSaveIdFound,
-    runtimeToSaveMappingPossible,
-    mappingConfidence: top?.score || 0,
-    threshold,
-    recommendation,
-    beforeLogReading: beforeReading,
-    afterLogReading: afterReading,
-    beforeSave: { path: beforeSave.savePath, gzipped: beforeSave.gzipped, candidates: beforeSave.candidates.length },
-    afterSave: { path: afterSave.savePath, gzipped: afterSave.gzipped, candidates: afterSave.candidates.length },
-    candidateMatches: matches.slice(0, 12),
-    warnings
-  };
-}
-
-function runNpcIdentityProbeSelftest() {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "x4-forge-npc-probe-"));
-  const checks: { name: string; pass: boolean; detail?: any }[] = [];
-  try {
-    const logBefore = `[=ERROR=] 1.0 A3b probe => raw=458069 idcode= name=Manda Smitt owner=argon`;
-    const logAfter = `[=ERROR=] 2.0 A3b probe => raw=2059935 idcode= name=Manda Smitt owner=argon`;
-    const readings = parseNpcProbeLines(`${logBefore}\n${logAfter}`, { targetName: "Manda Smitt" });
-    checks.push({ name: "parse A3b runtime probe lines", pass: readings.length === 2 && readings[0].raw === "458069" && readings[1].owner === "argon", detail: readings });
-
-    const saveBefore = `<save><characters><character id="char-manda-001" name="Manda Smitt" owner="argon" role="service_crew" ship="Vigilant"><skills engineering="2" morale="3"/></character></characters></save>`;
-    const saveAfter = `<save><characters><character id="char-manda-001" name="Manda Smitt" owner="argon" role="service_crew" ship="Vigilant"><skills engineering="2" morale="3"/></character></characters></save>`;
-    const beforePath = path.join(tmpDir, "before.xml");
-    const afterPath = path.join(tmpDir, "after.xml.gz");
-    fs.writeFileSync(beforePath, saveBefore, "utf8");
-    fs.writeFileSync(afterPath, zlib.gzipSync(Buffer.from(saveAfter, "utf8")));
-    const gzParsed = parseNpcSaveFile(afterPath, "Manda Smitt");
-    checks.push({ name: "parse gzip save candidates", pass: gzParsed.gzipped && gzParsed.candidates[0]?.candidateId === "char-manda-001", detail: gzParsed.candidates[0] });
-
-    const correlated = correlateNpcIdentity({ beforeLogReading: readings[0], afterLogReading: readings[1], beforeSavePath: beforePath, afterSavePath: afterPath, targetName: "Manda Smitt" });
-    checks.push({ name: "stable save id maps runtime-changing NPC", pass: correlated.runtimeIdStable === false && correlated.stableSaveIdFound && correlated.runtimeToSaveMappingPossible && correlated.recommendation === "Use save XML id", detail: correlated });
-
-    const noCandidatePath = path.join(tmpDir, "empty.xml");
-    fs.writeFileSync(noCandidatePath, `<save><characters><character id="other" name="Other Person" owner="argon"/></characters></save>`, "utf8");
-    const missing = correlateNpcIdentity({ beforeLogReading: readings[0], afterLogReading: readings[1], beforeSavePath: noCandidatePath, afterSavePath: noCandidatePath, targetName: "Manda Smitt" });
-    checks.push({ name: "no save candidate is not success", pass: !missing.runtimeToSaveMappingPossible && missing.recommendation === "No reliable generic NPC identity", detail: missing });
-
-    const dupA = path.join(tmpDir, "dup-a.xml");
-    const dupB = path.join(tmpDir, "dup-b.xml");
-    const dupXml = `<save><character id="dup-1" name="Manda Smitt" owner="argon"/><character id="dup-2" name="Manda Smitt" owner="argon"/></save>`;
-    fs.writeFileSync(dupA, dupXml, "utf8");
-    fs.writeFileSync(dupB, dupXml, "utf8");
-    const dup = correlateNpcIdentity({ beforeLogReading: readings[0], afterLogReading: readings[1], beforeSavePath: dupA, afterSavePath: dupB, targetName: "Manda Smitt" });
-    checks.push({ name: "duplicate same-name candidates produce ambiguity", pass: !dup.runtimeToSaveMappingPossible && dup.recommendation === "Ambiguous, needs better test subject", detail: dup });
-
-    const badGz = path.join(tmpDir, "bad.xml.gz");
-    fs.writeFileSync(badGz, "not a gzip", "utf8");
-    let badStructured = false;
-    try { parseNpcSaveFile(badGz, "Manda Smitt"); } catch (error) { badStructured = /decompress/i.test(String(error?.message || error)); }
-    checks.push({ name: "malformed gzip returns structured parse error", pass: badStructured });
-  } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort fixture cleanup */ }
-  }
-  return { allPassed: checks.every(c => c.pass), passed: checks.filter(c => c.pass).length, total: checks.length, checks };
-}
-
-app.post("/api/agent/npc-identity-probe/parse-log", (req, res) => {
-  try {
-    const result = parseNpcProbeLogFromFile(req.body?.logPath, req.body?.targetName, req.body?.limit);
-    return res.json({ ok: true, ...result });
-  } catch (error) {
-    return res.status(400).json({ ok: false, error: error?.message || "npc probe log parse failed" });
-  }
-});
-
-app.post("/api/agent/npc-identity-probe/parse-save", (req, res) => {
-  try {
-    const result = parseNpcSaveFile(req.body?.savePath, req.body?.targetName);
-    return res.json({ ok: true, ...result });
-  } catch (error) {
-    return res.status(400).json({ ok: false, error: error?.message || "npc save parse failed" });
-  }
-});
-
-app.post("/api/agent/npc-identity-probe/correlate", (req, res) => {
-  try {
-    const result = correlateNpcIdentity({
-      beforeLogReading: req.body?.beforeLogReading,
-      afterLogReading: req.body?.afterLogReading,
-      beforeSavePath: req.body?.beforeSavePath,
-      afterSavePath: req.body?.afterSavePath,
-      targetName: req.body?.targetName,
-      threshold: req.body?.threshold
-    });
-    return res.json({ ok: true, ...result });
-  } catch (error) {
-    return res.status(400).json({ ok: false, error: error?.message || "npc identity correlation failed" });
-  }
-});
-
-app.get("/api/agent/npc-identity-probe/selftest", (req, res) => {
-  try {
-    return res.json(runNpcIdentityProbeSelftest());
-  } catch (error) {
-    return res.status(500).json({ allPassed: false, error: error?.message || "npc identity probe selftest failed" });
-  }
-});
+// NPC Identity Probe (agent-only legacy) moved to src/server/npcIdentityProbe.ts — audit A6.
+registerNpcIdentityProbeRoutes(app, { findDebugLogCandidates, readTail, errorMessage });
 
 // A2 — run the deterministic root-cause layer over a PASTED trace (no live log needed).
 // Same engine as game-log/status.diagnosis; lets a dev paste a known-bad trace and see the
@@ -4266,6 +3773,18 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   }
 
   ws.passthroughFiles = passthroughFiles;
+
+  // STALE-SOURCE GATE stamp (P0 2026-07-09): content-keyed hash of the source folder at
+  // import time. Deploy recomputes it; mismatch = the disk changed since this canvas
+  // imported it → the write is blocked instead of overwriting newer truth (the incident).
+  try {
+    ws.sourceStamp = {
+      dir: absDir,
+      hash: hashFolderFingerprint(fingerprintModFolder(absDir)),
+      at: new Date().toISOString(),
+    };
+  } catch { /* stamping is best-effort; a missing stamp only disables the gate */ }
+
   const counts = classification.reduce((a: any, c) => { a[c.class] = (a[c.class] || 0) + 1; return a; }, {});
   const report = {
     folder: absDir,
@@ -4950,103 +4469,26 @@ app.get("/api/agent/override-map", (req, res) => {
   }
 });
 
-app.get("/api/agent/override-map-selftest", (_req, res) => {
-  try {
-    return res.json(runOverrideMapSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "override-map-selftest failed" });
-  }
-});
 
 // T4.1 Inc 0 — cat/dat round-trip spike oracle (synthetic fixture; proves
 // parse → positioned read → gzip/zlib decompress before any VFS UI is built).
-app.get("/api/agent/catdat-selftest", (_req, res) => {
-  try {
-    return res.json(runCatDatSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "catdat-selftest failed" });
-  }
-});
 
 // H8 — object-index name-resolution oracle (synthetic fixtures; guards the regex
 // XML/localization parsing incl. the multi-macro identification bounding fix).
-app.get("/api/agent/object-index-selftest", (_req, res) => {
-  try {
-    return res.json(runObjectIndexSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "object-index-selftest failed" });
-  }
-});
 
 // A4.2 — proposal-review engine oracle (synthetic fixtures; verifies the node
 // diff + Schema/Graph verdicts + applySafe contract that gates AI applies).
-app.get("/api/agent/proposal-review-selftest", (_req, res) => {
-  try {
-    return res.json(runProposalReviewSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "proposal-review-selftest failed" });
-  }
-});
 
 // A4.9 — intent-satisfaction checker oracle (synthetic; verifies requirement
 // pattern assertions incl. the Codex 'missing game-start trigger → FAIL' case).
-app.get("/api/agent/intent-check-selftest", (_req, res) => {
-  try {
-    return res.json(runIntentCheckSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "intent-check-selftest failed" });
-  }
-});
 
 // A5.1 — Architect ModBlueprint oracle (sanitize + the canMarkDone M-ARCH-2 guarantee).
-app.get("/api/agent/blueprint-selftest", (_req, res) => {
-  try {
-    return res.json(runBlueprintSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "blueprint-selftest failed" });
-  }
-});
 
-app.get("/api/agent/architect-loop-selftest", (_req, res) => {
-  try {
-    return res.json(runArchitectLoopSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "architect-loop-selftest failed" });
-  }
-});
 
-app.get("/api/agent/canvas-interaction-selftest", (_req, res) => {
-  try {
-    return res.json(runCanvasInteractionSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "canvas-interaction-selftest failed" });
-  }
-});
 
 // #23 — live-log error -> cue -> canvas navigation oracle (the deterministic core of the alert+jump feature).
-app.get("/api/agent/live-log-nav-selftest", (_req, res) => {
-  try {
-    return res.json(runLiveLogNavSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "live-log-nav-selftest failed" });
-  }
-});
 
-app.get("/api/agent/wares-jobs-roundtrip-selftest", (_req, res) => {
-  try {
-    return res.json(runWaresJobsRoundtripSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "wares-jobs-roundtrip-selftest failed" });
-  }
-});
 
-app.get("/api/agent/mod-fixes-selftest", (_req, res) => {
-  try {
-    return res.json(runModFixesSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "mod-fixes-selftest failed" });
-  }
-});
 
 // MD faithfulness guard oracle: proves the importer refuses to model MD it can't
 // round-trip (so <delay>/<library>/<params> are preserved verbatim, never silently
@@ -5115,71 +4557,15 @@ app.get("/api/agent/md-faithfulness-selftest", (_req, res) => {
   }
 });
 
-app.get("/api/agent/aiscript-roundtrip-selftest", (_req, res) => {
-  try {
-    return res.json(runAiScriptRoundtripSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "aiscript-roundtrip-selftest failed" });
-  }
-});
 
-app.get("/api/agent/lua-md-binding-selftest", (_req, res) => {
-  try {
-    return res.json(runLuaMdBindingSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "lua-md-binding-selftest failed" });
-  }
-});
 
-app.get("/api/agent/mod-dependency-selftest", (_req, res) => {
-  try {
-    return res.json(runModDependencyGraphSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "mod-dependency-selftest failed" });
-  }
-});
 
-app.get("/api/agent/galaxy-map-selftest", (_req, res) => {
-  try {
-    return res.json(runGalaxyMapSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "galaxy-map-selftest failed" });
-  }
-});
 
-app.get("/api/agent/extension-project-selftest", (_req, res) => {
-  try {
-    return res.json(runExtensionProjectSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "extension-project-selftest failed" });
-  }
-});
 
-app.get("/api/agent/project-orchestration-selftest", (_req, res) => {
-  try {
-    return res.json(runProjectOrchestrationSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "project-orchestration-selftest failed" });
-  }
-});
 
-app.get("/api/agent/project-crossfile-selftest", (_req, res) => {
-  try {
-    return res.json(runProjectCrossFileSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "project-crossfile-selftest failed" });
-  }
-});
 
 // P4 — third-party API registry (palettization). Curated registry + ◐ heuristic
 // dependency/usage validation for community library mods (sn_mod_support_apis, kuertee).
-app.get("/api/agent/external-api-registry-selftest", (_req, res) => {
-  try {
-    return res.json(runExternalApiRegistrySelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "external-api-registry-selftest failed" });
-  }
-});
 
 /* ------------------------------------------------------------------ *
  * P4 dynamic registry — DUMP IN new API defs from three sources, all merged
@@ -5554,25 +4940,46 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
   }
 });
 
-app.get("/api/agent/position-picker-selftest", (_req, res) => {
-  try {
-    return res.json(runPositionPickerSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "position-picker-selftest failed" });
-  }
-});
 
 // scriptproperties-selftest, aiscript-lint-selftest, scriptproperties-status —
 // registered by the validation module (src/server/validationRoutes.ts, stage-1 split).
+// SELFTEST REGISTRY (audit R1): one line per oracle — route + public allowlist wired together.
+const SELFTESTS: Record<string, () => unknown> = {
+  "compile-fidelity-selftest": runCompileFidelitySelftest,
+  "workspace-identity-selftest": runWorkspaceIdentitySelftest,
+  "override-map-selftest": runOverrideMapSelftest,
+  "catdat-selftest": runCatDatSelftest,
+  "object-index-selftest": runObjectIndexSelftest,
+  "proposal-review-selftest": runProposalReviewSelftest,
+  "intent-check-selftest": runIntentCheckSelftest,
+  "blueprint-selftest": runBlueprintSelftest,
+  "architect-loop-selftest": runArchitectLoopSelftest,
+  "canvas-interaction-selftest": runCanvasInteractionSelftest,
+  "live-log-nav-selftest": runLiveLogNavSelftest,
+  "wares-jobs-roundtrip-selftest": runWaresJobsRoundtripSelftest,
+  "aiscript-roundtrip-selftest": runAiScriptRoundtripSelftest,
+  "lua-md-binding-selftest": runLuaMdBindingSelftest,
+  "mod-dependency-selftest": runModDependencyGraphSelftest,
+  "galaxy-map-selftest": runGalaxyMapSelftest,
+  "extension-project-selftest": runExtensionProjectSelftest,
+  "project-orchestration-selftest": runProjectOrchestrationSelftest,
+  "project-crossfile-selftest": runProjectCrossFileSelftest,
+  "external-api-registry-selftest": runExternalApiRegistrySelftest,
+  "position-picker-selftest": runPositionPickerSelftest,
+  "mod-drift-selftest": runModDriftSelftest,
+  "quick-fixes-selftest": runWorkspaceQuickFixesSelftest,
+  "mod-recipes-selftest": runModRecipesSelftest,
+  "health-card-selftest": runHealthCardSelftest,
+  "bridge-live-state-selftest": runBridgeLiveStateSelftest,
+  "forge-watch-selftest": runForgeWatchSelftest,
+  "live-canvas-selftest": runLiveCanvasTelemetrySelftest,
+  "lua-staleness-selftest": runLuaStalenessSelftest,
+  "lua-runtime-log-selftest": runLuaRuntimeLogSelftest,
+};
+registerSelftests(app, PUBLIC_READONLY_GETS, SELFTESTS, errorMessage);
+
 registerValidationAgentRoutes(app);
 
-app.get("/api/agent/mod-drift-selftest", (_req, res) => {
-  try {
-    return res.json(runModDriftSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "mod-drift-selftest failed" });
-  }
-});
 
 // Drift report for one mod present in BOTH the workspace and deployed roots.
 app.get("/api/agent/mod-drift", (req, res) => {
@@ -5650,13 +5057,6 @@ app.post("/api/agent/quick-fixes", (req, res) => {
   }
 });
 
-app.get("/api/agent/quick-fixes-selftest", (_req, res) => {
-  try {
-    return res.json(runWorkspaceQuickFixesSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "quick-fixes-selftest failed" });
-  }
-});
 
 app.get("/api/agent/expression-suggest-selftest", (_req, res) => {
   try {
@@ -5668,6 +5068,43 @@ app.get("/api/agent/expression-suggest-selftest", (_req, res) => {
   }
 });
 
+// Startup walkaround card (beta-UX D1): the whole environment at a glance. Probes are
+// gathered here (cheap/cached services only — never triggers a cold object-index build);
+// the pure engine turns them into rows. Honest: a probe that can't run reports unknown.
+app.get("/api/agent/health-card", async (_req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const mdIndex = (() => { try { return getSchemaIndex(); } catch { return null; } })();
+    const aiIndex = (() => { try { return getAiSchemaIndex(); } catch { return null; } })();
+    const spIndex = getScriptPropertyIndex();
+    const bridge = await getBridgeLiveState();
+    const logPath = findDebugLogCandidates().find(c => { try { return fs.statSync(c).isFile(); } catch { return false; } });
+    const ws = sanitizeWorkspace(activeWorkspace);
+    const modId = (() => { try { return effectiveModId(ws); } catch { return ''; } })();
+    const drift = modId ? computeModDrift(modId) : null;
+    const tail = logPath ? readTail(logPath, 256 * 1024) : '';
+    const luaFiles = modId ? collectModLuaFiles(modId) : [];
+    const lua = luaFiles.length ? assessLuaStaleness(luaFiles.map(f => ({ path: f.path, source: f.source })), tail) : null;
+    const card = buildHealthCard({
+      gamePath: { path: resolved.x4GamePath || '(unset)', exists: !!resolved.x4GamePath && fs.existsSync(resolved.x4GamePath) },
+      stagingPath: { path: resolved.modWorkspacePath || '(unset)', exists: !!resolved.modWorkspacePath && fs.existsSync(resolved.modWorkspacePath) },
+      mdSchema: { loaded: !!mdIndex?.loaded, elements: mdIndex?.elementCount || 0 },
+      aiSchema: { loaded: !!aiIndex?.loaded, elements: aiIndex?.elementCount || 0 },
+      scriptProperties: { loaded: !!spIndex?.loaded, properties: spIndex?.model.parsedProperties || 0 },
+      objectIndex: objectIndexCache ? { items: objectIndexCache.index.items.length } : null,
+      bridge: { bridgeUp: bridge.bridgeUp, gameActive: bridge.gameActive, summary: bridge.summary },
+      debugLog: logPath ? { found: true, updatedAt: fs.statSync(logPath).mtime.toISOString() } : { found: false },
+      activeModDrift: drift ? { verdict: drift.verdict, summary: drift.summary } : null,
+      luaStaleness: lua ? { restartRequired: lua.restartRequired, instrumented: lua.instrumented, summary: lua.summary } : null,
+    });
+    return res.json({ ...card, activeMod: modId || null });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "health-card failed" });
+  }
+});
+
+
+
 app.get("/api/agent/live/bridge-state", async (_req, res) => {
   try {
     return res.json(await getBridgeLiveState());
@@ -5676,37 +5113,9 @@ app.get("/api/agent/live/bridge-state", async (_req, res) => {
   }
 });
 
-app.get("/api/agent/bridge-live-state-selftest", (_req, res) => {
-  try {
-    return res.json(runBridgeLiveStateSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "bridge-live-state-selftest failed" });
-  }
-});
 
-app.get("/api/agent/forge-watch-selftest", (_req, res) => {
-  try {
-    return res.json(runForgeWatchSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "forge-watch-selftest failed" });
-  }
-});
 
-app.get("/api/agent/live-canvas-selftest", (_req, res) => {
-  try {
-    return res.json(runLiveCanvasTelemetrySelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "live-canvas-selftest failed" });
-  }
-});
 
-app.get("/api/agent/lua-staleness-selftest", (_req, res) => {
-  try {
-    return res.json(runLuaStalenessSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "lua-staleness-selftest failed" });
-  }
-});
 
 // Instrument a deployed mod's ui *.lua with FORGE-LUAV boot markers so the game-log
 // watcher can detect resident-vs-disk staleness (#7). Idempotent; every rewritten file
@@ -6153,13 +5562,6 @@ app.get("/api/agent/lua-static-selftest", (_req, res) => {
   }
 });
 
-app.get("/api/agent/lua-runtime-log-selftest", (_req, res) => {
-  try {
-    return res.json(runLuaRuntimeLogSelftest());
-  } catch (error) {
-    return res.status(500).json({ pass: false, error: errorMessage(error) || "lua-runtime-log-selftest failed" });
-  }
-});
 
 app.get("/api/agent/lua-logic-blocks-selftest", (_req, res) => {
   try {
@@ -6919,6 +6321,19 @@ function compileWorkspaceToFolder(ws: any, rootPath: string, mode: 'candy' | 'st
 app.post("/api/agent/deploy", (req, res) => {
   const ws = sanitizeWorkspace(req.body.workspace || activeWorkspace);
   try {
+    // STALE-SOURCE GATE (P0 2026-07-09) — same protection as deploy-verify: never let an
+    // out-of-date workspace overwrite a source folder that changed after it was imported.
+    {
+      const stamp = (ws as any)?.sourceStamp as { dir: string; hash: string; at: string } | undefined;
+      let currentHash: string | null = null;
+      if (stamp?.dir) {
+        try { if (fs.existsSync(stamp.dir)) currentHash = hashFolderFingerprint(fingerprintModFolder(stamp.dir)); } catch { currentHash = null; }
+      }
+      const verdict = assessSourceSync(stamp, currentHash, req.body?.allowStaleOverwrite === true);
+      if (!verdict.ok) {
+        return res.status(409).json({ success: false, error: verdict.detail, stage: 'source-sync' });
+      }
+    }
     const resolved = resolveXsdConfig();
     const modWorkspacePath = resolved.modWorkspacePath;
     const x4GamePath = resolved.x4GamePath;
@@ -6998,7 +6413,12 @@ app.post("/api/agent/deploy", (req, res) => {
       success: true,
       message,
       deployedPath: deployedPath || stagingPath,
-      lastDeploy: lastDeployInfo
+      lastDeploy: lastDeployInfo,
+      // Audit A5: this route deploys WITHOUT the 9-stage preflight checklist. It stays
+      // for UI/agent compatibility (and carries the malformed-XML gate), but new flows
+      // should use deploy-verify. Converge the UI, then retire this route.
+      deprecated: true,
+      use: "/api/agent/deploy-verify"
     });
   } catch (error) {
     return res.status(500).json({
@@ -7025,7 +6445,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
   const check = (id: string, label: string, status: 'pass' | 'warn' | 'fail', detail: string) =>
     checklist.push({ id, label, status, detail });
   const STAGES: Array<[string, string]> = [
-    ['config', 'Paths configured'], ['import', 'Mod source read'], ['wellformed', 'XML well-formed'],
+    ['config', 'Paths configured'], ['import', 'Mod source read'], ['source-sync', 'Canvas in sync with source folder'], ['wellformed', 'XML well-formed'],
     ['compile', 'Compile diagnostics'], ['preflight', 'Full validation (schema/cues/lints)'],
     ['deploy', 'Written to staging + extensions'], ['bytes', 'Deployed bytes confirmed'],
     ['doctor', 'Extension doctor'], ['drift', 'Workspace/deployed sync'],
@@ -7061,9 +6481,34 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       modSourceDir = r.abs;
       ws = importModFolder(r.abs).workspace;
       check('import', 'Mod source read', 'pass', `fresh from ${reqPath} (${(ws.nodes || []).length} nodes)`);
+    } else if (req.body?.workspace && typeof req.body.workspace === 'object') {
+      // UI convergence (audit R4): the editor panels send their CURRENT canvas workspace,
+      // same contract the legacy /deploy accepted — without this, converged UI buttons
+      // would silently deploy a stale server-side activeWorkspace.
+      ws = sanitizeWorkspace(req.body.workspace);
+      check('import', 'Mod source read', 'pass', `workspace from request "${ws.name}" (${(ws.nodes || []).length} nodes)`);
     } else {
       ws = sanitizeWorkspace(activeWorkspace);
       check('import', 'Mod source read', 'pass', `active workspace "${ws.name}"`);
+    }
+
+    // 1a. STALE-SOURCE GATE (P0 2026-07-09): refuse to overwrite a source folder that
+    // changed AFTER this workspace imported it — an out-of-date canvas (restart-reset sync,
+    // another session, a git restore) must never regenerate over newer truth. Content-keyed,
+    // so byte-identical re-deploys never trip it. This is the gate that would have blocked
+    // the SPEC-#66 data-loss click.
+    const sourceStamp = (ws as any)?.sourceStamp as { dir: string; hash: string; at: string } | undefined;
+    {
+      let currentSourceHash: string | null = null;
+      if (sourceStamp?.dir) {
+        try { if (fs.existsSync(sourceStamp.dir)) currentSourceHash = hashFolderFingerprint(fingerprintModFolder(sourceStamp.dir)); } catch { currentSourceHash = null; }
+      }
+      const verdict = assessSourceSync(sourceStamp, currentSourceHash, req.body?.allowStaleOverwrite === true);
+      if (!verdict.ok) {
+        check('source-sync', 'Canvas in sync with source folder', 'fail', verdict.detail);
+        return res.status(409).json(failWith('source-sync', { error: verdict.detail, sourceStamp }));
+      }
+      check('source-sync', 'Canvas in sync with source folder', verdict.reason === 'in_sync' ? 'pass' : 'warn', verdict.detail);
     }
 
     // 1b. Well-formedness gate on the SOURCE .xml files on disk. importModFolder keeps MD as
@@ -7129,13 +6574,16 @@ app.post("/api/agent/deploy-verify", (req, res) => {
 
     const emittedMd = Object.entries(files).filter(([k]) => /^md\/.*\.xml$/i.test(k)).map(([, v]) => String(v)).join('\n');
     const hasCuesInEmitted = /<cue\b|<library\b/i.test(emittedMd);
-    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId), ...runPatchDiagnostics(ws)];
+    // Audit A3 (2026-07-09): runSchemaValidation removed from this gate — the PREFLIGHT
+    // stage below runs the same XSD layer (and more) via runProjectValidation, so the
+    // schema pass ran twice per deploy. Doctor + patch stay here; preflight owns schema.
+    const diagnostics = [...runModDoctor(ws, files, modId), ...runPatchDiagnostics(ws)];
     const compileErrors = diagnostics.filter((d: any) => d.severity === 'error' && !(d.code === 'package.readiness' && hasCuesInEmitted));
     if (compileErrors.length > 0) {
       check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
       return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
     }
-    check('compile', 'Compile diagnostics', 'pass', `0 errors across doctor/schema/patch (${diagnostics.length} total findings)`);
+    check('compile', 'Compile diagnostics', 'pass', `0 errors across doctor/patch (${diagnostics.length} findings; schema runs in preflight)`);
 
     // 2b. PREFLIGHT — the FULL validation stack over the emitted manifest (same engine as
     // project/validate: structure, cue refs, MD↔Lua wiring, XSD md+aiscript, order-param
@@ -7195,6 +6643,20 @@ app.post("/api/agent/deploy-verify", (req, res) => {
 
     const ok = bytesConfirmed && blocking.length === 0;
     lastDeployInfo = { modId, workspaceName: ws.name, deployedAt: new Date().toISOString(), stagingPath: stagingPath || undefined, deployedPath: deployedPath || undefined };
+
+    // Post-deploy convergence (P0): refresh the source stamp to the post-write state (a
+    // content-changing deploy legitimately changes the folder hash) and adopt this
+    // workspace as active with a version bump so polling clients converge on it — the
+    // canvas that just deployed can immediately deploy again without a false stale-block.
+    if (ok && sourceStamp?.dir) {
+      try {
+        if (fs.existsSync(sourceStamp.dir)) {
+          (ws as any).sourceStamp = { dir: sourceStamp.dir, hash: hashFolderFingerprint(fingerprintModFolder(sourceStamp.dir)), at: new Date().toISOString() };
+          activeWorkspace = ws;
+          workspaceVersion++;
+        }
+      } catch { /* convergence is best-effort; the gate stays safe either way */ }
+    }
     return res.json({
       ok, stage: 'done', modId, deployedPath, stagingPath, bytesConfirmed, deployedBytes,
       checklist,

@@ -53,12 +53,20 @@ export interface DriftReport {
   summary: string;
 }
 
+/** Tool-owned metadata: never part of the MOD, so never part of the drift VERDICT
+ * (BACKLOG B7 2026-07-09 — `.studio-mod-id` alone made every real-mod drift read "drifted",
+ * training users to ignore the one verdict that caught actual corruption). */
+const TOOL_METADATA_FILES = new Set(['.studio-mod-id', '.forgekeep', '.gitignore', 'supervisor.log']);
+
 export function compareModCopies(
   a: FileFingerprint[],
   b: FileFingerprint[],
   labelA = 'workspace',
   labelB = 'deployed',
 ): DriftReport {
+  const isToolMeta = (p: string) => TOOL_METADATA_FILES.has(p.toLowerCase().split('/').pop() || '');
+  a = a.filter(f => !isToolMeta(f.path));
+  b = b.filter(f => !isToolMeta(f.path));
   const mapA = new Map(a.map(f => [f.path.toLowerCase(), f]));
   const mapB = new Map(b.map(f => [f.path.toLowerCase(), f]));
   const allPaths = Array.from(new Set([...mapA.keys(), ...mapB.keys()])).sort();
@@ -158,6 +166,15 @@ export function runModDriftSelftest(): {
   ok('path comparison is case-insensitive (Windows)', cased.verdict === 'identical', cased.summary);
   const oneSided = compareModCopies([f('md/a.xml', 'h1')], []);
   ok('one-sided copy reports only_a', oneSided.onlyA === 1 && oneSided.verdict === 'drifted');
+
+  // tool-owned metadata never drives the verdict (B7: `.studio-mod-id` alone read "drifted")
+  const meta = compareModCopies(
+    [f('content.xml', 'h1'), f('.studio-mod-id', 'X'), f('.forgekeep', 'Y')],
+    [f('content.xml', 'h1')],
+  );
+  ok('tool metadata (.studio-mod-id/.forgekeep) excluded from verdict', meta.verdict === 'identical', meta.summary);
+  ok('real mod file still drives the verdict beside excluded metadata',
+    compareModCopies([f('content.xml', 'h1'), f('.studio-mod-id', 'X')], [f('content.xml', 'h2')]).verdict === 'drifted');
 
   // degradation
   ok('empty inputs degrade to identical-empty', compareModCopies([], []).verdict === 'identical');

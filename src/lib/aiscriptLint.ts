@@ -38,22 +38,7 @@ export interface AiscriptLintFinding {
   detail: string;
 }
 
-interface ElementLike {
-  nodeType: number;
-  nodeName: string;
-  getAttribute(name: string): string | null;
-  getElementsByTagName(name: string): ArrayLike<ElementLike>;
-  childNodes: ArrayLike<ElementLike>;
-}
-
-function directChildren(el: ElementLike, name: string): ElementLike[] {
-  const out: ElementLike[] = [];
-  for (let i = 0; i < el.childNodes.length; i++) {
-    const kid = el.childNodes[i];
-    if (kid.nodeType === 1 && kid.nodeName === name) out.push(kid);
-  }
-  return out;
-}
+import { directElementChildren as directChildren, type ElementLike } from './xmlLite';
 
 /**
  * Lint the `<order><params><param …>` block of one aiscript XML file.

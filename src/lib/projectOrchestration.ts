@@ -98,7 +98,11 @@ function aiInfluenceMainMd(modId: string): string {
   <cues>
     <cue name="Start">
       <actions>
-        <signal_cue cue="md.${modId}_contract_http.Call_chat" />
+        <!-- Call_chat is a <library> — invoked via run_actions (vanilla pattern), never signal_cue
+             (the game errors "Signalled cue … has no corresponding library"). -->
+        <run_actions ref="md.${modId}_contract_http.Call_chat">
+          <param name="prompt" value="'Hello from ${modId}'" />
+        </run_actions>
       </actions>
     </cue>
   </cues>

@@ -21,6 +21,13 @@ import {
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 
+export interface DeployChecklistRow {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail' | 'skipped';
+  detail: string;
+}
+
 interface CompileConfirmationModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -28,7 +35,21 @@ interface CompileConfirmationModalProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   modWorkspacePath?: string;
+  /** BACKLOG B7: live deploy-verify feedback rendered IN the wizard (was hidden in Playtest). */
+  compileStatus?: 'idle' | 'compiling' | 'success' | 'error';
+  compileMessage?: string;
+  checklist?: DeployChecklistRow[];
 }
+
+const CHECK_COLORS: Record<DeployChecklistRow['status'], string> = {
+  pass: 'text-emerald-400',
+  warn: 'text-amber-400',
+  fail: 'text-red-400',
+  skipped: 'text-slate-600',
+};
+const CHECK_GLYPH: Record<DeployChecklistRow['status'], string> = {
+  pass: '✓', warn: '!', fail: '✗', skipped: '·',
+};
 
 export default function CompileConfirmationModal({
   isOpen,
@@ -36,7 +57,10 @@ export default function CompileConfirmationModal({
   onConfirm,
   workspace,
   setWorkspace,
-  modWorkspacePath
+  modWorkspacePath,
+  compileStatus = 'idle',
+  compileMessage = '',
+  checklist = []
 }: CompileConfirmationModalProps) {
   if (!isOpen) return null;
 
@@ -251,6 +275,27 @@ export default function CompileConfirmationModal({
           </div>
         )}
 
+        {/* B7: deploy-verify preflight result — rendered IN the wizard, not hidden in Playtest */}
+        {compileStatus !== 'idle' && (
+          <div className="mx-4 mb-4 p-2.5 bg-[#0f131c] border border-white/5 rounded text-[10px] font-mono leading-relaxed space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar" data-testid="wizard-preflight-card">
+            <div className={`uppercase text-[8.5px] font-bold tracking-wider ${
+              compileStatus === 'compiling' ? 'text-cyan-400' : compileStatus === 'success' ? 'text-emerald-400' : 'text-red-400'
+            }`}>
+              {compileStatus === 'compiling' ? 'Running preflight & deploy…' : compileStatus === 'success' ? 'Deployed + verified' : 'Deploy failed'}
+            </div>
+            {compileMessage && <div className="text-slate-300 break-all">{compileMessage}</div>}
+            {checklist.map(row => (
+              <div key={row.id} className="flex items-start gap-1.5">
+                <span className={`${CHECK_COLORS[row.status]} font-bold w-3 shrink-0`}>{CHECK_GLYPH[row.status]}</span>
+                <span className={row.status === 'fail' ? 'text-red-300' : row.status === 'skipped' ? 'text-slate-600' : 'text-slate-400'}>
+                  {row.label}
+                  {row.status !== 'pass' && row.detail ? <span className="text-slate-500"> — {row.detail}</span> : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Footer controls wrapper block */}
         <div className="p-4 border-t border-white/5 bg-[#070a0f] flex items-center justify-between rounded-b-xl select-none">
           <div className="text-[10px] font-mono text-slate-500">
@@ -261,18 +306,15 @@ export default function CompileConfirmationModal({
               onClick={onClose}
               className="px-3 py-1.5 border border-white/10 hover:border-white/20 hover:bg-white/5 text-slate-400 hover:text-white rounded text-[10.5px] font-mono font-bold uppercase transition-all cursor-pointer"
             >
-              Cancel
+              {compileStatus === 'success' || compileStatus === 'error' ? 'Close' : 'Cancel'}
             </button>
             <button
-              onClick={() => {
-                onConfirm();
-                onClose();
-              }}
-              disabled={selectedCount === 0}
+              onClick={() => { onConfirm(); }}
+              disabled={selectedCount === 0 || compileStatus === 'compiling'}
               className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 disabled:border-transparent text-black rounded text-[10.5px] font-mono font-bold uppercase transition-all cursor-pointer shadow-lg shadow-emerald-500/10 disabled:cursor-not-allowed inline-flex items-center gap-1"
             >
               <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-              Build &amp; Staging
+              {compileStatus === 'success' || compileStatus === 'error' ? 'Build Again' : 'Build & Staging'}
             </button>
           </div>
         </div>

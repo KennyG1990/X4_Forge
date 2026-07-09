@@ -37,13 +37,16 @@ echo.
 echo Starting API server (port 3001, SUPERVISED - self-restarts if it ever dies)...
 start "X4 API (3001)" cmd /k "run-api-supervised.cmd"
 
-echo Starting Web / Vite server (port 3000)...
-start "X4 Web (3000)" cmd /k "npm run dev:web"
+echo Starting Web / Vite server (port 3000, SUPERVISED - self-restarts if it ever dies)...
+start "X4 Web (3000)" cmd /k "run-web-supervised.cmd"
+
+echo Starting watchdog (relaunches either server window if its port goes dark)...
+start "X4 Watchdog" cmd /k "forge-watchdog.cmd"
 
 echo.
-echo Both servers are starting in their own windows.
+echo Three windows are starting: API, Web, and Watchdog.
 echo Wait for the Web window to report "Local:  http://localhost:3000/",
 echo then open http://localhost:3000 in your browser.
 echo.
-echo This launcher window can be closed; the two server windows must stay open.
+echo This launcher window can be closed; the server + watchdog windows stay open.
 pause >nul

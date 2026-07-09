@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   GitFork,
   Trash,
@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import FpsMeter from './components/FpsMeter';
+import HealthCardOverlay from './components/HealthCardOverlay';
 import DialogHost from './lib/uiDialogs';
 import SyncModal from './components/SyncModal';
 import Canvas from './components/Canvas';
@@ -46,6 +47,7 @@ import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
+import { workspaceContentHash } from './lib/workspaceIdentity';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { resolveCueToNodeId } from './lib/liveLogNav';
@@ -157,6 +159,9 @@ export default function App() {
   }, []);
 
   const workspace = rawWorkspace;
+  // B1: ref mirror so the 3s sync poll reads the CURRENT canvas without re-arming the effect.
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
 
   useEffect(() => {
     loadSchemaLibrary();
@@ -274,6 +279,11 @@ export default function App() {
   // Bumped when Directory Settings closes so the Sidebar's read-only schema panel refreshes.
   const [schemaConfigVersion, setSchemaConfigVersion] = useState<number>(0);
   const [isCompileModalOpen, setIsCompileModalOpen] = useState<boolean>(false);
+  // B7: deploy-verify checklist rows surfaced in the Compile wizard itself.
+  const [deployChecklist, setDeployChecklist] = useState<Array<{ id: string; label: string; status: 'pass' | 'warn' | 'fail' | 'skipped'; detail: string }>>([]);
+  // B1 sync-trust: persistent canvas↔server content divergence gets a visible badge.
+  const [syncDiverged, setSyncDiverged] = useState<boolean>(false);
+  const syncMissesRef = useRef(0);
 
   // Left & Right Sidebar Resizing States
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
@@ -765,20 +775,25 @@ export default function App() {
 
   const executeCompileModProject = async () => {
     setCompileStatus('compiling');
+    setDeployChecklist([]);
     setCompileMessage('Compiling and deploying project on the server...');
     try {
-      const deployRes = await fetch('/api/agent/deploy', {
+      // Audit R4: deploy-verify (full 9-stage preflight) replaces the deprecated /deploy.
+      const deployRes = await fetch('/api/agent/deploy-verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace })
       });
       const deployData = await deployRes.json();
-      if (deployRes.ok && deployData.success) {
+      setDeployChecklist(Array.isArray(deployData.checklist) ? deployData.checklist : []);
+      if (deployRes.ok && deployData.ok) {
         setCompileStatus('success');
-        setCompileMessage(deployData.message);
+        setCompileMessage(`Deployed + verified "${deployData.modId}" to ${deployData.deployedPath || deployData.stagingPath}` +
+          (deployData.stagingPath && deployData.deployedPath ? ' (+ staging)' : ''));
       } else {
+        const failed = (deployData.checklist || []).find((c: { status: string }) => c.status === 'fail');
         setCompileStatus('error');
-        setCompileMessage(deployData.error || 'Compilation or deployment failed.');
+        setCompileMessage(deployData.error || (failed ? `${failed.label}: ${failed.detail}` : 'Compilation or deployment failed.'));
       }
     } catch (e: unknown) {
       setCompileStatus('error');
@@ -792,6 +807,9 @@ export default function App() {
       setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
       return;
     }
+    setCompileStatus('idle');
+    setCompileMessage('');
+    setDeployChecklist([]);
     setIsCompileModalOpen(true);
   };
 
@@ -808,6 +826,23 @@ export default function App() {
             setLocalVersion(data.version);
             localStorage.setItem('x4_mod_studio_version', String(data.version));
             localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(data.workspace));
+            syncMissesRef.current = 0;
+            setSyncDiverged(false);
+            return;
+          }
+          // B1 sync-trust: the version gate said "don't adopt" — verify CONTENT actually
+          // agrees. A transient mismatch (<~6s) is just the edit→sync debounce; a
+          // persistent one is real divergence (the stale-canvas incident class) and gets
+          // a visible badge instead of silence.
+          if (typeof data.workspaceHash === 'string' && data.workspaceHash.length > 0) {
+            const localHash = workspaceContentHash(sanitizeWorkspace(workspaceRef.current));
+            if (localHash !== data.workspaceHash) {
+              syncMissesRef.current += 1;
+              if (syncMissesRef.current >= 3) setSyncDiverged(true);
+            } else {
+              syncMissesRef.current = 0;
+              setSyncDiverged(false);
+            }
           }
         }
       } catch {
@@ -819,6 +854,23 @@ export default function App() {
     const interval = setInterval(fetchLatestServerWorkspace, 3000);
     return () => clearInterval(interval);
   }, [localVersion, setWorkspace]);
+
+  // B1: adopt the server workspace explicitly (badge click) — the user's choice, never silent.
+  const adoptServerWorkspace = async () => {
+    try {
+      const data = await fetch("/api/agent/workspace").then(r => r.json());
+      if (data?.workspace) {
+        setWorkspace(data.workspace);
+        if (data.version) {
+          setLocalVersion(data.version);
+          localStorage.setItem('x4_mod_studio_version', String(data.version));
+        }
+        localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(data.workspace));
+        syncMissesRef.current = 0;
+        setSyncDiverged(false);
+      }
+    } catch { /* leave the badge up — nothing adopted */ }
+  };
 
   // Command node addition handler
   const handleAddNode = (template: Omit<MDNode, 'id' | 'x' | 'y'>) => {
@@ -929,6 +981,7 @@ export default function App() {
   return (
     <div className="w-screen h-screen flex flex-col bg-[#0F1115] text-slate-300 font-sans">
       <FpsMeter />
+      <HealthCardOverlay />
       <DialogHost />
       {/* Upper Technical Header */}
       <header className="h-12 border-b border-white/10 bg-[#161920] px-4 flex items-center justify-between shrink-0 font-mono">
@@ -1186,6 +1239,16 @@ export default function App() {
             </select>
           </div>
 
+          {syncDiverged && (
+            <button
+              onClick={adoptServerWorkspace}
+              data-testid="sync-diverged-badge"
+              className="px-3 py-1 border border-amber-500/50 bg-amber-500/15 text-amber-300 rounded font-mono text-[11px] hover:bg-amber-500/25 transition-all flex items-center gap-1.5 cursor-pointer animate-pulse"
+              title="Your canvas content differs from the server copy (persistently, not just mid-edit). Click to adopt the server workspace — or keep editing and your next change syncs up normally."
+            >
+              ⚠ CANVAS ≠ SERVER — ADOPT
+            </button>
+          )}
           <button
             onClick={() => setIsSyncModalOpen(true)}
             className="px-3 py-1 border border-cyan-500/30 hover:border-cyan-500/80 bg-cyan-500/10 text-cyan-400 rounded font-mono text-[11px] hover:bg-cyan-500/20 transition-all flex items-center gap-1.5 cursor-pointer"
@@ -1548,6 +1611,9 @@ export default function App() {
         workspace={workspace}
         setWorkspace={setWorkspace}
         modWorkspacePath={modWorkspacePath}
+        compileStatus={compileStatus}
+        compileMessage={compileMessage}
+        checklist={deployChecklist}
       />
     </div>
   );

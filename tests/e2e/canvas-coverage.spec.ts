@@ -139,10 +139,26 @@ const fallbackRestoreWorkspace: E2EWorkspace = {
   links: [],
 };
 
-async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number }> {
+async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number; stopGetIsolation: () => void }> {
   let blocked = 0;
+  let isolateGets = true;
   await page.route('**/api/agent/workspace', async (route) => {
     const request = route.request();
+    // B1 sync-trust follow-up (2026-07-09): isolate the GET too. The app's 3s adoption
+    // poll reads the REAL server (which holds whatever the boot-blank sync pushed) and,
+    // because every sync POST response overwrites the stored version (App.tsx
+    // syncLocalEditsToServer), the adoption gate reopens mid-test and REPLACES the
+    // seeded canvas — the exact half-isolated-harness clobber the run kept hitting.
+    // Serving the low-versioned controlled workspace makes the page fully self-consistent.
+    // Teardown calls stopGetIsolation() so the restore-verify GET reads the real server.
+    if (request.method() === 'GET' && isolateGets) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ workspace: controlledWorkspace, version: 1, workspaceHash: '', lastUpdated: new Date().toISOString() }),
+      });
+      return;
+    }
     if (request.method() === 'POST') {
       let payload: { workspace?: { name?: string } } = {};
       try {
@@ -167,13 +183,18 @@ async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () 
     }
     await route.continue();
   });
-  return { count: () => blocked };
+  return { count: () => blocked, stopGetIsolation: () => { isolateGets = false; } };
 }
 
 async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
   await page.addInitScript(() => {
     localStorage.removeItem('x4_mod_studio_workspace');
-    localStorage.removeItem('x4_mod_studio_version');
+    // B1 sync-trust follow-up (2026-07-09): the version is PINNED HIGH, not removed.
+    // The harness isolates its POSTs from the server, so the server keeps the real
+    // (higher-versioned) workspace — with the adoption gate open, the 3s poll would
+    // ADOPT it mid-test and replace the seeded canvas (the exact clobber class the
+    // sync redesign exists to kill). Pinning makes the harness's isolation explicit.
+    localStorage.setItem('x4_mod_studio_version', '9007199254740991');
   });
   await page.goto('/');
   await expect(page.getByTestId('grid-canvas')).toBeVisible();
@@ -210,6 +231,7 @@ async function withSeededCanvas(
     await page.waitForTimeout(650);
     await body({ original });
   } finally {
+    isolated.stopGetIsolation(); // restore-verify below must read the REAL server
     await page.evaluate(async (workspace) => {
       (window as E2EWindow).__X4_E2E__!.setWorkspace(workspace);
       const response = await fetch('/api/agent/workspace', {

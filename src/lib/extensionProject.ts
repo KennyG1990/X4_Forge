@@ -17,7 +17,8 @@
  * extraction. Pure: no fs/network. House pattern: engine + oracle + public GET, then UI/API.
  */
 
-import { MD_CUE_KEYWORDS, parseSignalCueRefs } from './cueLineage';
+import { classifyCueRef, parseSignalCueRefs } from './cueLineage';
+import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parseModManifest, type ModDependency } from './modDependencyGraph';
 
 export type ProjectFileKind = 'md' | 'lua' | 'ui' | 'content' | 't' | 'library' | 'aiscript' | 'other';
@@ -76,9 +77,7 @@ export function classifyPath(path: string): ProjectFileKind {
   return 'other';
 }
 
-function normPath(path: string): string {
-  return (path || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
-}
+// normPath: shared via xmlLite (audit R2).
 
 export function createProject(id: string, name: string): ExtensionProject {
   return { id, name, files: [] };
@@ -194,17 +193,38 @@ export function buildContentXml(meta: ContentMeta): string {
  * Cross-file cue reference index — the linkage the single-file model can't see.
  * ------------------------------------------------------------------ */
 
-/** Parse the `<mdscript name="...">` name from one MD file (empty if none). */
+/** Parse the `<mdscript name="...">` name from one MD file (empty if none).
+ * B6: DOM-first (a commented-out mdscript header can't win); regex degrade on parse failure. */
 function mdScriptName(content: string): string {
-  return content.match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '';
+  const root = parseXmlLenient(content);
+  if (root) {
+    if (root.nodeName === 'mdscript') return root.getAttribute('name') || '';
+    const nested = root.getElementsByTagName('mdscript');
+    if (nested.length > 0) return nested[0].getAttribute('name') || '';
+    return '';
+  }
+  return content.replace(/<!--[\s\S]*?-->/g, '').match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '';
 }
 
-/** All `<cue name="...">` and `<library name="...">` entries defined in one MD file. */
+/** All `<cue name="...">` and `<library name="...">` entries defined in one MD file.
+ * B6: DOM-first — a commented-out `<cue name="X">` is not a definition (the same
+ * regex-sees-comments class as the doc-comment ref FP); regex degrade on parse failure. */
 function definedCueNames(content: string): string[] {
   const out: string[] = [];
+  const root = parseXmlLenient(content);
+  if (root) {
+    walkElements(root, el => {
+      if (el.nodeName === 'cue' || el.nodeName === 'library') {
+        const name = el.getAttribute('name');
+        if (name) out.push(name);
+      }
+    });
+    return out;
+  }
+  const text = content.replace(/<!--[\s\S]*?-->/g, '');
   const re = /<(?:cue|library)\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) out.push(m[1]);
+  while ((m = re.exec(text)) !== null) out.push(m[1]);
   return out;
 }
 
@@ -246,34 +266,24 @@ export function indexCueReferences(project: ExtensionProject): CueReferenceIndex
       let scope: CueRef['scope'];
       let resolved: boolean;
 
-      // NOTE: this intentionally does NOT reuse cueLineage.normalizeLocalCueRef. That
-      // helper collapses every dotted ref to `null` ("external"), but the PROJECT context
-      // needs to keep `md.<script>.<cue>` as a *cross_file* ref to resolve against sibling
-      // files — a distinction normalizeLocalCueRef erases. Do not "dedupe" these into one.
-      const local = ref.startsWith('this.') ? ref.slice(5) : ref;
-      const cross = ref.match(/^md\.([^.]+)\.(.+)$/i);
-
-      // Exact lowercase tokens only — a CamelCase "Parent" is a cue NAME, not the keyword.
-      if (MD_CUE_KEYWORDS.has(ref)) {
-        // Engine cue keyword (`parent`/`this`/`static`/`namespace`) — legal, resolved at
-        // runtime, never a name lookup. Flagging these trains users to ignore errors
-        // (ROADMAP #8, 2026-07-02: cue.unresolved "parent" ×3 on shipping in-game code).
+      // ONE classifier for all resolvers (audit A2): keywords are always-resolved,
+      // md.<script>.<cue> resolves cross-file when the script is ours, bare/this.X
+      // resolves against this file's cues, everything else is external (never flagged).
+      const c = classifyCueRef(ref);
+      if (c.kind === 'keyword') {
         scope = 'external'; resolved = true;
-      } else if (cross) {
-        // md.<script>.<cue...> — cross-file within the project if the script is ours.
-        const [, script, cuePath] = cross;
-        const firstCue = cuePath.split('.')[0];
-        if (knownScripts.has(script)) {
+      } else if (c.kind === 'cross') {
+        if (knownScripts.has(c.script)) {
           scope = 'cross_file';
-          resolved = (cuesByScript.get(script) || new Set()).has(firstCue);
+          resolved = (cuesByScript.get(c.script) || new Set()).has(c.cue);
         } else {
           scope = 'external'; resolved = true; // script not in project → external, never flagged
         }
-      } else if (!local.includes('.') && !local.startsWith('$') && !local.startsWith('{') && local.length > 0) {
+      } else if (c.kind === 'local') {
         scope = 'local';
-        resolved = ownCues.has(local);
+        resolved = ownCues.has(c.cue);
       } else {
-        scope = 'external'; resolved = true; // parent./static./expression/qualified → external
+        scope = 'external'; resolved = true;
       }
       references.push({ ref, file: f.path, scope, resolved });
     }
@@ -405,6 +415,22 @@ export function runExtensionProjectSelftest(): {
   // degrades safely
   ok('empty project degrades', indexCueReferences(createProject('e', 'E')).defined.length === 0
     && validateProjectStructure(createProject('e', 'E')).some(i => i.code === 'missing_content_xml'));
+
+  // B6: commented-out definitions are NOT definitions (DOM-first scan)
+  {
+    let pb6 = createProject('b6', 'B6');
+    pb6 = addFile(pb6, {
+      path: 'md/b6.xml', kind: 'md',
+      content: `<mdscript name="B6S"><cues>
+        <!-- <cue name="GhostCue"><conditions><event_game_started/></conditions></cue> -->
+        <cue name="RealCue"><actions><signal_cue cue="this.RealCue"/></actions></cue>
+      </cues></mdscript>`,
+    });
+    const idx6 = indexCueReferences(pb6);
+    ok('b6_commented_cue_not_defined', !idx6.defined.some(d => d.name === 'GhostCue') && idx6.defined.some(d => d.name === 'RealCue'),
+      JSON.stringify(idx6.defined.map(d => d.name)));
+    ok('b6_script_name_from_dom', idx6.defined.find(d => d.name === 'RealCue')?.script === 'B6S');
+  }
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

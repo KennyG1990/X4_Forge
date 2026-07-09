@@ -246,6 +246,9 @@ export interface ModWorkspace {
    * generated file already claims that path (the generated file wins).
    */
   passthroughFiles?: PassthroughFile[];
+  /** Stale-source deploy gate (P0 2026-07-09): stamped at import with a content-keyed hash
+   * of the source folder; deploy blocks when the folder changed since (see compileFidelity). */
+  sourceStamp?: { dir: string; hash: string; at: string };
   /** Lever 2: HTTP integration contract with an external local process (the studio owns the X4-side glue only). */
   integrationContract?: IntegrationContract;
   /** Lever 3: a single freely-editable custom Lua buffer, packaged as ui/<id>_custom.lua. */
@@ -1816,6 +1819,9 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
         }
       : undefined,
     customLua: typeof ws.customLua === 'string' ? ws.customLua : undefined,
+    sourceStamp: (ws.sourceStamp && typeof ws.sourceStamp.dir === 'string' && typeof ws.sourceStamp.hash === 'string')
+      ? { dir: String(ws.sourceStamp.dir), hash: String(ws.sourceStamp.hash), at: String(ws.sourceStamp.at || '') }
+      : undefined,
     passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
       .filter((f: any) => f && typeof f.path === 'string' && (typeof f.content === 'string' || f.omitted === true))
       .map((f: any) => ({
