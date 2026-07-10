@@ -2978,7 +2978,7 @@ function summarizeDiagnostics(diags: any[]) {
  * @param incoming   either a full workspace or (when merge) a partial set of top-level fields
  * @param opts.merge JSON-merge-patch semantics over the active workspace
  */
-function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number; dryRun?: boolean; merge?: boolean }): { status: number; body: any } {
+function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number; expectedHead?: string; dryRun?: boolean; merge?: boolean }): { status: number; body: any } {
   if (!incoming || typeof incoming !== 'object') {
     return { status: 400, body: { error: "Missing or invalid workspace payload." } };
   }
@@ -2992,6 +2992,27 @@ function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number;
         currentVersion: workspaceVersion
       }
     };
+  }
+  // B2 slice 1 (ADR-F1, 2026-07-09): CONTENT-addressed compare-and-swap. `expectedHead`
+  // is the content hash the writer believes the server currently holds (from GET
+  // /api/agent/workspace → workspaceHash). Mismatch = someone else changed the workspace
+  // since the writer last read it → explicit 409 with BOTH heads, never a silent
+  // last-writer-wins overwrite (the clobber class behind the SPEC-#66 incident).
+  // Version numbers can lie across restarts; content hashes cannot.
+  if (typeof opts.expectedHead === 'string' && opts.expectedHead.length > 0) {
+    const currentHead = activeWorkspaceHash();
+    if (opts.expectedHead !== currentHead) {
+      return {
+        status: 409,
+        body: {
+          error: 'head_conflict',
+          message: `Content conflict: expectedHead ${opts.expectedHead} != current ${currentHead}. The workspace changed since you read it — re-fetch, reconcile, and retry (or omit expectedHead to force last-writer-wins).`,
+          currentHead,
+          expectedHead: opts.expectedHead,
+          currentVersion: workspaceVersion,
+        }
+      };
+    }
   }
   const merged = opts.merge ? { ...activeWorkspace, ...incoming } : incoming;
   const nextWorkspace = sanitizeWorkspace(merged);
@@ -3033,11 +3054,11 @@ function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number;
  * `expectedVersion` (409 on mismatch) and `dryRun` (validate without applying).
  */
 app.post("/api/agent/workspace", (req, res) => {
-  const { workspace, expectedVersion, dryRun } = req.body || {};
+  const { workspace, expectedVersion, expectedHead, dryRun } = req.body || {};
   if (!workspace) {
     return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
   }
-  const r = applyWorkspaceMutation(workspace, { expectedVersion, dryRun });
+  const r = applyWorkspaceMutation(workspace, { expectedVersion, expectedHead, dryRun });
   return res.status(r.status).json(r.body);
 });
 
@@ -3048,11 +3069,11 @@ app.post("/api/agent/workspace", (req, res) => {
  * `expectedVersion` and `dryRun` controls.
  */
 app.post("/api/agent/workspace/merge", (req, res) => {
-  const { changes, expectedVersion, dryRun } = req.body || {};
+  const { changes, expectedVersion, expectedHead, dryRun } = req.body || {};
   if (!changes || typeof changes !== 'object') {
     return res.status(400).json({ error: "Missing required 'changes' object (top-level workspace fields to merge)." });
   }
-  const r = applyWorkspaceMutation(changes, { expectedVersion, dryRun, merge: true });
+  const r = applyWorkspaceMutation(changes, { expectedVersion, expectedHead, dryRun, merge: true });
   return res.status(r.status).json(r.body);
 });
 
@@ -7260,6 +7281,54 @@ if (process.env.NODE_ENV !== "production" || process.env.FORGE_ALLOW_RUN_COMMAND
     } catch (e) {
       res.status(500).json({ error: e.message || String(e) });
     }
+  });
+
+  // B16 (2026-07-09): ASYNC JOBS. The synchronous route above holds the HTTP response for
+  // the child's entire lifetime — a long command (lint, playwright) froze every in-page
+  // fetch for minutes (the all-evening 45s CDP-freeze class; 3 AAR citations). Jobs return
+  // a handle immediately; poll for status + output tail. Same dev-only gating; authed like
+  // every non-allowlisted route.
+  interface RunJob {
+    status: 'running' | 'done';
+    exitCode: number | null;
+    error: string | null;
+    out: string;
+    cmd: string;
+    startedAt: string;
+    endedAt?: string;
+  }
+  const RUN_JOBS = new Map<string, RunJob>();
+  let runJobSeq = 0;
+
+  app.post("/api/run_command/job", async (req, res) => {
+    const cmd = String(req.body?.cmd || "");
+    if (!cmd.trim()) return res.status(400).json({ error: "Missing 'cmd' in body." });
+    try {
+      const { exec } = await import("child_process");
+      const id = `job_${Date.now()}_${++runJobSeq}`;
+      const job: RunJob = { status: 'running', exitCode: null, error: null, out: '', cmd, startedAt: new Date().toISOString() };
+      RUN_JOBS.set(id, job);
+      if (RUN_JOBS.size > 20) { const oldest = RUN_JOBS.keys().next().value; if (oldest !== undefined) RUN_JOBS.delete(oldest); }
+      const child = exec(cmd, { maxBuffer: 8 * 1024 * 1024 });
+      const append = (chunk: unknown) => { job.out = (job.out + String(chunk)).slice(-65536); };
+      child.stdout?.on('data', append);
+      child.stderr?.on('data', append);
+      child.on('error', (e) => { job.error = e.message; });
+      child.on('exit', (code) => { job.status = 'done'; job.exitCode = code; job.endedAt = new Date().toISOString(); });
+      return res.json({ jobId: id, status: job.status, startedAt: job.startedAt });
+    } catch (e: any) {
+      return res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  app.get("/api/run_command/job/:id", (req, res) => {
+    const job = RUN_JOBS.get(String(req.params.id));
+    if (!job) return res.status(404).json({ error: "No such job (registry keeps the newest 20)." });
+    return res.json({
+      status: job.status, exitCode: job.exitCode, error: job.error,
+      cmd: job.cmd, startedAt: job.startedAt, endedAt: job.endedAt,
+      tail: job.out.slice(-4000),
+    });
   });
 }
 

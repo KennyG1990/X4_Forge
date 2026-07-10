@@ -27,7 +27,7 @@ import {
 import Sidebar from './components/Sidebar';
 import FpsMeter from './components/FpsMeter';
 import HealthCardOverlay from './components/HealthCardOverlay';
-import DialogHost from './lib/uiDialogs';
+import DialogHost, { confirmDialog } from './lib/uiDialogs';
 import SyncModal from './components/SyncModal';
 import Canvas from './components/Canvas';
 import UIBuilder from './components/UIBuilder';
@@ -1228,7 +1228,18 @@ export default function App() {
             <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1">Preset:</span>
             <select
               value="__current"
-              onChange={(e) => handleLoadPreset(e.target.value as 'escort' | 'mission' | 'blank' | '__current')}
+              onChange={async (e) => {
+                // B13 guard (2026-07-09): a preset pick REPLACES the whole canvas — twice
+                // this shipped silently (once via browser form-restoration on reload).
+                // Explicit confirm, always.
+                const pick = e.target.value as 'escort' | 'mission' | 'blank' | '__current';
+                if (pick === '__current') return;
+                const ok = await confirmDialog(
+                  `Replace the current canvas ("${workspace.name || 'Untitled'}") with a preset? The current graph is overwritten (Undo can restore it).`,
+                  { okLabel: 'Replace canvas', cancelLabel: 'Keep my canvas' },
+                );
+                if (ok) handleLoadPreset(pick);
+              }}
               className="bg-[#0F1115] border border-white/10 p-1 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
             >
               {/* H6: show the actually-loaded workspace, not a stale "Blank Workspace" label */}

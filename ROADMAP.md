@@ -599,6 +599,44 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ B16 CLOSED (2026-07-09): run_command async jobs — long commands no longer freeze the app
+The top tool debt (3 AAR citations in one evening). `POST /api/run_command/job {cmd}` returns a job id
+immediately (spawns via exec, 64KB rolling output buffer, newest-20 registry); `GET /api/run_command/job/:id`
+returns status/exitCode/4KB tail. Same dev-only gating as the sync route (not registered in production
+without FORGE_ALLOW_RUN_COMMAND); token-authed like all non-allowlisted routes. The sync GET stays for
+short commands.
+*Verified by dogfood: `npx tsc --noEmit` executed AS a job (exit 0, TSC_CLEAN in tail — doubling as the
+type gate for this very change); `GET /api/agent/workspace` answered in **7ms while the job ran** (the
+call class that previously froze 45s); unknown job id → 404. Zero workspace-state touched (Ken live in
+the app throughout, per OPERATOR PROTOCOL rule 2).*
+**AAR (B16):** SUSTAIN — using the new feature to run its own type gate made acceptance and validation the
+same act. IMPROVE — none fired (clean: single attempt, no scope change; logged per the zero-trigger rule).
+TOOLS — this WAS the tool fix; future agents should prefer the job API for anything >5s.
+**Commit point: "B16: run_command async jobs + B13 preset guard + B2 CAS slice 1 + OPERATOR PROTOCOL"**
+
+### ✅ B13 GUARD + B2 SLICE 1 CLOSED · B15 EVIDENCE BOUNDED (2026-07-09, "knock off the remaining tasks")
+- **B13 preset guard ✅** — the preset dropdown (which silently REPLACED the canvas twice this session, once
+  via browser form-restoration on reload) now requires an explicit in-app confirm ("Replace canvas" / "Keep
+  my canvas"). *Verified live: change dispatched → dialog appeared → decline → canvas byte-untouched.*
+- **B2 slice 1 ✅ (ADR-F1)** — content-addressed CAS is live on the write path: `applyWorkspaceMutation`
+  accepts `expectedHead` (the `workspaceHash` from GET); mismatch → **409 `head_conflict`** carrying BOTH
+  heads — never a silent last-writer-wins. Wired on POST /workspace AND /workspace/merge, composing with the
+  existing `expectedVersion` + `dryRun`. *Verified live with ZERO mutation (Ken was actively using the app —
+  all probes dryRun): correct head → 200; stale head → 409 head_conflict with both heads; server
+  hash+version unchanged after both. tsc CLEAN; api/workspace-identity/compile-fidelity/quick-fixes oracles
+  PASS; graph rebuilt.* Remaining B2 slices (client sends expectedHead + conflict UI; per-mod keying) stay
+  spec'd in BACKLOG.
+- **B15 ◐ evidence bounded** — reran 3×: still red, but the error-context pins death to the FINAL
+  click/evaluate with the palette open and results rendered; all app surfaces proven live; the machine
+  showed a worsening starvation signature all evening (45s CDP freezes, 0-FPS canvas, sandbox timeouts) and
+  Ken began actively using the app mid-diagnosis. First step stays: quiet machine, 3 runs. BACKLOG updated.
+**AAR:** SUSTAIN — dryRun-only acceptance let the CAS ship PROVEN while the user was live in the app (zero
+state risk); the CAS reused B1's hash + the existing expectedVersion shape — three features now share one
+identity mechanism. IMPROVE — I noticed mid-task that the canvas was Ken's own work ("No RNG Equipment
+Mods") and froze all workspace writes; the rule generalizes: before ANY state-touching validation, check
+whether a human is live in the surface. TOOLS — run_command async-job mode re-confirmed as the top tool debt
+(every long command freezes page fetches for its lifetime).
+
 ### ◐ B5 EXTRACTED + LIVE-VERIFIED (2026-07-09): Properties Inspector out of Sidebar — one e2e spec left red
 The thrice-cited worst-pick, executed. `src/components/PropertiesInspector.tsx` (~470 lines moved VERBATIM;
 `explainOpen`/`sidebarCopied` were inspector-local and moved in as component state; 11 explicit props);

@@ -2,6 +2,39 @@
 
 > Entry point for AI agents working in this repo. Read at session start. (Mirror to CLAUDE.md / GEMINI.md if your harness reads those instead.)
 
+## ⛔ OPERATOR PROTOCOL — the agent manages the operator too (Ken's order, 2026-07-09)
+
+Ken's standing instruction, verbatim intent: "remind me of my failures, help me circumvent my problems by
+reminding me, don't be nice about it." Ken is not a software engineer; he validates strategy by
+TRIANGULATION (multiple frontier models converging on an idea = the idea is sound) — that works; the
+shipped Forge is the proof. His failures are OPERATIONAL, under fatigue and multi-project load. Policing
+them is part of the agent's job, enforced like any workflow step:
+
+1. **SESSION-START BRIEF.** Before work, state in one block: WHICH project this session is (he runs 3–4 in
+   parallel and thrashes — one line of state kills the confusion), the **eyeball queue** (every ◐ item
+   gated on a 30-second Ken-check, listed), and the **commit question** ("was the last close committed? If
+   not, commit now — the titles are pre-written").
+2. **MACHINE-STATE ASK.** Before validation-heavy or e2e work: "Are you in the app? Game running? Machine
+   quiet?" Never assume. If the agent detects him live in a surface mid-session (canvas changed, load
+   spiking), FREEZE state-touching work and say so.
+3. **DEGRADATION CALL.** When a session runs long and agent errors cluster (2+ mistakes in the last
+   stretch, repeated tool freezes), say plainly: "we're in degradation territory — commit point now, fresh
+   session for the next unit." Ken may override, but he hears the evidence first, every time.
+4. **COMMIT CADENCE.** End every ✅ close with "commit point: <close title>". Uncommitted work is blast
+   radius — the SPEC-#66 recovery only worked because HEAD happened to be good.
+5. **CANON LAG.** When Ken reverses a written rule verbally, update the doc IN THE SAME TASK and name the
+   files changed. A decree without a doc edit is a future agent's landmine (lived: the UI-mandate
+   contradiction sat for days).
+6. **WRITE GATES.** Before any write to the real mod, game dirs, or standing config: give Ken ONE paragraph
+   — what will be written, what could break, how it's undone — and wait for explicit go. He reads that
+   paragraph; that is the whole deal. Never validate against the real mod when a scratch article works.
+7. **[REPRODUCED] vs [HYPOTHESIS].** Every failure explanation the agent gives is tagged one or the other.
+   Never dress a hypothesis as a diagnosis (the lossy-compiler mistake, 2026-07-09). Ken's cheapest check
+   on any agent: "reproduced, or story?"
+8. **OVERLOAD FLAG.** If Ken's messages show context-thrash (mixed projects, contradictions, no-sleep
+   hours), say it straight: "you're thrashing — here's this project's one-line state; the rest keeps."
+   That is a service, not disrespect; he asked for exactly this.
+
 ## Building the `x4_ai_influence` mod — agent API allowed (UI-only mandate LIFTED 2026-06-24)
 
 **UPDATE 2026-06-24 (Ken): the old "build the mod ONLY through this Forge's UI" HARD RULE is REVERSED.** It

@@ -17,14 +17,13 @@ adopts (version gate stays as tiebreak), on mismatch-with-local-edits it shows a
 **Acceptance:** oracle for the hash (stable across key order, sensitive to node/property change); simulated
 divergence shows the badge; adopt button converges; tsc/sweep green.
 
-### B2 · Sync protocol replacement: content-addressed workspace states — `spec'd`, **design DECIDED (ADR-F1, 2026-07-09)**
-Full design in `F:\StarForge\wiki\x4-forge\decisions.md` → ADR-F1 (CAS over content-addressed states;
-fast-forward-only adoption; explicit conflict UI; legacy writes one deprecation round; keyed per mod id —
-absorbs the one-project-model refactor). **First slice (next session, bounded):** server head tracking
-(`{hash, parentHash, at, origin}` on every write) + `expectedHead` CAS on `POST /api/agent/workspace` +
-409 conflict payload with both heads — no UI change needed (the B1 badge already renders divergence);
-reuses `workspaceContentHash`. **Acceptance:** two simulated clients cannot silently overwrite each other;
-e2e workspace-guard removed as the proof.
+### B2 · Sync protocol replacement (ADR-F1) — slice 1 ✅ CLOSED 2026-07-09 → ROADMAP; slices 2–3 `spec'd`
+Slice 1 (server CAS: `expectedHead` on POST /workspace + /merge → 409 `head_conflict` with both heads) is
+LIVE and dryRun-verified. **Slice 2 (next):** the CLIENT sends `expectedHead` on its 300ms sync + wires the
+409 into the B1 badge as an explicit conflict UI (Adopt server / Keep mine force). **Slice 3:** per-mod-id
+server state keying (absorbs one-project-model; multi-workspace tabs B12 rides on it). **Acceptance
+(unchanged, final):** two simulated clients cannot silently overwrite each other; e2e workspace-guard
+removed as the proof.
 
 ### B3 · Console health probe — ◐ built 2026-07-09 (watchdog + web supervisor wired into restart-studio); flip ✅ after one observed live recovery at next restart
 Supervisor respawns the API process only; a dead console/vite (lived 2026-07-09) needs a human.
@@ -55,6 +54,11 @@ showed repeated renderer freezes/CDP timeouts under load all evening. Suspects, 
 (memory/load — retry on a quiet machine first), the B1 3s poll interacting with this spec's non-isolated
 harness (add the canvas-coverage GET-isolation pattern), a real palette regression (least likely given the
 live proof). **Acceptance:** spec green 3× consecutively, or failure pinned with evidence.
+**Evidence added same night:** failure point bounded — the error-context snapshot shows the quick-spawn
+palette OPEN with the reward_player result RENDERED at death; lines 269–274 all succeeded; it dies on the
+final click/evaluate (275–276). App logic proven live (palette add + inspector, screenshot). The machine
+degraded all evening (repeated 45s CDP freezes, 0-FPS canvas readings, sandbox timeouts) — starvation
+signature. FIRST STEP NEXT SESSION: reboot/quiet machine, run 3×. Only if still red, instrument.
 
 ### B6 · xmldom scan — ✅ CLOSED 2026-07-09 → ROADMAP (DOM-first with regex degrade; 8 new oracle checks; real mod compiles clean)
 
@@ -92,8 +96,10 @@ editor surface beyond code view.
 Auto-select on create (wares ADD leaves "NO ACTIVE ASSET SELECTED"); consistent empty-state skeletons
 (WARES.XML preview blank at zero wares); delete toast with visible Undo; keyboard-shortcut audit + docs;
 override-map entry click → Diff→Patch pre-targeted at that file; "wire a HUD button in 3 steps" WIKI snippet.
-Added 2026-07-09: preset dropdown needs a CONFIRM guard (it can silently REPLACE the canvas, incl. re-apply
-on reload — lived twice); sync-diverged badge clips on narrow headers (overflow handling).
+Added 2026-07-09: ~~preset dropdown CONFIRM guard~~ ✅ done same night (live-verified decline path);
+sync-diverged badge clips on narrow headers (overflow handling) — still open.
+
+### B16 · run_command async-job mode — ✅ CLOSED 2026-07-09 → ROADMAP (dogfood-verified: app answered in 7ms mid-job)
 
 ### B14 · Staleness-era leftovers — `spec'd`
 Full server-side XPath match counts (needs an XPath lib decision); golden round-trip corpus across several
