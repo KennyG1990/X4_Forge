@@ -10,10 +10,16 @@ TRIANGULATION (multiple frontier models converging on an idea = the idea is soun
 shipped Forge is the proof. His failures are OPERATIONAL, under fatigue and multi-project load. Policing
 them is part of the agent's job, enforced like any workflow step:
 
-1. **SESSION-START BRIEF.** Before work, state in one block: WHICH project this session is (he runs 3–4 in
-   parallel and thrashes — one line of state kills the confusion), the **eyeball queue** (every ◐ item
-   gated on a 30-second Ken-check, listed), and the **commit question** ("was the last close committed? If
-   not, commit now — the titles are pre-written").
+1. **SESSION-START BRIEF.** Before work, read `BACKLOG.md` + **`SESSION-HANDOFF.md`** (the outgoing
+   agent's working-state transfer: hot files, live hazards, dead theories, next unit's first command — it
+   supersedes Agent-Brain queries for "where were we"), then state in one block: WHICH project this
+   session is (he runs 3–4 in parallel and thrashes — one line of state kills the confusion), the
+   **eyeball queue** (every ◐ item gated on a 30-second Ken-check, listed), and the **commit question**
+   ("was the last close committed? If not, commit now — the titles are pre-written").
+   **SESSION-CLOSE mirror:** at every commit point / degradation call, OVERWRITE `SESSION-HANDOFF.md` with
+   the current working state. This is what makes a fresh session as cheap as compaction — Ken's empirics
+   (long sessions beat fresh ones) hold precisely because self-authored state transfer beats retrieval;
+   the handoff file gives fresh sessions the same advantage without the degradation debt.
 2. **MACHINE-STATE ASK.** Before validation-heavy or e2e work: "Are you in the app? Game running? Machine
    quiet?" Never assume. If the agent detects him live in a surface mid-session (canvas changed, load
    spiking), FREEZE state-touching work and say so.

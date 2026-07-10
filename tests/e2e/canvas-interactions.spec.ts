@@ -132,10 +132,24 @@ const fallbackRestoreWorkspace: E2EWorkspace = {
   links: [],
 };
 
-async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number }> {
+async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number; startGetIsolation: () => void; stopGetIsolation: () => void }> {
   let blocked = 0;
+  let isolateGets = false;
   await page.route('**/api/agent/workspace', async (route) => {
     const request = route.request();
+    // B15 root-cause fix (2026-07-10, [REPRODUCED] via canvas-coverage's identical trio):
+    // the app's 3s adoption poll reads the REAL server (fresh e2e profile → gate open) and
+    // REPLACES the seeded canvas mid-test. POST-only isolation was enough pre-B1; now GETs
+    // must be isolated too — but only AFTER the seed captures the true `original` (toggle),
+    // and teardown stops it so the restore-verify reads the real server.
+    if (request.method() === 'GET' && isolateGets) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ workspace: controlledWorkspace, version: 1, workspaceHash: '', lastUpdated: new Date().toISOString() }),
+      });
+      return;
+    }
     if (request.method() === 'POST') {
       let payload: { workspace?: { name?: string } } = {};
       try {
@@ -160,7 +174,11 @@ async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () 
     }
     await route.continue();
   });
-  return { count: () => blocked };
+  return {
+    count: () => blocked,
+    startGetIsolation: () => { isolateGets = true; },
+    stopGetIsolation: () => { isolateGets = false; },
+  };
 }
 
 async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
@@ -209,6 +227,8 @@ test('real canvas interactions create oriented links, move groups, add from pale
   });
 
   const originalWorkspace = await seedWorkspace(page);
+  // GET isolation starts AFTER the seed captured the true server `original` above.
+  isolatedWorkspacePosts.startGetIsolation();
 
   try {
     await page.waitForTimeout(650);
@@ -276,6 +296,7 @@ test('real canvas interactions create oriented links, move groups, add from pale
     const afterPaletteAdd = await workspace(page);
     expect(afterPaletteAdd.nodes.some((node) => node.xmlTag === 'reward_player')).toBe(true);
   } finally {
+    isolatedWorkspacePosts.stopGetIsolation(); // restore-verify below must read the REAL server
     await page.evaluate(async (workspace) => {
       (window as E2EWindow).__X4_E2E__!.setWorkspace(workspace);
       const response = await fetch('/api/agent/workspace', {

@@ -139,9 +139,11 @@ const fallbackRestoreWorkspace: E2EWorkspace = {
   links: [],
 };
 
-async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number; stopGetIsolation: () => void }> {
+async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number; startGetIsolation: () => void; stopGetIsolation: () => void }> {
   let blocked = 0;
-  let isolateGets = true;
+  // Starts OFF so the seed's `original` capture reads the REAL server (otherwise teardown
+  // restores the empty fallback baseline over real state); switched on right after seeding.
+  let isolateGets = false;
   await page.route('**/api/agent/workspace', async (route) => {
     const request = route.request();
     // B1 sync-trust follow-up (2026-07-09): isolate the GET too. The app's 3s adoption
@@ -183,7 +185,11 @@ async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () 
     }
     await route.continue();
   });
-  return { count: () => blocked, stopGetIsolation: () => { isolateGets = false; } };
+  return {
+    count: () => blocked,
+    startGetIsolation: () => { isolateGets = true; },
+    stopGetIsolation: () => { isolateGets = false; },
+  };
 }
 
 async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
@@ -227,6 +233,7 @@ async function withSeededCanvas(
 ): Promise<void> {
   const isolated = await isolateControlledWorkspacePosts(page);
   const original = await seedWorkspace(page);
+  isolated.startGetIsolation(); // AFTER the true server `original` was captured
   try {
     await page.waitForTimeout(650);
     await body({ original });

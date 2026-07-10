@@ -25,10 +25,8 @@ server state keying (absorbs one-project-model; multi-workspace tabs B12 rides o
 (unchanged, final):** two simulated clients cannot silently overwrite each other; e2e workspace-guard
 removed as the proof.
 
-### B3 · Console health probe — ◐ built 2026-07-09 (watchdog + web supervisor wired into restart-studio); flip ✅ after one observed live recovery at next restart
-Supervisor respawns the API process only; a dead console/vite (lived 2026-07-09) needs a human.
-**Scope:** watchdog loop pings 3000 + 3001 every ~20s, respawns whichever is down, logs restarts.
-**Acceptance:** kill vite → auto-recovers; kill API → auto-recovers; both logged.
+### B3 · Console health probe — ✅ CLOSED 2026-07-09 → ROADMAP (Ken's live drill: closed the Web window →
+respawned ~60s; closed the API window → respawned; both verified from the agent side, app + API answering)
 
 ## P2 — Committed audit work (deferred by budget)
 
@@ -42,23 +40,10 @@ block into the 🔧 apply block; retire `modFixes.ts` + its selftest once absorb
 gets a working one-click fix (validated by compile + crossfile); modFixes selftest removed from the sweep
 with its checks migrated.
 
-### B5 · Sidebar Properties Inspector extraction — ◐ DONE 2026-07-09 (Ken overrode the deferral: "you have
-the context in this session"). Extraction complete + live-verified (screenshot); flips ✅ with B15.
+### B5 · Sidebar Properties Inspector extraction — ✅ CLOSED 2026-07-10 → ROADMAP (flipped by B15's fix; suite 11/11)
 
-### B15 · canvas-interactions.spec.ts RED — cause not isolated — `spec'd` (investigation, NEXT SESSION)
-Times out at its palette-add step (`reward_player`), page closed after 60s. Facts: fails 3× consecutively on
-UNCHANGED spec code (all experiments reverted); PASSED earlier the same evening post-B5-extraction (run 1);
-both suspect surfaces (Sidebar palette, PropertiesInspector) proven working in the live browser with a
-screenshot; canvas-coverage's similar seeded tests pass 3/3 in 19s after their harness fix; the machine
-showed repeated renderer freezes/CDP timeouts under load all evening. Suspects, in order: environment
-(memory/load — retry on a quiet machine first), the B1 3s poll interacting with this spec's non-isolated
-harness (add the canvas-coverage GET-isolation pattern), a real palette regression (least likely given the
-live proof). **Acceptance:** spec green 3× consecutively, or failure pinned with evidence.
-**Evidence added same night:** failure point bounded — the error-context snapshot shows the quick-spawn
-palette OPEN with the reward_player result RENDERED at death; lines 269–274 all succeeded; it dies on the
-final click/evaluate (275–276). App logic proven live (palette add + inspector, screenshot). The machine
-degraded all evening (repeated 45s CDP freezes, 0-FPS canvas readings, sandbox timeouts) — starvation
-signature. FIRST STEP NEXT SESSION: reboot/quiet machine, run 3×. Only if still red, instrument.
+### B15 · canvas-interactions RED — ✅ CLOSED 2026-07-10 → ROADMAP (root cause: B1 adoption poll vs the
+spec's POST-only isolation; GET isolation ported with capture-first toggles; suite 11/11, spec 3× green)
 
 ### B6 · xmldom scan — ✅ CLOSED 2026-07-09 → ROADMAP (DOM-first with regex degrade; 8 new oracle checks; real mod compiles clean)
 

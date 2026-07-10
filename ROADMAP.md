@@ -599,6 +599,31 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ B15 CLOSED + B5 FLIPS ✅ (2026-07-10): canvas-interactions pinned and fixed — full e2e suite 11/11
+**Root cause [REPRODUCED by proxy + elimination]:** NOT the app (the exact spec path — right-click
+quick-spawn → search → add reward_player — was driven live in the browser and worked, page alive, node
+added, undone after) and NOT the environment (3× red on a QUIET machine killed the starvation theory).
+It was the SAME mechanism already proven on canvas-coverage: the B1 3s adoption poll, in the e2e browser's
+fresh profile (gate open), reads the REAL server and REPLACES the seeded canvas mid-test —
+canvas-interactions' harness isolated POSTs only. A premise audit also showed the spec was never green
+post-B5: run 1's "7 passed" of 11 implied a 4th failure hidden by log truncation — the earlier "passed in
+run 1" claim was an inference error, corrected here.
+**Fix:** GET isolation with toggles ported to canvas-interactions (serve the controlled workspace,
+`workspaceHash:''` so the divergence check skips); isolation starts AFTER the seed captures the true
+server `original` and stops before the teardown restore-verify. canvas-coverage aligned to the same
+capture-original-first ordering (it had been restoring the empty fallback baseline over real server state
+after every test — worked, but polluted).
+*Verified: full suite **11/11 passed in 32.5s** (was 4+ min of 60s timeouts); acceptance met with
+**3× consecutive green** on canvas-interactions (37.2s); everything launched through the new B16 job API —
+zero page freezes while polling. **B5 (Properties Inspector extraction) flips ✅** — its only holdout was
+this spec.*
+**AAR (B15):** SUSTAIN — the elimination ladder (live-drive the exact user path → quiet-machine rerun →
+port the proven fix) converged in one sitting once each step produced EVIDENCE instead of theory; the B16
+job API paid for itself immediately. IMPROVE — the original "passed in run 1" premise came from a truncated
+log excerpt; when a count doesn't reconcile (7 of 11 with 3 known failures), the missing item IS the lead.
+TOOLS — none fired; harness pattern (POST+GET isolation with capture-first toggles) is now the canonical
+shape for seeded-canvas specs — reuse it, don't reinvent.
+
 ### ✅ B16 CLOSED (2026-07-09): run_command async jobs — long commands no longer freeze the app
 The top tool debt (3 AAR citations in one evening). `POST /api/run_command/job {cmd}` returns a job id
 immediately (spawns via exec, 64KB rolling output buffer, newest-20 registry); `GET /api/run_command/job/:id`
@@ -699,8 +724,10 @@ wired-node negatives); retired route answers **404**; headless acceptance — sc
 `/quick-fixes` lists the fix → ops applied → `/compile` **success, 0 error diagnostics**, emitted MD carries
 the wired `<event_cue_signalled cue="md.Setup.Start">` inside `<conditions>`; host tsc CLEAN; lint gate
 CLEAN; **FULL sweep 68/68** (net count unchanged: −1 retired, +0 new routes this task); e2e
-project-validate **6/6**; graph rebuilt. ◐ residual: the in-UI eyeball of the new advice/fix cards (select
-a triggerless cue, see 🔧 + 💡) awaits Ken's next session — engine + endpoint + compile-legality are proven.*
+project-validate **6/6**; graph rebuilt. **Residual CLEARED 2026-07-09 — KEN'S EYEBALL (experience gate):**
+he selected a fresh triggerless Mission Cue → green card with APPLY FIX rendered → click created and wired
+the Event: Game Started node on his canvas; he also confirmed the 💡 advice tier renders correctly on an
+orphaned do_if (amber, no button — by design). **B4/R3 is fully ✅.***
 **AAR (R3):** SUSTAIN — "absorb, don't bridge": migrating modFixes' checks INTO the quick-fix oracle at
 retirement time kept coverage continuous with zero orphaned tests. IMPROVE — the BACKLOG acceptance said
 "validated by compile + crossfile" and the headless run satisfied it; earlier tasks would have burned time
@@ -723,11 +750,12 @@ acceptance; sessions now start from 4KB of open work, not 600KB of history). Bui
   (stored version force-raised above server, server copy tweaked): badge appeared, screenshot taken, click
   adopted the server copy (tweak arrived on canvas), badge cleared, versions converged. Known cosmetic: the
   badge can clip on narrow headers (BACKLOG B13 polish).*
-- **B3 ◐ Console watchdog** — `run-web-supervised.cmd` (vite now self-heals like the API) +
+- **B3 ✅ Console watchdog** — `run-web-supervised.cmd` (vite now self-heals like the API) +
   `forge-watchdog.cmd` (pings 3000/3001 every 20s, two-miss threshold + 60s cooldown, relaunches the dead
-  window, logs to supervisor.log); `restart-studio.bat` starts all three. *◐: logic-reviewed + files in
-  place; the live kill-recovery drill needs the NEXT studio restart (can't kill Ken's running console
-  mid-session) — flip to ✅ after one observed recovery.*
+  window, logs to supervisor.log); `restart-studio.bat` starts all three. *FLIPPED ✅ 2026-07-09 by Ken's
+  live drill: he closed the Web window → watchdog respawned it (~60s, the designed two-miss delay); closed
+  the API window → respawned; agent-side confirmation after each (app rendered, API 200). The console-death
+  class that stalled the 2026-07-09 session is now self-healing.*
 - **B7 ✅ Small fixes pair** — (a) `compareModCopies` excludes tool-owned metadata (`.studio-mod-id`,
   `.forgekeep`, `.gitignore`, supervisor.log) from the drift VERDICT; oracle grew 2 checks (**10/10**); the
   real mod now reads **identical** instead of crying wolf. (b) The Compile wizard renders the full
