@@ -165,6 +165,28 @@ export default function PlaytestWorkspace({
     }
   };
 
+  // B9: package-for-release state + handler (gate lives server-side; this just reports).
+  const [releasing, setReleasing] = useState(false);
+  const [releaseBump, setReleaseBump] = useState<'none' | 'patch' | 'minor'>('patch');
+  const [releaseResult, setReleaseResult] = useState<any>(null);
+
+  const packageRelease = async () => {
+    setReleasing(true);
+    setReleaseResult(null);
+    try {
+      const r = await fetch('/api/agent/package/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bump: releaseBump }),
+      });
+      setReleaseResult(await r.json());
+    } catch (e: any) {
+      setReleaseResult({ success: false, error: e?.message || 'request failed' });
+    } finally {
+      setReleasing(false);
+    }
+  };
+
   const deployAndVerify = async () => {
     setVerifying(true);
     setVerifyResult(null);
@@ -348,6 +370,51 @@ export default function PlaytestWorkspace({
                   {typeof verifyResult.bytesConfirmed === 'boolean' && <div className="text-slate-400">bytes confirmed: {String(verifyResult.bytesConfirmed)} ({verifyResult.deployedBytes}b) · doctor blocking: {verifyResult.doctor?.blocking?.length ?? '—'}</div>}
                   {verifyResult.error && <div className="text-red-300">{verifyResult.error}</div>}
                   {verifyResult.compileErrors?.length > 0 && <div className="text-red-300">{verifyResult.compileErrors[0].message}</div>}
+                </div>
+              )}
+            </div>
+
+            {/* B9 (2026-07-10): "I shipped a mod" — package a GREEN build into a Nexus-ready zip. */}
+            <div className="pt-2 border-t border-white/5 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <select
+                  value={releaseBump}
+                  onChange={(e) => setReleaseBump(e.target.value as 'none' | 'patch' | 'minor')}
+                  data-testid="release-bump-select"
+                  className="px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-emerald-500"
+                  title="Version bump written into content.xml (X4 convention: 100 = v1.00; patch +1, minor +10)"
+                >
+                  <option value="none">keep version</option>
+                  <option value="patch">bump patch (+1)</option>
+                  <option value="minor">bump minor (+10)</option>
+                </select>
+                <button
+                  onClick={packageRelease}
+                  disabled={releasing}
+                  data-testid="package-release-btn"
+                  className="flex-1 px-3 py-1 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 font-sans text-black font-bold text-[10px] rounded transition-all whitespace-nowrap"
+                >
+                  {releasing ? 'Packaging…' : '📦 Package for Release (Nexus zip)'}
+                </button>
+              </div>
+              {releaseResult && (
+                <div data-testid="release-result" className={`rounded border p-1.5 text-[9px] font-mono leading-tight ${releaseResult.success ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-200' : 'border-red-500/40 bg-red-500/5 text-red-200'}`}>
+                  {releaseResult.success ? (
+                    <>
+                      <div className="font-bold">✓ RELEASE BUILT — {releaseResult.modId} v{releaseResult.version}</div>
+                      <div className="text-slate-300">{releaseResult.fileCount} files · {Math.round((releaseResult.sizeBytes || 0) / 1024)} KB{releaseResult.warnings ? ` · ${releaseResult.warnings} warning(s) (review before upload)` : ''}</div>
+                      <div className="text-slate-400 truncate select-all" title={releaseResult.zipPath}>→ {releaseResult.zipPath}</div>
+                      <div className="text-slate-500">Zip extracts straight into extensions/ · install README included. Upload to Nexus when ready.</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-bold">✗ RELEASE BLOCKED</div>
+                      <div className="text-red-300">{releaseResult.error}</div>
+                      {(releaseResult.blocking || []).slice(0, 4).map((b: { message?: string; code?: string }, i: number) => (
+                        <div key={i} className="text-red-200/80">• {b.message || b.code}</div>
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>

@@ -61,9 +61,8 @@ Single artifact a non-dev installs (Electron or single-binary + static bundle); 
 (README, support docs, release assets). Production mode already exists (API_ONLY + static serving +
 run_command gated out).
 
-### B9 · One-click distributable — `spec'd`
-"Package for Nexus": zip with content.xml version bump + README scaffold, building on the compiler +
-deploy-verify (only packages a green preflight).
+### B9 · One-click distributable — ✅ CLOSED 2026-07-10 → ROADMAP (zero-dep zip engine, 21/21 oracle,
+independent-extractor verified, gate blocks red builds, Playtest button live)
 
 ## P4 — Depth / UX long tail
 

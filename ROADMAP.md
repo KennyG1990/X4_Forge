@@ -599,6 +599,46 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ TIMELINE PROOF (2026-07-10, Ken: "validate this claim right now"): idea → shipped mod, one sitting
+Research (WebSearch): the loudest simple community ask is USEFUL ATTACK ALERTS — Steam threads complain
+vanilla warns at ≤50% shields or after the ship is dead. Built **Property Attack Alerts**
+(`property_attack_alerts`): instant `<show_notification>` + showonmap logbook entry on
+`<event_object_attacked>` against ANY player ship/station (watch-set refresh every 20s), attacker + sector
+named, 10s anti-spam cooldown. Grounded end-to-end: watch/group machinery copied from the in-game-verified
+`ai_influence_combat.xml`; `show_notification`/`write_to_logbook`/`find_station` forms copied from the
+vanilla 9.00 corpus. *Pipeline: authored → deploy-verify **9-stage preflight PASSED FIRST TRY** → deployed
+to game extensions → `package/release` → **releases/property_attack_alerts_v100.zip** (4 files, 2.5KB,
+install README inside). One input mistake caught+fixed en route: ws.version takes semver ('1.0.0'→100),
+not the X4 integer. ◐ in-game eyeball = Ken's 2-minute test (load save, let something shoot a drone).*
+
+### ✅ B9 CLOSED (2026-07-10): "Package for Release" — the "I shipped a mod" timeline endpoint
+Ken's new focus ("simplify the I-have-a-mod-idea → I-shipped-a-mod timeline"; Forge release itself stays
+parked — this ships MODS, not the Forge). RECONCILE win: no zip dependency needed — Node's zlib IS the
+deflate inside every zip; only the container was missing.
+- **`src/lib/modDistribution.ts`** (pure, ZERO deps): CRC-32 + minimal ZIP writer (local headers/central
+  directory/EOCD, deflate-or-store per entry, UTF-8 names); `bumpVersion` (X4 integer convention: 100=v1.00,
+  patch +1 / minor +10; semver handled; unknown formats left alone); `setContentVersion` (surgical — ONLY
+  the <content> version attribute changes, byte-fidelity everywhere else); player README with extract-into-
+  extensions/ install steps; `buildReleasePlan` with the **RELEASE GATE: any error diagnostic → no package.
+  The Forge never helps ship a red build.**
+- **`POST /api/agent/package/release {workspace?, bump?}`** — same diagnostics as /package, gate, writes
+  `<modWorkspacePath>/releases/<modId>_v<version>.zip` (`<modId>/`-rooted: extract-into-extensions is the
+  whole install). **UI:** Playtest panel button "📦 Package for Release" + bump selector + result card
+  (path select-all, warning count, blocked-reasons list). Operates on the ACTIVE workspace, consistent with
+  its sibling Deploy+Verify button.
+*Verified (methods by name): oracle `mod-distribution-selftest` **21/21** (CRC known vector, container
+structure, deflate round-trip, bump semantics incl. X4 integers, surgical version edit leaves other
+version attrs untouched, gate blocks, README content, modId sanitization); host tsc CLEAN ×2;
+**real-mod acceptance:** x4_ai_influence released (26 files, 74KB) and **extracted by PowerShell
+Expand-Archive — an independent zip implementation — 26/26 files, combat.xml SHA-256 identical to
+source**; **gate acceptance:** fake-macro workspace → 422 with blocking reasons; **UI acceptance:** real
+button click in the Playtest panel → green card, player_elite_escort v120→v121 (X4 integer bump on real
+data), zip on disk.*
+**AAR (B9):** SUSTAIN — the reconcile ("Forge already has…") killed a dependency decision entirely: zlib +
+80 lines of container beat an npm install; independent-extractor verification is the right acceptance for
+any hand-rolled format. IMPROVE — none fired (clean; logged per the zero-trigger rule). TOOLS — none.
+**Commit point: "B9: Package for Release — zero-dep zip engine + gate + Playtest button"**
+
 ### ✅ B15 CLOSED + B5 FLIPS ✅ (2026-07-10): canvas-interactions pinned and fixed — full e2e suite 11/11
 **Root cause [REPRODUCED by proxy + elimination]:** NOT the app (the exact spec path — right-click
 quick-spawn → search → add reward_player — was driven live in the browser and worked, page alive, node

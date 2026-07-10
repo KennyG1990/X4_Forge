@@ -91,6 +91,7 @@ import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes
 import { computeModDrift, fingerprintModFolder, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
 import { workspaceContentHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
+import { buildReleasePlan, buildZip, runModDistributionSelftest } from "./src/lib/modDistribution";
 import { runModDriftSelftest } from "./src/lib/modDrift";
 import { assessLuaStaleness, injectLuaVersionMarker, runLuaStalenessSelftest } from "./src/lib/luaStalenessCheck";
 import { registerGithubRoutes } from "./src/server/githubRoutes";
@@ -4968,6 +4969,7 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
 const SELFTESTS: Record<string, () => unknown> = {
   "compile-fidelity-selftest": runCompileFidelitySelftest,
   "workspace-identity-selftest": runWorkspaceIdentitySelftest,
+  "mod-distribution-selftest": runModDistributionSelftest,
   "override-map-selftest": runOverrideMapSelftest,
   "catdat-selftest": runCatDatSelftest,
   "object-index-selftest": runObjectIndexSelftest,
@@ -6749,6 +6751,52 @@ app.post("/api/agent/package", (req, res) => {
       success: false,
       error: error.message || "Failed to package workspace schema to file manifest."
     });
+  }
+});
+
+/**
+ * POST /api/agent/package/release — B9 (2026-07-10): the "I shipped a mod" endpoint.
+ * Compiles the workspace, runs the SAME diagnostics as /package, and — only on ZERO
+ * errors — writes a Nexus-ready `<modId>/`-rooted zip (bumped content.xml version,
+ * player install README inside) to `<modWorkspacePath>/releases/`.
+ * Body: { workspace?, bump?: 'none'|'patch'|'minor' } (bump defaults to 'none').
+ */
+app.post("/api/agent/package/release", (req, res) => {
+  const ws = sanitizeWorkspace(req.body?.workspace || activeWorkspace);
+  const bump = ['none', 'patch', 'minor'].includes(req.body?.bump) ? req.body.bump : 'none';
+  try {
+    const { modId, files } = buildWorkspaceFileManifest(ws);
+    const diagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId), ...runPatchDiagnostics(ws)];
+    const plan = buildReleasePlan({
+      modId, files, diagnostics, bump,
+      meta: { name: ws.name, author: ws.author, description: ws.description },
+    });
+    if (!plan.ok) {
+      return res.status(422).json({
+        success: false,
+        error: `Release blocked: ${plan.blocking!.length} error diagnostic(s). The Forge never packages a red build — fix them (Doctor / quick fixes), then release.`,
+        blocking: plan.blocking,
+      });
+    }
+    const resolved = resolveXsdConfig();
+    const baseDir = resolved.modWorkspacePath || process.cwd();
+    const releasesDir = path.join(baseDir, "releases");
+    if (!fs.existsSync(releasesDir)) fs.mkdirSync(releasesDir, { recursive: true });
+    const zipBuf = buildZip(plan.entries!);
+    const zipPath = path.join(releasesDir, plan.zipName!);
+    fs.writeFileSync(zipPath, zipBuf);
+    return res.json({
+      success: true,
+      modId: plan.modId,
+      version: plan.version,
+      zipPath,
+      sizeBytes: zipBuf.length,
+      fileCount: plan.entries!.length,
+      warnings: plan.warnings,
+      readme: plan.readme,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error?.message || "Failed to build release package." });
   }
 });
 

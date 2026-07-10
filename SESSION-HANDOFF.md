@@ -5,34 +5,32 @@
 > and ROADMAP can't: hot files, live hazards, dead theories, the next unit's first command.
 > Overwrite it each close; history lives in ROADMAP, not here.
 
-## Handoff 2026-07-10 (continuation of the marathon session; board fully green)
+## Handoff 2026-07-10 (B9 closed; direction: KEEP DEVELOPING, Forge release parked — Ken's cold feet)
 
-**One-line state:** EVERY engineering item ✅ — audits, backlog B1–B7/B13guard/B15/B16, e2e suite
-**11/11 in 32.5s**, B15 root-caused (B1 adoption poll vs POST-only e2e isolation) and fixed in both canvas
-specs. Open: B2 slices 2–3, B13 remainder QoL, release track (B8/B9, Ken's call), depth items (B10–B14).
+**One-line state:** Board green through B16 + B9. Ken's standing direction: optimize/trim/improve UI-UX,
+"simplify the I-have-a-mod-idea → I-shipped-a-mod timeline"; do NOT push the Forge release track (B8).
+The timeline endpoint now exists: 📦 Package for Release (Playtest panel) → gated, Nexus-ready zip.
 
-**Hot working set:** tests/e2e/canvas-interactions.spec.ts + canvas-coverage.spec.ts (the canonical
-seeded-harness pattern: POST isolation + GET isolation with startGetIsolation AFTER the seed captures the
-true server `original`, stopGetIsolation before teardown verify — reuse, don't reinvent);
-server.ts (CAS ~2995-3030, job API ~7285s); App.tsx (poll/badge ~815-880, preset guard ~1200);
-src/components/PropertiesInspector.tsx.
+**Hot working set:** src/lib/modDistribution.ts (zip/CRC/bump/gate — reuse for anything artifact-shaped);
+PlaytestWorkspace.tsx (release button ~line 168 handler / ~356 UI); server.ts /api/agent/package/release
+(~6755); the canonical seeded-e2e harness in tests/e2e/canvas-*.spec.ts.
 
-**Live hazards:**
-- Sandbox bash mount of X4_Forge is STALE (reads AND greps lie) — host Read/Grep + the run_command JOB API
-  (`POST /api/run_command/job`, poll `GET /api/run_command/job/:id`) are truth. Job API for anything >5s.
-- Chrome console-reader MCP serves stale buffers — trap console in-page instead.
-- Ken uses the machine + app while agents work (OPERATOR PROTOCOL rule 2: ask; freeze state-touching work
-  if he's live). His canvas is HIS — never restore/replace without asking.
-- Any NEW seeded-canvas e2e spec MUST use the isolation pattern above or the B1 poll will clobber it.
+**Live hazards:** stale sandbox mount (host Read/Grep + job API are truth; job API for anything >5s);
+Chrome console-reader stale (in-page trap instead); re-measure click coords after viewport changes;
+Ken lives on this machine — OPERATOR PROTOCOL rules 2/3/6 apply, ASK machine state before e2e/frontend
+edits (App/component edits hot-reload his page); his canvas is HIS — never replace it without asking.
+Playtest panel buttons (Deploy+Verify, Package) act on the SERVER-ACTIVE workspace by design.
 
-**Dead theories:** "lossy compiler" (wrong — stale-state class, fixed by monotonic version + source-sync
-gate + CAS); "canvas-interactions red = environment/load" (disproven on quiet machine); "spec passed in
-run 1" (log-truncation inference error — when counts don't reconcile, the missing item is the lead).
+**Dead theories:** lossy compiler (stale-state class — fixed by monotonic version + source-sync gate +
+CAS); canvas-interactions = environment (was the adoption poll vs POST-only harness isolation, fixed);
+"needs an npm zip dep" (zlib + 80-line container did it; check stdlib before npm).
 
-**Next unit, first command:** B2 slice 2 — client sends `expectedHead` on the 300ms sync
-(App.tsx syncLocalEditsToServer ~750) and wires 409 `head_conflict` into the B1 badge as explicit
-Adopt-server / Keep-mine(force) UI. Ask Ken's go first: App.tsx edits hot-reload his live page.
-Then B2 slice 3 (per-mod server keying). Release track (B8/B9) when Ken calls it.
+**Next units (Ken's focus, ranked):** (1) B2 slice 2 — client sends expectedHead on the 300ms sync
+(App.tsx syncLocalEditsToServer ~750) + wire 409 head_conflict into the B1 badge (Adopt/Keep-mine);
+frontend edit → ask Ken first. (2) B13 QoL batch — auto-select on create, empty-state skeletons, delete
+toast with visible Undo, shortcut audit, badge clipping. (3) B10 — frequency-ranked curated action
+semantics from the vanilla corpus (deepens explain/simulator guidance). (4) A "mod journey" friction
+audit (idea→ship walkthrough as a new modder) to source the next UX batch — good fresh-session opener.
 
-**Ken-gated:** commit (titles in ROADMAP, latest: "B15 root cause + e2e isolation + B5 flip — suite 11/11");
-release-track timing decision.
+**Ken-gated:** commit ("B9: Package for Release — zero-dep zip engine + gate + Playtest button");
+B8 stays parked until his call.
