@@ -51,7 +51,7 @@ import { workspaceContentHash } from './lib/workspaceIdentity';
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { resolveCueToNodeId } from './lib/liveLogNav';
-import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse, getProviderKey } from './lib/apiHelper';
+import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse, hasProviderKey, migrateLocalAiKeys } from './lib/apiHelper';
 import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluateBlueprintChecks, type ModBlueprint } from './lib/modBlueprint';
 import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
 import { getE2EPerfCounters, resetE2EPerfCounters, type E2EPerfCounters } from './lib/e2ePerfCounters';
@@ -164,6 +164,9 @@ export default function App() {
   workspaceRef.current = workspace;
 
   useEffect(() => {
+    // Audit #3: migrate any legacy localStorage AI keys to the server store, then load
+    // the boolean configured-status used by render gates (architectCanRun, AIHelper).
+    migrateLocalAiKeys();
     loadSchemaLibrary();
     (async () => {
       try {
@@ -470,7 +473,7 @@ export default function App() {
     setArchitectStep(null);
   };
   const declineArchitectStep = () => { architectPendingRef.current = null; setArchitectStep(null); };
-  const architectCanRun = !!getProviderKey(getActiveProvider());
+  const architectCanRun = hasProviderKey(getActiveProvider());
 
   const handleSendChatMode = React.useCallback(async (promptMsg: string) => {
     setAiChatHistory(prev => [...prev, { role: 'user', text: promptMsg }]);

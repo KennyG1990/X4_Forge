@@ -6,11 +6,13 @@ coverage/
 *.log
 
 # ---- Secrets & per-machine state: NEVER commit ----
-# Provider API keys live in .env.local (server) or browser localStorage (client).
+# Provider API keys live in .env.local or data/ai-keys.json (server-side store, audit #3).
 .env*
 !.env.example
 # Per-session auth token the API server writes on boot.
 .studio-api-token
+# Server-side AI provider key store + other runtime data (harvested schemas, caches).
+data/
 # Per-machine paths (game install, schema folder) written by the Settings modal.
 # Copy config.example.json to config.json or just use the in-app Settings.
 config.json

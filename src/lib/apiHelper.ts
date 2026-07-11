@@ -56,12 +56,60 @@ export function setActiveProvider(provider: AIProviderId): void {
   localStorage.setItem('active_ai_provider', provider);
 }
 
-export function getProviderKey(provider: AIProviderId): string {
-  return localStorage.getItem(`user_${provider}_key`) || '';
+/**
+ * Audit #3 (2026-07-10): provider keys live SERVER-SIDE (data/ai-keys.json), never in the
+ * browser. The client tracks only WHICH providers are configured (boolean cache below);
+ * key values are write-only via POST /api/ai/keys. Existing localStorage keys migrate
+ * silently on boot (migrateLocalAiKeys) and are removed from the browser.
+ */
+let aiKeyStatusCache: Record<string, boolean> = {};
+
+export async function refreshAiKeyStatus(): Promise<void> {
+  try {
+    const r = await fetch('/api/ai/keys/status');
+    if (r.ok) aiKeyStatusCache = (await r.json()).status || {};
+  } catch { /* keep last known */ }
+}
+
+/** Synchronous render-time gate: is a key configured (server-side) for this provider? */
+export function hasProviderKey(provider: AIProviderId): boolean {
+  return !!aiKeyStatusCache[provider];
 }
 
 export function setProviderKey(provider: AIProviderId, key: string): void {
-  localStorage.setItem(`user_${provider}_key`, key.trim());
+  // fire-and-forget server write; status cache updates from the response
+  fetch('/api/ai/keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, key: key.trim() }),
+  }).then(async r => { if (r.ok) aiKeyStatusCache = (await r.json()).status || aiKeyStatusCache; })
+    .catch(() => { /* status refresh will catch up */ });
+  // never keep a browser-side copy
+  localStorage.removeItem(`user_${provider}_key`);
+}
+
+/** One-time boot migration: move any legacy localStorage keys to the server, then purge. */
+export async function migrateLocalAiKeys(): Promise<void> {
+  const providers: AIProviderId[] = ['gemini', 'claude', 'openai', 'openrouter'];
+  for (const p of providers) {
+    const legacy = localStorage.getItem(`user_${p}_key`);
+    if (legacy !== null && !legacy.trim()) {
+      // empty husk from the old modal saving blanks — nothing to migrate, just purge
+      localStorage.removeItem(`user_${p}_key`);
+      continue;
+    }
+    if (legacy && legacy.trim()) {
+      try {
+        const r = await fetch('/api/ai/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: p, key: legacy.trim() }),
+        });
+        if (r.ok) localStorage.removeItem(`user_${p}_key`);
+      } catch { /* retry next boot; key stays local until migrated */ }
+    }
+  }
+  await refreshAiKeyStatus();
 }
 
 export function getProviderModel(provider: AIProviderId): string {
@@ -89,22 +137,18 @@ export function setProviderReasoning(provider: AIProviderId, level: string): voi
 
 export function getAIHeaders(): Record<string, string> {
   const provider = getActiveProvider();
-  const key = getProviderKey(provider);
   const model = getProviderModel(provider);
   const reasoning = getProviderReasoning(provider);
-  
-  const headers: Record<string, string> = {
+
+  // Audit #3: the browser no longer ships key material — the server resolves the stored
+  // key (or its .env fallback) for app-UI requests. x-custom-api-key remains supported
+  // server-side for external agents only.
+  return {
     'Content-Type': 'application/json',
     'x-ai-provider': provider,
     'x-ai-model': model,
     'x-ai-reasoning': reasoning
   };
-  
-  if (key) {
-    headers['x-custom-api-key'] = key;
-  }
-  
-  return headers;
 }
 
 export async function handleApiResponse<T = any>(response: Response, defaultError = "API request failed."): Promise<T> {

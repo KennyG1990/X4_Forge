@@ -13,12 +13,13 @@ import {
   Layers,
   Cpu
 } from 'lucide-react';
-import { 
-  AIProviderId, 
-  AI_PROVIDERS, 
-  getActiveProvider, 
-  setActiveProvider, 
-  getProviderKey, 
+import {
+  AIProviderId,
+  AI_PROVIDERS,
+  getActiveProvider,
+  setActiveProvider,
+  hasProviderKey,
+  refreshAiKeyStatus,
   setProviderKey,
   getProviderModel,
   setProviderModel,
@@ -71,6 +72,11 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
     claude: '',
     openai: '',
     openrouter: ''
+  });
+  // Audit #3: keys are write-only to the server — this tracks which providers already
+  // HAVE a stored key so the input can say "configured" without ever holding the value.
+  const [keyConfigured, setKeyConfigured] = useState<Record<AIProviderId, boolean>>({
+    gemini: false, claude: false, openai: false, openrouter: false
   });
   
   const [selectedModels, setSelectedModels] = useState<Record<AIProviderId, string>>({
@@ -203,14 +209,19 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
   useEffect(() => {
     setActiveProviderState(getActiveProvider());
-    
-    const loadedKeys = {
-      gemini: getProviderKey('gemini'),
-      claude: getProviderKey('claude'),
-      openai: getProviderKey('openai'),
-      openrouter: getProviderKey('openrouter')
-    };
-    setKeys(loadedKeys);
+
+    // Audit #3: key VALUES never come back from the server — inputs start empty and the
+    // configured-status (boolean) drives a "configured" placeholder. Typing replaces;
+    // leaving blank keeps the stored key unchanged.
+    setKeys({ gemini: '', claude: '', openai: '', openrouter: '' });
+    refreshAiKeyStatus().then(() => {
+      setKeyConfigured({
+        gemini: hasProviderKey('gemini'),
+        claude: hasProviderKey('claude'),
+        openai: hasProviderKey('openai'),
+        openrouter: hasProviderKey('openrouter')
+      });
+    });
 
     (['gemini', 'claude', 'openai', 'openrouter'] as AIProviderId[]).forEach((prov) => {
       const modelVal = getProviderModel(prov);
@@ -253,10 +264,11 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
     setSaving(true);
     
     setActiveProvider(activeProviderState);
-    setProviderKey('gemini', keys.gemini);
-    setProviderKey('claude', keys.claude);
-    setProviderKey('openai', keys.openai);
-    setProviderKey('openrouter', keys.openrouter);
+    // Audit #3: only send keys the user actually TYPED (blank = keep the stored one) —
+    // values go write-only to the server store, never to localStorage.
+    (['gemini', 'claude', 'openai', 'openrouter'] as AIProviderId[]).forEach((prov) => {
+      if (keys[prov] && keys[prov].trim()) setProviderKey(prov, keys[prov]);
+    });
 
     // Save model and reasoning level settings for each provider
     (['gemini', 'claude', 'openai', 'openrouter'] as AIProviderId[]).forEach((prov) => {
@@ -268,7 +280,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
     setTimeout(() => {
       setSaving(false);
-      setSuccessMsg("AI settings saved locally. Keys are stored in this browser and are not verified against the provider.");
+      setSuccessMsg("AI settings saved. Keys are stored on your local Forge server (never in the browser) and are not verified against the provider.");
       setTimeout(() => {
         setSuccessMsg(null);
         onClose();
@@ -433,7 +445,9 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                   type={showKeyVisible[activeProviderState] ? 'text' : 'password'}
                   value={keys[activeProviderState]}
                   onChange={(e) => setKeys(prev => ({ ...prev, [activeProviderState]: e.target.value }))}
-                  placeholder={AI_PROVIDERS.find(p => p.id === activeProviderState)?.placeholderKey}
+                  placeholder={keyConfigured[activeProviderState]
+                    ? '●●●●●●●● configured (stored on the server) — type to replace'
+                    : AI_PROVIDERS.find(p => p.id === activeProviderState)?.placeholderKey}
                   className="w-full bg-black border border-white/10 rounded focus:border-[#df9825] p-2 text-slate-200 text-[11px] font-mono focus:outline-none"
                 />
 

@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { ModWorkspace, ChatMessage } from '../types';
 import { reviewProposal, type VerdictStatus } from '../lib/proposalReview';
-import { getActiveProvider, getProviderKey } from '../lib/apiHelper';
+import { getActiveProvider, hasProviderKey } from '../lib/apiHelper';
 import BlueprintPanel, { type ArchitectStepView } from './BlueprintPanel';
 import { loadBlueprint, sampleBlueprint, type ModBlueprint } from '../lib/modBlueprint';
 
@@ -291,7 +291,7 @@ export default function AIHelper({
       )}
 
       {/* A4.8 — calm, upfront key-setup nudge (no recurring popups; just a static banner while no key is set). */}
-      {!getProviderKey(getActiveProvider()) && (
+      {!hasProviderKey(getActiveProvider()) && (
         <div className="shrink-0 px-3.5 py-2 bg-amber-500/[0.06] border-b border-amber-500/20 text-[10px] text-amber-300/90 font-sans leading-relaxed flex items-start gap-1.5">
           <Sparkles className="w-3 h-3 mt-0.5 shrink-0 text-amber-400/80" />
           <span>No AI key set for <b className="uppercase">{getActiveProvider()}</b>. Open <b>Settings → AI Assistant → Configure AI engine</b> to add a provider key — requests won't run until then.</span>

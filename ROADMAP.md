@@ -599,6 +599,32 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ AUDIT ROADMAP #3 CLOSED (2026-07-10): AI provider keys out of the browser — server-side store
+The audit's top security finding (plaintext keys in localStorage, shipped on every AI request) retired:
+- **`src/server/aiKeyStore.ts`** — keys live in `data/ai-keys.json` (same trust boundary as
+  `.studio-api-token`); `POST /api/ai/keys` is WRITE-ONLY (empty = delete, unknown provider = 400);
+  `GET /api/ai/keys/status` returns booleans only — values never travel back to a browser.
+- **Resolution chain** (one-point change in `callMultiProviderAI`, covers all four providers): explicit
+  `x-custom-api-key` header (external agents + one legacy round) → stored key (app-UI origins only — agents
+  don't spend the user's credits, same rule as .env) → .env fallback (app-UI only).
+- **Client:** `getAIHeaders` no longer attaches key material; render gates use a boolean status cache
+  (`hasProviderKey`); the AI Providers modal starts inputs empty with a "●●● configured — type to replace"
+  placeholder and only sends keys the user actually typed; **silent boot migration** moves legacy
+  localStorage keys to the server and purges the browser (incl. empty husks from the old save-all-blanks
+  modal). Save-message honesty fixed ("stored in this browser" → "stored on your local Forge server").
+- **Gitignore hole caught mid-unit:** `data/` was NOT ignored — the key store would have been committed.
+  Added (host-side verify; the stale sandbox mount was not trusted for the check).
+*Verified (methods by name): host tsc CLEAN ×2; key lifecycle live — set dummy → status true; clear →
+false; unknown provider → 400; status response carries no values; **real-data migration** — Ken's actual
+openrouter key moved server-side and vanished from localStorage on boot, empty husks purged on the next
+(residue: none, status {openrouter:true}); no-key provider probe errors honestly through the new chain
+("not configured", never a silent fallback); full e2e **11/11 (36.9s)**.*
+**AAR (#3):** SUSTAIN — the reconcile found all keyed calls already server-routed, collapsing a feared
+proxy-building unit into a storage move; testing migration against REAL data caught the empty-husk case a
+synthetic test would have missed. IMPROVE — I nearly shipped a secrets store into a committable directory;
+"where does this file land in git" is now part of the write-gate question for any new persistent file.
+TOOLS — none fired.
+
 ### ✅ AUDIT ROADMAP #2 / B2 SLICE 2 CLOSED (2026-07-10): the conflict UI — no write is ever silent again
 The 300ms auto-sync now does compare-and-swap: it carries `expectedHead` (the last server head the client
 saw — learned from poll GETs, from every own-POST response — mutation responses now return `workspaceHash` —

@@ -92,6 +92,7 @@ import { computeModDrift, fingerprintModFolder, getSchemaIndex, loadProjectFromD
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
 import { workspaceContentHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
 import { buildReleasePlan, buildZip, runModDistributionSelftest } from "./src/lib/modDistribution";
+import { aiKeyStatus, getStoredAiKey, setStoredAiKey } from "./src/server/aiKeyStore";
 import { runModDriftSelftest } from "./src/lib/modDrift";
 import { assessLuaStaleness, injectLuaVersionMarker, runLuaStalenessSelftest } from "./src/lib/luaStalenessCheck";
 import { registerGithubRoutes } from "./src/server/githubRoutes";
@@ -1555,6 +1556,22 @@ async function generateContentWithRetry(ai: any, params: any, maxRetries = 2) {
 // External clients (scripts, agents, other local processes) must supply their own key
 // via x-custom-api-key — they hold the studio token, but that authorizes workspace
 // access, not spending the user's provider credits.
+// Audit #3: key management endpoints — write-only set, boolean-only status. Values
+// never travel back to the browser. Authed like every non-allowlisted route.
+app.post("/api/ai/keys", (req, res) => {
+  try {
+    const { provider, key } = req.body || {};
+    const status = setStoredAiKey(String(provider || ""), String(key ?? ""));
+    return res.json({ success: true, status });
+  } catch (e: any) {
+    return res.status(400).json({ success: false, error: e?.message || "Failed to store key." });
+  }
+});
+
+app.get("/api/ai/keys/status", (_req, res) => {
+  return res.json({ status: aiKeyStatus() });
+});
+
 function isAppUiRequest(req: express.Request): boolean {
   const appOrigins = new Set([
     "http://localhost:3000", "http://127.0.0.1:3000",
@@ -1582,7 +1599,11 @@ async function callMultiProviderAI(
   // Hard server-side timeout: a hung provider must not leave the client spinning forever.
   const AI_TIMEOUT_MS = 120_000;
   const NO_KEY_MSG = "No API key for this request. App-UI requests use the configured provider settings; external/agent requests must supply their own key via the x-custom-api-key header (the server's .env keys are reserved for the app UI).";
-  const customKey = customKeyHeader;
+  // Audit #3 (2026-07-10): keys live SERVER-SIDE now (data/ai-keys.json via the AI
+  // Providers modal). Precedence: explicit header (agents + one legacy round) → stored
+  // key (app-UI only — agents don't spend the user's credits) → .env (app-UI only).
+  const storedKey = envFallbackAllowed ? getStoredAiKey(provider) : "";
+  const customKey = customKeyHeader || storedKey;
   const model = (req.headers["x-ai-model"] as string) || "";
   const reasoning = (req.headers["x-ai-reasoning"] as string) || "none";
 
