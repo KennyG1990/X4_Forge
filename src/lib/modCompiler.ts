@@ -70,8 +70,18 @@ export const toSafeModId = (name: string): string => {
   return safe || 'x4_md_studio_mod';
 };
 
+/**
+ * Workspace version → X4 content.xml version integer (X4 shows 100 as "1.00").
+ * Audit #1 (2026-07-10): format-aware. A PURE INTEGER is treated as ALREADY being the X4
+ * version and passes through untouched ("100" → "100"; the old blind ×100 turned it into
+ * "10000" — a shipped-artifact corruption a modder using X4's own convention would hit).
+ * Dotted versions keep the EXACT previous behavior (parseFloat×100: "1.0.0" → "100",
+ * "1.2" → "120"), so every existing semver-authored mod compiles to the same number.
+ */
 export const toContentVersion = (value: string): string => {
-  const normalized = String(value || '').trim().match(/^\d+(?:\.\d+)?/)?.[0];
+  const raw = String(value || '').trim();
+  if (/^\d+$/.test(raw)) return String(Math.max(1, parseInt(raw, 10))); // already X4 format
+  const normalized = raw.match(/^\d+(?:\.\d+)?/)?.[0];
   const numericVersion = normalized ? Number.parseFloat(normalized) : 1;
   const contentVersion = Number.isFinite(numericVersion)
     ? Math.round(numericVersion * 100)

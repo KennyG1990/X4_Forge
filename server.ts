@@ -3043,6 +3043,8 @@ function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number;
       success: true, applied: isDifferent,
       message: isDifferent ? 'Workspace updated; version bumped.' : 'Workspace already in sync.',
       version: workspaceVersion,
+      // B2 slice 2: writers track the post-write head so their NEXT CAS write carries it.
+      workspaceHash: activeWorkspaceHash(),
       diagnosticsSummary: summarizeDiagnostics(diagnostics),
       workspace: activeWorkspace
     }

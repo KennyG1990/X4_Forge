@@ -599,6 +599,44 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ AUDIT ROADMAP #2 / B2 SLICE 2 CLOSED (2026-07-10): the conflict UI — no write is ever silent again
+The 300ms auto-sync now does compare-and-swap: it carries `expectedHead` (the last server head the client
+saw — learned from poll GETs, from every own-POST response — mutation responses now return `workspaceHash` —
+and from adoptions). On **409 head_conflict** the header shows a red **⚠ WRITE CONFLICT** card with two
+explicit choices: **ADOPT SERVER** (take theirs) / **KEEP MINE** (deliberate force re-POST without
+expectedHead, ADR-F1's named valve). Boot/first writes stay legacy per the one-round deprecation.
+**Design flaw found LIVE and fixed in the same unit:** the first conflict test showed the 3s poll's
+version-gate adoption RESOLVING the conflict unilaterally — it adopted the server side and silently dropped
+the local edit while the card was asking the human to decide. The pre-CAS reflex undermining the CAS. Fix:
+adoption is HELD while a conflict is pending (`syncConflictRef` mirror so the poll closure sees live state);
+verified by a card surviving a full poll cycle. Second gap self-caught: the adopt branch returns early and
+skipped learning the head, leaving the CAS ref empty after every adoption.
+*Verified (methods by name): host tsc CLEAN ×2; live three-path test on the running app — (1) normal edit
+syncs to the server; (2) external force-write + immediate local edit → 409 → conflict card renders and
+SURVIVES a poll cycle; (3) KEEP MINE → server carries the local edit, external change deliberately
+overwritten, card cleared (ADOPT path = the B1-verified adopt handler + clear); traffic instrumented
+in-page to prove expectedHead attaches after priming; full e2e **11/11 (32.4s)** — the seeded harnesses'
+intercepted POSTs return no hash, so test syncs stay legacy by design. Test-marker residue cleaned from the
+workspace description.*
+**AAR (#2):** SUSTAIN — instrumenting the actual traffic (fetch wrapper logging outgoing bodies) after two
+failed black-box attempts found the empty-ref cause in one probe; live-testing the FEATURE also exposed a
+real design flaw no oracle would have caught (two automated-behavior layers fighting over one decision).
+IMPROVE — I designed the CAS client without re-reading the adoption path's early-return; couplings again
+(RECONCILE 2c): when adding a decision surface, enumerate every AUTOMATIC behavior that could preempt the
+decision. TOOLS — none fired. **Remaining B2:** slice 3 (per-mod server keying) stays spec'd.
+
+### ✅ AUDIT ROADMAP #1 CLOSED (2026-07-10): version field accepts both formats + live X4 preview
+First item of the approved audit roadmap. `toContentVersion` (modCompiler.ts) is now format-aware: a PURE
+INTEGER passes through as already-X4 ("100"→"100"; the old blind ×100 shipped a v10000 zip same night);
+dotted versions keep the EXACT prior behavior ("1.0.0"→"100", "1.2"→"120") so every existing semver mod
+compiles to the same number — zero regression by construction. UI: the META tab's Version String field now
+shows a live preview — "→ content.xml version: N (shown in-game as vX.XX)" — so what ships is never a
+surprise. *Verified: mod-distribution oracle **26/26** (5 new cases: integer passthrough ×2, semver
+regression guard, garbage/empty defaults); host tsc CLEAN; real-mod regression — fresh AI Influence import
+compiles to version="100" unchanged; UI preview rendering live (read from the DOM: "→ content.xml version:
+120 (shown in-game as v1.20)" on the active workspace).* AAR: clean — single attempt, no triggers; logged
+per the zero-trigger rule.
+
 ### ✅ TIMELINE PROOF (2026-07-10, Ken: "validate this claim right now"): idea → shipped mod, one sitting
 Research (WebSearch): the loudest simple community ask is USEFUL ATTACK ALERTS — Steam threads complain
 vanilla warns at ≤50% shields or after the ship is dead. Built **Property Attack Alerts**

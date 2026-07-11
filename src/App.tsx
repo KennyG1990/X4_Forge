@@ -284,6 +284,16 @@ export default function App() {
   // B1 sync-trust: persistent canvas↔server content divergence gets a visible badge.
   const [syncDiverged, setSyncDiverged] = useState<boolean>(false);
   const syncMissesRef = useRef(0);
+  // B2 slice 2 (ADR-F1): the last server head this client saw — attached as expectedHead
+  // on every auto-sync so a concurrent writer produces an explicit 409, never a silent
+  // last-writer-wins. Learned from poll GETs and from each own POST's response.
+  const lastServerHashRef = useRef<string>('');
+  const [syncConflict, _setSyncConflict] = useState<boolean>(false);
+  // ref mirror so the 3s poll closure sees the CURRENT conflict state (ADR-F1: while a
+  // human is deciding a conflict, the poll must NOT adopt — adoption would silently pick
+  // the server side and discard the local edit, which is exactly what CAS exists to stop).
+  const syncConflictRef = useRef(false);
+  const setSyncConflict = (v: boolean) => { syncConflictRef.current = v; _setSyncConflict(v); };
 
   // Left & Right Sidebar Resizing States
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
@@ -748,12 +758,26 @@ export default function App() {
         const response = await fetch("/api/agent/workspace", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ workspace })
+          // B2 slice 2: compare-and-swap. expectedHead only when known (boot writes stay
+          // legacy, per ADR-F1's one-round deprecation).
+          body: JSON.stringify(lastServerHashRef.current
+            ? { workspace, expectedHead: lastServerHashRef.current }
+            : { workspace })
         });
+        if (response.status === 409) {
+          // Someone else changed the server since we last saw it. NEVER overwrite silently —
+          // surface the conflict; the badge offers Adopt server / Keep mine (force).
+          setSyncConflict(true);
+          return;
+        }
         const data = await response.json();
         if (data && data.success && data.version) {
           setLocalVersion(data.version);
           localStorage.setItem('x4_mod_studio_version', String(data.version));
+          if (typeof data.workspaceHash === 'string' && data.workspaceHash) {
+            lastServerHashRef.current = data.workspaceHash;
+          }
+          setSyncConflict(false);
         }
       } catch {
         console.warn("Could not synchronize local edits to server workspace space.");
@@ -821,14 +845,22 @@ export default function App() {
         const data = await response.json();
         if (data && data.workspace && data.version) {
           const storedVer = Number(localStorage.getItem('x4_mod_studio_version') || String(localVersion));
-          if (data.version > storedVer) {
+          if (data.version > storedVer && !syncConflictRef.current) {
             setWorkspace(data.workspace);
             setLocalVersion(data.version);
             localStorage.setItem('x4_mod_studio_version', String(data.version));
             localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(data.workspace));
+            // B2 slice 2: adoption is also learning the head (this branch returns early —
+            // missing this line left the CAS ref empty after every adoption).
+            if (typeof data.workspaceHash === 'string' && data.workspaceHash) lastServerHashRef.current = data.workspaceHash;
             syncMissesRef.current = 0;
             setSyncDiverged(false);
             return;
+          }
+          if (syncConflictRef.current) return; // human is deciding — hold ALL automatic adoption
+          // B2 slice 2: the poll is also how the client learns the current server head.
+          if (typeof data.workspaceHash === 'string' && data.workspaceHash.length > 0) {
+            lastServerHashRef.current = data.workspaceHash;
           }
           // B1 sync-trust: the version gate said "don't adopt" — verify CONTENT actually
           // agrees. A transient mismatch (<~6s) is just the edit→sync debounce; a
@@ -866,10 +898,32 @@ export default function App() {
           localStorage.setItem('x4_mod_studio_version', String(data.version));
         }
         localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(data.workspace));
+        if (typeof data.workspaceHash === 'string' && data.workspaceHash) lastServerHashRef.current = data.workspaceHash;
         syncMissesRef.current = 0;
         setSyncDiverged(false);
+        setSyncConflict(false);
       }
     } catch { /* leave the badge up — nothing adopted */ }
+  };
+
+  // B2 slice 2: "Keep mine" — the explicit force valve (ADR-F1: omitting expectedHead is
+  // a deliberate last-writer-wins, chosen by a human, never by silence).
+  const forceKeepMine = async () => {
+    try {
+      const response = await fetch("/api/agent/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace: workspaceRef.current })
+      });
+      const data = await response.json();
+      if (data?.success) {
+        if (data.version) { setLocalVersion(data.version); localStorage.setItem('x4_mod_studio_version', String(data.version)); }
+        if (typeof data.workspaceHash === 'string' && data.workspaceHash) lastServerHashRef.current = data.workspaceHash;
+        setSyncConflict(false);
+        setSyncDiverged(false);
+        syncMissesRef.current = 0;
+      }
+    } catch { /* conflict card stays up */ }
   };
 
   // Command node addition handler
@@ -1250,7 +1304,29 @@ export default function App() {
             </select>
           </div>
 
-          {syncDiverged && (
+          {syncConflict ? (
+            // B2 slice 2: explicit write conflict — another writer changed the server since
+            // this canvas last saw it. A HUMAN picks the winner; nothing is silent.
+            <div data-testid="sync-conflict-card" className="flex items-center gap-1 px-2 py-0.5 border border-red-500/50 bg-red-500/15 rounded font-mono text-[10px] text-red-200">
+              <span className="font-bold">⚠ WRITE CONFLICT</span>
+              <button
+                onClick={adoptServerWorkspace}
+                data-testid="conflict-adopt-btn"
+                className="px-2 py-0.5 rounded bg-cyan-600/40 border border-cyan-400/40 hover:bg-cyan-600/60 text-cyan-100 font-bold cursor-pointer"
+                title="Discard this canvas's unsent changes and take the server's copy."
+              >
+                ADOPT SERVER
+              </button>
+              <button
+                onClick={forceKeepMine}
+                data-testid="conflict-keep-btn"
+                className="px-2 py-0.5 rounded bg-amber-600/40 border border-amber-400/40 hover:bg-amber-600/60 text-amber-100 font-bold cursor-pointer"
+                title="Overwrite the server with this canvas (last-writer-wins, chosen deliberately)."
+              >
+                KEEP MINE
+              </button>
+            </div>
+          ) : syncDiverged && (
             <button
               onClick={adoptServerWorkspace}
               data-testid="sync-diverged-badge"

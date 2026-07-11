@@ -38,6 +38,7 @@ import {
 import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
 import PropertiesInspector from './PropertiesInspector';
+import { toContentVersion } from '../lib/modCompiler';
 import DiagnosticsCenter from './DiagnosticsCenter';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
@@ -805,8 +806,14 @@ export default function Sidebar({
                   value={workspace.version}
                   onChange={e => setWorkspace(prev => ({ ...prev, version: e.target.value }))}
                   className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                  placeholder="e.g. 1.0.0"
+                  placeholder="e.g. 1.0.0 or 100"
                 />
+                {/* Audit #1: live X4-version preview — semver ("1.0.0") and X4 integers ("100")
+                    are both accepted; this shows exactly what content.xml will carry. */}
+                <p className="text-[9px] text-slate-500 mt-1 font-mono" data-testid="x4-version-preview">
+                  → content.xml version: <span className="text-cyan-300">{toContentVersion(workspace.version)}</span>
+                  {' '}(shown in-game as v{(parseInt(toContentVersion(workspace.version), 10) / 100).toFixed(2)})
+                </p>
               </div>
 
               <div>

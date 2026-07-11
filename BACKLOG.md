@@ -17,13 +17,11 @@ adopts (version gate stays as tiebreak), on mismatch-with-local-edits it shows a
 **Acceptance:** oracle for the hash (stable across key order, sensitive to node/property change); simulated
 divergence shows the badge; adopt button converges; tsc/sweep green.
 
-### B2 · Sync protocol replacement (ADR-F1) — slice 1 ✅ CLOSED 2026-07-09 → ROADMAP; slices 2–3 `spec'd`
-Slice 1 (server CAS: `expectedHead` on POST /workspace + /merge → 409 `head_conflict` with both heads) is
-LIVE and dryRun-verified. **Slice 2 (next):** the CLIENT sends `expectedHead` on its 300ms sync + wires the
-409 into the B1 badge as an explicit conflict UI (Adopt server / Keep mine force). **Slice 3:** per-mod-id
-server state keying (absorbs one-project-model; multi-workspace tabs B12 rides on it). **Acceptance
-(unchanged, final):** two simulated clients cannot silently overwrite each other; e2e workspace-guard
-removed as the proof.
+### B2 · Sync protocol replacement (ADR-F1) — slices 1–2 ✅ CLOSED (07-09/07-10) → ROADMAP; slice 3 `spec'd`
+Slices 1+2 live: full client↔server CAS with the WRITE CONFLICT card (Adopt/Keep-mine), adoption held
+during conflicts. **Slice 3 (remaining):** per-mod-id server state keying (absorbs one-project-model;
+multi-workspace B12 rides on it). **Acceptance:** two simulated clients cannot silently overwrite each
+other *per mod*; e2e workspace-guard removed as the proof.
 
 ### B3 · Console health probe — ✅ CLOSED 2026-07-09 → ROADMAP (Ken's live drill: closed the Web window →
 respawned ~60s; closed the API window → respawned; both verified from the agent side, app + API answering)

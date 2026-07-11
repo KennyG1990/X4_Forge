@@ -19,6 +19,7 @@
  */
 
 import * as zlib from 'zlib';
+import { toContentVersion } from './modCompiler';
 
 /* ------------------------------------------------------------------ *
  * CRC-32 (IEEE 802.3, the zip flavor)
@@ -235,6 +236,13 @@ export function runModDistributionSelftest(): {
 
   // CRC-32 known vector (the classic '123456789' → 0xCBF43926)
   ok('crc32_known_vector', crc32(Buffer.from('123456789')) === 0xcbf43926, crc32(Buffer.from('123456789')).toString(16));
+
+  // Audit #1 (2026-07-10): format-aware content-version conversion (the v10000 shipped-zip bug)
+  ok('x4_integer_passes_through', toContentVersion('100') === '100');
+  ok('x4_integer_417_passes_through', toContentVersion('417') === '417');
+  ok('semver_unchanged_regression_guard', toContentVersion('1.0.0') === '100' && toContentVersion('1.2') === '120' && toContentVersion('4.17') === '417');
+  ok('garbage_defaults_to_100', toContentVersion('v2-beta') === '100');
+  ok('empty_defaults_to_100', toContentVersion('') === '100');
 
   // zip container structure
   const zip = buildZip([
