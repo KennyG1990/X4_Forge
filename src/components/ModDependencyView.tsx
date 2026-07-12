@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import { Boxes, AlertTriangle, ArrowDownUp, Link2, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { fetchJson } from '../lib/apiHelper';
 
 interface DepNode {
   folder: string; id: string; name?: string; version?: string; enabled: boolean;
@@ -32,13 +33,14 @@ export default function ModDependencyView() {
 
   const load = () => {
     setLoading(true); setErr(null);
-    fetch('/api/agent/mod-dependency-graph')
-      .then(r => r.json())
+    // Audit #4: fetchJson surfaces the server's real message (a blind r.json() showed
+    // "SyntaxError: Unexpected token '<'" whenever the API was mid-restart).
+    fetchJson<DepGraph>('/api/agent/mod-dependency-graph', undefined, 'Failed to load the mod dependency graph.')
       .then((d: DepGraph) => {
         if (d && d.success) setGraph(d);
         else setErr(d?.error || 'Failed to load the mod dependency graph.');
       })
-      .catch(e => setErr(String(e)))
+      .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   };
   useEffect(load, []);

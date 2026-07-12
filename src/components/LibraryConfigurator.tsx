@@ -16,10 +16,13 @@ import {
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import ObjectIndexPicker from './ObjectIndexPicker';
+import { toast } from '../lib/uiDialogs';
 
 interface LibraryConfiguratorProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
+  /** B13: push an undo checkpoint before destructive edits (deletes) so Ctrl+Z works here too. */
+  saveCheckpoint?: () => void;
 }
 
 export interface WareDef {
@@ -61,7 +64,7 @@ export interface ConflictWarning {
   location: string;
 }
 
-export default function LibraryConfigurator({ workspace, setWorkspace }: LibraryConfiguratorProps) {
+export default function LibraryConfigurator({ workspace, setWorkspace, saveCheckpoint }: LibraryConfiguratorProps) {
   const [activeSubTab, setActiveSubTab] = useState<'wares' | 'jobs'>('wares');
   const [activeItemIndex, setActiveItemIndex] = useState<number>(0);
   const [isPatchMode, setIsPatchMode] = useState<boolean>(true);
@@ -482,16 +485,23 @@ export default function LibraryConfigurator({ workspace, setWorkspace }: Library
   };
 
   const handleDeleteActiveItem = () => {
+    // B13: checkpoint BEFORE the destructive edit so Ctrl+Z restores it, and say so.
     if (activeSubTab === 'wares') {
-      if (wares.length <= 1) return alert("Keep at least one ware entry.");
+      if (wares.length <= 1) return toast('Keep at least one ware entry.', 'warning');
+      const victim = wares[activeItemIndex];
+      saveCheckpoint?.();
       const next = wares.filter((_, i) => i !== activeItemIndex);
       saveWares(next);
       setActiveItemIndex(0);
+      toast(`Deleted ware "${victim?.id || 'ware'}" — Ctrl+Z to undo.`);
     } else {
-      if (jobs.length <= 1) return alert("Keep at least one job entry.");
+      if (jobs.length <= 1) return toast('Keep at least one job entry.', 'warning');
+      const victim = jobs[activeItemIndex];
+      saveCheckpoint?.();
       const next = jobs.filter((_, i) => i !== activeItemIndex);
       saveJobs(next);
       setActiveItemIndex(0);
+      toast(`Deleted job "${victim?.id || 'job'}" — Ctrl+Z to undo.`);
     }
   };
 
@@ -558,7 +568,14 @@ ${indent}</production>`;
 
   const compileWaresXML = (): string => {
     const item = wares[activeItemIndex] || wares[0];
-    if (!item) return '';
+    // B13: never render a BLANK preview — an empty library shows the compiled skeleton
+    // with guidance, so the pane always teaches what this file will become.
+    if (!item) return `<?xml version="1.0" encoding="utf-8"?>
+<!-- libraries/wares.xml — no wares defined yet.
+     Click the "+" button in the sidebar to create your first ware;
+     its compiled XML will appear here. -->
+<wares>
+</wares>`;
 
     if (isPatchMode) {
       return `<?xml version="1.0" encoding="utf-8"?>
@@ -585,7 +602,13 @@ ${renderWareProduction(item, '    ')}
 
   const compileJobsXML = (): string => {
     const item = jobs[activeItemIndex] || jobs[0];
-    if (!item) return '';
+    // B13: same skeleton-not-blank rule as the wares preview.
+    if (!item) return `<?xml version="1.0" encoding="utf-8"?>
+<!-- libraries/jobs.xml — no jobs defined yet.
+     Click the "+" button in the sidebar to create your first job;
+     its compiled XML will appear here. -->
+<jobs>
+</jobs>`;
 
     if (isPatchMode) {
       return `<?xml version="1.0" encoding="utf-8"?>

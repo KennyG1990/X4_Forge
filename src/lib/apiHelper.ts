@@ -151,6 +151,17 @@ export function getAIHeaders(): Record<string, string> {
   };
 }
 
+/**
+ * Audit #4 (2026-07-10): fetch + ok-check + JSON in one call. The known ugly path this
+ * fixes: during API restarts the vite proxy answers with HTML, and blind `r.json()`
+ * surfaces "SyntaxError: Unexpected token '<'" to the user. This returns the server's
+ * real error message when there is one, and a human sentence when there isn't.
+ */
+export async function fetchJson<T = any>(url: string, init?: RequestInit, defaultError = "Request failed."): Promise<T> {
+  const response = await fetch(url, init);
+  return handleApiResponse<T>(response, defaultError);
+}
+
 export async function handleApiResponse<T = any>(response: Response, defaultError = "API request failed."): Promise<T> {
   if (!response.ok) {
     let errMsg = defaultError;

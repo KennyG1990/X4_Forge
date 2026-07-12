@@ -22,7 +22,8 @@ import {
   Plug,
   Map as MapIcon,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  Keyboard
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import FpsMeter from './components/FpsMeter';
@@ -36,6 +37,8 @@ import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
 import AIConnectionModal from './components/AIConnectionModal';
 import DirectorySettingsModal from './components/DirectorySettingsModal';
+import FirstRunWizard from './components/FirstRunWizard';
+import { ttfm } from './lib/ttfm';
 import CompileConfirmationModal from './components/CompileConfirmationModal';
 import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
@@ -46,6 +49,7 @@ import ContractEditor from './components/ContractEditor';
 import TFileEditor from './components/TFileEditor';
 import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
+import ShortcutsOverlay from './components/ShortcutsOverlay';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
 import { workspaceContentHash } from './lib/workspaceIdentity';
 import type { SchemaLibrary } from './lib/schemaTypes';
@@ -278,7 +282,25 @@ export default function App() {
   const [isAgentBridgeOpen, setIsAgentBridgeOpen] = useState<boolean>(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState<boolean>(false);
+  // B13: keyboard-shortcuts overlay ("?" or the header keyboard button)
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
+  // B18 first-run wizard: shown when the Forge boots unconfigured (no game path AND no
+  // resolvable schemas). Dev/eyeball override: ?firstrun in the URL forces it open.
+  const [isFirstRunOpen, setIsFirstRunOpen] = useState<boolean>(false);
+  useEffect(() => {
+    ttfm.mark('first_boot'); // B20: funnel start (idempotent — first occurrence only)
+    if (new URLSearchParams(window.location.search).has('firstrun')) { setIsFirstRunOpen(true); return; }
+    (async () => {
+      try {
+        const res = await fetch('/api/schema/config');
+        const data = await res.json();
+        if (res.ok && data && !data.config?.x4GamePath && !data.resolved?.mdExists) setIsFirstRunOpen(true);
+        // B20: an already-configured install counts as configured-at-boot (true for them).
+        else if (res.ok && data?.resolved?.mdExists) ttfm.mark('paths_configured');
+      } catch { /* API not up yet — the boot-retry fetch already softened this; stay closed */ }
+    })();
+  }, []);
   // Bumped when Directory Settings closes so the Sidebar's read-only schema panel refreshes.
   const [schemaConfigVersion, setSchemaConfigVersion] = useState<number>(0);
   const [isCompileModalOpen, setIsCompileModalOpen] = useState<boolean>(false);
@@ -746,17 +768,45 @@ export default function App() {
       } else if ((e.metaKey || e.ctrlKey) && (e.shiftKey && e.key === 'z' || e.key === 'y')) {
         e.preventDefault();
         handleRedo();
+      } else if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // B13: shortcuts documentation surface — "?" toggles the overlay
+        e.preventDefault();
+        setIsShortcutsOpen(prev => !prev);
+      } else if (e.key === 'Escape') {
+        setIsShortcutsOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleUndo, handleRedo]);
 
+  // Audit #6 (2026-07-11, measured): stringify+setItem cost 3–31ms on import-sized
+  // workspaces (2–20MB payloads) and ran SYNCHRONOUSLY on every keystroke here; worse,
+  // an over-quota setItem threw BEFORE the server-sync timer below was armed, killing
+  // server sync entirely for oversized mods. The localStorage cache now rides the same
+  // 300ms debounce as the server sync (the visibility flush covers tab-hide), and quota
+  // failure degrades honestly: warn once, drop the stale cache, server stays authority.
+  const quotaWarnedRef = useRef(false);
+  // Audit #6: the 3s poll re-hashed an unchanged canvas at 12–26ms/main-thread on
+  // import-sized workspaces; the workspace object is replaced by reference on every
+  // edit, so the hash is valid until the reference changes.
+  const pollHashMemoRef = useRef<{ ws: unknown; hash: string } | null>(null);
   // Sync to local storage and do debounced sync with the server database
   useEffect(() => {
-    localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(workspace));
+    const persistLocalCache = () => {
+      try {
+        localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(workspace));
+      } catch (e) {
+        try { localStorage.removeItem('x4_mod_studio_workspace'); } catch { /* ignore */ }
+        if (!quotaWarnedRef.current) {
+          quotaWarnedRef.current = true;
+          console.warn('Workspace exceeds the localStorage cache limit — local cache skipped; the server copy remains the authority.', e);
+        }
+      }
+    };
 
     const syncLocalEditsToServer = async () => {
+      persistLocalCache();
       try {
         const response = await fetch("/api/agent/workspace", {
           method: "POST",
@@ -870,7 +920,14 @@ export default function App() {
           // persistent one is real divergence (the stale-canvas incident class) and gets
           // a visible badge instead of silence.
           if (typeof data.workspaceHash === 'string' && data.workspaceHash.length > 0) {
-            const localHash = workspaceContentHash(sanitizeWorkspace(workspaceRef.current));
+            const memo = pollHashMemoRef.current;
+            let localHash: string;
+            if (memo && memo.ws === workspaceRef.current) {
+              localHash = memo.hash;
+            } else {
+              localHash = workspaceContentHash(sanitizeWorkspace(workspaceRef.current));
+              pollHashMemoRef.current = { ws: workspaceRef.current, hash: localHash };
+            }
             if (localHash !== data.workspaceHash) {
               syncMissesRef.current += 1;
               if (syncMissesRef.current >= 3) setSyncDiverged(true);
@@ -1279,6 +1336,15 @@ export default function App() {
               <Redo2 className="w-3.5 h-3.5" />
               <span className="text-[9px]">({futureStates.length})</span>
             </button>
+            {/* B13: discoverable entry to the shortcuts list (also bound to "?") */}
+            <button
+              onClick={() => setIsShortcutsOpen(true)}
+              data-testid="shortcuts-open-btn"
+              className="p-1 px-2 rounded font-mono text-[11px] text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 cursor-pointer transition-all"
+              title="Keyboard shortcuts (?)"
+            >
+              <Keyboard className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           <div className="flex items-center gap-1.5 bg-black/35 rounded border border-white/10 p-1">
@@ -1310,8 +1376,10 @@ export default function App() {
           {syncConflict ? (
             // B2 slice 2: explicit write conflict — another writer changed the server since
             // this canvas last saw it. A HUMAN picks the winner; nothing is silent.
-            <div data-testid="sync-conflict-card" className="flex items-center gap-1 px-2 py-0.5 border border-red-500/50 bg-red-500/15 rounded font-mono text-[10px] text-red-200">
-              <span className="font-bold">⚠ WRITE CONFLICT</span>
+            <div data-testid="sync-conflict-card" className="flex items-center gap-1 px-2 py-0.5 border border-red-500/50 bg-red-500/15 rounded font-mono text-[10px] text-red-200 shrink-0 whitespace-nowrap">
+              {/* B13: on narrow headers the long label squashed mid-glyph — keep it short below xl */}
+              <span className="font-bold hidden xl:inline">⚠ WRITE CONFLICT</span>
+              <span className="font-bold xl:hidden" title="Write conflict: another writer changed the server since this canvas last saw it.">⚠</span>
               <button
                 onClick={adoptServerWorkspace}
                 data-testid="conflict-adopt-btn"
@@ -1333,10 +1401,12 @@ export default function App() {
             <button
               onClick={adoptServerWorkspace}
               data-testid="sync-diverged-badge"
-              className="px-3 py-1 border border-amber-500/50 bg-amber-500/15 text-amber-300 rounded font-mono text-[11px] hover:bg-amber-500/25 transition-all flex items-center gap-1.5 cursor-pointer animate-pulse"
+              className="px-3 py-1 border border-amber-500/50 bg-amber-500/15 text-amber-300 rounded font-mono text-[11px] hover:bg-amber-500/25 transition-all flex items-center gap-1.5 cursor-pointer animate-pulse shrink-0 whitespace-nowrap"
               title="Your canvas content differs from the server copy (persistently, not just mid-edit). Click to adopt the server workspace — or keep editing and your next change syncs up normally."
             >
-              ⚠ CANVAS ≠ SERVER — ADOPT
+              {/* B13: full label clips on narrow headers — compact form below xl, tooltip carries the detail */}
+              <span className="hidden xl:inline">⚠ CANVAS ≠ SERVER — ADOPT</span>
+              <span className="xl:hidden">⚠ ADOPT</span>
             </button>
           )}
           <button
@@ -1521,6 +1591,7 @@ export default function App() {
             <LibraryConfigurator
               workspace={workspace}
               setWorkspace={setWorkspace}
+              saveCheckpoint={saveCheckpoint}
             />
           ) : workspaceView === 'translation' ? (
             <TFileEditor
@@ -1679,6 +1750,18 @@ export default function App() {
         isOpen={isAIConfigOpen}
         onClose={() => setIsAIConfigOpen(false)}
       />
+
+      {/* B13: keyboard-shortcuts documentation surface ("?" or the header keyboard button) */}
+      {isShortcutsOpen && <ShortcutsOverlay onClose={() => setIsShortcutsOpen(false)} />}
+
+      {/* B18: first-run setup wizard — the "first five minutes" front door */}
+      {isFirstRunOpen && (
+        <FirstRunWizard
+          onClose={() => setIsFirstRunOpen(false)}
+          onOpenManualSetup={() => setIsDirSettingsOpen(true)}
+          onApplied={() => setSchemaConfigVersion(v => v + 1)}
+        />
+      )}
 
       {/* Directory Settings Modal — manages every folder the studio needs */}
       <DirectorySettingsModal

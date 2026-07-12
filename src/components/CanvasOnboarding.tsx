@@ -13,7 +13,9 @@ import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
 import { MOD_RECIPES, buildRecipeWorkspace } from '../lib/modRecipes';
 
 interface CanvasOnboardingProps {
-  onLoad: (workspace: ModWorkspace) => void;
+  /** B19: sourceId identifies what was loaded ('welcome' | 'recipe:timed_message' | …)
+   *  so the guided rail can pick up template-specific hand-holding. */
+  onLoad: (workspace: ModWorkspace, sourceId?: string) => void;
 }
 
 const CanvasOnboarding: React.FC<CanvasOnboardingProps> = ({ onLoad }) => {
@@ -34,7 +36,8 @@ const CanvasOnboarding: React.FC<CanvasOnboardingProps> = ({ onLoad }) => {
             {MOD_TEMPLATES.map(t => (
               <button
                 key={t.id}
-                onClick={() => onLoad(buildTemplateWorkspace(t.id))}
+                data-testid={`template-${t.id}`}
+                onClick={() => onLoad(buildTemplateWorkspace(t.id), t.id)}
                 className="text-left p-2.5 rounded-lg border border-white/10 bg-white/[0.02] hover:border-cyan-500/40 hover:bg-cyan-500/5 transition-colors group cursor-pointer"
               >
                 <div className="text-cyan-300 font-semibold text-xs group-hover:text-cyan-200">{t.title}</div>
@@ -77,7 +80,7 @@ const CanvasOnboarding: React.FC<CanvasOnboardingProps> = ({ onLoad }) => {
               <div className="flex gap-2 pt-1">
                 <button
                   data-testid="recipe-build"
-                  onClick={() => { onLoad(buildRecipeWorkspace(recipe.id, answers)); setActiveRecipe(null); }}
+                  onClick={() => { onLoad(buildRecipeWorkspace(recipe.id, answers), `recipe:${recipe.id}`); setActiveRecipe(null); }}
                   className="flex-1 px-3 py-1.5 rounded bg-emerald-600/30 border border-emerald-500/50 hover:bg-emerald-600/50 text-emerald-100 font-bold text-[11px] transition-all cursor-pointer"
                 >
                   Build my mod

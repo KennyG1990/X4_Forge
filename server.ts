@@ -96,6 +96,9 @@ import { aiKeyStatus, getStoredAiKey, setStoredAiKey } from "./src/server/aiKeyS
 import { runModDriftSelftest } from "./src/lib/modDrift";
 import { assessLuaStaleness, injectLuaVersionMarker, runLuaStalenessSelftest } from "./src/lib/luaStalenessCheck";
 import { registerGithubRoutes } from "./src/server/githubRoutes";
+import { registerGameDetectRoutes } from "./src/server/gameDetectRoutes";
+import { runGameDetectSelftest } from "./src/lib/gameDetect";
+import { runTtfmSelftest } from "./src/lib/ttfm";
 import { runLiveCanvasTelemetrySelftest } from "./src/lib/liveCanvasTelemetry";
 import { runBridgeLiveStateSelftest } from "./src/lib/bridgeLiveState";
 import { getBridgeLiveState } from "./src/server/liveBridge";
@@ -4990,6 +4993,8 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
 // registered by the validation module (src/server/validationRoutes.ts, stage-1 split).
 // SELFTEST REGISTRY (audit R1): one line per oracle — route + public allowlist wired together.
 const SELFTESTS: Record<string, () => unknown> = {
+  "game-detect-selftest": runGameDetectSelftest,
+  "ttfm-selftest": runTtfmSelftest,
   "compile-fidelity-selftest": runCompileFidelitySelftest,
   "workspace-identity-selftest": runWorkspaceIdentitySelftest,
   "mod-distribution-selftest": runModDistributionSelftest,
@@ -7288,6 +7293,8 @@ Use real X4 Mission Director xmlTags. Each requirement: {id, label (plain Englis
 // (2026-07-09: comment touch to wake tsx after a child-process kill test — tsx watch
 // waits for a file change after its child dies; the supervisor guards full-tree death.)
 registerGithubRoutes(app);
+// B18 first-run setup: game autodetect + schema harvest (config apply stays /api/schema/config).
+registerGameDetectRoutes(app, { extractBaseGameFile: catDatExtractBaseGameFile });
 
 // Configure Vite middleware or static serving
 async function setupDevOrProd() {

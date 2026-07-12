@@ -599,6 +599,219 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ B20 CLOSED (2026-07-11): TTFM funnel — the north-star metric is now measured, locally only
+Vision v2 Phase 1. `src/lib/ttfm.ts`: first-occurrence-only funnel stages (first_boot →
+paths_configured → template_loaded → first_deploy → game_confirmed) in localStorage, ZERO network
+(Ken's no-telemetry policy); injectable storage; deltas + boot-to-game total. Hooks (one-liners):
+App mount (boot; already-configured installs mark paths_configured at boot — true for them),
+FirstRunWizard apply, CanvasOnboarding load, GuidedRail deploy-ok, GuidedRail clean-log poll — which
+now announces the finish line: "your first mod is IN THE GAME (N min from first boot)". Deliberate
+scope cut, documented: no separate first_green_validate stage (deploy-verify's gate subsumes it).
+*Verified (methods by name): ttfm oracle 9/9 (once-only, delta math, corrupt-store degrade, unknown
+stage rejected); sweep **68/68**; host tsc exit 0; full e2e **12/12** (the guided-rail spec drives
+the template_loaded + boot hooks in a real browser — no crashes, flows intact); leak check clean.*
+**Residual (named):** a dedicated funnel-report panel is deferred until the first real funnel
+completes (eyeball/in-game batch) — the lib API + rail line are the readout until data exists to
+design around. **AAR:** clean run, zero triggers (logged, not silent) — the injectable-storage house
+shape made the oracle trivial. **WORST-IMPLEMENTATION PICK:** carried from B19 (the brief's missing
+verdict field) — it now ALSO gates the game_confirmed stage's honesty; priority rises in slice 2.
+
+### ◐ B19 SLICE 1 IMPLEMENTED (2026-07-11): the guided rail — onboarding no longer abandons the newcomer
+Vision v2 Phase 1 KEYSTONE, slice 1. After any starter template/recipe loads, `GuidedRail.tsx` appears
+on the canvas and owns the journey the old onboarding dropped: ① **Make it yours** (template-declared
+`RailGuide` hint naming the one node worth changing — welcome/reward_on_kill/spawn_patrol all carry
+metadata; recipes get honest generic hints), ② **Put it in the game** (the EXISTING deploy-verify chain,
+result + first failing checklist row rendered in place, retry on fail), ③ **See it** (live 5s
+debug-watcher poll + the template's plain-language "what to look for in game"). Dismissible at every
+step, never modal. Wiring: `CanvasOnboarding.onLoad` now passes a sourceId; Canvas holds rail state.
+*Verified (methods by name): host tsc exit 0; oracle sweep 67/67 (modTemplates oracle still proves every
+template compiles clean WITH rail metadata); **NEW e2e spec `guided-rail.spec.ts` green first run —
+full suite now 12/12 via test:e2e** (spec proves: empty canvas → picker → template click → rail step 1
+shows the template hint → step 2 shows Deploy (deliberately NOT clicked — it writes to the real game
+dir) → step 3 watcher status renders → dismiss; widened POST isolation blocks all X4_*/E2E_*-named
+syncs; capture-first GET isolation per B15 canon; in-spec restore verified); leak check clean.*
+**◐ residuals (named):** (1) rail FEEL → eyeball batch (load a template, walk the 3 steps); (2) the
+full rail-to-game EXPERIENCE (deploy step + game check with a real save) — game-gated, lands with the
+in-game batch; (3) in-game-verified template stamps — game-gated, deferred with the same batch;
+(4) beyond-canvas starter intents (price-tweak patch, t-file, HUD button) — slice 2, spec'd in BACKLOG.
+**AAR:** SUSTAIN — the widened-isolation pattern (block by name-prefix, not fixture-name equality) is
+what made an e2e spec SAFE for a flow that legitimately syncs new workspaces; bank it for every future
+onboarding-flow spec. IMPROVE — a `*/` inside a block comment (writing "X4_*/E2E_*") broke the parse;
+trivial but a first. TOOLS — none. **WORST-IMPLEMENTATION PICK:** the rail's step-3 "did the game see
+it" reads the debug-watcher brief with heuristic field guesses (`gameSeen`/`logFound`/`erroringCount`
+fallbacks) because the brief has no stable documented shape for "mod loaded and clean" — the EXECUTION
+gate everyone wants is one crisp server-computed verdict field away; spec that field into the brief
+(B19 slice 2 rider).
+
+### ◐ B18 IMPLEMENTED (2026-07-11): first-run wizard + game autodetect — every backend stage live-proven
+Vision v2 Phase 1. Zero-typing setup is REAL on this machine: `GET /api/agent/detect-game` found Ken's
+actual install through the Steam registry → libraryfolders.vdf → appmanifest_392160 chain
+(G:\SteamLibrary\...\X4 Foundations) and proposed all config paths; `POST /api/agent/setup/harvest-schemas`
+extracted md.xsd (195KB) + common.xsd (1.7MB, full) + aiscripts.xsd (155KB) from the game's cat/dat archives
+into gitignored `data/harvested-schemas/`. Apply reuses the EXISTING user-confirmed `POST /api/schema/config`
+verbatim — this feature adds zero new config writers. Pieces: pure `src/lib/gameDetect.ts` (+10/10 oracle,
+registry-registered), `src/server/gameDetectRoutes.ts` (registry/VDF/GOG reads + harvest; both routes
+token-gated), `src/components/FirstRunWizard.tsx` (scan → confirm → done; manual setup one click away at
+every step), App gate (opens only when NO game path AND NO resolvable schemas; `?firstrun` dev override).
+**Side-find, fixed same task (self-anneal): the oracle sweep had been BLIND to the whole registry cohort
+since R1** — it parsed only literal `/agent/*selftest` strings, missing runtime-registered oracles; every
+"35/35" cited since 2026-07-09 was the legacy subset (all true passes, under-covered). Sweep now also
+parses the SELFTESTS map keys → **67/67 green**, matching the R1-era board.
+*Verified (methods by name): game-detect oracle 10/10; live detect on the REAL machine (path above);
+live harvest → 3 files on disk, valid XML heads; bad-path → 400; token-less detect → 401; host tsc exit
+0; oracle sweep **67/67**; full e2e **11/11 via test:e2e** (also implicit proof the wizard gate stays
+CLOSED on a configured machine — an open overlay would have eaten canvas clicks); leak check clean.*
+**◐ residuals (named):** (1) wizard VISUALS → eyeball batch (⚠ `?firstrun=1`, LOOK ONLY — clicking "Set
+up automatically" on Ken's machine would rewrite his real config paths); (2) true config-less fresh-boot
+acceptance (<2 min, zero typing) needs a scratch checkout or the B23-era stranger test; (3) GOG branch
+implemented but unverified (no GOG install here).
+**AAR:** SUSTAIN — probing feasibility FIRST (catdat-debug + registry reads, 2 minutes) de-risked the
+whole design before a line was written; reusing the existing config-apply endpoint kept the write-surface
+count flat. IMPROVE/TOOLS — the sweep blind spot is the durable lesson: **a discovery mechanism must read
+the same source of truth the runtime uses** — the sweep read source literals while registration moved to
+runtime; the R1 migration created the gap the same day it killed the 401 gotcha. Fixed in-task; generalized
+to global ledger. **WORST-IMPLEMENTATION PICK:** oracle-sweep's discovery is still regex-over-source (twice
+now: allowlist block + SELFTESTS map) — the robust shape is asking the RUNNING server for its selftest
+index (a `GET /api/agent/selftest-index` the registry already has the data for); spec'd as a B26 sibling
+(B27) rather than a third regex.
+
+### ✅ AUDIT #6 CLOSED (2026-07-11): sync-loop cost measured; only what the numbers indicted was fixed
+Vision v2 Phase 0. **Measured first** (sandbox bench, tsx, 6 scenarios): pure-canvas mods are FINE
+(30–250 nodes → 0.04–0.4ms stringify/keystroke — no action, deliberately untouched); import-sized
+workspaces are NOT (real-mod shape ~2MB → 2.9ms stringify + 11.7ms hash; 3MB → 8.5ms + 26ms; 10MB
+→ 31ms + 91ms). **The bench also exposed a latent bug:** `App.tsx` line ~767 ran an UNGUARDED
+`localStorage.setItem` synchronously per keystroke ABOVE the server-sync debounce arm — an over-quota
+workspace (>~5–10MB, constructible by import) throws there and **kills server sync entirely**.
+Shipped (all three indicted): (1) the localStorage cache now rides the existing 300ms debounce
+(visibility flush still covers tab-hide; crash-loss window ≤300ms, undo checkpoints + server copy
+remain); (2) quota failure degrades honestly — warn once, drop the stale cache, server stays
+authority; (3) the 3s poll's content hash is memoized by workspace object reference (React replaces
+the reference on every edit, so the memo is exact) — an idle canvas re-hashes zero times instead of
+every 3s. `workspaceIdentity.ts` untouched — the algorithm was never indicted, payload size was.
+Known coupling (pre-existing, unwidened): the boot-time stale-localStorage race class; this change
+adds ≤300ms to that window.
+*Verified (methods by name): sandbox bench (numbers above, script in session scratchpad); host tsc
+exit 0; oracle sweep 35/35 (identity oracle untouched); **full e2e 11/11 via test:e2e exit 0** (the
+sync/adoption/conflict specs are the behavior coverage for this exact path); leak-class #70 check
+clean; `graphify update .` run. Browser longtask profiling deliberately substituted by the sandbox
+bench — driving the live app freehand would touch the shared server workspace outside the e2e guard.*
+**AAR:** SUSTAIN — measure-first turned a vague "perf item" into two precise fixes and found a
+sync-killing bug the feature work never would have; benching the IMPORT shape (base64 payloads), not
+just node counts, is what exposed it. IMPROVE — first bench run failed on a Windows ESM path scheme
+(file:// URL required for absolute imports under tsx); trivial, but it's the second Windows-path
+gotcha banked this project. TOOLS — none. **WORST-IMPLEMENTATION PICK:** the boot sequence still
+POSTs the localStorage workspace to the server as a legacy no-expectedHead write while the adoption
+poll races it — the last remaining "silent overwrite" window (ADR-F1's one-round deprecation now
+overdue). Fix belongs in B2 slice 3 (per-mod keying retires legacy writes); noted there.
+
+### ✅ B17 CLOSED (2026-07-11): the e2e gate tells the truth — test:e2e + verdict-parsing wrapper
+Vision v2 Phase 0. `scripts/run-e2e.mjs` wraps `npx playwright test`: echoes output through, parses the
+summary lines, exits on the VERDICT (pass ⇔ ≥1 passed ∧ 0 failed/flaky/interrupted/did-not-run/no-tests) —
+because on this box (Node v24.15.0 + Playwright 1.61) the child prints "N passed" then dies in libuv
+teardown (win/async.c:76, exit 0xC0000409; now reproduced **5/5 runs**), making the raw exit code useless
+as a gate in BOTH directions. New `npm run test:e2e` = the FULL suite (4 spec files, 11 tests — the gate
+records must cite from now on); `test:canvas` re-routed through the same wrapper (still the 2 canvas
+specs). Confirmed non-test file `handoff-gap-analysis.spec.ts` is deliberately test-free (its own header).
+*Verified (methods by name): **green path** — test:e2e → 11 passed, crash fired, wrapper exit 0;
+**injected-red path** — temp failing spec → "0 passed, 1 failed", wrapper exit 1, temp spec deleted;
+**no-tests path** — impossible grep → NO TESTS FOUND, wrapper exit 1; **leak-class #70** — authenticated
+workspace GET after the runs: Player_Elite_Escort intact.* **◐ deliberately deferred:** the Node-bump
+probe (does a newer/older Node clear the libuv assertion?) — that's a machine-level change on Ken's box,
+Ken-gated; the wrapper makes the gate correct regardless, so the bump is hygiene, not a blocker.
+**AAR:** SUSTAIN — validating BOTH failure directions (red must fail AND green must pass despite the
+crash) is what makes a gate trustworthy; the injected-red + delete pattern is cheap and reusable.
+IMPROVE — trigger (f) fired trivially (one edit rejected for edit-before-read; harness mechanics, no new
+canon). TOOLS — none new. **WORST-IMPLEMENTATION PICK:** the workspace-guard restore check is MANUAL —
+after every e2e run I hand-verify the server workspace with an authenticated GET; nothing asserts
+restoration automatically, so a guard regression would be caught by discipline, not machinery. Fix
+spec'd as **B26**: teardown (or wrapper) verifies restore and fails loudly on mismatch.
+
+### ✅ VISION V2 PLANNED (2026-07-11): "the UE5 editor for X4" — ADR-F2 + plan doc + B18–B24 spec'd
+Ken posed the design brief (UE5-class editor: lowest barrier to entry, intuitive, hand-holding,
+powerful, nothing taken from veterans), ratified the agent's independent assessment in full, and
+ordered the way forward planned under the workflow. Shipped (docs only, no code):
+- **ADR-F2** (`F:\StarForge\wiki\x4-forge\decisions.md`): barrier-to-entry becomes the primary
+  product axis; **TTFM (Time To First Mod) is the north-star metric** (in-app ≤15 min target);
+  first-success-before-depth sequencing; installer stays parked until Phase 1 evidence (B23 gate);
+  veteran-floor invariant; census-gates-curation.
+- **Plan of record:** `docs/plans/2026-07-11-vision-v2-ue5-editor.md` — vision-vs-exists assessment
+  table + 4 phases + risks. **BACKLOG P3.5 section:** B18 (first-run wizard + game autodetect),
+  B19 (template→in-game rail; ABSORBS audit #7), B20 (TTFM funnel, local-only), B21 (action-frequency
+  census), B22 (pattern browser), B23 (installer unpark package, Ken-gated), B24 (live-inspector
+  spike→ADR). B10 promoted from long-tail to Phase 2, re-scoped behind B21's census.
+- **RECONCILE was decisive (capability map CREATED,** `F:\StarForge\wiki\x4-forge\capability-map.md`):
+  the "template gallery" third of the vision ALREADY EXISTS — `modTemplates.ts` (selftest-backed),
+  `modRecipes.ts` (3 Q&A wizards), `CanvasOnboarding.tsx` picker, and cat/dat schema auto-harvest
+  (`getAiSchemaIndex`) — so B18/B19 are EXTEND items, not greenfield. Proven absent (negative
+  findings, dated): game-path autodetect, post-template deploy rail, TTFM metric, in-product pattern
+  browser, action-frequency data, live game-state read path.
+*Verified (methods applicable to a planning unit): reconcile evidence from live code reads
+(modTemplates/modRecipes/CanvasOnboarding/DirectorySettingsModal), Agent Brain query, ADR ledger
+check (no conflict with ADR-F1; F2 appended); second-layer coverage pass — all 7 ratified vision
+pillars + 5 gap items + sequencing doctrine each map to a named plan element, 100%; cross-refs
+consistent across plan doc ↔ BACKLOG ↔ ADR ↔ capability map ↔ HANDOFF §25.*
+**AAR:** SUSTAIN — reconcile-by-resource before speccing turned two "greenfield" items into extend
+items and created the project's capability map (its absence was itself a standing gap; now the next
+reconcile is cheap). IMPROVE — none fired beyond the reconcile scope change (logged as the trigger).
+TOOLS — none. **WORST-IMPLEMENTATION PICK:** the shipped onboarding surface itself
+(`CanvasOnboarding` + templates): it starts the newcomer's journey and abandons it at the exact
+moment of highest need — template loads, guidance ends, no path to deploy or to the game. Mechanism:
+built as a canvas gap-fill (G9), not as a funnel owner; nothing owns steps 2..N. The fix IS B19,
+now spec'd with an EXPERIENCE-gate acceptance.
+
+### ◐ AUDIT #5 / B13 QoL BATCH — MACHINE-VERIFIED, EYEBALL PENDING (2026-07-11)
+The B13 QoL batch (tracker #60) implemented 2026-07-11 is now machine-green end-to-end; only the
+EXPERIENCE gate (Ken's eyeball, ADR-G3) remains. Shipped: empty-state XML skeletons in the wares/jobs
+previews (`LibraryConfigurator` compileWaresXML/compileJobsXML); canvas node delete toast with Ctrl+Z hint
+(`Canvas.deleteNode`); ware/job delete converted `alert()`→toast WITH a real undo checkpoint (library
+deletes were never undoable before — `saveCheckpoint` threaded from App); `ShortcutsOverlay` ("?" / header
+button / Esc — the single source of truth for the shortcut list); sync badge/conflict-card clip fix
+(shrink-0, nowrap, compact <xl labels).
+*Verified (methods by name, 2026-07-11): host `npx tsc --noEmit` exit 0; full oracle sweep 35/35 endpoints
+green; **full e2e suite 11/11** — `test:canvas` 4/4 (30.3s) + project-validate 6/6 + xml-patch-merge 1/1
+(6.9s); workspace-guard restore confirmed post-run via authenticated GET (server holds Player_Elite_Escort,
+no E2E fixture leak — leak class #70 checked); ShortcutsOverlay browser-verified live 2026-07-11 (prior
+session).* **◐ residual (the whole remaining gate):** Ken's eyeball on ① canvas delete toast, ② library
+delete toast + working Undo, ③ empty-state skeletons (needs an empty scratch library), ④ compact badge on
+a narrow header. Flips ✅ on his screen, nothing else. Original-B13 items NOT in this batch's scope
+(override-map click → Diff→Patch pre-target; "wire a HUD button in 3 steps" WIKI snippet) stay spec'd in
+BACKLOG B13 — deliberately deferred, not silently dropped.
+
+**Record corrections found while validating (fixed in HANDOFF.md same task):** (1) `npm run test:canvas`
+runs the 2 canvas specs = **4 tests**, not 11 — the recorded "11/11" figure is the FULL e2e suite (4
+canvas + 6 project-validate + 1 xml-patch-merge); records now say which is which. (2) HANDOFF.md §5/§10
+claimed the API auth header is `x-studio-token`; the real contract is `Authorization: Bearer <token>`
+(server.ts ~292 — cost a 401'd probe this session). (3) NEW GOTCHA banked: on this Node build, Playwright
+dies with a libuv teardown assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, win/async.c:76 → exit
+0xC0000409) AFTER printing "N passed" — reproduced 2/2 runs. The pass/fail summary line is the verdict;
+the exit code is currently unusable as a gate (HANDOFF §22 row added; wrapper/Node-bump spec'd → B17).
+
+**AAR:** SUSTAIN — running the cheap gates (tsc/sweep/app-answering) BEFORE the machine-state ask meant
+Ken answered one question and the e2e fired immediately; the post-run leak-class-#70 check
+(authenticated workspace GET) should stay reflex. IMPROVE — I trusted HANDOFF's auth-header claim and
+burned a probe on a 401; even a freshly-written handoff doc is a CLAIM, not ground truth — the API is
+self-documenting (`GET /api/agent/schema`) and was one call away. TOOLS — the libuv exit-code corruption
+(above) makes every scripted e2e gate lie about failure; banked + spec'd B17.
+**WORST-IMPLEMENTATION PICK:** `test:canvas` as "the e2e gate" — the npm script runs 4 of the 11 tests
+while every record cites "11/11", and its exit code is corrupted by the teardown crash. Mechanism: the
+script's scope drifted from the suite as specs were added, and nothing names the FULL suite, so the
+gate people cite and the gate that runs are different things. Fix spec'd (B17): `npm run test:e2e`
+running ALL specs + a wrapper that parses the summary line and normalizes the exit code; records cite
+test:e2e thereafter.
+
+### ✅ AUDIT ROADMAP #4 CLOSED (2026-07-10): fetch hygiene — narrowed honestly after the survey falsified it
+The audit's [INFERENCE] "client fetch error-handling is inconsistent" was mostly WRONG on inspection: all
+10 blind `.then(r=>r.json())` component sites live inside adequate error contracts (`d.success`/`res.error`
+checks, try/catch with human messages, or deliberate silent-fallback polls). Recorded as a falsified
+inference — the audit discipline working in both directions. What SURVIVED: during API restarts the vite
+proxy answers HTML, and one user-facing surface (ModDependencyView) showed the raw parse error
+("SyntaxError: Unexpected token '<'"). Shipped: shared `fetchJson(url, init, defaultError)` in apiHelper
+(fetch + ok-check + non-JSON-body handling in one call — the adoption target for all FUTURE call sites) and
+converted ModDependencyView. *Verified: tsc CLEAN; live probe — fetchJson against an HTML-returning route
+yields "Server response was not JSON." (human) instead of the SyntaxError; e2e **11/11 (36.5s)**.* AAR:
+SUSTAIN — surveying before converting kept a feared 10-site churn to a 1-site fix + 1 helper; falsifying
+your own audit finding is a result, not a failure. IMPROVE/TOOLS — none fired.
+
 ### ✅ AUDIT ROADMAP #3 CLOSED (2026-07-10): AI provider keys out of the browser — server-side store
 The audit's top security finding (plaintext keys in localStorage, shipped on every AI request) retired:
 - **`src/server/aiKeyStore.ts`** — keys live in `data/ai-keys.json` (same trust boundary as

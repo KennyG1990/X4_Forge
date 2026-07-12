@@ -53,6 +53,22 @@ function discoverSelftestPaths() {
   if (start < 0 || end < 0) throw new Error("Could not bound the PUBLIC_READONLY_GETS array.");
   const block = text.slice(start, end);
   const paths = [...block.matchAll(/["'`](\/agent\/[a-z0-9-]*selftest)["'`]/gi)].map(m => m[1]);
+
+  // Registry-migrated oracles (audit R1) never appear as /agent/ literals — they are
+  // SELFTESTS map keys registered at runtime. Blind spot found 2026-07-11: the sweep
+  // silently missed the whole registry cohort (~30 oracles) since the migration. Parse
+  // the map keys too: `"<name>-selftest": fn`.
+  const mapOpen = text.indexOf("const SELFTESTS");
+  if (mapOpen >= 0) {
+    const mapStart = text.indexOf("{", mapOpen);
+    const mapEnd = text.indexOf("};", mapStart);
+    if (mapStart >= 0 && mapEnd >= 0) {
+      const mapBlock = text.slice(mapStart, mapEnd);
+      for (const m of mapBlock.matchAll(/["']([a-z0-9-]*selftest)["']\s*:/gi)) {
+        paths.push(`/agent/${m[1]}`);
+      }
+    }
+  }
   return [...new Set(paths)].sort();
 }
 

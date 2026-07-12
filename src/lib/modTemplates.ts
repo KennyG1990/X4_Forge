@@ -16,11 +16,22 @@
 import type { MDNode, MDLink, ModWorkspace } from '../types';
 import { sanitizeWorkspace, generateMDXML, validateModWorkspace } from '../types';
 
+/** B19 guided rail: per-template hand-holding from "loaded" to "seen in my game". */
+export interface RailGuide {
+  /** Node the TWEAK step points the newcomer at. */
+  focusNodeId: string;
+  /** Plain-language "change this and it's yours" hint. */
+  tweakHint: string;
+  /** What to look for in the running game (the rail's step 3). */
+  gameCheck: string;
+}
+
 export interface ModTemplate {
   id: string;
   name: string;          // mod name written into the workspace
   title: string;         // picker display title
   blurb: string;         // one-line description for the picker
+  rail?: RailGuide;      // B19: guided-rail metadata (blank template has none)
   build: () => { nodes: Partial<MDNode>[]; links: MDLink[] };
 }
 
@@ -42,6 +53,11 @@ export const MOD_TEMPLATES: ModTemplate[] = [
     name: 'X4_Welcome_Message',
     title: 'Welcome Message',
     blurb: 'Show a message to the player when a game starts. Great first mod.',
+    rail: {
+      focusNodeId: 'msg',
+      tweakHint: 'Click the show_help node and change its text — that becomes the message your game shows.',
+      gameCheck: 'Start or load any save: your message appears on screen within a few seconds.',
+    },
     build: () => ({
       nodes: [
         N('c', 'cue', 'cue', 80, 80, { name: 'Welcome', namespace: 'this' }),
@@ -59,6 +75,11 @@ export const MOD_TEMPLATES: ModTemplate[] = [
     name: 'X4_Reward_On_Kill',
     title: 'Reward on Kill',
     blurb: 'Track kills in a variable and pay the player for each one.',
+    rail: {
+      focusNodeId: 'rew',
+      tweakHint: 'Click the reward_player node and change money — that is your bounty per kill.',
+      gameCheck: 'Load a save and destroy a ship you have targeted: the credits arrive with a notification.',
+    },
     build: () => ({
       nodes: [
         N('cs', 'cue', 'cue', 80, 80, { name: 'Setup', namespace: 'this' }),
@@ -83,6 +104,11 @@ export const MOD_TEMPLATES: ModTemplate[] = [
     name: 'X4_Spawn_Patrol',
     title: 'Spawn Patrol',
     blurb: 'Spawn a couple of ships in the player\'s sector when a game starts.',
+    rail: {
+      focusNodeId: 's1',
+      tweakHint: 'Click a create_ship node — swap the macro or faction to spawn different ships.',
+      gameCheck: 'Start or load a game: two Argon fighters appear in your current sector.',
+    },
     build: () => ({
       nodes: [
         N('c', 'cue', 'cue', 80, 80, { name: 'Spawn_Patrol', namespace: 'this' }),

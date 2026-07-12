@@ -43,9 +43,13 @@ import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
 import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
 import { orientConnection, linkExists as linkAlreadyExists } from '../lib/canvasInteractions';
-import { promptDialog } from '../lib/uiDialogs';
+import { promptDialog, toast } from '../lib/uiDialogs';
 import { STARTER_TAGS } from '../lib/mdFriendlyNames';
 import CanvasOnboarding from './CanvasOnboarding';
+import GuidedRail from './GuidedRail';
+import { ttfm } from '../lib/ttfm';
+import { MOD_TEMPLATES } from '../lib/modTemplates';
+import { MOD_RECIPES } from '../lib/modRecipes';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
 import { computeAutoLayout } from '../lib/mdAutoLayout';
 import { markE2EPerfCounter } from '../lib/e2ePerfCounters';
@@ -131,6 +135,9 @@ export default function Canvas({
   const [liveStatus, setLiveStatus] = useState<{ available: boolean; live: boolean; updatedAt?: string; bridge?: { bridgeUp: boolean; gameActive: boolean; summary: string } } | null>(null);
   const [liveWatches, setLiveWatches] = useState<{ name: string; value: string }[]>([]);
   // (Recipe-wizard state lives inside CanvasOnboarding since the A7 extraction.)
+  // B19 guided rail: which starter (template id or 'recipe:<id>') was just loaded.
+  // Null = no rail. Set by CanvasOnboarding's onLoad, cleared by the rail's ✕.
+  const [railSourceId, setRailSourceId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!liveMode) { setLiveBadges({}); setLiveStatus(null); setLiveWatches([]); return; }
@@ -553,6 +560,8 @@ export default function Canvas({
   const deleteNode = (nodeId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     saveCheckpoint();
+    const victim = workspace.nodes.find(n => n.id === nodeId);
+    const label = String(victim?.properties?.name || victim?.label || 'node');
     setWorkspace(prev => ({
       ...prev,
       nodes: prev.nodes.filter(n => n.id !== nodeId),
@@ -561,6 +570,8 @@ export default function Canvas({
     if (selectedNode?.id === nodeId) {
       setSelectedNode(null);
     }
+    // B13: undo exists (the checkpoint above) but was invisible at the moment of deletion.
+    toast(`Deleted "${label}" — Ctrl+Z to undo.`);
   };
 
   const clearLinks = () => {
@@ -1497,8 +1508,23 @@ export default function Canvas({
 
       {/* Empty-canvas onboarding (G9 + recipes) — extracted to CanvasOnboarding (audit A7). */}
       {workspace.nodes.filter(n => n.type !== 'comment').length === 0 && (
-        <CanvasOnboarding onLoad={ws => { saveCheckpoint(); setWorkspace(ws); }} />
+        <CanvasOnboarding onLoad={(ws, sourceId) => { saveCheckpoint(); setWorkspace(ws); setRailSourceId(sourceId ?? null); ttfm.mark('template_loaded'); }} />
       )}
+
+      {/* B19: guided rail — carries the newcomer from "template loaded" into the game. */}
+      {railSourceId && workspace.nodes.length > 0 && (() => {
+        const tpl = MOD_TEMPLATES.find(t => t.id === railSourceId);
+        const recipe = railSourceId.startsWith('recipe:') ? MOD_RECIPES.find(r => `recipe:${r.id}` === railSourceId) : undefined;
+        if (!tpl && !recipe) return null;
+        return (
+          <GuidedRail
+            title={tpl?.title || recipe?.title || 'Your starter mod'}
+            guide={tpl?.rail || null}
+            getWorkspace={() => workspace}
+            onClose={() => setRailSourceId(null)}
+          />
+        );
+      })()}
       {/* Canvas Top Controls Toolbar */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-[#0f131a]/95 border border-cyan-500/20 p-2 rounded-lg shadow-2xl glass-effect">
         <button
