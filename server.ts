@@ -65,7 +65,10 @@ import { runLuaLogicBlocksSelftest } from "./src/lib/luaLogicBlocks";
 import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from "./src/lib/luaStaticAnalysis";
 import { runLuaRuntimeLogSelftest } from "./src/lib/luaRuntimeLog";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
-import { runSemanticsSelftest, listSemantics, semanticsForNode } from "./src/lib/mdSemantics";
+import { runSemanticsSelftest, listSemantics, semanticsForNode, getElementSemantics } from "./src/lib/mdSemantics";
+import { computeActionCensus, runActionCensusSelftest } from "./src/lib/actionCensus";
+import { createSpendMeter, runAiSpendMeterSelftest } from "./src/lib/aiSpendMeter";
+import { runModPatternsSelftest } from "./src/lib/modPatterns";
 import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
 import { runCriticSelftest, critiqueWorkspace } from "./src/lib/mdCritic";
 import { runXmlWellformedSelftest, checkXmlWellformed } from "./src/lib/xmlWellformed";
@@ -1589,6 +1592,19 @@ function isAppUiRequest(req: express.Request): boolean {
   return false;
 }
 
+// B25: the spend meter — every paid call passes this chokepoint; a runaway day
+// soft-stops at AI_DAILY_CALL_CAP total calls (default 300, 0 disables). Usage
+// persists in data/ai-usage.json; GET /api/ai/usage is the readout.
+const AI_DAILY_CALL_CAP = Number(process.env.AI_DAILY_CALL_CAP ?? 300);
+const AI_USAGE_FILE = path.join(process.cwd(), "data", "ai-usage.json");
+const aiSpendMeter = createSpendMeter(
+  {
+    load: () => { try { return fs.readFileSync(AI_USAGE_FILE, "utf8"); } catch { return null; } },
+    save: (t) => { try { fs.mkdirSync(path.dirname(AI_USAGE_FILE), { recursive: true }); fs.writeFileSync(AI_USAGE_FILE, t, "utf8"); } catch { /* best-effort */ } },
+  },
+  AI_DAILY_CALL_CAP,
+);
+
 async function callMultiProviderAI(
   req: express.Request,
   systemInstruction: string,
@@ -1597,6 +1613,14 @@ async function callMultiProviderAI(
   jsonSchema?: any
 ): Promise<string> {
   const provider = (req.headers["x-ai-provider"] as string) || "gemini";
+  {
+    const gate = aiSpendMeter.check(provider);
+    if (!gate.allowed) {
+      aiSpendMeter.recordRefusal(provider);
+      throw new Error(`Daily AI call cap reached (${gate.usedToday}/${gate.cap}). This is the runaway-spend backstop — raise AI_DAILY_CALL_CAP (or set 0 to disable) and restart if today's use is intentional.`);
+    }
+    aiSpendMeter.record(provider);
+  }
   const customKeyHeader = (req.headers["x-custom-api-key"] as string) || "";
   const envFallbackAllowed = isAppUiRequest(req);
   // Hard server-side timeout: a hung provider must not leave the client spinning forever.
@@ -4995,6 +5019,9 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
 const SELFTESTS: Record<string, () => unknown> = {
   "game-detect-selftest": runGameDetectSelftest,
   "ttfm-selftest": runTtfmSelftest,
+  "action-census-selftest": runActionCensusSelftest,
+  "ai-spend-meter-selftest": runAiSpendMeterSelftest,
+  "mod-patterns-selftest": runModPatternsSelftest,
   "compile-fidelity-selftest": runCompileFidelitySelftest,
   "workspace-identity-selftest": runWorkspaceIdentitySelftest,
   "mod-distribution-selftest": runModDistributionSelftest,
@@ -5028,6 +5055,18 @@ const SELFTESTS: Record<string, () => unknown> = {
   "lua-runtime-log-selftest": runLuaRuntimeLogSelftest,
 };
 registerSelftests(app, PUBLIC_READONLY_GETS, SELFTESTS, errorMessage);
+
+// B27: runtime selftest index — the RUNNING server states its own oracle board, so
+// discovery (oracle-sweep) reads the same truth registration writes instead of
+// regexing server.ts source (the blind-spot class fixed 2026-07-11). Public:
+// read-only metadata, no state.
+PUBLIC_READONLY_GETS.add("/agent/selftest-index");
+app.get("/api/agent/selftest-index", (_req, res) => {
+  // endsWith("selftest"), not "-selftest": the board includes the bare legacy
+  // /agent/selftest route (found by the B27 acceptance diff, 69≠70).
+  const selftests = [...PUBLIC_READONLY_GETS].filter((p) => p.startsWith("/agent/") && p.endsWith("selftest")).sort();
+  return res.json({ count: selftests.length, selftests });
+});
 
 registerValidationAgentRoutes(app);
 
@@ -7295,6 +7334,46 @@ Use real X4 Mission Director xmlTags. Each requirement: {id, label (plain Englis
 registerGithubRoutes(app);
 // B18 first-run setup: game autodetect + schema harvest (config apply stays /api/schema/config).
 registerGameDetectRoutes(app, { extractBaseGameFile: catDatExtractBaseGameFile });
+
+// B25: AI usage readout — counts only, no key material, no prompts.
+app.get("/api/ai/usage", (_req, res) => {
+  try { return res.json(aiSpendMeter.snapshot()); }
+  catch (error) { return res.status(500).json({ error: errorMessage(error) || "usage readout failed" }); }
+});
+
+// B21: MD action-frequency census — counts real action usage across the vanilla md/
+// corpus (read straight from the game's cat/dat archives, DLC included) so B10's
+// curation spend follows measured frequency, not judgment. Scan is seconds-heavy →
+// cached per game path until the schema library reloads.
+let actionCensusCache: { key: string; result: ReturnType<typeof computeActionCensus> } | null = null;
+app.get("/api/agent/action-census", (req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    if (!resolved.x4GamePath) return res.status(400).json({ error: "No x4GamePath configured." });
+    if (!schemaLibrary.loaded) return res.status(503).json({ error: "Schema library not loaded." });
+    const key = `${resolved.x4GamePath}|${schemaLibrary.actions.length}`;
+    if (!actionCensusCache || actionCensusCache.key !== key) {
+      const { matches, archiveCount } = catDatExtractEntries(
+        [resolved.x4GamePath],
+        (name) => /^md\/[^/]+\.xml$/.test(name),
+        { dedupeByName: true }
+      );
+      const actionTags = new Set(schemaLibrary.actions.map((a) => a.tag));
+      const result = computeActionCensus(
+        matches.map((m) => ({ name: m.name, text: m.text })),
+        actionTags,
+        (tag) => getElementSemantics(tag) !== null,
+      );
+      actionCensusCache = { key, result };
+      (result as unknown as Record<string, unknown>).archiveCount = archiveCount;
+    }
+    const top = Math.max(0, Math.min(1000, Number(req.query.top) || 50));
+    const c = actionCensusCache.result;
+    return res.json({ ...c, ranked: c.ranked.slice(0, top), rankedTotal: c.ranked.length });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "action-census failed" });
+  }
+});
 
 // Configure Vite middleware or static serving
 async function setupDevOrProd() {

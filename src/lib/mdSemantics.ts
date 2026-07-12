@@ -207,6 +207,183 @@ const REGISTRY: Record<string, ElementSemantics> = {
     describe: (p) => `Sets ${attr(p, 'object', 'the object')}'s hull level to ${attr(p, 'level', '(unset)')}.`,
     notInSchema: true,
   },
+
+  /* ------------------------------------------------------------------ *
+   * B10 slice 1 (2026-07-11) — the census-ranked batch. B21 measured the real
+   * corpus (106,437 instances): these are the top-52's uncurated tags, taking
+   * curated coverage from 41.4% of observed usage to ≥90%. Structural child
+   * elements (param/text/position/…) are curated HONESTLY as children of their
+   * parent action — the schema classifies them as actions, the census showed
+   * that misclassification, and pretending they act alone would teach wrong.
+   * ------------------------------------------------------------------ */
+  debug_text: {
+    tag: 'debug_text', kind: 'action', title: 'Debug Text', reads: [], writes: ['debuglog'], risk: 'safe',
+    describe: (p) => `Writes ${p?.text ? `"${attr(p, 'text')}"` : 'a message'} to the game's debug log (visible with logging enabled; players never see it).`,
+    note: 'The backbone of mod debugging — and of the Forge\'s FORGE-WATCH/FORGE-STATE protocols.',
+  },
+  param: {
+    tag: 'param', kind: 'other', title: 'Parameter (child element)', reads: [], writes: [], risk: 'safe',
+    describe: (p) => `Child element: passes parameter ${attr(p, 'name', '(unnamed)')}${p?.value ? ` = ${attr(p, 'value')}` : ''} to its parent (library call, order, or cutscene).`,
+    note: 'Not a standalone action — it belongs to a parent like run_actions, create_order, or signal_cue.',
+  },
+  text: {
+    tag: 'text', kind: 'other', title: 'Text Line (child element)', reads: [], writes: [], risk: 'safe',
+    describe: (p) => `Child element: one text line${p?.text ? ` ("${attr(p, 'text')}")` : ''} inside its parent (e.g. a debug_text block or menu element).`,
+    note: 'Not a standalone action.',
+  },
+  owner: {
+    tag: 'owner', kind: 'other', title: 'Owner (child element)', reads: [], writes: [], risk: 'safe',
+    describe: (p) => `Child element: sets the owning faction${p?.exact ? ` (${attr(p, 'exact')})` : ''} for the object its parent creates.`,
+    note: 'Belongs to create_ship / create_station and similar creators.',
+  },
+  position: {
+    tag: 'position', kind: 'other', title: 'Position (child element)', reads: [], writes: [], risk: 'safe',
+    describe: (p) => `Child element: the position (x=${attr(p, 'x', '0')}, y=${attr(p, 'y', '0')}, z=${attr(p, 'z', '0')}) for its parent's object or order.`,
+  },
+  rotation: {
+    tag: 'rotation', kind: 'other', title: 'Rotation (child element)', reads: [], writes: [], risk: 'safe',
+    describe: () => `Child element: the rotation for its parent's created object or cutscene camera.`,
+  },
+  safepos: {
+    tag: 'safepos', kind: 'other', title: 'Safe Position (child element)', reads: [], writes: [], risk: 'safe',
+    describe: () => `Child element: asks the engine for a SAFE position near the intended spot (avoids spawning inside geometry).`,
+  },
+  match: {
+    tag: 'match', kind: 'other', title: 'Match Filter (child element)', reads: [], writes: [], risk: 'safe',
+    describe: (p) => `Child element: a filter clause${p?.class ? ` (class ${attr(p, 'class')})` : ''} narrowing what its parent find_* action returns.`,
+  },
+  replace: {
+    tag: 'replace', kind: 'other', title: 'Replace Rule (child element)', reads: [], writes: [], risk: 'safe',
+    describe: (p) => `Child element of substitute_text: replaces ${attr(p, 'string', '(pattern)')} in the parent's text.`,
+  },
+  'break': {
+    tag: 'break', kind: 'other', title: 'Break', reads: [], writes: [], risk: 'safe',
+    describe: () => `Exits the innermost enclosing loop (do_all/do_while) immediately.`,
+  },
+  'return': {
+    tag: 'return', kind: 'other', title: 'Return', reads: [], writes: [], risk: 'safe',
+    describe: () => `Stops executing the current actions block (or library) and returns to the caller.`,
+  },
+  create_order: {
+    tag: 'create_order', kind: 'action', title: 'Create Order', reads: [], writes: ['object.orders'], risk: 'state_mutation',
+    describe: (p) => `Gives ${attr(p, 'object', 'the ship')} the '${attr(p, 'id', '(unset)')}' order${p?.default ? ' as its default behaviour' : ''}. Parameters ride in child <param> elements.`,
+    note: 'The fleet-actuation primitive: commands an EXISTING ship (proven shape: DeadAir order.move.recon).',
+  },
+  add_player_choice: {
+    tag: 'add_player_choice', kind: 'action', title: 'Add Player Choice', reads: [], writes: ['ui.conversation'], risk: 'safe',
+    describe: (p) => `Adds the choice ${p?.text ? `"${attr(p, 'text')}"` : '(text unset)'} to the current conversation/interaction menu; selecting it signals ${attr(p, 'cue', 'its cue')}.`,
+  },
+  assert: {
+    tag: 'assert', kind: 'action', title: 'Assert', reads: ['expression'], writes: ['debuglog'], risk: 'safe',
+    describe: (p) => `Debug check: logs an error if "${attr(p, 'value', '(unset)')}" is false. No effect on players.`,
+  },
+  create_position: {
+    tag: 'create_position', kind: 'action', title: 'Create Position Value', reads: [], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Builds a position value ${attr(p, 'name', '(unnamed)')} (x=${attr(p, 'x', '0')}, y=${attr(p, 'y', '0')}, z=${attr(p, 'z', '0')}) for later use — creates data, not objects.`,
+  },
+  create_group: {
+    tag: 'create_group', kind: 'action', title: 'Create Group', reads: [], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Creates the object group ${attr(p, 'groupname', '(unnamed)')} — a container variable for watching/commanding several objects together.`,
+    note: 'Use a BARE groupname and reference it BARE in nested listeners (child cues inherit the namespace).',
+  },
+  find_object_component: {
+    tag: 'find_object_component', kind: 'action', title: 'Find Object Component', reads: ['world.objects'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Searches ${attr(p, 'object', 'an object')} for a component matching the given filters and stores it in ${attr(p, 'name', '(unnamed)')}.`,
+  },
+  find_sector: {
+    tag: 'find_sector', kind: 'action', title: 'Find Sector', reads: ['world.map'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Finds a sector matching the filters${p?.name ? ` and stores it in ${attr(p, 'name')}` : ''} (e.g. by macro, owner, or distance).`,
+  },
+  find_station: {
+    tag: 'find_station', kind: 'action', title: 'Find Station', reads: ['world.objects'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Finds a station matching the filters${p?.name ? ` and stores it in ${attr(p, 'name')}` : ''} — the usual entry point for economy reads.`,
+  },
+  cancel_all_orders: {
+    tag: 'cancel_all_orders', kind: 'action', title: 'Cancel All Orders', reads: [], writes: ['object.orders'], risk: 'state_mutation',
+    describe: (p) => `Clears ${attr(p, 'object', 'the ship')}'s entire order queue.`,
+    note: 'Affects whatever the ship was doing — including player-issued orders.',
+  },
+  speak: {
+    tag: 'speak', kind: 'action', title: 'Speak Line', reads: [], writes: ['ui.audio'], risk: 'safe',
+    describe: (p) => `Has ${attr(p, 'actor', 'an actor')} speak line ${attr(p, 'line', '(unset)')}${p?.priority ? ` (priority ${attr(p, 'priority')})` : ''}.`,
+  },
+  substitute_text: {
+    tag: 'substitute_text', kind: 'action', title: 'Substitute Text', reads: [], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Rewrites the text in ${attr(p, 'text', '(unset)')} using its child <replace> rules (e.g. inserting names/values into a template string).`,
+  },
+  set_entity_traits: {
+    tag: 'set_entity_traits', kind: 'action', title: 'Set Entity Traits', reads: [], writes: ['entity.traits'], risk: 'state_mutation',
+    describe: (p) => `Configures traits of ${attr(p, 'entity', 'the entity')} (e.g. making an NPC unkillable or conversation-enabled).`,
+  },
+  remove_help: {
+    tag: 'remove_help', kind: 'action', title: 'Remove Help', reads: [], writes: ['ui.help'], risk: 'safe',
+    describe: (p) => `Removes the on-screen help/notification${p?.all ? ' (all of them)' : ''}.`,
+  },
+  remove_help_overlay: {
+    tag: 'remove_help_overlay', kind: 'action', title: 'Remove Help Overlay', reads: [], writes: ['ui.help'], risk: 'safe',
+    describe: () => `Removes the current highlight/overlay hint from the HUD.`,
+  },
+  show_help_overlay: {
+    tag: 'show_help_overlay', kind: 'action', title: 'Show Help Overlay', reads: [], writes: ['ui.help'], risk: 'safe',
+    describe: (p) => `Highlights a UI element or shows an overlay hint${p?.text ? ` ("${attr(p, 'text')}")` : ''} — tutorial-style guidance.`,
+  },
+  create_list: {
+    tag: 'create_list', kind: 'action', title: 'Create List', reads: [], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Creates the list variable ${attr(p, 'name', '(unnamed)')}${p?.exact ? ` with ${attr(p, 'exact')} entries` : ' (empty)'}.`,
+  },
+  append_list_elements: {
+    tag: 'append_list_elements', kind: 'action', title: 'Append List Elements', reads: ['variable'], writes: ['variable'], risk: 'safe',
+    describe: (p) => `Appends the contents of ${attr(p, 'other', '(unset)')} to the list ${attr(p, 'name', '(unset)')}.`,
+  },
+  allow_conversation_escape: {
+    tag: 'allow_conversation_escape', kind: 'action', title: 'Allow Conversation Escape', reads: [], writes: ['ui.conversation'], risk: 'safe',
+    describe: () => `Lets the player leave the current conversation with ESC.`,
+  },
+  cutscene_event: {
+    tag: 'cutscene_event', kind: 'action', title: 'Cutscene Event', reads: [], writes: ['ui.cutscene'], risk: 'safe',
+    describe: (p) => `Fires the '${attr(p, 'event', '(unset)')}' event inside the running cutscene (camera/actor beats).`,
+  },
+  play_cutscene: {
+    tag: 'play_cutscene', kind: 'action', title: 'Play Cutscene', reads: [], writes: ['ui.cutscene'], risk: 'safe',
+    describe: (p) => `Starts cutscene ${attr(p, 'cutscene', '(unset)')}; the player temporarily loses control.`,
+  },
+  stop_cutscene: {
+    tag: 'stop_cutscene', kind: 'action', title: 'Stop Cutscene', reads: [], writes: ['ui.cutscene'], risk: 'safe',
+    describe: () => `Ends the running cutscene and returns control to the player.`,
+  },
+  signal_objects: {
+    tag: 'signal_objects', kind: 'action', title: 'Signal Objects', reads: [], writes: ['object.signals'], risk: 'state_mutation',
+    describe: (p) => `Sends the '${attr(p, 'param', '(unset)')}' signal to ${attr(p, 'object', attr(p, 'group', 'the target objects'))} — their AI scripts can react to it.`,
+  },
+  set_object_min_hull: {
+    tag: 'set_object_min_hull', kind: 'action', title: 'Set Minimum Hull', reads: [], writes: ['object.hull'], risk: 'state_mutation',
+    describe: (p) => `Prevents ${attr(p, 'object', 'the object')}'s hull from dropping below ${attr(p, 'exact', '(unset)')} — effectively unkillable below that floor.`,
+    note: 'Mission-critical-object pattern; remember to remove it when the protection should end.',
+  },
+  set_userdata: {
+    tag: 'set_userdata', kind: 'action', title: 'Set Userdata', reads: [], writes: ['game.userdata'], risk: 'state_mutation',
+    describe: (p) => `Stores ${attr(p, 'value', '(unset)')} under userdata key '${attr(p, 'name', '(unset)')}' — persists in the save (and across new games for some keys).`,
+  },
+  add_effect: {
+    tag: 'add_effect', kind: 'action', title: 'Add Effect', reads: [], writes: ['world.vfx'], risk: 'safe',
+    describe: (p) => `Plays visual effect '${attr(p, 'effect', '(unset)')}'${p?.object ? ` at ${attr(p, 'object')}` : ''} — cosmetic only.`,
+  },
+  add_actor_to_room: {
+    tag: 'add_actor_to_room', kind: 'action', title: 'Add Actor To Room', reads: [], writes: ['world.npcs'], risk: 'spawn',
+    describe: (p) => `Places actor ${attr(p, 'actor', '(unset)')} into ${attr(p, 'room', 'the room')} (conversation/cutscene staging).`,
+  },
+  add_inventory: {
+    tag: 'add_inventory', kind: 'action', title: 'Add Inventory', reads: [], writes: ['entity.inventory'], risk: 'state_mutation',
+    describe: (p) => `Adds wares/items to ${attr(p, 'entity', attr(p, 'object', 'the entity'))}'s inventory (child elements list the items).`,
+  },
+  set_object_name: {
+    tag: 'set_object_name', kind: 'action', title: 'Set Object Name', reads: [], writes: ['object.name'], risk: 'state_mutation',
+    describe: (p) => `Renames ${attr(p, 'object', 'the object')} to ${attr(p, 'name', '(unset)')} (cosmetic, visible everywhere).`,
+  },
+  set_entity_overrides: {
+    tag: 'set_entity_overrides', kind: 'action', title: 'Set Entity Overrides', reads: [], writes: ['entity.appearance'], risk: 'state_mutation',
+    describe: (p) => `Overrides appearance/voice properties of ${attr(p, 'entity', 'the entity')} (e.g. face, voice, combat dialog).`,
+  },
   create_ship: {
     tag: 'create_ship', kind: 'action', title: 'Create Ship', reads: [], writes: ['world.objects'], risk: 'spawn',
     describe: (p) => `Spawns a ship` +
@@ -581,6 +758,24 @@ export function runSemanticsSelftest() {
       .every((t) => getElementSemantics(t) !== null));
   ok('g12_transfer_money_economy', semanticsForNode(node('transfer_money', {})).risk === 'economy');
   ok('g12_create_object_spawn', semanticsForNode(node('create_object', {})).risk === 'spawn');
+  // --- B10 slice 1 (2026-07-11): the census-ranked batch — every top-52 uncurated tag now curated ---
+  ok('b10s1_batch_curated',
+    ['param', 'debug_text', 'text', 'create_order', 'add_player_choice', 'owner', 'create_position', 'replace',
+     'position', 'assert', 'break', 'safepos', 'create_group', 'find_object_component', 'cancel_all_orders',
+     'speak', 'substitute_text', 'return', 'set_entity_traits', 'find_sector', 'rotation', 'remove_help',
+     'remove_help_overlay', 'show_help_overlay', 'create_list', 'allow_conversation_escape', 'cutscene_event',
+     'signal_objects', 'find_station', 'append_list_elements', 'set_object_min_hull', 'set_userdata',
+     'stop_cutscene', 'play_cutscene', 'match', 'add_effect', 'add_actor_to_room', 'add_inventory',
+     'set_object_name', 'set_entity_overrides']
+      .every((t) => getElementSemantics(t) !== null));
+  ok('b10s1_structural_children_honest',
+    ['param', 'text', 'owner', 'position', 'rotation', 'safepos', 'match', 'replace']
+      .every((t) => getElementSemantics(t)?.kind === 'other'));
+  ok('b10s1_create_order_mutates', semanticsForNode(node('create_order', {})).risk === 'state_mutation');
+  ok('b10s1_describe_never_throws',
+    ['create_order', 'speak', 'set_userdata', 'add_inventory'].every((t) => {
+      try { return typeof semanticsForNode(node(t, {})).description === 'string'; } catch { return false; }
+    }));
   ok('g12_find_object_reads', semanticsForNode(node('find_object', {})).reads.includes('world.objects'));
   ok('g12_show_notification_desc',
     describeNode(node('show_notification', { text: 'Hi' })) === `Shows a UI notification: "Hi".`,

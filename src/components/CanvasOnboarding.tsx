@@ -11,6 +11,7 @@ import React, { useState } from 'react';
 import type { ModWorkspace } from '../types';
 import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
 import { MOD_RECIPES, buildRecipeWorkspace } from '../lib/modRecipes';
+import { MOD_PATTERNS, buildPatternWorkspace } from '../lib/modPatterns';
 
 interface CanvasOnboardingProps {
   /** B19: sourceId identifies what was loaded ('welcome' | 'recipe:timed_message' | …)
@@ -54,6 +55,21 @@ const CanvasOnboarding: React.FC<CanvasOnboardingProps> = ({ onLoad }) => {
               >
                 <div className="text-emerald-300 font-semibold text-xs group-hover:text-emerald-200">{r.title}</div>
                 <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">{r.blurb}</div>
+              </button>
+            ))}
+            {/* B22: proven patterns — provenance-carrying fragments from shipping mods. */}
+            <div className="pt-1.5 border-t border-white/5 text-[9px] font-mono uppercase tracking-wider text-amber-400">Proven patterns — how real mods do it</div>
+            {MOD_PATTERNS.map(p => (
+              <button
+                key={p.id}
+                data-testid={`pattern-${p.id}`}
+                onClick={() => onLoad(buildPatternWorkspace(p.id), `pattern:${p.id}`)}
+                title={`${p.provenance.provenMod} — ${p.provenance.file}\n${p.provenance.note}`}
+                className="text-left p-2.5 rounded-lg border border-amber-500/15 bg-amber-500/[0.03] hover:border-amber-500/40 hover:bg-amber-500/10 transition-colors group cursor-pointer"
+              >
+                <div className="text-amber-300 font-semibold text-xs group-hover:text-amber-200">{p.title}</div>
+                <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">{p.blurb}</div>
+                <div className="text-slate-600 text-[9px] mt-0.5 italic truncate">proven by {p.provenance.provenMod}</div>
               </button>
             ))}
           </div>

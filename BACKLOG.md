@@ -19,20 +19,19 @@ divergence shows the badge; adopt button converges; tsc/sweep green.
 
 ### B2 · Sync protocol replacement (ADR-F1) — slices 1–2 ✅ CLOSED (07-09/07-10) → ROADMAP; slice 3 `spec'd`
 Slices 1+2 live: full client↔server CAS with the WRITE CONFLICT card (Adopt/Keep-mine), adoption held
-during conflicts. **Slice 3 (remaining):** per-mod-id server state keying (absorbs one-project-model;
-multi-workspace B12 rides on it). **Acceptance:** two simulated clients cannot silently overwrite each
-other *per mod*; e2e workspace-guard removed as the proof.
+during conflicts. **Slice 3 (remaining):** per-mod-id server state keying + **DISK PERSISTENCE of active
+state** (absorbs one-project-model; multi-workspace B12 rides on it). **Acceptance:** two simulated
+clients cannot silently overwrite each other *per mod*; state survives an API restart with zero clients
+attached; e2e workspace-guard removed as the proof.
+**Evidence 2026-07-11:** post-restart blank-client race clobbered the live workspace during the B10s1
+close (caught by the leak check, restored from snapshot) — the in-memory singleton is now a
+counted-incident class, not a theoretical one.
 
 ### B3 · Console health probe — ✅ CLOSED 2026-07-09 → ROADMAP (Ken's live drill: closed the Web window →
 respawned ~60s; closed the API window → respawned; both verified from the agent side, app + API answering)
 
-### B25 · AI spend meter + limit — `spec'd` (from the 2026-07-11 standing-hazard sweep)
-`callMultiProviderAI` is the single spend chokepoint (~10 call sites; the orchestration chain fires up
-to 5 provider calls per user request). Gates exist (tier default-off, per-call token cap, origin-locked
-keys) but **no cumulative meter, no session/daily limit** — the neural-link $256 lesson shape. Scope:
-count calls+tokens per provider per day at the chokepoint (one-point change), local meter surface,
-soft-stop at a configurable daily cap with an explicit user override. **Acceptance:** meter visible;
-cap trips in a test; zero behavior change while tier is off.
+### B25 · AI spend meter + daily cap — ✅ CLOSED 2026-07-11 → ROADMAP (oracle 7/7, sweep 70/70;
+GET /api/ai/usage live; cap-trip proven by oracle, not by spending)
 
 ## P2 — Committed audit work (deferred by budget)
 
@@ -82,11 +81,8 @@ cat/dat, apply = existing /api/schema/config); oracle 10/10; sweep 67/67; e2e 11
 visuals → eyeball batch (⚠ ?firstrun=1 LOOK ONLY — apply would rewrite Ken's real config); fresh-boot
 acceptance (<2min zero-typing) → scratch checkout or B23 stranger test; GOG branch unverified.
 
-### B27 · Selftest index endpoint for sweep discovery — `spec'd` (B18 AAR worst-pick)
-oracle-sweep discovers via regex-over-source TWICE (allowlist block + SELFTESTS map) — brittle; the
-registry already holds the truth. Add `GET /api/agent/selftest-index` (registry-fed, public) and make
-the sweep prefer it (source-parse as offline fallback). **Acceptance:** sweep count identical from
-both discovery paths; a new registry oracle appears in both automatically.
+### B27 · Selftest index endpoint — ✅ CLOSED 2026-07-11 → ROADMAP (sweep 71/71 via runtime index;
+acceptance diff caught 2 census errors incl. a nested-path oracle NO prior method ever swept)
 
 ### B19 · Template → in-game guided rail — slice 1 ◐ IMPLEMENTED 2026-07-11 → ROADMAP (ABSORBS audit #7)
 Slice 1 shipped: GuidedRail (3 steps, deploy-verify inline, live watcher poll), RailGuide metadata on
@@ -100,30 +96,35 @@ non-author tester ships welcome-message to a running game on on-screen guidance 
 ### B20 · TTFM instrumentation — ✅ CLOSED 2026-07-11 → ROADMAP (oracle 9/9, sweep 68/68, e2e 12/12;
 report panel deferred until the first real funnel completes)
 
-### B21 · MD action-frequency census — `spec'd` (Phase 2; gates B10 spend — measure first)
-Rank 785 actions by frequency over vanilla+DLC corpus (+available mods); output curation priority +
-coverage math. House pattern (lib + oracle + GET). **Acceptance:** oracle green; "top N = X% usage"
-table in the close; B10 re-scoped from it.
+### B21 · MD action-frequency census — ✅ CLOSED 2026-07-11 → ROADMAP (oracle 12/12; live corpus:
+106,437 instances, top-52 actions = 90% of usage, curated already 41.4% of instances)
 
-### B22 · Pattern browser — `spec'd` (Phase 2; DeadAir knowledge moves INTO the product)
-Stampable validated workspace fragments w/ provenance, stamped via EXISTING quick-fix graph-mutation
-ops. **Acceptance:** browse → stamp → 0 errors → deployable; provenance renders.
+### B22 · Pattern browser — slice 1 ◐ IMPLEMENTED 2026-07-11 → ROADMAP (4 proven patterns, oracle 9/9,
+DOM-verified browse→stamp; slice 2: mid-canvas stamping via graph-mutation ops + unified card component)
+
+### B28 · Browser-pane renderer wedge — `spec'd` (recurring tool hazard, 3× on 2026-07-11)
+Pane renderer stops answering screenshots after HMR + setWorkspace churn (JS/DOM stays alive;
+navigate-reload recovers). Suspect the canvas rAF loop + HMR interplay. Root-cause pass; until then
+the banked workaround is DOM-read validation + reload.
 
 ### B23 · Installer unpark decision package — `blocked` (Phase 3; KEN GATE, after Phase 1 lands)
 When TTFM-in-app measured ≤15 min: present B8 unpark w/ funnel evidence; Electron-vs-single-binary
 ADR at unpark. Until then B8 stays parked.
 
-### B24 · Live game-state inspector SPIKE — `spec'd` (Phase 4; output = ADR, NOT code)
-Evaluate world-outliner data paths (debuglog protocol / opt-in companion mod / bridge lessons-only).
-Constraints: optional, read-only default, zero impact absent. Any write path = separate, write-gated.
+### B24 · Live game-state inspector — SPIKE ✅ CLOSED 2026-07-11 → **ADR-F3** (StarForge decisions.md);
+slices spec'd below
+**B24s1 · FORGE-STATE parser + read-only Inspector panel** — `spec'd`: parse `FORGE-STATE {json}`
+debuglog lines via the existing watcher tail; panel renders whatever arrives (works with hand-authored
+probe cues). **B24s2 · probe-extension generator** — `spec'd`, gated on s1: Forge generates
+`x4_forge_probe` on demand (faction census / player assets / cue heartbeats), deploy write-gated,
+save-removable. Bridge = lessons only, never a dependency. Constraints (binding): optional, read-only,
+zero impact absent.
 
 ## P4 — Depth / UX long tail
 
-### B10 · G12: long-tail action semantics — `spec'd` (PROMOTED to Vision-v2 Phase 2 by ADR-F2)
-~40 of 785 actions have curated meaning; explainer/simulator stay shallow (honest-unknown) on the rest.
-Re-scoped 2026-07-11: **B21's census runs FIRST** (measure before curating); then milestone slices
-(N=75, N=150…) until coverage ≥ ~90% of observed usage. No longer "long tail" — for the barrier-to-entry
-brief this is core hand-holding depth.
+### B10 · curated action semantics — slice 1 ✅ CLOSED 2026-07-11 → ROADMAP (**91.5%** of observed
+usage curated; oracle 50/50). Remaining (optional depth, demand-driven): tags beyond the top 52; the
+xsdParser `structural` category rider (B21 close) so census/palette stop calling child elements actions.
 
 ### B11 · G13 residual: aiscripts visually editable — `spec'd`
 Wares/jobs slice done; aiscripts import editable only when byte-faithful (#65 guards) but have no visual
@@ -131,14 +132,14 @@ editor surface beyond code view.
 
 ### B12 · Multi-workspace tabs — `spec'd` (largely absorbed by B2's per-mod server state)
 
-### B13 · QoL batch — `in_progress` ◐ (batch 1 machine-verified 2026-07-11; awaiting Ken's eyeball)
-**Batch 1 implemented (uncommitted), all machine gates green 2026-07-11** (tsc 0 / sweep 35/35 / full e2e
-11/11 — see ROADMAP ◐ entry): empty-state XML skeletons; canvas delete toast + Ctrl+Z hint; library delete
-toast with REAL undo checkpoint; ShortcutsOverlay ("?"/button/Esc); badge clip fix. Auto-select-on-create
-found ALREADY existing (reconcile). **Remaining to flip ✅:** Ken's eyeball on ① canvas delete toast,
-② library delete toast+Undo, ③ empty-state skeletons (empty scratch library), ④ compact badge narrow.
-**Still spec'd (batch 2, deliberately deferred):** override-map entry click → Diff→Patch pre-targeted at
-that file; "wire a HUD button in 3 steps" WIKI snippet.
+### B13 · QoL batch — `in_progress` ◐ (batch 1 BROWSER-CONFIRMED 2026-07-11 visual pass; one visual left)
+Batch 1 surfaces browser-confirmed live by the agent (per Ken's validate-visually directive): canvas
+delete toast + undo ✅ · library delete toast + undo loop ✅ (PLUS fix: last-item delete was impossible —
+"keep at least one" guard removed, zero-state legal) · empty-state skeletons ✅ · ShortcutsOverlay ✅
+(prior session). **Remaining:** ① conflict-card/badge narrow-width VISUAL (pane wedged mid-reproduction;
+machinery e2e-covered) ② glance at the new FirstRunWizard ✕. Ken's feel-pass now optional, not gating.
+**Batch 2 (spec'd):** override-map click → Diff→Patch pre-target; "wire a HUD button in 3 steps" WIKI
+snippet.
 
 ### B17 · e2e gate hygiene — ✅ CLOSED 2026-07-11 → ROADMAP (green/red/no-tests all verified; Node-bump
 probe ◐ Ken-gated machine change)

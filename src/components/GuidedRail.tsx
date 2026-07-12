@@ -105,7 +105,10 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
   );
 
   return (
-    <div data-testid="guided-rail" className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 w-[560px] max-w-[92%]">
+    // z-[45]: above the radar minimap (z-40) — found overlapping in the 2026-07-11 visual
+    // pass; the rail is the newcomer's active guide and dismissible, so it wins while open.
+    // Stays below modals (z-50).
+    <div data-testid="guided-rail" className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[45] w-[560px] max-w-[92%]">
       <div className="bg-[#0f131a]/97 border border-cyan-500/25 rounded-xl shadow-2xl glass-effect p-3.5">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">

@@ -486,17 +486,21 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
 
   const handleDeleteActiveItem = () => {
     // B13: checkpoint BEFORE the destructive edit so Ctrl+Z restores it, and say so.
+    // 2026-07-11 visual pass: the old "keep at least one" guard made the (valid, designed)
+    // zero-item empty state unreachable by deletion — an accidental ADD was permanent.
+    // Zero wares/jobs is a legal mod shape; deleting the last item now returns to the
+    // empty-state skeleton like any other delete, undoable the same way.
     if (activeSubTab === 'wares') {
-      if (wares.length <= 1) return toast('Keep at least one ware entry.', 'warning');
       const victim = wares[activeItemIndex];
+      if (!victim) return;
       saveCheckpoint?.();
       const next = wares.filter((_, i) => i !== activeItemIndex);
       saveWares(next);
       setActiveItemIndex(0);
       toast(`Deleted ware "${victim?.id || 'ware'}" — Ctrl+Z to undo.`);
     } else {
-      if (jobs.length <= 1) return toast('Keep at least one job entry.', 'warning');
       const victim = jobs[activeItemIndex];
+      if (!victim) return;
       saveCheckpoint?.();
       const next = jobs.filter((_, i) => i !== activeItemIndex);
       saveJobs(next);

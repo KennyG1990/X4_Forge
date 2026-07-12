@@ -599,6 +599,143 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ B10 SLICE 1 CLOSED (2026-07-11): census-ranked curation — 41.4% → **91.5%** of real usage explained
+Vision v2 Phase 2. All 40 uncurated tags inside the census top-52 curated in `mdSemantics.ts`: real
+actions with full semantics (create_order, speak, set_userdata, signal_objects, find_* family, cutscene
+family, …; risk classes assigned — cancel_all_orders/set_* = state_mutation, add_actor_to_room = spawn);
+the 8 schema-misclassified STRUCTURAL children (param/text/owner/position/rotation/safepos/match/replace)
+curated HONESTLY as child elements (kind 'other') — the explainer now says what they belong to instead of
+pretending they act alone. *Verified: semantics oracle **50/50** (incl. 4 new B10s1 checks: batch
+complete, structural-honesty, risk class, describe-never-throws); **census acceptance:
+curatedInstancePct 41.4% → 91.5%** (target ≥90); sweep 72/72; tsc 0; e2e 12/12.*
+**INCIDENT, caught by the discipline (leak-class #70 check):** after this close's e2e run the API
+(restarted by tsx watch on the mdSemantics edit) came back holding the boot-blank default — the live
+workspace was clobbered during the restart window. Restored from the session guard snapshot, verified
+stable; no user data existed beyond the snapshot. Root cause **[HYPOTHESIS]**: the server's active
+workspace is in-memory-only; a blank client sync won the post-restart race (the singleton + legacy
+boot-write class ADR-F1 already names). **This is direct evidence for B2 slice 3** (per-mod, PERSISTED
+server state) — noted in its spec. **AAR:** SUSTAIN — the post-run leak check caught a silent clobber
+the same hour it happened; that reflex (B26 automates it) is non-negotiable now. IMPROVE — I left the
+browser pane holding stale state through a server restart; park the pane (or reset its canvas) at the
+end of every visual session. **WORST-IMPLEMENTATION PICK:** the in-memory-only active workspace —
+restart + one blank client = data loss window; B2s3 is no longer just architecture hygiene, it
+prevented-incident-count is now 1.
+
+### ✅ B24 SPIKE CLOSED (2026-07-11): inspector data-path decided — ADR-F3, no code by design
+Vision v2 Phase 4 opener. Three data paths evaluated (debuglog STATE protocol / Forge-generated probe
+extension / neural-link-style bridge); **decision recorded as ADR-F3**: FORGE-STATE debuglog protocol
+first (reuses the proven watcher tail, read-only by construction, zero new transport), probe-extension
+GENERATOR second (write-gated, save-removable), bridge mined for lessons but never a dependency.
+Slices B24s1/B24s2 spec'd in BACKLOG. *Verified: applicable method for a spike = the ADR exists, is
+consistent with ADR-F1/F2 and the determinism doctrine, and BACKLOG carries the bounded slices — no
+code shipped, per the spike's own fence.* **AAR:** clean (spike-to-ADR shape worked as fenced; zero
+triggers — logged, not silent).
+
+### ◐ B22 SLICE 1 IMPLEMENTED (2026-07-11): the pattern browser — DeadAir knowledge lives IN the product now
+Vision v2 Phase 2. `src/lib/modPatterns.ts`: provenance-carrying, oracle-enforced workspace fragments
+from shipping mods — ① kill-capture on a watched group (DeadAir/x4_ai_influence #66, the BARE-groupname
+listener shape), ② order dispatch to an existing ship (order.move.recon — no spawning), ③ station cargo
+shortage formula (the "Fill" engine: 1 − count/target), ④ faction relation-change eligibility checklist
+(dynamicwardiplomacy: isactive + not-excluded + ±25 bounds). Rendered as an amber "Proven patterns — how
+real mods do it" section in CanvasOnboarding, provenance in the tooltip AND stamped into the workspace
+description; the guided rail engages on pattern load (generic guide).
+*Verified: patterns oracle 9/9 (every pattern compiles to 0 validation errors + complete provenance);
+sweep **72/72**; tsc 0; e2e 12/12; **browse→stamp DOM-verified in the real UI** (4 cards render under
+the header, tooltip carries provenance, stamp loads the 6-node fragment + rail engages with the pattern
+title) — pixel screenshot skipped: the pane renderer wedged (2nd/3rd occurrence today), DOM reads
+substituted per the validate skill; server workspace restored + verified after.*
+**◐ residuals:** mid-canvas stamping (patterns onto a NON-empty canvas via the quick-fix graph-mutation
+ops — slice 2, the browse surface then moves beyond the empty-canvas picker); pattern-card pixel eyeball
+→ next visual session batch. **AAR:** SUSTAIN — the oracle contract ("every pattern compiles clean")
+turned pattern authoring into a fast loop, 9/9 first try because the fragments reused proven template
+vocabulary. TOOLS — the pane-renderer wedge is now RECURRING (3×): logged as a real tool hazard; DOM-read
+substitution is the banked workaround, but the wedge deserves a root-cause pass (likely HMR + the 180FPS
+canvas loop) — spec'd as **B28**. **WORST-IMPLEMENTATION PICK:** CanvasOnboarding is becoming a
+three-species list (templates/recipes/patterns) with copy-pasted card markup per species — the third
+copy today; a single typed card-list component is the fix, fold into B22 slice 2.
+
+### ✅ B27 CLOSED (2026-07-11): runtime selftest index — discovery now reads the truth registration writes
+`GET /api/agent/selftest-index` (public, metadata-only): the running server states its own oracle board
+from PUBLIC_READONLY_GETS — the same set every registration path feeds. oracle-sweep prefers it
+(source-parse demoted to offline fallback, labeled in output). **The acceptance diff found TWO census
+errors in the old methods:** (1) my first filter missed the bare legacy `/agent/selftest` (69≠70 —
+endsWith("-selftest") vs the hyphenless name); (2) the widened filter then surfaced
+`/agent/npc-identity-probe/selftest` — a nested-path oracle BOTH prior discovery methods had ALWAYS
+missed (the source regex can't match an inner slash; the R1 close even named it "deliberately not
+migrated"). The board's true size is **71**, and the runtime index is the only method that sees all of it.
+*Verified: diff source(70) vs index(71) — index ⊇ source, the one extra is the nested-path oracle,
+now swept and GREEN; **sweep 71/71 via "discovery: runtime index"**; tsc 0.*
+**AAR:** SUSTAIN — writing the acceptance as an EQUALITY DIFF (not "both look right") is what caught
+two silent census errors in one pass; equality-diff every discovery-mechanism migration. IMPROVE —
+none beyond. TOOLS — source-parse fallback documented as missing nested paths (acceptable: it only
+runs when the server is down, and the sweep needs the server anyway).
+
+### ✅ B25 CLOSED (2026-07-11): AI spend meter + daily cap — the $256 lesson closed at the chokepoint
+From the standing-hazard sweep. `src/lib/aiSpendMeter.ts` (pure, injectable store/clock) wired into
+`callMultiProviderAI` — the single chokepoint every paid call passes: per-provider daily call counts in
+gitignored `data/ai-usage.json`, cross-provider TOTAL soft-stop at `AI_DAILY_CALL_CAP` (default 300;
+0 disables), refusals counted for pressure visibility, clear raise-the-cap error message. Readout:
+`GET /api/ai/usage` (counts only — no keys, no prompts). Zero behavior change while the tier is off.
+*Verified: meter oracle 7/7 (per-provider counts, cross-provider cap, daily rollover, cap-0 bypass,
+corrupt-store degrade); live usage endpoint (day/cap/0 used); sweep **70/70**; tsc 0; e2e 12/12.
+Cap-trip deliberately NOT tested with real provider calls (not spending money to test the money guard —
+the oracle owns that logic).* **AAR:** clean except the standing note that the sweep→BACKLOG→shipped
+loop for this item took one day total — the hazard-sweep rule pays.
+
+### ✅ B21 CLOSED (2026-07-11): action-frequency census — B10's price measured, and it COLLAPSED
+Vision v2 Phase 2 opener; the measure-before-curating gate (ADR-F2). `src/lib/actionCensus.ts`
+(DOM-first counting via xmlLite — commented decoys structurally invisible, oracle-proven) +
+`GET /api/agent/action-census` reading the ENTIRE vanilla md/ corpus straight from the game's cat/dat
+archives (DLC-deduped, cached per game path).
+**The numbers (real corpus, this machine):** 332 md files · **106,437 action instances** · only
+**499 of 785** schema actions are ever used (286 are dead vocabulary) · current curated set already
+covers **41.4% of observed INSTANCES** (set_value alone is 30.5%) · **the top 52 actions cover 90% of
+everything vanilla does.** B10 re-priced: not a 785-action marathon — one slice of ~35 uncurated tags
+inside the top 52 reaches ~90% instance coverage. (Caveat, noted for the curation pass: a few top
+"actions" are schema-classified structural children — param/text/position/owner — the slice should
+skip or treat them as attribute docs.)
+*Verified (methods by name): census oracle 12/12 (comment-invisibility, nested counting, tie-break,
+pct/cum math, empty-corpus degrade); LIVE census against the real game archives (numbers above);
+sweep **69/69**; host tsc exit 0; full e2e 12/12; leak check clean.*
+**AAR:** SUSTAIN — measure-first flipped a feared marathon into one bounded slice, the third time
+today measurement collapsed a guess (perf, sweep coverage, now curation cost); the cat/dat walker as
+corpus source means zero external-dir dependencies. IMPROVE — one type slip (ElementLike.nodeName not
+tagName), caught by tsc immediately. TOOLS — none. **WORST-IMPLEMENTATION PICK:** the schema
+classifier calls structural child elements (param/text/owner/position) "actions" — that
+misclassification now visibly pollutes a data product (the census top-15); a `structural` category
+flag in xsdParser would clean census, palette, and explain-surface at once; spec'd as a B10-slice
+rider.
+
+### ✅ VISUAL VALIDATION PASS (2026-07-11): Phase 1 surfaces browser-confirmed; 2 real defects found+fixed
+Per Ken's /goal directive (validate visually + via API), the agent drove the REAL UI in the browser pane
+under a capture→validate→restore guard (server workspace snapshotted first, restored + verified after —
+twice, incl. once mid-pass when the pane renderer wedged).
+**Browser-CONFIRMED:** B18 wizard found-state (detected the real Steam install, all four proposed paths
+rendered correctly; apply untouched; manual-setup handoff shows Ken's real config unharmed) · B19 rail
+steps ①②③ live (step 3's watcher poll answered from the real debug-watcher; Deploy shown, never clicked)
+· B13 canvas delete toast ("Deleted "Welcome" — Ctrl+Z to undo." screenshotted) + undo verified by state
+· B13 empty-state skeleton (wares preview) · B13 library add→delete→zero→skeleton→Ctrl+Z-restore loop ·
+auto-select-on-create.
+**Defects FOUND by the pass, fixed, re-verified live:** (1) the guided rail rendered UNDER the radar
+minimap (z-30 vs z-40) — invisible to every machine gate; rail → z-[45], re-screenshotted clean.
+(2) the library's "keep at least one" guard made the designed zero-item empty state unreachable by
+deletion — an accidental ADD was permanent; guard removed, last-item delete now returns to the skeleton,
+undoable (verified live: 1→0→skeleton→Ctrl+Z→1). **Polish shipped:** wizard found-state had NO dismiss
+(trapped look-around users between two commitments) — ✕ added on all non-applying phases.
+*Verified: the screenshots/state-reads above; post-fix gates host tsc 0 · e2e 12/12 (test:e2e) ·
+sweep 68/68 · server workspace restored, name+nodes verified.* **◐ residual:** conflict-card/badge
+narrow-width VISUAL (the 409 reproduction wedged the pane renderer mid-experiment; conflict machinery
+itself is e2e-covered) + a glance at the new wizard ✕ — both queued for the next visual session.
+**AAR:** SUSTAIN — the guarded visual pass is now a PROVEN house method (snapshot → drive UI → restore
+via API works even with a dead pane) and it caught two ship-blockers no oracle/e2e/tsc could ever see;
+Ken's "validate visually" directive is vindicated as a standing layer, not a courtesy. IMPROVE — two
+comment-syntax slips in one day (JSX comment at expression root; `*/` inside a block comment) — slow
+down on comment-bearing edits. TOOLS — the pane renderer wedging under HMR+state churn is a live
+hazard: recovery = navigate-reload (worked); restore must NEVER depend on the pane (it didn't).
+**WORST-IMPLEMENTATION PICK:** the "keep at least one" guard class — an invariant invented to dodge an
+empty-state render bug that no longer exists, silently contradicting a designed feature; grep for its
+siblings (`length <= 1` guards) next reconcile.
+
 ### ✅ B20 CLOSED (2026-07-11): TTFM funnel — the north-star metric is now measured, locally only
 Vision v2 Phase 1. `src/lib/ttfm.ts`: first-occurrence-only funnel stages (first_boot →
 paths_configured → template_loaded → first_deploy → game_confirmed) in localStorage, ZERO network

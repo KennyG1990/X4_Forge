@@ -19,7 +19,28 @@
 - ◐ **B18** "B18: first-run wizard + game autodetect + schema harvest; oracle-sweep registry blind spot fixed"
 - ◐ **B19s1** "B19s1: guided rail — tweak/deploy/see-it steps + RailGuide metadata + guided-rail e2e spec"
 - ✅ **B20** "B20: TTFM funnel (local-only) — north-star metric instrumented, oracle 9/9"
-- **Gates as of close: tsc 0 · sweep 68/68 · e2e 12/12 (test:e2e) · leak clean.**
+- ✅ **VISUAL PASS** (guarded browser-pane; 2 defects found+fixed: rail z-under-minimap, last-item
+  library delete impossible; wizard ✕ added) "visual pass: rail z-fix, last-item delete legal, wizard dismiss"
+- ✅ **B21** "B21: action census — top-52 actions = 90% of 106k vanilla instances; B10 re-priced to one slice"
+- ✅ **B25** "B25: AI spend meter + daily cap at the callMultiProviderAI chokepoint"
+- ✅ **B27** "B27: runtime selftest-index; sweep discovers 71 oracles (2 census errors found by equality diff)"
+- **Gates as of latest close: tsc 0 · sweep 71/71 (runtime-index discovery) · e2e 12/12 (test:e2e) · leak clean.**
+- ◐ **B22s1** "B22s1: pattern browser — 4 provenance-carrying DeadAir patterns, oracle 9/9, DOM-verified"
+- ✅ **B24 spike** "B24: inspector data-path decided — ADR-F3 (FORGE-STATE protocol first)"
+- ✅ **B10s1** "B10s1: census-ranked curation — 91.5% of real usage explained (oracle 50/50)"
+- ⛔ **INCIDENT (handled):** API restart + blank-client race clobbered the live workspace during the
+  B10s1 close — CAUGHT by the leak-check reflex, restored from session snapshot, stable. Evidence
+  written into B2s3's spec (now requires DISK PERSISTENCE + zero-client restart survival).
+- **Final gates: tsc 0 · sweep 72/72 · e2e 12/12 · census 91.5% curated · workspace restored+stable.**
+- **DEGRADATION CALL made at session end:** 12 closed units, error cluster in the last stretch (2
+  comment-syntax slips, 2 edit-before-read, pane-hygiene contributing to the incident) — commit point
+  NOW, fresh session for B2s3 (it deserves clean context; it's sync architecture).
+- **Remaining buildable next session:** B2s3 (per-mod + persisted state — THE priority, incident-backed)
+  · B26 guard self-check · B19s2 (brief verdict field + beyond-canvas templates) · B22s2 (mid-canvas
+  stamping + unified cards) · B24s1 (FORGE-STATE parser+panel) · B28 (pane-wedge root cause).
+  Ken-gated: commits (titles above), B13 residual visuals + wizard-✕ glance, in-game batch, B23/B8.
+- **Note:** HANDOFF.md §3/§20/§28 predate this run — ROADMAP/BACKLOG/this file are current; refresh
+  HANDOFF.md next session (light lane).
 - **EYEBALL BATCH (Phase 1 boundary — present to Ken):** ① B13's 4 surfaces (delete toasts ×2,
   empty-state skeletons, compact badge) ② B18 wizard via `?firstrun=1` (⚠ LOOK ONLY — clicking "Set up
   automatically" rewrites Ken's real config) ③ B19 rail feel (empty canvas → template → walk 3 steps;

@@ -38,6 +38,20 @@ const LIST_ONLY = process.argv.includes("--list");
 const JSON_OUT = process.argv.includes("--json");
 const TIMEOUT_MS = Number(process.env.X4_FORGE_TIMEOUT_MS || 20000);
 
+/** B27: preferred discovery — ask the RUNNING server for its own oracle board (the
+ *  same set registration writes). Falls back to source parsing when the app is down. */
+async function discoverViaIndex() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    const res = await fetch(`${BASE}/api/agent/selftest-index`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data.selftests) || data.selftests.length === 0) return null;
+    return data.selftests;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
 /** Extract the `/agent/...-selftest` entries from server.ts's PUBLIC_READONLY_GETS set. */
 function discoverSelftestPaths() {
   const serverPath = path.join(ROOT, "server.ts");
@@ -95,9 +109,14 @@ async function hitOne(p) {
 }
 
 async function main() {
-  let paths;
-  try { paths = discoverSelftestPaths(); }
-  catch (e) { console.error(`[oracle-sweep] ${e.message}`); process.exit(1); }
+  let paths = await discoverViaIndex();
+  let via = "runtime index";
+  if (!paths) {
+    via = "source parse (server unreachable — fallback)";
+    try { paths = discoverSelftestPaths(); }
+    catch (e) { console.error(`[oracle-sweep] ${e.message}`); process.exit(1); }
+  }
+  console.error(`[oracle-sweep] discovery: ${via}`);
 
   if (paths.length === 0) { console.error("[oracle-sweep] No *-selftest endpoints discovered — check PUBLIC_READONLY_GETS."); process.exit(1); }
 

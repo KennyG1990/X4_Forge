@@ -50,6 +50,7 @@ import GuidedRail from './GuidedRail';
 import { ttfm } from '../lib/ttfm';
 import { MOD_TEMPLATES } from '../lib/modTemplates';
 import { MOD_RECIPES } from '../lib/modRecipes';
+import { MOD_PATTERNS } from '../lib/modPatterns';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
 import { computeAutoLayout } from '../lib/mdAutoLayout';
 import { markE2EPerfCounter } from '../lib/e2ePerfCounters';
@@ -1515,10 +1516,11 @@ export default function Canvas({
       {railSourceId && workspace.nodes.length > 0 && (() => {
         const tpl = MOD_TEMPLATES.find(t => t.id === railSourceId);
         const recipe = railSourceId.startsWith('recipe:') ? MOD_RECIPES.find(r => `recipe:${r.id}` === railSourceId) : undefined;
-        if (!tpl && !recipe) return null;
+        const pattern = railSourceId.startsWith('pattern:') ? MOD_PATTERNS.find(p => `pattern:${p.id}` === railSourceId) : undefined;
+        if (!tpl && !recipe && !pattern) return null;
         return (
           <GuidedRail
-            title={tpl?.title || recipe?.title || 'Your starter mod'}
+            title={tpl?.title || recipe?.title || pattern?.title || 'Your starter mod'}
             guide={tpl?.rail || null}
             getWorkspace={() => workspace}
             onClose={() => setRailSourceId(null)}

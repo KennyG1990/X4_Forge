@@ -111,7 +111,12 @@ const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ onClose, onOpenManualSe
       <div className="w-[520px] max-w-[90%] bg-[#0f131a]/97 border border-cyan-500/25 rounded-xl shadow-2xl glass-effect p-6">
         <div className="flex items-center gap-2.5 mb-1">
           <Rocket size={18} className="text-cyan-300" />
-          <div className="text-white font-bold text-sm tracking-wide">Welcome to X4 Forge</div>
+          <div className="text-white font-bold text-sm tracking-wide flex-1">Welcome to X4 Forge</div>
+          {/* 2026-07-11 visual pass: the found-state trapped look-around users between two
+              commitments — every phase except mid-apply is dismissible. */}
+          {phase !== 'applying' && (
+            <button onClick={onClose} aria-label="Dismiss setup" className="text-slate-500 hover:text-slate-300 cursor-pointer text-sm leading-none">✕</button>
+          )}
         </div>
         <div className="text-slate-400 text-[11px] mb-4 leading-relaxed">
           The Forge needs to know where X4: Foundations lives. It can find everything itself — nothing is
