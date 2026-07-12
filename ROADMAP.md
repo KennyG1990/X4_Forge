@@ -599,6 +599,149 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ B32 CLOSED (2026-07-12, workflow v3, VERIFIED): recurring-mistake tripwires — banked lessons become mechanical gates
+The JSX-comment-before-root mistake shipped twice in two days despite being banked after the first —
+banking is not recall. `scripts/precommit-check.mjs` now runs a TRIPWIRES table (extensible; first entry:
+`jsx-comment-before-root`, regex over all 45 src `.tsx/.jsx` files) BEFORE typecheck, so the block message
+names the mistake and its history instantly instead of surfacing as a generic tsc/Vite error minutes later.
+*Verified: green path exit 0 on the real tree (0 hits) · negative drill: planted the exact 07-12 mistake
+shape → BLOCKED exit 1 with the named tripwire → drill file removed · tsc 0 (unchanged sources).*
+**AAR: CLEAN — no trigger fired** (single-pass implement, both validation directions green first try).
+Durable point regardless: this unit IS the acted-on lesson from B29's AAR (tripwire over diary entry).
+
+### ✅ B26 CLOSED (2026-07-12, workflow v3, VERIFIED): the guard verifies its own restore — and the runtime-writes audit caught a second Vite gap
+The last manually-verified safety step is now machine-checked, plus the accumulated B2s3 residual audits.
+**Built:** ① `restoreWorkspace()` re-reads the server after its restore POST and byte-compares against the
+pre-suite snapshot — prints `RESTORE-VERIFY: OK/FAIL` (parseable marker); ② `run-e2e.mjs` verdict turns RED
+on the FAIL marker (a green suite that leaked test state is not green); ③ api-selftest extended 3→6 checks:
+`legacyRejected` (blind write → 409), `forceAccepted`, `firstContactLegacyAllowed` (flag-swap simulation,
+restored) — the two B2s3 gate branches named unexercised are now oracle-covered; ④ RESET-button audit:
+`handleClearWorkspace` is gate-legal by construction (CAS via the debounced save) and now PARKS the prior
+named state server-side — reset is recoverable, no fix needed; ⑤ runtime-writes audit: enumerated every
+`fs.write*` target in server.ts → found + fixed a SECOND Vite watch-ignore gap (`data/**` — AI-usage meter
+and api-registry writes were reloading clients, same class as the B2s3 `.studio-state` gap); all other
+write roots live outside the project tree or under already-ignored paths. ⑥ Guard-removal decision: KEEP
+until B31 (ephemeral e2e state) makes it obsolete by construction.
+*Verified (named methods): **tsc 0** · **api-selftest 6/6** live (incl. the three new gate checks; live+disk
+state byte-clean after) · **negative path**: doctored snapshot (junk field sanitize strips) through the real
+restore → `RESTORE-VERIFY: FAIL` printed, wrapper regex match proven, live workspace unharmed · **green
+path**: suite run shows `RESTORE-VERIFY: OK` + verdict PASS (in one full run the OK line was cut by the
+known libuv teardown crash racing output — absence is deliberately non-red; marker-present-FAIL is the red
+condition) · **oracle sweep 73/73** · workspace + disk state byte-match the guard snapshot.*
+**AAR (triggers: audit found a live gap; one validation surprise — the swallowed OK line):** SUSTAIN — the
+audit pattern "enumerate writers of the resource, check each against BOTH watchers (git, vite)" found a gap
+no task pointed at; that's rule 2(e) doing its job. IMPROVE — the OK-line race shows output-parsing gates
+inherit the crash's flakiness; B31 should move the verify INSIDE the test process (a fixture assert), not
+teardown stdout. TOOLS — none new. **Highest-risk evidenced weakness:** the wrapper's greenness partially
+depends on output that a known crash can truncate — bounded fix spec'd into B31 (in-process verify).
+
+### ✅ B29 CLOSED (2026-07-12, workflow v3, VERIFIED): the header fits real monitors — and the conflict card can never be clipped again
+The 2286px shrink-0 header (found during the 07-12 conflict-card visual) now has a real narrow-width
+strategy. **Built:** ① conflict card + diverged badge PROMOTED out of the header into a fixed
+viewport-anchored sync-status layer (`data-testid="sync-status-layer"`, top-right below the header) —
+clipping is now impossible by construction, full labels always; ② all 10 nav tabs, SYNC MOD / AGENT API /
+SETTINGS / RESET, undo/redo counters, the "Preset:" label, and the AI-engine detail row collapse to
+icon-only (with title tooltips) below a custom `min-[2150px]` breakpoint — full labels return only where
+they actually fit (measured: full-label header = 2087px, so Tailwind's 2xl=1536 was provably too early —
+caught by the 1920 drill); ③ search box yields (w-52 vs w-80) and the preset select clamps (max-w-130px)
+below the same breakpoint.
+**B2s3 ADDENDUM (found via this unit's drills, [REPRODUCED]):** `.studio-state/**` was missing from
+Vite's watch-ignore — every persistence write full-page-reloaded every connected client (the exact
+runtime-writes-into-project-tree class the config comment names; my B2s3 coupling miss — Vite's watcher
+is a READER of the project tree). Fixed in vite.config.ts. This was also the mechanism behind ALL the
+"Promise was collected" drill kills — after the fix, multi-second pane evals survive. **B2s3 Keep-mine
+residual CLOSED:** live conflict → KEEP MINE click → server adopted the client copy (force path proven
+end-to-end in the UI), card cleared.
+*Verified (named methods): **tsc 0** · **DOM-rect drills**: 1280×800 → docScrollWidth 1280 = vw, 18/18
+header controls on-screen; 1920×950 → 1920 = vw, 0 clipped · **negative path (the B29-spawning failure)**:
+live 409 produced at 1280 → card fully on-screen (right edge 1268 ≤ 1280), both buttons clickable,
+inside the fixed layer · **e2e 12/12** first try (conflict testids preserved) · **oracle sweep 73/73** ·
+workspace byte-restored to the guard snapshot; pane park VERIFIED by probe.*
+**Residual:** label-restore threshold (2150px) is a measured constant — if the header gains features it
+must be re-measured (note in spec); Ken's feel-pass on the icon-only header → optional eyeball batch.
+**AAR (triggers: repeat comment-syntax error; drill kills; breakpoint assumption corrected by the 1920
+drill):** SUSTAIN — DOM-rect acceptance made a visual unit pane-degradation-proof; drilling at TWO widths
+caught the wrong-breakpoint assumption machine-red. IMPROVE — I repeated yesterday's banked
+JSX-comment-before-root mistake (GlobalSearch); the banked lesson didn't transfer because I never re-read
+it — recurring-mistake classes need a pre-edit tripwire, not a diary entry. TOOLS — the biggest win: the
+"pane wedge" B28 hazard was substantially OUR OWN BUG (the Vite watch gap) masquerading as tool flakiness;
+lesson banked globally: before blaming the tool, enumerate what YOUR code writes into watched paths.
+**Highest-risk evidenced weakness:** vite.config's watch-ignore list is a hand-maintained enumeration that
+silently goes stale every time the server grows a new runtime-write path (token → snapshots → now state) —
+propose: server-side runtime writes converge under ONE ignored root (`.studio-state/`) instead of
+scattering new top-level dotfiles (spec'd into B26's audit scope).
+
+### ✅ B2 SLICE 3 CLOSED (2026-07-12): the workspace singleton is dead — state survives restarts, blind writes are rejected, mod switches park instead of destroy
+ADR-F1's remaining half, incident-backed (the 2026-07-11 boot-blank clobber). **Built:** ①
+`src/lib/workspaceState.ts` (house pattern): atomic tmp+rename persistence of the active state to
+`.studio-state/active.json` (gitignored) + parked per-mod states with prune-20 + oracle; ②
+`commitActiveWorkspace()` chokepoint — ALL four real writers (CAS mutation, deploy-verify, ai-generate,
+restore-snapshot) commit through it (persist + park-on-name-switch); the api-selftest swap stays raw
+deliberately and now RE-PERSISTS truth on restore (designed-in catch: its mid-test commit persisted test
+junk that a later restart would have adopted); ③ boot restores persisted state with a monotonic version
+(max(Date.now(), saved+1)); ④ **the ADR-F1 legacy deprecation round is OVER**: no-head/no-version writes
+→ 409 `legacy_write_rejected` unless `force:true` or true first contact (fresh install); ⑤ park-on-switch
++ `GET /workspace/parked` + `POST /workspace/restore-parked` (restores park the current state too — never
+destructive); ⑥ client: the boot save is SUPPRESSED until the poll learns the server head (the blank-client
+race is structurally impossible now); Keep-mine sends `force:true`; ⑦ all enumerated legacy writers updated
+(workspace-guard restore + 3 e2e fixture restores → force); install_mod.ts turned out to be a READER
+(reconcile record corrected); agent-API self-doc schema updated.
+*Verified (named methods): **tsc 0** · **oracle 10/10** (workspace-persistence-selftest: roundtrip, atomic
+no-litter, corrupt/invalid→null, park/list, latest-wins, prune, slug case-collision) · **oracle sweep
+73/73** (runtime-index discovery picked the new oracle up automatically) · **full e2e 12/12** via test:e2e
+(one unexplained single-flake on canvas-coverage delete-cascade in run 1, green in isolation + full re-run;
+artifacts auto-cleaned — logged as watch item, not chased) · **live API drills 6/6**: legacy-no-force→409,
+stale-head→409, CAS→200, park-on-switch parked the prior mod, restore-parked round-trip, oracle · **THE
+ACCEPTANCE, live×2**: zero-client tsx restart → content hash byte-identical across the restart, version
+monotonic · **INCIDENT-CLASS REPRODUCTION, dead**: marker on server → localStorage-wiped blank client
+booted + 8s of debounce/poll windows → marker intact, hash unmoved, and the client ADOPTED the server copy
+(DOM-verified: escort cue on canvas, no conflict card, no diverged badge) · final state byte-matches the
+guard snapshot, live AND on disk, stable with the pane parked.*
+**Residuals (named honestly):** first-contact allowance + pristine-default park-guard branches unexercised
+live (trivial conditions, oracle-adjacent); Keep-mine UI click not drilled (pane degraded — server force
+path API-drilled, client change is one line, suite green); e2e workspace-guard deliberately KEPT (removal
+deferred to B26); RESET header button's server semantics unaudited under the new gate → fold into B26.
+**AAR:** SUSTAIN — resource-first reconcile found real extension points (.snapshots machinery, ADR-F1's
+own spec) and the drills reproduced the actual incident as the acceptance test; the second-layer pass
+caught the unexercised Keep-mine path. IMPROVE — I "parked" the pane without verifying it (a client kept
+CAS-writing through my server restarts — benign only by luck); park = navigate AND verify blank, now in
+the handoff hazards. TOOLS — B28 grew a THIRD degradation mode: long-running JS evals get killed/collected
+mid-flight ("Inspected target navigated or closed", "Promise was collected") — banked workaround: pane JS
+must be short-lived (<~2s), no multi-second awaits; 3 drill interruptions this close. **WORST-IMPLEMENTATION
+PICK:** the e2e isolation harness — page.route half-isolation around the SHARED live singleton has now
+caused/complicated three incident classes (B15 RED, the guard-leak class, today's suppression interplay);
+with per-mod persisted state landed, the right shape is an EPHEMERAL server state for e2e (per-run state
+dir or fixture mod key) instead of route-mocking — spec'd as **B31**.
+
+### ✅ B13 RESIDUAL VISUALS CLOSED (2026-07-12): wizard ✕ + conflict card verified live — and the conflict card is invisible where it matters (→ B29)
+Ken reported not understanding the "eyeball items" — root cause: I'd been queueing them in engineer
+shorthand. Response: ran the two remaining app visuals myself under the validate-visually directive
+(guarded browser-pane session; snapshot→verify→restore, server workspace confirmed byte-stable after).
+**① FirstRunWizard ✕ — ✅ works.** DOM-verified (present → click → absent); the two "failed" physical
+clicks were the PANE lying (stale screenshot frames + input-scaling desync in the degraded renderer
+state — [REPRODUCED], banked as B28 evidence), not the app: the handler fired clean via element click.
+**② Conflict card — ✅ produced live, and it caught a real defect.** Manufactured a genuine 409 (external
+CAS write + immediate canvas edit inside the poll window; two failed attempts taught: the boot save is
+legacy/no-CAS by design, and a no-op tidy doesn't dirty the workspace). Card rendered with full text +
+both actions; the <xl compact ⚠ collapse works (computed-style verified at vw 1000/1270). **BUT the
+header's ~2286px of shrink-0 content pushes the card off-screen below ~2300px viewport** — the conflict
+UI is invisible on any normal window exactly when a conflict blocks sync. Spun out as **B29** (spec'd,
+ship-blocker grade). Adopt-server resolution verified (card cleared, scratch node discarded); snapshot
+restored; final server state byte-clean (name/desc/nodes/version stable across 6s).
+*Verified: DOM-truth probes (element presence, computed styles, bounding rects) + live 409 round-trip +
+guarded restore. Screenshot pipeline wedged 2× mid-session (B28) — pixels replaced by DOM reads per the
+banked workaround.*
+**AAR:** SUSTAIN — DOM-truth validation survived a dead screenshot pipeline; the drill's two failures
+each produced a mechanism lesson (legacy boot save; no-op mutations don't save) that made the third
+attempt surgical. IMPROVE — my eyeball-queue items were written for me, not for Ken; from now on every
+Ken-gated item ships with a click-by-click script (see the in-game item below) — an unactionable gate
+is an unfired gate. TOOLS — B28 evidence extended (stale frames + click desync); B29 filed. **Downgraded
+[HYPOTHESIS]:** yesterday's "adopt-race silent clobber" — the simpler mechanism (legacy boot save, no
+CAS head yet) explains the observed overwrite; the race theory stays unproven, B2s3 evidence unchanged.
+**WORST-IMPLEMENTATION PICK:** the header layout — seven shrink-0 clusters and zero responsive strategy
+means every new header feature (conflict card, spend meter, future badges) silently degrades narrow
+windows; B29 is the fix spec.
+
 ### ✅ B10 SLICE 1 CLOSED (2026-07-11): census-ranked curation — 41.4% → **91.5%** of real usage explained
 Vision v2 Phase 2. All 40 uncurated tags inside the census top-52 curated in `mdSemantics.ts`: real
 actions with full semantics (create_order, speak, set_userdata, signal_objects, find_* family, cutscene
@@ -4061,31 +4204,56 @@ A4.x — one setting in Settings governs how much AI surface exists. **Default O
 - **intent** — the user's goal in plain language; the north star the model re-reads every turn.
 - **requirements** — enumerated, checkable acceptance criteria.
 - **implementationPlan** — ordered steps; each carries a rationale, target nodes/domain, and a **deterministic "done-check"** (which validator/selftest proves it complete).
-- **taskList** — `{id, title, status: pending|in_progress|done|blocked, blockedBy}` — mirrors the TaskCreate/TaskUpdate model; both user- and AI-editable.
-- **scratchpad** — freeform notes, decisions made, open questions, and **rejected approaches + why** — a running "lessons" log so the model can't loop on the same mistake (exactly what ROADMAP/HANDOFF do for coding agents here).
-- **changelog** — applied steps + their deterministic verdicts (verified, not asserted).
+- **taskList** — `{id, title, status: pending|in_progress|done|blocked, blockedBy}` — mirrors the TaskCr
+---
 
-**The loop (plan → ground → propose → verify → record), human-gated at plan and step level:**
-1. **Plan** — model drafts/updates implementationPlan + taskList from intent; user reviews/edits (this is design *with* the user). Nothing touches the canvas.
-2. **Ground** — for the next task, model calls TOOLS: object-index (H8) for real ids, schema for valid attributes — instead of recalling from training.
-3. **Propose** — model emits ONE small step (a few nodes / one cue), never a whole workspace. Small surface = fewer hallucinations + trivial verification.
-4. **Verify** — the step runs through `validateModWorkspace` + the deterministic critic (`src/lib/mdCritic.ts`) + the task's selftest done-check; ✗ results route into the scratchpad as "known issues," never silently applied.
-5. **Record** — on user Confirm: apply (diffed + checkpointed, per A4.2), mark the task done, append the verdict to changelog, advance to the next step.
+### Workflow v3 adopted — Universal AI Task Workflow + X4 Forge Project Adapter (VERIFIED 2026-07-12, Ken's order)
+**Lane:** FULL (canon/governance change). **What changed:** the 8-step v2 workflow text (instituted
+2026-06-26, amended through 2026-07-02) is REPLACED everywhere it was written in this repo by Ken's
+`UNIVERSAL_AI_TASK_WORKFLOW.md` (CLASSIFY → PLAN → BASELINE → RECONCILE → DOCUMENT PLAN → IMPLEMENT →
+VALIDATE → REVIEW → DOCUMENT CLOSE → AAR; five-state closes VERIFIED/PARTIAL/FAILED/BLOCKED/REVERTED;
+acceptance contract + negative-path declared up front; delta-based capability map; evidenced-only
+risk pick; read-only git explicitly legal). Canonical core: `UNIVERSAL_AI_TASK_WORKFLOW.md` (repo
+root, verbatim from Ken's upload). `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` rewritten as IDENTICAL mirrors:
+OPERATOR PROTOCOL (kept verbatim as its own layer, ✅→VERIFIED wording only) + inlined universal core +
+NEW **X4 Forge Project Adapter** (status-symbol mapping ✅=VERIFIED/◐=PARTIAL, references, records +
+AAR-ledger paths, commands/gates incl. test:e2e + libuv-exit-code hazard, validation-layer mapping
+incl. ADR-G3 EXECUTION/EXPERIENCE split + click-by-click-script rule, e2e safety, spend policy/B25,
+git & release ownership, task-selection rule, DeadAir grounding). GEMINI.md previously carried NO
+workflow at all (the 2026-07-09 mirror-gap class) — now a full mirror. HANDOFF.md §1/§23 updated to
+v3. **What was deliberately not changed:** historical records keep ✅/◐ symbols (mapped, not
+rewritten); the mod-mandate, graphify, and Agent Brain sections carried over verbatim.
+**Baseline:** mirrors read in full before rewrite; working tree carried other sessions' uncommitted
+Vision-v2 work — preserved untouched. **Reconcile:** old workflow located in exactly CLAUDE.md +
+AGENTS.md (+ HANDOFF.md condensed §23); GEMINI.md confirmed workflow-less; the two subordinate HARD
+RULEs (roadmap-at-end; three-tools validation) absorbed into workflow §8 + the adapter's validation
+layers — nothing dropped. No capability-map delta (governance, not capability).
+**Validation (cited):** md5sum CLAUDE.md == AGENTS.md == GEMINI.md (7102136a…); host Read spot-checks
+of head/tail of both mirrors; UNIVERSAL_AI_TASK_WORKFLOW.md host-read verified (370 lines, verbatim);
+HANDOFF.md grep shows zero remaining v2-chain references. Negative path: stale-mount copy hazard
+checked before cp (mount freshness proven by header read). **Remaining/BLOCKED:** copies OUTSIDE this
+repo are unreachable from this session — **Ken must update `F:\DEV_ENV\CLAUDE.md` (authoritative
+global) and any StarForge wiki workflow pages**, or mount F:\DEV_ENV next session; until then the
+global copy contradicts this repo (known, named canon lag).
+**Suggested commit title:** "workflow v3: adopt Universal AI Task Workflow + X4 Forge adapter (CLAUDE/AGENTS/GEMINI mirrors, HANDOFF refs)"
+**AAR:** triggers — reconcile changed scope (GEMINI.md had NO workflow; mirror drift itself was the
+landmine) + one tool nuance (Read tool token cap on 4k-line ROADMAP → bash tail used). Sustain:
+verbatim-core + adapter split honored compliance scenario 10 (project language moved to adapter, core
+untouched). Improve (work): mirror discipline should be mechanical — a `precommit:check` extension
+diffing the three mirrors would make drift structurally impossible; spec'd as a backlog candidate
+(B30). Improve (tools): none beyond that. Highest-risk evidenced weakness: canon exists in FOUR
+places (3 mirrors + global) with manual sync — the exact class that bit us 2026-07-09; B30 is the
+bounded fix. Lessons banked here (project ledger entry pending StarForge access).
 
-**Anti-hallucination mechanisms (each mapped to an EXISTING deterministic asset):**
-- Decomposition into small steps → smaller error surface, each independently checkable.
-- Tool-grounding → `/api/agent/object-index` + `/api/agent/schema` supply real ids/attrs (kills the #1 failure: invented macros/tags).
-- Per-task deterministic done-check → `validateModWorkspace`, `mdCritic`, `round-trip-selftest` (lossless), `object-index-selftest`, etc. — completion is *verified*, not claimed.
-- Persistent blueprint → stable context every turn; prevents the drift long free-form chats cause.
-- Scratchpad lessons log → records failed/rejected approaches so the model doesn't repeat them.
-- Self-critique gate → reuse the deterministic critic to vet a plan step BEFORE proposing nodes.
-- Human-in-the-loop approval at plan + step granularity.
-
-**UI — a Blueprint panel inside the `cobuild` copilot:** three sub-views — **Plan** (ordered steps + per-step verdict badges), **Tasks** (live checklist), **Scratchpad** (editable notes/decisions/open-questions). Clicking a plan step focuses its affected nodes on the canvas. User edits to plan/tasks/scratchpad are treated as authoritative by the model.
-
-**Scoped build (ranked; depends on A4.1 toggle + A4.2 verify-gate + A4.4 tool-grounding):**
-- **A5.1** — `ModBlueprint` data model + persistence + Blueprint panel. ✅ **DONE & VERIFIED LIVE (2026-06-16).** `src/lib/modBlueprint.ts`: the `ModBlueprint` type (intent / requirements / implementationPlan / tasks / scratchpad{notes,decisions,rejected,openQuestions} / changelog), `sanitizeBlueprint`, localStorage load/save, `sampleBlueprint`, and **`canMarkDone` enforcing M-ARCH-2** (a task reaches `done` ONLY with a passing deterministic done-check). `src/components/BlueprintPanel.tsx`: read-only Plan/Tasks/Scratchpad sub-views with per-task done-check badges + progress. Surfaced as a new **ARCHITECT** mode tab in `AIHelper` (alongside CHAT/BUILDER). `runBlueprintSelftest()` + public `GET /api/agent/blueprint-selftest` + dashboard entry. **Verified: blueprint-selftest 10/10**; full sweep green; **screenshot-confirmed** the Architect tab rendering goal, "1/3 tasks verified done", the three tasks with their `intent:`/`graph valid` checks, and the "done only when its check passes" footer. *(Architect tab currently visible at any tier>off; cobuild-only gating folds in with A5.2. Panel is read-only here — editing is A5.5.)*
-- **A5.2** — agent loop wiring (plan→ground→propose→verify→record), reusing A4.2's verify-gate and A4.4's tools; strictly one-step-at-a-time proposals. ✅ **DONE (2026-06-17) — with one documented model-capability caveat.** D1 (referee) + D2 (live model) + D3 (orchestration + state lift) built and verified; D4 mostly verified live (loop end-to-end + referee guarantee proven on 3 real model outputs; correct-task targeting fixed & verified; `tsc` green). The only un-captured-live piece is the accept→Confirm→`done` happy-path screenshot, gated on a model that actually satisfies the task — the accept decision is oracle-proven (14/14) and the apply path reuses verified A4.2/A5.3 machinery, so this is an external model dependency, not a loop defect (user-approved close-out 2026-06-17; revisit with a stronger model if/when desired).
+**Addendum (same day):** the BLOCKED remainder is CLOSED — Ken granted F:\DEV_ENV + F:\StarForge
+access; global `{CLAUDE,AGENTS,GEMINI}.md` rewritten as identical v3 mirrors (md5 9dc37679…, all
+three; they had THEMSELVES drifted — AGENTS/GEMINI lacked the 07-09 operator protocol), canonical
+`F:\DEV_ENV\UNIVERSAL_AI_TASK_WORKFLOW.md` placed (md5 1e2d6a69… matches repo + upload),
+`wiki\workflow\agent-instructions.md` updated to a v3 summary (stale Codex peer-review rule removed),
+AAR ledger entries banked (global + x4-forge). Workflow v3 status upgraded: **VERIFIED with zero
+remaining canon lag.** Pre-existing damage found, preserved, flagged: global Karpathy section
+truncated mid-sentence (in-file note for Ken).
+ (14/14) and the apply path reuses verified A4.2/A5.3 machinery, so this is an external model dependency, not a loop defect (user-approved close-out 2026-06-17; revisit with a stronger model if/when desired).
   - **SCOPED DELIVERABLES (2026-06-16) — build the deterministic referee FIRST, then attach the live model:**
     - **D1 — Deterministic loop core (pure, oracle-tested, NO model). ✅ DONE & VERIFIED LIVE (2026-06-16).** `src/lib/architectLoop.ts`: the anti-hallucination referee. `vetTaskProposal({ base, proposed, blueprint, activeTaskId, knownTags, requirements })` → `{ decision: 'accept'|'revise'|'reject', reason, review, taskNowPasses, isRejected }`. Decision logic, derived ONLY from the determinism engine: `!review.applySafe` (schema/graph fail or unknown/hallucinated tag) → **revise**; an approach already in the lessons log (`isRejectedApproach`) → **reject**; `applySafe` but the active task's deterministic check does NOT pass on the *proposed* workspace → **revise** (the "valid XML ≠ satisfied intent" catch, M-ARCH-2/the Codex finding); `applySafe` AND task check passes → **accept**. Plus `nextActiveTask(blueprint)` (first non-done, respects `blockedBy`) and `loopStopReason(blueprint, iterations, max)` (`complete` | `max-iterations` | `stalled`). Oracle `runArchitectLoopSelftest()` + public `GET /api/agent/architect-loop-selftest` (allowlisted) + dashboard entry. **Done when:** oracle green via the live endpoint, asserting at minimum: accept-on-satisfied, **revise-on-valid-but-wrong** (the headline guarantee), revise-on-unknown-tag, reject-on-rejected-approach, stop-conditions. **✅ VERIFIED: `architect-loop-selftest` 14/14 via the live `GET /api/agent/architect-loop-selftest` endpoint** — incl. `accept_when_safe_and_task_passes`, `revise_on_valid_but_wrong` + `valid_but_wrong_is_still_applySafe` (proves the *intent* check, not the hard gate, catches it — the Codex semantic-compliance point), `revise_on_unknown_tag`/`unknown_tag_not_applySafe`, `reject_on_rejected_approach`, `deriveApproach_added_tags`, `next_is_unblocked_first`/`next_advances_after_unblock`, and all four `loopStopReason` states. Added to `PUBLIC_READONLY_GETS`. Oracle injects a `knownTags` schema set exactly as the live loop will (so legit md.xsd tags like `event_game_started` aren't false-flagged; `set_god_mode` still is) — the A4.5 false-block lesson carried forward.
     - **D2 — Live model wiring (needs OpenRouter key). ✅ BUILT (2026-06-16).** `App.runArchitectStep()` reuses `POST /api/agent/generate` for the per-task node proposal, grounding the model on the goal + the SPECIFIC active task + its success check + the lessons log ("do NOT repeat…"). **Confirmed live**: a real OpenRouter round-trip completed and returned a proposal that flowed through the referee (see D4).
@@ -4268,3 +4436,4 @@ validation give FALSE confidence; log + fix.
 4. **aiscript validation looks shallow.** Validating an `.aiscript`/order file (kind="aiscript") returned
    `definedCues:0` and no aiscript-specific findings — suggests basic XML parse rather than full `aiscripts.xsd`
    validation (orders/params/refs). CONFIRM aiscript files get true aiscripts.xsd validation; if not, add it.
+

@@ -17,15 +17,10 @@ adopts (version gate stays as tiebreak), on mismatch-with-local-edits it shows a
 **Acceptance:** oracle for the hash (stable across key order, sensitive to node/property change); simulated
 divergence shows the badge; adopt button converges; tsc/sweep green.
 
-### B2 · Sync protocol replacement (ADR-F1) — slices 1–2 ✅ CLOSED (07-09/07-10) → ROADMAP; slice 3 `spec'd`
-Slices 1+2 live: full client↔server CAS with the WRITE CONFLICT card (Adopt/Keep-mine), adoption held
-during conflicts. **Slice 3 (remaining):** per-mod-id server state keying + **DISK PERSISTENCE of active
-state** (absorbs one-project-model; multi-workspace B12 rides on it). **Acceptance:** two simulated
-clients cannot silently overwrite each other *per mod*; state survives an API restart with zero clients
-attached; e2e workspace-guard removed as the proof.
-**Evidence 2026-07-11:** post-restart blank-client race clobbered the live workspace during the B10s1
-close (caught by the leak check, restored from snapshot) — the in-memory singleton is now a
-counted-incident class, not a theoretical one.
+### B2 · Sync protocol replacement (ADR-F1) — ✅ ALL SLICES CLOSED (s1–2 07-09/07-10, s3 2026-07-12) → ROADMAP
+Slice 3 closed 07-12: persistence + chokepoint + legacy gate + park-on-switch; acceptance proven live
+(zero-client restart survival ×2; blank-client incident reproduction → dead). Residuals folded into B26
+(guard self-check + RESET-button audit + guard-removal decision). B12 tabs ride the parked-state map.
 
 ### B3 · Console health probe — ✅ CLOSED 2026-07-09 → ROADMAP (Ken's live drill: closed the Web window →
 respawned ~60s; closed the API window → respawned; both verified from the agent side, app + API answering)
@@ -102,10 +97,23 @@ report panel deferred until the first real funnel completes)
 ### B22 · Pattern browser — slice 1 ◐ IMPLEMENTED 2026-07-11 → ROADMAP (4 proven patterns, oracle 9/9,
 DOM-verified browse→stamp; slice 2: mid-canvas stamping via graph-mutation ops + unified card component)
 
-### B28 · Browser-pane renderer wedge — `spec'd` (recurring tool hazard, 3× on 2026-07-11)
+### B28 · Browser-pane renderer wedge — `spec'd` (recurring tool hazard, 3× on 2026-07-11, 2× more on 07-12)
 Pane renderer stops answering screenshots after HMR + setWorkspace churn (JS/DOM stays alive;
 navigate-reload recovers). Suspect the canvas rAF loop + HMR interplay. Root-cause pass; until then
-the banked workaround is DOM-read validation + reload.
+the banked workaround is DOM-read validation + reload. **New evidence 07-12:** in the degraded state
+the pane also serves STALE SCREENSHOT FRAMES and physical clicks fail to land even when the click echo
+reports the correct DOM coordinates (wizard-✕ looked broken for 2 clicks; btn.click() + DOM-read proved
+the app handler fine) — when the pane misbehaves, trust ONLY DOM reads, never pixels or click echoes.
+**Third mode (07-12, B2s3 close):** long-running JS evals get killed mid-flight ("Inspected target
+navigated or closed", "Promise was collected") — 3 drill interruptions; workaround: pane JS must be
+short-lived (<~2s), no multi-second awaits; split drills into per-action calls.
+
+### B29 · Header horizontal overflow — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+Fits at 1280 AND 1920 (DOM-rect drills, 0 clipped controls); conflict card promoted to a fixed
+sync-status layer (unclippable by construction); live-409 negative path proven at 1280; e2e 12/12,
+sweep 73/73. Bonus: found+fixed the B2s3 Vite watch-ignore gap (persistence writes were
+full-reloading every client) and closed the Keep-mine residual end-to-end. Note: label-restore
+threshold min-[2150px] is a measured constant — re-measure if the header gains features.
 
 ### B23 · Installer unpark decision package — `blocked` (Phase 3; KEN GATE, after Phase 1 lands)
 When TTFM-in-app measured ≤15 min: present B8 unpark w/ funnel evidence; Electron-vs-single-binary
@@ -132,22 +140,31 @@ editor surface beyond code view.
 
 ### B12 · Multi-workspace tabs — `spec'd` (largely absorbed by B2's per-mod server state)
 
-### B13 · QoL batch — `in_progress` ◐ (batch 1 BROWSER-CONFIRMED 2026-07-11 visual pass; one visual left)
+### B13 · QoL batch — batch 1 ✅ VERIFIED 2026-07-12 (all surfaces agent-confirmed; Ken feel-pass optional)
 Batch 1 surfaces browser-confirmed live by the agent (per Ken's validate-visually directive): canvas
 delete toast + undo ✅ · library delete toast + undo loop ✅ (PLUS fix: last-item delete was impossible —
 "keep at least one" guard removed, zero-state legal) · empty-state skeletons ✅ · ShortcutsOverlay ✅
-(prior session). **Remaining:** ① conflict-card/badge narrow-width VISUAL (pane wedged mid-reproduction;
-machinery e2e-covered) ② glance at the new FirstRunWizard ✕. Ken's feel-pass now optional, not gating.
+(prior session) · FirstRunWizard ✕ ✅ (07-12: DOM-verified present→click→absent; handler wired) ·
+conflict-card narrow-width ✅ VERIFIED with defect found (07-12: real 409 produced live; compact ⚠
+collapse works at <xl, BUT the card sits off-screen — header overflow, spun out as **B29**).
 **Batch 2 (spec'd):** override-map click → Diff→Patch pre-target; "wire a HUD button in 3 steps" WIKI
 snippet.
 
 ### B17 · e2e gate hygiene — ✅ CLOSED 2026-07-11 → ROADMAP (green/red/no-tests all verified; Node-bump
 probe ◐ Ken-gated machine change)
 
-### B26 · workspace-guard restore self-check — `spec'd` (B17 AAR worst-pick)
-Guard restore is verified manually (authenticated GET) after every e2e run; nothing asserts it.
-Scope: workspace-guard.teardown verifies the restored workspace matches its snapshot (name+hash) and
-fails LOUDLY on mismatch. **Acceptance:** simulated restore failure → teardown reports it, wrapper red.
+### B26 · workspace-guard restore self-check — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+Restore-verify marker + wrapper red-on-FAIL (negative path drilled); api-selftest 6/6 covers all gate
+branches; RESET audited clean (CAS + parks); runtime-writes audit found+fixed a 2nd vite gap (data/**).
+Guard KEPT until B31. Residual note: verify line can race the libuv crash → B31 moves it in-process.
+
+### B31 · Ephemeral e2e server state — `spec'd` (B2s3 AAR worst-pick, 2026-07-12; renumbered from B30 — collision with the parallel v3-adoption session's mirror-drift gate)
+The e2e isolation harness route-mocks around the SHARED live singleton — half-isolation has now
+caused/complicated three incident classes (B15 RED, guard-leak class #70, the 07-12 suppression
+interplay). With B2s3's per-mod persisted state landed, the right shape: e2e runs against an EPHEMERAL
+server state (per-run state dir via env flag, or a fixture mod key), killing route-mocks AND the guard.
+**Acceptance:** suite green with zero `page.route('**/api/agent/workspace')` interceptions and zero
+guard dependence; Ken's live workspace untouched by construction, not by restoration.
 
 ### B16 · run_command async-job mode — ✅ CLOSED 2026-07-09 → ROADMAP (dogfood-verified: app answered in 7ms mid-job)
 
@@ -155,3 +172,14 @@ fails LOUDLY on mismatch. **Acceptance:** simulated restore failure → teardown
 Full server-side XPath match counts (needs an XPath lib decision); golden round-trip corpus across several
 real published mods (needs mod paths from Ken); T1.3 runtime ftable loader (gated on in-game verification);
 mod profiles / update audit (P-C/P-D); T4.3 canvas cross-domain arrow.
+
+### B32 · Recurring-mistake tripwires — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+TRIPWIRES table in precommit-check.mjs (runs before typecheck, named messages); negative drill BLOCKED
+exit 1, green tree exit 0. Add future mechanical-mistake patterns to the table.
+
+### B30 · Mirror-drift gate — `spec'd` (added 2026-07-12, from the workflow-v3 AAR)
+Canon lives in 3 in-repo mirrors (CLAUDE.md/AGENTS.md/GEMINI.md) + the global F:\DEV_ENV\CLAUDE.md,
+synced by hand — the exact drift class that let an agent work a full session without the workflow
+(2026-07-09). Extend `scripts/precommit-check.mjs` to diff the three in-repo mirrors and FAIL on
+divergence. Acceptance: precommit red when any mirror differs; green now (md5-identical as of v3
+adoption); ROADMAP close cites a deliberate-divergence test.

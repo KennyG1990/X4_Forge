@@ -20,6 +20,8 @@ config.json
 # ---- Local caches / generated state ----
 .studio-cache/
 .snapshots/
+# B2s3: persisted active/parked workspace state (per-machine runtime data).
+.studio-state/
 *.db
 .tmp_*
 temp_import/

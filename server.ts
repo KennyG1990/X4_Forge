@@ -113,6 +113,7 @@ import { runModRecipesSelftest } from "./src/lib/modRecipes";
 import { parse as luaParse } from "luaparse";
 import { registerNpcIdentityProbeRoutes } from "./src/server/npcIdentityProbe";
 import { registerSelftests } from "./src/server/selftestRegistry";
+import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
 import {
@@ -1500,6 +1501,61 @@ let activeWorkspace: ModWorkspace = JSON.parse(JSON.stringify(DEFAULT_WORKSPACE)
 // A monotonic-across-restarts seed keeps the adoption gate working after every restart.
 let workspaceVersion = Date.now();
 
+// B2 slice 3 (ADR-F1): the active workspace survives restarts on disk. A restart with a
+// blank client attached clobbered real state on 2026-07-11 — the in-memory singleton is a
+// counted incident class, not a style choice.
+const STUDIO_STATE_DIR = path.join(process.cwd(), ".studio-state");
+// Legacy (no-expectedHead) writes are only auto-accepted on true first contact: a fresh
+// install where nothing was ever persisted and nothing has been written this run.
+let hadPersistedStateAtBoot = false;
+let anyCommitSinceBoot = false;
+{
+  const saved = readActiveState(STUDIO_STATE_DIR);
+  if (saved) {
+    activeWorkspace = saved.workspace as ModWorkspace;
+    // Monotonic across restarts: never fall below what clients already saw.
+    workspaceVersion = Math.max(Date.now(), saved.version + 1);
+    hadPersistedStateAtBoot = true;
+    console.log(`[state] restored persisted workspace "${activeWorkspace.name}" (v${saved.version}, saved ${saved.savedAt})`);
+  }
+}
+
+/**
+ * B2s3 chokepoint: every REAL writer of the active workspace commits through here so
+ * persistence and park-on-switch can't be bypassed. (The selftest save/restore swap is
+ * the deliberate exception — test-scoped, restores in the same request.)
+ * Loading a DIFFERENT mod parks the previous state instead of destroying it.
+ */
+function commitActiveWorkspace(next: ModWorkspace, origin: string): void {
+  const nameSwitched = Boolean(next?.name && activeWorkspace?.name && next.name !== activeWorkspace.name);
+  if (nameSwitched) {
+    // Don't park the pristine boot sample — parking is for real prior work only.
+    const isPristineDefault = JSON.stringify(activeWorkspace) === JSON.stringify(DEFAULT_WORKSPACE);
+    if (!isPristineDefault) {
+      parkState(STUDIO_STATE_DIR, {
+        workspace: activeWorkspace,
+        version: workspaceVersion,
+        savedAt: new Date().toISOString(),
+        origin: `parked-on-switch:${origin}`,
+      });
+    }
+  }
+  activeWorkspace = next;
+  workspaceVersion++;
+  anyCommitSinceBoot = true;
+  try {
+    writeActiveState(STUDIO_STATE_DIR, {
+      workspace: activeWorkspace,
+      version: workspaceVersion,
+      savedAt: new Date().toISOString(),
+      origin,
+    });
+  } catch (e) {
+    // Persistence failure must never fail the write itself — but say it loudly.
+    console.error("[state] could not persist active workspace:", e);
+  }
+}
+
 // -----------------------------------------------------
 // Helper to call generateContent with retry and fallback model capability
 // to handle temporary 503 Spikes in Demand / UNAVAILABLE errors.
@@ -2210,17 +2266,30 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/workspace",
         auth: true,
-        body: { workspace: "ModWorkspace", expectedVersion: "optional number (optimistic concurrency; 409 on mismatch)", dryRun: "optional boolean (validate + return diagnostics without applying)" },
-        purpose: "Replace the active studio workspace and bump the version if changed.",
-        example: "POST {\"workspace\":{...},\"expectedVersion\":7} -> 409 {error:'version_conflict'} if stale, else 200 {applied,version,diagnosticsSummary}"
+        body: { workspace: "ModWorkspace", expectedHead: "workspaceHash from GET (content CAS; 409 head_conflict on mismatch)", expectedVersion: "optional number (optimistic concurrency; 409 on mismatch)", force: "optional boolean — deliberate last-writer-wins overwrite", dryRun: "optional boolean (validate + return diagnostics without applying)" },
+        purpose: "Replace the active studio workspace and bump the version if changed. Writes with NEITHER expectedHead NOR expectedVersion NOR force are rejected 409 legacy_write_rejected (GET first, send its workspaceHash as expectedHead). Loading a workspace with a different name PARKS the previous state (see /workspace/parked).",
+        example: "POST {\"workspace\":{...},\"expectedHead\":\"ab12...\"} -> 409 {error:'head_conflict'} if stale, else 200 {applied,version,workspaceHash,diagnosticsSummary}"
       },
       {
         method: "POST",
         path: "/api/agent/workspace/merge",
         auth: true,
-        body: { changes: "partial top-level ModWorkspace fields to merge (JSON-merge-patch)", expectedVersion: "optional number", dryRun: "optional boolean" },
-        purpose: "Granular edit: merge only the provided top-level fields into the active workspace.",
-        example: "POST {\"changes\":{\"version\":\"2.0.0\"},\"expectedVersion\":7}"
+        body: { changes: "partial top-level ModWorkspace fields to merge (JSON-merge-patch)", expectedHead: "workspaceHash from GET (content CAS)", expectedVersion: "optional number", force: "optional boolean", dryRun: "optional boolean" },
+        purpose: "Granular edit: merge only the provided top-level fields into the active workspace. Same CAS/force rules as POST /api/agent/workspace.",
+        example: "POST {\"changes\":{\"version\":\"2.0.0\"},\"expectedHead\":\"ab12...\"}"
+      },
+      {
+        method: "GET",
+        path: "/api/agent/workspace/parked",
+        auth: true,
+        purpose: "B2s3: list states parked when a different mod was loaded (park-on-switch keeps prior work instead of destroying it)."
+      },
+      {
+        method: "POST",
+        path: "/api/agent/workspace/restore-parked",
+        auth: true,
+        body: { name: "workspace name as listed by /workspace/parked" },
+        purpose: "Switch back to a parked state; the current state is parked first, so restores are never destructive."
       },
       {
         method: "GET",
@@ -2907,9 +2976,8 @@ app.post("/api/fs/restore-snapshot", (req, res) => {
       return res.status(400).json({ error: "Invalid snapshot format." });
     }
     
-    activeWorkspace = parsed.workspace;
-    workspaceVersion++;
-    
+    commitActiveWorkspace(parsed.workspace, 'restore-snapshot');
+
     return res.json({ success: true, workspace: activeWorkspace });
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to restore snapshot." });
@@ -3027,9 +3095,28 @@ function summarizeDiagnostics(diags: any[]) {
  * @param incoming   either a full workspace or (when merge) a partial set of top-level fields
  * @param opts.merge JSON-merge-patch semantics over the active workspace
  */
-function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number; expectedHead?: string; dryRun?: boolean; merge?: boolean }): { status: number; body: any } {
+function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number; expectedHead?: string; dryRun?: boolean; merge?: boolean; force?: boolean }): { status: number; body: any } {
   if (!incoming || typeof incoming !== 'object') {
     return { status: 400, body: { error: "Missing or invalid workspace payload." } };
+  }
+  // B2 slice 3: ADR-F1's legacy-write deprecation round ENDS here. A write that names
+  // neither expectedHead nor expectedVersion is blind last-writer-wins — the exact
+  // mechanism of the 2026-07-11 boot-blank clobber. It now requires an explicit
+  // `force:true` (a deliberate human/agent choice), except on true first contact
+  // (fresh install: nothing persisted, nothing written this run). Dry runs stay open.
+  const isLegacyWrite = !(typeof opts.expectedHead === 'string' && opts.expectedHead.length > 0)
+    && typeof opts.expectedVersion !== 'number';
+  const firstContact = !hadPersistedStateAtBoot && !anyCommitSinceBoot;
+  if (isLegacyWrite && !opts.force && !opts.dryRun && !firstContact) {
+    return {
+      status: 409,
+      body: {
+        error: 'legacy_write_rejected',
+        message: "Blind write rejected: no expectedHead/expectedVersion supplied. GET /api/agent/workspace first and send its workspaceHash as expectedHead (CAS), or pass force:true to deliberately overwrite (last-writer-wins).",
+        currentHead: activeWorkspaceHash(),
+        currentVersion: workspaceVersion,
+      }
+    };
   }
   // Optimistic concurrency: reject stale writes when expectedVersion is supplied.
   if (typeof opts.expectedVersion === 'number' && opts.expectedVersion !== workspaceVersion) {
@@ -3082,8 +3169,8 @@ function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number;
 
   const isDifferent = JSON.stringify(nextWorkspace) !== JSON.stringify(activeWorkspace);
   if (isDifferent) {
-    activeWorkspace = nextWorkspace;
-    workspaceVersion++;
+    // B2s3: all real writes go through the chokepoint (persist + park-on-switch).
+    commitActiveWorkspace(nextWorkspace, opts.force ? 'api:forced' : (isLegacyWrite ? 'api:legacy-first-contact' : 'api:cas'));
   }
   return {
     status: 200,
@@ -3105,11 +3192,11 @@ function applyWorkspaceMutation(incoming: any, opts: { expectedVersion?: number;
  * `expectedVersion` (409 on mismatch) and `dryRun` (validate without applying).
  */
 app.post("/api/agent/workspace", (req, res) => {
-  const { workspace, expectedVersion, expectedHead, dryRun } = req.body || {};
+  const { workspace, expectedVersion, expectedHead, dryRun, force } = req.body || {};
   if (!workspace) {
     return res.status(400).json({ error: "Missing required 'workspace' body parameter." });
   }
-  const r = applyWorkspaceMutation(workspace, { expectedVersion, expectedHead, dryRun });
+  const r = applyWorkspaceMutation(workspace, { expectedVersion, expectedHead, dryRun, force: force === true });
   return res.status(r.status).json(r.body);
 });
 
@@ -3120,12 +3207,39 @@ app.post("/api/agent/workspace", (req, res) => {
  * `expectedVersion` and `dryRun` controls.
  */
 app.post("/api/agent/workspace/merge", (req, res) => {
-  const { changes, expectedVersion, expectedHead, dryRun } = req.body || {};
+  const { changes, expectedVersion, expectedHead, dryRun, force } = req.body || {};
   if (!changes || typeof changes !== 'object') {
     return res.status(400).json({ error: "Missing required 'changes' object (top-level workspace fields to merge)." });
   }
-  const r = applyWorkspaceMutation(changes, { expectedVersion, expectedHead, dryRun, merge: true });
+  const r = applyWorkspaceMutation(changes, { expectedVersion, expectedHead, dryRun, merge: true, force: force === true });
   return res.status(r.status).json(r.body);
+});
+
+/**
+ * GET /api/agent/workspace/parked
+ * B2s3: states parked when a different mod was loaded (park-on-switch). Read-only list.
+ */
+app.get("/api/agent/workspace/parked", (req, res) => {
+  return res.json({ parked: listParked(STUDIO_STATE_DIR) });
+});
+
+/**
+ * POST /api/agent/workspace/restore-parked { name }
+ * B2s3: deliberate switch back to a parked state — parks the current one first (so a
+ * restore is never destructive either), then activates the parked workspace.
+ */
+app.post("/api/agent/workspace/restore-parked", (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "Missing required 'name' body parameter." });
+  const parked = readParked(STUDIO_STATE_DIR, name);
+  if (!parked) return res.status(404).json({ error: `No parked state named "${name}".` });
+  commitActiveWorkspace(parked.workspace as ModWorkspace, 'restore-parked');
+  return res.json({
+    success: true,
+    workspace: activeWorkspace,
+    version: workspaceVersion,
+    workspaceHash: activeWorkspaceHash(),
+  });
 });
 
 /**
@@ -5053,6 +5167,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "live-canvas-selftest": runLiveCanvasTelemetrySelftest,
   "lua-staleness-selftest": runLuaStalenessSelftest,
   "lua-runtime-log-selftest": runLuaRuntimeLogSelftest,
+  "workspace-persistence-selftest": runWorkspaceStateSelftest,
 };
 registerSelftests(app, PUBLIC_READONLY_GETS, SELFTESTS, errorMessage);
 
@@ -5943,13 +6058,31 @@ app.get("/api/agent/api-selftest", (req, res) => {
     // 3. merge with correct expectedVersion: applies, version bumps.
     const merge = applyWorkspaceMutation({ version: '7.7.7' }, { expectedVersion: savedVer, merge: true });
     results.push({ test: 'mergeApply', pass: merge.status === 200 && merge.body.applied === true && workspaceVersion === savedVer + 1 && activeWorkspace.version === '7.7.7', detail: { applied: merge.body.applied, newVersion: workspaceVersion, mergedVersion: activeWorkspace.version } });
+    // 4. B2s3 legacy gate: a blind write (no head, no version, no force) is rejected.
+    const legacy = applyWorkspaceMutation({ ...savedWs, version: '8.8.8' }, {});
+    results.push({ test: 'legacyRejected', pass: legacy.status === 409 && legacy.body.error === 'legacy_write_rejected', detail: { status: legacy.status, error: legacy.body.error } });
+    // 5. B2s3 force valve: the same blind write with force:true is a deliberate overwrite.
+    const forced = applyWorkspaceMutation({ ...savedWs, version: '8.8.9' }, { force: true });
+    results.push({ test: 'forceAccepted', pass: forced.status === 200 && forced.body.applied === true, detail: { status: forced.status } });
+    // 6. B2s3 first-contact allowance: on a fresh install (nothing persisted, nothing
+    // committed) a legacy write is allowed once. Simulated by flag swap, restored below.
+    const savedBootFlag = hadPersistedStateAtBoot; const savedCommitFlag = anyCommitSinceBoot;
+    hadPersistedStateAtBoot = false; anyCommitSinceBoot = false;
+    const firstContact = applyWorkspaceMutation({ ...savedWs, version: '9.0.1' }, {});
+    hadPersistedStateAtBoot = savedBootFlag; anyCommitSinceBoot = savedCommitFlag;
+    results.push({ test: 'firstContactLegacyAllowed', pass: firstContact.status === 200 && firstContact.body.applied === true, detail: { status: firstContact.status } });
     return res.json({ allPassed: results.every(r => r.pass), results });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'api-selftest failed' });
   } finally {
-    // Always restore live state.
+    // Always restore live state. Deliberately RAW (not commitActiveWorkspace): this swap
+    // is test-scoped and must not park anything — but the mid-test commit persisted test
+    // junk to disk, so re-persist the restored truth or a later restart adopts the junk.
     activeWorkspace = savedWs;
     workspaceVersion = savedVer;
+    try {
+      writeActiveState(STUDIO_STATE_DIR, { workspace: savedWs, version: savedVer, savedAt: new Date().toISOString(), origin: 'api-selftest-restore' });
+    } catch { /* persistence failure never fails the selftest response */ }
   }
 });
 
@@ -6742,8 +6875,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       try {
         if (fs.existsSync(sourceStamp.dir)) {
           (ws as any).sourceStamp = { dir: sourceStamp.dir, hash: hashFolderFingerprint(fingerprintModFolder(sourceStamp.dir)), at: new Date().toISOString() };
-          activeWorkspace = ws;
-          workspaceVersion++;
+          commitActiveWorkspace(ws, 'deploy-verify');
         }
       } catch { /* convergence is best-effort; the gate stays safe either way */ }
     }
@@ -7225,8 +7357,7 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
     // mutation point). External agents keep the documented apply-by-default.
     const applyGenerated = req.body.apply !== false;
     if (applyGenerated) {
-      activeWorkspace = combinedWorkspace;
-      workspaceVersion++;
+      commitActiveWorkspace(combinedWorkspace, 'ai-generate');
     }
 
     console.log(`[AI-STUDIO] Phased interpretation complete. Delivered blueprint named: ${combinedWorkspace.name}`);

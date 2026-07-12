@@ -807,15 +807,16 @@ export default function App() {
 
     const syncLocalEditsToServer = async () => {
       persistLocalCache();
+      // B2 slice 3: ADR-F1's legacy deprecation round is OVER. Until the boot GET/poll has
+      // taught us the server head, we do NOT write — a blind boot save is exactly the
+      // blank-client clobber that destroyed live state on 2026-07-11 (and the server now
+      // rejects it anyway). The 3s poll learns the head, then the next edit syncs via CAS.
+      if (!lastServerHashRef.current) return;
       try {
         const response = await fetch("/api/agent/workspace", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // B2 slice 2: compare-and-swap. expectedHead only when known (boot writes stay
-          // legacy, per ADR-F1's one-round deprecation).
-          body: JSON.stringify(lastServerHashRef.current
-            ? { workspace, expectedHead: lastServerHashRef.current }
-            : { workspace })
+          body: JSON.stringify({ workspace, expectedHead: lastServerHashRef.current })
         });
         if (response.status === 409) {
           // Someone else changed the server since we last saw it. NEVER overwrite silently —
@@ -966,14 +967,16 @@ export default function App() {
     } catch { /* leave the badge up — nothing adopted */ }
   };
 
-  // B2 slice 2: "Keep mine" — the explicit force valve (ADR-F1: omitting expectedHead is
-  // a deliberate last-writer-wins, chosen by a human, never by silence).
+  // B2 slice 2: "Keep mine" — the explicit force valve (ADR-F1: last-writer-wins is
+  // chosen by a human, never by silence). B2s3: the choice is now spelled force:true —
+  // the server rejects blind no-head writes outright.
   const forceKeepMine = async () => {
     try {
       const response = await fetch("/api/agent/workspace", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace: workspaceRef.current })
+        // B2s3: the server's legacy gate requires overwrites to be EXPLICIT now.
+        body: JSON.stringify({ workspace: workspaceRef.current, force: true })
       });
       const data = await response.json();
       if (data?.success) {
@@ -1191,7 +1194,8 @@ export default function App() {
                 title={firstFlaggedNodeId ? tooltip + ' — click to jump to the flagged node' : tooltip}
               >
                 <GitFork className="w-3.5 h-3.5" />
-                <span>MD Scripts</span>
+                {/* B29: labels collapse to icon-only below 2xl so the header fits 1280 */}
+                <span className="hidden min-[2150px]:inline">MD Scripts</span>
                 {indicatorDot}
               </button>
             );
@@ -1204,9 +1208,10 @@ export default function App() {
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="AIScripts"
           >
             <Scroll className="w-3.5 h-3.5" />
-            AIScripts
+            <span className="hidden min-[2150px]:inline">AIScripts</span>
           </button>
 
           <button
@@ -1216,9 +1221,10 @@ export default function App() {
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="Wares & Jobs"
           >
             <Package className="w-3.5 h-3.5" />
-            Wares & Jobs
+            <span className="hidden min-[2150px]:inline">Wares & Jobs</span>
           </button>
 
           <button
@@ -1228,9 +1234,10 @@ export default function App() {
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="HUD & LUA UI"
           >
             <Layout className="w-3.5 h-3.5" />
-            HUD & LUA UI
+            <span className="hidden min-[2150px]:inline">HUD & LUA UI</span>
           </button>
 
           <button
@@ -1240,9 +1247,10 @@ export default function App() {
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="XML Patching"
           >
             <FileCode className="w-3.5 h-3.5" />
-            XML Patching
+            <span className="hidden min-[2150px]:inline">XML Patching</span>
           </button>
 
           <button
@@ -1252,9 +1260,10 @@ export default function App() {
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="Project"
           >
             <FolderGit2 className="w-3.5 h-3.5" />
-            Project
+            <span className="hidden min-[2150px]:inline">Project</span>
           </button>
 
           <button
@@ -1264,9 +1273,10 @@ export default function App() {
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="Galaxy"
           >
             <MapIcon className="w-3.5 h-3.5" />
-            Galaxy
+            <span className="hidden min-[2150px]:inline">Galaxy</span>
           </button>
 
           <button
@@ -1276,9 +1286,10 @@ export default function App() {
                 ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="Contracts"
           >
             <Plug className="w-3.5 h-3.5" />
-            Contracts
+            <span className="hidden min-[2150px]:inline">Contracts</span>
           </button>
 
           <button
@@ -1288,9 +1299,10 @@ export default function App() {
                 ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="Languages (t/)"
           >
             <Globe className="w-3.5 h-3.5" />
-            Languages (t/)
+            <span className="hidden min-[2150px]:inline">Languages (t/)</span>
           </button>
 
           <button
@@ -1300,9 +1312,10 @@ export default function App() {
                 ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
                 : 'text-slate-400 hover:text-white border border-transparent'
             }`}
+            title="X4 Wiki"
           >
             <BookOpen className="w-3.5 h-3.5" />
-            X4 Wiki
+            <span className="hidden min-[2150px]:inline">X4 Wiki</span>
           </button>
         </div>
 
@@ -1321,7 +1334,7 @@ export default function App() {
               title="Undo last action (Ctrl+Z)"
             >
               <Undo2 className="w-3.5 h-3.5" />
-              <span className="text-[9px]">({pastStates.length})</span>
+              <span className="text-[9px] hidden min-[2150px]:inline">({pastStates.length})</span>
             </button>
             <button
               onClick={handleRedo}
@@ -1334,7 +1347,7 @@ export default function App() {
               title="Redo action (Ctrl+Y)"
             >
               <Redo2 className="w-3.5 h-3.5" />
-              <span className="text-[9px]">({futureStates.length})</span>
+              <span className="text-[9px] hidden min-[2150px]:inline">({futureStates.length})</span>
             </button>
             {/* B13: discoverable entry to the shortcuts list (also bound to "?") */}
             <button
@@ -1348,7 +1361,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-1.5 bg-black/35 rounded border border-white/10 p-1">
-            <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1">Preset:</span>
+            <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1 hidden min-[2150px]:inline">Preset:</span>
             <select
               value="__current"
               onChange={async (e) => {
@@ -1363,7 +1376,7 @@ export default function App() {
                 );
                 if (ok) handleLoadPreset(pick);
               }}
-              className="bg-[#0F1115] border border-white/10 p-1 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+              className="bg-[#0F1115] border border-white/10 p-1 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer max-w-[130px] min-[2150px]:max-w-none truncate"
             >
               {/* H6: show the actually-loaded workspace, not a stale "Blank Workspace" label */}
               <option value="__current">{workspace.name || 'Current Workspace'}</option>
@@ -1373,49 +1386,16 @@ export default function App() {
             </select>
           </div>
 
-          {syncConflict ? (
-            // B2 slice 2: explicit write conflict — another writer changed the server since
-            // this canvas last saw it. A HUMAN picks the winner; nothing is silent.
-            <div data-testid="sync-conflict-card" className="flex items-center gap-1 px-2 py-0.5 border border-red-500/50 bg-red-500/15 rounded font-mono text-[10px] text-red-200 shrink-0 whitespace-nowrap">
-              {/* B13: on narrow headers the long label squashed mid-glyph — keep it short below xl */}
-              <span className="font-bold hidden xl:inline">⚠ WRITE CONFLICT</span>
-              <span className="font-bold xl:hidden" title="Write conflict: another writer changed the server since this canvas last saw it.">⚠</span>
-              <button
-                onClick={adoptServerWorkspace}
-                data-testid="conflict-adopt-btn"
-                className="px-2 py-0.5 rounded bg-cyan-600/40 border border-cyan-400/40 hover:bg-cyan-600/60 text-cyan-100 font-bold cursor-pointer"
-                title="Discard this canvas's unsent changes and take the server's copy."
-              >
-                ADOPT SERVER
-              </button>
-              <button
-                onClick={forceKeepMine}
-                data-testid="conflict-keep-btn"
-                className="px-2 py-0.5 rounded bg-amber-600/40 border border-amber-400/40 hover:bg-amber-600/60 text-amber-100 font-bold cursor-pointer"
-                title="Overwrite the server with this canvas (last-writer-wins, chosen deliberately)."
-              >
-                KEEP MINE
-              </button>
-            </div>
-          ) : syncDiverged && (
-            <button
-              onClick={adoptServerWorkspace}
-              data-testid="sync-diverged-badge"
-              className="px-3 py-1 border border-amber-500/50 bg-amber-500/15 text-amber-300 rounded font-mono text-[11px] hover:bg-amber-500/25 transition-all flex items-center gap-1.5 cursor-pointer animate-pulse shrink-0 whitespace-nowrap"
-              title="Your canvas content differs from the server copy (persistently, not just mid-edit). Click to adopt the server workspace — or keep editing and your next change syncs up normally."
-            >
-              {/* B13: full label clips on narrow headers — compact form below xl, tooltip carries the detail */}
-              <span className="hidden xl:inline">⚠ CANVAS ≠ SERVER — ADOPT</span>
-              <span className="xl:hidden">⚠ ADOPT</span>
-            </button>
-          )}
+          {/* B29: the conflict card / diverged badge moved OUT of the header into the fixed
+              sync-status layer below — a header slot gets clipped on narrow windows, and the
+              conflict UI must be visible exactly when a conflict blocks sync. */}
           <button
             onClick={() => setIsSyncModalOpen(true)}
             className="px-3 py-1 border border-cyan-500/30 hover:border-cyan-500/80 bg-cyan-500/10 text-cyan-400 rounded font-mono text-[11px] hover:bg-cyan-500/20 transition-all flex items-center gap-1.5 cursor-pointer"
             title="Load existing mods or push updates to GitHub"
           >
             <FolderGit2 className="w-3.5 h-3.5" />
-            SYNC MOD
+            <span className="hidden min-[2150px]:inline">SYNC MOD</span>
           </button>
 
           {aiEnabled && (
@@ -1426,9 +1406,9 @@ export default function App() {
           >
             <div className="flex items-center gap-1.5">
               <Sparkles className="w-3 h-3 text-amber-500 animate-pulse" />
-              <span className="font-bold text-[9px] tracking-wide text-slate-200 uppercase">AI ENGINE: {activeAIProvider.toUpperCase()}</span>
+              <span className="font-bold text-[9px] tracking-wide text-slate-200 uppercase"><span className="hidden min-[2150px]:inline">AI ENGINE: </span>{activeAIProvider.toUpperCase()}</span>
             </div>
-            <div className="flex items-center gap-1.5 text-[8.5px] text-[#df9825] font-mono leading-none">
+            <div className="hidden min-[2150px]:flex items-center gap-1.5 text-[8.5px] text-[#df9825] font-mono leading-none">
               <span className="opacity-95">{activeAIModel.length > 20 ? activeAIModel.substring(0, 18) + '...' : activeAIModel}</span>
               {activeReasoning !== 'none' && (
                 <span className="bg-[#df9825]/15 px-1 py-0.5 rounded border border-[#df9825]/20 text-[7px] uppercase font-bold text-emerald-400">
@@ -1449,7 +1429,7 @@ export default function App() {
             title="Open External AI Agent API Control panel and documentation"
           >
             <Cpu className="w-3.5 h-3.5" />
-            AGENT API
+            <span className="hidden min-[2150px]:inline">AGENT API</span>
           </button>
 
           <button
@@ -1458,7 +1438,7 @@ export default function App() {
             title="Manage all folders the studio uses (Mod Workspace, X4 game path, schema)"
           >
             <SettingsGear className="w-3.5 h-3.5" />
-            SETTINGS
+            <span className="hidden min-[2150px]:inline">SETTINGS</span>
           </button>
 
           <button
@@ -1467,10 +1447,50 @@ export default function App() {
             title="Clean workspace back to blank state"
           >
             <Trash className="w-3.5 h-3.5" />
-            RESET
+            <span className="hidden min-[2150px]:inline">RESET</span>
           </button>
         </div>
       </header>
+
+      {/* B29: viewport-anchored sync-status layer — can NEVER be clipped by header overflow.
+          Persistent until resolved (unlike the transient toast stack), so it lives in its own
+          fixed slot just below the header, above everything but dialogs. */}
+      {(syncConflict || syncDiverged) && (
+        <div data-testid="sync-status-layer" className="fixed top-14 right-3 z-[9999]">
+          {syncConflict ? (
+            // B2 slice 2: explicit write conflict — another writer changed the server since
+            // this canvas last saw it. A HUMAN picks the winner; nothing is silent.
+            <div data-testid="sync-conflict-card" className="flex items-center gap-1.5 px-2.5 py-1.5 border border-red-500/50 bg-[#1a0d0d]/95 rounded-lg shadow-2xl font-mono text-[10px] text-red-200 whitespace-nowrap">
+              <span className="font-bold">⚠ WRITE CONFLICT</span>
+              <button
+                onClick={adoptServerWorkspace}
+                data-testid="conflict-adopt-btn"
+                className="px-2 py-0.5 rounded bg-cyan-600/40 border border-cyan-400/40 hover:bg-cyan-600/60 text-cyan-100 font-bold cursor-pointer"
+                title="Discard this canvas's unsent changes and take the server's copy."
+              >
+                ADOPT SERVER
+              </button>
+              <button
+                onClick={forceKeepMine}
+                data-testid="conflict-keep-btn"
+                className="px-2 py-0.5 rounded bg-amber-600/40 border border-amber-400/40 hover:bg-amber-600/60 text-amber-100 font-bold cursor-pointer"
+                title="Overwrite the server with this canvas (last-writer-wins, chosen deliberately)."
+              >
+                KEEP MINE
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={adoptServerWorkspace}
+              data-testid="sync-diverged-badge"
+              className="px-3 py-1.5 border border-amber-500/50 bg-[#1a140d]/95 text-amber-300 rounded-lg shadow-2xl font-mono text-[11px] hover:bg-amber-500/25 transition-all flex items-center gap-1.5 cursor-pointer animate-pulse whitespace-nowrap"
+              title="Your canvas content differs from the server copy (persistently, not just mid-edit). Click to adopt the server workspace — or keep editing and your next change syncs up normally."
+            >
+              ⚠ CANVAS ≠ SERVER — ADOPT
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Workspace split panel areas */}
       <div className="flex flex-1 overflow-hidden">

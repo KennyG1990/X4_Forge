@@ -71,7 +71,47 @@ function checkLargeFiles() {
   }
 }
 
+// B32 (2026-07-12): recurring-mistake tripwire. A JSX expression-container comment as the
+// FIRST thing inside `return (` breaks the compile — shipped twice in two days (07-11
+// GuidedRail, 07-12 GlobalSearch) because a banked lesson is not a recall mechanism.
+// Extensible home: add future mechanical-mistake patterns to TRIPWIRES.
+const TRIPWIRES = [
+  {
+    name: "jsx-comment-before-root",
+    pattern: /return\s*\(\s*\{\s*\/\*/,
+    message: "JSX comment as the first thing inside `return (` — move it above the return; it breaks the compile (banked 07-11, recurred 07-12).",
+  },
+];
+
+function walkSources(dir, out) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkSources(full, out);
+    else if (/\.(tsx|jsx)$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+function checkTripwires() {
+  const files = walkSources(path.join(root, "src"), []);
+  const hits = [];
+  for (const file of files) {
+    const text = fs.readFileSync(file, "utf8");
+    for (const trip of TRIPWIRES) {
+      if (trip.pattern.test(text)) {
+        hits.push(`${path.relative(root, file)}: [${trip.name}] ${trip.message}`);
+      }
+    }
+  }
+  console.log(`[precommit] tripwires: ${TRIPWIRES.length} pattern(s) over ${files.length} source files — ${hits.length} hit(s)`);
+  if (hits.length > 0) {
+    throw new Error(`tripwire hit(s):\n  ${hits.join("\n  ")}`);
+  }
+}
+
 try {
+  checkTripwires();
   runTypecheck();
   checkLargeFiles();
   console.log("[precommit] OK");

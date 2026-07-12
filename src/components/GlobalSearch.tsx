@@ -214,8 +214,9 @@ export default function GlobalSearch({
     }
   };
 
+  // B29: the search box yields width below 2xl so the header fits 1280 viewports.
   return (
-    <div ref={containerRef} className="relative w-64 md:w-80 select-none">
+    <div ref={containerRef} className="relative w-52 min-[2150px]:w-80 select-none">
       
       {/* Search Input Box */}
       <div className="relative flex items-center h-8 bg-[#0a0c10]/80 border border-white/10 hover:border-cyan-500/40 focus-within:border-cyan-500 rounded-lg px-2.5 transition-all">

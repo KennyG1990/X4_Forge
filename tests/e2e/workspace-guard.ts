@@ -31,11 +31,30 @@ export async function captureWorkspace(): Promise<void> {
 export async function restoreWorkspace(): Promise<void> {
   if (!fs.existsSync(SNAPSHOT)) return;
   const workspace = JSON.parse(fs.readFileSync(SNAPSHOT, 'utf8'));
-  await fetch(`${BASE}/api/agent/workspace`, {
+  const posted = await fetch(`${BASE}/api/agent/workspace`, {
     method: 'POST',
     headers: bearer(),
-    body: JSON.stringify({ workspace }),
-  }).catch(() => { /* server gone — nothing to restore onto */ });
+    // B2s3 legacy gate: a guard restore is a deliberate overwrite by definition.
+    body: JSON.stringify({ workspace, force: true }),
+  }).catch(() => null); // server gone — nothing to restore onto
+  // B26: SELF-CHECK — a guard that restores without verifying is a guard that can fail
+  // silently (the manual post-run GET was the only thing catching leak class #70).
+  // Mismatch prints a parseable marker; scripts/run-e2e.mjs turns it into a red verdict.
+  if (posted) {
+    try {
+      const res = await fetch(`${BASE}/api/agent/workspace`, { headers: bearer() });
+      const data = await res.json();
+      const got = JSON.stringify(data?.workspace ?? null);
+      const want = JSON.stringify(workspace);
+      if (got === want) {
+        console.log(`[workspace-guard] RESTORE-VERIFY: OK ("${workspace?.name}" byte-matches the pre-suite snapshot)`);
+      } else {
+        console.error(`[workspace-guard] RESTORE-VERIFY: FAIL — server holds "${data?.workspace?.name}" (${got.length}B), snapshot was "${workspace?.name}" (${want.length}B). The live workspace may be leaked test state.`);
+      }
+    } catch (e) {
+      console.error(`[workspace-guard] RESTORE-VERIFY: FAIL — could not re-read the workspace after restore: ${(e as Error).message}`);
+    }
+  }
   fs.unlinkSync(SNAPSHOT);
 }
 

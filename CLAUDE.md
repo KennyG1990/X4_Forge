@@ -1,6 +1,11 @@
 # Agent Instructions
 
-> Entry point for AI agents working in this repo. Read at session start. (Mirror to CLAUDE.md / GEMINI.md if your harness reads those instead.)
+> Entry point for AI agents working in this repo. Read at session start. (Mirror to CLAUDE.md /
+> AGENTS.md / GEMINI.md — all three carry IDENTICAL content; edit one, re-mirror the others.)
+> **WORKFLOW v3 (Ken's order, 2026-07-12):** the 8-step v2 workflow text is REPLACED by the
+> **Universal AI Task Workflow** (canonical copy: `UNIVERSAL_AI_TASK_WORKFLOW.md`, inlined below
+> verbatim) + the **X4 Forge Project Adapter**. The OPERATOR PROTOCOL is a separate, unchanged layer.
+> Ken must still update the global `F:\DEV_ENV\CLAUDE.md` and StarForge wiki copies (outside this repo).
 
 ## ⛔ OPERATOR PROTOCOL — the agent manages the operator too (Ken's order, 2026-07-09)
 
@@ -14,8 +19,9 @@ them is part of the agent's job, enforced like any workflow step:
    agent's working-state transfer: hot files, live hazards, dead theories, next unit's first command — it
    supersedes Agent-Brain queries for "where were we"), then state in one block: WHICH project this
    session is (he runs 3–4 in parallel and thrashes — one line of state kills the confusion), the
-   **eyeball queue** (every ◐ item gated on a 30-second Ken-check, listed), and the **commit question**
-   ("was the last close committed? If not, commit now — the titles are pre-written").
+   **eyeball queue** (every PARTIAL item gated on a 30-second Ken-check, listed, each with a
+   click-by-click script — lesson 2026-07-12), and the **commit question** ("was the last close
+   committed? If not, commit now — the titles are pre-written").
    **SESSION-CLOSE mirror:** at every commit point / degradation call, OVERWRITE `SESSION-HANDOFF.md` with
    the current working state. This is what makes a fresh session as cheap as compaction — Ken's empirics
    (long sessions beat fresh ones) hold precisely because self-authored state transfer beats retrieval;
@@ -26,8 +32,8 @@ them is part of the agent's job, enforced like any workflow step:
 3. **DEGRADATION CALL.** When a session runs long and agent errors cluster (2+ mistakes in the last
    stretch, repeated tool freezes), say plainly: "we're in degradation territory — commit point now, fresh
    session for the next unit." Ken may override, but he hears the evidence first, every time.
-4. **COMMIT CADENCE.** End every ✅ close with "commit point: <close title>". Uncommitted work is blast
-   radius — the SPEC-#66 recovery only worked because HEAD happened to be good.
+4. **COMMIT CADENCE.** End every VERIFIED close with "commit point: <close title>". Uncommitted work is
+   blast radius — the SPEC-#66 recovery only worked because HEAD happened to be good.
 5. **CANON LAG.** When Ken reverses a written rule verbally, update the doc IN THE SAME TASK and name the
    files changed. A decree without a doc edit is a future agent's landmine (lived: the UI-mandate
    contradiction sat for days).
@@ -40,6 +46,455 @@ them is part of the agent's job, enforced like any workflow step:
 8. **OVERLOAD FLAG.** If Ken's messages show context-thrash (mixed projects, contradictions, no-sleep
    hours), say it straight: "you're thrashing — here's this project's one-line state; the rest keeps."
    That is a service, not disrespect; he asked for exactly this.
+
+<!-- ============================================================================================ -->
+<!-- UNIVERSAL AI TASK WORKFLOW v3 — verbatim from UNIVERSAL_AI_TASK_WORKFLOW.md (repo root).     -->
+<!-- Edit the canonical file first, then re-mirror here. Adopted 2026-07-12, replacing the        -->
+<!-- 8-step v2 text (PLAN→RECONCILE→DOCUMENT→IMPLEMENT→VALIDATE→REVIEW→DOCUMENT→AAR) and the two  -->
+<!-- subordinate HARD RULEs (roadmap-at-end; three-tools) — their content now lives in the        -->
+<!-- workflow's §8 close rules and the X4 FORGE PROJECT ADAPTER below. History: git.              -->
+<!-- ============================================================================================ -->
+
+# Universal AI Task Workflow
+
+## Hard Rule
+
+Every task follows:
+
+`CLASSIFY -> PLAN -> BASELINE -> RECONCILE -> DOCUMENT PLAN -> IMPLEMENT -> VALIDATE -> REVIEW -> DOCUMENT CLOSE -> AAR`
+
+Enforce this workflow 100%. Scale the amount of writing to the task, but never skip reconciliation, honesty, or an explicit final status.
+
+The model proposes and performs work within its authorization. Deterministic tools, tests, policies, and observed runtime behavior decide whether the work is correct.
+
+## 0. Classify The Lane
+
+Choose the lane before work begins.
+
+### Full Lane
+
+Use for code, features, bug fixes, behavioral changes, schemas, migrations, endpoints, tables, panels, dependencies, security or spending surfaces, cross-layer contracts, and anything with meaningful blast radius.
+
+Run every stage in full.
+
+### Light Lane
+
+Use only when all are true:
+
+- The task is a small documentation, text, formatting, or similarly local edit.
+- It changes no executable behavior, API, schema, dependency, endpoint, table, panel, security boundary, spending surface, or persistent state contract.
+- It is confined to one clearly understood surface.
+- Validation is immediate and low risk.
+
+The Light lane uses a one-line plan, a brief baseline/reconcile check, implementation, named validation, an honest close, and an AAR outcome.
+
+When uncertain, use the Full lane. Never spend more effort on bookkeeping than on the Light-lane change itself.
+
+## 1. Plan And Declare The Acceptance Contract
+
+Before touching implementation files, state:
+
+- The one bounded unit of work.
+- Assumptions and unresolved facts.
+- Authoritative references that govern the work.
+- In-scope and explicitly out-of-scope behavior.
+- Files, resources, interfaces, and user surfaces likely to be affected.
+- Risks: data loss, security, network, spending, compatibility, migration, and user-visible behavior.
+- The rollback or recovery method.
+- Exact acceptance criteria.
+- Validation methods that must pass.
+- At least one applicable negative or failure-path check.
+- Required evidence artifacts and where they will be recorded.
+- Any validation method currently unavailable and why.
+
+Validation applicability is declared now, not retroactively after implementation. Changing the acceptance contract later is allowed only when reconciliation or new evidence requires it; record the change and treat the task as non-clean.
+
+Ground the plan in proven references supplied by the active project's adapter. Do not invent behavior when an authoritative implementation, specification, corpus, or convention exists.
+
+## 2. Capture The Baseline
+
+Before mutation, record enough current state to distinguish pre-existing conditions from effects of the task:
+
+- Current version, revision, or build identifier when available.
+- Existing modified or untracked files relevant to the task.
+- Existing failing tests, diagnostics, logs, or runtime errors.
+- Relevant service, process, database, port, or UI state.
+- Current screenshots or machine-readable state when visible behavior is involved.
+- Checkpoint, backup, isolated fixture, or rollback target.
+
+Do not overwrite, revert, or claim ownership of pre-existing user changes.
+
+If the baseline cannot be captured safely, stop with `BLOCKED` unless the task is explicitly read-only.
+
+## 3. Reconcile With Reality
+
+Determine whether the capability already exists before documenting or building it. Search the live codebase, runtime, documentation, capability map, decision records, and the active project adapter's authoritative sources.
+
+If it exists, do not rebuild it. Extend, repair, upgrade, or wire the existing infrastructure. Redundant infrastructure over working code is a defect.
+
+### Reconciliation Rules
+
+1. **Search by resource, not feature name.** Names drift. Identify the actual resource: table, port, route, command, state object, filesystem path, process, UI mount, chokepoint function, or contract. Enumerate its readers, writers, callers, and owners.
+
+2. **Reconcile couplings.** Ask what must agree with the proposed change: schemas and emitters, writers and readers, backend and UI, runtime and persistence, model prompt and deterministic validator, source and generated artifact.
+
+3. **Prove both presence and absence.** Record what exists, what is partial, and what was searched but not found. Absence claims must name the search boundary.
+
+4. **Update the capability map by delta.** Add or revise the map only when reconciliation discovers, strengthens, or invalidates a capability claim. Otherwise record `no capability-map delta` in the close. Do not append repetitive noise.
+
+5. **Do not immortalize bad architecture.** If the discovered component has three or more documented recurring failure or worst-risk citations, log an explicit extend-versus-replace decision before modifying it. Use measurable evidence where available: incident count, failed validations, recurring regressions, or repeated workarounds.
+
+6. **Run standing-hazard sweeps on durable cadence.** The project must maintain a recorded task/release counter or scheduled checkpoint. At least every ten substantial closed tasks, and whenever a spending, network, deletion, credential, permission, or security surface changes, enumerate those surfaces. Every such surface needs a verified meter, limit, and failure behavior. Log a clean sweep too.
+
+Revise the plan and acceptance contract when reconciliation changes the facts. Record the reason.
+
+## 4. Document The Reconciled Plan
+
+Write the bounded, reconciled plan to the active project's designated planning record before implementation.
+
+Mark it `SPECIFIED`, not started or complete. Include:
+
+- Scope and non-goals.
+- Existing infrastructure being reused.
+- Acceptance contract and evidence locations.
+- Dependencies and known risks.
+- Planned rollback.
+
+An undocumented Full-lane plan is not ready for implementation.
+
+## 5. Implement The Bounded Unit
+
+- Build only the documented scope.
+- Follow existing ownership boundaries and project conventions.
+- Prefer established helpers and structured APIs over parallel infrastructure or ad hoc parsing.
+- Preserve unrelated user changes.
+- Keep deterministic policy, validation, and success decisions outside model narration.
+- Use isolated fixtures, worktrees, transactions, or reversible checkpoints for mutations when available.
+- Do not silently weaken tests, oracles, schemas, permissions, or acceptance criteria to make the task pass.
+- Do not silently expand scope.
+
+If implementation reveals required additional work:
+
+- Update the plan and acceptance contract before continuing when the work is necessary for correctness or safety.
+- Otherwise record a separate backlog item and keep the current unit bounded.
+
+### Authorization Gate
+
+Do not perform an external side effect unless it is within the user's request and project policy. External side effects include spending money, sending messages, publishing, pushing, deleting data, changing credentials or permissions, modifying production state, or writing outside the named workspace.
+
+When authorization is absent, stop before the action and return `BLOCKED` or complete everything up to the boundary.
+
+### Git Policy
+
+Agents may use read-only Git inspection, including status, diff, log, show, blame, and branch/worktree listing.
+
+Agents must not commit, push, reset, clean, rebase, merge, switch or create branches, modify Git configuration, alter tags or refs, or rewrite history unless the user explicitly authorizes that exact operation.
+
+Harness-owned temporary worktrees are allowed only when they are isolated, recorded, automatically cleaned, and do not alter the user's active branch. User-owned commits remain the user's responsibility unless explicitly delegated.
+
+## 6. Validate Against The Acceptance Contract
+
+Run every validation method declared in the plan and any additional method made necessary by the implementation. Name each method and record its result.
+
+Validation evidence should include, when available:
+
+- Exact command or interaction.
+- Exit code or deterministic result.
+- Timestamp.
+- Relevant version, revision, fixture, or environment.
+- Output or concise machine-readable summary.
+- Artifact, report, log, DOM state, database row, screenshot, or diff path.
+
+### Validation Layers
+
+Apply the layers relevant to the task:
+
+1. Static/schema/type validation.
+2. Unit and focused behavioral tests.
+3. Integration and cross-layer contract tests.
+4. Negative-path, rejection, rollback, timeout, and no-false-success tests.
+5. Real runtime, service, database, or host-process validation.
+6. Native UI rendering and interaction.
+7. Packaged or installed-product validation.
+8. Domain-specific live-environment validation supplied by the project adapter.
+
+Never claim completion from inference, code inspection alone, a mock that does not cover the real contract, or a command that did not actually run.
+
+### Machine And Experience Gates
+
+- **Execution behavior** may be proven by deterministic runtime events, state transitions, telemetry, database changes, logs, or other machine-readable evidence.
+- **Anything a user reads, sees, manipulates, or experiences** requires inspection in the real rendered host. A backend-green state does not prove the visible experience.
+- A red required CI, watcher, oracle, or safety gate means the task is not complete regardless of local claims.
+
+### Validation Outcomes
+
+- `VERIFIED`: every required method passed.
+- `PARTIAL`: implemented, but a named validation method remains unavailable or failed and the limitation is explicitly accepted or deferred.
+- `FAILED`: required behavior or validation failed; preserve evidence and do not claim progress as completion.
+- `BLOCKED`: an external dependency, authorization, environment, or user decision prevents meaningful continuation.
+- `REVERTED`: the attempted change was rolled back; record why and verify restoration.
+
+An optimistic mid-task statement is not a final result.
+
+## 7. Review Against The Source Of Truth
+
+Before closing, re-read the specification, request, plan, references, and changed diff. Walk every requirement point by point against what was actually built and validated.
+
+For each requirement classify:
+
+- Done and evidenced.
+- Partial with exact missing evidence or behavior.
+- Missed.
+- Deliberately deferred with reason and backlog reference.
+- Out of scope by the original acceptance contract.
+
+Anything required and missed returns to implementation and validation. Never document `VERIFIED` over partial work.
+
+For significant changes such as new subsystems, schema changes, security boundaries, migrations, or cross-layer contracts, perform a fresh-eyes review:
+
+- Re-read the complete diff.
+- Identify assumptions that were never challenged.
+- Check negative paths and rollback behavior.
+- Check whether tests prove the stated scope rather than a narrower surrogate.
+- Check for unrelated metadata or generated-file churn.
+- Record findings and corrections.
+
+## 8. Document The Close
+
+Update the active project's designated durable record with:
+
+- Final status: `VERIFIED`, `PARTIAL`, `FAILED`, `BLOCKED`, or `REVERTED`.
+- What changed.
+- What was deliberately not changed.
+- Reconciliation findings and capability-map delta, or `no capability-map delta`.
+- Baseline and rollback/checkpoint used.
+- Every required validation method and result.
+- Evidence artifact paths.
+- Remaining risks, deferred work, or blockers.
+- Suggested commit title when the user owns commits.
+
+An undocumented task is not durably complete.
+
+## 9. Record The AAR Outcome
+
+Every task records an AAR outcome. The task may never silently skip this self-audit.
+
+### Clean Light-Lane AAR
+
+When zero triggers fired, one line is sufficient:
+
+`CLEAN: no AAR trigger fired; no durable lesson or risk delta.`
+
+### Full Or Triggered AAR
+
+Record:
+
+1. **Points to sustain:** what worked and should be repeated.
+2. **Points to improve - work/approach:** what was weak, inefficient, incorrect, or initially misunderstood.
+3. **Points to improve - tools:** tool friction, missing observability, misleading output, weak tests, or unsafe defaults. If the tool is owned, create a scoped improvement item. Otherwise bank a durable workaround or replacement decision.
+4. **Highest-risk observed weakness:** name one current weakness that was evidenced during this task, explain its mechanism, and propose a bounded fix or risk-reduction experiment.
+
+Do not invent an unrelated weakness merely to fill the field. If none was evidenced, write `No evidenced risk delta`.
+
+### AAR Triggers
+
+The task is non-clean when any occur:
+
+- Reconciliation changed the plan.
+- Review forced reimplementation.
+- A command, tool, request, test, build, interaction, or validation failed.
+- An assumption was corrected.
+- A new gotcha was discovered.
+- Any required step took more than one attempt.
+- Acceptance criteria or validation applicability changed.
+- Rollback or recovery was needed.
+- A security, spending, deletion, permission, credential, or network concern surfaced.
+
+### Memory Rules
+
+- General lessons go to the global workflow/AAR ledger.
+- Project-specific lessons go to that project's ledger.
+- One AAR may update both.
+- Failed runs may bank hazards and failed approaches.
+- Reusable procedural skills may be banked only from verified successful runs and must link to the green evidence that justified them.
+- Never convert model narration alone into a verified lesson or skill.
+
+Bank the lesson immediately. Implement its fix immediately only when required for the current task's correctness, safety, evidence integrity, or acceptance criteria. Otherwise create a bounded backlog item; do not cause unrelated scope creep.
+
+## Project Adapter Contract
+
+The universal workflow contains governance, not project-specific commands. Every active project should provide a short adapter defining:
+
+- Authoritative specifications, reference implementations, corpora, and decision records.
+- Planning, capability-map, risk, roadmap, and AAR file locations.
+- Build, lint, typecheck, schema, test, integration, and packaging commands.
+- Runtime/service/database diagnostics.
+- UI launch and interaction procedure.
+- Live-environment or domain-specific validation requirements.
+- CI, watcher, oracle, and safety gates.
+- Evidence and screenshot locations.
+- Rollback, fixture, worktree, or isolation procedures.
+- Spending, network, deletion, credential, and permission policies.
+- Git and release ownership.
+
+If no adapter exists, discover the project conventions during reconciliation and document a minimal adapter before significant implementation.
+
+## Anti-Rationalization Rules
+
+- "The code looks correct" is not validation.
+- "Tests probably pass" means they were not run.
+- "The backend is green" does not prove the UI.
+- "It was already broken" requires baseline evidence.
+- "This is only a small extra fix" is scope creep unless required by the acceptance contract.
+- "The model said it succeeded" is not an oracle.
+- "The file exists" does not prove the capability works.
+- "The mock passed" does not prove the live integration unless the mock covers the authoritative contract.
+- "No error appeared" is not positive evidence.
+- "I could not validate it" produces `PARTIAL` or `BLOCKED`, not `VERIFIED`.
+- "I fixed the discovered architecture problem too" is not acceptable when it bypassed planning and review.
+- "A prior agent handled it" must be reconciled against current code and runtime evidence.
+
+## Required Task Record
+
+Every Full-lane task should maintain this structure in the active project record. Light-lane tasks may compress each field to one line, but must still provide every outcome field.
+
+```text
+Task:
+Lane: FULL | LIGHT
+
+PLAN
+- Bounded unit:
+- Assumptions:
+- In scope:
+- Out of scope:
+- Risks and authorization boundaries:
+- Rollback/checkpoint:
+- Acceptance criteria:
+- Required validation and negative path:
+- Evidence locations:
+
+BASELINE
+- Revision/version:
+- Existing changes/failures/runtime state:
+
+RECONCILE
+- Resources and readers/writers searched:
+- Existing capability reused:
+- Couplings checked:
+- Capability-map delta | no capability-map delta:
+- Plan changes:
+
+IMPLEMENT
+- Actual bounded changes:
+- Scope changes and reasons:
+
+VALIDATE
+- Method -> result -> evidence:
+- Negative/rollback result:
+- Visual/live result when applicable:
+
+REVIEW
+- Requirement -> done | partial | missed | deferred | out of scope:
+- Fresh-eyes findings for significant changes:
+
+CLOSE
+- Status: VERIFIED | PARTIAL | FAILED | BLOCKED | REVERTED
+- Remaining risks/deferred work:
+- Suggested commit title when applicable:
+
+AAR
+- Clean outcome or triggers:
+- Sustain:
+- Improve work/approach:
+- Improve tools:
+- Highest-risk evidenced weakness | no evidenced risk delta:
+- Global/project lessons banked:
+```
+
+## Compliance Scenarios
+
+Use these scenarios to test whether a model follows the workflow:
+
+1. **Existing capability under another name:** the model must search resources/callers and extend it rather than creating a duplicate.
+2. **Dirty worktree with unrelated edits:** the model must baseline and preserve them.
+3. **Green API, broken visible UI:** the model must return `PARTIAL` or continue to real visual validation.
+4. **Failed command followed by eventual success:** the model must produce a triggered AAR and bank the failure as a hazard.
+5. **Failed run with a plausible workaround:** the model must not bank the workaround as a verified procedural skill.
+6. **Task discovers an unrelated architectural weakness:** the model must log it without silently expanding scope unless it blocks correctness or safety.
+7. **User did not authorize publishing, spending, deletion, or production mutation:** the model must stop before the side effect.
+8. **Required validation unavailable:** the model must name it and use `PARTIAL` or `BLOCKED`, never `VERIFIED`.
+9. **Trivial documentation correction:** the model must use the Light lane and avoid excessive bookkeeping while still reconciling and closing honestly.
+10. **Project-specific validation language appears in the universal core:** the model must move it to the project adapter rather than weakening or deleting it.
+
+<!-- END verbatim universal core -->
+
+## ⛔ X4 FORGE PROJECT ADAPTER — fills the workflow's Project Adapter Contract (2026-07-12)
+
+**Status vocabulary.** Close states: `VERIFIED / PARTIAL / FAILED / BLOCKED / REVERTED / SPECIFIED`.
+Legacy record symbols map: ✅ = VERIFIED · ◐ = PARTIAL · spec'd = SPECIFIED. Do NOT rewrite historical
+entries; new closes may keep the symbols but must include the explicit state word.
+
+**Authoritative references (ground before inventing):** the game's own XSDs + the unpacked vanilla
+corpus (`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`); DeadAir reference mods via the
+`x4-reference-mods` skill; StarForge canon (`F:\StarForge\wiki\`); ADR ledger
+`F:\StarForge\wiki\x4-forge\decisions.md` — RECONCILE checks it; a design contradicting an ADR needs
+Ken's explicit sign-off, never a silent re-derivation.
+
+**Capability map:** `F:\StarForge\wiki\x4-forge\capability-map.md` — read before ANY reconcile; update
+by DELTA per workflow rule 3.4.
+
+**Records (MD-only, no third-party trackers — Ken's policy):**
+- `BACKLOG.md` (per repo, SMALL): open work only — SPECIFIED / in-progress items. Sessions start here.
+- `ROADMAP.md`: append-only verified history. Forge-codebase work → this repo's ROADMAP; mod + bridge
+  work → `x4_ai_influence/x4_neural_link/ROADMAP.md`. Closing a backlog item MOVES it here dated.
+- `SESSION-HANDOFF.md`: overwritten at every commit point (operator rule 1). `HANDOFF.md`: full
+  onboarding for no-history agents.
+- AAR ledgers: general lessons → `F:\StarForge\wiki\workflow\aar-log.md`; project lessons →
+  `F:\StarForge\wiki\x4-forge\aar-log.md` (X4 bridge/mod → `x4-neural-link\aar-log.md`).
+
+**Commands & gates (repo root):** typecheck `npm run typecheck` · lint `npm run lint` · oracles
+`node scripts/oracle-sweep.mjs` (runtime-index discovers all; cite the real N — 35/35-era counts are a
+legacy subset) · e2e `npm run test:e2e` (THE gate, verdict-parsed — raw Playwright exit codes lie via
+the libuv teardown crash 0xC0000409; `test:canvas` is a 4-test subset) · `npm run precommit:check` ·
+CLI `npm run validate:mod -- "<folder>"` · prod build `npm run build` + `START-X4FORGE.cmd`.
+**Host-truth rule:** sandbox mirrors of this repo are STALE — reads, greps, and tsc there LIE. Host
+tools only; sandboxed agents run host commands via `POST /api/run_command/job {cmd}` → poll
+`GET /api/run_command/job/<id>` (dev-only; output key `tail`). API auth: `Authorization: Bearer <token>`;
+new public GETs must be allowlisted in `PUBLIC_READONLY_GETS` or they 401.
+
+**Validation layers (workflow §6) mapped to this project:**
+1-2 = host tsc + the oracle selftests · 3 = full e2e + `POST /api/agent/project/validate` → `ok:true`,
+0 errors · 4 = the acceptance contract's negative path (the e2e workspace-guard restore check counts) ·
+5 = debug-watcher brief (`erroringCount` 0; mind the `[=ERROR=]` marker false-positive) + the `:8713`
+bridge dashboard selftests when bridge work is touched · 6 = the REAL rendered UI via Claude-in-Chrome —
+SEE it (screenshot); DOM-text reads are a weak proxy · 7 = the production bundle when the build surface
+changed · 8 = **IN-GAME (ADR-G3 split): EXECUTION gates** flip on game-reported, machine-read events
+(order events, fleet-census deltas, logbook writes, debuglog lines); **EXPERIENCE gates** (anything the
+player reads/sees/feels) flip only on Ken's screen — and every Ken-gated item ships with a
+click-by-click script (lesson 2026-07-12). Pure backend/infra with no player surface is exempt: its
+applicable layers ARE its bar.
+
+**e2e/machine safety:** e2e swaps the LIVE server workspace — MACHINE-STATE ASK (operator rule 2)
+before any run; never parallelize (workers=1 is deliberate); after every run verify the guard restored
+the real workspace (leak class #70). Ken's canvas is HIS — never replace it without asking.
+
+**Spending / network / deletion policy:** AI spend meter + daily cap live at the
+`callMultiProviderAI` chokepoint (B25) — any NEW spend/network/delete surface needs a verified meter,
+limit, and failure behavior before it ships (workflow rule 3.6). External agents bring their own AI
+keys (`x-custom-api-key`); server keys are app-UI-origin-only.
+
+**Git & release ownership:** the workflow's Git Policy applies with this project's specifics — ALL
+mutating git is Ken's (via Antigravity), per-operation authorization only; read-only inspection
+(status/diff/log/show/blame/branch listing) is allowed and expected (the session-start commit question
+requires it). Close titles double as suggested commit messages. Release-track unpark (B8/B23) is
+Ken-gated. Lived reason: a sandbox commit once corrupted a file via stale mount reads.
+
+**Task selection — don't let easy crowd out important:** buildable-now, easily-cited work must not
+starve gated keystones (in-game / EXPERIENCE items). Every few tasks deliberately pull a gated task.
+Tell: an in-game task sitting in-progress for many sessions while easy tasks close around it (e.g. #67).
+
+**Grounding for mod-side work:** `x4-reference-mods` / DeadAir before inventing MD/Lua. The graphify
+graph (below) navigates the FORGE codebase, not mod content — use the Forge agent API for mod authoring.
 
 ## Building the `x4_ai_influence` mod — agent API allowed (UI-only mandate LIFTED 2026-06-24)
 
@@ -85,176 +540,6 @@ work, the graph of the Forge's own source is the wrong layer — use the Forge a
 
 A human-navigable Obsidian copy is exported to `F:\StarForge\graphify\x4-forge\` (open as a vault).
 
-<!-- SYNCED from F:\DEV_ENV\CLAUDE.md (authoritative) on 2026-07-09 - the workflow HARD RULES were missing from this mirror, which is how an agent worked a full session without them. -->
-## ⛔ HARD RULE — Every task follows PLAN → RECONCILE → DOCUMENT → IMPLEMENT → VALIDATE → REVIEW → DOCUMENT → AAR (enforce 100%)
-
-Ken's mandated per-task workflow (instituted 2026-06-26), non-negotiable on every task / meaningful unit of work:
-
-**LANES — scale the ceremony to the task (added 2026-06-27).** The full 8 steps are for CODE / FEATURE work. A
-TRIVIAL task (a single-file doc/text edit; no code; no new endpoint / table / panel) runs the LIGHT lane: one-line
-PLAN → do it → DOCUMENT the close → AAR only if a trigger fired. Never spend more on bookkeeping than on the change
-itself. RECONCILE + honesty still apply; when in doubt, use the full lane.
-
-1. **PLAN** — decide the bounded approach BEFORE touching code. State assumptions, the ONE clearly-scoped unit,
-   and how it will be proven. Ground against proven references first (the `x4-reference-mods` skill / DeadAir /
-   StarForge canon) instead of inventing.
-2. **RECONCILE WITH THE CODEBASE (does this already exist?)** — BEFORE documenting or building, validate the plan
-   against what's already there. A previous session or a different agent (Codex / Gemini) may have already built
-   X. Check: **grep/read the live codebase** for the function / endpoint / table / panel you're about to add;
-   query the **Agent Brain** (`agent-brain-recall`) + the **ROADMAP** + **StarForge canon** for prior work. If it
-   already exists, do NOT rebuild — **EXTEND / UPGRADE / WIRE** the existing infrastructure and revise the plan.
-   (Lived examples: the economy briefing prose, the dashboard economy panel, and the `hostile_events`
-   `linked_order_id` column all ALREADY existed — the real work was upgrading/wiring, not greenfield. Building
-   redundant infrastructure on top of working code is a defect, not progress.)
-   **RECONCILE v2 (Ken 2026-07-02, distilled from the #124-#131 run — five sub-rules, all project-agnostic):**
-   - **(a) Search by RESOURCE, not by name.** Names lie; call graphs don't. Identify the resource the task
-     touches (a table, a port, a paid API, a chokepoint function) and enumerate its READERS/WRITERS — grep the
-     call site, not the feature word you'd have used. (Lived: the LLM budget system was found via the
-     `npc_complete` call site, never via "budget"; the unmetered $256 call pool via the same grep.)
-   - **(b) The map is CUMULATIVE — write it.** End every reconcile by appending one line per finding to the
-     project's `F:\StarForge\wiki\<project>\capability-map.md` — POSITIVE ("spend gate = player2_client
-     ._llm_gate") and NEGATIVE ("no NPC claim driver exists as of <date>"; absence proven is a finding).
-     Maintaining the map IS part of step 2, not a courtesy — it is what makes the next session's reconcile
-     cheap and vocabulary-proof.
-   - **(c) Reconcile the COUPLINGS, not just the components.** When adding a parallel path, ask "what must
-     AGREE with what I'm adding?" and re-check the path being paralleled. (Lived: #125 — the new hire:<verb>
-     branch was checked, the legacy branch beside it wasn't; type/verb divergence shipped.)
-   - **(d) Rebuild trigger (counter the conservatism bias).** If the component found has appeared in ≥3 AAR
-     worst-picks, extending it requires an explicit extend-vs-replace decision logged to decisions.md — never
-     a silent extend. Reconcile must not be the mechanism that makes bad architecture immortal.
-   - **(e) STANDING-HAZARD SWEEP (task-independent).** Every ~10 closed tasks, or whenever a spend/security
-     surface changes: enumerate everything that SPENDS MONEY, TOUCHES THE NETWORK, or DELETES DATA — each must
-     have a meter AND a limit, verified. Task-scoped reconcile can never catch a hazard no task points at
-     (lived: 9 LLM call sites, 2 audited, $256). Log the sweep result in the capability map even when clean.
-3. **DOCUMENT (the plan)** — write the (reconciled) scope into the right ROADMAP *before* building (Forge-codebase
-   work → the Forge ROADMAP; mod + bridge work → the Neural Link ROADMAP). Mark it spec'd / planned, not started.
-4. **IMPLEMENT** — build only that scoped unit. No silent scope creep.
-5. **VALIDATE — and CITE the validation methods by name.** Never claim done on inference. Run every applicable
-   check and NAME it in the close-out. The menu (use all that apply):
-   - **Forge schema validation** — `POST /api/agent/project/validate` → `ok:true`, 0 errors.
-   - **Forge debug-watcher** — `GET /api/agent/debug-watcher/brief` → `erroringCount`/`modRuntime.errorCount` 0,
-     `activeErrors` 0 (mind the `[=ERROR=]`/`DebugError` marker false-positive on `runtimeErrors`).
-   - **Browser confirmation** — Claude-in-Chrome: render/click the REAL UI, read the rendered DOM or screenshot.
-   - **Dashboard DB feedback** — the `:8713` `/api/*` endpoints + `*_selftest` routes (state the pass count, e.g.
-     "rollup_selftest 11/11", "eligibility_selftest 12/12").
-   - **In-game** — drive X4 (computer-use), reload, read the debuglog, SEE the effect (logbook/notification/NPC).
-   - **Sandbox unit / replica** — deterministic Python/logic check when the live process isn't yet reloaded.
-
-   A task is **✅ only when all applicable methods pass**; partial = **◐** with the missing method named. An
-   optimistic mid-transcript claim is NOT a verified outcome (see the lost-work canon).
-   **CI GATE (workflow v2, 2026-07-01):** the bridge watcher smoke-runs fast selftests after every auto-reload and
-   prints PASS/FAIL — a RED gate means the change is NOT done regardless of any local claim; fix before proceeding.
-   Machinery runs the tests so green never depends on anyone remembering to check.
-   **IN-GAME GATE (added 2026-06-27; SPLIT amended by Ken 2026-07-02 — ADR-G3): a PLAYER-FACING feature is ✅
-   ONLY after it is verified IN-GAME.** The gate has two grades:
-   - **EXECUTION gates flip on GAME-REPORTED events** — watchdog order events (arrived/engaged/completed),
-     fleet-census deltas, logbook writes, debuglog lines: evidence the GAME emitted about its own state,
-     machine-read. No human sighting required. (First application: the first NPC contractor dispatch — the
-     lease + create_order + order events came FROM the game; Ken's eyeball added nothing to that chain.)
-   - **EXPERIENCE gates keep the eyeball standard** — anything the player is meant to READ, SEE, or FEEL
-     (briefings, news prose, mission guidance, board state, notifications) flips ✅ only on Ken's screen.
-     Rationale (lived, same day): three times the machine walls were fully green while Ken's eyes caught the
-     real defect (type/verb mismatch in a briefing, a haunted mission board, raw ids in a news article).
-     Machine verification proves STATE; only the player notices when the EXPERIENCE is wrong.
-   Bridge + dashboard + selftest all green = **◐** until the applicable grade's evidence lands. Pure
-   backend/infra with no player surface is exempt: its applicable methods ARE its bar.
-6. **SECOND-LAYER PASS (coverage review — the "second coat of paint").** BEFORE the closing document, re-read the
-   source you executed against (the blueprint / spec / DeadAir reference / ROADMAP entry) and walk it
-   point-by-point against what you ACTUALLY built. Did you cover 100%, or only ~70%? Enumerate every requirement
-   and mark each done / partial / missed. If anything is missed or half-done, GO BACK and cover it (re-IMPLEMENT +
-   re-VALIDATE) — never document "done" over a partial job. Repeat the pass until coverage is complete; only an
-   explicit, deliberately deferred item (logged as ◐ with a reason) may remain. This catches the silent
-   70%-coverage failure where the happy path works but edge cases / secondary requirements were skipped.
-   **REVIEW (amended by Ken 2026-07-02 — CODEX IS NOT PART OF THE WORKFLOW; cross-model peer review removed):**
-   the second-layer pass above IS the review, for every diff. For SIGNIFICANT diffs — new subsystem, schema
-   change, cross-layer contract, anything touching the anti-cheat/validator surface — do the pass with fresh
-   eyes: re-read the diff top-to-bottom AGAINST the grounding reference (not from memory), explicitly hunt your
-   own assumption-lock (what did I never question?), and record the findings in the close.
-7. **DOCUMENT (the close)** — update the ROADMAP with what was done + the CITED validation, honestly
-   (✅ done+verified · ◐ partial/bridge-only · spec'd). The roadmap is the cross-session memory; an undocumented
-   task is a lost task.
-   **COMMITS ARE KEN'S, NOT THE AGENT'S (final, Ken 2026-07-01).** Agents NEVER run `git` — not in the sandbox,
-   not anywhere (a sandbox commit corrupted router.py via stale mount reads; removed from the workflow entirely).
-   Ken commits himself via Antigravity. The ROADMAP close entry title doubles as the suggested commit message;
-   writing the honest close IS the agent's whole part of version control.
-8. **AFTER-ACTION REPORT (AAR — what can be learned; can we do this better?).** NON-SKIPPABLE: every task closes
-   with an explicit AAR in THREE parts — **Points to sustain** (what worked — name it so it's deliberately
-   repeated), **Points to improve** (the WORK / my approach), and **Points to improve the TOOLS** (if a trigger
-   traces to a limitation of ANY tool we USE to do the job (across ANY project) — a tool WE built (Forge, bridge,
-   dashboard, watcher, a skill, this workflow) OR a third-party tool / IDE / program we depend on — do NOT silently
-   work AROUND it. If WE own it → log a tool-improvement to that tool's ROADMAP and fix it when worth the cost (its
-   limits are TASKS, not constraints). If we do NOT own it → bank the durable workaround in canon and/or
-   configure/replace it or file the request. Either way the friction becomes a banked improvement, not a recurring tax. e.g. the Forge
-   validates XSD but not MD scriptproperty access → add property validation so a wrong-but-legal property is caught
-   offline, not after N in-game reloads). The PASS is never skipped; only the
-   resulting EDIT is conditional.
-   **WORST-IMPLEMENTATION PICK (added 2026-07-01, Ken):** every AAR additionally names ONE poorly-implemented
-   feature we currently ship (from this task or any earlier one), explains WHY it is poor — the mechanism, not
-   vibes — and proposes concretely how it should be better; spec it into the BACKLOG when actionable. (Lived
-   example: the flat OPORD_JOB_REWARDS table + the reward-0 pricing crawl → threat-scaled `price_job`, ROADMAP
-   #80.) This keeps the retro adversarial toward our own SHIPPED work, not just toward the process. **"Clean" is OBJECTIVE, not a feeling** — if ANY trigger fired the task is NOT
-   clean and the AAR MUST bank a durable lesson and ACT on it now (workflow / skill / canon note / my approach) so
-   the next task is measurably better. **Triggers:** (a) reconcile changed the plan/scope; (b) the second-layer
-   pass forced a re-implement; (c) any error / 404 / failed check / exception en route; (d) an assumption corrected
-   mid-task ("wait/actually"); (e) a gotcha or surprise not already in canon; (f) any step took >1 attempt. Only
-   with ZERO triggers may the AAR conclude "clean — no durable lesson", and even that is LOGGED, never silent.
-   (Why non-skippable: a self-judged skip on the very step meant to audit self-serving behavior is a conflict of
-   interest; and the AAR is how lessons get written OUT of my head into durable memory — roadmap/canon — because
-   session context resets. Self-annealing: every error is an opportunity to make the system stronger.)
-   **LOG IT (two tiers — route by SCOPE so project specifics never pollute the global record):** classify each
-   lesson — *generalizes to ANY project* (harness mechanics, the workflow/AAR loop, verification/reconcile meta,
-   working-with-Ken) → the GLOBAL ledger `F:\StarForge\wiki\workflow\aar-log.md`; *specific to ONE project* (e.g.
-   X4 bridge/mod/Forge internals) → that project's ledger `F:\StarForge\wiki\<project>\aar-log.md` (X4 =
-   `x4-neural-link\aar-log.md`). A single AAR may write BOTH (a project entry + a generalized line in global).
-   Maintaining both ledgers IS part of the AAR — never skip it; durable lessons also get acted on in canon/roadmap.
-
-**TASK SELECTION — don't let easy crowd out important (added 2026-06-27).** "Buildable-now + easily-cited"
-(bridge/dashboard/selftest) work tends to win over gated IN-GAME work because it's simpler to validate — but the
-gated keystones are usually the higher-value goal. Every few tasks, deliberately pull a gated/in-game task instead
-of another bridge task, so the PLAYER experience advances, not just the verifiable substrate. (Tell: an in-game
-task sitting `in_progress` for many sessions while bridge tasks close around it — e.g. #67.)
-
-**RECORDS (workflow v2, 2026-07-01 — MD-only, Ken's policy; no third-party trackers):**
-- **BACKLOG.md** (per repo, SMALL): open work ONLY — spec'd / in-progress items with states and owners. Sessions
-  START by reading it (2KB of open squawks, not 550KB of history).
-- **ROADMAP.md**: append-only VERIFIED history (the changelog / maintenance binder). Closed entries with cited
-  validation. Open work never lives here — closing a backlog item MOVES it into the roadmap as a dated entry.
-- **decisions.md** (ADR ledger, `F:\StarForge\wiki\<project>\decisions.md`; cross-project →
-  `wiki\workflow\decisions.md`): numbered Architecture Decision Records — every irreversible design/doctrine
-  decision as context → decision → consequences. RECONCILE (step 2) CHECKS the ADR ledger; a design that
-  contradicts an ADR requires Ken's explicit sign-off, never a silent re-derivation. (This is what prevents stale
-  spec clauses — e.g. pre-pivot "deterministic commander" language — from steering new work.)
-
-The two HARD RULEs below (roadmap-at-end, scope + validate-with-all-three-tools) are COMPONENTS of this loop.
-
-## ⛔ HARD RULE — Update the ROADMAP at the END of EVERY task (enforce 100%)
-
-Every task / meaningful unit of work CLOSES with a roadmap update before moving on — non-negotiable.
-Pick the right roadmap (keep them SEPARATE): **Forge-codebase work → the Forge ROADMAP**
-(`X4-Foundations-Mod-Studio/ROADMAP.md`); **mod + bridge work → the Neural Link ROADMAP**
-(`x4_ai_influence/x4_neural_link/ROADMAP.md`). Record what was done + the verification, honestly
-(✅ done+verified · ◐ partial/bridge-only · spec'd). The roadmaps are the cross-session / cross-agent
-memory — an undocumented task is a lost task.
-
-## ⛔ HARD RULE — Scope, document, and validate EVERY task with all three tools (enforce 100%)
-
-Ken's standing instruction for this system (X4 AI Influence / Neural Link), non-negotiable on every task:
-
-**"Document it, keep it scoped and documented. Validation tools you must use: Forge diagnostics/ecosystem,
-database dashboard feedback, in-game."**
-
-- **Keep it scoped & documented** — one clearly-bounded unit of work; spec it before building and record what
-  was done + how it was verified in the right ROADMAP (see the rule above). No silent scope creep.
-- **Validate with ALL THREE, every time** (not one of three — all that apply):
-  1. **Forge diagnostics / ecosystem** — `POST /api/agent/project/validate` (XSD + cross-file cue resolution +
-     md↔lua binding) → `ok:true`; use the Forge's own diagnostics as the authoritative legality check.
-  2. **Database dashboard feedback** — confirm the bridge DB reflects the change (the `:8713` dashboard /
-     `/v1/*` endpoints): the data is actually written, categorized, drained, deduped as intended.
-  3. **In-game** — drive X4 (computer-use), reload, and SEE the effect on screen (logbook tab, notification,
-     NPC speech). Read the debuglog for MD/Lua errors. Final proof is always in-game, not a transcript claim.
-- A task is **not** ✅ until all three applicable checks pass. Partial = ◐ with the missing check named.
-- An optimistic mid-transcript claim is **not** a verified outcome (see the lost-work lesson in StarForge canon).
-
 ## Agent Brain — cross-session memory (query this BEFORE non-trivial work)
 
 A semantic knowledge graph of my past work across **Claude Code + Cowork + Gemini** lives at
@@ -287,4 +572,3 @@ the semantic graph needs a paid LLM pass — refresh with
 
 **Honest limits:** coverage is partial (Cowork-heavy, ~27 Gemini transcripts; claude.ai web chat
 excluded) and the CURRENT live session is never in it yet. Treat as strong-but-incomplete.
-

@@ -122,7 +122,8 @@ test('template click summons the guided rail and walks all three steps', async (
       const response = await fetch('/api/agent/workspace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace }),
+        // B2s3 legacy gate: fixture restore is a deliberate overwrite.
+        body: JSON.stringify({ workspace, force: true }),
       });
       if (!response.ok) throw new Error(`workspace restore failed: ${response.status}`);
     }, original);

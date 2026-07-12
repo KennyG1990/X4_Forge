@@ -13,6 +13,20 @@
 > **Full onboarding (no-history agents): read HANDOFF.md — the comprehensive 28-section AI-to-AI
 > handoff (rewritten 2026-07-11, corrected same day).**
 
+> **⚠ WORKFLOW v3 ADOPTED 2026-07-12 (Ken's order):** the 8-step v2 workflow is REPLACED by the
+> **Universal AI Task Workflow** (CLASSIFY→PLAN→BASELINE→RECONCILE→DOCUMENT PLAN→IMPLEMENT→VALIDATE→
+> REVIEW→DOCUMENT CLOSE→AAR; closes are VERIFIED/PARTIAL/FAILED/BLOCKED/REVERTED, ✅=VERIFIED
+> ◐=PARTIAL) + the **X4 Forge Project Adapter** — CLAUDE.md/AGENTS.md/GEMINI.md are now identical
+> mirrors carrying both; canonical core `UNIVERSAL_AI_TASK_WORKFLOW.md`. "THE workflow" everywhere in
+> this file now means v3. **Global copies DONE same day** (Ken granted folder access):
+> `F:\DEV_ENV\{CLAUDE,AGENTS,GEMINI}.md` rewritten as identical mirrors (md5-verified; core + GLOBAL
+> ADAPTER DEFAULTS + operator protocol) + canonical `F:\DEV_ENV\UNIVERSAL_AI_TASK_WORKFLOW.md`;
+> StarForge `wiki\workflow\agent-instructions.md` v3 summary (stale Codex peer-review line removed);
+> AAR ledgers banked. NO canon lag remains. Found+flagged: global Karpathy section was pre-truncated
+> mid-sentence (preserved, noted in-file for Ken). B30 (mirror-drift precommit gate) spec'd in
+> BACKLOG. Commit title: "workflow v3: adopt Universal AI Task Workflow + X4 Forge adapter
+> (CLAUDE/AGENTS/GEMINI mirrors, HANDOFF refs)".
+
 ## Vision-v2 run progress (2026-07-11 — **PHASE 1 BUILDABLE SET COMPLETE**; commit titles pre-written):
 - ✅ **B17** "B17: test:e2e verdict gate — libuv-crash-immune e2e wrapper"
 - ✅ **Audit #6** "audit#6: debounce+quota-guard localStorage cache, memoize poll hash (measured; fixes over-quota sync-killer)"
@@ -35,18 +49,43 @@
 - **DEGRADATION CALL made at session end:** 12 closed units, error cluster in the last stretch (2
   comment-syntax slips, 2 edit-before-read, pane-hygiene contributing to the incident) — commit point
   NOW, fresh session for B2s3 (it deserves clean context; it's sync architecture).
-- **Remaining buildable next session:** B2s3 (per-mod + persisted state — THE priority, incident-backed)
-  · B26 guard self-check · B19s2 (brief verdict field + beyond-canvas templates) · B22s2 (mid-canvas
-  stamping + unified cards) · B24s1 (FORGE-STATE parser+panel) · B28 (pane-wedge root cause).
-  Ken-gated: commits (titles above), B13 residual visuals + wizard-✕ glance, in-game batch, B23/B8.
+- **GOAL RUN 2026-07-12 (standing): build ALL remaining BACKLOG until Ken-gated-only; commit-point pause
+  every ~5 closes.** Close #1: ✅ **B2s3** "B2s3: workspace persistence + legacy-write gate + park-on-switch
+  — singleton incident class dead (restart-survival + blank-boot reproduction proven live)". Close #2:
+  ✅ **B29** "B29: responsive header (min-2150px label collapse) + unclippable sync-status layer; fix B2s3
+  vite watch-ignore gap". Close #3: ✅ **B26** "B26: guard restore self-check (wrapper red on FAIL) +
+  gate-matrix selftests + runtime-writes audit (2nd vite gap fixed: data/**)". Close #4: ✅ **B32**
+  "B32: precommit tripwires table — jsx-comment-before-root blocked with named message". (Also today,
+  pre-goal: "B13 residual visuals close".)
+- **⏸ COMMIT-POINT PAUSE (per the goal's ~5-close rule) — 5 closes today, run continues after Ken commits.**
+  Next unit queued: **B24s1** (FORGE-STATE parser + read-only Inspector panel — house pattern: lib + oracle
+  + endpoint + panel; grounded in ADR-F3); then B19s2, B22s2, B31, B28-residual, B11, B13b2, B14.
+  All gates green at pause: tsc 0 · sweep 73/73 · e2e 12/12 (restore-verified) · api-selftest 6/6 ·
+  precommit (incl. tripwires) exit 0 · workspace byte-clean + pane parked (verified).
+- **MAJOR TOOL-HAZARD REVISION (07-12): most of the B28 "pane" flakiness this session was OUR bug** —
+  .studio-state writes triggering Vite full reloads on every workspace commit. Fixed (vite.config ignore).
+  Long pane JS evals survive now. B28 stays open for the pre-B2s3 wedge modes only (stale screenshot
+  frames / click desync — those predate .studio-state).
+- **Remaining buildable:** B26 guard self-check (+B2s3 residuals: RESET audit, first-contact branch,
+  guard-removal decision, runtime-writes-under-one-root audit) · **B31 (ephemeral e2e server state)** ·
+  B32 (jsx-comment lint tripwire) · B19s2 (brief verdict field + beyond-canvas templates) · B22s2
+  (mid-canvas stamping + unified cards) · B24s1 (FORGE-STATE parser+panel) · B28 (residual modes) · B11
+  aiscripts visual · B13 batch 2 · B14 leftovers (partly Ken-gated). Ken-gated: commits, in-game batch
+  (script below), B23/B8.
+- **Live hazard (new):** pane "park" must be VERIFIED (navigate to about:blank, then probe — an unverified
+  park left a client CAS-writing through server restarts on 07-12).
 - **Note:** HANDOFF.md §3/§20/§28 predate this run — ROADMAP/BACKLOG/this file are current; refresh
   HANDOFF.md next session (light lane).
-- **EYEBALL BATCH (Phase 1 boundary — present to Ken):** ① B13's 4 surfaces (delete toasts ×2,
-  empty-state skeletons, compact badge) ② B18 wizard via `?firstrun=1` (⚠ LOOK ONLY — clicking "Set up
-  automatically" rewrites Ken's real config) ③ B19 rail feel (empty canvas → template → walk 3 steps;
-  deploying the welcome template to his game IS safe and is also the first real TTFM datapoint).
-- **IN-GAME BATCH (game-gated, whenever Ken next plays):** rail-to-game EXPERIENCE, template
-  in-game-verified stamps, first complete TTFM funnel.
+- **EYEBALL QUEUE CLEARED 2026-07-12** (Ken said he didn't understand the items — agent ran the two
+  remaining app visuals itself: wizard ✕ ✅ works; conflict card ✅ produced live via real 409, compact
+  collapse works, **defect found: header overflow hides the card <~2300px → B29 spec'd**). Lesson
+  banked: every Ken-gated item must ship with a click-by-click script. Ken's feel-pass on B13/B18/B19
+  surfaces is now OPTIONAL, not gating.
+- **IN-GAME BATCH (game-gated, whenever Ken next plays — THE one remaining Ken item, plain-English
+  script):** launch X4 with the mod system enabled → in the Forge, clear canvas → Templates → "Welcome
+  Message" → follow the 3 rail steps (tweak the text, click Deploy to X4, watch step 3 confirm from the
+  game log) → in-game: load a save, the welcome line should appear in the logbook. That single walk =
+  rail-to-game EXPERIENCE gate + first template in-game stamp + first complete TTFM funnel datapoint.
 - **Gate note:** cite sweeps as N/68 (35/35 era = legacy subset). THE e2e gate = `npm run test:e2e`
   (12 tests, verdict-parsed exit).
 - **Next build units (Phase 2):** B21 census → B10 slices; B22 pattern browser; B25 spend meter;
@@ -97,3 +136,4 @@ or B19 starts Phase 1** (B19 is the keystone — don't let easy items crowd it).
 delete toasts with undo, shortcuts overlay, badge clip fix" ② "docs(vision): ADR-F2 Vision v2 plan —
 TTFM north star, B18–B24 spec'd" — squash if preferred); the eyeball queue; B8 stays parked (B23
 carries its unpark decision).
+

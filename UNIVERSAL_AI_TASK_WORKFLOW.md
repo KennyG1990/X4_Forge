@@ -1,60 +1,3 @@
-# Agent Instructions
-
-> Entry point for AI agents working in this repo. Read at session start. (Mirror to CLAUDE.md /
-> AGENTS.md / GEMINI.md — all three carry IDENTICAL content; edit one, re-mirror the others.)
-> **WORKFLOW v3 (Ken's order, 2026-07-12):** the 8-step v2 workflow text is REPLACED by the
-> **Universal AI Task Workflow** (canonical copy: `UNIVERSAL_AI_TASK_WORKFLOW.md`, inlined below
-> verbatim) + the **X4 Forge Project Adapter**. The OPERATOR PROTOCOL is a separate, unchanged layer.
-> Ken must still update the global `F:\DEV_ENV\CLAUDE.md` and StarForge wiki copies (outside this repo).
-
-## ⛔ OPERATOR PROTOCOL — the agent manages the operator too (Ken's order, 2026-07-09)
-
-Ken's standing instruction, verbatim intent: "remind me of my failures, help me circumvent my problems by
-reminding me, don't be nice about it." Ken is not a software engineer; he validates strategy by
-TRIANGULATION (multiple frontier models converging on an idea = the idea is sound) — that works; the
-shipped Forge is the proof. His failures are OPERATIONAL, under fatigue and multi-project load. Policing
-them is part of the agent's job, enforced like any workflow step:
-
-1. **SESSION-START BRIEF.** Before work, read `BACKLOG.md` + **`SESSION-HANDOFF.md`** (the outgoing
-   agent's working-state transfer: hot files, live hazards, dead theories, next unit's first command — it
-   supersedes Agent-Brain queries for "where were we"), then state in one block: WHICH project this
-   session is (he runs 3–4 in parallel and thrashes — one line of state kills the confusion), the
-   **eyeball queue** (every PARTIAL item gated on a 30-second Ken-check, listed, each with a
-   click-by-click script — lesson 2026-07-12), and the **commit question** ("was the last close
-   committed? If not, commit now — the titles are pre-written").
-   **SESSION-CLOSE mirror:** at every commit point / degradation call, OVERWRITE `SESSION-HANDOFF.md` with
-   the current working state. This is what makes a fresh session as cheap as compaction — Ken's empirics
-   (long sessions beat fresh ones) hold precisely because self-authored state transfer beats retrieval;
-   the handoff file gives fresh sessions the same advantage without the degradation debt.
-2. **MACHINE-STATE ASK.** Before validation-heavy or e2e work: "Are you in the app? Game running? Machine
-   quiet?" Never assume. If the agent detects him live in a surface mid-session (canvas changed, load
-   spiking), FREEZE state-touching work and say so.
-3. **DEGRADATION CALL.** When a session runs long and agent errors cluster (2+ mistakes in the last
-   stretch, repeated tool freezes), say plainly: "we're in degradation territory — commit point now, fresh
-   session for the next unit." Ken may override, but he hears the evidence first, every time.
-4. **COMMIT CADENCE.** End every VERIFIED close with "commit point: <close title>". Uncommitted work is
-   blast radius — the SPEC-#66 recovery only worked because HEAD happened to be good.
-5. **CANON LAG.** When Ken reverses a written rule verbally, update the doc IN THE SAME TASK and name the
-   files changed. A decree without a doc edit is a future agent's landmine (lived: the UI-mandate
-   contradiction sat for days).
-6. **WRITE GATES.** Before any write to the real mod, game dirs, or standing config: give Ken ONE paragraph
-   — what will be written, what could break, how it's undone — and wait for explicit go. He reads that
-   paragraph; that is the whole deal. Never validate against the real mod when a scratch article works.
-7. **[REPRODUCED] vs [HYPOTHESIS].** Every failure explanation the agent gives is tagged one or the other.
-   Never dress a hypothesis as a diagnosis (the lossy-compiler mistake, 2026-07-09). Ken's cheapest check
-   on any agent: "reproduced, or story?"
-8. **OVERLOAD FLAG.** If Ken's messages show context-thrash (mixed projects, contradictions, no-sleep
-   hours), say it straight: "you're thrashing — here's this project's one-line state; the rest keeps."
-   That is a service, not disrespect; he asked for exactly this.
-
-<!-- ============================================================================================ -->
-<!-- UNIVERSAL AI TASK WORKFLOW v3 — verbatim from UNIVERSAL_AI_TASK_WORKFLOW.md (repo root).     -->
-<!-- Edit the canonical file first, then re-mirror here. Adopted 2026-07-12, replacing the        -->
-<!-- 8-step v2 text (PLAN→RECONCILE→DOCUMENT→IMPLEMENT→VALIDATE→REVIEW→DOCUMENT→AAR) and the two  -->
-<!-- subordinate HARD RULEs (roadmap-at-end; three-tools) — their content now lives in the        -->
-<!-- workflow's §8 close rules and the X4 FORGE PROJECT ADAPTER below. History: git.              -->
-<!-- ============================================================================================ -->
-
 # Universal AI Task Workflow
 
 ## Hard Rule
@@ -341,18 +284,18 @@ If no adapter exists, discover the project conventions during reconciliation and
 
 ## Anti-Rationalization Rules
 
-- "The code looks correct" is not validation.
-- "Tests probably pass" means they were not run.
-- "The backend is green" does not prove the UI.
-- "It was already broken" requires baseline evidence.
-- "This is only a small extra fix" is scope creep unless required by the acceptance contract.
-- "The model said it succeeded" is not an oracle.
-- "The file exists" does not prove the capability works.
-- "The mock passed" does not prove the live integration unless the mock covers the authoritative contract.
-- "No error appeared" is not positive evidence.
-- "I could not validate it" produces `PARTIAL` or `BLOCKED`, not `VERIFIED`.
-- "I fixed the discovered architecture problem too" is not acceptable when it bypassed planning and review.
-- "A prior agent handled it" must be reconciled against current code and runtime evidence.
+- “The code looks correct” is not validation.
+- “Tests probably pass” means they were not run.
+- “The backend is green” does not prove the UI.
+- “It was already broken” requires baseline evidence.
+- “This is only a small extra fix” is scope creep unless required by the acceptance contract.
+- “The model said it succeeded” is not an oracle.
+- “The file exists” does not prove the capability works.
+- “The mock passed” does not prove the live integration unless the mock covers the authoritative contract.
+- “No error appeared” is not positive evidence.
+- “I could not validate it” produces `PARTIAL` or `BLOCKED`, not `VERIFIED`.
+- “I fixed the discovered architecture problem too” is not acceptable when it bypassed planning and review.
+- “A prior agent handled it” must be reconciled against current code and runtime evidence.
 
 ## Required Task Record
 
@@ -425,150 +368,3 @@ Use these scenarios to test whether a model follows the workflow:
 8. **Required validation unavailable:** the model must name it and use `PARTIAL` or `BLOCKED`, never `VERIFIED`.
 9. **Trivial documentation correction:** the model must use the Light lane and avoid excessive bookkeeping while still reconciling and closing honestly.
 10. **Project-specific validation language appears in the universal core:** the model must move it to the project adapter rather than weakening or deleting it.
-
-<!-- END verbatim universal core -->
-
-## ⛔ X4 FORGE PROJECT ADAPTER — fills the workflow's Project Adapter Contract (2026-07-12)
-
-**Status vocabulary.** Close states: `VERIFIED / PARTIAL / FAILED / BLOCKED / REVERTED / SPECIFIED`.
-Legacy record symbols map: ✅ = VERIFIED · ◐ = PARTIAL · spec'd = SPECIFIED. Do NOT rewrite historical
-entries; new closes may keep the symbols but must include the explicit state word.
-
-**Authoritative references (ground before inventing):** the game's own XSDs + the unpacked vanilla
-corpus (`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`); DeadAir reference mods via the
-`x4-reference-mods` skill; StarForge canon (`F:\StarForge\wiki\`); ADR ledger
-`F:\StarForge\wiki\x4-forge\decisions.md` — RECONCILE checks it; a design contradicting an ADR needs
-Ken's explicit sign-off, never a silent re-derivation.
-
-**Capability map:** `F:\StarForge\wiki\x4-forge\capability-map.md` — read before ANY reconcile; update
-by DELTA per workflow rule 3.4.
-
-**Records (MD-only, no third-party trackers — Ken's policy):**
-- `BACKLOG.md` (per repo, SMALL): open work only — SPECIFIED / in-progress items. Sessions start here.
-- `ROADMAP.md`: append-only verified history. Forge-codebase work → this repo's ROADMAP; mod + bridge
-  work → `x4_ai_influence/x4_neural_link/ROADMAP.md`. Closing a backlog item MOVES it here dated.
-- `SESSION-HANDOFF.md`: overwritten at every commit point (operator rule 1). `HANDOFF.md`: full
-  onboarding for no-history agents.
-- AAR ledgers: general lessons → `F:\StarForge\wiki\workflow\aar-log.md`; project lessons →
-  `F:\StarForge\wiki\x4-forge\aar-log.md` (X4 bridge/mod → `x4-neural-link\aar-log.md`).
-
-**Commands & gates (repo root):** typecheck `npm run typecheck` · lint `npm run lint` · oracles
-`node scripts/oracle-sweep.mjs` (runtime-index discovers all; cite the real N — 35/35-era counts are a
-legacy subset) · e2e `npm run test:e2e` (THE gate, verdict-parsed — raw Playwright exit codes lie via
-the libuv teardown crash 0xC0000409; `test:canvas` is a 4-test subset) · `npm run precommit:check` ·
-CLI `npm run validate:mod -- "<folder>"` · prod build `npm run build` + `START-X4FORGE.cmd`.
-**Host-truth rule:** sandbox mirrors of this repo are STALE — reads, greps, and tsc there LIE. Host
-tools only; sandboxed agents run host commands via `POST /api/run_command/job {cmd}` → poll
-`GET /api/run_command/job/<id>` (dev-only; output key `tail`). API auth: `Authorization: Bearer <token>`;
-new public GETs must be allowlisted in `PUBLIC_READONLY_GETS` or they 401.
-
-**Validation layers (workflow §6) mapped to this project:**
-1-2 = host tsc + the oracle selftests · 3 = full e2e + `POST /api/agent/project/validate` → `ok:true`,
-0 errors · 4 = the acceptance contract's negative path (the e2e workspace-guard restore check counts) ·
-5 = debug-watcher brief (`erroringCount` 0; mind the `[=ERROR=]` marker false-positive) + the `:8713`
-bridge dashboard selftests when bridge work is touched · 6 = the REAL rendered UI via Claude-in-Chrome —
-SEE it (screenshot); DOM-text reads are a weak proxy · 7 = the production bundle when the build surface
-changed · 8 = **IN-GAME (ADR-G3 split): EXECUTION gates** flip on game-reported, machine-read events
-(order events, fleet-census deltas, logbook writes, debuglog lines); **EXPERIENCE gates** (anything the
-player reads/sees/feels) flip only on Ken's screen — and every Ken-gated item ships with a
-click-by-click script (lesson 2026-07-12). Pure backend/infra with no player surface is exempt: its
-applicable layers ARE its bar.
-
-**e2e/machine safety:** e2e swaps the LIVE server workspace — MACHINE-STATE ASK (operator rule 2)
-before any run; never parallelize (workers=1 is deliberate); after every run verify the guard restored
-the real workspace (leak class #70). Ken's canvas is HIS — never replace it without asking.
-
-**Spending / network / deletion policy:** AI spend meter + daily cap live at the
-`callMultiProviderAI` chokepoint (B25) — any NEW spend/network/delete surface needs a verified meter,
-limit, and failure behavior before it ships (workflow rule 3.6). External agents bring their own AI
-keys (`x-custom-api-key`); server keys are app-UI-origin-only.
-
-**Git & release ownership:** the workflow's Git Policy applies with this project's specifics — ALL
-mutating git is Ken's (via Antigravity), per-operation authorization only; read-only inspection
-(status/diff/log/show/blame/branch listing) is allowed and expected (the session-start commit question
-requires it). Close titles double as suggested commit messages. Release-track unpark (B8/B23) is
-Ken-gated. Lived reason: a sandbox commit once corrupted a file via stale mount reads.
-
-**Task selection — don't let easy crowd out important:** buildable-now, easily-cited work must not
-starve gated keystones (in-game / EXPERIENCE items). Every few tasks deliberately pull a gated task.
-Tell: an in-game task sitting in-progress for many sessions while easy tasks close around it (e.g. #67).
-
-**Grounding for mod-side work:** `x4-reference-mods` / DeadAir before inventing MD/Lua. The graphify
-graph (below) navigates the FORGE codebase, not mod content — use the Forge agent API for mod authoring.
-
-## Building the `x4_ai_influence` mod — agent API allowed (UI-only mandate LIFTED 2026-06-24)
-
-**UPDATE 2026-06-24 (Ken): the old "build the mod ONLY through this Forge's UI" HARD RULE is REVERSED.** It
-contradicted `F:\DEV_ENV\CLAUDE.md`, which is authoritative — both now agree. You **may use the Forge agent API
-(`/api/agent/*`) to author, validate, and deploy** the `x4_ai_influence` mod (in-game MD/Lua/content), and use
-mouse clicks (Claude-in-Chrome / computer-use) for *validation*. Pure-canvas building was too slow. The Forge is
-still proven by building a real mod end-to-end — but via the API is fine; a UI gap found while building is worth
-fixing in the Forge (log it in ROADMAP) but no longer blocks. (Verification — driving X4, reading the debuglog,
-querying the bridge DB — tests results, not the build. The Python bridge is not a Forge artifact, edited normally.)
-
-## Code knowledge graph (graphify)
-
-A precomputed knowledge graph of this codebase lives at `graphify-out/graph.json`
-(**1160 nodes · 2649 edges · 51 communities**, AST-extracted, code-only). Use it to
-orient and reason about structure **before** grepping the whole tree — it answers
-relationship questions that grep/LSP can't cheaply: blast radius, shortest paths,
-and what a symbol connects to.
-
-The CLI is `graphify` (installed; package is `graphifyy`). Run from the repo root so
-it finds `graphify-out/graph.json` by default:
-
-```bash
-graphify query   "How does X work?"        # BFS traversal — broad context for a question
-graphify affected "generateMDXML()"        # REVERSE blast-radius: what breaks if I change this
-graphify path    "Canvas.tsx" "xsdParser.ts"  # shortest dependency path between two nodes
-graphify explain "ModWorkspace"            # a node + its neighbors (degree, community, edges)
-```
-
-Core abstractions (god nodes): `ModWorkspace` (67 edges), `MDNode` (38),
-`generateMDXML()` (33), `compileAndSaveAll()` (21), `validateModWorkspace()` (15).
-
-**Keep it fresh.** After changing code, rebuild deterministically (no LLM, free, seconds):
-
-```bash
-graphify update .
-```
-
-**Scope caveat:** the graph is **code-only** — it does NOT include ROADMAP.md, docs/,
-schemas, or wares/jobs data (those are stripped by `.graphifyignore`). For mod-authoring
-work, the graph of the Forge's own source is the wrong layer — use the Forge agent API
-(see the `x4-forge-api` skill). This graph is for navigating/maintaining the Forge codebase.
-
-A human-navigable Obsidian copy is exported to `F:\StarForge\graphify\x4-forge\` (open as a vault).
-
-## Agent Brain — cross-session memory (query this BEFORE non-trivial work)
-
-A semantic knowledge graph of my past work across **Claude Code + Cowork + Gemini** lives at
-`F:\DEV_ENV\Agent Brain Vault`. It exists so I don't re-derive what a past session already solved
-(e.g. the X4 Neural Link skills/relation work).
-
-**THE ONE RULE:** before non-trivial work — or whenever Ken references something "we did before,"
-a project by name, or a past decision/outcome — **query the brain first instead of guessing or
-re-reading raw files.**
-
-**First-class MCP — `claude-brain`.** Graphify's own server `graphify-mcp` serves the semantic
-graph. Registration lives in `Agent Brain Vault\_brain-tools\brain.mcp.json`; for Claude Code,
-merge it into `F:\DEV_ENV\.mcp.json` (Cowork: add as a connector). It points at
-`Agent Brain Vault\graphify-out\graph.json`. Call its tools (discover via tools/list — query /
-explain / stats) for meaning-based recall. Phrase questions by MEANING, not filenames.
-- If no MCP is connected, fall back to the CLI:
-  `python "F:\DEV_ENV\Agent Brain Vault\_brain-tools\query_brain.py" --vault "F:\DEV_ENV\Agent Brain Vault" "<question>"`
-- Verbatim source notes: `Agent Brain Vault\notes\` (one per conversation).
-
-**Query `graph.json`, NOT Obsidian's Graph View** — that view is a shallow `[[wikilink]]` keyword
-co-occurrence graph (the kind we discarded). The real retrieval layer is the LLM-extracted
-`graph.json` / `graph.html`.
-
-**Brain vs StarForge:** the brain = the dragnet (every conversation, raw — "where did I ever touch
-X"); StarForge `wiki/` = the canon (curated design). Distill durable brain findings into canon.
-
-**Refresh:** notes auto-refresh nightly (free, deterministic) via the `ClaudeBrain-normalize` task;
-the semantic graph needs a paid LLM pass — refresh with
-`/graphify "F:\DEV_ENV\Agent Brain Vault\notes" --update` (new/changed notes only — cheap).
-
-**Honest limits:** coverage is partial (Cowork-heavy, ~27 Gemini transcripts; claude.ai web chat
-excluded) and the CURRENT live session is never in it yet. Treat as strong-but-incomplete.

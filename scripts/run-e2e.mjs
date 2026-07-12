@@ -42,12 +42,17 @@ child.on('close', (code) => {
   const didNotRun = count(/(\d+)\s+did not run/);
   const noTests = /no tests found/i.test(out);
 
-  const red = failed > 0 || flaky > 0 || interrupted > 0 || didNotRun > 0;
+  // B26: the workspace-guard teardown verifies its own restore and prints a parseable
+  // marker — a green suite that leaked test state into the live workspace is NOT green.
+  const guardFail = /\[workspace-guard\] RESTORE-VERIFY: FAIL/.test(out);
+
+  const red = failed > 0 || flaky > 0 || interrupted > 0 || didNotRun > 0 || guardFail;
   const green = passed > 0 && !red && !noTests;
 
   const crashed = code !== 0;
   const detail = `${passed} passed, ${failed} failed, ${flaky} flaky, ${interrupted} interrupted, ${didNotRun} did not run` +
     (noTests ? ', NO TESTS FOUND' : '') +
+    (guardFail ? ', WORKSPACE-GUARD RESTORE-VERIFY FAILED' : '') +
     (crashed ? ` (child exit ${code} IGNORED — verdict comes from the summary; libuv teardown crash is a known non-signal)` : '');
 
   console.log(`\n[run-e2e] VERDICT: ${green ? 'PASS' : 'FAIL'} — ${detail}`);

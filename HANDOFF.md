@@ -47,7 +47,9 @@ after the last edits; visual items pending Ken's eyeball — §20); B2 sync slic
 is spec'd; long-tail items B10/B11/B12/B14 spec'd (§3, §25).
 
 **The single most important thing to understand:** this project runs under a **mandatory, non-negotiable
-workflow** (PLAN → RECONCILE → DOCUMENT → IMPLEMENT → VALIDATE → REVIEW → DOCUMENT → AAR) defined in
+workflow** — v3 as of 2026-07-12: the **Universal AI Task Workflow** (CLASSIFY → PLAN → BASELINE →
+RECONCILE → DOCUMENT PLAN → IMPLEMENT → VALIDATE → REVIEW → DOCUMENT CLOSE → AAR; canonical text
+`UNIVERSAL_AI_TASK_WORKFLOW.md`, inlined with the X4 Forge Project Adapter) — defined in
 `AGENTS.md`/`CLAUDE.md`, with an **operator protocol** for managing Ken himself. Nothing is "done" on
 inference — only on cited validation. **Agents never run mutating `git`; Ken commits.** An undocumented
 task is a lost task.
@@ -571,17 +573,21 @@ never dress a hypothesis as a diagnosis (lived lesson: the "lossy compiler" misd
 
 ## 23. Operational and Safety Rules (BINDING — from AGENTS.md/CLAUDE.md, condensed)
 
-1. **Follow the 8-step workflow on every task** (LIGHT lane for trivial doc edits). RECONCILE before
-   building — the thing you're about to build may already exist (three lived examples).
-2. **Never run mutating git.** Read-only `git status/log` OK. Ken commits; your close-entry title is
-   the suggested commit message. End every ✅ close with "commit point: <title>".
+1. **Follow the Universal AI Task Workflow (v3, 2026-07-12) on every task** — CLASSIFY the lane,
+   declare the acceptance contract (incl. a negative-path check) BEFORE implementing, capture a
+   BASELINE before mutating, RECONCILE before building (the thing may already exist — three lived
+   examples). Full text + X4 adapter: `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` (identical mirrors).
+2. **Never run mutating git.** Read-only inspection (status/diff/log/show/blame/branch listing) is
+   allowed and expected. Ken commits; your close-entry title is the suggested commit message. End
+   every VERIFIED close with "commit point: <title>".
 3. **Machine-state ask** before validation-heavy/e2e/frontend-hot-reload work: "Are you in the app?
    Game running? Machine quiet?" Ken lives on this machine; his canvas is HIS.
 4. **Write gates:** before ANY write to the real mod, game dirs, or standing config — one paragraph to
    Ken (what/risk/undo), wait for explicit go. Never validate against the real mod when a scratch
    article works.
 5. **Never claim done without cited validation** (§15 menu). Optimistic mid-transcript claims are not
-   outcomes. ✅ vs ◐ honesty is enforced.
+   outcomes. Close states are VERIFIED / PARTIAL / FAILED / BLOCKED / REVERTED (legacy ✅=VERIFIED,
+   ◐=PARTIAL); honesty is enforced.
 6. **Update records same-task**: ROADMAP close (Forge work → this repo's ROADMAP), BACKLOG state,
    SESSION-HANDOFF at commit points, AAR with worst-implementation pick; canon edits when a rule is
    verbally reversed (a decree without a doc edit is a landmine).

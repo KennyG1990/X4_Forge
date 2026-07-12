@@ -111,6 +111,12 @@ export default defineConfig(() => {
                 '**/use_agent_api.py',
                 // App/doc/tooling writes that shouldn't trigger reloads.
                 '**/.studio-api-token',
+                // B2s3 workspace persistence: the API writes active/parked state on every
+                // commit — without this every canvas edit full-reloads every client.
+                '**/.studio-state/**',
+                // B26 runtime-writes audit: server runtime data (AI usage meter, harvested
+                // schemas, api-registry) — same spurious-reload class as .studio-state.
+                '**/data/**',
                 '**/.tmp_*',
                 '**/*.log',
                 '**/.snapshots/**',
