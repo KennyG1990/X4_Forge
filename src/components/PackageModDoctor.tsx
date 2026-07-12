@@ -559,13 +559,28 @@ export default function PackageModDoctor({
                   {ovMap.resolution === 'base' ? 'BASE-RESOLVED' : 'SELECTOR-STRING'}
                 </span>
               </div>
-              <button
-                onClick={() => setOvMap(null)}
-                className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition-all shrink-0 cursor-pointer"
-                title="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {/* B13b2: jump straight into Diff→Patch pre-targeted at this file — the
+                    natural next move after seeing who rewrites what. */}
+                <button
+                  data-testid="override-map-to-diffpatch"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('xmlpatch-pretarget', { detail: { targetFile: ovMap.targetFile } }));
+                    setOvMap(null);
+                  }}
+                  className="px-2 py-1 rounded bg-fuchsia-600/30 border border-fuchsia-400/30 hover:bg-fuchsia-600/50 text-fuchsia-100 text-[9px] font-mono font-bold cursor-pointer"
+                  title="Open the XML Patching workbench with Diff→Patch pre-targeted at this file."
+                >
+                  DIFF→PATCH
+                </button>
+                <button
+                  onClick={() => setOvMap(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition-all shrink-0 cursor-pointer"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <div className="px-4 py-2 border-b border-white/5 shrink-0 font-mono text-[9px] text-slate-400 flex flex-wrap items-center gap-1">
               LOAD ORDER:

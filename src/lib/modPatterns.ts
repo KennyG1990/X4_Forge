@@ -152,6 +152,56 @@ export function buildPatternWorkspace(id: string): ModWorkspace {
   } as Partial<ModWorkspace>);
 }
 
+/**
+ * B22s2: stamp a pattern INTO an existing workspace (mid-canvas), never replacing it.
+ * Node/link ids are remapped with a unique stamp prefix so repeated stamps and
+ * collisions are impossible; the fragment lands below the existing graph's bounding
+ * box so it never overlaps working nodes. Returns a NEW sanitized workspace.
+ */
+export function stampPatternIntoWorkspace(ws: ModWorkspace, id: string): ModWorkspace {
+  const p = MOD_PATTERNS.find((x) => x.id === id);
+  if (!p) return ws;
+  // Unique per-stamp prefix WITHOUT wall-clock: derived from existing stamp count.
+  const stampNo = (ws.nodes || []).reduce((max, n) => {
+    const m = /^stamp(\d+)_/.exec(String(n.id));
+    return m ? Math.max(max, parseInt(m[1], 10)) : max;
+  }, 0) + 1;
+  const prefix = `stamp${stampNo}_`;
+  // Land the fragment below everything that exists (fresh canvas → origin).
+  const maxY = (ws.nodes || []).reduce((m, n) => Math.max(m, (n.y ?? 0)), 0);
+  const offsetY = ws.nodes?.length ? maxY + 260 : 80;
+  const built = p.build();
+  // Cue NAMES must be unique per script file (validator-enforced) — ids alone aren't
+  // enough when the same pattern is stamped twice. Suffix on collision only, so the
+  // first stamp keeps the pattern's teachable names. Patterns are self-contained
+  // (no cross-cue name references), which the compile-clean oracle enforces.
+  const takenCueNames = new Set(
+    (ws.nodes || []).map(n => String((n.properties as Record<string, unknown>)?.name ?? '')).filter(Boolean)
+  );
+  const stampedNodes = built.nodes.map(n => {
+    const props = { ...(n.properties as Record<string, unknown>) };
+    if (n.type === 'cue' && typeof props.name === 'string' && props.name) {
+      let candidate = props.name;
+      let bump = stampNo;
+      while (takenCueNames.has(candidate)) candidate = `${props.name}_${bump++}`;
+      takenCueNames.add(candidate);
+      props.name = candidate;
+    }
+    return { ...n, id: `${prefix}${n.id}`, y: (n.y ?? 0) + offsetY - 80, properties: props };
+  });
+  const stampedLinks = built.links.map(l => ({
+    ...l,
+    id: `${prefix}${l.id}`,
+    sourceNodeId: `${prefix}${l.sourceNodeId}`,
+    targetNodeId: `${prefix}${l.targetNodeId}`,
+  }));
+  return sanitizeWorkspace({
+    ...ws,
+    nodes: [...(ws.nodes || []), ...stampedNodes],
+    links: [...(ws.links || []), ...stampedLinks],
+  } as Partial<ModWorkspace>);
+}
+
 /* ------------------------------------------------------------------ *
  * Oracle — house contract; every pattern compiles to 0 errors and
  * carries complete provenance.
@@ -173,6 +223,34 @@ export function runModPatternsSelftest() {
     } catch (e) {
       ok(`pattern_${p.id}_compiles_clean`, false, e instanceof Error ? e.message : String(e));
     }
+  }
+
+  // B22s2: mid-canvas stamping — additive, collision-free, repeatable, still legal.
+  try {
+    const base = buildPatternWorkspace('kill_capture_group');
+    const baseNodes = base.nodes.length;
+    const once = stampPatternIntoWorkspace(base, 'order_dispatch');
+    const patternNodes = MOD_PATTERNS.find(p => p.id === 'order_dispatch')!.build().nodes.length;
+    ok('stamp_adds_without_replacing', once.nodes.length === baseNodes + patternNodes
+      && base.nodes.every(n => once.nodes.some(m => m.id === n.id)));
+    ok('stamp_ids_unique', new Set(once.nodes.map(n => n.id)).size === once.nodes.length);
+    ok('stamp_lands_below_existing', (() => {
+      const baseMaxY = Math.max(...base.nodes.map(n => n.y ?? 0));
+      const stamped = once.nodes.filter(n => String(n.id).startsWith('stamp'));
+      return stamped.every(n => (n.y ?? 0) > baseMaxY);
+    })());
+    const twice = stampPatternIntoWorkspace(once, 'order_dispatch');
+    ok('stamp_twice_no_collision', new Set(twice.nodes.map(n => n.id)).size === twice.nodes.length
+      && twice.nodes.length === once.nodes.length + patternNodes);
+    const diags = validateModWorkspace(twice, generateMDXML(twice));
+    ok('stamped_workspace_compiles_clean', diags.filter(d => d.severity === 'error').length === 0,
+      diags.filter(d => d.severity === 'error').map(d => d.message));
+    ok('stamp_links_rewired_to_stamped_ids', twice.links
+      .filter(l => String(l.id).startsWith('stamp'))
+      .every(l => twice.nodes.some(n => n.id === l.sourceNodeId) && twice.nodes.some(n => n.id === l.targetNodeId)));
+    ok('stamp_unknown_id_is_noop', stampPatternIntoWorkspace(base, 'no_such_pattern') === base);
+  } catch (e) {
+    ok('stamp_suite_threw', false, e instanceof Error ? e.message : String(e));
   }
 
   const passed = checks.filter(c => c.pass).length;

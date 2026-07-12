@@ -46,20 +46,23 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
         const res = await fetch('/api/agent/debug-watcher/brief');
         const b = await res.json();
         if (!res.ok) { setWatcher('Log watcher unavailable.'); return; }
-        const errs = Number(b?.modRuntime?.errorCount ?? b?.erroringCount ?? 0);
-        if (b?.gameSeen === false || b?.logFound === false) {
-          setWatcher('No game log yet — start X4 (or reload a save) with the mod deployed.');
-        } else if (errs > 0) {
-          setWatcher(`Game log found — ${errs} error(s) attributed to your mod. Check the canvas badges.`);
-        } else {
-          // B20: the funnel's finish line — the game's log is present and clean.
+        // B19s2: the SERVER computes the verdict — the rail renders it, guessing nothing.
+        // (The previous code read fields that never existed on the brief's top level and
+        // therefore always reported "clean" — the exact heuristic this field kills.)
+        const verdict = b?.verdict as { state?: string; detail?: string; errorCount?: number } | undefined;
+        if (!verdict?.state) { setWatcher('Log watcher unavailable (no verdict field — old API?).'); return; }
+        if (verdict.state === 'loaded_clean') {
+          // B20: the funnel's finish line — the game confirmed the mod, clean.
           if (ttfm.mark('game_confirmed')) {
             const total = ttfm.totalMs();
-            if (total !== null) setWatcher(`Game log looks clean — your first mod is IN THE GAME (${Math.round(total / 60000)} min from first boot). ${guide?.gameCheck || ''}`);
-            else setWatcher('Game log looks clean. ' + (guide?.gameCheck || 'Load a save and watch for your change.'));
-          } else {
-            setWatcher('Game log looks clean. ' + (guide?.gameCheck || 'Load a save and watch for your change.'));
+            if (total !== null) { setWatcher(`Your mod is IN THE GAME and clean (${Math.round(total / 60000)} min from first boot). ${guide?.gameCheck || ''}`); return; }
           }
+          setWatcher('Mod loaded and clean. ' + (guide?.gameCheck || 'Load a save and watch for your change.'));
+        } else if (verdict.state === 'loaded_with_errors') {
+          setWatcher(`${verdict.detail} Check the canvas badges.`);
+        } else {
+          // no_log / stale / not_seen — the verdict's detail already says what to do next.
+          setWatcher(verdict.detail || 'Waiting for the game…');
         }
       } catch {
         setWatcher('Log watcher unavailable.');

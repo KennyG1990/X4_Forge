@@ -78,20 +78,10 @@ const BLANK_WORKSPACE: ModWorkspace = {
   version: '1.0.0',
   author: 'Space_Pilot',
   description: 'Custom script developed using X4 Forge visual nodes generator',
-  nodes: [
-    {
-      id: "cue_first",
-      type: "cue",
-      label: "Mission Cue",
-      xmlTag: "cue",
-      x: 150,
-      y: 120,
-      properties: { name: "My_Startup_Cue", instantiate: "false", namespace: "this", state: "active", conditions: "", actions: "" },
-      propertiesSchema: NODE_TEMPLATES[0].propertiesSchema,
-      inputs: NODE_TEMPLATES[0].inputs,
-      outputs: NODE_TEMPLATES[0].outputs
-    }
-  ],
+  // B33 (2026-07-12): GENUINELY empty — the old starter cue meant RESET/blank never
+  // reached "empty in every domain", so the template picker was unreachable after a
+  // reset (and the cue itself was dead code the Forge's own scanner flagged).
+  nodes: [],
   links: [],
   uiWidgets: [],
   uiTheme: {
@@ -709,6 +699,14 @@ export default function App() {
     return () => window.removeEventListener('navigate-to-source', handleNavigateToSource);
   }, [workspace]);
 
+  // B13b2: override-map → Diff→Patch pre-target. The Doctor dispatches; App switches the
+  // view; XMLPatchSystem (same event) sets the target file + difftool tab.
+  useEffect(() => {
+    const handlePretarget = () => { setWorkspaceView('xmlpatch'); setActiveSidebarTab('config'); };
+    window.addEventListener('xmlpatch-pretarget', handlePretarget);
+    return () => window.removeEventListener('xmlpatch-pretarget', handlePretarget);
+  }, []);
+
   useEffect(() => {
     const updateAIState = () => {
       const provider = getActiveProvider();
@@ -965,6 +963,39 @@ export default function App() {
         setSyncConflict(false);
       }
     } catch { /* leave the badge up — nothing adopted */ }
+  };
+
+  // B12: parked-workspace switcher (rides B2s3's park-on-switch server state).
+  const [parkedList, setParkedList] = useState<Array<{ name: string; slug: string; nodeCount: number }>>([]);
+  const refreshParkedList = async () => {
+    try {
+      const data = await fetch('/api/agent/workspace/parked').then(r => r.json());
+      if (Array.isArray(data?.parked)) setParkedList(data.parked);
+    } catch { /* switcher just shows presets when the list is unavailable */ }
+  };
+  // Ready before interaction: on boot, and whenever a switch/load may have parked
+  // something (workspace name change). onFocus refresh stays as a liveness bonus.
+  useEffect(() => { refreshParkedList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [workspace.name]);
+  const restoreParkedWorkspace = async (name: string) => {
+    try {
+      const response = await fetch('/api/agent/workspace/restore-parked', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await response.json();
+      if (data?.success && data.workspace) {
+        saveCheckpoint();
+        setWorkspace(data.workspace);
+        if (data.version) { setLocalVersion(data.version); localStorage.setItem('x4_mod_studio_version', String(data.version)); }
+        localStorage.setItem('x4_mod_studio_workspace', JSON.stringify(data.workspace));
+        if (typeof data.workspaceHash === 'string' && data.workspaceHash) lastServerHashRef.current = data.workspaceHash;
+        syncMissesRef.current = 0;
+        setSyncDiverged(false);
+        setSyncConflict(false);
+        refreshParkedList();
+      }
+    } catch { /* server unreachable — the canvas stays as-is */ }
   };
 
   // B2 slice 2: "Keep mine" — the explicit force valve (ADR-F1: last-writer-wins is
@@ -1361,28 +1392,51 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-1.5 bg-black/35 rounded border border-white/10 p-1">
-            <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1 hidden min-[2150px]:inline">Preset:</span>
+            <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1 hidden min-[2150px]:inline">Workspace:</span>
             <select
               value="__current"
+              data-testid="workspace-switcher"
+              onFocus={refreshParkedList}
               onChange={async (e) => {
+                const pick = e.target.value;
+                if (pick === '__current') return;
+                // B12: parked workspaces — switching PARKS the current state server-side
+                // (B2s3 park-on-switch), so nothing is ever lost either direction.
+                if (pick.startsWith('parked:')) {
+                  const name = pick.slice('parked:'.length);
+                  const ok = await confirmDialog(
+                    `Switch to the parked workspace "${name}"? The current canvas ("${workspace.name || 'Untitled'}") is parked first — switch back the same way.`,
+                    { okLabel: 'Switch workspace', cancelLabel: 'Stay here' },
+                  );
+                  if (ok) await restoreParkedWorkspace(name);
+                  return;
+                }
                 // B13 guard (2026-07-09): a preset pick REPLACES the whole canvas — twice
                 // this shipped silently (once via browser form-restoration on reload).
-                // Explicit confirm, always.
-                const pick = e.target.value as 'escort' | 'mission' | 'blank' | '__current';
-                if (pick === '__current') return;
+                // Explicit confirm, always. (B2s3: the replaced state is parked, recoverable.)
                 const ok = await confirmDialog(
                   `Replace the current canvas ("${workspace.name || 'Untitled'}") with a preset? The current graph is overwritten (Undo can restore it).`,
                   { okLabel: 'Replace canvas', cancelLabel: 'Keep my canvas' },
                 );
-                if (ok) handleLoadPreset(pick);
+                if (ok) handleLoadPreset(pick as 'escort' | 'mission' | 'blank');
               }}
               className="bg-[#0F1115] border border-white/10 p-1 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer max-w-[130px] min-[2150px]:max-w-none truncate"
             >
               {/* H6: show the actually-loaded workspace, not a stale "Blank Workspace" label */}
               <option value="__current">{workspace.name || 'Current Workspace'}</option>
-              <option value="blank">Blank Workspace</option>
-              <option value="escort">Elite Fighter Wing Escort</option>
-              <option value="mission">Argon Sector Bounty System</option>
+              {/* B12: parked server states — switch without losing anything. */}
+              {parkedList.filter(p => p.name !== workspace.name).length > 0 && (
+                <optgroup label="Parked workspaces">
+                  {parkedList.filter(p => p.name !== workspace.name).map(p => (
+                    <option key={p.slug} value={`parked:${p.name}`}>{p.name} ({p.nodeCount} nodes)</option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="Presets">
+                <option value="blank">Blank Workspace</option>
+                <option value="escort">Elite Fighter Wing Escort</option>
+                <option value="mission">Argon Sector Bounty System</option>
+              </optgroup>
             </select>
           </div>
 

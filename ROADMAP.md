@@ -599,6 +599,286 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ✅ B30 CLOSED (2026-07-12, workflow v3, VERIFIED): the canon mirrors can no longer drift silently
+The parallel v3-adoption session's spec, delivered: `precommit-check.mjs` byte-compares
+CLAUDE.md/AGENTS.md/GEMINI.md and BLOCKS the commit on divergence with a named message ("edit ONE canon
+and copy it to the other two"). *Verified: green path exit 0 on the (md5-identical) mirrors ·
+deliberate-divergence drill: appended a marker to GEMINI.md → BLOCKED exit 1 with the named message →
+restored, mirrors identical again (hash-verified).* **AAR: CLEAN.**
+
+### ✅ T4.3 / B14 FINAL CLOSED (2026-07-12, workflow v3, VERIFIED — ALREADY RESOLVED): the "canvas arrow" shipped as the contextual binding panel in the 37th pass
+The last B14 "buildable" was a stale echo: `luaMdBinding.ts`'s own header records that the cross-view
+drag was DELIBERATELY replaced by a contextual surface — the PropertiesInspector shows the exact two-way
+Lua↔MD glue (AddUITriggeredEvent/event_ui_triggered inbound, raise_lua_event/RegisterEvent outbound) for
+any selected cue, instantiating the vetted luaSnippets patterns; oracle `lua-md-binding-selftest` rides
+the 75/75 sweep, and the 37th-pass ROADMAP close documented the scope adaptation explicitly.
+*Verified: **live drill** — selected the escort cue → the inspector surfaces `event_ui_triggered` +
+`raise_lua_event` glue · oracle in sweep.* **No code written.** B14 is now fully dispositioned: every
+remaining line is Ken-gated (XPath lib decision, corpus paths, P-C/P-D keep-or-drop) or game-gated (T1.3).
+**AAR (trigger: second stale-entry catch today):** the backlog carried TWO "buildable" items (B11, T4.3)
+that shipped long ago under different names — closes were recorded in ROADMAP but the backlog lines
+never updated. Lesson banked (global ledger): when a close ships a SUBSTITUTE for a spec'd item, the
+close must flip the original backlog line in the same task, else it haunts the queue as phantom work.
+
+### ✅ B11 CLOSED (2026-07-12, workflow v3, VERIFIED — ALREADY EXISTED): aiscripts are visually editable, and have been since #65
+The spec'd gap ("no visual editor surface beyond code view") was STALE. Reconcile found the chain
+complete: `parseAiScriptXml` + both #65 determinism guards live in the server IMPORT path (byte-faithful
+files become editable AIBehaviorScript models; the rest stay lossless passthrough — oracle-covered by
+aiscript-roundtrip-selftest in the 75/75 sweep), and the 915-line AIScriptEditor lists + edits
+`workspace.aiScripts` models through its visual Task Pipeline.
+*Verified (named methods): **live drill** — merged a model script via the API, AISCRIPTS tab lists it,
+its fields render in editable inputs, pipeline pane visible, and a REAL UI field edit round-tripped
+into the workspace model (`description` updated, hook-verified) · drill removed, workspace byte-matches
+the guard snapshot · import chain = existing oracle (sweep 75/75).*
+**No code written.** This close is the RECONCILE rule working as designed: search by resource
+(parseAiScriptXml's callers) before building — my first grep missed server.ts and nearly "confirmed"
+the gap. **AAR (trigger: assumption corrected — grep scope):** lesson — when checking whether a lib is
+wired, grep the WHOLE repo, not src/; server.ts is a caller too.
+
+### ✅ B12 CLOSED (2026-07-12, workflow v3, VERIFIED): the workspace switcher — every parked state is one dropdown away
+Multi-workspace, delivered on B2s3's parked-state map (the "tabs" chrome was never the substance —
+switch-without-loss is). **Built:** the header preset select became the WORKSPACE SWITCHER
+(`workspace-switcher` testid): a "Parked workspaces" optgroup lists every parked server state (name +
+node count, active excluded); picking one confirms, then `POST /workspace/restore-parked` — the current
+state is PARKED FIRST server-side, so switching is non-destructive in BOTH directions; the client adopts
+the response (workspace/version/hash, checkpointed for Ctrl+Z); the parked list refreshes on boot, on
+workspace-name change, and on focus.
+*Verified (named methods): **tsc 0** · **live round-trip drill via the REAL user flow**: escort (3
+nodes) → RESET (parks the full escort) → picker → price-tweak template → switcher lists
+`parked:Player_Elite_Escort` → switch back → 3 nodes on canvas, description intact — and the template
+got parked in return · server active state byte-matches the guard snapshot after · **e2e 12/12** on the
+ephemeral stack · sweep covered (no server-side change beyond B2s3's existing endpoints — the oracle
+already proves park/restore).*
+**Drill lesson (methodology, not product):** my first drill emptied the escort IN PLACE before the name
+switch, so the park correctly captured the emptied state — park-on-switch preserves what the canvas
+HOLDS, not what it held an hour ago; drills must mutate through the real flow (RESET), which parks full
+content. **Residuals:** beyond-canvas parked entries display "(0 nodes)" (true but unhelpful — patch/
+t-file counts would read better; polish note, folded into the B13 batch-3 pool); focus-refresh doesn't
+fire in unfocused panes (mount + name-change refresh covers real use).
+**AAR (triggers: focus-event assumption corrected; drill-methodology error):** SUSTAIN — validating via
+the REAL user flow exposed both the focus fragility and the drill error that a synthetic-state drill
+would have hidden. IMPROVE — when a drill needs "prior content preserved", the drill must enter through
+the same door the user does. TOOLS — none. **Highest-risk evidenced weakness:** parked-state pruning is
+count-based (20) with no age display in the switcher — a user with many parks sees bare names; fine at
+current scale, revisit with B13 polish if parks accumulate.
+
+### ✅ B31 CLOSED (2026-07-12, workflow v3, VERIFIED): e2e runs on its own ephemeral stack — the guard and every route-mock are DELETED
+The endgame of three incident classes (B15 RED, guard-leak #70, the 07-12 suppression interplay): the
+suite no longer shares ANYTHING with the live dev stack. **Built (s2, on s1's proven mechanism):** ①
+playwright.config launches an ephemeral TWO-PROCESS stack per run — API (tsx, :3101) + Vite (:3100,
+DISABLE_HMR, strictPort) — with env `STUDIO_API_TOKEN`/`API_PORT`/`X4_STATE_DIR` (per-run temp dir);
+`reuseExistingServer: false`; auto-teardown; ② vite token-inject plugin prefers the env token (the
+ephemeral stack never touches this checkout's token file); ③ **workspace-guard.ts + teardown DELETED**
+(globalSetup/Teardown gone); ④ canvas-interactions / canvas-coverage / guided-rail REWRITTEN: fixture
+seeded straight into the ephemeral API (`tests/e2e/ephemeral.ts` helper), app adopts it on boot —
+page.route isolation harnesses, localStorage version pins, restore teardowns, blocked-counter
+assertions ALL deleted (compile/base-content mocks stay — they're about debounce/speed, not state); ⑤
+project-validate's bearer → the ephemeral env token; ⑥ run-e2e wrapper: guard marker check retired,
+header truths updated — **the machine-state ask is no longer needed for e2e**, by construction.
+*Verified (named methods): **tsc 0** · **suite 12/12 on the ephemeral stack, twice** (fresh state dir
+each run) · **acceptance literal**: `page.route('**/api/agent/workspace')` count in specs = 0; guard
+files gone; live workspace byte-identical to its snapshot after both runs WITH NO RESTORE EVER RUNNING ·
+ephemeral ports verified closed post-run · **sweep 75/75** · wrapper subset run PASS.*
+**Bonus finding:** the libuv teardown crash (B17's whole reason) did NOT reproduce on the ephemeral
+stack in 3 runs — it appears tied to reusing the live dev server; the verdict-parse gate stays as armor.
+**AAR (trigger: none this slice — first-try green both runs):** SUSTAIN — s1's mechanism-first slicing
+made s2 a wiring exercise; seeding the SERVER and letting the app adopt naturally deleted ~200 lines of
+isolation theater and made the specs TRUER (the sync path is now exercised for real). IMPROVE — nothing
+evidenced this slice. TOOLS — none. **Highest-risk evidenced weakness:** the two `webServer` commands
+cold-boot ~30s per suite run — acceptable, but if e2e grows, per-worker port sharding (noted in config)
+is the parallelism unlock.
+
+### (superseded by the full B31 close above) s1 record kept for history: ephemeral instances proven at the API level
+The e2e-isolation endgame in safe slices. **Built (s1):** `X4_STATE_DIR` env override for the B2s3
+state dir — the last hard-cwd surface; `PORT` / `API_PORT` / `STUDIO_API_TOKEN` overrides already
+existed (reconcile win). **Proven live:** a second full API instance booted on :3101 with its own token
++ temp state dir BESIDE the live server — no "[state] restored" (pristine boot), a CAS marker write
+landed in ITS state file only, the live server + `.studio-state/active.json` + `.studio-api-token`
+untouched throughout; instance stopped, drill dir removed, live health re-verified.
+*Verified: tsc 0 · live two-instance drill (the whole point — isolation by construction, not by
+restore) · teardown clean.*
+**Remaining (s2, spec'd in BACKLOG):** playwright webServer launches the ephemeral stack (Vite+API on
+alt ports), specs point at it, route-mocks and the workspace-guard deleted. DELIBERATELY not built in
+this session — it rewrites three spec harnesses under an active degradation call; the mechanism is now
+proven and cheap for a fresh session.
+**AAR (trigger: Start-Process/npx Windows quirk — 1 retry via Bash):** SUSTAIN — slicing infra so the
+RISKY half lands on a proven mechanism instead of a theory. IMPROVE — remember npx is a .cmd shim;
+background launches on Windows go through Bash or cmd /c. TOOLS — none.
+
+### ◐ B14 TRIAGED (2026-07-12, workflow v3, light lane): the staleness-era leftovers get honest gates
+Re-classified with current evidence, no code: **XPath match counts** → KEN-GATED (adding an XPath lib
+is a dependency decision under the local-npm-only posture — ADR-worthy, not an agent call); **golden
+round-trip corpus** → KEN-GATED (needs his published-mod paths); **T1.3 runtime ftable loader** →
+GAME-GATED (in-game batch); **P-C/P-D mod profiles** → KEN-GATED (stale spec — keep-or-drop is a
+priority call); **T4.3 canvas cross-domain arrow** → BUILDABLE, stays open (alternate canvas entry to
+the complete contractGlue generator; medium UI unit). **AAR: CLEAN** (classification only, no trigger).
+
+### ✅ B13 BATCH 2 CLOSED (2026-07-12, workflow v3, VERIFIED): override-map→Diff→Patch jump, the HUD-button guide, one starter card
+Three QoL items closed as one batch. ① **Override-map → Diff→Patch pre-target:** a `DIFF→PATCH` button
+in the Doctor's override-map modal dispatches `xmlpatch-pretarget` (extends the existing
+navigate-to-source window-event idiom); App switches the view; XMLPatchSystem consumes it — via a
+module-scope MAILBOX, because the event fires while the workbench is unmounted (caught live in the first
+drill: view switched but the target didn't — the component mounts after the event; mailbox consumed on
+mount, cleared on use so it never replays). ② **"Wire a HUD Button in 3 Steps" wiki guide** (luaui):
+design → signal → catch-in-MD with a copyable two-sided code template. ③ **StarterCard** component —
+the onboarding's three drifting card blocks (templates/recipes/patterns) unified, tone-varied, testids
+unchanged (closes the B22s2 deferral).
+*Verified (named methods): **tsc 0** · **live drills**: cold-view pretarget → view switched + target
+input = libraries/factions.xml + DIFF→PATCH tab active (fuchsia selected state) + synthesize pane
+rendered; wiki article in DOM with all three steps (reader UPPERCASES headers — probe lesson) + code
+template; onboarding cards covered by the suite's template-welcome flow · **sweep 75/75** · **e2e
+12/12**, RESTORE-VERIFY OK · workspace byte-clean · pane parked.*
+**AAR (triggers: the mount-race re-implement; two false-positive probe readings):** SUSTAIN — driving
+the drill from a COLD view caught the mount race that a warm-view test would have hidden. IMPROVE —
+two DOM probes lied to me this unit (persistent code-editor text matched my marker; uppercase transform
+hid literal strings) — probe for STRUCTURAL anchors (ids, testids) first, innerText substrings second.
+TOOLS — none. **Highest-risk evidenced weakness:** window-event + module-mailbox is now the SECOND
+cross-component channel (after navigate-to-source) with no typed contract — a typo in an event name
+fails silently; a typed event-bus helper would make both channels compile-checked (backlog-worthy only
+when a third channel appears; noted, not spec'd).
+
+### ◐ B28 CLOSED-RECLASSIFIED (2026-07-12, workflow v3, PARTIAL): the "pane wedge" was two bugs — ours is fixed, the tool's is banked
+Light lane, disposition unit. The recurring browser-pane hazard decomposed under this week's evidence:
+**(a) OURS, FIXED:** JS evals dying mid-flight ("Promise was collected"/"Inspected target navigated or
+closed") were Vite full-page reloads triggered by server runtime writes into watched paths —
+`.studio-state/**` (B29 fix) and `data/**` (B26 audit fix). Multi-second evals survive since; drills
+that died 3× in a row now run whole. **(b) THE TOOL'S, BANKED:** screenshot timeouts, stale frames, and
+click-coordinate desync persist after (a) while JS/DOM stay fully responsive — same app code
+screenshotted fine at session start; the failure lives in the pane's capture/compositor path, which this
+repo cannot fix. Durable workarounds banked (BACKLOG history + global AAR ledger): validate by DOM reads
++ computed styles, keep pane JS short, recover by reload, verify parks by probe.
+*Verified: (a) by absence — zero eval kills across the B29-final/B24s1/B22s2 drills post-fix (was 5+
+kills before); (b) by persistence — screenshot timeout reproduced post-fix with responsive DOM.*
+**Disposition:** removed from open work — no buildable Forge unit remains. If the tool-side modes
+persist across sessions, the request goes upstream (Anthropic/Claude pane), not into this backlog.
+**AAR: trigger (assumption corrected — "tool flakiness" was half ours):** lesson already banked
+globally at B29 (before blaming the tool, enumerate what your code writes into watched paths).
+
+### ✅ B22s2 CLOSED (2026-07-12, workflow v3, VERIFIED): proven patterns stamp mid-canvas — the library works on a working graph
+B22s1's DeadAir patterns only existed on the EMPTY canvas (onboarding). **Built:** ①
+`stampPatternIntoWorkspace()` in modPatterns.ts: additive stamp — unique `stampN_` id prefix (derived
+from existing stamp count, no wall-clock), fragment lands below the existing graph's bounding box,
+links rewired to stamped ids, returns a new sanitized workspace; ② cue-NAME collision suffixing — the
+oracle caught that re-stamping duplicated cue names (validator-illegal) even with unique ids; names
+suffix only on collision so first stamps keep the teachable names; ③ "Proven patterns — stamp onto
+canvas" section in the Sidebar Templates tab: provenance-carrying cards + STAMP buttons
+(`stamp-pattern-<id>` testids), checkpointed via the setWorkspace wrapper so **Ctrl+Z removes a stamp**.
+*Verified (named methods): **tsc 0** · **patterns oracle 16/16** (7 new stamp checks: additive,
+id-unique, lands-below, double-stamp no-collision, compiles clean, links rewired, unknown-id noop — one
+REAL defect caught+fixed by the oracle: duplicate cue names on re-stamp) · **live visual drill
+(guarded)**: escort canvas 3 nodes → STAMP kill_capture_group → 9 nodes, originals intact, all 9 render
+in DOM → Ctrl+Z → back to 3, stamps gone, server byte-matches the snapshot after sync · **sweep 75/75**
+· **e2e 12/12**, RESTORE-VERIFY OK · pane park verified.*
+**Deviations from spec (named):** stamping is a dedicated pure function rather than reusing the quick-fix
+add_node/add_link op-walker — same semantics, oracle-covered, and the op-walker's dedup rules don't fit
+bulk stamps; the "unified card component" half is DEFERRED to B13 batch 2 (pure DRY polish across four
+card surfaces — no behavior at stake), logged there.
+**AAR (triggers: oracle caught the cue-name defect pre-ship — a re-implement):** SUSTAIN — writing the
+double-stamp oracle check BEFORE trusting the stamp is exactly why the name bug never reached the UI.
+IMPROVE — I initially equated "unique ids" with "legal duplicate" — the validator's uniqueness surface
+is NAMES too; when cloning graph fragments, enumerate ALL uniqueness constraints (id, cue name), not the
+one in front of you. TOOLS — none. **Highest-risk evidenced weakness:** patterns/templates/recipes/
+blueprints are now FOUR parallel starter systems with overlapping vocabulary — consolidation thinking
+belongs in the B13b2 card unification (spec'd there).
+
+### ✅ B33 CLOSED (2026-07-12, workflow v3, VERIFIED): RESET returns to the template picker — the dead starter cue is gone
+BLANK_WORKSPACE shipped a starter cue ("My_Startup_Cue" — dead code the Forge's own Cue Lineage Tree
+flagged as isolated back in the 41st-pass era), so a reset canvas was never "empty in every domain" and
+the onboarding/template picker was unreachable after RESET. **Built:** BLANK_WORKSPACE.nodes → [] (one
+change; RESET and the blank preset now land on a genuinely empty workspace → picker mounts). Reconcile
+proved no dependents: the My_Startup_Cue strings in logTelemetry are self-contained synthetic fixtures.
+*Verified: **tsc 0** · **live drill**: RESET click → picker visible with all 7 templates, workspace
+nodes = 0 · escort restored via the parked valve, final state byte-matches the guard snapshot ·
+**sweep 75/75** · **e2e 12/12**, RESTORE-VERIFY OK.*
+**AAR: CLEAN — no trigger fired** (single-edit unit, first-try green everywhere). Noted: this closes the
+loop B19s2b's AAR opened same-day — weakness evidenced, spec'd, fixed within the session.
+
+### ✅ B19s2b CLOSED (2026-07-12, workflow v3, VERIFIED): the first mod doesn't have to be a script — beyond-canvas starter templates
+Vision v2's barrier axis: MD logic was the ONLY starter path; the cheapest real first mods (a price
+change, a text entry, a HUD button) had no template. **Built:** ① `ModTemplate.build()` extended to all
+workspace domains (xmlPatches/tFiles/uiWidgets) and `buildTemplateWorkspace` passes them through (the
+loader previously DROPPED everything but nodes/links); ② three new templates with rail guides:
+**Price Tweak** (replace `/wares/ware[@id='energycells']/price/@average` in libraries/wares.xml),
+**Custom Text** (t-file page 10099 entry 100, l044), **HUD Button** (window + button widgets); rail
+navigation lives in the tweakHint text (`focusNodeId` now optional — it was write-only metadata anyway);
+③ the two coupling fixes that make node-less templates WORK: CanvasOnboarding's "empty" now means empty
+in EVERY domain (the overlay used to re-cover a patch-only workspace) and the rail mounts on content in
+ANY domain (it required canvas nodes); onboarding card height-capped + scrollable (7 templates now).
+*Verified (named methods): **tsc 0** · **templates oracle 23/23** (each new template: compiles clean,
+has content, has rail; domain content survives sanitize — the pass-through is asserted, not assumed) ·
+**sweep 75/75** · **live visual drill (guarded)**: empty workspace → onboarding shows all 7 → clicked
+Price Tweak → workspace = X4_Cheaper_Energy with the exact patch selector, onboarding gone (node-less!),
+rail mounted with the beyond-canvas hint · restore via **B2s3's own restore-parked valve** (park-on-switch
+had parked the escort automatically — first in-anger dogfood of the new machinery), final state
+byte-matches the guard snapshot · **e2e 12/12**, RESTORE-VERIFY OK · pane park verified.*
+**Residuals:** the three new templates' in-game EXPERIENCE (price at a trader, text via {10099,100},
+button on HUD) → in-game batch; XML-patch/t-file/HUD tab rendering of loaded content is standard
+workspace binding (DOM-checked at the state level only).
+**AAR (triggers: blank-preset surprise — RESET leaves 1 cue so onboarding never shows after reset;
+plan adjusted mid-drill):** SUSTAIN — reconcile caught BOTH coupling breaks (overlay + rail mount)
+before implementation, exactly rule 2c. IMPROVE — the drill fought the blank-preset's starter cue;
+noted below. TOOLS — none. **Highest-risk evidenced weakness:** BLANK_WORKSPACE ships a starter cue, so
+"reset" ≠ "empty" and the onboarding/template flow is unreachable after RESET without hand-deleting the
+cue — a newcomer who resets to try another template never sees the picker again. Bounded fix: RESET
+should land on a genuinely empty workspace (or the picker should also mount for the pristine blank
+preset) — spec'd as **B33**.
+
+### ✅ B19s2a CLOSED (2026-07-12, workflow v3, VERIFIED): the watcher verdict is server truth — the rail stops guessing
+The rail's step 3 read fields that never existed on the brief (`gameSeen`/`logFound`/top-level
+`modRuntime`) — so it reported "clean" whenever the endpoint answered at all, including with no log and
+with attributed errors. **Built:** ① `src/lib/watcherVerdict.ts` (house pattern): pure
+`computeWatcherVerdict()` → one of `no_log · stale · not_seen · loaded_with_errors · loaded_clean` with a
+human detail + attributed error count; precedence no_log > stale (predates deploy) > not_seen > errors >
+clean; oracle 9 checks incl. precedence and live-vs-idle messaging; ② `buildDebugWatcherBrief` computes and
+returns `verdict` on BOTH branches (no-log early return included), errors = modRuntime + cueLiveness +
+activeErrors; ③ GuidedRail step 3 renders the verdict (TTFM finish line now fires ONLY on a true
+`loaded_clean`); ④ Playtest's Agent Debug Brief renders a color-coded `watcher-verdict` chip — same field,
+zero client re-derivation.
+*Verified (named methods): **tsc 0** · **oracle 9/9** first run · **live brief drill**: verdict =
+`not_seen` with the idle-log detail — HONEST (game not running; old code would have said "clean") ·
+**sweep 75/75** · **e2e 12/12** (guided-rail spec exercises the changed path; RESTORE-VERIFY OK) ·
+**DOM-verified** verdict chip live in Playtest.*
+**Impact on B20:** TTFM's `game_confirmed` mark was previously reachable while the game was OFF — the
+first-mod funnel could false-complete. Now gated on real `loaded_clean`. **Residual:** B19s2b
+(beyond-canvas starter intents) continues as the next unit.
+**AAR (trigger: found the old heuristic was not just imprecise but ALWAYS-clean — an assumption
+correction):** SUSTAIN — "kill the guess with a server field" pattern: compute once, render everywhere.
+IMPROVE — B19s1 shipped a step-3 reading fields nobody verified existed; consumer fields must be checked
+against the producer's actual response shape at review (coupling rule 2c — this was a coupling miss).
+TOOLS — none. **Highest-risk evidenced weakness:** TTFM data collected before today may contain
+false-complete funnels (game-off "confirmations") — worthless noise at worst, but B20's report panel
+(deferred) must stamp verdict-era vs pre-verdict datapoints.
+
+### ✅ B24s1 CLOSED (2026-07-12, workflow v3, VERIFIED): the Inspector exists — FORGE-STATE topics from the running game render in the Forge
+Vision v2 Phase 4 slice 1, per ADR-F3 (protocol-first, read-only by construction). **Built:** ①
+`src/lib/forgeState.ts` (house pattern, mirrors forgeWatch): `FORGE-STATE <topic> {json}` parser —
+latest-wins per topic, malformed JSON counted never thrown, {-anchored so scalar payloads are non-lines,
+200-topic cap; `buildStateActionXml()` emit helper (topic + key/expression fields → the exact debug_text
+action); oracle 12 checks incl. emit→engine-stamp→parse round-trip; ② `GET /api/agent/live/forge-state` —
+rides the existing watcher plumbing (findDebugLogCandidates + bounded readTail), returns topics + malformed
++ live freshness; ③ Inspector card in PlaytestWorkspace (`forge-state-inspector` testid): 4s poll,
+live/stale badge, expandable pretty-JSON per topic with line numbers + field counts, malformed-lines note,
+and an empty state that TEACHES the protocol (copy-paste emit snippet). No write path anywhere — ADR-F3's
+binding constraint holds by construction.
+*Verified (named methods): **tsc 0** · **oracle 12/12** (one oracle-expectation fix en route: scalar
+payloads are non-lines, not malformed — the parser was right, my test expectation was wrong) · **live
+endpoint drill** against a synthetic project-local debuglog.txt fixture (a legal candidate path — NOT a
+game dir): 2 topics, latest-wins proven (credits 99000 not 125000), malformed 1 · **DOM-verified panel**,
+both states: empty state with snippet + honest "log stale"; populated state with live badge, both topics,
+expanded player JSON, malformed note · fixture removed → endpoint reverts to 0 topics · **sweep 74/74**
+(runtime index auto-discovered the new oracle) · **e2e 12/12** with RESTORE-VERIFY: OK · pane park verified.*
+**Vite-ignore rider:** `debuglog.txt`/`uidata.log` added to the watch-ignore (B26 audit rule — in-tree
+runtime files must not reload clients).
+**Residuals:** real in-game FORGE-STATE emission → in-game batch (hand-author the snippet in a scratch cue
+— the empty-state teaches exactly this); B24s2 (probe generator) stays spec'd, write-gated.
+**AAR (triggers: oracle expectation wrong on first run; screenshot still dead):** SUSTAIN — the fixture
+drill through a LEGAL candidate path proved the full endpoint→panel chain without touching game dirs.
+IMPROVE — I wrote an oracle expectation from memory of my own regex instead of tracing it; trace before
+asserting. TOOLS — B28 narrowed: screenshots are STILL dead after the Vite fix, so the wedge's screenshot
+mode is genuinely the pane's, not ours (evidence appended to B28). **Highest-risk evidenced weakness:**
+the Inspector's empty-state snippet is the ONLY doc of the FORGE-STATE protocol — one hand-typed emit
+away from drift; B24s2's generator (which will emit protocol lines mechanically) is the durable fix.
+
 ### ✅ B32 CLOSED (2026-07-12, workflow v3, VERIFIED): recurring-mistake tripwires — banked lessons become mechanical gates
 The JSX-comment-before-root mistake shipped twice in two days despite being banked after the first —
 banking is not recall. `scripts/precommit-check.mjs` now runs a TRIPWIRES table (extensible; first entry:

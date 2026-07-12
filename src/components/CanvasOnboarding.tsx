@@ -12,6 +12,7 @@ import type { ModWorkspace } from '../types';
 import { MOD_TEMPLATES, buildTemplateWorkspace } from '../lib/modTemplates';
 import { MOD_RECIPES, buildRecipeWorkspace } from '../lib/modRecipes';
 import { MOD_PATTERNS, buildPatternWorkspace } from '../lib/modPatterns';
+import StarterCard from './StarterCard';
 
 interface CanvasOnboardingProps {
   /** B19: sourceId identifies what was loaded ('welcome' | 'recipe:timed_message' | …)
@@ -25,7 +26,9 @@ const CanvasOnboarding: React.FC<CanvasOnboardingProps> = ({ onLoad }) => {
 
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
-      <div className="pointer-events-auto w-[460px] max-w-[82%] bg-[#0f131a]/97 border border-cyan-500/25 rounded-xl shadow-2xl glass-effect p-5">
+      {/* B19s2b: 3 beyond-canvas templates joined the list — cap height so the card
+          scrolls instead of clipping on short viewports. */}
+      <div className="pointer-events-auto w-[460px] max-w-[82%] max-h-[85%] overflow-y-auto scrollbar-thin bg-[#0f131a]/97 border border-cyan-500/25 rounded-xl shadow-2xl glass-effect p-5">
         <div className="text-center mb-3.5">
           <div className="text-white font-bold text-sm tracking-wide">Start a new mod</div>
           <div className="text-slate-400 text-[11px] mt-1 leading-relaxed">
@@ -34,43 +37,26 @@ const CanvasOnboarding: React.FC<CanvasOnboardingProps> = ({ onLoad }) => {
         </div>
         {!activeRecipe && (
           <div className="grid grid-cols-1 gap-2">
+            {/* B13b2: all three starter lists render the ONE StarterCard (tone-varied). */}
             {MOD_TEMPLATES.map(t => (
-              <button
-                key={t.id}
-                data-testid={`template-${t.id}`}
-                onClick={() => onLoad(buildTemplateWorkspace(t.id), t.id)}
-                className="text-left p-2.5 rounded-lg border border-white/10 bg-white/[0.02] hover:border-cyan-500/40 hover:bg-cyan-500/5 transition-colors group cursor-pointer"
-              >
-                <div className="text-cyan-300 font-semibold text-xs group-hover:text-cyan-200">{t.title}</div>
-                <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">{t.blurb}</div>
-              </button>
+              <StarterCard key={t.id} testid={`template-${t.id}`} tone="cyan"
+                title={t.title} blurb={t.blurb}
+                onClick={() => onLoad(buildTemplateWorkspace(t.id), t.id)} />
             ))}
             <div className="pt-1.5 border-t border-white/5 text-[9px] font-mono uppercase tracking-wider text-emerald-400">Recipes — describe it, we build it</div>
             {MOD_RECIPES.map(r => (
-              <button
-                key={r.id}
-                data-testid={`recipe-${r.id}`}
-                onClick={() => { setActiveRecipe(r.id); setAnswers({}); }}
-                className="text-left p-2.5 rounded-lg border border-emerald-500/15 bg-emerald-500/[0.03] hover:border-emerald-500/40 hover:bg-emerald-500/10 transition-colors group cursor-pointer"
-              >
-                <div className="text-emerald-300 font-semibold text-xs group-hover:text-emerald-200">{r.title}</div>
-                <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">{r.blurb}</div>
-              </button>
+              <StarterCard key={r.id} testid={`recipe-${r.id}`} tone="emerald"
+                title={r.title} blurb={r.blurb}
+                onClick={() => { setActiveRecipe(r.id); setAnswers({}); }} />
             ))}
             {/* B22: proven patterns — provenance-carrying fragments from shipping mods. */}
             <div className="pt-1.5 border-t border-white/5 text-[9px] font-mono uppercase tracking-wider text-amber-400">Proven patterns — how real mods do it</div>
             {MOD_PATTERNS.map(p => (
-              <button
-                key={p.id}
-                data-testid={`pattern-${p.id}`}
-                onClick={() => onLoad(buildPatternWorkspace(p.id), `pattern:${p.id}`)}
-                title={`${p.provenance.provenMod} — ${p.provenance.file}\n${p.provenance.note}`}
-                className="text-left p-2.5 rounded-lg border border-amber-500/15 bg-amber-500/[0.03] hover:border-amber-500/40 hover:bg-amber-500/10 transition-colors group cursor-pointer"
-              >
-                <div className="text-amber-300 font-semibold text-xs group-hover:text-amber-200">{p.title}</div>
-                <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">{p.blurb}</div>
-                <div className="text-slate-600 text-[9px] mt-0.5 italic truncate">proven by {p.provenance.provenMod}</div>
-              </button>
+              <StarterCard key={p.id} testid={`pattern-${p.id}`} tone="amber"
+                title={p.title} blurb={p.blurb}
+                footnote={`proven by ${p.provenance.provenMod}`}
+                tooltip={`${p.provenance.provenMod} — ${p.provenance.file}\n${p.provenance.note}`}
+                onClick={() => onLoad(buildPatternWorkspace(p.id), `pattern:${p.id}`)} />
             ))}
           </div>
         )}

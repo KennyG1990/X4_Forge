@@ -150,6 +150,27 @@ export const WIKI_TOPICS: WikiTopic[] = [
   </window>
 </ui_layout>`,
     egosoftUrl: "https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding/Lua%20UI%20Customization/"
+  },
+  {
+    // B13b2: the promised "3 steps" walkthrough — wire a HUD button end-to-end in the Forge.
+    id: "luaui_button_3_steps",
+    title: "Wire a HUD Button in 3 Steps",
+    category: "luaui",
+    summary: "The complete Forge path from a drawn button to an in-game reaction: design it, signal it, catch it in MD.",
+    content: "The Forge wires HUD → game logic through MD signals; you never write Lua by hand.\n\n### Step 1 — Draw the button\nOpen **HUD & LUA UI** (top bar) and add a `button` widget inside a `window` (or load the *HUD Button* starter template). Its `label` is what the pilot reads.\n\n### Step 2 — Name its signal\nIn the button's properties set `signal` to a cue-friendly name, e.g. `My_Button_Pressed`. The compiler emits the Lua that raises this as an MD-visible signal when clicked.\n\n### Step 3 — Catch it in MD\nOn the MD canvas, add a cue whose condition is `event_cue_signalled` with `cue=\"md.$YourScript$.My_Button_Pressed\"` — or simply an event node listening for the signal name. Everything the game can do (spawn, reward, log, speak) hangs off that cue's actions.\n\nDeploy (the rail's one-click deploy works here too), load a save, click your button, and watch the cue fire in the debug watcher.",
+    codeTemplate: `<!-- Step 1+2 (HUD designer output): -->
+<button text="DECLARE RED ALERT" signal="My_Button_Pressed" />
+
+<!-- Step 3 (MD side — catches the click): -->
+<cue name="On_My_Button" instantiate="true" namespace="this">
+  <conditions>
+    <event_cue_signalled cue="md.Setup.My_Button_Pressed" />
+  </conditions>
+  <actions>
+    <write_to_logbook category="general" text="'HUD button pressed!'" />
+  </actions>
+</cue>`,
+    egosoftUrl: "https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding/Lua%20UI%20Customization/"
   }
 ];
 

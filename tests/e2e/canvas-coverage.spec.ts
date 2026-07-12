@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { seedServerWorkspace } from './ephemeral';
 
 /**
  * G14 — additional canvas interaction coverage (#24).
@@ -10,8 +11,8 @@ import { expect, test, type Page } from '@playwright/test';
  *      (deleteNode filters links where source/target === nodeId — Canvas.tsx ~504).
  *   C. a link on the second flow orientation (cue.conditions -> event.condition) is created.
  *
- * Uses the same isolation/seed/restore harness shape as canvas-interactions.spec.ts so a
- * run never mutates shared server workspace state.
+ * B31s2: runs against the EPHEMERAL e2e stack — fixture seeded into the ephemeral
+ * server, adopted by the app on boot. No route isolation, no restore teardown.
  */
 
 type E2ENode = {
@@ -130,136 +131,25 @@ const controlledWorkspace: E2EWorkspace = {
   compileSettings: { md: true, ui: false, ai: false, library: false, translations: false, patches: false },
 };
 
-const fallbackRestoreWorkspace: E2EWorkspace = {
-  ...controlledWorkspace,
-  id: 'e2e_cov_restore_baseline',
-  name: 'E2E_Cov_Restore_Baseline',
-  description: 'Neutral baseline used only when a prior run already leaked the fixture.',
-  nodes: [],
-  links: [],
-};
-
-async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number; startGetIsolation: () => void; stopGetIsolation: () => void }> {
-  let blocked = 0;
-  // Starts OFF so the seed's `original` capture reads the REAL server (otherwise teardown
-  // restores the empty fallback baseline over real state); switched on right after seeding.
-  let isolateGets = false;
-  await page.route('**/api/agent/workspace', async (route) => {
-    const request = route.request();
-    // B1 sync-trust follow-up (2026-07-09): isolate the GET too. The app's 3s adoption
-    // poll reads the REAL server (which holds whatever the boot-blank sync pushed) and,
-    // because every sync POST response overwrites the stored version (App.tsx
-    // syncLocalEditsToServer), the adoption gate reopens mid-test and REPLACES the
-    // seeded canvas — the exact half-isolated-harness clobber the run kept hitting.
-    // Serving the low-versioned controlled workspace makes the page fully self-consistent.
-    // Teardown calls stopGetIsolation() so the restore-verify GET reads the real server.
-    if (request.method() === 'GET' && isolateGets) {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ workspace: controlledWorkspace, version: 1, workspaceHash: '', lastUpdated: new Date().toISOString() }),
-      });
-      return;
-    }
-    if (request.method() === 'POST') {
-      let payload: { workspace?: { name?: string } } = {};
-      try {
-        payload = JSON.parse(request.postData() || '{}') as { workspace?: { name?: string } };
-      } catch {
-        payload = {};
-      }
-      if (payload.workspace?.name === controlledWorkspace.name) {
-        blocked += 1;
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            success: true,
-            applied: false,
-            version: 900001,
-            message: 'E2E fixture workspace sync isolated from shared server state.',
-          }),
-        });
-        return;
-      }
-    }
-    await route.continue();
-  });
-  return {
-    count: () => blocked,
-    startGetIsolation: () => { isolateGets = true; },
-    stopGetIsolation: () => { isolateGets = false; },
-  };
-}
-
-async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
+/** Seed the ephemeral server with the fixture and boot the app onto it. */
+async function withSeededCanvas(page: Page, body: () => Promise<void>): Promise<void> {
+  await seedServerWorkspace(controlledWorkspace);
   await page.addInitScript(() => {
     localStorage.removeItem('x4_mod_studio_workspace');
-    // B1 sync-trust follow-up (2026-07-09): the version is PINNED HIGH, not removed.
-    // The harness isolates its POSTs from the server, so the server keeps the real
-    // (higher-versioned) workspace — with the adoption gate open, the 3s poll would
-    // ADOPT it mid-test and replace the seeded canvas (the exact clobber class the
-    // sync redesign exists to kill). Pinning makes the harness's isolation explicit.
-    localStorage.setItem('x4_mod_studio_version', '9007199254740991');
+    localStorage.removeItem('x4_mod_studio_version');
   });
   await page.goto('/');
   await expect(page.getByTestId('grid-canvas')).toBeVisible();
   await page.waitForFunction(() => !!(window as E2EWindow).__X4_E2E__);
-  const original = await page.evaluate(async ({ controlledName, fallback }) => {
-    const response = await fetch('/api/agent/workspace');
-    if (!response.ok) throw new Error(`workspace fetch failed: ${response.status}`);
-    const data = await response.json();
-    const serverWorkspace = data.workspace as E2EWorkspace;
-    return serverWorkspace.name === controlledName ? fallback : serverWorkspace;
-  }, { controlledName: controlledWorkspace.name, fallback: fallbackRestoreWorkspace });
-  await page.evaluate((workspace) => {
-    (window as E2EWindow).__X4_E2E__!.setWorkspace(workspace);
-  }, controlledWorkspace);
   await expect(page.getByTestId('canvas-node-cue_e2e')).toBeVisible();
   await expect(page.getByTestId('canvas-node-event_e2e')).toBeVisible();
   await expect(page.getByTestId('canvas-node-action_e2e')).toBeVisible();
-  return original;
+  await page.waitForTimeout(650);
+  await body();
 }
 
 async function readWorkspace(page: Page): Promise<E2EWorkspace> {
   return page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspace());
-}
-
-/** Runs `body` against a freshly seeded canvas, isolating fixture POSTs and restoring
- *  the original server workspace afterward — mirrors canvas-interactions.spec.ts. */
-async function withSeededCanvas(
-  page: Page,
-  body: (ctx: { original: E2EWorkspace }) => Promise<void>,
-): Promise<void> {
-  const isolated = await isolateControlledWorkspacePosts(page);
-  const original = await seedWorkspace(page);
-  isolated.startGetIsolation(); // AFTER the true server `original` was captured
-  try {
-    await page.waitForTimeout(650);
-    await body({ original });
-  } finally {
-    isolated.stopGetIsolation(); // restore-verify below must read the REAL server
-    await page.evaluate(async (workspace) => {
-      (window as E2EWindow).__X4_E2E__!.setWorkspace(workspace);
-      const response = await fetch('/api/agent/workspace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // B2s3 legacy gate: fixture restore is a deliberate overwrite.
-        body: JSON.stringify({ workspace, force: true }),
-      });
-      if (!response.ok) throw new Error(`workspace restore failed: ${response.status}`);
-    }, original);
-    await page.waitForTimeout(500);
-    const restored = await page.evaluate(async () => {
-      const response = await fetch('/api/agent/workspace');
-      if (!response.ok) throw new Error(`workspace verify failed: ${response.status}`);
-      const data = await response.json();
-      return data.workspace as E2EWorkspace;
-    });
-    expect(restored.name).toBe(original.name);
-    expect(restored.name).not.toBe(controlledWorkspace.name);
-    expect(isolated.count()).toBeGreaterThan(0);
-  }
 }
 
 test('single-node drag moves only the dragged node', async ({ page }) => {

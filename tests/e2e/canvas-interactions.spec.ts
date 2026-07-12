@@ -1,4 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
+import { seedServerWorkspace } from './ephemeral';
+
+/**
+ * B31s2: this spec runs against the EPHEMERAL e2e stack (playwright.config.ts) — the
+ * fixture is seeded straight into the ephemeral server and the app adopts it on boot.
+ * The old page.route isolation harness + restore teardown (the half-isolation behind
+ * incident classes B15/#70) is gone by construction: there is no shared state to guard.
+ */
 
 type E2EWorkspace = {
   id: string;
@@ -122,66 +130,9 @@ const controlledWorkspace: E2EWorkspace = {
   compileSettings: { md: true, ui: false, ai: false, library: false, translations: false, patches: false },
 };
 
-const fallbackRestoreWorkspace: E2EWorkspace = {
-  ...controlledWorkspace,
-  id: 'e2e_restore_baseline',
-  name: 'E2E_Restore_Baseline',
-  author: 'Playwright',
-  description: 'Neutral baseline used only when a prior run already leaked E2E_Canvas.',
-  nodes: [],
-  links: [],
-};
-
-async function isolateControlledWorkspacePosts(page: Page): Promise<{ count: () => number; startGetIsolation: () => void; stopGetIsolation: () => void }> {
-  let blocked = 0;
-  let isolateGets = false;
-  await page.route('**/api/agent/workspace', async (route) => {
-    const request = route.request();
-    // B15 root-cause fix (2026-07-10, [REPRODUCED] via canvas-coverage's identical trio):
-    // the app's 3s adoption poll reads the REAL server (fresh e2e profile → gate open) and
-    // REPLACES the seeded canvas mid-test. POST-only isolation was enough pre-B1; now GETs
-    // must be isolated too — but only AFTER the seed captures the true `original` (toggle),
-    // and teardown stops it so the restore-verify reads the real server.
-    if (request.method() === 'GET' && isolateGets) {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ workspace: controlledWorkspace, version: 1, workspaceHash: '', lastUpdated: new Date().toISOString() }),
-      });
-      return;
-    }
-    if (request.method() === 'POST') {
-      let payload: { workspace?: { name?: string } } = {};
-      try {
-        payload = JSON.parse(request.postData() || '{}') as { workspace?: { name?: string } };
-      } catch {
-        payload = {};
-      }
-      if (payload.workspace?.name === controlledWorkspace.name) {
-        blocked += 1;
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            success: true,
-            applied: false,
-            version: 900000,
-            message: 'E2E fixture workspace sync isolated from shared server state.',
-          }),
-        });
-        return;
-      }
-    }
-    await route.continue();
-  });
-  return {
-    count: () => blocked,
-    startGetIsolation: () => { isolateGets = true; },
-    stopGetIsolation: () => { isolateGets = false; },
-  };
-}
-
-async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
+/** Seed the ephemeral server, boot the app fresh, and wait for natural adoption. */
+async function seedWorkspace(page: Page): Promise<void> {
+  await seedServerWorkspace(controlledWorkspace);
   await page.addInitScript(() => {
     localStorage.removeItem('x4_mod_studio_workspace');
     localStorage.removeItem('x4_mod_studio_version');
@@ -189,19 +140,9 @@ async function seedWorkspace(page: Page): Promise<E2EWorkspace> {
   await page.goto('/');
   await expect(page.getByTestId('grid-canvas')).toBeVisible();
   await page.waitForFunction(() => !!(window as E2EWindow).__X4_E2E__);
-  const original = await page.evaluate(async ({ controlledName, fallback }) => {
-    const response = await fetch('/api/agent/workspace');
-    if (!response.ok) throw new Error(`workspace fetch failed: ${response.status}`);
-    const data = await response.json();
-    const serverWorkspace = data.workspace as E2EWorkspace;
-    return serverWorkspace.name === controlledName ? fallback : serverWorkspace;
-  }, { controlledName: controlledWorkspace.name, fallback: fallbackRestoreWorkspace });
-  await page.evaluate((workspace) => {
-    (window as E2EWindow).__X4_E2E__!.setWorkspace(workspace);
-  }, controlledWorkspace);
+  // The boot poll adopts the seeded server copy (version beats the cleared local state).
   await expect(page.getByTestId('canvas-node-cue_e2e')).toBeVisible();
   await expect(page.getByTestId('canvas-node-action_e2e')).toBeVisible();
-  return original;
 }
 
 async function workspace(page: Page): Promise<E2EWorkspace> {
@@ -220,102 +161,77 @@ async function perfCounters(page: Page): Promise<E2EPerfCounters> {
 
 test('real canvas interactions create oriented links, move groups, add from palette, and avoid per-frame canvas diagnostics', async ({ page }) => {
   let compileRequests = 0;
-  const isolatedWorkspacePosts = await isolateControlledWorkspacePosts(page);
+  // Compile stays mocked: the assertion below is about DEBOUNCE behavior (how often the
+  // app compiles), not about the compiler — and mocking keeps the spec fast.
   await page.route('**/api/agent/compile', async (route) => {
     compileRequests += 1;
     await route.fulfill({ json: { diagnostics: [] } });
   });
 
-  const originalWorkspace = await seedWorkspace(page);
-  // GET isolation starts AFTER the seed captured the true server `original` above.
-  isolatedWorkspacePosts.startGetIsolation();
+  await seedWorkspace(page);
 
-  try {
-    await page.waitForTimeout(650);
-    compileRequests = 0;
+  await page.waitForTimeout(650);
+  compileRequests = 0;
 
-    const cue = page.getByTestId('canvas-node-cue_e2e');
-    const event = page.getByTestId('canvas-node-event_e2e');
+  const cue = page.getByTestId('canvas-node-cue_e2e');
+  const event = page.getByTestId('canvas-node-event_e2e');
 
-    await page.getByTestId('canvas-port-cue_e2e-out_act').click();
-    await page.getByTestId('canvas-port-action_e2e-in_act').click();
-    const afterLink = await workspace(page);
-    expect(afterLink.links).toContainEqual(expect.objectContaining({
-      sourceNodeId: 'cue_e2e',
-      sourcePortId: 'out_act',
-      targetNodeId: 'action_e2e',
-      targetPortId: 'in_act',
-    }));
-    await page.waitForTimeout(700);
-    compileRequests = 0;
+  await page.getByTestId('canvas-port-cue_e2e-out_act').click();
+  await page.getByTestId('canvas-port-action_e2e-in_act').click();
+  const afterLink = await workspace(page);
+  expect(afterLink.links).toContainEqual(expect.objectContaining({
+    sourceNodeId: 'cue_e2e',
+    sourcePortId: 'out_act',
+    targetNodeId: 'action_e2e',
+    targetPortId: 'in_act',
+  }));
+  await page.waitForTimeout(700);
+  compileRequests = 0;
 
-    const beforeDrag = await workspace(page);
-    const cueBefore = beforeDrag.nodes.find((node) => node.id === 'cue_e2e')!;
-    const eventBefore = beforeDrag.nodes.find((node) => node.id === 'event_e2e')!;
-    await resetPerfCounters(page);
+  const beforeDrag = await workspace(page);
+  const cueBefore = beforeDrag.nodes.find((node) => node.id === 'cue_e2e')!;
+  const eventBefore = beforeDrag.nodes.find((node) => node.id === 'event_e2e')!;
+  await resetPerfCounters(page);
 
-    await cue.click({ modifiers: ['Shift'] });
-    await event.click({ modifiers: ['Shift'] });
-    await cue.dragTo(cue, {
-      sourcePosition: { x: 30, y: 20 },
-      targetPosition: { x: 110, y: 90 },
-      steps: 18,
-    });
+  await cue.click({ modifiers: ['Shift'] });
+  await event.click({ modifiers: ['Shift'] });
+  await cue.dragTo(cue, {
+    sourcePosition: { x: 30, y: 20 },
+    targetPosition: { x: 110, y: 90 },
+    steps: 18,
+  });
 
-    const afterGroupDrag = await workspace(page);
-    const cueAfter = afterGroupDrag.nodes.find((node) => node.id === 'cue_e2e')!;
-    const eventAfter = afterGroupDrag.nodes.find((node) => node.id === 'event_e2e')!;
-    expect(cueAfter.x).toBeGreaterThan(cueBefore.x);
-    expect(cueAfter.y).toBeGreaterThan(cueBefore.y);
-    expect(eventAfter.x - eventBefore.x).toBe(cueAfter.x - cueBefore.x);
-    expect(eventAfter.y - eventBefore.y).toBe(cueAfter.y - cueBefore.y);
+  const afterGroupDrag = await workspace(page);
+  const cueAfter = afterGroupDrag.nodes.find((node) => node.id === 'cue_e2e')!;
+  const eventAfter = afterGroupDrag.nodes.find((node) => node.id === 'event_e2e')!;
+  expect(cueAfter.x).toBeGreaterThan(cueBefore.x);
+  expect(cueAfter.y).toBeGreaterThan(cueBefore.y);
+  expect(eventAfter.x - eventBefore.x).toBe(cueAfter.x - cueBefore.x);
+  expect(eventAfter.y - eventBefore.y).toBe(cueAfter.y - cueBefore.y);
 
-    const dragPerfCounters = await perfCounters(page);
-    expect(dragPerfCounters.bySource['Canvas.lawDiagnostics'] || 0).toBe(0);
-    expect(dragPerfCounters.generateMDXML).toBe(0);
-    expect(dragPerfCounters.validateModWorkspace).toBe(0);
+  const dragPerfCounters = await perfCounters(page);
+  expect(dragPerfCounters.bySource['Canvas.lawDiagnostics'] || 0).toBe(0);
+  expect(dragPerfCounters.generateMDXML).toBe(0);
+  expect(dragPerfCounters.validateModWorkspace).toBe(0);
 
-    await page.waitForTimeout(700);
-    const settledPerfCounters = await perfCounters(page);
-    expect(settledPerfCounters.bySource['Canvas.lawDiagnostics']).toBe(2);
-    expect(settledPerfCounters.generateMDXML).toBe(1);
-    expect(settledPerfCounters.validateModWorkspace).toBe(1);
-    expect(compileRequests).toBeLessThanOrEqual(2);
+  await page.waitForTimeout(700);
+  const settledPerfCounters = await perfCounters(page);
+  expect(settledPerfCounters.bySource['Canvas.lawDiagnostics']).toBe(2);
+  expect(settledPerfCounters.generateMDXML).toBe(1);
+  expect(settledPerfCounters.validateModWorkspace).toBe(1);
+  expect(compileRequests).toBeLessThanOrEqual(2);
 
-    // Right-click a spot that is free canvas at the default 1280px viewport: x=720 was
-    // UNDER the docked code-editor <aside> (which fills the panel since the G8 width fix),
-    // so the click was intercepted and retried until the 60s timeout (found 2026-07-09).
-    // (300, 520) sits below the seeded fixture nodes and left of the code panel.
-    await page.getByTestId('grid-canvas').click({
-      button: 'right',
-      position: { x: 300, y: 520 },
-    });
-    await expect(page.getByTestId('canvas-quick-spawn')).toBeVisible();
-    await page.getByPlaceholder('Search egosoft logic parameters...').fill('reward_player');
-    await page.getByTestId('canvas-palette-reward_player').click();
-    const afterPaletteAdd = await workspace(page);
-    expect(afterPaletteAdd.nodes.some((node) => node.xmlTag === 'reward_player')).toBe(true);
-  } finally {
-    isolatedWorkspacePosts.stopGetIsolation(); // restore-verify below must read the REAL server
-    await page.evaluate(async (workspace) => {
-      (window as E2EWindow).__X4_E2E__!.setWorkspace(workspace);
-      const response = await fetch('/api/agent/workspace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // B2s3 legacy gate: fixture restore is a deliberate overwrite.
-        body: JSON.stringify({ workspace, force: true }),
-      });
-      if (!response.ok) throw new Error(`workspace restore failed: ${response.status}`);
-    }, originalWorkspace);
-    await page.waitForTimeout(800);
-    const restored = await page.evaluate(async () => {
-      const response = await fetch('/api/agent/workspace');
-      if (!response.ok) throw new Error(`workspace verify failed: ${response.status}`);
-      const data = await response.json();
-      return data.workspace as E2EWorkspace;
-    });
-    expect(restored.name).toBe(originalWorkspace.name);
-    expect(restored.name).not.toBe(controlledWorkspace.name);
-    expect(isolatedWorkspacePosts.count()).toBeGreaterThan(0);
-  }
+  // Right-click a spot that is free canvas at the default 1280px viewport: x=720 was
+  // UNDER the docked code-editor <aside> (which fills the panel since the G8 width fix),
+  // so the click was intercepted and retried until the 60s timeout (found 2026-07-09).
+  // (300, 520) sits below the seeded fixture nodes and left of the code panel.
+  await page.getByTestId('grid-canvas').click({
+    button: 'right',
+    position: { x: 300, y: 520 },
+  });
+  await expect(page.getByTestId('canvas-quick-spawn')).toBeVisible();
+  await page.getByPlaceholder('Search egosoft logic parameters...').fill('reward_player');
+  await page.getByTestId('canvas-palette-reward_player').click();
+  const afterPaletteAdd = await workspace(page);
+  expect(afterPaletteAdd.nodes.some((node) => node.xmlTag === 'reward_player')).toBe(true);
 });

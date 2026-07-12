@@ -163,6 +163,17 @@ export const BUILTIN_BOILERPLATES: BoilerplateSnippet[] = [
   }
 ];
 
+// B13b2 mailbox: the pretarget event fires while the workbench is unmounted (the same
+// event switches the view); this module-scope listener lives from first import, so the
+// mount effect can consume what arrived before mount.
+let pendingPretargetFile: string | null = null;
+if (typeof window !== 'undefined') {
+  window.addEventListener('xmlpatch-pretarget', (ev: Event) => {
+    const file = String((ev as CustomEvent).detail?.targetFile || '').trim();
+    if (file) pendingPretargetFile = file;
+  });
+}
+
 export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSystemProps) {
   // QoL: default to a target that actually exists in vanilla (ship_macros.xml
   // does not — first open used to show a resolution error).
@@ -241,6 +252,24 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
 
   const dtBasePreview = useMemo(() => previewPaneText(baseFileContent), [baseFileContent]);
   const dtPatchPreview = useMemo(() => previewPaneText(dtResult?.diffXml), [dtResult]);
+
+  // B13b2: override-map "DIFF→PATCH" jump — pre-target this workbench from anywhere.
+  // The event usually fires while this component is UNMOUNTED (the same event switches
+  // the view, and we mount after) — the module-scope mailbox below catches it; this
+  // effect consumes the mailbox on mount and handles the already-mounted case live.
+  useEffect(() => {
+    const apply = (file: string) => {
+      if (!file) return;
+      pendingPretargetFile = null; // consumed — never replays on a later mount
+      setTargetFile(file);
+      setRightPanelTab('difftool');
+      setDtSeededFor(null); // reseed the editable copy from the new file's vanilla content
+    };
+    if (pendingPretargetFile) apply(pendingPretargetFile);
+    const handlePretarget = (ev: Event) => apply(String((ev as CustomEvent).detail?.targetFile || '').trim());
+    window.addEventListener('xmlpatch-pretarget', handlePretarget);
+    return () => window.removeEventListener('xmlpatch-pretarget', handlePretarget);
+  }, []);
 
   useEffect(() => {
     if (!targetFile) return;

@@ -79,14 +79,15 @@ acceptance (<2min zero-typing) → scratch checkout or B23 stranger test; GOG br
 ### B27 · Selftest index endpoint — ✅ CLOSED 2026-07-11 → ROADMAP (sweep 71/71 via runtime index;
 acceptance diff caught 2 census errors incl. a nested-path oracle NO prior method ever swept)
 
-### B19 · Template → in-game guided rail — slice 1 ◐ IMPLEMENTED 2026-07-11 → ROADMAP (ABSORBS audit #7)
-Slice 1 shipped: GuidedRail (3 steps, deploy-verify inline, live watcher poll), RailGuide metadata on
-all 3 non-blank templates, sourceId plumbing; e2e `guided-rail.spec.ts` green (suite 12/12), sweep
-67/67. **Open:** rail feel → eyeball batch; rail-to-game EXPERIENCE + in-game template stamps →
-in-game batch (game-gated). **Slice 2 spec'd:** beyond-canvas starter intents (price-tweak XML patch,
-t-file text, HUD button); crisp server-computed "mod loaded and clean" verdict field in the
-debug-watcher brief (kills the rail's heuristic field guesses). **Acceptance (unchanged, final):** a
-non-author tester ships welcome-message to a running game on on-screen guidance alone.
+### B19 · Template → in-game guided rail — s1 ◐ (07-11) · s2a+s2b ✅ CLOSED 2026-07-12 → ROADMAP
+s2a: server `verdict` field (oracle 9/9) — rail + Playtest render it, TTFM gated on true loaded_clean.
+s2b: beyond-canvas templates (price patch / t-file / HUD button, oracle 23/23) + the two coupling
+fixes (onboarding empty-in-every-domain; rail mounts on any-domain content). **Open (game-gated):**
+rail-to-game EXPERIENCE + template stamps → in-game batch. **Acceptance (final):** a non-author tester
+ships welcome-message to a running game on on-screen guidance alone.
+
+### B33 · RESET → template picker — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+(dead starter cue removed from BLANK_WORKSPACE; RESET→picker proven live; sweep 75/75, e2e 12/12)
 
 ### B20 · TTFM instrumentation — ✅ CLOSED 2026-07-11 → ROADMAP (oracle 9/9, sweep 68/68, e2e 12/12;
 report panel deferred until the first real funnel completes)
@@ -94,19 +95,14 @@ report panel deferred until the first real funnel completes)
 ### B21 · MD action-frequency census — ✅ CLOSED 2026-07-11 → ROADMAP (oracle 12/12; live corpus:
 106,437 instances, top-52 actions = 90% of usage, curated already 41.4% of instances)
 
-### B22 · Pattern browser — slice 1 ◐ IMPLEMENTED 2026-07-11 → ROADMAP (4 proven patterns, oracle 9/9,
-DOM-verified browse→stamp; slice 2: mid-canvas stamping via graph-mutation ops + unified card component)
+### B22 · Pattern browser — s1 ◐ (07-11) · s2 ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+Mid-canvas stamping live (oracle 16/16 incl. a caught cue-name-collision defect; stamp→undo drill
+green). Card unification deferred → B13 batch 2.
 
-### B28 · Browser-pane renderer wedge — `spec'd` (recurring tool hazard, 3× on 2026-07-11, 2× more on 07-12)
-Pane renderer stops answering screenshots after HMR + setWorkspace churn (JS/DOM stays alive;
-navigate-reload recovers). Suspect the canvas rAF loop + HMR interplay. Root-cause pass; until then
-the banked workaround is DOM-read validation + reload. **New evidence 07-12:** in the degraded state
-the pane also serves STALE SCREENSHOT FRAMES and physical clicks fail to land even when the click echo
-reports the correct DOM coordinates (wizard-✕ looked broken for 2 clicks; btn.click() + DOM-read proved
-the app handler fine) — when the pane misbehaves, trust ONLY DOM reads, never pixels or click echoes.
-**Third mode (07-12, B2s3 close):** long-running JS evals get killed mid-flight ("Inspected target
-navigated or closed", "Promise was collected") — 3 drill interruptions; workaround: pane JS must be
-short-lived (<~2s), no multi-second awaits; split drills into per-action calls.
+### B28 · Browser-pane wedge — ◐ CLOSED-RECLASSIFIED 2026-07-12 (workflow v3, PARTIAL) → ROADMAP
+Ours (Vite watch gaps killing evals) fixed via B29/B26; the tool's (screenshot/stale-frame/click-desync
+in the pane's capture path) banked with workarounds — no buildable Forge unit remains. Escalate
+upstream if it persists across sessions.
 
 ### B29 · Header horizontal overflow — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 Fits at 1280 AND 1920 (DOM-rect drills, 0 clipped controls); conflict card promoted to a fixed
@@ -121,12 +117,13 @@ ADR at unpark. Until then B8 stays parked.
 
 ### B24 · Live game-state inspector — SPIKE ✅ CLOSED 2026-07-11 → **ADR-F3** (StarForge decisions.md);
 slices spec'd below
-**B24s1 · FORGE-STATE parser + read-only Inspector panel** — `spec'd`: parse `FORGE-STATE {json}`
-debuglog lines via the existing watcher tail; panel renders whatever arrives (works with hand-authored
-probe cues). **B24s2 · probe-extension generator** — `spec'd`, gated on s1: Forge generates
-`x4_forge_probe` on demand (faction census / player assets / cue heartbeats), deploy write-gated,
-save-removable. Bridge = lessons only, never a dependency. Constraints (binding): optional, read-only,
-zero impact absent.
+**B24s1 · FORGE-STATE parser + Inspector panel** — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) →
+ROADMAP (oracle 12/12; endpoint + panel DOM-proven against a synthetic fixture; in-game emission →
+in-game batch). **B24s2 · probe-extension generator** — `spec'd`, KEN-WRITE-GATED (2026-07-12): the
+generator code is writable, but its VALIDATION is inseparable from deploying `x4_forge_probe` into the
+real game dirs + an in-game run — both behind Ken's standing write gate and the game session. Per
+workflow v3 it cannot close past PARTIAL without Ken; queued for a session where he's at the wheel.
+Constraints (binding): optional, read-only, zero impact absent; bridge = lessons only.
 
 ## P4 — Depth / UX long tail
 
@@ -134,21 +131,19 @@ zero impact absent.
 usage curated; oracle 50/50). Remaining (optional depth, demand-driven): tags beyond the top 52; the
 xsdParser `structural` category rider (B21 close) so census/palette stop calling child elements actions.
 
-### B11 · G13 residual: aiscripts visually editable — `spec'd`
-Wares/jobs slice done; aiscripts import editable only when byte-faithful (#65 guards) but have no visual
-editor surface beyond code view.
+### B11 · aiscripts visually editable — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED — ALREADY EXISTED; stale entry)
+Reconcile + live drill proved the full chain has existed since #65 + the AIScriptEditor: guarded
+byte-faithful import → editable AIBehaviorScript model → the editor's visual pipeline edits it (UI field
+edit → model updated, drill-proven). The "no visual surface beyond code view" claim was stale. No code
+written — the workflow's redundant-infrastructure rule in action.
 
-### B12 · Multi-workspace tabs — `spec'd` (largely absorbed by B2's per-mod server state)
+### B12 · Multi-workspace switcher — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+(parked-state optgroup in the header select; non-destructive round-trip proven via the real user flow;
+tab-strip chrome deliberately out of scope — switch-without-loss was the substance)
 
-### B13 · QoL batch — batch 1 ✅ VERIFIED 2026-07-12 (all surfaces agent-confirmed; Ken feel-pass optional)
-Batch 1 surfaces browser-confirmed live by the agent (per Ken's validate-visually directive): canvas
-delete toast + undo ✅ · library delete toast + undo loop ✅ (PLUS fix: last-item delete was impossible —
-"keep at least one" guard removed, zero-state legal) · empty-state skeletons ✅ · ShortcutsOverlay ✅
-(prior session) · FirstRunWizard ✕ ✅ (07-12: DOM-verified present→click→absent; handler wired) ·
-conflict-card narrow-width ✅ VERIFIED with defect found (07-12: real 409 produced live; compact ⚠
-collapse works at <xl, BUT the card sits off-screen — header overflow, spun out as **B29**).
-**Batch 2 (spec'd):** override-map click → Diff→Patch pre-target; "wire a HUD button in 3 steps" WIKI
-snippet.
+### B13 · QoL batch — batch 1 ✅ (07-12) · batch 2 ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+Batch 2: override-map→Diff→Patch pre-target (event+mailbox, mount-race caught+fixed) · HUD-button
+3-step wiki guide · StarterCard unification (B22s2 deferral closed). All drills live; suite green.
 
 ### B17 · e2e gate hygiene — ✅ CLOSED 2026-07-11 → ROADMAP (green/red/no-tests all verified; Node-bump
 probe ◐ Ken-gated machine change)
@@ -158,28 +153,23 @@ Restore-verify marker + wrapper red-on-FAIL (negative path drilled); api-selftes
 branches; RESET audited clean (CAS + parks); runtime-writes audit found+fixed a 2nd vite gap (data/**).
 Guard KEPT until B31. Residual note: verify line can race the libuv crash → B31 moves it in-process.
 
-### B31 · Ephemeral e2e server state — `spec'd` (B2s3 AAR worst-pick, 2026-07-12; renumbered from B30 — collision with the parallel v3-adoption session's mirror-drift gate)
-The e2e isolation harness route-mocks around the SHARED live singleton — half-isolation has now
-caused/complicated three incident classes (B15 RED, guard-leak class #70, the 07-12 suppression
-interplay). With B2s3's per-mod persisted state landed, the right shape: e2e runs against an EPHEMERAL
-server state (per-run state dir via env flag, or a fixture mod key), killing route-mocks AND the guard.
-**Acceptance:** suite green with zero `page.route('**/api/agent/workspace')` interceptions and zero
-guard dependence; Ken's live workspace untouched by construction, not by restoration.
+### B31 · Ephemeral e2e server state — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+Suite 12/12 ×2 on its own per-run stack; guard + all workspace route-mocks DELETED; live workspace
+untouched with no restore ever running; acceptance literal (0 interceptions). e2e no longer needs the
+machine-state ask. Bonus: the libuv crash didn't reproduce off the shared server (3 runs).
 
 ### B16 · run_command async-job mode — ✅ CLOSED 2026-07-09 → ROADMAP (dogfood-verified: app answered in 7ms mid-job)
 
-### B14 · Staleness-era leftovers — `spec'd`
-Full server-side XPath match counts (needs an XPath lib decision); golden round-trip corpus across several
-real published mods (needs mod paths from Ken); T1.3 runtime ftable loader (gated on in-game verification);
-mod profiles / update audit (P-C/P-D); T4.3 canvas cross-domain arrow.
+### B14 · Staleness-era leftovers — ✅ FULLY DISPOSITIONED 2026-07-12 (all remaining lines Ken/game-gated)
+KEN-GATED: XPath match counts (lib = dependency DECISION, local-npm-only posture) · golden round-trip
+corpus (needs Ken's mod paths) · P-C/P-D mod profiles (stale spec — keep-or-drop call). GAME-GATED:
+T1.3 runtime ftable loader. T4.3 "canvas arrow" → CLOSED (already resolved by substitution in the 37th
+pass: the PropertiesInspector's contextual Lua↔MD binding panel; live-drilled 07-12 → ROADMAP).
 
 ### B32 · Recurring-mistake tripwires — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 TRIPWIRES table in precommit-check.mjs (runs before typecheck, named messages); negative drill BLOCKED
 exit 1, green tree exit 0. Add future mechanical-mistake patterns to the table.
 
-### B30 · Mirror-drift gate — `spec'd` (added 2026-07-12, from the workflow-v3 AAR)
-Canon lives in 3 in-repo mirrors (CLAUDE.md/AGENTS.md/GEMINI.md) + the global F:\DEV_ENV\CLAUDE.md,
-synced by hand — the exact drift class that let an agent work a full session without the workflow
-(2026-07-09). Extend `scripts/precommit-check.mjs` to diff the three in-repo mirrors and FAIL on
-divergence. Acceptance: precommit red when any mirror differs; green now (md5-identical as of v3
-adoption); ROADMAP close cites a deliberate-divergence test.
+### B30 · Mirror-drift gate — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
+(precommit byte-compares the 3 in-repo mirrors; deliberate-divergence drill BLOCKED exit 1; green now.
+The GLOBAL F:\DEV_ENV\CLAUDE.md copy remains Ken's named canon-lag item — outside this repo's gate.)

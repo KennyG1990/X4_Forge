@@ -1507,13 +1507,22 @@ export default function Canvas({
   return (
     <div className="flex-1 bg-[#07090d] relative overflow-hidden flex flex-col h-full select-none" onContextMenu={handleCanvasContextMenu}>
 
-      {/* Empty-canvas onboarding (G9 + recipes) — extracted to CanvasOnboarding (audit A7). */}
-      {workspace.nodes.filter(n => n.type !== 'comment').length === 0 && (
+      {/* Empty-canvas onboarding (G9 + recipes) — extracted to CanvasOnboarding (audit A7).
+          B19s2b: "empty" means empty in EVERY domain — a patch/t-file/HUD template has an
+          empty canvas but is NOT an empty workspace (the overlay used to re-cover it). */}
+      {workspace.nodes.filter(n => n.type !== 'comment').length === 0
+        && (workspace.xmlPatches?.length ?? 0) === 0
+        && (workspace.tFiles?.length ?? 0) === 0
+        && workspace.uiWidgets.length === 0 && (
         <CanvasOnboarding onLoad={(ws, sourceId) => { saveCheckpoint(); setWorkspace(ws); setRailSourceId(sourceId ?? null); ttfm.mark('template_loaded'); }} />
       )}
 
-      {/* B19: guided rail — carries the newcomer from "template loaded" into the game. */}
-      {railSourceId && workspace.nodes.length > 0 && (() => {
+      {/* B19: guided rail — carries the newcomer from "template loaded" into the game.
+          B19s2b: mounts on content in ANY domain, not just canvas nodes. */}
+      {railSourceId && (workspace.nodes.length > 0
+        || (workspace.xmlPatches?.length ?? 0) > 0
+        || (workspace.tFiles?.length ?? 0) > 0
+        || workspace.uiWidgets.length > 0) && (() => {
         const tpl = MOD_TEMPLATES.find(t => t.id === railSourceId);
         const recipe = railSourceId.startsWith('recipe:') ? MOD_RECIPES.find(r => `recipe:${r.id}` === railSourceId) : undefined;
         const pattern = railSourceId.startsWith('pattern:') ? MOD_PATTERNS.find(p => `pattern:${p.id}` === railSourceId) : undefined;

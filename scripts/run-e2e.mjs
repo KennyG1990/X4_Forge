@@ -1,11 +1,13 @@
 /**
  * run-e2e.mjs — the e2e gate wrapper (BACKLOG B17, 2026-07-11).
  *
- * Why this exists: on this Node build, Playwright finishes the suite, prints its
- * summary ("N passed"), and THEN dies in libuv teardown
+ * Why this exists: on this Node build, Playwright could finish the suite, print its
+ * summary ("N passed"), and THEN die in libuv teardown
  * (`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`, src\win\async.c:76,
- * exit 0xC0000409) — reproduced 2/2 on 2026-07-11. The child's exit code is
- * therefore unusable as a gate: a fully green suite exits non-zero.
+ * exit 0xC0000409) — reproduced 2/2 on 2026-07-11 against the reused live dev server.
+ * The child's exit code is therefore unusable as a gate: a fully green suite could
+ * exit non-zero. (B31s2 note: since the suite moved to its OWN ephemeral stack the
+ * crash has not reproduced — the verdict-parse gate stays as armor either way.)
  *
  * This wrapper spawns `npx playwright test <args>` (no args = ALL specs in
  * tests/e2e per playwright.config.ts), echoes output through, parses the summary
@@ -17,8 +19,9 @@
  *   npm run test:e2e                 # full suite (the gate records should cite)
  *   node scripts/run-e2e.mjs <spec>  # any subset, same verdict semantics
  *
- * NOTE: the suite swaps the live server workspace during the run (workspace-guard
- * restores it). The machine-state rule applies: ask Ken before running.
+ * B31s2: the suite runs against an EPHEMERAL stack (see playwright.config.ts) — the
+ * live dev server and workspace are untouched by construction; no machine-state ask
+ * is needed to run e2e anymore.
  */
 import { spawn } from 'node:child_process';
 
@@ -42,17 +45,14 @@ child.on('close', (code) => {
   const didNotRun = count(/(\d+)\s+did not run/);
   const noTests = /no tests found/i.test(out);
 
-  // B26: the workspace-guard teardown verifies its own restore and prints a parseable
-  // marker — a green suite that leaked test state into the live workspace is NOT green.
-  const guardFail = /\[workspace-guard\] RESTORE-VERIFY: FAIL/.test(out);
-
-  const red = failed > 0 || flaky > 0 || interrupted > 0 || didNotRun > 0 || guardFail;
+  // (B26's workspace-guard marker check retired with the guard itself — B31s2 gives the
+  // suite its own ephemeral server, so there is no shared state to leak or restore.)
+  const red = failed > 0 || flaky > 0 || interrupted > 0 || didNotRun > 0;
   const green = passed > 0 && !red && !noTests;
 
   const crashed = code !== 0;
   const detail = `${passed} passed, ${failed} failed, ${flaky} flaky, ${interrupted} interrupted, ${didNotRun} did not run` +
     (noTests ? ', NO TESTS FOUND' : '') +
-    (guardFail ? ', WORKSPACE-GUARD RESTORE-VERIFY FAILED' : '') +
     (crashed ? ` (child exit ${code} IGNORED — verdict comes from the summary; libuv teardown crash is a known non-signal)` : '');
 
   console.log(`\n[run-e2e] VERDICT: ${green ? 'PASS' : 'FAIL'} — ${detail}`);

@@ -74,8 +74,21 @@ interface GameLogStatus {
   error?: string;
 }
 
+// B24s1 (ADR-F3): shape of GET /api/agent/live/forge-state — the Inspector's read path.
+interface ForgeStateView {
+  available: boolean;
+  live?: boolean;
+  logUpdatedAt?: string;
+  topics?: { topic: string; data: unknown; raw: string; lineNo: number }[];
+  malformed?: number;
+  reason?: string;
+  error?: string;
+}
+
 interface DebugWatcherBrief {
   brief?: string;
+  // B19s2: server-computed "loaded and clean?" verdict — render, never re-derive.
+  verdict?: { state: 'no_log' | 'stale' | 'not_seen' | 'loaded_with_errors' | 'loaded_clean'; detail: string; errorCount: number };
   timeline?: { kind: string; severity: 'info' | 'warning' | 'error'; label: string; lineNumber?: number; evidence: string }[];
   expectedChain?: { step: string; seen: boolean; evidence?: string }[];
   sinceDeploy?: { hasDeploy: boolean; changedSinceDeploy: boolean; summary: string; deployedAt?: string; logUpdatedAt?: string };
@@ -139,6 +152,8 @@ export default function PlaytestWorkspace({
   const [gameLogLoading, setGameLogLoading] = useState<boolean>(false);
   const [gameLogError, setGameLogError] = useState<string>('');
   const [debugBrief, setDebugBrief] = useState<DebugWatcherBrief | null>(null);
+  // B24s1 (ADR-F3): read-only Inspector — latest FORGE-STATE snapshot per topic.
+  const [forgeState, setForgeState] = useState<ForgeStateView | null>(null);
   const [pastedDiagnosis, setPastedDiagnosis] = useState<GameLogStatus['diagnosis'] | null>(null);
   const [diagnosingPasted, setDiagnosingPasted] = useState<boolean>(false);
   // NPC Identity Probe UI removed 2026-07-09 (Ken): it was a one-off research rig from
@@ -249,12 +264,23 @@ export default function PlaytestWorkspace({
     }
   };
 
+  const refreshForgeState = async () => {
+    try {
+      const response = await fetch('/api/agent/live/forge-state');
+      const data = await response.json();
+      setForgeState(data);
+    } catch (err) {
+      setForgeState({ available: false, error: err?.message || 'Failed to read FORGE-STATE topics.' });
+    }
+  };
+
   useEffect(() => {
     refreshGameLogStatus();
     refreshDebugBrief();
+    refreshForgeState();
     // Poll every 4s so the watcher feels live during an in-game test (was 15s, which read
     // as "not automatic"). The tail is byte-bounded, so a fast poll is cheap.
-    const timer = window.setInterval(() => { refreshGameLogStatus(); refreshDebugBrief(); }, 4000);
+    const timer = window.setInterval(() => { refreshGameLogStatus(); refreshDebugBrief(); refreshForgeState(); }, 4000);
     return () => window.clearInterval(timer);
     // reason: refreshGameLogStatus is a non-memoized component-body function; the polling interval should reset only on activeModId change, not every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -643,6 +669,20 @@ export default function PlaytestWorkspace({
                   {debugBrief.sinceDeploy?.changedSinceDeploy ? 'fresh since deploy' : 'stale / no deploy proof'}
                 </div>
               </div>
+              {/* B19s2: the server's one verdict — same field the guided rail renders. */}
+              {debugBrief.verdict && (
+                <div
+                  data-testid="watcher-verdict"
+                  title={debugBrief.verdict.detail}
+                  className={`rounded border px-1.5 py-1 text-[9px] font-mono leading-tight ${
+                    debugBrief.verdict.state === 'loaded_clean' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : debugBrief.verdict.state === 'loaded_with_errors' ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                    : 'border-amber-500/30 bg-amber-500/5 text-amber-300'
+                  }`}
+                >
+                  VERDICT: {debugBrief.verdict.state.toUpperCase()} — {debugBrief.verdict.detail}
+                </div>
+              )}
               {debugBrief.sinceDeploy?.summary && (
                 <div className="text-[9px] font-mono text-slate-300 leading-tight">{debugBrief.sinceDeploy.summary}</div>
               )}
@@ -693,6 +733,42 @@ export default function PlaytestWorkspace({
               Debug watcher brief failed: {debugBrief.error}
             </div>
           )}
+
+          {/* B24s1 (ADR-F3): read-only game-state Inspector. Renders whatever FORGE-STATE
+              topics arrive in the debuglog tail — works with hand-authored probe cues today,
+              the B24s2 probe extension later. READ-ONLY by ADR constraint: no write path. */}
+          <div className="mt-2 space-y-2 rounded border border-violet-500/20 bg-violet-500/5 p-2" data-testid="forge-state-inspector">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[9px] font-mono uppercase tracking-wider text-violet-200">Inspector — FORGE-STATE</div>
+              <div className={`text-[9px] font-mono ${forgeState?.live ? 'text-emerald-300' : 'text-slate-500'}`}>
+                {forgeState?.live ? 'log live' : forgeState?.available ? 'log stale' : 'no log'}
+              </div>
+            </div>
+            {(!forgeState || !forgeState.available || !forgeState.topics?.length) ? (
+              <div className="text-[9px] font-mono text-slate-500 leading-tight">
+                {forgeState?.error
+                  ? `Inspector read failed: ${forgeState.error}`
+                  : 'No FORGE-STATE topics in the current log tail. Emit one from any cue: '}
+                {!forgeState?.error && (
+                  <code className="text-violet-300/90 select-text">{'<debug_text text="\'FORGE-STATE player {\\"credits\\": \\"\' + player.money + \'\\"}\'" />'}</code>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
+                {forgeState.topics.map((t) => (
+                  <details key={t.topic} className="rounded border border-white/10 bg-black/20 p-1.5" data-testid={`forge-state-topic-${t.topic}`}>
+                    <summary className="cursor-pointer text-[9px] font-mono text-violet-300">
+                      {t.topic} <span className="text-slate-500">· line {t.lineNo} · {Object.keys((t.data as Record<string, unknown>) || {}).length} field(s)</span>
+                    </summary>
+                    <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap text-[9px] leading-tight text-slate-300 select-text">{JSON.stringify(t.data, null, 2)}</pre>
+                  </details>
+                ))}
+                {(forgeState.malformed ?? 0) > 0 && (
+                  <div className="text-[9px] font-mono text-amber-300">{forgeState.malformed} malformed FORGE-STATE line(s) ignored (bad JSON).</div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* (NPC Identity Probe panel removed 2026-07-09 — one-off research rig, not product surface.) */}
         </div>

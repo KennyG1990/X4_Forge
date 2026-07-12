@@ -57,11 +57,44 @@
   gate-matrix selftests + runtime-writes audit (2nd vite gap fixed: data/**)". Close #4: ✅ **B32**
   "B32: precommit tripwires table — jsx-comment-before-root blocked with named message". (Also today,
   pre-goal: "B13 residual visuals close".)
-- **⏸ COMMIT-POINT PAUSE (per the goal's ~5-close rule) — 5 closes today, run continues after Ken commits.**
-  Next unit queued: **B24s1** (FORGE-STATE parser + read-only Inspector panel — house pattern: lib + oracle
-  + endpoint + panel; grounded in ADR-F3); then B19s2, B22s2, B31, B28-residual, B11, B13b2, B14.
-  All gates green at pause: tsc 0 · sweep 73/73 · e2e 12/12 (restore-verified) · api-selftest 6/6 ·
-  precommit (incl. tripwires) exit 0 · workspace byte-clean + pane parked (verified).
+- **Ken committed (53ac590) → run resumed. Closes since commit:** ① ✅ **B24s1** "B24s1: FORGE-STATE
+  protocol — parser + oracle 12/12 + live endpoint + Inspector panel (ADR-F3)" ② ✅ **B19s2a** "B19s2a:
+  server watcher verdict (no_log/stale/not_seen/errors/clean, oracle 9/9) — rail + Playtest render it,
+  TTFM gated on true loaded_clean" ③ ✅ **B19s2b** "B19s2b: beyond-canvas starter templates (price patch
+  / t-file / HUD button, oracle 23/23) + onboarding/rail any-domain coupling fixes" — first in-anger use
+  of B2s3's park/restore valve during the drill, worked exactly as designed. **B33 spec'd** (RESET never
+  returns to template picker — blank preset ships a starter cue).
+  ④ ✅ **B33** "B33: RESET returns to the template picker — dead starter cue removed" ⑤ ✅ **B22s2**
+  "B22s2: mid-canvas pattern stamping (oracle 16/16, cue-name-collision defect caught+fixed) + sidebar
+  stamp cards" ⑥ ◐ **B28** "B28: pane-wedge disposition — ours (Vite gaps) fixed, tool's banked;
+  reclassified, no open work" ⑦ ✅ **B13b2** "B13b2: override-map→Diff→Patch pretarget (event+mailbox),
+  HUD-button wiki guide, StarterCard unification".
+  **⛔ DEGRADATION CALL at close #7 (goal-mandated, 2026-07-12):** error cluster in the last stretch —
+  mount-race re-implement (B13b2), wrong oracle expectation (B24s1), 2 false-positive DOM probes, 1 JS
+  syntax slip. All caught+fixed, but the trend is real and the remaining units are the biggest left.
+  COMMIT POINT NOW; fresh session for B31.
+  **All gates green at the call:** tsc 0 · sweep 75/75 · e2e 12/12 (RESTORE-VERIFY OK) · workspace
+  byte-clean · pane parked. Commit: the seven quoted titles above, oldest first (or squash:
+  "feat(vision-v2): inspector, verdict, beyond-canvas templates, stamping, QoL batch 2 + fixes").
+  **RUN COMPLETE (2026-07-12, hook-directed to termination): closes #8–#16 after the degradation call,
+  each deliberately small or reconcile-first:** ⑧ ◐ B31s1 (ephemeral-instance mechanism) ⑨ ◐ B14 triage
+  ⑩ ✅ **B31** "B31: ephemeral e2e stack — guard + ALL workspace route-mocks DELETED; 12/12 ×2; live
+  workspace untouched with no restore ever running; libuv crash gone off the shared server" ⑪ ✅ **B12**
+  "B12: workspace switcher over the parked-state map — non-destructive round-trip via the real user
+  flow" ⑫ ✅ **B11** "B11: ALREADY EXISTED (stale entry) — #65 import + AIScriptEditor chain live-drilled"
+  ⑬ ✅ **B30** "B30: canon mirror-drift precommit gate — divergence drill BLOCKED exit 1" ⑭ ✅ **T4.3/B14
+  final** "T4.3: ALREADY RESOLVED by substitution (inspector binding panel, 37th pass) — live-drilled"
+  ⑮ B24s2 reclassified KEN-WRITE-GATED (validation inseparable from game-dir deploy) ⑯ phantom-work
+  lesson banked globally (two stale 'buildable' entries had shipped under other names).
+  **⛳ THE BACKLOG IS GENUINELY KEN-GATED-ONLY.** Remaining, all yours: commits (16 closes today) ·
+  decisions (B8/B23 unpark · XPath lib dependency · P-C/P-D keep-or-drop) · write gate (B24s2) ·
+  in-game batch (rail walk + 3 template EXPERIENCE checks + T1.3) · optional feel-passes (B18 wizard,
+  B19 rail, B22 cards, icon-header at <2150px).
+  **Final gates: tsc 0 · sweep 75/75 · e2e 12/12 on the ephemeral stack · precommit (tripwires +
+  mirror gate) green · workspace byte-identical to its snapshot · pane parked.**
+  **Ken-gated queue (standing):** commits · in-game batch (welcome-template walk + the 3 new template
+  EXPERIENCE checks: trader price, {10099,100} text, HUD button) · B23/B8 unpark · B24s2 (write-gated
+  deploy of the probe extension) · B18 GOG branch (no GOG install to verify against).
 - **MAJOR TOOL-HAZARD REVISION (07-12): most of the B28 "pane" flakiness this session was OUR bug** —
   .studio-state writes triggering Vite full reloads on every workspace commit. Fixed (vite.config ignore).
   Long pane JS evals survive now. B28 stays open for the pre-B2s3 wedge modes only (stale screenshot

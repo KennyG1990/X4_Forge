@@ -18,8 +18,9 @@ import { sanitizeWorkspace, generateMDXML, validateModWorkspace } from '../types
 
 /** B19 guided rail: per-template hand-holding from "loaded" to "seen in my game". */
 export interface RailGuide {
-  /** Node the TWEAK step points the newcomer at. */
-  focusNodeId: string;
+  /** Node the TWEAK step points the newcomer at (canvas templates only — B19s2b:
+      beyond-canvas templates navigate via the tweakHint text instead). */
+  focusNodeId?: string;
   /** Plain-language "change this and it's yours" hint. */
   tweakHint: string;
   /** What to look for in the running game (the rail's step 3). */
@@ -32,7 +33,14 @@ export interface ModTemplate {
   title: string;         // picker display title
   blurb: string;         // one-line description for the picker
   rail?: RailGuide;      // B19: guided-rail metadata (blank template has none)
-  build: () => { nodes: Partial<MDNode>[]; links: MDLink[] };
+  // B19s2b: templates may populate ANY workspace domain, not just the MD canvas.
+  build: () => {
+    nodes: Partial<MDNode>[];
+    links: MDLink[];
+    xmlPatches?: ModWorkspace['xmlPatches'];
+    tFiles?: ModWorkspace['tFiles'];
+    uiWidgets?: ModWorkspace['uiWidgets'];
+  };
 }
 
 const N = (id: string, type: MDNode['type'], xmlTag: string, x: number, y: number, properties: any = {}): Partial<MDNode> =>
@@ -123,16 +131,87 @@ export const MOD_TEMPLATES: ModTemplate[] = [
       ],
     }),
   },
+  // ------------------------------------------------------------------------
+  // B19s2b: beyond-canvas starter intents — first mods that aren't MD logic.
+  // The rail's tweakHint carries the navigation (these have no canvas node).
+  // ------------------------------------------------------------------------
+  {
+    id: 'price_tweak',
+    name: 'X4_Cheaper_Energy',
+    title: 'Price Tweak (XML patch)',
+    blurb: 'Make Energy Cells cheaper — your first game-data patch, no scripting.',
+    rail: {
+      tweakHint: 'Open the XML PATCHING tab (top bar) — the patch sets the average price of Energy Cells. Change 64 to any number you like.',
+      gameCheck: 'Dock at any trader: Energy Cells trade around your new price.',
+    },
+    build: () => ({
+      nodes: [], links: [],
+      xmlPatches: [{
+        id: 'patch_price',
+        targetFile: 'libraries/wares.xml',
+        sel: "/wares/ware[@id='energycells']/price/@average",
+        action: 'replace',
+        content: '64',
+        note: 'Cheaper Energy Cells — average price down from vanilla.',
+        includeInBuild: true,
+      }],
+    }),
+  },
+  {
+    id: 'greeting_tfile',
+    name: 'X4_My_Text_Mod',
+    title: 'Custom Text (t-file)',
+    blurb: 'Add your own translatable text entry — the way real mods name things.',
+    rail: {
+      tweakHint: 'Open the LANGUAGES (t/) tab (top bar) — page 10099, entry 100 holds your text. Change it to anything; other mods reference it as {10099,100}.',
+      gameCheck: 'Any mod or script that reads {10099,100} now shows your text in-game.',
+    },
+    build: () => ({
+      nodes: [], links: [],
+      tFiles: [{
+        languageId: '44',
+        fileName: '0001-l044.xml',
+        includeInBuild: true,
+        pages: [{
+          id: '10099',
+          title: 'My Mod Text',
+          items: [{ id: '100', value: 'Hello from my first X4 Forge text mod!' }],
+        }],
+      }],
+    }),
+  },
+  {
+    id: 'hud_button',
+    name: 'X4_My_HUD_Button',
+    title: 'HUD Button (Lua UI)',
+    blurb: 'Put a clickable button on the HUD — your first UI mod.',
+    rail: {
+      tweakHint: 'Open the HUD & LUA UI tab (top bar) — drag the button, resize it, change its label. The designer compiles it to Lua for you.',
+      gameCheck: 'Load a save: your button appears on the HUD where you placed it.',
+    },
+    build: () => ({
+      nodes: [], links: [],
+      uiWidgets: [
+        { id: 'w_win', type: 'window', x: 120, y: 120, w: 280, h: 120, label: 'My First Panel', properties: {}, includeInBuild: true },
+        { id: 'w_btn', type: 'button', x: 150, y: 170, w: 220, h: 40, label: 'My First Button', properties: { text: 'Click me' }, includeInBuild: true },
+      ],
+    }),
+  },
 ];
 
 /** Materialize a template id into a full (sanitized) workspace ready to load. */
 export function buildTemplateWorkspace(id: string): ModWorkspace {
   const tpl = MOD_TEMPLATES.find((t) => t.id === id) || MOD_TEMPLATES[0];
-  const { nodes, links } = tpl.build();
+  const built = tpl.build();
   return sanitizeWorkspace({
     name: tpl.name,
     description: `Started from the "${tpl.title}" template in X4 Forge.`,
-    nodes, links, uiWidgets: [],
+    nodes: built.nodes,
+    links: built.links,
+    // B19s2b: beyond-canvas domains pass through (patches, t-files, HUD widgets).
+    uiWidgets: built.uiWidgets ?? [],
+    xmlPatches: built.xmlPatches ?? [],
+    tFiles: built.tFiles ?? [],
   } as Partial<ModWorkspace>);
 }
 
@@ -154,11 +233,27 @@ export function runModTemplatesSelftest() {
       const diags = validateModWorkspace(ws, generateMDXML(ws));
       const errors = diags.filter((d) => d.severity === 'error');
       ok(`template_${tpl.id}_compiles_clean`, errors.length === 0, errors.map((e) => e.message));
-      ok(`template_${tpl.id}_has_nodes`, ws.nodes.length > 0);
+      // B19s2b: a template's content may live in ANY domain — assert it has SOME.
+      const hasContent = ws.nodes.length > 0 || (ws.xmlPatches?.length ?? 0) > 0
+        || (ws.tFiles?.length ?? 0) > 0 || ws.uiWidgets.length > 0;
+      ok(`template_${tpl.id}_has_content`, hasContent);
+      ok(`template_${tpl.id}_has_rail`, Boolean(tpl.rail?.tweakHint && tpl.rail?.gameCheck));
     } catch (e) {
       ok(`template_${tpl.id}_compiles_clean`, false, 'threw: ' + (e?.message || e));
     }
   }
+
+  // B19s2b: beyond-canvas domains survive sanitize (the loader used to drop them).
+  const priceWs = buildTemplateWorkspace('price_tweak');
+  ok('price_tweak_patch_survives', (priceWs.xmlPatches?.length ?? 0) === 1
+    && priceWs.xmlPatches![0].sel.includes('energycells')
+    && priceWs.xmlPatches![0].targetFile === 'libraries/wares.xml');
+  const tfileWs = buildTemplateWorkspace('greeting_tfile');
+  ok('greeting_tfile_survives', (tfileWs.tFiles?.length ?? 0) === 1
+    && tfileWs.tFiles![0].pages[0]?.items[0]?.id === '100');
+  const hudWs = buildTemplateWorkspace('hud_button');
+  ok('hud_button_widgets_survive', hudWs.uiWidgets.length === 2
+    && hudWs.uiWidgets.some(w => w.type === 'button'));
 
   const passed = checks.filter((c) => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

@@ -110,8 +110,30 @@ function checkTripwires() {
   }
 }
 
+// B30 (2026-07-12): canon lives in three in-repo mirrors (CLAUDE.md/AGENTS.md/GEMINI.md),
+// synced by hand — the exact drift class that let an agent work a full session without
+// the workflow (2026-07-09). Byte-identical or the commit blocks.
+const CANON_MIRRORS = ["CLAUDE.md", "AGENTS.md", "GEMINI.md"];
+
+function checkMirrorDrift() {
+  const contents = CANON_MIRRORS.map((name) => {
+    const p = path.join(root, name);
+    if (!fs.existsSync(p)) throw new Error(`canon mirror missing: ${name}`);
+    return { name, text: fs.readFileSync(p, "utf8") };
+  });
+  const drifted = contents.filter((c) => c.text !== contents[0].text).map((c) => c.name);
+  console.log(`[precommit] canon mirrors: ${CANON_MIRRORS.join(" = ")} — ${drifted.length === 0 ? "identical" : "DRIFTED"}`);
+  if (drifted.length > 0) {
+    throw new Error(
+      `canon mirror drift: ${drifted.join(", ")} differ(s) from ${contents[0].name}. ` +
+        "Edit ONE canon and copy it to the other two — a decree without all mirrors updated is a future agent's landmine."
+    );
+  }
+}
+
 try {
   checkTripwires();
+  checkMirrorDrift();
   runTypecheck();
   checkLargeFiles();
   console.log("[precommit] OK");

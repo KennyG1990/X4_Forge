@@ -47,6 +47,7 @@ import CueViewer from './CueViewer';
 import AIHelper from './AIHelper';
 import ObjectBrowser from './ObjectBrowser';
 import type { ModBlueprint } from '../lib/modBlueprint';
+import { MOD_PATTERNS, stampPatternIntoWorkspace } from '../lib/modPatterns';
 import type { ArchitectStepView } from './BlueprintPanel';
 
 interface SidebarProps {
@@ -1074,6 +1075,39 @@ export default function Sidebar({
               <p className="text-[10px] text-slate-500 leading-normal font-sans">
                 Non-compilable visual templates. Drag them onto the canvas or drag-start, select, and customize them.
               </p>
+            </div>
+
+            {/* B22s2: proven patterns, stampable MID-CANVAS (onboarding covers only the
+                empty canvas; this is the same library for a working graph). */}
+            <div className="space-y-2 bg-black/40 p-3 rounded border border-amber-500/10 font-mono">
+              <span className="text-amber-400 uppercase font-bold text-[9px] tracking-wider block">
+                Proven patterns — stamp onto canvas
+              </span>
+              <p className="text-[9px] text-slate-500 leading-snug font-sans">
+                Working fragments from shipping mods. Stamping ADDS the pattern below your
+                current graph — nothing is replaced. Rename the $variables to make it yours.
+              </p>
+              {MOD_PATTERNS.map(p => (
+                <div key={p.id} className="rounded border border-amber-500/15 bg-amber-500/[0.03] p-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-amber-300 font-semibold text-[10px] leading-tight">{p.title}</div>
+                      <div className="text-slate-500 text-[9px] mt-0.5 leading-snug font-sans">{p.blurb}</div>
+                      <div className="text-slate-600 text-[8.5px] mt-0.5 truncate" title={`${p.provenance.provenMod} — ${p.provenance.file}\n${p.provenance.note}`}>
+                        ⛏ {p.provenance.provenMod}
+                      </div>
+                    </div>
+                    <button
+                      data-testid={`stamp-pattern-${p.id}`}
+                      onClick={() => setWorkspace(ws => stampPatternIntoWorkspace(ws, p.id))}
+                      className="shrink-0 px-2 py-1 rounded bg-amber-600/30 border border-amber-400/30 hover:bg-amber-600/50 text-amber-100 text-[9px] font-bold cursor-pointer"
+                      title="Add this pattern below your current graph."
+                    >
+                      STAMP
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Part 1: CREATE REUSABLE BLUEPRINT */}

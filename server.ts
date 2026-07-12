@@ -106,6 +106,8 @@ import { runLiveCanvasTelemetrySelftest } from "./src/lib/liveCanvasTelemetry";
 import { runBridgeLiveStateSelftest } from "./src/lib/bridgeLiveState";
 import { getBridgeLiveState } from "./src/server/liveBridge";
 import { parseForgeWatches, runForgeWatchSelftest } from "./src/lib/forgeWatch";
+import { parseForgeState, runForgeStateSelftest } from "./src/lib/forgeState";
+import { computeWatcherVerdict, runWatcherVerdictSelftest } from "./src/lib/watcherVerdict";
 import { suggestExpression, runExpressionSuggestSelftest } from "./src/lib/expressionSuggest";
 import { listQuickFixes, runWorkspaceQuickFixesSelftest } from "./src/lib/workspaceQuickFixes";
 import { buildHealthCard, runHealthCardSelftest } from "./src/lib/healthCard";
@@ -1014,6 +1016,8 @@ function buildDebugWatcherBrief(modIdInput?: string, expectedInput: string[] = [
       ok: status.status !== "error",
       status,
       brief: status.summary || "No X4 debug log found.",
+      // B19s2: the ONE server-computed answer to "loaded and clean?" — no client guessing.
+      verdict: computeWatcherVerdict({ hasLog: false, logFresh: false, hasDeploy: Boolean(status.lastDeploy), changedSinceDeploy: false, markersSeen: false, cuesActive: false, errorCount: 0 }),
       timeline: [],
       expectedChain: [],
       sinceDeploy: { hasDeploy: Boolean(status.lastDeploy), changedSinceDeploy: false, summary: "No readable log to compare with deploy state." },
@@ -1097,10 +1101,26 @@ function buildDebugWatcherBrief(modIdInput?: string, expectedInput: string[] = [
     ...(topEvidence.length ? topEvidence : ["No high-signal evidence in the current tail."]),
   ].join("\n");
 
+  // B19s2: single server-computed verdict — kills the rail's (and agents') field guessing.
+  const attributedErrors =
+    Number(status.modRuntime?.errorCount || 0) +
+    Number(status.cueLiveness?.erroringCount || 0) +
+    Number(status.counts?.activeErrors || 0);
+  const verdict = computeWatcherVerdict({
+    hasLog: true,
+    logFresh: Boolean(logTime && (Date.now() - logTime) < 120_000),
+    hasDeploy: Boolean(status.lastDeploy),
+    changedSinceDeploy,
+    markersSeen: Boolean(status.modRuntime?.markersSeen),
+    cuesActive: Boolean((status.cueLiveness?.firingCount || 0) > 0 || (status.cueLiveness?.erroringCount || 0) > 0),
+    errorCount: attributedErrors,
+  });
+
   return {
     ok: status.status !== "error",
     status,
     brief: status.summary || "",
+    verdict,
     timeline,
     expectedChain,
     sinceDeploy,
@@ -1504,7 +1524,11 @@ let workspaceVersion = Date.now();
 // B2 slice 3 (ADR-F1): the active workspace survives restarts on disk. A restart with a
 // blank client attached clobbered real state on 2026-07-11 — the in-memory singleton is a
 // counted incident class, not a style choice.
-const STUDIO_STATE_DIR = path.join(process.cwd(), ".studio-state");
+// B31s1: X4_STATE_DIR lets an EPHEMERAL instance (e2e, drills) keep its own persisted
+// state without touching this checkout's — isolation by construction, not by restore.
+const STUDIO_STATE_DIR = process.env.X4_STATE_DIR?.trim()
+  ? path.resolve(process.env.X4_STATE_DIR.trim())
+  : path.join(process.cwd(), ".studio-state");
 // Legacy (no-expectedHead) writes are only auto-accepted on true first contact: a fresh
 // install where nothing was ever persisted and nothing has been written this run.
 let hadPersistedStateAtBoot = false;
@@ -5164,6 +5188,8 @@ const SELFTESTS: Record<string, () => unknown> = {
   "health-card-selftest": runHealthCardSelftest,
   "bridge-live-state-selftest": runBridgeLiveStateSelftest,
   "forge-watch-selftest": runForgeWatchSelftest,
+  "forge-state-selftest": runForgeStateSelftest,
+  "watcher-verdict-selftest": runWatcherVerdictSelftest,
   "live-canvas-selftest": runLiveCanvasTelemetrySelftest,
   "lua-staleness-selftest": runLuaStalenessSelftest,
   "lua-runtime-log-selftest": runLuaRuntimeLogSelftest,
@@ -5230,6 +5256,30 @@ app.post("/api/agent/live/cue-telemetry", async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "live cue-telemetry failed" });
+  }
+});
+
+// B24s1 (ADR-F3): the Inspector's read path — latest FORGE-STATE snapshot per topic
+// from the debuglog tail. READ-ONLY by construction: this endpoint (and the whole
+// FORGE-STATE surface) must never grow a write path toward the game.
+app.get("/api/agent/live/forge-state", (req, res) => {
+  try {
+    const candidates = findDebugLogCandidates();
+    const logPath = candidates.find(c => { try { return fs.statSync(c).isFile(); } catch { return false; } });
+    if (!logPath) return res.json({ available: false, live: false, reason: "No X4 debuglog found in the known locations.", topics: [], malformed: 0 });
+    const stat = fs.statSync(logPath);
+    const tail = readTail(logPath, 256 * 1024);
+    const parsed = parseForgeState(tail);
+    return res.json({
+      available: true,
+      logPath,
+      logUpdatedAt: stat.mtime.toISOString(),
+      live: (Date.now() - stat.mtimeMs) < 120_000,
+      topics: parsed.topics,
+      malformed: parsed.malformed,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "forge-state read failed" });
   }
 });
 

@@ -5,13 +5,13 @@
  * against the dev server (reuseExistingServer) — the exact acceptance checks that
  * were verified by hand in-session, pinned so they can't silently regress.
  */
-import fs from 'fs';
-import path from 'path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
+import { E2E_TOKEN } from '../../playwright.config';
 
+// B31s2: these requests ride baseURL (the ephemeral Vite → ephemeral API proxy), so the
+// bearer is the ephemeral stack's env token — the live checkout's token file is not read.
 function bearer(): Record<string, string> {
-  const token = fs.readFileSync(path.join(process.cwd(), '.studio-api-token'), 'utf8').trim();
-  return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  return { Authorization: `Bearer ${E2E_TOKEN}`, 'Content-Type': 'application/json' };
 }
 
 async function validate(request: APIRequestContext, body: unknown) {

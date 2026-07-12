@@ -33,7 +33,10 @@ function studioTokenPlugin(): Plugin {
       // In combined fallback mode server.ts already injected the token; don't double up.
       if (html.includes('__STUDIO_API_TOKEN__')) return html;
       try {
-        const token = fs
+        // B31s2: an EPHEMERAL stack (e2e) passes the token via env — both processes get
+        // it without touching this checkout's .studio-api-token file.
+        const token = (process.env.STUDIO_API_TOKEN?.trim())
+          || fs
           .readFileSync(path.resolve(__dirname, '.studio-api-token'), 'utf8')
           .trim();
         if (token) {
@@ -117,6 +120,9 @@ export default defineConfig(() => {
                 // B26 runtime-writes audit: server runtime data (AI usage meter, harvested
                 // schemas, api-registry) — same spurious-reload class as .studio-state.
                 '**/data/**',
+                // B24s1: project-local debuglog fixtures (findDebugLogCandidates fallback).
+                '**/debuglog.txt',
+                '**/uidata.log',
                 '**/.tmp_*',
                 '**/*.log',
                 '**/.snapshots/**',
