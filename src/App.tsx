@@ -966,7 +966,7 @@ export default function App() {
   };
 
   // B12: parked-workspace switcher (rides B2s3's park-on-switch server state).
-  const [parkedList, setParkedList] = useState<Array<{ name: string; slug: string; nodeCount: number }>>([]);
+  const [parkedList, setParkedList] = useState<Array<{ name: string; slug: string; nodeCount: number; contentSummary?: string }>>([]);
   const refreshParkedList = async () => {
     try {
       const data = await fetch('/api/agent/workspace/parked').then(r => r.json());
@@ -1428,7 +1428,7 @@ export default function App() {
               {parkedList.filter(p => p.name !== workspace.name).length > 0 && (
                 <optgroup label="Parked workspaces">
                   {parkedList.filter(p => p.name !== workspace.name).map(p => (
-                    <option key={p.slug} value={`parked:${p.name}`}>{p.name} ({p.nodeCount} nodes)</option>
+                    <option key={p.slug} value={`parked:${p.name}`}>{p.name} ({p.contentSummary ?? `${p.nodeCount} nodes`})</option>
                   ))}
                 </optgroup>
               )}

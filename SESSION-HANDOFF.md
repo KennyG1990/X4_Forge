@@ -92,6 +92,23 @@
   B19 rail, B22 cards, icon-header at <2150px).
   **Final gates: tsc 0 · sweep 75/75 · e2e 12/12 on the ephemeral stack · precommit (tripwires +
   mirror gate) green · workspace byte-identical to its snapshot · pane parked.**
+
+- **NO-VALIDATION-NEEDED BATCH (2026-07-13, "execute as much as you can without my validation"):** five
+  agent-completable units, each backend/oracle-verifiable or housekeeping — backlog stays Ken-gated-only.
+  ① ✅ **Standing-hazard sweep** (workflow rule 2e, was overdue): money=single AI chokepoint metered+capped;
+  network=GitHub user-driven+auth-gated; delete=all path-jailed — CLEAN + removed one zero-caller
+  recursive-wipe foot-gun (`cleanDirectoryExceptMetadata`). ② ✅ **B12 residual**: `contentSummary`
+  (domain-aware) replaces "0 nodes" for beyond-canvas parked states (oracle 11/11, live-verified). ③ ◐
+  **B24s2** probe generator: `forgeProbe.ts` + oracle 9/9 + read-only `/api/agent/probe/preview` (compiles
+  clean, read-only invariant, round-trips) — **also fixed a latent B24s1 `\"`-vs-`&quot;` emit bug** (the
+  round-trip oracle had used a hand-written line, never its own output); ◐ residual = deploy + in-game
+  (Ken). ④ ✅ **HANDOFF.md refresh** (light lane): currency banner + fixed the load-bearing stale refs
+  (workflow v3, ephemeral e2e / deleted guard, B2-fixed, backlog Ken-gated). ⑤ ✅ **fresh-eyes review**
+  of the session's new code: emit consumers contained, escaping traced end-to-end — one real bug (the emit
+  format) caught+fixed during the build, no new defects; one cosmetic oracle-detail cleaned.
+  **Gates after the batch: tsc 0 · sweep 76/76 (probe oracle auto-discovered) · e2e 12/12 · workspace
+  byte-identical · pane parked.** Two lessons banked globally (park-drill methodology; round-trip oracles
+  must feed real generator output). B24s2's in-game deploy joins the Ken-gated queue.
   **Ken-gated queue (standing):** commits · in-game batch (welcome-template walk + the 3 new template
   EXPERIENCE checks: trader price, {10099,100} text, HUD button) · B23/B8 unpark · B24s2 (write-gated
   deploy of the probe extension) · B18 GOG branch (no GOG install to verify against).

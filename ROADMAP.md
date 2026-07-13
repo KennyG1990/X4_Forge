@@ -599,6 +599,74 @@ advanced + copies agree" is not verification of CORRECTNESS — only comparison 
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
 
+### ◐ B24s2 IMPLEMENTED (2026-07-13, workflow v3, PARTIAL — code VERIFIED, deploy Ken-gated): the FORGE-STATE probe generator
+The read-only companion to B24s1's Inspector, per ADR-F3. **Built:** `src/lib/forgeProbe.ts` —
+`buildProbeWorkspace(topics)` generates the optional `x4_forge_probe` extension: an event_game_started
+cue whose actions are a chain of debug_text FORGE-STATE emits (default topics: player name/credits/sector,
+assets ships/stations; parameterizable); deterministic (no wall-clock). Reuses `buildStateTextExpression`
+(B24s1) + `generateMDXML`/`validateModWorkspace` so it compiles through the SAME authoritative validator as
+templates. Read-only `POST /api/agent/probe/preview` returns the workspace + compiled MD + diagnostics —
+**no deploy endpoint by design** (deploying into the game dirs is the write-gated half). Oracle
+`forge-probe-selftest`.
+**LATENT B24s1 BUG FOUND + FIXED en route (required for correctness):** the emit helper `buildStateActionXml`
+used `\"` for the JSON quotes — that renders LITERALLY as `\"` in the debug log and breaks JSON.parse, and
+is also invalid XML in the attribute. B24s1's round-trip oracle used a hand-written rendered line, so it
+never exercised the helper's real output. Fixed: `buildStateTextExpression` now carries LOGICAL real quotes
+(generateMDXML XML-escapes them to `&quot;` at emit → X4 renders back to `"` → valid JSON); the paste
+snippet escapes inline; the Inspector's hardcoded empty-state snippet updated to `&quot;` too.
+*Verified (named methods): **tsc 0** · **probe oracle 9/9** (compiles to 0 errors; READ-ONLY invariant —
+every action is debug_text; event-based trigger; one emit per topic; per-topic FORGE-STATE marker;
+&quot;-escaped, no raw `{"`; rendered-snapshot round-trips through parseForgeState with the exact key set;
+deterministic re-generation; custom topics parameterize) · **forge-state oracle 15/15** (with 3 new
+XML-validity checks pinning the fix) · **sweep 76/76** (probe oracle auto-discovered) · **e2e 12/12** ·
+**live**: `/api/agent/probe/preview` returns x4_forge_probe, 0 errors / 0 warnings, debug_text lines with
+proper `&quot;` escaping.*
+**◐ residual (Ken-gated, named):** deploy `x4_forge_probe` into the game extensions folder (write gate) +
+launch X4 + confirm FORGE-STATE topics appear in the B24s1 Inspector (in-game EXPERIENCE gate). The probe
+EXPRESSIONS (player.numships etc.) are also in-game-verified there — a wrong property logs an error, not a
+crash (read-only by construction). Periodic-timer heartbeat is a FURTHER follow-up: it needs a
+`checkinterval` cue-attribute the MD emitter does not yet write (documented, not built).
+**AAR (triggers: latent-bug discovery mid-build; a plan expansion for correctness):** SUSTAIN — compiling
+the generated probe through the REAL validator (not a bespoke check) is exactly what surfaced the `\"` bug
+that a mock would have hidden; grounding on `generateMDXML`'s actual escaper before writing the emit was
+the win. IMPROVE — B24s1's round-trip oracle tested a hand-written rendered line instead of its OWN emit
+output; a round-trip oracle must feed the real generator output through a real (or faithfully simulated)
+render, never a hand-authored stand-in. Banked. **WORST-IMPLEMENTATION PICK:** B24s1's emit helper — it
+shipped ◐ with an oracle that looked green but never exercised the actual emit→render→parse chain; the
+fix + the new XML-validity checks close that gap.
+
+### ✅ STANDING-HAZARD SWEEP + B12 RESIDUAL CLOSED (2026-07-13, workflow v3, VERIFIED)
+Two self-anneal closes. **(A) Standing-hazard sweep (workflow rule 2e — DUE: ~16 tasks closed since the
+last, and B25/B31 changed spend/network surfaces).** Enumerated every surface that SPENDS MONEY, TOUCHES
+THE NETWORK, or DELETES DATA and verified each has a meter AND a limit:
+  - **MONEY (AI):** all provider calls (Anthropic/OpenAI/OpenRouter fetch + Gemini `generateContentWithRetry`)
+    funnel through the SINGLE chokepoint `callMultiProviderAI`, which checks `aiSpendMeter` and refuses over
+    `AI_DAILY_CALL_CAP` — meter + limit confirmed at the choke; `/api/gemini` routes through it too. ✅
+  - **NETWORK (non-AI):** GitHub routes (load/push/create/device-OAuth) are user-initiated + auth-gated
+    (Bearer on all POSTs); no automated caller = no runaway; GitHub API is free. The `http.request`/djfhe
+    hits are GENERATED Lua strings, not server calls. ✅
+  - **DELETE:** `/api/fs/delete-dir` is path-jailed (rejects absolute/`..`/empty, resolves within configured
+    roots, never deletes a root, auth-gated); `/api/fs/delete-snapshot` bounded to the snapshot dir;
+    `cleanForgeManagedEntries` deletes only managed top-level entries and honors `.forgekeep`; snapshot prune
+    is count-limited (30). ✅
+  - **ONE FINDING, FIXED:** `cleanDirectoryExceptMetadata` (the old "wipe everything except .snapshots/
+    .studio-mod-id" deploy refresh) had ZERO callers since `cleanForgeManagedEntries` replaced it — a
+    recursive-delete foot-gun sitting dormant for a future edit to re-wire. **Deleted.** tsc 0.
+  *Verified: resource-by-resource read of every `fetch`/`fs.rm*`/`fs.unlink*` site (grep-enumerated, not
+  feature-named); tsc 0 after the deletion; capability-map updated. Sweep result: CLEAN + 1 foot-gun removed.*
+**(B) B12 residual — parked-workspace content label.** Beyond-canvas parked states (patch/text/HUD-only)
+displayed "0 nodes". Added `summarizeWorkspaceContent()` (domain-aware: nodes/patches/text files/widgets/
+wares/jobs, "empty" when none) + `contentSummary` on `ParkedSummary`; the switcher renders it.
+*Verified: persistence oracle 11/11 (new `content_summary_beyond_canvas` check pins "1 patch" / "1 text
+file, 2 widgets" / "empty" / "3 nodes"); sweep 75/75; **live**: switcher rendered "Player_Elite_Escort
+(3 nodes, 3 widgets)" (multi-domain, not just nodes), and the parked-list API returned `'empty'` for a
+node-less state instead of "0 nodes"; escort restored byte-identical to snapshot, pane parked.*
+**AAR (trigger: drill-methodology repeat — I emptied workspaces before switching, so the beyond-canvas
+parked entry summarized "empty" not "1 patch"; same class as B12's own close):** the fix is still proven
+(oracle strings + live multi-domain render + API 'empty'), but I re-learned the same lesson — drills that
+need "prior content preserved in a park" must switch WITHOUT emptying first. Banked (again); the standing
+fix is to script park drills as: load full A → load full B → assert A parked with A's content.
+
 ### ✅ B30 CLOSED (2026-07-12, workflow v3, VERIFIED): the canon mirrors can no longer drift silently
 The parallel v3-adoption session's spec, delivered: `precommit-check.mjs` byte-compares
 CLAUDE.md/AGENTS.md/GEMINI.md and BLOCKS the commit on divergence with a named message ("edit ONE canon

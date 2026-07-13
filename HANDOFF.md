@@ -1,5 +1,26 @@
 # X4 Forge — AI-to-AI Development Handoff
 
+> **⚠ CURRENCY BANNER (refreshed 2026-07-13, light lane).** The deep-onboarding sections below (§3, §15,
+> §19, §20, §23) were written 2026-07-11 and are a HISTORICAL SNAPSHOT — the architecture/environment/
+> philosophy sections (§1–2, §4–14, §16–18, §21–22, §24–28) remain accurate. For "where are we RIGHT NOW"
+> trust, in this order: **`SESSION-HANDOFF.md`** (authoritative current state) → **`BACKLOG.md`** →
+> **`ROADMAP.md`** (append-only). Load-bearing reversals since 2026-07-11 you MUST know:
+> - **Workflow is v3** (the *Universal AI Task Workflow* — CLASSIFY→PLAN→BASELINE→RECONCILE→DOCUMENT→
+>   IMPLEMENT→VALIDATE→REVIEW→DOCUMENT→AAR; statuses VERIFIED/PARTIAL/FAILED/BLOCKED/REVERTED), NOT the
+>   8-step v2 described in older text. Canonical core: `UNIVERSAL_AI_TASK_WORKFLOW.md`.
+> - **e2e now runs on an EPHEMERAL stack** (own Vite:3100 + API:3101 + token + temp `X4_STATE_DIR`, see
+>   `playwright.config.ts`). **`tests/e2e/workspace-guard.ts` + `.teardown.ts` are DELETED**, and the
+>   `page.route('**/api/agent/workspace')` isolation harnesses are gone — anywhere below that says "don't
+>   bypass workspace-guard" or references those files is STALE. The live dev workspace is untouched by
+>   construction; no machine-state ask is needed to run e2e. `test:e2e` (12 specs) is THE gate.
+> - **The B2 mutable-singleton sync bug (§19 "known bug") is FIXED** (B2s3: disk persistence + legacy-write
+>   gate + park-on-switch). Workspace state survives restarts; a parked-state switcher exists (B12).
+> - **The BACKLOG is Ken-gated-only** as of 2026-07-13: every remaining item is a commit, a decision
+>   (B8/B23/XPath/P-C-D), a write-gated deploy (B24s2), an in-game check, or an optional eyeball. There is
+>   no agent-buildable feature work queued.
+> - **HEAD advances with Ken's commits** (he commits via Antigravity); the "uncommitted set" in §20 is long
+>   stale — read `git log`/`git status` for the real state.
+>
 > **Purpose:** onboard an AI agent with ZERO prior conversation history to this project: understand it,
 > reproduce the environment, verify current state, continue safely, and not repeat old mistakes.
 > **Written:** 2026-07-11, against commit `37209c8` + a known uncommitted working set (§3, §20).
@@ -416,12 +437,15 @@ parallel e2e workers (clobbered live work twice); trusting sandbox mirrors (mult
 
 ## 15. Testing and Verification
 
-- **Layers:** (1) ~40 deterministic selftest oracles (in-engine fixtures, exposed as GET endpoints,
-  swept by `node scripts/oracle-sweep.mjs` — exits non-zero on any red, `--list` shows coverage);
-  (2) Playwright e2e — **`npm run test:e2e` is THE gate** (full suite, 11 tests across 4 specs; B17
-  shipped 2026-07-11): both it and `test:canvas` (2 canvas specs, 4 tests) route through
-  `scripts/run-e2e.mjs`, which parses the summary and exits on the VERDICT — the raw Playwright exit
-  code is corrupted by the libuv teardown crash (§22) and must never be trusted directly; (3) host gates `npm run typecheck`,
+- **Layers:** (1) **76** deterministic selftest oracles (in-engine fixtures, exposed as GET endpoints,
+  swept by `node scripts/oracle-sweep.mjs` — exits non-zero on any red; discovery reads the RUNTIME
+  selftest index (B27), not a source regex); (2) Playwright e2e — **`npm run test:e2e` is THE gate**
+  (full suite, **12 specs**, runs on the B31s2 EPHEMERAL stack — own Vite/API/token/state-dir per run,
+  live workspace untouched by construction; `test:canvas` is retired) via `scripts/run-e2e.mjs`, which
+  parses the summary and exits on the VERDICT — the raw Playwright exit code was corrupted by a libuv
+  teardown crash on the OLD shared-server model (§22) and must never be trusted directly (the crash has
+  not recurred on the ephemeral stack, but the verdict-parse gate stays as armor); (3) host gates
+  `npm run typecheck`,
   `npm run lint`, `npm run precommit:check`; (4) browser confirmation (see the x4-forge-confirm/validate
   skills: SEE the change, screenshot it); (5) in-game verification for player-facing mod features
   (EXECUTION gates on game-emitted events; EXPERIENCE gates on Ken's eyeball — ADR-G3).
@@ -592,7 +616,9 @@ never dress a hypothesis as a diagnosis (lived lesson: the "lossy compiler" misd
    SESSION-HANDOFF at commit points, AAR with worst-implementation pick; canon edits when a rule is
    verbally reversed (a decree without a doc edit is a landmine).
 7. **Sandbox mirrors of this repo lie** — host tools + job API are truth (multiple incidents).
-8. **Don't parallelize e2e; don't bypass workspace-guard; don't silently resolve sync conflicts.**
+8. **e2e runs on its own EPHEMERAL stack (B31s2) — don't parallelize it, and NEVER re-point specs at the
+   live dev server (:3000/:3001).** (The old `workspace-guard` + route-mock isolation is deleted; the
+   ephemeral stack in `playwright.config.ts` is the isolation now.) **Don't silently resolve sync conflicts.**
 9. **Secrets:** anything new that persists → decide its git fate FIRST (`data/` lesson).
 10. **Operator protocol:** brief Ken at session start (project one-liner, eyeball queue, commit
     question); flag degradation ("2+ errors clustering — commit point now"); flag his context-thrash

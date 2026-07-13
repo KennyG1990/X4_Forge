@@ -750,7 +750,7 @@ export default function PlaytestWorkspace({
                   ? `Inspector read failed: ${forgeState.error}`
                   : 'No FORGE-STATE topics in the current log tail. Emit one from any cue: '}
                 {!forgeState?.error && (
-                  <code className="text-violet-300/90 select-text">{'<debug_text text="\'FORGE-STATE player {\\"credits\\": \\"\' + player.money + \'\\"}\'" />'}</code>
+                  <code className="text-violet-300/90 select-text">{'<debug_text text="\'FORGE-STATE player {&quot;credits&quot;: &quot;\' + player.money + \'&quot;}\'" />'}</code>
                 )}
               </div>
             ) : (

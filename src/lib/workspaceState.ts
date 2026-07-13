@@ -27,6 +27,28 @@ export interface ParkedSummary {
   savedAt: string;
   version: number;
   nodeCount: number;
+  /** B12 residual fix: domain-aware human label, e.g. "3 nodes" / "1 patch" /
+   *  "1 text file" — so beyond-canvas workspaces don't all read "0 nodes". */
+  contentSummary: string;
+}
+
+/** Human, domain-aware one-liner of what a workspace holds (canvas + beyond-canvas). */
+export function summarizeWorkspaceContent(ws: any): string {
+  const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+  const parts: string[] = [];
+  const nodes = Array.isArray(ws?.nodes) ? ws.nodes.length : 0;
+  const patches = Array.isArray(ws?.xmlPatches) ? ws.xmlPatches.length : 0;
+  const tFiles = Array.isArray(ws?.tFiles) ? ws.tFiles.length : 0;
+  const widgets = Array.isArray(ws?.uiWidgets) ? ws.uiWidgets.length : 0;
+  const wares = Array.isArray(ws?.wares) ? ws.wares.length : 0;
+  const jobs = Array.isArray(ws?.jobs) ? ws.jobs.length : 0;
+  if (nodes) parts.push(plural(nodes, 'node'));
+  if (patches) parts.push(plural(patches, 'patch', 'patches'));
+  if (tFiles) parts.push(plural(tFiles, 'text file'));
+  if (widgets) parts.push(plural(widgets, 'widget'));
+  if (wares) parts.push(plural(wares, 'ware'));
+  if (jobs) parts.push(plural(jobs, 'job'));
+  return parts.length ? parts.join(', ') : 'empty';
 }
 
 const ACTIVE_FILE = "active.json";
@@ -114,6 +136,7 @@ export function listParked(stateDir: string): ParkedSummary[] {
             savedAt: String(parsed.savedAt || ""),
             version: Number(parsed.version || 0),
             nodeCount: parsed.workspace.nodes.length,
+            contentSummary: summarizeWorkspaceContent(parsed.workspace),
           };
         } catch {
           return null;
@@ -168,13 +191,23 @@ export function runWorkspaceStateSelftest(): { pass: boolean; checks: Array<{ na
     fs.writeFileSync(path.join(dir, "active.json"), JSON.stringify({ workspace: { name: "x" }, version: 1 }), "utf8");
     checks.push({ name: "invalid_shape_returns_null", pass: readActiveState(dir) === null });
 
-    // 5. park + list reflects name/nodeCount
+    // 5. park + list reflects name/nodeCount + a domain-aware content summary
     parkState(dir, mkState("Beta_Mod", [{ id: "a" }, { id: "b" }, { id: "c" }], 200));
     const l1 = listParked(dir);
     checks.push({
       name: "park_and_list",
-      pass: l1.length === 1 && l1[0].name === "Beta_Mod" && l1[0].nodeCount === 3,
+      pass: l1.length === 1 && l1[0].name === "Beta_Mod" && l1[0].nodeCount === 3 && l1[0].contentSummary === "3 nodes",
       detail: JSON.stringify(l1),
+    });
+
+    // 5b. B12 residual: a beyond-canvas (node-less) workspace summarizes by its REAL
+    // content, not "0 nodes". summarizeWorkspaceContent is the single source of that label.
+    checks.push({
+      name: "content_summary_beyond_canvas",
+      pass: summarizeWorkspaceContent({ nodes: [], xmlPatches: [{ id: 'p' }], tFiles: [], uiWidgets: [] }) === "1 patch"
+        && summarizeWorkspaceContent({ nodes: [], xmlPatches: [], tFiles: [{ id: 't' }], uiWidgets: [{ id: 'w' }, { id: 'w2' }] }) === "1 text file, 2 widgets"
+        && summarizeWorkspaceContent({ nodes: [], xmlPatches: [], tFiles: [], uiWidgets: [] }) === "empty",
+      detail: summarizeWorkspaceContent({ nodes: [], xmlPatches: [{ id: 'p' }] }),
     });
 
     // 6. re-park same name → single entry, latest wins

@@ -107,6 +107,7 @@ import { runBridgeLiveStateSelftest } from "./src/lib/bridgeLiveState";
 import { getBridgeLiveState } from "./src/server/liveBridge";
 import { parseForgeWatches, runForgeWatchSelftest } from "./src/lib/forgeWatch";
 import { parseForgeState, runForgeStateSelftest } from "./src/lib/forgeState";
+import { buildProbeWorkspace, runForgeProbeSelftest, DEFAULT_PROBE_TOPICS } from "./src/lib/forgeProbe";
 import { computeWatcherVerdict, runWatcherVerdictSelftest } from "./src/lib/watcherVerdict";
 import { suggestExpression, runExpressionSuggestSelftest } from "./src/lib/expressionSuggest";
 import { listQuickFixes, runWorkspaceQuickFixesSelftest } from "./src/lib/workspaceQuickFixes";
@@ -5189,6 +5190,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "bridge-live-state-selftest": runBridgeLiveStateSelftest,
   "forge-watch-selftest": runForgeWatchSelftest,
   "forge-state-selftest": runForgeStateSelftest,
+  "forge-probe-selftest": runForgeProbeSelftest,
   "watcher-verdict-selftest": runWatcherVerdictSelftest,
   "live-canvas-selftest": runLiveCanvasTelemetrySelftest,
   "lua-staleness-selftest": runLuaStalenessSelftest,
@@ -5280,6 +5282,29 @@ app.get("/api/agent/live/forge-state", (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "forge-state read failed" });
+  }
+});
+
+// B24s2 (ADR-F3): READ-ONLY preview of the generated x4_forge_probe extension. Returns
+// the probe workspace + its compiled MD so an agent/UI can review it BEFORE deploying.
+// NOTE: there is intentionally NO deploy endpoint here — deploying the probe into the
+// game dirs is the write-gated / in-game half (Ken). The probe emits FORGE-STATE via
+// debug_text only (read-only, save-removable, zero-impact when absent).
+app.post("/api/agent/probe/preview", (req, res) => {
+  try {
+    const topics = Array.isArray(req.body?.topics) && req.body.topics.length ? req.body.topics : DEFAULT_PROBE_TOPICS;
+    const ws = buildProbeWorkspace(topics);
+    const md = generateMDXML(ws);
+    const diagnostics = computeWorkspaceDiagnostics(ws);
+    return res.json({
+      workspace: ws,
+      md,
+      diagnosticsSummary: summarizeDiagnostics(diagnostics),
+      readOnly: true,
+      note: "Preview only. Deploying x4_forge_probe writes into the game extensions folder — that step is write-gated and human-run.",
+    });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "probe preview failed" });
   }
 });
 
@@ -6434,25 +6459,10 @@ app.get("/api/agent/catdat-debug", (req, res) => {
   }
 });
 
-function cleanDirectoryExceptMetadata(dirPath: string) {
-  if (!fs.existsSync(dirPath)) return;
-  try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name === '.snapshots' || entry.name === '.studio-mod-id') {
-        continue;
-      }
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        fs.rmSync(fullPath, { recursive: true, force: true });
-      } else {
-        fs.unlinkSync(fullPath);
-      }
-    }
-  } catch (err) {
-    console.warn(`Error cleaning directory ${dirPath}:`, err);
-  }
-}
+// (Removed 2026-07-12, standing-hazard sweep: cleanDirectoryExceptMetadata — the old
+// "wipe everything except .snapshots/.studio-mod-id" deploy refresh — had ZERO callers
+// since cleanForgeManagedEntries replaced it, but a recursive-delete foot-gun sitting
+// unused is exactly what a future edit re-wires by accident. Deleted, not left dormant.)
 
 // Explicit preserve-list: newline-separated top-level names (e.g. "x4_neural_link") in a `.forgekeep`
 // file at the deploy root. Lines starting with '#' are comments. Lets a mod co-locate non-Forge runtime.

@@ -119,11 +119,12 @@ ADR at unpark. Until then B8 stays parked.
 slices spec'd below
 **B24s1 · FORGE-STATE parser + Inspector panel** — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) →
 ROADMAP (oracle 12/12; endpoint + panel DOM-proven against a synthetic fixture; in-game emission →
-in-game batch). **B24s2 · probe-extension generator** — `spec'd`, KEN-WRITE-GATED (2026-07-12): the
-generator code is writable, but its VALIDATION is inseparable from deploying `x4_forge_probe` into the
-real game dirs + an in-game run — both behind Ken's standing write gate and the game session. Per
-workflow v3 it cannot close past PARTIAL without Ken; queued for a session where he's at the wheel.
-Constraints (binding): optional, read-only, zero impact absent; bridge = lessons only.
+in-game batch). **B24s2 · probe-extension generator** — ◐ IMPLEMENTED 2026-07-13 → ROADMAP: generator
+(`forgeProbe.ts`) + oracle 9/9 + read-only `/api/agent/probe/preview` all VERIFIED (probe compiles to 0
+errors, read-only invariant enforced, round-trips the parser; also fixed a latent B24s1 `\"`-vs-`&quot;`
+emit bug). **◐ residual = the deploy + in-game confirmation** (write gate + game session, Ken). Periodic
+heartbeat needs a `checkinterval` emit the compiler lacks (further follow-up). Constraints (binding):
+optional, read-only, zero impact absent; bridge = lessons only.
 
 ## P4 — Depth / UX long tail
 
@@ -140,6 +141,9 @@ written — the workflow's redundant-infrastructure rule in action.
 ### B12 · Multi-workspace switcher — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 (parked-state optgroup in the header select; non-destructive round-trip proven via the real user flow;
 tab-strip chrome deliberately out of scope — switch-without-loss was the substance)
+· RESIDUAL CLOSED 2026-07-13: domain-aware `contentSummary` replaces "0 nodes" for beyond-canvas parked
+states (oracle 11/11, live-verified). Standing-hazard sweep also run same day (clean + 1 dead-wipe
+foot-gun removed) → ROADMAP.
 
 ### B13 · QoL batch — batch 1 ✅ (07-12) · batch 2 ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 Batch 2: override-map→Diff→Patch pre-target (event+mailbox, mount-race caught+fixed) · HUD-button
