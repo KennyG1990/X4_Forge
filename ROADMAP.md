@@ -52,6 +52,98 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B42 · AGENT KEY MANAGER — named/scoped/EXPIRING keys + parity passes + extension icon (2026-07-15, branch `claude/x4-forge-vscode-poc-806ef5`; VERIFIED live in Antigravity)
+
+Grew out of Ken's security question ("if the token is a feature, we should have a key
+generator like OpenRouter/OpenAI"). Corrected: those are static bearer keys (what the Forge
+already uses), not OAuth — the missing piece was key *management*, so that's what shipped, no
+OAuth ceremony. Owner issues per-agent keys instead of sharing the god-mode session token.
+
+**Built:** engine `src/lib/agentKeys.ts` (token `x4fk_<64hex>`, **sha256 stored — plaintext
+shown once**, injected clock/rng, atomic `data/agent-keys.json`); auth chokepoint
+(server.ts authMiddleware) extended — session token = unchanged full-power fast path, `x4fk_`
+keys → verify(hash/expiry/revocation) + `scopeAllows` deny-by-default; scopes **read / write /
+deploy** (key management itself is session-token-only for every scope — escalation guard);
+**user-picked lifetime 1h/24h/7d/30d/never** (Ken's requirement); endpoints
+`GET/POST /api/agent/keys` + `/revoke`; AgentBridge **AGENT KEYS** tab (create form, one-time
+reveal+copy, table with scope/expiry/last-used/revoke); extension command
+`x4forge.createAgentKey` (mints a key against the owned sidecar → clipboard — closes the B41
+token-discoverability gap). Extension icon added (`icon.png`, generated); VSIX → **0.0.2**.
+
+**Validation:** oracle `agent-keys-selftest` **18/18** (incl. expiry at +2h dead / +59m alive,
+revoke, prune, full scope matrix, persistence with no plaintext in file); tsc/lint/precommit 0;
+**e2e 19/19** (auth path changed, session token unaffected); sweep **79/81** vs the staged
+sidecar (agent-keys swept; same 2 env-reference reds). Terminal security matrix on the staged
+prod sidecar: read GET 200 / POST 403 · write compile 200 / deploy 403 / key-mint 403 · revoked
+401 · garbage 401 · audit updates — all correct. **LIVE IN ANTIGRAVITY (VSIX 0.0.2, sidecar
+:62577):** reloaded window → 0.0.2 active; AGENT KEYS tab rendered; created a key via the UI
+with the lifetime dropdown; one-time reveal + list; an exact key used from a plain terminal
+(read 200, compile 403); revoked in the UI → same token 401 "agent key revoked" + row greyed.
+**Parity passes:** 19/19 major-surface engines 200 (oracle count 81); Expert-mode visual pass
+(toolbox, canvas, generated-MD editor, Wares/Libraries configurator, AgentBridge 4 tabs);
+full template→edit→compile→validate→package workflow. Main untouched; no git mutation.
+**Open (Ken):** commit this branch; port the auth change + B41 fixes onto main.
+**Suggested commit title:** "B42: agent key manager — named/scoped/expiring keys
+(sha256-at-rest, deny-by-default scopes, UI tab + extension command) + ext icon 0.0.2".
+
+### ✅ B41 · VS CODE / ANTIGRAVITY EXTENSION PoC (2026-07-15 — worktree branch `claude/x4-forge-vscode-poc-806ef5`; VERIFIED in BOTH IDEs; market experiment still owed to human beta)
+
+**IN-IDE UPDATE (2026-07-15, Ken authorized both installs):** installed + launched + drove a
+full mod build in **desktop VS Code 1.120.0 AND Antigravity IDE**. Each: VSIX installs, the
+`x4forge.autoOpen` setting opens the studio, the real Forge UI renders in the webview over a
+per-IDE managed sidecar on its own dynamic loopback port (:62647 VS Code, :52030 Antigravity),
+and the representative workflow (template load → Mod-Meta rename typed-edit → compile 5 files →
+project/validate ok:true 0 errors → package) completes. Antigravity's Workspace Trust gate
+proven (extension disabled until trusted, per the manifest). Two clients of one sidecar proven
+by the webview live-adopting a mod built via the browser pane. Both installs + sidecars ran
+concurrently without touching the standalone :3000 stack (hash `dac6d106bd45f2bd` unchanged).
+Added for this: `onStartupFinished` activation + `x4forge.autoOpen` (opt-in, trusted-only).
+Note: Ken committed the main B34–B37 delta mid-session as `ff38642` (his own action; this fork
+untouched). **VS Code = VERIFIED · Antigravity = VERIFIED · market experiment = still owed to a
+human beta (BETA-TEST-SCRIPT.md).**
+
+### (original close) ◐→✅ B41 · VS CODE / ANTIGRAVITY EXTENSION PoC (2026-07-15 — worktree branch `claude/x4-forge-vscode-poc-806ef5`)
+
+Market-validation spike (NOT a conversion): the existing React app rendered in a VS Code
+webview (full-bleed iframe to a loopback origin) over the existing Express backend as a
+managed sidecar — `node dist/server.cjs`, NODE_ENV=production, OS-assigned loopback port,
+per-session env token, own X4_STATE_DIR. Attach-first: an already-running Forge answering
+the agent-schema fingerprint is attached to and never managed. One core, two shells; zero
+core imports from the shell. New `vscode-extension/` (controller ~400 lines, staging +
+packaging scripts, README, beta-test script). Plan: `docs/plans/2026-07-15-vscode-extension-poc.md`.
+**Faithfulness:** built on 8050e03 + the main checkout's 33-file uncommitted B34–B37 delta,
+copied byte-identically (0/33 MD5 mismatches); main checkout never written.
+
+**Found + fixed (all latent, surfaced by packaging the product for real):**
+1. Prod static serving never injected `__STUDIO_API_TOKEN__` (express.static served
+   index.html before the injecting catch-all) → every packaged-build UI call would 401.
+   `server.ts` `{index:false}` [REPRODUCED pre/post].
+2. `db.ts` `createRequire(import.meta.url)` → `createRequire(undefined)` in the esbuild CJS
+   bundle → optional better-sqlite3 NEVER loaded from dist. Fixed via `__filename` preference
+   [REPRODUCED: db-selftest available:false→true].
+3. e2e localhost family race: vite binds whichever family `localhost` resolves to per boot;
+   Playwright's request context pins ::1 → ECONNREFUSED killed 19/19. Pinned 127.0.0.1 in
+   playwright.config.ts + tests/e2e/ephemeral.ts [REPRODUCED red→green same code].
+
+**Gates (worktree, host):** tsc 0 · lint 0 · precommit 0 · sweep **78/80** vs the staged
+prod sidecar (2 reds = reference oracles needing a configured game install — mechanism cited,
+same code 80/80 on the configured live server at B37) · **e2e 19/19 (45s)** ·
+`project/validate` ok:true 0 errors · build 0 · graphify updated.
+**Representative workflow proven in the real rendered UI** (sidecar origin, DOM-verified,
+0 console errors; screenshot channel timed out 2/2 — same banked B37 capture failure):
+open workspace → Beginner Customize edit round-trips to server (hash flip) → Validate green
+→ compile 5 files → package file set written + zipped (scratch). Failure paths proven:
+EADDRINUSE exit-1 surfacing, attach-probe impostor truth table, no-node error path.
+**VSIX:** `vscode-extension/x4-forge-studio-0.0.1.vsix` — 2092 files / 16.77 MB, contents
+inspected (native module in, zero maps/secrets/config/source). Staged bits boot-proven as packaged.
+**Deliberately not done:** any install (Ken write gate), Antigravity run (separate result),
+any main-checkout write, any game/mod write, any git mutation.
+**Residuals:** baked default machine paths ship in server.cjs (pre-existing product defaults
+— genericize before tester distribution) · sidecar writes data/ into cwd (X4_DATA_DIR seam
+would fix) · port the 4 fixes to main. Evidence: `vscode-extension/evidence/VALIDATION.md`.
+**Suggested commit title:** "B41: VS Code extension PoC — webview shell + managed sidecar
+(VSIX packaged; prod token-injection + db bundle fixes; e2e 127.0.0.1 pinning)".
+
 ### ✅ VALIDATOR GAP CLOSURE PASS (2026-07-08 — Claude/Cowork session; five logged gaps closed + stage-1 server split)
 
 All five items shipped as house-pattern engines (pure lib + oracle + public GET), wired into
@@ -598,6 +690,93 @@ damage-signature enumeration (findstr for the generated header) bounded the blas
 advanced + copies agree" is not verification of CORRECTNESS — only comparison against the pre-action source
 is; (3) I celebrated a green wall I had just painted myself. TOOLS — the P0 guard above; plus deploy-verify
 should add a "content fidelity" stage: hash imported source vs emitted manifest for passthrough files.
+
+### ✅ BACKLOG-COMPLETION RECONCILE (2026-07-13, workflow v3, VERIFIED): the queued backlog is genuinely Ken-gated-only
+A stop-hook check fired claiming buildable work remained (quoting a stale SESSION-HANDOFF "remaining
+buildable: B22s2 · B31 · B11 · B13b2 · B28-residual · B14" line). RECONCILED against the LIVE BACKLOG:
+every one of those is closed (B22s2 ✅ mid-canvas stamping · B31 ✅ ephemeral e2e · B11 ✅ reconciled-already-
+existed · B13b2 ✅ · B28-residual ◐ reclassified "no buildable Forge unit remains" · B14 ✅ all-lines-
+Ken/game-gated). Full-file scan: every `spec'd`/`in_progress` unit is closed; all remaining items are
+Ken-gated (B8/B23 unpark, B18/B19/B20/B24s2 in-game, B14/B17 decisions) or explicitly OPTIONAL-DEPTH notes.
+**The one candidate agent-buildable item — B10's xsdParser `structural`-category rider — was reconciled and
+found ENVIRONMENT-GATED:** its acceptance (census/palette stop showing param/text/owner/position as actions)
+needs the live game schema + corpus (Ken's install); the census filters by `schemaLibrary.actions`
+(server.ts ~7552) built from the classifier; and the symptom is already handled downstream (B10s1 curated
+kind 'other'). A schema-layer change with palette/template/validation blast radius, deserving fresh context
+— SPECIFIED, not rushed. **MACHINE-STATE EVENT:** mid-reconcile the dev server (:3000/:3001) went unreachable
+(refused → timeout, watchdog silent 20s+); live validation frozen per the operator protocol (not restarted
+— Ken's environment). *Verified: full BACKLOG.md read; census/schema wiring traced (actionCensus filters by
+actionTags←schemaLibrary.actions←classifyFromGroup); server-down confirmed by 4× poll. Records corrected:
+SESSION-HANDOFF authoritative-state block added (supersedes stale per-pause lines); B10 entry promoted to an
+explicit SPEC with blast-radius readers named.*
+**AAR (triggers: stop-hook claim corrected by reconcile; machine-state change):** SUSTAIN — reconciling the
+CLAIM against the live records instead of the cited stale doc is the workflow's whole point; the "read
+BACKLOG not the handoff snapshot" instinct caught a false-positive. IMPROVE — SESSION-HANDOFF accretes a
+"remaining buildable" line per pause and never prunes them, so a stale one misled an automated check; fixed
+by an authoritative top block, but the durable fix is to OVERWRITE (not append) the state section each close.
+TOOLS — the dev server has no agent-visible liveness signal until a call fails; a cheap `/api/health` poll at
+session-critical moments would catch a mid-session death sooner. **Highest-risk evidenced weakness:**
+SESSION-HANDOFF's append-not-overwrite drift — it's now large enough that stale lines contradict the current
+state; enforce the operator protocol's "overwrite each close" on the state section specifically.
+
+### ◐ B34 UI COMPILER TRUTH/PARITY REPAIR (2026-07-14, workflow v3, PARTIAL — Forge-side VERIFIED, in-game EXPERIENCE gate open)
+Second-pass review reproduced the defect instead of trusting the first analysis: package
+`generateUILuaScript()` emitted widget metadata plus an EMPTY `onShowMenu`, UIBuilder previewed a different
+fuller program, and Canvas called graph-only heuristics `COMPILER`. It also found a stronger product lie:
+the "HUD Button" beginner template promised a visible HUD button with no construction/open path.
+**Built:** one shared package/preview emitter now uses the in-game-proven AI Influence lifecycle and APIs
+present in the unpacked X4 9.00 corpus: lazy Helper, deferred/idempotent registration, namespaced
+`RegisterEvent`, queued early-open retry, `OpenMenu`, `onShowMenu`, `createFrameHandle`, fTable rows, and
+`frame:display()`. All nine designer widget types emit real Helper cells; excluded widgets do not ship;
+strings escape safely. Template renamed honestly to Standalone Menu and alone opts into one-shot auto-open.
+Mod Doctor's `ui.lua_scaffold` retired. App's existing `/api/agent/compile` diagnostics now drive the Canvas
+`PACKAGE: CHECK/OFFLINE/ERRORS/WARN/OK` badge; checking/offline can never be green.
+**Evidence:** UI compiler oracle **11/11** (including static X4 analysis clean and negative package-status
+paths) · `npm run typecheck` PASS · oracle sweep **77/77** · full e2e **12/12** · production build PASS ·
+authenticated live compile of `Player_Elite_Escort`: 5 files, 4,031-byte Lua, 0 errors/warnings, frame +
+display + statusbar + open-event + retry present, scaffold absent · rendered browser: preview same 4,031
+bytes/markers and `PACKAGE: OK`, no console errors · e2e left live workspace unchanged (3 nodes/2 links/3
+widgets). Graphify refreshed: 1508 nodes/3500 edges/83 communities.
+**◐ remaining gate:** deploy a scratch generated Standalone Menu (never the real mod), load X4, confirm the
+one-shot menu renders/button event works/no debuglog errors. Persistent non-modal HUD overlay semantics were
+never implemented and remain out of B34 scope. **AAR:** the first review missed App's existing package poll;
+resource/caller reconciliation prevented redundant validation infrastructure. Preview/template drift is a
+systemic risk when copy and package are separate; single emitter + parity oracle is the durable control.
+Suggested commit: `B34: make visual UI compile match preview and package diagnostics`.
+
+### ✅ B35 SEARCHABLE VIRTUALIZED NODE CATALOG (2026-07-14, workflow v3, VERIFIED)
+Replaced the NODES sidebar's eager full-vocabulary render with one schema-backed catalog shared by Sidebar
+and Canvas quick-add. The catalog ranks the measured B21 top actions plus starter nodes, excludes the eight
+reproduced structural child tags from Curated, preserves the complete vocabulary through All/search, and
+adds bounded intent aliases, favorites, recents, and existing type filters. `VirtualizedNodeToolbox` renders
+a fixed-height window instead of mounting the full schema.
+**Second-pass corrections:** fresh-eyes review found favorites could outrank exact search; relevance now owns
+non-overlapping score bands and oracle coverage. The first focused e2e failed because `teleport_object` was a
+synthetic humanizer example, not a real schema element; the test now uses authenticated long-tail tag
+`create_god_factory`. [REPRODUCED] fixture defect, not product defect.
+**Evidence:** node-toolbox selftest **14/14** · `npm run typecheck` PASS · runtime oracle sweep **78/78** ·
+focused e2e **2/2** · full verdict-parsed e2e **14/14** · rendered browser: Curated 66 / All 1,217 results,
+both with 8 mounted rows; intent `money` found Reward Player; `param` searchable in All and absent from
+Curated · production build PASS · precommit PASS · diff check PASS · live workspace unchanged
+(`Player_Elite_Escort`, 3 nodes/2 links/3 widgets) · graphify refreshed to 1,533 nodes/3,549 edges/85
+communities. **Capability delta:** shared ranked/searchable/virtualized node discovery now exists; upstream
+structural classification remains the already-recorded B10 rider. Suggested commit:
+`B35: replace eager schema toolbox with ranked virtualized catalog`.
+
+### ✅ B36 ONE READINESS EVIDENCE LADDER (2026-07-14, workflow v3, VERIFIED)
+Added one global Graph valid → Package valid → Deployed → Seen in game → Experience confirmed model and
+clickable ladder. It adapts the existing graph validator, B34 package diagnostics, deploy metadata, B19s2
+server watcher verdict, and an explicit user confirmation tied to one exact deploy. Successful deploy
+metadata now includes the sanitized workspace content hash; later edits turn Deploy/Seen/Experience stale.
+Checking/local compiler fallback cannot green Package; staging-only is not Deployed; no-log/stale/not-seen/
+runtime-error/clean remain distinct. Package opens Package Diagnostics; later stages open Playtest.
+**Second-pass fixes:** failed byte/doctor deploy attempts previously overwrote `lastDeployInfo`; they no longer
+become evidence. Old/manual log markers could pass Seen without a current matching deploy; Seen now depends
+on successful hash-matching deploy proof. **Evidence:** readiness oracle **21/21** · typecheck PASS · sweep
+**79/79** · focused e2e **2/2** · full e2e **16/16** · browser verified truthful live no-deploy state,
+evidence expansion, Package/Playtest routing, and disabled experience confirmation · build/precommit/diff
+check PASS · live workspace unchanged 3/2/3 · graphify 1,559 nodes/3,610 edges/94 communities. Deploy history
+remains in-memory; restart honestly clears proof. Suggested commit: `B36: unify graph-to-game readiness evidence`.
 
 ### ◐ B24s2 IMPLEMENTED (2026-07-13, workflow v3, PARTIAL — code VERIFIED, deploy Ken-gated): the FORGE-STATE probe generator
 The read-only companion to B24s1's Inspector, per ADR-F3. **Built:** `src/lib/forgeProbe.ts` —
@@ -4784,4 +4963,3 @@ validation give FALSE confidence; log + fix.
 4. **aiscript validation looks shallow.** Validating an `.aiscript`/order file (kind="aiscript") returned
    `definedCues:0` and no aiscript-specific findings — suggests basic XML parse rather than full `aiscripts.xsd`
    validation (orders/params/refs). CONFIRM aiscript files get true aiscripts.xsd validation; if not, add it.
-

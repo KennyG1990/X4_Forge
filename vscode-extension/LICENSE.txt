@@ -1,0 +1,3 @@
+Proprietary — X4 Forge proof-of-concept build for private local testing only.
+Not for redistribution or marketplace publication. All rights reserved by the
+X4 Forge project owner.

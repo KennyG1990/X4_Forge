@@ -4,6 +4,33 @@
 > Sessions START here. Closing an item MOVES it into ROADMAP.md as a dated, verification-cited entry.
 > States: `spec'd` · `in_progress` · `blocked` · `parked`. Owner is whoever picks it up (agent or Ken).
 
+## P0 — Active (this worktree branch)
+
+### B41 · VS Code / Antigravity extension PoC — ✅ VERIFIED (both IDEs) 2026-07-15 → ROADMAP
+Install-tested LIVE in desktop VS Code AND Antigravity (Ken authorized both installs): VSIX
+installs, autoOpen launches the studio, the real UI renders in the webview over a managed
+per-IDE sidecar (dynamic ports :62647 / :52030), representative edit→validate→compile→package
+completes in each, Workspace Trust gate proven in Antigravity. VSIX 2092 files/16.77MB, inspected
+clean. Standalone :3000 untouched. Evidence: `vscode-extension/evidence/VALIDATION.md`.
+**Open (Ken, not blocking the tech result):** private-beta cohorts + go/no-go
+(`vscode-extension/BETA-TEST-SCRIPT.md`); commit-of-this-branch decision.
+**Residuals (bounded):** genericize server.ts baked default paths before ANY tester
+distribution (13 machine literals ship in every build); optional X4_DATA_DIR seam so the
+sidecar stops writing data/ into its install dir; port to main the 3 product/infra fixes
+(prod token injection, db createRequire, e2e 127.0.0.1 pinning) — main already committed the
+B34–B37 delta this session as ff38642.
+
+### B42 · Agent key manager (scoped, expiring keys) + parity passes + ext icon — ✅ VERIFIED 2026-07-15 → ROADMAP
+Named scoped expiring agent keys (read/write/deploy · 1h/24h/7d/30d/never · sha256-at-rest ·
+one-time reveal · revoke · audit), AgentBridge AGENT KEYS tab, extension "Create Agent Key"
+command, key-mgmt session-token-only. Oracle 18/18; e2e 19/19; sweep 79/81; full security
+matrix + full key lifecycle proven LIVE in Antigravity (create→reveal→terminal use→scope
+403→revoke→terminal 401). Parity: 19/19 surface engines 200 + visual panel passes. Icon
+shipped; VSIX 0.0.2. Evidence: `vscode-extension/evidence/VALIDATION.md`.
+**Open (Ken):** commit-of-branch decision; port the auth change + fixes to main. **Residual
+(bounded):** attach-mode has no session credential, so the "Create Agent Key" command only
+works against an owned sidecar (documented in the command's message).
+
 ## P1 — Safety / architecture
 
 ### B1 · Workspace sync-trust slice — ✅ CLOSED 2026-07-09 → ROADMAP (badge verified live; residual: badge clipping polish → B13)
@@ -89,6 +116,21 @@ ships welcome-message to a running game on on-screen guidance alone.
 ### B33 · RESET → template picker — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 (dead starter cue removed from BLANK_WORKSPACE; RESET→picker proven live; sweep 75/75, e2e 12/12)
 
+### B37 · Beginner and Expert workspace shell — `in_progress` (implementation green; screenshot evidence open)
+Full acceptance contract: `docs/plans/2026-07-14-beginner-expert-workspace.md`. Reuses the real editors,
+readiness evidence, compile confirmation, and exact-deploy experience gate; no parallel compiler or deploy path.
+Typecheck/sweep 80/80/e2e 19/19/build/precommit/live interaction all pass. `PARTIAL` only because the
+in-app browser screenshot transport timed out on four captures across two sessions, including a 400×300 crop;
+DOM/interaction/1280 geometry and a fresh zero-console-error check are evidenced. The crop failure rules out image
+size and isolates the open gate to the in-app tab's screenshot channel.
+
+### B38 · Playtest Deploy and Prove — `SPECIFIED` (implementation waits behind the B34-B37 commit point)
+Consolidate the existing deploy-verify, watcher verdict, cue liveness, FORGE-WATCH/FORGE-STATE, source
+navigation, and artifact surfaces into one deterministic proof session. Fix the reproduced blank-path Playtest
+deploy bug (it currently omits the visible workspace), and let file-load evidence prove data-only mods are seen.
+Exact current-workspace/game-target confirmation is mandatory; validation uses a purpose-built scratch workspace,
+not an unsafe automatic clone. Full acceptance record: `docs/plans/2026-07-15-deploy-and-prove.md`.
+
 ### B20 · TTFM instrumentation — ✅ CLOSED 2026-07-11 → ROADMAP (oracle 9/9, sweep 68/68, e2e 12/12;
 report panel deferred until the first real funnel completes)
 
@@ -129,8 +171,18 @@ optional, read-only, zero impact absent; bridge = lessons only.
 ## P4 — Depth / UX long tail
 
 ### B10 · curated action semantics — slice 1 ✅ CLOSED 2026-07-11 → ROADMAP (**91.5%** of observed
-usage curated; oracle 50/50). Remaining (optional depth, demand-driven): tags beyond the top 52; the
-xsdParser `structural` category rider (B21 close) so census/palette stop calling child elements actions.
+usage curated; oracle 50/50). Remaining = OPTIONAL-DEPTH / DEMAND-DRIVEN NOTES (NOT queued agent work):
+- **tags beyond the top 52** — demand-driven; the top 52 already cover 90% of real usage.
+- **xsdParser `structural`-category rider** (B21 worst-pick) — `classifyFromGroup` labels structural
+  child-elements (param/text/owner/position/rotation/safepos/match/replace) `'action'`, so they enter
+  `schemaLibrary.actions` and the census's `actionTags` filter (server.ts ~7552). Fix = add a `structural`
+  category; census/palette/explain exclude it. **Reconciled 2026-07-13 — why it's NOT force-built:** (1) its
+  ACCEPTANCE (live census/palette stop showing these) needs the LIVE game schema + corpus loaded = Ken's
+  configured install, so not cleanly agent-verifiable here; (2) it's a schema-layer change feeding
+  palette/templates/validation — real blast radius, deserves fresh context, not a marathon tail;
+  (3) the user-visible symptom is ALREADY handled (B10s1 curated these kind 'other' in mdSemantics). SPEC'd
+  for a future session with the schema loaded. Blast-radius readers to check first: `schemaLibraryToTemplates`
+  (schemaTypes.ts:81), the action/control_flow split (xsdParser.ts:291), census `actionTags` (server.ts:7552).
 
 ### B11 · aiscripts visually editable — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED — ALREADY EXISTED; stale entry)
 Reconcile + live drill proved the full chain has existed since #65 + the AIScriptEditor: guarded

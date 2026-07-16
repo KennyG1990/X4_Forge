@@ -49,6 +49,8 @@ import ObjectBrowser from './ObjectBrowser';
 import type { ModBlueprint } from '../lib/modBlueprint';
 import { MOD_PATTERNS, stampPatternIntoWorkspace } from '../lib/modPatterns';
 import type { ArchitectStepView } from './BlueprintPanel';
+import VirtualizedNodeToolbox from './VirtualizedNodeToolbox';
+import type { DiagnosticsScope } from './DiagnosticsCenter';
 
 interface SidebarProps {
   width?: number;
@@ -127,6 +129,7 @@ interface SidebarProps {
 
   diagnostics: PackageDiagnostic[];
   diagnosticSource: 'checking' | 'package' | 'local';
+  diagnosticsScope?: DiagnosticsScope;
   onSelectSnapshot?: (snapWS: ModWorkspace | null) => void;
   autoSaveEnabled?: boolean;
   setAutoSaveEnabled?: (val: boolean) => void;
@@ -192,6 +195,7 @@ export default function Sidebar({
   handleDeclineAction,
   diagnostics,
   diagnosticSource,
+  diagnosticsScope,
   onSelectSnapshot,
   autoSaveEnabled,
   setAutoSaveEnabled
@@ -291,10 +295,6 @@ export default function Sidebar({
     });
     return Array.from(byTag.values());
   }, [schemaTemplates]);
-
-  const filteredTemplates = allTemplates.filter(
-    t => nodeFilter === 'all' || t.type === nodeFilter
-  );
 
   const loadSchemaConfig = React.useCallback(async () => {
     try {
@@ -659,6 +659,7 @@ export default function Sidebar({
               setAutoSaveEnabled={setAutoSaveEnabled}
               diagnostics={diagnostics}
               diagnosticSource={diagnosticSource}
+              requestedScope={diagnosticsScope}
               onOpenCues={() => setActiveTab('cues')}
               aiEnabled={aiEnabled}
             />
@@ -698,35 +699,7 @@ export default function Sidebar({
                 <Wrench className="w-3.5 h-3.5 text-cyan-400" />
                 TOOLBOX (CLICK TO CREATE)
               </h3>
-              <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
-                {filteredTemplates.map((template, idx) => {
-                  let badgeColors = 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-                  if (template.type === 'cue') badgeColors = 'bg-purple-500/10 text-purple-400 border-purple-500/20';
-                  if (template.type === 'event') badgeColors = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
-                  if (template.type === 'condition') badgeColors = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
-                  if (template.type === 'action') badgeColors = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => onAddNode(template)}
-                      className="w-full text-left p-1.5 rounded bg-black/20 border border-white/5 hover:border-cyan-500/50 transition-all flex items-center justify-between group cursor-pointer"
-                    >
-                      <div>
-                        <div className="text-xs font-semibold text-slate-200 group-hover:text-white transition-colors leading-none">
-                          {template.label}
-                        </div>
-                        <div className="text-[9.5px] font-mono text-slate-500 mt-1">
-                          &lt;{template.xmlTag}&gt;
-                        </div>
-                      </div>
-                      <span className={`text-[8.5px] font-mono border px-1 py-0.5 rounded leading-none shrink-0 ${badgeColors}`}>
-                        {template.type.substring(0, 4).toUpperCase()}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <VirtualizedNodeToolbox templates={allTemplates} nodeType={nodeFilter} onAddNode={onAddNode} />
             </div>
           </div>
         )}

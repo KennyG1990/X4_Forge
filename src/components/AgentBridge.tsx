@@ -18,7 +18,9 @@ import {
   ChevronDown,
   ChevronUp,
   X,
-  Zap
+  Zap,
+  KeyRound,
+  Trash2
 } from 'lucide-react';
 import { ModWorkspace, NODE_TEMPLATES, MDNode } from '../types';
 
@@ -83,7 +85,69 @@ export default function AgentBridge({
   localVersion,
   setLocalVersion
 }: AgentBridgeProps) {
-  const [activeTab, setActiveTab] = useState<'docs' | 'status' | 'execute'>('docs');
+  const [activeTab, setActiveTab] = useState<'docs' | 'status' | 'execute' | 'keys'>('docs');
+
+  // B42: agent-key manager state (list is safe records only — never plaintext keys).
+  interface AgentKeyRow {
+    id: string; label: string; scope: 'read' | 'write' | 'deploy';
+    createdAt: number; expiresAt: number | null; lastUsedAt: number | null;
+    useCount: number; revokedAt: number | null; hashPrefix: string;
+  }
+  const [agentKeys, setAgentKeys] = useState<AgentKeyRow[]>([]);
+  const [keysError, setKeysError] = useState<string>('');
+  const [newKeyLabel, setNewKeyLabel] = useState<string>('');
+  const [newKeyScope, setNewKeyScope] = useState<'read' | 'write' | 'deploy'>('write');
+  const [newKeyTtl, setNewKeyTtl] = useState<string>('7d');
+  const [createdKey, setCreatedKey] = useState<{ token: string; label: string } | null>(null);
+
+  const loadAgentKeys = useCallback(async () => {
+    try {
+      const r = await fetch('/api/agent/keys');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setAgentKeys(Array.isArray(d.keys) ? d.keys : []);
+      setKeysError('');
+    } catch (e) {
+      setKeysError(`Could not load keys: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'keys') void loadAgentKeys();
+  }, [activeTab, loadAgentKeys]);
+
+  const createAgentKey = useCallback(async () => {
+    setKeysError('');
+    try {
+      const r = await fetch('/api/agent/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: newKeyLabel.trim(), scope: newKeyScope, ttl: newKeyTtl }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setCreatedKey({ token: d.token, label: d.record?.label || newKeyLabel });
+      setNewKeyLabel('');
+      await loadAgentKeys();
+    } catch (e) {
+      setKeysError(e instanceof Error ? e.message : String(e));
+    }
+  }, [newKeyLabel, newKeyScope, newKeyTtl, loadAgentKeys]);
+
+  const revokeAgentKey = useCallback(async (id: string) => {
+    setKeysError('');
+    try {
+      const r = await fetch('/api/agent/keys/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+      await loadAgentKeys();
+    } catch (e) {
+      setKeysError(e instanceof Error ? e.message : String(e));
+    }
+  }, [loadAgentKeys]);
   const [copiedTextId, setCopiedTextId] = useState<string | null>(null);
 
   // Surgical Console states
@@ -564,6 +628,17 @@ export default function AgentBridge({
           <Terminal className="w-3.5 h-3.5 inline mr-1.5" />
           Live State JSON
         </button>
+        <button
+          onClick={() => setActiveTab('keys')}
+          className={`flex-1 py-1.5 rounded font-mono text-[11px] font-bold transition-all cursor-pointer ${
+            activeTab === 'keys'
+              ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <KeyRound className="w-3.5 h-3.5 inline mr-1.5" />
+          Agent Keys
+        </button>
       </div>
 
       {/* View area panel content */}
@@ -854,6 +929,155 @@ export default function AgentBridge({
         {/* -----------------------------------------------------
             VIEW TAB: RAW STATE JSON VIEWER
             ----------------------------------------------------- */}
+        {/* -----------------------------------------------------
+            VIEW TAB: AGENT KEYS (B42 — named, scoped, expiring)
+            ----------------------------------------------------- */}
+        {activeTab === 'keys' && (
+          <div className="space-y-4 font-sans text-slate-300 text-[11px]">
+            <div className="rounded-lg bg-white/[0.02] border border-white/5 p-3 leading-relaxed">
+              <h4 className="text-white font-bold mb-1 font-mono flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                AGENT KEYS
+              </h4>
+              <p className="text-slate-400">
+                Issue a personal key per agent (Codex, Claude, a script) instead of sharing the studio
+                session token. Keys are scoped, expire on the schedule you pick, and can be revoked
+                one at a time. The key value is shown <span className="text-amber-300 font-bold">once</span> —
+                only its hash is stored.
+              </p>
+            </div>
+
+            {/* Create form */}
+            <div className="rounded-lg bg-white/[0.02] border border-white/5 p-3 space-y-2">
+              <div className="font-mono text-[10px] text-slate-400 font-bold">CREATE A KEY</div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <input
+                  data-testid="agent-key-label"
+                  value={newKeyLabel}
+                  onChange={(e) => setNewKeyLabel(e.target.value)}
+                  placeholder="Label (e.g. codex-agent)"
+                  className="flex-1 min-w-[140px] bg-black/40 border border-white/10 rounded px-2 py-1.5 text-slate-200 font-mono text-[11px] outline-none focus:border-amber-500/50"
+                />
+                <select
+                  data-testid="agent-key-scope"
+                  value={newKeyScope}
+                  onChange={(e) => setNewKeyScope(e.target.value as 'read' | 'write' | 'deploy')}
+                  className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-slate-200 font-mono text-[11px] outline-none"
+                  title="read = GET only · write = + workspace/compile/validate/package · deploy = full API power"
+                >
+                  <option value="read">scope: read</option>
+                  <option value="write">scope: write</option>
+                  <option value="deploy">scope: deploy</option>
+                </select>
+                <select
+                  data-testid="agent-key-ttl"
+                  value={newKeyTtl}
+                  onChange={(e) => setNewKeyTtl(e.target.value)}
+                  className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-slate-200 font-mono text-[11px] outline-none"
+                  title="How long the key stays valid"
+                >
+                  <option value="1h">expires: 1 hour</option>
+                  <option value="24h">expires: 24 hours</option>
+                  <option value="7d">expires: 7 days</option>
+                  <option value="30d">expires: 30 days</option>
+                  <option value="never">expires: never</option>
+                </select>
+                <button
+                  data-testid="agent-key-create"
+                  onClick={() => void createAgentKey()}
+                  disabled={!newKeyLabel.trim()}
+                  className="px-3 py-1.5 rounded font-mono text-[11px] font-bold bg-amber-600/20 text-amber-300 border border-amber-500/30 hover:bg-amber-600/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Generate
+                </button>
+              </div>
+              <p className="text-slate-500 text-[10px]">
+                read = inspect only · write = edit/compile/validate/package (no deploys, no spend) ·
+                deploy = everything. Key management itself always requires the studio itself.
+              </p>
+            </div>
+
+            {/* One-time reveal */}
+            {createdKey && (
+              <div data-testid="agent-key-reveal" className="rounded-lg bg-amber-500/10 border border-amber-500/40 p-3 space-y-2">
+                <div className="font-mono text-[10px] text-amber-300 font-bold">
+                  KEY FOR “{createdKey.label}” — COPY IT NOW, IT WILL NOT BE SHOWN AGAIN
+                </div>
+                <div className="flex gap-2 items-center">
+                  <code className="flex-1 break-all bg-black/50 rounded px-2 py-1.5 text-amber-200 font-mono text-[11px]">
+                    {createdKey.token}
+                  </code>
+                  <button
+                    onClick={() => { void navigator.clipboard?.writeText(createdKey.token); }}
+                    className="px-2 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10 cursor-pointer"
+                    title="Copy key"
+                  >
+                    <Copy className="w-3.5 h-3.5 text-amber-300" />
+                  </button>
+                  <button
+                    onClick={() => setCreatedKey(null)}
+                    className="px-2 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10 cursor-pointer"
+                    title="Dismiss (key stays valid)"
+                  >
+                    <X className="w-3.5 h-3.5 text-slate-300" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-amber-200/70 font-mono">
+                  Use: <code>Authorization: Bearer {'<key>'}</code> against this studio’s /api.
+                </p>
+              </div>
+            )}
+
+            {keysError && (
+              <div className="rounded border border-red-500/40 bg-red-500/10 text-red-300 px-3 py-2 font-mono text-[11px]">
+                {keysError}
+              </div>
+            )}
+
+            {/* Key table */}
+            <div className="rounded-lg bg-white/[0.02] border border-white/5 p-3">
+              <div className="font-mono text-[10px] text-slate-400 font-bold mb-2">
+                ISSUED KEYS ({agentKeys.length})
+              </div>
+              {agentKeys.length === 0 ? (
+                <div className="text-slate-500">No agent keys yet — generate one above.</div>
+              ) : (
+                <div className="space-y-1.5" data-testid="agent-key-list">
+                  {agentKeys.map((k) => {
+                    const expired = k.expiresAt !== null && Date.now() >= k.expiresAt;
+                    const dead = k.revokedAt !== null || expired;
+                    return (
+                      <div key={k.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded border px-2 py-1.5 font-mono text-[10px] ${dead ? 'border-white/5 bg-black/20 text-slate-600' : 'border-white/10 bg-black/30 text-slate-300'}`}>
+                        <span className={`font-bold ${dead ? '' : 'text-white'}`}>{k.label}</span>
+                        <span className={`px-1.5 rounded border ${k.scope === 'deploy' ? 'border-red-500/40 text-red-300' : k.scope === 'write' ? 'border-cyan-500/40 text-cyan-300' : 'border-emerald-500/40 text-emerald-300'}`}>{k.scope}</span>
+                        <span>#{k.hashPrefix}</span>
+                        <span>
+                          {k.revokedAt !== null ? 'REVOKED'
+                            : k.expiresAt === null ? 'never expires'
+                            : `${expired ? 'EXPIRED' : 'expires'} ${new Date(k.expiresAt).toLocaleString()}`}
+                        </span>
+                        <span className="text-slate-500">
+                          {k.lastUsedAt ? `last used ${new Date(k.lastUsedAt).toLocaleString()} · ${k.useCount}×` : 'never used'}
+                        </span>
+                        {!dead && (
+                          <button
+                            data-testid={`agent-key-revoke-${k.label}`}
+                            onClick={() => void revokeAgentKey(k.id)}
+                            className="ml-auto px-1.5 py-0.5 rounded border border-red-500/30 text-red-300 hover:bg-red-500/10 cursor-pointer flex items-center gap-1"
+                            title="Revoke this key immediately"
+                          >
+                            <Trash2 className="w-3 h-3" /> revoke
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {activeTab === 'status' && (
           <div className="space-y-4">
             <div className="p-3 bg-slate-900/60 border border-white/5 rounded-lg space-y-1 text-[11px] font-sans text-slate-400 leading-normal">

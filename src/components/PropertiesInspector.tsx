@@ -45,6 +45,7 @@ interface PropertiesInspectorProps {
   handleLabelChange: (newLabel: string) => void;
   handlePropChange: (key: string, value: unknown) => void;
   handleSendCuePackageToAIGuide: () => void;
+  showAdvancedActions?: boolean;
   setWorkspaceView?: (view: 'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy') => void;
 }
 
@@ -59,6 +60,7 @@ export default function PropertiesInspector({
   handleLabelChange,
   handlePropChange,
   handleSendCuePackageToAIGuide,
+  showAdvancedActions = true,
   setWorkspaceView
 }: PropertiesInspectorProps) {
   // Inspector-local UI state (moved in with the block — used nowhere else).
@@ -120,7 +122,7 @@ export default function PropertiesInspector({
                                 : 'Wiring: not currently wired into a cue.'}
                       </div>
                       {/* T4.3 "Bind to UI (Lua)" — for a cue, the deterministic two-way Lua↔MD glue (verified snippets). */}
-                      {x.role === 'cue' && (() => {
+                      {showAdvancedActions && x.role === 'cue' && (() => {
                         const bind = luaMdBinding(selectedNode);
                         if (!bind) return null;
                         return (
@@ -358,7 +360,7 @@ export default function PropertiesInspector({
               )}
 
               {/* AI Copilot Cue Editor */}
-              {selectedNode && (
+              {showAdvancedActions && selectedNode && (
                 <div className="mt-4 border-t border-cyan-500/10 pt-3 bg-gradient-to-r from-emerald-500/5 to-cyan-500/5 hover:from-emerald-500/10 hover:to-cyan-500/10 border border-emerald-500/10 rounded p-2.5 flex flex-col gap-2 transition-all">
                   <div className="flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />

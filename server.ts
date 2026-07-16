@@ -76,6 +76,9 @@ import { runVanillaUiReferenceSelftest, profileMenuLua, deriveSchemaEvidence } f
 import { runSimulateSelftest, simulateWorkspace } from "./src/lib/mdSimulate";
 import { runPortSemanticsSelftest } from "./src/lib/portSemantics";
 import { runFriendlyNamesSelftest } from "./src/lib/mdFriendlyNames";
+import { runNodeToolboxSelftest } from "./src/lib/nodeToolbox";
+import { runReadinessSelftest } from "./src/lib/readiness";
+import { runExperienceModeSelftest } from "./src/lib/experienceMode";
 import { runCompileSelftest } from "./src/lib/mdCompileSelftest";
 import { runModTemplatesSelftest } from "./src/lib/modTemplates";
 import { runCompositeBlocksSelftest } from "./src/lib/compositeBlocks";
@@ -86,6 +89,7 @@ import { runLiveFixesSelftest } from "./src/lib/liveFixes";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
+import { runUiCompilerSelftest } from "./src/lib/uiCompilerSelftest";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
@@ -116,6 +120,7 @@ import { runModRecipesSelftest } from "./src/lib/modRecipes";
 import { parse as luaParse } from "luaparse";
 import { registerNpcIdentityProbeRoutes } from "./src/server/npcIdentityProbe";
 import { registerSelftests } from "./src/server/selftestRegistry";
+import { createAgentKeyStore, scopeAllows, runAgentKeysSelftest, AGENT_KEY_TTLS, AGENT_KEY_PREFIX, type AgentKeyScope } from "./src/lib/agentKeys";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -292,6 +297,11 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/expression-suggest-selftest",
 ]);
 
+// B42: named, scoped, expiring agent keys (src/lib/agentKeys). The boot session token
+// keeps full, unscoped power and is the ONLY credential that can manage keys.
+const AGENT_KEYS_FILE = path.join(process.cwd(), "data", "agent-keys.json");
+const agentKeyStore = createAgentKeyStore({ file: AGENT_KEYS_FILE });
+
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (req.method === "GET" && PUBLIC_READONLY_GETS.has(req.path)) {
     return next();
@@ -301,16 +311,68 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized: Missing token." });
   }
-  
+
   const token = authHeader.substring(7);
-  if (token !== STUDIO_API_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized: Invalid token." });
+  if (token === STUDIO_API_TOKEN) {
+    return next(); // session token: full power, unchanged fast path
   }
-  
-  next();
+
+  // B42: agent keys — verify hash, expiry, revocation, then enforce scope (deny-by-default).
+  if (token.startsWith(AGENT_KEY_PREFIX)) {
+    const v = agentKeyStore.verify(token);
+    if (!v.ok) {
+      return res.status(401).json({ error: `Unauthorized: agent key ${v.reason || "invalid"}.` });
+    }
+    if (!scopeAllows(v.scope as AgentKeyScope, req.method, req.path)) {
+      return res.status(403).json({
+        error: `Forbidden: key "${v.label}" has scope "${v.scope}" — this route needs a higher scope (or the studio session token for key management).`,
+        code: "insufficient_scope",
+        scope: v.scope,
+      });
+    }
+    agentKeyStore.touch(v.id!);
+    return next();
+  }
+
+  return res.status(401).json({ error: "Unauthorized: Invalid token." });
 }
 
 app.use("/api", authMiddleware);
+
+// ---------------------------------------------------------------------------
+// B42: agent-key management (SESSION TOKEN ONLY — scopeAllows denies /agent/keys
+// to every agent key, so anything that reaches these handlers used the session token).
+// ---------------------------------------------------------------------------
+app.get("/api/agent/keys", (_req, res) => {
+  agentKeyStore.prune();
+  return res.json({ keys: agentKeyStore.list(), ttls: Object.keys(AGENT_KEY_TTLS) });
+});
+
+app.post("/api/agent/keys", (req, res) => {
+  const label = String(req.body?.label || "").trim();
+  const scope = String(req.body?.scope || "") as AgentKeyScope;
+  const ttlName = String(req.body?.ttl || "");
+  if (!label) return res.status(400).json({ error: "Missing 'label'." });
+  if (!["read", "write", "deploy"].includes(scope)) {
+    return res.status(400).json({ error: "Invalid 'scope' — use read | write | deploy." });
+  }
+  if (!(ttlName in AGENT_KEY_TTLS)) {
+    return res.status(400).json({ error: `Invalid 'ttl' — use ${Object.keys(AGENT_KEY_TTLS).join(" | ")}.` });
+  }
+  const { token, record } = agentKeyStore.create(label, scope, AGENT_KEY_TTLS[ttlName]);
+  const { tokenHash: _hidden, ...safe } = record;
+  // The plaintext token appears in THIS response only — it is never persisted or listed.
+  return res.json({ token, record: { ...safe, hashPrefix: record.tokenHash.slice(0, 8) } });
+});
+
+app.post("/api/agent/keys/revoke", (req, res) => {
+  const id = String(req.body?.id || "");
+  if (!id) return res.status(400).json({ error: "Missing 'id'." });
+  const done = agentKeyStore.revoke(id);
+  return done
+    ? res.json({ ok: true, id })
+    : res.status(404).json({ error: "No such active key (already revoked or unknown id)." });
+});
 
 type CompiledFileManifest = Record<string, string>;
 
@@ -331,6 +393,8 @@ type PatchDiagnosticBlock = Pick<PatchBlock, "id" | "sel" | "targetFile" | "incl
 type LastDeployInfo = {
   modId: string;
   workspaceName: string;
+  /** Exact sanitized workspace content compiled for this deploy (B36 freshness proof). */
+  workspaceHash: string;
   deployedAt: string;
   stagingPath?: string;
   deployedPath?: string;
@@ -5156,6 +5220,7 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
 // registered by the validation module (src/server/validationRoutes.ts, stage-1 split).
 // SELFTEST REGISTRY (audit R1): one line per oracle — route + public allowlist wired together.
 const SELFTESTS: Record<string, () => unknown> = {
+  "agent-keys-selftest": runAgentKeysSelftest,
   "game-detect-selftest": runGameDetectSelftest,
   "ttfm-selftest": runTtfmSelftest,
   "action-census-selftest": runActionCensusSelftest,
@@ -5196,6 +5261,10 @@ const SELFTESTS: Record<string, () => unknown> = {
   "lua-staleness-selftest": runLuaStalenessSelftest,
   "lua-runtime-log-selftest": runLuaRuntimeLogSelftest,
   "workspace-persistence-selftest": runWorkspaceStateSelftest,
+  "ui-compiler-selftest": runUiCompilerSelftest,
+  "node-toolbox-selftest": runNodeToolboxSelftest,
+  "readiness-selftest": runReadinessSelftest,
+  "experience-mode-selftest": runExperienceModeSelftest,
 };
 registerSelftests(app, PUBLIC_READONLY_GETS, SELFTESTS, errorMessage);
 
@@ -6687,6 +6756,7 @@ app.post("/api/agent/deploy", (req, res) => {
     lastDeployInfo = {
       modId,
       workspaceName: ws.name,
+      workspaceHash: workspaceContentHash(sanitizeWorkspace(ws)),
       deployedAt: new Date().toISOString(),
       stagingPath: stagingPath || undefined,
       deployedPath: deployedPath || undefined
@@ -6925,7 +6995,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     }
 
     const ok = bytesConfirmed && blocking.length === 0;
-    lastDeployInfo = { modId, workspaceName: ws.name, deployedAt: new Date().toISOString(), stagingPath: stagingPath || undefined, deployedPath: deployedPath || undefined };
+    const deployedAt = new Date().toISOString();
 
     // Post-deploy convergence (P0): refresh the source stamp to the post-write state (a
     // content-changing deploy legitimately changes the folder hash) and adopt this
@@ -6938,6 +7008,20 @@ app.post("/api/agent/deploy-verify", (req, res) => {
           commitActiveWorkspace(ws, 'deploy-verify');
         }
       } catch { /* convergence is best-effort; the gate stays safe either way */ }
+    }
+    // Capture content identity after source-stamp convergence so the client compares
+    // readiness against the exact workspace state adopted after deploy.
+    // Failed byte/doctor gates are attempted writes, not successful deploy evidence.
+    // Preserve the prior successful record instead of painting the readiness ladder green.
+    if (ok) {
+      lastDeployInfo = {
+        modId,
+        workspaceName: ws.name,
+        workspaceHash: workspaceContentHash(sanitizeWorkspace(ws)),
+        deployedAt,
+        stagingPath: stagingPath || undefined,
+        deployedPath: deployedPath || undefined,
+      };
     }
     return res.json({
       ok, stage: 'done', modId, deployedPath, stagingPath, bytesConfirmed, deployedBytes,
@@ -7600,7 +7684,10 @@ async function setupDevOrProd() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    // B41: index:false — otherwise static serves dist/index.html for "/" BEFORE the
+    // injecting catch-all below, and the page never receives __STUDIO_API_TOKEN__
+    // (every API call then 401s in a packaged/production build).
+    app.use(express.static(distPath, { index: false }));
     app.get("*", (req, res) => {
       const html = fs.readFileSync(path.join(distPath, "index.html"), "utf8");
       res.status(200).set({ "Content-Type": "text/html" }).end(injectStudioToken(html));

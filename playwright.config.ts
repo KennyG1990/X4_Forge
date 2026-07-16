@@ -15,6 +15,12 @@ export const E2E_API_PORT = 3101;
 export const E2E_TOKEN = 'x4forge-e2e-ephemeral-token';
 // Per-run state dir: unique-ish per process start; OS temp cleanup owns the leftovers.
 const E2E_STATE_DIR = path.join(os.tmpdir(), `x4forge-e2e-state-${process.pid}`);
+// B41: 127.0.0.1 EVERYWHERE, never "localhost" — vite binds whichever family
+// "localhost" resolves to at boot (varies per run on Windows), while Playwright's
+// request context resolves localhost to ::1 and does NOT fall back. A mismatched
+// draw refuses every API call (reproduced 2026-07-15: ECONNREFUSED ::1:3100 failed
+// all 19 tests). Same class as vite.config's proxy 127.0.0.1 comment.
+const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${E2E_WEB_PORT}`;
 
 const ephemeralEnv = {
   STUDIO_API_TOKEN: E2E_TOKEN,
@@ -33,20 +39,26 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${E2E_WEB_PORT}`,
+    baseURL: E2E_BASE_URL,
     trace: 'retain-on-failure',
+    // Existing specs exercise the full studio. B37's focused spec removes this key to
+    // prove the newcomer default; keeping the suite explicit avoids mode-dependent tests.
+    storageState: {
+      cookies: [],
+      origins: [{ origin: E2E_BASE_URL, localStorage: [{ name: 'x4_forge_experience_mode', value: 'expert' }] }],
+    },
   },
   webServer: [
     {
       command: 'npx tsx server.ts',
-      url: `http://localhost:${E2E_API_PORT}/api/agent/schema`,
+      url: `http://127.0.0.1:${E2E_API_PORT}/api/agent/schema`,
       reuseExistingServer: false,
       timeout: 120_000,
       env: { ...ephemeralEnv, PORT: String(E2E_API_PORT) },
     },
     {
-      command: `npx vite --port ${E2E_WEB_PORT} --strictPort`,
-      url: `http://localhost:${E2E_WEB_PORT}`,
+      command: `npx vite --host 127.0.0.1 --port ${E2E_WEB_PORT} --strictPort`,
+      url: `http://127.0.0.1:${E2E_WEB_PORT}`,
       reuseExistingServer: false,
       timeout: 120_000,
       env: ephemeralEnv,

@@ -60,12 +60,34 @@ import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluat
 import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
 import { getE2EPerfCounters, resetE2EPerfCounters, type E2EPerfCounters } from './lib/e2ePerfCounters';
 import type { ArchitectStepView } from './components/BlueprintPanel';
+import type { DiagnosticsScope } from './components/DiagnosticsCenter';
+import ReadinessLadder from './components/ReadinessLadder';
+import BeginnerWorkspace from './components/BeginnerWorkspace';
+import { toSafeModId } from './lib/modCompiler';
+import {
+  EXPERIENCE_MODE_KEY,
+  beginnerEditorForWorkspace,
+  parseExperienceMode,
+  type BeginnerStep,
+  type ExperienceMode,
+  type WorkspaceView,
+} from './lib/experienceMode';
+import {
+  buildReadinessStages,
+  EXPERIENCE_CONFIRMATIONS_KEY,
+  parseExperienceConfirmations,
+  type ExperienceConfirmation,
+  type ReadinessOwner,
+  type ReadinessStageId,
+  type ReadinessWatcherEvidence,
+} from './lib/readiness';
 
 type ForgeE2EWindow = Window & {
   __X4_E2E__?: {
     getWorkspace: () => ModWorkspace;
     setWorkspace: (workspace: ModWorkspace) => void;
     getMdCode: () => string;
+    getWorkspaceHash: () => string;
     resetPerfCounters: () => E2EPerfCounters;
     getPerfCounters: () => E2EPerfCounters;
   };
@@ -175,8 +197,11 @@ export default function App() {
     })();
   }, [loadSchemaLibrary]);
 
-  const [workspaceView, setWorkspaceView] = useState<'blueprint' | 'ui-designer' | 'aiscripts' | 'libraries' | 'xmlpatch' | 'contracts' | 'translation' | 'wiki' | 'project' | 'galaxy'>('blueprint');
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('blueprint');
+  const [experienceMode, setExperienceMode] = useState<ExperienceMode>(() => parseExperienceMode(localStorage.getItem(EXPERIENCE_MODE_KEY)));
+  const [beginnerStep, setBeginnerStep] = useState<BeginnerStep>('idea');
   const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference'>('script');
+  const [diagnosticsScope, setDiagnosticsScope] = useState<DiagnosticsScope>('scripts');
 
   // Lifted auto-save state to synchronize settings and prevent data clobbering on load
   const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(false);
@@ -184,6 +209,10 @@ export default function App() {
   // Diagnostics / Mod Doctor states moved to App level to share across Sidebar/CodePreview
   const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
   const [diagnosticSource, setDiagnosticSource] = useState<'checking' | 'package' | 'local'>('checking');
+  const [readinessWatcher, setReadinessWatcher] = useState<ReadinessWatcherEvidence>({ phase: 'loading' });
+  const [experienceConfirmations, setExperienceConfirmations] = useState<Record<string, ExperienceConfirmation>>(
+    () => parseExperienceConfirmations(localStorage.getItem(EXPERIENCE_CONFIRMATIONS_KEY))
+  );
 
   const [snapshotDiffWorkspace, setSnapshotDiffWorkspace] = useState<ModWorkspace | null>(null);
 
@@ -201,6 +230,7 @@ export default function App() {
       getWorkspace: () => workspace,
       setWorkspace: (next: ModWorkspace) => setWorkspace(sanitizeWorkspace(next)),
       getMdCode: () => mdCode,
+      getWorkspaceHash: () => workspaceContentHash(sanitizeWorkspace(workspace)),
       resetPerfCounters: resetE2EPerfCounters,
       getPerfCounters: getE2EPerfCounters,
     };
@@ -237,6 +267,93 @@ export default function App() {
       window.clearTimeout(timer);
     };
   }, [workspace, mdCode]);
+
+  const readinessWorkspaceHash = React.useMemo(
+    () => workspaceContentHash(sanitizeWorkspace(workspace)),
+    [workspace]
+  );
+  const activeReadinessModId = React.useMemo(() => toSafeModId(workspace.name), [workspace.name]);
+
+  // B36 adapter: poll the EXISTING server verdict/deploy evidence. Components do not
+  // infer game state; they all render the same model built from this response.
+  useEffect(() => {
+    let cancelled = false;
+    setReadinessWatcher({ phase: 'loading' });
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/agent/debug-watcher/brief?modId=${encodeURIComponent(activeReadinessModId)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data?.error || 'Readiness evidence request failed.');
+        if (!cancelled) setReadinessWatcher({
+          phase: 'ready',
+          verdict: data?.verdict,
+          sinceDeploy: data?.sinceDeploy,
+          lastDeploy: data?.status?.lastDeploy || null,
+        });
+      } catch (error) {
+        if (!cancelled) setReadinessWatcher({ phase: 'error', error: error instanceof Error ? error.message : 'Readiness evidence unavailable.' });
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 4000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [activeReadinessModId]);
+
+  const graphDiagnostics = React.useMemo(
+    () => validateModWorkspace(workspace, mdCode),
+    [workspace, mdCode]
+  );
+  const readinessStages = React.useMemo(() => buildReadinessStages({
+    workspaceName: workspace.name,
+    workspaceHash: readinessWorkspaceHash,
+    graphDiagnostics,
+    packageDiagnostics: diagnostics,
+    diagnosticSource,
+    watcher: readinessWatcher,
+    confirmation: experienceConfirmations[workspace.name] || null,
+  }), [workspace.name, readinessWorkspaceHash, graphDiagnostics, diagnostics, diagnosticSource, readinessWatcher, experienceConfirmations]);
+
+  const navigateReadiness = React.useCallback((owner: ReadinessOwner, stage: ReadinessStageId) => {
+    if (experienceMode === 'beginner') {
+      if (stage === 'graph' || stage === 'package') {
+        setBeginnerStep('validate');
+        if (stage === 'graph') setWorkspaceView('blueprint');
+      } else if (stage === 'deployed') {
+        setBeginnerStep('deploy');
+      } else {
+        setBeginnerStep('confirm');
+      }
+      return;
+    }
+    if (owner === 'canvas') {
+      setWorkspaceView('blueprint');
+      setActiveSidebarTab('script');
+      return;
+    }
+    if (owner === 'diagnostics') {
+      setDiagnosticsScope('package');
+      setActiveSidebarTab('diagnostics');
+      return;
+    }
+    setActiveSidebarTab('playtest');
+  }, [experienceMode]);
+
+  const confirmCurrentExperience = React.useCallback(() => {
+    const deploy = readinessWatcher.lastDeploy;
+    if (!deploy?.deployedAt || !deploy.deployedPath || deploy.workspaceHash !== readinessWorkspaceHash) return;
+    const confirmation: ExperienceConfirmation = {
+      workspaceName: workspace.name,
+      workspaceHash: readinessWorkspaceHash,
+      deployedAt: deploy.deployedAt,
+      confirmedAt: new Date().toISOString(),
+    };
+    setExperienceConfirmations(current => {
+      const next = { ...current, [workspace.name]: confirmation };
+      try { localStorage.setItem(EXPERIENCE_CONFIRMATIONS_KEY, JSON.stringify(next)); } catch { /* optional evidence preference */ }
+      return next;
+    });
+  }, [readinessWatcher.lastDeploy, readinessWorkspaceHash, workspace.name]);
+
   const [visibleCueIds, setVisibleCueIds] = useState<string[] | null>(null);
   const [focusNodeRequest, setFocusNodeRequest] = useState<{ nodeId: string; timestamp: number } | null>(null);
 
@@ -255,6 +372,29 @@ export default function App() {
   const [activeMdScript, setActiveMdScript] = useState<string | null>(null);
   const [activeEditorFile, setActiveEditorFile] = useState<EditorFile | null>(null);
   const [selectedWidget, setSelectedWidget] = useState<UIWidget | null>(null);
+
+  useEffect(() => {
+    try { localStorage.setItem(EXPERIENCE_MODE_KEY, experienceMode); } catch { /* optional UI preference */ }
+  }, [experienceMode]);
+
+  const beginnerSelectionKind = React.useCallback((): 'node' | 'widget' | null => {
+    if (workspaceView === 'ui-designer' && selectedWidget) return 'widget';
+    if (selectedNode) return 'node';
+    return selectedWidget ? 'widget' : null;
+  }, [workspaceView, selectedNode, selectedWidget]);
+
+  const changeExperienceMode = React.useCallback((mode: ExperienceMode) => {
+    setExperienceMode(mode);
+    if (mode === 'beginner') {
+      setWorkspaceView(beginnerStep === 'idea' ? 'blueprint' : beginnerEditorForWorkspace(workspace, beginnerSelectionKind()));
+    }
+  }, [beginnerStep, workspace, beginnerSelectionKind]);
+
+  const changeBeginnerStep = React.useCallback((step: BeginnerStep) => {
+    setBeginnerStep(step);
+    if (step === 'idea') setWorkspaceView('blueprint');
+    if (step === 'customize') setWorkspaceView(beginnerEditorForWorkspace(workspace, beginnerSelectionKind()));
+  }, [workspace, beginnerSelectionKind]);
 
   // Selection hygiene: undo/redo (or any workspace replacement) can remove the
   // entity a panel has selected; clear dangling selections so inspectors and
@@ -1163,18 +1303,21 @@ export default function App() {
             )}
           </div>
 
-          {/* Global Search Tool */}
-          <GlobalSearch
-            workspace={workspace}
-            workspaceView={workspaceView}
-            setWorkspaceView={setWorkspaceView}
-            setActiveSidebarTab={setActiveSidebarTab}
-            setSelectedNode={setSelectedNode}
-            setSelectedWidget={setSelectedWidget}
-          />
+          {/* Full cross-domain search belongs to Expert; Beginner keeps one task path. */}
+          {experienceMode === 'expert' && (
+            <GlobalSearch
+              workspace={workspace}
+              workspaceView={workspaceView}
+              setWorkspaceView={setWorkspaceView}
+              setActiveSidebarTab={setActiveSidebarTab}
+              setSelectedNode={setSelectedNode}
+              setSelectedWidget={setSelectedWidget}
+            />
+          )}
         </div>
 
         {/* View Selection Mode Tabs */}
+        {experienceMode === 'expert' && (
         <div id="view_selection_modes" className="flex items-center gap-1 p-1 rounded-md bg-black/45 border border-white/10">
           {(() => {
             const isActive = workspaceView === 'blueprint';
@@ -1349,9 +1492,10 @@ export default function App() {
             <span className="hidden min-[2150px]:inline">X4 Wiki</span>
           </button>
         </div>
+        )}
 
         {/* Preset & Project management utilities */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1 min-[2150px]:gap-3">
           {/* History Undo/Redo Group */}
           <div className="flex items-center gap-1 bg-black/45 border border-white/10 p-1 rounded-md">
             <button
@@ -1443,6 +1587,7 @@ export default function App() {
           {/* B29: the conflict card / diverged badge moved OUT of the header into the fixed
               sync-status layer below — a header slot gets clipped on narrow windows, and the
               conflict UI must be visible exactly when a conflict blocks sync. */}
+          {experienceMode === 'expert' && (
           <button
             onClick={() => setIsSyncModalOpen(true)}
             className="px-3 py-1 border border-cyan-500/30 hover:border-cyan-500/80 bg-cyan-500/10 text-cyan-400 rounded font-mono text-[11px] hover:bg-cyan-500/20 transition-all flex items-center gap-1.5 cursor-pointer"
@@ -1451,8 +1596,9 @@ export default function App() {
             <FolderGit2 className="w-3.5 h-3.5" />
             <span className="hidden min-[2150px]:inline">SYNC MOD</span>
           </button>
+          )}
 
-          {aiEnabled && (
+          {experienceMode === 'expert' && aiEnabled && (
           <button
             onClick={() => setIsAIConfigOpen(true)}
             className="px-3 py-1 border border-amber-500/25 hover:border-[#df9825] bg-amber-500/5 text-amber-400 rounded font-mono text-[11px] hover:bg-amber-500/15 transition-all flex flex-col justify-center items-start text-left cursor-pointer select-none leading-tight gap-0.5"
@@ -1473,6 +1619,7 @@ export default function App() {
           </button>
           )}
 
+          {experienceMode === 'expert' && (
           <button
             onClick={() => setIsAgentBridgeOpen(prev => !prev)}
             className={`px-3 py-1 border rounded font-mono text-[11px] transition-all flex items-center gap-1.5 cursor-pointer ${
@@ -1485,6 +1632,7 @@ export default function App() {
             <Cpu className="w-3.5 h-3.5" />
             <span className="hidden min-[2150px]:inline">AGENT API</span>
           </button>
+          )}
 
           <button
             onClick={() => setIsDirSettingsOpen(true)}
@@ -1505,6 +1653,18 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      <ReadinessLadder
+        stages={readinessStages}
+        onNavigate={navigateReadiness}
+        onConfirmExperience={confirmCurrentExperience}
+        trailing={(
+          <div data-testid="experience-mode-switch" className="flex items-center gap-1 rounded-md border border-white/10 bg-black/45 p-1">
+            <button data-testid="mode-beginner" aria-pressed={experienceMode === 'beginner'} onClick={() => changeExperienceMode('beginner')} className={`rounded px-2 py-1 text-[9px] font-mono font-bold uppercase ${experienceMode === 'beginner' ? 'bg-cyan-600/25 text-cyan-300' : 'text-slate-500 hover:text-white'}`}>Beginner</button>
+            <button data-testid="mode-expert" aria-pressed={experienceMode === 'expert'} onClick={() => changeExperienceMode('expert')} className={`rounded px-2 py-1 text-[9px] font-mono font-bold uppercase ${experienceMode === 'expert' ? 'bg-amber-600/25 text-amber-300' : 'text-slate-500 hover:text-white'}`}>Expert</button>
+          </div>
+        )}
+      />
 
       {/* B29: viewport-anchored sync-status layer — can NEVER be clipped by header overflow.
           Persistent until resolved (unlike the transient toast stack), so it lives in its own
@@ -1550,6 +1710,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         
         {/* Left Side: Drag control panel, property editor inspector */}
+        {experienceMode === 'expert' ? (
         <Sidebar
           width={leftSidebarWidth}
           aiEnabled={aiEnabled}
@@ -1618,8 +1779,28 @@ export default function App() {
           architectRunDisabledReason={architectCanRun ? undefined : 'No AI key set — add one in Settings → AI Assistant → Configure AI engine.'}
           diagnostics={diagnostics}
           diagnosticSource={diagnosticSource}
+          diagnosticsScope={diagnosticsScope}
           onSelectSnapshot={setSnapshotDiffWorkspace}
         />
+        ) : (
+          <BeginnerWorkspace
+            width={leftSidebarWidth}
+            step={beginnerStep}
+            onStepChange={changeBeginnerStep}
+            workspace={workspace}
+            setWorkspace={setWorkspace}
+            selectedNode={workspaceView === 'ui-designer' ? null : selectedNode}
+            setSelectedNode={setSelectedNode}
+            selectedWidget={workspaceView === 'ui-designer' ? selectedWidget : null}
+            setSelectedWidget={setSelectedWidget}
+            saveCheckpoint={saveCheckpoint}
+            readinessStages={readinessStages}
+            compileStatus={compileStatus}
+            compileMessage={compileMessage}
+            onDeploy={handleCompileModProject}
+            onConfirmExperience={confirmCurrentExperience}
+          />
+        )}
 
         {/* Left Resizer Handle */}
         <div
@@ -1648,6 +1829,8 @@ export default function App() {
               selectedCueIds={selectedCueIds}
               setSelectedCueIds={setSelectedCueIds}
               activeMdScript={activeMdScript}
+              packageDiagnostics={diagnostics}
+              diagnosticSource={diagnosticSource}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder
@@ -1697,7 +1880,7 @@ export default function App() {
         </main>
 
         {/* Right Resizer Handle — hidden when the code panel is collapsed (nothing to resize). */}
-        {!codeCollapsed && (
+        {experienceMode === 'expert' && !codeCollapsed && (
           <div
             className={`w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
               isResizingRight ? 'bg-cyan-500 w-1.5' : ''
@@ -1710,6 +1893,7 @@ export default function App() {
         )}
 
         {/* Right Side: Real-time Synchronized compiler preview output (collapsible) */}
+        {experienceMode === 'expert' && (
         <aside
           className={`shrink-0 flex flex-col bg-[#12141a] border-l border-[#df9825]/10 relative transition-[width] duration-300 ease-in-out overflow-hidden ${codeCollapsed ? 'self-start rounded-bl-lg shadow-lg' : 'h-full'}`}
           style={{ width: codeCollapsed ? 300 : rightSidebarWidth }}
@@ -1755,11 +1939,12 @@ export default function App() {
           />
           </div>
         </aside>
+        )}
 
       </div>
 
       {/* Embedded Intelligent AI Guide Drawer chatbot */}
-      {aiEnabled && isAiFloatingVisible && (
+      {experienceMode === 'expert' && aiEnabled && isAiFloatingVisible && (
         <AIHelper
           mode="floating"
           workspace={workspace}

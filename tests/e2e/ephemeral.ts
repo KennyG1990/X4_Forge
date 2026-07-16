@@ -7,7 +7,9 @@
  */
 import { E2E_API_PORT, E2E_TOKEN } from '../../playwright.config';
 
-const API = `http://localhost:${E2E_API_PORT}`;
+// B41: 127.0.0.1, never "localhost" — the API binds IPv4-only (server.ts listen)
+// and resolver family order varies per run on Windows (see playwright.config note).
+const API = `http://127.0.0.1:${E2E_API_PORT}`;
 
 /** Force-set the ephemeral server's active workspace (deliberate overwrite by design). */
 export async function seedServerWorkspace(workspace: unknown): Promise<void> {

@@ -1,0 +1,20 @@
+# Ship ONLY the compiled controller, the staged app, and the manifest/docs.
+**
+!out/extension.js
+!app/**
+!package.json
+!README.md
+!LICENSE.txt
+!icon.png
+
+# Never ship these even if present under an allowed tree (runtime writes land in
+# app/ because the server resolves some paths from cwd — staging is re-run fresh
+# before packaging, and these rules are the second line of defense).
+**/.env
+**/.studio-api-token
+**/.studio-state/**
+**/*.map
+app/data/**
+app/config.json
+app/debuglog.txt
+app/*.log

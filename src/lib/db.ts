@@ -35,7 +35,10 @@ let loadError: string | null = null;
 function loadDriver(): any {
   if (BetterSqlite3 || loadError) return BetterSqlite3;
   try {
-    const require = createRequire(import.meta.url);
+    // B41: in the esbuild CJS production bundle `import.meta.url` compiles to
+    // undefined and createRequire(undefined) throws — use __filename there so the
+    // optional driver also loads from dist/server.cjs, not only under tsx/ESM.
+    const require = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
     BetterSqlite3 = require('better-sqlite3');
   } catch (err) {
     loadError = err?.message || String(err);

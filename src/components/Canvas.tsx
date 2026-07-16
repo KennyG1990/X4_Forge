@@ -38,13 +38,13 @@ import {
   Activity
 } from 'lucide-react';
 import { mapTelemetryToNodes, type LiveNodeBadge } from '../lib/liveCanvasTelemetry';
-import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML } from '../types';
+import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML, type PackageDiagnostic } from '../types';
 import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
 import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
 import { orientConnection, linkExists as linkAlreadyExists } from '../lib/canvasInteractions';
 import { promptDialog, toast } from '../lib/uiDialogs';
-import { STARTER_TAGS } from '../lib/mdFriendlyNames';
+import { buildNodeToolboxEntries } from '../lib/nodeToolbox';
 import CanvasOnboarding from './CanvasOnboarding';
 import GuidedRail from './GuidedRail';
 import { ttfm } from '../lib/ttfm';
@@ -54,6 +54,7 @@ import { MOD_PATTERNS } from '../lib/modPatterns';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
 import { computeAutoLayout } from '../lib/mdAutoLayout';
 import { markE2EPerfCounter } from '../lib/e2ePerfCounters';
+import { summarizePackageStatus, type DiagnosticSource } from '../lib/packageStatus';
 
 type Pt = { x: number; y: number };
 
@@ -106,6 +107,8 @@ interface CanvasProps {
   setSelectedCueIds: React.Dispatch<React.SetStateAction<string[]>>;
   /** When set, only show cues from this MD script (file stem); null = all scripts. */
   activeMdScript?: string | null;
+  packageDiagnostics?: PackageDiagnostic[];
+  diagnosticSource?: DiagnosticSource;
 }
 
 export default function Canvas({
@@ -119,7 +122,9 @@ export default function Canvas({
   focusNodeRequest,
   selectedCueIds,
   setSelectedCueIds,
-  activeMdScript = null
+  activeMdScript = null,
+  packageDiagnostics = [],
+  diagnosticSource = 'checking'
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   // Dependency-graph panel defaults CLOSED: open-by-default it floats at z-40 over the
@@ -1297,6 +1302,27 @@ export default function Canvas({
     return list;
   }, [workspace.nodes, workspace.links]);
 
+  const allDiagnostics = React.useMemo(() => {
+    const packageItems = packageDiagnostics.map((diagnostic, index) => ({
+      id: `package_${diagnostic.code || diagnostic.category}_${index}`,
+      nodeId: diagnostic.nodeId,
+      type: diagnostic.severity,
+      message: diagnostic.message,
+    }));
+    const seen = new Set<string>();
+    return [...packageItems, ...diagnostics].filter(diagnostic => {
+      const key = `${diagnostic.nodeId || ''}|${diagnostic.type}|${diagnostic.message}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [diagnostics, packageDiagnostics]);
+
+  const packageStatus = React.useMemo(
+    () => summarizePackageStatus(packageDiagnostics, diagnosticSource),
+    [packageDiagnostics, diagnosticSource]
+  );
+
   // Schema-driven per-node diagnostics (md.xsd, no AI) — fetched so the canvas can show
   // an in-your-face badge on the exact offending node instead of burying it in the Doctor.
   const [schemaNodeDiags, setSchemaNodeDiags] = useState<Record<string, { severity: 'error' | 'warning'; messages: string[] }>>({});
@@ -1346,7 +1372,7 @@ export default function Canvas({
       if (severity === 'error') cur.severity = 'error';
       m[nodeId] = cur;
     };
-    for (const d of diagnostics) {
+    for (const d of allDiagnostics) {
       if (!d.nodeId || d.type === 'info') continue;
       add(d.nodeId, d.type === 'error' ? 'error' : 'warning', d.message);
     }
@@ -1358,7 +1384,7 @@ export default function Canvas({
       add(d.nodeId, d.severity === 'error' ? 'error' : 'warning', d.message);
     }
     return m;
-  }, [diagnostics, schemaNodeDiags, lawDiags]);
+  }, [allDiagnostics, schemaNodeDiags, lawDiags]);
 
   // Selective node alignment/distribution (UE5-style) over the multi-selection.
   const applyAlignment = React.useCallback((mode: AlignMode) => {
@@ -1476,23 +1502,24 @@ export default function Canvas({
   }, [schemaTemplates]);
 
   // Filter right click context spawn options
-  // Curation: by default show only the curated "starter" set so newcomers aren't drowned
-  // in the full md.xsd vocabulary. Advanced toggle OR an active search reveals everything.
-  const baseTemplates = (showAdvancedPalette || searchQuery.trim())
-    ? allTemplates
-    : allTemplates.filter(t => STARTER_TAGS.has(t.xmlTag));
-  // Base search filter (label/tag substring).
-  const searchedTemplates = baseTemplates.filter(
-    t => t.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-         t.xmlTag.toLowerCase().includes(searchQuery.toLowerCase())
+  // B35 catalog seam: Sidebar and quick-add share measured ranking, intent aliases,
+  // structural-child exclusion, and full-vocabulary search. Port compatibility remains
+  // Canvas-owned because it depends on the wire currently being dragged.
+  const catalogTemplates = React.useMemo(
+    () => buildNodeToolboxEntries({
+      templates: allTemplates,
+      query: searchQuery,
+      mode: showAdvancedPalette ? 'all' : 'curated',
+    }).map(entry => entry.template),
+    [allTemplates, searchQuery, showAdvancedPalette]
   );
   // #2 drag-off-pin: when the spawn menu was opened by dragging a wire off a port,
   // narrow to nodes that port can actually connect to (port-semantics layer). The
   // typed-connector map guarantees this never empties on flow-type drags (out_next →
   // every action), which is what made the earlier coarse-type attempt unusable.
   const filteredTemplates = pendingLinkTarget
-    ? compatibleTemplates(pendingLinkTarget.portId, searchedTemplates)
-    : searchedTemplates;
+    ? compatibleTemplates(pendingLinkTarget.portId, catalogTemplates)
+    : catalogTemplates;
 
   // Dynamic Minimap calculation helpers
   const xs = nodesFilteredByCue.map(n => n.x);
@@ -1596,29 +1623,28 @@ export default function Canvas({
         {/* Compile / Diagnostic checks badge */}
         <button
           onClick={() => setDiagnosticPanelOpen(prev => !prev)}
+          data-testid="package-status-badge"
           className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
-            diagnostics.some(d => d.type === 'error')
+            packageStatus.tone === 'red'
               ? 'bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/15'
-              : diagnostics.some(d => d.type === 'warning')
+              : packageStatus.tone === 'amber'
               ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/15'
               : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/15'
           }`}
-          title="Check blueprint syntax and logic connections for warnings or isolated states"
+          title={diagnosticSource === 'package'
+            ? 'Package compiler and Mod Doctor status. Open for package plus graph details.'
+            : diagnosticSource === 'checking'
+              ? 'Package compiler is checking the current workspace.'
+              : 'Package compiler is unavailable; showing local MD validation only.'}
         >
-          {diagnostics.some(d => d.type === 'error') ? (
+          {packageStatus.tone === 'red' ? (
             <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-          ) : diagnostics.some(d => d.type === 'warning') ? (
+          ) : packageStatus.tone === 'amber' ? (
             <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
           ) : (
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
           )}
-          <span>COMPILER: {
-            diagnostics.some(d => d.type === 'error')
-              ? "ERRORS"
-              : diagnostics.some(d => d.type === 'warning')
-              ? "WARN"
-              : "OK"
-          }</span>
+          <span>PACKAGE: {packageStatus.label}</span>
         </button>
         
         <div className="h-5 w-px bg-white/10 mx-1" />
@@ -2633,14 +2659,14 @@ export default function Canvas({
           </div>
 
           <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-1 max-h-64">
-            {diagnostics.length === 0 ? (
+            {allDiagnostics.length === 0 ? (
               <div className="flex flex-col items-center justify-center text-center py-6 bg-emerald-500/5 rounded-lg border border-emerald-500/20 text-emerald-400">
                 <CheckCircle2 className="w-6 h-6 mb-1.5 animate-pulse" />
                 <span className="font-bold uppercase text-[10px]">ALL CHECKS CLEAR</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">0 errors, 0 logic warnings</span>
               </div>
             ) : (
-              diagnostics.map((diag) => {
+              allDiagnostics.map((diag) => {
                 let boxStyle = 'bg-amber-500/5 border-amber-500/20 text-amber-300';
                 let iconColor = 'text-amber-400';
                 if (diag.type === 'error') {
@@ -2672,7 +2698,7 @@ export default function Canvas({
               })
             )}
           </div>
-          <span className="text-[9px] text-slate-500 text-center leading-snug">Evaluates connected script graphs real-time to prevent broken XML references in X4 Foundations load processes.</span>
+          <span className="text-[9px] text-slate-500 text-center leading-snug">Package compiler/Mod Doctor findings plus local graph connectivity checks. PACKAGE: OFFLINE is never treated as a green build.</span>
         </div>
       )}
 

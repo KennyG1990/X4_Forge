@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Brain, PackageCheck, Boxes } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic } from '../types';
 import { analyzeCueLineage } from '../lib/cueLineage';
@@ -34,11 +34,12 @@ interface DiagnosticsCenterProps {
   onOpenCues?: () => void;
   /** A4.10 — gates the optional AI-polish affordance in the Scripts (MDScanner) view. */
   aiEnabled?: boolean;
+  requestedScope?: DiagnosticsScope;
 }
 
-type Scope = 'scripts' | 'package' | 'install';
+export type DiagnosticsScope = 'scripts' | 'package' | 'install';
 
-const SCOPES: { id: Scope; label: string; icon: typeof Brain; activeClass: string }[] = [
+const SCOPES: { id: DiagnosticsScope; label: string; icon: typeof Brain; activeClass: string }[] = [
   { id: 'scripts', label: 'Scripts', icon: Brain, activeClass: 'bg-amber-500/10 text-amber-400 border-amber-500/40' },
   { id: 'package', label: 'Package', icon: PackageCheck, activeClass: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/40' },
   { id: 'install', label: 'Install', icon: Boxes, activeClass: 'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/40' },
@@ -56,8 +57,13 @@ export default function DiagnosticsCenter({
   diagnosticSource,
   onOpenCues,
   aiEnabled = false,
+  requestedScope = 'scripts',
 }: DiagnosticsCenterProps) {
-  const [scope, setScope] = useState<Scope>('scripts');
+  const [scope, setScope] = useState<DiagnosticsScope>(requestedScope);
+
+  useEffect(() => {
+    setScope(requestedScope);
+  }, [requestedScope]);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#080a0e]">
@@ -69,6 +75,8 @@ export default function DiagnosticsCenter({
           return (
             <button
               key={s.id}
+              data-testid={`diagnostics-scope-${s.id}`}
+              aria-pressed={active}
               onClick={() => setScope(s.id)}
               title={`${s.label} Diagnostics`}
               className={`px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer border ${

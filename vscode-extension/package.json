@@ -1,0 +1,91 @@
+{
+  "name": "x4-forge-studio",
+  "displayName": "X4 Forge Studio",
+  "description": "Run the X4 Forge visual modding studio inside VS Code. Proof-of-concept shell: the existing Forge app rendered in a webview over a managed local backend sidecar.",
+  "version": "0.0.2",
+  "icon": "icon.png",
+  "publisher": "x4forge-local",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "x4forge.openStudio",
+        "title": "X4 Forge: Open Studio"
+      },
+      {
+        "command": "x4forge.stopSidecar",
+        "title": "X4 Forge: Stop Backend Sidecar"
+      },
+      {
+        "command": "x4forge.showLogs",
+        "title": "X4 Forge: Show Backend Logs"
+      },
+      {
+        "command": "x4forge.createAgentKey",
+        "title": "X4 Forge: Create Agent Key"
+      }
+    ],
+    "configuration": {
+      "title": "X4 Forge Studio",
+      "properties": {
+        "x4forge.attachUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3000",
+          "description": "URL of an already-running Forge to attach to before spawning a sidecar. The extension attaches only if this URL answers the Forge agent-schema probe; it never stops a server it attached to."
+        },
+        "x4forge.forgeRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to a built Forge checkout (must contain dist/server.cjs and node_modules). When empty, the app bundled inside the extension is used."
+        },
+        "x4forge.stateDir": {
+          "type": "string",
+          "default": "",
+          "description": "Directory for the sidecar's workspace state (X4_STATE_DIR). When empty, a per-user directory in the extension's global storage is used. Point it at an existing Forge checkout's .studio-state to open the real workspace — do NOT do this while that Forge's own server is running (the attach probe normally prevents this)."
+        },
+        "x4forge.nodePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Node.js executable used to run the sidecar. When empty, 'node' from PATH is used. The sidecar requires a real Node install (native modules are ABI-matched to it)."
+        },
+        "x4forge.autoOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the X4 Forge Studio automatically when a (trusted) workspace finishes loading. Useful for dedicated modding workspaces; off by default."
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "X4 Forge compiles, validates, and packages mod projects (filesystem writes and local process execution). The extension is disabled in untrusted workspaces."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "The Forge backend requires a local filesystem."
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build-ext.mjs",
+    "stage-app": "node scripts/stage-app.mjs",
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.25.0",
+    "typescript": "~5.8.2"
+  }
+}
