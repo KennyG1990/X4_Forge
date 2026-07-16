@@ -1,5 +1,26 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
+> ## ✅ COMMITTED 2026-07-16 as `fcbd9be` (editor swap + launcher + schema discovery + config persist)
+> HEAD = `fcbd9be` on the branch. Extension = **x4-forge-studio-0.0.6.vsix** (NOT yet installed
+> anywhere this session — reinstall to test the launcher icon + schema fixes live).
+> - **B48** CodeMirror 6 editor (CodeMirrorField.tsx) behind CODEMIRROR_EDITOR flag — real editor
+>   + split/unified diff, all CodePreview chrome preserved. e2e 19/19 (fixed the xml-patch-merge
+>   textarea-count coupling via a data-testid).
+> - **B51** schema `discoverXsd` (subdir-aware, base-over-DLC) → md/common/aiscripts load from an
+>   unpacked-game path (live: 1339 elems); config.json persists via X4_CONFIG_DIR (extension →
+>   globalStorage). Oracle schema-discovery-selftest 9/9. Fixed a self-inflicted e2e regression
+>   (configPath must NOT fall back to X4_STATE_DIR).
+> - **B50** Activity Bar launcher icon (media/activitybar.svg) + viewsWelcome buttons. In-rail
+>   visual = fast Ken eyeball (may sit under the "..." overflow on a crowded bar).
+> - **B47** walkaround bridge row → optional/neutral.
+> **NEXT UNITS:** ① **B52 bug reporting** — DECISION PENDING (Ken picks delivery: GitHub Issues
+> [rec] / Discord webhook / clipboard; give a repo, then build). ② B48 Phase 2 (collapse editor
+> pane for canvas real estate + native-IDE-tab bridge + lazy-load the CodeMirror chunk). ③ B46
+> broad multi-XSD/full-corpus reference sets. ④ residual X4_DATA_DIR seam (harvested-schemas
+> persistence in the extension). The spoop mod request (fighters stay in travel mode until in
+> weapon range) = an easy AISCRIPT patch — good Forge proof piece once aiscripts validation is
+> exercised.
+
 > ## 🚀 SHIPPED (2026-07-16): X4 Forge Studio is LIVE on Open VSX
 > **https://open-vsx.org/extension/x4forge/x4-forge-studio** — `x4forge.x4-forge-studio v0.0.4`,
 > MIT, pre-release, auto-updates in Antigravity/Cursor/Windsurf/VSCodium. Namespace `x4forge` owned;
