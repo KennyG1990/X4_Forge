@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug X4 Forge Extension (controller)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "npm: build",
+      "__note": "F5 here launches a dev IDE window with the extension loaded and extension.ts debuggable (both VS Code and Antigravity support the extensionHost type). The sidecar half is debugged separately via the x4forge.debug setting or the attach config below."
+    },
+    {
+      "name": "Attach to X4 Forge Sidecar",
+      "type": "node",
+      "request": "attach",
+      "address": "127.0.0.1",
+      "port": 9229,
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**"],
+      "__note": "Manual attach when you launched the sidecar with --inspect=127.0.0.1:9229 yourself. The extension's x4forge.debug setting auto-attaches on a dynamic port instead; use this only for a hand-launched backend."
+    }
+  ]
+}

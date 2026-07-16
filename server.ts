@@ -2668,10 +2668,11 @@ app.post("/api/schema/config", (req, res) => {
     const modWorkspacePath = req.body?.modWorkspacePath !== undefined ? String(req.body.modWorkspacePath || '').trim() : undefined;
     const filesystemPath = req.body?.filesystemPath !== undefined ? String(req.body.filesystemPath || '').trim() : undefined;
 
-    if (!schemaDir) {
-      return res.status(400).json({ error: "Missing required schemaDir." });
-    }
-
+    // Paths save INDEPENDENTLY of schema validity. The schema directory is validated and
+    // REPORTED, never a hard gate — you can save just the workspace/filesystem/game paths
+    // with no schema (or an incomplete one). Schema-aware validation simply stays degraded
+    // until md.xsd + common.xsd resolve. (Previously an unsatisfied schema 400'd the whole
+    // save, blocking the other paths — the exact foot-gun this removes.)
     const nextConfig = {
       ...readXsdConfig(),
       ...(gamePath ? { x4GamePath: gamePath } : {}),
@@ -2680,20 +2681,22 @@ app.post("/api/schema/config", (req, res) => {
       xsdSchemaPath: schemaDir,
       schemaFiles: ['md.xsd', 'common.xsd']
     };
-    const resolved = resolveXsdConfig(nextConfig);
-    if (!resolved.mdExists || !resolved.commonExists) {
-      return res.status(400).json({
-        error: "Schema directory must contain both md.xsd and common.xsd.",
-        resolved
-      });
-    }
-
     writeXsdConfig(nextConfig);
+    const resolved = resolveXsdConfig(nextConfig);
     const library = reloadSchemaLibrary();
+    const schemaComplete = !!(resolved.mdExists && resolved.commonExists);
+    const schemaWarning = schemaComplete
+      ? null
+      : schemaDir
+        ? `Paths saved. Schema directory "${schemaDir}" is missing md.xsd and/or common.xsd, so schema-aware validation stays disabled until that resolves.`
+        : `Paths saved. No schema directory is set, so schema-aware validation stays disabled until you point one at a folder containing md.xsd + common.xsd.`;
     return res.json({
-      success: library.loaded,
+      success: true,
+      saved: true,
+      schemaComplete,
+      schemaWarning,
       config: nextConfig,
-      resolved: resolveXsdConfig(nextConfig),
+      resolved,
       schema_counts: {
         events: library.events.length,
         conditions: library.conditions.length,

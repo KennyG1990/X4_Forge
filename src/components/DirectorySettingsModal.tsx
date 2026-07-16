@@ -89,7 +89,7 @@ export default function DirectorySettingsModal({
   const [workspaceInput, setWorkspaceInput] = useState('');
   const [filesystemInput, setFilesystemInput] = useState('');
   const [resolved, setResolved] = useState<any>(null);
-  const [status, setStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'error'; msg: string }>({ type: 'idle', msg: '' });
+  const [status, setStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'warn' | 'error'; msg: string }>({ type: 'idle', msg: '' });
 
   useEffect(() => {
     if (!isOpen) return;
@@ -124,18 +124,19 @@ export default function DirectorySettingsModal({
         setResolved(res.resolved || resolved);
         setStatus({ type: 'error', msg: res.error });
       } else {
+        // Paths always save now (schema no longer gates the save). Reflect that honestly:
+        // green when the schema also loaded, amber "saved, schema pending" when it didn't.
         setResolved(res.resolved || null);
         setModWorkspacePath(workspaceInput.trim());
         setFilesystemPath(filesystemInput.trim());
         const events = res.schema_counts?.events ?? 0;
         const conditions = res.schema_counts?.conditions ?? 0;
         const actions = res.schema_counts?.actions ?? 0;
-        // P11: a save that loads ZERO schema elements is a broken config (empty or invalid
-        // schema path), not a clean success — surface it as an error instead of green "Saved".
-        if (events === 0 && conditions === 0 && actions === 0) {
+        if (res.schemaComplete === false || (events === 0 && conditions === 0 && actions === 0)) {
           setStatus({
-            type: 'error',
-            msg: `Saved, but 0 schema elements loaded — the Schema Directory looks empty or invalid (${schemaPath.trim() || 'no path set'}). Schema-aware validation will not work until this resolves.`
+            type: 'warn',
+            msg: res.schemaWarning
+              || `Paths saved. Schema not loaded (${schemaPath.trim() || 'no schema path set'}) — schema-aware validation stays disabled until md.xsd + common.xsd resolve.`
           });
         } else {
           setStatus({
@@ -296,7 +297,9 @@ export default function DirectorySettingsModal({
               className={`p-2 rounded text-[10px] font-mono leading-relaxed border ${
                 status.type === 'error'
                   ? 'bg-red-500/10 border-red-500/30 text-red-300'
-                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  : status.type === 'warn'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
               }`}
             >
               {status.msg}

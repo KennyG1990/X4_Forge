@@ -31,6 +31,41 @@ shipped; VSIX 0.0.2. Evidence: `vscode-extension/evidence/VALIDATION.md`.
 (bounded):** attach-mode has no session credential, so the "Create Agent Key" command only
 works against an owned sidecar (documented in the command's message).
 
+### B43 · Gold-standard sidecar debugging (VS Code + Antigravity) — ✅ VERIFIED 2026-07-15 → ROADMAP
+`x4forge.debug` (off/inspect/inspect-brk) spawns the sidecar under `--inspect` + auto-attaches the
+IDE Node debugger. Proven LIVE in BOTH IDEs (debug toolbar active; Antigravity Call Stack "X4 Forge
+Sidecar RUNNING"; VS Code "Debugger listening on ws://" + debug status). Source-level TS via
+`x4forge.forgeRoot`; committed `.vscode/launch.json` for the controller. Default off = zero behavior
+change (touched only vscode-extension/). VSIX 0.0.3, both IDEs. Evidence: `vscode-extension/evidence/VALIDATION.md`.
+
+### B44 · Git-derived live version in the header — ✅ VERIFIED 2026-07-15 → ROADMAP
+Header `v{__APP_VERSION__}` is now `major.minor.<git-commit-count>` (baked at build time), so it
+moves with every commit and updates when users update the extension; tooltip `__APP_BUILD__` =
+short SHA + commit date + dirty flag. Graceful fallback to package.json version if git absent.
+`vite.config.ts` + `src/vite-env.d.ts` + one App.tsx attribute. Live-proven header "v1.0.213".
+
+### B45 · Directory-save no longer gated on schema — ✅ VERIFIED 2026-07-15 → ROADMAP
+`POST /api/schema/config` was 400-gated on schemaDir containing md.xsd+common.xsd, which
+blocked saving the workspace/filesystem/game paths whenever the schema was absent/incomplete.
+Now paths save independently; schema is validated + REPORTED (amber "saved, schema pending"),
+never a hard gate. Server + DirectorySettingsModal. Live-proven: workspace-only save persists;
+valid schema still loads (unpacked libraries → 402 events/807 actions). tsc/e2e 19/19.
+
+### B46 · Full-corpus schema/reference validation (modding-relevant subset) — `spec'd` (SPECIFIED 2026-07-15, Ken chose subset scope)
+Load ALL XSDs from the schema folder (not just md+common); route each mod file type to its
+real schema (MD, AIScripts, wares, jobs, factions, gamestarts, god/sectors, t-files, ui,
+macros/components); build reference sets from the full unpacked corpus (9,884 files at
+`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`). 3 phases (loader / routing / corpus refs).
+Plan: `docs/plans/2026-07-15-full-corpus-validation.md`. NOT started — big core-engine change;
+deserves fresh context.
+
+### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP
+Ken: the bridge is x4_ai_influence-specific (ADR-F3 "optional, never a dependency"), but the
+startup walkaround warned amber "bridge DOWN" for EVERY mod. Now labeled "(optional)", a down
+bridge reports neutral (unknown/grey) with copy naming its actual scope, never a warn, and no
+longer counts toward "N items worth a look". healthCard.ts + oracle check pinning the negative.
+Live-proven: counter 2→1, row grey with the optional copy. Oracle 9/9, tsc 0, precommit 0.
+
 ## P1 — Safety / architecture
 
 ### B1 · Workspace sync-trust slice — ✅ CLOSED 2026-07-09 → ROADMAP (badge verified live; residual: badge clipping polish → B13)

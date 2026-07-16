@@ -52,6 +52,81 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B47 · WALKAROUND BRIDGE ROW DE-ESCALATED TO OPTIONAL (2026-07-15, branch; VERIFIED)
+
+Ken's correction: the neural-link bridge is fundamental ONLY to x4_ai_influence (ADR-F3 binds it
+"optional, never a dependency"), but the startup walkaround treated a down bridge as an amber
+"worth a look" for every mod — implying a universal requirement. Fix in `src/lib/healthCard.ts`:
+row renamed "Neural-link bridge (optional)"; bridge UP → pass; bridge DOWN → NEUTRAL
+(unknown/grey) with detail "only used by bridge-integrated mods (e.g. x4_ai_influence); not
+required for anything else"; a down bridge no longer counts toward the warn tally. Oracle gained
+a pinned negative ("down bridge is neutral info, never a warn") — 9/9. Live-proven on a scratch
+sidecar: header count 2→1 items, row grey with the optional copy. tsc 0 · precommit 0 · e2e
+unaffected surface (no spec touches the walkaround row). **Suggested commit title:** included in
+the B43–B47 batch title.
+
+### ✅ B45 · DIRECTORY SAVE DECOUPLED FROM SCHEMA (2026-07-15, branch `claude/x4-forge-vscode-poc-806ef5`; VERIFIED)
+
+Ken hit it: `POST /api/schema/config` 400-rejected the WHOLE save (workspace/filesystem/game
+paths included) unless the schema dir contained md.xsd+common.xsd — so you couldn't set just the
+workspace path without a valid schema. Fixed: paths save independently; the schema dir is
+validated and REPORTED (server returns `saved/schemaComplete/schemaWarning`; the modal shows an
+amber "Paths saved — schema pending" instead of a red failure), never a hard gate. Files:
+server.ts config endpoint + `src/components/DirectorySettingsModal.tsx` (+ new `warn` status
+style). **Live-proven:** workspace-only save (empty schema) → `saved:true, schemaComplete:false`,
+persisted on GET; valid schema still loads (pointing at the unpacked `libraries/` even loaded a
+richer md.xsd — 402 events/807 actions vs the old 398/785). tsc 0 · e2e 19/19.
+**Suggested commit title:** "B45: directory paths save independently of schema validity (report,
+don't gate)".
+
+### ✅ B44 · GIT-DERIVED LIVE VERSION IN THE HEADER (2026-07-15, branch `claude/x4-forge-vscode-poc-806ef5`; VERIFIED)
+
+Ken: the header showed a static `v1.0.0` forever — he wanted it to track commits and change as
+users update the extension. Now `__APP_VERSION__` is computed at BUILD TIME as
+`${major}.${minor}.${git-commit-count}` (major.minor from package.json, patch = `git rev-list
+--count HEAD`), baked into the bundle; `__APP_BUILD__` (new) = short SHA + commit date + a
+"uncommitted build" flag when the tree is dirty, shown as the header tooltip. Because it's frozen
+into the bundle at build time (when .git is present) and the header reads a compile-time literal,
+the shipped app needs no repo at runtime, and a user who updates to a bundle built from a newer
+commit sees a higher number. Graceful fallback to the plain package.json version if git is
+unavailable. Files: `vite.config.ts` (compute + define both constants), `src/vite-env.d.ts`
+(declare `__APP_BUILD__`), `src/App.tsx` (one `title=` attribute on the version span).
+
+**Validation:** tsc/lint/precommit 0; product build 0; the git version + tooltip confirmed BAKED
+into `dist/assets/*.js`; booted the fresh build and read the rendered header live —
+**"X4 FORGE v1.0.213"**, tooltip **"commit 379255c · 2026-07-15 · uncommitted build"**; e2e rerun
+(product build changed). Note: the number is the whole-branch commit count, so it only advances
+on real commits (Ken's), and a dirty build is flagged in the tooltip.
+**Suggested commit title:** "B44: header version tracks git (major.minor.commit-count + build
+tooltip) instead of static v1.0.0".
+
+### ✅ B43 · GOLD-STANDARD SIDECAR DEBUGGING — VS Code + Antigravity (2026-07-15, branch `claude/x4-forge-vscode-poc-806ef5`; VERIFIED live in BOTH IDEs)
+
+Ken wanted real debuggability (breakpoints, not just logs) for the extension's backend, in both
+IDEs. Reconcile verified BOTH VS Code and Antigravity bundle `ms-vscode.js-debug` → one attach
+path works in each, no fork workaround.
+
+**Built:** `x4forge.debug` setting (`off`/`inspect`/`inspect-brk`) — spawnSidecar prepends
+`--<mode>=127.0.0.1:<free port>` to the node args and auto-attaches via
+`vscode.debug.startDebugging({type:'node',request:'attach',port,continueOnAttach:!brk,...})`;
+`inspect-brk` tolerates the readiness pause (returns the handle instead of killing the paused
+server). Source-level TS breakpoints reuse the EXISTING `x4forge.forgeRoot` (repo `npm run build`
+keeps `dist/server.cjs.map`) — no build change. Committed `vscode-extension/.vscode/launch.json`
+(Extension-Host config to debug `extension.ts` + a manual attach config). `chrome://inspect`
+fallback if auto-attach ever fails. Version → 0.0.3.
+
+**Validation:** extension tsc/build clean; headless `--inspect` proof (server boots 200; CDP
+`/json/version` node v24.15.0; "Debugger listening on ws://…"). **LIVE in Antigravity** (0.0.3,
+debug=inspect, forgeRoot=repo): Run & Debug opened, debug toolbar active, Call Stack "Remote
+Process [0] + X4 Forge Sidecar — RUNNING", Debug Console streaming. **LIVE in VS Code** (same
+settings): debug toolbar active, "Debugger listening on ws://…" in the X4 Forge output, debug
+status bar. Default `off` = byte-identical spawn (no arg, no attach); B43 touched only
+`vscode-extension/`, so repo gates (green at B42 close) are unaffected; precommit re-run green.
+VSIX 0.0.3 inspected — launch.json + *.map correctly NOT shipped (dev-only), no secrets.
+**Open (Ken):** commit branch; port with the other extension work to main.
+**Suggested commit title:** "B43: gold-standard sidecar debugging — x4forge.debug (--inspect +
+auto-attach, both IDEs) + forgeRoot sourcemaps + launch.json".
+
 ### ✅ B42 · AGENT KEY MANAGER — named/scoped/EXPIRING keys + parity passes + extension icon (2026-07-15, branch `claude/x4-forge-vscode-poc-806ef5`; VERIFIED live in Antigravity)
 
 Grew out of Ken's security question ("if the token is a feature, we should have a key

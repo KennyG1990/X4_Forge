@@ -145,6 +145,30 @@ no external assets): node-graph X of four cyan nodes wired to an amber forge-spa
 studio's dark plate in a teal rounded frame. Wired via manifest `icon` field; version → 0.0.2;
 present in the VSIX (2093 files, the +1 vs 0.0.1).
 
+## B43 — Gold-standard sidecar debugging (validated live in BOTH IDEs, 2026-07-15)
+
+`x4forge.debug` (`off`/`inspect`/`inspect-brk`) launches the managed sidecar under Node
+`--inspect` and auto-attaches the IDE's debugger via `vscode.debug.startDebugging`. Both IDEs
+bundle `ms-vscode.js-debug` (verified in their `resources/app/extensions`), so the same attach
+config works in each. Source-level TS breakpoints via `x4forge.forgeRoot` (repo build keeps
+`dist/server.cjs.map`); committed `vscode-extension/.vscode/launch.json` adds an Extension-Host
+config for debugging the controller. Version → 0.0.3.
+
+- **Mechanism (headless):** staged sidecar launched with `--inspect=127.0.0.1:9345` → server
+  still boots (schema 200), CDP `/json/version` = `node.js/v24.15.0`, `/json/list` shows a
+  debuggable `node` target, stderr banner "Debugger listening on ws://127.0.0.1:9345/…".
+- **Live in ANTIGRAVITY (0.0.3, debug=inspect, forgeRoot=repo):** reload → Run & Debug view
+  opened, **debug toolbar active** (pause/step/restart/disconnect), **Call Stack: "Remote
+  Process [0] + X4 Forge Sidecar — RUNNING"**, Debug Console streaming the attached process.
+- **Live in VS CODE (same settings):** **debug toolbar active**, "X4 Forge" output shows
+  "Debugger listening on ws://…", DEBUG CONSOLE tab, status bar in debug state. Attached and
+  controllable — gold-standard parity with Antigravity.
+- **Regression:** `x4forge.debug` defaults to `off` → no `--inspect` arg, no attach, spawn path
+  byte-identical to before; B43 touched only `vscode-extension/` (no product source), so repo
+  gates (tsc/e2e/sweep, green at B42 close) are unaffected; precommit re-run green.
+- VSIX 0.0.3 (2094 files): inspected — **launch.json and *.map do NOT ship** (dev-only), no
+  secrets. Both IDEs on 0.0.3.
+
 ## Integrity at B42 close
 
 - Standalone :3000: not running at close (user's dev-terminal stack — unrelated; B42 ran only

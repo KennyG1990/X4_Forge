@@ -2,7 +2,7 @@
   "name": "x4-forge-studio",
   "displayName": "X4 Forge Studio",
   "description": "Run the X4 Forge visual modding studio inside VS Code. Proof-of-concept shell: the existing Forge app rendered in a webview over a managed local backend sidecar.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "icon": "icon.png",
   "publisher": "x4forge-local",
   "private": true,
@@ -63,6 +63,17 @@
           "type": "boolean",
           "default": false,
           "description": "Open the X4 Forge Studio automatically when a (trusted) workspace finishes loading. Useful for dedicated modding workspaces; off by default."
+        },
+        "x4forge.debug": {
+          "type": "string",
+          "enum": ["off", "inspect", "inspect-brk"],
+          "default": "off",
+          "enumDescriptions": [
+            "Normal — no debugger.",
+            "Launch the backend with --inspect and auto-attach the Node debugger (breakpoints, stepping). Works in VS Code and Antigravity.",
+            "Like inspect, but pause at the first line so you can debug startup; continue execution in the debugger to start the server."
+          ],
+          "description": "Attach a Node debugger to the managed backend sidecar. For SOURCE-LEVEL (TypeScript) breakpoints, also set x4forge.forgeRoot to a built repo checkout (its bundle keeps sourcemaps); against the bundled app you debug at the bundled-JS level. Default off."
         }
       }
     }

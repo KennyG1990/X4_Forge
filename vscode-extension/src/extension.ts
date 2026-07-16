@@ -31,6 +31,8 @@ interface BackendHandle {
   port?: number;
   /** Session token for an OWNED sidecar (attach mode has no credential — by design). */
   token?: string;
+  /** Node inspector port when spawned under --inspect (B43); 0 when not debugging. */
+  debugPort?: number;
 }
 
 let backend: BackendHandle | null = null;
@@ -56,7 +58,39 @@ function cfg() {
     stateDir: (c.get<string>("stateDir") || "").trim(),
     nodePath: (c.get<string>("nodePath") || "").trim(),
     autoOpen: c.get<boolean>("autoOpen") === true,
+    debug: ((c.get<string>("debug") || "off").trim() as "off" | "inspect" | "inspect-brk"),
   };
+}
+
+/**
+ * Gold-standard debugging: attach the IDE's Node debugger to the sidecar's --inspect port.
+ * Works identically in VS Code and Antigravity — both bundle ms-vscode.js-debug (verified),
+ * which registers the `node` attach type this config uses. `continueOnAttach` is true for
+ * plain --inspect (the process is already running) and false for --inspect-brk (stay paused
+ * at the first line so the developer can step through startup).
+ */
+async function attachSidecarDebugger(debugPort: number, appRoot: string, brk: boolean): Promise<void> {
+  try {
+    const started = await vscode.debug.startDebugging(undefined, {
+      type: "node",
+      request: "attach",
+      name: "X4 Forge Sidecar",
+      address: "127.0.0.1",
+      port: debugPort,
+      continueOnAttach: !brk,
+      sourceMaps: true,
+      // When forgeRoot points at a real build, dist/server.cjs.map sits here → TS breakpoints.
+      outFiles: [path.join(appRoot, "dist", "**", "*.cjs")],
+      skipFiles: ["<node_internals>/**"],
+      restart: false,
+    });
+    log(started
+      ? `debugger attached to the sidecar on inspector port ${debugPort} (session "X4 Forge Sidecar")`
+      : `debugger attach on port ${debugPort} was not started (is js-debug available in this host?)`);
+  } catch (err) {
+    log(`debugger attach failed on port ${debugPort}: ${err instanceof Error ? err.message : String(err)} — ` +
+      `the inspector is still open; attach manually via chrome://inspect (127.0.0.1:${debugPort}).`);
+  }
 }
 
 async function fetchWithTimeout(url: string, ms: number): Promise<Response | null> {
@@ -174,11 +208,21 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   const stateDir = resolveStateDir(context);
   fs.mkdirSync(stateDir, { recursive: true });
 
-  log(`spawning sidecar: ${nodeExe} (${nodeVersion}) dist/server.cjs`);
+  // B43: gold-standard debugging — spawn under --inspect and auto-attach the IDE debugger.
+  const debugMode = cfg().debug;
+  const nodeArgs: string[] = [];
+  let debugPort = 0;
+  if (debugMode !== "off") {
+    debugPort = await findFreePort();
+    nodeArgs.push(`--${debugMode}=127.0.0.1:${debugPort}`);
+  }
+
+  log(`spawning sidecar: ${nodeExe} (${nodeVersion}) ${nodeArgs.join(" ")} dist/server.cjs`.replace(/\s+/g, " "));
   log(`  app root: ${appRoot.root} (${appRoot.source})`);
   log(`  port: ${port} (dynamically selected)  state dir: ${stateDir}`);
+  if (debugPort) log(`  DEBUG: node inspector on 127.0.0.1:${debugPort} (${debugMode})`);
 
-  const child = spawn(nodeExe, [path.join("dist", "server.cjs")], {
+  const child = spawn(nodeExe, [...nodeArgs, path.join("dist", "server.cjs")], {
     cwd: appRoot.root,
     windowsHide: true,
     env: {
@@ -194,7 +238,13 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   child.stdout?.on("data", (d) => output.append(String(d)));
   child.stderr?.on("data", (d) => output.append(String(d)));
 
-  const handle: BackendHandle = { baseUrl: `http://127.0.0.1:${port}`, owned: true, child, port, token };
+  const handle: BackendHandle = { baseUrl: `http://127.0.0.1:${port}`, owned: true, child, port, token, debugPort };
+
+  // Attach the debugger right after spawn (the inspector is up at process start). For
+  // --inspect-brk the process is paused at entry until this attach + a manual continue.
+  if (debugPort) {
+    void attachSidecarDebugger(debugPort, appRoot.root, debugMode === "inspect-brk");
+  }
 
   child.on("exit", (code, signal) => {
     log(`sidecar exited (code=${code}, signal=${signal ?? "none"})`);
@@ -213,7 +263,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   });
 
   // Readiness: the server must answer its own public schema endpoint.
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + (debugMode === "off" ? 30_000 : 120_000);
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(
@@ -225,6 +275,12 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
       return handle;
     }
     await new Promise((r) => setTimeout(r, 400));
+  }
+  // --inspect-brk pauses the server at entry until the developer continues in the debugger,
+  // so a readiness timeout is EXPECTED there — return the handle instead of killing it.
+  if (debugMode === "inspect-brk") {
+    log(`sidecar is paused at startup (--inspect-brk) — continue execution in the debugger to start the server.`);
+    return handle;
   }
   stoppingDeliberately = true;
   try {

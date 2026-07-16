@@ -1290,7 +1290,7 @@ export default function App() {
               <path d="M17.6 3.1l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="#fbbf24" />
             </svg>
             <span className="font-semibold text-white tracking-tight shrink-0 select-none">
-              X4 FORGE <span className="text-cyan-400/90 font-normal">v{__APP_VERSION__}</span>
+              X4 FORGE <span className="text-cyan-400/90 font-normal" title={__APP_BUILD__}>v{__APP_VERSION__}</span>
             </span>
             {workspace.sourceFolder && (
               <span

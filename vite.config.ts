@@ -1,5 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import {execSync} from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import {defineConfig, type Plugin} from 'vite';
@@ -7,14 +8,35 @@ import {defineConfig, type Plugin} from 'vite';
 // API server port in split-dev mode (Vite serves the UI on 3000 and proxies /api here).
 const API_PORT = process.env.API_PORT || '3001';
 
-// Single source of truth for the app version: package.json. Injected below as
-// a compile-time constant (__APP_VERSION__) so the header (and anything else)
-// always shows the released version — bump package.json once per release.
-const APP_VERSION = (() => {
+// App version, computed at BUILD TIME and baked into the bundle as compile-time constants
+// (__APP_VERSION__ / __APP_BUILD__). The DISPLAYED patch number is the git commit count, so
+// the header version moves with every commit — a user who updates the extension (installs a
+// bundle built from a newer commit) sees a higher number. major.minor come from package.json
+// (bump those manually at real milestones). The shipped app has no .git, but that's fine: the
+// value is frozen into the bundle at build time, exactly when .git IS present. Falls back to
+// the plain package.json version if git is unavailable.
+const {APP_VERSION, APP_BUILD} = (() => {
+  const pkgVersion = (() => {
+    try {
+      return String(JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')).version || '0.0.0');
+    } catch {
+      return '0.0.0';
+    }
+  })();
+  const git = (cmd: string) =>
+    execSync(cmd, {cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore']}).toString().trim();
   try {
-    return String(JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')).version || '0.0.0');
+    const count = git('git rev-list --count HEAD');
+    const sha = git('git rev-parse --short HEAD');
+    const date = git('git show -s --format=%cs HEAD'); // commit date, YYYY-MM-DD
+    const dirty = git('git status --porcelain').length > 0;
+    const [major = '1', minor = '0'] = pkgVersion.split('.');
+    return {
+      APP_VERSION: `${major}.${minor}.${count}`,
+      APP_BUILD: `commit ${sha} · ${date}${dirty ? ' · uncommitted build' : ''}`,
+    };
   } catch {
-    return '0.0.0';
+    return {APP_VERSION: pkgVersion, APP_BUILD: `v${pkgVersion}`};
   }
 })();
 
@@ -58,6 +80,7 @@ export default defineConfig(() => {
   return {
     define: {
       __APP_VERSION__: JSON.stringify(APP_VERSION),
+      __APP_BUILD__: JSON.stringify(APP_BUILD),
     },
     plugins: [react(), tailwindcss(), studioTokenPlugin()],
     resolve: {

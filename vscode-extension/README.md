@@ -51,6 +51,27 @@ npm run package     # → x4-forge-studio-0.0.1.vsix
 Install: `code --install-extension x4-forge-studio-0.0.1.vsix`
 Uninstall: `code --uninstall-extension x4forge-local.x4-forge-studio`
 
+## Debugging (VS Code and Antigravity)
+
+Gold-standard Node debugging — breakpoints, stepping, variable inspection — attaches to the
+managed backend sidecar. Both VS Code and Antigravity bundle the JS debugger, so this works
+identically in either.
+
+1. Set **`x4forge.debug`** to `inspect` (or `inspect-brk` to pause at startup).
+2. Open the studio. The extension launches the backend with `--inspect` and **auto-attaches
+   the debugger** — a session named "X4 Forge Sidecar" appears in Run & Debug, and the inspect
+   port is printed in the "X4 Forge" output channel.
+3. For **source-level (TypeScript) breakpoints**, also set **`x4forge.forgeRoot`** to a built
+   repo checkout (its `dist/server.cjs.map` lets the debugger map to the original `.ts`).
+   Against the bundled app you still debug, at the bundled-JS level.
+
+If the auto-attach ever doesn't start, the inspector is still open — attach manually from
+`chrome://inspect` at the printed `127.0.0.1:<port>`.
+
+To debug the **extension controller** itself (`extension.ts`), open `vscode-extension/` and
+press F5 (the committed `.vscode/launch.json` provides an Extension-Host config). You can debug
+the controller and the sidecar at the same time.
+
 ## Honest limitations (spike scope)
 
 - The webview hosts the Forge over loopback HTTP in an iframe; a few IDE-side keyboard

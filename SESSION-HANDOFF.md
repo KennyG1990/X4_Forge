@@ -1,5 +1,19 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
+> ## ⛔ COMMIT POINT (2026-07-15, degradation call RATIFIED by Ken)
+> **CORRECTION: Ken already committed B41+B42 on this branch as `379255c` ("feat(forge): Launch
+> VS Code Extension PoC, Agent Key Manager, and new workspace modes") — the header's v1.0.213 IS
+> that commit.** Remaining uncommitted = **B43+B44+B45+B47 + records** (15-ish files, junk-checked
+> clean: no secrets/config/data/VSIX). Suggested title:
+> "feat(forge): sidecar debugging (both IDEs), git-derived live version, save-gate fix,
+> bridge-row de-escalation — B43–B45, B47"
+> (or individually: the B43/B44/B45/B47 titles in their ROADMAP entries.)
+> **NEXT UNIT (fresh session): B46 phase 1 (multi-schema loader)** — plan is fully reconciled at
+> `docs/plans/2026-07-15-full-corpus-validation.md`; first command: read that plan + BACKLOG B46,
+> then start on `src/lib/xsdParser.ts` loadSchemaLibrary. Ken-gated queue also: port B41–B45 to
+> main (B44/B45 are PRODUCT source), beta cohorts, two live debug sessions may still be attached
+> (disconnect at leisure).
+
 > ## ◐ AUTHORITATIVE CURRENT STATE — 2026-07-15 (this WORKTREE; the main checkout's own
 > ## SESSION-HANDOFF.md at F:\DEV_ENV\X4_Forge governs main — it was NOT touched)
 >
@@ -9,6 +23,32 @@
 > same 33 dirty files, 0 stashes; live :3000 workspace hash `dac6d106bd45f2bd` byte-identical
 > to its pre-session record).
 >
+> - **B45 status: ✅ VERIFIED** (2026-07-15, PRODUCT source) — directory paths save independently of
+>   schema validity. `POST /api/schema/config` no longer 400-gates the whole save on md.xsd+common.xsd;
+>   paths save + schema is reported (amber "saved, schema pending"). server.ts + DirectorySettingsModal.
+>   Live-proven; e2e 19/19.
+> - **B46 status: SPECIFIED, NOT started** — full-corpus schema/reference validation, MODDING-RELEVANT
+>   SUBSET scope (Ken chose, not exhaustive). Load all XSDs from the schema folder + route each mod
+>   file type to its real schema + full-corpus reference sets from the 9,884-file unpacked game
+>   (`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`). 3 phases (loader/routing/corpus-refs). Plan:
+>   `docs/plans/2026-07-15-full-corpus-validation.md`. **This is a core validation-engine change (highest
+>   blast radius; cry-wolf-false-positive is the historical failure mode) — deliberately deferred to a
+>   FRESH session per the degradation call at the end of this long run.**
+> - **B44 status: ✅ VERIFIED** (2026-07-15) — header version tracks git. `__APP_VERSION__` =
+>   `major.minor.<git-commit-count>` baked at build time (moves with commits, updates when users
+>   update the extension); new `__APP_BUILD__` tooltip = short SHA + date + dirty flag. vite.config.ts
+>   + vite-env.d.ts + one App.tsx attribute. Live-proven header "v1.0.213". **This is PRODUCT source**
+>   (unlike B41–B43 which were extension-only) — so the header version change is ALSO in the standalone
+>   app and rides to main whenever the product is next built. Port with the rest.
+> - **B43 status: ✅ VERIFIED live in BOTH IDEs** (2026-07-15) — gold-standard sidecar debugging.
+>   `x4forge.debug` (off/inspect/inspect-brk) spawns the sidecar under `--inspect` + auto-attaches
+>   the IDE Node debugger (both bundle js-debug — verified). Source-level TS via `x4forge.forgeRoot`
+>   (repo build keeps the map); committed `vscode-extension/.vscode/launch.json` for the controller.
+>   Proven live: Antigravity Call Stack "X4 Forge Sidecar RUNNING" + VS Code debug toolbar/"Debugger
+>   listening on ws://". Default off = zero behavior change; touched ONLY `vscode-extension/` (repo
+>   gates unaffected). **VSIX is now `x4-forge-studio-0.0.3.vsix`** (both IDEs). Plan:
+>   `docs/plans/2026-07-15-gold-standard-debug.md`. Two debug sessions may still be running on the
+>   scratch workspace (Ken can disconnect).
 > - **B42 status: ✅ VERIFIED live in Antigravity** (2026-07-15) — agent key manager: named,
 >   scoped (read/write/deploy), EXPIRING (1h/24h/7d/30d/never) keys, sha256-at-rest, one-time
 >   reveal, revoke, audit. AgentBridge AGENT KEYS tab + extension command `x4forge.createAgentKey`.
