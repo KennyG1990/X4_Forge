@@ -20,9 +20,11 @@ store (namespace `x4forge`). GitHub and the store are two SEPARATE destinations:
    ```
    npm run stage-app                                  # copy built product into app/
    npm run build                                      # compile the controller (out/)
-   npx @vscode/vsce package --pre-release --allow-missing-repository
+   npx @vscode/vsce package --allow-missing-repository
    ```
    (Run `npm run build` in the REPO ROOT first if the product bundle changed.)
+   **STANDING RULE (Ken, 2026-07-16): ALL releases are STABLE — never pass `--pre-release`.**
+   (0.0.4/0.0.6 were pre-release and hit the "no release version" install wall; 0.0.7+ are stable.)
 4. Publish (token read from .env.local, never printed):
    ```
    npx ovsx publish x4-forge-studio-<version>.vsix -p <OVSX_PAT>
