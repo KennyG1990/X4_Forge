@@ -51,13 +51,22 @@ Now paths save independently; schema is validated + REPORTED (amber "saved, sche
 never a hard gate. Server + DirectorySettingsModal. Live-proven: workspace-only save persists;
 valid schema still loads (unpacked libraries → 402 events/807 actions). tsc/e2e 19/19.
 
-### B46 · Full-corpus schema/reference validation (modding-relevant subset) — `spec'd` (SPECIFIED 2026-07-15, Ken chose subset scope)
-Load ALL XSDs from the schema folder (not just md+common); route each mod file type to its
-real schema (MD, AIScripts, wares, jobs, factions, gamestarts, god/sectors, t-files, ui,
-macros/components); build reference sets from the full unpacked corpus (9,884 files at
-`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`). 3 phases (loader / routing / corpus refs).
-Plan: `docs/plans/2026-07-15-full-corpus-validation.md`. NOT started — big core-engine change;
-deserves fresh context.
+### B46 · Full-corpus schema/reference validation — Phase 1 ✅ VERIFIED 2026-07-16; Phases 2–3 `spec'd`
+**Phase 1 (multi-schema loader) SHIPPED:** `src/lib/schemaRegistry.ts` — discovers EVERY *.xsd
+under the configured schema folder + game folder (bounded walk mirroring B51, base-over-DLC),
+resolves transitive include chains, builds lazy per-domain indexes via the existing
+`buildSchemaIndex`; `GET /api/agent/schema-registry` (+`?domain=` +`?refresh=1`), TTL registry
+cache (cold walk 25.6s first-touch → 14ms cached). Oracle `schema-registry-selftest` 11/11
+(synthetic: include chain, junk degrade, missing include, DLC preference). LIVE vs the real
+unpacked 9.00: **40 domains** (incl. addon/coreaddon/cutscenes found in subdirs), 48 DLC dupes
+shadowed, 0 unresolved includes; md 1507 / factions 1354 / gamestarts 1417 / parameters 1556 /
+diff 4 elements. tsc/lint/precommit 0 · e2e 19/19 · sweep 82/85 (3 reds A/B-proven env-only).
+MD path + getAiSchemaIndex untouched (validation behavior unchanged this phase BY DESIGN).
+**Phase 2 (`spec'd`, fresh session):** file→schema routing (factions.xml→factions.xsd, emitted
+patches→diff.xsd, wares/jobs/gamestarts/t/ui) wired into project/validate; negative-path
+acceptance. NOTE for P2: the unpacked md.xsd flags 2 findings in the generator's synthetic MD
+(md_generator_zero_findings env red) — investigate before routing. **Phase 3 (`spec'd`):**
+full-corpus reference sets. Plan: `docs/plans/2026-07-15-full-corpus-validation.md`.
 
 ### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP
 Ken: the bridge is x4_ai_influence-specific (ADR-F3 "optional, never a dependency"), but the

@@ -39,6 +39,19 @@ already index for the property lint). Niche tiering of the remaining ~20 confirm
    folder, keyed by root element/domain (not the 2-file hardcode). Keep the existing MD
    SchemaLibrary shape for back-compat; add a per-domain index map. Oracle: load the unpacked
    `libraries/`, assert N domains parsed, md still 402/807. `GET /api/agent/schema-registry`.
+   **Phase-1 reconciled design (2026-07-16, in-progress):** engine `src/lib/schemaRegistry.ts`
+   (pure) — `discoverSchemaRegistry(schemaDir, gamePath?)` enumerates `*.xsd` via a bounded walk
+   MIRRORING B51's `discoverXsd` (depth≤6, asset-dir skips, base-over-DLC preference per
+   basename); per-domain `includes` resolved transitively from `schemaLocation` attrs (real graph
+   is shallow: ~20×→common, diplomacy→aiscripts→common); `getDomainIndex` = existing
+   `buildSchemaIndex([main, ...includes])` (the proven aiscripts composition — NO new parser).
+   Parse is LAZY per domain (common.xsd 1.7MB; eager ×30 too slow) and the shared 8-slot
+   indexCache is left alone (bump deferred to phase 2 routing). Oracle = SYNTHETIC fixtures
+   (include chain, junk file, missing include, DLC-copy preference) — env-dependent unpacked-dir
+   proof is a VALIDATION step, not the oracle (B49 lesson: no env-red noise). Endpoint
+   `GET /api/agent/schema-registry` (+PUBLIC_READONLY_GETS) lists domains; `?domain=x` parses one
+   and reports elementCount. Existing md path (`loadCurrentSchemaLibrary`) and `getAiSchemaIndex`
+   UNTOUCHED this phase.
 2. **File→schema routing.** A path→domain map + a validator that runs `validateXmlAgainstSchema`
    with the right domain index per generated/imported file; wire into `runSchemaValidation` +
    `project/validate`. Oracle: a deliberately-malformed wares/jobs/factions file FAILS; a

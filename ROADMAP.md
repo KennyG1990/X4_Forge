@@ -52,6 +52,42 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B46 PHASE 1 · MULTI-SCHEMA REGISTRY — all 40 game XSDs discovered + indexable (2026-07-16, VERIFIED) · 0.0.10 PUBLISHED
+
+Triggered by Ken's XSD-inventory question ("is none of this stuff useful for making mods?" — it
+is; it was spec'd-not-built). Phase 1 of the B46 plan, implemented per the reconciled design
+delta written before code:
+
+- **Engine `src/lib/schemaRegistry.ts`** (pure, house pattern): bounded-walk discovery of every
+  `*.xsd` under schemaDir+gamePath (mirrors B51's depth/skip/base-over-DLC rules), transitive
+  `schemaLocation` include-chasing, lazy per-domain `SchemaIndex` via the EXISTING
+  `buildSchemaIndex` (no new parser), TTL registry cache (measured: 25.6s first-touch cold walk
+  over the 9,884-file corpus → 1.4s FS-warm → **14ms** cached; `?refresh=1` escape).
+- **`GET /api/agent/schema-registry`** (PUBLIC_READONLY_GETS): domain list + include chains +
+  shadowed-copy counts; `?domain=x` builds that index and reports elementCount; unknown → 404.
+- **Oracle `schema-registry-selftest` 11/11** — synthetic fixtures ONLY (include chain,
+  transitive chain, junk-XSD degrade-not-throw, missing-include reporting, DLC-copy preference,
+  subdir discovery, empty-root) — env-dependent proof kept OUT of the oracle (B49 lesson).
+- **Live vs `F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`:** **40 domains** — all 37
+  `libraries/` XSDs PLUS addon/coreaddon/cutscenes found deeper in the tree (the ui schemas
+  phase 2 needs); 48 DLC duplicate copies correctly shadowed; **0 unresolved includes** across
+  the whole corpus; spot indexes: md **1507** elements · factions 1354 · gamestarts 1417 ·
+  parameters 1556 · diff 4 (correct — tiny schema).
+- **Gates:** tsc 0 · lint 0 · precommit 0 · **e2e 19/19 PASS** (verdict-parsed) · sweep **82/85**
+  with the 3 reds **A/B-PROVEN environmental** (same build on a bare no-XSD instance fails the
+  same class — reference/patch checks need a configured object index; documented since B49).
+- **Deliberately unchanged:** `loadCurrentSchemaLibrary` (md path), `getAiSchemaIndex`, all
+  validation routing — phase 1 adds CAPABILITY, not behavior, so it cannot cry wolf.
+- **Phase-2 hand-off note:** unpacked md.xsd yields 2 findings on the generator's synthetic MD
+  (`md_generator_zero_findings` red on XSD-configured scratch) — investigate before routing.
+
+**Also this close:** stable **0.0.10** published to Open VSX (registry-confirmed indexed,
+preRelease=False) carrying the B18 wizard fix — the fix functionally verified in the exact
+staged bundle shipped (booted `vscode-extension/app/dist/server.cjs` with scratch X4_DATA_DIR →
+detect-game returns the relocated path). **Suggested commit title:** "feat(schema): B46 Phase 1
+— multi-schema registry (40-domain discovery, include chains, lazy per-domain indexes,
+schema-registry endpoint + oracle 11/11); bump extension to 0.0.10".
+
 ### ✅ B50 + B37 · KEN EYEBALL GATES CLOSED · stable 0.0.9 PUBLISHED (2026-07-16, VERIFIED)
 
 **Experience gates flipped on Ken's screen (ADR-G3 — the only authority for these):**

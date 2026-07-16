@@ -123,6 +123,7 @@ import { registerSelftests } from "./src/server/selftestRegistry";
 import { createAgentKeyStore, scopeAllows, runAgentKeysSelftest, AGENT_KEY_TTLS, AGENT_KEY_PREFIX, type AgentKeyScope } from "./src/lib/agentKeys";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
+import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest } from "./src/lib/schemaRegistry";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -257,6 +258,7 @@ app.use((req, res, next) => {
 // Public so localhost dev/verification tooling can reach them without the token.
 const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/schema",
+  "/agent/schema-registry",
   "/agent/md-audit",
   "/agent/xsd-debug",
   "/agent/catdat-debug",
@@ -2261,6 +2263,45 @@ Analyze this trace and return the structured issues diagnostics and suggestions.
  * Exposes core constants, valid selection macro values, structural boundaries, and base templates.
  * Extremely helpful for AI agents to understand exactly what values are valid before making updates.
  */
+// B46 Phase 1 (2026-07-16): multi-schema registry — discover EVERY *.xsd under the configured
+// schema folder (and game folder), with per-domain include chains; ?domain=<name> lazily builds
+// that one domain's element index. Read-only; nothing routes validation through this yet (phase 2).
+app.get("/api/agent/schema-registry", (req, res) => {
+  try {
+    const resolved = resolveXsdConfig();
+    const schemaDir = resolved.schemaDir || "";
+    const registry = discoverSchemaRegistry(schemaDir, resolved.x4GamePath || undefined, { refresh: req.query.refresh === "1" });
+    const wanted = typeof req.query.domain === "string" ? req.query.domain.toLowerCase() : "";
+    const body: Record<string, unknown> = {
+      roots: registry.roots,
+      domainCount: registry.domains.length,
+      domains: registry.domains.map(d => ({
+        domain: d.domain,
+        file: d.path,
+        sizeBytes: d.sizeBytes,
+        includes: d.includes.map(p => path.basename(p)),
+        missingIncludes: d.missingIncludes,
+        shadowedCopies: d.shadowedCopies,
+      })),
+    };
+    if (wanted) {
+      const info = registry.domains.find(d => d.domain === wanted);
+      if (!info) return res.status(404).json({ ...body, error: `Unknown schema domain: ${wanted}` });
+      const index = getDomainIndex(info);
+      body.domainIndex = {
+        domain: info.domain,
+        loaded: index.loaded,
+        elementCount: index.elementCount,
+        sourceFiles: index.sourceFiles,
+        sampleElements: Array.from(index.elements.keys()).slice(0, 25),
+      };
+    }
+    return res.json(body);
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "schema-registry failed" });
+  }
+});
+
 app.get("/api/agent/schema", (req, res) => {
   const currentConfig = readXsdConfig();
   const resolvedConfig = resolveXsdConfig();
@@ -5236,6 +5277,7 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
 const SELFTESTS: Record<string, () => unknown> = {
   "agent-keys-selftest": runAgentKeysSelftest,
   "schema-discovery-selftest": runSchemaDiscoverySelftest,
+  "schema-registry-selftest": runSchemaRegistrySelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,
