@@ -75,6 +75,32 @@ an Azure subscription to create the publisher org; deferred. Flip beta→stable 
 non-pre-release package+publish. **Suggested commit title:** "feat(extension): publish X4 Forge
 Studio to Open VSX (x4forge namespace, MIT, marketplace-prep: PII scrub + native-dep portability)".
 
+### ✅ B48 Phase 2 + B53 · CANVAS REAL-ESTATE (collapse-default + lazy editor) + X4_DATA_DIR SEAM (2026-07-16, branch; VERIFIED)
+
+**B48P2 (canvas real estate, the thing Ken originally asked for):** the CodePreview pane now
+starts COLLAPSED by default so the canvas owns the width (live-measured +164px wider); the user's
+last choice persists (`x4_forge_code_collapsed`), expanding is one pull-tab click, and Expert
+still owns the full editor. The CodeMirror engine is now a **lazy `React.lazy`/Suspense import**
+(its own 358KB/gz-118 asset) that is NOT fetched until the pane is first opened — canvas-only
+sessions never download it (verified `chunkLoaded=false` while collapsed, `true` after expand).
+All chrome + the persistent top bar intact. FOUND+FIXED in the live drill: the collapsed drawer
+silently stayed full-width because the top-bar element's intrinsic tab/button width defeated the
+aside's inline width via flex min-content sizing — `min-w-0` + `overflow-x-hidden` on the aside +
+bar fixed it (300px collapsed confirmed with transitions disabled). e2e experience-mode spec
+updated (Expert opens the editor via the pull-tab now that it's collapsed-default).
+
+**B53 (X4_DATA_DIR seam):** `data/` (AI keys, agent keys, AI spend meter, api-registry, harvested
+schemas) was cwd-relative → wiped on every extension update, exactly like config.json before B51.
+New `src/lib/dataDir.ts` (`resolveDataDir`/`dataPath`, honors `X4_DATA_DIR`, deliberately NOT
+coupled to X4_STATE_DIR — the B51 regression lesson); 8 call sites migrated; the extension passes
+`X4_DATA_DIR=<globalStorage>/data`. Oracle `data-dir-selftest` 4/4 + served. Live-proven: a booted
+sidecar wrote agent-keys.json into X4_DATA_DIR, not cwd. Persistence parity with B51 config.
+
+Gates: tsc 0 · lint 0 · precommit 0 · **e2e 19/19** · oracle sweep +1 (data-dir) · build 0 ·
+bundle now splits the editor into its own chunk (main gz 412KB, editor gz 118KB lazy).
+**Suggested commit title:** "B48P2+B53: collapse-default code pane (canvas real estate) + lazy
+CodeMirror chunk + X4_DATA_DIR seam (runtime data survives extension updates)".
+
 ### ✅ B52 · IN-APP BUG REPORTER → GITHUB ISSUES (2026-07-16, branch; VERIFIED — e2e 19/19, precommit 0; Ken commit + release pending)
 
 Ken's decision after a Discord user asked where to report bugs: reports land in the

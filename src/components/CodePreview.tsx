@@ -21,11 +21,21 @@ import {
 } from 'lucide-react';
 import { ModWorkspace, generateMDXML, generateUIXML, MDNode, PackageDiagnostic } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
-import CodeMirrorField from './CodeMirrorField';
-
 // B48: the real editor engine (CodeMirror 6) replaces the hand-rolled textarea/pre editor and
 // custom diff renderer. Flag kept so the old renderer stays reachable as a one-release fallback.
+// B48P2: LAZY import — the ~360KB editor chunk is only fetched when the code pane is actually
+// shown (it starts collapsed by default), so canvas-only sessions never pay for it.
+const CodeMirrorField = React.lazy(() => import('./CodeMirrorField'));
 const CODEMIRROR_EDITOR = true;
+
+/** Tiny placeholder while the lazily-fetched editor chunk arrives (sub-second on localhost). */
+function EditorLoading() {
+  return (
+    <div className="flex-1 flex items-center justify-center font-mono text-[10px] text-slate-600 select-none">
+      loading editor…
+    </div>
+  );
+}
 import {
   toSafeModId,
   generateContentXML,
@@ -168,7 +178,7 @@ export default function CodePreview({
   selectedCueIds,
   autoSaveEnabled: propAutoSaveEnabled,
   setAutoSaveEnabled: _propSetAutoSaveEnabled,
-  codeCollapsed: _codeCollapsed,
+  codeCollapsed,
   setCodeCollapsed: _setCodeCollapsed,
   topBarTarget
 }: CodePreviewProps) {
@@ -1118,16 +1128,22 @@ export default function CodePreview({
       {/* ================================================================ */}
       <div id="xml_code_viewport" className="flex-1 flex min-h-0 relative select-text overflow-hidden m-2 rounded-lg border border-white/10 bg-[#050608] shadow-[0_3px_14px_rgba(0,0,0,0.45)]">
         {CODEMIRROR_EDITOR ? (
-          effectiveDiffEnabled ? (
+          codeCollapsed ? (
+            // B48P2: pane is collapsed — do NOT mount the editor (its lazy chunk stays
+            // unfetched). The aside body is hidden anyway; this just skips the work.
+            <div className="flex-1" />
+          ) : effectiveDiffEnabled ? (
             // ============= CODEMIRROR DIFF (read-only, split/unified) =============
             <div className="flex-1 flex overflow-hidden min-h-0 bg-[#050608]">
               <div className="flex-1 min-w-0 overflow-hidden">
-                <CodeMirrorField
-                  value={getDiffTexts().current}
-                  diffOriginal={getDiffTexts().original}
-                  diffMode={diffMode}
-                  className="h-full"
-                />
+                <React.Suspense fallback={<EditorLoading />}>
+                  <CodeMirrorField
+                    value={getDiffTexts().current}
+                    diffOriginal={getDiffTexts().original}
+                    diffMode={diffMode}
+                    className="h-full"
+                  />
+                </React.Suspense>
               </div>
               {showMinimap && renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).modifiedLines)}
             </div>
@@ -1136,11 +1152,13 @@ export default function CodePreview({
             <div className="flex-1 flex overflow-hidden min-h-0">
               <div className="relative h-full w-full overflow-hidden flex flex-1 bg-[#050608]">
                 <div className="flex-1 min-w-0 overflow-hidden">
-                  <CodeMirrorField
-                    value={isFileEditorActive ? editorContent : activeCodeText}
-                    onChange={isFileEditorActive ? handleEditorContentChange : handleGeneratedDraftChange}
-                    className="h-full"
-                  />
+                  <React.Suspense fallback={<EditorLoading />}>
+                    <CodeMirrorField
+                      value={isFileEditorActive ? editorContent : activeCodeText}
+                      onChange={isFileEditorActive ? handleEditorContentChange : handleGeneratedDraftChange}
+                      className="h-full"
+                    />
+                  </React.Suspense>
                 </div>
                 {/* Status pill — file save vs generated apply (preserved from the old editor) */}
                 <div className="absolute bottom-3 right-4 px-2 py-1 rounded bg-[#0b0c13]/90 border border-white/5 text-[9px] pointer-events-none select-none z-10 font-mono">

@@ -107,6 +107,24 @@ with working buttons — I couldn't cleanly distinguish it among the ~20 install
 via screenshots. NOTE: on a crowded rail a new container can land under the "···" (Additional
 Views) overflow at the bottom — if it's not immediately visible, it's there.
 
+### B48 Phase 2 · Canvas real-estate (collapse-default) + lazy editor — ✅ VERIFIED 2026-07-16 (e2e 19/19)
+Code pane starts COLLAPSED by default (canvas +164px wider live-measured), last choice persists
+(localStorage `x4_forge_code_collapsed`); the CodeMirror chunk is a lazy `React.lazy`/Suspense
+import (own 358KB/gz118 asset) NOT fetched until the pane is first opened — canvas-only sessions
+never download it (verified: chunkLoaded=false while collapsed). Editor + persistent top bar +
+all chrome intact; expand/collapse/persist drilled live. FOUND+FIXED live: the collapsed drawer
+stayed full-width because the top-bar's intrinsic width defeated the aside's inline width via
+flex min-content — `min-w-0` + `overflow-x-hidden` fixed it (300px collapsed confirmed). e2e:
+experience-mode spec updated (Expert now opens the editor via the pull-tab, since collapsed-default).
+
+### B53 · X4_DATA_DIR seam — runtime data survives extension updates — ◐ IMPLEMENTED 2026-07-16
+`data/` (agent keys, AI keys, AI spend meter, api-registry, harvested schemas) was cwd-relative =
+wiped on every extension update (like config.json was pre-B51). New `src/lib/dataDir.ts`
+(`resolveDataDir`/`dataPath`, honors `X4_DATA_DIR`, NOT coupled to X4_STATE_DIR); 8 call sites
+migrated (server.ts ×3, xsdParser ×2, aiKeyStore, gameDetectRoutes, validationRoutes); extension
+passes `X4_DATA_DIR=<globalStorage>/data`. Oracle `data-dir-selftest` 4/4. Live-proven: a booted
+sidecar wrote agent-keys.json into X4_DATA_DIR, not cwd.
+
 ### B48 · Real editor engine (CodeMirror 6) replaces hand-rolled CodePreview — Phase 1 ◐ IMPLEMENTED 2026-07-16
 Swapped the transparent-textarea/pre editor + custom line-diff for CodeMirror 6 (`CodeMirrorField.tsx`),
 behind flag `CODEMIRROR_EDITOR` (old renderer kept as fallback). Editable editor + read-only split

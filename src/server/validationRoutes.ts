@@ -18,6 +18,7 @@ import fs from "fs";
 import path from "path";
 import type { Express, Request, Response } from "express";
 import { resolveXsdConfig } from "../lib/xsdParser";
+import { dataPath } from "../lib/dataDir";
 import { buildSchemaIndex, type SchemaIndex } from "../lib/xsdValidate";
 import { extractBaseGameFile as catDatExtractBaseGameFile } from "../lib/x4CatDat";
 import { buildScriptPropertyIndex, runScriptPropertiesSelftest, type ScriptPropertyIndex } from "../lib/scriptProperties";
@@ -41,7 +42,7 @@ export function getAiSchemaIndex(): SchemaIndex | null {
   if (aiXsd && fs.existsSync(aiXsd)) return buildSchemaIndex([aiXsd, resolved.commonXsdPath].filter(Boolean));
   try {
     if (!resolved.x4GamePath) return null;
-    const cacheDir = path.join(process.cwd(), "data", "harvested-schemas");
+    const cacheDir = dataPath("harvested-schemas"); // B53
     const cachedXsd = path.join(cacheDir, "aiscripts.xsd");
     if (!fs.existsSync(cachedXsd)) {
       const hit = catDatExtractBaseGameFile(resolved.x4GamePath, "libraries/aiscripts.xsd");

@@ -212,6 +212,10 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   // wiping the configured game/schema/workspace paths each time the user updated.
   const configDir = path.join(context.globalStorageUri.fsPath, "config");
   fs.mkdirSync(configDir, { recursive: true });
+  // B53: the server's runtime-data root (AI keys, agent keys, spend meter, harvested schemas)
+  // also persists in global storage — not the install dir the next update wipes.
+  const dataDir = path.join(context.globalStorageUri.fsPath, "data");
+  fs.mkdirSync(dataDir, { recursive: true });
 
   // B43: gold-standard debugging — spawn under --inspect and auto-attach the IDE debugger.
   const debugMode = cfg().debug;
@@ -237,6 +241,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
       STUDIO_API_TOKEN: token,
       X4_STATE_DIR: stateDir,
       X4_CONFIG_DIR: configDir, // B51: config.json persists across extension updates
+      X4_DATA_DIR: dataDir,     // B53: AI/agent keys, spend meter, harvested schemas persist too
       // Defense-in-depth: never allow the dev-only shell route in this shell.
       FORGE_ALLOW_RUN_COMMAND: "",
     },

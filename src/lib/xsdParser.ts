@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { XMLParser } from 'fast-xml-parser';
+import { dataPath } from './dataDir';
 import { schemaLibraryToTemplates, SchemaAttribute, SchemaCategory, SchemaElement, SchemaLibrary } from './schemaTypes';
 
 type AnyNode = Record<string, any>;
@@ -238,8 +239,9 @@ export function getDefaultSchemaDir(gamePath = getDefaultGamePath()): string {
     }
   }
   // B49: generic default = the wizard's harvest target (B18 extracts md/common/aiscripts
-  // XSDs from the game archives into here) — never a specific mod's folder.
-  return path.join(process.cwd(), 'data', 'harvested-schemas');
+  // XSDs from the game archives into here) — never a specific mod's folder. B53: via the
+  // relocatable data root so it survives extension updates.
+  return dataPath('harvested-schemas');
 }
 
 function configPath(): string {
@@ -307,7 +309,7 @@ export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
   const schemaDir = process.env.X4_XSD_PATH
     || (config.xsdSchemaPath
       ? (path.isAbsolute(config.xsdSchemaPath) ? config.xsdSchemaPath : path.join(gamePath, config.xsdSchemaPath))
-      : path.join(process.cwd(), 'data', 'harvested-schemas'));
+      : dataPath('harvested-schemas'));
 
   const files = config.schemaFiles?.length ? config.schemaFiles : ['md.xsd', 'common.xsd'];
   // An explicit ABSOLUTE path in schemaFiles always wins (a user who set an exact file). Else

@@ -122,6 +122,7 @@ import { registerNpcIdentityProbeRoutes } from "./src/server/npcIdentityProbe";
 import { registerSelftests } from "./src/server/selftestRegistry";
 import { createAgentKeyStore, scopeAllows, runAgentKeysSelftest, AGENT_KEY_TTLS, AGENT_KEY_PREFIX, type AgentKeyScope } from "./src/lib/agentKeys";
 import { runBugReportSelftest } from "./src/lib/bugReport";
+import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -309,7 +310,7 @@ const PUBLIC_READONLY_GETS = new Set<string>([
 
 // B42: named, scoped, expiring agent keys (src/lib/agentKeys). The boot session token
 // keeps full, unscoped power and is the ONLY credential that can manage keys.
-const AGENT_KEYS_FILE = path.join(process.cwd(), "data", "agent-keys.json");
+const AGENT_KEYS_FILE = dataPath("agent-keys.json"); // B53: survives extension updates via X4_DATA_DIR
 const agentKeyStore = createAgentKeyStore({ file: AGENT_KEYS_FILE });
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -1751,7 +1752,7 @@ function isAppUiRequest(req: express.Request): boolean {
 // soft-stops at AI_DAILY_CALL_CAP total calls (default 300, 0 disables). Usage
 // persists in data/ai-usage.json; GET /api/ai/usage is the readout.
 const AI_DAILY_CALL_CAP = Number(process.env.AI_DAILY_CALL_CAP ?? 300);
-const AI_USAGE_FILE = path.join(process.cwd(), "data", "ai-usage.json");
+const AI_USAGE_FILE = dataPath("ai-usage.json"); // B53
 const aiSpendMeter = createSpendMeter(
   {
     load: () => { try { return fs.readFileSync(AI_USAGE_FILE, "utf8"); } catch { return null; } },
@@ -4905,7 +4906,7 @@ function loadAndApplyExternalApiRegistry(): void {
   const errors: { source: string; file?: string; errors: string[] }[] = [];
   const conflictsAll: { extensionId: string; kind: string; detail: string }[] = [];
 
-  const dataDir = path.join(process.cwd(), "data", "api-registry");
+  const dataDir = dataPath("api-registry"); // B53
   const fromData = loadApiDefsFromDir(dataDir, "data-dir");
   errors.push(...fromData.errors);
 
@@ -5236,6 +5237,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "agent-keys-selftest": runAgentKeysSelftest,
   "schema-discovery-selftest": runSchemaDiscoverySelftest,
   "bug-report-selftest": runBugReportSelftest,
+  "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,
   "ttfm-selftest": runTtfmSelftest,
   "action-census-selftest": runActionCensusSelftest,

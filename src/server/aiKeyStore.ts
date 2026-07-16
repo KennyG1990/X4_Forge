@@ -17,11 +17,12 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { dataPath } from "../lib/dataDir";
 
 export const AI_KEY_PROVIDERS = ["gemini", "claude", "openai", "openrouter"] as const;
 export type AiKeyProvider = (typeof AI_KEY_PROVIDERS)[number];
 
-const STORE_PATH = path.join(process.cwd(), "data", "ai-keys.json");
+const STORE_PATH = dataPath("ai-keys.json"); // B53: survives extension updates via X4_DATA_DIR
 
 function readStore(): Record<string, string> {
   try {

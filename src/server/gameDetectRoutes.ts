@@ -26,6 +26,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { parseLibraryFolders, proposeSetup, X4_STEAM_APPID, X4_STEAM_REL_DIR } from "../lib/gameDetect";
+import { dataPath } from "../lib/dataDir";
 
 interface GameDetectDeps {
   /** cat/dat extractor: (gamePath, 'libraries/md.xsd') → ExtractMatch | null */
@@ -116,7 +117,7 @@ export function registerGameDetectRoutes(app: Express, deps: GameDetectDeps): vo
       if (!gamePath || !fs.existsSync(gamePath)) {
         return res.status(400).json({ error: "x4GamePath missing or does not exist." });
       }
-      const outDir = path.join(process.cwd(), "data", "harvested-schemas");
+      const outDir = dataPath("harvested-schemas"); // B53
       fs.mkdirSync(outDir, { recursive: true });
       const files: { name: string; bytes: number }[] = [];
       const missing: string[] = [];

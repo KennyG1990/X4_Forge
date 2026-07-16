@@ -57,6 +57,9 @@ test('Beginner exposes five tasks, preserves workspace and selection, and Expert
   await page.getByTestId('mode-expert').click();
   await expect(page.locator('#view_selection_modes')).toBeVisible();
   await expect(page.locator('#side_panel')).toBeVisible();
+  // B48P2: the code pane starts COLLAPSED by default (canvas real estate) — Expert still owns
+  // the editor, it just opens via the pull-tab. Expand, then assert the editor container.
+  await page.getByTitle('Show code editor').click();
   await expect(page.locator('#antigravity_ide_container')).toBeVisible();
   expect(await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash())).toBe(initialHash);
 

@@ -457,7 +457,22 @@ export default function App() {
   // Left & Right Sidebar Resizing States
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(320);
   const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(460);
-  const [codeCollapsed, setCodeCollapsed] = useState<boolean>(false);
+  // B48P2: the code pane starts COLLAPSED by default — the canvas is the product's core
+  // surface and gets the real estate; the persistent top bar (tabs+actions) stays either way.
+  // The user's last choice wins across sessions (localStorage), and expanding is one click on
+  // the pull-tab. Collapsed-by-default also means the editor engine's chunk isn't even
+  // downloaded until the pane is first opened (lazy import in CodePreview).
+  const [codeCollapsed, setCodeCollapsedState] = useState<boolean>(() => {
+    try { const saved = localStorage.getItem('x4_forge_code_collapsed'); return saved === null ? true : saved === '1'; }
+    catch { return true; }
+  });
+  const setCodeCollapsed: React.Dispatch<React.SetStateAction<boolean>> = (next) => {
+    setCodeCollapsedState(prev => {
+      const value = typeof next === 'function' ? (next as (p: boolean) => boolean)(prev) : next;
+      try { localStorage.setItem('x4_forge_code_collapsed', value ? '1' : '0'); } catch { /* private mode */ }
+      return value;
+    });
+  };
   // The persistent editor TOP BAR element — CodePreview portals its tabs+actions here so
   // the editor body stays a code-only entity, and the bar survives the editor's collapse.
   const [editorBarEl, setEditorBarEl] = useState<HTMLDivElement | null>(null);
@@ -1909,7 +1924,7 @@ export default function App() {
         {/* Right Side: Real-time Synchronized compiler preview output (collapsible) */}
         {experienceMode === 'expert' && (
         <aside
-          className={`shrink-0 flex flex-col bg-[#12141a] border-l border-[#df9825]/10 relative transition-[width] duration-300 ease-in-out overflow-hidden ${codeCollapsed ? 'self-start rounded-bl-lg shadow-lg' : 'h-full'}`}
+          className={`shrink-0 min-w-0 flex flex-col bg-[#12141a] border-l border-[#df9825]/10 relative transition-[width] duration-300 ease-in-out overflow-hidden ${codeCollapsed ? 'self-start rounded-bl-lg shadow-lg' : 'h-full'}`}
           style={{ width: codeCollapsed ? 300 : rightSidebarWidth }}
         >
           {/* Drawer pull-tab — toggles the code BODY (the top bar below always persists). */}
@@ -1923,7 +1938,10 @@ export default function App() {
 
           {/* PERSISTENT EDITOR TOP BAR — CodePreview portals its tabs+actions here. This is
               a separate element from the editor body; it never collapses with the editor. */}
-          <div ref={setEditorBarEl} className="shrink-0 w-full bg-[#0b0d12]" />
+          {/* min-w-0 + hidden x-overflow: without these, the bar's intrinsic tab/button width
+              defeats the aside's inline width via flex min-content sizing (the collapsed
+              drawer silently stayed at full width — found in the B48P2 live drill). */}
+          <div ref={setEditorBarEl} className="shrink-0 w-full min-w-0 overflow-x-hidden bg-[#0b0d12]" />
 
           {/* EDITOR BODY (code-only) — hidden when collapsed; the top bar above stays. */}
           <div className={`flex-1 min-h-0 w-full overflow-hidden ${codeCollapsed ? 'hidden' : 'flex'}`}>
