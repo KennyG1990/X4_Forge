@@ -1,82 +1,56 @@
-# X4 Forge Studio — VS Code extension (proof-of-concept)
+# X4 Forge Studio
 
-Runs the existing X4 Forge visual modding studio inside VS Code (and VS Code forks such as
-Antigravity). This is a **market-validation spike** (B41): one product core, two shells —
-the standalone Forge is unchanged and remains the primary product.
+**Visual modding studio for X4: Foundations — inside your IDE.**
+
+Build, validate, and deploy X4 mods on a node canvas instead of hand-writing XML. X4 Forge
+Studio runs the full X4 Forge app right inside VS Code and compatible editors (Antigravity,
+Cursor, VSCodium, Windsurf), backed by a local engine that validates your work against the
+game's real schemas at every step.
 
 ## What it does
 
-- **`X4 Forge: Open Studio`** — opens the real Forge UI in a webview.
-- **Attach-first:** if a Forge is already running at `x4forge.attachUrl`
-  (default `http://127.0.0.1:3000`), the extension attaches to it and never manages it.
-- Otherwise it starts a **managed sidecar**: the bundled production Forge backend
-  (`app/dist/server.cjs`) under your system Node, on a **dynamically selected loopback
-  port**, with a **per-session bearer token** (generated fresh each start, passed via env,
-  never written to disk) and its own state directory.
-- **`X4 Forge: Stop Backend Sidecar`** stops only a backend the extension itself started.
-- **`X4 Forge: Show Backend Logs`** opens the sidecar's output channel.
+- **Node-graph mod editor** — assemble Mission Director logic (cues, conditions, actions) and
+  UI as a visual graph; the studio compiles it to the exact XML/Lua the game loads.
+- **Real-schema validation** — every change is checked against X4's own schemas, so you catch
+  mistakes before the game does.
+- **Compile, preview, package** — turn your graph into a ready-to-install extension folder or
+  a shareable package, without touching a text editor.
+- **Guided first mod** — a beginner rail walks a newcomer from idea to a working, deployable
+  mod; power users get the full studio.
+- **Optional AI assist** — off by default; the studio is a fully deterministic editor without it.
+
+## Getting started
+
+1. Install the extension.
+2. Run **"X4 Forge: Open Studio"** from the Command Palette (or turn on
+   `x4forge.autoOpen` to open it automatically).
+3. The first-run setup helps point the studio at your X4 installation, then you're building.
 
 ## Requirements
 
-- Windows/macOS/Linux desktop VS Code ≥ 1.85 (no vscode.dev / web support).
-- **Node.js on PATH** (or set `x4forge.nodePath`). The sidecar's native module
-  (better-sqlite3) is ABI-matched to a real Node install; the extension refuses to run it
-  under anything else and says so.
-- A **trusted** workspace. The Forge compiles/validates/packages mod projects, so the
-  extension is disabled entirely in untrusted workspaces.
+- **Node.js** installed on your machine (the studio runs a small local engine). If it's
+  missing, the extension tells you.
+- **X4: Foundations** installed (the studio validates and deploys against your game files).
+- A **trusted** workspace — the studio writes and compiles mod files, so it stays disabled in
+  untrusted folders.
 
 ## Settings
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `x4forge.attachUrl` | `http://127.0.0.1:3000` | Probe-and-attach target before spawning. |
-| `x4forge.forgeRoot` | (empty) | Use a built Forge checkout (`dist/server.cjs` + `node_modules`) instead of the bundled app. |
-| `x4forge.stateDir` | (empty → extension global storage) | Sidecar `X4_STATE_DIR`. Point at a checkout's `.studio-state` to open that real workspace **only when that checkout's own server is not running**. |
-| `x4forge.nodePath` | (empty → `node` on PATH) | Node executable for the sidecar. |
+| Setting | What it does |
+|---|---|
+| `x4forge.autoOpen` | Open the studio automatically when a trusted workspace loads. |
+| `x4forge.attachUrl` | Attach to an already-running X4 Forge instead of starting one. |
+| `x4forge.forgeRoot` | Use your own built X4 Forge checkout instead of the bundled app. |
+| `x4forge.debug` | Attach a debugger to the studio backend (for development). |
 
-## Build & package (from a repo checkout)
+## Privacy
 
-```powershell
-# 1. Build the product (repo root)
-npm run build
-# 2. Stage it into the extension + install its runtime deps
-cd vscode-extension
-npm install
-npm run stage-app
-# 3. Compile the controller (fresh out/) and package
-npm run build
-npm run package     # → x4-forge-studio-0.0.1.vsix
-```
+Everything runs locally on your machine. The studio talks only to a backend on your own
+computer (loopback), protected by a per-session token. No mod data leaves your machine, and
+AI features are opt-in and use your own API keys.
 
-Install: `code --install-extension x4-forge-studio-0.0.1.vsix`
-Uninstall: `code --uninstall-extension x4forge-local.x4-forge-studio`
+## Feedback
 
-## Debugging (VS Code and Antigravity)
+This is an early release — issues and ideas are welcome.
 
-Gold-standard Node debugging — breakpoints, stepping, variable inspection — attaches to the
-managed backend sidecar. Both VS Code and Antigravity bundle the JS debugger, so this works
-identically in either.
-
-1. Set **`x4forge.debug`** to `inspect` (or `inspect-brk` to pause at startup).
-2. Open the studio. The extension launches the backend with `--inspect` and **auto-attaches
-   the debugger** — a session named "X4 Forge Sidecar" appears in Run & Debug, and the inspect
-   port is printed in the "X4 Forge" output channel.
-3. For **source-level (TypeScript) breakpoints**, also set **`x4forge.forgeRoot`** to a built
-   repo checkout (its `dist/server.cjs.map` lets the debugger map to the original `.ts`).
-   Against the bundled app you still debug, at the bundled-JS level.
-
-If the auto-attach ever doesn't start, the inspector is still open — attach manually from
-`chrome://inspect` at the printed `127.0.0.1:<port>`.
-
-To debug the **extension controller** itself (`extension.ts`), open `vscode-extension/` and
-press F5 (the committed `.vscode/launch.json` provides an Extension-Host config). You can debug
-the controller and the sidecar at the same time.
-
-## Honest limitations (spike scope)
-
-- The webview hosts the Forge over loopback HTTP in an iframe; a few IDE-side keyboard
-  shortcuts may shadow in-app shortcuts.
-- The bundled app starts unconfigured (first-run wizard) until game paths are set; its
-  state lives in the extension's global storage unless `x4forge.stateDir` says otherwise.
-- AI features require the user's own keys (nothing is bundled; no server keys ship).
-- Not published to any marketplace; local install only.
+Licensed under MIT.

@@ -66,6 +66,36 @@ bridge reports neutral (unknown/grey) with copy naming its actual scope, never a
 longer counts toward "N items worth a look". healthCard.ts + oracle check pinning the negative.
 Live-proven: counter 2→1, row grey with the optional copy. Oracle 9/9, tsc 0, precommit 0.
 
+### B48 · Retire the hand-rolled code editor (Monaco swap + real-estate) — `spec'd` (SPECIFIED 2026-07-15)
+Reconcile shrank the "heart surgery": the whole editor = ONE component (CodePreview.tsx, 1,255
+lines, one mount in App.tsx, ~20-prop contract; shared state touches only App+itself). Phase 1
+= swap the text/diff CORE for Monaco inside the existing shell (chrome/apply/CAS wiring intact,
+BOTH shells benefit); Phase 2 = collapse-by-default for canvas real estate + extension-native
+"Open in IDE editor" bridge. Plan: `docs/plans/2026-07-15-editor-replacement.md`. Fresh session.
+
+### B49 · Marketplace — ✅ PUBLISHED to Open VSX (2026-07-16) → ROADMAP; MS Marketplace still gated
+**LIVE:** `x4forge.x4-forge-studio v0.0.4`, MIT, pre-release, at
+https://open-vsx.org/extension/x4forge/x4-forge-studio — auto-updates in Antigravity/Cursor/
+Windsurf/VSCodium. Namespace `x4forge` claimed; token in `.env.local` (OVSX_PAT); README/LICENSE/
+manifest finalized; bundle PII-clean. **UPDATE LOOP:** commit → bump version → `npm run package`
+(vsce --pre-release) → `ovsx publish <vsix> -p $OVSX_PAT` (Ken-authorized each time). **STILL
+OPEN (not blocking):** MS Marketplace — blocked on Azure DevOps org requiring a subscription
+(their gate); revisit when Ken wants stock-VS-Code reach. Flip pre-release→stable via a normal
+(non-`--pre-release`) package+publish when ready.
+
+### B49-old · Marketplace readiness prep (superseded by the publish above)
+VERIFIED: Antigravity pulls from **Open VSX** → dual-registry publish. **DONE 2026-07-16:**
+① machine-path genericize — runtime defaults now empty/harvest-dir (xsdParser), fixtures+
+placeholders scrubbed of usernames/drives; client bundle 0 traces; server.cjs remaining =
+generic VDF fixtures + public mod-name provenance (assessed OK). Stranger-machine sim: bare
+staged app boots 200, gamePath '', health verdict honestly `blocked`→wizard. ② liveBridge
+better-sqlite3 static import → lazy degrade (portability crash killed). Sweep on BARE install
+78/81 — expression-suggest 0/0 red is HONEST now (old G:\ default silently loaded Ken's real
+schema; configured instances stay green). **Ken's part:** MS publisher account + Open VSX
+namespace + license choice + beta-vs-prerelease call. Then: package.json publisher/repo/
+keywords finalize → `vsce publish` + `ovsx publish` (each Ken-authorized). Plan:
+`docs/plans/2026-07-15-marketplace-readiness.md`.
+
 ## P1 — Safety / architecture
 
 ### B1 · Workspace sync-trust slice — ✅ CLOSED 2026-07-09 → ROADMAP (badge verified live; residual: badge clipping polish → B13)

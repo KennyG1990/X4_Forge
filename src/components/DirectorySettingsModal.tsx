@@ -188,7 +188,7 @@ export default function DirectorySettingsModal({
               type="text"
               value={workspaceInput}
               onChange={e => setWorkspaceInput(e.target.value)}
-              placeholder="e.g. C:\Users\Moshi\Desktop\MyStagingWorkspace"
+              placeholder="e.g. C:\Users\you\Documents\X4ForgeMods"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
           </DirectoryRow>
@@ -203,7 +203,7 @@ export default function DirectorySettingsModal({
               type="text"
               value={filesystemInput}
               onChange={e => setFilesystemInput(e.target.value)}
-              placeholder="e.g. G:\SteamLibrary\steamapps\common\X4 Foundations\extensions"
+              placeholder="e.g. C:\Program Files (x86)\Steam\steamapps\common\X4 Foundations\extensions"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
           </DirectoryRow>
@@ -218,7 +218,7 @@ export default function DirectorySettingsModal({
               type="text"
               value={gamePath}
               onChange={e => setGamePath(e.target.value)}
-              placeholder="e.g. G:\SteamLibrary\steamapps\common\X4 Foundations"
+              placeholder="e.g. C:\Program Files (x86)\Steam\steamapps\common\X4 Foundations"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
           </DirectoryRow>
@@ -233,7 +233,7 @@ export default function DirectorySettingsModal({
               type="text"
               value={schemaPath}
               onChange={e => setSchemaPath(e.target.value)}
-              placeholder="e.g. extensions/x4_ai_influence/md"
+              placeholder="e.g. data\harvested-schemas (auto-harvested) or an unpacked game folder"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
             {resolved && (

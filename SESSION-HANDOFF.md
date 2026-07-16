@@ -1,5 +1,15 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
+> ## 🚀 SHIPPED (2026-07-16): X4 Forge Studio is LIVE on Open VSX
+> **https://open-vsx.org/extension/x4forge/x4-forge-studio** — `x4forge.x4-forge-studio v0.0.4`,
+> MIT, pre-release, auto-updates in Antigravity/Cursor/Windsurf/VSCodium. Namespace `x4forge` owned;
+> `OVSX_PAT` in `F:\DEV_ENV\X4_Forge\.env.local` (main checkout, gitignored — NEVER in chat/worktree).
+> **UPDATE LOOP:** commit → bump `vscode-extension/package.json` version → `npm run package` (vsce
+> `--pre-release`) → `cd vscode-extension; npx ovsx publish <vsix> -p $OVSX_PAT` (read token from
+> .env.local; each publish is Ken-authorized). Flip beta→stable = same but WITHOUT `--pre-release`.
+> MS Marketplace still gated on Azure-subscription requirement (deferred, not blocking).
+> Marketplace-prep changes (B49) are PRODUCT+extension source, uncommitted on the branch — commit them.
+>
 > ## ⛔ COMMIT POINT (2026-07-15, degradation call RATIFIED by Ken)
 > **CORRECTION: Ken already committed B41+B42 on this branch as `379255c` ("feat(forge): Launch
 > VS Code Extension PoC, Agent Key Manager, and new workspace modes") — the header's v1.0.213 IS
@@ -8,9 +18,12 @@
 > "feat(forge): sidecar debugging (both IDEs), git-derived live version, save-gate fix,
 > bridge-row de-escalation — B43–B45, B47"
 > (or individually: the B43/B44/B45/B47 titles in their ROADMAP entries.)
-> **NEXT UNIT (fresh session): B46 phase 1 (multi-schema loader)** — plan is fully reconciled at
-> `docs/plans/2026-07-15-full-corpus-validation.md`; first command: read that plan + BACKLOG B46,
-> then start on `src/lib/xsdParser.ts` loadSchemaLibrary. Ken-gated queue also: port B41–B45 to
+> **NEXT UNITS (fresh sessions, one each — Ken picks order):** ① **B48 phase 1** (Monaco core swap
+> inside CodePreview's shell — `docs/plans/2026-07-15-editor-replacement.md`; reconcile done: ONE
+> component, ONE mount, ~20-prop contract) ② **B46 phase 1** (multi-schema loader —
+> `docs/plans/2026-07-15-full-corpus-validation.md`) ③ **B49** (marketplace readiness —
+> `docs/plans/2026-07-15-marketplace-readiness.md`; VERIFIED: Antigravity = Open VSX registry;
+> publisher accounts + every publish are Ken's). Never B48+B46 in the same session. Ken-gated queue also: port B41–B45 to
 > main (B44/B45 are PRODUCT source), beta cohorts, two live debug sessions may still be attached
 > (disconnect at leisure).
 

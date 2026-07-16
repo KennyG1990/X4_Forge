@@ -216,7 +216,9 @@ export function getDefaultGamePath(): string {
       // Ignore malformed config here; startup will still report schema load errors.
     }
   }
-  return 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations';
+  // B49: NO machine-specific default. Unconfigured = empty → existence checks fail
+  // gracefully, the health card flags it, and the first-run wizard (B18) autodetects.
+  return '';
 }
 
 export function getDefaultSchemaDir(gamePath = getDefaultGamePath()): string {
@@ -231,7 +233,9 @@ export function getDefaultSchemaDir(gamePath = getDefaultGamePath()): string {
       // Ignore malformed config here; startup will still report schema load errors.
     }
   }
-  return path.join(gamePath, 'extensions', 'x4_ai_influence', 'md');
+  // B49: generic default = the wizard's harvest target (B18 extracts md/common/aiscripts
+  // XSDs from the game archives into here) — never a specific mod's folder.
+  return path.join(process.cwd(), 'data', 'harvested-schemas');
 }
 
 function configPath(): string {
@@ -249,11 +253,11 @@ export function writeXsdConfig(config: XsdConfig): void {
 }
 
 export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
-  const gamePath = process.env.X4_GAME_PATH || config.x4GamePath || 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations';
+  const gamePath = process.env.X4_GAME_PATH || config.x4GamePath || '';
   const schemaDir = process.env.X4_XSD_PATH
     || (config.xsdSchemaPath
       ? (path.isAbsolute(config.xsdSchemaPath) ? config.xsdSchemaPath : path.join(gamePath, config.xsdSchemaPath))
-      : path.join(gamePath, 'extensions', 'x4_ai_influence', 'md'));
+      : path.join(process.cwd(), 'data', 'harvested-schemas'));
 
   const files = config.schemaFiles?.length ? config.schemaFiles : ['md.xsd', 'common.xsd'];
   const mdFile = files.find(file => path.basename(file).toLowerCase() === 'md.xsd') || 'md.xsd';

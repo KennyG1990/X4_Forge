@@ -176,6 +176,28 @@ config for debugging the controller. Version → 0.0.3.
 - Main checkout: 0 dirty (Ken committed the B34–B37 delta as ff38642 earlier); B42 lives on
   the worktree branch only. No git mutation performed by this session.
 
+## B49 — Marketplace-prep blockers (agent half DONE 2026-07-16; publish awaits Ken's accounts)
+
+1. **Machine-path genericize:** runtime defaults were `G:\SteamLibrary\...` + `<game>\extensions\
+   x4_ai_influence\md` (xsdParser.ts) — now `''` (unconfigured → health card flags → B18 wizard)
+   and `<cwd>\data\harvested-schemas`. Fixtures/placeholders scrubbed of usernames+drives.
+   **Shipped-bundle scan:** client 0 traces; VSIX server.cjs: Moshi 0 · Users\ken 0 · DEV_ENV 0.
+   Remaining assessed-OK: generic VDF parser fixtures ("SteamLibrary" is what it parses) +
+   `x4_ai_influence` as public provenance/health-card copy (a mod name, not a path).
+2. **Portability crash killed:** liveBridge better-sqlite3 static import → lazy `createRequire`
+   with `__filename` fallback (same pattern as db.ts); driver-absent → "no events", never a boot
+   crash.
+3. **Stranger-machine simulation** (bare staged app, no config, empty state): boots 200,
+   `resolved gamePath: ''`, schemaDir = own harvest dir, health verdict honestly `blocked`
+   (game_path fail → wizard is the designed path), 0 Steam refs in boot logs.
+4. Gates: tsc 0 · build 0 · precommit 0 · **e2e 19/19** · sweep on the BARE install **78/81**
+   (reference/selftest = known env reds; `expression-suggest 0/0` newly red on bare installs
+   because the old machine default was silently loading Ken's real schema — HONEST regression
+   of a false green; configured instances remain green, e.g. 79/81 on :3282/:3283).
+5. VSIX **0.0.4** (2093 files) packaged + reinstalled in BOTH IDEs.
+Still Ken's: MS publisher account, Open VSX namespace, license choice, beta-vs-prerelease call;
+then finalize package.json publisher/repo/keywords and Ken-authorized `vsce publish` + `ovsx publish`.
+
 ## Close integrity checks
 
 - Live :3000 at close: UP, workspace `Player_Elite_Escort`, hash `dac6d106bd45f2bd` —

@@ -318,7 +318,7 @@ export function runLuaRuntimeLogSelftest() {
   ];
 
   const log = [
-    "[=ERROR=] 22.90 G:/SteamLibrary/steamapps/common/X4 Foundations/ui/addons/ego_gameoptions/gameoptions.xpl(6340): (from presentation 'ui/widget/presentations/widget_fullscreen/widget_fullscreen.bgf') Restricted function OnlineGetVersionIncompatibilityState() called from non-verified source 'ui/addons/ego_gameoptions/gameoptions.xpl'! Aborting call!",
+    "[=ERROR=] 22.90 C:/Steam/steamapps/common/X4 Foundations/ui/addons/ego_gameoptions/gameoptions.xpl(6340): (from presentation 'ui/widget/presentations/widget_fullscreen/widget_fullscreen.bgf') Restricted function OnlineGetVersionIncompatibilityState() called from non-verified source 'ui/addons/ego_gameoptions/gameoptions.xpl'! Aborting call!",
     "File I/O: Failed to verify the file signature for file '.\\ui\\addons\\ego_gameoptions\\gameoptions.xpl'",
     "ui/ai_influence_chat.lua:42: attempt to index a nil value while handling ai_influence.chat and ai_influence.chat.response",
     'stack traceback:',

@@ -52,6 +52,29 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### 🚀 B49 · PUBLISHED TO OPEN VSX — X4 Forge Studio is on a public store (2026-07-16, VERIFIED LIVE)
+
+X4 Forge Studio is publicly published: **`x4forge.x4-forge-studio v0.0.4`**, MIT, pre-release, at
+**https://open-vsx.org/extension/x4forge/x4-forge-studio** — installable + auto-updating in
+Antigravity / Cursor / Windsurf / VSCodium (the AI-IDE audience). Verified live via the Open VSX
+API (namespace/name/version/license/preRelease=true/downloadable). First public distribution of
+the Forge in any form.
+
+**Marketplace-prep that made it shippable (all VERIFIED before publish):** genericized 13 baked
+machine-path defaults to empty/harvest-dir (xsdParser) + scrubbed fixtures/placeholders
+(usernames, drives) — shipped bundle scans 0 for Moshi/ken/DEV_ENV; lazy-loaded better-sqlite3 in
+liveBridge (static import was a portability boot-crash); stranger-machine sim (bare install, no
+config) boots clean → first-run wizard; MIT LICENSE + public-facing README (the store page) +
+manifest identity (`x4forge`, keywords, categories, galleryBanner). Namespace claimed via
+`ovsx create-namespace`; token verified; VSIX packaged `vsce --pre-release`; `ovsx publish` on
+Ken's explicit "ship it". Gates: tsc/precommit/build 0 · e2e 19/19 · sweep on bare install 78/81
+(env reds honest). Token lives in `.env.local` (OVSX_PAT, gitignored) — never entered chat.
+
+**Still open (not blocking):** MS Marketplace (stock VS Code) — blocked on Azure DevOps requiring
+an Azure subscription to create the publisher org; deferred. Flip beta→stable anytime via a
+non-pre-release package+publish. **Suggested commit title:** "feat(extension): publish X4 Forge
+Studio to Open VSX (x4forge namespace, MIT, marketplace-prep: PII scrub + native-dep portability)".
+
 ### ✅ B47 · WALKAROUND BRIDGE ROW DE-ESCALATED TO OPTIONAL (2026-07-15, branch; VERIFIED)
 
 Ken's correction: the neural-link bridge is fundamental ONLY to x4_ai_influence (ADR-F3 binds it

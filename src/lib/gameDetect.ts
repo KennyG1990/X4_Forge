@@ -102,11 +102,12 @@ export function runGameDetectSelftest(): {
 
   ok('appid_is_x4', X4_STEAM_APPID === '392160');
 
-  const p = proposeSetup({ gameDir: 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations', homeDir: 'C:\\Users\\ken', forgeCwd: 'F:\\DEV_ENV\\X4_Forge' });
-  ok('proposal_extensions_under_game', p.filesystemPath === 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations\\extensions', p.filesystemPath);
-  ok('proposal_workspace_under_documents', p.modWorkspacePath === 'C:\\Users\\ken\\Documents\\X4ForgeMods', p.modWorkspacePath);
-  ok('proposal_schemas_under_data', p.xsdSchemaPath === 'F:\\DEV_ENV\\X4_Forge\\data\\harvested-schemas', p.xsdSchemaPath);
-  ok('proposal_keeps_game_dir_verbatim', p.x4GamePath === 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations');
+  // Synthetic fixture paths only — deliberately generic (these strings ship in the bundle).
+  const p = proposeSetup({ gameDir: 'D:\\SteamLibrary\\steamapps\\common\\X4 Foundations', homeDir: 'C:\\Users\\example', forgeCwd: 'C:\\X4Forge' });
+  ok('proposal_extensions_under_game', p.filesystemPath === 'D:\\SteamLibrary\\steamapps\\common\\X4 Foundations\\extensions', p.filesystemPath);
+  ok('proposal_workspace_under_documents', p.modWorkspacePath === 'C:\\Users\\example\\Documents\\X4ForgeMods', p.modWorkspacePath);
+  ok('proposal_schemas_under_data', p.xsdSchemaPath === 'C:\\X4Forge\\data\\harvested-schemas', p.xsdSchemaPath);
+  ok('proposal_keeps_game_dir_verbatim', p.x4GamePath === 'D:\\SteamLibrary\\steamapps\\common\\X4 Foundations');
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

@@ -9,8 +9,28 @@
  */
 
 import fs from "fs";
-import Database from "better-sqlite3";
+import { createRequire } from "module";
 import { normalizeBridgeLiveState, type BridgeEventRow, type BridgeLiveState } from "../lib/bridgeLiveState";
+
+// B49: better-sqlite3 is an OPTIONAL native module. A static import made the entire server
+// bundle crash at require-time on any machine where the prebuilt binding can't load (wrong
+// OS/ABI) — a marketplace-portability killer. Lazy-load with the same __filename-safe
+// pattern as src/lib/db.ts; when unavailable, telemetry reads degrade to "no events".
+type SqliteCtor = new (path: string, opts: { readonly: boolean; fileMustExist: boolean }) => {
+  prepare(sql: string): { all(...args: unknown[]): unknown[] };
+  close(): void;
+};
+let Sqlite: SqliteCtor | null | undefined; // undefined = not attempted
+function getSqlite(): SqliteCtor | null {
+  if (Sqlite !== undefined) return Sqlite;
+  try {
+    const req = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
+    Sqlite = req('better-sqlite3') as SqliteCtor;
+  } catch {
+    Sqlite = null; // optional dependency absent/incompatible — bridge telemetry degrades
+  }
+  return Sqlite;
+}
 
 const BRIDGE_URL = process.env.FORGE_BRIDGE_URL || "http://127.0.0.1:8713";
 const CACHE_MS = 10_000;
@@ -34,6 +54,8 @@ async function fetchHealth(): Promise<unknown> {
 function readRecentEvents(telemetryDbPath: string): BridgeEventRow[] {
   try {
     if (!telemetryDbPath || !fs.existsSync(telemetryDbPath)) return [];
+    const Database = getSqlite();
+    if (!Database) return []; // driver unavailable → honest empty, never a crash
     const db = new Database(telemetryDbPath, { readonly: true, fileMustExist: true });
     try {
       const cutoff = Date.now() - 2 * 3_600_000;
