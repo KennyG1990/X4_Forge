@@ -52,6 +52,60 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B50 + B37 · KEN EYEBALL GATES CLOSED · stable 0.0.9 PUBLISHED (2026-07-16, VERIFIED)
+
+**Experience gates flipped on Ken's screen (ADR-G3 — the only authority for these):**
+- **B50 Activity Bar launcher — VERIFIED.** Ken confirmed the node-graph icon renders in the
+  Activity Bar rail and the launcher opens (the ~10s residual that machine screenshots couldn't
+  cleanly distinguish among ~20 installed-extension icons). Closes B50 fully.
+- **B37 Beginner/Expert workspace shell — VERIFIED.** Ken confirmed both shells render correctly
+  live. This closes the LAST open gate on B37 — the item had been PARTIAL for two sessions solely
+  because the in-app screenshot transport timed out on four captures; every machine-checkable
+  layer (tsc, sweep 80/80, e2e 19/19, build, precommit, DOM/interaction/geometry drills,
+  zero-console-error) was already green. Evidence: Ken's live confirmation 2026-07-16.
+
+**Stable 0.0.9 published to Open VSX (same day):** `ovsx publish` exit 0 → registry API confirmed
+`0.0.9 · preRelease=False · download=True` (indexed 40s post-publish; poll evidence in session).
+Ships B48P2 (collapse-default canvas + lazy CodeMirror chunk), B53 (X4_DATA_DIR seam), B52 (bug
+reporter). VSIX pre-flight: editor chunk present, 0 secret/path traces. Standing rule held: ALL
+releases stable, never `--pre-release` (see vscode-extension/PUBLISHING.md). Store users
+auto-update. Suggested commit title (with the B48P2+B53 code): "B48P2+B53: collapse-default code
+pane (canvas real estate) + lazy CodeMirror chunk + X4_DATA_DIR seam; publish stable 0.0.9;
+close B50+B37 Ken eyeball gates".
+
+**Remaining Ken-gated queue after this:** B19 rail-to-game + B24s2 probe deploy (need a live X4
+session) · B23/B8 unpark decision · in-game batch.
+
+### ✅ B18 · FIRST-RUN WIZARD CLOSED (visuals + fresh-boot acceptance) — found & fixed a B53 coupling bug (2026-07-16, VERIFIED)
+
+Ken asked whether the agent could eyeball the UI gates itself — yes, per the adapter's layer 6
+(Claude-in-Chrome screenshots of the real rendered UI; only in-game EXPERIENCE gates are
+Ken-only). Ran B18's two open gates on an **isolated scratch instance** (built dist/server.cjs on
+:3210 with X4_STATE_DIR/X4_CONFIG_DIR/X4_DATA_DIR → session scratchpad; game dir READ-only):
+
+- **Wizard visuals — SEEN** (screenshots): centered "Welcome to X4 Forge" modal, "Found X4:
+  Foundations (Steam)" detect card with the real G:\ install, 4 truthful proposal rows,
+  Set-up-automatically/Manual-setup/dismiss controls, "nothing is saved until you confirm" copy.
+- **Fresh-boot acceptance — PROVEN**: one click, zero typing, ~15s (<2min bar): detect →
+  harvest md/common/aiscripts.xsd from the real game cat/dat (195KB/1.7MB/154KB) → apply →
+  success state ("You're set up… Start building") → reload → STARTUP WALKAROUND flipped
+  "2 blocking issue(s)" → "2 item(s) worth a look — nothing blocking": md schema **1507
+  elements**, ai schema **1488**, **2333 script properties** — all loaded from the wizard's own
+  writes. config.json landed in X4_CONFIG_DIR, XSDs in X4_DATA_DIR, **zero writes outside
+  scratch** (worktree data dir verified clean). B47's optional bridge row rendered grey as
+  designed. Residual: GOG detect branch unverified (no GOG install on this machine).
+
+**FOUND + FIXED during the eyeball — B53 coupling gap (shipped in 0.0.9):**
+`proposeSetup` built `proposal.xsdSchemaPath` from **cwd** while the harvest endpoint WRITES to
+`dataPath("harvested-schemas")` (X4_DATA_DIR-relocated in the extension). On the extension,
+first-run auto-setup would harvest XSDs into globalStorage but save a config pointing at the
+install dir — schema missing + wiped on update (the exact bug class B53 killed). One-line fix in
+`src/server/gameDetectRoutes.ts` (route overrides the pure proposal with `dataPath(...)`;
+`proposeSetup` + its oracle stay pure/green 10/10). Validated: tsc 0 · lint 0 · precommit 0 ·
+build 0 · live re-probe of `/api/agent/detect-game` returns the X4_DATA_DIR path · wizard re-run
+end-to-end on the fixed build (the acceptance above IS the fixed build). Standalone users were
+unaffected (cwd == data dir there). **Ships in 0.0.10 — recommend publishing after Ken commits.**
+
 ### 🚀 B49 · PUBLISHED TO OPEN VSX — X4 Forge Studio is on a public store (2026-07-16, VERIFIED LIVE)
 
 X4 Forge Studio is publicly published: **`x4forge.x4-forge-studio v0.0.4`**, MIT, pre-release, at

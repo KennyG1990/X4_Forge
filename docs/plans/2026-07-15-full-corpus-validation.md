@@ -27,6 +27,13 @@ gamestarts.xsd) · god/sectors (`libraries/god.xml`, `maps/**` → objectspawn*/
 · t-files (`t/*.xml` — page/entry structure) · ui (`ui/**` → addon/coreaddon.xsd) ·
 macros/components (referenced, not usually authored → reference sets).
 
+## Delta 2026-07-16 (reconcile w/ Ken's XSD-inventory question)
+Add **`diff.xsd`** to phase 2 routing as a FIRST-CLASS domain: nearly every file the Forge emits
+is a `<diff>` patch document — validating our own emitted patches against the game's own diff
+schema guards the most-used output path (self-check, not just user-file check). Also note
+**`scriptproperties.xsd`** as a phase-3 hardening item (validate the scriptproperties.xml we
+already index for the property lint). Niche tiering of the remaining ~20 confirmed unchanged.
+
 ## Phases (each ≈ one focused session; checkpoint between)
 1. **Multi-schema loader.** New schema registry that discovers + loads ALL `*.xsd` in the schema
    folder, keyed by root element/domain (not the 2-file hardcode). Keep the existing MD

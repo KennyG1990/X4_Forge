@@ -96,16 +96,9 @@ namespace + license choice + beta-vs-prerelease call. Then: package.json publish
 keywords finalize → `vsce publish` + `ovsx publish` (each Ken-authorized). Plan:
 `docs/plans/2026-07-15-marketplace-readiness.md`.
 
-### B50 · Activity-bar launcher icon (click-to-run) — ◐ IMPLEMENTED 2026-07-16 (visual = 10-sec Ken eyeball)
-Activity Bar view container `x4forge` + monochrome node-graph SVG (`media/activitybar.svg`,
-currentColor) + `x4forge.launcher` view with `viewsWelcome` buttons → existing openStudio/
-createAgentKey/showLogs/stopSidecar; empty TreeDataProvider registered so the welcome renders.
-Keeps the command. **VERIFIED:** manifest contributions valid (JSON-checked), SVG valid + ships
-in VSIX, build 0, packaged 0.0.5, installed in BOTH IDEs. **◐ residual (Ken eyeball, ~10s):**
-confirm the node-graph icon shows in the Activity Bar rail and clicking it opens the launcher
-with working buttons — I couldn't cleanly distinguish it among the ~20 installed-extension icons
-via screenshots. NOTE: on a crowded rail a new container can land under the "···" (Additional
-Views) overflow at the bottom — if it's not immediately visible, it's there.
+### B50 · Activity-bar launcher icon (click-to-run) — ✅ VERIFIED 2026-07-16 (Ken eyeball confirmed) → ROADMAP
+Icon renders in the Activity Bar rail + launcher opens with working buttons — confirmed live on
+Ken's screen 2026-07-16 (the only residual). Full implementation record in ROADMAP.
 
 ### B48 Phase 2 · Canvas real-estate (collapse-default) + lazy editor — ✅ VERIFIED 2026-07-16 (e2e 19/19)
 Code pane starts COLLAPSED by default (canvas +164px wider live-measured), last choice persists
@@ -224,11 +217,16 @@ independent-extractor verified, gate blocks red builds, Playtest button live)
 > Full plan + sequencing rationale: `docs/plans/2026-07-11-vision-v2-ue5-editor.md`. Items below
 > are Phase 1/2 (buildable now); Phase 3 rides B2s3/B8; Phase 4 starts with the B24 spike.
 
-### B18 · First-run setup wizard + game autodetect — ◐ IMPLEMENTED 2026-07-11 → ROADMAP
-All backend stages live-proven on the real machine (detect via registry+VDF, harvest 3 XSDs from
-cat/dat, apply = existing /api/schema/config); oracle 10/10; sweep 67/67; e2e 11/11. **Open:** wizard
-visuals → eyeball batch (⚠ ?firstrun=1 LOOK ONLY — apply would rewrite Ken's real config); fresh-boot
-acceptance (<2min zero-typing) → scratch checkout or B23 stranger test; GOG branch unverified.
+### B18 · First-run setup wizard + game autodetect — ✅ VERIFIED 2026-07-16 (visuals SEEN + fresh-boot acceptance on scratch) → ROADMAP
+Both open gates closed 2026-07-16 on an ISOLATED scratch instance (X4_STATE/CONFIG/DATA_DIR →
+scratchpad; game dir read-only): wizard visuals eyeballed via Claude-in-Chrome screenshots (modal,
+detect card, proposal rows, buttons all render); full zero-typing auto-setup run end-to-end in
+~15s (<2min bar) — detect→harvest 3 XSDs from real cat/dat→apply→reload → walkaround flipped
+"2 blocking" → "nothing blocking", md 1507 elems + ai 1488 + 2333 scriptprops loaded from the
+wizard's own writes. BONUS: the eyeball CAUGHT a real B53 coupling bug (proposal.xsdSchemaPath
+was cwd-based while harvest writes to dataPath → extension auto-setup would point config at an
+empty, update-wiped dir) — fixed in gameDetectRoutes.ts, live re-proven. **Residual (minor):**
+GOG detect branch still unverified (no GOG install available); ships in 0.0.10.
 
 ### B27 · Selftest index endpoint — ✅ CLOSED 2026-07-11 → ROADMAP (sweep 71/71 via runtime index;
 acceptance diff caught 2 census errors incl. a nested-path oracle NO prior method ever swept)
@@ -243,13 +241,11 @@ ships welcome-message to a running game on on-screen guidance alone.
 ### B33 · RESET → template picker — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 (dead starter cue removed from BLANK_WORKSPACE; RESET→picker proven live; sweep 75/75, e2e 12/12)
 
-### B37 · Beginner and Expert workspace shell — `in_progress` (implementation green; screenshot evidence open)
-Full acceptance contract: `docs/plans/2026-07-14-beginner-expert-workspace.md`. Reuses the real editors,
-readiness evidence, compile confirmation, and exact-deploy experience gate; no parallel compiler or deploy path.
-Typecheck/sweep 80/80/e2e 19/19/build/precommit/live interaction all pass. `PARTIAL` only because the
-in-app browser screenshot transport timed out on four captures across two sessions, including a 400×300 crop;
-DOM/interaction/1280 geometry and a fresh zero-console-error check are evidenced. The crop failure rules out image
-size and isolates the open gate to the in-app tab's screenshot channel.
+### B37 · Beginner and Expert workspace shell — ✅ VERIFIED 2026-07-16 (Ken eyeball closed the last gate) → ROADMAP
+Both shells confirmed rendering correctly live on Ken's screen 2026-07-16 — the only open gate
+(the in-app screenshot transport had timed out on four captures; every machine-checkable layer was
+already green: tsc/sweep 80/80/e2e 19/19/build/precommit/DOM+interaction drills). Full acceptance
+contract: `docs/plans/2026-07-14-beginner-expert-workspace.md`.
 
 ### B38 · Playtest Deploy and Prove — `SPECIFIED` (implementation waits behind the B34-B37 commit point)
 Consolidate the existing deploy-verify, watcher verdict, cue liveness, FORGE-WATCH/FORGE-STATE, source

@@ -99,6 +99,11 @@ export function registerGameDetectRoutes(app: Express, deps: GameDetectDeps): vo
         });
       }
       const proposal = proposeSetup({ gameDir: hit.gameDir, homeDir: os.homedir(), forgeCwd: process.cwd() });
+      // B53 coupling: the harvest endpoint WRITES to dataPath("harvested-schemas") (may be
+      // X4_DATA_DIR-relocated, e.g. extension globalStorage) — the proposal must point where
+      // the files actually land, not at cwd, or auto-setup saves a config aimed at an empty
+      // (and update-wiped) directory.
+      proposal.xsdSchemaPath = dataPath("harvested-schemas");
       // Prove schemas are actually harvestable from THIS install before promising it.
       let canHarvestSchemas = false;
       try {
