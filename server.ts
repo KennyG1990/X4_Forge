@@ -76,6 +76,9 @@ import { runVanillaUiReferenceSelftest, profileMenuLua, deriveSchemaEvidence } f
 import { runSimulateSelftest, simulateWorkspace } from "./src/lib/mdSimulate";
 import { runPortSemanticsSelftest } from "./src/lib/portSemantics";
 import { runFriendlyNamesSelftest } from "./src/lib/mdFriendlyNames";
+import { runNodeToolboxSelftest } from "./src/lib/nodeToolbox";
+import { runReadinessSelftest } from "./src/lib/readiness";
+import { runExperienceModeSelftest } from "./src/lib/experienceMode";
 import { runCompileSelftest } from "./src/lib/mdCompileSelftest";
 import { runModTemplatesSelftest } from "./src/lib/modTemplates";
 import { runCompositeBlocksSelftest } from "./src/lib/compositeBlocks";
@@ -86,6 +89,7 @@ import { runLiveFixesSelftest } from "./src/lib/liveFixes";
 import { runLogTelemetrySelftest, parseLogTelemetry } from "./src/lib/logTelemetry";
 import { runUiWidgetValidateSelftest } from "./src/lib/uiWidgetValidate";
 import { runUILayoutSelftest } from "./src/lib/uiLayout";
+import { runUiCompilerSelftest } from "./src/lib/uiCompilerSelftest";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
@@ -331,6 +335,8 @@ type PatchDiagnosticBlock = Pick<PatchBlock, "id" | "sel" | "targetFile" | "incl
 type LastDeployInfo = {
   modId: string;
   workspaceName: string;
+  /** Exact sanitized workspace content compiled for this deploy (B36 freshness proof). */
+  workspaceHash: string;
   deployedAt: string;
   stagingPath?: string;
   deployedPath?: string;
@@ -5196,6 +5202,10 @@ const SELFTESTS: Record<string, () => unknown> = {
   "lua-staleness-selftest": runLuaStalenessSelftest,
   "lua-runtime-log-selftest": runLuaRuntimeLogSelftest,
   "workspace-persistence-selftest": runWorkspaceStateSelftest,
+  "ui-compiler-selftest": runUiCompilerSelftest,
+  "node-toolbox-selftest": runNodeToolboxSelftest,
+  "readiness-selftest": runReadinessSelftest,
+  "experience-mode-selftest": runExperienceModeSelftest,
 };
 registerSelftests(app, PUBLIC_READONLY_GETS, SELFTESTS, errorMessage);
 
@@ -6687,6 +6697,7 @@ app.post("/api/agent/deploy", (req, res) => {
     lastDeployInfo = {
       modId,
       workspaceName: ws.name,
+      workspaceHash: workspaceContentHash(sanitizeWorkspace(ws)),
       deployedAt: new Date().toISOString(),
       stagingPath: stagingPath || undefined,
       deployedPath: deployedPath || undefined
@@ -6925,7 +6936,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     }
 
     const ok = bytesConfirmed && blocking.length === 0;
-    lastDeployInfo = { modId, workspaceName: ws.name, deployedAt: new Date().toISOString(), stagingPath: stagingPath || undefined, deployedPath: deployedPath || undefined };
+    const deployedAt = new Date().toISOString();
 
     // Post-deploy convergence (P0): refresh the source stamp to the post-write state (a
     // content-changing deploy legitimately changes the folder hash) and adopt this
@@ -6938,6 +6949,20 @@ app.post("/api/agent/deploy-verify", (req, res) => {
           commitActiveWorkspace(ws, 'deploy-verify');
         }
       } catch { /* convergence is best-effort; the gate stays safe either way */ }
+    }
+    // Capture content identity after source-stamp convergence so the client compares
+    // readiness against the exact workspace state adopted after deploy.
+    // Failed byte/doctor gates are attempted writes, not successful deploy evidence.
+    // Preserve the prior successful record instead of painting the readiness ladder green.
+    if (ok) {
+      lastDeployInfo = {
+        modId,
+        workspaceName: ws.name,
+        workspaceHash: workspaceContentHash(sanitizeWorkspace(ws)),
+        deployedAt,
+        stagingPath: stagingPath || undefined,
+        deployedPath: deployedPath || undefined,
+      };
     }
     return res.json({
       ok, stage: 'done', modId, deployedPath, stagingPath, bytesConfirmed, deployedBytes,

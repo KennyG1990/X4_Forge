@@ -6,6 +6,58 @@
 > re-ask each new session): machine quiet, standing e2e/browser clearance; EXPERIENCE gates batched
 > per phase boundary. Ken-gated always: eyeballs, commits, B23/B8 unpark.
 
+> ## ◐ AUTHORITATIVE CURRENT STATE — 2026-07-15 (supersedes every dated "remaining buildable" line below)
+> **HEAD remains `8050e03`; working tree is intentionally dirty and UNCOMMITTED.** Pre-existing changes at
+> session start: BACKLOG.md, ROADMAP.md, SESSION-HANDOFF.md modified; CODEX-ONBOARDING.md untracked. B34 then
+> added its UI compiler repair across server/App/Canvas/UIBuilder/modDoctor/templates/types plus new helper,
+> oracle, and plan files. B35 overlaps server/Canvas and adds Sidebar/catalog/toolbox/e2e/docs. Preserve and
+> attribute the mixed diff honestly; no Git mutation was authorized.
+> - **B34:** PARTIAL only because the scratch in-game Standalone Menu EXPERIENCE gate is open. Forge-side
+>   compiler parity/package truth remains green (oracle now part of sweep 78/78).
+> - **B35:** VERIFIED and moved to ROADMAP. One shared Sidebar/Canvas node catalog; Curated 66 / All 1,217;
+>   rendered DOM bounded to 8 rows; aliases/favorites/recents/search/type filters proven. Gates: toolbox
+>   14/14, typecheck, sweep 78/78, focused e2e 2/2, full e2e 14/14, browser, build, precommit, diff check.
+>   Graphify 1,533 nodes/3,549 edges/85 communities. First focused e2e failure was a synthetic non-schema
+>   fixture (`teleport_object`), corrected to real `create_god_factory`; AAR banked.
+> - **B36:** VERIFIED and moved to ROADMAP. Global five-stage readiness ladder uses current graph/package,
+>   successful deploy workspace hash, server watcher verdict, and exact-deploy user confirmation. Later edits
+>   stale downstream proof; failed deploy attempts do not write evidence; Seen requires matching Deploy.
+>   Gates: oracle 21/21, typecheck, sweep 79/79, focused e2e 2/2, full e2e 16/16, browser, build,
+>   precommit/diff check. Graphify 1,559/3,610/94. Live ladder honestly shows Graph/Package green, Deploy
+>   not deployed, In game deploy first, Experience waiting. E2E failures/worker crash and corrections banked.
+> - **B37:** PARTIAL only on the adapter's screenshot artifact. Beginner/Expert mode is implemented: absent or
+>   corrupt preference defaults Beginner; exactly five steps reuse the real editors/property inspector/B36
+>   evidence/guarded compile wizard/exact-deploy confirmation; Expert retains the full studio; workspace and
+>   selection survive switches. Second pass caught and fixed leaked Sync/Git + Agent API controls, readiness
+>   clicks targeting hidden Expert tabs, a no-op AI action, and a live 1280 header overflow. Final gates:
+>   experience 12/12, typecheck, sweep 80/80, focused e2e 3/3, full e2e 19/19 twice, build, precommit, diff
+>   check, zero live console errors, header/readiness 1280/1280. `Page.captureScreenshot` has now timed out four
+>   times across two sessions, including a fresh 400×300 crop while DOM reads stayed responsive and console errors
+>   stayed at zero; capture size is ruled out and the in-app screenshot channel is isolated as the failure. The
+>   implementation is green but the required strongest visual artifact is not claimed. Graphify 1579/3670/84.
+> - **Active program:** `docs/plans/2026-07-14-product-loop-next-level-{design,implementation}.md`. Next
+>   bounded slice is **B38 Deploy and prove**, now reconciled and `SPECIFIED` in
+>   `docs/plans/2026-07-15-deploy-and-prove.md`; implementation remains behind this commit point. Reconciliation
+>   rejected automatic scratch cloning as unsafe (internal X4 ids are not renamed), reproduced Playtest's blank-
+>   path stale-workspace deploy, the hard-coded AI Influence expected chain, and the watcher false-negative for
+>   data-only mods whose file-load evidence is already present. The corrected design confirms/deploys the visible
+>   workspace unchanged and uses a purpose-built scratch workspace for live validation. B39 scoped AI and B40
+>   installer follow in that written order. User explicitly authorized workspace
+>   add/remove/change for validation and adjacent in-workspace fixes; real mod/game/config writes, Git,
+>   spending, publishing, credentials, permissions, and deletion retain their separate gates.
+> - **Ken/game-gated queue:** commit B34+B35 only after reviewing the mixed dirty diff; scratch-only in-game
+>   Standalone Menu test; welcome-template/B19 rail walk; B24s2 probe deploy+confirm; B18 fresh boot; B20
+>   real funnel; B8/B23 installer decision; B14 XPath/mod-profile decisions; B17 Node bump.
+> - **Known residual:** upstream xsdParser still classifies structural children as actions. B35 keeps the
+>   eight reproduced tags out of Curated but available via All/search; B10 structural-category rider remains
+>   the root fix. B24s2 heartbeat also remains game-gated.
+> - **Live state:** :3000/:3001 up; authenticated workspace re-verified `Player_Elite_Escort` (3 nodes /
+>   2 links / 3 widgets; hash `dac6d106bd45f2bd`) after isolated e2e. Browser deliverable is Beginner mode;
+>   no deploy, experience confirmation, game/config/mod write, or Git mutation was performed.
+> - **DEGRADATION CALL:** this stretch accumulated multiple caught failures (fixture types, auth probe, three
+>   focused-test corrections, stale reviewctl path, four screenshot timeouts, responsive regression). Commit
+>   point now; use a fresh session for B38 rather than carrying this error density forward.
+>
 > Written by the outgoing agent at every commit point / session close. The incoming agent reads
 > BACKLOG.md + THIS FILE before anything else — it transfers the WORKING STATE the Agent Brain
 > and ROADMAP can't: hot files, live hazards, dead theories, the next unit's first command.
@@ -186,4 +238,3 @@ or B19 starts Phase 1** (B19 is the keystone — don't let easy items crowd it).
 delete toasts with undo, shortcuts overlay, badge clip fix" ② "docs(vision): ADR-F2 Vision v2 plan —
 TTFM north star, B18–B24 spec'd" — squash if preferred); the eyeball queue; B8 stays parked (B23
 carries its unpark decision).
-

@@ -15,6 +15,7 @@ export const E2E_API_PORT = 3101;
 export const E2E_TOKEN = 'x4forge-e2e-ephemeral-token';
 // Per-run state dir: unique-ish per process start; OS temp cleanup owns the leftovers.
 const E2E_STATE_DIR = path.join(os.tmpdir(), `x4forge-e2e-state-${process.pid}`);
+const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${E2E_WEB_PORT}`;
 
 const ephemeralEnv = {
   STUDIO_API_TOKEN: E2E_TOKEN,
@@ -33,8 +34,14 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${E2E_WEB_PORT}`,
+    baseURL: E2E_BASE_URL,
     trace: 'retain-on-failure',
+    // Existing specs exercise the full studio. B37's focused spec removes this key to
+    // prove the newcomer default; keeping the suite explicit avoids mode-dependent tests.
+    storageState: {
+      cookies: [],
+      origins: [{ origin: E2E_BASE_URL, localStorage: [{ name: 'x4_forge_experience_mode', value: 'expert' }] }],
+    },
   },
   webServer: [
     {

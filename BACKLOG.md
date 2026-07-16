@@ -89,6 +89,21 @@ ships welcome-message to a running game on on-screen guidance alone.
 ### B33 · RESET → template picker — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 (dead starter cue removed from BLANK_WORKSPACE; RESET→picker proven live; sweep 75/75, e2e 12/12)
 
+### B37 · Beginner and Expert workspace shell — `in_progress` (implementation green; screenshot evidence open)
+Full acceptance contract: `docs/plans/2026-07-14-beginner-expert-workspace.md`. Reuses the real editors,
+readiness evidence, compile confirmation, and exact-deploy experience gate; no parallel compiler or deploy path.
+Typecheck/sweep 80/80/e2e 19/19/build/precommit/live interaction all pass. `PARTIAL` only because the
+in-app browser screenshot transport timed out on four captures across two sessions, including a 400×300 crop;
+DOM/interaction/1280 geometry and a fresh zero-console-error check are evidenced. The crop failure rules out image
+size and isolates the open gate to the in-app tab's screenshot channel.
+
+### B38 · Playtest Deploy and Prove — `SPECIFIED` (implementation waits behind the B34-B37 commit point)
+Consolidate the existing deploy-verify, watcher verdict, cue liveness, FORGE-WATCH/FORGE-STATE, source
+navigation, and artifact surfaces into one deterministic proof session. Fix the reproduced blank-path Playtest
+deploy bug (it currently omits the visible workspace), and let file-load evidence prove data-only mods are seen.
+Exact current-workspace/game-target confirmation is mandatory; validation uses a purpose-built scratch workspace,
+not an unsafe automatic clone. Full acceptance record: `docs/plans/2026-07-15-deploy-and-prove.md`.
+
 ### B20 · TTFM instrumentation — ✅ CLOSED 2026-07-11 → ROADMAP (oracle 9/9, sweep 68/68, e2e 12/12;
 report panel deferred until the first real funnel completes)
 
@@ -129,8 +144,18 @@ optional, read-only, zero impact absent; bridge = lessons only.
 ## P4 — Depth / UX long tail
 
 ### B10 · curated action semantics — slice 1 ✅ CLOSED 2026-07-11 → ROADMAP (**91.5%** of observed
-usage curated; oracle 50/50). Remaining (optional depth, demand-driven): tags beyond the top 52; the
-xsdParser `structural` category rider (B21 close) so census/palette stop calling child elements actions.
+usage curated; oracle 50/50). Remaining = OPTIONAL-DEPTH / DEMAND-DRIVEN NOTES (NOT queued agent work):
+- **tags beyond the top 52** — demand-driven; the top 52 already cover 90% of real usage.
+- **xsdParser `structural`-category rider** (B21 worst-pick) — `classifyFromGroup` labels structural
+  child-elements (param/text/owner/position/rotation/safepos/match/replace) `'action'`, so they enter
+  `schemaLibrary.actions` and the census's `actionTags` filter (server.ts ~7552). Fix = add a `structural`
+  category; census/palette/explain exclude it. **Reconciled 2026-07-13 — why it's NOT force-built:** (1) its
+  ACCEPTANCE (live census/palette stop showing these) needs the LIVE game schema + corpus loaded = Ken's
+  configured install, so not cleanly agent-verifiable here; (2) it's a schema-layer change feeding
+  palette/templates/validation — real blast radius, deserves fresh context, not a marathon tail;
+  (3) the user-visible symptom is ALREADY handled (B10s1 curated these kind 'other' in mdSemantics). SPEC'd
+  for a future session with the schema loaded. Blast-radius readers to check first: `schemaLibraryToTemplates`
+  (schemaTypes.ts:81), the action/control_flow split (xsdParser.ts:291), census `actionTags` (server.ts:7552).
 
 ### B11 · aiscripts visually editable — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED — ALREADY EXISTED; stale entry)
 Reconcile + live drill proved the full chain has existed since #65 + the AIScriptEditor: guarded

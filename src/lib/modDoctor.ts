@@ -149,16 +149,6 @@ export function runModDoctor(
       }
     });
 
-    if (active(workspace.uiWidgets).length > 0) {
-      push(diagnostics, {
-        severity: 'info',
-        category: 'egosoft',
-        code: 'ui.lua_scaffold',
-        domain: 'ui_layout',
-        filePath: `ui/${modId}.lua`,
-        message: 'UI is packaged as an X4-correct ui.xml addon index plus a Lua entry point (ui/<modId>.lua). The Lua wires into X4’s menu system, but widget construction via Helper/widgetSystem is scaffolded — complete the onShowMenu hook and verify in-game before relying on the menu.'
-      });
-    }
   } else if ((workspace.uiWidgets || []).length > 0) {
     push(diagnostics, {
       severity: 'info',

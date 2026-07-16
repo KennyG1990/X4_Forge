@@ -183,16 +183,16 @@ export const MOD_TEMPLATES: ModTemplate[] = [
   {
     id: 'hud_button',
     name: 'X4_My_HUD_Button',
-    title: 'HUD Button (Lua UI)',
-    blurb: 'Put a clickable button on the HUD — your first UI mod.',
+    title: 'Standalone Menu (Lua UI)',
+    blurb: 'Build a real X4 menu with a clickable button — your first UI mod.',
     rail: {
-      tweakHint: 'Open the HUD & LUA UI tab (top bar) — drag the button, resize it, change its label. The designer compiles it to Lua for you.',
-      gameCheck: 'Load a save: your button appears on the HUD where you placed it.',
+      tweakHint: 'Open the HUD & LUA UI tab (top bar) — drag the button, resize it, change its label. The designer compiles the exact preview to Lua.',
+      gameCheck: 'Load a save: the starter menu opens once. Close it, then confirm the button produced no UI errors in the debug log.',
     },
     build: () => ({
       nodes: [], links: [],
       uiWidgets: [
-        { id: 'w_win', type: 'window', x: 120, y: 120, w: 280, h: 120, label: 'My First Panel', properties: {}, includeInBuild: true },
+        { id: 'w_win', type: 'window', x: 120, y: 120, w: 280, h: 120, label: 'My First Panel', properties: { autoOpen: true }, includeInBuild: true },
         { id: 'w_btn', type: 'button', x: 150, y: 170, w: 220, h: 40, label: 'My First Button', properties: { text: 'Click me' }, includeInBuild: true },
       ],
     }),
@@ -254,6 +254,7 @@ export function runModTemplatesSelftest() {
   const hudWs = buildTemplateWorkspace('hud_button');
   ok('hud_button_widgets_survive', hudWs.uiWidgets.length === 2
     && hudWs.uiWidgets.some(w => w.type === 'button'));
+  ok('hud_button_requests_one_shot_open', hudWs.uiWidgets.some(w => w.properties?.autoOpen === true));
 
   const passed = checks.filter((c) => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

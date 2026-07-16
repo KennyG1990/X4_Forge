@@ -1088,74 +1088,179 @@ export function generateUIIndexXML(workspace: ModWorkspace, modId: string): stri
 </addon>`;
 }
 
-/**
- * Generate a Lua entry point for the mod's UI, packaged at `ui/<modId>.lua` and
- * registered by `ui.xml`. This uses X4's real menu-registration pattern (the
- * global `Menus` table + `Helper.registerMenu`, guarded so a missing global
- * never hard-errors) instead of the previous invented `RegisterLayout` /
- * `RemoveAllUITriggers` calls. Widget definitions authored in the studio are
- * emitted as a data table the menu's createMenu hook can consume; the actual
- * widget construction is left to X4's Helper/widgetSystem API rather than
- * fabricated here.
- */
+/** Generate the runnable X4 standalone-menu entry point used by package AND preview. */
 export function generateUILuaScript(workspace: ModWorkspace, modId: string): string {
-  const activeWidgets = (workspace.uiWidgets || []).filter(w => w.includeInBuild !== false);
+  const activeWidgets = (workspace.uiWidgets || [])
+    .filter(w => w.includeInBuild !== false)
+    .slice()
+    .sort((a, b) => (a.y - b.y) || (a.x - b.x));
   const luaName = modId.replace(/[^a-zA-Z0-9_]/g, '_');
-  const esc = (s: string) => String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const menuName = `${luaName}_menu`;
+  const esc = (s: unknown) => String(s ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t');
+  const n = (value: unknown, fallback: number) => (
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  );
 
   const widgetLines = activeWidgets.map(w => {
     const label = esc(w.label || '');
     return `    { type = "${esc(w.type)}", id = "${esc(w.id)}", label = "${label}", x = ${Math.round(w.x)}, y = ${Math.round(w.y)}, width = ${Math.round(w.w)}, height = ${Math.round(w.h)} },`;
   }).join('\n');
 
-  const t = workspace.uiTheme || ({} as any);
+  const rowLines = activeWidgets.map((w, widgetIndex) => {
+    const id = esc(w.id);
+    const label = esc(w.label || w.type);
+    const props = w.properties || {};
+    if (w.type === 'window' || w.type === 'header') {
+      return `  row = ftable:addRow(false, {})\n  row[1]:setColSpan(2):createText("${label}", Helper.headerRowCenteredProperties)`;
+    }
+    if (w.type === 'button') {
+      return `  row = ftable:addRow(true, {})\n  row[1]:setColSpan(2):createButton({ active = true }):setText("${label}", { halign = "center" })\n  row[1].handlers.onClick = function() menu.emit("${id}", { widget = "${id}" }) end`;
+    }
+    if (w.type === 'input') {
+      const placeholder = esc(props.placeholder || w.label || 'Enter text');
+      return `  row = ftable:addRow(true, {})\n  row[1]:setColSpan(2):createEditBox({ defaultText = "${placeholder}", maxChars = 255 })\n  row[1].handlers.onEditBoxDeactivated = function(_, text) menu.emit("${id}", { text = text }) end`;
+    }
+    if (w.type === 'dropdown') {
+      const rawOptions = Array.isArray(props.options) && props.options.length > 0 ? props.options : ['Option 1', 'Option 2'];
+      const options = rawOptions.map((option: unknown, index: number) => `{ id = "${esc(String(index + 1))}", text = "${esc(option)}" }`).join(', ');
+      return `  row = ftable:addRow(true, {})\n  row[1]:createText("${label}")\n  local options_${widgetIndex + 1} = { ${options} }\n  row[2]:createDropDown(options_${widgetIndex + 1}, { startOption = "1", active = true })\n  row[2].handlers.onDropDownConfirmed = function(_, option) menu.emit("${id}", { option = option }) end`;
+    }
+    if (w.type === 'progressbar') {
+      const current = n(props.value, 75);
+      const max = Math.max(1, n(props.max, 100));
+      return `  row = ftable:addRow(false, {})\n  row[1]:createText("${label}")\n  row[2]:createStatusBar({ current = ${current}, start = ${current}, max = ${max} })`;
+    }
+    if (w.type === 'chat') {
+      return `  row = ftable:addRow(false, {})\n  row[1]:setColSpan(2):createText(menu.transcript or "${label}", { wordwrap = true })`;
+    }
+    if (w.type === 'table') {
+      return `  row = ftable:addRow(false, {})\n  row[1]:setColSpan(2):createText("${label}", Helper.subHeaderTextProperties)\n  row = ftable:addRow(false, {})\n  row[1]:createText("Item")\n  row[2]:createText("Value", { halign = "right" })`;
+    }
+    return `  row = ftable:addRow(false, {})\n  row[1]:setColSpan(2):createText("${label}", { wordwrap = true })`;
+  }).join('\n');
+
+  const widest = activeWidgets.reduce((max, w) => Math.max(max, n(w.w, 0)), 0);
+  const frameWidth = Math.max(420, Math.min(1100, Math.round(widest + 120)));
+  const frameHeight = Math.max(180, Math.min(900, activeWidgets.length * 56 + 100));
+  const autoOpen = activeWidgets.some(w => w.properties?.autoOpen === true);
 
   return `-- ${workspace.name || modId} — X4 UI extension entry point
 -- Packaged at: extensions/${modId}/ui/${modId}.lua
 -- Registered by: extensions/${modId}/ui.xml (<environment type="menus">)
---
--- This file uses X4's real UI menu-registration pattern. X4 exposes the global
--- 'Menus' table and a 'Helper' library to UI Lua. We register this menu by
--- inserting it into Menus and calling Helper.registerMenu when available.
--- Widget construction itself must use X4's widgetSystem (see the game's
--- ui/core scripts); the studio emits widget metadata below for that hook.
-
-local ffi = require("ffi")
+-- Generated from the visual designer by X4 Forge. Uses the corpus-backed
+-- standalone-menu lifecycle: lazy Helper -> deferred registration -> OpenMenu
+-- -> onShowMenu -> createFrameHandle/fTable -> frame:display().
 
 local widgets = {
 ${widgetLines || '    -- (no widgets authored in the studio yet)'}
 }
 
-local theme = {
-  background = "${esc(t.backgroundColor || '')}",
-  border = "${esc(t.borderColor || '')}",
-  accent = "${esc(t.accentColor || '')}",
-  opacity = ${typeof t.opacity === 'number' ? t.opacity : 1},
-}
+local Helper = rawget(_G, "Helper")
+local function refreshHelper()
+  if not Helper then Helper = rawget(_G, "Helper") end
+  return Helper
+end
 
 local menu = {
-  name = "${luaName}_menu",
+  name = "${menuName}",
+  layer = 4,
+  active = false,
   widgets = widgets,
-  theme = theme,
+  transcript = "",
 }
 
+local function log(message)
+  if DebugError then DebugError("[${luaName}] " .. tostring(message)) end
+end
+
+function menu.ensureRegistered()
+  refreshHelper()
+  _G.Menus = _G.Menus or {}
+  local found = false
+  for i, existing in ipairs(_G.Menus) do
+    if existing.name == menu.name then _G.Menus[i] = menu; found = true; break end
+  end
+  if not found then table.insert(_G.Menus, menu) end
+  if Helper and Helper.registerMenu and not menu._registered then
+    local ok = pcall(Helper.registerMenu, menu)
+    menu._registered = ok
+  end
+  return menu._registered == true
+end
+
+function menu.open(context)
+  menu.context = type(context) == "table" and context or {}
+  if not menu.ensureRegistered() then
+    if SetScript then SetScript("onUpdate", menu.retryOpen) end
+    return false
+  end
+  if OpenMenu then OpenMenu(menu.name, nil, nil, true)
+  elseif menu.onShowMenu then menu.onShowMenu() end
+  return true
+end
+
+function menu.retryOpen()
+  if not menu.ensureRegistered() then return end
+  if RemoveScript then RemoveScript("onUpdate", menu.retryOpen) end
+  menu.open(menu.context)
+end
+
 function menu.onShowMenu()
-  -- Build the menu frame here using Helper/widgetSystem and menu.widgets.
-  -- e.g. local frame = Helper.createFrameHandle(menu, { ... })
+  refreshHelper()
+  menu.active = true
+  menu.createFrame()
 end
 
-local function init()
-  -- Register with X4's menu system. Guard each global so a UI-API change or a
-  -- non-UI load context fails soft instead of throwing.
-  if type(Menus) == "table" then
-    table.insert(Menus, menu)
-  end
-  if Helper and type(Helper.registerMenu) == "function" then
-    Helper.registerMenu(menu)
-  end
+function menu.emit(widgetId, payload)
+  if AddUITriggeredEvent then AddUITriggeredEvent(menu.name, widgetId, payload or {}) end
 end
 
-init()
+function menu.createFrame()
+  refreshHelper()
+  if not Helper then log("Helper unavailable; frame not built"); return end
+  if menu.frame and Helper.clearDataForRefresh then Helper.clearDataForRefresh(menu, menu.layer) end
+  local width = Helper.scaleX(${frameWidth})
+  local height = Helper.scaleY(${frameHeight})
+  local x = ((Helper.viewWidth or 1920) - width) / 2
+  local y = ((Helper.viewHeight or 1080) - height) / 2
+  menu.frame = Helper.createFrameHandle(menu, { x = x, y = y, width = width, height = height, layer = menu.layer, standardButtons = { close = true } })
+  local ftable = menu.frame:addTable(2, { tabOrder = 1, width = width, highlightMode = "off" })
+  ftable:setColWidthPercent(1, 55)
+  ftable:setColWidthPercent(2, 45)
+  local row
+${rowLines || '  row = ftable:addRow(false, {})\n  row[1]:setColSpan(2):createText("No active widgets")'}
+  menu.frame:display()
+end
+
+function menu.cleanup()
+  menu.frame = nil
+  menu.active = false
+end
+
+function menu.close()
+  refreshHelper()
+  if Helper and Helper.closeMenuAndReturn then Helper.closeMenuAndReturn(menu) end
+  menu.cleanup()
+end
+
+-- Deliberate opening path for MD/companion Lua: <raise_lua_event name="'${menuName}.open'"/>.
+if RegisterEvent then RegisterEvent("${menuName}.open", function(_, context) menu.open(context) end) end
+_G["${menuName}"] = menu
+${autoOpen ? `
+-- The beginner template opts into one visible first result. Ordinary authored menus do not auto-open.
+local function autoOpenWhenReady()
+  refreshHelper()
+  if not Helper then return end
+  if RemoveScript then RemoveScript("onUpdate", autoOpenWhenReady) end
+  menu.open({ source = "x4_forge_template" })
+end
+if SetScript then SetScript("onUpdate", autoOpenWhenReady) end
+` : ''}
 
 return menu
 `;
