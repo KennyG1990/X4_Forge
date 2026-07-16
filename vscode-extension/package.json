@@ -2,10 +2,17 @@
   "name": "x4-forge-studio",
   "displayName": "X4 Forge Studio",
   "description": "Visual modding studio for X4: Foundations — build, validate, and deploy mods with a node canvas and real-schema validation, no hand-written XML required.",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "icon": "icon.png",
   "publisher": "x4forge",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KennyG1990/X4_Forge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KennyG1990/X4_Forge/issues"
+  },
   "keywords": [
     "x4",
     "x4 foundations",

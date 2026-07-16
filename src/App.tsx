@@ -23,8 +23,10 @@ import {
   Map as MapIcon,
   ChevronRight,
   ChevronLeft,
-  Keyboard
+  Keyboard,
+  Bug
 } from 'lucide-react';
+import BugReportModal from './components/BugReportModal';
 import Sidebar from './components/Sidebar';
 import FpsMeter from './components/FpsMeter';
 import HealthCardOverlay from './components/HealthCardOverlay';
@@ -415,6 +417,8 @@ export default function App() {
   // B13: keyboard-shortcuts overlay ("?" or the header keyboard button)
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isDirSettingsOpen, setIsDirSettingsOpen] = useState<boolean>(false);
+  // B52: "Report a Bug" → prefilled GitHub issue (KennyG1990/X4_Forge Issues tab).
+  const [isBugReportOpen, setIsBugReportOpen] = useState<boolean>(false);
   // B18 first-run wizard: shown when the Forge boots unconfigured (no game path AND no
   // resolvable schemas). Dev/eyeball override: ?firstrun in the URL forces it open.
   const [isFirstRunOpen, setIsFirstRunOpen] = useState<boolean>(false);
@@ -1635,6 +1639,16 @@ export default function App() {
           )}
 
           <button
+            data-testid="report-bug-button"
+            onClick={() => setIsBugReportOpen(true)}
+            className="px-3 py-1 border border-amber-500/30 hover:border-amber-400/60 bg-black/40 text-amber-300 hover:text-amber-200 rounded font-mono text-[11px] transition-all flex items-center gap-1.5 cursor-pointer"
+            title="Report a bug — opens a pre-filled GitHub issue (no account? it can copy the report instead)"
+          >
+            <Bug className="w-3.5 h-3.5" />
+            <span className="hidden min-[2150px]:inline">REPORT BUG</span>
+          </button>
+
+          <button
             onClick={() => setIsDirSettingsOpen(true)}
             className="px-3 py-1 border border-white/10 hover:border-cyan-400/40 bg-black/40 text-slate-300 hover:text-white rounded font-mono text-[11px] transition-all flex items-center gap-1.5 cursor-pointer"
             title="Manage all folders the studio uses (Mod Workspace, X4 game path, schema)"
@@ -2033,6 +2047,19 @@ export default function App() {
         aiTier={aiTier}
         setAiTier={setAiTier}
         onOpenAIConfig={() => { setIsDirSettingsOpen(false); setIsAIConfigOpen(true); }}
+      />
+
+      {/* B52: Report-a-Bug modal — prefilled GitHub issue, secret-free (user submits) */}
+      <BugReportModal
+        isOpen={isBugReportOpen}
+        onClose={() => setIsBugReportOpen(false)}
+        context={{
+          'App version': `${__APP_VERSION__}`,
+          'Build': `${__APP_BUILD__}`,
+          'Platform': typeof navigator !== 'undefined' ? navigator.platform : 'unknown',
+          'Shell': typeof window !== 'undefined' && window.location.port === '3000' ? 'standalone (dev)' : `sidecar/packaged (port ${typeof window !== 'undefined' ? window.location.port : '?'})`,
+          'Workspace': `${workspace.name} (${workspace.nodes.length} nodes / ${workspace.links.length} links)`,
+        }}
       />
 
       {/* Selectable Compile Targets Confirmation Wizard Modal */}

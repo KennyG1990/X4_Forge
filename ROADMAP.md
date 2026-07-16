@@ -75,6 +75,27 @@ an Azure subscription to create the publisher org; deferred. Flip beta→stable 
 non-pre-release package+publish. **Suggested commit title:** "feat(extension): publish X4 Forge
 Studio to Open VSX (x4forge namespace, MIT, marketplace-prep: PII scrub + native-dep portability)".
 
+### ✅ B52 · IN-APP BUG REPORTER → GITHUB ISSUES (2026-07-16, branch; VERIFIED — e2e 19/19, precommit 0; Ken commit + release pending)
+
+Ken's decision after a Discord user asked where to report bugs: reports land in the
+**KennyG1990/X4_Forge Issues tab** ("bugs are issues and this tracks"), and the entry point must
+be obvious. **Secret-free by construction:** the app never calls GitHub — the header REPORT BUG
+button (amber, next to SETTINGS, shared header = visible in Beginner AND Expert) opens a modal
+(title / steps / attach-technical-details with the context SHOWN verbatim), then opens a
+**prefilled `github.com/KennyG1990/X4_Forge/issues/new?labels=bug&title=…&body=…`** page in the
+user's browser — they submit under their own account. COPY REPORT is the clipboard fallback (no
+GitHub account / popups blocked). Engine `src/lib/bugReport.ts` (pure): secret redaction
+(x4fk_ keys / 64-hex tokens / Bearer → `[redacted]`), URL-length cap with body truncation +
+full-text clipboard rescue, empty-title rejection. Oracle `bug-report-selftest` **10/10**,
+registered + served. Manifest rider: `repository` + `bugs.url` (store page gets a real Report
+Issue link). LIVE drill on a scratch sidecar: button visible in default Beginner mode ✓ · modal ✓
+· empty title blocks submit (negative) ✓ · captured window.open URL verified (target, encoded
+title/body, labels=bug, env table) ✓ · screenshot taken. Gates at close: tsc 0 · lint 0 · oracle
+10/10 · precommit 0 · **e2e 19/19 PASS** (evidence/e2e-b52.log). Ships in the next stable release
+after Ken commits. Plan: `docs/plans/2026-07-16-bug-reporter.md`.
+**Suggested commit title:** "B52: in-app bug reporter — header REPORT BUG → prefilled GitHub issue
+(secret-free, redaction, clipboard fallback, oracle) + repo/bugs manifest links".
+
 ### ✅ B47 · WALKAROUND BRIDGE ROW DE-ESCALATED TO OPTIONAL (2026-07-15, branch; VERIFIED)
 
 Ken's correction: the neural-link bridge is fundamental ONLY to x4_ai_influence (ADR-F3 binds it

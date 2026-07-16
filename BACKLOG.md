@@ -129,11 +129,16 @@ subdirs (md/, libraries/, aiscripts/), prefers base game over DLC copies, recurs
 elements", ai_schema pass, config persists. Caught+fixed a self-inflicted e2e regression
 (configPath fell back to X4_STATE_DIR which e2e sets). Plan/decision: this entry + capability-map.
 
-### B52 · In-app bug reporting — `spec'd` (DECISION PENDING: delivery mechanism = Ken's call)
-A user (Paradox) asked where to report bugs. Options: GitHub Issues (rec — secret-free, pre-filled
-issue in Ken's repo + clipboard fallback) · Discord webhook (zero-friction but bakes a secret) ·
-clipboard-only. Awaiting Ken's destination (repo/webhook), then build the modal + auto-context
-(version/build/OS/workspace) + delivery + rate-limit.
+### B52 · In-app bug reporter → GitHub Issues — ✅ VERIFIED 2026-07-16 (e2e 19/19) → ROADMAP; ships in next release after Ken commits
+Ken's decision: reports land in KennyG1990/X4_Forge **Issues** tab; entry point must be obvious.
+Built secret-free: header **REPORT BUG** button (amber, both modes — verified visible in Beginner
+default) → modal (title/steps/attach-details with the exact context SHOWN to the user) → opens a
+**prefilled github.com/…/issues/new?labels=bug** page the user submits themselves; COPY REPORT
+clipboard fallback; secret redaction (x4fk_/64-hex/Bearer → [redacted]); URL-length truncation
+with full-body clipboard rescue. Engine `src/lib/bugReport.ts` + oracle `bug-report-selftest`
+**10/10** (served live). Manifest gains repository+bugs URLs (store "Report Issue" link). LIVE
+drill: empty-title blocked ✓, filled report produced the exact prefilled URL (title/body/label/env
+verified) ✓, context visible ✓, screenshot taken. Plan: `docs/plans/2026-07-16-bug-reporter.md`.
 
 ## P1 — Safety / architecture
 

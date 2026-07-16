@@ -39,7 +39,21 @@ IDE reload. A SIDE-LOADED install (installed from a local .vsix) may not auto-up
 store — reinstall from the store (Extensions view → search "X4 Forge" → the `x4forge` one →
 Install) to move onto the store channel, then future updates are automatic.
 
+## ⚠ Pre-release vs stable — the gotcha that bit us (2026-07-16)
+Every version so far (0.0.4, 0.0.6) was published `--pre-release`, so the store has **NO stable
+release**. Consequences we hit live:
+- A plain `--install-extension x4forge.x4-forge-studio` (and the store's default "Install"
+  button) FAILS with "Can't install release version ... it has no release version." Users must
+  pass `--install-extension <id> --pre-release`, or click "Switch to Pre-Release Version" in the
+  UI — friction most users won't figure out.
+- A SIDE-LOADED install (Source: VSIX in the Extensions panel) does NOT auto-update from the
+  store at all — it's pinned. Reinstall from the store to move onto the auto-updating channel.
+
+RECOMMENDATION for adoption: publish STABLE (drop `--pre-release` at package time in step 3) so
+"Install" just works for everyone. Keep the "beta" signal in the version number (0.0.x) and the
+README, not in the pre-release channel. Switching is free: bump the version and package WITHOUT
+`--pre-release`, then publish. Once a stable exists, normal installs and auto-update work
+seamlessly; you can still cut pre-release builds alongside for testers.
+
 ## Notes
 - Version must always increase (store rejects a re-publish of an existing version).
-- Pre-release vs stable: users on the pre-release channel get pre-release builds; a stable
-  publish (no --pre-release at package time) is what non-beta users receive.
