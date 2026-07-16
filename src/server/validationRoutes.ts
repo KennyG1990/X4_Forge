@@ -35,8 +35,10 @@ function errText(error: unknown): string {
 // closes ROADMAP AAR item #1 ("no AISCRIPT validation path") without manual setup.
 export function getAiSchemaIndex(): SchemaIndex | null {
   const resolved = resolveXsdConfig();
-  const aiXsd = path.join(resolved.schemaDir || "", "aiscripts.xsd");
-  if (fs.existsSync(aiXsd)) return buildSchemaIndex([aiXsd, resolved.commonXsdPath].filter(Boolean));
+  // B51: prefer the DISCOVERED aiscripts.xsd (subdir-aware — the game keeps it in aiscripts/ or
+  // libraries/, not at the top level), falling back to a top-level file, then the cat/dat harvest.
+  const aiXsd = resolved.aiscriptsXsdPath || path.join(resolved.schemaDir || "", "aiscripts.xsd");
+  if (aiXsd && fs.existsSync(aiXsd)) return buildSchemaIndex([aiXsd, resolved.commonXsdPath].filter(Boolean));
   try {
     if (!resolved.x4GamePath) return null;
     const cacheDir = path.join(process.cwd(), "data", "harvested-schemas");

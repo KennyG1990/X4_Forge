@@ -64,9 +64,13 @@ test('diff-to-patch three-pane merge synthesizes and adopts a patch block', asyn
   await expect(workbench.getByText('Edited XML')).toBeVisible();
   await expect(workbench.locator('span').filter({ hasText: 'Patch XML' })).toBeVisible();
 
-  const editors = page.locator('textarea');
-  await expect(editors).toHaveCount(3);
-  await editors.nth(1).fill(editedXml);
+  // Target the Edited XML pane directly (the three panes are already asserted by their labels
+  // above). The prior `page.locator('textarea')` global count coupled this test to unrelated
+  // editors elsewhere on the page — B48 swapped CodePreview to CodeMirror (no textarea), which
+  // legitimately changed that count. A stable testid keeps the test on the actual pane.
+  const editedPane = page.getByTestId('diff-patch-edited-xml');
+  await expect(editedPane).toBeVisible();
+  await editedPane.fill(editedXml);
   await page.getByRole('button', { name: 'Synthesize Patch' }).click();
 
   await expect(workbench.getByText('1 op(s)')).toBeVisible();

@@ -2,7 +2,7 @@
   "name": "x4-forge-studio",
   "displayName": "X4 Forge Studio",
   "description": "Visual modding studio for X4: Foundations — build, validate, and deploy mods with a node canvas and real-schema validation, no hand-written XML required.",
-  "version": "0.0.4",
+  "version": "0.0.6",
   "icon": "icon.png",
   "publisher": "x4forge",
   "license": "MIT",
@@ -31,6 +31,30 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "x4forge",
+          "title": "X4 Forge",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "x4forge": [
+        {
+          "id": "x4forge.launcher",
+          "name": "Studio",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "x4forge.launcher",
+        "contents": "Build, validate, and deploy X4: Foundations mods on a visual canvas.\n\n[Open Studio](command:x4forge.openStudio)\n\nOpens the full studio in an editor tab, starting the local backend automatically.\n\n[Create Agent Key](command:x4forge.createAgentKey)\n[Show Backend Logs](command:x4forge.showLogs)\n[Stop Backend](command:x4forge.stopSidecar)"
+      }
+    ],
     "commands": [
       {
         "command": "x4forge.openStudio",

@@ -21,6 +21,11 @@ import {
 } from 'lucide-react';
 import { ModWorkspace, generateMDXML, generateUIXML, MDNode, PackageDiagnostic } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
+import CodeMirrorField from './CodeMirrorField';
+
+// B48: the real editor engine (CodeMirror 6) replaces the hand-rolled textarea/pre editor and
+// custom diff renderer. Flag kept so the old renderer stays reachable as a one-release fallback.
+const CODEMIRROR_EDITOR = true;
 import {
   toSafeModId,
   generateContentXML,
@@ -1112,7 +1117,63 @@ export default function CodePreview({
       {/* VIEWPANE STAGE (DIFF MODE OR NORMAL CODE EDITOR)                  */}
       {/* ================================================================ */}
       <div id="xml_code_viewport" className="flex-1 flex min-h-0 relative select-text overflow-hidden m-2 rounded-lg border border-white/10 bg-[#050608] shadow-[0_3px_14px_rgba(0,0,0,0.45)]">
-        {effectiveDiffEnabled ? (
+        {CODEMIRROR_EDITOR ? (
+          effectiveDiffEnabled ? (
+            // ============= CODEMIRROR DIFF (read-only, split/unified) =============
+            <div className="flex-1 flex overflow-hidden min-h-0 bg-[#050608]">
+              <div className="flex-1 min-w-0 overflow-hidden">
+                <CodeMirrorField
+                  value={getDiffTexts().current}
+                  diffOriginal={getDiffTexts().original}
+                  diffMode={diffMode}
+                  className="h-full"
+                />
+              </div>
+              {showMinimap && renderMinimap(computeLineDiff(getDiffTexts().original.split('\n'), getDiffTexts().current.split('\n')).modifiedLines)}
+            </div>
+          ) : (
+            // ============= CODEMIRROR NORMAL (editable) =============
+            <div className="flex-1 flex overflow-hidden min-h-0">
+              <div className="relative h-full w-full overflow-hidden flex flex-1 bg-[#050608]">
+                <div className="flex-1 min-w-0 overflow-hidden">
+                  <CodeMirrorField
+                    value={isFileEditorActive ? editorContent : activeCodeText}
+                    onChange={isFileEditorActive ? handleEditorContentChange : handleGeneratedDraftChange}
+                    className="h-full"
+                  />
+                </div>
+                {/* Status pill — file save vs generated apply (preserved from the old editor) */}
+                <div className="absolute bottom-3 right-4 px-2 py-1 rounded bg-[#0b0c13]/90 border border-white/5 text-[9px] pointer-events-none select-none z-10 font-mono">
+                  {isFileEditorActive ? (
+                    editorSaveStatus === 'error' ? <span className="text-red-400 font-bold uppercase">{editorError}</span>
+                    : editorSaveStatus === 'saving' ? <span className="text-cyan-400 animate-pulse">SAVING ON-DISK...</span>
+                    : editorSaveStatus === 'saved' ? <span className="text-[#36e07a] font-bold">✔ DRAFT DEPLOYED TO BLUEPRINT</span>
+                    : <span className="text-slate-500 lowercase">{activeEditorFile?.path}</span>
+                  ) : (
+                    generatedApplyStatus === 'error' ? <span className="text-red-400 font-bold uppercase">{generatedApplyMessage}</span>
+                    : generatedApplyStatus === 'applying' ? <span className="text-cyan-400 animate-pulse">APPLYING XML...</span>
+                    : generatedApplyStatus === 'applied' ? <span className="text-[#36e07a] font-bold">{generatedApplyMessage}</span>
+                    : generatedDraftDirty ? <span className="text-amber-300 font-bold">DRAFT MODIFIED - APPLY TO WORKSPACE WHEN READY</span>
+                    : <span className="text-slate-500 lowercase">generated XML is editable</span>
+                  )}
+                </div>
+              </div>
+              {/* Error scroll indicators (approximate) — preserved */}
+              {lineDiagMap.size > 0 && (
+                <div className="absolute top-0 right-1 w-2.5 h-full pointer-events-none z-10">
+                  {Array.from(lineDiagMap.entries()).map(([idx, info]) => (
+                    <div
+                      key={idx}
+                      className={`absolute right-0 w-2 h-[3.5px] rounded-sm ${info.severity === 'error' ? 'bg-red-500' : 'bg-amber-400'}`}
+                      style={{ top: `${(idx / Math.max(codeLines.length, 1)) * 100}%` }}
+                    />
+                  ))}
+                </div>
+              )}
+              {showMinimap && renderMinimap(codeLines.map(l => ({ value: l })))}
+            </div>
+          )
+        ) : effectiveDiffEnabled ? (
           diffMode === 'split' ? (
             // ==================== SIDE-BY-SIDE DIFF MODE ====================
             <div className="flex-1 flex overflow-hidden min-h-0 bg-[#050608]">

@@ -1426,6 +1426,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace }: XMLPatchSyst
                     <span className="text-slate-600">candidate</span>
                   </div>
                   <textarea
+                    data-testid="diff-patch-edited-xml"
                     value={dtEdited}
                     onChange={e => { setDtEdited(e.target.value); setDtResult(null); setDtError(null); }}
                     spellCheck={false}

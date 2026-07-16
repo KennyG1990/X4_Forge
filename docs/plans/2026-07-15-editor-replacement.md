@@ -38,7 +38,27 @@ Post-swap acceptance = walk this list in the rendered UI, item by item:
 
 Anything NOT on this list found during implementation gets ADDED here before it is touched.
 
-## Phase 1 — core swap (Monaco)
+## RECONCILE + LIBRARY DECISION (2026-07-16, in-implementation)
+Current editing core (the laggy/weird part), all inside CodePreview.tsx:
+- Edit surface = a TRANSPARENT `<textarea>` over a syntax-highlighted `<pre>` (highlightXML on
+  every keystroke, textarea/pre alignment) — lines ~911-919 (all-scripts) + ~1246-1253 (single).
+- Diff = custom `computeLineDiff` + per-line `highlightXML` render, split/unified (~1115-1240).
+- Minimap = custom `renderMinimap` (~861), auto-hidden <560px (G8b).
+- Highlighter = custom `highlightXML`/`highlightCode`.
+The CHROME (tabs, 7 toolbar buttons, status bar, apply/compile, snapshot-diff wiring, aria,
+collapse) is separate and is PRESERVED verbatim per the contract above.
+
+**Decision: CodeMirror 6, not Monaco.** Rationale — (1) the studio runs inside a webview under a
+STRICT CSP; Monaco needs web workers, whose Vite bundling + CSP-safe (non-CDN) worker loading is a
+real footgun mid-marathon; CodeMirror 6 needs NO workers and is CSP-clean. (2) Lighter (~1MB vs
+~5MB), trivial Vite integration. (3) `@codemirror/lang-xml` + `@codemirror/merge` cover
+highlight+edit+split/unified diff directly. (4) Works identically in BOTH shells (standalone +
+extension) — the standalone has no native IDE editor to borrow, so an embedded real editor is the
+only thing that fixes it everywhere. The custom minimap is KEPT (pure fn of the lines; fed from
+the editor content) to satisfy the contract. Reversibility: gate the new path behind a flag with
+the old textarea/pre renderer as fallback for the first pass.
+
+## Phase 1 — core swap (CodeMirror 6)
 - Add `monaco-editor` (local npm; fits the posture). Replace CodePreview's hand-rolled text
   area + custom diff renderer with Monaco Editor + Monaco DiffEditor (the literal VS Code
   editor component — kills lag/draw bugs class-wide, in BOTH shells incl. standalone).

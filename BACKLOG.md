@@ -96,6 +96,45 @@ namespace + license choice + beta-vs-prerelease call. Then: package.json publish
 keywords finalize → `vsce publish` + `ovsx publish` (each Ken-authorized). Plan:
 `docs/plans/2026-07-15-marketplace-readiness.md`.
 
+### B50 · Activity-bar launcher icon (click-to-run) — ◐ IMPLEMENTED 2026-07-16 (visual = 10-sec Ken eyeball)
+Activity Bar view container `x4forge` + monochrome node-graph SVG (`media/activitybar.svg`,
+currentColor) + `x4forge.launcher` view with `viewsWelcome` buttons → existing openStudio/
+createAgentKey/showLogs/stopSidecar; empty TreeDataProvider registered so the welcome renders.
+Keeps the command. **VERIFIED:** manifest contributions valid (JSON-checked), SVG valid + ships
+in VSIX, build 0, packaged 0.0.5, installed in BOTH IDEs. **◐ residual (Ken eyeball, ~10s):**
+confirm the node-graph icon shows in the Activity Bar rail and clicking it opens the launcher
+with working buttons — I couldn't cleanly distinguish it among the ~20 installed-extension icons
+via screenshots. NOTE: on a crowded rail a new container can land under the "···" (Additional
+Views) overflow at the bottom — if it's not immediately visible, it's there.
+
+### B48 · Real editor engine (CodeMirror 6) replaces hand-rolled CodePreview — Phase 1 ◐ IMPLEMENTED 2026-07-16
+Swapped the transparent-textarea/pre editor + custom line-diff for CodeMirror 6 (`CodeMirrorField.tsx`),
+behind flag `CODEMIRROR_EDITOR` (old renderer kept as fallback). Editable editor + read-only split
+(MergeView) / unified (unifiedMergeView) diff; XML highlighting + line numbers native; chrome
+(tabs, 7 toolbar btns, status bar, minimap, editable-badge, apply/save pills) PRESERVED. Decision:
+CodeMirror not Monaco (CSP/worker-clean for the webview; both shells benefit). **VERIFIED live:**
+editor mounts, edits flow to draft (DRAFT-MODIFIED flips), diff MergeView renders, syntax
+highlight + gutter + status bar confirmed via DOM + screenshot; tsc 0. Bundle +360KB (lazy-load =
+Phase 2 polish). **Open:** e2e (running), extension repackage, Phase 2 (collapse-default real
+estate + optional native-IDE-tab bridge). Plan: `docs/plans/2026-07-15-editor-replacement.md`.
+
+### B51 · Schema discovery (recursive, subdir-aware, multi-XSD) + config persistence — ◐ IMPLEMENTED 2026-07-16
+Fixes reported bugs: (1) schema scanner only looked top-level for md.xsd/common.xsd, so pointing
+it at an unpacked game (`…\X4 unpacked 9.00`) found nothing; now `discoverXsd` finds XSDs in
+subdirs (md/, libraries/, aiscripts/), prefers base game over DLC copies, recurses as fallback.
+(2) aiscripts.xsd now discovered + wired into `getAiSchemaIndex` (ai_schema loads from the game).
+(3) directory settings didn't persist across extension updates — config.json now honors
+`X4_CONFIG_DIR` (extension → globalStorage), NOT the throwaway state dir. Oracle
+`schema-discovery-selftest` 9/9. **LIVE-PROVEN** against the real unpacked game: md_schema "1339
+elements", ai_schema pass, config persists. Caught+fixed a self-inflicted e2e regression
+(configPath fell back to X4_STATE_DIR which e2e sets). Plan/decision: this entry + capability-map.
+
+### B52 · In-app bug reporting — `spec'd` (DECISION PENDING: delivery mechanism = Ken's call)
+A user (Paradox) asked where to report bugs. Options: GitHub Issues (rec — secret-free, pre-filled
+issue in Ken's repo + clipboard fallback) · Discord webhook (zero-friction but bakes a secret) ·
+clipboard-only. Awaiting Ken's destination (repo/webhook), then build the modal + auto-context
+(version/build/OS/workspace) + delivery + rate-limit.
+
 ## P1 — Safety / architecture
 
 ### B1 · Workspace sync-trust slice — ✅ CLOSED 2026-07-09 → ROADMAP (badge verified live; residual: badge clipping polish → B13)

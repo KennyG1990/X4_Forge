@@ -12,7 +12,7 @@ import os from "os";
 import zlib from "zlib";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, writeXsdConfig } from "./src/lib/xsdParser";
+import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig } from "./src/lib/xsdParser";
 
 // Import types & helpers from the frontend shared file
 import {
@@ -189,8 +189,17 @@ function injectStudioToken(html: string): string {
 function loadCurrentSchemaLibrary(): SchemaLibrary {
   try {
     const resolved = resolveXsdConfig();
-    const library = loadSchemaLibrary(resolved.schemaDir, resolved.schemaFiles || ['md.xsd', 'common.xsd']);
-    console.log(`[AI-STUDIO] Loaded XSD schema library: ${library.events.length} events, ${library.conditions.length} conditions, ${library.actions.length} actions.`);
+    // B51: load from the DISCOVERED absolute paths (the game keeps md.xsd/common.xsd in
+    // subdirectories, so a naive schemaDir + 'md.xsd' join misses them). loadSchemaLibrary
+    // honors absolute file paths. Guard when neither resolved yet → empty library, not a throw.
+    const schemaPaths = [resolved.mdXsdPath, resolved.commonXsdPath].filter(p => p && fs.existsSync(p));
+    if (!schemaPaths.length) {
+      return createEmptySchemaLibrary(
+        `md.xsd / common.xsd not found under the configured schema or game path (searched "${resolved.schemaDir}"${resolved.x4GamePath ? ` and "${resolved.x4GamePath}"` : ''}).`,
+      );
+    }
+    const library = loadSchemaLibrary(resolved.schemaDir, schemaPaths);
+    console.log(`[AI-STUDIO] Loaded XSD schema library: ${library.events.length} events, ${library.conditions.length} conditions, ${library.actions.length} actions (md=${resolved.mdXsdPath}).`);
     return library;
   } catch (error) {
     const message = errorMessage(error);
@@ -5224,6 +5233,7 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
 // SELFTEST REGISTRY (audit R1): one line per oracle — route + public allowlist wired together.
 const SELFTESTS: Record<string, () => unknown> = {
   "agent-keys-selftest": runAgentKeysSelftest,
+  "schema-discovery-selftest": runSchemaDiscoverySelftest,
   "game-detect-selftest": runGameDetectSelftest,
   "ttfm-selftest": runTtfmSelftest,
   "action-census-selftest": runActionCensusSelftest,

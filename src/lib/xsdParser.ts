@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { XMLParser } from 'fast-xml-parser';
 import { schemaLibraryToTemplates, SchemaAttribute, SchemaCategory, SchemaElement, SchemaLibrary } from './schemaTypes';
@@ -34,6 +35,9 @@ export interface ResolvedXsdConfig extends XsdConfig {
   commonXsdPath: string;
   mdExists: boolean;
   commonExists: boolean;
+  /** B51: aiscripts.xsd discovered under the schema/game dir (for AISCRIPT validation). */
+  aiscriptsXsdPath?: string;
+  aiscriptsExists?: boolean;
   modWorkspacePath?: string;
   filesystemPath?: string;
 }
@@ -239,7 +243,53 @@ export function getDefaultSchemaDir(gamePath = getDefaultGamePath()): string {
 }
 
 function configPath(): string {
-  return path.resolve(process.cwd(), 'config.json');
+  // B51: honor an EXPLICIT config dir (X4_CONFIG_DIR) so the packaged extension can persist the
+  // user's Directory Settings OUTSIDE its install dir (which every extension update wipes).
+  // Only X4_CONFIG_DIR — deliberately NOT X4_STATE_DIR, which the e2e/ephemeral stack sets for
+  // workspace isolation; coupling config to it would move config.json into the throwaway state
+  // dir. Unset (dev/standalone) → config.json in cwd, unchanged.
+  const dir = process.env.X4_CONFIG_DIR?.trim() || process.cwd();
+  return path.resolve(dir, 'config.json');
+}
+
+// B51: the game ships its XSDs in SUBDIRECTORIES (md/md.xsd, libraries/common.xsd,
+// aiscripts/aiscripts.xsd), and an unpacked-game folder scatters them further (per-DLC copies
+// under extensions/). `discoverXsd` finds a schema by basename wherever it lives: conventional
+// relative homes first (fast, exact), then a bounded recursive walk preferring base game over
+// DLC copies and shallower paths.
+const XSD_CONVENTIONAL_HOMES: Record<string, string[]> = {
+  'md.xsd': ['md.xsd', 'md/md.xsd', 'libraries/md.xsd'],
+  'common.xsd': ['common.xsd', 'libraries/common.xsd', 'md/common.xsd'],
+  'aiscripts.xsd': ['aiscripts.xsd', 'aiscripts/aiscripts.xsd', 'libraries/aiscripts.xsd'],
+};
+
+export function discoverXsd(root: string, basename: string): string | null {
+  if (!root) return null;
+  try { if (!fs.existsSync(root)) return null; } catch { return null; }
+  const lower = basename.toLowerCase();
+  for (const rel of (XSD_CONVENTIONAL_HOMES[lower] || [basename])) {
+    const p = path.join(root, ...rel.split('/'));
+    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* keep looking */ }
+  }
+  const matches: { path: string; depth: number; dlc: boolean }[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (depth > 6 || matches.length > 200) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (/^(node_modules|\.git|assets|textures|videos|music|sounds|shadergl|particles)$/i.test(e.name)) continue;
+        walk(full, depth + 1);
+      } else if (e.name.toLowerCase() === lower) {
+        matches.push({ path: full, depth, dlc: /[\\/]extensions[\\/]/i.test(full) });
+      }
+    }
+  };
+  walk(root, 0);
+  if (!matches.length) return null;
+  matches.sort((a, b) => (Number(a.dlc) - Number(b.dlc)) || (a.depth - b.depth) || a.path.localeCompare(b.path));
+  return matches[0].path;
 }
 
 export function readXsdConfig(): XsdConfig {
@@ -260,10 +310,18 @@ export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
       : path.join(process.cwd(), 'data', 'harvested-schemas'));
 
   const files = config.schemaFiles?.length ? config.schemaFiles : ['md.xsd', 'common.xsd'];
-  const mdFile = files.find(file => path.basename(file).toLowerCase() === 'md.xsd') || 'md.xsd';
-  const commonFile = files.find(file => path.basename(file).toLowerCase() === 'common.xsd') || 'common.xsd';
-  const mdXsdPath = path.isAbsolute(mdFile) ? mdFile : path.join(schemaDir, mdFile);
-  const commonXsdPath = path.isAbsolute(commonFile) ? commonFile : path.join(schemaDir, commonFile);
+  // An explicit ABSOLUTE path in schemaFiles always wins (a user who set an exact file). Else
+  // discover the schema under the configured schema dir (subdir-aware), then under the game
+  // dir, and only fall back to the naive top-level join if discovery finds nothing.
+  const explicitAbs = (base: string) => files.find(f => path.basename(f).toLowerCase() === base && path.isAbsolute(f));
+  const discover = (base: string) =>
+    explicitAbs(base)
+    || discoverXsd(schemaDir, base)
+    || (gamePath ? discoverXsd(gamePath, base) : null);
+
+  const mdXsdPath = discover('md.xsd') || path.join(schemaDir, 'md.xsd');
+  const commonXsdPath = discover('common.xsd') || path.join(schemaDir, 'common.xsd');
+  const aiscriptsXsdPath = discover('aiscripts.xsd') || undefined;
 
   return {
     ...config,
@@ -273,9 +331,47 @@ export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
     schemaDir,
     mdXsdPath,
     commonXsdPath,
+    aiscriptsXsdPath,
     mdExists: fs.existsSync(mdXsdPath),
-    commonExists: fs.existsSync(commonXsdPath)
+    commonExists: fs.existsSync(commonXsdPath),
+    aiscriptsExists: !!aiscriptsXsdPath && fs.existsSync(aiscriptsXsdPath),
   };
+}
+
+/**
+ * B51 oracle: schema discovery finds XSDs in the game's real subdirectory layout, prefers base
+ * game over DLC copies, keeps the flat harvested-schemas layout working, and recurses as a
+ * fallback. Uses a temp fixture (no game install needed).
+ */
+export function runSchemaDiscoverySelftest(): { pass: boolean; checks: Array<{ name: string; pass: boolean; detail?: string }> } {
+  const checks: Array<{ name: string; pass: boolean; detail?: string }> = [];
+  const ok = (name: string, pass: boolean, detail?: string) => checks.push({ name, pass, detail });
+  const tmp = path.join(os.tmpdir(), `x4-xsd-discover-${process.pid}`);
+  const mk = (rel: string) => { const p = path.join(tmp, ...rel.split('/')); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, '<xs:schema/>'); return p; };
+  try {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    mk('md/md.xsd'); mk('libraries/common.xsd'); mk('aiscripts/aiscripts.xsd'); mk('extensions/ego_dlc/md/md.xsd');
+    ok('md found in md/ subdir', discoverXsd(tmp, 'md.xsd') === path.join(tmp, 'md', 'md.xsd'), discoverXsd(tmp, 'md.xsd') || 'null');
+    ok('common found in libraries/', discoverXsd(tmp, 'common.xsd') === path.join(tmp, 'libraries', 'common.xsd'));
+    ok('aiscripts found in aiscripts/', discoverXsd(tmp, 'aiscripts.xsd') === path.join(tmp, 'aiscripts', 'aiscripts.xsd'));
+    ok('base preferred over DLC copy', !(discoverXsd(tmp, 'md.xsd') || '').includes('extensions'));
+    ok('missing file → null', discoverXsd(tmp, 'nonexistent.xsd') === null);
+    ok('nonexistent root → null', discoverXsd(path.join(tmp, 'nope'), 'md.xsd') === null);
+
+    const flat = path.join(tmp, 'flat'); fs.mkdirSync(flat, { recursive: true }); fs.writeFileSync(path.join(flat, 'md.xsd'), '<xs:schema/>');
+    ok('flat harvested layout still works', discoverXsd(flat, 'md.xsd') === path.join(flat, 'md.xsd'));
+
+    const deep = path.join(tmp, 'weird'); fs.mkdirSync(path.join(deep, 'a', 'b', 'schemas'), { recursive: true }); fs.writeFileSync(path.join(deep, 'a', 'b', 'schemas', 'md.xsd'), '<xs:schema/>');
+    ok('recursive fallback finds deep md', (discoverXsd(deep, 'md.xsd') || '').endsWith(path.join('schemas', 'md.xsd')));
+
+    const r = resolveXsdConfig({ xsdSchemaPath: tmp });
+    ok('resolveXsdConfig reports all present', r.mdExists === true && r.commonExists === true && r.aiscriptsExists === true);
+  } catch (e) {
+    ok('selftest ran without error', false, String(e));
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+  return { pass: checks.every(c => c.pass), checks };
 }
 
 export function loadSchemaLibrary(schemaDir = getDefaultSchemaDir(), files = ['md.xsd', 'common.xsd']): SchemaLibrary {

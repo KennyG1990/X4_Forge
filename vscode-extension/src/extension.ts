@@ -207,6 +207,11 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   const token = crypto.randomBytes(32).toString("hex");
   const stateDir = resolveStateDir(context);
   fs.mkdirSync(stateDir, { recursive: true });
+  // B51: persist the user's Directory Settings (config.json) in global storage, NOT the
+  // extension's install dir — the latter is replaced on every extension update, which was
+  // wiping the configured game/schema/workspace paths each time the user updated.
+  const configDir = path.join(context.globalStorageUri.fsPath, "config");
+  fs.mkdirSync(configDir, { recursive: true });
 
   // B43: gold-standard debugging — spawn under --inspect and auto-attach the IDE debugger.
   const debugMode = cfg().debug;
@@ -231,6 +236,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
       PORT: String(port),
       STUDIO_API_TOKEN: token,
       X4_STATE_DIR: stateDir,
+      X4_CONFIG_DIR: configDir, // B51: config.json persists across extension updates
       // Defense-in-depth: never allow the dev-only shell route in this shell.
       FORGE_ALLOW_RUN_COMMAND: "",
     },
@@ -425,6 +431,17 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(output, statusItem);
 
   log(`extension activated (host: ${vscode.env.appName} ${vscode.version})`);
+
+  // B50: the Activity Bar launcher view. An empty tree provider makes the view render its
+  // `viewsWelcome` buttons (Open Studio / Create Agent Key / Logs / Stop) — a click-to-run
+  // entry point so users never need the command palette.
+  const emptyLauncher: vscode.TreeDataProvider<vscode.TreeItem> = {
+    getChildren: () => [],
+    getTreeItem: (e) => e,
+  };
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("x4forge.launcher", emptyLauncher),
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("x4forge.openStudio", () => openStudio(context)),
