@@ -52,6 +52,54 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ◐ B55 PHASE 1 · VALIDATION-DRIVEN REPAIR LOOP — the validator now drives the agent (2026-07-16, PARTIAL)
+
+The Forge-Agent harness lesson applied to the in-app agent (plan:
+`docs/plans/2026-07-16-validation-driven-agent-loop.md`). Phase 4 of `/api/agent/generate` is
+no longer a one-shot self-heal: a bounded repair loop driven by the COMPOSITE validator
+(workspace laws + full `runProjectValidation`: structure, cross-file cues, md/aiscripts schemas
+incl. B46P2 routed domains, aiscript lint, script properties, corpus pitfalls) decides retries,
+progress, and completion — the model only proposes candidates.
+
+- **`src/lib/agentLoop.ts`** (pure, injected validate/repair — oracle `agent-loop-selftest`
+  **12/12**): stable diagnostic signatures, deduped remediation capsules (quick-fix descriptors
+  ride along as grounded hints), max 3 attempts (1 = the old one-shot, via `repairAttempts`),
+  no-progress halt after 2 identical signature sets, spend-cap/provider-error halts keep the
+  BEST-validated workspace ever seen (a worse candidate is never adopted). Clean first
+  validation = ZERO repair calls (no spend).
+- **`flattenProjectValidation`** (projectValidation.ts): one diagnostic currency over all 7
+  validator layers. **Response** gains honest `repair: {attempts, maxAttempts, haltReason,
+  remaining, history}`; request shape unchanged (external-agent compatible).
+- **selftestRegistry now awaits async oracles** — agent-loop was the first; a pending Promise
+  previously serialized as `{}` and read as a silent sweep FAIL.
+- **Live-found + fixed:** openrouter default model id `google/gemini-2.1-flash` does not exist
+  (catalog-checked) — every keyed request without `x-ai-model` 500'd. Now `gemini-2.5-flash`.
+
+**LIVE test (Ken-authorized, his stored openrouter key, never read into context):** 2 real
+generates on a scratch instance (:3777, staged `apply:false`) — 200 in ~8-10s, 7-node/6-link
+blueprint, composite validation clean first pass → **0 repair calls, live proof of the
+no-spend-when-clean contract**; spend meter recorded 9 calls; key resolved via app-UI origin.
+
+**Gates:** tsc 0 · touched-files lint 0 · precommit OK · sweep **84/87** (same 3 documented env
+reds) · **e2e 19/19 PASS**. The first two e2e runs failed 18-19/19 — [REPRODUCED] environmental:
+a long-lived scratch `tsx server.ts` instance holds Vite's machine-global HMR port 24678; the
+ephemeral e2e Vite died on EADDRINUSE and cascaded. Kill scratch instances before e2e (hazard
+banked); the diff was never the cause.
+
+**◐ PARTIAL on one named point:** the repair path firing on a REAL dirty generation has not
+been observed live — both live prompts validated clean first pass (the templates make
+requiredness hard to violate). Loop semantics (convergence, stalls, cap-trip, best-workspace)
+are deterministically oracle-proven; the `repair` response field self-reports when it first
+fires in real use. **Deferred:** the plan's old-vs-new A/B needs a prompt that actually
+generates invalid output.
+
+**Also this close: stable 0.0.13 published to Open VSX (Ken-authorized 2026-07-17)** — the
+staged bundle probed BEFORE publish (agent-loop oracle 12/12 IN the shipped server.cjs, plus
+B46P2 regression: md-audit 0, routing 24/24); `ovsx publish` exit 0 (🚀 v0.0.13).
+**Suggested commit title:** "feat(agent): B55P1 validation-driven repair loop — composite
+validator drives generate phase 4 (oracle 12/12, spend-capped, honest repair reporting); fix
+openrouter default model + async selftest registry; bump extension to 0.0.13".
+
 ### ✅ B46 PHASE 2 · FILE→SCHEMA ROUTING — corpus-proven, zero false positives (2026-07-16, VERIFIED)
 
 **First job (the P1 hand-off note) RESOLVED [REPRODUCED]:** the 2 md-audit findings

@@ -216,6 +216,47 @@ export function runProjectValidation(
 }
 
 /* ------------------------------------------------------------------ *
+ * B55P1: flatten the layered result into one diagnostic currency for the
+ * validation-driven repair loop (src/lib/agentLoop.ts). Every layer keeps
+ * its native shape in the result; this is a VIEW, not a replacement.
+ * ------------------------------------------------------------------ */
+
+export interface FlatProjectDiagnostic {
+  severity: "error" | "warning" | "info";
+  message: string;
+  code?: string;
+  filePath?: string;
+  sourceRef?: string;
+  line?: number;
+}
+
+export function flattenProjectValidation(result: ProjectValidationResult): FlatProjectDiagnostic[] {
+  const out: FlatProjectDiagnostic[] = [];
+  for (const i of result.structure) {
+    out.push({ severity: i.severity, code: `project.${i.code}`, filePath: i.path, message: i.detail });
+  }
+  for (const r of result.cueIndex.unresolved) {
+    out.push({ severity: "error", code: "project.unresolved_cue_ref", filePath: r.file, sourceRef: r.ref, message: `Cue reference "${r.ref}" resolves to nothing in this project.` });
+  }
+  for (const f of result.crossFile.findings) {
+    out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef: f.event || f.dependencyId, message: f.detail });
+  }
+  for (const d of result.schema.findings) {
+    out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line, message: d.message });
+  }
+  for (const f of result.aiscript.findings) {
+    out.push({ severity: f.severity, code: f.code, sourceRef: f.order ? `${f.order}${f.param ? `@${f.param}` : ""}` : f.param, message: f.detail });
+  }
+  for (const f of result.scriptProperties.findings) {
+    out.push({ severity: f.severity, code: f.code, sourceRef: f.chain, line: f.line, message: `Property chain "${f.chain}": segment "${f.segment}" — ${f.suggestions.length ? `did you mean ${f.suggestions.slice(0, 3).join(", ")}?` : "unknown in scriptproperties.xml."}` });
+  }
+  for (const f of result.pitfalls.findings) {
+    out.push({ severity: f.severity, code: f.code, sourceRef: f.cue, line: f.line, message: f.detail });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * Disk loading (fromPath / CLI).
  * ------------------------------------------------------------------ */
 

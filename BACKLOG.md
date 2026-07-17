@@ -76,15 +76,17 @@ works). Same `expandIncludeChain` treatment; verify palette count 402 after.
 `reportUnknownElements` for routed domains rides on it. Plan (incl. P2 reconciled design +
 corpus corrections): `docs/plans/2026-07-15-full-corpus-validation.md`.
 
-### B55 · Validation-driven agent loop — `SPECIFIED` 2026-07-16 (Forge-Agent harness lessons)
-Promote the validator stack from post-generation reporting into the control system of the
-internal AI agent. Reconciled against code 2026-07-16: phase-4 self-heal is ONE-SHOT against
-`validateModWorkspace` only; `runProjectValidation` (+ B46P2 routing) is never in the loop; no
-corpus retrieval into prompts. Phase 1 = bounded repair loop driven by the composite validator
-(signature-based no-progress halt, B25 spend-cap negative path). Phase 2 = deterministic
-vanilla-example retrieval into prompts (budgeted, corpus-bytes-only). Phase 3 (Ken-gated) =
-architect/editor model split + evidence-gated done + the causal A/B harness. Reuses:
-vetTaskProposal/loopStopReason, quick-fix descriptors, B25 meter, B36 evidence, corpus walkers.
+### B55 · Validation-driven agent loop — Phase 1 ◐ PARTIAL 2026-07-16 → ROADMAP; Phases 2–3 `spec'd`
+**Phase 1 SHIPPED (composite-validator repair loop):** `src/lib/agentLoop.ts` (oracle 12/12) +
+generate phase-4 rewiring — the full validator stack (incl. B46P2 routing) now DRIVES retries/
+halts/completion; clean first pass = 0 repair calls (live-proven with Ken's openrouter key,
+2 real generates, spend metered); honest `repair` reporting; quick-fix hints in repair prompts.
+Also fixed live: invalid openrouter default model id; async selftests now awaited by the
+registry. Gates: tsc 0 · sweep 84/87 (same env reds) · e2e 19/19. **◐ residual:** repair-path
+live-fire not yet observed (both live generations validated clean); self-reports via the
+`repair` field when it happens. **Phase 2 (`spec'd`):** deterministic vanilla-example retrieval
+into prompts (budgeted, corpus-bytes-only; share B46P3's index). **Phase 3 (`spec'd`,
+Ken-gated):** architect/editor split + evidence-gated done + causal A/B harness.
 Plan: `docs/plans/2026-07-16-validation-driven-agent-loop.md`.
 
 ### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP

@@ -95,7 +95,8 @@ import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
 import { classifyPath, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
-import { computeModDrift, fingerprintModFolder, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
 import { workspaceContentHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
 import { buildReleasePlan, buildZip, runModDistributionSelftest } from "./src/lib/modDistribution";
@@ -1936,7 +1937,9 @@ async function callMultiProviderAI(
       throw new Error(envFallbackAllowed ? "OpenRouter API key is not configured. Please supply your API Key in the AI Providers settings modal." : NO_KEY_MSG);
     }
 
-    const finalModel = model || "google/gemini-2.1-flash";
+    // B55P1: "google/gemini-2.1-flash" is not a valid OpenRouter id (live-reproduced 500,
+    // 2026-07-16, catalog-checked) — a keyed request with no x-ai-model header always failed.
+    const finalModel = model || "google/gemini-2.5-flash";
     let finalPrompt = prompt;
     if (responseFormat === "json") {
       finalPrompt = `${prompt}\n\nCRITICAL: Return ONLY a raw, fully valid JSON object fitting this schema specifications: ${JSON.stringify(jsonSchema || {})}. Do NOT wrap the JSON inside markdown blocks or include any extra conversational text! Only output valid JSON!`;
@@ -5304,6 +5307,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "schema-discovery-selftest": runSchemaDiscoverySelftest,
   "schema-registry-selftest": runSchemaRegistrySelftest,
   "schema-routing-selftest": runSchemaRoutingSelftest,
+  "agent-loop-selftest": runAgentLoopSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,
@@ -7474,15 +7478,29 @@ Create, update, or reposition HUD window containers and nested controller elemen
       uiTheme: phase3Result.uiTheme || currentUITheme
     };
 
-    // --- PHASE 4: EXPERT SCHEMA SELF-REPAIR SANITY VET ---
-    console.log(`[AI-STUDIO] [Phase 4/4] Executing Egosoft Schema Verification & Healing...`);
-    const currentCode = generateMDXML(combinedWorkspace);
-    const validationDiagnostics = validateModWorkspace(combinedWorkspace, currentCode);
-    let selfHealError: string | null = null;
+    // --- PHASE 4: VALIDATION-DRIVEN REPAIR LOOP (B55P1) ---
+    // The composite validator DRIVES a bounded repair loop; the model only proposes
+    // candidates (src/lib/agentLoop.ts). Composite = workspace laws + the FULL project
+    // stack (structure, cross-file cues, md/aiscripts schemas incl. B46P2 routed domains,
+    // aiscript lint, script properties, corpus pitfalls). A clean first validation makes
+    // ZERO repair calls; identical unresolved findings across 2 consecutive attempts halt
+    // the loop; a spend-cap trip halts honestly with the best workspace seen.
+    console.log(`[AI-STUDIO] [Phase 4/4] Validation-driven repair loop...`);
+    const compositeValidate = (ws: ModWorkspace): LoopDiagnostic[] => {
+      const out: LoopDiagnostic[] = validateModWorkspace(ws, generateMDXML(ws)).map(d => ({
+        severity: d.severity, message: d.message, code: `workspace.${d.category}`, nodeId: d.nodeId, line: d.line,
+      }));
+      try {
+        const { modId, files } = buildWorkspaceFileManifest(ws);
+        const project: ExtensionProject = {
+          id: modId, name: modId,
+          files: Object.entries(files).map(([p, c]) => ({ path: p, kind: classifyPath(p), content: String(c) })),
+        };
+        out.push(...flattenProjectValidation(runProjectValidation(project, { references: getReferenceSets() })));
+      } catch { /* project layer unavailable — workspace laws still drive the loop */ }
+      return out;
+    };
 
-    if (validationDiagnostics.length > 0) {
-      console.log(`[AI-STUDIO] Validation reported ${validationDiagnostics.length} warnings. Running auto-remedy fix...`);
-      
       const phase4System = `You are Phase 4 (Self-Healing Compiler) for the X4 Foundations visual editor.
 The generated workspace layout currently fails Egosoft's visual schema checks with specific warnings/errors.
 Study the diagnostics report, apply corrections to the nodes, properties, and links, and return the absolute complete ModWorkspace JSON.
@@ -7540,42 +7558,53 @@ CRITICAL COMPLIANCE RULES:
         }
       };
 
-      const phase4Prompt = `Correct the layout parameters of this ModWorkspace structure.
-[Damaged Workspace Layout]:
+    // B55P1: repairAttempts 1..3 (default 3). 1 reproduces the pre-B55 one-shot behavior —
+    // the documented external-agent request shape is unchanged; this field is additive.
+    const repairAttempts = Math.max(1, Math.min(3, Math.floor(Number(req.body.repairAttempts)) || 3));
+    const repairResult = await runRepairLoop<ModWorkspace>({
+      initial: combinedWorkspace,
+      validate: compositeValidate,
+      maxAttempts: repairAttempts,
+      repair: async (ws, capsules, attempt) => {
+        console.log(`[AI-STUDIO] Repair attempt ${attempt}/${repairAttempts}: ${capsules.length} open finding(s)...`);
+        // Deterministic quick-fix descriptors ride along as grounded hints (B55 plan:
+        // typed remediation, reuse — never rebuild — the existing mechanical fixes).
+        const mechanicalFixes = listQuickFixes(ws).map(f => ({ nodeId: f.nodeId, title: f.title, detail: f.detail }));
+        const phase4Prompt = `Correct this ModWorkspace structure.
+[Workspace Layout]:
 ${JSON.stringify({
-  name: combinedWorkspace.name,
-  description: combinedWorkspace.description,
-  nodes: combinedWorkspace.nodes.map(n => ({ id: n.id, xmlTag: n.xmlTag, properties: n.properties })),
-  links: combinedWorkspace.links
+  name: ws.name,
+  description: ws.description,
+  nodes: ws.nodes.map(n => ({ id: n.id, xmlTag: n.xmlTag, properties: n.properties })),
+  links: ws.links
 })}
 
-[Egosoft Validation Diagnostics Code Reports]:
-${JSON.stringify(validationDiagnostics, null, 2)}
-
-Please edit the links or properties to resolve all errors in the diagnostic suite. Output the corrected variables.`;
-
-      try {
+[Open validation findings — resolve ALL of these]:
+${JSON.stringify(capsules, null, 2)}
+${mechanicalFixes.length ? `
+[Known mechanical fixes (deterministic hints for specific nodes)]:
+${JSON.stringify(mechanicalFixes, null, 2)}
+` : ''}
+Apply corrections to the nodes, properties, and links to resolve every finding. Output the corrected complete structure.`;
         const phase4Raw = await callMultiProviderAI(req, phase4System, phase4Prompt, "json", phase4Schema);
         const phase4Result = JSON.parse(phase4Raw.trim());
-        
         // Re-populate system metadata to guarantee property schemas remain undamaged
-        const fixedNodes = populateNodeMetadata(phase4Result.nodes);
-        
-        combinedWorkspace = {
-          ...combinedWorkspace,
-          name: phase4Result.name || combinedWorkspace.name,
-          nodes: fixedNodes,
-          links: phase4Result.links || combinedWorkspace.links,
-          uiWidgets: phase4Result.uiWidgets || combinedWorkspace.uiWidgets,
-          uiTheme: phase4Result.uiTheme || combinedWorkspace.uiTheme
+        return {
+          ...ws,
+          name: phase4Result.name || ws.name,
+          nodes: populateNodeMetadata(phase4Result.nodes),
+          links: phase4Result.links || ws.links,
+          uiWidgets: phase4Result.uiWidgets || ws.uiWidgets,
+          uiTheme: phase4Result.uiTheme || ws.uiTheme
         };
-        console.log(`[AI-STUDIO] Phased Auto-Remedy cycle completed successfully.`);
-      } catch (repairErr) {
-        selfHealError = repairErr?.message || String(repairErr);
-        console.warn(`[AI-STUDIO] Self-heal attempt failed (falling back to base layout):`, repairErr);
-      }
+      },
+    });
+    combinedWorkspace = repairResult.workspace;
+    const selfHealError: string | null = repairResult.repairError || null;
+    if (repairResult.attempts === 0) {
+      console.log(`[AI-STUDIO] Verification complete: pristine composite validation on first run (0 repair calls).`);
     } else {
-      console.log(`[AI-STUDIO] Verification complete: pristine schema validated on first run.`);
+      console.log(`[AI-STUDIO] Repair loop finished: ${repairResult.attempts} attempt(s), halt=${repairResult.haltReason}, remaining=${repairResult.remaining.length} finding(s).`);
     }
 
     // Approval-flow fix (Codex finding): the in-app AI guide sends apply:false
@@ -7604,8 +7633,11 @@ Please edit the links or properties to resolve all errors in the diagnostic suit
     } else {
       resultMessage += ` Validation found ${finalErrors} error(s) / ${finalWarnings} warning(s) remaining.`;
     }
+    if (repairResult.attempts > 0) {
+      resultMessage += ` Repair loop: ${repairResult.attempts} attempt(s), halted ${repairResult.haltReason}.`;
+    }
     if (selfHealError) {
-      resultMessage += ` Self-heal phase failed (${selfHealError}); the un-healed layout was applied.`;
+      resultMessage += ` A repair call failed (${selfHealError}); the best-validated layout seen was kept.`;
     }
 
     // A4.9b — extract checkable requirements from the ORIGINAL prompt (separate
@@ -7674,8 +7706,16 @@ Use real X4 Mission Director xmlTags. Each requirement: {id, label (plain Englis
       workspace: combinedWorkspace,
       diagnostics: finalDiagnostics,
       requirements: intentRequirements,
-      selfHealFailed: (validationDiagnostics.length > 0 && finalDiagnostics.length > 0) || !!selfHealError,
-      selfHealError
+      selfHealFailed: (repairResult.attempts > 0 && finalDiagnostics.length > 0) || !!selfHealError,
+      selfHealError,
+      // B55P1: honest repair-loop reporting (additive field; request shape unchanged).
+      repair: {
+        attempts: repairResult.attempts,
+        maxAttempts: repairAttempts,
+        haltReason: repairResult.haltReason,
+        remaining: repairResult.remaining.slice(0, 25),
+        history: repairResult.history
+      }
     });
 
   } catch (error) {

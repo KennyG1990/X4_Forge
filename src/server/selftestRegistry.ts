@@ -12,7 +12,7 @@
 
 import type { Express } from "express";
 
-export type SelftestFn = () => unknown;
+export type SelftestFn = () => unknown | Promise<unknown>;
 
 export function registerSelftests(
   app: Express,
@@ -24,9 +24,11 @@ export function registerSelftests(
   for (const [name, fn] of Object.entries(tests)) {
     const route = `/api/agent/${name}`;
     publicGets.add(`/agent/${name}`);
-    app.get(route, (_req, res) => {
+    // B55P1: await the oracle — an ASYNC selftest (agent-loop was the first) otherwise
+    // serializes as a pending Promise ({}), which the sweep reads as a silent FAIL.
+    app.get(route, async (_req, res) => {
       try {
-        return res.json(fn());
+        return res.json(await Promise.resolve(fn()));
       } catch (error) {
         return res.status(500).json({ pass: false, error: errorMessage(error) || `${name} failed` });
       }
