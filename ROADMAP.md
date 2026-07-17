@@ -52,6 +52,37 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B59d · ANTI-HALLUCINATION POSITIONING COPY — Ken-voiced, Ken-approved (2026-07-17, VERIFIED)
+
+Fourth/final unit of the B59 menu. The community verdict "AI-made mods = one big hallucination" is
+the pain; the counter-story is the Forge's **validator-driven** repair loop. Copy was grounded in
+the ACTUAL mechanism BEFORE writing (anti-hallucination copy must not itself hallucinate) — read
+server.ts:7728–7854: Phase 4 = the composite validator (`validateModWorkspace` + full
+`runProjectValidation`: Egosoft schemas, cross-file cue resolution, script-property checks, corpus
+pitfalls) DRIVES a bounded repair loop; the **model only proposes** candidate fixes; clean first
+pass = 0 AI repair calls; identical findings twice = halt; unresolved-after-repair surfaces as
+`selfHealFailed` (honest, never hidden).
+
+- **Ken approval gate (the spec):** agent drafted, Ken approved **verbatim**, all three surfaces,
+  publish 0.0.21. Ken's one addition became a new backlog item (see below).
+- **Shipped to three surfaces:** (1) extension **README** new section "Is this just another AI mod
+  generator?" + a lead callout (README = the Open VSX store overview); (2) the tighter one-liner
+  **store blurb**; (3) an in-app **wiki topic** `reference_ai_anti_hallucination` — which required
+  wiring a new **Reference** tab in WikiBrowser.tsx (the `reference` category existed in the type but
+  had NO tab, so any reference topic was previously unreachable — now live).
+- **Honest limit kept in the copy:** it catches STRUCTURAL/schema lies (invented tags, bad
+  attributes, dangling refs, non-existent script properties); it does NOT promise the mod does what
+  you meant — the game is the final judge (semantic bugs in un-schema'd content still compile clean).
+- **Validated:** tsc 0 · lint 0 · **e2e 19/19 PASS** · **EYES:** the Reference tab renders and the
+  full topic content displays (screenshot). Stable **0.0.21 PUBLISHED** (staged-bundle probe ROOT 200).
+
+**Ken's directive off this unit → new work item B61 (SPECIFIED, reconcile-first):** "if you've
+identified un-schema'd work it sounds like we need a schema for that." The honest limit named a real
+gap — content domains the game ships NO XSD for (jobs and kin, B46P2). Closing it = AUTHORING
+validation Egosoft doesn't ship; its own workflow cycle, Ken-gated before build. Logged in BACKLOG.
+**Suggested commit title:** "feat(community): B59d anti-hallucination positioning copy (README +
+store + Reference wiki tab), publish 0.0.21".
+
 ### ✅ B59c · UI-EXTENSIONS COMPAT GUIDE (kuertee) — reconcile-first, honest defer of codegen (2026-07-17, VERIFIED)
 
 Third unit of the B59 menu (grounded from kuertee's real GitHub API, never invented).

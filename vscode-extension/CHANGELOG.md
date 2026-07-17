@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.21 — 2026-07-17
+
+- New: a plain-English answer to "is this just another AI mod generator?" — now on the store page, in the README, and as a Reference guide inside the studio. Short version: AI output goes through the same real-schema validation a hand-built mod faces, and if it can't make a mod validate, it tells you instead of handing you a broken one.
+
 ## 0.0.20 — 2026-07-17
 
 - New in-app guide: how to make a UI mod compatible with the widely-used kuertee UI Extensions framework — the ecosystem-standard way, instead of patching the game's UI files directly. Find it under X4 Wiki → HUD & LUA.

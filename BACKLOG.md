@@ -143,14 +143,29 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 (a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
-### B59 · Community patch ROUND 2 — a/b/c ✅ BUILT 2026-07-17 → ROADMAP; d in progress (Ken's goal: a→b→c→d)
-**a ✅ Patch-day readiness · b ✅ galaxy reconcile+jobs starter · c ✅ UI-Extensions guide** — old-vs-new selector drift (patchReadiness.ts oracle 10/10 +
+### B61 · Content validation for un-schema'd domains (jobs et al.) — SPECIFIED (Ken directive 2026-07-17, reconcile-first)
+Ken, off the B59d honest limit: "if you've identified un-schema'd work it sounds like we need a schema
+for that." REAL gap — X4 ships NO content XSD for some domains (jobs is the known one, B46P2 routed
+its `<diff>` WRAPPER but not the job CONTENT; the B59b jobs starter + B59a-adjacent AARs both flagged
+"a subtly-wrong job compiles clean, fails only in-game"). Closing it = AUTHORING validation the game
+itself doesn't ship — a real design decision with blast radius. **Reconcile FIRST** (before any spec):
+enumerate which content domains have no XSD (jobs, and check god/regions/sectors/etc.); check for prior
+art (the corpus-grounded "job content lint" idea floated in the B59b AAR — grounded on the vanilla job
+vocabulary: valid orders, `class` values, faction/tag combos, macro existence); decide extend-vs-new.
+Likely shape: a corpus-grounded content linter (advisory, WARNING severity like patch-readiness), NOT
+a fake XSD. **Ken-gated before build.** Ground: `F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`
+libraries/jobs.xml (606 jobs) + scriptproperties.xml.
+
+### B59 · Community patch ROUND 2 — a/b/c/d ✅ ALL BUILT 2026-07-17 → ROADMAP (Ken's goal a→b→c→d COMPLETE)
+**a ✅ Patch-day readiness · b ✅ galaxy reconcile+jobs starter · c ✅ UI-Extensions guide · d ✅ anti-hallucination copy** — old-vs-new selector drift (patchReadiness.ts oracle 10/10 +
 endpoint + MCP check_patch_readiness; live two-corpus proof vs real unpacked 9.00; 0.0.18
 published). **b ✅** galaxy tab = read-only viewer (sector authoring DEFERRED #64 P2); shipped custom_patrol_job
 jobs starter (oracle 36/36, picker EYES-seen, 0.0.19). **c ✅** reconcile found no raw-Lua carrier →
 codegen starter DEFERRED; shipped grounded kuertee UI-Extensions compat wiki topic
-(`luaui_kuertee_compat`, HUD & LUA, EYES-seen, e2e 19/19, 0.0.20 published). NEXT per goal:
-**d** anti-hallucination positioning copy (Ken-voiced; agent drafts, Ken approves). Research + menu:
+(`luaui_kuertee_compat`, HUD & LUA, EYES-seen, e2e 19/19, 0.0.20 published). **d ✅** Ken-approved
+anti-hallucination copy grounded in the real repair loop → shipped to README + store blurb + new
+Reference wiki tab (`reference_ai_anti_hallucination`, EYES-seen, e2e 19/19, 0.0.21 published); Ken's
+directive off it spun out **B61** (above). Research + menu:
 `docs/research/2026-07-17-community-gap-map-round2.md`. Original research kept below.
 Demand-side + author-workflow sweep: Nexus demand = conversions/overhauls/AI-tweaks (asset
 side OUT of scope; the XML layer of overhauls IS ours — GALAXY tab must be reconciled first)

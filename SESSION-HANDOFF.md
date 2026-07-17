@@ -1,73 +1,60 @@
-# SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
+# SESSION-HANDOFF — X4 Forge (overwrite at every commit point)
 
-> ## ⛔ COMMIT POINT (2026-07-17) — B59a+b VERIFIED + 0.0.19 PUBLISHED (goal: build B59 a→b→c→d)
-> **0.0.18 live on Open VSX** (patch-day readiness). Publish-before-commit; commit via git shell.
-> Goal active (Ken /goal): build the B59 menu a→b→c→d as sequenced units, workflow religiously.
-> **a+b DONE** (b: galaxy=viewer, sector-edit deferred #64 P2; shipped Faction Patrol Fleet jobs
-> starter). Next: **c** UI-Extensions-compatible starter (ground from kuertee repo), then **d**
-> anti-hallucination copy (Ken-voiced, agent drafts).
-> New files this unit: src/lib/patchReadiness.ts + docs plans (patch-day, galaxy-jobs); B59b touched src/lib/modTemplates.ts.
-> Touched: server.ts (endpoint+selftest reg), mcp/x4forge-mcp.cjs (check_patch_readiness),
-> package.json 0.0.18, CHANGELOG/release-notes, records. Committed via git shell + push.
->
-> ## 👁 B58 EYEBALL ADDITIONS (append to the B56+B57 batch below)
-> 8. **Starters:** RESET → picker shows Story Arc (3 stages) / War-Reactive Bounty /
->    Custom Game Start → pick Custom Game Start → XML PATCHING tab holds the gamestart
->    patch; LANGUAGES tab holds {10099,200-202}.
-> 9. **Conflicts:** "X4 Forge: Check Mod Conflicts" (with your real game path set) →
->    status line + any real collisions/dep issues in Problems (source: x4forge-conflicts).
-> 10. **Proof facts:** "Generate Proof Artifact" → PROOF.md now ends with "Save-impact
->    facts" (cues, patched files, overrides, the modified-flag truth).
->
-> ## 👁 EYEBALL QUEUE (B56+B57 combined — your Antigravity after the 0.0.15 publish)
-> 1. **Problems panel:** "X4 Forge: Validate Mod Folder" → findings in Ctrl+Shift+M,
->    click→file:line; break+save → refresh; TYPE without saving → squiggles update (~1s).
-> 2. **Mod folder:** "Open Mod Folder in Workspace" → explorer shows the mod; AGENTS.md +
->    X4_NOTES.md + .vscode/extensions.json appeared; read AGENTS.md — THE RULE + your mod's
->    real cues/domains in it.
-> 3. **IntelliSense:** in md/*.xml: `<` inside `<actions>` → census-ranked completions;
->    hover set_value → "Set Variable" card; F12 on a cue name in `cue="md.X.Y"` → jumps to
->    the defining `<cue>`; Shift+F12 → all references.
-> 4. **MCP:** "Copy MCP Server Config" → paste into your agent's MCP settings + a write-scope
->    key → ask the agent to "stage_and_validate <mod>" then "readiness" — it should refuse to
->    claim done while stages fail (AGENTS.md tells it so).
-> 5. **Proof:** "Generate Proof Artifact" with the mod folder open → PROOF.md opens: ladder
->    table + folder verdict + watcher line.
-> 6. **(Opt-in) two-way:** set `x4forge.twoWayEditing: true` → edit an md file on disk →
->    adopt prompt → "Adopt into canvas" → open the studio: canvas shows your edit. (Counters
->    log to Output → X4 Forge.)
-> 7. **(Opt-in) associations:** `x4forge.writeXmlAssociations: true` + Red Hat XML — plain
->    factions.xml validates against the game XSD; diff-patch files stay quiet.
->
-> ## ✅ THIS RUN (B57 s1–s5; full record in ROADMAP)
-> Machine: agentBrief 12/12 · langNav 10/10 · 8-tool stdio MCP drill (author_check broken
-> draft → capsules; capsule-code parity; readiness honest) · proof markdown live · import→CAS
-> adopt + 409 stale negative · sweep 86/89 · e2e 19/19 · tsc 0 ×2 · lint 0 · precommit OK.
-> EYES (Ken-ordered): ?panel=diagnostics + ?panel=playtest land correctly; the s5-adopted
-> "B56 Test" workspace visible on canvas (bogusattr preserved byte-faithfully as Custom XML
-> node); readiness header honestly PACKAGE: WARN (4 warnings). Plan change recorded:
-> CodeActions rescoped out (canvas-level fixes ≠ file-level apply).
->
-> ## 🎯 NEXT UNITS
-> 1. Ken: commit → 0.0.15 publish → combined eyeball batch above.
-> 2. **B55 Phase 2** corpus retrieval into prompts · **B46 Phase 3** reference sets (SHARED
->    corpus index — build once; also unlocks t-file {page,id} hover + reportUnknownElements).
-> 3. **B57 residuals:** s6 bucket (EmmyLua stubs · lemminx proof · formatter-drift guard ·
->    precise-children) · two-way default-on decision (needs its telemetry).
-> 4. B55 residual (repair live-fire self-reports) · in-game Ken pair (B19 rail · B24s2 probe).
->
-> ## ⚠ LIVE HAZARDS / GOTCHAS (carry forward)
-> - Restart scratch after EVERY server edit (plain tsx doesn't reload) — applied mechanically
->   this run; the class still bites when forgotten.
-> - Scratch tsx instances hold Vite HMR port 24678 → kill before e2e. Kills by port-PID only.
-> - Never pipe gate output through tail/head — full log to file, tail the file.
-> - SchemaIndex children sets are over-inclusive BY DESIGN — completions ride them; the
->   precise mode is a residual, never an in-place "fix".
-> - lang providers never spawn a sidecar; live-buffer diagnostics are best-effort (save/
->   command paths stay authoritative).
-> - Two-way adopt: import returns the workspace; the CAS commit is a SECOND call — always
->   read version first; 409 = canvas moved, re-run.
-> - Sweep env reds on scratch: expression-suggest 0/0 + reference-selftest + selftest 7/10.
->
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.19 STABLE** (2026-07-17)
-> Registry-confirmed indexed. Carries B59a patch-day + B59b jobs starter + B60 + B58 + B57 + B56 + B55P1 + B46P2.
+**Project:** X4 Forge (the visual X4 modding studio + its VS Code/Antigravity extension). NOT the
+x4_ai_influence mod, NOT the neural-link bridge. Branch `claude/x4-forge-vscode-poc-806ef5`.
+
+## Where we are (2026-07-17)
+Ken's **/goal** (build the B59 community-patch menu a→b→c→d, workflow-religious, publish-before-commit)
+is **COMPLETE** — all four units shipped, published, committed, pushed.
+
+- **B59a ✅** Patch-day readiness check — published **0.0.18**, `629a70b`.
+- **B59b ✅** Galaxy reconcile (viewer; sector-edit deferred #64 P2) + `custom_patrol_job` jobs
+  starter — published **0.0.19**, `12f3e35`.
+- **B59c ✅** UI-Extensions (kuertee) compat wiki guide (codegen deferred, no raw-Lua carrier) —
+  published **0.0.20**, `9f1a14a`.
+- **B59d ✅** Anti-hallucination positioning copy, Ken-approved verbatim, grounded in the real Phase-4
+  repair loop → README section + store blurb + new **Reference** wiki tab
+  (`reference_ai_anti_hallucination`). e2e 19/19, EYES-seen, staged-probe ROOT 200. Published
+  **0.0.21**, committed **`<this commit>`**. ← last commit point.
+
+## Commit question
+B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
+are on the store and in git. Nothing uncommitted.
+
+## NEXT UNIT — B61 (SPECIFIED, Ken directive, reconcile-first, NOT yet started)
+Off B59d's honest limit, Ken said: "if you've identified un-schema'd work it sounds like we need a
+schema for that." REAL gap — X4 ships NO content XSD for some domains (jobs is the known one; B46P2
+routed only the `<diff>` WRAPPER, not job CONTENT). A subtly-wrong job compiles clean and fails only
+in-game (flagged in the B59b + B59d AARs). **Closing it = AUTHORING validation the game doesn't ship
+— real blast radius, Ken-GATED before any build.** First move: **RECONCILE** — enumerate which content
+domains lack an XSD (jobs, then check god/regions/sectors/wares/etc.); look for the prior-art idea
+already banked (B59b AAR: a corpus-grounded "job content lint" over the vanilla job vocabulary — valid
+orders, `class` values, faction/tag combos, macro existence). Likely shape: an advisory
+(WARNING-severity, like patch-readiness) corpus-grounded content LINTER, NOT a fake XSD. Ground:
+`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00` → libraries/jobs.xml (606 jobs) + scriptproperties.xml.
+Present the reconcile finding + spec to Ken and get sign-off BEFORE building. Full record: BACKLOG B61.
+
+## Eyeball queue (Ken 30-sec checks) — all already EYES-seen by the agent this session
+- B59c: X4 WIKI → HUD & LUA → "UI Extensions Framework Compatibility (kuertee)".
+- B59d: X4 WIKI → **Reference** tab → "Is this just another AI mod generator?" (confirm the mechanism
+  paragraphs + honest-limit paragraph read right). Also the store page / README "Is this just another
+  AI mod generator?" section on Open VSX once 0.0.21 propagates.
+
+## Hot facts / hazards
+- **Publish flow:** bump package.json → `npm run changelog` → `npm run stage-app` → (repo root)
+  `npm run build` → (vscode-extension) `npm run package` → staged probe
+  (`cd vscode-extension/app/dist && PORT=xxxx node server.cjs`, assert ROOT 200; health 401 by design)
+  → `npx ovsx publish x4-forge-studio-<v>.vsix -p $OVSX_PAT` (token in `F:\DEV_ENV\X4_Forge\.env.local`)
+  → THEN git commit+push. **Publish-before-commit is firm; commit mechanism is flexible (git shell OK).**
+- **release-notes.json** (vscode-extension/): add ONE plain-English block per version (audience = users)
+  before `npm run changelog`. Humanized-subject fallback covers a missed block.
+- Staged bundle entry is **app/dist/server.cjs** (NOT app/server.cjs).
+- Fresh scratch boots in **Beginner** mode (no top nav) — click **EXPERT** (top-right toggle) to reach
+  the X4 WIKI / AGENT API / GALAXY top-nav tabs for eyeballs.
+- e2e swaps the LIVE workspace — MACHINE-STATE ASK before running; workers=1; verify guard restore.
+- Host-truth: run gates on the host; sandbox mirrors LIE.
+- Env-red sweep items (3): known, not regressions.
+
+## First command for the next session
+`cd "F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00\libraries"` and inspect jobs.xml + the sibling
+libraries/ for which content files have NO matching XSD — that enumeration IS B61's reconcile step.

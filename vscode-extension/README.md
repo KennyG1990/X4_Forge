@@ -19,6 +19,40 @@ game's real schemas at every step.
   mod; power users get the full studio.
 - **Optional AI assist** — off by default; the studio is a fully deterministic editor without it.
 
+**Built to be the opposite of a hallucinated mod.** AI output goes through the same real-schema
+validation as hand-built mods — invented tags, bad attributes, and dangling cue references get
+caught by Egosoft's own schemas, not by the AI grading itself. If it can't make a mod validate,
+it tells you — it doesn't hand you a broken mod that looks finished. ([How that works](#is-this-just-another-ai-mod-generator).)
+
+## Is this just another AI mod generator?
+
+**Straight answer: no — and here's the mechanism.**
+
+The knock on AI-made mods is fair: a language model will happily invent a command that doesn't
+exist, an attribute the schema never had, or a cue reference that points at nothing — and you
+don't find out until the game silently ignores it or refuses to load.
+
+X4 Forge doesn't trust the AI's output. It **runs it through the exact same validators a
+hand-built mod faces** — Egosoft's own XML schemas, cross-file cue resolution, script-property
+checks, and a set of known-pitfall rules pulled from real mods. Not a sanity check the AI grades
+itself on. The same wall your own hand-written XML would hit.
+
+If the generated mod passes on the first try, you're done — the AI is never asked to "fix"
+anything. If it doesn't, the **validator** — not the model — drives the repair: it hands the
+model the exact failing findings and asks for a correction, then re-validates. That loop is
+bounded (a few attempts, then it stops), and if the same problem survives two rounds, it gives
+up instead of spinning. When it still can't make a mod validate, **it tells you that plainly** —
+you get the findings, not a broken mod dressed up as finished.
+
+**What this does and doesn't buy you.** It catches the structural lies — invented tags, wrong
+attributes, dangling references, script properties that don't exist. It does **not** promise the
+mod does what you pictured; no validator can read your mind, and the game is still the final
+judge. What it promises is narrower and more useful: what the AI hands you is a mod that's
+actually *shaped like a real X4 mod*, not a plausible-looking hallucination you debug in-game.
+
+(And AI is off by default. The studio is a full deterministic editor without ever calling a
+model — the validation above runs on everything, AI-authored or not.)
+
 ## Getting started
 
 1. Install the extension.

@@ -199,6 +199,13 @@ MapMenu.registerCallback("buttonToggleObjectList_on_start", myCallbackFunc, "my_
   <actions><!-- teardown here --></actions>
 </cue>`,
     egosoftUrl: "https://github.com/kuertee/x4-mod-ui-extensions"
+  },
+  {
+    id: "reference_ai_anti_hallucination",
+    title: "Is this just another AI mod generator?",
+    category: "reference",
+    summary: "How the Forge keeps AI-authored mods honest — the same real-schema validation a hand-built mod faces, driven by the validator, not the model.",
+    content: "**Straight answer: no — and here's the mechanism.**\n\nThe knock on AI-made mods is fair: a language model will happily invent a command that doesn't exist, an attribute the schema never had, or a cue reference that points at nothing — and you don't find out until the game silently ignores it or refuses to load.\n\n### The Forge doesn't trust the AI's output\nIt runs the generated mod through the **exact same validators a hand-built mod faces** — Egosoft's own XML schemas, cross-file cue resolution, script-property checks, and a set of known-pitfall rules pulled from real mods. Not a sanity check the AI grades itself on. The same wall your own hand-written XML would hit.\n\n### The validator drives the repair — not the model\nIf the generated mod passes on the first try, you're done; the AI is never asked to \"fix\" anything. If it doesn't, the validator hands the model the exact failing findings, asks for a correction, and re-validates. That loop is **bounded** (a few attempts, then it stops), and if the same problem survives two rounds it gives up instead of spinning. When it still can't make a mod validate, **it tells you plainly** — you get the findings, not a broken mod dressed up as finished.\n\n### What this does and doesn't buy you\nIt catches the *structural* lies — invented tags, wrong attributes, dangling references, script properties that don't exist. It does **not** promise the mod does what you pictured; no validator can read your mind, and the game is the final judge. The promise is narrower and more useful: what the AI hands you is a mod actually *shaped like a real X4 mod*, not a plausible-looking hallucination you debug in-game.\n\n(AI is off by default. The studio is a full deterministic editor without ever calling a model — the validation above runs on everything, AI-authored or not.)"
   }
 ];
 
@@ -209,7 +216,7 @@ interface WikiBrowserProps {
 }
 
 export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspace }: WikiBrowserProps) {
-  const [activeTab, setActiveTab] = useState<'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui'>('mdscript');
+  const [activeTab, setActiveTab] = useState<'mdscript' | 'aiscript' | 'xmlpatch' | 'luaui' | 'reference'>('mdscript');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -308,6 +315,18 @@ export default function WikiBrowser({ selectedNode, setSelectedNode, setWorkspac
           >
             <Layers className="w-3.5 h-3.5" />
             HUD & LUA
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('reference'); setSearchQuery(''); }}
+            className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'reference'
+                ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Book className="w-3.5 h-3.5" />
+            Reference
           </button>
 
         </div>
