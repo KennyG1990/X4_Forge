@@ -22,6 +22,9 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import { mapFlatFindings, type FlatFinding } from "./diagnosticsMap";
+import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAssociations } from "./modFolder";
+import { xmlCursorContext } from "./langContext";
 
 interface BackendHandle {
   baseUrl: string;
@@ -59,6 +62,8 @@ function cfg() {
     nodePath: (c.get<string>("nodePath") || "").trim(),
     autoOpen: c.get<boolean>("autoOpen") === true,
     debug: ((c.get<string>("debug") || "off").trim() as "off" | "inspect" | "inspect-brk"),
+    modFolder: (c.get<string>("modFolder") || "").trim(),
+    writeXmlAssociations: c.get<boolean>("writeXmlAssociations") === true,
   };
 }
 
@@ -572,12 +577,336 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // B56s1 — Problems-panel projection: run the sidecar's FULL validator stack
+  // (structure → cues → cross-file → schemas incl. routed domains → lints) over a mod
+  // folder and surface the flat findings as native IDE diagnostics. The extension never
+  // revalidates anything itself — it projects server truth (one-referee rule).
+  diagCollection = vscode.languages.createDiagnosticCollection("x4forge");
+  context.subscriptions.push(
+    diagCollection,
+    vscode.commands.registerCommand("x4forge.validateModFolder", () => validateModFolder(context)),
+    vscode.commands.registerCommand("x4forge.openModFolder", () => openModFolder(context)),
+    vscode.commands.registerCommand("x4forge.copyMcpConfig", () => copyMcpConfig(context)),
+  );
+  registerLangProviders(context);
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (!lastValidated || !doc.uri.fsPath.toLowerCase().startsWith(lastValidated.root.toLowerCase())) return;
+      if (revalidateTimer) clearTimeout(revalidateTimer);
+      revalidateTimer = setTimeout(() => void validateModFolder(context, lastValidated?.fromPath), 600);
+    }),
+  );
+
   // Opt-in convenience (x4forge.autoOpen): open the studio once the workspace loads.
   // Only ever runs in trusted workspaces — the manifest disables the extension
   // entirely when untrusted, so activate() is not called there.
   if (cfg().autoOpen) {
     log("x4forge.autoOpen is set — opening the studio");
     void openStudio(context);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B56s1 — Problems-panel projection (see docs/plans/2026-07-17-ide-native-forge.md)
+// ---------------------------------------------------------------------------
+
+let diagCollection: vscode.DiagnosticCollection | null = null;
+let lastValidated: { root: string; fromPath: string } | null = null;
+let revalidateTimer: ReturnType<typeof setTimeout> | null = null;
+
+const DIAG_SEVERITY: Record<string, vscode.DiagnosticSeverity> = {
+  error: vscode.DiagnosticSeverity.Error,
+  warning: vscode.DiagnosticSeverity.Warning,
+  info: vscode.DiagnosticSeverity.Information,
+};
+
+async function validateModFolder(context: vscode.ExtensionContext, fromPathArg?: string): Promise<void> {
+  try {
+    const handle = await ensureBackend(context);
+    if (!handle.owned || !handle.token) {
+      void vscode.window.showInformationMessage(
+        "X4 Forge: attached to an externally-run Forge — the extension holds no credential for it (by design). Validate in that Forge's UI, or stop it and let the extension manage a sidecar.",
+      );
+      return;
+    }
+    const fromPath = (fromPathArg
+      || cfg().modFolder
+      || (await vscode.window.showInputBox({
+        prompt: "Mod folder to validate (name under the configured Mod Workspace root)",
+        placeHolder: "e.g. x4_ai_influence — set x4forge.modFolder to skip this prompt",
+        validateInput: (v) => (v.trim() ? undefined : "Folder name required"),
+      }))
+      || "").trim();
+    if (!fromPath) return;
+
+    const res = await fetch(`${handle.baseUrl}/api/agent/project/validate`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${handle.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ fromPath }),
+    });
+    const data = (await res.json()) as {
+      flat?: FlatFinding[];
+      source?: { mode: string; root?: string; loaded?: string[] };
+      summary?: Record<string, number>;
+      error?: string;
+    };
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!data.source || data.source.mode !== "fromPath" || !data.source.root) {
+      throw new Error("Validate response carried no folder root — server too old for fromPath projection?");
+    }
+
+    const mapped = mapFlatFindings(data.flat || [], data.source.loaded || []);
+    diagCollection?.clear();
+    let errors = 0;
+    let warnings = 0;
+    for (const [rel, list] of mapped.byFile) {
+      const uri = vscode.Uri.file(path.join(data.source.root, ...rel.split("/")));
+      diagCollection?.set(uri, list.map((d) => {
+        if (d.severity === "error") errors++;
+        else if (d.severity === "warning") warnings++;
+        const diag = new vscode.Diagnostic(
+          new vscode.Range(d.line, 0, d.line, 200),
+          d.message,
+          DIAG_SEVERITY[d.severity] ?? vscode.DiagnosticSeverity.Information,
+        );
+        diag.source = "x4forge";
+        if (d.code) diag.code = d.code;
+        return diag;
+      }));
+    }
+    lastValidated = { root: data.source.root, fromPath };
+    const suffix = mapped.unanchored ? ` (+${mapped.unanchored} unanchored)` : "";
+    log(`validated "${fromPath}": ${errors} error(s), ${warnings} warning(s) across ${mapped.byFile.size} file(s)${suffix}`);
+    void vscode.window.setStatusBarMessage(
+      `X4 Forge: ${errors === 0 && warnings === 0 ? "validation clean" : `${errors} error(s), ${warnings} warning(s)`} — ${fromPath}${suffix}`,
+      8000,
+    );
+  } catch (err) {
+    // Sidecar down / request failed → never leave STALE diagnostics lying around.
+    diagCollection?.clear();
+    lastValidated = null;
+    showBackendError(`Validate Mod Folder failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B56s2 — mod workspace as a real IDE folder (read-mostly phase A; the canvas/server
+// remains the writer of generated files — dual-writer editing is a later, gated decision)
+// ---------------------------------------------------------------------------
+
+async function openModFolder(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const handle = await ensureBackend(context);
+    if (!handle.owned || !handle.token) {
+      void vscode.window.showInformationMessage(
+        "X4 Forge: attached to an externally-run Forge — open its mod workspace folder manually (the extension holds no credential to read that Forge's settings).",
+      );
+      return;
+    }
+    const res = await fetch(`${handle.baseUrl}/api/schema/config`, {
+      headers: { Authorization: `Bearer ${handle.token}` },
+    });
+    const data = (await res.json()) as { resolved?: { modWorkspacePath?: string }; config?: { modWorkspacePath?: string }; error?: string };
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const root = (data.resolved?.modWorkspacePath || data.config?.modWorkspacePath || "").trim();
+    if (!root || !fs.existsSync(root)) {
+      void vscode.window.showWarningMessage(
+        "X4 Forge: no Mod Workspace folder is configured (or it does not exist). Set it in the studio: Settings → Directory Settings.",
+      );
+      return;
+    }
+    const mods = listModFolders(root);
+    if (!mods.length) {
+      void vscode.window.showInformationMessage(`X4 Forge: the Mod Workspace (${root}) has no mod folders yet.`);
+      return;
+    }
+    const pick = mods.length === 1
+      ? mods[0]
+      : await vscode.window.showQuickPick(mods, { placeHolder: "Mod folder to open as an IDE workspace folder" });
+    if (!pick) return;
+    const modPath = path.join(root, pick);
+    writeRecommendations(modPath);
+    // B56s5 (DEFAULT-OFF): per-file xml.fileAssociations to the game's own XSDs, only for
+    // plain-rooted files of corpus-proven domains — never for <diff> patches or wares/jobs.
+    if (cfg().writeXmlAssociations) {
+      try {
+        const regRes = await fetch(`${handle.baseUrl}/api/agent/schema-registry`);
+        const reg = (await regRes.json()) as { domains?: Array<{ domain: string; path: string }> };
+        const xsds: Record<string, string> = {};
+        for (const d of reg.domains || []) xsds[d.domain] = d.path;
+        const assoc = buildXmlAssociations(modPath, xsds);
+        const written = writeXmlAssociations(modPath, assoc);
+        log(written ? `xml.fileAssociations written for ${assoc.length} plain-rooted file(s)` : "no association-eligible files found");
+      } catch (err) {
+        log(`xml.fileAssociations skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    const uri = vscode.Uri.file(modPath);
+    const already = vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath.toLowerCase() === modPath.toLowerCase());
+    if (!already) {
+      vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders?.length ?? 0, 0, {
+        uri,
+        name: `X4 Mod: ${pick}`,
+      });
+    }
+    log(`opened mod folder as workspace folder: ${modPath} (recommendations written)`);
+    void vscode.window.setStatusBarMessage(`X4 Forge: "${pick}" added to the workspace — explorer, search, and git now see it.`, 8000);
+  } catch (err) {
+    showBackendError(`Open Mod Folder failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B56s3 — X4 IntelliSense: completion + hover providers over the sidecar's public
+// /api/agent/lang/* endpoints. The extension never owns vocabulary — it projects the
+// same schema/census/semantics truth the studio uses (one-referee rule). Providers
+// degrade silently (empty results) when no sidecar answers.
+// ---------------------------------------------------------------------------
+
+const LANG_CACHE_TTL_MS = 30_000;
+const langCache = new Map<string, { at: number; data: unknown }>();
+
+/** A file participates in X4 IntelliSense when it lives under a known mod root. */
+function modRootFor(fsPath: string): string | null {
+  const p = fsPath.toLowerCase();
+  if (lastValidated && p.startsWith(lastValidated.root.toLowerCase())) return lastValidated.root;
+  for (const f of vscode.workspace.workspaceFolders || []) {
+    if (f.name.startsWith("X4 Mod: ") && p.startsWith(f.uri.fsPath.toLowerCase())) return f.uri.fsPath;
+  }
+  return null;
+}
+
+async function langGet<T>(route: "complete" | "attrs" | "hover", params: Record<string, string>): Promise<T | null> {
+  if (!backend) return null; // never spawn a sidecar from a keystroke
+  const qs = new URLSearchParams(params).toString();
+  const key = `${route}?${qs}`;
+  const hit = langCache.get(key);
+  if (hit && Date.now() - hit.at < LANG_CACHE_TTL_MS) return hit.data as T;
+  try {
+    const res = await fetchWithTimeout(`${backend.baseUrl}/api/agent/lang/${route}?${qs}`, 3000);
+    if (!res || !res.ok) return null;
+    const data = (await res.json()) as T;
+    langCache.set(key, { at: Date.now(), data });
+    if (langCache.size > 200) langCache.delete(langCache.keys().next().value as string);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function relModPath(root: string, fsPath: string): string {
+  return path.relative(root, fsPath).replace(/\\/g, "/");
+}
+
+function registerLangProviders(context: vscode.ExtensionContext): void {
+  const selector: vscode.DocumentSelector = [{ scheme: "file", pattern: "**/*.xml" }];
+
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider(selector, {
+      async provideCompletionItems(doc, pos) {
+        const root = modRootFor(doc.uri.fsPath);
+        if (!root) return undefined;
+        const text = doc.getText();
+        const ctx = xmlCursorContext(text, doc.offsetAt(pos));
+        const file = relModPath(root, doc.uri.fsPath);
+        const rootHint = ctx.rootTag || "";
+
+        if (ctx.elementStart && ctx.parentTag) {
+          const data = await langGet<{ items: Array<{ tag: string; curated: boolean; requiredAttrs: string[]; summary?: string }> }>(
+            "complete", { file, parent: ctx.parentTag, root: rootHint });
+          if (!data?.items?.length) return undefined;
+          return data.items.map((it, i) => {
+            const item = new vscode.CompletionItem(it.tag, vscode.CompletionItemKind.Class);
+            item.sortText = `${it.curated ? "0" : "1"}${String(i).padStart(4, "0")}`;
+            item.detail = [it.curated ? "curated" : "", it.summary || ""].filter(Boolean).join(" · ") || undefined;
+            if (it.requiredAttrs.length) {
+              const attrs = it.requiredAttrs.map((a, n) => `${a}="$${n + 1}"`).join(" ");
+              item.insertText = new vscode.SnippetString(`${it.tag} ${attrs}`);
+              item.documentation = `Required: ${it.requiredAttrs.join(", ")}`;
+            }
+            return item;
+          });
+        }
+
+        if (ctx.inTag && ctx.inAttrValue) {
+          const data = await langGet<{ attrs: Array<{ name: string; enumValues?: string[] }> }>(
+            "attrs", { file, tag: ctx.inTag, root: rootHint });
+          const enums = data?.attrs?.find((a) => a.name === ctx.inAttrValue)?.enumValues;
+          if (!enums?.length) return undefined;
+          return enums.map((v) => new vscode.CompletionItem(v, vscode.CompletionItemKind.EnumMember));
+        }
+
+        if (ctx.inTag) {
+          const data = await langGet<{ attrs: Array<{ name: string; required: boolean; type?: string }> }>(
+            "attrs", { file, tag: ctx.inTag, root: rootHint });
+          if (!data?.attrs?.length) return undefined;
+          return data.attrs.map((a, i) => {
+            const item = new vscode.CompletionItem(a.name, vscode.CompletionItemKind.Property);
+            item.sortText = `${a.required ? "0" : "1"}${String(i).padStart(4, "0")}`;
+            item.detail = `${a.required ? "required" : "optional"}${a.type ? ` · ${a.type}` : ""}`;
+            item.insertText = new vscode.SnippetString(`${a.name}="$1"`);
+            return item;
+          });
+        }
+        return undefined;
+      },
+    }, "<", " ", "\""),
+
+    vscode.languages.registerHoverProvider(selector, {
+      async provideHover(doc, pos) {
+        const root = modRootFor(doc.uri.fsPath);
+        if (!root) return undefined;
+        const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
+        if (!range) return undefined;
+        const word = doc.getText(range);
+        const before = doc.getText(new vscode.Range(range.start.with(undefined, Math.max(0, range.start.character - 2)), range.start));
+        if (!before.includes("<")) return undefined; // hover element names only
+        const ctx = xmlCursorContext(doc.getText(), doc.offsetAt(range.start));
+        const data = await langGet<{ known: boolean; summary?: string; requiredAttrs: string[]; attrCount: number; semantics?: { description?: string; risk?: string; note?: string } }>(
+          "hover", { file: relModPath(root, doc.uri.fsPath), tag: word, root: ctx.rootTag || "" });
+        if (!data?.known) return undefined;
+        const md = new vscode.MarkdownString();
+        md.appendMarkdown(`**\`<${word}>\`**${data.summary ? ` — ${data.summary}` : ""}\n\n`);
+        if (data.semantics?.description) md.appendMarkdown(`${data.semantics.description}\n\n`);
+        if (data.requiredAttrs.length) md.appendMarkdown(`Required: ${data.requiredAttrs.map((a) => `\`${a}\``).join(", ")}\n\n`);
+        if (data.semantics?.risk && data.semantics.risk !== "none") md.appendMarkdown(`Risk: ${data.semantics.risk}\n\n`);
+        if (data.semantics?.note) md.appendMarkdown(`_${data.semantics.note}_\n`);
+        md.appendMarkdown(`\n*x4forge · ${data.attrCount} attribute(s) declared*`);
+        return new vscode.Hover(md, range);
+      },
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// B56s4 — MCP config for IDE-resident coding agents. We COPY a ready-to-paste config;
+// we never write into another tool's configuration files (their config is theirs).
+// ---------------------------------------------------------------------------
+
+async function copyMcpConfig(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const handle = await ensureBackend(context);
+    const shimPath = vscode.Uri.joinPath(context.extensionUri, "mcp", "x4forge-mcp.cjs").fsPath;
+    const config = {
+      mcpServers: {
+        x4forge: {
+          command: "node",
+          args: [shimPath],
+          env: {
+            X4FORGE_URL: handle.baseUrl,
+            X4FORGE_KEY: "<paste an agent key here — run 'X4 Forge: Create Agent Key' (write scope recommended)>",
+          },
+        },
+      },
+    };
+    await vscode.env.clipboard.writeText(JSON.stringify(config, null, 2));
+    log(`MCP config copied (shim: ${shimPath}, url: ${handle.baseUrl})`);
+    void vscode.window.showInformationMessage(
+      "X4 Forge: MCP server config copied to clipboard. Paste it into your agent's MCP settings, then replace the X4FORGE_KEY placeholder with a real agent key (X4 Forge: Create Agent Key).",
+      "Create Agent Key",
+    ).then((pick) => pick === "Create Agent Key" && vscode.commands.executeCommand("x4forge.createAgentKey"));
+  } catch (err) {
+    showBackendError(`Copy MCP config failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

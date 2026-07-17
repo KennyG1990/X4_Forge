@@ -52,6 +52,75 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ◐ B56 · IDE-NATIVE FORGE, PHASE A (unit-0 + s1–s5) — the extension stops being a picture frame (2026-07-17, PARTIAL pending Ken's IDE eyeball batch)
+
+Overnight build per Ken's /goal, workflow-enforced per slice; plan + build-time deltas:
+`docs/plans/2026-07-17-ide-native-forge.md`. Two motions: PROJECT Forge truth into native IDE
+surfaces; INGEST ecosystem capability. Every piece projects SERVER truth — zero IDE-side
+revalidation logic anywhere (one-referee rule held).
+
+- **unit-0 · palette include fix (VERIFIED):** `loadSchemaLibrary` expands xs:include chains —
+  boot log now 402 events / 35 conditions (was 382/29; the stale count was user-visible in the
+  XML-patching meta panel); all 5 `event_cue_*` in the palette library. Sweep 84/87 same reds.
+- **s1 · Problems-panel projection (machine-VERIFIED; IDE render Ken-gated):** validate route
+  gains additive `flat` (the B55P1 currency); extension `x4forge.validateModFolder` +
+  DiagnosticCollection via pure `diagnosticsMap.ts` (selftest 10/10: 0-based lines, case/slash
+  path healing, pathless→content.xml anchoring, unanchored counting), on-save revalidate
+  (600ms debounce), sidecar-down CLEARS (never stale). LIVE contract drill: seeded-defect mod
+  → 4 findings, correct file/line/severity/code (first drill returned 0 on a STALE pre-edit
+  process — the restart-after-edit class again; caught by suspicion of a clean result).
+- **s2 · mod folder as real IDE folder (machine-VERIFIED; IDE flow Ken-gated):**
+  `x4forge.openModFolder` — reads modWorkspacePath via the sidecar config API, QuickPick,
+  `updateWorkspaceFolders` ("X4 Mod: <name>"), merge-writes `.vscode/extensions.json`
+  recommendations (redhat.vscode-xml, sumneko.lua — suggestions only). `modFolder.ts` selftest
+  15/15. READ-MOSTLY phase A: canvas/server stays the writer. tasks.json CUT (reconciled:
+  ceremony — commands are keybindable, matchers redundant vs s1).
+- **s3 · X4 IntelliSense (machine-VERIFIED; IDE feel Ken-gated):** `src/lib/langService.ts`
+  (oracle 12/12, sweep-discovered) + public `GET /api/agent/lang/{complete,attrs,hover}` +
+  extension providers with pure `langContext.ts` cursor parser (selftest 10/10: comments
+  blanked, self-closing pops, attr-value detection, diff-payload parents). LIVE: md/actions →
+  882 children census-curated-first; factions routing → real factions.xsd children; t honestly
+  empty; hover(set_value) → curated "Set Variable" + deterministic description. 30s response
+  cache; providers never spawn a sidecar and degrade silently. KNOWN RESIDUAL: child lists
+  over-inclusive (suppression-built sets) — precise-children mode is the follow-up.
+- **s4 · MCP shim for coding agents (machine-VERIFIED end-to-end):**
+  `vscode-extension/mcp/x4forge-mcp.cjs` — dependency-free stdio MCP server, FIVE curated
+  tools (validate_mod, list_schema_domains, get_workspace, compile_workspace,
+  explain_element); deploy/generate deliberately NOT exposed. `x4forge.copyMcpConfig` copies a
+  ready config (never writes other tools' config files). **Security review (rule 3.6): listens
+  on NOTHING (stdio client of the loopback sidecar); auth = scoped revocable agent keys,
+  enforced SERVER-side; no AI-spend path via exposed tools.** LIVE drill over real stdio with
+  freshly-minted keys: initialize/tools-list/5-tool session green (validate_mod returned the 4
+  seeded findings; 40 domains; explain create_ship 18 attrs); NEGATIVES green: read-scope key
+  refused on validate (403 surfaced), bogus key refused (401 surfaced), unknown tool -32602.
+- **s5 · ecosystem interop (machine-VERIFIED; third-party proof IDE-gated):** DEFAULT-OFF
+  `x4forge.writeXmlAssociations` — per-file root-sniffed associations to the game's own XSDs,
+  ONLY plain-rooted factions/gamestarts/addon files (never `<diff>` patches, never wares/jobs
+  — the B46P2 corpus evidence applied). Selftest 15/15 incl. diff-rooted exclusion, user-key
+  preservation, ui/addons depth (a real depth bug the oracle caught and killed). Lemminx
+  corpus-proof cannot run headless → association writing stays default-off until Ken's IDE
+  session proves it; EmmyLua stubs deferred.
+
+**Gates (final battery):** root tsc 0 · ext tsc 0 · touched-files lint 0 · precommit OK ·
+sweep **85/88** (same 3 documented env reds; new lang-service oracle discovered) · **e2e 19/19
+PASS ×3** (checkpoint + final) · ext build OK · VSIX packages with `mcp/**` shipped (integrity
+check only — artifact DELETED; it would have collided with the published 0.0.13. Morning
+publish: bump to 0.0.14 + re-stage + package + probe + publish).
+**Not done (deliberate):** s6 (native diff/SCM/matchers — demand-driven bucket); two-way
+folder editing (gated on drift telemetry).
+
+**Morning close (2026-07-17, Ken-authorized):** BROWSER EYEBALL on the fresh prod bundle —
+the XSD Schema Source panel now reads **EVENTS 402 / CONDITIONS 35** at the exact spot the
+stale 382/29 was user-visible; Diagnostics Scripts/Package panels render clean; studio smoke
+green (v1.0.226, toolbox 66 curated). **Stable 0.0.14 PUBLISHED** — staged-bundle probe
+BEFORE publish: 402-event boot line + agent-loop 12/12 + lang-service 12/12 + routing 24/24 +
+md-audit 0 + live lang/complete (882 census-ranked items) all IN the shipped server.cjs;
+`ovsx publish` exit 0 (🚀 v0.0.14). Remaining ◐: the four IDE-hosted eyeballs (Ken's
+Antigravity after auto-update — scripts in SESSION-HANDOFF).
+**Suggested commit title:** "feat(ide): B56 Phase A — Problems-panel projection, mod-folder
+workspace, X4 IntelliSense, MCP agent tools, XSD-association interop (+palette include fix);
+bump extension to 0.0.14".
+
 ### ◐ B55 PHASE 1 · VALIDATION-DRIVEN REPAIR LOOP — the validator now drives the agent (2026-07-16, PARTIAL)
 
 The Forge-Agent harness lesson applied to the in-app agent (plan:

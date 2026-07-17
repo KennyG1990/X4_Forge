@@ -89,6 +89,30 @@ into prompts (budgeted, corpus-bytes-only; share B46P3's index). **Phase 3 (`spe
 Ken-gated):** architect/editor split + evidence-gated done + causal A/B harness.
 Plan: `docs/plans/2026-07-16-validation-driven-agent-loop.md`.
 
+### B56 · IDE-native Forge — Phase A (unit-0+s1–s5) ◐ BUILT 2026-07-17 → ROADMAP; eyeball batch OPEN
+Overnight build complete and machine-validated (oracles diagnosticsMap 10/10 · modFolder 15/15
+· langContext 10/10 · langService 12/12 · live drills incl. full stdio MCP session with scope/
+auth negatives · sweep 85/88 · e2e 19/19 ×3 · both tsc 0 · VSIX integrity w/ mcp/ shipped).
+**◐ OPEN = Ken's IDE eyeball batch** (click-by-click scripts in SESSION-HANDOFF): Problems
+panel render · open-mod-folder flow · IntelliSense feel · MCP config paste into a real agent ·
+(opt-in) association behavior with Red Hat XML. **Residuals (`spec'd`):** precise-children
+index mode for completions (current child lists are suppression-built, over-inclusive) ·
+two-way folder editing (gated on drift telemetry) · lemminx corpus-proof (IDE-gated; assoc
+writer stays default-off) · EmmyLua stubs · **s6** native diff/SCM/matchers (demand-driven).
+Build deltas + full record: plan header + ROADMAP. Plan:
+`docs/plans/2026-07-17-ide-native-forge.md`.
+
+### B57 · IDE-native Forge, Phase B (agent-first environment) — `SPECIFIED` 2026-07-17
+Two motions: make the mod folder SELF-DESCRIBING for any resident agent (AGENTS.md +
+grounding notes generated from live truth; workflow-encoded MCP tools — author_check /
+stage_and_validate with remediation capsules / readiness-as-machine-contract) and CLOSE the
+editor loop (server-side quick-fixes as IDE lightbulbs, cue go-to-definition/references,
+unsaved-buffer diagnostics, evidence deep links + one-page PROOF.md artifact, and — gated,
+default-off, telemetry-first — two-way editing via the EXISTING byte-faithful importer).
+Order: s1→s2 (reliability pair) → s3 → s4 → s5 (gated) · s6 bucket (EmmyLua stubs, lemminx
+proof, formatter-drift guard, precise-children). Renames deliberately excluded (saved-game
+hazard). Plan: `docs/plans/2026-07-17-ide-native-forge-phase-b.md`.
+
 ### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP
 Ken: the bridge is x4_ai_influence-specific (ADR-F3 "optional, never a dependency"), but the
 startup walkaround warned amber "bridge DOWN" for EVERY mod. Now labeled "(optional)", a down

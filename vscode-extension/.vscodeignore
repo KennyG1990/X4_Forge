@@ -7,6 +7,7 @@
 !LICENSE.txt
 !icon.png
 !media/activitybar.svg
+!mcp/**
 
 # Never ship these even if present under an allowed tree (runtime writes land in
 # app/ because the server resolves some paths from cwd — staging is re-run fresh

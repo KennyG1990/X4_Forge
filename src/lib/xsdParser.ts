@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { XMLParser } from 'fast-xml-parser';
 import { dataPath } from './dataDir';
+import { expandIncludeChain } from './schemaRegistry';
 import { schemaLibraryToTemplates, SchemaAttribute, SchemaCategory, SchemaElement, SchemaLibrary } from './schemaTypes';
 
 type AnyNode = Record<string, any>;
@@ -377,8 +378,14 @@ export function runSchemaDiscoverySelftest(): { pass: boolean; checks: Array<{ n
 }
 
 export function loadSchemaLibrary(schemaDir = getDefaultSchemaDir(), files = ['md.xsd', 'common.xsd']): SchemaLibrary {
-  const schemaRoots = files.map(file => {
-    const fullPath = path.isAbsolute(file) ? file : path.join(schemaDir, file);
+  // B56 unit-0 (2026-07-17): expand each root XSD through its transitive xs:include chain —
+  // the unpacked game's md/md.xsd is a ZERO-DECLARATION include shim, and without expansion
+  // the palette silently lost all 20 MD-only events (382 vs 402 — the stale count was
+  // user-visible in the XML-patching meta panel). Same fix class as B55P1's validator loaders.
+  const expandedPaths = Array.from(new Set(
+    files.flatMap(file => expandIncludeChain(path.isAbsolute(file) ? file : path.join(schemaDir, file)))
+  ));
+  const schemaRoots = (expandedPaths.length ? expandedPaths : files.map(f => path.isAbsolute(f) ? f : path.join(schemaDir, f))).map(fullPath => {
     const parsed = parser.parse(fs.readFileSync(fullPath, 'utf8'));
     parsed.__sourceFile = fullPath;
     return parsed;
@@ -399,7 +406,7 @@ export function loadSchemaLibrary(schemaDir = getDefaultSchemaDir(), files = ['m
     actions,
     controlFlow,
     simpleTypes,
-    sourceFiles: files.map(file => path.isAbsolute(file) ? file : path.join(schemaDir, file)),
+    sourceFiles: expandedPaths.length ? expandedPaths : files.map(file => path.isAbsolute(file) ? file : path.join(schemaDir, file)),
     loaded: true
   };
 

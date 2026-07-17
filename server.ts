@@ -125,7 +125,8 @@ import { createAgentKeyStore, scopeAllows, runAgentKeysSelftest, AGENT_KEY_TTLS,
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
 import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest } from "./src/lib/schemaRegistry";
-import { runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
+import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
+import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -261,6 +262,9 @@ app.use((req, res, next) => {
 const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/schema",
   "/agent/schema-registry",
+  "/agent/lang/complete",
+  "/agent/lang/attrs",
+  "/agent/lang/hover",
   "/agent/md-audit",
   "/agent/xsd-debug",
   "/agent/catdat-debug",
@@ -5249,7 +5253,9 @@ app.post("/api/agent/project/validate", (req, res) => {
     // and a deployed copy, report their divergence alongside the verdict — validating a
     // stale copy without knowing it is the trap (ROADMAP #5, confirmed 2026-07-09).
     const drift = source.mode === "fromPath" ? computeModDrift(path.basename(source.root)) : null;
-    return res.json({ ...result, source, ...(drift ? { drift } : {}) });
+    // B56s1: `flat` = the one-list diagnostic view (B55P1 currency) — consumed by the
+    // extension's Problems-panel projection. Additive; existing consumers unaffected.
+    return res.json({ ...result, flat: flattenProjectValidation(result), source, ...(drift ? { drift } : {}) });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project validate failed" });
   }
@@ -5308,6 +5314,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "schema-registry-selftest": runSchemaRegistrySelftest,
   "schema-routing-selftest": runSchemaRoutingSelftest,
   "agent-loop-selftest": runAgentLoopSelftest,
+  "lang-service-selftest": runLangServiceSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,
@@ -6345,6 +6352,57 @@ app.get("/api/agent/selftest", async (req, res) => {
     return res.json({ allPassed: checks.every(c => c.pass), passed: checks.filter(c => c.pass).length, total: checks.length, checks });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'selftest failed' });
+  }
+});
+
+// B56s3 — X4 IntelliSense endpoints (public read-only): completion/hover data for the
+// IDE extension's language providers. Index selection mirrors the validation routing —
+// md/ and aiscripts/ use their existing indexes; routed subset files use the registry
+// domain; anything else answers empty (never the wrong vocabulary).
+function langIndexFor(file: string, rootHint?: string): { index: SchemaIndex | null; domain: string } {
+  const p = String(file || "").replace(/\\/g, "/").toLowerCase();
+  try {
+    if (/(^|\/)aiscripts\//.test(p)) return { index: getAiSchemaIndex(), domain: "aiscripts" };
+    if (/(^|\/)md\//.test(p) || !p) return { index: getSchemaIndex(), domain: "md" };
+    const routed = routeProjectFile(p, rootHint === "diff" ? "<diff/>" : `<${rootHint || ""}/>`);
+    if (routed?.kind === "schema" && routed.domain) {
+      const resolved = resolveXsdConfig();
+      const registry = discoverSchemaRegistry(resolved.schemaDir, resolved.x4GamePath || undefined);
+      const info = registry.domains.find(d => d.domain === routed.domain);
+      if (info) return { index: getDomainIndex(info), domain: routed.domain };
+    }
+    if (/(^|\/)t\/[^/]+\.xml$/.test(p)) return { index: null, domain: "t" };
+  } catch { /* degrade to empty below */ }
+  return { index: null, domain: "none" };
+}
+
+app.get("/api/agent/lang/complete", (req, res) => {
+  try {
+    const { index, domain } = langIndexFor(String(req.query.file || ""), String(req.query.root || "") || undefined);
+    const parent = String(req.query.parent || "") || null;
+    return res.json({ domain, parent, items: index ? completeChildren(index, parent) : [] });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "lang complete failed" });
+  }
+});
+
+app.get("/api/agent/lang/attrs", (req, res) => {
+  try {
+    const { index, domain } = langIndexFor(String(req.query.file || ""), String(req.query.root || "") || undefined);
+    const tag = String(req.query.tag || "") || null;
+    return res.json({ domain, tag, attrs: index ? attributesFor(index, tag) : [] });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "lang attrs failed" });
+  }
+});
+
+app.get("/api/agent/lang/hover", (req, res) => {
+  try {
+    const { index, domain } = langIndexFor(String(req.query.file || ""), String(req.query.root || "") || undefined);
+    const tag = String(req.query.tag || "") || null;
+    return res.json({ domain, ...(index ? hoverFor(index, tag) : { tag: (tag || "").toLowerCase(), known: false, requiredAttrs: [], attrCount: 0 }) });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "lang hover failed" });
   }
 });
 
