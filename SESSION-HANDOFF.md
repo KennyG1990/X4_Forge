@@ -1,18 +1,12 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
-> ## ⛔ COMMIT POINT (2026-07-17) — B60 changelog VERIFIED + 0.0.17 PUBLISHED; Ken commits (publish-before-commit)
-> **0.0.17 is ALREADY LIVE on Open VSX** (published before commit, per Ken's new flow — this
-> makes the committed version == the published version, killing the changelog version-lag).
-> **UNCOMMITTED (Ken owns commits):** B60 — vscode-extension/scripts/gen-changelog.mjs (NEW) +
-> release-notes.json (NEW) + CHANGELOG.md (NEW, generated) + .vscodeignore + package.json
-> (0.0.16→0.0.17 + changelog script) + PUBLISHING.md · BACKLOG/ROADMAP/this file.
-> **Suggested title:** "chore(release): B60 automated readable changelog + publish 0.0.17"
-> **NEW PUBLISH FLOW (Ken's order — publish BEFORE commit):** bump package.json →
-> `npm run changelog` → stage → build → package → staged probe → `ovsx publish` → poll →
-> THEN Ken commits (the bump + generated CHANGELOG ride in the same commit — no separate
-> publish-doc commit afterward). Documented in PUBLISHING.md.
-> **Per-release human step:** add a plain-English `"<version>": [...]` block to
-> vscode-extension/release-notes.json — everything else is automatic.
+> ## ⛔ COMMIT POINT (2026-07-17) — B59a VERIFIED + 0.0.18 PUBLISHED (goal: build B59 a→b→c→d)
+> **0.0.18 live on Open VSX** (patch-day readiness). Publish-before-commit; commit via git shell.
+> Goal active (Ken /goal): build the B59 menu a→b→c→d as sequenced units, workflow religiously.
+> **a DONE.** Next: **b** galaxy-tab RECONCILE-first (outcome genuinely unknown), then c, then d.
+> New files this unit: src/lib/patchReadiness.ts, docs/plans/2026-07-17-patch-day-readiness.md.
+> Touched: server.ts (endpoint+selftest reg), mcp/x4forge-mcp.cjs (check_patch_readiness),
+> package.json 0.0.18, CHANGELOG/release-notes, records. Committed via git shell + push.
 >
 > ## 👁 B58 EYEBALL ADDITIONS (append to the B56+B57 batch below)
 > 8. **Starters:** RESET → picker shows Story Arc (3 stages) / War-Reactive Bounty /
@@ -73,5 +67,5 @@
 >   read version first; 409 = canvas moved, re-run.
 > - Sweep env reds on scratch: expression-suggest 0/0 + reference-selftest + selftest 7/10.
 >
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.17 STABLE** (2026-07-17)
-> Registry-confirmed indexed. Carries B60 readable changelog + B58 + B57 + B56 + B55P1 + B46P2.
+> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.18 STABLE** (2026-07-17)
+> Registry-confirmed indexed. Carries B59a patch-day readiness + B60 + B58 + B57 + B56 + B55P1 + B46P2.

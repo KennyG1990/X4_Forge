@@ -143,7 +143,13 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 (a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
-### B59 · Community gap map ROUND 2 — RESEARCHED 2026-07-17; candidates await Ken's picks
+### B59 · Community patch ROUND 2 — a ✅ BUILT 2026-07-17 → ROADMAP; b/c/d in progress (Ken's goal: a→b→c→d)
+**a ✅ Patch-day readiness check** — old-vs-new selector drift (patchReadiness.ts oracle 10/10 +
+endpoint + MCP check_patch_readiness; live two-corpus proof vs real unpacked 9.00; 0.0.18
+published). NEXT per goal: **b** galaxy-tab RECONCILE (outcome unknown → then SKU decision) ·
+**c** UI-Extensions-compatible starter (ground from kuertee's repo) · **d** anti-hallucination
+positioning copy (Ken-voiced; agent drafts). Research + menu:
+`docs/research/2026-07-17-community-gap-map-round2.md`. Original research kept below.
 Demand-side + author-workflow sweep: Nexus demand = conversions/overhauls/AI-tweaks (asset
 side OUT of scope; the XML layer of overhauls IS ours — GALAXY tab must be reconciled first)
 · the patch-day mod-breakage cycle is structural and untooled (→ two-corpus selector-drift

@@ -52,6 +52,35 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B59a · PATCH-DAY READINESS CHECK — the seasonal killer feature (2026-07-17, VERIFIED)
+
+Research Finding 2 (round 2): every game update silently breaks mods and modders hand-hunt which
+vanilla files changed — untooled by anyone. Plan: `docs/plans/2026-07-17-patch-day-readiness.md`.
+Reconcile confirmed all carriers exist → COMPOSITION, not new analysis (`xpathLib.select` selector
+eval from overrideMap; `extractBaseGameFile` per game root; the Doctor's diff-selector regex).
+
+- **`src/lib/patchReadiness.ts`** (pure, resolver-injected; oracle `patch-readiness-selftest`
+  **10/10**, sweep-discovered): evaluates each of a mod's `<diff>` selectors against OLD vs NEW
+  vanilla content → verdicts ok / **broken** (matched old, not new — will silently miss) /
+  unresolved (targets another mod / bad xpath — NOT a break) / now_matches / target_file_removed.
+  Advisory WARNING severity; malformed xpath → unresolved-not-crash; bounded evals.
+- **`GET /api/agent/patch-readiness`** (authed) — `?fromPath&oldRoot&newRoot(=configured game)`;
+  reads the mod's diff patches, resolves base content **loose-first then packed** from each root
+  (works against an unpacked corpus AND a real install), returns findings.
+- **MCP `check_patch_readiness`** — surfaces BROKEN selectors to IDE agents.
+- **LIVE two-corpus proof** (real unpacked 9.00 as OLD + a synthetic changed root as NEW):
+  `/wares/ware[@id='energycells']/price/@average` → **BROKEN** (matched 9.00 1×, changed root 0×);
+  the unchanged `/@volume` control → **OK** (1/1, stayed quiet); a jobs.xml patch whose target is
+  absent in NEW → **target_file_removed**. Same findings through the MCP tool over stdio.
+
+**Gates:** tsc 0 · lint 0 errors · precommit OK · sweep **87/90** (same 3 env reds) · **e2e
+19/19 PASS**. **Stable 0.0.18 PUBLISHED + indexed** (staged-bundle probe: patch-readiness oracle
+10/10 in the shipped server.cjs). Publish-before-commit.
+**Out of scope (honest):** auto-fixing broken selectors (report only); non-selector breakage
+(renamed macros/wares → B46 Phase 3 reference sets). **Reconcile note (rule 3.4):** capability-map
+delta = NEW patch-day capability. **Suggested commit title:** "feat(community): B59a patch-day
+readiness check — old-vs-new selector drift (engine+oracle+endpoint+MCP), publish 0.0.18".
+
 ### ✅ B60 · AUTOMATED READABLE CHANGELOG — Open VSX "Changes" tab live (2026-07-17, VERIFIED)
 
 Ken flagged the empty Open VSX "Changes" tab. Reconcile: no CHANGELOG.md ever shipped, and

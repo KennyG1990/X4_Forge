@@ -133,6 +133,30 @@ const TOOLS = [
     },
   },
   {
+    name: "check_patch_readiness",
+    description:
+      "Patch-day readiness: check whether a mod's <diff> patch SELECTORS still match after a game update. Give the path to the OLD game version's data and (optionally) the new one; returns which patches will SILENTLY MISS because the vanilla files changed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fromPath: { type: "string", description: "Mod folder name under the Mod Workspace root" },
+        oldRoot: { type: "string", description: "Path to the PREVIOUS game version's data (unpacked or install) to compare against" },
+        newRoot: { type: "string", description: "Path to the new game version's data (default: the configured game path)" },
+      },
+      required: ["fromPath", "oldRoot"],
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ fromPath: String(args.fromPath || ""), oldRoot: String(args.oldRoot || "") });
+      if (args.newRoot) q.set("newRoot", String(args.newRoot));
+      const d = await forge("GET", `/api/agent/patch-readiness?${q}`);
+      return {
+        diffFiles: d.diffFiles,
+        summary: d.summary,
+        broken: (d.findings || []).filter((f) => f.verdict === "broken" || f.verdict === "target_file_removed").slice(0, 50),
+      };
+    },
+  },
+  {
     name: "explain_element",
     description: "Explain an X4 MD/AIScript XML element: schema-declared attributes (required/enums) plus the Forge's curated deterministic semantics (what it does, risk class).",
     inputSchema: {

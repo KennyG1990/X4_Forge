@@ -128,6 +128,7 @@ import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest } fro
 import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
 import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
 import { buildAgentsMd, buildNotesMd, runAgentBriefSelftest } from "./src/lib/agentBrief";
+import { analyzePatchReadiness, runPatchReadinessSelftest } from "./src/lib/patchReadiness";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -5265,6 +5266,50 @@ app.post("/api/agent/project/validate", (req, res) => {
   }
 });
 
+// B59a — patch-day readiness: does a mod's <diff> selectors still match after a game update?
+// Reads the mod's diff patches, evaluates each selector against the OLD and NEW vanilla files
+// (extractBaseGameFile with two game roots), reports which will silently miss. Additive/read-only.
+app.get("/api/agent/patch-readiness", (req, res) => {
+  try {
+    const fromPath = String(req.query.fromPath || "").trim();
+    const oldRoot = String(req.query.oldRoot || "").trim();
+    const newRoot = String(req.query.newRoot || "").trim() || resolveXsdConfig().x4GamePath || "";
+    if (!fromPath) return res.status(400).json({ error: "Missing fromPath (mod folder under the configured roots)." });
+    if (!oldRoot) return res.status(400).json({ error: "Missing oldRoot — the path to the PREVIOUS game version's data (unpacked or install) to compare against. Without an old reference no patch-day check is possible." });
+    if (!newRoot) return res.status(400).json({ error: "No newRoot and no configured X4 game path — set the game path in Settings or pass newRoot." });
+
+    const resolvedFolder = resolveModFolder(fromPath);
+    if ("error" in resolvedFolder) return res.status(resolvedFolder.status).json({ error: resolvedFolder.error });
+    const load = loadProjectFromDisk(resolvedFolder.abs);
+
+    // Collect diff patches: a loaded file whose content is a <diff> doc patches the vanilla
+    // file at its OWN relative path (X4 convention). Selectors via the Doctor's regex shape.
+    const patches: Array<{ targetFile: string; selectors: Array<{ sel: string; op?: string }> }> = [];
+    for (const f of load.project.files) {
+      if (typeof f.content !== "string" || !/<diff[\s>]/.test(f.content)) continue;
+      const selectors = [...f.content.matchAll(/<(add|replace|remove)\b[^>]*\bsel\s*=\s*"([^"]+)"/gi)]
+        .map(m => ({ op: m[1].toLowerCase(), sel: m[2] }));
+      if (selectors.length) patches.push({ targetFile: f.path, selectors });
+    }
+
+    // Loose-first, then packed .cat/.dat — mirrors the Doctor's resolveBaseContent so this
+    // works against BOTH an unpacked corpus (all loose) and a real install (core files packed).
+    const readFrom = (root: string) => (targetFile: string): string | null => {
+      const rel = targetFile.replace(/\\/g, "/");
+      try {
+        const loose = path.join(root, ...rel.split("/"));
+        if (fs.existsSync(loose) && fs.statSync(loose).isFile()) return fs.readFileSync(loose, "utf8");
+      } catch { /* fall through to packed */ }
+      try { const hit = catDatExtractBaseGameFile(root, rel); return hit?.text ?? null; }
+      catch { return null; }
+    };
+    const result = analyzePatchReadiness({ patches, resolveOld: readFrom(oldRoot), resolveNew: readFrom(newRoot) });
+    return res.json({ oldRoot, newRoot, diffFiles: patches.length, ...result });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "patch-readiness failed" });
+  }
+});
+
 // B57s1 — the self-describing mod folder: AGENTS.md + X4_NOTES.md content generated from
 // live truth (files, cue index, routed domains, generated-file ownership). The extension
 // writes the files; agents READ them. Deterministic and idempotent by construction.
@@ -5458,6 +5503,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "agent-loop-selftest": runAgentLoopSelftest,
   "lang-service-selftest": runLangServiceSelftest,
   "agent-brief-selftest": runAgentBriefSelftest,
+  "patch-readiness-selftest": runPatchReadinessSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,
