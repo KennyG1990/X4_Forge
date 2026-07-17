@@ -35,6 +35,40 @@ bar = all 606 vanilla jobs lint clean** (cry-wolf is the #1 risk on this surface
 **BUILD IS KEN-GATED** — authoring validation Egosoft doesn't ship is a product-direction call, not a
 presence one. When Ken gives the go: implement per the spec, corpus-prove, gate, publish decision his.
 
+## BLOCKED (2026-07-17) — in-game validation of deployed x4_ai_influence (needs Ken AT the machine)
+Ken cleared game-eyes via computer-use while away, but two machine-reality walls block it headless
+(both [REPRODUCED] this session):
+1. **computer-use `request_access` needs Ken to click the on-screen approval dialog** for Steam/X4 —
+   only Antigravity was pre-granted; can't self-grant remotely.
+2. **X4 won't launch headless:** direct `X4.exe -debug scripts -logfile debuglog.txt` → Steam DRM
+   blocks; `steam://run/392160//-debug scripts -logfile debuglog.txt/` → Steam up (steamwebhelper)
+   but NO X4 process + debuglog untouched (08:34) = a masked/unclickable Steam launcher/mod-warning
+   dialog with no operator to clear it.
+3. Antigravity is running a live Gemini agent + idle codex session (collision risk); its installed
+   Forge ext is stale **0.0.16** (this session shipped 0.0.21) so IDE-eyeball there wouldn't validate
+   current work anyway.
+
+**RECON DONE (all verified, so the resume is ~5 min when Ken is at the keyboard):**
+- Game: `G:\SteamLibrary\steamapps\common\X4 Foundations\X4.exe` (Steam appid 392160).
+- Deployed mods incl. **x4_ai_influence** (+ x4_neural_link + kuertee x4-mod-ui-extensions) in
+  `G:\SteamLibrary\steamapps\common\X4 Foundations\extensions\`.
+- Save present: `C:\Users\Moshi\Documents\Egosoft\X4\20076855\` — debuglog writes there.
+- Debug launch string (from healthCard.ts): **`-debug scripts -logfile debuglog.txt`**.
+- Baseline debuglog "errors" are BENIGN modded-X4 noise: unsigned-mod signature fails (error 14/13),
+  offline/venture-DLC patcher errors, the vanilla `OnlineGetVersionIncompatibilityState` abort. The
+  x4_ai_influence proving slice: walk to an NPC → "Speak to AI" → wheel → chat → `[TEST] Declare war on me`.
+
+**RESUME SCRIPT (Ken at the machine):**
+1. Launch X4 from Steam (or with the debug launch options set on the game's Steam launch options), let
+   the main menu load; if a "modified game" mod-warning appears, click through it.
+2. Click **Continue** (loads last save) → wait for the game to load in.
+3. Agent (or Ken) reads the fresh log: `C:\Users\Moshi\Documents\Egosoft\X4\20076855\debuglog.txt` —
+   EXECUTION gate = x4_ai_influence cues init with zero `[=ERROR=]` beyond the benign baseline above.
+4. EXPERIENCE gate (Ken's screen): drive to an NPC, "Speak to AI", run the `[TEST] Declare war on me`
+   slice, confirm the response. Screenshot for the record.
+Alternatively an agent CAN drive it once Ken approves the computer-use grant dialog for Steam + X4 and
+clears the initial launch dialog — after that, menu→Continue is 2D nav (feasible), NPC-walk is 3D (hard).
+
 ## Eyeball queue (Ken 30-sec checks) — all already EYES-seen by the agent this session
 - B59c: X4 WIKI → HUD & LUA → "UI Extensions Framework Compatibility (kuertee)".
 - B59d: X4 WIKI → **Reference** tab → "Is this just another AI mod generator?" (confirm the mechanism
