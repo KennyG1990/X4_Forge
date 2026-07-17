@@ -8,8 +8,9 @@
 > docs/research/ + docs/plans/2026-07-17-community-patch.md · records.
 > **Suggested title:** "feat(community): B58 patch — story-arc + war-reactive +
 > custom-gamestart starters, conflict projection, save-impact facts"
-> **Publish flow after commit:** bump 0.0.16 → build → stage → package → staged probe
-> (templates oracle 33/33 + check_conflicts answers) → ovsx publish → poll.
+> **PUBLISH DONE: stable 0.0.16 live on Open VSX** (staged probe: templates 33/33 +
+> routing 24/24 + agent-loop 12/12 + md-audit 0 IN the bundle; registry-confirmed indexed).
+> The uncommitted diff now includes the 0.0.16 bump.
 >
 > ## 👁 B58 EYEBALL ADDITIONS (append to the B56+B57 batch below)
 > 8. **Starters:** RESET → picker shows Story Arc (3 stages) / War-Reactive Bounty /
@@ -70,5 +71,5 @@
 >   read version first; 409 = canvas moved, re-run.
 > - Sweep env reds on scratch: expression-suggest 0/0 + reference-selftest + selftest 7/10.
 >
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.15 STABLE** (2026-07-17)
-> Registry-confirmed indexed. Carries B57 Phase B + B56 Phase A + B55P1 + B46P2.
+> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.16 STABLE** (2026-07-17)
+> Registry-confirmed indexed. Carries B58 community patch + B57 + B56 + B55P1 + B46P2.

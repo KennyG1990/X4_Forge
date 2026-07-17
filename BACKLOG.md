@@ -134,6 +134,17 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 (a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
+### B59 · Community gap map ROUND 2 — RESEARCHED 2026-07-17; candidates await Ken's picks
+Demand-side + author-workflow sweep: Nexus demand = conversions/overhauls/AI-tweaks (asset
+side OUT of scope; the XML layer of overhauls IS ours — GALAXY tab must be reconciled first)
+· the patch-day mod-breakage cycle is structural and untooled (→ two-corpus selector-drift
+"patch-day readiness" — carriers exist: registry multi-root + overrideMap selector eval +
+cat/dat) · the UI ecosystem runs through kuertee's UI Extensions framework (→
+dependency-declaring compatible starter; ground from his repo) · "AI-made mods = one large
+LLM hallucination" is the community verdict — our validator-driven loop is the counter-story
+(positioning copy = Ken-voiced). MENU a–d, default order a→b(reconcile)→c→d:
+`docs/research/2026-07-17-community-gap-map-round2.md`. Nothing scheduled until Ken picks.
+
 ### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP
 Ken: the bridge is x4_ai_influence-specific (ADR-F3 "optional, never a dependency"), but the
 startup walkaround warned amber "bridge DOWN" for EVERY mod. Now labeled "(optional)", a down
