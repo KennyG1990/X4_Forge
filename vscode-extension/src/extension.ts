@@ -25,6 +25,7 @@ import * as path from "node:path";
 import { mapFlatFindings, type FlatFinding } from "./diagnosticsMap";
 import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAssociations } from "./modFolder";
 import { xmlCursorContext } from "./langContext";
+import { findCueDefinition, findCueReferences, mdscriptNameOf, parseCueWord } from "./langNav";
 
 interface BackendHandle {
   baseUrl: string;
@@ -587,8 +588,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("x4forge.validateModFolder", () => validateModFolder(context)),
     vscode.commands.registerCommand("x4forge.openModFolder", () => openModFolder(context)),
     vscode.commands.registerCommand("x4forge.copyMcpConfig", () => copyMcpConfig(context)),
+    vscode.commands.registerCommand("x4forge.refreshAgentBrief", () => refreshAgentBrief(context)),
+    vscode.commands.registerCommand("x4forge.generateProof", () => generateProof(context)),
   );
   registerLangProviders(context);
+  registerNavProviders(context);
+  registerTwoWayEditing(context);
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (!lastValidated || !doc.uri.fsPath.toLowerCase().startsWith(lastValidated.root.toLowerCase())) return;
@@ -726,6 +731,10 @@ async function openModFolder(context: vscode.ExtensionContext): Promise<void> {
     if (!pick) return;
     const modPath = path.join(root, pick);
     writeRecommendations(modPath);
+    // B57s1: the folder describes itself to any resident agent.
+    try { await writeAgentBrief(context, modPath, pick); } catch (err) {
+      log(`agent brief skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
     // B56s5 (DEFAULT-OFF): per-file xml.fileAssociations to the game's own XSDs, only for
     // plain-rooted files of corpus-proven domains — never for <diff> patches or wares/jobs.
     if (cfg().writeXmlAssociations) {
@@ -907,6 +916,288 @@ async function copyMcpConfig(context: vscode.ExtensionContext): Promise<void> {
     ).then((pick) => pick === "Create Agent Key" && vscode.commands.executeCommand("x4forge.createAgentKey"));
   } catch (err) {
     showBackendError(`Copy MCP config failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B57s1 — the self-describing mod folder: AGENTS.md + X4_NOTES.md generated from live
+// server truth. GENERATED files (marked as such) — regenerated idempotently, hand edits
+// are deliberately not preserved (staleness class).
+// ---------------------------------------------------------------------------
+
+async function writeAgentBrief(context: vscode.ExtensionContext, modPath: string, fromPath: string): Promise<boolean> {
+  const handle = await ensureBackend(context);
+  if (!handle.owned || !handle.token) return false;
+  const res = await fetch(`${handle.baseUrl}/api/agent/project/brief?fromPath=${encodeURIComponent(fromPath)}`, {
+    headers: { Authorization: `Bearer ${handle.token}` },
+  });
+  const data = (await res.json()) as { agentsMd?: string; notesMd?: string; error?: string };
+  if (!res.ok || !data.agentsMd || !data.notesMd) throw new Error(data.error || `HTTP ${res.status}`);
+  fs.writeFileSync(path.join(modPath, "AGENTS.md"), data.agentsMd, "utf8");
+  fs.writeFileSync(path.join(modPath, "X4_NOTES.md"), data.notesMd, "utf8");
+  log(`agent brief written for "${fromPath}" (AGENTS.md + X4_NOTES.md)`);
+  return true;
+}
+
+async function refreshAgentBrief(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const handle = await ensureBackend(context);
+    if (!handle.owned || !handle.token) {
+      void vscode.window.showInformationMessage("X4 Forge: attached to an externally-run Forge — no credential to read its project data.");
+      return;
+    }
+    // Prefer a mod folder already in the workspace; else prompt.
+    const modFolders = (vscode.workspace.workspaceFolders || []).filter((f) => f.name.startsWith("X4 Mod: "));
+    let modPath: string | null = null;
+    let fromPath: string | null = null;
+    if (modFolders.length === 1) {
+      modPath = modFolders[0].uri.fsPath;
+      fromPath = path.basename(modPath);
+    } else if (modFolders.length > 1) {
+      const pick = await vscode.window.showQuickPick(modFolders.map((f) => f.name.replace("X4 Mod: ", "")), { placeHolder: "Which mod?" });
+      if (!pick) return;
+      modPath = modFolders.find((f) => f.name === `X4 Mod: ${pick}`)?.uri.fsPath ?? null;
+      fromPath = pick;
+    } else {
+      fromPath = (await vscode.window.showInputBox({ prompt: "Mod folder name under the Mod Workspace root" }))?.trim() || null;
+      if (!fromPath) return;
+      const cfgRes = await fetch(`${handle.baseUrl}/api/schema/config`, { headers: { Authorization: `Bearer ${handle.token}` } });
+      const cfgData = (await cfgRes.json()) as { resolved?: { modWorkspacePath?: string } };
+      const root = (cfgData.resolved?.modWorkspacePath || "").trim();
+      if (!root) throw new Error("No Mod Workspace root configured.");
+      modPath = path.join(root, fromPath);
+    }
+    if (!modPath || !fs.existsSync(modPath)) throw new Error(`Mod folder not found: ${modPath}`);
+    await writeAgentBrief(context, modPath, fromPath!);
+    void vscode.window.setStatusBarMessage(`X4 Forge: agent brief refreshed for "${fromPath}".`, 6000);
+  } catch (err) {
+    showBackendError(`Refresh Agent Brief failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B57s3 — cue navigation (aid, not verdict) + unsaved-buffer diagnostics.
+// ---------------------------------------------------------------------------
+
+function mdFilesOf(root: string): string[] {
+  const dir = path.join(root, "md");
+  try {
+    return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".xml")).map((f) => path.join(dir, f));
+  } catch {
+    return [];
+  }
+}
+
+function registerNavProviders(context: vscode.ExtensionContext): void {
+  const selector: vscode.DocumentSelector = [{ scheme: "file", pattern: "**/md/*.xml" }];
+
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider(selector, {
+      provideDefinition(doc, pos) {
+        const root = modRootFor(doc.uri.fsPath);
+        if (!root) return undefined;
+        const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
+        if (!range) return undefined;
+        const word = parseCueWord(doc.getText(range));
+        if (!word) return undefined;
+        for (const file of mdFilesOf(root)) {
+          let text: string;
+          try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+          if (word.script && (mdscriptNameOf(text) || "").toLowerCase() !== word.script.toLowerCase()) continue;
+          const loc = findCueDefinition(text, word.cue);
+          if (loc) return new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column));
+        }
+        return undefined;
+      },
+    }),
+    vscode.languages.registerReferenceProvider(selector, {
+      provideReferences(doc, pos) {
+        const root = modRootFor(doc.uri.fsPath);
+        if (!root) return undefined;
+        const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
+        if (!range) return undefined;
+        const word = parseCueWord(doc.getText(range));
+        if (!word) return undefined;
+        const out: vscode.Location[] = [];
+        for (const file of mdFilesOf(root)) {
+          let text: string;
+          try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+          for (const loc of findCueReferences(text, word.cue)) {
+            out.push(new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column)));
+          }
+        }
+        return out;
+      },
+    }),
+  );
+
+  // Unsaved-buffer diagnostics: the edited BUFFER + its siblings from disk go through the
+  // full inline validator — squiggles while typing, saves not required. Debounced; the
+  // server stays the referee (nothing is computed extension-side).
+  let liveTimer: ReturnType<typeof setTimeout> | null = null;
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (!e.document.uri.fsPath.toLowerCase().endsWith(".xml")) return;
+      const root = modRootFor(e.document.uri.fsPath);
+      if (!root || !backend?.owned || !backend.token) return;
+      if (liveTimer) clearTimeout(liveTimer);
+      liveTimer = setTimeout(() => void liveValidateBuffer(root, e.document), 800);
+    }),
+  );
+}
+
+async function liveValidateBuffer(root: string, doc: vscode.TextDocument): Promise<void> {
+  try {
+    if (!backend?.owned || !backend.token) return;
+    const editedRel = relModPath(root, doc.uri.fsPath);
+    const files: Array<{ path: string; content: string }> = [{ path: editedRel, content: doc.getText() }];
+    // Siblings from disk so cross-file checks stay accurate (mod folders are small).
+    const walk = (rel: string, depth: number) => {
+      if (depth > 3 || files.length > 80) return;
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(path.join(root, ...rel.split("/").filter(Boolean)), { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const childRel = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) { if (!e.name.startsWith(".")) walk(childRel, depth + 1); continue; }
+        if (!/\.(xml|lua)$/i.test(e.name) || childRel === editedRel) continue;
+        try { files.push({ path: childRel, content: fs.readFileSync(path.join(root, ...childRel.split("/")), "utf8") }); } catch { /* skip */ }
+      }
+    };
+    walk("", 0);
+    const res = await fetch(`${backend.baseUrl}/api/agent/project/validate`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ project: { id: path.basename(root), name: path.basename(root), files } }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { flat?: FlatFinding[] };
+    const mapped = mapFlatFindings(data.flat || [], files.map((f) => f.path));
+    diagCollection?.clear();
+    for (const [rel, list] of mapped.byFile) {
+      diagCollection?.set(vscode.Uri.file(path.join(root, ...rel.split("/"))), list.map((d) => {
+        const diag = new vscode.Diagnostic(new vscode.Range(d.line, 0, d.line, 200), d.message, DIAG_SEVERITY[d.severity] ?? vscode.DiagnosticSeverity.Information);
+        diag.source = "x4forge";
+        if (d.code) diag.code = d.code;
+        return diag;
+      }));
+    }
+  } catch {
+    /* live diagnostics are best-effort; the save/command paths remain authoritative */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B57s4 — proof artifact: one page of machine evidence, written into the mod folder.
+// ---------------------------------------------------------------------------
+
+async function generateProof(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const handle = await ensureBackend(context);
+    if (!handle.owned || !handle.token) {
+      void vscode.window.showInformationMessage("X4 Forge: attached to an externally-run Forge — no credential for its evidence.");
+      return;
+    }
+    const modFolders = (vscode.workspace.workspaceFolders || []).filter((f) => f.name.startsWith("X4 Mod: "));
+    const fromPath = modFolders.length === 1
+      ? path.basename(modFolders[0].uri.fsPath)
+      : (await vscode.window.showInputBox({ prompt: "Mod folder name for the proof (blank = active workspace only)" }))?.trim() || "";
+    const res = await fetch(`${handle.baseUrl}/api/agent/proof?fromPath=${encodeURIComponent(fromPath)}`, {
+      headers: { Authorization: `Bearer ${handle.token}` },
+    });
+    const data = (await res.json()) as { markdown?: string; error?: string };
+    if (!res.ok || !data.markdown) throw new Error(data.error || `HTTP ${res.status}`);
+    const target = modFolders.length === 1 ? modFolders[0].uri.fsPath : null;
+    if (target) {
+      fs.writeFileSync(path.join(target, "PROOF.md"), data.markdown, "utf8");
+      const doc = await vscode.workspace.openTextDocument(path.join(target, "PROOF.md"));
+      await vscode.window.showTextDocument(doc, { preview: true });
+      log(`PROOF.md written to ${target}`);
+    } else {
+      const doc = await vscode.workspace.openTextDocument({ content: data.markdown, language: "markdown" });
+      await vscode.window.showTextDocument(doc, { preview: true });
+    }
+  } catch (err) {
+    showBackendError(`Generate Proof failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B57s5 — two-way adopt (DEFAULT-OFF: x4forge.twoWayEditing). IDE file edits can be
+// ADOPTED into the canvas via the server's guarded importer — never silently: every
+// adoption is an explicit user action; refusals surface their reason; adopt/refuse
+// counters accumulate the telemetry that gates any future default-on decision.
+// ---------------------------------------------------------------------------
+
+let adoptWatcher: vscode.FileSystemWatcher | null = null;
+let adoptPromptOpen = false;
+
+function telemetryBump(context: vscode.ExtensionContext, key: "adoptCount" | "declineCount" | "guardRefusals" | "conflictCount"): void {
+  const k = `x4forge.telemetry.${key}`;
+  const next = (context.globalState.get<number>(k) || 0) + 1;
+  void context.globalState.update(k, next);
+  log(`telemetry ${key} = ${next}`);
+}
+
+function registerTwoWayEditing(context: vscode.ExtensionContext): void {
+  const enabled = vscode.workspace.getConfiguration("x4forge").get<boolean>("twoWayEditing") === true;
+  if (!enabled || adoptWatcher) return;
+  adoptWatcher = vscode.workspace.createFileSystemWatcher("**/{md,libraries,t,ui}/**/*.xml");
+  context.subscriptions.push(
+    adoptWatcher,
+    adoptWatcher.onDidChange((uri) => void offerAdopt(context, uri)),
+    adoptWatcher.onDidCreate((uri) => void offerAdopt(context, uri)),
+  );
+  log("two-way editing watcher active (x4forge.twoWayEditing=true)");
+}
+
+async function offerAdopt(context: vscode.ExtensionContext, uri: vscode.Uri): Promise<void> {
+  const root = modRootFor(uri.fsPath);
+  if (!root || adoptPromptOpen || !backend?.owned || !backend.token) return;
+  adoptPromptOpen = true;
+  try {
+    const rel = relModPath(root, uri.fsPath);
+    const pick = await vscode.window.showInformationMessage(
+      `X4 Forge: "${rel}" changed on disk. Adopt the folder's current state into the canvas? (Guarded — a lossy import refuses instead of corrupting.)`,
+      "Adopt into canvas", "Not now",
+    );
+    if (pick !== "Adopt into canvas") { telemetryBump(context, "declineCount"); return; }
+    await adoptFolderIntoCanvas(context, path.basename(root));
+  } finally {
+    adoptPromptOpen = false;
+  }
+}
+
+async function adoptFolderIntoCanvas(context: vscode.ExtensionContext, folderName: string): Promise<void> {
+  try {
+    if (!backend?.owned || !backend.token) throw new Error("no owned sidecar");
+    const auth = { Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" };
+    const wsRes = await fetch(`${backend.baseUrl}/api/agent/workspace`, { headers: auth });
+    const wsData = (await wsRes.json()) as { version?: number };
+    const importRes = await fetch(`${backend.baseUrl}/api/agent/mod-folder/import`, {
+      method: "POST", headers: auth, body: JSON.stringify({ path: folderName }),
+    });
+    const imported = (await importRes.json()) as { success?: boolean; workspace?: unknown; report?: { skipped?: unknown[]; reason?: string }; error?: string };
+    if (!importRes.ok || !imported.success || !imported.workspace) {
+      telemetryBump(context, "guardRefusals");
+      throw new Error(imported.error || imported.report?.reason || `guarded import refused (HTTP ${importRes.status})`);
+    }
+    const commitRes = await fetch(`${backend.baseUrl}/api/agent/workspace`, {
+      method: "POST", headers: auth,
+      body: JSON.stringify({ workspace: imported.workspace, expectedVersion: wsData.version }),
+    });
+    const committed = (await commitRes.json()) as { applied?: boolean; error?: string };
+    if (commitRes.status === 409) {
+      telemetryBump(context, "conflictCount");
+      throw new Error("canvas changed while adopting — nothing applied; re-run adopt when ready");
+    }
+    if (!commitRes.ok || !committed.applied) throw new Error(committed.error || `commit refused (HTTP ${commitRes.status})`);
+    telemetryBump(context, "adoptCount");
+    const skipped = imported.report?.skipped as unknown[] | undefined;
+    void vscode.window.setStatusBarMessage(
+      `X4 Forge: adopted "${folderName}" into the canvas${skipped?.length ? ` (${skipped.length} file(s) preserved as-is)` : ""}.`, 8000);
+    log(`adopted folder "${folderName}" into canvas (CAS ok)`);
+  } catch (err) {
+    showBackendError(`Adopt into canvas failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

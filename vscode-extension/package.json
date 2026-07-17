@@ -90,6 +90,14 @@
       {
         "command": "x4forge.copyMcpConfig",
         "title": "X4 Forge: Copy MCP Server Config (for coding agents)"
+      },
+      {
+        "command": "x4forge.refreshAgentBrief",
+        "title": "X4 Forge: Refresh Agent Brief (AGENTS.md + X4_NOTES.md)"
+      },
+      {
+        "command": "x4forge.generateProof",
+        "title": "X4 Forge: Generate Proof Artifact (PROOF.md)"
       }
     ],
     "configuration": {
@@ -144,6 +152,11 @@
           "type": "boolean",
           "default": false,
           "description": "When opening a mod folder, also write per-file xml.fileAssociations to the game XSDs (plain-rooted factions/gamestarts/addon files only \u2014 never diff patches). Requires an XML extension (e.g. Red Hat XML) to take effect. Default off: the Forge validator remains the single referee unless you opt in."
+        },
+        "x4forge.twoWayEditing": {
+          "type": "boolean",
+          "default": false,
+          "description": "EXPERIMENTAL: when an opened mod folder's XML changes on disk, offer to adopt the folder into the canvas via the guarded importer (a lossy import refuses instead of corrupting). Default off; adoption is always an explicit prompt."
         }
       }
     }

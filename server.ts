@@ -77,7 +77,7 @@ import { runSimulateSelftest, simulateWorkspace } from "./src/lib/mdSimulate";
 import { runPortSemanticsSelftest } from "./src/lib/portSemantics";
 import { runFriendlyNamesSelftest } from "./src/lib/mdFriendlyNames";
 import { runNodeToolboxSelftest } from "./src/lib/nodeToolbox";
-import { runReadinessSelftest } from "./src/lib/readiness";
+import { buildReadinessStages, runReadinessSelftest } from "./src/lib/readiness";
 import { runExperienceModeSelftest } from "./src/lib/experienceMode";
 import { runCompileSelftest } from "./src/lib/mdCompileSelftest";
 import { runModTemplatesSelftest } from "./src/lib/modTemplates";
@@ -93,10 +93,10 @@ import { runUiCompilerSelftest } from "./src/lib/uiCompilerSelftest";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
-import { classifyPath, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
+import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
-import { runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
+import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
 import { workspaceContentHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
 import { buildReleasePlan, buildZip, runModDistributionSelftest } from "./src/lib/modDistribution";
@@ -127,6 +127,7 @@ import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
 import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest } from "./src/lib/schemaRegistry";
 import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
 import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
+import { buildAgentsMd, buildNotesMd, runAgentBriefSelftest } from "./src/lib/agentBrief";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -5255,9 +5256,138 @@ app.post("/api/agent/project/validate", (req, res) => {
     const drift = source.mode === "fromPath" ? computeModDrift(path.basename(source.root)) : null;
     // B56s1: `flat` = the one-list diagnostic view (B55P1 currency) — consumed by the
     // extension's Problems-panel projection. Additive; existing consumers unaffected.
-    return res.json({ ...result, flat: flattenProjectValidation(result), source, ...(drift ? { drift } : {}) });
+    const flat = flattenProjectValidation(result);
+    // B57s2: `capsules` = the SAME remediation packet the in-app repair loop feeds its
+    // model — one currency for our loop, the IDE, and external agents. Additive.
+    return res.json({ ...result, flat, capsules: buildRemediationCapsules(flat), source, ...(drift ? { drift } : {}) });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project validate failed" });
+  }
+});
+
+// B57s1 — the self-describing mod folder: AGENTS.md + X4_NOTES.md content generated from
+// live truth (files, cue index, routed domains, generated-file ownership). The extension
+// writes the files; agents READ them. Deterministic and idempotent by construction.
+app.get("/api/agent/project/brief", (req, res) => {
+  try {
+    const fromPath = String(req.query.fromPath || "").trim();
+    if (!fromPath) return res.status(400).json({ error: "Missing fromPath." });
+    const resolvedFolder = resolveModFolder(fromPath);
+    if ("error" in resolvedFolder) return res.status(resolvedFolder.status).json({ error: resolvedFolder.error });
+    const load = loadProjectFromDisk(resolvedFolder.abs);
+    const modId = path.basename(load.root).toLowerCase();
+    const files = load.loaded.map(f => f.replace(/\\/g, "/"));
+    // Canvas-owned files: the compiler's manifest names for THIS folder id. content.xml
+    // counts as generated only when the compiled md file exists too (canvas-produced mod).
+    const mdFile = `md/${modId}.xml`;
+    const generatedFiles = files.filter(f =>
+      f === mdFile || f === "ui.xml" || f === `ui/${modId}.lua`
+      || (f === "content.xml" && files.includes(mdFile)));
+    const domains = Array.from(new Set(
+      files.map(f => {
+        const file = load.project.files.find(pf => pf.path === f);
+        const routed = routeProjectFile(f, typeof file?.content === "string" ? file.content : "");
+        return routed?.kind === "schema" ? routed.domain : routed?.kind === "tfile" ? "t" : null;
+      }).filter((d): d is string => !!d)));
+    const cueNames = indexCueReferences(load.project).defined.map(d => d.name);
+    const input = {
+      modId, files, generatedFiles, domainsPresent: domains, cueNames,
+      mcpTools: ["validate_mod", "author_check", "stage_and_validate", "readiness", "list_schema_domains", "get_workspace", "compile_workspace", "explain_element"],
+    };
+    return res.json({ input, agentsMd: buildAgentsMd(input), notesMd: buildNotesMd(input) });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "project brief failed" });
+  }
+});
+
+// B57s2 — the readiness ladder as MACHINE truth for agents: the same buildReadinessStages
+// the studio header uses, fed entirely from server-side evidence. The `experience` stage is
+// user-screen-gated by design — the server reports it honestly un-confirmed (ADR-G3).
+function computeServerReadiness() {
+  const ws = sanitizeWorkspace(activeWorkspace);
+  const mdCode = generateMDXML(ws);
+  const graphDiagnostics = validateModWorkspace(ws, mdCode);
+  const { modId, files } = buildWorkspaceFileManifest(ws);
+  // The stage builder only counts severities; adapt server diagnostics to its shape.
+  const packageDiagnostics = [...runModDoctor(ws, files, modId), ...runSchemaValidation(files, modId), ...runPatchDiagnostics(ws)]
+    .map(d => ({ severity: d.severity, message: d.message, category: "egosoft" as const }));
+  const brief = buildDebugWatcherBrief(modId, []);
+  const stages = buildReadinessStages({
+    workspaceName: ws.name,
+    workspaceHash: activeWorkspaceHash(),
+    graphDiagnostics,
+    packageDiagnostics,
+    diagnosticSource: "package",
+    watcher: { phase: "ready", lastDeploy: brief.status?.lastDeploy ?? null, sinceDeploy: brief.sinceDeploy, verdict: brief.verdict, error: null },
+    confirmation: null,
+  });
+  return { ws, modId, stages, watcherVerdict: brief.verdict };
+}
+
+app.get("/api/agent/readiness", (req, res) => {
+  try {
+    const { ws, modId, stages } = computeServerReadiness();
+    return res.json({
+      workspace: ws.name,
+      modId,
+      stages,
+      note: "experience flips only on the user's screen (studio confirmation) — agents must never claim it.",
+    });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "readiness failed" });
+  }
+});
+
+// B57s4 — the PROOF artifact: one markdown page of machine evidence (readiness ladder,
+// folder validation, watcher verdict, content identity). Renders ONLY server-computed
+// state — there is no path to author evidence into it.
+app.get("/api/agent/proof", (req, res) => {
+  try {
+    const fromPath = String(req.query.fromPath || "").trim();
+    const { ws, stages, watcherVerdict } = computeServerReadiness();
+    let folderBlock = "_no fromPath given — folder validation skipped_";
+    if (fromPath) {
+      const resolvedFolder = resolveModFolder(fromPath);
+      if ("error" in resolvedFolder) {
+        folderBlock = `_folder not resolvable: ${resolvedFolder.error}_`;
+      } else {
+        const load = loadProjectFromDisk(resolvedFolder.abs);
+        const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+        const result = runProjectValidation(load.project, { references });
+        const flat = flattenProjectValidation(result);
+        const errors = flat.filter(f => f.severity === "error").length;
+        const warnings = flat.filter(f => f.severity === "warning").length;
+        folderBlock = [
+          `- Folder: \`${load.root}\` (${load.loaded.length} files)`,
+          `- Verdict: **${result.ok ? "OK" : "FAILING"}** — ${errors} error(s), ${warnings} warning(s)`,
+          ...flat.slice(0, 10).map(f => `  - ${f.severity.toUpperCase()} \`${f.code || "?"}\` ${f.filePath || ""}${f.line ? `:${f.line}` : ""} — ${f.message.slice(0, 110)}`),
+          flat.length > 10 ? `  - …and ${flat.length - 10} more` : "",
+        ].filter(Boolean).join("\n");
+      }
+    }
+    const stageLines = stages.map(s => `| ${s.label} | **${s.status.toUpperCase()}** | ${s.evidence.replace(/\|/g, "\\|")} |`).join("\n");
+    const md = `<!-- GENERATED by X4 Forge (PROOF.md) — machine evidence; regenerate, never hand-edit. -->
+# Proof of state — ${ws.name}
+
+Generated: ${new Date().toISOString()}
+
+## Readiness ladder (machine stages)
+| stage | status | evidence |
+|---|---|---|
+${stageLines}
+
+Watcher verdict: \`${watcherVerdict ?? "unavailable"}\`
+Workspace content hash: \`${activeWorkspaceHash()}\`
+
+## Mod folder validation
+${folderBlock}
+
+_The experience stage flips only on the user's screen. This artifact renders server-computed
+state only._
+`;
+    return res.json({ markdown: md, workspace: ws.name });
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || "proof failed" });
   }
 });
 
@@ -5315,6 +5445,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "schema-routing-selftest": runSchemaRoutingSelftest,
   "agent-loop-selftest": runAgentLoopSelftest,
   "lang-service-selftest": runLangServiceSelftest,
+  "agent-brief-selftest": runAgentBriefSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,

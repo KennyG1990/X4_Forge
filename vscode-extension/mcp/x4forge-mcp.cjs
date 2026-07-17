@@ -71,6 +71,50 @@ const TOOLS = [
     },
   },
   {
+    name: "author_check",
+    description:
+      "Validate DRAFT file contents BEFORE writing anything to disk — the full Forge validator stack over an inline payload. Use this on every draft; only write files that come back clean (or whose findings you are about to fix).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        files: {
+          type: "array",
+          description: "Draft files as {path, content} — paths relative to the mod root, e.g. md/my_script.xml",
+          items: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+        },
+      },
+      required: ["files"],
+    },
+    handler: async (args) => {
+      const files = (args.files || []).map((f) => ({ path: String(f.path || ""), content: String(f.content || "") }));
+      const d = await forge("POST", "/api/agent/project/validate", {
+        project: { id: "author_check", name: "author_check", files },
+      });
+      return { ok: d.ok, summary: d.summary, findings: (d.flat || []).slice(0, 100), capsules: (d.capsules || []).slice(0, 50) };
+    },
+  },
+  {
+    name: "stage_and_validate",
+    description:
+      "Validate a mod folder on disk and return REMEDIATION CAPSULES — the same structured repair packet the Forge's own repair loop uses (stable signature, file/line, message, hints). Fix every capsule, then call again until none remain.",
+    inputSchema: {
+      type: "object",
+      properties: { fromPath: { type: "string", description: "Mod folder name under the Mod Workspace root" } },
+      required: ["fromPath"],
+    },
+    handler: async (args) => {
+      const d = await forge("POST", "/api/agent/project/validate", { fromPath: String(args.fromPath || "") });
+      return { ok: d.ok, summary: d.summary, capsules: (d.capsules || []).slice(0, 100), files: d.source?.loaded, root: d.source?.root };
+    },
+  },
+  {
+    name: "readiness",
+    description:
+      "The Forge readiness ladder as machine truth — graph/package/deployed/seen/experience stages with evidence. THIS is the only legitimate 'done' claim: a change is complete when the machine stages pass. The experience stage flips only on the user's own screen; never claim it.",
+    inputSchema: { type: "object", properties: {} },
+    handler: async () => forge("GET", "/api/agent/readiness"),
+  },
+  {
     name: "explain_element",
     description: "Explain an X4 MD/AIScript XML element: schema-declared attributes (required/enums) plus the Forge's curated deterministic semantics (what it does, risk class).",
     inputSchema: {

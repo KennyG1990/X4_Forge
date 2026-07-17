@@ -52,6 +52,49 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ◐ B57 · IDE-NATIVE FORGE, PHASE B (s1–s5) — the agent-first environment exploited (2026-07-17, PARTIAL pending Ken's IDE eyeball batch)
+
+Built same-day on Ken's order, workflow per slice; plan `docs/plans/2026-07-17-ide-native-forge-phase-b.md`.
+Two motions: the mod folder DESCRIBES ITSELF to any resident agent; the editor loop CLOSES.
+
+- **s1 · self-describing folder (machine-VERIFIED):** `src/lib/agentBrief.ts` (oracle 12/12,
+  sweep-discovered) → `GET /api/agent/project/brief` → extension writes AGENTS.md (THE RULE:
+  propose→validate→fix→revalidate; done = the readiness tool; generated-file ownership; rename
+  boundary) + X4_NOTES.md (census/semantics cheat-sheet, 20 rows) on openModFolder + refresh
+  command. LIVE: real mod facts (domains factions+t, cue Main) rendered into both docs.
+- **s2 · workflow-encoded MCP tools (machine-VERIFIED end-to-end):** validate response gains
+  `capsules` (the B55 repair-loop currency — ONE packet for our loop, the IDE, and external
+  agents); shim adds `author_check` (draft validation BEFORE disk — live: broken draft → 6
+  findings/4 capsules), `stage_and_validate` (live: exactly the 4 expected capsule codes),
+  `readiness` (the B36 ladder as machine truth via server-side `buildReadinessStages`;
+  experience honestly never claimable by agents). 8 tools total over real stdio.
+- **s3 · editor loop (machine-VERIFIED; IDE feel Ken-gated):** cue go-to-definition/references
+  (`langNav.ts` oracle 10/10 — dotted-chain references, script narrowing, word boundaries;
+  navigation AID, the validator stays the referee) + unsaved-buffer diagnostics (debounced
+  inline validate of the live buffer + disk siblings). PLAN CHANGE recorded: CodeActions
+  rescoped OUT — quick-fixes are canvas-level; file-level apply is meaningless before s5-class
+  editing matures.
+- **s4 · evidence deep links + proof (EYES-VERIFIED):** `?panel=<sidebar tab>` boot routing —
+  SEEN landing directly on Diagnostics and Playtest; `GET /api/agent/proof` renders the
+  one-page machine-evidence markdown (ladder table + folder verdict + watcher + content hash;
+  server-computed only, no authoring path) + `Generate Proof Artifact` command writes PROOF.md.
+- **s5 · two-way adopt, DEFAULT-OFF (machine+EYES-VERIFIED):** `x4forge.twoWayEditing` —
+  watcher → explicit adopt prompt → GUARDED `importModFolder` → CAS workspace commit;
+  adopt/decline/guard-refusal/conflict telemetry counters gate any future default-on. LIVE
+  drill: import→CAS adopt applied; STALE re-commit → 409 refused; EYES: the adopted "B56 Test"
+  workspace rendered on the canvas with the bogus attribute byte-faithfully preserved as a
+  Custom XML node, readiness header honestly PACKAGE: WARN (4 warnings).
+
+**Gates:** root+ext tsc 0 · lint 0 errors (new libs fully clean) · precommit OK · sweep
+**86/89** (agent-brief oracle discovered; same 3 documented env reds) · **e2e 19/19 PASS** ·
+ext build OK · oracles agentBrief 12/12 + langNav 10/10. **Eyes validation (Ken-ordered):**
+deep links land, adopted workspace visible, honest warn-state header — screenshots in session.
+**◐ PARTIAL:** the IDE-hosted checks (AGENTS.md write flow, proof-in-editor, nav/live-squiggle
+feel, adopt prompt UX) join Ken's eyeball batch; two-way stays default-off pending telemetry.
+**Suggested commit title:** "feat(ide): B57 Phase B — self-describing mod folders, workflow-
+encoded agent tools, cue navigation, live diagnostics, evidence deep links + proof, gated
+two-way adopt".
+
 ### ◐ B56 · IDE-NATIVE FORGE, PHASE A (unit-0 + s1–s5) — the extension stops being a picture frame (2026-07-17, PARTIAL pending Ken's IDE eyeball batch)
 
 Overnight build per Ken's /goal, workflow-enforced per slice; plan + build-time deltas:

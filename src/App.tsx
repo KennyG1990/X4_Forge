@@ -202,7 +202,17 @@ export default function App() {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('blueprint');
   const [experienceMode, setExperienceMode] = useState<ExperienceMode>(() => parseExperienceMode(localStorage.getItem(EXPERIENCE_MODE_KEY)));
   const [beginnerStep, setBeginnerStep] = useState<BeginnerStep>('idea');
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference'>('script');
+  // B57s4: evidence deep links — ?panel=<sidebar tab> lands directly on that panel, so
+  // agent walkthroughs, PROOF.md, and IDE surfaces can link straight to evidence. Unknown
+  // values fall through to the default (never a crash path).
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'script' | 'ui' | 'config' | 'filesystem' | 'git' | 'cues' | 'templates' | 'ai' | 'diagnostics' | 'playtest' | 'reference'>(() => {
+    try {
+      const requested = new URLSearchParams(window.location.search).get('panel');
+      const legal = ['script', 'ui', 'config', 'filesystem', 'git', 'cues', 'templates', 'ai', 'diagnostics', 'playtest', 'reference'] as const;
+      if (requested && (legal as readonly string[]).includes(requested)) return requested as typeof legal[number];
+    } catch { /* URL parsing must never break boot */ }
+    return 'script';
+  });
   const [diagnosticsScope, setDiagnosticsScope] = useState<DiagnosticsScope>('scripts');
 
   // Lifted auto-save state to synchronize settings and prevent data clobbering on load

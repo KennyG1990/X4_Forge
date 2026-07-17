@@ -102,16 +102,17 @@ writer stays default-off) · EmmyLua stubs · **s6** native diff/SCM/matchers (d
 Build deltas + full record: plan header + ROADMAP. Plan:
 `docs/plans/2026-07-17-ide-native-forge.md`.
 
-### B57 · IDE-native Forge, Phase B (agent-first environment) — `SPECIFIED` 2026-07-17
-Two motions: make the mod folder SELF-DESCRIBING for any resident agent (AGENTS.md +
-grounding notes generated from live truth; workflow-encoded MCP tools — author_check /
-stage_and_validate with remediation capsules / readiness-as-machine-contract) and CLOSE the
-editor loop (server-side quick-fixes as IDE lightbulbs, cue go-to-definition/references,
-unsaved-buffer diagnostics, evidence deep links + one-page PROOF.md artifact, and — gated,
-default-off, telemetry-first — two-way editing via the EXISTING byte-faithful importer).
-Order: s1→s2 (reliability pair) → s3 → s4 → s5 (gated) · s6 bucket (EmmyLua stubs, lemminx
-proof, formatter-drift guard, precise-children). Renames deliberately excluded (saved-game
-hazard). Plan: `docs/plans/2026-07-17-ide-native-forge-phase-b.md`.
+### B57 · IDE-native Forge, Phase B — s1–s5 ◐ BUILT 2026-07-17 → ROADMAP; eyeball batch OPEN
+All five slices machine-validated same-day (agentBrief 12/12 · langNav 10/10 · 8-tool stdio
+MCP session w/ author_check draft loop + capsule parity + readiness contract · import→CAS
+adopt + 409 negative · sweep 86/89 · e2e 19/19 · both tsc 0) and EYES-validated in the
+browser (deep links land on Diagnostics/Playtest; adopted workspace live on canvas,
+byte-faithful; honest PACKAGE: WARN header). PLAN CHANGE recorded: CodeActions rescoped out
+(quick-fixes are canvas-level). **◐ OPEN = Ken's IDE batch** (scripts in SESSION-HANDOFF):
+AGENTS.md flow, proof-in-editor, nav/squiggle feel, adopt prompt. Two-way stays DEFAULT-OFF
+until its own telemetry says otherwise. **Residuals (`spec'd`):** s6 bucket (EmmyLua stubs ·
+lemminx corpus proof · formatter-drift guard · precise-children mode). Renames stay excluded.
+Plan: `docs/plans/2026-07-17-ide-native-forge-phase-b.md`.
 
 ### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP
 Ken: the bridge is x4_ai_influence-specific (ADR-F3 "optional, never a dependency"), but the
