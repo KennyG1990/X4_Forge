@@ -52,6 +52,32 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B59c · UI-EXTENSIONS COMPAT GUIDE (kuertee) — reconcile-first, honest defer of codegen (2026-07-17, VERIFIED)
+
+Third unit of the B59 menu (grounded from kuertee's real GitHub API, never invented).
+- **Reconcile finding:** the app has **no raw-Lua workspace carrier** — `ModWorkspace` models MD /
+  AI-script / content-XML nodes and `dependencies`, but the template families emit XML through the
+  compile pipeline; there is no node type that emits a hand-written `.lua` file. A codegen "starter"
+  would have required a new carrier subsystem (out of scope for a bounded B59 unit).
+- **SKU decision:** codegen starter **DEFERRED**; shipped the tractable, higher-leverage half — a
+  **grounded reference topic** so a modder writing UI mods does the ecosystem-standard thing
+  (hook kuertee's framework) instead of patching vanilla UI files and colliding with every other UI
+  mod. New `WIKI_TOPICS` entry **`luaui_kuertee_compat`** in `WikiBrowser.tsx` (HUD & LUA category):
+  extension id `kuertee_ui_extensions`, `MapMenu.registerCallback(hook, fn, "my_mod_id")` /
+  `deregisterCallback`, the `uix_deactivate_mod` deactivation listener
+  (`<event_ui_triggered screen="'OptionsMenu'" control="'uix_deactivate_mod'"/>` +
+  `event.param3 == 'my_mod_id'`), attributed to kuertee's framework
+  (github.com/kuertee/x4-mod-ui-extensions).
+- **Validated:** tsc 0 · **EYES:** the topic renders in the X4 WIKI → HUD & LUA index with its title
+  and grounded summary (screenshot); client-only change ships in the app bundle.
+
+**Gates:** tsc 0 · lint 0 errors · precommit OK · **e2e 19/19 PASS**. **Stable 0.0.20 PUBLISHED**
+(staged-bundle probe: dist server.cjs serves ROOT 200). Publish-before-commit. No new engine — added
+to the existing wiki-topic registry; the durable output is the reconcile FINDING (no raw-Lua carrier)
++ the grounded guidance. **Out of scope (honest):** a Lua-emitting codegen starter (needs a new
+workspace carrier — separate multi-session spec). **Suggested commit title:** "feat(community): B59c
+UI-Extensions (kuertee) compatibility wiki guide, publish 0.0.20".
+
 ### ✅ B59b · GALAXY-TAB RECONCILE → JOBS STARTER — reconcile-first, honest defer (2026-07-17, VERIFIED)
 
 Reconcile-first per the B59 menu (outcome genuinely unknown going in). Plan + decision:

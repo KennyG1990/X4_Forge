@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.20 — 2026-07-17
+
+- New in-app guide: how to make a UI mod compatible with the widely-used kuertee UI Extensions framework — the ecosystem-standard way, instead of patching the game's UI files directly. Find it under X4 Wiki → HUD & LUA.
+
 ## 0.0.19 — 2026-07-17
 
 - New starter: Faction Patrol Fleet — add a patrolling faction fleet that spawns and roams the galaxy, the way big overhaul mods add fleets. Grounded on the game's own job definitions.

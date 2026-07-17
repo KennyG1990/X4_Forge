@@ -171,6 +171,34 @@ export const WIKI_TOPICS: WikiTopic[] = [
   </actions>
 </cue>`,
     egosoftUrl: "https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding/Lua%20UI%20Customization/"
+  },
+  {
+    // B59c (2026-07-17): grounded on the kuertee UI Extensions framework's own docs
+    // (github.com/kuertee/x4-mod-ui-extensions) — NOT invented. Most UI/QoL mods target ITS
+    // hooks rather than raw ui/ diffs; declaring the dependency + using its registerCallback
+    // makes a Forge-authored UI mod first-class in the real ecosystem.
+    id: "luaui_kuertee_compat",
+    title: "UI Extensions Framework Compatibility (kuertee)",
+    category: "luaui",
+    summary: "Make a UI mod hook into the widely-used kuertee UI Extensions framework instead of raw ui/ diffs — the ecosystem-standard way.",
+    content: "Most UI and quality-of-life mods don't patch the game's `ui/` files directly — they extend the community-standard **kuertee UI Extensions** framework (very commonly a required dependency). Targeting its hooks makes your mod compatible with the whole UI-mod ecosystem instead of fighting it.\n\n### 1. Declare the dependency\nIn your `content.xml`, require the framework by its extension id **`kuertee_ui_extensions`**. In the Forge, add it under the workspace's dependencies so the compiled `content.xml` emits a `<dependency>` element.\n\n### 2. Register a callback into an existing menu\nThe framework exposes a per-menu `registerCallback(callbackName, callbackFunc, modId)` — you attach your function to a named hook on a game menu (e.g. the Map menu) and pass your own mod id. Deregister with `deregisterCallback(callbackName, nil, modId)`.\n\n### 3. Clean up on deactivation\nListen for the framework's deactivate signal so your mod tidies up when disabled — an `event_ui_triggered` on the OptionsMenu `uix_deactivate_mod` control, gated on your mod id.\n\n**Note:** the Forge's HUD designer emits a *standalone* menu (see \"Wire a HUD Button\"); authoring a framework-callback mod means hand-writing the small Lua below (a raw-Lua starter is planned). Identifiers here are the framework's own — see its GitHub for the full hook list.",
+    codeTemplate: `<!-- content.xml: require the framework -->
+<dependency id="kuertee_ui_extensions" name="kuertee UI Extensions" />
+
+-- your mod's Lua: hook into a game menu (grounded on the framework's API)
+MapMenu.registerCallback("buttonToggleObjectList_on_start", myCallbackFunc, "my_mod_id")
+-- ...and deregister when done:
+-- MapMenu.deregisterCallback("buttonToggleObjectList_on_start", nil, "my_mod_id")
+
+<!-- MD: clean up when the user disables your mod -->
+<cue name="On_UIX_Deactivate" instantiate="true">
+  <conditions>
+    <event_ui_triggered screen="'OptionsMenu'" control="'uix_deactivate_mod'" />
+    <check_value value="event.param3 == 'my_mod_id'" />
+  </conditions>
+  <actions><!-- teardown here --></actions>
+</cue>`,
+    egosoftUrl: "https://github.com/kuertee/x4-mod-ui-extensions"
   }
 ];
 
