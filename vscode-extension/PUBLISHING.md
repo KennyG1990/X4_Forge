@@ -18,6 +18,7 @@ store (namespace `x4forge`). GitHub and the store are two SEPARATE destinations:
 2. Bump `version` in `vscode-extension/package.json` (e.g. 0.0.6 -> 0.0.7).
 3. From `vscode-extension/`:
    ```
+   npm run changelog                                  # regenerate CHANGELOG.md from git (B60)
    npm run stage-app                                  # copy built product into app/
    npm run build                                      # compile the controller (out/)
    npx @vscode/vsce package --allow-missing-repository

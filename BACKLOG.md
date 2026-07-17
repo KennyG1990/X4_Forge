@@ -6,6 +6,15 @@
 
 ## P0 — Active (this worktree branch)
 
+### B60 · Automated + readable extension CHANGELOG — ✅ VERIFIED 2026-07-17 → ROADMAP
+Open VSX "Changes" tab is LIVE and human-readable (confirmed served for 0.0.17). Automated:
+`scripts/gen-changelog.mjs` derives the version list/dates/order from git; the USER-FACING text
+per version comes from curated `release-notes.json` (plain language for modders) with a
+humanized-commit-subject fallback; selftest 8/8; ships via `.vscodeignore`; `npm run changelog`
+in the publish flow. Publish-before-commit adopted (structurally fixes version-lag: committed
+version == published version). One human step per release = add a plain-English block to
+release-notes.json.
+
 ### B41 · VS Code / Antigravity extension PoC — ✅ VERIFIED (both IDEs) 2026-07-15 → ROADMAP
 Install-tested LIVE in desktop VS Code AND Antigravity (Ken authorized both installs): VSIX
 installs, autoOpen launches the studio, the real UI renders in the webview over a managed

@@ -4,6 +4,7 @@
 !app/**
 !package.json
 !README.md
+!CHANGELOG.md
 !LICENSE.txt
 !icon.png
 !media/activitybar.svg

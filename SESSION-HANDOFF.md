@@ -1,16 +1,18 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
-> ## ⛔ COMMIT POINT (2026-07-17, late) — B58 community patch BUILT; Ken commits
-> **HEAD = `dafeed7`** (B57 committed). **UNCOMMITTED (Ken owns commits):** B58 —
-> src/lib/modTemplates.ts (3 new starters) · server.ts (proof save-impact facts) ·
-> src/server/projectValidation.ts (flat dedupe) · vscode-extension: extension.ts
-> (checkModConflicts) + mcp/x4forge-mcp.cjs (check_conflicts) + package.json (1 command) ·
-> docs/research/ + docs/plans/2026-07-17-community-patch.md · records.
-> **Suggested title:** "feat(community): B58 patch — story-arc + war-reactive +
-> custom-gamestart starters, conflict projection, save-impact facts"
-> **PUBLISH DONE: stable 0.0.16 live on Open VSX** (staged probe: templates 33/33 +
-> routing 24/24 + agent-loop 12/12 + md-audit 0 IN the bundle; registry-confirmed indexed).
-> The uncommitted diff now includes the 0.0.16 bump.
+> ## ⛔ COMMIT POINT (2026-07-17) — B60 changelog VERIFIED + 0.0.17 PUBLISHED; Ken commits (publish-before-commit)
+> **0.0.17 is ALREADY LIVE on Open VSX** (published before commit, per Ken's new flow — this
+> makes the committed version == the published version, killing the changelog version-lag).
+> **UNCOMMITTED (Ken owns commits):** B60 — vscode-extension/scripts/gen-changelog.mjs (NEW) +
+> release-notes.json (NEW) + CHANGELOG.md (NEW, generated) + .vscodeignore + package.json
+> (0.0.16→0.0.17 + changelog script) + PUBLISHING.md · BACKLOG/ROADMAP/this file.
+> **Suggested title:** "chore(release): B60 automated readable changelog + publish 0.0.17"
+> **NEW PUBLISH FLOW (Ken's order — publish BEFORE commit):** bump package.json →
+> `npm run changelog` → stage → build → package → staged probe → `ovsx publish` → poll →
+> THEN Ken commits (the bump + generated CHANGELOG ride in the same commit — no separate
+> publish-doc commit afterward). Documented in PUBLISHING.md.
+> **Per-release human step:** add a plain-English `"<version>": [...]` block to
+> vscode-extension/release-notes.json — everything else is automatic.
 >
 > ## 👁 B58 EYEBALL ADDITIONS (append to the B56+B57 batch below)
 > 8. **Starters:** RESET → picker shows Story Arc (3 stages) / War-Reactive Bounty /
@@ -71,5 +73,5 @@
 >   read version first; 409 = canvas moved, re-run.
 > - Sweep env reds on scratch: expression-suggest 0/0 + reference-selftest + selftest 7/10.
 >
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.16 STABLE** (2026-07-17)
-> Registry-confirmed indexed. Carries B58 community patch + B57 + B56 + B55P1 + B46P2.
+> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.17 STABLE** (2026-07-17)
+> Registry-confirmed indexed. Carries B60 readable changelog + B58 + B57 + B56 + B55P1 + B46P2.

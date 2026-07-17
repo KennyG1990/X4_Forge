@@ -52,6 +52,28 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B60 · AUTOMATED READABLE CHANGELOG — Open VSX "Changes" tab live (2026-07-17, VERIFIED)
+
+Ken flagged the empty Open VSX "Changes" tab. Reconcile: no CHANGELOG.md ever shipped, and
+`.vscodeignore` wouldn't have shipped one. Fix + two Ken-directed refinements:
+- **`scripts/gen-changelog.mjs`** (pure `buildChangelog` + `humanizeSubject` + git version-bump
+  reader + `--selftest` 8/8): version list, dates, and ordering derived from git; USER-FACING
+  text from curated `release-notes.json` (plain modder language) with a humanized-commit-subject
+  fallback so no entry is ever empty or jargon-only. `.vscodeignore` ships CHANGELOG.md (`vsce ls`
+  confirms); `npm run changelog` regenerates; wired into PUBLISHING.md.
+- **Readability (Ken):** raw commit subjects are engineer-speak — resolved with the curated
+  notes layer; the shipped file reads "What's New in X4 Forge Studio" with plain bullets.
+- **Publish-before-commit (Ken):** the new flow bumps → generates → publishes → THEN Ken commits,
+  so the committed version equals the published version — STRUCTURALLY eliminating the
+  version-lag class (a feature no longer groups a cycle early).
+- **RECONCILE trap caught:** the bump commit's subject ≠ the feature it ships (0.0.16's bump said
+  "B59 research" but shipped B58) — designed around it rather than mislabeling.
+**Verified LIVE:** stable **0.0.17 published + indexed**; the store serves the readable
+CHANGELOG.md (fetched: "What's New… 0.0.17… 0.0.16: New ready-made mod starters…"). Staged-bundle
+boot 200 + templates 33/33 pre-publish. Gates: generator selftest 8/8, ext build OK, ships one
+CHANGELOG.md. Build/packaging-only change (no server/app runtime touched → e2e/sweep out of
+scope). **Suggested commit title:** "chore(release): B60 automated readable changelog + publish 0.0.17".
+
 ### ◐ B58 · COMMUNITY PATCH — research-driven, reconcile-guarded (2026-07-17, PARTIAL: f deferred + IDE eyeballs)
 
 Research: `docs/research/2026-07-17-community-gap-map.md` (cited web sweep). Plan:

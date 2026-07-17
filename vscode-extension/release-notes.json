@@ -1,0 +1,36 @@
+{
+  "_comment": "Plain-English release notes for the CHANGELOG (B60). ONE human step per release: add a version key with a few user-facing bullets — what a modder can now DO or what got better. Everything else (version list, dates, ordering, the shipped CHANGELOG.md) is generated automatically by `npm run changelog`. Versions with no entry here fall back to a cleaned-up commit subject.",
+  "0.0.17": [
+    "You can now see what's new in each update right here — in plain language."
+  ],
+  "0.0.16": [
+    "New ready-made mod starters: a 3-stage Story Arc, a War-Reactive Bounty that only pays while two factions are at war, and a Custom Game Start you can select from the New Game screen.",
+    "Mod conflict checker — spot when two of your installed mods change the same game file, and see which one wins.",
+    "The proof report now lists a mod's save-game impact (which cues and files it touches) so you know what to expect before you install."
+  ],
+  "0.0.15": [
+    "Opened mod folders now describe themselves to AI coding assistants, so an assistant follows the Forge's rules instead of guessing.",
+    "Jump straight to where a cue is defined, and see everywhere it's used.",
+    "Errors now show up as you type, not only when you save.",
+    "Generate a one-page proof report for any mod, and turn on optional two-way editing between the editor and the canvas."
+  ],
+  "0.0.14": [
+    "Deep IDE integration: mod problems appear in the native Problems panel, you can open a mod as a real workspace folder, and X4 autocomplete and hover docs work while you edit MD and AI scripts.",
+    "Coding assistants can now use the Forge as a tool through a bundled connector."
+  ],
+  "0.0.13": [
+    "The built-in AI now checks its own work against the game's real rules and fixes mistakes before handing you a mod — no more invented commands that only fail in-game."
+  ],
+  "0.0.12": [
+    "Every kind of mod file (factions, game starts, patches, and more) is now checked against the game's own rules, not just mission scripts."
+  ],
+  "0.0.11": [
+    "The backend now restarts itself automatically if it ever stops, and the open studio reconnects on its own."
+  ],
+  "0.0.10": [
+    "Broader schema support and editor improvements; first-run setup fix."
+  ],
+  "0.0.9": [
+    "Editor and schema-loading improvements."
+  ]
+}
