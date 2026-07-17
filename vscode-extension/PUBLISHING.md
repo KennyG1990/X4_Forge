@@ -35,6 +35,12 @@ store (namespace `x4forge`). GitHub and the store are two SEPARATE destinations:
    `--pre-release` from step 3.
 5. Verify: `https://open-vsx.org/api/x4forge/x4-forge-studio/versions` lists the new version.
    Indexing of the "latest" pointer can lag a few minutes; the version query confirms it's live.
+6. **Commit LAST (publish-before-commit — Ken's order, 2026-07-17).** The version bump + generated
+   CHANGELOG ride in the SAME commit as the work, AFTER the store publish, so the committed
+   version always equals the published version. **Commit method is flexible** (Ken, 2026-07-17):
+   either Antigravity's Source Control UI (the **KLIO** ✦ button generates the message → **Commit**
+   → **Sync**), or the agent commits directly with `git` using a comprehensive message and pushes —
+   whichever is simpler. Publish-before-commit is the firm part; the mechanism is not.
 
 ## How users get the update
 Installed-from-store extensions with Auto Update on pick it up automatically within a bit, or on
