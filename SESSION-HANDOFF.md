@@ -1,18 +1,24 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
-> ## ⛔ COMMIT POINT (2026-07-17) — B57 Phase B BUILT + eyes-validated; Ken commits
-> **HEAD = `7e5430a`** (B56 Phase A committed). **UNCOMMITTED (Ken owns commits):** B57
-> Phase B — src/lib/agentBrief.ts (NEW) · server.ts (brief/readiness/proof endpoints +
-> computeServerReadiness + capsules on validate) · src/App.tsx (?panel= deep links) ·
-> vscode-extension: extension.ts (agent-brief writes, refresh/proof commands, nav providers,
-> live-buffer diagnostics, two-way adopt) + src/langNav.ts (NEW) + mcp/x4forge-mcp.cjs
-> (3 new tools) + package.json (3 commands, 1 setting) · records.
-> **Suggested title:** "feat(ide): B57 Phase B — self-describing mod folders, workflow-encoded
-> agent tools, cue navigation, live diagnostics, evidence deep links + proof, gated two-way
-> adopt"
-> **AFTER commit → publish flow (Ken-authorized per publish):** bump **0.0.15** → repo-root
-> build → stage-app → ext build → package → staged probe (brief + readiness + proof answer;
-> agent-loop/lang/routing oracles green; md-audit 0) → ovsx publish → poll.
+> ## ⛔ COMMIT POINT (2026-07-17, late) — B58 community patch BUILT; Ken commits
+> **HEAD = `dafeed7`** (B57 committed). **UNCOMMITTED (Ken owns commits):** B58 —
+> src/lib/modTemplates.ts (3 new starters) · server.ts (proof save-impact facts) ·
+> src/server/projectValidation.ts (flat dedupe) · vscode-extension: extension.ts
+> (checkModConflicts) + mcp/x4forge-mcp.cjs (check_conflicts) + package.json (1 command) ·
+> docs/research/ + docs/plans/2026-07-17-community-patch.md · records.
+> **Suggested title:** "feat(community): B58 patch — story-arc + war-reactive +
+> custom-gamestart starters, conflict projection, save-impact facts"
+> **Publish flow after commit:** bump 0.0.16 → build → stage → package → staged probe
+> (templates oracle 33/33 + check_conflicts answers) → ovsx publish → poll.
+>
+> ## 👁 B58 EYEBALL ADDITIONS (append to the B56+B57 batch below)
+> 8. **Starters:** RESET → picker shows Story Arc (3 stages) / War-Reactive Bounty /
+>    Custom Game Start → pick Custom Game Start → XML PATCHING tab holds the gamestart
+>    patch; LANGUAGES tab holds {10099,200-202}.
+> 9. **Conflicts:** "X4 Forge: Check Mod Conflicts" (with your real game path set) →
+>    status line + any real collisions/dep issues in Problems (source: x4forge-conflicts).
+> 10. **Proof facts:** "Generate Proof Artifact" → PROOF.md now ends with "Save-impact
+>    facts" (cues, patched files, overrides, the modified-flag truth).
 >
 > ## 👁 EYEBALL QUEUE (B56+B57 combined — your Antigravity after the 0.0.15 publish)
 > 1. **Problems panel:** "X4 Forge: Validate Mod Folder" → findings in Ctrl+Shift+M,
@@ -64,5 +70,5 @@
 >   read version first; 409 = canvas moved, re-run.
 > - Sweep env reds on scratch: expression-suggest 0/0 + reference-selftest + selftest 7/10.
 >
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.14 STABLE** (2026-07-17)
-> Carries B56 Phase A + B55P1 + B46P2. B57 Phase B ships as **0.0.15** after Ken's commit.
+> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.15 STABLE** (2026-07-17)
+> Registry-confirmed indexed. Carries B57 Phase B + B56 Phase A + B55P1 + B46P2.

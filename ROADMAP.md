@@ -52,6 +52,46 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ◐ B58 · COMMUNITY PATCH — research-driven, reconcile-guarded (2026-07-17, PARTIAL: f deferred + IDE eyeballs)
+
+Research: `docs/research/2026-07-17-community-gap-map.md` (cited web sweep). Plan:
+`docs/plans/2026-07-17-community-patch.md`. **Reconcile prevented two rebuilds** (Ken's
+explicit caution): B58e was ALREADY SHIPPED (healthCard debuglog warning w/ launch string);
+B58b's ENGINE was ALREADY SHIPPED (Extension Doctor + overrideMap element-level
+contested/winner + dep graph #66 — confirmed by fixture drill before any code).
+
+- **B58b · conflict PROJECTION (machine-VERIFIED):** MCP tool `check_conflicts` + IDE command
+  "Check Mod Conflicts" (separate diagnostics collection) over the EXISTING engine. Fixture
+  drill (2-mod wares.xml selector collision + missing required dep in a fake extensions root):
+  Doctor reported `patch.selector_collision` w/ simulated load order + `dep.missing_required`;
+  same findings through the shim over real stdio with a read-scope key.
+- **B58a · story-arc templates (machine+EYES-VERIFIED):** `epic_arc_skeleton` (3 chained
+  stages: offer → journey via event_object_changed_sector → signalled reward finale) and
+  `war_reactive_mission` (war gate uses the REAL scriptproperties chain
+  `hasrelation.enemy.{faction.x}` — grounded in vanilla scriptproperties.xml). Census-curated
+  tags only. Templates oracle **33/33** (each compiles 0 errors through the real pipeline).
+- **B58d · Custom Game Start template (machine+EYES-VERIFIED):** reconcile moved it from the
+  MD-recipe machinery (MD-only) to the beyond-canvas template family — a `<diff>` ADD of a
+  corpus-grounded `<gamestart>` (vanilla x4ep1_gamestart_intro shape, REAL macros) + the
+  t-file entries its name/description reference. Emitted files validated LIVE: routed
+  `gamestarts/diff` + `tfile/plain`, **0 errors / 0 warnings** against the game's own schema.
+- **B58c · save-impact facts (machine-VERIFIED):** PROOF.md gains a deterministic
+  "Save-impact facts" section — cues added (rename warning), diff-patched vanilla files,
+  full-file overrides (prefer-diffs note), and the honest engine-side modified-flag statement.
+  Drill: seeded mod reported cue `Main` + factions.xml correctly as a full-file override.
+  Bonus fix: the flat view de-dupes the pre-existing structure/cross-file double-report.
+- **EYES (Ken's standing order):** the Start-a-new-mod picker renders all three new starters
+  with blurbs (screenshot). A transient PACKAGE error on the eyes instance was diagnosed
+  honestly: REF_UNKNOWN_FACTION from the B58b fixture's fake game path (documented env class,
+  cleared by unsetting the path) — not a regression.
+
+**Gates:** tsc 0 (root+ext) · lint 0 errors · precommit OK · sweep **86/89** (same 3 env
+reds; templates 33/33, recipes 13/13) · **e2e 19/19 PASS**. **Deferred (honest):** B58f
+(missing-docs export into the reference surface) — spec'd, next session; patrol/behavior
+template (aiscript-side, own unit). **Suggested commit title:** "feat(community): B58 patch —
+story-arc + war-reactive + custom-gamestart starters, conflict projection, save-impact facts
+(reconcile: Doctor/overrideMap engine reused, e already shipped)".
+
 ### ◐ B57 · IDE-NATIVE FORGE, PHASE B (s1–s5) — the agent-first environment exploited (2026-07-17, PARTIAL pending Ken's IDE eyeball batch)
 
 Built same-day on Ken's order, workflow per slice; plan `docs/plans/2026-07-17-ide-native-forge-phase-b.md`.

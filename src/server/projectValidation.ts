@@ -253,7 +253,15 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   for (const f of result.pitfalls.findings) {
     out.push({ severity: f.severity, code: f.code, sourceRef: f.cue, line: f.line, message: f.detail });
   }
-  return out;
+  // De-dupe identical findings that reach the flat view via two layers (the cross-file
+  // validator re-reports structure issues under its own code — same message, same file).
+  const seen = new Set<string>();
+  return out.filter(f => {
+    const key = `${f.severity}|${f.filePath || ""}|${f.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /* ------------------------------------------------------------------ *

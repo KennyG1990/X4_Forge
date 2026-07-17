@@ -114,6 +114,26 @@ until its own telemetry says otherwise. **Residuals (`spec'd`):** s6 bucket (Emm
 lemminx corpus proof · formatter-drift guard · precise-children mode). Renames stay excluded.
 Plan: `docs/plans/2026-07-17-ide-native-forge-phase-b.md`.
 
+### B58 · Community patch — ◐ BUILT 2026-07-17 → ROADMAP (f deferred); reconcile collapsed two
+RECONCILED-EXISTS: e (debuglog onboarding — healthCard.ts already ships the exact launch-string
+warning) · b's ENGINE (Doctor + overrideMap element-level contested/winner + dep graph #66 —
+Ken's memory confirmed). Patch scope: **b-projection** (MCP check_conflicts + IDE Problems
+mapping over the EXISTING engine) → **d** (one custom_gamestart recipe over existing machinery)
+→ **a** ✅ (arc + war templates, oracle 33/33, picker EYES-seen) → **c** ✅ (save-impact facts
+in PROOF, drilled) · **d** ✅ (Custom Game Start template — reconciled INTO the beyond-canvas
+family, routed-validated 0 findings) · **b** ✅ (projection drilled via fixture + stdio) ·
+**f `spec'd`, DEFERRED** (MD element reference into the reference surface — next session) ·
+patrol template deferred (aiscript-side). Plan: `docs/plans/2026-07-17-community-patch.md`.
+
+### B58-research · Community gap map — RESEARCHED 2026-07-17
+Web sweep of Egosoft/Steam/Nexus/Reddit-adjacent sources: newcomer wall + story-SDK wish (our
+exact lane) · debug-iteration pain (mostly out-shipped by us; onboarding gap) · cross-mod diff
+conflicts (best practice exists, verification doesn't — strong unbuilt fit) · save-game anxiety
+(lintable patterns only; the modified flag is engine-side) · content wishes ≈ template SKUs ·
+X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated). DECISION MENU
+(a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
+`docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
+
 ### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP
 Ken: the bridge is x4_ai_influence-specific (ADR-F3 "optional, never a dependency"), but the
 startup walkaround warned amber "bridge DOWN" for EVERY mod. Now labeled "(optional)", a down

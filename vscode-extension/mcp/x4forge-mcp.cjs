@@ -115,6 +115,24 @@ const TOOLS = [
     handler: async () => forge("GET", "/api/agent/readiness"),
   },
   {
+    name: "check_conflicts",
+    description:
+      "Scan the INSTALLED extensions folder for cross-mod problems: two mods patching the same base file/element (with the load-order WINNER), missing required dependencies, and load-order issues. Uses the Forge's Extension Doctor + element-level override analysis.",
+    inputSchema: { type: "object", properties: {} },
+    handler: async () => {
+      const d = await forge("GET", "/api/agent/extension-doctor");
+      return {
+        extensionsScanned: d.extensionsScanned,
+        enabledCount: d.enabledCount,
+        counts: d.counts,
+        loadOrder: d.loadOrder,
+        findings: (d.findings || []).slice(0, 50).map((f) => ({
+          severity: f.severity, code: f.code, file: f.filePath, message: f.message,
+        })),
+      };
+    },
+  },
+  {
     name: "explain_element",
     description: "Explain an X4 MD/AIScript XML element: schema-declared attributes (required/enums) plus the Forge's curated deterministic semantics (what it does, risk class).",
     inputSchema: {

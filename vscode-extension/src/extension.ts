@@ -590,6 +590,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("x4forge.copyMcpConfig", () => copyMcpConfig(context)),
     vscode.commands.registerCommand("x4forge.refreshAgentBrief", () => refreshAgentBrief(context)),
     vscode.commands.registerCommand("x4forge.generateProof", () => generateProof(context)),
+    vscode.commands.registerCommand("x4forge.checkModConflicts", () => checkModConflicts(context)),
   );
   registerLangProviders(context);
   registerNavProviders(context);
@@ -1198,6 +1199,67 @@ async function adoptFolderIntoCanvas(context: vscode.ExtensionContext, folderNam
     log(`adopted folder "${folderName}" into canvas (CAS ok)`);
   } catch (err) {
     showBackendError(`Adopt into canvas failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B58b — cross-mod conflict projection: the EXISTING Extension Doctor / override-map
+// engine surfaced as native IDE diagnostics (separate collection from mod-folder
+// validation so the two never clear each other).
+// ---------------------------------------------------------------------------
+
+let conflictCollection: vscode.DiagnosticCollection | null = null;
+
+async function checkModConflicts(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const handle = await ensureBackend(context);
+    if (!handle.owned || !handle.token) {
+      void vscode.window.showInformationMessage("X4 Forge: attached to an externally-run Forge — open its Diagnostics → Install tab for the conflict scan.");
+      return;
+    }
+    const res = await fetch(`${handle.baseUrl}/api/agent/extension-doctor`, {
+      headers: { Authorization: `Bearer ${handle.token}` },
+    });
+    const data = (await res.json()) as {
+      extensionsRoot?: string;
+      extensionsScanned?: number;
+      counts?: Record<string, number>;
+      findings?: Array<{ severity: string; code?: string; filePath?: string; message: string }>;
+      error?: string;
+    };
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+    conflictCollection ??= vscode.languages.createDiagnosticCollection("x4forge-conflicts");
+    context.subscriptions.push(conflictCollection);
+    conflictCollection.clear();
+
+    const extRootParent = data.extensionsRoot ? path.dirname(data.extensionsRoot) : null;
+    const byFile = new Map<string, vscode.Diagnostic[]>();
+    for (const f of data.findings || []) {
+      if (!extRootParent || !f.filePath) continue;
+      const abs = path.join(extRootParent, ...f.filePath.split("/"));
+      const diag = new vscode.Diagnostic(
+        new vscode.Range(0, 0, 0, 200),
+        f.message,
+        DIAG_SEVERITY[f.severity] ?? vscode.DiagnosticSeverity.Information,
+      );
+      diag.source = "x4forge-conflicts";
+      if (f.code) diag.code = f.code;
+      const list = byFile.get(abs) || [];
+      list.push(diag);
+      byFile.set(abs, list);
+    }
+    for (const [abs, list] of byFile) conflictCollection.set(vscode.Uri.file(abs), list);
+
+    const c = data.counts || {};
+    log(`conflict scan: ${data.extensionsScanned ?? 0} extensions — ${c.error || 0} error(s), ${c.warning || 0} warning(s), ${c.info || 0} info`);
+    void vscode.window.setStatusBarMessage(
+      `X4 Forge conflicts: ${data.extensionsScanned ?? 0} extensions scanned — ${c.error || 0} error(s), ${c.warning || 0} warning(s) (details in Problems).`,
+      10000,
+    );
+  } catch (err) {
+    conflictCollection?.clear();
+    showBackendError(`Check Mod Conflicts failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

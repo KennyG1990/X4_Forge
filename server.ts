@@ -5357,11 +5357,23 @@ app.get("/api/agent/proof", (req, res) => {
         const flat = flattenProjectValidation(result);
         const errors = flat.filter(f => f.severity === "error").length;
         const warnings = flat.filter(f => f.severity === "warning").length;
+        // B58c — save-impact FACTS (deterministic; no judgment rules): what this mod adds
+        // to a save (cues become part of it — renaming them later breaks saves), which
+        // vanilla files it patches, and which it fully overrides (diffs are the safer form).
+        const cueNames = result.cueIndex.defined.map(d => d.name);
+        const diffPatched = result.schema.routed.filter(r => r.route.wrapper === "diff").map(r => r.path);
+        const fullOverrides = result.schema.routed.filter(r => r.route.kind === "schema" && r.route.wrapper === "plain").map(r => r.path);
         folderBlock = [
           `- Folder: \`${load.root}\` (${load.loaded.length} files)`,
           `- Verdict: **${result.ok ? "OK" : "FAILING"}** — ${errors} error(s), ${warnings} warning(s)`,
           ...flat.slice(0, 10).map(f => `  - ${f.severity.toUpperCase()} \`${f.code || "?"}\` ${f.filePath || ""}${f.line ? `:${f.line}` : ""} — ${f.message.slice(0, 110)}`),
           flat.length > 10 ? `  - …and ${flat.length - 10} more` : "",
+          "",
+          "### Save-impact facts",
+          `- Cues this mod adds to saves: ${cueNames.length ? cueNames.slice(0, 20).map(c => `\`${c}\``).join(", ") : "(none)"}${cueNames.length ? " — renaming released cues breaks existing saves." : ""}`,
+          `- Vanilla files patched via \`<diff>\` (compatibility-friendly): ${diffPatched.length ? diffPatched.map(p => `\`${p}\``).join(", ") : "(none)"}`,
+          `- Full-file overrides (replace vanilla wholesale — prefer diffs): ${fullOverrides.length ? fullOverrides.map(p => `\`${p}\``).join(", ") : "(none)"}`,
+          "- The game marks any save that ever loaded a mod as *modified* permanently — that flag is engine-side and no mod or tool can remove it.",
         ].filter(Boolean).join("\n");
       }
     }

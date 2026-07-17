@@ -181,6 +181,122 @@ export const MOD_TEMPLATES: ModTemplate[] = [
     }),
   },
   {
+    // B58a (2026-07-17): the story-SDK wish — a multi-stage mission ARC skeleton. Teaches
+    // the arc SHAPE (staged cues, signals, player-progress gates, finale reward) using
+    // census-curated tags only; the templates oracle compiles+validates it like all others.
+    id: 'epic_arc_skeleton',
+    name: 'X4_My_Story_Arc',
+    title: 'Story Arc (3 stages)',
+    blurb: 'A three-stage mission arc skeleton — offer, journey, reward — ready to reshape.',
+    rail: {
+      tweakHint: 'Three chained cues on the canvas: Stage 1 offers the story at game start, Stage 2 advances when you change sector, Stage 3 pays the reward. Change the texts and the reward, then add your own actions per stage.',
+      gameCheck: 'Load a save: Stage 1\'s message appears; jump to another sector: Stage 2 fires; the finale message and credits arrive with Stage 3.',
+    },
+    build: () => ({
+      nodes: [
+        N('a1', 'cue', 'cue', 80, 80, { name: 'Arc_Stage1_Offer', namespace: 'this' }),
+        N('a1ev', 'event', 'event_game_started', 80, 300, {}),
+        N('a1msg', 'action', 'show_help', 440, 60, { text: "'Stage 1 — A stranger asks for your help. Head to any neighbouring sector.'", duration: 8 }),
+        N('a2', 'cue', 'cue', 80, 520, { name: 'Arc_Stage2_Journey', namespace: 'this' }),
+        N('a2ev', 'event', 'event_object_changed_sector', 80, 740, { object: 'player.ship' }),
+        N('a2msg', 'action', 'show_help', 440, 500, { text: "'Stage 2 — You made the journey. The stranger signals the final meeting.'", duration: 8 }),
+        N('a2sig', 'action', 'signal_cue_instantly', 780, 500, { cue: 'Arc_Stage3_Reward' }),
+        N('a3', 'cue', 'cue', 80, 960, { name: 'Arc_Stage3_Reward', namespace: 'this' }),
+        N('a3ev', 'event', 'event_cue_signalled', 80, 1180, { cue: 'Arc_Stage2_Journey' }),
+        N('a3rew', 'action', 'reward_player', 440, 940, { money: '150000' }),
+        N('a3msg', 'action', 'show_help', 780, 940, { text: "'Finale — The stranger pays their debt. Your arc is complete.'", duration: 8 }),
+      ],
+      links: [
+        L('al1', 'a1', 'out_cond', 'a1ev', 'in_cond'),
+        L('al2', 'a1', 'out_act', 'a1msg', 'in_act'),
+        L('al3', 'a2', 'out_cond', 'a2ev', 'in_cond'),
+        L('al4', 'a2', 'out_act', 'a2msg', 'in_act'),
+        L('al5', 'a2msg', 'out_next', 'a2sig', 'in_act'),
+        L('al6', 'a3', 'out_cond', 'a3ev', 'in_cond'),
+        L('al7', 'a3', 'out_act', 'a3rew', 'in_act'),
+        L('al8', 'a3rew', 'out_next', 'a3msg', 'in_act'),
+      ],
+    }),
+  },
+  {
+    // B58a (2026-07-17): war-reactive content — the "dynamic missions when factions go to
+    // war" wish. The war gate uses the REAL scriptproperties chain
+    // hasrelation.<relationrange>.{$faction} (grounded in vanilla scriptproperties.xml).
+    id: 'war_reactive_mission',
+    name: 'X4_War_Bounty',
+    title: 'War-Reactive Bounty',
+    blurb: 'A bounty that only pays while two factions are actually at war.',
+    rail: {
+      tweakHint: 'The check_value gate reads faction.argon.hasrelation.enemy.{faction.xenon} — swap either faction. The bounty below it pays per qualifying kill only while that war is real.',
+      gameCheck: 'While Argon and Xenon are hostile: killing a Xenon ship pays the bounty; if the war ended, the payout stays silent.',
+    },
+    build: () => ({
+      nodes: [
+        N('w1', 'cue', 'cue', 80, 80, { name: 'War_Bounty', instantiate: 'true', namespace: 'this' }),
+        N('w1ev', 'event', 'event_object_destroyed', 80, 300, { object: 'player.target' }),
+        N('w1war', 'action', 'do_if', 440, 60, { value: 'faction.argon.hasrelation.enemy.{faction.xenon}' }),
+        N('w1own', 'action', 'do_if', 780, 60, { value: 'event.object.owner == faction.xenon' }),
+        N('w1rew', 'action', 'reward_player', 1120, 60, { money: '40000' }),
+        N('w1msg', 'action', 'show_help', 1460, 60, { text: "'War bounty collected — the front thanks you.'", duration: 5 }),
+      ],
+      links: [
+        L('wl1', 'w1', 'out_cond', 'w1ev', 'in_cond'),
+        L('wl2', 'w1', 'out_act', 'w1war', 'in_act'),
+        L('wl3', 'w1war', 'out_body', 'w1own', 'in_act'),
+        L('wl4', 'w1own', 'out_body', 'w1rew', 'in_act'),
+        L('wl5', 'w1rew', 'out_next', 'w1msg', 'in_act'),
+      ],
+    }),
+  },
+  {
+    // B58d (2026-07-17): the community's most-wished structured mod — a selectable custom
+    // game start. Every macro/shape below is CORPUS-GROUNDED (vanilla gamestarts.xml:
+    // location/player/ship shapes from x4ep1_gamestart_intro; player macro is the real
+    // custom-creative one). Emits a diff-add patch (the compatible way mods add starts)
+    // plus the t-file entries its name/description reference — validated by the routed
+    // diff+gamestarts merged index (B46P2).
+    id: 'custom_gamestart',
+    name: 'X4_My_Custom_Start',
+    title: 'Custom Game Start',
+    blurb: 'Add your own selectable New Game start — your ship, money, and location.',
+    rail: {
+      tweakHint: 'Open the XML PATCHING tab (top bar) — the patch adds your game start. Change money="250000", the ship macro, or the location. The LANGUAGES (t/) tab holds its menu name and description ({10099,200} and {10099,201}).',
+      gameCheck: 'Start a New Game: "My Custom Start" appears in the start list; selecting it begins in your chosen ship with your chosen credits.',
+    },
+    build: () => ({
+      nodes: [], links: [],
+      xmlPatches: [{
+        id: 'patch_gamestart',
+        targetFile: 'libraries/gamestarts.xml',
+        sel: '/gamestarts',
+        action: 'add',
+        content: [
+          '<gamestart id="my_custom_start" name="{10099,200}" description="{10099,201}" image="gamestart_2" group="1">',
+          '  <location galaxy="xu_ep2_universe_macro" zone="zone002_cluster_29_sector002_macro" />',
+          '  <player macro="character_player_custom_f_asi_macro" money="250000" name="{10099,202}" />',
+          '  <ship macro="ship_arg_s_fighter_01_a_macro" />',
+          '</gamestart>',
+        ].join('\n'),
+        note: 'Your new selectable start — shaped on the vanilla x4ep1_gamestart_intro entry.',
+        includeInBuild: true,
+      }],
+      tFiles: [{
+        languageId: '44',
+        fileName: '0001-l044.xml',
+        includeInBuild: true,
+        pages: [{
+          id: '10099',
+          title: 'Custom Start Text',
+          items: [
+            { id: '200', value: 'My Custom Start' },
+            { id: '201', value: 'A fresh start built in X4 Forge — tweak the ship, money, and location to make it yours.' },
+            { id: '202', value: 'Pilot' },
+          ],
+        }],
+      }],
+    }),
+  },
+  {
     id: 'hud_button',
     name: 'X4_My_HUD_Button',
     title: 'Standalone Menu (Lua UI)',
