@@ -1,57 +1,65 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
-> ## ⛔ COMMIT POINT (2026-07-16, night) — B54 watchdog VERIFIED; Ken commits
-> **HEAD = `5850884`** (Ken committed B46 Phase 1). **UNCOMMITTED (Ken owns commits):** B54
-> (vscode-extension/src/extension.ts watchdog + panel re-point), version bump 0.0.11, records.
-> Suggested title: "feat(extension): B54 sidecar auto-restart watchdog (capped respawn + panel
-> re-point), drilled live; publish stable 0.0.11"
-> **B54 root cause banked:** the 20:56 sidecar death was the AGENT'S broad Stop-Process sweep
-> (command line `node dist\server.cjs` carries no 'extension' marker — that's in the CWD).
-> KILLS ARE PORT-PID ONLY from now on. Watchdog drilled live in Antigravity: killed :55430 →
-> respawned :53143 in seconds, open panel re-pointed itself, workspace intact. Ken's
-> Antigravity now runs 0.0.11 (header v1.0.222).
+> ## ⛔ COMMIT POINT (2026-07-16, night session 2) — B46 Phase 2 VERIFIED + 0.0.12 PUBLISHED; Ken commits
+> **HEAD = `46d5b86`** (B54 committed). **UNCOMMITTED (Ken owns commits):** B46 Phase 2 —
+> src/lib/schemaRouting.ts (NEW) · schemaRegistry.ts (+expandIncludeChain) ·
+> projectValidation.ts (loader fix + routing + LOADABLE_RE) · validationRoutes.ts (ai loader
+> fix) · server.ts (emitted-files routing + oracle registration) · xsdValidate.ts
+> (INDEX_CACHE_MAX 8→24) · vscode-extension/package.json (0.0.11→0.0.12) · records
+> (BACKLOG/ROADMAP/plan doc/this file).
+> **Suggested title:** "feat(schema): B46 Phase 2 — file→schema routing (corpus-proven
+> factions/gamestarts/addon/diff, warning-capped unproven), include-chain loader fix kills the
+> md-audit false positives; bump extension to 0.0.12"
 >
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.11 STABLE** (2026-07-16)
-> Registry-API-confirmed indexed (preRelease=False, downloadable). Carries the B18 wizard fix
-> (B53 coupling bug: proposal.xsdSchemaPath was cwd-based while harvest writes to dataPath —
-> extension auto-setup pointed at an empty dir; fix FUNCTIONALLY verified in the exact shipped
-> staged bundle). STANDING RULE: all releases STABLE, never `--pre-release`
-> (vscode-extension/PUBLISHING.md; OVSX_PAT in `F:\DEV_ENV\X4_Forge\.env.local` — MAIN checkout
-> root, not the worktree).
->
-> ## ✅ CLOSED THIS SESSION (all in ROADMAP with evidence)
-> B48P2 (collapse-default canvas + lazy CodeMirror) · B53 (X4_DATA_DIR seam) · B52 (bug
-> reporter) · 0.0.9 + 0.0.10 published stable · B50 + B37 (Ken eyeballs) · B18 (wizard visuals
-> SEEN via Claude-in-Chrome + fresh-boot zero-typing acceptance ~15s on isolated scratch; found
-> +fixed the B53 coupling bug) · **B46 Phase 1** (multi-schema registry: 40 domains live vs the
-> unpacked 9.00, 0 unresolved includes, oracle 11/11, e2e 19/19, sweep 82/85 w/ 3 A/B-proven
-> env reds).
+> ## ✅ CLOSED THIS SESSION
+> **B46 Phase 2 (VERIFIED, full record in ROADMAP):** the P1 hand-off note resolved — the 2
+> md-audit findings were include-blind-loader false positives (md/md.xsd + aiscripts.xsd in the
+> unpacked tree are ZERO-DECLARATION include shims; buildSchemaIndex never followed xs:include).
+> `expandIncludeChain` fix: md index 1339→1507, `md_generator_zero_findings` GREEN. Routing
+> shipped corpus-proven: 124 vanilla files (base+21 DLC roots) → 0 findings; proven set
+> factions/gamestarts/addon/diff; coreaddon warning-capped (zero corpus instances). TWO PLAN
+> ASSUMPTIONS CORPUS-FALSIFIED and corrected in-flight: wares/jobs→libraries.xsd is WRONG
+> (26,835 vanilla findings; now diff-wrapper-only) and the drafted `<language id>` t-check was
+> invented (26/74 vanilla omit it; removed). Gates: tsc 0 · touched-files lint 0 · precommit OK
+> · sweep 83/86 (same 3 documented env reds, md flip green, new routing oracle 24/24) ·
+> e2e 19/19 PASS. Negative path live via project/validate on the :3777 scratch.
 >
 > ## 🎯 NEXT UNITS (fresh session each)
-> 1. **B46 Phase 2 — file→schema routing** (THE cry-wolf-risk phase; plan §phase-2):
->    path→domain map (factions.xml→factions.xsd, gamestarts, wares/jobs via libraries.xsd,
->    t-files, ui→addon/coreaddon, EMITTED PATCHES→diff.xsd) wired into runSchemaValidation +
->    project/validate; negative-path acceptance (malformed file FAILS, vanilla-shaped passes);
->    every new domain corpus-proven zero-false-positive before shipping (WARNING severity
->    until proven). **First job: investigate the P2 hand-off note — unpacked md.xsd flags 2
->    findings on the generator's synthetic MD (md_generator_zero_findings red on
->    XSD-configured scratch instances; A/B evidence in ROADMAP).**
-> 2. **B46 Phase 3** — full-corpus reference sets (9,884 files, SQLite-cached).
-> 3. **In-game Ken-gated pair:** B19 rail-to-game TTFM proof · B24s2 probe deploy.
-> 4. Beta cohorts (BETA-TEST-SCRIPT.md) · Discord announce (copy drafted) · spoop mod
->    (AISCRIPT travel-drive patch — good aiscripts-validation proof piece).
+> 1. **B55 Phase 1 — validation-driven repair loop** (Ken's active priority, from the
+>    Forge-Agent/Codex conversation 2026-07-16): plan SPECIFIED at
+>    `docs/plans/2026-07-16-validation-driven-agent-loop.md` — reconciled against code (the
+>    phase-4 self-heal is one-shot vs validateModWorkspace only; runProjectValidation never in
+>    the loop; no corpus retrieval). Phase 1 = composite-validator repair loop + signature halt
+>    + B25 cap negative path. Real-key A/B drills are Ken-authorized per run.
+> 2. **B46 Phase 3 — full-corpus reference sets** (plan §phase-3; B55 Phase 2's retrieval
+>    should SHARE its SQLite corpus index — build once).
+> 3. **B46P2 residual (small):** palette `loadSchemaLibrary` include-blind — 382 vs 402 events
+>    on unpacked-ROOT configs. Apply expandIncludeChain; verify palette 402.
+> 4. **In-game Ken-gated pair:** B19 rail-to-game TTFM proof · B24s2 probe deploy.
+> 5. Beta cohorts (BETA-TEST-SCRIPT.md) · Discord announce (copy drafted) · spoop mod.
 >
 > ## ⚠ LIVE HAZARDS / GOTCHAS (carry forward)
-> - Scratch-instance pattern for gate validation: boot dist/server.cjs with
->   X4_STATE_DIR/X4_CONFIG_DIR/X4_DATA_DIR → scratchpad + X4_XSD_PATH → unpacked root; kill by
->   port PID (`Get-NetTCPConnection -LocalPort`). `Remove-Item Env:X` is sandbox-blocked — use
->   `$env:X=''` (empty string is falsy server-side).
-> - Registry discovery cold walk over the unpacked tree = up to ~25s first-touch (FS-cold);
->   TTL-cached thereafter (14ms). ?refresh=1 busts it.
+> - Scratch-instance pattern: boot `npx tsx server.ts` with X4_STATE_DIR/X4_CONFIG_DIR/
+>   X4_DATA_DIR → scratchpad + X4_XSD_PATH → unpacked root + PORT. Kill by port PID ONLY
+>   (`Get-NetTCPConnection -LocalPort`). Bash gotcha: env-prefix assignments don't expand in
+>   redirects — `export` first, then run (a boot attempt failed on `$SP/server.log` → `/`).
+> - **Probe the real seam:** a verification probe must call the exported production function
+>   (getSchemaIndex), not a hand-assembled replica (buildSchemaIndex direct) — the replica
+>   reproduced the old behavior and nearly mis-verified the Unit A fix.
+> - **Schema-by-name is a trap:** libraries.xsd does NOT govern wares/jobs content; t files have
+>   NO schema. Every new routed domain ships WARNING-capped until a recorded zero-finding corpus
+>   run promotes it (`CORPUS_PROVEN_DOMAINS` in schemaRouting.ts — evidence cited in comment).
+> - Registry discovery on unpacked-root configs: ~25s FS-cold first touch, ~1-2s warm, 14ms
+>   TTL-cached (5 min). runProjectValidation now touches it — first validate after boot/idle on
+>   such configs pays the walk. Watch; don't fix yet.
 > - Sweep reds on scratch instances: expression-suggest 0/0 + reference-selftest + main
->   selftest 6/10 are ENV (need configured object index) — A/B before blaming a change.
-> - In-app Browser pane screenshot transport is UNRELIABLE (timeouts; B37/B18) — use
->   Claude-in-Chrome for visual gates (adapter layer 6); DOM reads in the pane still work.
-> - Open VSX indexes asynchronously (40–80s observed) — `ovsx publish` exit 0 is authoritative;
->   poll the version-specific endpoint, not /latest.
+>   selftest 7/10 (was 6/10 pre-fix) are ENV (need configured object index) — A/B before blaming.
+> - In-app Browser pane screenshot transport UNRELIABLE — Claude-in-Chrome for visual gates.
+> - Open VSX: `ovsx publish` exit 0 is authoritative; poll version-specific endpoint. All
+>   releases STABLE, never --pre-release (PUBLISHING.md; OVSX_PAT in MAIN checkout .env.local).
 > - configPath must NEVER fall back to X4_STATE_DIR (e2e sets it). e2e is verdict-parsed only.
+>
+> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.12 STABLE** (2026-07-16)
+> `ovsx publish` exit 0 (🚀 v0.0.12); staged-bundle probe PASSED pre-publish (md-audit 0 +
+> routing oracle 24/24 in the exact shipped server.cjs). Carries B46 Phase 2 (+ B53/B54 from
+> 0.0.11). Ken's Antigravity auto-updates from the store channel.

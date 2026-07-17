@@ -51,7 +51,7 @@ Now paths save independently; schema is validated + REPORTED (amber "saved, sche
 never a hard gate. Server + DirectorySettingsModal. Live-proven: workspace-only save persists;
 valid schema still loads (unpacked libraries → 402 events/807 actions). tsc/e2e 19/19.
 
-### B46 · Full-corpus schema/reference validation — Phase 1 ✅ VERIFIED 2026-07-16; Phases 2–3 `spec'd`
+### B46 · Full-corpus schema/reference validation — Phases 1–2 ✅ VERIFIED 2026-07-16; Phase 3 `spec'd`
 **Phase 1 (multi-schema loader) SHIPPED:** `src/lib/schemaRegistry.ts` — discovers EVERY *.xsd
 under the configured schema folder + game folder (bounded walk mirroring B51, base-over-DLC),
 resolves transitive include chains, builds lazy per-domain indexes via the existing
@@ -62,11 +62,30 @@ unpacked 9.00: **40 domains** (incl. addon/coreaddon/cutscenes found in subdirs)
 shadowed, 0 unresolved includes; md 1507 / factions 1354 / gamestarts 1417 / parameters 1556 /
 diff 4 elements. tsc/lint/precommit 0 · e2e 19/19 · sweep 82/85 (3 reds A/B-proven env-only).
 MD path + getAiSchemaIndex untouched (validation behavior unchanged this phase BY DESIGN).
-**Phase 2 (`spec'd`, fresh session):** file→schema routing (factions.xml→factions.xsd, emitted
-patches→diff.xsd, wares/jobs/gamestarts/t/ui) wired into project/validate; negative-path
-acceptance. NOTE for P2: the unpacked md.xsd flags 2 findings in the generator's synthetic MD
-(md_generator_zero_findings env red) — investigate before routing. **Phase 3 (`spec'd`):**
-full-corpus reference sets. Plan: `docs/plans/2026-07-15-full-corpus-validation.md`.
+**Phase 2 ✅ VERIFIED 2026-07-16 → ROADMAP:** file→schema routing shipped corpus-proven
+(factions/gamestarts/addon/diff proven on 124 vanilla files → 0 findings; coreaddon
+warning-capped, no corpus instances). The P2 hand-off note RESOLVED: the 2 md-audit findings
+were include-blind loader false positives (md/md.xsd is a zero-declaration include shim);
+`expandIncludeChain` fix flipped `md_generator_zero_findings` green (sweep 83/86, e2e 19/19).
+CORPUS-FALSIFIED and corrected in-flight: wares/jobs must NOT route to libraries.xsd (26,835
+vanilla findings) → diff-wrapper-only; invented `<language id>` t-check removed (26/74 vanilla
+omit it). **P2 residual (`spec'd`, small):** palette `loadSchemaLibrary` (xsdParser) is still
+include-blind — 382 events instead of 402 on unpacked-ROOT configs (pointing at `libraries/`
+works). Same `expandIncludeChain` treatment; verify palette count 402 after.
+**Phase 3 (`spec'd`):** full-corpus reference sets (9,884 files, SQLite-cached);
+`reportUnknownElements` for routed domains rides on it. Plan (incl. P2 reconciled design +
+corpus corrections): `docs/plans/2026-07-15-full-corpus-validation.md`.
+
+### B55 · Validation-driven agent loop — `SPECIFIED` 2026-07-16 (Forge-Agent harness lessons)
+Promote the validator stack from post-generation reporting into the control system of the
+internal AI agent. Reconciled against code 2026-07-16: phase-4 self-heal is ONE-SHOT against
+`validateModWorkspace` only; `runProjectValidation` (+ B46P2 routing) is never in the loop; no
+corpus retrieval into prompts. Phase 1 = bounded repair loop driven by the composite validator
+(signature-based no-progress halt, B25 spend-cap negative path). Phase 2 = deterministic
+vanilla-example retrieval into prompts (budgeted, corpus-bytes-only). Phase 3 (Ken-gated) =
+architect/editor model split + evidence-gated done + the causal A/B harness. Reuses:
+vetTaskProposal/loopStopReason, quick-fix descriptors, B25 meter, B36 evidence, corpus walkers.
+Plan: `docs/plans/2026-07-16-validation-driven-agent-loop.md`.
 
 ### B47 · Walkaround: neural-link bridge de-escalated to optional — ✅ VERIFIED 2026-07-15 → ROADMAP
 Ken: the bridge is x4_ai_influence-specific (ADR-F3 "optional, never a dependency"), but the

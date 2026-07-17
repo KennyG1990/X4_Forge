@@ -1,8 +1,8 @@
 {
   "name": "x4-forge-studio",
   "displayName": "X4 Forge Studio",
-  "description": "Visual modding studio for X4: Foundations — build, validate, and deploy mods with a node canvas and real-schema validation, no hand-written XML required.",
-  "version": "0.0.11",
+  "description": "Visual modding studio for X4: Foundations \u00e2\u20ac\u201d build, validate, and deploy mods with a node canvas and real-schema validation, no hand-written XML required.",
+  "version": "0.0.12",
   "icon": "icon.png",
   "publisher": "x4forge",
   "license": "MIT",
@@ -96,7 +96,7 @@
         "x4forge.stateDir": {
           "type": "string",
           "default": "",
-          "description": "Directory for the sidecar's workspace state (X4_STATE_DIR). When empty, a per-user directory in the extension's global storage is used. Point it at an existing Forge checkout's .studio-state to open the real workspace — do NOT do this while that Forge's own server is running (the attach probe normally prevents this)."
+          "description": "Directory for the sidecar's workspace state (X4_STATE_DIR). When empty, a per-user directory in the extension's global storage is used. Point it at an existing Forge checkout's .studio-state to open the real workspace \u00e2\u20ac\u201d do NOT do this while that Forge's own server is running (the attach probe normally prevents this)."
         },
         "x4forge.nodePath": {
           "type": "string",
@@ -110,10 +110,14 @@
         },
         "x4forge.debug": {
           "type": "string",
-          "enum": ["off", "inspect", "inspect-brk"],
+          "enum": [
+            "off",
+            "inspect",
+            "inspect-brk"
+          ],
           "default": "off",
           "enumDescriptions": [
-            "Normal — no debugger.",
+            "Normal \u00e2\u20ac\u201d no debugger.",
             "Launch the backend with --inspect and auto-attach the Node debugger (breakpoints, stepping). Works in VS Code and Antigravity.",
             "Like inspect, but pause at the first line so you can debug startup; continue execution in the debugger to start the server."
           ],

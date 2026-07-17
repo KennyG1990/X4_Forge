@@ -24,6 +24,8 @@ import fs from "fs";
 import path from "path";
 import { compareModCopies, type DriftReport, type FileFingerprint } from "../lib/modDrift";
 import { resolveXsdConfig } from "../lib/xsdParser";
+import { discoverSchemaRegistry, expandIncludeChain } from "../lib/schemaRegistry";
+import { validateRoutedFiles, type RoutedFileResult } from "../lib/schemaRouting";
 import { buildSchemaIndex, validateXmlAgainstSchema, type XsdDiagnostic } from "../lib/xsdValidate";
 import {
   classifyPath,
@@ -38,10 +40,17 @@ import { lintAiscriptOrderParams, type AiscriptLintFinding } from "../lib/aiscri
 import { lintMdPitfalls, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
-/** MD schema index (md.xsd + common.xsd from the configured schema dir). */
+/**
+ * MD schema index (md.xsd + common.xsd from the configured schema dir).
+ * B46P2: each root XSD is expanded through its transitive xs:include chain first —
+ * the unpacked game's md/md.xsd is a zero-declaration include shim, and without the
+ * expansion the whole real MD vocabulary (libraries/md.xsd) silently drops out.
+ */
 export function getSchemaIndex() {
   const resolved = resolveXsdConfig();
-  return buildSchemaIndex([resolved.mdXsdPath, resolved.commonXsdPath].filter(Boolean));
+  const roots = [resolved.mdXsdPath, resolved.commonXsdPath].filter((p): p is string => !!p);
+  const expanded = Array.from(new Set(roots.flatMap(p => expandIncludeChain(p))));
+  return buildSchemaIndex(expanded.length ? expanded : roots);
 }
 
 export interface ProjectValidationReferences {
@@ -70,7 +79,13 @@ export interface ProjectValidationResult {
   structure: ReturnType<typeof validateProjectStructure>;
   cueIndex: ReturnType<typeof indexCueReferences>;
   crossFile: ReturnType<typeof validateProjectCrossFile>;
-  schema: { mdAvailable: boolean; aiscriptAvailable: boolean; findings: XsdDiagnostic[] };
+  schema: {
+    mdAvailable: boolean;
+    aiscriptAvailable: boolean;
+    findings: XsdDiagnostic[];
+    /** B46P2: which non-md/aiscripts files were routed to which game schema (honest reporting) */
+    routed: Array<Pick<RoutedFileResult, "path" | "route" | "domainAvailable" | "severityCapped">>;
+  };
   aiscript: { findings: AiscriptLintFinding[] };
   scriptProperties: { available: boolean; findings: ScriptPropertyFinding[] };
   pitfalls: { findings: MdPitfallFinding[] };
@@ -117,6 +132,23 @@ export function runProjectValidation(
       }
     }
   } catch { /* schema layer unavailable — reported via available flags */ }
+
+  // B46P2: route the non-md/aiscripts subset (factions/gamestarts/wares/jobs/ui/t + diff
+  // patches) to their real game schemas via the phase-1 registry. Degrades to an empty
+  // route list on schema-less instances — never wrong-schema noise.
+  let routed: RoutedFileResult[] = [];
+  try {
+    const resolved = resolveXsdConfig();
+    const registry = (resolved.schemaDir || resolved.x4GamePath)
+      ? discoverSchemaRegistry(resolved.schemaDir, resolved.x4GamePath || undefined)
+      : null;
+    routed = validateRoutedFiles(
+      project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string })),
+      registry,
+      { references: opts.references },
+    );
+    for (const r of routed) schemaFindings.push(...r.findings);
+  } catch { /* routing degrades silently; md/aiscripts layers already reported */ }
 
   const aiscriptLint: AiscriptLintFinding[] = [];
   try {
@@ -171,7 +203,12 @@ export function runProjectValidation(
     structure,
     cueIndex,
     crossFile,
-    schema: { mdAvailable: mdSchemaAvailable, aiscriptAvailable: aiSchemaAvailable, findings: schemaFindings },
+    schema: {
+      mdAvailable: mdSchemaAvailable,
+      aiscriptAvailable: aiSchemaAvailable,
+      findings: schemaFindings,
+      routed: routed.map(({ path: p, route, domainAvailable, severityCapped }) => ({ path: p, route, domainAvailable, severityCapped })),
+    },
     aiscript: { findings: aiscriptLint },
     scriptProperties: { available: !!spIndex, findings: scriptPropertyFindings },
     pitfalls: { findings: pitfallFindings },
@@ -182,7 +219,8 @@ export function runProjectValidation(
  * Disk loading (fromPath / CLI).
  * ------------------------------------------------------------------ */
 
-const LOADABLE_RE = /^(content\.xml|md\/[^/]+\.xml|aiscripts\/[^/]+\.xml|t\/[^/]+\.xml|libraries\/[^/]+\.xml|(?:ui|lua|subst_lua)\/.+\.lua|[^/]+\.lua)$/i;
+// B46P2: ui/**/*.xml added — ui addon documents now route to addon/coreaddon.xsd.
+const LOADABLE_RE = /^(content\.xml|md\/[^/]+\.xml|aiscripts\/[^/]+\.xml|t\/[^/]+\.xml|libraries\/[^/]+\.xml|ui\/.+\.xml|(?:ui|lua|subst_lua)\/.+\.lua|[^/]+\.lua)$/i;
 const MAX_FILES = 500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 

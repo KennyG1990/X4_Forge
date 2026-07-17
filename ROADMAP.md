@@ -52,6 +52,66 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B46 PHASE 2 · FILE→SCHEMA ROUTING — corpus-proven, zero false positives (2026-07-16, VERIFIED)
+
+**First job (the P1 hand-off note) RESOLVED [REPRODUCED]:** the 2 md-audit findings
+(`event_cue_signalled`/`event_cue_completed`) were FALSE POSITIVES from include-blind schema
+loading, NOT generator bugs. The unpacked game's `md/md.xsd` and `aiscripts/aiscripts.xsd` are
+zero-declaration include SHIMS; `buildSchemaIndex` never followed `xs:include`, so on
+unpacked-root configs the legacy md index silently lost ALL of `libraries/md.xsd` (probe: cue,
+actions, do_if + all 20 MD-only `event_*` missing; 382 common events + 20 md = the 402 B45 saw;
+`ALWAYS_KNOWN` masked all but exactly those 2). Same hole for aiscripts (101 declarations).
+
+**Unit A (loader fix):** `expandIncludeChain()` exported from schemaRegistry; `getSchemaIndex` +
+`getAiSchemaIndex` expand roots through it. A/B PROVEN on the :3777 unpacked-root scratch:
+md-audit 2 findings → **0**; `md_generator_zero_findings` env red → GREEN (main selftest 6/10 →
+7/10); md index 1339 → **1507** elements (= the registry's md domain count exactly).
+
+**Unit B (routing):** new pure lib `src/lib/schemaRouting.ts` + oracle `schema-routing-selftest`
+**24/24** (auto-discovered by sweep): root-element sniff, subset path map
+(factions/gamestarts → own XSDs · ui XML → addon/coreaddon by root · t/*.xml → structural
+page/t-id lint, the game ships NO t schema · `<diff>`-rooted files → MERGED diff+domain index ·
+wares/jobs → diff-wrapper-only), severity cap to WARNING for non-corpus-proven domains
+(injectable proven-set). Wired into BOTH `runProjectValidation` (project/validate + CLI, response
+now reports `schema.routed`) and `runSchemaValidation` (emitted-files self-check — our own diff
+patches now validate against the game's diff.xsd). `LOADABLE_RE` += ui XML;
+`INDEX_CACHE_MAX` 8→24 (phase-1 deferral honored).
+
+**CORPUS PROOF (the cry-wolf gate, and it fired):** sweep vs `X4 unpacked 9.00` (base + 21 DLC
+roots, 129 files). Run 1 FALSIFIED two plan assumptions: ① wares/jobs must NOT route to
+libraries.xsd (26,835 findings on vanilla — the game ships no schema governing wares/jobs
+content) → corrected to wrapper-only diff validation; ② the drafted `<language id>` t-check was
+an invented rule (26/74 vanilla t-files legally omit it) → removed (page/t id checks survived,
+0/74 findings). Run 2: **124 routed vanilla files → 0 findings.** PROVEN set shipped:
+factions (1 plain + 5 diff) · gamestarts (1 + 6) · addon (11) · diff wrapper (37). NOT proven:
+coreaddon (zero corpus instances) — stays warning-capped. Evidence:
+scratchpad `b46p2/corpus-proof-run{1,2}.txt`.
+
+**Negative path (live, project/validate on :3777):** malformed factions (`bogusattr` +
+missing required `behaviourset`), diff `<add>` missing `sel`, t-file page without id → all
+flagged with correct routes reported; vanilla factions.xml control → 0 routed findings.
+Compile drill: md-only workspace through `/api/agent/compile` → zero new routed noise.
+
+**Gates:** tsc 0 · lint 0 errors (touched files fully clean) · precommit OK · sweep **83/86**
+(same 3 A/B-documented env reds as the P1 baseline, `md_generator_zero_findings` now green) ·
+**e2e 19/19 PASS** (verdict-parsed, ephemeral stack). Baseline `46d5b86` clean tree; rollback =
+single-commit revert.
+
+**Deliberately unchanged:** md/aiscripts validation behavior (beyond the loader fix), niche
+~29 domains unrouted, reference sets (phase 3), `reportUnknownElements` OFF for routed domains
+until phase-3 reference work. **Residuals banked:** palette `loadSchemaLibrary` is still
+include-blind (382 events on unpacked-root configs — same one-line fix, spec'd in BACKLOG);
+registry TTL re-walk cost on first validate after boot/idle on unpacked-root configs (~1-2s
+FS-warm, 25s FS-cold; watch, don't fix yet).
+
+**Also this close: stable 0.0.12 published to Open VSX (Ken-authorized 2026-07-16)** carrying
+B46 Phase 2 — the fix functionally verified in the EXACT staged bundle shipped (booted
+`vscode-extension/app/dist/server.cjs` on a scratch env + unpacked XSD root: md-audit
+findingCount 0, schema-routing-selftest 24/24) BEFORE `ovsx publish` (exit 0, 🚀 v0.0.12).
+**Suggested commit title:** "feat(schema): B46 Phase 2 — file→schema routing (corpus-proven
+factions/gamestarts/addon/diff, warning-capped unproven), include-chain loader fix kills the
+md-audit false positives; bump extension to 0.0.12".
+
 ### ✅ B54 · SIDECAR AUTO-RESTART WATCHDOG — self-healing backend, drilled live (2026-07-16, VERIFIED) · 0.0.11 PUBLISHED
 
 **Root cause of the reported sidecar death (20:56, exit 4294967295): the agent's own broad

@@ -20,6 +20,7 @@ import type { Express, Request, Response } from "express";
 import { resolveXsdConfig } from "../lib/xsdParser";
 import { dataPath } from "../lib/dataDir";
 import { buildSchemaIndex, type SchemaIndex } from "../lib/xsdValidate";
+import { expandIncludeChain } from "../lib/schemaRegistry";
 import { extractBaseGameFile as catDatExtractBaseGameFile } from "../lib/x4CatDat";
 import { buildScriptPropertyIndex, runScriptPropertiesSelftest, type ScriptPropertyIndex } from "../lib/scriptProperties";
 import { ORDER_PARAM_TYPES, runAiscriptLintSelftest } from "../lib/aiscriptLint";
@@ -39,7 +40,12 @@ export function getAiSchemaIndex(): SchemaIndex | null {
   // B51: prefer the DISCOVERED aiscripts.xsd (subdir-aware — the game keeps it in aiscripts/ or
   // libraries/, not at the top level), falling back to a top-level file, then the cat/dat harvest.
   const aiXsd = resolved.aiscriptsXsdPath || path.join(resolved.schemaDir || "", "aiscripts.xsd");
-  if (aiXsd && fs.existsSync(aiXsd)) return buildSchemaIndex([aiXsd, resolved.commonXsdPath].filter(Boolean));
+  // B46P2: expand include chains — the unpacked game's aiscripts/aiscripts.xsd is a
+  // zero-declaration shim including ../libraries/aiscripts.xsd (101 declarations).
+  if (aiXsd && fs.existsSync(aiXsd)) {
+    const roots = [aiXsd, resolved.commonXsdPath].filter((p): p is string => !!p);
+    return buildSchemaIndex(Array.from(new Set(roots.flatMap(p => expandIncludeChain(p)))));
+  }
   try {
     if (!resolved.x4GamePath) return null;
     const cacheDir = dataPath("harvested-schemas"); // B53

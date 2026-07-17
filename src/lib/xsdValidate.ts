@@ -88,7 +88,10 @@ function collectEnums(node: AnyNode | undefined): string[] {
 // re-parsed ~2.1MB of XSD (measured: 245-273ms per warm request, dominated by reparse).
 // Keyed by the file-path SET; the mtime-key still invalidates on schema edits. Bounded.
 const indexCache = new Map<string, { key: string; index: SchemaIndex }>();
-const INDEX_CACHE_MAX = 8;
+// B46P2: 8 → 24. Routing builds per-domain indexes (md, aiscripts, diff, factions,
+// gamestarts, libraries, addon, coreaddon, plus diff-merged variants) — 8 slots would
+// thrash and re-parse ~2MB XSDs per request (the exact regression the cache prevents).
+const INDEX_CACHE_MAX = 24;
 
 /**
  * Build (and cache) a schema element/attribute index from the given XSD files.

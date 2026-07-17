@@ -78,6 +78,37 @@ function readIncludeTargets(xsdPath: string): string[] {
   return targets;
 }
 
+/**
+ * Expand one XSD into itself + its transitive xs:include/xs:import chain, resolving each
+ * schemaLocation relative to the file that declares it. Unresolvable targets are skipped
+ * (buildSchemaIndex filters non-existent paths anyway).
+ *
+ * B46 Phase 2 (2026-07-16): the unpacked game's md/md.xsd and aiscripts/aiscripts.xsd are
+ * include SHIMS with zero declarations (each just includes ../libraries/<name>.xsd), and
+ * buildSchemaIndex does not follow includes — so the legacy md/aiscripts indexes silently
+ * lost the entire real vocabulary on unpacked-root configs (reproduced: all 20 MD-only
+ * event_* elements missing → the md-audit false positives). Loaders expand through this.
+ */
+export function expandIncludeChain(xsdPath: string): string[] {
+  const out: string[] = [];
+  const visited = new Set<string>();
+  const queue = [xsdPath];
+  while (queue.length) {
+    const current = queue.shift()!;
+    let real: string;
+    try { real = path.resolve(current); } catch { continue; }
+    const key = real.toLowerCase();
+    if (visited.has(key)) continue;
+    try { if (!fs.existsSync(real) || !fs.statSync(real).isFile()) continue; } catch { continue; }
+    visited.add(key);
+    out.push(real);
+    for (const target of readIncludeTargets(real)) {
+      queue.push(path.resolve(path.dirname(real), target));
+    }
+  }
+  return out;
+}
+
 // Registry cache: the bounded walk over a full unpacked-game tree measured 25.6s cold
 // (9,884-file corpus, 2026-07-16) — far too slow per GET. Discovery results change only when
 // schema files are added/moved, so cache per root-set with a TTL; callers pass refresh=true

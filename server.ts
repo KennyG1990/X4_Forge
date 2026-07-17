@@ -124,6 +124,7 @@ import { createAgentKeyStore, scopeAllows, runAgentKeysSelftest, AGENT_KEY_TTLS,
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
 import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest } from "./src/lib/schemaRegistry";
+import { runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -1421,6 +1422,30 @@ function runSchemaValidation(files: Record<string, string>, modId: string): Serv
       if (/^aiscripts\//i.test(fp)) validateFile(fp, 'ai_scripts', true, aiIndex);
     }
   }
+
+  // B46P2: route the remaining emitted files (libraries diff patches, t-files, ui addons)
+  // to their real game schemas — the self-check on our own most-used output path (<diff>
+  // documents). Degrades to nothing on schema-less instances.
+  try {
+    const resolved = resolveXsdConfig();
+    const registry = (resolved.schemaDir || resolved.x4GamePath)
+      ? discoverSchemaRegistry(resolved.schemaDir, resolved.x4GamePath || undefined)
+      : null;
+    const routedInputs = Object.entries(files).map(([p, content]) => ({ path: p, content }));
+    for (const r of validateRoutedFiles(routedInputs, registry, { references })) {
+      for (const d of r.findings) {
+        out.push({
+          severity: d.severity,
+          category: 'schema',
+          code: d.code,
+          domain: d.domain || r.route.domain || 'routed',
+          filePath: r.path,
+          message: d.line ? `${d.message} (line ${d.line})` : d.message,
+          sourceRef: d.sourceRef ? { kind: 'xsd', label: d.sourceRef } : undefined
+        });
+      }
+    }
+  } catch { /* routing degrades silently; md/aiscripts layers already reported */ }
   return out;
 }
 
@@ -5278,6 +5303,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "agent-keys-selftest": runAgentKeysSelftest,
   "schema-discovery-selftest": runSchemaDiscoverySelftest,
   "schema-registry-selftest": runSchemaRegistrySelftest,
+  "schema-routing-selftest": runSchemaRoutingSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,

@@ -61,6 +61,72 @@ already index for the property lint). Niche tiering of the remaining ~20 confirm
    ids); extend `getReferenceSets` accordingly. Cache in the existing SQLite store; watch build
    time (9,884 files). Oracle: reference set counts per kind; an unknown ware/faction/job flagged.
 
+## Phase 2 — reconciled design (2026-07-16, SPECIFIED)
+
+**First-job resolution — the P1 hand-off note is CLOSED [REPRODUCED]:** the 2 md-audit findings
+(`event_cue_signalled`, `event_cue_completed`) are FALSE POSITIVES from include-blind schema
+loading, not generator bugs. Mechanism, fully evidenced on an unpacked-root scratch instance
+(:3777, X4_XSD_PATH = unpacked root):
+- `md/md.xsd` and `aiscripts/aiscripts.xsd` in the unpacked tree are include SHIMS (0 element
+  declarations; each holds one `xs:include` to `../libraries/<name>.xsd`).
+- `buildSchemaIndex` does NOT follow `xs:include`, and `discoverXsd`'s conventional homes prefer
+  the shims — so legacy `getSchemaIndex`/`getAiSchemaIndex` index shim+common only (probe:
+  1339 elements, ALL of libraries/md.xsd missing: cue, actions, do_if, all 20 `event_*`).
+- The arithmetic proves it: common.xsd declares 382 events, libraries/md.xsd the other 20 —
+  382+20 = the 402 events B45 saw pointing straight at `libraries/`.
+- Only 2 findings surface because `ALWAYS_KNOWN` shields the structural names and most template
+  events live in common.xsd; exactly two synthetic-MD elements are MD-only AND unshielded.
+- Same hole for aiscripts: `libraries/aiscripts.xsd` has 101 declarations the shim drops.
+
+**Unit A (precondition — flips `md_generator_zero_findings` green):** export a transitive
+`expandIncludeChain(xsdPath)` from `schemaRegistry.ts` (schemaLocation resolved relative to each
+file, visited-set, missing targets skipped); `getSchemaIndex` and `getAiSchemaIndex` expand their
+root XSDs through it before `buildSchemaIndex`. Non-shim configs are unaffected (a chain of a
+declaration-bearing md.xsd is itself + its includes; dedupe by path).
+
+**Unit B (routing):** new pure lib `src/lib/schemaRouting.ts` (house pattern):
+- `sniffRootElement(xml)` — first non-PI/comment/DOCTYPE tag name.
+- `routeProjectFile(path, xml)` → subset map ONLY: `libraries/factions.xml`→factions ·
+  `libraries/gamestarts.xml`→gamestarts · `libraries/wares.xml|jobs.xml`→libraries ·
+  `ui/**/*.xml` with root `addon`→addon / `coreaddon`→coreaddon · `t/*.xml`→t-file structural
+  lint (NO game XSD exists for t; grounded 2026-07-16) · a routed file with root `<diff>` gets a
+  MERGED index (diff chain + domain chain) so wrapper AND payload vocabulary are both legal.
+  Everything else (incl. the ~29 niche domains) returns unrouted — deliberately.
+- md/ and aiscripts/ keep their EXISTING handlers untouched (beyond Unit A's loader fix).
+- **Cry-wolf gate:** findings for domains not in the corpus-proven set are severity-capped to
+  WARNING (`CORPUS_PROVEN_DOMAINS` const, populated only from this session's recorded corpus
+  evidence). `lintTFileStructure` is warnings-only.
+- Oracle `runSchemaRoutingSelftest()` (synthetic fixtures) registered in SELFTESTS.
+
+**Wiring:** shared routing helper consumed by BOTH `runProjectValidation` (projectValidation.ts;
+registry via `discoverSchemaRegistry(resolved.schemaDir, resolved.x4GamePath)`, TTL-cached) and
+`runSchemaValidation` (server.ts, emitted-files record — this is the diff.xsd self-check on our
+own output). `LOADABLE_RE` gains `ui/**/*.xml`. `INDEX_CACHE_MAX` 8→24 (bump deferred from
+phase 1 exactly for this). Response surfaces which files routed to which domain (honest
+reporting; schema-less instances degrade to unrouted, never wrong-schema noise).
+
+**Corpus-run corrections (2026-07-16, first sweep run1 → run2):** two plan assumptions were
+FALSIFIED by the vanilla corpus and corrected before shipping: ① "wares/jobs via libraries.xsd"
+is WRONG — vanilla wares/jobs produce 26,835 findings against libraries.xsd (its declarations
+govern a different usage; the game ships NO schema for wares/jobs content). Corrected: plain
+wares/jobs are unrouted; diff-rooted wares/jobs patches get wrapper-only diff.xsd validation.
+② the drafted `<language id>` t-file check was an invented rule — 26/74 vanilla t-files omit
+the id legitimately. Removed; the page/t id checks survived (0 findings on 74 files). Second
+sweep: 124 routed vanilla files → 0 findings. Proven set = factions/gamestarts/addon/diff;
+coreaddon has zero corpus instances and stays warning-capped.
+
+**Acceptance:** ① md-audit on the unpacked-root scratch = 0 findings (the A/B flip of the env
+red) ② routing oracle green + auto-discovered by sweep ③ corpus proof: vanilla
+factions/gamestarts/wares/jobs/all-t/ui-addon files AND DLC `<diff>`-rooted library patches →
+zero findings per routed domain, exact counts recorded; a failing domain stays warning-capped
+with the reason recorded ④ negative path: malformed factions attr / malformed diff / malformed
+t-file flagged via project/validate on the scratch instance; vanilla-shaped passes ⑤ tsc/lint/
+precommit 0 · sweep (scratch: only the known env reds remain) · e2e 19/19 ⑥ md/aiscripts
+emission behavior unchanged except the removed false positives.
+**Rollback:** single-commit revert (Ken owns commits); changes isolated to named functions.
+**Out of scope:** reference sets (phase 3), god/maps routing, scriptproperties.xsd hardening,
+niche-domain routing, any new md-path checks.
+
 ## Acceptance contract (per phase)
 Each phase: pure engine + oracle (house pattern) + endpoint; tsc/lint/precommit/e2e green; the
 NEGATIVE path (malformed file rejected / unknown ref flagged) is the real proof; ground every new
