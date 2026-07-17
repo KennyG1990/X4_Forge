@@ -1,14 +1,17 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
-> ## ⛔ COMMIT POINT (2026-07-16, late) — B46 Phase 1 VERIFIED; Ken commits
-> **HEAD = `7358f81`** (Ken's commit of B48P2/B53/B52/records + the wizard fix). **UNCOMMITTED
-> (Ken owns commits):** B46 Phase 1 (src/lib/schemaRegistry.ts NEW, server.ts registry
-> route/allowlist/selftest, plan-doc deltas, BACKLOG/ROADMAP/handoff updates) + the 0.0.10
-> version bump in vscode-extension/package.json. Suggested title:
-> "feat(schema): B46 Phase 1 — multi-schema registry (40-domain discovery, include chains,
-> lazy per-domain indexes, schema-registry endpoint + oracle 11/11); bump extension to 0.0.10"
+> ## ⛔ COMMIT POINT (2026-07-16, night) — B54 watchdog VERIFIED; Ken commits
+> **HEAD = `5850884`** (Ken committed B46 Phase 1). **UNCOMMITTED (Ken owns commits):** B54
+> (vscode-extension/src/extension.ts watchdog + panel re-point), version bump 0.0.11, records.
+> Suggested title: "feat(extension): B54 sidecar auto-restart watchdog (capped respawn + panel
+> re-point), drilled live; publish stable 0.0.11"
+> **B54 root cause banked:** the 20:56 sidecar death was the AGENT'S broad Stop-Process sweep
+> (command line `node dist\server.cjs` carries no 'extension' marker — that's in the CWD).
+> KILLS ARE PORT-PID ONLY from now on. Watchdog drilled live in Antigravity: killed :55430 →
+> respawned :53143 in seconds, open panel re-pointed itself, workspace intact. Ken's
+> Antigravity now runs 0.0.11 (header v1.0.222).
 >
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.10 STABLE** (2026-07-16)
+> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.11 STABLE** (2026-07-16)
 > Registry-API-confirmed indexed (preRelease=False, downloadable). Carries the B18 wizard fix
 > (B53 coupling bug: proposal.xsdSchemaPath was cwd-based while harvest writes to dataPath —
 > extension auto-setup pointed at an empty dir; fix FUNCTIONALLY verified in the exact shipped

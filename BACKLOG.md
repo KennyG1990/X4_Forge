@@ -160,6 +160,24 @@ with full-body clipboard rescue. Engine `src/lib/bugReport.ts` + oracle `bug-rep
 drill: empty-title blocked ✓, filled report produced the exact prefilled URL (title/body/label/env
 verified) ✓, context visible ✓, screenshot taken. Plan: `docs/plans/2026-07-16-bug-reporter.md`.
 
+### B54 · Sidecar auto-restart watchdog — ✅ VERIFIED 2026-07-16 (live kill-drill in Antigravity) → ROADMAP
+DRILL PASSED (Ken-authorized, agent-driven): 0.0.11 installed + window reloaded (header v1.0.222)
+→ sidecar :55430 killed by port-PID at 19:55:43 → watchdog respawned on :53143 within seconds,
+status bar updated, the OPEN studio panel re-pointed itself (badge "managed sidecar on port
+53143"), canvas + workspace intact; old port confirmed dead, new port HTTP 200. Published
+stable 0.0.11.
+Root cause of the 20:56 sidecar death: **the agent's own broad `Stop-Process` sweep** (filter
+matched `node dist\server.cjs` — the "extension" marker lives in the CWD, not the command line;
+exit 4294967295 = externally terminated). [REPRODUCED by timeline + filter analysis.] Procedural
+fix banked (port-PID kills only — in handoff hazards). Product fix: the extension now
+AUTO-RESTARTS an unexpectedly-dead sidecar (capped 3 per 5min with linear backoff; deliberate
+stops exempt via the existing stoppingDeliberately flag; boot crash-loops degrade to the old
+error) and RELOADS the open studio panel against the new port+token (without this the iframe
+still points at the dead backend). extension.ts only; VSIX 0.0.11 packaged, watchdog verified
+in the compiled extension.js. **Open gate (one drill):** install 0.0.11, open studio, kill the
+sidecar PID from a terminal → panel comes back on its own + "restarted automatically" toast +
+log line "auto-restarting (attempt 1/3)".
+
 ## P1 — Safety / architecture
 
 ### B1 · Workspace sync-trust slice — ✅ CLOSED 2026-07-09 → ROADMAP (badge verified live; residual: badge clipping polish → B13)

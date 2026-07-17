@@ -52,6 +52,30 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B54 · SIDECAR AUTO-RESTART WATCHDOG — self-healing backend, drilled live (2026-07-16, VERIFIED) · 0.0.11 PUBLISHED
+
+**Root cause of the reported sidecar death (20:56, exit 4294967295): the agent's own broad
+`Stop-Process` sweep** — the filter matched command line `server\.cjs` and excluded 'extension',
+but the sidecar's command line is just `node dist\server.cjs` (the extension marker lives in the
+CWD). [REPRODUCED by timeline + filter analysis + exit-code semantics.] Procedural fix banked:
+kills are port-PID only, ever (handoff hazards + AAR).
+
+**Product fix (extension.ts only):** unexpected sidecar exit now auto-restarts — linear backoff,
+capped 3/5min (boot crash-loops degrade to the old run-Open-Studio error), deliberate stops
+exempt via the existing `stoppingDeliberately` flag — and the OPEN studio panel is re-pointed at
+the new backend (new sidecar = new port + token; without the reload the iframe keeps aiming at
+the corpse).
+
+**Live drill (Ken-authorized, agent-driven in Antigravity):** installed 0.0.11 → Reload Window
+(gotcha: the palette keystroke must target IDE chrome, not the webview — first attempt was
+swallowed by the iframe) → Open Studio (v1.0.222, sidecar :55430) → killed :55430 by port-PID at
+19:55:43 → respawned on :53143 in seconds; status bar updated, panel badge "managed sidecar on
+port 53143", canvas + Player_Elite_Escort intact; old port confirmed dead, new port HTTP 200.
+Ext tsc/build 0; watchdog string verified in the COMPILED extension.js (lesson applied: probe
+the artifact, not a comment). **Stable 0.0.11 published** (ovsx exit 0; index poll running).
+**Suggested commit title:** "feat(extension): B54 sidecar auto-restart watchdog (capped respawn
++ panel re-point), drilled live; publish stable 0.0.11".
+
 ### ✅ B46 PHASE 1 · MULTI-SCHEMA REGISTRY — all 40 game XSDs discovered + indexable (2026-07-16, VERIFIED) · 0.0.10 PUBLISHED
 
 Triggered by Ken's XSD-inventory question ("is none of this stuff useful for making mods?" — it

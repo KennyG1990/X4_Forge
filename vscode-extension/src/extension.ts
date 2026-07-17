@@ -263,10 +263,11 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
     if (backend === handle) backend = null;
     updateStatus();
     if (wasCurrent && !stoppingDeliberately) {
-      showBackendError(
-        `The Forge backend exited unexpectedly (code ${code ?? "?"}). ` +
-          `The studio view will not work until it is restarted — run "X4 Forge: Open Studio" again.`,
-      );
+      // Watchdog (2026-07-16): anything can kill a long-lived local process (OOM killer, a
+      // stray taskkill, AV software — lived: a broad Stop-Process sweep took out a healthy
+      // sidecar mid-session). A ready-then-died backend is restartable by definition, so
+      // restart it instead of dead-ending the studio on a manual command.
+      void autoRestartSidecar(context, code);
     }
   });
   child.on("error", (err) => {
@@ -300,6 +301,53 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
     stoppingDeliberately = false;
   }
   throw new Error("Forge backend did not become ready within 30s. See \"X4 Forge\" output for its logs.");
+}
+
+// Sidecar watchdog: auto-restart after an UNEXPECTED exit (deliberate stops set
+// stoppingDeliberately and never come here). Capped to RESTART_MAX unexpected exits per
+// RESTART_WINDOW_MS so a genuinely-broken backend (boot crash-loop) degrades to the old
+// run-Open-Studio-again error instead of spinning forever.
+const RESTART_WINDOW_MS = 5 * 60_000;
+const RESTART_MAX = 3;
+let restartTimestamps: number[] = [];
+
+async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: number | null): Promise<void> {
+  const now = Date.now();
+  restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS);
+  if (restartTimestamps.length >= RESTART_MAX) {
+    showBackendError(
+      `The Forge backend exited unexpectedly (code ${exitCode ?? "?"}) and auto-restart gave up ` +
+        `after ${RESTART_MAX} attempts in 5 minutes. See "X4 Forge" output for its logs, then run ` +
+        `"X4 Forge: Open Studio" again.`,
+    );
+    return;
+  }
+  restartTimestamps.push(now);
+  const attempt = restartTimestamps.length;
+  log(`sidecar exited unexpectedly (code ${exitCode ?? "?"}) — auto-restarting (attempt ${attempt}/${RESTART_MAX})`);
+  await new Promise((r) => setTimeout(r, 1000 * attempt)); // linear backoff: 1s, 2s, 3s
+  if (backend || stoppingDeliberately) return; // already replaced, or a stop raced the backoff
+  try {
+    const handle = await ensureBackend(context);
+    log(`sidecar auto-restarted at ${handle.baseUrl}`);
+    // A new sidecar has a NEW port + token, so an open studio panel still points at the dead
+    // one — reload its iframe against the fresh backend.
+    if (panel) {
+      panel.webview.html = webviewHtml(
+        panel.webview,
+        handle.baseUrl,
+        handle.owned ? `managed sidecar on port ${handle.port}` : `attached to ${handle.baseUrl}`,
+      );
+    }
+    void vscode.window.showInformationMessage(
+      "X4 Forge: the backend stopped unexpectedly and was restarted automatically.",
+    );
+  } catch (err) {
+    showBackendError(
+      `The Forge backend exited unexpectedly and auto-restart failed: ` +
+        `${err instanceof Error ? err.message : String(err)} — run "X4 Forge: Open Studio" again.`,
+    );
+  }
 }
 
 async function ensureBackend(context: vscode.ExtensionContext): Promise<BackendHandle> {
