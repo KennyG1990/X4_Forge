@@ -21,18 +21,19 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## NEXT UNIT — B61 (SPECIFIED, Ken directive, reconcile-first, NOT yet started)
+## NEXT UNIT — B61 (RECONCILE + SPEC DONE 2026-07-17; BUILD PARKED for Ken's go)
 Off B59d's honest limit, Ken said: "if you've identified un-schema'd work it sounds like we need a
-schema for that." REAL gap — X4 ships NO content XSD for some domains (jobs is the known one; B46P2
-routed only the `<diff>` WRAPPER, not job CONTENT). A subtly-wrong job compiles clean and fails only
-in-game (flagged in the B59b + B59d AARs). **Closing it = AUTHORING validation the game doesn't ship
-— real blast radius, Ken-GATED before any build.** First move: **RECONCILE** — enumerate which content
-domains lack an XSD (jobs, then check god/regions/sectors/wares/etc.); look for the prior-art idea
-already banked (B59b AAR: a corpus-grounded "job content lint" over the vanilla job vocabulary — valid
-orders, `class` values, faction/tag combos, macro existence). Likely shape: an advisory
-(WARNING-severity, like patch-readiness) corpus-grounded content LINTER, NOT a fake XSD. Ground:
-`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00` → libraries/jobs.xml (606 jobs) + scriptproperties.xml.
-Present the reconcile finding + spec to Ken and get sign-off BEFORE building. Full record: BACKLOG B61.
+schema for that." **Reconcile + spec are DONE** (read-only, while Ken away) — full plan committed at
+`docs/plans/2026-07-17-b61-content-lint-unschemad.md` (`913156a`). Do NOT re-run the reconcile.
+Finding: corpus ships no jobs.xsd/wares.xsd; `schemaRouting.ts:70-71` already maps jobs.xml/wares.xml
+→ null (CORPUS-FALSIFIED 2026-07-16) so job/ware CONTENT is unchecked (only the diff wrapper is).
+"A schema for that" = a NEW corpus-grounded content LINTER (no XSD to extend), plugging into the
+existing null-route hook + CORPUS_PROVEN_DOMAINS cry-wolf gate + reference sets. Proposed shape:
+`src/lib/jobsContentLint.ts` pure lib + `jobs-content-lint-selftest` oracle, learns legal vocabulary
+from vanilla jobs.xml (606 jobs), checks a mod's jobs against it, WARNING-capped; **zero-false-positive
+bar = all 606 vanilla jobs lint clean** (cry-wolf is the #1 risk on this surface). wares.xml = phase 2.
+**BUILD IS KEN-GATED** — authoring validation Egosoft doesn't ship is a product-direction call, not a
+presence one. When Ken gives the go: implement per the spec, corpus-prove, gate, publish decision his.
 
 ## Eyeball queue (Ken 30-sec checks) — all already EYES-seen by the agent this session
 - B59c: X4 WIKI → HUD & LUA → "UI Extensions Framework Compatibility (kuertee)".
