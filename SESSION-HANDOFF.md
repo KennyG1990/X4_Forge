@@ -1,10 +1,12 @@
 # SESSION HANDOFF — X4 Forge (worktree branch `claude/x4-forge-vscode-poc-806ef5`)
 
-> ## ⛔ COMMIT POINT (2026-07-17) — B59a VERIFIED + 0.0.18 PUBLISHED (goal: build B59 a→b→c→d)
+> ## ⛔ COMMIT POINT (2026-07-17) — B59a+b VERIFIED + 0.0.19 PUBLISHED (goal: build B59 a→b→c→d)
 > **0.0.18 live on Open VSX** (patch-day readiness). Publish-before-commit; commit via git shell.
 > Goal active (Ken /goal): build the B59 menu a→b→c→d as sequenced units, workflow religiously.
-> **a DONE.** Next: **b** galaxy-tab RECONCILE-first (outcome genuinely unknown), then c, then d.
-> New files this unit: src/lib/patchReadiness.ts, docs/plans/2026-07-17-patch-day-readiness.md.
+> **a+b DONE** (b: galaxy=viewer, sector-edit deferred #64 P2; shipped Faction Patrol Fleet jobs
+> starter). Next: **c** UI-Extensions-compatible starter (ground from kuertee repo), then **d**
+> anti-hallucination copy (Ken-voiced, agent drafts).
+> New files this unit: src/lib/patchReadiness.ts + docs plans (patch-day, galaxy-jobs); B59b touched src/lib/modTemplates.ts.
 > Touched: server.ts (endpoint+selftest reg), mcp/x4forge-mcp.cjs (check_patch_readiness),
 > package.json 0.0.18, CHANGELOG/release-notes, records. Committed via git shell + push.
 >
@@ -67,5 +69,5 @@
 >   read version first; 409 = canvas moved, re-run.
 > - Sweep env reds on scratch: expression-suggest 0/0 + reference-selftest + selftest 7/10.
 >
-> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.18 STABLE** (2026-07-17)
-> Registry-confirmed indexed. Carries B59a patch-day readiness + B60 + B58 + B57 + B56 + B55P1 + B46P2.
+> ## 🚀 STORE STATE — Open VSX `x4forge.x4-forge-studio` **v0.0.19 STABLE** (2026-07-17)
+> Registry-confirmed indexed. Carries B59a patch-day + B59b jobs starter + B60 + B58 + B57 + B56 + B55P1 + B46P2.

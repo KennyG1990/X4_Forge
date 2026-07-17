@@ -52,6 +52,29 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B59b · GALAXY-TAB RECONCILE → JOBS STARTER — reconcile-first, honest defer (2026-07-17, VERIFIED)
+
+Reconcile-first per the B59 menu (outcome genuinely unknown going in). Plan + decision:
+`docs/plans/2026-07-17-galaxy-jobs-reconcile.md`.
+- **Reconcile finding:** the GALAXY tab is a **read-only merged-map VIEWER** (#64 P1;
+  GalaxyMapView.tsx says "not the deferred sector editor", UI says "Phase 2 editing remains
+  deferred"). `galaxyMap.ts` merges base + extension universe files; `/api/agent/galaxy-map`
+  serves it. Seeing what an overhaul does to the galaxy EXISTS; authoring sectors does NOT.
+- **SKU decision:** sector authoring **DEFERRED** (#64 P2 — large, high-blast-radius subsystem,
+  not a starter). Built the tractable half — **`custom_patrol_job`** beyond-canvas template
+  (B58d family): a `<diff>`-add of a corpus-grounded `<job>` (vanilla Patrol order +
+  `class="galaxy"` location + military ship select — verified against libraries/jobs.xml,
+  606 jobs / 540 galaxy-class) + its t-file name entry.
+- **Validated:** templates oracle **36/36**; emitted files LIVE → `libraries/jobs.xml → diff/diff`
+  + `t → tfile/plain`, **0 errors/0 warnings**; **EYES:** "Faction Patrol Fleet (jobs)" renders in
+  the Start-a-new-mod picker with its blurb (screenshot).
+
+**Gates:** tsc 0 · lint 0 errors · precommit OK · sweep 87/90 · **e2e 19/19 PASS**. **Stable
+0.0.19 PUBLISHED + indexed** (staged probe: templates 36/36 + patch-readiness 10/10 in the
+bundle). Publish-before-commit. No new engine — reused the template family; the durable output is
+the reconcile FINDING (capability-map delta). **Suggested commit title:** "feat(community): B59b
+galaxy reconcile (viewer, sector-edit deferred) + Faction Patrol Fleet jobs starter, publish 0.0.19".
+
 ### ✅ B59a · PATCH-DAY READINESS CHECK — the seasonal killer feature (2026-07-17, VERIFIED)
 
 Research Finding 2 (round 2): every game update silently breaks mods and modders hand-hunt which

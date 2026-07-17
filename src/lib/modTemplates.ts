@@ -297,6 +297,59 @@ export const MOD_TEMPLATES: ModTemplate[] = [
     }),
   },
   {
+    // B59b (2026-07-17): the "overhaul XML layer" wish — a persistent faction FLEET job.
+    // The Galaxy tab is a read-only merged-map VIEWER (#64 P1; sector authoring is deferred
+    // #64 P2 — too large for a starter), so the tractable overhaul SKU is jobs. Every element
+    // is CORPUS-GROUNDED against vanilla libraries/jobs.xml (patrol order + galaxy location +
+    // military ship select). Emits a diff-add (jobs has no content XSD — the routed diff
+    // wrapper is validated) + the t-file entry its name references.
+    id: 'custom_patrol_job',
+    name: 'X4_My_Patrol_Fleet',
+    title: 'Faction Patrol Fleet (jobs)',
+    blurb: 'Add a patrolling faction fleet that spawns and roams the galaxy — the way overhauls add fleets.',
+    rail: {
+      tweakHint: 'Open the XML PATCHING tab (top bar) — the patch adds a job to libraries/jobs.xml. Change faction="argon", the ship size/tags, and quota galaxy="3". The LANGUAGES (t/) tab holds the fleet name ({10099,300}).',
+      gameCheck: 'Start or continue a game: an Argon military patrol of your quota spawns over time and roams the galaxy.',
+    },
+    build: () => ({
+      nodes: [], links: [],
+      xmlPatches: [{
+        id: 'patch_job',
+        targetFile: 'libraries/jobs.xml',
+        sel: '/jobs',
+        action: 'add',
+        content: [
+          '<job id="my_patrol_fleet" name="{10099,300}" startactive="true">',
+          '  <orders>',
+          '    <order order="Patrol" default="true"><param name="range" value="class.zone"/></order>',
+          '  </orders>',
+          '  <category faction="argon" tags="[military]" size="ship_m"/>',
+          '  <quota galaxy="3"/>',
+          '  <location class="galaxy" macro="xu_ep2_universe_macro"/>',
+          '  <environment buildatshipyard="true"/>',
+          '  <ship>',
+          '    <select faction="argon" tags="[military]" size="ship_m"/>',
+          '    <loadout><quantity exact="1.0"/><quality exact="0.9"/></loadout>',
+          '    <owner exact="argon" overridenpc="true"/>',
+          '  </ship>',
+          '</job>',
+        ].join('\n'),
+        note: 'A roaming Argon military patrol — shaped on vanilla jobs.xml patrol/fleet entries.',
+        includeInBuild: true,
+      }],
+      tFiles: [{
+        languageId: '44',
+        fileName: '0001-l044.xml',
+        includeInBuild: true,
+        pages: [{
+          id: '10099',
+          title: 'Patrol Fleet Text',
+          items: [{ id: '300', value: 'My Patrol Fleet' }],
+        }],
+      }],
+    }),
+  },
+  {
     id: 'hud_button',
     name: 'X4_My_HUD_Button',
     title: 'Standalone Menu (Lua UI)',

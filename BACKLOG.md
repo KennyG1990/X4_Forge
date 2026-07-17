@@ -144,9 +144,10 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
 ### B59 · Community patch ROUND 2 — a ✅ BUILT 2026-07-17 → ROADMAP; b/c/d in progress (Ken's goal: a→b→c→d)
-**a ✅ Patch-day readiness check** — old-vs-new selector drift (patchReadiness.ts oracle 10/10 +
+**a ✅ Patch-day readiness · b ✅ galaxy reconcile+jobs starter** — old-vs-new selector drift (patchReadiness.ts oracle 10/10 +
 endpoint + MCP check_patch_readiness; live two-corpus proof vs real unpacked 9.00; 0.0.18
-published). NEXT per goal: **b** galaxy-tab RECONCILE (outcome unknown → then SKU decision) ·
+published). **b ✅** galaxy tab = read-only viewer (sector authoring DEFERRED #64 P2); shipped custom_patrol_job
+jobs starter (oracle 36/36, picker EYES-seen, 0.0.19). NEXT per goal:
 **c** UI-Extensions-compatible starter (ground from kuertee's repo) · **d** anti-hallucination
 positioning copy (Ken-voiced; agent drafts). Research + menu:
 `docs/research/2026-07-17-community-gap-map-round2.md`. Original research kept below.

@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.19 — 2026-07-17
+
+- New starter: Faction Patrol Fleet — add a patrolling faction fleet that spawns and roams the galaxy, the way big overhaul mods add fleets. Grounded on the game's own job definitions.
+
 ## 0.0.18 — 2026-07-17
 
 - Patch-day readiness check — when X4 updates, see which of your mod's patches will silently stop working because the game files changed, before you ship a broken update.
