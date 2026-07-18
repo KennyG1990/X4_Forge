@@ -535,3 +535,7 @@ Research (pre-culled, 2 agents triangulated): `docs/research/2026-07-18-communit
 - **A3** loadout slot-fit (needs slot-count from ship macros; heavier). **C1** computed balance stats (DPS/
   margin/slot tables; analysis value-add). CULLED-OUT (already covered): derive-diff-from-two-files
   (synthesizePatch exists), IntelliSense, sector editor (#64), cat/dat pack (B62f-adjacent).
+
+### B63 round-4 continued — A2 (god.xml) REJECTED by reconcile; B1 pillar + object-index-maps prereq open
+**A2 REJECTED (corpus-falsified):** god.xml matchextension="false" is omitted by 495/496 vanilla locations (mod convention, not a rule) → cry-wolf; macro-resolution can't work either — only 18/151 god.xml macros are in index/macros.xml, the other 133 are sector/zone/cluster macros in maps/ which the object index (x4ObjectIndex scans index/*.xml only) doesn't include → would flag 133/151 vanilla macros. **PREREQ for a safe god.xml lint: extend x4ObjectIndex to also index maps/ sector/zone/cluster macros** (a bounded infra unit; also improves reference pickers + liveFixes macro-existence broadly). Then god.xml macro-resolution becomes clean (0-bar). **B1 (bulk-transform pillar) remains the strategic next-big-thing (Ken decision).** Round-4 net so far: A1 factions ✅; A2 falsified; a/d/e (round-3) falsified/covered — the EASY lint wins are genuinely mined.
+
