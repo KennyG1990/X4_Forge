@@ -41,7 +41,7 @@ import { lintMdPitfalls, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
-import { buildModTextIndex, lintTextReferences, type TextRefFinding } from "../lib/tFileLint";
+import { buildModTextIndex, lintTextReferences, lintTranslationCoverage, type TextRefFinding, type TranslationCoverageFinding } from "../lib/tFileLint";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
 /**
@@ -83,6 +83,7 @@ export interface ProjectValidationResult {
     waresContentWarnings: number;
     migrationWarnings: number;
     tFileRefWarnings: number;
+    tFileCoverageWarnings: number;
   };
   structure: ReturnType<typeof validateProjectStructure>;
   cueIndex: ReturnType<typeof indexCueReferences>;
@@ -106,6 +107,8 @@ export interface ProjectValidationResult {
   migration: { findings: MigrationFinding[] };
   /** B62b: t-file reference integrity (mod-owned-page dangling {page,id} refs; always runs). */
   tFileRefs: { findings: TextRefFinding[] };
+  /** B62b phase 2: per-language translation coverage gaps across the mod's own t-files. */
+  tFileCoverage: { findings: TranslationCoverageFinding[] };
 }
 
 /**
@@ -231,6 +234,8 @@ export function runProjectValidation(
   // mod's OWN t-files (no vanilla index) → cry-wolf-safe; always runs. Advisory WARNING.
   const strFiles = project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string }));
   const tFileFindings: TextRefFinding[] = lintTextReferences({ files: strFiles, index: buildModTextIndex(strFiles) }).findings;
+  // B62b phase 2: translation coverage across the mod's own language files (corpus-verified 0-gap-safe).
+  const tCoverageFindings: TranslationCoverageFinding[] = lintTranslationCoverage({ tFiles: strFiles }).findings;
 
   // B62c: version-migration / deprecation lint — flags constructs a game update renamed/removed
   // (grounded in Egosoft's Breaking Changes wiki, corpus-verified: 399 vanilla 9.0 scripts lint clean).
@@ -262,6 +267,7 @@ export function runProjectValidation(
       waresContentWarnings: waresLintFindings.length,
       migrationWarnings: migrationFindings.length,
       tFileRefWarnings: tFileFindings.length,
+      tFileCoverageWarnings: tCoverageFindings.length,
     },
     structure,
     cueIndex,
@@ -279,6 +285,7 @@ export function runProjectValidation(
     waresLint: { available: !!waresVocab, findings: waresLintFindings },
     migration: { findings: migrationFindings },
     tFileRefs: { findings: tFileFindings },
+    tFileCoverage: { findings: tCoverageFindings },
   };
 }
 
@@ -335,6 +342,10 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   // B62b: t-file reference integrity — advisory WARNING (never flips `ok`).
   for (const f of result.tFileRefs.findings) {
     out.push({ severity: "warning", code: `tfile.${f.kind}`, filePath: f.filePath, sourceRef: `{${f.page},${f.id}}`, message: f.message });
+  }
+  // B62b phase 2: translation coverage — advisory WARNING.
+  for (const f of result.tFileCoverage.findings) {
+    out.push({ severity: "warning", code: `tfile.${f.kind}`, filePath: `t/ (language ${f.language})`, sourceRef: `page ${f.page}`, message: f.message });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
   // validator re-reports structure issues under its own code — same message, same file).

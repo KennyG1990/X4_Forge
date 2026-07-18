@@ -52,6 +52,26 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B62b phase 2 · TRANSLATION COVERAGE MATRIX — wired + published 0.0.26 (2026-07-18, VERIFIED)
+
+Extends B62b: for a page the mod defines in 2+ of its OWN language files, flags a language with fewer
+entries than its most-complete language (a real translation gap — non-players see fallback text).
+`tFileLint.ts` `buildLanguageCoverage` (page → lang → entry-id sets) + `lintTranslationCoverage`
+(one SUMMARY finding per page-language gap, not per entry → low-noise). Advisory WARNING; `ok` excludes it.
+- **Corpus-verified cry-wolf-safe:** a broad vanilla probe showed **477 multi-language pages, 0 coverage
+  gaps** (Egosoft fully translates), so a gap is a REAL gap, never noise — a clean 0-bar like the other lints.
+- **Oracle caught a real bug pre-ship:** the language id derived from the filename (`…l007.xml` → "007")
+  vs the `<language id="7">` attribute disagreed — a mod mixing the forms would see a FALSE gap. Fixed by
+  normalizing (strip leading zeros); locked in the `language_from_filename` oracle check.
+- Only fires for multi-language mods (a single-language mod is never nagged). Oracle `tfile-lint-selftest`
+  now **18/18** (13 + 5 coverage).
+**Validation:** tsc 0 · lint 0 · oracle 18/18 · **CRY-WOLF BAR MET: 477 vanilla multi-lang pages → 0
+gaps** · negative path (multi-lang page with a gap → 1 summary finding; complete → 0; single-lang → 0) ·
+**LIVE endpoint** (`tfile.incomplete_translation` + `tFileCoverageWarnings:1`) · sweep 91/94 (no
+regression) · **e2e 19/19**. Stable **0.0.26 PUBLISHED**. Publish-before-commit. **Deferred (B62b phase 3):**
+free-page-ID allocator + reserved-registry collision (need the community reserved-page data; own reconcile).
+**Suggested commit title:** "feat(validate): B62b phase 2 translation coverage matrix (corpus-clean 0 gaps), publish 0.0.26".
+
 ### ✅ B62b · T-FILE (LOCALIZATION) REFERENCE INTEGRITY — wired + published 0.0.25 (2026-07-18, VERIFIED)
 
 Round-3 F2. Reconcile confirmed: `lintTFileStructure` checks a t-file's own shape; NOTHING resolved

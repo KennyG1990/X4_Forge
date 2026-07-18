@@ -132,6 +132,84 @@ export function lintTextReferences(input: LintTextRefsInput): TFileLintResult {
 }
 
 /* ------------------------------------------------------------------ *
+ * B62b phase 2 — per-language translation coverage.
+ * A page the mod defines in 2+ of its OWN language files, where one language
+ * has fewer entries than the most-complete one, has an incomplete translation.
+ * Corpus-verified cry-wolf-safe: vanilla's 477 multi-language pages have 0 gaps
+ * (Egosoft fully translates), so a gap is a REAL gap, never noise. One SUMMARY
+ * finding per (page, language) — not per entry — to keep it low-noise. Advisory.
+ * ------------------------------------------------------------------ */
+
+export interface TranslationCoverageFinding {
+  page: string;
+  language: string;
+  have: number;
+  max: number;
+  missing: number;
+  kind: "incomplete_translation";
+  message: string;
+}
+
+/**
+ * Derive the language id of a t-file: from the filename suffix (…l044.xml → 44), else <language id>.
+ * NORMALIZED (leading zeros stripped) so the filename form "007" and the attribute form "7" — X4 uses
+ * both — are treated as the SAME language, never a false coverage gap.
+ */
+function languageOf(path: string, content: string): string | null {
+  const m = path.replace(/\\/g, "/").toLowerCase().match(/l(\d+)\.xml$/);
+  if (m) return String(parseInt(m[1], 10));
+  const lm = String(content || "").match(/<language\s+id\s*=\s*"(\d+)"/i);
+  return lm ? String(parseInt(lm[1], 10)) : null;
+}
+
+/** page id -> language id -> set of entry (t) ids defined for that page in that language. */
+export function buildLanguageCoverage(tFiles: Array<{ path: string; content: string }>): Map<string, Map<string, Set<string>>> {
+  const cov = new Map<string, Map<string, Set<string>>>();
+  for (const f of tFiles) {
+    if (!isTFile(f.path) || typeof f.content !== "string") continue;
+    const lang = languageOf(f.path, f.content);
+    if (!lang) continue;
+    const doc = parse(f.content);
+    if (!doc) continue;
+    const pages = doc.getElementsByTagName("page");
+    for (let i = 0; i < pages.length; i++) {
+      const pid = pages[i].getAttribute("id");
+      if (!pid) continue;
+      let byLang = cov.get(pid);
+      if (!byLang) { byLang = new Map(); cov.set(pid, byLang); }
+      let set = byLang.get(lang);
+      if (!set) { set = new Set(); byLang.set(lang, set); }
+      const ts = pages[i].getElementsByTagName("t");
+      for (let j = 0; j < ts.length; j++) {
+        const tid = ts[j].getAttribute("id");
+        if (tid) set.add(tid);
+      }
+    }
+  }
+  return cov;
+}
+
+export function lintTranslationCoverage(input: { tFiles: Array<{ path: string; content: string }> }): { findings: TranslationCoverageFinding[]; summary: { multiLangPages: number; findings: number } } {
+  const cov = buildLanguageCoverage(input.tFiles);
+  const findings: TranslationCoverageFinding[] = [];
+  let multiLangPages = 0;
+  for (const [page, byLang] of cov) {
+    if (byLang.size < 2) continue; // need 2+ languages to have a coverage gap
+    multiLangPages++;
+    const max = Math.max(...[...byLang.values()].map(s => s.size));
+    for (const [lang, set] of byLang) {
+      if (set.size < max) {
+        findings.push({
+          page, language: lang, have: set.size, max, missing: max - set.size, kind: "incomplete_translation",
+          message: `Page ${page}: language ${lang} has ${set.size} of ${max} text entries — ${max - set.size} line(s) present in your other language file(s) are not translated here (players in that language see the fallback text).`,
+        });
+      }
+    }
+  }
+  return { findings, summary: { multiLangPages, findings: findings.length } };
+}
+
+/* ------------------------------------------------------------------ *
  * Oracle — synthetic fixtures; pure, no corpus needed.
  * ------------------------------------------------------------------ */
 
@@ -187,6 +265,24 @@ export function runTFileLintSelftest() {
   ok("empty_safe", lintTextReferences({ files: [], index: idx }).findings.length === 0);
   ok("no_tfiles_no_owned_pages", buildModTextIndex([]).ownedPages.size === 0);
   ok("malformed_tfile_safe", buildModTextIndex([{ path: "t/x.xml", content: "<language><page id=" }]).ownedPages.size === 0);
+
+  // --- B62b phase 2: translation coverage ---
+  const covEn = { path: "t/0001-L044.xml", content: `<language id="44"><page id="20201"><t id="1">a</t><t id="2">b</t><t id="3">c</t></page></language>` };
+  const covDe = { path: "t/0001-L049.xml", content: `<language id="49"><page id="20201"><t id="1">a</t><t id="2">b</t></page></language>` }; // missing 3
+  const covGap = lintTranslationCoverage({ tFiles: [covEn, covDe] });
+  ok("coverage_gap_flagged", covGap.findings.length === 1 && covGap.findings[0].language === "49" && covGap.findings[0].missing === 1, JSON.stringify(covGap.findings));
+  ok("coverage_summary_not_per_entry", covGap.findings.length === 1); // one summary per page-language, not per missing entry
+
+  // Complete coverage → no findings (mirrors vanilla: 477 multi-lang pages, 0 gaps).
+  const covDeFull = { path: "t/0001-L049.xml", content: `<language id="49"><page id="20201"><t id="1">a</t><t id="2">b</t><t id="3">c</t></page></language>` };
+  ok("complete_coverage_clean", lintTranslationCoverage({ tFiles: [covEn, covDeFull] }).findings.length === 0);
+
+  // Single-language mod → nothing to compare → no findings (never nags a mono-language mod).
+  ok("single_language_no_findings", lintTranslationCoverage({ tFiles: [covEn] }).findings.length === 0);
+
+  // Language derived from filename even without a <language id> attribute.
+  const covNoAttr = { path: "t/0002-l007.xml", content: `<language><page id="20201"><t id="1">x</t></page></language>` };
+  ok("language_from_filename", lintTranslationCoverage({ tFiles: [covEn, covNoAttr] }).findings.some(f => f.language === "7"));
 
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

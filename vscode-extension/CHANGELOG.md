@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.26 — 2026-07-18
+
+- Localization got a second helper: if your mod ships text in more than one language, the Forge now points out any lines you translated in one language but missed in another — so non-English players don't silently fall back to English. It only speaks up for multi-language mods (never nags a single-language mod), and gives one summary per language, not a wall of warnings.
+
 ## 0.0.25 — 2026-07-18
 
 - New localization check: if your mod references one of its own text lines by {page,id} but that line isn't defined in your language files, the Forge flags it — catching the typos that show up as blank or wrong text in-game. It only checks references to text your mod owns (never vanilla text you reuse), and it ignores developer comment notes, so it stays quiet on valid mods.

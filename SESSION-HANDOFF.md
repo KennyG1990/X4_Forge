@@ -21,7 +21,14 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B62 round-3 RECONCILE-EXHAUSTED — b/c shipped; a/d/e falsified-or-covered; f/g need Ken
+## B62b phase 2 ✅ TRANSLATION COVERAGE MATRIX SHIPPED 0.0.26
+Extends tfile lint: flags a page the mod defines in 2+ languages where one has fewer entries (real gap).
+Corpus-verified cry-wolf-safe (477 vanilla multi-lang pages → 0 gaps). Oracle 18/18 (caught+fixed a
+filename-vs-attr language-id normalization bug). Low-noise (one summary per page-language; single-lang
+mods never nagged). Wired, e2e 19/19, published 0.0.26, committed `<this commit>`. **B62b phase 3 deferred:**
+free-page-ID allocator + reserved-page-registry collision (needs community reserved-page data; own reconcile).
+
+## (below) B62 round-3 RECONCILE-EXHAUSTED — b/c shipped; a/d/e falsified-or-covered; f/g need Ken
 The clean buildable-now backend-lint work of round 3 is DONE. Reconcile rejected/culled the rest:
 **e REJECTED** (corpus-falsified — 345 vanilla macros defined-but-NOT-indexed, so a macro-orphan lint
 cry-wolfs; a class-restricted version is speculative + deferred). **f DEFERRED** (version encoding already
