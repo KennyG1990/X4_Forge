@@ -52,6 +52,25 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B63/A2 · GOD.XML STATION-PLACEMENT MACRO LINT — wired + published 0.0.29 (2026-07-18, VERIFIED)
+
+Round-4 A2, unblocked by the B63 index-fix. `src/lib/godLint.ts` (pure, DOM-comment-safe): flags a god.xml
+`<location macro=>` / `<station macro=>` (any `macro=`) that doesn't resolve to a known sector/zone/station
+macro — a missing macro means the station silently never spawns. Known = the reference-set macros (now
+incl. maps/ sectors after B63) ∪ the mod's OWN `<macro name>` defs (project-wide); SKIPPED when the
+reference set is empty (object index not built) — the factions empty-refset lesson. **matchextension NOT
+checked — corpus-falsified (495/496 vanilla omit it).** First lint ADDED VIA THE REGISTRY the refactor put
+in place — one spec entry, proving the refactor's value.
+- Oracle `god-lint-selftest` **9/9**. Wired as a `basenameLints` registry entry → validate + capsules + IDE
+  Problems.
+**Validation:** tsc 0 · lint 0 · oracle 9/9 · **CRY-WOLF BAR MET: vanilla god.xml 609 macro refs → 0
+unknown** (proven against index/macros ∪ maps macros) · negative path exact · wired proof (bad macro →
+`god.unknown_macro` WARNING + `godMacroWarnings:1`; empty macro set → skips) · sweep **93/96** (new oracle
+green, 3 pre-existing reds, no regression) · **e2e 19/19**. Stable **0.0.29 PUBLISHED**. Publish-before-commit.
+**Round-4 status:** A1 factions ✅ · A2 god.xml ✅ (via the B63 index-fix) · A3 loadout slot-fit (needs
+ship-macro slot data — likely another index gap) · **B1 bulk-transform pillar (Ken decision)** · C1 stats.
+**Suggested commit title:** "feat(validate): B63/A2 god.xml macro-resolution lint (corpus-clean 609 refs), publish 0.0.29".
+
 ### ✅ B63 · OBJECT-INDEX indexes maps/ sector macros — unblocks god.xml + fixes false "macro missing" (2026-07-18, VERIFIED, 0.0.28)
 
 The recurring "macro not in the index" cry-wolf (bit B62e AND A2) had ONE root cause: `x4ObjectIndex`

@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.29 — 2026-07-18
+
+- New check for station/economy mods: if your god.xml places a station in a sector or zone whose macro doesn't exist (a typo, or a sector you forgot to add), the Forge flags it — instead of the station silently never spawning in-game. Grounded in the game's real macros (now including sectors/zones), so valid placements stay quiet.
+
 ## 0.0.28 — 2026-07-18
 
 - The Forge now recognizes the game's sector, zone, and cluster macros. Referencing one of those (for example a station location in god.xml, or a sector in a mission) no longer gets a false 'that macro doesn't exist' warning, and they now show up in the pick-a-macro lists.

@@ -134,6 +134,7 @@ import { runMigrationLintSelftest } from "./src/lib/migrationLint";
 import { runWaresContentLintSelftest, learnWaresVocabulary, type WaresVocabulary } from "./src/lib/waresContentLint";
 import { runTFileLintSelftest, buildModTextIndex, lintTextReferences } from "./src/lib/tFileLint";
 import { runFactionsLintSelftest, lintFactionRelations } from "./src/lib/factionsLint";
+import { runGodLintSelftest, lintGodMacros } from "./src/lib/godLint";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -5613,6 +5614,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "wares-content-lint-selftest": runWaresContentLintSelftest,
   "tfile-lint-selftest": runTFileLintSelftest,
   "factions-lint-selftest": runFactionsLintSelftest,
+  "god-lint-selftest": runGodLintSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,

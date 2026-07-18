@@ -43,6 +43,7 @@ import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
 import { buildModTextIndex, lintTextReferences, lintTranslationCoverage, type TextRefFinding, type TranslationCoverageFinding } from "../lib/tFileLint";
 import { lintFactionRelations, type FactionLintFinding } from "../lib/factionsLint";
+import { lintGodMacros, type GodLintFinding } from "../lib/godLint";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
 /**
@@ -86,6 +87,7 @@ export interface ProjectValidationResult {
     tFileRefWarnings: number;
     tFileCoverageWarnings: number;
     factionRelationWarnings: number;
+    godMacroWarnings: number;
   };
   structure: ReturnType<typeof validateProjectStructure>;
   cueIndex: ReturnType<typeof indexCueReferences>;
@@ -113,6 +115,8 @@ export interface ProjectValidationResult {
   tFileCoverage: { findings: TranslationCoverageFinding[] };
   /** B63/A1: factions.xml relation value-bounds + unknown-target-faction findings. */
   factionRelations: { findings: FactionLintFinding[] };
+  /** B63/A2: god.xml unresolved macro= references (sector/zone/station macro that doesn't exist). */
+  godMacros: { findings: GodLintFinding[] };
 }
 
 /**
@@ -214,12 +218,26 @@ export function runProjectValidation(
   const jobsLintFindings: JobLintFinding[] = [];
   const waresLintFindings: WareLintFinding[] = [];
   const factionFindings: FactionLintFinding[] = [];
+  const godFindings: GodLintFinding[] = [];
   const jobsVocab = opts.jobsVocabulary;
   const waresVocab = opts.waresVocabulary;
+  // B63/A2: known macro set for god.xml resolution = the reference-set macros (now including maps/ sector
+  // macros after B63) UNION the mod's OWN <macro name> defs (a mod adding a new sector must not cry wolf).
+  // Undefined when the reference set is empty (object index not built) → the god lint skips (honest degrade).
+  const knownMacros: Set<string> | undefined = (() => {
+    if (!opts.references?.macros || opts.references.macros.size === 0) return undefined;
+    const set = new Set<string>([...opts.references.macros].map(m => m.toLowerCase()));
+    for (const f of project.files) {
+      if (typeof f.content !== "string") continue;
+      for (const m of f.content.matchAll(/<macro\b[^>]*\bname\s*=\s*"([^"]+)"/gi)) set.add(m[1].toLowerCase());
+    }
+    return set;
+  })();
   const basenameLints: Array<{ basename: string; sink: unknown[]; run: (content: string) => unknown[] | null }> = [
     { basename: "jobs.xml", sink: jobsLintFindings, run: c => jobsVocab ? lintJobsContent({ jobsXml: c, vocabulary: jobsVocab }).findings : null },
     { basename: "wares.xml", sink: waresLintFindings, run: c => waresVocab ? lintWaresContent({ waresXml: c, vocabulary: waresVocab }).findings : null },
     { basename: "factions.xml", sink: factionFindings, run: c => lintFactionRelations({ factionsXml: c, knownFactions: opts.references?.factions }).findings },
+    { basename: "god.xml", sink: godFindings, run: c => knownMacros ? lintGodMacros({ godXml: c, knownMacros }).findings : null },
   ];
   for (const f of project.files) {
     if (typeof f.content !== "string") continue;
@@ -273,6 +291,7 @@ export function runProjectValidation(
       tFileRefWarnings: tFileFindings.length,
       tFileCoverageWarnings: tCoverageFindings.length,
       factionRelationWarnings: factionFindings.length,
+      godMacroWarnings: godFindings.length,
     },
     structure,
     cueIndex,
@@ -292,6 +311,7 @@ export function runProjectValidation(
     tFileRefs: { findings: tFileFindings },
     tFileCoverage: { findings: tCoverageFindings },
     factionRelations: { findings: factionFindings },
+    godMacros: { findings: godFindings },
   };
 }
 
@@ -356,6 +376,10 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   // B63/A1: factions.xml relations — advisory WARNING (never flips `ok`).
   for (const f of result.factionRelations.findings) {
     out.push({ severity: "warning", code: `factions.${f.kind}`, filePath: "libraries/factions.xml", sourceRef: `${f.faction}→${f.target}`, message: f.message });
+  }
+  // B63/A2: god.xml unresolved macros — advisory WARNING (never flips `ok`).
+  for (const f of result.godMacros.findings) {
+    out.push({ severity: "warning", code: `god.${f.kind}`, filePath: "libraries/god.xml", sourceRef: `${f.station}:${f.macro}`, message: f.message });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
   // validator re-reports structure issues under its own code — same message, same file).
