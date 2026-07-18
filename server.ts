@@ -1264,10 +1264,13 @@ function getObjectIndex(): X4ObjectIndex {
     resolved.x4GamePath ? path.join(resolved.x4GamePath, "libraries") : "",
     resolved.x4GamePath ? path.join(resolved.x4GamePath, "assets") : "",
     resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "",
+    // B63: maps/ holds the galaxy/cluster/sector/zone macro DEFINITIONS that god.xml, jobs, etc.
+    // reference by macro= — index them so those references resolve (was 133/151 god.xml macros absent).
+    resolved.x4GamePath ? path.join(resolved.x4GamePath, "maps") : "",
     resolved.modWorkspacePath || "",
     resolved.filesystemPath || ""
   ];
-  const cacheKey = JSON.stringify({ roots, indexerVersion: 5, schemaLoaded: schemaLibrary.loaded, schemaCounts: {
+  const cacheKey = JSON.stringify({ roots, indexerVersion: 6, schemaLoaded: schemaLibrary.loaded, schemaCounts: {
     events: schemaLibrary.events.length,
     conditions: schemaLibrary.conditions.length,
     actions: schemaLibrary.actions.length,

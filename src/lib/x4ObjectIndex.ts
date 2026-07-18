@@ -48,6 +48,9 @@ const KINDS: X4ObjectKind[] = ['ship', 'station', 'ware', 'faction', 'sound', 'j
 function isWantedPackedEntry(name: string): boolean {
   const n = name.toLowerCase();
   if (n === 'index/macros.xml' || n === 'index/components.xml') return true;
+  // B63: maps/ galaxy/cluster/sector/zone macro definitions — so god.xml/jobs macro= references resolve.
+  // Bounded (a few dozen files); the core scanner extracts only their <macro name> defs.
+  if (n.startsWith('maps/') && n.endsWith('.xml')) return true;
   if (n === 'libraries/factions.xml') return true;
   if (n === 'libraries/wares.xml') return true;
   if (n === 'libraries/jobs.xml') return true;

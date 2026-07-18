@@ -52,6 +52,26 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B63 · OBJECT-INDEX indexes maps/ sector macros — unblocks god.xml + fixes false "macro missing" (2026-07-18, VERIFIED, 0.0.28)
+
+The recurring "macro not in the index" cry-wolf (bit B62e AND A2) had ONE root cause: `x4ObjectIndex`
+scanned `libraries/assets/extensions` but NOT `maps/`, where the galaxy/cluster/sector/zone macro
+DEFINITIONS live. So sector macros referenced by god.xml/jobs/missions were absent from `references.macros`
+→ `liveFixes` falsely flagged them "doesn't exist" and any resolution lint would cry-wolf. Fixed at the
+source (very careful — shared infra, 2 consumers db.ts/healthCard.ts):
+- **server.ts `getObjectIndex`:** added `maps/` to the loose-scan roots + bumped `indexerVersion` 5→6 (cache
+  invalidation). **x4ObjectIndex `isWantedPackedEntry`:** added `maps/*.xml` (for packed Steam installs).
+- The core scanner ALREADY parses `<macro name>` (line 298) — so this is purely ADDITIVE (feed maps/ to the
+  proven scanner), no new parser. `maps/` is bounded (47 files / ~1077 macros).
+**Validation:** tsc 0 · lint 0 · **object-index oracle 22/22** (no regression) · maps/ scan → **1077 macros**
+extracted (cluster/sector/zone) · **god.xml macro resolution 133-unresolved → 0** (the A2 unblock, proven) ·
+sweep **92/95 unchanged** · **e2e 19/19**. Stable **0.0.28 PUBLISHED** (real user-facing fix: sector macros
+no longer false-flagged + now appear in pickers). Publish-before-commit.
+**Unblocks A2 (god.xml lint):** with sector macros now in the reference set, a god.xml `<location macro=>` /
+`<station macro=>` resolution lint is now cry-wolf-safe (vanilla → 0). A2 is the clean next unit (reuse the
+basenameLints registry). matchextension stays out (falsified — vanilla omits it 495/496). **Suggested commit
+title:** "feat(index): index maps/ sector macros (god.xml 133→0 resolvable), publish 0.0.28".
+
 ### ✅ B63 refactor · PER-BASENAME CONTENT-LINT REGISTRY — behavior-preserving DRY (2026-07-18, VERIFIED)
 
 Workflow rule 3.5 fired (the projectValidation content-lint-wiring duplication hazard was banked 3×). Ken:

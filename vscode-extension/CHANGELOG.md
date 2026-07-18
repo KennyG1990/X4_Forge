@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.28 — 2026-07-18
+
+- The Forge now recognizes the game's sector, zone, and cluster macros. Referencing one of those (for example a station location in god.xml, or a sector in a mission) no longer gets a false 'that macro doesn't exist' warning, and they now show up in the pick-a-macro lists.
+
 ## 0.0.27 — 2026-07-18
 
 - New check for faction mods: if a faction relation value is outside the game's legal −1…+1 range, or points at a faction id that doesn't exist, the Forge flags it — catching the two mistakes overhaul and diplomacy mods hit most. Grounded in the game's own factions, so valid relations stay quiet.
