@@ -40,6 +40,7 @@ import { lintAiscriptOrderParams, type AiscriptLintFinding } from "../lib/aiscri
 import { lintMdPitfalls, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
+import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
 /**
@@ -78,6 +79,7 @@ export interface ProjectValidationResult {
     scriptPropertyWarnings: number;
     mdPitfallWarnings: number;
     jobsContentWarnings: number;
+    waresContentWarnings: number;
     migrationWarnings: number;
   };
   structure: ReturnType<typeof validateProjectStructure>;
@@ -96,6 +98,8 @@ export interface ProjectValidationResult {
   /** B61: corpus-grounded content lint for jobs.xml (the game ships no jobs XSD). available:false
    *  when no vocabulary was injected (CLI / schema-less instances) — never a claimed-but-unrun check. */
   jobsLint: { available: boolean; findings: JobLintFinding[] };
+  /** B61 phase 3: corpus-grounded content lint for wares.xml. available:false when no vocabulary injected. */
+  waresLint: { available: boolean; findings: WareLintFinding[] };
   /** B62c: version-migration/deprecation lint (embedded corpus-verified ruleset; always runs). */
   migration: { findings: MigrationFinding[] };
 }
@@ -106,7 +110,7 @@ export interface ProjectValidationResult {
  */
 export function runProjectValidation(
   project: ExtensionProject,
-  opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary } = {},
+  opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary } = {},
 ): ProjectValidationResult {
   const structure = validateProjectStructure(project);
   const cueIndex = indexCueReferences(project);
@@ -204,6 +208,20 @@ export function runProjectValidation(
     }
   }
 
+  // B61 phase 3: corpus-grounded content lint for wares.xml (the game ships no wares XSD) — mirrors
+  // the jobs layer. Only runs when the server injected a learned vocabulary (else honest degrade).
+  // Advisory WARNING; never flips `ok`.
+  const waresLintFindings: WareLintFinding[] = [];
+  const waresVocab = opts.waresVocabulary;
+  if (waresVocab) {
+    for (const f of project.files) {
+      const base = f.path.replace(/\\/g, "/").split("/").pop() || "";
+      if (base === "wares.xml" && typeof f.content === "string") {
+        waresLintFindings.push(...lintWaresContent({ waresXml: f.content, vocabulary: waresVocab }).findings);
+      }
+    }
+  }
+
   // B62c: version-migration / deprecation lint — flags constructs a game update renamed/removed
   // (grounded in Egosoft's Breaking Changes wiki, corpus-verified: 399 vanilla 9.0 scripts lint clean).
   // No injected data — the ruleset is embedded. Advisory WARNING; never flips `ok` (see below + flatten).
@@ -231,6 +249,7 @@ export function runProjectValidation(
       scriptPropertyWarnings: scriptPropertyFindings.length,
       mdPitfallWarnings: pitfallFindings.length,
       jobsContentWarnings: jobsLintFindings.length,
+      waresContentWarnings: waresLintFindings.length,
       migrationWarnings: migrationFindings.length,
     },
     structure,
@@ -246,6 +265,7 @@ export function runProjectValidation(
     scriptProperties: { available: !!spIndex, findings: scriptPropertyFindings },
     pitfalls: { findings: pitfallFindings },
     jobsLint: { available: !!jobsVocab, findings: jobsLintFindings },
+    waresLint: { available: !!waresVocab, findings: waresLintFindings },
     migration: { findings: migrationFindings },
   };
 }
@@ -291,6 +311,10 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   // B61: jobs content lint — advisory only (WARNING never flips `ok`), one currency with every other layer.
   for (const f of result.jobsLint.findings) {
     out.push({ severity: "warning", code: `jobs.${f.kind}`, filePath: "libraries/jobs.xml", sourceRef: f.jobId, message: f.message });
+  }
+  // B61 phase 3: wares content lint — advisory WARNING (never flips `ok`).
+  for (const f of result.waresLint.findings) {
+    out.push({ severity: "warning", code: `wares.${f.kind}`, filePath: "libraries/wares.xml", sourceRef: f.wareId, message: f.message });
   }
   // B62c: version-migration/deprecation lint — advisory WARNING (never flips `ok`).
   for (const f of result.migration.findings) {

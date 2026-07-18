@@ -154,7 +154,10 @@ index-coupling orphan lint (unindexed macro/component) · **f** Steam Workshop p
 cat/dat build, whitelist, visibility) · **g** visual diff-patch sel builder (UI-heavy, Ken-screen-gated).
 Recommended remaining order: b → e → f → g.
 
-### B61 · Content validation for un-schema'd domains (jobs et al.) — increment 1+2 ✅ VERIFIED 2026-07-17 → ROADMAP; phase 3 (wares) SPECIFIED
+### B61 · Content validation for un-schema'd domains (jobs et al.) — inc 1+2 + phase 3 ✅ VERIFIED 2026-07-17 → ROADMAP
+jobs linter (inc1 engine + inc2 wired, 0.0.22) + **phase 3 wares linter ✅ (wired, oracle 14/14,
+corpus-clean 1397/1397, 0.0.24)** all done. Remaining un-schema'd domains (god.xml, ships.xml, loadouts)
+are lower-demand — same pattern if ever pulled, but not scheduled.
 **increment 2 ✅ (2026-07-17, published 0.0.22):** jobs linter WIRED into the live validator —
 `jobsLint` layer in projectValidation.ts (advisory WARNING, never flips `ok`), `getJobsVocabulary()`
 in server.ts (base + `ego_dlc_*` merged, cached, reference-set factions), threaded into all 4

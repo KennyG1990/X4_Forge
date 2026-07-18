@@ -21,7 +21,17 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B62 round-3 community features (auto mode, "build these out") — c ✅ SHIPPED 0.0.23; a/d rejected-by-reconcile
+## B61 phase 3 ✅ WARES linter SHIPPED 0.0.24 + IDE-eyeball BLOCKED (input-host)
+Wares content linter shipped (`src/lib/waresContentLint.ts`, oracle 14/14, corpus-clean 1397/1397, wired
+into projectValidation like jobs, e2e 19/19, published 0.0.24, committed `<this commit>`). jobs+wares both
+close the no-content-XSD gap. **IDE EYEBALL (B56/B57) BLOCKED:** `textinputhost.exe` (Windows IME/input
+host) keeps grabbing frontmost focus and blocking computer-use input to Antigravity (reproduced — key AND
+click both failed); it's an un-grantable system process. Native-IDE eyeball needs Ken at the machine (dismiss
+the input host) OR is genuinely un-drivable remotely this session. Nothing was disrupted in Ken's workspace.
+HAZARD banked (AAR): 3 near-identical content-lint wirings (jobs/wares/migration) — extract a domain registry
+before a 4th (god/ships).
+
+## (superseded) B62 round-3 community features (auto mode, "build these out") — c ✅ SHIPPED 0.0.23; a/d rejected-by-reconcile
 Research menu: `docs/research/2026-07-17-community-gap-map-round3.md`. Reconcile-first culled hard:
 **B62a REJECTED** — content.xml language-completeness "won't launch" is a CORPUS MYTH (real mods incl.
 x4_ai_influence ship 1 language, load fine). **B62d REJECTED** — auto-deps already built (externalApiRegistry

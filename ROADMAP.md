@@ -52,6 +52,23 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B61 phase 3 · WARES CONTENT LINTER — wired + published 0.0.24 (2026-07-17, VERIFIED)
+
+The jobs-linter (B61) pattern applied to the economy layer — wares.xml has no content XSD either (B46P2).
+`src/lib/waresContentLint.ts` (pure, vocabulary-injected, DOM-comment-safe): learns the closed-set
+vocabulary from vanilla wares (transport, group, individual tag tokens) + a deterministic price-ordering
+check (min ≤ average ≤ max). Only lints `<ware>` DEFINITIONS (has `id`) — the nested `<ware ware=…>`
+production INPUT references are left alone. Advisory WARNING; `ok` excludes it.
+- Oracle `wares-content-lint-selftest` **14/14**. `server.ts getWaresVocabulary()` reads base + ego_dlc_*
+  wares (official only, cached by root sig); threaded into all 4 runProjectValidation call sites; findings
+  reach validate response + capsules + IDE Problems panel.
+**Validation:** tsc 0 · lint 0 · oracle 14/14 · **CRY-WOLF BAR MET: all 1397 vanilla wares → 0 findings**
+(learned 10 transports / 63 tags / 25 groups) · negative path exact (bad ware → unknown_transport +
+unknown_group + unknown_tag + price_order) · **LIVE endpoint** (wares.* warnings + `waresContentWarnings:4`)
+· sweep **90/93** (new oracle green, 3 pre-existing reds, no regression) · **e2e 19/19**. Stable **0.0.24
+PUBLISHED**. Publish-before-commit. **Suggested commit title:** "feat(validate): B61 phase 3 wares content
+linter (wired, corpus-clean 1397/1397), publish 0.0.24".
+
 ### ✅ B62c · VERSION-MIGRATION / DEPRECATION LINTER — wired + published 0.0.23 (2026-07-17, VERIFIED)
 
 Round-3 community research (`docs/research/2026-07-17-community-gap-map-round3.md`) → Ken "build these out."

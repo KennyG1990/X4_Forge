@@ -131,6 +131,7 @@ import { buildAgentsMd, buildNotesMd, runAgentBriefSelftest } from "./src/lib/ag
 import { analyzePatchReadiness, runPatchReadinessSelftest } from "./src/lib/patchReadiness";
 import { runJobsContentLintSelftest, learnJobsVocabularyMerged, type JobsVocabulary } from "./src/lib/jobsContentLint";
 import { runMigrationLintSelftest } from "./src/lib/migrationLint";
+import { runWaresContentLintSelftest, learnWaresVocabulary, type WaresVocabulary } from "./src/lib/waresContentLint";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -1435,6 +1436,54 @@ function getJobsVocabulary(): JobsVocabulary | undefined {
 
   const factions = (() => { try { const f = getReferenceSets().factions; return f.size ? f : undefined; } catch { return undefined; } })();
   return { classes: _jobsVocabBaseCache.classes, orders: _jobsVocabBaseCache.orders, sizes: _jobsVocabBaseCache.sizes, factions };
+}
+
+// B61 phase 3: learned wares vocabulary (transports/tags/groups), cached by game-root signature.
+// Official content only (base + ego_dlc_*) — a mod's own typo must never teach the linter.
+let _waresVocabCache: { key: string; vocab: WaresVocabulary } | null = null;
+function getWaresVocabulary(): WaresVocabulary | undefined {
+  let key = "";
+  let roots: string[] = [];
+  try {
+    const r = resolveXsdConfig();
+    key = `${r.schemaDir || ""}|${r.x4GamePath || ""}`;
+    roots = [r.schemaDir, r.x4GamePath].filter((x): x is string => !!x);
+  } catch { return undefined; }
+  if (_waresVocabCache && _waresVocabCache.key === key) return _waresVocabCache.vocab;
+
+  const readBase = (root: string, rel: string): string | null => {
+    const loose = path.join(root, ...rel.split("/"));
+    try { if (fs.existsSync(loose) && fs.statSync(loose).isFile()) return fs.readFileSync(loose, "utf8"); } catch { /* fall through */ }
+    try { return catDatExtractBaseGameFile(root, rel)?.text ?? null; } catch { return null; }
+  };
+  const xmls: string[] = [];
+  for (const root of roots) {
+    const base = readBase(root, "libraries/wares.xml");
+    if (!base) continue;
+    xmls.push(base);
+    try {
+      const extDir = path.join(root, "extensions");
+      if (fs.existsSync(extDir)) {
+        for (const dir of fs.readdirSync(extDir)) {
+          if (!/^ego_dlc_/i.test(dir)) continue;
+          const dlc = path.join(extDir, dir, "libraries", "wares.xml");
+          try { if (fs.existsSync(dlc)) xmls.push(fs.readFileSync(dlc, "utf8")); } catch { /* skip */ }
+        }
+      }
+    } catch { /* no extensions dir */ }
+    break;
+  }
+  if (!xmls.length) { _waresVocabCache = null; return undefined; }
+  const merged: WaresVocabulary = { transports: new Set(), tags: new Set(), groups: new Set() };
+  for (const xml of xmls) {
+    const v = learnWaresVocabulary(xml);
+    v.transports.forEach(x => merged.transports.add(x));
+    v.tags.forEach(x => merged.tags.add(x));
+    v.groups.forEach(x => merged.groups.add(x));
+  }
+  if (!merged.transports.size) { _waresVocabCache = null; return undefined; } // parse failed / empty — honest degrade
+  _waresVocabCache = { key, vocab: merged };
+  return merged;
 }
 
 function runSchemaValidation(files: Record<string, string>, modId: string): ServerDiagnostic[] {
@@ -5300,7 +5349,7 @@ app.post("/api/agent/project/validate", (req, res) => {
     }
 
     const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-    const result = runProjectValidation(project, { references, jobsVocabulary: getJobsVocabulary() });
+    const result = runProjectValidation(project, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
     // Drift-as-first-class-state: when the validated mod exists as BOTH a workspace copy
     // and a deployed copy, report their divergence alongside the verdict — validating a
     // stale copy without knowing it is the trap (ROADMAP #5, confirmed 2026-07-09).
@@ -5448,7 +5497,7 @@ app.get("/api/agent/proof", (req, res) => {
       } else {
         const load = loadProjectFromDisk(resolvedFolder.abs);
         const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-        const result = runProjectValidation(load.project, { references, jobsVocabulary: getJobsVocabulary() });
+        const result = runProjectValidation(load.project, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
         const flat = flattenProjectValidation(result);
         const errors = flat.filter(f => f.severity === "error").length;
         const warnings = flat.filter(f => f.severity === "warning").length;
@@ -5556,6 +5605,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "patch-readiness-selftest": runPatchReadinessSelftest,
   "jobs-content-lint-selftest": runJobsContentLintSelftest,
   "migration-lint-selftest": runMigrationLintSelftest,
+  "wares-content-lint-selftest": runWaresContentLintSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,
@@ -7335,7 +7385,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       files: Object.entries(files).map(([p, c]) => ({ path: p, kind: classifyPath(p), content: String(c) })),
     };
     const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-    const preflight = runProjectValidation(manifestProject as any, { references, jobsVocabulary: getJobsVocabulary() });
+    const preflight = runProjectValidation(manifestProject as any, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
     const pfWarnings = preflight.summary.schemaWarnings + preflight.summary.scriptPropertyWarnings + preflight.summary.mdPitfallWarnings;
     if (!preflight.ok) {
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
@@ -7795,7 +7845,7 @@ Create, update, or reposition HUD window containers and nested controller elemen
           id: modId, name: modId,
           files: Object.entries(files).map(([p, c]) => ({ path: p, kind: classifyPath(p), content: String(c) })),
         };
-        out.push(...flattenProjectValidation(runProjectValidation(project, { references: getReferenceSets(), jobsVocabulary: getJobsVocabulary() })));
+        out.push(...flattenProjectValidation(runProjectValidation(project, { references: getReferenceSets(), jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() })));
       } catch { /* project layer unavailable — workspace laws still drive the loop */ }
       return out;
     };

@@ -3,7 +3,11 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
-## 0.0.23 — 2026-07-18
+## 0.0.24 — 2026-07-18
+
+- The 'jobs' safety check now has a twin for 'wares' (the economy/commodity definitions): the Forge flags a made-up transport type, a typo'd tag or group, and a nonsensical price (min above max) — grounded in the game's own wares so it stays quiet on valid content. Advisory, never blocking.
+
+## 0.0.23 — 2026-07-17
 
 - New check: the Forge now flags mod code that uses commands or properties a game update removed or renamed (e.g. things that changed in 9.0), so you find out at edit-time instead of when the mod silently breaks in-game. It's advisory and grounded in Egosoft's own Breaking Changes list, and it ignores commented-out code so it won't nag about old lines you already disabled.
 
