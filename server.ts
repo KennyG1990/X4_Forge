@@ -129,6 +129,7 @@ import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from 
 import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
 import { buildAgentsMd, buildNotesMd, runAgentBriefSelftest } from "./src/lib/agentBrief";
 import { analyzePatchReadiness, runPatchReadinessSelftest } from "./src/lib/patchReadiness";
+import { runJobsContentLintSelftest } from "./src/lib/jobsContentLint";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -5504,6 +5505,7 @@ const SELFTESTS: Record<string, () => unknown> = {
   "lang-service-selftest": runLangServiceSelftest,
   "agent-brief-selftest": runAgentBriefSelftest,
   "patch-readiness-selftest": runPatchReadinessSelftest,
+  "jobs-content-lint-selftest": runJobsContentLintSelftest,
   "bug-report-selftest": runBugReportSelftest,
   "data-dir-selftest": runDataDirSelftest,
   "game-detect-selftest": runGameDetectSelftest,

@@ -21,7 +21,23 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## NEXT UNIT — B61 (RECONCILE + SPEC DONE 2026-07-17; BUILD PARKED for Ken's go)
+## B61 increment 1 ✅ VERIFIED 2026-07-17 (auto mode) — jobs content linter engine + oracle
+Ken authorized the build ("auto mode, you're doing great"). Shipped `src/lib/jobsContentLint.ts` (pure
+vocabulary-injected linter, mirrors patchReadiness) + oracle `jobs-content-lint-selftest` 14/14. CRY-WOLF
+BAR MET: all **604 real vanilla jobs lint clean, 0 false positives** (learned 11 classes/13 orders/5
+sizes); negative path exact; sweep 88/91 (new oracle green, 3 pre-existing env reds unchanged); tsc/lint 0.
+Committed `<this commit>`. **UNWIRED on purpose** (off the live validator → no user-facing change, no
+publish, avoids e2e/collision with the parallel codex + Antigravity-Gemini agents).
+
+**NEXT — B61 increment 2 (SPECIFIED):** wire the linter into the validator — route jobs.xml (the null
+route, schemaRouting.ts:70) → linter; learn from the **MERGED base+DLC jobs** (not just base — else DLC
+orders/classes cry wolf; use the same extension-merge the galaxy-map/reference-sets use); thread
+reference-set factions; surface as WARNING capsules; add `/api/agent/jobs-lint` GET + MCP tool if
+warranted; re-run the 604+DLC-clean proof server-side BEFORE promoting jobs to CORPUS_PROVEN_DOMAINS; then
+e2e (clean machine window — NOT while parallel agents run) + publish (user-facing → changelog). Phase 3 =
+wares.xml. Full spec: `docs/plans/2026-07-17-b61-content-lint-unschemad.md` + BACKLOG B61.
+
+## (superseded) B61 RECONCILE + SPEC — done 2026-07-17
 Off B59d's honest limit, Ken said: "if you've identified un-schema'd work it sounds like we need a
 schema for that." **Reconcile + spec are DONE** (read-only, while Ken away) — full plan committed at
 `docs/plans/2026-07-17-b61-content-lint-unschemad.md` (`913156a`). Do NOT re-run the reconcile.

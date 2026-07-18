@@ -143,18 +143,20 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 (a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
-### B61 · Content validation for un-schema'd domains (jobs et al.) — SPECIFIED (Ken directive 2026-07-17, reconcile-first)
-Ken, off the B59d honest limit: "if you've identified un-schema'd work it sounds like we need a schema
-for that." REAL gap — X4 ships NO content XSD for some domains (jobs is the known one, B46P2 routed
-its `<diff>` WRAPPER but not the job CONTENT; the B59b jobs starter + B59a-adjacent AARs both flagged
-"a subtly-wrong job compiles clean, fails only in-game"). Closing it = AUTHORING validation the game
-itself doesn't ship — a real design decision with blast radius. **Reconcile FIRST** (before any spec):
-enumerate which content domains have no XSD (jobs, and check god/regions/sectors/etc.); check for prior
-art (the corpus-grounded "job content lint" idea floated in the B59b AAR — grounded on the vanilla job
-vocabulary: valid orders, `class` values, faction/tag combos, macro existence); decide extend-vs-new.
-Likely shape: a corpus-grounded content linter (advisory, WARNING severity like patch-readiness), NOT
-a fake XSD. **Ken-gated before build.** Ground: `F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`
-libraries/jobs.xml (606 jobs) + scriptproperties.xml.
+### B61 · Content validation for un-schema'd domains (jobs et al.) — increment 1 ✅ VERIFIED 2026-07-17 → ROADMAP; increment 2 (wiring) SPECIFIED
+Ken directed this off the B59d honest limit ("we need a schema for that — follow the workflow") and
+authorized the build ("auto mode"). **increment 1 ✅ (2026-07-17):** `src/lib/jobsContentLint.ts` pure
+vocabulary-injected linter + oracle `jobs-content-lint-selftest` 14/14; CRY-WOLF BAR MET (all 604 real
+vanilla jobs lint clean, 0 false positives); negative path exact; sweep 88/91 (new oracle green, 3
+pre-existing env reds). Corpus-grounded (learns 11 classes/13 orders/5 sizes from vanilla), NOT a fake
+XSD; advisory, faction checks skip without a reference set. **UNWIRED on purpose** (off the validate
+path — no user-facing change, no publish, avoids e2e/collision with the parallel codex + Antigravity-Gemini
+sessions). **increment 2 (SPECIFIED, next):** wire the linter into the live validator — route jobs.xml
+(the null route, schemaRouting.ts:70) to the linter, thread reference-set factions, surface findings as
+WARNING capsules (one currency: validate/MCP/IDE), add `/api/agent/jobs-lint` GET + MCP tool if warranted;
+promote jobs to CORPUS_PROVEN_DOMAINS only after re-running the 604-clean proof server-side; then e2e (clean
+machine window) + publish (user-facing → changelog entry). Phase 3 = wares.xml (same pattern). Ground:
+`F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00\libraries\jobs.xml`.
 
 ### B59 · Community patch ROUND 2 — a/b/c/d ✅ ALL BUILT 2026-07-17 → ROADMAP (Ken's goal a→b→c→d COMPLETE)
 **a ✅ Patch-day readiness · b ✅ galaxy reconcile+jobs starter · c ✅ UI-Extensions guide · d ✅ anti-hallucination copy** — old-vs-new selector drift (patchReadiness.ts oracle 10/10 +

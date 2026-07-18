@@ -52,6 +52,41 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B61 (increment 1) · JOBS CONTENT LINTER — engine + oracle + corpus proof (2026-07-17, VERIFIED)
+
+Ken directed this off the B59d honest limit ("we need a schema for that — follow the workflow") and
+authorized the build ("auto mode, you're doing great"). Reconcile + spec:
+`docs/plans/2026-07-17-b61-content-lint-unschemad.md`. Closes the gap the B59d anti-hallucination copy
+admits: X4 ships no content XSD for jobs (schemaRouting.ts maps jobs.xml → null; only the `<diff>`
+wrapper validates), so a semantically-wrong job compiles clean and fails only in-game.
+
+- **`src/lib/jobsContentLint.ts`** (pure, vocabulary-injected — mirrors patchReadiness B59a): NOT an
+  authored XSD (none exists to extend) but a corpus-grounded LINTER. `learnJobsVocabulary(vanillaJobsXml,
+  factions?)` learns the legal closed-set vocabulary from real vanilla jobs.xml; `lintJobsContent({jobsXml,
+  vocabulary})` finds every `<job>` (full `<jobs>` doc OR a `<diff>/<add>` wrapper) and checks only the
+  grounded attributes — location/@class, order/@order, ship/select/@size, and faction refs (only when a
+  reference set is supplied). Advisory; unknown values reported as "not vanilla — ignore if you defined it."
+- **Cry-wolf defense (the #1 failure mode of this surface):** NARROW scope (unknown elements/attrs are
+  ignored, never flagged) + learned-from-corpus + honest hint-not-assertion messaging + faction checks
+  SKIP without a reference set (never guess-flag a legit modded faction).
+- **Oracle `jobs-content-lint-selftest` 14/14** (registered in SELFTESTS → auto-wired route + public
+  allowlist + sweep discovery via registerSelftests).
+
+**Validation:** tsc 0 · lint 0 errors · **CRY-WOLF BAR MET: all 604 real vanilla jobs (606 raw − 2
+commented) lint CLEAN → 0 false positives** (learned 11 classes / 13 orders / 5 sizes, matching a raw
+grep) · negative path exact (a bad job flags missing_id + `blackhole` class + `TakeOverGalaxy` order +
+`ship_titan` size; real `argon` faction correctly not flagged) · **sweep 88/91** (new oracle GREEN via
+its endpoint; the 3 reds are the SAME pre-existing env reds — +1 green, 0 new reds). e2e N/A to this
+surface (server-lib + isolated selftest endpoint, no UI/canvas — adapter's "pure infra" exemption; also
+avoided the live-workspace swap while Ken's parallel agents are running).
+
+**Deliberately NOT done (increment 2, unwired ON PURPOSE):** the linter is not yet wired into the live
+validator / the jobs.xml null-route or an endpoint — kept OFF the validate path so this increment
+touches nothing user-facing and needs no publish, and to avoid e2e/collision risk with the parallel
+codex + Antigravity-Gemini sessions. Increment 2 (route wiring + endpoint + capsules + publish) runs in a
+clean machine window. **No publish this increment** (no user-facing change). Capability-map delta logged.
+**Suggested commit title:** "feat(validate): B61 jobs content linter engine + oracle (corpus-clean 604/604), unwired".
+
 ### ✅ B59d · ANTI-HALLUCINATION POSITIONING COPY — Ken-voiced, Ken-approved (2026-07-17, VERIFIED)
 
 Fourth/final unit of the B59 menu. The community verdict "AI-made mods = one big hallucination" is
