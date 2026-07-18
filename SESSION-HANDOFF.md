@@ -21,6 +21,16 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
+## CURRENT STATE (2026-07-18) — B63 god.xml thread COMPLETE; round-4 A3/B1/C1 remain
+Latest = **0.0.29 published**, HEAD on origin. The B63 thread (all origin-verified): registry refactor
+(golden-identical, no publish) → A1 factions.xml lint (0.0.27) → index-fix (object index scans maps/ sector
+macros; god.xml 133→0; 0.0.28) → A2 god.xml macro lint (0.0.29, one registry entry). The index-fix
+root-caused a cry-wolf that bit twice (B62e + A2). **ROUND-4 REMAINING (reconcile-first):** **A3** loadout
+slot-fit (needs ship-macro slot data — LIKELY another index gap) · **B1 bulk-transform PILLAR** (Ken
+decision — new capability class, X4_Customizer's domain, multi-unit) · **C1** computed balance stats.
+Adding a per-basename lint now = one `basenameLints` entry + its field/summary/flatten (response contract).
+Session so far: 0.0.18→0.0.29 (13 versions) + the refactor. In-game proof still BLOCKED (desktop/textinputhost).
+
 ## B63 refactor ✅ content-lint registry (behavior-identical, no publish) 2026-07-18
 The 3 per-basename lint loops (jobs/wares/factions) now share ONE `basenameLints` registry loop in
 projectValidation.ts — GOLDEN behavior-preservation test proved byte-identical output across all 6 lints;
