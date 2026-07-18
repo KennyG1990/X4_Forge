@@ -143,16 +143,24 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 (a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
-### B62 · Community round-3 features — b/c ✅ SHIPPED, a/d rejected-by-reconcile, e/f/g open (Ken: "build these out")
-Research + menu: `docs/research/2026-07-17-community-gap-map-round3.md`. Reconcile-first culled hard:
-**a REJECTED** (content.xml language-completeness "won't launch" = corpus myth; real mods ship 0–2 langs) ·
-**d REJECTED** (auto-deps already built — externalApiRegistry + generateContentXML). **c ✅ SHIPPED** →
-ROADMAP (migration/deprecation linter, oracle 11/11, corpus-clean 399/399, 0.0.23). **b ✅ SHIPPED** →
-ROADMAP (t-file reference integrity, tFileLint.ts, oracle 13/13, corpus-clean 12930 refs, comment-attr
-cry-wolf catch, 0.0.25). **OPEN (each RECONCILE-FIRST — a & d fell):** **e** index-coupling orphan lint
-(unindexed macro/component) · **f** Steam Workshop publish helper (version*100, cat/dat build, whitelist,
-visibility) · **g** visual diff-patch sel builder (UI-heavy, Ken-screen-gated). **B62b phase 2 deferred:**
-per-language coverage matrix + free-page-ID allocator + reserved-registry collision. Order: e → f → g.
+### B62 · Community round-3 features — b/c ✅ SHIPPED; a/d/e falsified-or-covered; f/g need Ken decisions (RECONCILE-EXHAUSTED)
+Research + menu: `docs/research/2026-07-17-community-gap-map-round3.md`. The workflow's reconcile-first
+discipline culled the menu down to what could ship cry-wolf-safe:
+- **b ✅ SHIPPED** (t-file reference integrity, oracle 13/13, corpus-clean 12930 refs, 0.0.25) → ROADMAP.
+- **c ✅ SHIPPED** (migration/deprecation linter, oracle 11/11, corpus-clean 399/399, 0.0.23) → ROADMAP.
+- **a REJECTED** (content.xml language-completeness "won't launch" = corpus myth; real mods ship 0–2 langs).
+- **d REJECTED** (auto-deps already built — externalApiRegistry + generateContentXML).
+- **e REJECTED** (corpus-falsified: 345 vanilla macros are defined-but-NOT-indexed — characters/decorations/
+  zones/test — so "not in index/macros.xml" is not an error signal; a simple orphan lint cry-wolfs on 345.
+  A cry-wolf-safe version would restrict to ship/station macro CLASSES + verify that subset — SPECULATIVE,
+  own reconcile, DEFERRED).
+- **f DEFERRED (Ken decision)** — version*100 encoding ALREADY DONE (extensionProject.ts:159 + modCompiler.ts:74);
+  folder + zip distributable exist (B9). New part = Steam Workshop cat/dat build + upload → needs Egosoft's
+  external WorkshopTool.exe (or a binary-format reimpl) AND is a PUBLISH side-effect surface. Spec + Ken go.
+- **g DEFERRED** — visual diff-patch sel builder; UI-heavy + blocked by the textinputhost computer-use issue.
+- **B62b phase 2 deferred:** per-language coverage matrix + free-page-ID allocator + reserved-registry collision.
+**Net:** the clean buildable-now backend-lint work of round 3 is EXHAUSTED (b, c shipped; a/d/e don't survive
+reconcile); f/g are non-lint surfaces needing Ken's decision. Future rounds → new research sweep.
 
 ### B61 · Content validation for un-schema'd domains (jobs et al.) — inc 1+2 + phase 3 ✅ VERIFIED 2026-07-17 → ROADMAP
 jobs linter (inc1 engine + inc2 wired, 0.0.22) + **phase 3 wares linter ✅ (wired, oracle 14/14,

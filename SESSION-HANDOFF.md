@@ -21,7 +21,16 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B62b ✅ T-FILE reference integrity SHIPPED 0.0.25 (localization)
+## B62 round-3 RECONCILE-EXHAUSTED — b/c shipped; a/d/e falsified-or-covered; f/g need Ken
+The clean buildable-now backend-lint work of round 3 is DONE. Reconcile rejected/culled the rest:
+**e REJECTED** (corpus-falsified — 345 vanilla macros defined-but-NOT-indexed, so a macro-orphan lint
+cry-wolfs; a class-restricted version is speculative + deferred). **f DEFERRED** (version encoding already
+done; the new part = Steam Workshop cat/dat build + upload needs Egosoft's WorkshopTool.exe + is a publish
+side-effect → Ken decision). **g DEFERRED** (UI-heavy + textinputhost-blocked). Next real content work =
+a NEW research sweep (round 4) OR the deferred keystones (in-game proof [needs desktop], B62b phase 2,
+B55 P2-3, B46 P3). See BACKLOG B62 for the full disposition.
+
+## (shipped) B62b ✅ T-FILE reference integrity SHIPPED 0.0.25 (localization)
 `src/lib/tFileLint.ts`: flags a `{page,id}` ref targeting a page the MOD OWNS but whose entry id is
 missing (modder's own typo). Cry-wolf-safe (only mod-owned pages; no vanilla index). Oracle 13/13,
 corpus-clean 12930 refs (caught + fixed a comment=-attribute false-positive class), wired into
