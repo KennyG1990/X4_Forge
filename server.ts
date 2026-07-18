@@ -129,7 +129,7 @@ import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from 
 import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
 import { buildAgentsMd, buildNotesMd, runAgentBriefSelftest } from "./src/lib/agentBrief";
 import { analyzePatchReadiness, runPatchReadinessSelftest } from "./src/lib/patchReadiness";
-import { runJobsContentLintSelftest } from "./src/lib/jobsContentLint";
+import { runJobsContentLintSelftest, learnJobsVocabularyMerged, type JobsVocabulary } from "./src/lib/jobsContentLint";
 import { readActiveState, writeActiveState, parkState, listParked, readParked, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
@@ -1386,6 +1386,54 @@ function getReferenceSets(): { macros: Set<string>; wares: Set<string>; factions
     }
   } catch { /* no index — empty sets disable ref checks */ }
   return { macros, wares, factions };
+}
+
+// B61: the learned jobs vocabulary (classes/orders/sizes) is expensive-ish to build (parse the ~15k-line
+// vanilla jobs.xml + DLC diffs) but stable per game root — cache it keyed by root signature. Factions
+// come from the object index and are (re)attached fresh each call so faction checks turn on as soon as
+// the index is ready (and never with a stale set). Learns from OFFICIAL content only (base + ego_dlc_*);
+// arbitrary mods are excluded so a mod's own typo can never "teach" the linter to accept it.
+let _jobsVocabBaseCache: { key: string; classes: Set<string>; orders: Set<string>; sizes: Set<string> } | null = null;
+function getJobsVocabulary(): JobsVocabulary | undefined {
+  let key = "";
+  let roots: string[] = [];
+  try {
+    const r = resolveXsdConfig();
+    key = `${r.schemaDir || ""}|${r.x4GamePath || ""}`;
+    roots = [r.schemaDir, r.x4GamePath].filter((x): x is string => !!x);
+  } catch { return undefined; }
+
+  if (!_jobsVocabBaseCache || _jobsVocabBaseCache.key !== key) {
+    const readBase = (root: string, rel: string): string | null => {
+      const loose = path.join(root, ...rel.split("/"));
+      try { if (fs.existsSync(loose) && fs.statSync(loose).isFile()) return fs.readFileSync(loose, "utf8"); } catch { /* fall through to packed */ }
+      try { return catDatExtractBaseGameFile(root, rel)?.text ?? null; } catch { return null; }
+    };
+    const xmls: string[] = [];
+    for (const root of roots) {
+      const base = readBase(root, "libraries/jobs.xml");
+      if (!base) continue;
+      xmls.push(base);
+      try {
+        const extDir = path.join(root, "extensions");
+        if (fs.existsSync(extDir)) {
+          for (const dir of fs.readdirSync(extDir)) {
+            if (!/^ego_dlc_/i.test(dir)) continue; // official DLC only — never arbitrary mods
+            const dlcJobs = path.join(extDir, dir, "libraries", "jobs.xml");
+            try { if (fs.existsSync(dlcJobs)) xmls.push(fs.readFileSync(dlcJobs, "utf8")); } catch { /* skip one DLC */ }
+          }
+        }
+      } catch { /* no extensions dir on this root */ }
+      break; // first root that yields a base jobs.xml wins
+    }
+    if (!xmls.length) { _jobsVocabBaseCache = null; return undefined; }
+    const learned = learnJobsVocabularyMerged(xmls);
+    if (!learned.classes.size || !learned.orders.size) { _jobsVocabBaseCache = null; return undefined; } // parse failed / empty — degrade honestly
+    _jobsVocabBaseCache = { key, classes: learned.classes, orders: learned.orders, sizes: learned.sizes };
+  }
+
+  const factions = (() => { try { const f = getReferenceSets().factions; return f.size ? f : undefined; } catch { return undefined; } })();
+  return { classes: _jobsVocabBaseCache.classes, orders: _jobsVocabBaseCache.orders, sizes: _jobsVocabBaseCache.sizes, factions };
 }
 
 function runSchemaValidation(files: Record<string, string>, modId: string): ServerDiagnostic[] {
@@ -5251,7 +5299,7 @@ app.post("/api/agent/project/validate", (req, res) => {
     }
 
     const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-    const result = runProjectValidation(project, { references });
+    const result = runProjectValidation(project, { references, jobsVocabulary: getJobsVocabulary() });
     // Drift-as-first-class-state: when the validated mod exists as BOTH a workspace copy
     // and a deployed copy, report their divergence alongside the verdict — validating a
     // stale copy without knowing it is the trap (ROADMAP #5, confirmed 2026-07-09).
@@ -5399,7 +5447,7 @@ app.get("/api/agent/proof", (req, res) => {
       } else {
         const load = loadProjectFromDisk(resolvedFolder.abs);
         const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-        const result = runProjectValidation(load.project, { references });
+        const result = runProjectValidation(load.project, { references, jobsVocabulary: getJobsVocabulary() });
         const flat = flattenProjectValidation(result);
         const errors = flat.filter(f => f.severity === "error").length;
         const warnings = flat.filter(f => f.severity === "warning").length;
@@ -7285,7 +7333,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       files: Object.entries(files).map(([p, c]) => ({ path: p, kind: classifyPath(p), content: String(c) })),
     };
     const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-    const preflight = runProjectValidation(manifestProject as any, { references });
+    const preflight = runProjectValidation(manifestProject as any, { references, jobsVocabulary: getJobsVocabulary() });
     const pfWarnings = preflight.summary.schemaWarnings + preflight.summary.scriptPropertyWarnings + preflight.summary.mdPitfallWarnings;
     if (!preflight.ok) {
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
@@ -7745,7 +7793,7 @@ Create, update, or reposition HUD window containers and nested controller elemen
           id: modId, name: modId,
           files: Object.entries(files).map(([p, c]) => ({ path: p, kind: classifyPath(p), content: String(c) })),
         };
-        out.push(...flattenProjectValidation(runProjectValidation(project, { references: getReferenceSets() })));
+        out.push(...flattenProjectValidation(runProjectValidation(project, { references: getReferenceSets(), jobsVocabulary: getJobsVocabulary() })));
       } catch { /* project layer unavailable — workspace laws still drive the loop */ }
       return out;
     };

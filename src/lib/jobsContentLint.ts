@@ -102,6 +102,23 @@ export function learnJobsVocabulary(vanillaJobsXml: string, factions?: Set<strin
   return vocab;
 }
 
+/**
+ * Learn a MERGED vocabulary from several jobs.xml sources (base + DLC diffs). DLCs add jobs via
+ * <diff> documents that still carry <location>/<order>/<select> elements, so learning from them
+ * unions any DLC-introduced vocabulary — closing the "base-only ⇒ DLC content cries wolf" gap.
+ */
+export function learnJobsVocabularyMerged(jobsXmls: string[], factions?: Set<string>): JobsVocabulary {
+  const merged: JobsVocabulary = { classes: new Set(), orders: new Set(), sizes: new Set() };
+  for (const xml of jobsXmls) {
+    const v = learnJobsVocabulary(xml);
+    v.classes.forEach(c => merged.classes.add(c));
+    v.orders.forEach(o => merged.orders.add(o));
+    v.sizes.forEach(s => merged.sizes.add(s));
+  }
+  if (factions) merged.factions = factions;
+  return merged;
+}
+
 function emptyByKind(): Record<JobLintKind, number> {
   return { missing_id: 0, unknown_order: 0, unknown_location_class: 0, unknown_ship_size: 0, unknown_faction: 0 };
 }
@@ -251,6 +268,18 @@ export function runJobsContentLintSelftest() {
   const diffRes = lintJobsContent({ jobsXml: diffAdd, vocabulary: diffVocab });
   ok("diff_wrapper_job_found", diffRes.summary.jobs === 1, JSON.stringify(diffRes.summary));
   ok("diff_wrapper_linted", diffRes.summary.byKind.unknown_ship_size === 1 && diffRes.findings.some(f => f.value === "ship_l"));
+
+  // MERGED vocabulary: a base fixture + a DLC <diff> that adds a job with a new order/size unions both.
+  const dlcDiff = `<?xml version="1.0"?><diff><add sel="/jobs">
+    <job id="terran_defence"><orders><order order="DeployStaticDefenseStrategy"/></orders><location class="station"/><ship><select faction="terran" size="ship_xl"/></ship></job>
+  </add></diff>`;
+  const mergedVocab = learnJobsVocabularyMerged([vanilla, dlcDiff]);
+  ok("merged_unions_dlc_order", mergedVocab.orders.has("Patrol") && mergedVocab.orders.has("DeployStaticDefenseStrategy"), [...mergedVocab.orders].join(","));
+  ok("merged_unions_dlc_size", mergedVocab.sizes.has("ship_m") && mergedVocab.sizes.has("ship_xl"));
+  ok("merged_unions_dlc_class", mergedVocab.classes.has("galaxy") && mergedVocab.classes.has("station"));
+  // The DLC job that would have cried wolf under base-only now lints clean under the merged vocab.
+  const dlcClean = lintJobsContent({ jobsXml: dlcDiff, vocabulary: mergedVocab });
+  ok("merged_no_cry_wolf_on_dlc", dlcClean.findings.length === 0, JSON.stringify(dlcClean.summary.byKind));
 
   // Robustness: empty and malformed input never crash.
   ok("empty_safe", lintJobsContent({ jobsXml: "", vocabulary: vocab }).findings.length === 0);

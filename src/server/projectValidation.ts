@@ -38,6 +38,7 @@ import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
 import { lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { lintAiscriptOrderParams, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import { lintMdPitfalls, type MdPitfallFinding } from "../lib/mdPitfallLints";
+import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
 /**
@@ -75,6 +76,7 @@ export interface ProjectValidationResult {
     aiscriptErrors: number;
     scriptPropertyWarnings: number;
     mdPitfallWarnings: number;
+    jobsContentWarnings: number;
   };
   structure: ReturnType<typeof validateProjectStructure>;
   cueIndex: ReturnType<typeof indexCueReferences>;
@@ -89,6 +91,9 @@ export interface ProjectValidationResult {
   aiscript: { findings: AiscriptLintFinding[] };
   scriptProperties: { available: boolean; findings: ScriptPropertyFinding[] };
   pitfalls: { findings: MdPitfallFinding[] };
+  /** B61: corpus-grounded content lint for jobs.xml (the game ships no jobs XSD). available:false
+   *  when no vocabulary was injected (CLI / schema-less instances) — never a claimed-but-unrun check. */
+  jobsLint: { available: boolean; findings: JobLintFinding[] };
 }
 
 /**
@@ -97,7 +102,7 @@ export interface ProjectValidationResult {
  */
 export function runProjectValidation(
   project: ExtensionProject,
-  opts: { references?: ProjectValidationReferences } = {},
+  opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary } = {},
 ): ProjectValidationResult {
   const structure = validateProjectStructure(project);
   const cueIndex = indexCueReferences(project);
@@ -180,6 +185,21 @@ export function runProjectValidation(
     }
   }
 
+  // B61: corpus-grounded content lint for jobs.xml — the game ships NO jobs XSD, so a semantically
+  // wrong job (invented order, bad class, non-existent faction, wrong ship size) compiles clean and
+  // fails only in-game. Only runs when the server injected a learned vocabulary (else honest degrade).
+  // Advisory only — findings are WARNING and never flip `ok` (see the flatten mapping + ok computation).
+  const jobsLintFindings: JobLintFinding[] = [];
+  const jobsVocab = opts.jobsVocabulary;
+  if (jobsVocab) {
+    for (const f of project.files) {
+      const base = f.path.replace(/\\/g, "/").split("/").pop() || "";
+      if (base === "jobs.xml" && typeof f.content === "string") {
+        jobsLintFindings.push(...lintJobsContent({ jobsXml: f.content, vocabulary: jobsVocab }).findings);
+      }
+    }
+  }
+
   const schemaErrors = schemaFindings.filter(d => d.severity === "error").length;
   const aiscriptErrors = aiscriptLint.filter(d => d.severity === "error").length;
   return {
@@ -199,6 +219,7 @@ export function runProjectValidation(
       aiscriptErrors,
       scriptPropertyWarnings: scriptPropertyFindings.length,
       mdPitfallWarnings: pitfallFindings.length,
+      jobsContentWarnings: jobsLintFindings.length,
     },
     structure,
     cueIndex,
@@ -212,6 +233,7 @@ export function runProjectValidation(
     aiscript: { findings: aiscriptLint },
     scriptProperties: { available: !!spIndex, findings: scriptPropertyFindings },
     pitfalls: { findings: pitfallFindings },
+    jobsLint: { available: !!jobsVocab, findings: jobsLintFindings },
   };
 }
 
@@ -252,6 +274,10 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   }
   for (const f of result.pitfalls.findings) {
     out.push({ severity: f.severity, code: f.code, sourceRef: f.cue, line: f.line, message: f.detail });
+  }
+  // B61: jobs content lint — advisory only (WARNING never flips `ok`), one currency with every other layer.
+  for (const f of result.jobsLint.findings) {
+    out.push({ severity: "warning", code: `jobs.${f.kind}`, filePath: "libraries/jobs.xml", sourceRef: f.jobId, message: f.message });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
   // validator re-reports structure issues under its own code — same message, same file).

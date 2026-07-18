@@ -143,7 +143,17 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 (a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
-### B61 · Content validation for un-schema'd domains (jobs et al.) — increment 1 ✅ VERIFIED 2026-07-17 → ROADMAP; increment 2 (wiring) SPECIFIED
+### B61 · Content validation for un-schema'd domains (jobs et al.) — increment 1+2 ✅ VERIFIED 2026-07-17 → ROADMAP; phase 3 (wares) SPECIFIED
+**increment 2 ✅ (2026-07-17, published 0.0.22):** jobs linter WIRED into the live validator —
+`jobsLint` layer in projectValidation.ts (advisory WARNING, never flips `ok`), `getJobsVocabulary()`
+in server.ts (base + `ego_dlc_*` merged, cached, reference-set factions), threaded into all 4
+runProjectValidation call sites; findings flow to the validate response + capsules + IDE Problems panel.
+tsc/lint 0 · oracle 18/18 · LIVE endpoint proof (jobs.* warnings from the corpus-configured server) ·
+sweep 88/91 · e2e 19/19. **phase 3 (SPECIFIED):** wares.xml content lint — same corpus-grounded pattern
+(price/economy vocabulary); jobs is the proven template. Minor deferred: per-file flat `filePath` (mods
+have one jobs.xml so canonical label is fine); promoting jobs into CORPUS_PROVEN_DOMAINS is unnecessary
+(the linter is its own advisory layer, already WARNING). Historical spec below.
+### B61 · (superseded — increment 1) content validation reconcile
 Ken directed this off the B59d honest limit ("we need a schema for that — follow the workflow") and
 authorized the build ("auto mode"). **increment 1 ✅ (2026-07-17):** `src/lib/jobsContentLint.ts` pure
 vocabulary-injected linter + oracle `jobs-content-lint-selftest` 14/14; CRY-WOLF BAR MET (all 604 real

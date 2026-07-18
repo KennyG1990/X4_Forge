@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.22 — 2026-07-18
+
+- New check for 'jobs' files (the fleet & economy definitions big overhaul mods use): the Forge now flags likely mistakes — an invented order, a bad location type, or a wrong ship size — even though the game itself ships no rules file for jobs to check against. It's advisory (a heads-up, never a blocker) and learned from the real game's own jobs, so it stays quiet on valid content.
+
 ## 0.0.21 — 2026-07-17
 
 - New: a plain-English answer to "is this just another AI mod generator?" — now on the store page, in the README, and as a Reference guide inside the studio. Short version: AI output goes through the same real-schema validation a hand-built mod faces, and if it can't make a mod validate, it tells you instead of handing you a broken one.

@@ -21,7 +21,17 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B61 increment 1 ✅ VERIFIED 2026-07-17 (auto mode) — jobs content linter engine + oracle
+## B61 increment 1+2 ✅ VERIFIED 2026-07-17 (auto mode) — jobs content linter, WIRED + published 0.0.22
+Ken cleared the parallel-agent blocker ("codex/Gemini not active") + "stick to the workflow", so
+increment 2 wired the engine into the live validator. `jobsLint` layer in projectValidation.ts (advisory
+WARNING, `ok` formula excludes it → never blocks), `getJobsVocabulary()` in server.ts (base + ego_dlc_*
+merged, cached, reference-set factions) threaded into all 4 runProjectValidation call sites; findings hit
+the validate response + capsules + IDE Problems panel. tsc/lint 0 · oracle 18/18 · LIVE endpoint proof
+(jobs.* warnings from a corpus-configured server) · sweep 88/91 · **e2e 19/19**. Published **0.0.22**,
+committed `<this commit>`. **NEXT — B61 phase 3 (SPECIFIED):** wares.xml content lint, same pattern
+(jobs is the proven template). Full detail: ROADMAP B61 inc2 + BACKLOG.
+
+## (superseded) B61 increment 1 — engine + oracle + corpus proof
 Ken authorized the build ("auto mode, you're doing great"). Shipped `src/lib/jobsContentLint.ts` (pure
 vocabulary-injected linter, mirrors patchReadiness) + oracle `jobs-content-lint-selftest` 14/14. CRY-WOLF
 BAR MET: all **604 real vanilla jobs lint clean, 0 false positives** (learned 11 classes/13 orders/5

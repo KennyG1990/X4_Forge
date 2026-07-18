@@ -52,6 +52,32 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B61 (increment 2) · JOBS CONTENT LINTER — WIRED into the live validator + published 0.0.22 (2026-07-17, VERIFIED)
+
+Ken cleared the parallel-agent blocker ("codex/Gemini not active, you're the only agent") and said
+"stick to the workflow", so increment 2 wired the increment-1 engine into the live validator.
+- **`src/server/projectValidation.ts`:** new `jobsLint` layer + `opts.jobsVocabulary` + `jobsLint`
+  result field + `summary.jobsContentWarnings` + flatten mapping (WARNING, one currency). For any file
+  basename `jobs.xml`, lints against the injected vocabulary; **advisory only** — the `ok` formula
+  provably excludes jobsLintFindings, so a suspicious job NEVER blocks validation. Honest degrade
+  (`available:false`) when no vocabulary is injected (CLI / schema-less).
+- **`server.ts` `getJobsVocabulary()`** (cached by game-root signature): reads base `libraries/jobs.xml`
+  (loose-first then packed) + **merges `ego_dlc_*` jobs** (official content only — a mod's own typo can
+  never teach the linter; closes the base-only-cries-wolf-on-DLC gap), attaches reference-set factions
+  fresh each call. Threaded into all 4 `runProjectValidation` call sites. Findings now also reach the
+  **IDE Problems panel** for free (they flow through the flat diagnostic currency).
+- **`jobsContentLint.ts`:** added `learnJobsVocabularyMerged(xmls, factions?)`; oracle now **18/18**.
+
+**Validation (Full-lane, all layers):** tsc 0 · lint 0 · oracle **18/18** · wired proof (real vanilla
+→ 0 findings; bad job → 4 WARNINGs in the flat currency; no-vocab → skipped; `ok` unaffected) · **LIVE
+endpoint** POST /api/agent/project/validate with the corpus configured → jobs.* warnings +
+`jobsContentWarnings:4` in the response (proves getJobsVocabulary reads the configured root end-to-end) ·
+**sweep 88/91** (jobs oracle green, 3 pre-existing env reds, no regression) · **e2e 19/19 PASS**. Stable
+**0.0.22 PUBLISHED** (staged probe ROOT 200). Publish-before-commit.
+**Fresh-eyes note:** flat finding `filePath` is the canonical `libraries/jobs.xml` (mods have one) —
+cosmetic, logged for a later increment. **Deferred:** phase 3 = wares.xml (same pattern). **Suggested
+commit title:** "feat(validate): B61 inc2 — wire jobs content linter into the live validator, publish 0.0.22".
+
 ### ✅ B61 (increment 1) · JOBS CONTENT LINTER — engine + oracle + corpus proof (2026-07-17, VERIFIED)
 
 Ken directed this off the B59d honest limit ("we need a schema for that — follow the workflow") and
