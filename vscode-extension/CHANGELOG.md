@@ -3,7 +3,11 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
-## 0.0.22 — 2026-07-18
+## 0.0.23 — 2026-07-18
+
+- New check: the Forge now flags mod code that uses commands or properties a game update removed or renamed (e.g. things that changed in 9.0), so you find out at edit-time instead of when the mod silently breaks in-game. It's advisory and grounded in Egosoft's own Breaking Changes list, and it ignores commented-out code so it won't nag about old lines you already disabled.
+
+## 0.0.22 — 2026-07-17
 
 - New check for 'jobs' files (the fleet & economy definitions big overhaul mods use): the Forge now flags likely mistakes — an invented order, a bad location type, or a wrong ship size — even though the game itself ships no rules file for jobs to check against. It's advisory (a heads-up, never a blocker) and learned from the real game's own jobs, so it stays quiet on valid content.
 

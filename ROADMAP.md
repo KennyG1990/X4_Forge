@@ -52,6 +52,39 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B62c · VERSION-MIGRATION / DEPRECATION LINTER — wired + published 0.0.23 (2026-07-17, VERIFIED)
+
+Round-3 community research (`docs/research/2026-07-17-community-gap-map-round3.md`) → Ken "build these out."
+Reconcile-first culled the menu HARD (the discipline working): **B62a REJECTED** — the research's
+"content.xml missing language blocks → game won't launch" is CORPUS-FALSIFIED: real working mods ship 0–2
+language blocks (kuertee_more_generic_missions/mod_support_community_api have NONE; x4_ai_influence ships
+just lang 44), so a completeness lint would cry-wolf on the majority incl. Ken's own mod. **B62d REJECTED
+(already built)** — `externalApiRegistry.ts` already flags a mod using an external API without the
+content.xml dependency (+ transitive), and `generateContentXML` already emits the `<dependency>` block.
+**B62c SURVIVED and shipped:**
+
+- **`src/lib/migrationLint.ts`** (pure, embedded ruleset): flags constructs a game update renamed/removed
+  — the "written against the old game, silently breaks" class (distinct from B59a selector-drift: this is
+  CONSTRUCTS deleted/renamed, not a `sel` that moved). Ruleset GROUNDED in Egosoft's Breaking Changes wiki
+  (WebFetched) and CORPUS-VERIFIED: every identifier confirmed absent from live 9.00. **DOM-parsed
+  (comment-safe)** — the corpus leaves removed calls (e.g. get_highest_resource_yield) COMMENTED as
+  references; a regex would cry-wolf on them, a DOM walk doesn't. Rules cover 9.00 (missiletags,
+  get_highest_resource_yield, find_asteroid/recyclable_in_cluster, isexceedingmadscore→madscore,
+  efficiencyupgrades, yield props) + 7.00 (purposemacro/name). Advisory WARNING; property rules require a
+  `.`-access (a bare token isn't flagged).
+- **Wired** into `runProjectValidation` (migration layer, always-on — no injected data) → validate
+  response + capsules + IDE Problems panel; `ok` formula excludes it (never blocks). Oracle
+  `migration-lint-selftest` 11/11.
+
+**Validation:** tsc 0 · lint 0 · oracle 11/11 · **CRY-WOLF BAR MET: all 399 vanilla 9.0 md/aiscript files
+→ 0 findings** (comment-safety proven) · **LIVE endpoint** (mod using a removed action + renamed property
+→ migration.* warnings + `migrationWarnings:2`) · sweep **89/92** (new oracle green, 3 pre-existing reds,
+no regression) · **e2e 19/19**. Stable **0.0.23 PUBLISHED**. Publish-before-commit.
+**Deferred (round-3 menu remainder):** B62b (t-file integrity/page-ID), B62e (index-coupling orphan lint),
+B62f (Workshop publish helper), B62g (sel builder, UI-heavy) — each needs its own reconcile (given a & d
+fell to reconcile, verify each survives before building). **Suggested commit title:** "feat(validate): B62c
+version-migration/deprecation linter (wired, corpus-clean 399/399), publish 0.0.23; B62a/d rejected-by-reconcile".
+
 ### ✅ B61 (increment 2) · JOBS CONTENT LINTER — WIRED into the live validator + published 0.0.22 (2026-07-17, VERIFIED)
 
 Ken cleared the parallel-agent blocker ("codex/Gemini not active, you're the only agent") and said

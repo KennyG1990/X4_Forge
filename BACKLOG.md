@@ -143,6 +143,17 @@ X4CodeComplete/CodeDebug ecosystem overlap (stay friendly, stay differentiated).
 (a–f, effort/impact rated, recommended default order e→d→b→a→c→f):
 `docs/research/2026-07-17-community-gap-map.md`. Nothing scheduled until Ken picks.
 
+### B62 · Community round-3 features (localization/migration/publish) — c ✅ SHIPPED, a/d rejected-by-reconcile, b/e/f/g open (Ken: "build these out")
+Research + menu: `docs/research/2026-07-17-community-gap-map-round3.md`. Reconcile-first is culling hard:
+**a REJECTED** (content.xml language-completeness "won't launch" = corpus myth; real mods ship 0–2 langs) ·
+**d REJECTED** (auto-deps already built — externalApiRegistry + generateContentXML) · **c ✅ SHIPPED** →
+ROADMAP (version-migration/deprecation linter, migrationLint.ts, oracle 11/11, corpus-clean 399/399,
+0.0.23). **OPEN (each RECONCILE-FIRST before build — given a & d fell):** **b** t-file reference integrity
++ page-ID allocator (t-files are structural-lint-only today; but check langService coverage) · **e**
+index-coupling orphan lint (unindexed macro/component) · **f** Steam Workshop publish helper (version*100,
+cat/dat build, whitelist, visibility) · **g** visual diff-patch sel builder (UI-heavy, Ken-screen-gated).
+Recommended remaining order: b → e → f → g.
+
 ### B61 · Content validation for un-schema'd domains (jobs et al.) — increment 1+2 ✅ VERIFIED 2026-07-17 → ROADMAP; phase 3 (wares) SPECIFIED
 **increment 2 ✅ (2026-07-17, published 0.0.22):** jobs linter WIRED into the live validator —
 `jobsLint` layer in projectValidation.ts (advisory WARNING, never flips `ok`), `getJobsVocabulary()`

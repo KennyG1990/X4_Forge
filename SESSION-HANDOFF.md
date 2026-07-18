@@ -21,7 +21,18 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B61 increment 1+2 ✅ VERIFIED 2026-07-17 (auto mode) — jobs content linter, WIRED + published 0.0.22
+## B62 round-3 community features (auto mode, "build these out") — c ✅ SHIPPED 0.0.23; a/d rejected-by-reconcile
+Research menu: `docs/research/2026-07-17-community-gap-map-round3.md`. Reconcile-first culled hard:
+**B62a REJECTED** — content.xml language-completeness "won't launch" is a CORPUS MYTH (real mods incl.
+x4_ai_influence ship 1 language, load fine). **B62d REJECTED** — auto-deps already built (externalApiRegistry
++ generateContentXML). **B62c ✅ SHIPPED** — version-migration/deprecation linter (`src/lib/migrationLint.ts`,
+oracle 11/11, CORPUS-CLEAN 399/399, DOM-comment-safe, wired into projectValidation, e2e 19/19, published
+0.0.23, committed `<this commit>`). **NEXT (round-3 remainder, EACH reconcile-first — a & d fell to reconcile):**
+b t-file integrity/page-ID · e index-coupling orphan lint · f Workshop publish helper · g sel builder (UI-heavy).
+KEY LESSON THIS ROUND: a research agent's secondary-source claim is a HYPOTHESIS — verify against the corpus
+BEFORE building; expect a real fraction of "community-requested" ideas to be already-built or falsified.
+
+## (superseded) B61 increment 1+2 ✅ VERIFIED 2026-07-17 (auto mode) — jobs content linter, WIRED + published 0.0.22
 Ken cleared the parallel-agent blocker ("codex/Gemini not active") + "stick to the workflow", so
 increment 2 wired the engine into the live validator. `jobsLint` layer in projectValidation.ts (advisory
 WARNING, `ok` formula excludes it → never blocks), `getJobsVocabulary()` in server.ts (base + ego_dlc_*
