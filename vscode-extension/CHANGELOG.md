@@ -3,7 +3,11 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
-## 0.0.24 — 2026-07-18
+## 0.0.25 — 2026-07-18
+
+- New localization check: if your mod references one of its own text lines by {page,id} but that line isn't defined in your language files, the Forge flags it — catching the typos that show up as blank or wrong text in-game. It only checks references to text your mod owns (never vanilla text you reuse), and it ignores developer comment notes, so it stays quiet on valid mods.
+
+## 0.0.24 — 2026-07-17
 
 - The 'jobs' safety check now has a twin for 'wares' (the economy/commodity definitions): the Forge flags a made-up transport type, a typo'd tag or group, and a nonsensical price (min above max) — grounded in the game's own wares so it stays quiet on valid content. Advisory, never blocking.
 

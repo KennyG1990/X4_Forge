@@ -52,6 +52,28 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B62b · T-FILE (LOCALIZATION) REFERENCE INTEGRITY — wired + published 0.0.25 (2026-07-18, VERIFIED)
+
+Round-3 F2. Reconcile confirmed: `lintTFileStructure` checks a t-file's own shape; NOTHING resolved
+`{page,id}` text references — a typo shows blank/garbage in-game. `src/lib/tFileLint.ts` (pure,
+comment-safe): builds the mod's owned-text index from its OWN t-files (page → entry-id sets, merged
+across languages) and flags a `{page,id}` reference that targets a page the mod DEFINES but whose entry
+id is missing. **Deliberately cry-wolf-safe — no vanilla index:** references to pages the mod does NOT
+own (vanilla-text reuse) are never flagged. Always runs (mod's own files); advisory WARNING; `ok`
+excludes it.
+- **Cry-wolf catch during the build (reconcile earned its keep AGAIN):** the vanilla corpus bar first
+  showed 3 "dangling" refs — all inside X4's `comment="…"` DEVELOPER-NOTE attribute (example text, not
+  live refs). Added a `comment="…"`-attribute strip (beyond XML comments); locked in an oracle check.
+- Oracle `tfile-lint-selftest` **13/13**. Wired in projectValidation (tFileRefs layer) → validate
+  response + capsules + IDE Problems panel.
+**Validation:** tsc 0 · lint 0 · oracle 13/13 · **CRY-WOLF BAR MET: all 12,930 vanilla {page,id} refs
+(531 files) → 0 dangling** after the comment-attr fix · negative path (mod ref to own missing entry →
+flagged; vanilla-page reuse → not; commented example → not) · **LIVE endpoint** (`tfile.dangling_text_ref`
++ `tFileRefWarnings:1`) · sweep **91/94** (new oracle green, 3 pre-existing reds, no regression) · **e2e
+19/19**. Stable **0.0.25 PUBLISHED**. Publish-before-commit. **Deferred (B62b phase 2):** per-language
+coverage matrix + free-page-ID allocator + reserved-registry collision (each its own reconcile). **Suggested
+commit title:** "feat(validate): B62b t-file reference integrity (corpus-clean 12930 refs), publish 0.0.25".
+
 ### ✅ B61 phase 3 · WARES CONTENT LINTER — wired + published 0.0.24 (2026-07-17, VERIFIED)
 
 The jobs-linter (B61) pattern applied to the economy layer — wares.xml has no content XSD either (B46P2).

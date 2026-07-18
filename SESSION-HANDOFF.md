@@ -21,7 +21,17 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B61 phase 3 ✅ WARES linter SHIPPED 0.0.24 + IDE-eyeball BLOCKED (input-host)
+## B62b ✅ T-FILE reference integrity SHIPPED 0.0.25 (localization)
+`src/lib/tFileLint.ts`: flags a `{page,id}` ref targeting a page the MOD OWNS but whose entry id is
+missing (modder's own typo). Cry-wolf-safe (only mod-owned pages; no vanilla index). Oracle 13/13,
+corpus-clean 12930 refs (caught + fixed a comment=-attribute false-positive class), wired into
+projectValidation, e2e 19/19, published 0.0.25, committed `<this commit>`. **B62 status:** b ✅ + c ✅
+shipped; a/d rejected-by-reconcile; **e/f/g OPEN (reconcile-first):** e index-coupling orphan lint · f
+Workshop publish helper · g sel builder (UI-heavy). B62b phase 2 (coverage matrix/page-ID allocator) deferred.
+HAZARD banked: 4 near-identical content-lint wirings now (jobs/wares/migration/tfile) — extract a domain
+registry before a 5th; and the IDE eyeball remains blocked by textinputhost (needs a machine-side touch).
+
+## (superseded) B61 phase 3 ✅ WARES linter SHIPPED 0.0.24 + IDE-eyeball BLOCKED (input-host)
 Wares content linter shipped (`src/lib/waresContentLint.ts`, oracle 14/14, corpus-clean 1397/1397, wired
 into projectValidation like jobs, e2e 19/19, published 0.0.24, committed `<this commit>`). jobs+wares both
 close the no-content-XSD gap. **IDE EYEBALL (B56/B57) BLOCKED:** `textinputhost.exe` (Windows IME/input

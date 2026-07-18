@@ -41,6 +41,7 @@ import { lintMdPitfalls, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
+import { buildModTextIndex, lintTextReferences, type TextRefFinding } from "../lib/tFileLint";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
 /**
@@ -81,6 +82,7 @@ export interface ProjectValidationResult {
     jobsContentWarnings: number;
     waresContentWarnings: number;
     migrationWarnings: number;
+    tFileRefWarnings: number;
   };
   structure: ReturnType<typeof validateProjectStructure>;
   cueIndex: ReturnType<typeof indexCueReferences>;
@@ -102,6 +104,8 @@ export interface ProjectValidationResult {
   waresLint: { available: boolean; findings: WareLintFinding[] };
   /** B62c: version-migration/deprecation lint (embedded corpus-verified ruleset; always runs). */
   migration: { findings: MigrationFinding[] };
+  /** B62b: t-file reference integrity (mod-owned-page dangling {page,id} refs; always runs). */
+  tFileRefs: { findings: TextRefFinding[] };
 }
 
 /**
@@ -222,6 +226,12 @@ export function runProjectValidation(
     }
   }
 
+  // B62b: t-file (localization) reference integrity — flags a {page,id} text reference that targets a
+  // page THIS MOD defines but whose entry id is missing (a typo in the modder's own text). Uses the
+  // mod's OWN t-files (no vanilla index) → cry-wolf-safe; always runs. Advisory WARNING.
+  const strFiles = project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string }));
+  const tFileFindings: TextRefFinding[] = lintTextReferences({ files: strFiles, index: buildModTextIndex(strFiles) }).findings;
+
   // B62c: version-migration / deprecation lint — flags constructs a game update renamed/removed
   // (grounded in Egosoft's Breaking Changes wiki, corpus-verified: 399 vanilla 9.0 scripts lint clean).
   // No injected data — the ruleset is embedded. Advisory WARNING; never flips `ok` (see below + flatten).
@@ -251,6 +261,7 @@ export function runProjectValidation(
       jobsContentWarnings: jobsLintFindings.length,
       waresContentWarnings: waresLintFindings.length,
       migrationWarnings: migrationFindings.length,
+      tFileRefWarnings: tFileFindings.length,
     },
     structure,
     cueIndex,
@@ -267,6 +278,7 @@ export function runProjectValidation(
     jobsLint: { available: !!jobsVocab, findings: jobsLintFindings },
     waresLint: { available: !!waresVocab, findings: waresLintFindings },
     migration: { findings: migrationFindings },
+    tFileRefs: { findings: tFileFindings },
   };
 }
 
@@ -319,6 +331,10 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   // B62c: version-migration/deprecation lint — advisory WARNING (never flips `ok`).
   for (const f of result.migration.findings) {
     out.push({ severity: "warning", code: `migration.${f.kind}`, filePath: f.filePath, sourceRef: `${f.version}:${f.match}`, message: f.message });
+  }
+  // B62b: t-file reference integrity — advisory WARNING (never flips `ok`).
+  for (const f of result.tFileRefs.findings) {
+    out.push({ severity: "warning", code: `tfile.${f.kind}`, filePath: f.filePath, sourceRef: `{${f.page},${f.id}}`, message: f.message });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
   // validator re-reports structure issues under its own code — same message, same file).
