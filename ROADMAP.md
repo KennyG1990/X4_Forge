@@ -52,6 +52,27 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B63 refactor · PER-BASENAME CONTENT-LINT REGISTRY — behavior-preserving DRY (2026-07-18, VERIFIED)
+
+Workflow rule 3.5 fired (the projectValidation content-lint-wiring duplication hazard was banked 3×). Ken:
+"be very careful, execute." **RECONCILE revised the plan honestly:** the validate route returns
+`res.json({ ...result, flat, capsules })` — the FULL result object (every per-lint field + summary count) is
+serialized to external agents, so the response shape MUST be preserved. That limits the registry to DRY'ing
+the LOOP, not eliminating the per-lint fields (the "one-liner per lint" benefit was smaller than pitched —
+recorded). Delivered the safe win: the 3 near-identical per-basename lint loops (jobs/wares/factions) → ONE
+table-driven loop (`basenameLints` registry, each `run` returns null to disable). Result fields + summary +
+flatten UNCHANGED. **No consumer reads the per-lint fields (grep-verified); response shape byte-preserved.**
+- **Safety net — GOLDEN behavior-preservation test:** captured the flattened findings + summary + field
+  counts across a fixture exercising ALL 6 lints BEFORE the refactor, re-ran AFTER → **byte-IDENTICAL** (11
+  findings, same summary, same field counts). This is a REFACTOR: same behavior, cleaner structure.
+**Validation:** tsc 0 · lint 0 · **golden diff IDENTICAL** · all 6 lint oracles green (jobs 18 / wares 14 /
+migration 11 / tfile 18 / factions 11) · sweep **92/95 unchanged** (no regression) · **e2e 19/19**.
+**NO PUBLISH** (internal, behavior-identical, no user-facing change — rides the next feature's publish).
+**Honest residual:** engines/oracles untouched; only the projectValidation loop changed. migration + tfile
+lints stay single-call (structurally different — not the duplication). A new basename lint = 1 registry
+entry + still its result field/summary/flatten case (response contract). **Suggested commit title:**
+"refactor(validate): unify per-basename content lints into a registry (golden-identical, no publish)".
+
 ### ✅ B63/A1 · FACTIONS.XML RELATIONS VALIDATION — wired + published 0.0.27 (2026-07-18, VERIFIED)
 
 Round-4 research (`docs/research/2026-07-18-community-gap-map-round4.md`, pre-culled — 2 agents

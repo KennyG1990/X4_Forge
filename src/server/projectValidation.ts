@@ -204,32 +204,30 @@ export function runProjectValidation(
     }
   }
 
-  // B61: corpus-grounded content lint for jobs.xml — the game ships NO jobs XSD, so a semantically
-  // wrong job (invented order, bad class, non-existent faction, wrong ship size) compiles clean and
-  // fails only in-game. Only runs when the server injected a learned vocabulary (else honest degrade).
-  // Advisory only — findings are WARNING and never flip `ok` (see the flatten mapping + ok computation).
+  // B63 (registry refactor): the per-basename content lints (jobs/wares/factions) share ONE loop via a
+  // small table — adding a domain is a spec entry, not a copy-pasted per-file loop (the recurring
+  // duplication hazard, banked 3×). Each `run` returns null to disable the lint (honest degrade when no
+  // vocabulary was injected). Behavior is byte-identical to the prior three separate loops (golden-verified:
+  // each sink is filled in the same file order, and flatten reads them in the same order). The game ships
+  // NO XSD for jobs/wares CONTENT; factions.xsd doesn't check relation bounds / target resolution. All
+  // findings are advisory WARNING and never flip `ok` (see the flatten mapping + the `ok` computation).
   const jobsLintFindings: JobLintFinding[] = [];
-  const jobsVocab = opts.jobsVocabulary;
-  if (jobsVocab) {
-    for (const f of project.files) {
-      const base = f.path.replace(/\\/g, "/").split("/").pop() || "";
-      if (base === "jobs.xml" && typeof f.content === "string") {
-        jobsLintFindings.push(...lintJobsContent({ jobsXml: f.content, vocabulary: jobsVocab }).findings);
-      }
-    }
-  }
-
-  // B61 phase 3: corpus-grounded content lint for wares.xml (the game ships no wares XSD) — mirrors
-  // the jobs layer. Only runs when the server injected a learned vocabulary (else honest degrade).
-  // Advisory WARNING; never flips `ok`.
   const waresLintFindings: WareLintFinding[] = [];
+  const factionFindings: FactionLintFinding[] = [];
+  const jobsVocab = opts.jobsVocabulary;
   const waresVocab = opts.waresVocabulary;
-  if (waresVocab) {
-    for (const f of project.files) {
-      const base = f.path.replace(/\\/g, "/").split("/").pop() || "";
-      if (base === "wares.xml" && typeof f.content === "string") {
-        waresLintFindings.push(...lintWaresContent({ waresXml: f.content, vocabulary: waresVocab }).findings);
-      }
+  const basenameLints: Array<{ basename: string; sink: unknown[]; run: (content: string) => unknown[] | null }> = [
+    { basename: "jobs.xml", sink: jobsLintFindings, run: c => jobsVocab ? lintJobsContent({ jobsXml: c, vocabulary: jobsVocab }).findings : null },
+    { basename: "wares.xml", sink: waresLintFindings, run: c => waresVocab ? lintWaresContent({ waresXml: c, vocabulary: waresVocab }).findings : null },
+    { basename: "factions.xml", sink: factionFindings, run: c => lintFactionRelations({ factionsXml: c, knownFactions: opts.references?.factions }).findings },
+  ];
+  for (const f of project.files) {
+    if (typeof f.content !== "string") continue;
+    const base = f.path.replace(/\\/g, "/").split("/").pop() || "";
+    for (const spec of basenameLints) {
+      if (base !== spec.basename) continue;
+      const r = spec.run(f.content);
+      if (r) spec.sink.push(...r);
     }
   }
 
@@ -241,15 +239,7 @@ export function runProjectValidation(
   // B62b phase 2: translation coverage across the mod's own language files (corpus-verified 0-gap-safe).
   const tCoverageFindings: TranslationCoverageFinding[] = lintTranslationCoverage({ tFiles: strFiles }).findings;
 
-  // B63/A1: factions.xml relations validation — relation value bounds ([-1,1]) + unknown relation-target
-  // faction (against the reference-set factions + the mod's own defs). Cry-wolf-safe (vanilla → 0). Advisory.
-  const factionFindings: FactionLintFinding[] = [];
-  for (const f of project.files) {
-    const base = f.path.replace(/\\/g, "/").split("/").pop() || "";
-    if (base === "factions.xml" && typeof f.content === "string") {
-      factionFindings.push(...lintFactionRelations({ factionsXml: f.content, knownFactions: opts.references?.factions }).findings);
-    }
-  }
+  // (factions.xml relations lint is handled by the basename-lint registry above — B63/A1.)
 
   // B62c: version-migration / deprecation lint — flags constructs a game update renamed/removed
   // (grounded in Egosoft's Breaking Changes wiki, corpus-verified: 399 vanilla 9.0 scripts lint clean).

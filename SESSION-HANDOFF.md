@@ -21,7 +21,15 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B63/A1 ✅ FACTIONS.XML RELATIONS LINT SHIPPED 0.0.27 (round-4)
+## B63 refactor ✅ content-lint registry (behavior-identical, no publish) 2026-07-18
+The 3 per-basename lint loops (jobs/wares/factions) now share ONE `basenameLints` registry loop in
+projectValidation.ts — GOLDEN behavior-preservation test proved byte-identical output across all 6 lints;
+all oracles green, e2e 19/19. Committed `<this commit>`. NO publish (internal, behavior-identical).
+Reconcile finding: the validate route serializes the full result (`res.json({...result})`), so the per-lint
+FIELDS are an external contract — the registry DRYs the LOOP only, not the fields. **A2 (god.xml) is now the
+clean next lint** (add a basenameLints entry + its field/summary/flatten). B1 transform pillar still Ken-decision.
+
+## (shipped) B63/A1 ✅ FACTIONS.XML RELATIONS LINT SHIPPED 0.0.27 (round-4)
 Round-4 research (PRE-CULLED, 2 agents triangulated): `docs/research/2026-07-18-community-gap-map-round4.md`.
 A1 shipped: `src/lib/factionsLint.ts` — relation value bounds [-1,1] (always) + unknown-target-faction
 (vs reference-set factions ∪ own defs; empty refset → skip). Oracle 11/11, corpus-clean 232 relations,
