@@ -42,6 +42,7 @@ import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../li
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
 import { buildModTextIndex, lintTextReferences, lintTranslationCoverage, type TextRefFinding, type TranslationCoverageFinding } from "../lib/tFileLint";
+import { lintFactionRelations, type FactionLintFinding } from "../lib/factionsLint";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
 /**
@@ -84,6 +85,7 @@ export interface ProjectValidationResult {
     migrationWarnings: number;
     tFileRefWarnings: number;
     tFileCoverageWarnings: number;
+    factionRelationWarnings: number;
   };
   structure: ReturnType<typeof validateProjectStructure>;
   cueIndex: ReturnType<typeof indexCueReferences>;
@@ -109,6 +111,8 @@ export interface ProjectValidationResult {
   tFileRefs: { findings: TextRefFinding[] };
   /** B62b phase 2: per-language translation coverage gaps across the mod's own t-files. */
   tFileCoverage: { findings: TranslationCoverageFinding[] };
+  /** B63/A1: factions.xml relation value-bounds + unknown-target-faction findings. */
+  factionRelations: { findings: FactionLintFinding[] };
 }
 
 /**
@@ -237,6 +241,16 @@ export function runProjectValidation(
   // B62b phase 2: translation coverage across the mod's own language files (corpus-verified 0-gap-safe).
   const tCoverageFindings: TranslationCoverageFinding[] = lintTranslationCoverage({ tFiles: strFiles }).findings;
 
+  // B63/A1: factions.xml relations validation — relation value bounds ([-1,1]) + unknown relation-target
+  // faction (against the reference-set factions + the mod's own defs). Cry-wolf-safe (vanilla → 0). Advisory.
+  const factionFindings: FactionLintFinding[] = [];
+  for (const f of project.files) {
+    const base = f.path.replace(/\\/g, "/").split("/").pop() || "";
+    if (base === "factions.xml" && typeof f.content === "string") {
+      factionFindings.push(...lintFactionRelations({ factionsXml: f.content, knownFactions: opts.references?.factions }).findings);
+    }
+  }
+
   // B62c: version-migration / deprecation lint — flags constructs a game update renamed/removed
   // (grounded in Egosoft's Breaking Changes wiki, corpus-verified: 399 vanilla 9.0 scripts lint clean).
   // No injected data — the ruleset is embedded. Advisory WARNING; never flips `ok` (see below + flatten).
@@ -268,6 +282,7 @@ export function runProjectValidation(
       migrationWarnings: migrationFindings.length,
       tFileRefWarnings: tFileFindings.length,
       tFileCoverageWarnings: tCoverageFindings.length,
+      factionRelationWarnings: factionFindings.length,
     },
     structure,
     cueIndex,
@@ -286,6 +301,7 @@ export function runProjectValidation(
     migration: { findings: migrationFindings },
     tFileRefs: { findings: tFileFindings },
     tFileCoverage: { findings: tCoverageFindings },
+    factionRelations: { findings: factionFindings },
   };
 }
 
@@ -346,6 +362,10 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   // B62b phase 2: translation coverage — advisory WARNING.
   for (const f of result.tFileCoverage.findings) {
     out.push({ severity: "warning", code: `tfile.${f.kind}`, filePath: `t/ (language ${f.language})`, sourceRef: `page ${f.page}`, message: f.message });
+  }
+  // B63/A1: factions.xml relations — advisory WARNING (never flips `ok`).
+  for (const f of result.factionRelations.findings) {
+    out.push({ severity: "warning", code: `factions.${f.kind}`, filePath: "libraries/factions.xml", sourceRef: `${f.faction}→${f.target}`, message: f.message });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
   // validator re-reports structure issues under its own code — same message, same file).

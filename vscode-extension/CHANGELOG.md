@@ -3,6 +3,10 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.27 — 2026-07-18
+
+- New check for faction mods: if a faction relation value is outside the game's legal −1…+1 range, or points at a faction id that doesn't exist, the Forge flags it — catching the two mistakes overhaul and diplomacy mods hit most. Grounded in the game's own factions, so valid relations stay quiet.
+
 ## 0.0.26 — 2026-07-18
 
 - Localization got a second helper: if your mod ships text in more than one language, the Forge now points out any lines you translated in one language but missed in another — so non-English players don't silently fall back to English. It only speaks up for multi-language mods (never nags a single-language mod), and gives one summary per language, not a wall of warnings.

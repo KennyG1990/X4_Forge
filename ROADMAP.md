@@ -52,6 +52,29 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B63/A1 · FACTIONS.XML RELATIONS VALIDATION — wired + published 0.0.27 (2026-07-18, VERIFIED)
+
+Round-4 research (`docs/research/2026-07-18-community-gap-map-round4.md`, pre-culled — 2 agents
+triangulated). A1 is the cleanest survivor: factions.xml IS XSD-covered but the XSD doesn't catch the two
+hazards faction/overhaul mods (Unlocked/Reactive Factions, DeadAir) hit. `src/lib/factionsLint.ts` (pure,
+DOM-comment-safe): **relation value out of the legal [-1,1] range** (deterministic, always runs) +
+**unknown relation-target faction** (resolved against reference-set factions ∪ the mod's own `<faction id>`
+defs; skipped when no/empty reference set). Advisory WARNING; `ok` excludes it. Reuses the already-threaded
+`opts.references.factions` — no new vocabulary loader.
+- **Cry-wolf caught in the LIVE proof + fixed:** a fresh scratch instance has an EMPTY reference set (object
+  index not built), and the engine ran the faction-id check against it → flagged real `argon` as unknown.
+  Fixed: an empty reference set is treated as ABSENT (skip the check, bounds still run); locked in the
+  `empty_refset_skips_faction_check` oracle check.
+- Oracle `factions-lint-selftest` **11/11**. Wired in projectValidation (factionRelations layer) → validate
+  + capsules + IDE Problems.
+**Validation:** tsc 0 · lint 0 · oracle 11/11 · **CRY-WOLF BAR MET: vanilla factions.xml (21 factions, 232
+relations) → 0 findings** (all values in [-1,1], grounded) · negative path exact (bad value + unknown
+faction) · **LIVE endpoint** (`factions.relation_out_of_range` + degrade-skips-faction-id on an index-less
+instance) · sweep 92/95 (new oracle green, 3 pre-existing reds, no regression) · **e2e 19/19**. Stable
+**0.0.27 PUBLISHED**. Publish-before-commit. **Round-4 remainder:** A2 god.xml station-placement (strong
+next lint), B1 bulk-transform PILLAR (Ken decision), A3 loadout slot-fit, C1 computed stats. **Suggested
+commit title:** "feat(validate): B63/A1 factions.xml relations lint (corpus-clean 232 relations), publish 0.0.27".
+
 ### ✅ B62b phase 2 · TRANSLATION COVERAGE MATRIX — wired + published 0.0.26 (2026-07-18, VERIFIED)
 
 Extends B62b: for a page the mod defines in 2+ of its OWN language files, flags a language with fewer

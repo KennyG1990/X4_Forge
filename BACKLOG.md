@@ -522,3 +522,16 @@ exit 1, green tree exit 0. Add future mechanical-mistake patterns to the table.
 ### B30 · Mirror-drift gate — ✅ CLOSED 2026-07-12 (workflow v3, VERIFIED) → ROADMAP
 (precommit byte-compares the 3 in-repo mirrors; deliberate-divergence drill BLOCKED exit 1; green now.
 The GLOBAL F:\DEV_ENV\CLAUDE.md copy remains Ken's named canon-lag item — outside this repo's gate.)
+
+### B63 · Community round-4 features (ecosystem/overhaul gaps) — A1 ✅ SHIPPED; A2/A3/C1 open, B1 PILLAR (Ken decision)
+Research (pre-culled, 2 agents triangulated): `docs/research/2026-07-18-community-gap-map-round4.md`.
+- **A1 ✅ SHIPPED** (factions.xml relations lint: value bounds [-1,1] + unknown-target-faction, oracle 11/11,
+  corpus-clean 232 relations, 0.0.27) → ROADMAP.
+- **A2 OPEN** — god.xml station-placement lint (matchextension="false" gotcha + macro resolution; COMPLETELY
+  uncovered; needs the object index for macro refs). Strong next lint, reconcile-first.
+- **B1 (Ken decision) — BULK PARAMETRIC TRANSFORMS pillar**: select-by-rule → multiply/set property → emit
+  <diff> (X4_Customizer's domain; the 3rd pillar author/validate/TRANSFORM). Highest impact, multi-unit
+  (rule engine + selection UI + emit); composes with synthesizePatch + the validators. NEEDS A SPEC + Ken go.
+- **A3** loadout slot-fit (needs slot-count from ship macros; heavier). **C1** computed balance stats (DPS/
+  margin/slot tables; analysis value-add). CULLED-OUT (already covered): derive-diff-from-two-files
+  (synthesizePatch exists), IntelliSense, sector editor (#64), cat/dat pack (B62f-adjacent).

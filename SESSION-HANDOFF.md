@@ -21,7 +21,19 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## B62b phase 2 ✅ TRANSLATION COVERAGE MATRIX SHIPPED 0.0.26
+## B63/A1 ✅ FACTIONS.XML RELATIONS LINT SHIPPED 0.0.27 (round-4)
+Round-4 research (PRE-CULLED, 2 agents triangulated): `docs/research/2026-07-18-community-gap-map-round4.md`.
+A1 shipped: `src/lib/factionsLint.ts` — relation value bounds [-1,1] (always) + unknown-target-faction
+(vs reference-set factions ∪ own defs; empty refset → skip). Oracle 11/11, corpus-clean 232 relations,
+live proof caught+fixed a cry-wolf (empty-refset flagged real argon → now skips). e2e 19/19, published 0.0.27,
+committed `<this commit>`. **ROUND-4 REMAINDER:** **A2 god.xml station-placement lint** (matchextension="false"
+gotcha + macro resolution; uncovered; STRONG next) · **B1 BULK-TRANSFORM PILLAR** (Ken decision — the 3rd
+pillar, X4_Customizer's domain, multi-unit; needs a spec + go) · A3 loadout slot-fit · C1 computed stats.
+**⚠️ DO THE DOMAIN-REGISTRY REFACTOR BEFORE A2** — 6 near-identical content-lint wirings now
+(jobs/wares/migration/tfile-ref/tfile-coverage/factions); extract domain→{fileMatch,lint,injectData} so A2
+is a table entry not a 7th copy (hazard banked 3×, now overdue).
+
+## (shipped) B62b phase 2 ✅ TRANSLATION COVERAGE MATRIX SHIPPED 0.0.26
 Extends tfile lint: flags a page the mod defines in 2+ languages where one has fewer entries (real gap).
 Corpus-verified cry-wolf-safe (477 vanilla multi-lang pages → 0 gaps). Oracle 18/18 (caught+fixed a
 filename-vs-attr language-id normalization bug). Low-noise (one summary per page-language; single-lang
