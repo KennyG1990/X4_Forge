@@ -102,6 +102,11 @@ clears the initial launch dialog — after that, menu→Continue is 2D nav (feas
   AI mod generator?" section on Open VSX once 0.0.21 propagates.
 
 ## Hot facts / hazards
+- **⚠️ DETACHED-HEAD HAZARD (lived 2026-07-17):** something in the build/e2e/scratch flow ran a bare
+  `git checkout HEAD` and DETACHED HEAD mid-session; the next commit stranded on the detached HEAD and
+  `git push` silently NO-OP'd (exit 0, remote didn't move). ALWAYS after a push assert
+  `git rev-parse origin/<branch>` == `git rev-parse HEAD` and that `git status -sb` shows the branch, not
+  "## HEAD (no branch)". Recovery if detached: `git branch -f <branch> HEAD && git checkout <branch> && git push`.
 - **Publish flow:** bump package.json → `npm run changelog` → `npm run stage-app` → (repo root)
   `npm run build` → (vscode-extension) `npm run package` → staged probe
   (`cd vscode-extension/app/dist && PORT=xxxx node server.cjs`, assert ROOT 200; health 401 by design)
