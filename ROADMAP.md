@@ -91,6 +91,19 @@ the USD cap, but review the pricing table + estimate approach before treating it
 the deliberate app-UI-origin isolation → Ken's explicit sign-off required (not silently rearchitected). SEC6/SEC7 deferred.
 - **Suggested commit title:** "fix(security): B64-SEC1/2/3 — run_command scope fix + env docs + config.json hardening; feat(spend): B64-SEC4 dollar-aware attribution (default-off)".
 
+### ✅ B64-T1 (slice) · route-level integration harness for the security surface — VERIFIED 2026-07-19 (headless)
+Audit C-TEST-1: 133 routes had no automated coverage beyond 9 e2e specs. New `scripts/route-integration.mjs`
+(`npm run test:routes`) boots an EPHEMERAL server (isolated state/data dirs, a known session token, NO game corpus
+needed) and asserts the security contract from an EXTERNAL HTTP client — the one thing the in-process SELFTESTS
+can't do (they bypass authMiddleware). **13/13 PASS:** unauth→401, bogus token→401, session→200; a READ key →200
+on read GETs, **403 on /api/run_command + /run_command/job** (makes the one-off B64-SEC1 live drill a PERMANENT
+regression guard), 403 on write POSTs + key-mgmt; a WRITE key →403 on exec + key-mgmt; fs/write path-traversal →
+rejected (403). Reliable Windows teardown via `taskkill /T /F` + a port-sweep backstop; verified no leaked listener.
+tsc 0. Files: `scripts/route-integration.mjs`, `package.json` (test:routes). **B64-T1b (deferred):** deploy dry-run,
+validate-with-fixture-schema (needs a bundled fixture so it stays corpus-independent), and the extension smoke test.
+Not wired into precommit (boots a server, ~10s — too slow); it's a standalone gate like e2e (cite in security closes).
+**Suggested commit title:** "test(routes): B64-T1 external route-integration harness (auth/scope/path-containment, 13/13)".
+
 ### ✅ B64-T2 · e2e verdict via Playwright JSON reporter — VERIFIED 2026-07-19 (headless)
 The e2e gate (`scripts/run-e2e.mjs`) decided PASS/FAIL by regex over the list-reporter STDOUT — brittle to any
 Playwright summary-wording change (audit finding C-TEST-2). Now the verdict comes from Playwright's STRUCTURED

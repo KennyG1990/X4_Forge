@@ -17,7 +17,8 @@
     "start:prod": "set NODE_ENV=production&& node dist/server.cjs",
     "precommit:check": "node scripts/precommit-check.mjs",
     "test:canvas": "node scripts/run-e2e.mjs tests/e2e/canvas-interactions.spec.ts tests/e2e/canvas-coverage.spec.ts",
-    "test:e2e": "node scripts/run-e2e.mjs"
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "test:routes": "node scripts/route-integration.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",

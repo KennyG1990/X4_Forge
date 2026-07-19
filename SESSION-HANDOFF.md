@@ -51,9 +51,14 @@ doesn't address the rapid-distinct-edit symptom). P1b/P2b also deferred. **PERF 
 wording drift), stdout regex kept as fallback, `--selftest` 10/10 guarded in precommit. Files: scripts/run-e2e.mjs,
 scripts/precommit-check.mjs.
 
-**NEXT UNIT = B64-T1** (route-level integration test harness for the highest-risk routes: project/validate, fs/write,
-deploy, agent keys + an extension smoke test; wire into the sweep — headless, but a BIG-ish new harness — consider a
-bounded first slice). Then ARCH1 (server.ts route extraction, ongoing). **EYEBALL-
+**T1 ✅ VERIFIED (slice, 2026-07-19, headless):** `scripts/route-integration.mjs` (`npm run test:routes`, 13/13) —
+external HTTP harness over the security surface (auth/scope/run_command-negatives/path-containment); SEC1 now a
+PERMANENT regression guard; clean taskkill /T teardown. **T1b deferred** (deploy dry-run + validate-with-fixture +
+ext smoke). Files: scripts/route-integration.mjs, package.json.
+
+**NEXT UNIT = B64-ARCH1** (server.ts route extraction — ONE cohesive route-group at a time into src/server/, no
+behavior change, tsc+e2e green each time; the god-file is 8347 lines / 133 routes, ~18% extracted. Pick a
+self-contained group with minimal shared-state coupling). **Alternatively** the EYEBALL-
 GATED (build headless, PARTIAL until Ken's screen — textinputhost blocks remote):** U1 error-toast assertive+persist
 (uiDialogs.tsx), U2 deploy-failure color (GuidedRail.tsx:153), U3 severity icon (CodePreview.tsx:1185), A1 shared-modal
 a11y. **KEN DECISIONS:** SEC5 Origin-spoof mechanism, X1 Google OAuth finish-or-remove. Full plan: docs/plans/2026-07-18-audit-hardening.md.
