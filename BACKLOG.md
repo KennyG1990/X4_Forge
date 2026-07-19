@@ -30,8 +30,10 @@ Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit sh
   severity icon · U4 Beginner Customize dead-end (verify-first).
 - **A11Y (broad, mostly EXPERIENCE-gated):** A1 shared modal shell (role=dialog/aria-modal/Escape/focus-trap —
   ~10 modals at once) · A2 Canvas keyboard nav (heavy, eyeball) · A3 sub-11px typography (deferred, design-led).
-- **TEST/ARCH:** T1 route-level integration harness · T2 e2e verdict via Playwright JSON reporter · ARCH1
-  server.ts route extraction (ongoing). **PRODUCT:** X1 finish-or-remove Google OAuth (Ken decision).
+- **TEST/ARCH:** T2 ✅ VERIFIED (e2e verdict from Playwright JSON report + `--selftest` 10/10 + precommit guard;
+  → ROADMAP). **NEXT: T1** route-level integration harness (highest-risk routes: validate/fs-write/deploy/agent-keys
+  + extension smoke; big-ish new harness) · ARCH1 server.ts route extraction (ongoing). **PRODUCT:** X1
+  finish-or-remove Google OAuth (Ken decision).
 - **NOT re-opened (already tracked):** 3 RED oracles (env-only), e2e stdout-parse (B17), 13 machine literals (B41).
 - **Eyeball-gated units** (U1–U4, A1–A2) wait for Ken's rendered screen — blocked by `textinputhost.exe` remotely;
   the headless units (SEC1-4, P1-4, T1-2, ARCH1) close with oracles/e2e alone.

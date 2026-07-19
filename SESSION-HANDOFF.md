@@ -47,9 +47,13 @@ first cold build (honest acceptance revision). Files: server.ts (getObjectIndex 
 stamp. **P3 DEFERRED** (workspace-write debounce risks lost-write in the ADR-F1/SPEC-#66 path; safe dirty-check
 doesn't address the rapid-distinct-edit symptom). P1b/P2b also deferred. **PERF BLOCK DONE.**
 
+**T2 ✅ VERIFIED (2026-07-19, headless):** e2e verdict now from Playwright JSON report (immune to the libuv crash +
+wording drift), stdout regex kept as fallback, `--selftest` 10/10 guarded in precommit. Files: scripts/run-e2e.mjs,
+scripts/precommit-check.mjs.
+
 **NEXT UNIT = B64-T1** (route-level integration test harness for the highest-risk routes: project/validate, fs/write,
-deploy, agent keys + an extension smoke test; wire into the sweep — headless). Then T2 (e2e verdict via Playwright
-JSON reporter instead of stdout regex, scripts/run-e2e.mjs) → ARCH1 (server.ts route extraction, ongoing). **EYEBALL-
+deploy, agent keys + an extension smoke test; wire into the sweep — headless, but a BIG-ish new harness — consider a
+bounded first slice). Then ARCH1 (server.ts route extraction, ongoing). **EYEBALL-
 GATED (build headless, PARTIAL until Ken's screen — textinputhost blocks remote):** U1 error-toast assertive+persist
 (uiDialogs.tsx), U2 deploy-failure color (GuidedRail.tsx:153), U3 severity icon (CodePreview.tsx:1185), A1 shared-modal
 a11y. **KEN DECISIONS:** SEC5 Origin-spoof mechanism, X1 Google OAuth finish-or-remove. Full plan: docs/plans/2026-07-18-audit-hardening.md.

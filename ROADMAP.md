@@ -91,6 +91,18 @@ the USD cap, but review the pricing table + estimate approach before treating it
 the deliberate app-UI-origin isolation → Ken's explicit sign-off required (not silently rearchitected). SEC6/SEC7 deferred.
 - **Suggested commit title:** "fix(security): B64-SEC1/2/3 — run_command scope fix + env docs + config.json hardening; feat(spend): B64-SEC4 dollar-aware attribution (default-off)".
 
+### ✅ B64-T2 · e2e verdict via Playwright JSON reporter — VERIFIED 2026-07-19 (headless)
+The e2e gate (`scripts/run-e2e.mjs`) decided PASS/FAIL by regex over the list-reporter STDOUT — brittle to any
+Playwright summary-wording change (audit finding C-TEST-2). Now the verdict comes from Playwright's STRUCTURED
+JSON report (`--reporter=list,json` + `PLAYWRIGHT_JSON_OUTPUT_NAME`), which is written to disk on suite completion
+— BEFORE the known libuv teardown crash (0xC0000409) — so it's immune to BOTH the crash AND wording drift. The
+stdout regex is KEPT as an explicit FALLBACK (missing/unreadable report → falls back, never silently green). Verdict
+logic factored into pure `verdictFromReport` / `verdictFromStdout` + a `--selftest` mode (10/10: all-pass green,
+failed/flaky/interrupted/timedOut/no-tests red, skipped-not-bad, all 3 fallback cases). **Wired into precommit**
+(`checkE2eVerdict` runs the selftest every commit — a broken verdict is a false-green, the worst failure mode).
+Live: full e2e now prints `[via json-report]` + PASS 19/19. tsc 0 · precommit green. Files: `scripts/run-e2e.mjs`,
+`scripts/precommit-check.mjs`. **Suggested commit title:** "test(e2e): B64-T2 verdict from Playwright JSON report + precommit guard".
+
 ### ✅ B64-P2 + P4 · validate-latency + cold-boot stamp fixes — VERIFIED 2026-07-19 (headless)
 - **P2 (getReferenceSets memoization):** `getReferenceSets` walked the whole object index (tens of thousands of
   items) building 3 Sets on EVERY call (≥2×/validate: project/validate + getJobsVocabulary). Now memoized by the

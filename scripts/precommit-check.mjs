@@ -131,9 +131,20 @@ function checkMirrorDrift() {
   }
 }
 
+// B64-T2 (2026-07-19): the e2e verdict logic IS the gate — a broken verdict is a
+// false-green (the worst failure mode). Guard it here so an edit to run-e2e.mjs can
+// never silently break how PASS/FAIL is decided.
+function checkE2eVerdict() {
+  console.log("[precommit] e2e verdict selftest");
+  const result = spawnSync("node scripts/run-e2e.mjs --selftest", { cwd: root, shell: true, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`e2e verdict selftest failed with exit ${result.status ?? "unknown"}`);
+}
+
 try {
   checkTripwires();
   checkMirrorDrift();
+  checkE2eVerdict();
   runTypecheck();
   checkLargeFiles();
   console.log("[precommit] OK");
