@@ -68,11 +68,12 @@ build` + tsc first. T2's fallback correctly FAILs a no-report run (no false-gree
 (uiDialogs.tsx). RECONCILE: no shared modal shell exists → re-scoped to the DialogHost dialog; the ~10 bespoke feature
 modals are **A1b** (shared `<Modal>` primitive + per-modal migration, eyeball-gated).
 
-**NEXT UNIT = B64-ARCH1** (server.ts route extraction — ONE cohesive route-group at a time into src/server/, no
-behavior change, tsc+e2e+sweep green each; god-file 8347 lines/133 routes, ~18% extracted; pick a minimal-shared-state
-group — candidates: ai/keys+usage, health/version, selftest-index). **Note:** ARCH1 is delicate (shared module state)
-+ open-ended — a clean bounded extraction is VERIFIABLE headless but deserves care. Remaining eyeball units (A1b, A2,
-U4) need Ken's screen; SEC5/X1 are Ken decisions.
+**ARCH1 RECONCILE-DEFERRED (2026-07-19):** pattern proven (`registerXxxRoutes(app, deps)`); ready candidate = AI
+keys/usage trio (server.ts:1935/1945/8184 → `src/server/aiRoutes.ts`, deps setStoredAiKey/aiKeyStatus + spendMeter
+snapshot). Not cut 14-units-deep: marginal value per extraction + security-relevant candidate → deserves a DEDICATED
+extraction session (several groups, tsc+sweep+e2e per). **B64 BATCH: every clean bounded headless unit is now DONE.**
+Remaining = eyeball-gated (A1/U1/U2/U3 built-PARTIAL awaiting Ken's screen; A1b/A2/U4 unbuilt) · Ken decisions (SEC5
+Origin-spoof, X1 OAuth) · deferred-with-rationale (ARCH1, P1b/P2b/P3, T1b, A3, SEC6/7). No clean headless unit left to grind.
 **Alternatively** the EYEBALL-
 GATED (build headless, PARTIAL until Ken's screen — textinputhost blocks remote):** U1 error-toast assertive+persist
 (uiDialogs.tsx), U2 deploy-failure color (GuidedRail.tsx:153), U3 severity icon (CodePreview.tsx:1185), A1 shared-modal

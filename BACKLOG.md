@@ -37,8 +37,13 @@ Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit sh
 - **TEST/ARCH:** T2 ✅ (e2e verdict from JSON report + precommit guard) · T1 ✅ slice (route-integration harness
   `npm run test:routes`, 13/13 — auth/scope/run_command-negatives/path-containment; SEC1 now a PERMANENT guard) —
   both VERIFIED 2026-07-19, headless, → ROADMAP. **NEW: T1b** (deploy dry-run + validate-with-fixture-schema +
-  extension smoke — needs a bundled fixture; deferred). **NEXT: ARCH1** server.ts route extraction (ongoing, one
-  cohesive route-group at a time, no behavior change). **PRODUCT:** X1 finish-or-remove Google OAuth (Ken decision).
+  extension smoke — needs a bundled fixture; deferred). **ARCH1 — RECONCILE-DEFERRED (decision 2026-07-19, rule 3.5):** extraction pattern proven
+  (`registerXxxRoutes(app, deps)` per src/server/*.ts); ready candidate = the AI keys/usage trio (server.ts:1935/1945/8184
+  → `src/server/aiRoutes.ts`, deps: setStoredAiKey/aiKeyStatus + a spendMeter snapshot closure). NOT cut now: value is
+  marginal per single extraction (8347→~8250 lines) + the cleanest candidate is security-relevant (key storage + origin
+  gating) — the god-file reduction deserves a DEDICATED focused pass (several extractions, one fresh session), not one
+  drive-by 14-units-deep. Do it as its own session with full tsc+sweep+e2e per extraction. **PRODUCT:** X1 finish-or-remove
+  Google OAuth (Ken decision).
 - **NOT re-opened (already tracked):** 3 RED oracles (env-only), e2e stdout-parse (B17), 13 machine literals (B41).
 - **Eyeball-gated units** (U1–U4, A1–A2) wait for Ken's rendered screen — blocked by `textinputhost.exe` remotely;
   the headless units (SEC1-4, P1-4, T1-2, ARCH1) close with oracles/e2e alone.
