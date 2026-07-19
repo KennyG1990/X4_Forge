@@ -21,8 +21,43 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## CURRENT STATE (2026-07-18) — B63 god.xml thread COMPLETE; round-4 A3/B1/C1 remain
-Latest = **0.0.29 published**, HEAD on origin. The B63 thread (all origin-verified): registry refactor
+## CURRENT STATE (2026-07-18) — ACTIVE FOCUS: B64 audit-hardening batch (SPECIFIED, security-first)
+Ken commissioned a full four-sweep read-only audit (security · data/perf · UI/a11y · tests/config/arch) and
+ordered it planned out systematically, **security first, then agent's choice**, workflow-religious, disciplined
+docs, "not from memory." DONE (this turn): reconciled against ADRs + capability-map, wrote the full SPECIFIED
+plan → **`docs/plans/2026-07-18-audit-hardening.md`** + compact umbrella **BACKLOG B64**. NO code yet — each
+unit ships a Ken-approval brief BEFORE implementation. **SEC1/2/3 ✅ VERIFIED (2026-07-18, headless, e2e 19/19, → ROADMAP):** SEC1 run_command scope fix (agentKeys.ts
+`EXEC_PREFIX` denies exec to all agent-key scopes; oracle 20/20 + **live 403 drill** read→403 / session→200 /
+benign→200) · SEC2 `.env.example` security/spend/dir vars · SEC3 `readXsdConfig` parse-safe degrade (oracle 12/12).
+**SEC4 ✅ VERIFIED (headless, additive/default-off, oracle 13/13, e2e 19/19):** dollar-aware spend attribution
+extending B25 — `estimateCallUsd` per-model pricing, per-provider USD rollup in ai-usage.json, optional
+`AI_DAILY_USD_CAP` (0=off=legacy). Files: aiSpendMeter.ts, server.ts (chokepoint+import), .env.example. **Ken-review
+the pricing table before treating as shipped spend policy.** **SEC5 (Origin-spoof) VERIFIED-as-real-gap by code,
+DEFERRED to Ken** (isAppUiRequest trusts a client-settable header; the fix changes the deliberate isolation model →
+needs Ken's mechanism choice). SEC6/SEC7 deferred. **SECURITY BLOCK DONE.**
+
+**P1 ✅ VERIFIED (headless, e2e 19/19):** object-index stale-while-revalidate — `getObjectIndex` now serves the
+stale index + schedules a deduped background refresh past the 60s TTL instead of blocking; build extracted to
+`rebuildObjectIndexNow`. Deterministic generatedAt drill proved stale-serve (T1 post-TTL, T2 after bg). **NEW P1b
+deferred:** truly non-blocking build (worker/chunked-async) — single thread still freezes during the bg refresh +
+first cold build (honest acceptance revision). Files: server.ts (getObjectIndex + helper + ResolvedXsdConfig import).
+
+**NEXT UNIT = B64-P2** (validate latency: memoize `getReferenceSets` by index signature — it's rebuilt ~2×/validate,
+server.ts:1383/1443 — + thread ONE parsed DOM per file through the basenameLints loop + migration/tfile layers, which
+today each re-DOM-parse the same file. Acceptance = GOLDEN behavior-preservation test, findings byte-identical
+before/after, like the B63 registry refactor; watch for a lint that mutates its doc). Then P3 (debounce workspace
+writes, server.ts:1785/workspaceState.ts) → P4 (deepen cold-boot invalidation stamps, server.ts:1234) → U1-3
+(cheap UX, EYEBALL-gated) → A1 (modal a11y, eyeball) → T1/T2 (route tests, e2e reporter) → ARCH1. Full plan:
+docs/plans/2026-07-18-audit-hardening.md.
+
+**COMMIT POINT (uncommitted now — REAL BLAST RADIUS, recommend committing before the next session):** B64 plan +
+SEC1/2/3/4 + P1 code + all record updates. Suggested title: "feat(hardening): B64 SEC1-4 + P1 — run_command scope
+fix, env docs, config.json hardening, dollar-aware spend (default-off), stale-while-revalidate object index".
+Files: agentKeys.ts, xsdParser.ts, aiSpendMeter.ts, server.ts, .env.example, docs/plans/2026-07-18-audit-hardening.md,
+BACKLOG/ROADMAP/HANDOFF, capability-map.md (StarForge). Nothing published (all headless, no user-facing change).
+
+## PRIOR STATE (2026-07-18) — B63 god.xml thread COMPLETE; round-4 A3/B1/C1 remain
+Latest published = **0.0.29**, HEAD on origin. The B63 thread (all origin-verified): registry refactor
 (golden-identical, no publish) → A1 factions.xml lint (0.0.27) → index-fix (object index scans maps/ sector
 macros; god.xml 133→0; 0.0.28) → A2 god.xml macro lint (0.0.29, one registry entry). The index-fix
 root-caused a cry-wolf that bit twice (B62e + A2). **ROUND-4 REMAINING (reconcile-first):** **A3** loadout
@@ -30,6 +65,8 @@ slot-fit (needs ship-macro slot data — LIKELY another index gap) · **B1 bulk-
 decision — new capability class, X4_Customizer's domain, multi-unit) · **C1** computed balance stats.
 Adding a per-basename lint now = one `basenameLints` entry + its field/summary/flatten (response contract).
 Session so far: 0.0.18→0.0.29 (13 versions) + the refactor. In-game proof still BLOCKED (desktop/textinputhost).
+**Commit question:** 0.0.29 (`b903b33`) + handoff (`b087c23`) committed+pushed, origin==HEAD. B64 planning
+docs (this turn: plan + BACKLOG + handoff) are UNCOMMITTED — commit point: "docs(B64): audit-hardening plan".
 
 ## B63 refactor ✅ content-lint registry (behavior-identical, no publish) 2026-07-18
 The 3 per-basename lint loops (jobs/wares/factions) now share ONE `basenameLints` registry loop in
@@ -199,5 +236,8 @@ clears the initial launch dialog — after that, menu→Continue is 2D nav (feas
 - Env-red sweep items (3): known, not regressions.
 
 ## First command for the next session
-`cd "F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00\libraries"` and inspect jobs.xml + the sibling
-libraries/ for which content files have NO matching XSD — that enumeration IS B61's reconcile step.
+Active work = **B64 audit-hardening**. First unit = **B64-SEC1** (run_command scope fix). First command:
+read `docs/plans/2026-07-18-audit-hardening.md` (B64-SEC1 section) + `src/lib/agentKeys.ts:203` (scopeAllows
+blanket-GET grant) + `server.ts:8188` (run_command exec) — then give Ken the approval brief before editing.
+(Prior thread's next command, if B64 is paused: inspect `F:\Downskies\...\X4 unpacked 9.00\libraries` for
+round-4 A3 loadout slot-fit reconcile.)

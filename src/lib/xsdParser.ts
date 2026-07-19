@@ -298,7 +298,21 @@ export function discoverXsd(root: string, basename: string): string | null {
 export function readXsdConfig(): XsdConfig {
   const fullPath = configPath();
   if (!fs.existsSync(fullPath)) return {};
-  return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+  // B64-SEC3 (2026-07-18): a corrupt/partially-written config.json must NOT throw.
+  // readXsdConfig is called at the top of ~40 route handlers (several before their try
+  // block); an unhandled JSON.parse threw an opaque 500 across the whole API. Degrade to
+  // "unconfigured" (same as file-absent) with a visible warning, so the app falls back to
+  // the first-run wizard instead of dying (mirrors B45's non-fatal schema-absence policy).
+  let raw: string;
+  try { raw = fs.readFileSync(fullPath, 'utf8'); }
+  catch (e) { console.warn(`[config] could not read ${fullPath}: ${(e as Error).message} — treating as unconfigured`); return {}; }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as XsdConfig : {};
+  } catch (e) {
+    console.warn(`[config] ${fullPath} is not valid JSON (${(e as Error).message}) — treating as unconfigured; fix or delete it via Directory Settings`);
+    return {};
+  }
 }
 
 export function writeXsdConfig(config: XsdConfig): void {
@@ -369,6 +383,23 @@ export function runSchemaDiscoverySelftest(): { pass: boolean; checks: Array<{ n
 
     const r = resolveXsdConfig({ xsdSchemaPath: tmp });
     ok('resolveXsdConfig reports all present', r.mdExists === true && r.commonExists === true && r.aiscriptsExists === true);
+
+    // B64-SEC3: a corrupt config.json degrades to {} (unconfigured) and never throws.
+    const cfgDir = path.join(tmp, 'cfg'); fs.mkdirSync(cfgDir, { recursive: true });
+    const prevCfgDir = process.env.X4_CONFIG_DIR;
+    process.env.X4_CONFIG_DIR = cfgDir;
+    try {
+      fs.writeFileSync(configPath(), '{ this is not valid json ,,', 'utf8');
+      let threw = false, val: XsdConfig | null = null;
+      try { val = readXsdConfig(); } catch { threw = true; }
+      ok('corrupt config.json does not throw', threw === false);
+      ok('corrupt config.json degrades to empty', !!val && Object.keys(val as object).length === 0);
+      // a VALID config still parses through unchanged
+      fs.writeFileSync(configPath(), JSON.stringify({ x4GamePath: 'X:/game' }), 'utf8');
+      ok('valid config.json still parses', readXsdConfig().x4GamePath === 'X:/game');
+    } finally {
+      if (prevCfgDir === undefined) delete process.env.X4_CONFIG_DIR; else process.env.X4_CONFIG_DIR = prevCfgDir;
+    }
   } catch (e) {
     ok('selftest ran without error', false, String(e));
   } finally {

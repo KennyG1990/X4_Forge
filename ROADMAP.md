@@ -52,6 +52,63 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B64-SEC1/2/3 · Audit-hardening security group — VERIFIED 2026-07-18 (headless, no publish)
+First three units of the B64 audit-hardening batch (source: the 2026-07-18 four-sweep audit; full plan
+`docs/plans/2026-07-18-audit-hardening.md`). All headless, no user-facing UI change, no publish.
+- **SEC1 (run_command scope-integrity fix)** — `scopeAllows` (agentKeys.ts) blanket-granted every GET to
+  every scope, so a **read-scoped agent key inherited `GET /api/run_command` RCE** (dev-only route; 404 in
+  prod). Added `EXEC_PREFIX='/run_command'` denied to ALL agent-key scopes (session token only), exactly like
+  the key-management guard. The POST-only scope selftest never covered a GET RCE. Oracle `agent-keys-selftest`
+  **20/20** (+`no_scope_can_exec_commands`, +`read_scope_still_reads_normal_gets`). **LIVE 403 DRILL** (isolated
+  server): read key → 403 on `GET /run_command`, `POST /run_command/job`, `GET /run_command/job/:id`; session
+  token → 200; read key → 200 on a benign GET (no over-restriction). Files: `src/lib/agentKeys.ts`, `server.ts` unchanged (middleware already calls scopeAllows).
+- **SEC2 (env-var docs)** — `.env.example` now documents every security/spend/dir var the server reads:
+  `FORGE_ALLOW_RUN_COMMAND` (⚠ enables the exec route in prod), `AI_DAILY_CALL_CAP` (spend backstop), `PORT`,
+  `API_ONLY`, `X4_DATA_DIR`, `X4_CONFIG_DIR`, `X4_STATE_DIR`, `FORGE_BRIDGE_URL`, the `OPEN_ROUTER_API_KEY` alias.
+  Build/test-only (`API_PORT`/`DISABLE_HMR`/`PLAYWRIGHT_BASE_URL`) + OS vars correctly omitted. Doc-only (Light lane).
+- **SEC3 (config.json parse hardening)** — `readXsdConfig` (xsdParser.ts) did `JSON.parse` with no try/catch,
+  called atop ~40 handlers → a corrupt `config.json` threw an opaque 500 API-wide. Now degrades to `{}`
+  (unconfigured, → first-run wizard, mirrors B45) with a visible `[config]` warning; non-object JSON also
+  degrades; valid config unchanged. Oracle `schema-discovery-selftest` **12/12** (+3 negative/positive checks).
+- **Gates:** host `tsc` 0 · both oracles green · **full e2e 19/19** (regression gate — SEC1 touched authMiddleware
+  for all routes; SEC3 the config read; e2e #16 also re-runs the two oracles via the public selftest endpoints).
+
+### ✅ B64-SEC4 · dollar-aware spend attribution (EXTENDS B25) — VERIFIED 2026-07-18 (headless, additive, default-off) · **Ken-review before relying on it**
+The B25 spend meter counted CALLS only (no dollar visibility, no per-provider cost). SEC4 adds, strictly
+additively: coarse per-model USD pricing (`estimateCallUsd`, substring-matched, default fallback), per-provider
+USD rollup in `data/ai-usage.json`, and an OPTIONAL daily dollar backstop `AI_DAILY_USD_CAP` (default 0 =
+**disabled = byte-identical legacy behavior** — proven by `usd_default_off_never_stops` + unchanged call-cap
+checks). The chokepoint estimates each call (input≈chars/4, output≈4k budget) and records it; the gate now
+soft-stops on EITHER the call cap or (if set) the dollar cap, with a `stoppedBy` reason in the error. It's an
+ESTIMATE (runaway-dollar guard, not billing) — labelled as such in code + docs. `GET /api/ai/usage` surfaces
+the usd rollup. Oracle `ai-spend-meter-selftest` **13/13** (+estimate math, usd cap stop, default-off, rollover);
+tsc 0; e2e 19/19. Files: `src/lib/aiSpendMeter.ts`, `server.ts` (chokepoint + import), `.env.example`.
+Deferred sub-part: per-AGENT-KEY attribution (needs key-id threaded to the chokepoint — bounded, not built).
+**Ken-review:** it's a spend surface (adapter rule 3.6) — additive/default-off so nothing changes unless you set
+the USD cap, but review the pricing table + estimate approach before treating it as a shipped spend policy.
+**SEC5 (Origin/Referer spend-spoof) — VERIFIED as a real gap by code inspection, DEFERRED to Ken:** `isAppUiRequest`
+(server.ts:1876) gates server-key spend purely on the client-settable `Origin`/`Referer` header. Closing it changes
+the deliberate app-UI-origin isolation → Ken's explicit sign-off required (not silently rearchitected). SEC6/SEC7 deferred.
+- **Suggested commit title:** "fix(security): B64-SEC1/2/3 — run_command scope fix + env docs + config.json hardening; feat(spend): B64-SEC4 dollar-aware attribution (default-off)".
+
+### ✅ B64-P1 · object-index build off the request hot path (stale-while-revalidate) — VERIFIED 2026-07-18 (headless)
+`getObjectIndex` rebuilt SYNCHRONOUSLY on the request path after its 60s TTL, freezing the single event loop
+for every client (the audit's HIGH perf finding; corroborated live — a full-corpus cold build blew a 2-min
+probe). Fix: **stale-while-revalidate** — a cache hit with the SAME key but past TTL now returns the stale
+index IMMEDIATELY and schedules ONE background refresh (deduped by `objectIndexRefreshing`); a CHANGED
+cacheKey (config changed) still blocks (can't serve stale of a different config); first cold build unchanged.
+The synchronous build+cache+mirror was extracted verbatim into `rebuildObjectIndexNow(resolved, roots,
+cacheKey)` shared by both the blocking and background paths (no drift). **DETERMINISTIC PROOF** (tiny-fixture
+live drill, generatedAt across the 60s boundary): cold `T1` → warm `T1` → **post-TTL served `T1` stale (not a
+blocked rebuild)** → +2s `T2` (bg refresh ran). tsc 0 · **e2e 19/19** (getObjectIndex is load-bearing —
+validate/search/reference-sets). Files: `server.ts` (getObjectIndex + new helper + `ResolvedXsdConfig` import).
+- **ACCEPTANCE REVISED honestly (recorded, non-clean):** the original "a request DURING the refresh returns
+  <100ms" needs a truly non-blocking build; Node is single-threaded, so the background rebuild still occupies
+  the loop WHEN it runs — the freeze is DECOUPLED from request latency + DEDUPED, not eliminated. True
+  non-blocking (worker thread / chunked-async yielding) is a large ripple across every synchronous
+  getObjectIndex caller → backlogged as **P1b**, not silently scoped in. First cold build also still blocks.
+- **Suggested commit title:** "perf(index): B64-P1 stale-while-revalidate object index (no per-request rebuild)".
+
 ### ✅ B63/A2 · GOD.XML STATION-PLACEMENT MACRO LINT — wired + published 0.0.29 (2026-07-18, VERIFIED)
 
 Round-4 A2, unblocked by the B63 index-fix. `src/lib/godLint.ts` (pure, DOM-comment-safe): flags a god.xml

@@ -194,11 +194,21 @@ export const WRITE_SCOPE_POST_PREFIXES = [
 export const KEY_MANAGEMENT_PREFIX = '/agent/keys';
 
 /**
+ * Arbitrary command execution (dev-only run_command route + its async jobs) is
+ * session-token-only for EVERY scope. B64-SEC1 (2026-07-18): the blanket-GET grant
+ * below would otherwise let a read-scoped key reach `GET /api/run_command?cmd=…`
+ * (which runs exec()) — a scope-integrity break the POST-only matrix never covered.
+ * Covers `/run_command`, `/run_command/job` (POST) and `/run_command/job/:id` (GET).
+ */
+export const EXEC_PREFIX = '/run_command';
+
+/**
  * Is `method path` allowed for `scope`? (path is express req.path under /api.)
  * Deny-by-default: anything not explicitly granted for the scope is refused.
  */
 export function scopeAllows(scope: AgentKeyScope, method: string, reqPath: string): boolean {
   if (reqPath.startsWith(KEY_MANAGEMENT_PREFIX)) return false; // never via agent key
+  if (reqPath.startsWith(EXEC_PREFIX)) return false; // B64-SEC1: exec is session-token-only, even on GET
   const m = method.toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return true; // all scopes read
   if (scope === 'read') return false;
@@ -275,6 +285,17 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
   ok('no_scope_can_manage_keys',
     (['read', 'write', 'deploy'] as AgentKeyScope[]).every(
       (s) => scopeAllows(s, 'POST', '/agent/keys') === false && scopeAllows(s, 'GET', '/agent/keys') === false));
+  // B64-SEC1: no agent-key scope may reach the dev-only exec route on ANY method (the
+  // blanket-GET grant used to leak GET /run_command RCE to read keys). Session token only.
+  ok('no_scope_can_exec_commands',
+    (['read', 'write', 'deploy'] as AgentKeyScope[]).every(
+      (s) => scopeAllows(s, 'GET', '/run_command') === false &&
+             scopeAllows(s, 'POST', '/run_command/job') === false &&
+             scopeAllows(s, 'GET', '/run_command/job/abc') === false));
+  // guard against over-restriction: a benign read GET is still allowed for the read scope
+  ok('read_scope_still_reads_normal_gets',
+    scopeAllows('read', 'GET', '/agent/schema') === true &&
+    scopeAllows('read', 'GET', '/agent/workspace') === true);
 
   // persistence round-trip (real temp file)
   try {

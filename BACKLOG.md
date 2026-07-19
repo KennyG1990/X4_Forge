@@ -6,6 +6,32 @@
 
 ## P0 — Active (this worktree branch)
 
+### B64 · Audit-driven hardening batch — `spec'd` (SPECIFIED 2026-07-18) · security-first, one unit at a time
+Source: a four-sweep read-only audit (security · data/perf · UI/a11y · tests/config/arch), every finding
+file:line-cited + confidence-labelled. Full acceptance contracts: `docs/plans/2026-07-18-audit-hardening.md`.
+Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit ships a Ken-approval brief
+(change/files/risks/validation) BEFORE code. Reconcile already done — see the plan's reconciliation summary.
+- **SECURITY (build order):** SEC1 ✅ VERIFIED (run_command scope fix; oracle 20/20 + live 403 drill) · SEC2 ✅
+  VERIFIED (.env.example security/spend/dir vars) · SEC3 ✅ VERIFIED (config.json parse hardening; oracle 12/12) —
+  all 2026-07-18, headless, e2e 19/19, → ROADMAP. SEC4 ✅ VERIFIED (dollar-aware spend attribution, EXTENDS B25,
+  additive+default-off, oracle 13/13; **Ken-review the pricing table before treating as shipped spend policy**).
+  **SEC5 (Origin/Referer spend-spoof) — VERIFIED as a real gap by code inspection, DEFERRED to Ken** (closing it
+  changes the deliberate app-UI-origin isolation → needs explicit sign-off + a mechanism choice). SEC6 session-token
+  rotation + SEC7 plaintext AI keys = **deferred** (low urgency / accepted-risk). **Security block DONE; now PERF.**
+- **PERF (agent's choice):** P1 ✅ VERIFIED (stale-while-revalidate object index; deterministic drill + e2e 19/19;
+  → ROADMAP) — **NEW: P1b** (truly non-blocking build via worker/chunked-async; deferred, large ripple). **NEXT:
+  P2** cache getReferenceSets + share one DOM parse across lints (golden-identical) → P3 debounce workspace writes
+  → P4 deepen cold-boot index-invalidation stamps.
+- **CHEAP UX:** U1 error-toast assertive+non-expiring · U2 deploy-failure error styling · U3 color-independent
+  severity icon · U4 Beginner Customize dead-end (verify-first).
+- **A11Y (broad, mostly EXPERIENCE-gated):** A1 shared modal shell (role=dialog/aria-modal/Escape/focus-trap —
+  ~10 modals at once) · A2 Canvas keyboard nav (heavy, eyeball) · A3 sub-11px typography (deferred, design-led).
+- **TEST/ARCH:** T1 route-level integration harness · T2 e2e verdict via Playwright JSON reporter · ARCH1
+  server.ts route extraction (ongoing). **PRODUCT:** X1 finish-or-remove Google OAuth (Ken decision).
+- **NOT re-opened (already tracked):** 3 RED oracles (env-only), e2e stdout-parse (B17), 13 machine literals (B41).
+- **Eyeball-gated units** (U1–U4, A1–A2) wait for Ken's rendered screen — blocked by `textinputhost.exe` remotely;
+  the headless units (SEC1-4, P1-4, T1-2, ARCH1) close with oracles/e2e alone.
+
 ### B60 · Automated + readable extension CHANGELOG — ✅ VERIFIED 2026-07-17 → ROADMAP
 Open VSX "Changes" tab is LIVE and human-readable (confirmed served for 0.0.17). Automated:
 `scripts/gen-changelog.mjs` derives the version list/dates/order from git; the USER-FACING text

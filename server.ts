@@ -12,7 +12,7 @@ import os from "os";
 import zlib from "zlib";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig } from "./src/lib/xsdParser";
+import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig } from "./src/lib/xsdParser";
 
 // Import types & helpers from the frontend shared file
 import {
@@ -67,7 +67,7 @@ import { runLuaRuntimeLogSelftest } from "./src/lib/luaRuntimeLog";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runSemanticsSelftest, listSemantics, semanticsForNode, getElementSemantics } from "./src/lib/mdSemantics";
 import { computeActionCensus, runActionCensusSelftest } from "./src/lib/actionCensus";
-import { createSpendMeter, runAiSpendMeterSelftest } from "./src/lib/aiSpendMeter";
+import { createSpendMeter, estimateCallUsd, runAiSpendMeterSelftest } from "./src/lib/aiSpendMeter";
 import { runModPatternsSelftest } from "./src/lib/modPatterns";
 import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
 import { runCriticSelftest, critiqueWorkspace } from "./src/lib/mdCritic";
@@ -225,6 +225,10 @@ function loadCurrentSchemaLibrary(): SchemaLibrary {
 let schemaLibrary: SchemaLibrary = loadCurrentSchemaLibrary();
 let schemaTemplatesByTag = new Map(schemaLibrary.templates.map(template => [template.xmlTag, template]));
 let objectIndexCache: { key: string; builtAt: number; index: X4ObjectIndex } | null = null;
+// B64-P1: in-flight guard for the stale-while-revalidate background refresh — dedupes
+// concurrent expired-cache hits into a single rebuild (Node is single-threaded, so this
+// is a boolean, not a lock). Holds the cacheKey currently being refreshed.
+let objectIndexRefreshing: string | null = null;
 
 // SQLite cache (mirror-write stage — see src/lib/db.ts). Lazily opened once;
 // null when better-sqlite3 isn't installed or the DB can't be opened. All uses
@@ -1282,6 +1286,26 @@ function getObjectIndex(): X4ObjectIndex {
     return objectIndexCache.index;
   }
 
+  // B64-P1 STALE-WHILE-REVALIDATE: cache present + SAME key but past the 60s TTL → return
+  // the stale index IMMEDIATELY and refresh in the background (deduped by objectIndexRefreshing).
+  // After the first cold build, no user request ever pays a synchronous rebuild. (Node is
+  // single-threaded, so the background rebuild still occupies the loop when it runs — the
+  // freeze is decoupled from request latency + deduped, not eliminated; a truly non-blocking
+  // build via a worker thread is P1b.) A CHANGED cacheKey (config changed) cannot serve a
+  // stale index for a different config, so it falls through to the blocking rebuild below.
+  if (objectIndexCache && objectIndexCache.key === cacheKey) {
+    if (objectIndexRefreshing !== cacheKey) {
+      objectIndexRefreshing = cacheKey;
+      const staleResolved = resolved, staleRoots = roots;
+      setImmediate(() => {
+        try { rebuildObjectIndexNow(staleResolved, staleRoots, cacheKey); }
+        catch (err) { console.warn('[object-index] background refresh failed (kept stale copy):', err); }
+        finally { if (objectIndexRefreshing === cacheKey) objectIndexRefreshing = null; }
+      });
+    }
+    return objectIndexCache.index;
+  }
+
   // COLD-BOOT FAST PATH (SQLite stage 3): if this process has never built the
   // index, the cached copy was built with the same cacheKey, and every source
   // stamp matches, restore from the DB instead of re-decoding 60+ archives.
@@ -1323,6 +1347,13 @@ function getObjectIndex(): X4ObjectIndex {
     }
   }
 
+  return rebuildObjectIndexNow(resolved, roots, cacheKey);
+}
+
+// B64-P1: the synchronous build + in-memory cache set + SQLite mirror-write, extracted so
+// BOTH the blocking cold-build path and the stale-while-revalidate background refresh share
+// one code path (no drift). Updates objectIndexCache under `cacheKey` and returns the index.
+function rebuildObjectIndexNow(resolved: ResolvedXsdConfig, roots: string[], cacheKey: string): X4ObjectIndex {
   const schemaElements = [
     ...schemaLibrary.events.map(element => ({ tag: element.tag, category: "md_event" })),
     ...schemaLibrary.conditions.map(element => ({ tag: element.tag, category: "md_condition" })),
@@ -1891,6 +1922,8 @@ function isAppUiRequest(req: express.Request): boolean {
 // soft-stops at AI_DAILY_CALL_CAP total calls (default 300, 0 disables). Usage
 // persists in data/ai-usage.json; GET /api/ai/usage is the readout.
 const AI_DAILY_CALL_CAP = Number(process.env.AI_DAILY_CALL_CAP ?? 300);
+// B64-SEC4: OPTIONAL dollar backstop (estimated). 0/unset = disabled = legacy behavior.
+const AI_DAILY_USD_CAP = Number(process.env.AI_DAILY_USD_CAP ?? 0);
 const AI_USAGE_FILE = dataPath("ai-usage.json"); // B53
 const aiSpendMeter = createSpendMeter(
   {
@@ -1898,6 +1931,8 @@ const aiSpendMeter = createSpendMeter(
     save: (t) => { try { fs.mkdirSync(path.dirname(AI_USAGE_FILE), { recursive: true }); fs.writeFileSync(AI_USAGE_FILE, t, "utf8"); } catch { /* best-effort */ } },
   },
   AI_DAILY_CALL_CAP,
+  undefined,
+  AI_DAILY_USD_CAP,
 );
 
 async function callMultiProviderAI(
@@ -1912,6 +1947,9 @@ async function callMultiProviderAI(
     const gate = aiSpendMeter.check(provider);
     if (!gate.allowed) {
       aiSpendMeter.recordRefusal(provider);
+      if (gate.stoppedBy === 'usd') {
+        throw new Error(`Daily AI spend cap reached (~$${gate.usdToday.toFixed(2)}/$${gate.usdCap.toFixed(2)} estimated). This is the runaway-DOLLAR backstop — raise AI_DAILY_USD_CAP (or set 0 to disable) and restart if today's spend is intentional.`);
+      }
       throw new Error(`Daily AI call cap reached (${gate.usedToday}/${gate.cap}). This is the runaway-spend backstop — raise AI_DAILY_CALL_CAP (or set 0 to disable) and restart if today's use is intentional.`);
     }
     aiSpendMeter.record(provider);
@@ -1928,6 +1966,13 @@ async function callMultiProviderAI(
   const customKey = customKeyHeader || storedKey;
   const model = (req.headers["x-ai-model"] as string) || "";
   const reasoning = (req.headers["x-ai-reasoning"] as string) || "none";
+  // B64-SEC4: attribute a coarse estimated USD cost to this call (per-provider rollup in
+  // data/ai-usage.json, readable via GET /api/ai/usage). Estimate only — a runaway-dollar
+  // backstop, not accounting: input≈chars/4, output≈the ~4k per-call budget cap.
+  try {
+    const estInTokens = Math.ceil((systemInstruction.length + prompt.length) / 4);
+    aiSpendMeter.recordCost(provider, estimateCallUsd(model, estInTokens, 4000));
+  } catch { /* metering is best-effort, never fatal */ }
 
   if (provider === "claude") {
     const claudeKey = customKey || (envFallbackAllowed ? process.env.ANTHROPIC_API_KEY : undefined);

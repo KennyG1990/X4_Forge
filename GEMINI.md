@@ -483,11 +483,16 @@ the real workspace (leak class #70). Ken's canvas is HIS — never replace it wi
 limit, and failure behavior before it ships (workflow rule 3.6). External agents bring their own AI
 keys (`x-custom-api-key`); server keys are app-UI-origin-only.
 
-**Git & release ownership:** the workflow's Git Policy applies with this project's specifics — ALL
-mutating git is Ken's (via Antigravity), per-operation authorization only; read-only inspection
-(status/diff/log/show/blame/branch listing) is allowed and expected (the session-start commit question
-requires it). Close titles double as suggested commit messages. Release-track unpark (B8/B23) is
-Ken-gated. Lived reason: a sandbox commit once corrupted a file via stale mount reads.
+**Git & release ownership:** the workflow's Git Policy applies with this project's specifics — Ken
+DELEGATED git to the agent (2026-07-19): the agent COMMITS AND PUSHES directly with `git` (the KLIO /
+Antigravity computer-use commit flow is RETIRED — "get rid of the klio policy"), using a comprehensive
+message and asserting `origin/<branch>` == `HEAD` after every push (banked detached-HEAD hazard). Run
+`npm run precommit:check` first. **Publish-before-commit** holds ONLY for USER-FACING releases (bump →
+changelog → stage → build → package → probe → `ovsx publish` → commit, so store version == committed
+version); headless/internal changes (security/perf/infra/tests) have no publish step and just commit.
+Read-only inspection is always fine. Release-track unpark (B8/B23) stays Ken-gated. (The old "ALL mutating
+git is Ken's via Antigravity, per-operation only" line is superseded for the commit+push step; this session
+is HOST-NATIVE, so the stale-mount commit-corruption hazard does not apply.)
 
 **Task selection — don't let easy crowd out important:** buildable-now, easily-cited work must not
 starve gated keystones (in-game / EXPERIENCE items). Every few tasks deliberately pull a gated task.
