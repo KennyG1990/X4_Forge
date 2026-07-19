@@ -142,9 +142,18 @@ each is ◐ PARTIAL until Ken's screen closes it (textinputhost blocks remote ey
     info path is intact. **Follow-up option (Ken's call, not done):** route `window.alert` → error-kind so alert-
     surfaced errors persist (that's the transient path the audit's "errors vanish" actually describes) — small, but
     window.alert isn't always an error, so it's a judgment call. U1 stays ◐ (code-correct; no live error trigger exists).
-  - **U3 ◐:** width-cue is code-verified (error `w-2` / warning `w-1`, both sites) and the code pane renders live, but
-    the current workspace's diagnostics didn't surface as line-gutter markers in the viewed file (they need a file whose
-    MD diagnostics carry line positions in view), so the rendered marker widths weren't captured this session. Stays ◐.
+  - **U3 ✗ NO-OP ON LIVE — audit C-A11Y-4 FALSIFIED for the shipped app (visual validation caught it):** the
+    scroll-gutter markers I modified live in the OLD hand-rolled renderer (CodePreview.tsx:1185/1391), but B48 set
+    `const CODEMIRROR_EDITOR = true` (CodePreview.tsx:29) — the DEFAULT editor is CodeMirror, so that renderer + its
+    markers are DEAD CODE. Live-DOM check: `.cm-editor` is the active editor, 0 of my markers render. And
+    `CodeMirrorField.tsx` renders NO per-line severity diagnostics at all (only line-number + diff gutters) — so there
+    is no color-only severity marker in the user-visible editor to fix. The severity indicators users DO see (readiness
+    chips "Valid · 3 warnings" / "1 error", the Editor-Diagnostics button) already carry TEXT labels, not color alone.
+    **Net:** U3's change is harmless dead-path polish (helps only if the CodeMirror flag is ever turned off); the audit's
+    color-only-severity premise doesn't hold for the live app. Kept (harmless + defensible fallback), NOT counted as a
+    user-visible fix. **Broader implication:** the audit's UI/a11y findings came from STATIC analysis and can cite
+    disabled render paths — A1b/A2/U-items must be re-grounded against the LIVE render path (CodeMirror, the real
+    components) before building. A1 (validated live) and U2 (GuidedRail, a live component) are the ones that hold.
   - **U2 ◐:** NOT driven — a real Beginner deploy writes to the mod-staging dir (filesystem side effect); not worth the
     write-gate risk to prove a color token. The `text-amber-300`→`text-rose-300` change is code-verified. Stays ◐.
 - **Suggested commit title:** "feat(ux): B64-U1/U2/U3 — persistent assertive error toasts, red deploy-failure, shape-cued severity".
