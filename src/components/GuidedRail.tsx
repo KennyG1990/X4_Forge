@@ -151,7 +151,10 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
               <span className="inline-flex items-center gap-1.5 text-emerald-300"><CheckCircle2 size={12} /> {deploy.detail}</span>
             )}
             {deploy.phase === 'fail' && (
-              <span className="inline-flex items-start gap-1.5 text-amber-300">
+              // B64-U2 (audit C-UX-2): a hard deploy FAILURE was styled text-amber-300 — the
+              // same amber as warnings — so it read as a caution. Use error red (rose) to
+              // distinguish failure from warning; the amber palette stays reserved for warnings.
+              <span className="inline-flex items-start gap-1.5 text-rose-300">
                 <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {deploy.detail} — fix the highlighted issue and deploy again.
                 <button onClick={runDeploy} className="text-cyan-300 underline underline-offset-2 cursor-pointer shrink-0">Retry</button>
               </span>

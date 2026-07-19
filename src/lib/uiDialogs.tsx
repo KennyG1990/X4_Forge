@@ -46,12 +46,19 @@ function subscribe(l: Listener): () => void {
   return () => { listeners.delete(l); };
 }
 
-/** Fire-and-forget toast. Auto-dismisses. Replaces alert() for notifications. */
-export function toast(message: string, kind: ToastKind = 'info', ttlMs = 4200): void {
+/**
+ * Fire-and-forget toast. Replaces alert() for notifications.
+ * B64-U1 (2026-07-18, audit C-UX-1): ERROR toasts must not vanish before they're read or
+ * announced — by default an error persists (ttl 0 = manual dismiss) and is announced
+ * ASSERTIVELY (role="alert", see DialogHost). Info/success/warning keep the timed, polite
+ * behavior. An explicit `ttlMs` argument still wins (callers may override either way).
+ */
+export function toast(message: string, kind: ToastKind = 'info', ttlMs?: number): void {
   const id = seq++;
+  const effectiveTtl = ttlMs ?? (kind === 'error' ? 0 : 4200); // errors persist until dismissed
   toasts = [...toasts, { id, message: String(message ?? ''), kind }];
   emit();
-  if (ttlMs > 0) setTimeout(() => dismissToast(id), ttlMs);
+  if (effectiveTtl > 0) setTimeout(() => dismissToast(id), effectiveTtl);
 }
 
 export function dismissToast(id: number): void {
@@ -125,8 +132,12 @@ export default function DialogHost() {
       <div style={{ position: 'fixed', top: 14, right: 14, zIndex: 100000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 380, pointerEvents: 'none' }} data-testid="toast-host">
         {toasts.map(t => {
           const s = KIND_STYLE[t.kind];
+          // B64-U1: errors are announced assertively (role="alert"/aria-live="assertive") so a
+          // screen reader interrupts to read them; others stay polite. All are click-to-dismiss.
+          const isError = t.kind === 'error';
           return (
-            <div key={t.id} role="status" data-testid="toast"
+            <div key={t.id} role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'}
+              data-testid="toast" data-kind={t.kind} title="Click to dismiss"
               style={{ pointerEvents: 'auto', background: 'rgba(11,13,18,0.96)', border: `1px solid ${s.border}`, borderLeft: `3px solid ${s.bar}`, color: '#e2e8f0', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, fontFamily: 'system-ui, sans-serif', boxShadow: '0 4px 16px rgba(0,0,0,0.45)', cursor: 'pointer', lineHeight: 1.35 }}
               onClick={() => dismissToast(t.id)}>
               {t.message}

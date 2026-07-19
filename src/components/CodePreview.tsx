@@ -1182,7 +1182,11 @@ export default function CodePreview({
                   {Array.from(lineDiagMap.entries()).map(([idx, info]) => (
                     <div
                       key={idx}
-                      className={`absolute right-0 w-2 h-[3.5px] rounded-sm ${info.severity === 'error' ? 'bg-red-500' : 'bg-amber-400'}`}
+                      /* B64-U3 (audit C-A11Y-4): severity was color-ONLY. These 2px markers are
+                       too small for an icon, so add a SHAPE cue — error=full-width, warning=
+                       half-width — so a colorblind reader can tell them apart. Fuller
+                       message-level icon treatment needs a rendered pass (eyeball batch / A1). */
+                    className={`absolute right-0 h-[3.5px] rounded-sm ${info.severity === 'error' ? 'w-2 bg-red-500' : 'w-1 bg-amber-400'}`}
                       style={{ top: `${(idx / Math.max(codeLines.length, 1)) * 100}%` }}
                     />
                   ))}
@@ -1388,7 +1392,11 @@ export default function CodePreview({
                 {Array.from(lineDiagMap.entries()).map(([idx, info]) => (
                   <div
                     key={idx}
-                    className={`absolute right-0 w-2 h-[3.5px] rounded-sm ${info.severity === 'error' ? 'bg-red-500' : 'bg-amber-400'}`}
+                    /* B64-U3 (audit C-A11Y-4): severity was color-ONLY. These 2px markers are
+                       too small for an icon, so add a SHAPE cue — error=full-width, warning=
+                       half-width — so a colorblind reader can tell them apart. Fuller
+                       message-level icon treatment needs a rendered pass (eyeball batch / A1). */
+                    className={`absolute right-0 h-[3.5px] rounded-sm ${info.severity === 'error' ? 'w-2 bg-red-500' : 'w-1 bg-amber-400'}`}
                     style={{ top: `${(idx / Math.max(codeLines.length, 1)) * 100}%` }}
                   />
                 ))}

@@ -91,6 +91,23 @@ the USD cap, but review the pricing table + estimate approach before treating it
 the deliberate app-UI-origin isolation → Ken's explicit sign-off required (not silently rearchitected). SEC6/SEC7 deferred.
 - **Suggested commit title:** "fix(security): B64-SEC1/2/3 — run_command scope fix + env docs + config.json hardening; feat(spend): B64-SEC4 dollar-aware attribution (default-off)".
 
+### ◐ B64-U1/U2/U3 · cheap UX/a11y fixes — PARTIAL (BUILT + machine-validated) 2026-07-19; EYEBALL-gated
+All three code-complete, tsc 0, **vite build ✓ (1816 modules)**, **e2e 19/19**. They change what a user SEES, so
+each is ◐ PARTIAL until Ken's screen closes it (textinputhost blocks remote eyeball). Files: `src/lib/uiDialogs.tsx`
+(U1), `src/components/GuidedRail.tsx` (U2), `src/components/CodePreview.tsx` (U3).
+- **U1 (error toasts persist + assertive):** `toast()` — error kind now defaults to ttl 0 (persists until clicked;
+  info/success/warning keep the 4.2s timer; explicit ttlMs still wins) and renders `role="alert"`/`aria-live="assertive"`
+  (others polite) so a screen reader interrupts to read it. Was: all polite + 4.2s → errors vanished before read (C-UX-1).
+- **U2 (deploy failure reads as error):** GuidedRail `fail` phase `text-amber-300` → `text-rose-300` — a hard failure
+  no longer wears warning-amber (C-UX-2).
+- **U3 (color-independent severity):** the 2px scroll-gutter markers were red-vs-amber ONLY; too small for an icon, so
+  added a SHAPE cue — error=full-width (`w-2`), warning=half-width (`w-1`) — both render sites (C-A11Y-4). Fuller
+  message-level icon treatment deferred to the eyeball batch (needs a rendered pass to place correctly).
+- **EYEBALL SCRIPTS (Ken, ~1 min):** (U1) trigger any validation error → confirm the toast STAYS until clicked (doesn't
+  auto-vanish) + reads as an error. (U2) Beginner rail → Deploy with a deliberately-broken mod → the failure line is RED,
+  not amber. (U3) open a mod with both an error and a warning → the right-edge scroll marks differ in WIDTH, not just color.
+- **Suggested commit title:** "feat(ux): B64-U1/U2/U3 — persistent assertive error toasts, red deploy-failure, shape-cued severity".
+
 ### ✅ B64-T1 (slice) · route-level integration harness for the security surface — VERIFIED 2026-07-19 (headless)
 Audit C-TEST-1: 133 routes had no automated coverage beyond 9 e2e specs. New `scripts/route-integration.mjs`
 (`npm run test:routes`) boots an EPHEMERAL server (isolated state/data dirs, a known session token, NO game corpus

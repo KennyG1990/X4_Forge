@@ -56,9 +56,19 @@ external HTTP harness over the security surface (auth/scope/run_command-negative
 PERMANENT regression guard; clean taskkill /T teardown. **T1b deferred** (deploy dry-run + validate-with-fixture +
 ext smoke). Files: scripts/route-integration.mjs, package.json.
 
-**NEXT UNIT = B64-ARCH1** (server.ts route extraction — ONE cohesive route-group at a time into src/server/, no
-behavior change, tsc+e2e green each time; the god-file is 8347 lines / 133 routes, ~18% extracted. Pick a
-self-contained group with minimal shared-state coupling). **Alternatively** the EYEBALL-
+**U1/U2/U3 ◐ PARTIAL (BUILT, tsc/vite/e2e 19/19; EYEBALL-gated — scripts above):** persistent assertive error toasts,
+red deploy-failure, shape-cued severity markers. Files: uiDialogs.tsx, GuidedRail.tsx, CodePreview.tsx.
+
+**⚠️ HAZARD (banked 2×, 2026-07-19):** the graphify post-commit hook's BACKGROUND rebuild contends with e2e — caused
+a transient 16-fail run AND a 0/0-no-report run this session, both non-reproducing on clean re-run. If e2e comes back
+0/0 or mass-fail right after a commit, RE-RUN it (don't chase a phantom regression); confirm the code with `npx vite
+build` + tsc first. T2's fallback correctly FAILs a no-report run (no false-green).
+
+**NEXT UNIT = B64-A1** (shared-modal a11y: role="dialog"+aria-modal+labelled title+Escape+focus-trap+focus-restore on
+the shared modal shell → fixes ~10 modals at once + can fold in U3's fuller message-level severity icon; headless build,
+eyeball close) **OR B64-ARCH1** (server.ts route extraction — ONE cohesive route-group at a time into src/server/, no
+behavior change, tsc+e2e green each; god-file 8347 lines/133 routes, ~18% extracted; pick minimal-shared-state group).
+**Alternatively** the EYEBALL-
 GATED (build headless, PARTIAL until Ken's screen — textinputhost blocks remote):** U1 error-toast assertive+persist
 (uiDialogs.tsx), U2 deploy-failure color (GuidedRail.tsx:153), U3 severity icon (CodePreview.tsx:1185), A1 shared-modal
 a11y. **KEN DECISIONS:** SEC5 Origin-spoof mechanism, X1 Google OAuth finish-or-remove. Full plan: docs/plans/2026-07-18-audit-hardening.md.
@@ -225,7 +235,10 @@ Ken cleared game-eyes via computer-use while away, but two machine-reality walls
 Alternatively an agent CAN drive it once Ken approves the computer-use grant dialog for Steam + X4 and
 clears the initial launch dialog — after that, menu→Continue is 2D nav (feasible), NPC-walk is 3D (hard).
 
-## Eyeball queue (Ken 30-sec checks) — all already EYES-seen by the agent this session
+## Eyeball queue (Ken 30-sec checks)
+- **B64-U1** (error toasts): trigger any validation error → the toast STAYS until you click it (no 4.2s auto-vanish) + reads as an error.
+- **B64-U2** (deploy failure): Beginner rail → Deploy a deliberately-broken mod → the failure line is RED (rose), not warning-amber.
+- **B64-U3** (severity shape cue): open a mod with BOTH an error and a warning → right-edge scroll marks differ in WIDTH (error wide, warning half), not just color.
 - B59c: X4 WIKI → HUD & LUA → "UI Extensions Framework Compatibility (kuertee)".
 - B59d: X4 WIKI → **Reference** tab → "Is this just another AI mod generator?" (confirm the mechanism
   paragraphs + honest-limit paragraph read right). Also the store page / README "Is this just another

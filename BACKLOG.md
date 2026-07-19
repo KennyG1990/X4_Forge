@@ -26,10 +26,12 @@ Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit sh
   that risks lost-write/disk-memory-divergence in the ADR-F1/SPEC-#66-scarred persistence path; the safe dirty-check
   slice doesn't address the symptom. Revisit in fresh context with crash-consistency tests if the write-amplification
   ever bites. **PERF BLOCK DONE (P1/P2/P4 shipped; P1b/P2b/P3 deferred).**
-- **CHEAP UX:** U1 error-toast assertive+non-expiring · U2 deploy-failure error styling · U3 color-independent
-  severity icon · U4 Beginner Customize dead-end (verify-first).
+- **CHEAP UX:** U1 ◐ (error toasts persist + role=alert) · U2 ◐ (deploy-failure red not amber) · U3 ◐ (shape-cue
+  severity, color-independent) — all BUILT + tsc/vite/e2e 19/19, **EYEBALL-gated PARTIAL** (scripts in ROADMAP +
+  handoff), 2026-07-19 → ROADMAP. U4 Beginner Customize dead-end (verify-first, not started).
 - **A11Y (broad, mostly EXPERIENCE-gated):** A1 shared modal shell (role=dialog/aria-modal/Escape/focus-trap —
-  ~10 modals at once) · A2 Canvas keyboard nav (heavy, eyeball) · A3 sub-11px typography (deferred, design-led).
+  ~10 modals at once; also the fuller message-level severity-icon from U3) · A2 Canvas keyboard nav (heavy, eyeball)
+  · A3 sub-11px typography (deferred, design-led). **NEXT buildable: A1** (headless build, eyeball close) or ARCH1.
 - **TEST/ARCH:** T2 ✅ (e2e verdict from JSON report + precommit guard) · T1 ✅ slice (route-integration harness
   `npm run test:routes`, 13/13 — auth/scope/run_command-negatives/path-containment; SEC1 now a PERMANENT guard) —
   both VERIFIED 2026-07-19, headless, → ROADMAP. **NEW: T1b** (deploy dry-run + validate-with-fixture-schema +
