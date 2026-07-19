@@ -91,7 +91,18 @@ the USD cap, but review the pricing table + estimate approach before treating it
 the deliberate app-UI-origin isolation → Ken's explicit sign-off required (not silently rearchitected). SEC6/SEC7 deferred.
 - **Suggested commit title:** "fix(security): B64-SEC1/2/3 — run_command scope fix + env docs + config.json hardening; feat(spend): B64-SEC4 dollar-aware attribution (default-off)".
 
-### ◐ B64-A1 · accessible app-wide confirm/prompt dialog — PARTIAL (BUILT + machine-validated) 2026-07-19; EYEBALL-gated
+### ✅ B64-A1 · accessible app-wide confirm/prompt dialog — VERIFIED 2026-07-19 (LIVE UI validated)
+**EYEBALL CLOSED via computer-use (Ken unblocked Forge visual validation):** drove the real UI (Vite on 8800 +
+isolated sidecar on 8801), opened a promptDialog (canvas sticky-note), and proved the full a11y contract in the live
+DOM: `role="dialog"` ✓ · `aria-modal="true"` ✓ · `aria-labelledby="dialoghost-message"` → the message text ✓ · input
+autofocused ✓ · **Escape closes** ✓ · **Tab focus-trap holds** (after 4 Tabs, focus was on the Cancel button, still
+inside the modal — never escaped) ✓. Focus-restore returns to `prevFocus` — correct for the KEYBOARD path (a mouse
+click doesn't focus the opener, so it restored to the canvas; honest minor note, correct for the a11y case). Screenshots
+wedged (known B28 pane issue) so validation was via DOM (`read_page` + `javascript_tool`), which is the stronger a11y
+proof anyway. tsc/vite/e2e 19/19 already green. File: `src/lib/uiDialogs.tsx`. A1b (bespoke feature modals) still deferred.
+**Suggested commit title:** "feat(a11y): B64-A1 accessible confirm/prompt dialog — VERIFIED live (role, aria, Escape, focus-trap)".
+
+### ◐ B64-A1 (superseded above; original PARTIAL close) · accessible app-wide confirm/prompt dialog — 2026-07-19
 **RECONCILE changed the plan:** the audit assumed a shared modal shell to fix ~10 modals at once — there is NONE
 (AIConnectionModal/DirectorySettingsModal/BugReportModal/SyncModal/HealthCardOverlay/PackageModDoctor… each roll
 their own `fixed inset-0` overlay). So A1 was re-scoped to the ONE genuinely app-wide dialog: the confirm/prompt
@@ -123,6 +134,19 @@ each is ◐ PARTIAL until Ken's screen closes it (textinputhost blocks remote ey
 - **EYEBALL SCRIPTS (Ken, ~1 min):** (U1) trigger any validation error → confirm the toast STAYS until clicked (doesn't
   auto-vanish) + reads as an error. (U2) Beginner rail → Deploy with a deliberately-broken mod → the failure line is RED,
   not amber. (U3) open a mod with both an error and a warning → the right-edge scroll marks differ in WIDTH, not just color.
+- **EYEBALL SESSION (2026-07-19, live UI via computer-use) — findings:**
+  - **U1 RECONCILE FINDING (audit premise partly falsified):** the client raises NO `toast(…,'error')` anywhere —
+    every `toast()` call is default `'info'` (node/ware/job deletes + the `window.alert`→toast reroute). Errors surface
+    via inline text / the Problems panel / console, NOT toasts. So U1's code is CORRECT + future-proofs the error-toast
+    path (persist + `role="alert"`), but there is no live error-toast to drive today; the toast host is mounted and the
+    info path is intact. **Follow-up option (Ken's call, not done):** route `window.alert` → error-kind so alert-
+    surfaced errors persist (that's the transient path the audit's "errors vanish" actually describes) — small, but
+    window.alert isn't always an error, so it's a judgment call. U1 stays ◐ (code-correct; no live error trigger exists).
+  - **U3 ◐:** width-cue is code-verified (error `w-2` / warning `w-1`, both sites) and the code pane renders live, but
+    the current workspace's diagnostics didn't surface as line-gutter markers in the viewed file (they need a file whose
+    MD diagnostics carry line positions in view), so the rendered marker widths weren't captured this session. Stays ◐.
+  - **U2 ◐:** NOT driven — a real Beginner deploy writes to the mod-staging dir (filesystem side effect); not worth the
+    write-gate risk to prove a color token. The `text-amber-300`→`text-rose-300` change is code-verified. Stays ◐.
 - **Suggested commit title:** "feat(ux): B64-U1/U2/U3 — persistent assertive error toasts, red deploy-failure, shape-cued severity".
 
 ### ✅ B64-T1 (slice) · route-level integration harness for the security surface — VERIFIED 2026-07-19 (headless)

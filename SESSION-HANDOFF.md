@@ -242,10 +242,10 @@ Alternatively an agent CAN drive it once Ken approves the computer-use grant dia
 clears the initial launch dialog — after that, menu→Continue is 2D nav (feasible), NPC-walk is 3D (hard).
 
 ## Eyeball queue (Ken 30-sec checks)
-- **B64-A1** (accessible dialog): open any confirm dialog → **Escape** cancels it · **Tab** cycles focus among OK/Cancel/input (never leaves) · after close, focus returns to the control you opened it from.
-- **B64-U1** (error toasts): trigger any validation error → the toast STAYS until you click it (no 4.2s auto-vanish) + reads as an error.
-- **B64-U2** (deploy failure): Beginner rail → Deploy a deliberately-broken mod → the failure line is RED (rose), not warning-amber.
-- **B64-U3** (severity shape cue): open a mod with BOTH an error and a warning → right-edge scroll marks differ in WIDTH (error wide, warning half), not just color.
+- **B64-A1** ✅ CLOSED VERIFIED via computer-use 2026-07-19 (live DOM: role=dialog/aria-modal/Escape/Tab-trap all proven). No Ken check needed.
+- **B64-U1** ◐ — RECONCILE FOUND the app raises no error-kind toasts (all `toast()` are info); code future-proofs the error path but no live trigger. Ken decision: route `window.alert`→error-kind? (small, judgment call). No quick eyeball possible until an error toast exists.
+- **B64-U2** ◐ — deploy failure color (amber→rose); NOT driven (deploy = filesystem side effect). Eyeball only if you deploy a broken mod: failure line should be RED not amber.
+- **B64-U3** ◐ — severity shape cue (error wide / warning half); code-verified but the live gutter markers didn't render for the test workspace's diagnostics. Eyeball: open a mod with an error+warning on specific lines → right-edge marks differ in WIDTH.
 - B59c: X4 WIKI → HUD & LUA → "UI Extensions Framework Compatibility (kuertee)".
 - B59d: X4 WIKI → **Reference** tab → "Is this just another AI mod generator?" (confirm the mechanism
   paragraphs + honest-limit paragraph read right). Also the store page / README "Is this just another
