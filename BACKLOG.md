@@ -29,9 +29,11 @@ Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit sh
 - **CHEAP UX:** U1 ◐ (error toasts persist + role=alert) · U2 ◐ (deploy-failure red not amber) · U3 ◐ (shape-cue
   severity, color-independent) — all BUILT + tsc/vite/e2e 19/19, **EYEBALL-gated PARTIAL** (scripts in ROADMAP +
   handoff), 2026-07-19 → ROADMAP. U4 Beginner Customize dead-end (verify-first, not started).
-- **A11Y (broad, mostly EXPERIENCE-gated):** A1 shared modal shell (role=dialog/aria-modal/Escape/focus-trap —
-  ~10 modals at once; also the fuller message-level severity-icon from U3) · A2 Canvas keyboard nav (heavy, eyeball)
-  · A3 sub-11px typography (deferred, design-led). **NEXT buildable: A1** (headless build, eyeball close) or ARCH1.
+- **A11Y:** A1 ◐ (accessible app-wide confirm/prompt dialog — role=dialog/aria-modal/Escape/focus-trap/restore;
+  RECONCILE: no shared shell existed, re-scoped to the one DialogHost dialog; tsc/vite/e2e 19/19, EYEBALL-gated
+  PARTIAL) 2026-07-19 → ROADMAP. **A1b (deferred):** shared `<Modal>` primitive + migrate the ~10 bespoke feature
+  modals (each eyeball-gated) + fold in U3's message-level severity icon. A2 Canvas keyboard nav (heavy, eyeball)
+  · A3 sub-11px typography (deferred, design-led). **NEXT buildable: ARCH1** (server.ts extraction) or A1b/A2 (eyeball).
 - **TEST/ARCH:** T2 ✅ (e2e verdict from JSON report + precommit guard) · T1 ✅ slice (route-integration harness
   `npm run test:routes`, 13/13 — auth/scope/run_command-negatives/path-containment; SEC1 now a PERMANENT guard) —
   both VERIFIED 2026-07-19, headless, → ROADMAP. **NEW: T1b** (deploy dry-run + validate-with-fixture-schema +

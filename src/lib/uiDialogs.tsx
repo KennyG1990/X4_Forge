@@ -18,7 +18,7 @@
  * non-component code, without prop drilling.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
 export interface ToastItem { id: number; message: string; kind: ToastKind }
@@ -115,12 +115,44 @@ const KIND_STYLE: Record<ToastKind, { border: string; bar: string }> = {
 export default function DialogHost() {
   const [, force] = useState(0);
   const [inputValue, setInputValue] = useState('');
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const prevFocusRef = useRef<HTMLElement | null>(null);
   useEffect(() => subscribe(() => force(n => n + 1)), []);
 
   // keep the local input seeded when a prompt opens
   useEffect(() => {
     if (activeRequest?.kind === 'prompt') setInputValue(activeRequest.defaultValue ?? '');
     // reason: activeRequest is a module-level mutable (non-reactive) value; the input should be seeded only when a new request opens, identified by its stable id. kind/defaultValue are read once at open and adding them is redundant with id (and could re-seed mid-edit).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRequest?.id]);
+
+  // B64-A1 (audit C-A11Y-2/3): make the app-wide confirm/prompt dialog accessible — Escape
+  // closes (BOTH kinds; previously only the prompt input handled it), Tab is trapped inside
+  // the dialog, and focus returns to the opener on close. Runs only while a request is open.
+  useEffect(() => {
+    const open = activeRequest;
+    if (!open) return;
+    prevFocusRef.current = (document.activeElement as HTMLElement | null);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        resolveActive(open.kind === 'confirm' ? false : null);
+        return;
+      }
+      if (e.key === 'Tab' && modalRef.current) {
+        const f = Array.from(modalRef.current.querySelectorAll<HTMLElement>('button, input, [tabindex]:not([tabindex="-1"])'))
+          .filter(el => !el.hasAttribute('disabled'));
+        if (f.length === 0) return;
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      try { prevFocusRef.current?.focus?.(); } catch { /* opener gone — nothing to restore */ }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRequest?.id]);
 
@@ -151,9 +183,10 @@ export default function DialogHost() {
         <div data-testid="dialog-modal"
           style={{ position: 'fixed', inset: 0, zIndex: 100001, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={() => resolveActive(req.kind === 'confirm' ? false : null)}>
-          <div onClick={e => e.stopPropagation()}
+          <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="dialoghost-message"
+            onClick={e => e.stopPropagation()}
             style={{ background: '#0f1218', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 18, width: 460, maxWidth: '90vw', color: '#e2e8f0', fontFamily: 'system-ui, sans-serif', boxShadow: '0 10px 40px rgba(0,0,0,0.6)' }}>
-            <div style={{ fontSize: 13.5, lineHeight: 1.45, marginBottom: 14, whiteSpace: 'pre-wrap' }}>{req.message}</div>
+            <div id="dialoghost-message" style={{ fontSize: 13.5, lineHeight: 1.45, marginBottom: 14, whiteSpace: 'pre-wrap' }}>{req.message}</div>
             {req.kind === 'prompt' && (
               <input autoFocus data-testid="dialog-input" value={inputValue}
                 onChange={e => setInputValue(e.target.value)}

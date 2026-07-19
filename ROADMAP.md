@@ -91,6 +91,23 @@ the USD cap, but review the pricing table + estimate approach before treating it
 the deliberate app-UI-origin isolation → Ken's explicit sign-off required (not silently rearchitected). SEC6/SEC7 deferred.
 - **Suggested commit title:** "fix(security): B64-SEC1/2/3 — run_command scope fix + env docs + config.json hardening; feat(spend): B64-SEC4 dollar-aware attribution (default-off)".
 
+### ◐ B64-A1 · accessible app-wide confirm/prompt dialog — PARTIAL (BUILT + machine-validated) 2026-07-19; EYEBALL-gated
+**RECONCILE changed the plan:** the audit assumed a shared modal shell to fix ~10 modals at once — there is NONE
+(AIConnectionModal/DirectorySettingsModal/BugReportModal/SyncModal/HealthCardOverlay/PackageModDoctor… each roll
+their own `fixed inset-0` overlay). So A1 was re-scoped to the ONE genuinely app-wide dialog: the confirm/prompt
+modal in `uiDialogs.tsx` (`DialogHost`) that every `confirmDialog`/`promptDialog` call routes through. Added
+`role="dialog"` + `aria-modal="true"` + `aria-labelledby` (the message), Escape-closes for BOTH kinds (was
+prompt-input-only), a Tab focus-trap within the dialog, and focus-restore to the opener on close. tsc 0 · vite
+build ✓ (1816 modules) · **e2e 19/19** (the capture-phase keydown listener arms only while a dialog is open — no
+test opens one, so zero regression). ARIA roles are code-verified; Escape/trap/restore is deterministic logic that
+needs a rendered dialog → ◐ PARTIAL on the behavior. File: `src/lib/uiDialogs.tsx`.
+- **A1b (deferred, revised spec):** the ~10 bespoke feature modals need a shared accessible `<Modal>` primitive +
+  per-modal migration, each EYEBALL-gated — a dedicated multi-unit effort for fresh context + Ken's screen.
+- **EYEBALL SCRIPT (Ken, ~30s):** open any confirm dialog (e.g. a destructive action) → press **Escape** (it
+  closes/cancels) · press **Tab** repeatedly (focus cycles among OK/Cancel/input, never leaves the dialog) · after
+  closing, focus is back on the control you opened it from.
+- **Suggested commit title:** "feat(a11y): B64-A1 accessible confirm/prompt dialog (role=dialog, Escape, focus-trap, restore)".
+
 ### ◐ B64-U1/U2/U3 · cheap UX/a11y fixes — PARTIAL (BUILT + machine-validated) 2026-07-19; EYEBALL-gated
 All three code-complete, tsc 0, **vite build ✓ (1816 modules)**, **e2e 19/19**. They change what a user SEES, so
 each is ◐ PARTIAL until Ken's screen closes it (textinputhost blocks remote eyeball). Files: `src/lib/uiDialogs.tsx`

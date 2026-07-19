@@ -64,10 +64,15 @@ a transient 16-fail run AND a 0/0-no-report run this session, both non-reproduci
 0/0 or mass-fail right after a commit, RE-RUN it (don't chase a phantom regression); confirm the code with `npx vite
 build` + tsc first. T2's fallback correctly FAILs a no-report run (no false-green).
 
-**NEXT UNIT = B64-A1** (shared-modal a11y: role="dialog"+aria-modal+labelled title+Escape+focus-trap+focus-restore on
-the shared modal shell → fixes ~10 modals at once + can fold in U3's fuller message-level severity icon; headless build,
-eyeball close) **OR B64-ARCH1** (server.ts route extraction — ONE cohesive route-group at a time into src/server/, no
-behavior change, tsc+e2e green each; god-file 8347 lines/133 routes, ~18% extracted; pick minimal-shared-state group).
+**A1 ◐ PARTIAL (BUILT, tsc/vite/e2e 19/19; EYEBALL-gated — script above):** accessible confirm/prompt dialog
+(uiDialogs.tsx). RECONCILE: no shared modal shell exists → re-scoped to the DialogHost dialog; the ~10 bespoke feature
+modals are **A1b** (shared `<Modal>` primitive + per-modal migration, eyeball-gated).
+
+**NEXT UNIT = B64-ARCH1** (server.ts route extraction — ONE cohesive route-group at a time into src/server/, no
+behavior change, tsc+e2e+sweep green each; god-file 8347 lines/133 routes, ~18% extracted; pick a minimal-shared-state
+group — candidates: ai/keys+usage, health/version, selftest-index). **Note:** ARCH1 is delicate (shared module state)
++ open-ended — a clean bounded extraction is VERIFIABLE headless but deserves care. Remaining eyeball units (A1b, A2,
+U4) need Ken's screen; SEC5/X1 are Ken decisions.
 **Alternatively** the EYEBALL-
 GATED (build headless, PARTIAL until Ken's screen — textinputhost blocks remote):** U1 error-toast assertive+persist
 (uiDialogs.tsx), U2 deploy-failure color (GuidedRail.tsx:153), U3 severity icon (CodePreview.tsx:1185), A1 shared-modal
@@ -236,6 +241,7 @@ Alternatively an agent CAN drive it once Ken approves the computer-use grant dia
 clears the initial launch dialog — after that, menu→Continue is 2D nav (feasible), NPC-walk is 3D (hard).
 
 ## Eyeball queue (Ken 30-sec checks)
+- **B64-A1** (accessible dialog): open any confirm dialog → **Escape** cancels it · **Tab** cycles focus among OK/Cancel/input (never leaves) · after close, focus returns to the control you opened it from.
 - **B64-U1** (error toasts): trigger any validation error → the toast STAYS until you click it (no 4.2s auto-vanish) + reads as an error.
 - **B64-U2** (deploy failure): Beginner rail → Deploy a deliberately-broken mod → the failure line is RED (rose), not warning-amber.
 - **B64-U3** (severity shape cue): open a mod with BOTH an error and a warning → right-edge scroll marks differ in WIDTH (error wide, warning half), not just color.
