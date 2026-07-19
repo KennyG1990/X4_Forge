@@ -6,6 +6,27 @@
 
 ## P0 — Active (this worktree branch)
 
+### B65 · Cold-start onboarding — kill the "md.xsd not found" dead-end — `spec'd` (SPECIFIED 2026-07-19) · KEN-GATED (direction + tool name)
+Real Discord user hit `md.xsd / common.xsd not found at this path` and couldn't recover. **Planned TWICE**
+(two independent agents, same grounded brief) + reconciled against the live install. Full plan:
+`docs/plans/2026-07-19-onboarding-schema-coldstart.md`. **Convergence:** both passes independently agreed on
+root cause + first unit + validation. **Reality-check catch:** both recommended Egosoft's first-party
+`XRCatTool.exe` in the game root — FALSIFIED (the real 9.00 install has only .cat/.dat + X4.exe; NO first-party
+unpacker). Corrected → community unpacker (Ken used the X4 Unpacker Suite, `F:\Downskies\x4unpackersuiteV1`).
+- **Root cause:** every schema-setup failure branch (canHarvestSchemas=false, harvest 422, not-found, dismissed
+  wizard, raw error) funnels into ONE inert surface — the DirectorySettingsModal schema row (:244), which only
+  DIAGNOSES, never TREATS. Harvest capability exists but only the wizard calls it; the reliable unpack-and-point
+  method (discoverXsd, works) is surfaced nowhere but a tooltip.
+- **B65-1 (FIRST unit):** make the DirectorySettingsModal schema row SELF-RESCUING — add an in-place "Extract
+  schemas from my game install" button (reuses POST /api/agent/setup/harvest-schemas) + an inline unpack teach
+  panel (on 422 / no game path) + honest states. ONE file (DirectorySettingsModal.tsx), no backend change, additive.
+- **Deferred follow-ons:** B65-2 wizard failure-branch parity · B65-3 re-entry gap (App.tsx:442 + persistent "finish
+  setup" banner) · B65-4 raw-error→settings deep-link (server.ts:212) · B65-5 shared `<SchemaRecovery>` component.
+  OUT/gated: first-party one-click unpack (child-process spawn — hazard sweep + Ken gate); shipping any XSD (illegal).
+- **KEN DECISIONS before build:** (1) approve the direction; (2) NAME the community unpacker to recommend (+ the
+  tool-agnostic "any extractor, point at root" floor stays regardless). **Validation:** typecheck/lint + harvest
+  contract + VISUAL/live DOM (3 states) + negative path (no false-green) — EXPERIENCE-gated, visual validation required.
+
 ### B64 · Audit-driven hardening batch — `spec'd` (SPECIFIED 2026-07-18) · security-first, one unit at a time
 Source: a four-sweep read-only audit (security · data/perf · UI/a11y · tests/config/arch), every finding
 file:line-cited + confidence-labelled. Full acceptance contracts: `docs/plans/2026-07-18-audit-hardening.md`.
