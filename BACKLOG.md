@@ -26,14 +26,22 @@ Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit sh
   that risks lost-write/disk-memory-divergence in the ADR-F1/SPEC-#66-scarred persistence path; the safe dirty-check
   slice doesn't address the symptom. Revisit in fresh context with crash-consistency tests if the write-amplification
   ever bites. **PERF BLOCK DONE (P1/P2/P4 shipped; P1b/P2b/P3 deferred).**
-- **CHEAP UX:** U1 ◐ (error toasts persist + role=alert) · U2 ◐ (deploy-failure red not amber) · U3 ◐ (shape-cue
-  severity, color-independent) — all BUILT + tsc/vite/e2e 19/19, **EYEBALL-gated PARTIAL** (scripts in ROADMAP +
-  handoff), 2026-07-19 → ROADMAP. U4 Beginner Customize dead-end (verify-first, not started).
-- **A11Y:** A1 ◐ (accessible app-wide confirm/prompt dialog — role=dialog/aria-modal/Escape/focus-trap/restore;
-  RECONCILE: no shared shell existed, re-scoped to the one DialogHost dialog; tsc/vite/e2e 19/19, EYEBALL-gated
-  PARTIAL) 2026-07-19 → ROADMAP. **A1b (deferred):** shared `<Modal>` primitive + migrate the ~10 bespoke feature
-  modals (each eyeball-gated) + fold in U3's message-level severity icon. A2 Canvas keyboard nav (heavy, eyeball)
-  · A3 sub-11px typography (deferred, design-led). **NEXT buildable: ARCH1** (server.ts extraction) or A1b/A2 (eyeball).
+- **CHEAP UX (eyeball-validated 2026-07-19 via computer-use — Ken unblocked Forge visual validation):**
+  - **U1** ◐ DORMANT — error toasts persist + role=alert (code-correct), but the app raises NO error-kind toasts
+    (all `toast()` are info); no live trigger. **OPEN DECISION (Ken):** route `window.alert`→error-kind? (judgment call).
+  - **U2** ◐ CODE-VERIFIED, live component (GuidedRail) — amber→rose deploy-fail. NOT live-driven (deploy = write-gate
+    to the real mod-staging dir). **OPEN DECISION (Ken):** isolate modWorkspacePath→scratch and drive a failing deploy, or accept code-verified.
+  - **U3** ✗ NO-OP / FALSIFIED — the markers are in the OLD renderer; `CODEMIRROR_EDITOR=true` (CodePreview.tsx:29)
+    makes CodeMirror default → dead code (live: 0 markers). CodeMirror shows no per-line severity markers; live severity
+    indicators already have text labels. Audit C-A11Y-4 FALSIFIED for the live app; U3 = harmless dead-path polish. → ROADMAP.
+  - **U4** Beginner Customize dead-end (verify-first, not started; re-ground against live path first).
+- **A11Y:** **A1 ✅ VERIFIED LIVE** (accessible confirm/prompt dialog — role=dialog/aria-modal/Escape/focus-trap/restore
+  proven in the live DOM via computer-use; RECONCILE: no shared shell → re-scoped to the DialogHost dialog) 2026-07-19 →
+  ROADMAP. **A1b (deferred):** shared `<Modal>` primitive + migrate the ~10 bespoke feature modals (each eyeball-gated).
+  A2 Canvas keyboard nav (heavy, eyeball) · A3 sub-11px typography (deferred, design-led).
+  **⚠️ DURABLE LESSON (2026-07-19):** the audit's UI/a11y findings were STATIC and can cite DISABLED render paths (U3
+  proved it) — **re-ground A1b/A2/U4 against the LIVE render path (CodeMirror + real components) BEFORE building**, else
+  we ship no-ops. **NEXT buildable: re-ground the a11y items, or ARCH1** (server.ts extraction, its own session).
 - **TEST/ARCH:** T2 ✅ (e2e verdict from JSON report + precommit guard) · T1 ✅ slice (route-integration harness
   `npm run test:routes`, 13/13 — auth/scope/run_command-negatives/path-containment; SEC1 now a PERMANENT guard) —
   both VERIFIED 2026-07-19, headless, → ROADMAP. **NEW: T1b** (deploy dry-run + validate-with-fixture-schema +
@@ -45,8 +53,17 @@ Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit sh
   drive-by 14-units-deep. Do it as its own session with full tsc+sweep+e2e per extraction. **PRODUCT:** X1 finish-or-remove
   Google OAuth (Ken decision).
 - **NOT re-opened (already tracked):** 3 RED oracles (env-only), e2e stdout-parse (B17), 13 machine literals (B41).
-- **Eyeball-gated units** (U1–U4, A1–A2) wait for Ken's rendered screen — blocked by `textinputhost.exe` remotely;
-  the headless units (SEC1-4, P1-4, T1-2, ARCH1) close with oracles/e2e alone.
+- **VISUAL VALIDATION UNBLOCKED (Ken, 2026-07-19):** the Forge UI can now be driven headlessly via computer-use — start
+  Vite + an isolated sidecar (see the eyeball-session method: Vite 8800 + sidecar 8801, isolated X4_STATE/DATA dirs, known
+  token), open the Browser pane, validate via DOM (`read_page` + `javascript_tool`; screenshots wedge — B28). This is how
+  A1 was VERIFIED and U3 was falsified. The OLD "eyeball blocked by textinputhost" note is SUPERSEDED for the Forge web UI.
+  (IN-GAME validation of x4_ai_influence is still desktop-blocked — that's X4 itself, not the Forge UI.)
+- **B64-FINDING (2026-07-19, from Ken's Google-AI screenshot):** Google's AI Overview describes X4 Forge but OVERCLAIMS
+  ("edit sector maps"/"design station blueprints") — reconcile confirmed those are GOOGLE'S hallucination, NOT our copy
+  (extension README has zero such claims; manifest description is accurate/modest). Two small OPEN items: (a) verify +
+  fix a possible mojibaked em-dash (`â€"` vs `—`) in the package.json `description` [HYPOTHESIS — read the raw bytes first];
+  (b) optional: richer store README with an explicit "what it does / what's on the roadmap" so the AI summarizes fact not
+  guess (ties to B59d anti-hallucination). Neither started; both small; Ken's call.
 
 ### B60 · Automated + readable extension CHANGELOG — ✅ VERIFIED 2026-07-17 → ROADMAP
 Open VSX "Changes" tab is LIVE and human-readable (confirmed served for 0.0.17). Automated:
