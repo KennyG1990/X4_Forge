@@ -91,6 +91,25 @@ the USD cap, but review the pricing table + estimate approach before treating it
 the deliberate app-UI-origin isolation → Ken's explicit sign-off required (not silently rearchitected). SEC6/SEC7 deferred.
 - **Suggested commit title:** "fix(security): B64-SEC1/2/3 — run_command scope fix + env docs + config.json hardening; feat(spend): B64-SEC4 dollar-aware attribution (default-off)".
 
+### ✅ B64-P2 + P4 · validate-latency + cold-boot stamp fixes — VERIFIED 2026-07-19 (headless)
+- **P2 (getReferenceSets memoization):** `getReferenceSets` walked the whole object index (tens of thousands of
+  items) building 3 Sets on EVERY call (≥2×/validate: project/validate + getJobsVocabulary). Now memoized by the
+  index identity (`generatedAt`, which changes on every rebuild incl. the P1 background refresh), so the O(N)
+  walk happens once per index generation. SAFE to share the cached Sets: verified NO consumer mutates them —
+  factionsLint (`new Set([...knownFactions])`), godLint, and projectValidation all defensively copy; xsdValidate
+  only `.has()`-reads. Findings byte-identical by construction (same generation → same Sets). **P2b deferred:**
+  threading one parsed DOM per file through the ~8 lints (signature ripple across the lint libs) — not scoped here.
+- **P4 (cold-boot invalidation stamps):** `collectObjectIndexStamps` stamped only `.cat` files + top-level dir
+  mtimes, so a NESTED loose-XML edit under a user root (mod/filesystem) bumped no stamp → a restarted process
+  restored a STALE SQLite index until the 60s TTL. Added a bounded loose-XML digest (newest .xml mtime + file
+  count) per USER-editable root (the vanilla game tree is read-only + huge — its .cat stamps suffice; walk is
+  depth/budget-capped, skips heavy asset dirs). A nested edit/add/remove flips a synthetic stamp → `sourcesUnchanged`
+  (db.ts:152, compares passed-vs-STORED mtimes, never re-stats — so synthetic keys work) returns false → rebuild.
+- **Gates:** tsc 0 · **e2e 19/19 ×2** (one transient 16-fail run — graphify-rebuild CPU contention, [HYPOTHESIS];
+  did NOT reproduce across 2 confirmation runs). P4's nested-edit scenario is construction-argued (digest→stamp→
+  rebuild) + typecheck + e2e; a full cold-boot-restart drill was not run (heavy) — honest.
+- **Suggested commit title:** "perf(validate): B64-P2 memoize getReferenceSets + P4 cold-boot loose-XML stamps".
+
 ### ✅ B64-P1 · object-index build off the request hot path (stale-while-revalidate) — VERIFIED 2026-07-18 (headless)
 `getObjectIndex` rebuilt SYNCHRONOUSLY on the request path after its 60s TTL, freezing the single event loop
 for every client (the audit's HIGH perf finding; corroborated live — a full-corpus cold build blew a 2-min

@@ -42,19 +42,23 @@ stale index + schedules a deduped background refresh past the 60s TTL instead of
 deferred:** truly non-blocking build (worker/chunked-async) — single thread still freezes during the bg refresh +
 first cold build (honest acceptance revision). Files: server.ts (getObjectIndex + helper + ResolvedXsdConfig import).
 
-**NEXT UNIT = B64-P2** (validate latency: memoize `getReferenceSets` by index signature — it's rebuilt ~2×/validate,
-server.ts:1383/1443 — + thread ONE parsed DOM per file through the basenameLints loop + migration/tfile layers, which
-today each re-DOM-parse the same file. Acceptance = GOLDEN behavior-preservation test, findings byte-identical
-before/after, like the B63 registry refactor; watch for a lint that mutates its doc). Then P3 (debounce workspace
-writes, server.ts:1785/workspaceState.ts) → P4 (deepen cold-boot invalidation stamps, server.ts:1234) → U1-3
-(cheap UX, EYEBALL-gated) → A1 (modal a11y, eyeball) → T1/T2 (route tests, e2e reporter) → ARCH1. Full plan:
-docs/plans/2026-07-18-audit-hardening.md.
+**P2 + P4 ✅ VERIFIED (2026-07-19, headless, e2e 19/19 ×2):** P2 memoized getReferenceSets by index generatedAt
+(consumers proven non-mutating); P4 added a bounded loose-XML digest per user root so nested edits flip a cold-boot
+stamp. **P3 DEFERRED** (workspace-write debounce risks lost-write in the ADR-F1/SPEC-#66 path; safe dirty-check
+doesn't address the rapid-distinct-edit symptom). P1b/P2b also deferred. **PERF BLOCK DONE.**
 
-**COMMIT POINT (uncommitted now — REAL BLAST RADIUS, recommend committing before the next session):** B64 plan +
-SEC1/2/3/4 + P1 code + all record updates. Suggested title: "feat(hardening): B64 SEC1-4 + P1 — run_command scope
-fix, env docs, config.json hardening, dollar-aware spend (default-off), stale-while-revalidate object index".
-Files: agentKeys.ts, xsdParser.ts, aiSpendMeter.ts, server.ts, .env.example, docs/plans/2026-07-18-audit-hardening.md,
-BACKLOG/ROADMAP/HANDOFF, capability-map.md (StarForge). Nothing published (all headless, no user-facing change).
+**NEXT UNIT = B64-T1** (route-level integration test harness for the highest-risk routes: project/validate, fs/write,
+deploy, agent keys + an extension smoke test; wire into the sweep — headless). Then T2 (e2e verdict via Playwright
+JSON reporter instead of stdout regex, scripts/run-e2e.mjs) → ARCH1 (server.ts route extraction, ongoing). **EYEBALL-
+GATED (build headless, PARTIAL until Ken's screen — textinputhost blocks remote):** U1 error-toast assertive+persist
+(uiDialogs.tsx), U2 deploy-failure color (GuidedRail.tsx:153), U3 severity icon (CodePreview.tsx:1185), A1 shared-modal
+a11y. **KEN DECISIONS:** SEC5 Origin-spoof mechanism, X1 Google OAuth finish-or-remove. Full plan: docs/plans/2026-07-18-audit-hardening.md.
+
+**COMMITTED + PUSHED `b7466d5` (2026-07-19, origin==HEAD verified, on-branch):** B64 plan + SEC1/2/3/4 + P1 +
+canon updates. **CANON CHANGE (Ken 2026-07-19):** KLIO commit flow RETIRED — the agent now commits+pushes directly
+with git (git-ownership line updated in CLAUDE/AGENTS/GEMINI mirrors + the commit-policy memory). Publish-before-commit
+now applies ONLY to user-facing releases; headless changes just commit. Nothing published (all headless). StarForge
+capability-map.md updated (separate repo, not in this commit).
 
 ## PRIOR STATE (2026-07-18) — B63 god.xml thread COMPLETE; round-4 A3/B1/C1 remain
 Latest published = **0.0.29**, HEAD on origin. The B63 thread (all origin-verified): registry refactor

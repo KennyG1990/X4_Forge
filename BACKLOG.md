@@ -18,10 +18,14 @@ Ordering law (Ken 2026-07-18): SECURITY FIRST, then agent's choice. Each unit sh
   **SEC5 (Origin/Referer spend-spoof) — VERIFIED as a real gap by code inspection, DEFERRED to Ken** (closing it
   changes the deliberate app-UI-origin isolation → needs explicit sign-off + a mechanism choice). SEC6 session-token
   rotation + SEC7 plaintext AI keys = **deferred** (low urgency / accepted-risk). **Security block DONE; now PERF.**
-- **PERF (agent's choice):** P1 ✅ VERIFIED (stale-while-revalidate object index; deterministic drill + e2e 19/19;
-  → ROADMAP) — **NEW: P1b** (truly non-blocking build via worker/chunked-async; deferred, large ripple). **NEXT:
-  P2** cache getReferenceSets + share one DOM parse across lints (golden-identical) → P3 debounce workspace writes
-  → P4 deepen cold-boot index-invalidation stamps.
+- **PERF (agent's choice):** P1 ✅ (stale-while-revalidate object index) · P2 ✅ (memoize getReferenceSets by index
+  generation; consumers proven non-mutating) · P4 ✅ (cold-boot loose-XML digest stamps catch nested user-root edits)
+  — all VERIFIED 2026-07-19, headless, e2e 19/19, → ROADMAP. **DEFERRED (reconciled):** **P1b** truly non-blocking
+  build (worker/chunked-async; large ripple) · **P2b** thread one DOM per file across the ~8 lints (signature ripple)
+  · **P3 DEFERRED w/ rationale** — the audit symptom is rapid DISTINCT edits, which only a delay-debounce fixes, and
+  that risks lost-write/disk-memory-divergence in the ADR-F1/SPEC-#66-scarred persistence path; the safe dirty-check
+  slice doesn't address the symptom. Revisit in fresh context with crash-consistency tests if the write-amplification
+  ever bites. **PERF BLOCK DONE (P1/P2/P4 shipped; P1b/P2b/P3 deferred).**
 - **CHEAP UX:** U1 error-toast assertive+non-expiring · U2 deploy-failure error styling · U3 color-independent
   severity icon · U4 Beginner Customize dead-end (verify-first).
 - **A11Y (broad, mostly EXPERIENCE-gated):** A1 shared modal shell (role=dialog/aria-modal/Escape/focus-trap —

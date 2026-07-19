@@ -1254,11 +1254,42 @@ function collectObjectIndexStamps(resolved: ReturnType<typeof resolveXsdConfig>)
     const extM = stat(extDir);
     if (extM !== null) stamps.push({ path: extDir, mtime: extM });
   }
+  // B64-P4: the stamps above (.cat files + top-level dir mtimes) miss a NESTED loose-XML edit
+  // under a user-editable root — editing mod/libraries/jobs.xml bumps neither a .cat nor the
+  // root's own mtime, so a restarted process would restore a STALE SQLite index until the 60s
+  // TTL. Add a bounded loose-XML digest (newest .xml mtime + file count) per USER root so a
+  // nested edit/add/remove flips a stamp and forces a rebuild. Only the user-editable roots are
+  // deep-walked (the vanilla game tree is read-only and huge — its .cat stamps suffice); the
+  // walk is depth- and budget-capped and skips heavy asset dirs, so it stays cold-boot-cheap.
+  const looseXmlDigest = (root: string): { newest: number; count: number } => {
+    let newest = 0, count = 0, budget = 20000;
+    const walk = (dir: string, depth: number) => {
+      if (depth > 12 || budget <= 0) return;
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (budget <= 0) break;
+        if (e.isDirectory()) {
+          if (/^(node_modules|\.git|\.snapshots|assets|textures|videos|music|sounds|shadergl|particles)$/i.test(e.name)) continue;
+          walk(path.join(dir, e.name), depth + 1);
+        } else if (e.name.toLowerCase().endsWith('.xml')) {
+          budget--; count++;
+          const m = stat(path.join(dir, e.name));
+          if (m !== null && m > newest) newest = m;
+        }
+      }
+    };
+    walk(root, 0);
+    return { newest, count };
+  };
   for (const root of [resolved.modWorkspacePath, resolved.filesystemPath]) {
     if (!root) continue;
     addCats(root);
     const m = stat(root);
     if (m !== null) stamps.push({ path: root, mtime: m });
+    const d = looseXmlDigest(root);
+    stamps.push({ path: `${root}::loosexml-newest`, mtime: d.newest });
+    stamps.push({ path: `${root}::loosexml-count`, mtime: d.count });
   }
   return stamps;
 }
@@ -1410,21 +1441,32 @@ function rebuildObjectIndexNow(resolved: ResolvedXsdConfig, roots: string[], cac
  * any AI script files against the parsed md.xsd/common.xsd element/attribute
  * index. Returns ModDoctor-shaped diagnostics so they merge with heuristic ones.
  */
+// B64-P2: reference sets are derived by walking the whole object index (tens of thousands of
+// items) and were rebuilt ~2× per validate (project/validate + getJobsVocabulary). Memoize by
+// the index identity (generatedAt changes on every rebuild, incl. the P1 background refresh), so
+// a validate that already has a warm index pays the O(N) walk ONCE per index generation, not per
+// call. Consumers never mutate the returned sets (factionsLint/godLint/projectValidation all copy
+// via `new Set([...])`; xsdValidate only `.has()`-reads — verified 2026-07-18), so sharing the
+// cached sets is safe.
+let _refSetsCache: { gen: string; sets: { macros: Set<string>; wares: Set<string>; factions: Set<string> } } | null = null;
 /** Build reference id sets from the game index, keyed by schema semantic type. */
 function getReferenceSets(): { macros: Set<string>; wares: Set<string>; factions: Set<string> } {
+  let idx: X4ObjectIndex;
+  try { idx = getObjectIndex(); }
+  catch { return { macros: new Set(), wares: new Set(), factions: new Set() }; } // no index — empty sets disable ref checks
+  if (_refSetsCache && _refSetsCache.gen === idx.generatedAt) return _refSetsCache.sets;
   const macros = new Set<string>();
   const wares = new Set<string>();
   const factions = new Set<string>();
-  try {
-    const idx = getObjectIndex();
-    for (const item of idx.items) {
-      const id = item.id.toLowerCase();
-      if (item.kind === 'ship' || item.kind === 'station' || item.kind === 'macro') macros.add(id);
-      else if (item.kind === 'ware') wares.add(id);
-      else if (item.kind === 'faction') { factions.add(id); factions.add(id.replace(/^faction\./, '')); }
-    }
-  } catch { /* no index — empty sets disable ref checks */ }
-  return { macros, wares, factions };
+  for (const item of idx.items) {
+    const id = item.id.toLowerCase();
+    if (item.kind === 'ship' || item.kind === 'station' || item.kind === 'macro') macros.add(id);
+    else if (item.kind === 'ware') wares.add(id);
+    else if (item.kind === 'faction') { factions.add(id); factions.add(id.replace(/^faction\./, '')); }
+  }
+  const sets = { macros, wares, factions };
+  _refSetsCache = { gen: idx.generatedAt, sets };
+  return sets;
 }
 
 // B61: the learned jobs vocabulary (classes/orders/sizes) is expensive-ish to build (parse the ~15k-line
