@@ -63,11 +63,14 @@ GATED (build headless, PARTIAL until Ken's screen — textinputhost blocks remot
 (uiDialogs.tsx), U2 deploy-failure color (GuidedRail.tsx:153), U3 severity icon (CodePreview.tsx:1185), A1 shared-modal
 a11y. **KEN DECISIONS:** SEC5 Origin-spoof mechanism, X1 Google OAuth finish-or-remove. Full plan: docs/plans/2026-07-18-audit-hardening.md.
 
-**COMMITTED + PUSHED `b7466d5` (2026-07-19, origin==HEAD verified, on-branch):** B64 plan + SEC1/2/3/4 + P1 +
-canon updates. **CANON CHANGE (Ken 2026-07-19):** KLIO commit flow RETIRED — the agent now commits+pushes directly
-with git (git-ownership line updated in CLAUDE/AGENTS/GEMINI mirrors + the commit-policy memory). Publish-before-commit
-now applies ONLY to user-facing releases; headless changes just commit. Nothing published (all headless). StarForge
-capability-map.md updated (separate repo, not in this commit).
+**COMMITTED + PUSHED — 4 clean commits this session (all origin==HEAD verified, on-branch, nothing published — headless):**
+`b7466d5` SEC1-4 + P1 + B64 plan + canon · `82b837d` P2 + P4 · `ec62c5d` T2 · `b72a295` T1. **CANON CHANGE (Ken
+2026-07-19):** KLIO commit flow RETIRED — the agent commits+pushes directly (git-ownership line in CLAUDE/AGENTS/GEMINI
++ commit-policy memory updated). Publish-before-commit now applies ONLY to user-facing releases. StarForge
+capability-map.md updated per unit (separate repo, not in these commits).
+**B64 BATCH STATUS:** headless high-value work DONE — SEC1-4 ✅, P1/P2/P4 ✅, T2 ✅, T1 ✅ (slice). Remaining is
+NOT cleanly headless-closeable: ARCH1 (open-ended god-file extraction — fresh context) · U1-3 + A1 (EYEBALL-gated —
+build then Ken's screen) · SEC5 + X1 (Ken decisions) · T1b/P1b/P2b/P3/A2/A3/SEC6/SEC7 (deferred w/ rationale in BACKLOG).
 
 ## PRIOR STATE (2026-07-18) — B63 god.xml thread COMPLETE; round-4 A3/B1/C1 remain
 Latest published = **0.0.29**, HEAD on origin. The B63 thread (all origin-verified): registry refactor
