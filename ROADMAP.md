@@ -158,6 +158,22 @@ each is ◐ PARTIAL until Ken's screen closes it (textinputhost blocks remote ey
     write-gate risk to prove a color token. The `text-amber-300`→`text-rose-300` change is code-verified. Stays ◐.
 - **Suggested commit title:** "feat(ux): B64-U1/U2/U3 — persistent assertive error toasts, red deploy-failure, shape-cued severity".
 
+### ✅ B-INGAME · North-Star proof — Forge-built mod runs live in-game — VERIFIED 2026-07-20 (EXECUTION; EXPERIENCE prior-proven)
+The Forge's 1.0 bar ("a non-trivial mod, built entirely in the studio, runs in-game") is met and validated live.
+The deployed mod is TWO extensions: `x4_ai_influence` (chat/UI client) + `x4_neural_link` (in-game transport server),
++ a Python bridge (`:8713`) with roleRAG grounding + Player2 cloud inference (`:4315`) + a SQLite npc_memory.
+- **EXECUTION gate VERIFIED live (machine-read, dogfooded through the Forge's OWN debug-log watcher):** launched X4 from
+  Steam → modded 9.00 save loaded clean (no crash) → the Forge watcher, keyed to `ai_influence` (imported via LOAD MOD
+  PROJECT), read the live debuglog tail and returned **`AGENT DEBUG BRIEF → VERDICT: LOADED_CLEAN` / `ACTIVE-MOD LOG
+  STATUS: NO LOG ISSUES`** (the 2 "active issues" are benign `ui.xml` signature fails, error 14, correctly not
+  attributed). The full AI loop fired: 2 in-game messages → `runtime/responses/chat_*.json` `status:ok` /
+  `provider:player2` / `error:null` / ~2s latency / genuine in-character replies. Bridge `:8713/health` 200, Player2
+  `:4315/v1/health` 200.
+- **EXPERIENCE gate:** the on-screen NPC replies were seen live (Ken's screen). The `[TEST] Declare war` action slice was
+  PROVEN in a prior session (contextual-conversation trigger) and then DELIBERATELY SCRAPPED (Ken) as a crutch — not re-run.
+- **This validated a Forge capability too:** the debug-log watcher works on a real deployed mod against a live tail.
+- Task #30 CLOSED. Records home note: this is the Forge's North-Star proof; mod-side detail lives in the mod's own repos.
+
 ### ✅ B65-1 + B65-1b · Cold-start onboarding fix (self-rescuing schema row + full 40-XSD harvest) — VERIFIED LIVE 2026-07-19
 Triggered by a real Discord user stuck on "md.xsd / common.xsd not found". Planned TWICE (two independent agents
 converged) + reality-checked (both wrongly assumed a first-party XRCatTool — the live install has none). Ken:

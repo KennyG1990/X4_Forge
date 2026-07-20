@@ -35,6 +35,24 @@ unpacker). Corrected → community unpacker (Ken used the X4 Unpacker Suite, `F:
   tool-agnostic "any extractor, point at root" floor stays regardless). **Validation:** typecheck/lint + harvest
   contract + VISUAL/live DOM (3 states) + negative path (no false-green) — EXPERIENCE-gated, visual validation required.
 
+### B67 · Live-dogfood Forge findings (from the B-INGAME session, 2026-07-20) — `spec'd`
+Surfaced while validating the real deployed mod live through the Forge (dogfooding). All are FORGE bugs/quality, not mod:
+- **B67-1 · bridge-health FALSE-NEGATIVE:** the startup walkaround / health card reported the neural-link bridge "Not
+  running" while it was demonstrably UP (`:8713/health` → 200, and the AI loop was actively working). `liveBridge.ts`
+  health-check is misreading a live bridge — likely wrong probe path/port or a timeout. Reproducible; fix headless +
+  add a check. (The bridge is optional per ADR-F3, so this only mislabels — but it's a real false signal.)
+- **B67-2 · validator over-warns on imported RAW cues:** after LOAD MOD PROJECT of x4_ai_influence, Editor Diagnostics
+  flagged its cues ("no event/condition or action nodes wired", "no namespace") — likely FALSE POSITIVES on raw MD cues
+  that import as passthrough (they run fine in-game). Investigate whether raw/passthrough cues should be exempt from the
+  wired-node/namespace lints, or the warnings re-scoped. Forge validation QUALITY on real-mod imports.
+- **B67-3 · "Failed to fetch" in LOAD MOD PROJECT + Agent Brief:** intermittent fetch failures during import on the
+  INSTALLED (pre-P1) extension — the object-index build synchronously blocks the old sidecar (exactly what B64-P1's
+  stale-while-revalidate in 0.0.30 fixes). Partly "update the install to 0.0.30", but verify the import dialog's own
+  fetch has a graceful degrade/retry rather than a bare "Failed to fetch".
+- **Also pending validation (now doable at the machine):** B64-U2 (deploy-fail color — isolate a scratch deploy, drive a
+  failing deploy, confirm rose) · B56/B57 IDE-native eyeball batches (install 0.0.30, drive Problems panel / IntelliSense
+  / cue nav / MCP / adopt in the IDE).
+
 ### B64 · Audit-driven hardening batch — `spec'd` (SPECIFIED 2026-07-18) · security-first, one unit at a time
 Source: a four-sweep read-only audit (security · data/perf · UI/a11y · tests/config/arch), every finding
 file:line-cited + confidence-labelled. Full acceptance contracts: `docs/plans/2026-07-18-audit-hardening.md`.
