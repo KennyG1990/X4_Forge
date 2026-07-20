@@ -4892,3 +4892,9 @@ CLOSE-OUT 2026-07-20: entry sat uncommitted on main for 4 days; meanwhile origin
 **YAML** — the .md pair is deleted, the structured .yml forms + config.yml chooser ship.
 Also in this commit: deprecation banner atop main's stale SESSION-HANDOFF.md pointing at the
 extension worktree. Git now delegated to the agent (2026-07-19 policy), so this commit is agent-made.
+LIVE-VERIFIED 2026-07-20 (agent, real rendered GitHub): Community Standards checklist 7/7 green
+(Description/README/CoC/Contributing/License/Security policy/Issue templates all `color-fg-success`
+via DOM icon-class read; only PR template unchecked — known, unrequested). /issues/new/choose is
+auth-walled for anonymous users; verified read-only via Ken's Chrome session: chooser shows exactly
+Bug report + Feature request forms + Blank issue + private-security contact link, zero .md duplicates.
+Browser-pane screenshot channel timed out 2/2 — DOM icon-class read used as the deterministic verdict.
