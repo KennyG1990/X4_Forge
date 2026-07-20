@@ -12,7 +12,7 @@
  */
 
 import type { MDNode, MDLink, ModWorkspace } from '../types';
-import { sanitizeWorkspace, generateMDXML } from '../types';
+import { sanitizeWorkspace, generateMDXML, reindentRawXmlBlock } from '../types';
 
 const N = (id: string, type: any, xmlTag: string, properties: any = {}): Partial<MDNode> =>
   ({ id, type, xmlTag, properties, label: id, x: 0, y: 0 } as any);
@@ -106,6 +106,30 @@ export function runCompileSelftest() {
       [L('la', 'c', 'out_act', 'g', 'in_act'), L('lb', 'g', 'out_body', 'b', 'in_act')],
     );
     ok('do_if_nests_body', /<do_if value="\$x gt 1">[\s\S]*<reward_player money="5"\s*\/>[\s\S]*<\/do_if>/.test(xml), xml.match(/<do_if[\s\S]*?<\/do_if>/)?.[0]);
+  }
+
+  // ---- B68: raw-passthrough re-indent is idempotent + no runaway indentation ----
+  {
+    // A deliberately over-indented (runaway) library block, as the round-trip bug produced on-disk.
+    const runaway =
+      '<library name="R" purpose="run_actions">\n' +
+      '                              <actions>\n' +
+      "                                  <raise_lua_event name=\"'x'\" />\n" +
+      '                              </actions>\n' +
+      '                          </library>';
+    const base = '    ';
+    const once = reindentRawXmlBlock(runaway, base);
+    const twice = reindentRawXmlBlock(once, base);
+    const maxLead = Math.max(...once.split('\n').map(l => (l.match(/^ */)?.[0].length ?? 0)));
+    ok('b68_reindent_idempotent', once === twice, { once, twice });
+    ok('b68_reindent_no_runaway', maxLead <= 8, { maxLead, once });
+    ok('b68_reindent_preserves_nesting',
+      once.includes('\n      <actions>') && once.includes("\n        <raise_lua_event"),
+      once);
+    // Wire-through: a custom_xml_cue node with runaway rawXml must compile WITHOUT runaway indentation.
+    const xml = compile([N('c', 'cue', 'custom_xml_cue', { name: 'Raw', rawXml: runaway })], []);
+    const worst = Math.max(...xml.split('\n').map(l => (l.match(/^ */)?.[0].length ?? 0)));
+    ok('b68_generate_bounds_indent', worst <= 12, { worst });
   }
 
   const passed = checks.filter((c) => c.pass).length;

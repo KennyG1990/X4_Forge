@@ -6,6 +6,14 @@
 
 ## P0 — Active (this worktree branch)
 
+### B69 · Inspector raw-XML box → real code editor — `spec'd` (low-pri, from the B68 dogfood thread)
+The PropertiesInspector "RAW CUE XML" field is a plain `<textarea rows={6}>` (`PropertiesInspector.tsx:270`) — no
+syntax highlighting, no X4 schema IntelliSense, no line numbers — while the main editor is CodeMirror with all of
+that. Raw XML (the case that needs a real editor most) gets the weakest surface. **Fix:** swap that textarea for the
+existing `CodeMirrorField` component (reuse, no new infra) for the rawXml case. Headless-buildable (tsc+vite+e2e),
+EYEBALL-gated (Ken's screen) to close. Bigger alt (deferred): edit raw nodes in the main editor via two-way sync
+(B57s5 territory — riskier). No functional impact; pure editing-UX quality.
+
 ### B65 · Cold-start onboarding — B65-1 + 1b ✅ VERIFIED LIVE 2026-07-19 → ROADMAP; follow-ons B65-2..5 deferred
 **B65-1 (self-rescuing schema row + teach panel) + B65-1b (full 40-XSD tree-preserving harvest) SHIPPED + VERIFIED LIVE**
 (amber→Extract→green, 402 events / 40 domains, e2e 19/19). Visual validation CAUGHT + fixed a shim regression (packed

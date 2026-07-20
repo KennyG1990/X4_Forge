@@ -52,6 +52,25 @@ Foundation-first means: before adding polish, every link above has to be *correc
 
 ## Current State
 
+### ✅ B68 · Idempotent raw-passthrough XML indentation (runaway-indent fix) — VERIFIED 2026-07-20 (headless, no publish)
+**Bug (dogfood find, REPRODUCED 3 ways — Ken's screen + on-disk deployed file + code):** the raw-passthrough render
+paths in `generateMDXML`/`renderCue` (`src/types.ts`) prepended a fixed indent to each line WITHOUT stripping the
+line's own leading whitespace, so import→generate was **non-idempotent** — leading whitespace grew unboundedly on
+every save (proven: `x4_ai_influence/md/ai_influence_contract.xml` had `<actions>` drifting ~100 spaces right while
+`<library>` stayed at 4; ~4 spaces × ~25 round-trips, because re-serialization resets the first line while children
+accumulate). Harmless in-game (inter-tag whitespace is insignificant → B-INGAME unaffected) → quality/idempotency defect.
+- **Fix:** new module-level `reindentRawXmlBlock(raw, baseIndent)` (types.ts) — trims each line, re-indents by tag-nesting
+  depth → **idempotent by construction** (trim-first; `f(f(x))===f(x)`) and **self-healing** (dedents existing pollution
+  on the next generate). Applied to all three sibling passthrough spots: `custom_xml_cue` whole-cue, `custom_event`/
+  `custom_condition` conditions, `custom_xml` actions. Structured emitters untouched.
+- **Validation:** typecheck clean · `runCompileSelftest` **16/16** (12 pre-existing unchanged → no regression; +4 new:
+  idempotent, no-runaway, preserves-nesting, generate-bounds-indent) via the real `generateMDXML` · **e2e 19/19 PASS**
+  (json-report verdict; workspace guard restored, no leak) · negative path: already-clean XML is a fixed point (unmangled).
+- **Scope/limits:** helper-level idempotency + real-`generateMDXML` wire-through proven; full import→generate→import DOM
+  round-trip is *inferred* from the fixed-point property, not separately executed. Out of scope (deferred): the inspector
+  raw-XML box is a plain `<textarea>` vs the main CodeMirror editor (UX upgrade — reuse `CodeMirrorField`), and two-way adopt.
+- Files: `src/types.ts`, `src/lib/mdCompileSelftest.ts`. Rollback: git revert. Suggested commit: below.
+
 ### ✅ B64-SEC1/2/3 · Audit-hardening security group — VERIFIED 2026-07-18 (headless, no publish)
 First three units of the B64 audit-hardening batch (source: the 2026-07-18 four-sweep audit; full plan
 `docs/plans/2026-07-18-audit-hardening.md`). All headless, no user-facing UI change, no publish.

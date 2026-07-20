@@ -754,6 +754,40 @@ export function formatX4Time(value: unknown): string {
   return s;                                          // already has a unit or is an expression
 }
 
+/**
+ * Re-indent a raw-passthrough XML block IDEMPOTENTLY (B68).
+ *
+ * The raw-passthrough render paths used to prepend a fixed indent to each line WITHOUT stripping
+ * the line's own leading whitespace (`indent + l`). Because import serializes children WITH their
+ * file indentation, every import→generate cycle added another layer → unbounded runaway indentation
+ * (proven on-disk: `<actions>` drifting ~100 spaces right while `<library>` stayed put, since
+ * re-serialization resets the first line but children accumulate). A common-minimum dedent can't fix
+ * it (the first line sits at column 0 → min 0). This instead TRIMS every line and re-indents by
+ * tag-nesting depth, so applying it twice is a fixed point: reindent(reindent(x)) === reindent(x).
+ *
+ * Idempotency comes from trim-first and is independent of the depth heuristic's precision; the
+ * one-tag-per-line depth counting only affects prettiness on the common (serializer) shape.
+ */
+export function reindentRawXmlBlock(raw: string, baseIndent: string, step: string = '  '): string {
+  const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const out: string[] = [];
+  let depth = 0;
+  for (const rawLine of lines) {
+    const t = rawLine.trim();
+    if (!t) continue;                                   // drop blank/whitespace-only lines (no structure)
+    const tags = t.match(/<[^>]+>/g) || [];
+    const closes = tags.filter(g => /^<\//.test(g)).length;
+    const selfCloses = tags.filter(g => /\/>$/.test(g)).length;
+    const comments = tags.filter(g => /^<!--/.test(g) || /^<[?!]/.test(g)).length;
+    const opens = tags.length - closes - selfCloses - comments;
+    const beginsWithClose = /^<\//.test(t);
+    const thisDepth = beginsWithClose ? Math.max(0, depth - 1) : depth;
+    out.push(baseIndent + step.repeat(thisDepth) + t);
+    depth = Math.max(0, depth + opens - closes);
+  }
+  return out.join('\n');
+}
+
 // Helper functions to generate the XML output cleanly
 export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: string[], scriptNameOverride?: string): string {
   // Filter out any nodes where includeInBuild is false
@@ -778,7 +812,8 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     // nodes is preserved verbatim here. Lossless by construction → no cue is ever "too hard
     // to represent", so passthrough is never needed.
     if (cue.xmlTag === 'custom_xml_cue') {
-      return String(cue.properties?.rawXml || '').replace(/\r\n/g, '\n').split('\n').map(l => (l.trim() ? indent + l : l)).join('\n') + '\n';
+      // B68: idempotent re-indent (was `indent + l` per line → unbounded runaway indentation on round-trip).
+      return reindentRawXmlBlock(String(cue.properties?.rawXml || ''), indent) + '\n';
     }
 
     const cueName = cue.properties.name || cue.id;
@@ -810,11 +845,9 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
         const targetNode = workspace.nodes.find(n => n.id === link.targetNodeId);
         if (targetNode) {
           if (targetNode.xmlTag === 'custom_event' || targetNode.xmlTag === 'custom_condition') {
+            // B68: idempotent re-indent (was per-line `indentDouble + l` with no per-line dedent → runaway).
             const raw = targetNode.properties.rawXml || '';
-            const lines = raw.trim().split('\n');
-            lines.forEach((l: string) => {
-              xml += `${indentDouble}${l}\n`;
-            });
+            if (raw.trim()) xml += reindentRawXmlBlock(raw, indentDouble) + '\n';
           } else if (targetNode.xmlTag === 'event_cue_signalled') {
             xml += `${indentDouble}<event_cue_signalled cue="${escapeXMLAttribute(String(targetNode.properties.cue || 'md.Setup.Start'))}" />\n`;
           } else if (targetNode.xmlTag === 'event_object_destroyed') {
@@ -899,8 +932,9 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
           return;
         }
         if (tag === 'custom_xml') {
+          // B68: idempotent re-indent (was per-line `ind + l` with no per-line dedent → runaway).
           const raw = node.properties.rawXml || '';
-          raw.trim().split('\n').forEach((l: string) => { xml += `${ind}${l}\n`; });
+          if (raw.trim()) xml += reindentRawXmlBlock(raw, ind) + '\n';
         } else if (tag === 'create_ship') {
           // md.xsd: owner is a child <owner exact="faction.x"/>; location via
           // the `sector` attribute + a <position> child. No `faction` attr, no <space>.
