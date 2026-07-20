@@ -1,0 +1,66 @@
+name: Feature request
+description: Suggest a new capability or improvement for X4 Forge
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: check the README and existing issues — a surprising amount already
+        exists (agent API, conflict audit, third-party API definitions, etc.). Third-party
+        API definitions can often be added **without code** — see CONTRIBUTING.md.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Node canvas / visual authoring (Mission Director)
+        - Schema validation / diagnostics
+        - Compiler / package generation
+        - XML patches (XPath diff)
+        - Wares / jobs / game data browsing
+        - UI & Lua integration
+        - Translations (t-files)
+        - Conflict / dependency audit
+        - Deployment & GitHub publishing
+        - Agent HTTP API / automation
+        - AI-assisted generation
+        - VS Code / Antigravity extension
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the modding pain point, not just the feature. What do you do by hand today?
+      placeholder: "Every time I add a new ware I have to manually cross-check..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should X4 Forge do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use now, other tools, or other designs.
+  - type: textarea
+    id: honesty
+    attributes:
+      label: How could this be validated honestly?
+      description: |
+        Forge's rule is honesty over coverage — every check states whether it is schema-grade
+        or heuristic. If you have an idea how this feature could prove its output (XSD, vanilla
+        corpus, round-trip, in-game evidence), note it here. Optional.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and the README for this capability
+          required: true

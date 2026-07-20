@@ -4871,3 +4871,24 @@ validation give FALSE confidence; log + fix.
 4. **aiscript validation looks shallow.** Validating an `.aiscript`/order file (kind="aiscript") returned
    `definedCues:0` and no aiscript-specific findings — suggests basic XML parse rather than full `aiscripts.xsd`
    validation (orders/params/refs). CONFIRM aiscript files get true aiscripts.xsd validation; if not, add it.
+
+## ✅ VERIFIED — GitHub community-health files (2026-07-16) [Light lane]
+GitHub Insights checklist was missing code of conduct, security policy, and issue templates.
+Added `.github/`: `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1, contact = Ken's email),
+`SECURITY.md` (local-first threat model: allowlist/401 bypass, path traversal, run_command
+injection, key leakage, DNS-rebinding, malicious package import; private reporting via GitHub
+advisories), `ISSUE_TEMPLATE/bug_report.yml` + `feature_request.yml` (issue forms, surface/area
+dropdowns incl. VS Code + Antigravity extension) + `config.yml`. Same files copied into the
+`claude/x4-forge-vscode-poc-806ef5` worktree (extension branch). NOTE: GitHub reads these from
+the DEFAULT branch only — main is the copy that flips the checklist. Docs-only, no code/behavior
+change; no capability-map delta. Validation: YAML parsed clean (3/3), files present in both trees.
+Remaining checklist item (not requested): pull request template. Commits are Ken's.
+Suggested commit title: `docs: add community health files (.github/) — CoC, security policy, issue forms`
+AAR: CLEAN — one trigger: assumed repo-root working copy was the only target; Ken corrected
+mid-task (extension worktree). Lesson: ask which working copy/branch is the shipping surface
+when a repo has live worktrees.
+CLOSE-OUT 2026-07-20: entry sat uncommitted on main for 4 days; meanwhile origin/main gained
+`354588a` (Ken via GitHub UI: plain-markdown bug_report.md/feature_request.md). Ken's word:
+**YAML** — the .md pair is deleted, the structured .yml forms + config.yml chooser ship.
+Also in this commit: deprecation banner atop main's stale SESSION-HANDOFF.md pointing at the
+extension worktree. Git now delegated to the agent (2026-07-19 policy), so this commit is agent-made.

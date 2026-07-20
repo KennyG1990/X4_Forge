@@ -1,5 +1,12 @@
 # SESSION HANDOFF — X4 Forge
 
+> **⛔ STOP — `main` IS DEPRECATED (Ken, 2026-07-20).** This branch is the old browser-server app;
+> everything below is stale 2026-07-15 Vision-v2-era state. **Live development is the VS Code
+> extension line**: worktree `.claude/worktrees/x4-forge-vscode-poc-806ef5` (branch
+> `claude/x4-forge-vscode-poc-806ef5`) — read THAT copy of SESSION-HANDOFF.md. Do NOT merge the
+> two lines (intentional divergence, Ken-gated). `main` only matters as the GitHub default branch
+> (README, community-health files).
+
 > **⛳ STANDING GOAL (Ken, 2026-07-11): build out the ENTIRE Vision v2 scope** — all phases of
 > `docs/plans/2026-07-11-vision-v2-ue5-editor.md` (Phase 0 closes + B18–B24 + promoted B10), task
 > by task through THE workflow, until built or Ken-gated. Session grants (2026-07-11, per-session —

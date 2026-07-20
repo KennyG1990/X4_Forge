@@ -1,0 +1,83 @@
+name: Bug report
+description: Something in X4 Forge is broken, lying, or producing an invalid mod
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. X4 Forge's whole value is telling the truth about your mod —
+        a check that passes when it shouldn't is a bug too. Security issues: please use
+        [private reporting](https://github.com/KennyG1990/X4_Forge/security/advisories/new)
+        instead of a public issue.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where did the bug happen?
+      options:
+        - Forge web app (localhost:3000 UI / node canvas / editors)
+        - VS Code extension
+        - Antigravity extension
+        - Agent HTTP API (/api/*)
+        - CLI validator (npm run validate:mod)
+        - Compiler / package generator (generated XML or package output)
+        - Deployment (extensions/ folder, game pickup)
+        - In-game behavior of a Forge-built mod
+        - Docs / other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: X4 Forge version / commit
+      placeholder: "1.0.0 or commit hash"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser or VS Code/Antigravity version, X4 game version if relevant
+      placeholder: "Windows 11, Chrome 138, VS Code 1.102, X4 7.5"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+      placeholder: "Validation reported ok:true but the deployed package was missing content.xml..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open workspace '...'
+        2. Click '...'
+        3. Run '...'
+        4. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / validation output / diagnostics
+      description: Server console output, `/api/agent/project/validate` response, browser console, or the game's debuglog. Automatically formatted as code.
+      render: shell
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, the offending generated XML, mod workspace details, other installed mods that patch the same files, etc.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues for this bug
+          required: true
+        - label: I can reproduce it on the latest version
+          required: false

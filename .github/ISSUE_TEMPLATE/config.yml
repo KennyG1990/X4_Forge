@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability (private)
+    url: https://github.com/KennyG1990/X4_Forge/security/advisories/new
+    about: Please report security issues privately, never as a public issue.
