@@ -22,7 +22,7 @@ Ken does **not** want them merged. Reconciling branch↔main is a **Ken-gated gi
 merge/rebase. Just keep committing to this branch.
 
 ## 2. Git / commit question
-- **HEAD = `ca4c18a`, origin == HEAD, nothing uncommitted.** (`git -C <worktree> rev-parse HEAD` /
+- **HEAD = `d63d64e`, origin == HEAD, nothing uncommitted.** (`git -C <worktree> rev-parse HEAD` /
   `origin/claude/x4-forge-vscode-poc-806ef5`.)
 - **Git is DELEGATED to the agent** (Ken, 2026-07-19): commit + push directly with `git`; assert
   `origin/<branch>` == `HEAD` after every push (banked detached-HEAD hazard). KLIO/Antigravity commit flow
@@ -32,7 +32,7 @@ merge/rebase. Just keep committing to this branch.
 
 ## 3. First moves for the fresh session
 1. Read this file + `BACKLOG.md` (the open-work queue; B64/B65/B67 live there).
-2. `git -C "<worktree>" rev-parse HEAD` and confirm == `origin/claude/x4-forge-vscode-poc-806ef5` (should be `ca4c18a`).
+2. `git -C "<worktree>" rev-parse HEAD` and confirm == `origin/claude/x4-forge-vscode-poc-806ef5` (should be `d63d64e`).
 3. **MACHINE-STATE ASK before anything live** (operator rule 2): "Are you in the app? Game running? Machine
    quiet?" — e2e and mod-import can swap Ken's live workspace / touch his canvas.
 4. Pick from the PENDING QUEUE (§6) — recommend a NON-recall, non-eyeball unit, or drive an eyeball item
@@ -65,23 +65,35 @@ merge/rebase. Just keep committing to this branch.
   + `x4_neural_link` + Python bridge + roleRAG + **Player2** cloud LLM at `:4315`, NOT ollama) runs live
   in-game: LOADED_CLEAN off the Forge's own debug-log watcher + the AI loop firing (`chat_*.json`
   status:ok / provider:player2 / error:null / ~2s). EXPERIENCE war-trigger was prior-proven + deliberately scrapped.
+- **B68 runaway-indent generator fix — VERIFIED 2026-07-20 (headless, no publish).** Dogfood find: raw-passthrough
+  XML render (`generateMDXML`/`renderCue`, `src/types.ts`) was non-idempotent → leading whitespace grew unboundedly
+  every save (proven on-disk: `ai_influence_contract.xml` `<actions>` ~100 spaces). Fix: `reindentRawXmlBlock` (trim
+  each line + re-indent by tag depth → idempotent + self-healing), applied to all 3 passthrough spots. typecheck +
+  `runCompileSelftest` 16/16 + e2e 19/19. Harmless in-game (whitespace insignificant). → ROADMAP. Follow-on: **B69**
+  (inspector raw-XML box is a plain textarea vs the main CodeMirror editor — swap to `CodeMirrorField`; low-pri, eyeball).
 
-## 5. ⚠️ Degradation status + the lesson driving it
-**A degradation checkpoint is OPEN (re-raised 2026-07-20).** This session produced **TWO recalled-symptom
-phantoms**, both things I believed I *saw* live, both disproved by reading code, neither reproduced:
+## 5. ⚠️ Degradation status + the recall lesson (now with its resolution)
+**A degradation checkpoint was raised (2026-07-20)** after **two recalled-symptom phantoms** — both things I believed
+I *saw* live, both disproved by reading code, neither reproduced:
 - **B67-1** "bridge-health false-negative" — code shows the check is correct (`bridgeUp = health.ok===true`;
   `:8713/health` returns `{ok:true,...}`). I'd conflated a stale down-state screenshot with a later up curl.
 - **B67-2** "validator over-warns on imported cues" — `xmlParser.ts:163` defaults `namespace="this"` on every
   import (namespace lint can't fire); `OnAccepted` is a `<library>` with wired `<actions>`; `Registry` has
   `event_game_loaded`+action+`namespace="this"`. Neither lint can fire. Retracted, no fix.
 
-**DURABLE LESSON (banked, now evidenced 2×):** *my recalled UI observations are unreliable — treat any
-"I saw X in the app N sessions ago" as a HYPOTHESIS and REPRODUCE it live (or read the code) BEFORE treating
-it as a bug or building a fix.* This is the "AI has no sense of time" trap. Every failure explanation must be
-tagged **[REPRODUCED]** vs **[HYPOTHESIS]** (operator rule 7).
+**...then B68 RESOLVED the thread the right way.** Ken pointed at the raw-XML box ("am I chasing ghosts?"). I nearly
+retracted based on the *screenshots* (which looked normal), then checked the **authoritative source** — the actual
+on-disk deployed file — and it CONFIRMED a real runaway-indent bug. Fixed + VERIFIED (B68).
 
-**Why a fresh session is recommended:** the ENTIRE remaining queue is fatigue-exposed — either recall-dependent
-or eyeball-gated (see §6). A rested/authorized session closes these cleanly; a tired one manufactures phantoms.
+**DURABLE LESSON (refined, evidenced 3×):** recalled/observed *surfaces* (screenshots, pasted text, memory) are
+unreliable — resolve every "is X real?" against the **deterministic/authoritative source** (the code, the on-disk
+artifact, a reproduced run) **before** forming a verdict. The failure mode has two faces: *insisting* on a phantom
+(B67-1/-2) and *caving* on a real bug (nearly, B68). The check settles both — don't insist, don't cave. Tag every
+explanation **[REPRODUCED]** vs **[HYPOTHESIS]** (operator rule 7).
+
+**Session-continuation guidance:** *grounded/deterministic* work (dogfood bug with an on-disk repro + an oracle, like
+B68) is safe to continue and closed cleanly VERIFIED. What the degradation flag warns against is *recall-dependent* or
+*eyeball-gated* work (§6) — a tired session manufactures phantoms there. Prefer grounded units; defer the rest.
 
 ---
 
@@ -94,6 +106,7 @@ or eyeball-gated (see §6). A rested/authorized session closes these cleanly; a 
 | **B56 / B57 IDE eyeball batches** | **eyeball-gated** | Install 0.0.30 in Antigravity, drive Problems panel / IntelliSense / cue go-to-def / MCP tools / two-way adopt **in the IDE**. ⚠️ `textinputhost.exe` steals focus and blocks remote computer-use input — **needs Ken at the machine**. |
 | **B64 U1 / U3 / A1** UX/a11y | **eyeball-gated** (built PARTIAL) | U1 persistent assertive error toasts, A1 accessible dialog (both A1 VERIFIED-live already), **U3 was FALSIFIED live** (CodeMirror is default; the old per-line severity renderer is dead code — audit finding C-A11Y-4 does not apply to the live app). |
 | **B65-2..5** onboarding follow-ons | **CODE (non-recall)** but UI → closes PARTIAL pending eyeball | B65-2 wizard failure-branch parity (teach panel in the `canHarvestSchemas=false`/error branch — reuses B65-1 panel) · B65-3 re-entry gap (`App.tsx:442` + persistent banner) · B65-4 raw-error→settings deep-link · B65-5 shared `<SchemaRecovery>` component. **The safest "keep producing" pick if not stopping.** Plan: `docs/plans/2026-07-19-onboarding-schema-coldstart.md`. |
+| **B69** inspector raw-XML box → CodeMirror | **CODE (non-recall)** but UI → PARTIAL pending eyeball | Swap the plain `<textarea>` at `PropertiesInspector.tsx:270` for the existing `CodeMirrorField` (reuse, no new infra) so raw XML gets syntax highlighting + X4 IntelliSense like the main editor. Low-pri; from the B68 dogfood thread. |
 | **SEC5** Origin-spoof · **X1** Google OAuth | **Ken decisions** | SEC5: `isAppUiRequest` trusts a client-settable Origin/Referer header — real gap, but the fix changes the deliberate isolation model → needs Ken's mechanism choice. X1: finish or remove the OAuth stub. |
 | **ARCH1** god-file route extraction | fresh-context code session | Pattern proven (`registerXxxRoutes(app, deps)`). Candidate: AI keys/usage trio (`server.ts:1935/1945/8184` → `src/server/aiRoutes.ts`). Deserves a dedicated session, tsc+sweep+e2e per group. |
 
