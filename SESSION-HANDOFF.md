@@ -21,7 +21,23 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## CURRENT STATE (2026-07-19) — B65 cold-start onboarding SHIPPED + VERIFIED LIVE (latest)
+## CURRENT STATE (2026-07-20) — B-INGAME North-Star PROVEN live; degradation checkpoint
+This was an ENORMOUS session. Banked + pushed (origin==HEAD `739620f`): the whole B64 audit-hardening batch
+(SEC1-4, P1/P2/P4, T2, T1, A1, U-trio), **B65 cold-start onboarding SHIPPED as 0.0.30 on Open VSX**, and
+**B-INGAME CLOSED** — the Forge-built two-extension mod (x4_ai_influence + x4_neural_link + Python bridge +
+roleRAG + Player2) runs live in-game, EXECUTION gate verified via the Forge's OWN debug-log watcher
+(LOADED_CLEAN off a live tail) + the AI loop firing (chat_*.json status:ok/player2/error:null/~2s). The
+North Star is met. See ROADMAP for all closes.
+**DEGRADATION CALLED (2026-07-20):** near the end I claimed a "bridge-health false-negative" (B67-1) that a
+2-min reconcile FALSIFIED (I conflated a stale screenshot with a later curl — the time-sense trap). That
+fatigue-class error + the session length = commit-point now, fresh session for the next unit.
+**PENDING VALIDATION (now doable at the machine, next session):** B67-2 (Forge validator over-warns on
+imported RAW/passthrough cues — investigate exemption) · B67-3 (LOAD MOD PROJECT "Failed to fetch" — mostly
+pre-P1, verify graceful degrade) · B64-U2 (deploy-fail rose color — isolate a scratch deploy) · B56/B57 IDE
+eyeball batches (install 0.0.30, drive Problems/IntelliSense/cue-nav/MCP/adopt in the IDE). B65-2..5 onboarding
+follow-ons still open. **Commit question:** all committed+pushed, origin==HEAD 739620f, nothing uncommitted.
+
+## PRIOR STATE (2026-07-19) — B65 cold-start onboarding SHIPPED + VERIFIED LIVE
 Real Discord user hit "md.xsd/common.xsd not found" and couldn't recover. Planned TWICE + reality-checked (both plans
 wrongly assumed a first-party XRCatTool; the live install has none). Ken: no in-app unpacker (B66 rejected) — awareness
 + guidance + the harvest doing its whole job. **SHIPPED + VERIFIED LIVE:** (1b) harvest now extracts ALL 40 packed XSDs
