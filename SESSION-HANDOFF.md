@@ -21,7 +21,20 @@ is **COMPLETE** — all four units shipped, published, committed, pushed.
 B59d is committed AND pushed (this session's final commit) and published (0.0.21). All of B59 a–d
 are on the store and in git. Nothing uncommitted.
 
-## CURRENT STATE (2026-07-18) — ACTIVE FOCUS: B64 audit-hardening batch (SPECIFIED, security-first)
+## CURRENT STATE (2026-07-19) — B65 cold-start onboarding SHIPPED + VERIFIED LIVE (latest)
+Real Discord user hit "md.xsd/common.xsd not found" and couldn't recover. Planned TWICE + reality-checked (both plans
+wrongly assumed a first-party XRCatTool; the live install has none). Ken: no in-app unpacker (B66 rejected) — awareness
++ guidance + the harvest doing its whole job. **SHIPPED + VERIFIED LIVE:** (1b) harvest now extracts ALL 40 packed XSDs
+tree-preserving (was 3 — packed users were silently degraded to a 3-domain validator); visual validation CAUGHT a shim
+regression (packed md/md.xsd's `../../../` include overshoots the harvest tree → 382 events; fixed by skipping shim
+duplicates → md→real libraries/md.xsd → **402 events / 40 domains**). (1) DirectorySettingsModal schema row is
+self-rescuing: in-place "Extract schemas from my game install" button + always-available teach panel (how validation
+works · harvest · unpack fallback → community tool SOURCES, tool-agnostic). Live: amber→Extract→green + banner, e2e 19/19.
+Files: gameDetectRoutes.ts, DirectorySettingsModal.tsx. → ROADMAP. **Deferred B65-2..5** (wizard parity, re-entry gap,
+raw-error deep-link, shared component). **Possible follow-up (AAR): add a synthetic-cat/dat oracle for the harvest shim-skip.**
+Plan: `docs/plans/2026-07-19-onboarding-schema-coldstart.md`. **Commit point below.**
+
+## PRIOR STATE (2026-07-18) — ACTIVE FOCUS: B64 audit-hardening batch (SPECIFIED, security-first)
 Ken commissioned a full four-sweep read-only audit (security · data/perf · UI/a11y · tests/config/arch) and
 ordered it planned out systematically, **security first, then agent's choice**, workflow-religious, disciplined
 docs, "not from memory." DONE (this turn): reconciled against ADRs + capability-map, wrote the full SPECIFIED
@@ -259,7 +272,8 @@ clears the initial launch dialog — after that, menu→Continue is 2D nav (feas
   "## HEAD (no branch)". Recovery if detached: `git branch -f <branch> HEAD && git checkout <branch> && git push`.
 - **Publish flow:** bump package.json → `npm run changelog` → `npm run stage-app` → (repo root)
   `npm run build` → (vscode-extension) `npm run package` → staged probe
-  (`cd vscode-extension/app/dist && PORT=xxxx node server.cjs`, assert ROOT 200; health 401 by design)
+  (**`cd vscode-extension/app && PORT=xxxx node dist/server.cjs`** — cwd MUST be app/ so `cwd/dist` resolves; the
+  old note said `cd app/dist` which double-nests to app/dist/dist/index.html → ROOT 500. assert ROOT 200; health 401 by design)
   → `npx ovsx publish x4-forge-studio-<v>.vsix -p $OVSX_PAT` (token in `F:\DEV_ENV\X4_Forge\.env.local`)
   → THEN git commit+push. **Publish-before-commit is firm; commit mechanism is flexible (git shell OK).**
 - **release-notes.json** (vscode-extension/): add ONE plain-English block per version (audience = users)

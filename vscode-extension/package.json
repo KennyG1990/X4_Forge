@@ -1,8 +1,8 @@
 {
   "name": "x4-forge-studio",
   "displayName": "X4 Forge Studio",
-  "description": "Visual modding studio for X4: Foundations \u00e2\u20ac\u201d build, validate, and deploy mods with a node canvas and real-schema validation, no hand-written XML required.",
-  "version": "0.0.29",
+  "description": "Visual modding studio for X4: Foundations â€” build, validate, and deploy mods with a node canvas and real-schema validation, no hand-written XML required.",
+  "version": "0.0.30",
   "icon": "icon.png",
   "publisher": "x4forge",
   "license": "MIT",
@@ -120,7 +120,7 @@
         "x4forge.stateDir": {
           "type": "string",
           "default": "",
-          "description": "Directory for the sidecar's workspace state (X4_STATE_DIR). When empty, a per-user directory in the extension's global storage is used. Point it at an existing Forge checkout's .studio-state to open the real workspace \u00e2\u20ac\u201d do NOT do this while that Forge's own server is running (the attach probe normally prevents this)."
+          "description": "Directory for the sidecar's workspace state (X4_STATE_DIR). When empty, a per-user directory in the extension's global storage is used. Point it at an existing Forge checkout's .studio-state to open the real workspace â€” do NOT do this while that Forge's own server is running (the attach probe normally prevents this)."
         },
         "x4forge.nodePath": {
           "type": "string",
@@ -141,7 +141,7 @@
           ],
           "default": "off",
           "enumDescriptions": [
-            "Normal \u00e2\u20ac\u201d no debugger.",
+            "Normal â€” no debugger.",
             "Launch the backend with --inspect and auto-attach the Node debugger (breakpoints, stepping). Works in VS Code and Antigravity.",
             "Like inspect, but pause at the first line so you can debug startup; continue execution in the debugger to start the server."
           ],
@@ -150,12 +150,12 @@
         "x4forge.modFolder": {
           "type": "string",
           "default": "",
-          "description": "Default mod folder name (under the configured Mod Workspace root) for \"Validate Mod Folder\" \u2014 leave empty to be prompted each time."
+          "description": "Default mod folder name (under the configured Mod Workspace root) for \"Validate Mod Folder\" — leave empty to be prompted each time."
         },
         "x4forge.writeXmlAssociations": {
           "type": "boolean",
           "default": false,
-          "description": "When opening a mod folder, also write per-file xml.fileAssociations to the game XSDs (plain-rooted factions/gamestarts/addon files only \u2014 never diff patches). Requires an XML extension (e.g. Red Hat XML) to take effect. Default off: the Forge validator remains the single referee unless you opt in."
+          "description": "When opening a mod folder, also write per-file xml.fileAssociations to the game XSDs (plain-rooted factions/gamestarts/addon files only — never diff patches). Requires an XML extension (e.g. Red Hat XML) to take effect. Default off: the Forge validator remains the single referee unless you opt in."
         },
         "x4forge.twoWayEditing": {
           "type": "boolean",

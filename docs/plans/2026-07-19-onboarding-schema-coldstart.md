@@ -48,7 +48,22 @@ One file: `src/components/DirectorySettingsModal.tsx` (the exact surface the Dis
 - **New local state** (mirror the wizard's `applyAutomatic`, FirstRunWizard.tsx:67-100): a `harvest()` async,
   a `harvesting` flag, a `guideOpen` boolean. Reuse `gamePath`/`schemaPath`/`saveServerPaths`/`status`/`resolved`.
 
-## TOOL POSITION (corrected by the live-install check — KEN DECISION on the exact name)
+## KEN DECISIONS (2026-07-19, at the machine)
+- **B66 (build our own unpacker) — REJECTED.** No in-app unpacker, no exec surface. Scope = make users aware of
+  how the validator works, what it requires, and where to find the community tools.
+- **Direction APPROVED**; permissions for live/visual validation granted (Ken at the machine).
+- **B65-1b IS IN SCOPE** (agent scoping call, stated not silent): the packed game ships **43 XSDs** (verified via
+  cat-manifest enumeration on the real install); the harvest extracts only 3, so harvest-only users get a silently
+  DEGRADED B46 validation surface (no factions/gamestarts/diff/addon/scriptproperties routing). 1b extends the
+  EXISTING harvest to extract ALL shipped .xsd entries **tree-preserving** (flat basenames collide: md/md.xsd vs
+  libraries/md.xsd, md/diff.xsd vs libraries/diff.xsd, aiscripts/aiscripts.xsd vs libraries/aiscripts.xsd — and
+  md/md.xsd is the include SHIM that needs its relative include chain intact). Registry + discoverXsd are already
+  subdir-aware → zero downstream changes. This is not an unpacker; it is the approved harvest doing its whole job.
+- **Tool guidance = SOURCES, not one binary** (per "where they can find those tools"): the teach panel points to the
+  community's tool hubs (Egosoft forum modding-tools board, Nexus) tool-agnostically — "any X4 cat/dat extractor
+  works; point the schema field at the unpacked root." No specific binary endorsed (the XRCatTool lesson).
+
+## TOOL POSITION (superseded by the KEN DECISIONS above; kept for the record)
 - **Primary in-app path = the built-in harvest** (no external tool at all): the "Extract from my game install"
   button. Recommend this FIRST; it works for most installs.
 - **Fallback = a COMMUNITY unpacker** (there is NO first-party tool in the install — verified). Recommend a

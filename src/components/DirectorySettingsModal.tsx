@@ -90,6 +90,9 @@ export default function DirectorySettingsModal({
   const [filesystemInput, setFilesystemInput] = useState('');
   const [resolved, setResolved] = useState<any>(null);
   const [status, setStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'warn' | 'error'; msg: string }>({ type: 'idle', msg: '' });
+  // B65-1: in-place schema recovery — harvest from the user's own install, and a teach panel.
+  const [harvesting, setHarvesting] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -107,14 +110,17 @@ export default function DirectorySettingsModal({
     })();
   }, [isOpen]);
 
-  const saveServerPaths = async () => {
+  const saveServerPaths = async (schemaDirOverride?: string) => {
+    // schemaDirOverride: harvest sets schemaPath via setState (async), so it passes the new
+    // dir directly rather than waiting a render for state to settle.
+    const schemaDir = (schemaDirOverride ?? schemaPath).trim();
     setStatus({ type: 'saving', msg: '' });
     try {
       const res = await fetch('/api/schema/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          schemaDir: schemaPath.trim(),
+          schemaDir,
           x4GamePath: gamePath.trim(),
           modWorkspacePath: workspaceInput.trim(),
           filesystemPath: filesystemInput.trim()
@@ -136,7 +142,7 @@ export default function DirectorySettingsModal({
           setStatus({
             type: 'warn',
             msg: res.schemaWarning
-              || `Paths saved. Schema not loaded (${schemaPath.trim() || 'no schema path set'}) — schema-aware validation stays disabled until md.xsd + common.xsd resolve.`
+              || `Paths saved. Schema not loaded (${schemaDir || 'no schema path set'}) — schema-aware validation stays disabled until md.xsd + common.xsd resolve.`
           });
         } else {
           setStatus({
@@ -150,9 +156,39 @@ export default function DirectorySettingsModal({
     }
   };
 
+  // B65-1: extract ALL of X4's schema files from the user's own game install (the same harvest
+  // the first-run wizard runs — now reachable from the exact screen users get stuck on). On
+  // failure, open the teach panel so the amber state is never a dead-end.
+  const harvestFromInstall = async () => {
+    const g = gamePath.trim();
+    if (!g) return;
+    setHarvesting(true);
+    setStatus({ type: 'saving', msg: 'Extracting the game’s schema files…' });
+    try {
+      const res = await fetch('/api/agent/setup/harvest-schemas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x4GamePath: g }),
+      }).then(r => r.json());
+      if (!res.ok) {
+        setGuideOpen(true);
+        setStatus({ type: 'error', msg: res.error || 'Could not extract the schema files from your game install — see below.' });
+        return;
+      }
+      setSchemaPath(res.dir);
+      await saveServerPaths(res.dir); // persist + reload schema; re-resolves schemaOk to green
+    } catch (e: any) {
+      setGuideOpen(true);
+      setStatus({ type: 'error', msg: e?.message || 'Schema extraction failed — see below.' });
+    } finally {
+      setHarvesting(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const schemaOk = resolved?.mdExists && resolved?.commonExists;
+  const showGuide = guideOpen || (resolved && !schemaOk); // auto-open the teach panel when stuck
 
   return (
     <div
@@ -227,21 +263,43 @@ export default function DirectorySettingsModal({
           <DirectoryRow
             icon={<Database className="w-4 h-4" />}
             title="XSD Schema Folder"
-            tooltip="The folder containing md.xsd and common.xsd. These power the studio's node validation and autocomplete against X4's real Mission Director schema. Usually inside an unpacked game/extension folder."
+            tooltip="The folder holding X4's schema files (md.xsd, common.xsd + ~40 more). Powers validation and autocomplete. Fill this automatically by setting your Game Installation above and clicking Extract — or point it at an unpacked game's root folder."
           >
             <input
               type="text"
               value={schemaPath}
               onChange={e => setSchemaPath(e.target.value)}
-              placeholder="e.g. data\harvested-schemas (auto-harvested) or an unpacked game folder"
+              placeholder="Click Extract below to auto-fill — or paste an unpacked game folder's root path"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
             {resolved && (
-              <div className="flex items-center gap-1.5 text-[10px] font-mono mt-1">
+              <div className="mt-1 space-y-1.5 text-[10px] font-mono">
                 {schemaOk ? (
-                  <span className="text-emerald-400 flex items-center gap-1"><CheckCircle className="w-3 h-3" /> md.xsd &amp; common.xsd found</span>
+                  <span className="text-emerald-400 flex items-center gap-1"><CheckCircle className="w-3 h-3" /> md.xsd &amp; common.xsd found — schema-aware validation is on</span>
                 ) : (
-                  <span className="text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> md.xsd / common.xsd not found at this path</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> md.xsd / common.xsd not found — validation is limited</span>
+                    <button
+                      type="button"
+                      onClick={harvestFromInstall}
+                      disabled={harvesting || !gamePath.trim()}
+                      title={gamePath.trim() ? 'Extract X4’s schema files from your game install' : 'Set your X4 Game Installation path above first'}
+                      className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[10px] font-semibold cursor-pointer inline-flex items-center gap-1"
+                    >
+                      <Database className="w-3 h-3" /> {harvesting ? 'Extracting…' : 'Extract schemas from my game install'}
+                    </button>
+                  </div>
+                )}
+                <button type="button" onClick={() => setGuideOpen(o => !o)} className="text-slate-500 hover:text-cyan-300 text-[10px] inline-flex items-center gap-1 cursor-pointer">
+                  <Info className="w-3 h-3" /> How validation works &amp; where to get the schema files {showGuide ? '▾' : '▸'}
+                </button>
+                {showGuide && (
+                  <div className="text-[10px] leading-relaxed text-slate-400 font-sans bg-white/[0.03] border border-white/10 rounded p-2 space-y-1">
+                    <p><span className="text-slate-200 font-semibold">How it works:</span> the Forge validates your mod against X4’s own schema files — md.xsd, common.xsd, and ~40 more the game ships. The more it has, the more of your mod it checks (factions, game starts, patches, and so on).</p>
+                    <p><span className="text-slate-200 font-semibold">What it needs:</span> those schema files, from <span className="text-slate-200">your</span> install — the Forge can’t legally ship X4’s files with it.</p>
+                    <p><span className="text-emerald-300 font-semibold">Easiest:</span> set your <span className="text-slate-200">X4 Game Installation</span> above, then click <span className="text-slate-200">Extract schemas from my game install</span> — it pulls every schema straight out of your own game. No unpacking needed.</p>
+                    <p><span className="text-cyan-300 font-semibold">If that fails:</span> unpack the game once with an X4 cat/dat extractor (community tools live on the <span className="text-slate-200">Egosoft forum “Scripts and Modding → Tools” board</span> and Nexus Mods), then paste the <span className="text-slate-200">unpacked folder’s root</span> into the field above — the Forge finds the schemas anywhere inside it. Any extractor works.</p>
+                  </div>
                 )}
               </div>
             )}
@@ -311,7 +369,7 @@ export default function DirectorySettingsModal({
               All directory paths are saved securely on the server config.
             </span>
             <button
-              onClick={saveServerPaths}
+              onClick={() => saveServerPaths()}
               disabled={status.type === 'saving'}
               className="px-4 py-1.5 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black rounded text-[11px] font-mono font-bold uppercase flex items-center gap-1.5 cursor-pointer shrink-0"
             >

@@ -6,7 +6,15 @@
 
 ## P0 — Active (this worktree branch)
 
-### B65 · Cold-start onboarding — kill the "md.xsd not found" dead-end — `spec'd` (SPECIFIED 2026-07-19) · KEN-GATED (direction + tool name)
+### B65 · Cold-start onboarding — B65-1 + 1b ✅ VERIFIED LIVE 2026-07-19 → ROADMAP; follow-ons B65-2..5 deferred
+**B65-1 (self-rescuing schema row + teach panel) + B65-1b (full 40-XSD tree-preserving harvest) SHIPPED + VERIFIED LIVE**
+(amber→Extract→green, 402 events / 40 domains, e2e 19/19). Visual validation CAUGHT + fixed a shim regression (packed
+md/md.xsd shim's `../../../` include overshoots the harvest tree → 382 events; fixed by skipping shim duplicates so
+md→real libraries/md.xsd → 402). Files: gameDetectRoutes.ts, DirectorySettingsModal.tsx. B66 own-unpacker REJECTED.
+**DEFERRED follow-ons:** B65-2 wizard failure-branch parity (canHarvestSchemas=false + error phase get the teach panel,
+not a dead-end; FirstRunWizard.tsx) · B65-3 re-entry gap (App.tsx:442 auto-open + persistent "finish setup" banner) ·
+B65-4 raw-error→settings deep-link (server.ts:212 / health card) · B65-5 shared `<SchemaRecovery>` component (DRY once
+wizard + modal share the panel). Plan: `docs/plans/2026-07-19-onboarding-schema-coldstart.md`.
 Real Discord user hit `md.xsd / common.xsd not found at this path` and couldn't recover. **Planned TWICE**
 (two independent agents, same grounded brief) + reconciled against the live install. Full plan:
 `docs/plans/2026-07-19-onboarding-schema-coldstart.md`. **Convergence:** both passes independently agreed on

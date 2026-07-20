@@ -158,6 +158,32 @@ each is ◐ PARTIAL until Ken's screen closes it (textinputhost blocks remote ey
     write-gate risk to prove a color token. The `text-amber-300`→`text-rose-300` change is code-verified. Stays ◐.
 - **Suggested commit title:** "feat(ux): B64-U1/U2/U3 — persistent assertive error toasts, red deploy-failure, shape-cued severity".
 
+### ✅ B65-1 + B65-1b · Cold-start onboarding fix (self-rescuing schema row + full 40-XSD harvest) — VERIFIED LIVE 2026-07-19
+Triggered by a real Discord user stuck on "md.xsd / common.xsd not found". Planned TWICE (two independent agents
+converged) + reality-checked (both wrongly assumed a first-party XRCatTool — the live install has none). Ken:
+no in-app unpacker (B66 rejected); awareness + guidance + the harvest doing its whole job.
+- **B65-1b (backend, gameDetectRoutes.ts):** the harvest extracted only 3 XSDs while the packed game ships **43** and
+  B46 routes files to their own schemas — so every packed-install (harvest-only) user was silently DEGRADED to a
+  3-domain validator. Now the harvest extracts EVERY packed .xsd **tree-preserving** (flat basenames collide). **LIVE
+  BUG CAUGHT + FIXED by visual validation:** the packed `md/md.xsd` shim includes `../../../libraries/md.xsd` (deep-vpath
+  relative) which OVERSHOOTS a 2-level harvest tree → md resolved to the 213-byte shim → 382 events (20 MD elements lost).
+  Fix: skip the shim duplicates (any non-`libraries/` basename that also exists under `libraries/`) so discoverXsd
+  resolves to the self-contained real `libraries/md.xsd`. **Result (live, real install):** 40 XSDs harvested, md→real,
+  **402 events / 807 actions / schemaComplete**, **40 B46 domains** (was 3) — a packed user now gets the FULL validator
+  Ken gets from an unpacked corpus, one click, no unpacking.
+- **B65-1 (UI, DirectorySettingsModal.tsx):** the schema row (the exact inert surface every failure funnels into) is now
+  self-rescuing — an in-place **"Extract schemas from my game install"** button (reuses the harvest endpoint, enabled when
+  the game path is set) + an always-available, auto-on-when-stuck **teach panel** (how validation works · ~40 schemas ·
+  the harvest path · the unpack fallback pointing to community tool SOURCES — Egosoft forum tools board / Nexus — "any
+  extractor, point at the unpacked root"). `saveServerPaths` gained a schema-dir override (harvest sets state async).
+- **VALIDATION:** host tsc 0 · vite build (1816 mod) · **e2e 19/19** · **LIVE (computer-use, DOM-driven — pane screenshots
+  wedge, B28):** amber start (game known, schema empty) → teach panel auto-shown with all awareness copy + Extract enabled
+  (game path prefilled) → click Extract → **row flips GREEN** "schema-aware validation is on" + banner "Schema library
+  reloaded: 402 events…" → backend 40 domains, shim absent, md→libraries/md.xsd. Negative: Extract disabled when no game path.
+- **Deferred follow-ons (B65-2..5):** wizard failure-branch parity · re-entry gap (App.tsx:442 + persistent banner) ·
+  raw-error→settings deep-link · shared `<SchemaRecovery>` component. **OUT:** B66 own-unpacker (rejected), shipping XSDs.
+- **Suggested commit title:** "fix(onboarding): B65 — self-rescuing schema row + full 40-XSD tree-preserving harvest (402 events, 40 domains)".
+
 ### ✅ B64-T1 (slice) · route-level integration harness for the security surface — VERIFIED 2026-07-19 (headless)
 Audit C-TEST-1: 133 routes had no automated coverage beyond 9 e2e specs. New `scripts/route-integration.mjs`
 (`npm run test:routes`) boots an EPHEMERAL server (isolated state/data dirs, a known session token, NO game corpus

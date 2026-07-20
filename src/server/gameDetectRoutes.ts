@@ -27,6 +27,7 @@ import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { parseLibraryFolders, proposeSetup, X4_STEAM_APPID, X4_STEAM_REL_DIR } from "../lib/gameDetect";
 import { dataPath } from "../lib/dataDir";
+import { findCatDatArchives, parseCat, readEntryText } from "../lib/x4CatDat";
 
 interface GameDetectDeps {
   /** cat/dat extractor: (gamePath, 'libraries/md.xsd') → ExtractMatch | null */
@@ -84,7 +85,48 @@ function findGogX4(): { gameDir: string; source: string } | null {
   return null;
 }
 
-const HARVEST_FILES = ["libraries/md.xsd", "libraries/common.xsd", "libraries/aiscripts.xsd"];
+/**
+ * B65-1b (2026-07-19): the packed game ships ~43 XSDs, not 3 — and the B46 schema registry
+ * routes factions/gamestarts/diff/addon/etc. to their OWN schemas. Harvesting only the core
+ * trio silently degraded every harvest-only (packed-install) user to a 3-domain validator.
+ * Now the harvest extracts EVERY .xsd entry in the archives, TREE-PRESERVING (flat basenames
+ * collide — md/md.xsd vs libraries/md.xsd — and md/md.xsd is the zero-declaration include
+ * shim whose relative include chain must stay intact). Registry + discoverXsd are already
+ * subdir-aware, so downstream needs no change. Later archive wins per path (the same
+ * override order extractBaseGameFile honors).
+ */
+function enumeratePackedXsds(gamePath: string): Array<{ rel: string; datPath: string; entry: { name: string; size: number; offset: number } }> {
+  const byRel = new Map<string, { rel: string; datPath: string; entry: { name: string; size: number; offset: number } }>();
+  for (const archive of findCatDatArchives([gamePath])) {
+    let entries;
+    try { entries = parseCat(archive.catPath); } catch { continue; }
+    for (const entry of entries) {
+      const rel = entry.name.toLowerCase();
+      if (!rel.endsWith('.xsd')) continue;
+      byRel.set(rel, { rel: entry.name, datPath: archive.datPath, entry }); // later archive wins
+    }
+  }
+  // B65-1b: the packed game ships include-SHIM duplicates (e.g. md/md.xsd, aiscripts/aiscripts.xsd,
+  // md/diff.xsd) that just `<xs:include>` their real sibling under libraries/ — but the packed shim's
+  // path is `../../../libraries/md.xsd` (relative to the game's deep vpath), which OVERSHOOTS a flat
+  // 2-level harvest tree and silently drops ~20 MD elements (382 vs 402). The `libraries/` copy is the
+  // self-contained real schema. So when a basename exists BOTH under libraries/ and as a shallower
+  // shim, keep only the libraries/ one — discoverXsd then resolves to the complete file. (Unique subdir
+  // schemas like cutscenes/, ui/core/ have no libraries/ twin and are kept.)
+  const libBasenames = new Set<string>();
+  for (const { rel } of byRel.values()) {
+    const r = rel.replace(/\\/g, '/').toLowerCase();
+    if (r.startsWith('libraries/')) libBasenames.add(path.basename(r));
+  }
+  return [...byRel.values()].filter(({ rel }) => {
+    const r = rel.replace(/\\/g, '/').toLowerCase();
+    if (r.startsWith('libraries/')) return true;
+    return !libBasenames.has(path.basename(r)); // drop the shim duplicate; keep unique subdir schemas
+  });
+}
+
+/** The two files POST /api/schema/config validates for — missing either is a hard fail. */
+const CORE_BASENAMES = ["md.xsd", "common.xsd"];
 
 export function registerGameDetectRoutes(app: Express, deps: GameDetectDeps): void {
 
@@ -126,20 +168,40 @@ export function registerGameDetectRoutes(app: Express, deps: GameDetectDeps): vo
       fs.mkdirSync(outDir, { recursive: true });
       const files: { name: string; bytes: number }[] = [];
       const missing: string[] = [];
-      for (const rel of HARVEST_FILES) {
-        const hit = deps.extractBaseGameFile(gamePath, rel);
-        if (hit && hit.text) {
-          const name = path.basename(rel);
-          fs.writeFileSync(path.join(outDir, name), hit.text, "utf8");
-          files.push({ name, bytes: Buffer.byteLength(hit.text, "utf8") });
-        } else {
-          missing.push(rel);
+
+      // B65-1b: harvest EVERY packed .xsd, tree-preserving. Fall back to the core-trio
+      // extractBaseGameFile path if enumeration yields nothing (e.g. an unpacked/loose install
+      // with no .cat archives — those users already have the loose .xsd tree the registry reads).
+      const packed = enumeratePackedXsds(gamePath);
+      if (packed.length > 0) {
+        for (const { rel, datPath, entry } of packed) {
+          try {
+            const text = readEntryText(datPath, entry);
+            if (!text) { missing.push(rel); continue; }
+            const dest = path.join(outDir, ...rel.split("/")); // preserve the game's dir tree
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.writeFileSync(dest, text, "utf8");
+            files.push({ name: rel, bytes: Buffer.byteLength(text, "utf8") });
+          } catch { missing.push(rel); }
+        }
+      } else {
+        // No packed archives — try the core trio via the loose-or-packed extractor.
+        for (const rel of ["libraries/md.xsd", "libraries/common.xsd", "libraries/aiscripts.xsd"]) {
+          const hit = deps.extractBaseGameFile(gamePath, rel);
+          if (hit && hit.text) {
+            const dest = path.join(outDir, ...rel.split("/"));
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.writeFileSync(dest, hit.text, "utf8");
+            files.push({ name: rel, bytes: Buffer.byteLength(hit.text, "utf8") });
+          } else { missing.push(rel); }
         }
       }
-      // md.xsd + common.xsd are what POST /api/schema/config validates for; aiscripts
-      // is a bonus (the schema index can also self-harvest it). Missing either core
-      // file is a hard fail so the wizard never applies a half-usable schema dir.
-      const coreOk = files.some(f => f.name === "md.xsd") && files.some(f => f.name === "common.xsd");
+
+      // md.xsd + common.xsd are what POST /api/schema/config validates for. Missing either
+      // core file is a hard fail so the wizard never applies a half-usable schema dir. (Checked
+      // by BASENAME — they may live at libraries/md.xsd or a bare md.xsd depending on layout.)
+      const haveCore = (base: string) => files.some(f => path.basename(f.name).toLowerCase() === base);
+      const coreOk = CORE_BASENAMES.every(haveCore);
       if (!coreOk) {
         return res.status(422).json({ error: "Could not extract md.xsd + common.xsd from the game archives.", files, missing });
       }

@@ -3,6 +3,11 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.30 — 2026-07-20
+
+- First-run setup is fixed: if you hit "md.xsd / common.xsd not found", Directory Settings now has a one-click "Extract schemas from my game install" button — it pulls every one of X4's schema files straight out of your own game, no unpacking needed. It grabs the full set (not just the core two), so factions, game starts, patches and more all get validated.
+- When schemas aren't set up, the settings screen now explains how validation works and exactly how to get the files — including the fallback of unpacking the game with any community cat/dat tool and pointing the Forge at the unpacked folder — instead of dead-ending on an error.
+
 ## 0.0.29 — 2026-07-18
 
 - New check for station/economy mods: if your god.xml places a station in a sector or zone whose macro doesn't exist (a typo, or a sector you forgot to add), the Forge flags it — instead of the station silently never spawning in-game. Grounded in the game's real macros (now including sectors/zones), so valid placements stay quiet.
