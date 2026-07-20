@@ -1,8 +1,9 @@
 # Publishing an X4 Forge Studio update (the agreed flow)
 
-The extension ships from the **`claude/x4-forge-vscode-poc-806ef5`** branch to the **Open VSX**
+The extension ships from **`main`** (the one line since the 2026-07-20 unification — the old
+`claude/x4-forge-vscode-poc-806ef5` branch is retired) to the **Open VSX**
 store (namespace `x4forge`). GitHub and the store are two SEPARATE destinations:
-- **GitHub** = the source code (push commits to the branch).
+- **GitHub** = the source code (push commits to `main`).
 - **Open VSX** = the installable app users get (a published `.vsix`). Pushing to GitHub does
   NOT update the store; you must publish.
 
@@ -14,7 +15,7 @@ store (namespace `x4forge`). GitHub and the store are two SEPARATE destinations:
   does not (that would need the MS Marketplace, currently blocked on Azure billing).
 
 ## Steps to cut a new version
-1. Commit the code changes (Ken commits + pushes to the branch).
+1. Have the code changes ready on `main` (committed, or riding in the release commit — see step 6).
 2. Bump `version` in `vscode-extension/package.json` (e.g. 0.0.6 -> 0.0.7).
 3. From `vscode-extension/`:
    ```

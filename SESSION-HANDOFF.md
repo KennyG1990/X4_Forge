@@ -11,7 +11,9 @@
   extension** (`x4forge.x4-forge-studio`) + a bundled Express **sidecar** (`dist/server.cjs`).
   This is the **Forge codebase itself** — NOT the `x4_ai_influence` mod, NOT the `x4_neural_link` bridge.
 - **Working tree:** `F:\DEV_ENV\X4_Forge` — **the ONE and ONLY checkout. Develop on `main`, here.**
-- **Latest published:** **0.0.30** on Open VSX.
+- **Latest published:** **0.0.31** on Open VSX (2026-07-20, first release cut from unified `main`;
+  ships B68 runaway-indent fix; gates at release: typecheck 0 · sweep 96/96 vs prod bundle ·
+  routes 13/13 · e2e 19/19 PASS).
 
 ### ✅ ONE LINE NOW (Ken's order, 2026-07-20): `main` IS the extension line — the split is OVER
 History: the extension work lived on `claude/x4-forge-vscode-poc-806ef5` in a worktree while old

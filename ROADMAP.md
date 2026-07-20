@@ -6112,3 +6112,13 @@ one-line era (invariant now against `origin/main`). PARTIAL residual: the three 
 (worktree remove, local branch -d, remote push --delete) were blocked by the agent's permission
 classifier — listed verbatim in SESSION-HANDOFF §1 for Ken to run or re-authorize. Worktree/branch
 are FROZEN until then; content-wise both already equal main (`4fbce7d`), so deletion loses nothing.
+
+## ✅ VERIFIED — 0.0.31 released from unified main (2026-07-20) [first release of the one-line era]
+Ken's order: prove the merge clean, publish, commit. **Merge/main cleanliness gates, all run on the
+unified checkout:** typecheck exit 0 · oracle sweep **96/96** against the PRODUCTION bundle
+(`dist/server.cjs` on :3000; gotcha — sweep defaults to :3001, use `X4_FORGE_BASE`) · route-integration
+13/13 · full e2e **19/19 VERDICT: PASS** (json-report) · precommit gate green. **Release (publish-before-
+commit honored):** bump 0.0.30→0.0.31 → gen-changelog (29 versions, newest 0.0.31) → stage-app (secrets-
+clean) → build-ext → vsce package STABLE (2098 files, 17.0MB) → `ovsx publish` OK ("Published
+x4forge.x4-forge-studio v0.0.31") → store versions API confirmed live → commit. Ships B68 (runaway-indent
+generator fix) as the user-facing delta plus the unification. PUBLISHING.md updated: ships from `main` now.

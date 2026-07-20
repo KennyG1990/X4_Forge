@@ -3,7 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
-## 0.0.30 — 2026-07-20
+## 0.0.31 — 2026-07-20
+
+- Fixed a bug where imported raw XML (cues loaded from an existing mod and kept verbatim) gained more and more leading whitespace on every save — indentation is now stable no matter how many times you save, and previously affected files self-heal on their next save.
+- Housekeeping: the project's development history was unified onto the main branch — no user-facing change beyond this cleaner foundation for updates.
+
+## 0.0.30 — 2026-07-19
 
 - First-run setup is fixed: if you hit "md.xsd / common.xsd not found", Directory Settings now has a one-click "Extract schemas from my game install" button — it pulls every one of X4's schema files straight out of your own game, no unpacking needed. It grabs the full set (not just the core two), so factions, game starts, patches and more all get validated.
 - When schemas aren't set up, the settings screen now explains how validation works and exactly how to get the files — including the fallback of unpacking the game with any community cat/dat tool and pointing the Forge at the unpacked folder — instead of dead-ending on an error.
