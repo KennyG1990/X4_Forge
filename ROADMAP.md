@@ -6101,3 +6101,14 @@ checkout `F:\DEV_ENV\X4_Forge` tree swapped to the extension app; its node_modul
 `npm install` before building there. SESSION-HANDOFF §1 rewritten same task (canon-lag rule).
 Validation: merge-commit tree hash == branch tree hash (git plumbing equality); ff-only on both
 refs (no forced update possible); origin==HEAD asserted on both after push; status clean both trees.
+
+## ◐ PARTIAL — single-line consolidation: worktree/branch retirement (2026-07-20)
+Ken ended the dual-line arrangement for good ("stop this confusion"). Done + VERIFIED: fallback tag
+`legacy-webapp-main` = old webapp tip `2cc9131`, pushed; ALL live worktree state copied into the
+primary checkout `F:\DEV_ENV\X4_Forge` (node_modules ×2, `.studio-api-token`, `config.json`, `data/`
+incl. 15-Jul harvested schemas, e2e evidence logs, 19 .vsix release artifacts — spot-checked) and
+the unified checkout PROVEN working: `npm run typecheck` exit 0. SESSION-HANDOFF rewritten to the
+one-line era (invariant now against `origin/main`). PARTIAL residual: the three deletion commands
+(worktree remove, local branch -d, remote push --delete) were blocked by the agent's permission
+classifier — listed verbatim in SESSION-HANDOFF §1 for Ken to run or re-authorize. Worktree/branch
+are FROZEN until then; content-wise both already equal main (`4fbce7d`), so deletion loses nothing.

@@ -10,24 +10,27 @@
 - **Project:** **X4 Forge** — a visual X4:Foundations modding studio, shipped as a **VS Code / Open VSX
   extension** (`x4forge.x4-forge-studio`) + a bundled Express **sidecar** (`dist/server.cjs`).
   This is the **Forge codebase itself** — NOT the `x4_ai_influence` mod, NOT the `x4_neural_link` bridge.
-- **Working tree:** `F:\DEV_ENV\X4_Forge\.claude\worktrees\x4-forge-vscode-poc-806ef5`
-- **Branch:** `claude/x4-forge-vscode-poc-806ef5` — **this IS the live development line.**
+- **Working tree:** `F:\DEV_ENV\X4_Forge` — **the ONE and ONLY checkout. Develop on `main`, here.**
 - **Latest published:** **0.0.30** on Open VSX.
 
-### ✅ Branch/main UNIFIED (Ken's order, 2026-07-20 — supersedes the earlier DO-NOT-MERGE flag)
-This extension line **is now `main`**: Ken ordered a supersession merge — a merge commit whose tree is
-100% this branch's content, with old `main` (the deprecated browser-server webapp, last real code tip
-`ff38642`) kept only as a history ancestor. `main` and `claude/x4-forge-vscode-poc-806ef5` now point at
-the SAME commit and must be pushed together (`git push origin main claude/x4-forge-vscode-poc-806ef5`)
-until the claude/ branch is retired (Ken's call, pending). GitHub default branch = `main`, so the
-community-health files/README/issue forms now render from THIS content. **Primary checkout
-`F:\DEV_ENV\X4_Forge` now holds the extension tree but its `node_modules` predates the swap — run
-`npm install` there before any build/typecheck in that checkout.** This worktree remains valid.
+### ✅ ONE LINE NOW (Ken's order, 2026-07-20): `main` IS the extension line — the split is OVER
+History: the extension work lived on `claude/x4-forge-vscode-poc-806ef5` in a worktree while old
+`main` (the deprecated browser-server webapp) was kept as a fallback. 2026-07-20 Ken ended it: a
+supersession merge made `main`'s content 100% the extension line (old webapp reachable in history;
+easy fallback tag **`legacy-webapp-main`** = its final tip `2cc9131`). The primary checkout carries
+the full working env (node_modules, `.studio-api-token`, `config.json`, `data/`, evidence logs,
+.vsix artifacts — copied from the worktree; typecheck exit 0 verified). **Retirement of the old
+worktree + `claude/` branch:** the agent's deletion commands were permission-blocked; Ken runs
+(or re-authorizes) these three, then this paragraph's last sentence can be deleted:
+`git -C F:\DEV_ENV\X4_Forge worktree remove --force ".claude/worktrees/x4-forge-vscode-poc-806ef5"` ·
+`git -C F:\DEV_ENV\X4_Forge branch -d claude/x4-forge-vscode-poc-806ef5` ·
+`git -C F:\DEV_ENV\X4_Forge push origin --delete claude/x4-forge-vscode-poc-806ef5`.
+Until then the worktree/branch still exist but are FROZEN — never commit there again.
 
 ## 2. Git / commit question
-- **Invariant (don't hard-code a SHA — it goes stale the instant this file is committed):** `git -C <worktree>
-  rev-parse HEAD` must equal `git rev-parse origin/claude/x4-forge-vscode-poc-806ef5`, and the tree must be clean.
-  That's the whole check — HEAD == origin & nothing uncommitted. (Last written at the commit that added this line.)
+- **Invariant (don't hard-code a SHA — it goes stale the instant this file is committed):** in
+  `F:\DEV_ENV\X4_Forge`, `git rev-parse HEAD` must equal `git rev-parse origin/main`, and the tree must be
+  clean. That's the whole check — HEAD == origin & nothing uncommitted. (Last written at the commit that added this line.)
 - **Git is DELEGATED to the agent** (Ken, 2026-07-19): commit + push directly with `git`; assert
   `origin/<branch>` == `HEAD` after every push (banked detached-HEAD hazard). KLIO/Antigravity commit flow
   is RETIRED. **Publish-before-commit applies ONLY to user-facing releases**; headless/internal changes just
@@ -36,8 +39,8 @@ community-health files/README/issue forms now render from THIS content. **Primar
 
 ## 3. First moves for the fresh session
 1. Read this file + `BACKLOG.md` (the open-work queue; B64/B65/B67 live there).
-2. Confirm `git -C "<worktree>" rev-parse HEAD` == `git rev-parse origin/claude/x4-forge-vscode-poc-806ef5` (they
-   must match — the exact SHA is whatever this file was last committed at; do NOT expect a specific hash).
+2. Confirm `git -C F:\DEV_ENV\X4_Forge rev-parse HEAD` == `git rev-parse origin/main` (they must
+   match — the exact SHA is whatever this file was last committed at; do NOT expect a specific hash).
 3. **MACHINE-STATE ASK before anything live** (operator rule 2): "Are you in the app? Game running? Machine
    quiet?" — e2e and mod-import can swap Ken's live workspace / touch his canvas.
 4. Pick from the PENDING QUEUE (§6) — recommend a NON-recall, non-eyeball unit, or drive an eyeball item
