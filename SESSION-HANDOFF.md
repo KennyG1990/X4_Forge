@@ -22,8 +22,9 @@ Ken does **not** want them merged. Reconciling branch↔main is a **Ken-gated gi
 merge/rebase. Just keep committing to this branch.
 
 ## 2. Git / commit question
-- **HEAD = `d63d64e`, origin == HEAD, nothing uncommitted.** (`git -C <worktree> rev-parse HEAD` /
-  `origin/claude/x4-forge-vscode-poc-806ef5`.)
+- **Invariant (don't hard-code a SHA — it goes stale the instant this file is committed):** `git -C <worktree>
+  rev-parse HEAD` must equal `git rev-parse origin/claude/x4-forge-vscode-poc-806ef5`, and the tree must be clean.
+  That's the whole check — HEAD == origin & nothing uncommitted. (Last written at the commit that added this line.)
 - **Git is DELEGATED to the agent** (Ken, 2026-07-19): commit + push directly with `git`; assert
   `origin/<branch>` == `HEAD` after every push (banked detached-HEAD hazard). KLIO/Antigravity commit flow
   is RETIRED. **Publish-before-commit applies ONLY to user-facing releases**; headless/internal changes just
@@ -32,7 +33,8 @@ merge/rebase. Just keep committing to this branch.
 
 ## 3. First moves for the fresh session
 1. Read this file + `BACKLOG.md` (the open-work queue; B64/B65/B67 live there).
-2. `git -C "<worktree>" rev-parse HEAD` and confirm == `origin/claude/x4-forge-vscode-poc-806ef5` (should be `d63d64e`).
+2. Confirm `git -C "<worktree>" rev-parse HEAD` == `git rev-parse origin/claude/x4-forge-vscode-poc-806ef5` (they
+   must match — the exact SHA is whatever this file was last committed at; do NOT expect a specific hash).
 3. **MACHINE-STATE ASK before anything live** (operator rule 2): "Are you in the app? Game running? Machine
    quiet?" — e2e and mod-import can swap Ken's live workspace / touch his canvas.
 4. Pick from the PENDING QUEUE (§6) — recommend a NON-recall, non-eyeball unit, or drive an eyeball item
