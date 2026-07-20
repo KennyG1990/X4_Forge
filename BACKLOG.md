@@ -4,7 +4,20 @@
 > Sessions START here. Closing an item MOVES it into ROADMAP.md as a dated, verification-cited entry.
 > States: `spec'd` · `in_progress` · `blocked` · `parked`. Owner is whoever picks it up (agent or Ken).
 
-## P0 — Active (this worktree branch)
+## P0 — Active
+
+### B70 · Agent harness litters the LIVE GAME DIR when workspace = extensions folder — `spec'd` (found 2026-07-20)
+Ken found `PLAN.md` / `SCRATCHPAD.md` / `todos.json` / `evidence_ledger.json` (session
+`forge-1783998383822-6g6h7kbw`, 2026-07-13) plus a full `.forge/` state tree (sessions, checkpoints,
+evals — activity 07-09→07-16) INSIDE `G:\...\X4 Foundations\extensions\`. Root cause: the agent
+harness writes its durable artifacts into the workspace root, and nothing stops the workspace root
+from being the live game extensions dir. Harmless to X4 (it only scans content.xml subdirs) but it's
+scattering agent state into a user's game install. **Fix (reconcile-first):** find the harness's
+workspace-root/artifact-write chokepoint; when the workspace root is (or contains) a configured game
+dir, either refuse, or redirect harness artifacts to the Forge data dir (B53 `dataDir.ts` seam is the
+proven home) keyed by workspace — plus a lint/walkaround warning when game-dir litter is detected.
+Validation: oracle for the redirect + a negative (game-dir workspace never gains harness files);
+sweep/e2e. The existing litter itself is Ken-gated cleanup (game-dir write gate), tracked separately.
 
 ### B69 · Inspector raw-XML box → real code editor — `spec'd` (low-pri, from the B68 dogfood thread)
 The PropertiesInspector "RAW CUE XML" field is a plain `<textarea rows={6}>` (`PropertiesInspector.tsx:270`) — no
