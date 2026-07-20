@@ -37,10 +37,12 @@ unpacker). Corrected → community unpacker (Ken used the X4 Unpacker Suite, `F:
 
 ### B67 · Live-dogfood Forge findings (from the B-INGAME session, 2026-07-20) — `spec'd`
 Surfaced while validating the real deployed mod live through the Forge (dogfooding). All are FORGE bugs/quality, not mod:
-- **B67-1 · bridge-health FALSE-NEGATIVE:** the startup walkaround / health card reported the neural-link bridge "Not
-  running" while it was demonstrably UP (`:8713/health` → 200, and the AI loop was actively working). `liveBridge.ts`
-  health-check is misreading a live bridge — likely wrong probe path/port or a timeout. Reproducible; fix headless +
-  add a check. (The bridge is optional per ADR-F3, so this only mislabels — but it's a real false signal.)
+- **B67-1 · bridge-health "false-negative" — RETRACTED / FALSIFIED (reconcile 2026-07-20).** Read the code: the check is
+  CORRECT. `:8713/health` returns `{ok:true, player2:{ok:true}, metrics:{...}}`; `normalizeBridgeLiveState` sets
+  `bridgeUp = health.ok===true` → true → healthCard renders "pass/Bridge UP". The "Not running" I saw was the walkaround
+  snapshot from EARLIER (bridge genuinely down then) — I compared a stale screenshot to a later live curl (a timestamp
+  conflation, the "AI has no sense of time" trap). NO bug. Possible-but-UNREPRODUCED sub-item: whether the walkaround
+  re-polls the 10s liveBridge cache on a down→up transition (mild display staleness) — do NOT chase without a fresh repro.
 - **B67-2 · validator over-warns on imported RAW cues:** after LOAD MOD PROJECT of x4_ai_influence, Editor Diagnostics
   flagged its cues ("no event/condition or action nodes wired", "no namespace") — likely FALSE POSITIVES on raw MD cues
   that import as passthrough (they run fine in-game). Investigate whether raw/passthrough cues should be exempt from the
