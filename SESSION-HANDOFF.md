@@ -29,6 +29,28 @@ worktree + `claude/` branch:** the agent's deletion commands were permission-blo
 `git -C F:\DEV_ENV\X4_Forge push origin --delete claude/x4-forge-vscode-poc-806ef5`.
 Until then the worktree/branch still exist but are FROZEN — never commit there again.
 
+## 1b. ⚡ LATEST SESSION CLOSE (2026-07-20, marathon session — read this before §4's older summary)
+All VERIFIED + pushed on `main` unless noted:
+- **Unification executed + finished:** supersession merge `4fbce7d` (main == extension line, old
+  webapp = history ancestor, fallback tag `legacy-webapp-main`); worktree state migrated to the
+  primary checkout (typecheck 0); remote + local `claude/` branch DELETED; worktree deregistered.
+  **Residual:** one EMPTY husk dir `.claude\worktrees\x4-forge-vscode-poc-806ef5` — held by a
+  still-running claude.exe from the 07-19 session; deletes with one keypress once that old session
+  ends (or after reboot). Cosmetic only.
+- **0.0.31 RELEASED from unified main** (ships B68 indent fix): gates typecheck 0 · sweep 96/96 vs
+  prod bundle (gotcha: sweep defaults :3001 — set `X4_FORGE_BASE`) · routes 13/13 · e2e 19/19
+  VERDICT PASS; published→verified on Open VSX→committed (`7e92874`); release-notes 0.0.31 added.
+- **Community-health unit closed end-to-end** on the default branch: checklist 7/7 green + issue
+  chooser deduped (YAML forms won, Ken's word), live-verified.
+- **B70 filed + attributed:** game-dir litter (`G:\...\extensions\` PLAN/SCRATCHPAD/todos/
+  evidence_ledger + `.forge/`) came from the SEPARATE `kennyg.forge-agent` harness extension
+  (source: `F:\DEV_ENV\projects\Agent_Harness_Extension`, chokepoint `src/harness/loop.ts:3037`),
+  NOT this app. **⏳ KEN-PENDING: move-vs-delete word for the litter cleanup (game-dir write gate).**
+- **Harness fix SPECIFIED, fresh-session kickoff:** `Read docs/2026-07-20-globalstorage-artifact-store.md
+  in F:\DEV_ENV\projects\Agent_Harness_Extension and build S1–S4` (globalStorage artifact store;
+  plan doc is UNCOMMITTED in that repo — its git is NOT delegated; commit is Ken's or first-ask).
+- Records: ROADMAP entries for unification/consolidation/0.0.31; AAR ledger updated (StarForge).
+
 ## 2. Git / commit question
 - **Invariant (don't hard-code a SHA — it goes stale the instant this file is committed):** in
   `F:\DEV_ENV\X4_Forge`, `git rev-parse HEAD` must equal `git rev-parse origin/main`, and the tree must be
