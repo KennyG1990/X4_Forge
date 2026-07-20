@@ -6,18 +6,20 @@
 
 ## P0 — Active
 
-### B70 · Agent harness litters the LIVE GAME DIR when workspace = extensions folder — `spec'd` (found 2026-07-20)
+### B70 · Game-dir agent litter — ATTRIBUTED 2026-07-20: the SEPARATE Forge Agent Harness extension, NOT this app
 Ken found `PLAN.md` / `SCRATCHPAD.md` / `todos.json` / `evidence_ledger.json` (session
-`forge-1783998383822-6g6h7kbw`, 2026-07-13) plus a full `.forge/` state tree (sessions, checkpoints,
-evals — activity 07-09→07-16) INSIDE `G:\...\X4 Foundations\extensions\`. Root cause: the agent
-harness writes its durable artifacts into the workspace root, and nothing stops the workspace root
-from being the live game extensions dir. Harmless to X4 (it only scans content.xml subdirs) but it's
-scattering agent state into a user's game install. **Fix (reconcile-first):** find the harness's
-workspace-root/artifact-write chokepoint; when the workspace root is (or contains) a configured game
-dir, either refuse, or redirect harness artifacts to the Forge data dir (B53 `dataDir.ts` seam is the
-proven home) keyed by workspace — plus a lint/walkaround warning when game-dir litter is detected.
-Validation: oracle for the redirect + a negative (game-dir workspace never gains harness files);
-sweep/e2e. The existing litter itself is Ken-gated cleanup (game-dir write gate), tracked separately.
+`forge-1783998383822-6g6h7kbw`, 2026-07-13) plus a full `.forge/` state tree (activity 07-09→07-16)
+INSIDE `G:\...\X4 Foundations\extensions\`. **Attribution (evidence-based):** grep of THIS codebase =
+zero writers of those artifact names; grep of `kennyg.forge-agent-1.0.0` (the standalone Forge Agent
+Harness IDE extension, installed in Antigravity + VS Code) hits `out/harness/loop.js` /
+`backgroundRunner.js` / `extension.js` — the harness writes its governance artifacts into whatever
+IDE workspace folder is open, and on 07-13 that was the live game extensions dir. Harmless to X4
+(it only scans content.xml subdirs). **The workspace-root guard/redirect fix belongs in the
+kennyg.forge-agent PROJECT, not this repo** — carry it there (refuse or redirect artifacts when the
+workspace root is a game dir). **X4 Forge's own bounded slice (this repo, optional):** walkaround/
+health-card warning when known harness-litter filenames are detected in a configured game extensions
+dir ("agent artifacts in your game folder — clean up"). Existing litter cleanup = Ken-gated
+(game-dir write gate), pending his move-vs-delete word.
 
 ### B69 · Inspector raw-XML box → real code editor — `spec'd` (low-pri, from the B68 dogfood thread)
 The PropertiesInspector "RAW CUE XML" field is a plain `<textarea rows={6}>` (`PropertiesInspector.tsx:270`) — no
