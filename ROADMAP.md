@@ -6078,3 +6078,26 @@ validation give FALSE confidence; log + fix.
 4. **aiscript validation looks shallow.** Validating an `.aiscript`/order file (kind="aiscript") returned
    `definedCues:0` and no aiscript-specific findings — suggests basic XML parse rather than full `aiscripts.xsd`
    validation (orders/params/refs). CONFIRM aiscript files get true aiscripts.xsd validation; if not, add it.
+
+## ✅ VERIFIED — GitHub community-health files (2026-07-16, closed-out 2026-07-20) [Light lane; ported from old main's ROADMAP during the 2026-07-20 unification]
+GitHub Insights checklist was missing code of conduct, security policy, and issue templates.
+Added `.github/`: `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md` (local-first
+threat model, private reporting via GitHub advisories), `ISSUE_TEMPLATE/bug_report.yml` +
+`feature_request.yml` (structured issue forms) + `config.yml` (blank issues on, private security
+contact link). Ken's "YAML" call deleted the duplicate .md pair he'd added via the GitHub UI
+(`354588a`). Landed on old main `f5ffd63` (GitHub reads these from the default branch only).
+LIVE-VERIFIED 2026-07-20: Community Standards checklist 7/7 green (DOM icon-class read —
+`color-fg-success`; only PR template unchecked, known+unrequested); /issues/new/choose (auth-walled;
+read via Ken's Chrome) shows exactly the 2 forms + Blank issue + security contact, zero duplicates.
+
+## ✅ VERIFIED — main↔extension-line unification (2026-07-20) [supersession merge, Ken-ordered]
+Ken reversed the DO-NOT-MERGE flag: "the worktree branch becomes the main." Executed as a
+supersession merge — merge commit tree = 100% extension-line content (no content from old main;
+its `.github/` blobs were already byte-identical), parents = extension tip + old main tip
+(`2cc9131`), so old main's history stays reachable, NO force-push, NO history rewrite. `main`
+fast-forwarded onto it; GitHub default branch unchanged (community checklist keeps rendering).
+Old webapp's last code commit `ff38642` is abandoned-by-design (reachable in history). Primary
+checkout `F:\DEV_ENV\X4_Forge` tree swapped to the extension app; its node_modules needs
+`npm install` before building there. SESSION-HANDOFF §1 rewritten same task (canon-lag rule).
+Validation: merge-commit tree hash == branch tree hash (git plumbing equality); ff-only on both
+refs (no forced update possible); origin==HEAD asserted on both after push; status clean both trees.

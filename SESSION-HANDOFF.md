@@ -14,12 +14,15 @@
 - **Branch:** `claude/x4-forge-vscode-poc-806ef5` — **this IS the live development line.**
 - **Latest published:** **0.0.30** on Open VSX.
 
-### ⚠️ Branch / main divergence — INTENTIONAL, DO NOT MERGE (Ken confirmed 2026-07-20)
-`main` (local `ff38642`, origin `354588a`) is the **deprecated old browser-server app** and has been
-undeveloped for days. This branch **forked from `8050e03`** (before `main`'s current tip) and carries ALL
-real work (58+ commits: B46→B67, publishes 0.0.14→0.0.30). The two lines have **diverged on purpose** —
-Ken does **not** want them merged. Reconciling branch↔main is a **Ken-gated git op**; do not attempt
-merge/rebase. Just keep committing to this branch.
+### ✅ Branch/main UNIFIED (Ken's order, 2026-07-20 — supersedes the earlier DO-NOT-MERGE flag)
+This extension line **is now `main`**: Ken ordered a supersession merge — a merge commit whose tree is
+100% this branch's content, with old `main` (the deprecated browser-server webapp, last real code tip
+`ff38642`) kept only as a history ancestor. `main` and `claude/x4-forge-vscode-poc-806ef5` now point at
+the SAME commit and must be pushed together (`git push origin main claude/x4-forge-vscode-poc-806ef5`)
+until the claude/ branch is retired (Ken's call, pending). GitHub default branch = `main`, so the
+community-health files/README/issue forms now render from THIS content. **Primary checkout
+`F:\DEV_ENV\X4_Forge` now holds the extension tree but its `node_modules` predates the swap — run
+`npm install` there before any build/typecheck in that checkout.** This worktree remains valid.
 
 ## 2. Git / commit question
 - **Invariant (don't hard-code a SHA — it goes stale the instant this file is committed):** `git -C <worktree>
