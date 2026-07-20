@@ -28,14 +28,20 @@ This was an ENORMOUS session. Banked + pushed (origin==HEAD `739620f`): the whol
 roleRAG + Player2) runs live in-game, EXECUTION gate verified via the Forge's OWN debug-log watcher
 (LOADED_CLEAN off a live tail) + the AI loop firing (chat_*.json status:ok/player2/error:null/~2s). The
 North Star is met. See ROADMAP for all closes.
-**DEGRADATION CALLED (2026-07-20):** near the end I claimed a "bridge-health false-negative" (B67-1) that a
-2-min reconcile FALSIFIED (I conflated a stale screenshot with a later curl — the time-sense trap). That
-fatigue-class error + the session length = commit-point now, fresh session for the next unit.
-**PENDING VALIDATION (now doable at the machine, next session):** B67-2 (Forge validator over-warns on
-imported RAW/passthrough cues — investigate exemption) · B67-3 (LOAD MOD PROJECT "Failed to fetch" — mostly
-pre-P1, verify graceful degrade) · B64-U2 (deploy-fail rose color — isolate a scratch deploy) · B56/B57 IDE
-eyeball batches (install 0.0.30, drive Problems/IntelliSense/cue-nav/MCP/adopt in the IDE). B65-2..5 onboarding
-follow-ons still open. **Commit question:** all committed+pushed, origin==HEAD 739620f, nothing uncommitted.
+**DEGRADATION CALLED — RE-RAISED with a 2nd data point (2026-07-20).** Ken confirmed the branch↔main divergence
+is intentional (this IDE-extension branch is the live line; `main` is the deprecated browser-server app; do NOT
+merge). Then, continuing the queue: **B67-2 became the SECOND recalled-symptom phantom this session** — like B67-1
+(bridge-health), the claimed "validator over-warns on imported cues" is contradicted by the code (xmlParser.ts:163
+defaults namespace to "this" on every import → namespace lint can't fire; OnAccepted is a `<library>` with wired
+`<actions>`; Registry has event_game_loaded+action+namespace="this" → neither lint can fire). Retracted read-only,
+NO fix (committed cc419fe). Two phantoms from unreliable recall = clear degradation signature.
+**The entire remaining queue is fatigue-exposed** — either recall-dependent (B67-3: "Failed to fetch", also needs
+the pre-0.0.30 install to repro, likely already fixed by P1) or eyeball/computer-use-gated (B64-U2 deploy-fail
+color; B56/B57 IDE batches — need Ken's screen). B65-2..5 onboarding follow-ons are the only NON-recall CODE work
+left, but they're UI so they'd close PARTIAL pending Ken's eyeball. **Recommendation: commit point now, fresh
+session for the eyeball/IDE work.** If continuing, safest pick = a B65-2..5 onboarding code follow-on (no recall
+dependency), closed PARTIAL pending eyeball. **Commit question:** all committed+pushed, origin==HEAD `cc419fe`,
+nothing uncommitted.
 
 ## PRIOR STATE (2026-07-19) — B65 cold-start onboarding SHIPPED + VERIFIED LIVE
 Real Discord user hit "md.xsd/common.xsd not found" and couldn't recover. Planned TWICE + reality-checked (both plans
