@@ -43,10 +43,24 @@ Surfaced while validating the real deployed mod live through the Forge (dogfoodi
   snapshot from EARLIER (bridge genuinely down then) — I compared a stale screenshot to a later live curl (a timestamp
   conflation, the "AI has no sense of time" trap). NO bug. Possible-but-UNREPRODUCED sub-item: whether the walkaround
   re-polls the 10s liveBridge cache on a down→up transition (mild display staleness) — do NOT chase without a fresh repro.
-- **B67-2 · validator over-warns on imported RAW cues:** after LOAD MOD PROJECT of x4_ai_influence, Editor Diagnostics
-  flagged its cues ("no event/condition or action nodes wired", "no namespace") — likely FALSE POSITIVES on raw MD cues
-  that import as passthrough (they run fine in-game). Investigate whether raw/passthrough cues should be exempt from the
-  wired-node/namespace lints, or the warnings re-scoped. Forge validation QUALITY on real-mod imports.
+- **B67-2 · validator over-warns on imported RAW cues — DOWNGRADED to UNREPRODUCED / code-contradicted (read-only reconcile 2026-07-20).**
+  Original claim: after LOAD MOD PROJECT of x4_ai_influence, Editor Diagnostics flagged its cues ("no event/condition or
+  action nodes wired", "no namespace") — "likely false positives". Reconcile (no live repro yet) says the code contradicts
+  this for the cues I named:
+  - The two exact message strings live ONLY in `src/types.ts` (canvas graph validator): `:1520` wiring-info fires only when
+    a cue resolves to 0 conditions AND 0 actions AND 0 sub-cues; `:1544` namespace-info fires only when `properties.namespace`
+    is empty. [REPRODUCED: code]
+  - `src/lib/xmlParser.ts:163` defaults `namespace` to `"this"` for EVERY imported cue/library when the attr is absent → the
+    namespace lint **cannot fire on any imported cue**. [REPRODUCED: code]
+  - Ground truth in `aic_contracts.xml`: `OnAccepted` is a `<library>` with a full `<actions>` block (importer wires it via
+    `out_act`, so actionNodes>0 → wiring lint can't fire); `Registry` has `<event_game_loaded/>` + an action + `namespace="this"`
+    → trips neither lint. [REPRODUCED: source]
+  - Conclusion: the recalled symptom is very likely a stale/misattributed UI observation (same class as B67-1 — a remembered
+    screenshot the code disproves). NOT treated as a confirmed bug; NO fix made (would be a fix built on an unreproduced,
+    code-contradicted symptom — the exact anti-rationalization trap).
+  - Only-if-reproduced next step (fresh/authorized session, needs the running Forge + MACHINE-STATE ASK — the import path may
+    touch Ken's canvas): LOAD MOD PROJECT of x4_ai_influence, read the ACTUAL diagnostics on `OnAccepted`/`Registry`, and only
+    if a warning genuinely appears, decide library-node exemption. Do NOT chase without that live repro.
 - **B67-3 · "Failed to fetch" in LOAD MOD PROJECT + Agent Brief:** intermittent fetch failures during import on the
   INSTALLED (pre-P1) extension — the object-index build synchronously blocks the old sidecar (exactly what B64-P1's
   stale-while-revalidate in 0.0.30 fixes). Partly "update the install to 0.0.30", but verify the import dialog's own
