@@ -437,6 +437,32 @@ function isLiteralRef(v: string): boolean {
   return !!v && !/[{}$\s]/.test(v) && !v.includes('.');
 }
 
+function referenceDistance(a: string, b: string, cap = 3): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]; row[0] = i; let best = row[0];
+    for (let j = 1; j <= b.length; j++) {
+      const old = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = old; best = Math.min(best, row[j]);
+    }
+    if (best > cap) return cap + 1;
+  }
+  return row[b.length];
+}
+
+function referenceSuggestion(value: string, candidates: Set<string>): string {
+  const clean = value.toLowerCase().replace(/^faction\./, '');
+  const ranked = [...candidates]
+    .map(v => v.toLowerCase().replace(/^faction\./, ''))
+    .filter((v, i, all) => all.indexOf(v) === i)
+    .map(v => ({ value: v, distance: referenceDistance(clean, v) }))
+    .filter(v => v.distance <= 3)
+    .sort((a, b) => a.distance - b.distance || a.value.localeCompare(b.value));
+  return ranked.length ? ` Did you mean "${ranked[0].value}"?` : '';
+}
+
 /**
  * Validate XML text against the schema index. Returns diagnostics for enum
  * violations (error), missing required attributes (warning), unknown attributes
@@ -534,9 +560,9 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       if (opts.references?.factions?.size && attr.value && /^faction\.\w+$/i.test(attr.value)) {
         if (!opts.references.factions.has(attr.value.toLowerCase())) {
           out.push({
-            severity: 'error', domain, filePath, line: tag.line,
+            severity: 'warning', domain, filePath, line: tag.line,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_FACTION',
-            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known faction. Valid factions come from libraries/factions.xml in the indexed game data.`
+            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known faction in the configured canonical X4 corpus.${referenceSuggestion(attr.value, opts.references.factions)}`
           });
         }
       }
@@ -548,15 +574,15 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
         const lv = attr.value.toLowerCase();
         if ((t === 'macroname' || t === 'macro') && refs.macros && refs.macros.size && !refs.macros.has(lv)) {
           out.push({
-            severity: 'error', domain, filePath, line: tag.line,
+            severity: 'warning', domain, filePath, line: tag.line,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_MACRO',
-            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known macro in the indexed game data (${refs.macros.size} macros). X4 will not resolve it at runtime — pick a real macro from the Object Browser.`
+            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known macro in the configured canonical X4 corpus (${refs.macros.size} macros).${referenceSuggestion(attr.value, refs.macros)}`
           });
         } else if ((t === 'warename' || t === 'ware') && refs.wares && refs.wares.size && !refs.wares.has(lv)) {
           out.push({
             severity: 'warning', domain, filePath, line: tag.line,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_WARE',
-            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known ware id in the indexed game data (${refs.wares.size} wares).`
+            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known ware id in the configured canonical X4 corpus (${refs.wares.size} wares).${referenceSuggestion(attr.value, refs.wares)}`
           });
         }
       }

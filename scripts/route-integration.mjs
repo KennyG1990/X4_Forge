@@ -34,6 +34,11 @@ const stateDir = path.join(tmp, 'state');
 const dataDir = path.join(tmp, 'data');
 fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(dataDir, { recursive: true });
+const referenceRoot = path.join(tmp, 'reference');
+fs.mkdirSync(path.join(referenceRoot, 'libraries'), { recursive: true });
+fs.writeFileSync(path.join(referenceRoot, 'libraries', 'factions.xml'), '<factions><faction id="routefixture" name="Route Fixture" tags="economic"/></factions>');
+fs.writeFileSync(path.join(referenceRoot, 'libraries', 'wares.xml'), '<wares><ware id="routeware" name="Route Ware" group="test" tags="economy"/></wares>');
+fs.writeFileSync(path.join(referenceRoot, 'libraries', 'scriptproperties.xml'), '<scriptproperties><datatype name="faction"><property name="id" result="ID" type="string"/></datatype></scriptproperties>');
 
 const checks = [];
 const ok = (name, pass, detail) => { checks.push({ name, pass: !!pass, detail }); console.log(`${pass ? '  ok  ' : ' FAIL '}${name}${detail ? `  [${detail}]` : ''}`); };
@@ -52,8 +57,9 @@ async function req(method, urlPath, token, body) {
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   try {
     const res = await fetch(BASE + urlPath, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
-    let json = null; try { json = await res.json(); } catch { /* non-json */ }
-    return { status: res.status, json };
+    const raw = await res.text();
+    let json = null; try { json = JSON.parse(raw); } catch { /* non-json */ }
+    return { status: res.status, json, raw };
   } catch (e) {
     return { status: 0, json: null, error: String(e) };
   }
@@ -65,7 +71,7 @@ async function main() {
     cwd: process.cwd(),
     shell: process.platform === 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: String(PORT), NODE_ENV: 'development', STUDIO_API_TOKEN: SESSION_TOKEN, X4_STATE_DIR: stateDir, X4_DATA_DIR: dataDir },
+    env: { ...process.env, PORT: String(PORT), NODE_ENV: 'development', STUDIO_API_TOKEN: SESSION_TOKEN, X4_STATE_DIR: stateDir, X4_DATA_DIR: dataDir, X4_REFERENCE_ROOT: referenceRoot },
   });
   let serverOut = '';
   child.stdout.on('data', (d) => { serverOut += d; });
@@ -85,6 +91,14 @@ async function main() {
   ok('no_token_401', (await req('GET', '/api/agent/workspace', null)).status === 401);
   ok('bogus_token_401', (await req('GET', '/api/agent/workspace', 'not-a-real-token')).status === 401);
   ok('session_token_200_workspace', (await req('GET', '/api/agent/workspace', SESSION_TOKEN)).status === 200);
+
+  // --- public canonical reference API + raw-file containment ---
+  const factions = await req('GET', '/api/reference/factions', null);
+  ok('reference_factions_public_and_canonical', factions.status === 200 && factions.json?.[0]?.id === 'routefixture');
+  const rawFaction = await req('GET', '/api/reference/file?path=libraries/factions.xml', null);
+  ok('reference_file_returns_real_raw_file', rawFaction.status === 200 && rawFaction.raw.includes('routefixture'));
+  const referenceTraversal = await req('GET', '/api/reference/file?path=../outside.xml', null);
+  ok('reference_file_traversal_rejected', referenceTraversal.status === 403, `status=${referenceTraversal.status}`);
 
   // --- mint a read + a write agent key with the session token ---
   const mkKey = async (scope) => {

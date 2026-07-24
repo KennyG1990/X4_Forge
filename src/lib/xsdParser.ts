@@ -23,6 +23,8 @@ const parser = new XMLParser({
 
 export interface XsdConfig {
   x4GamePath?: string;
+  /** Loose/unpacked X4 corpus used by the read-only reference API and canonical validation. */
+  x4ReferenceRoot?: string;
   xsdSchemaPath?: string;
   schemaFiles?: string[];
   modWorkspacePath?: string;
@@ -40,9 +42,14 @@ export interface ResolvedXsdConfig extends XsdConfig {
   /** B51: aiscripts.xsd discovered under the schema/game dir (for AISCRIPT validation). */
   aiscriptsXsdPath?: string;
   aiscriptsExists?: boolean;
+  x4ReferenceRoot: string;
+  x4ReferenceExists: boolean;
   modWorkspacePath?: string;
   filesystemPath?: string;
 }
+
+/** User-requested default; override with X4_REFERENCE_ROOT or config.x4ReferenceRoot. */
+export const DEFAULT_X4_REFERENCE_ROOT = 'F:\\Downskies\\x4unpackersuiteV1\\X4 unpacked 9.00';
 
 function arrayOf<T>(value: T | T[] | undefined): T[] {
   if (!value) return [];
@@ -321,6 +328,11 @@ export function writeXsdConfig(config: XsdConfig): void {
 
 export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
   const gamePath = process.env.X4_GAME_PATH || config.x4GamePath || '';
+  const x4ReferenceRoot = path.resolve(
+    process.env.X4_REFERENCE_ROOT?.trim()
+      || config.x4ReferenceRoot?.trim()
+      || DEFAULT_X4_REFERENCE_ROOT,
+  );
   const schemaDir = process.env.X4_XSD_PATH
     || (config.xsdSchemaPath
       ? (path.isAbsolute(config.xsdSchemaPath) ? config.xsdSchemaPath : path.join(gamePath, config.xsdSchemaPath))
@@ -349,6 +361,8 @@ export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
     mdXsdPath,
     commonXsdPath,
     aiscriptsXsdPath,
+    x4ReferenceRoot,
+    x4ReferenceExists: fs.existsSync(x4ReferenceRoot) && fs.statSync(x4ReferenceRoot).isDirectory(),
     mdExists: fs.existsSync(mdXsdPath),
     commonExists: fs.existsSync(commonXsdPath),
     aiscriptsExists: !!aiscriptsXsdPath && fs.existsSync(aiscriptsXsdPath),

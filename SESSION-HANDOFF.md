@@ -1,181 +1,74 @@
-# SESSION-HANDOFF — X4 Forge (overwrite at every commit point)
+# SESSION-HANDOFF — X4 Forge (degradation checkpoint 2026-07-23)
 
-> **Read me first, then `BACKLOG.md`.** This is the working-state transfer for the NEXT session.
-> Deep verified history lives in `ROADMAP.md` + `git log`; this file is CURRENT state only.
+## 1. Project / bounded unit
 
----
+- **Project:** X4 Forge extension + Express sidecar in `F:\DEV_ENV\X4_Forge`, `main`.
+- **Task:** B73 — expose a configurable loose/unpacked X4 reference corpus through read-only APIs and use canonical IDs in validation.
+- **Workflow position:** `CLASSIFY ✅ → PLAN ✅ → BASELINE ✅ → RECONCILE ✅ → DOCUMENT PLAN ✅ → IMPLEMENT ◐ → VALIDATE (paused) → REVIEW → DOCUMENT CLOSE → AAR`.
+- **Plan/acceptance contract:** `docs/plans/2026-07-23-reference-corpus-api.md`.
 
-## 1. What project is this / where am I
+## 2. Baseline / ownership
 
-- **Project:** **X4 Forge** — a visual X4:Foundations modding studio, shipped as a **VS Code / Open VSX
-  extension** (`x4forge.x4-forge-studio`) + a bundled Express **sidecar** (`dist/server.cjs`).
-  This is the **Forge codebase itself** — NOT the `x4_ai_influence` mod, NOT the `x4_neural_link` bridge.
-- **Working tree:** `F:\DEV_ENV\X4_Forge` — **the ONE and ONLY checkout. Develop on `main`, here.**
-- **Latest published:** **0.0.31** on Open VSX (2026-07-20, first release cut from unified `main`;
-  ships B68 runaway-indent fix; gates at release: typecheck 0 · sweep 96/96 vs prod bundle ·
-  routes 13/13 · e2e 19/19 PASS).
+- Pre-change `HEAD == origin/main == b20687887fe8facfc699c1d6bcfa03291b26d675`.
+- `BACKLOG.md` already contained user-owned uncommitted B71/B72 additions; preserve them. B73 was added above them without rewriting their text.
+- Pre-change `npm run typecheck` passed (exit 0, 19.6 s).
+- No Git mutation, commit, push, publish, game-directory write, mod write, or live-workspace swap was performed.
 
-### ✅ ONE LINE NOW (Ken's order, 2026-07-20): `main` IS the extension line — the split is OVER
-History: the extension work lived on `claude/x4-forge-vscode-poc-806ef5` in a worktree while old
-`main` (the deprecated browser-server webapp) was kept as a fallback. 2026-07-20 Ken ended it: a
-supersession merge made `main`'s content 100% the extension line (old webapp reachable in history;
-easy fallback tag **`legacy-webapp-main`** = its final tip `2cc9131`). The primary checkout carries
-the full working env (node_modules, `.studio-api-token`, `config.json`, `data/`, evidence logs,
-.vsix artifacts — copied from the worktree; typecheck exit 0 verified). **Retirement of the old
-worktree + `claude/` branch:** the agent's deletion commands were permission-blocked; Ken runs
-(or re-authorizes) these three, then this paragraph's last sentence can be deleted:
-`git -C F:\DEV_ENV\X4_Forge worktree remove --force ".claude/worktrees/x4-forge-vscode-poc-806ef5"` ·
-`git -C F:\DEV_ENV\X4_Forge branch -d claude/x4-forge-vscode-poc-806ef5` ·
-`git -C F:\DEV_ENV\X4_Forge push origin --delete claude/x4-forge-vscode-poc-806ef5`.
-Until then the worktree/branch still exist but are FROZEN — never commit there again.
+## 3. Reconciliation facts
 
-## 1b. ⚡ LATEST SESSION CLOSE (2026-07-20, marathon session — read this before §4's older summary)
-All VERIFIED + pushed on `main` unless noted:
-- **Unification executed + finished:** supersession merge `4fbce7d` (main == extension line, old
-  webapp = history ancestor, fallback tag `legacy-webapp-main`); worktree state migrated to the
-  primary checkout (typecheck 0); remote + local `claude/` branch DELETED; worktree deregistered.
-  **Residual:** one EMPTY husk dir `.claude\worktrees\x4-forge-vscode-poc-806ef5` — held by a
-  still-running claude.exe from the 07-19 session; deletes with one keypress once that old session
-  ends (or after reboot). Cosmetic only.
-- **0.0.31 RELEASED from unified main** (ships B68 indent fix): gates typecheck 0 · sweep 96/96 vs
-  prod bundle (gotcha: sweep defaults :3001 — set `X4_FORGE_BASE`) · routes 13/13 · e2e 19/19
-  VERDICT PASS; published→verified on Open VSX→committed (`7e92874`); release-notes 0.0.31 added.
-- **Community-health unit closed end-to-end** on the default branch: checklist 7/7 green + issue
-  chooser deduped (YAML forms won, Ken's word), live-verified.
-- **B70 filed + attributed:** game-dir litter (`G:\...\extensions\` PLAN/SCRATCHPAD/todos/
-  evidence_ledger + `.forge/`) came from the SEPARATE `kennyg.forge-agent` harness extension
-  (source: `F:\DEV_ENV\projects\Agent_Harness_Extension`, chokepoint `src/harness/loop.ts:3037`),
-  NOT this app. **⏳ KEN-PENDING: move-vs-delete word for the litter cleanup (game-dir write gate).**
-- **Harness fix SPECIFIED, fresh-session kickoff:** `Read docs/2026-07-20-globalstorage-artifact-store.md
-  in F:\DEV_ENV\projects\Agent_Harness_Extension and build S1–S4` (globalStorage artifact store;
-  plan doc is UNCOMMITTED in that repo — its git is NOT delegated; commit is Ken's or first-ask).
-- Records: ROADMAP entries for unification/consolidation/0.0.31; AAR ledger updated (StarForge).
+- B46 already specified full-corpus reference sets. Existing `getReferenceSets()` came from `getObjectIndex()`, which mixes game install + mod workspace + filesystem roots; it is not a canonical validation source.
+- Existing seams reused: `xsdValidate` semantic reference checks, `runProjectValidation`, scriptproperties parser/lint, object-index localization helpers, schema/config API, Directory Settings, public GET allowlist, selftest registry.
+- Authoritative 9.00 corpus has exactly 32 unique faction IDs: base 21 plus official DLC additions. Required IDs are present and `riptide` is absent.
+- User premise corrected: `libraries/scriptproperties.xml:1821` defines faction property `id` (`result="ID"`, `type="string"`). The API must expose it.
+- `category` and `isreal` are not faction XML attributes. B73 documents them as derived authoring fields: player; hidden→system; nodiplomacyselection/aggressive→hostile; otherwise political; `isreal=true` only for political.
 
-## 2. Git / commit question
-- **Invariant (don't hard-code a SHA — it goes stale the instant this file is committed):** in
-  `F:\DEV_ENV\X4_Forge`, `git rev-parse HEAD` must equal `git rev-parse origin/main`, and the tree must be
-  clean. That's the whole check — HEAD == origin & nothing uncommitted. (Last written at the commit that added this line.)
-- **Git is DELEGATED to the agent** (Ken, 2026-07-19): commit + push directly with `git`; assert
-  `origin/<branch>` == `HEAD` after every push (banked detached-HEAD hazard). KLIO/Antigravity commit flow
-  is RETIRED. **Publish-before-commit applies ONLY to user-facing releases**; headless/internal changes just
-  commit. The repo's **git pre-commit hook auto-runs `npm run precommit:check`** (tripwires + canon-mirror
-  identity + e2e **verdict selftest** [NOT live e2e — no workspace swap] + typecheck). A doc-only commit is safe.
+## 4. Implementation currently on disk
 
-## 3. First moves for the fresh session
-1. Read this file + `BACKLOG.md` (the open-work queue; B64/B65/B67 live there).
-2. Confirm `git -C F:\DEV_ENV\X4_Forge rev-parse HEAD` == `git rev-parse origin/main` (they must
-   match — the exact SHA is whatever this file was last committed at; do NOT expect a specific hash).
-3. **MACHINE-STATE ASK before anything live** (operator rule 2): "Are you in the app? Game running? Machine
-   quiet?" — e2e and mod-import can swap Ken's live workspace / touch his canvas.
-4. Pick from the PENDING QUEUE (§6) — recommend a NON-recall, non-eyeball unit, or drive an eyeball item
-   WITH Ken on his screen.
+- `src/lib/xsdParser.ts`: additive `x4ReferenceRoot`; precedence `X4_REFERENCE_ROOT` → config → requested default; resolved existence flag.
+- `src/lib/referenceCorpus.ts` (new): base + sorted `ego_dlc_*` faction/ware/map/macro/scriptproperty discovery, localization, first-definition provenance, source-stat signature cache, safe raw-file resolver, DLC add/remove/cache/path oracle.
+- `src/server/referenceRoutes.ts` (new): public read-only status/factions/wares/sectors/scriptproperties/file/search/selftest routes; startup loader; canonical validation-set service.
+- `src/lib/referenceLint.ts` (new): explicit Lua `GetWareData`/`GetFactionData`/`GetMacroData` literal warnings and suggestions; pure oracle.
+- `src/lib/x4ObjectIndex.ts`: localization parser/resolver exported for reuse.
+- `src/lib/scriptProperties.ts`: additive full property records (`name`, `result`, `type`) retained in each entry.
+- `src/lib/xsdValidate.ts`: unknown faction/macro/ware findings are advisory warnings and include cheap suggestions.
+- `src/server/projectValidation.ts`: canonical sets copied per project, project-owned macro/ware/faction definitions unioned, Lua literal findings layered/flattended.
+- `server.ts`: route registration/allowlist/startup load, canonical sets replacing mixed-root validation sets, config POST field, selftest registrations, agent schema documentation.
+- `src/components/DirectorySettingsModal.tsx`: unpacked-reference field and availability state.
+- `scripts/route-integration.mjs`: isolated synthetic reference root + public/raw/traversal checks.
+- `BACKLOG.md`: B73 SPECIFIED entry. `docs/plans/2026-07-23-reference-corpus-api.md`: Full-lane task record/contract.
 
----
+## 5. Evidence already green
 
-## 4. What this (very long) session accomplished — all VERIFIED + pushed, see ROADMAP
+- Post-implementation `npm run typecheck`: exit 0 (15.4 s).
+- `runReferenceCorpusSelftest`: 9/9 PASS — cache reuse, localization, macro index, faction.id, DLC add invalidation, DLC removal invalidation, safe file, traversal rejection.
+- `runReferenceLiteralLintSelftest`: 5/5 PASS — faction/ware suggestions, Lua literal warning, Lua comment exclusion, known macro clean.
+- Real configured corpus direct load: 32 factions, 1,902 wares, 170 unique sectors, 194 indexed source files.
+- Required provenance: fallensplit→ego_dlc_split; kaori→ego_dlc_timelines; holyorderfanatic→base; loanshark→ego_dlc_pirate; trinity→base; riptide absent.
+- Faction datatype first properties observed: id/string, name/string, rawname/string, knownname/string, shortname/string.
 
-- **B64 audit-hardening batch** (commissioned as a 4-sweep senior audit; planned security-first in
-  `docs/plans/2026-07-18-audit-hardening.md`). **Headless high-value work DONE + VERIFIED:**
-  - **SEC1** run_command scope fix (`agentKeys.ts` `EXEC_PREFIX` denies exec to all agent-key scopes; oracle
-    20/20 + live 403 drill) · **SEC2** `.env.example` security/spend/dir vars · **SEC3** `readXsdConfig`
-    parse-safe degrade (oracle 12/12) · **SEC4** dollar-aware spend attribution + optional `AI_DAILY_USD_CAP`
-    (default-off; oracle 13/13) — **Ken should review the `MODEL_PRICING` table before treating as shipped policy.**
-  - **P1** object-index stale-while-revalidate · **P2** memoized `getReferenceSets` · **P4** loose-XML digest
-    per user root. All headless, e2e 19/19.
-  - **T2** e2e verdict from Playwright JSON report (immune to the libuv teardown crash) + `--selftest` 10/10 in
-    precommit · **T1** `scripts/route-integration.mjs` (`npm run test:routes` 13/13) — permanent SEC1 regression guard.
-  - **Ken decisions (deferred):** SEC5 Origin-spoof mechanism, X1 Google OAuth finish-or-remove.
-  - **Deferred-with-rationale:** ARCH1 (god-file route extraction — candidate = AI keys/usage trio →
-    `src/server/aiRoutes.ts`; needs a dedicated session), P1b/P2b/P3, T1b, A1b/A2/A3, SEC6/SEC7.
-- **B65 cold-start onboarding — SHIPPED 0.0.30, VERIFIED LIVE.** Real Discord user hit "md.xsd/common.xsd not
-  found". Fix: DirectorySettingsModal schema row is self-rescuing — in-place **"Extract schemas from my game
-  install"** button + always-available teach panel (how validation works · harvest · unpack fallback). The
-  harvest now extracts **all 40 packed XSDs tree-preserving → 402 events / 40 domains** (was silently 3).
-  Visual validation CAUGHT a shim regression (packed `md/md.xsd`'s `../../../` include overshot the harvest
-  tree → 382 events; fixed by skipping shim duplicates). Files: `gameDetectRoutes.ts`, `DirectorySettingsModal.tsx`.
-- **B-INGAME North Star — PROVEN LIVE (EXECUTION gate).** The Forge-built two-extension mod (`x4_ai_influence`
-  + `x4_neural_link` + Python bridge + roleRAG + **Player2** cloud LLM at `:4315`, NOT ollama) runs live
-  in-game: LOADED_CLEAN off the Forge's own debug-log watcher + the AI loop firing (`chat_*.json`
-  status:ok / provider:player2 / error:null / ~2s). EXPERIENCE war-trigger was prior-proven + deliberately scrapped.
-- **B68 runaway-indent generator fix — VERIFIED 2026-07-20 (headless, no publish).** Dogfood find: raw-passthrough
-  XML render (`generateMDXML`/`renderCue`, `src/types.ts`) was non-idempotent → leading whitespace grew unboundedly
-  every save (proven on-disk: `ai_influence_contract.xml` `<actions>` ~100 spaces). Fix: `reindentRawXmlBlock` (trim
-  each line + re-indent by tag depth → idempotent + self-healing), applied to all 3 passthrough spots. typecheck +
-  `runCompileSelftest` 16/16 + e2e 19/19. Harmless in-game (whitespace insignificant). → ROADMAP. Follow-on: **B69**
-  (inspector raw-XML box is a plain textarea vs the main CodeMirror editor — swap to `CodeMirrorField`; low-pri, eyeball).
+## 6. Degradation / AAR trigger
 
-## 5. ⚠️ Degradation status + the recall lesson (now with its resolution)
-**A degradation checkpoint was raised (2026-07-20)** after **two recalled-symptom phantoms** — both things I believed
-I *saw* live, both disproved by reading code, neither reproduced:
-- **B67-1** "bridge-health false-negative" — code shows the check is correct (`bridgeUp = health.ok===true`;
-  `:8713/health` returns `{ok:true,...}`). I'd conflated a stale down-state screenshot with a later up curl.
-- **B67-2** "validator over-warns on imported cues" — `xmlParser.ts:163` defaults `namespace="this"` on every
-  import (namespace lint can't fire); `OnAccepted` is a `<library>` with wired `<actions>`; `Registry` has
-  `event_game_loaded`+action+`namespace="this"`. Neither lint can fire. Retracted, no fix.
+- Three PowerShell inline-command input failures clustered: embedded regex quote parsing twice and `$f` expansion inside a `tsx -e` XML fixture once. These are command-wrapper failures, not code/test failures.
+- Rule of Three fired. Strategic Pivot choice: no more inline `tsx -e` or regex-heavy PowerShell validation. Resume only with file-backed selftest endpoints, `npm run test:routes`, and ordinary npm scripts.
+- The third attempted validation did not run; it produced no Forge result and changed no files.
 
-**...then B68 RESOLVED the thread the right way.** Ken pointed at the raw-XML box ("am I chasing ghosts?"). I nearly
-retracted based on the *screenshots* (which looked normal), then checked the **authoritative source** — the actual
-on-disk deployed file — and it CONFIRMED a real runaway-indent bug. Fixed + VERIFIED (B68).
+## 7. Exact next unit after Ken says `Execute`
 
-**DURABLE LESSON (refined, evidenced 3×):** recalled/observed *surfaces* (screenshots, pasted text, memory) are
-unreliable — resolve every "is X real?" against the **deterministic/authoritative source** (the code, the on-disk
-artifact, a reproduced run) **before** forming a verdict. The failure mode has two faces: *insisting* on a phantom
-(B67-1/-2) and *caving* on a real bug (nearly, B68). The check settles both — don't insist, don't cave. Tag every
-explanation **[REPRODUCED]** vs **[HYPOTHESIS]** (operator rule 7).
+1. Run `npm run test:routes` (isolated server/fixture; no live workspace swap).
+2. Fix only reproduced failures, then `npm run typecheck`, `npm run lint`, `node scripts/oracle-sweep.mjs`, `npm run precommit:check`, `npm run build`.
+3. Use an isolated HTTP server/harness to call the real reference endpoints and POST a project-validation fixture; do not use inline `tsx -e`.
+4. MACHINE-STATE GATE still unanswered. Before `npm run test:e2e`, ask/confirm: Forge app state, X4 running, machine quiet. Verify e2e workspace-guard restoration afterward.
+5. Fresh-eyes diff review; `graphify update .`; update capability map, B46/B73 records, ROADMAP/BACKLOG, project/global AAR, and overwrite this handoff with the final close.
+6. Directory Settings is user-visible: without real rendered-host inspection, final UI proof is `PARTIAL` even if all static/API gates pass.
 
-**Session-continuation guidance:** *grounded/deterministic* work (dogfood bug with an on-disk repro + an oracle, like
-B68) is safe to continue and closed cleanly VERIFIED. What the degradation flag warns against is *recall-dependent* or
-*eyeball-gated* work (§6) — a tired session manufactures phantoms there. Prefer grounded units; defer the rest.
+## 8. Existing unrelated eyeball queue
 
----
+- B64-U2: scratch failing deploy → GuidedRail deploy step must render rose/red.
+- B56/B57: installed VSIX Problems/IntelliSense/go-to-def/MCP/two-way-adopt checks.
+- B64 U1/A1, B65 follow-ons, B69 CodeMirror UI checks remain separate from B73.
 
-## 6. PENDING QUEUE (from BACKLOG B67 + B64 + B65)
+## 9. Commit question
 
-| Item | Type | Next step |
-|---|---|---|
-| **B67-3** "Failed to fetch" on LOAD MOD PROJECT | recall-dependent + needs pre-0.0.30 install | Likely already fixed by B64-P1's stale-while-revalidate in 0.0.30. **Reproduce on the 0.0.30 install first**; only if it still fails, verify the import dialog's fetch has graceful degrade/retry vs a bare error. Low value — do not chase without a live repro. |
-| **B64-U2** deploy-fail rose color | **eyeball-gated** | Built (`GuidedRail.tsx` deploy `fail` phase → `text-rose-300`); code-verified, not live-driven. Needs an **isolated scratch deploy** driven to a FAILING deploy, confirm rose on Ken's screen. |
-| **B56 / B57 IDE eyeball batches** | **eyeball-gated** | Install 0.0.30 in Antigravity, drive Problems panel / IntelliSense / cue go-to-def / MCP tools / two-way adopt **in the IDE**. ⚠️ `textinputhost.exe` steals focus and blocks remote computer-use input — **needs Ken at the machine**. |
-| **B64 U1 / U3 / A1** UX/a11y | **eyeball-gated** (built PARTIAL) | U1 persistent assertive error toasts, A1 accessible dialog (both A1 VERIFIED-live already), **U3 was FALSIFIED live** (CodeMirror is default; the old per-line severity renderer is dead code — audit finding C-A11Y-4 does not apply to the live app). |
-| **B65-2..5** onboarding follow-ons | **CODE (non-recall)** but UI → closes PARTIAL pending eyeball | B65-2 wizard failure-branch parity (teach panel in the `canHarvestSchemas=false`/error branch — reuses B65-1 panel) · B65-3 re-entry gap (`App.tsx:442` + persistent banner) · B65-4 raw-error→settings deep-link · B65-5 shared `<SchemaRecovery>` component. **The safest "keep producing" pick if not stopping.** Plan: `docs/plans/2026-07-19-onboarding-schema-coldstart.md`. |
-| **B69** inspector raw-XML box → CodeMirror | **CODE (non-recall)** but UI → PARTIAL pending eyeball | Swap the plain `<textarea>` at `PropertiesInspector.tsx:270` for the existing `CodeMirrorField` (reuse, no new infra) so raw XML gets syntax highlighting + X4 IntelliSense like the main editor. Low-pri; from the B68 dogfood thread. |
-| **SEC5** Origin-spoof · **X1** Google OAuth | **Ken decisions** | SEC5: `isAppUiRequest` trusts a client-settable Origin/Referer header — real gap, but the fix changes the deliberate isolation model → needs Ken's mechanism choice. X1: finish or remove the OAuth stub. |
-| **ARCH1** god-file route extraction | fresh-context code session | Pattern proven (`registerXxxRoutes(app, deps)`). Candidate: AI keys/usage trio (`server.ts:1935/1945/8184` → `src/server/aiRoutes.ts`). Deserves a dedicated session, tsc+sweep+e2e per group. |
+- No commit was made. The current B73 work is an uncommitted degradation checkpoint.
+- Suggested close title if/when VERIFIED: `feat: expose canonical X4 reference corpus through the Forge API`.
 
-**Possible follow-up (AAR, low priority):** add a synthetic-cat/dat oracle for the B65 harvest shim-skip logic.
-
-## 7. Eyeball queue — click-by-click scripts (operator rule 1)
-- **B64-U2 (deploy-fail rose):** open a mod project → point deploy at an intentionally-unwritable / bad target
-  (or a folder with a deploy-blocking condition) → run Deploy → watch the GuidedRail deploy step: it must turn
-  **rose/red** (not amber). 30-sec check.
-- **B56/B57 IDE:** install the 0.0.30 VSIX in Antigravity → Open Mod Folder (x4_ai_influence) → confirm (a)
-  Problems panel shows Forge diagnostics, (b) IntelliSense/hover works in an MD file, (c) go-to-def on a cue
-  name jumps, (d) the MCP tools appear, (e) two-way adopt round-trips. Needs Ken at the keyboard (textinputhost).
-
-## 8. Durable hazards & gotchas (carry forward)
-- **Recalled UI symptoms are unreliable — reproduce before believing** (§5; evidenced B67-1 + B67-2).
-- **graphify post-commit hook bg rebuild contends with e2e** → transient 16-fail or 0/0-no-report runs, both
-  non-reproducing. If e2e comes back mass-fail/0-0 right after a commit, **RE-RUN** it; confirm code with
-  `npx vite build` + `tsc` first. T2's fallback correctly FAILs a no-report run (no false-green).
-- **e2e swaps the LIVE server workspace** → MACHINE-STATE ASK first; never parallelize (workers=1 deliberate);
-  after any run verify the guard restored the real workspace (leak class #70).
-- **Staged-probe cwd:** `cd vscode-extension/app && PORT=xxxx node dist/server.cjs` (NOT `app/dist`) → expect ROOT 200.
-- **New public GET routes** must be allowlisted in `PUBLIC_READONLY_GETS` or they 401.
-- **Host-truth:** sandbox mirrors are stale — host tools only. (This session is host-native, so moot here.)
-- `precommit:check` runs only the e2e **verdict selftest**, not live e2e — committing does not swap the workspace.
-
-## 9. Commands (adapter)
-`npm run typecheck` · `npm run lint` · `node scripts/oracle-sweep.mjs` (cite the real N) · `npm run test:e2e`
-(THE gate, verdict-parsed) · `npm run test:routes` (13/13) · `npm run precommit:check` ·
-`npm run validate:mod -- "<folder>"` · prod build `npm run build` + `START-X4FORGE.cmd`.
-**Publish (user-facing only):** bump `vscode-extension/package.json` → `npm run changelog` (edit
-`vscode-extension/release-notes.json` first) → root `npm run build` → ext `npm run stage-app` → ext
-`npm run build` → ext `npm run package` → staged probe (§8) → `ovsx publish x4-forge-studio-<v>.vsix -p $OVSX_PAT`
-(token in `F:\DEV_ENV\X4_Forge\.env.local`) → commit + push + verify origin==HEAD.
-
-## 10. Records map
-- `BACKLOG.md` — open work (B64/B65/B67). `ROADMAP.md` — append-only verified history (all closes above).
-- Plans: `docs/plans/2026-07-18-audit-hardening.md`, `docs/plans/2026-07-19-onboarding-schema-coldstart.md`.
-- Capability map: `F:\StarForge\wiki\x4-forge\capability-map.md` (separate repo). ADRs:
-  `F:\StarForge\wiki\x4-forge\decisions.md`. AAR: `F:\StarForge\wiki\x4-forge\aar-log.md` (general →
-  `F:\StarForge\wiki\workflow\aar-log.md`). Code graph: `graphify-out/graph.json` (`graphify` CLI; code-only).

@@ -86,6 +86,7 @@ export default function DirectorySettingsModal({
 }: DirectorySettingsModalProps) {
   const [gamePath, setGamePath] = useState('');
   const [schemaPath, setSchemaPath] = useState('');
+  const [referenceRoot, setReferenceRoot] = useState('');
   const [workspaceInput, setWorkspaceInput] = useState('');
   const [filesystemInput, setFilesystemInput] = useState('');
   const [resolved, setResolved] = useState<any>(null);
@@ -101,6 +102,7 @@ export default function DirectorySettingsModal({
         const res = await fetch('/api/schema/config').then(r => r.json());
         setGamePath(res.config?.x4GamePath || res.resolved?.x4GamePath || '');
         setSchemaPath(res.config?.xsdSchemaPath || res.resolved?.schemaDir || '');
+        setReferenceRoot(res.config?.x4ReferenceRoot || res.resolved?.x4ReferenceRoot || '');
         setWorkspaceInput(res.config?.modWorkspacePath || res.resolved?.modWorkspacePath || '');
         setFilesystemInput(res.config?.filesystemPath || res.resolved?.filesystemPath || '');
         setResolved(res.resolved || null);
@@ -122,6 +124,7 @@ export default function DirectorySettingsModal({
         body: JSON.stringify({
           schemaDir,
           x4GamePath: gamePath.trim(),
+          x4ReferenceRoot: referenceRoot.trim(),
           modWorkspacePath: workspaceInput.trim(),
           filesystemPath: filesystemInput.trim()
         })
@@ -138,7 +141,12 @@ export default function DirectorySettingsModal({
         const events = res.schema_counts?.events ?? 0;
         const conditions = res.schema_counts?.conditions ?? 0;
         const actions = res.schema_counts?.actions ?? 0;
-        if (res.schemaComplete === false || (events === 0 && conditions === 0 && actions === 0)) {
+        if (res.resolved?.x4ReferenceExists === false) {
+          setStatus({
+            type: 'warn',
+            msg: `Paths saved. Unpacked reference corpus not found at ${res.resolved?.x4ReferenceRoot || referenceRoot || '(unset)'} — canonical reference endpoints and ID checks remain unavailable.`,
+          });
+        } else if (res.schemaComplete === false || (events === 0 && conditions === 0 && actions === 0)) {
           setStatus({
             type: 'warn',
             msg: res.schemaWarning
@@ -257,6 +265,30 @@ export default function DirectorySettingsModal({
               placeholder="e.g. C:\Program Files (x86)\Steam\steamapps\common\X4 Foundations"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
+          </DirectoryRow>
+
+          {/* 2b. Canonical loose/unpacked reference corpus */}
+          <DirectoryRow
+            icon={<Database className="w-4 h-4" />}
+            title="X4 Unpacked Reference Corpus"
+            tooltip="A read-only unpacked X4 root containing libraries/, maps/, t/, and extensions/ego_dlc_*. Powers canonical faction, ware, sector, macro, and script-property APIs plus unknown-ID validation. Forge never writes here."
+          >
+            <input
+              type="text"
+              value={referenceRoot}
+              onChange={e => setReferenceRoot(e.target.value)}
+              placeholder="e.g. D:\X4 unpacked 9.00"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+            />
+            {resolved && (
+              <div className="mt-1 text-[10px] font-mono">
+                {resolved.x4ReferenceExists ? (
+                  <span className="text-emerald-400 flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Reference root found — canonical read-only APIs and ID checks are on</span>
+                ) : (
+                  <span className="text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Reference root not found — canonical ID checks are unavailable</span>
+                )}
+              </div>
+            )}
           </DirectoryRow>
 
           {/* 3. XSD schema folder (server path) */}

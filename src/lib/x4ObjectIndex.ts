@@ -88,7 +88,7 @@ function decodeXmlEntities(s: string): string {
 
 /** Parse an X4 t-file (`<page id><t id>text</t></page>`) into the loc map. Later
  *  calls override earlier entries for the same key (DLC/extension text wins). */
-function parseLocalizationXml(xml: string, map: LocalizationMap): void {
+export function parseLocalizationXml(xml: string, map: LocalizationMap): void {
   for (const pageMatch of xml.matchAll(/<page\b[^>]*\bid\s*=\s*"(\d+)"[^>]*>([\s\S]*?)<\/page>/gi)) {
     const page = pageMatch[1];
     const body = pageMatch[2];
@@ -136,7 +136,7 @@ function stripX4Comments(s: string): string {
  * so callers can fall back to a sensible label. Decodes entities and removes
  * X4 parenthetical comments.
  */
-function resolveLocName(rawName: string, map: LocalizationMap | undefined): string | null {
+export function resolveLocName(rawName: string, map: LocalizationMap | undefined): string | null {
   if (!rawName || !map || !LOC_REF.test(rawName)) return null;
   const expanded = expandLocRefs(rawName.trim(), map);
   if (expanded.indexOf('{') !== -1) return null; // a ref stayed unresolved

@@ -6,6 +6,37 @@
 
 ## P0 — Active
 
+### B73 · Canonical unpacked-reference API + validation integration `SPECIFIED`
+Expose base + `ego_dlc_*` faction/ware/sector/scriptproperty data from a configurable unpacked corpus
+through path-contained read-only endpoints, backed by a source-signature cache. Replace the mixed
+game/mod reference sets used by project validation with canonical sets plus project-owned definitions;
+unknown faction/ware/macro literals warn with suggestions. Reconciled plan and acceptance contract:
+`docs/plans/2026-07-23-reference-corpus-api.md`. Corpus correction: 9.00 does expose `faction.id` in
+`scriptproperties.xml`; `category`/`isreal` are derived authoring metadata, not native faction attrs.
+
+### B72 · Lua GetComponentData semantics lint — close the blind spot that let a 12k-error bug pass validation `spec'd`
+Motivated 2026-07-21: x4_ai_influence's aic_uix.lua fed the `"sector"` property (returns the sector NAME
+string — vanilla menu_map.lua:9302 pairs "sectorid"+"sector" as id+name) into ConvertStringToLuaID →
+component 0 → ~255 engine errors per tick, 12,765 in one session. Forge validation was green: the XSD/
+scriptproperties corpus covers MD expressions, not Lua C-API property semantics. House-pattern slice:
+(1) harvest the vanilla ui/ lua corpus (vanilla-ui-harvest infra exists) into a GetComponentData property
+table — name → return kind (string/id/component/table), grounded per-property on observed vanilla usage;
+(2) lint mod lua for misuse patterns: id-conversion applied to name-returning properties, GetComponentData
+on GetContained* enumeration results without an IsValidComponent guard, cdata fed back without conversion;
+(3) selftest oracle: the aic_uix.lua pre-fix pattern must flag, the post-fix version must pass, vanilla
+menu_map.lua must produce zero false positives. Surface in project/validate beside scriptProperties.
+
+### B71 · Graph-lint FALSE POSITIVE: "ILLEGAL INSTANTIATE / NO EVENT CONDITION" on cues whose events sit inside <check_any> `spec'd`
+Found 2026-07-21 during x4_ai_influence Phase-0 warning classification. Studio canvas diagnostics flag
+`Speak_menu` (ai_influence_conversation.xml:68) and `Sync_on_load` (ai_influence_worldsync.xml:83) as
+ILLEGAL INSTANTIATE + NO EVENT CONDITION, but both cues have valid event conditions (`event_game_started`/
+`event_game_loaded`, `event_conversation_next_section`/`..returned..`) nested inside `<check_any>` — legal
+MD the game loads fine, and the agent-API `project/validate` correctly does NOT flag them. The graph
+model's event-condition detector only looks at direct children of `<conditions>`. Fix: recurse into
+`check_any`/`check_all` wrappers when deciding whether an instantiate cue has an event condition.
+Acceptance: import x4_ai_influence → those two diagnostics disappear; a truly conditionless
+instantiate cue still flags.
+
 ### B70 · Game-dir agent litter — ATTRIBUTED 2026-07-20: the SEPARATE Forge Agent Harness extension, NOT this app
 Ken found `PLAN.md` / `SCRATCHPAD.md` / `todos.json` / `evidence_ledger.json` (session
 `forge-1783998383822-6g6h7kbw`, 2026-07-13) plus a full `.forge/` state tree (activity 07-09→07-16)

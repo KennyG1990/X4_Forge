@@ -44,6 +44,7 @@ import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "..
 import { buildModTextIndex, lintTextReferences, lintTranslationCoverage, type TextRefFinding, type TranslationCoverageFinding } from "../lib/tFileLint";
 import { lintFactionRelations, type FactionLintFinding } from "../lib/factionsLint";
 import { lintGodMacros, type GodLintFinding } from "../lib/godLint";
+import { lintReferenceLiterals, type ReferenceLiteralFinding } from "../lib/referenceLint";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 
 /**
@@ -88,6 +89,7 @@ export interface ProjectValidationResult {
     tFileCoverageWarnings: number;
     factionRelationWarnings: number;
     godMacroWarnings: number;
+    referenceWarnings: number;
   };
   structure: ReturnType<typeof validateProjectStructure>;
   cueIndex: ReturnType<typeof indexCueReferences>;
@@ -117,6 +119,28 @@ export interface ProjectValidationResult {
   factionRelations: { findings: FactionLintFinding[] };
   /** B63/A2: god.xml unresolved macro= references (sector/zone/station macro that doesn't exist). */
   godMacros: { findings: GodLintFinding[] };
+  /** Canonical explicit-literal checks, including Lua Get*Data("literal", ...) calls. */
+  references: { available: boolean; findings: ReferenceLiteralFinding[] };
+}
+
+/** Copy canonical sets and admit definitions owned by this project. Never mutate shared cache sets. */
+function referencesForProject(project: ExtensionProject, base?: ProjectValidationReferences): ProjectValidationReferences | undefined {
+  const available = !!(base?.macros?.size || base?.wares?.size || base?.factions?.size);
+  if (!available) return undefined; // canonical corpus unavailable: do not validate against project-only partial sets
+  const references: ProjectValidationReferences = {
+    macros: new Set(base?.macros || []),
+    wares: new Set(base?.wares || []),
+    factions: new Set(base?.factions || []),
+  };
+  for (const file of project.files) {
+    if (typeof file.content !== 'string') continue;
+    for (const m of file.content.matchAll(/<macro\b[^>]*\bname\s*=\s*["']([^"']+)["']/gi)) references.macros!.add(m[1].toLowerCase());
+    for (const m of file.content.matchAll(/<ware\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)) references.wares!.add(m[1].toLowerCase());
+    for (const m of file.content.matchAll(/<faction\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)) {
+      const id = m[1].toLowerCase(); references.factions!.add(id); references.factions!.add(`faction.${id}`);
+    }
+  }
+  return references;
 }
 
 /**
@@ -130,6 +154,7 @@ export function runProjectValidation(
   const structure = validateProjectStructure(project);
   const cueIndex = indexCueReferences(project);
   const crossFile = validateProjectCrossFile(project);
+  const references = referencesForProject(project, opts.references);
   const structuralErrors = structure.filter(i => i.severity === "error").length;
 
   const schemaFindings: XsdDiagnostic[] = [];
@@ -143,7 +168,7 @@ export function runProjectValidation(
       for (const f of project.files) {
         if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
           schemaFindings.push(...validateXmlAgainstSchema(f.content, mdIndex, {
-            filePath: f.path, domain: "mission_director", reportUnknownElements: true, references: opts.references,
+            filePath: f.path, domain: "mission_director", reportUnknownElements: true, references,
           }));
         }
       }
@@ -154,7 +179,7 @@ export function runProjectValidation(
       for (const f of project.files) {
         if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
           schemaFindings.push(...validateXmlAgainstSchema(f.content, aiIndexRef, {
-            filePath: f.path, domain: "ai_scripts", reportUnknownElements: true, references: opts.references,
+            filePath: f.path, domain: "ai_scripts", reportUnknownElements: true, references,
           }));
         }
       }
@@ -173,7 +198,7 @@ export function runProjectValidation(
     routed = validateRoutedFiles(
       project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string })),
       registry,
-      { references: opts.references },
+      { references },
     );
     for (const r of routed) schemaFindings.push(...r.findings);
   } catch { /* routing degrades silently; md/aiscripts layers already reported */ }
@@ -195,6 +220,19 @@ export function runProjectValidation(
       const k = f.kind || classifyPath(f.path);
       if ((k === "md" || k === "aiscript") && typeof f.content === "string") {
         scriptPropertyFindings.push(...lintScriptPropertyChains(f.content, spIndex, { filePath: f.path }));
+      }
+    }
+  }
+
+  const referenceFindings: ReferenceLiteralFinding[] = [];
+  if (references) {
+    for (const f of project.files) {
+      if (typeof f.content !== 'string') continue;
+      const kind = f.kind || classifyPath(f.path);
+      // MD/AIScript literals are checked against their schema semantic types above.
+      // This extra layer is for Lua's explicit Get*Data("literal", ...) forms.
+      if (kind === 'lua') {
+        referenceFindings.push(...lintReferenceLiterals(f.content, references, { filePath: f.path, kind }));
       }
     }
   }
@@ -225,8 +263,8 @@ export function runProjectValidation(
   // macros after B63) UNION the mod's OWN <macro name> defs (a mod adding a new sector must not cry wolf).
   // Undefined when the reference set is empty (object index not built) → the god lint skips (honest degrade).
   const knownMacros: Set<string> | undefined = (() => {
-    if (!opts.references?.macros || opts.references.macros.size === 0) return undefined;
-    const set = new Set<string>([...opts.references.macros].map(m => m.toLowerCase()));
+    if (!references?.macros || references.macros.size === 0) return undefined;
+    const set = new Set<string>([...references.macros].map(m => m.toLowerCase()));
     for (const f of project.files) {
       if (typeof f.content !== "string") continue;
       for (const m of f.content.matchAll(/<macro\b[^>]*\bname\s*=\s*"([^"]+)"/gi)) set.add(m[1].toLowerCase());
@@ -236,7 +274,7 @@ export function runProjectValidation(
   const basenameLints: Array<{ basename: string; sink: unknown[]; run: (content: string) => unknown[] | null }> = [
     { basename: "jobs.xml", sink: jobsLintFindings, run: c => jobsVocab ? lintJobsContent({ jobsXml: c, vocabulary: jobsVocab }).findings : null },
     { basename: "wares.xml", sink: waresLintFindings, run: c => waresVocab ? lintWaresContent({ waresXml: c, vocabulary: waresVocab }).findings : null },
-    { basename: "factions.xml", sink: factionFindings, run: c => lintFactionRelations({ factionsXml: c, knownFactions: opts.references?.factions }).findings },
+    { basename: "factions.xml", sink: factionFindings, run: c => lintFactionRelations({ factionsXml: c, knownFactions: references?.factions }).findings },
     { basename: "god.xml", sink: godFindings, run: c => knownMacros ? lintGodMacros({ godXml: c, knownMacros }).findings : null },
   ];
   for (const f of project.files) {
@@ -292,6 +330,7 @@ export function runProjectValidation(
       tFileCoverageWarnings: tCoverageFindings.length,
       factionRelationWarnings: factionFindings.length,
       godMacroWarnings: godFindings.length,
+      referenceWarnings: referenceFindings.length,
     },
     structure,
     cueIndex,
@@ -312,6 +351,7 @@ export function runProjectValidation(
     tFileCoverage: { findings: tCoverageFindings },
     factionRelations: { findings: factionFindings },
     godMacros: { findings: godFindings },
+    references: { available: !!references, findings: referenceFindings },
   };
 }
 
@@ -380,6 +420,9 @@ export function flattenProjectValidation(result: ProjectValidationResult): FlatP
   // B63/A2: god.xml unresolved macros — advisory WARNING (never flips `ok`).
   for (const f of result.godMacros.findings) {
     out.push({ severity: "warning", code: `god.${f.kind}`, filePath: "libraries/god.xml", sourceRef: `${f.station}:${f.macro}`, message: f.message });
+  }
+  for (const f of result.references.findings) {
+    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.id, line: f.line, message: f.message });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
   // validator re-reports structure issues under its own code — same message, same file).

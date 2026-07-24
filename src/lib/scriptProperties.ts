@@ -38,6 +38,8 @@ export interface SPEntry {
   headDocs: Map<string, string>;
   /** full property names as written (for suggestions/diagnostics) */
   propNames: string[];
+  /** full property records as authored in scriptproperties.xml (reference API). */
+  properties: Array<{ name: string; result: string; type: string }>;
   /** has a pure-placeholder property like "{$numeric}" — any segment is legal here */
   wildcard: boolean;
   /** contains <import> children — property set is dynamic/incomplete, don't type-check */
@@ -126,6 +128,7 @@ export function parseScriptProperties(xml: string): ScriptPropertyModel {
       heads: new Set<string>(),
       headDocs: new Map<string, string>(),
       propNames: [],
+      properties: [],
       wildcard: false,
       dynamic: false,
     };
@@ -141,6 +144,11 @@ export function parseScriptProperties(xml: string): ScriptPropertyModel {
       if (!pname) continue;
       model.parsedProperties++;
       entry.propNames.push(pname);
+      entry.properties.push({
+        name: pname,
+        result: kid.getAttribute('result') || '',
+        type: kid.getAttribute('type') || '',
+      });
       const head = propertyHead(pname);
       if (head) {
         entry.heads.add(head);

@@ -95,6 +95,7 @@ import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
+import { getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes } from "./src/server/referenceRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
@@ -118,6 +119,8 @@ import { suggestExpression, runExpressionSuggestSelftest } from "./src/lib/expre
 import { listQuickFixes, runWorkspaceQuickFixesSelftest } from "./src/lib/workspaceQuickFixes";
 import { buildHealthCard, runHealthCardSelftest } from "./src/lib/healthCard";
 import { runModRecipesSelftest } from "./src/lib/modRecipes";
+import { runReferenceCorpusSelftest } from "./src/lib/referenceCorpus";
+import { runReferenceLiteralLintSelftest } from "./src/lib/referenceLint";
 import { parse as luaParse } from "luaparse";
 import { registerNpcIdentityProbeRoutes } from "./src/server/npcIdentityProbe";
 import { registerSelftests } from "./src/server/selftestRegistry";
@@ -326,6 +329,14 @@ const PUBLIC_READONLY_GETS = new Set<string>([
   "/agent/scriptproperties-status",
   "/agent/md-pitfall-selftest",
   "/agent/expression-suggest-selftest",
+  "/reference/status",
+  "/reference/factions",
+  "/reference/wares",
+  "/reference/sectors",
+  "/reference/scriptproperties",
+  "/reference/file",
+  "/reference/search",
+  "/reference/selftest",
 ]);
 
 // B42: named, scoped, expiring agent keys (src/lib/agentKeys). The boot session token
@@ -1448,25 +1459,10 @@ function rebuildObjectIndexNow(resolved: ResolvedXsdConfig, roots: string[], cac
 // call. Consumers never mutate the returned sets (factionsLint/godLint/projectValidation all copy
 // via `new Set([...])`; xsdValidate only `.has()`-reads — verified 2026-07-18), so sharing the
 // cached sets is safe.
-let _refSetsCache: { gen: string; sets: { macros: Set<string>; wares: Set<string>; factions: Set<string> } } | null = null;
-/** Build reference id sets from the game index, keyed by schema semantic type. */
+/** Canonical reference sets from the configured unpacked root (never mod/workspace data). */
 function getReferenceSets(): { macros: Set<string>; wares: Set<string>; factions: Set<string> } {
-  let idx: X4ObjectIndex;
-  try { idx = getObjectIndex(); }
-  catch { return { macros: new Set(), wares: new Set(), factions: new Set() }; } // no index — empty sets disable ref checks
-  if (_refSetsCache && _refSetsCache.gen === idx.generatedAt) return _refSetsCache.sets;
-  const macros = new Set<string>();
-  const wares = new Set<string>();
-  const factions = new Set<string>();
-  for (const item of idx.items) {
-    const id = item.id.toLowerCase();
-    if (item.kind === 'ship' || item.kind === 'station' || item.kind === 'macro') macros.add(id);
-    else if (item.kind === 'ware') wares.add(id);
-    else if (item.kind === 'faction') { factions.add(id); factions.add(id.replace(/^faction\./, '')); }
-  }
-  const sets = { macros, wares, factions };
-  _refSetsCache = { gen: idx.generatedAt, sets };
-  return sets;
+  const { macros, wares, factions } = getCanonicalReferenceSets();
+  return { macros, wares, factions };
 }
 
 // B61: the learned jobs vocabulary (classes/orders/sizes) is expensive-ish to build (parse the ~15k-line
@@ -2536,7 +2532,7 @@ app.get("/api/agent/schema", (req, res) => {
     description: "X4 Forge external agent contract. Use this to inspect supported workspace domains, valid values, compile outputs, and protected API routes before modifying the studio.",
     auth: {
       read_only_schema_is_public: true,
-      protected_routes: "Every /api route except GET /api/agent/schema requires Authorization: Bearer <token>.",
+      protected_routes: "Mutation and workspace routes require Authorization: Bearer <token>; explicitly allowlisted read-only reference/diagnostic GETs are public on localhost.",
       token_sources_for_local_agents: [
         "Read process.env.STUDIO_API_TOKEN when the server was started with one.",
         "Otherwise read the gitignored .studio-api-token file in the project root.",
@@ -2604,6 +2600,12 @@ app.get("/api/agent/schema", (req, res) => {
           },
           note: "Indexes loose XML from configured paths AND decodes packed .cat/.dat archives (base game + DLC extensions) for catalog macros (index/macros.xml), factions, wares, jobs, and sounds. Response includes packedArchives and packedEntriesScanned counters."
         },
+        canonical_reference: {
+          rootSetting: "X4_REFERENCE_ROOT environment variable or config.x4ReferenceRoot (Directory Settings)",
+          purpose: "Read-only canonical IDs and script-property documentation from a loose/unpacked X4 root, merged as base plus every present official ego_dlc_* source.",
+          endpoints: ["/api/reference/factions", "/api/reference/wares", "/api/reference/sectors", "/api/reference/scriptproperties", "/api/reference/file", "/api/reference/search"],
+          note: "Unlike the Object Browser, canonical validation sets never include mod workspace or arbitrary extension data. Faction category/isreal are documented derived authoring fields; source records the first defining base/DLC file.",
+        },
         package_manifest: {
           always_outputs: ["content.xml", "README.md"],
           conditional_outputs: ["md/<modId>.xml", "ui.xml", "ui/<modId>.lua", "aiscripts/*.xml", "libraries/wares.xml", "libraries/jobs.xml", "t/*.xml", "<xmlPatch.targetFile>"]
@@ -2628,6 +2630,42 @@ app.get("/api/agent/schema", (req, res) => {
         path: "/api/agent/workspace",
         auth: true,
         purpose: "Read the active studio workspace plus version counter."
+      },
+      {
+        method: "GET",
+        path: "/api/reference/factions",
+        auth: false,
+        purpose: "List canonical base+DLC faction IDs, localized names, first-definition source, and derived category/isreal authoring metadata. Use ?refresh=1 to force a cache rebuild."
+      },
+      {
+        method: "GET",
+        path: "/api/reference/wares",
+        auth: false,
+        purpose: "List canonical base+DLC ware IDs, localized names, group, tags, and first-definition source."
+      },
+      {
+        method: "GET",
+        path: "/api/reference/sectors",
+        auth: false,
+        purpose: "List sector macro IDs and localized display names from base+DLC map macro files."
+      },
+      {
+        method: "GET",
+        path: "/api/reference/scriptproperties?datatype=faction",
+        auth: false,
+        purpose: "List scriptproperties.xml keyword/datatype properties and function-like selectors with name, result documentation, and result type."
+      },
+      {
+        method: "GET",
+        path: "/api/reference/file?path=libraries/factions.xml",
+        auth: false,
+        purpose: "Read one raw file beneath the configured unpacked reference root; absolute paths, traversal, directories, and symlink escapes are rejected."
+      },
+      {
+        method: "GET",
+        path: "/api/reference/search?q=argon&kind=faction",
+        auth: false,
+        purpose: "Search canonical faction, ware, sector, and script-property records."
       },
       {
         method: "POST",
@@ -2945,6 +2983,7 @@ app.post("/api/schema/config", (req, res) => {
     const gamePath = String(req.body?.x4GamePath || '').trim();
     const modWorkspacePath = req.body?.modWorkspacePath !== undefined ? String(req.body.modWorkspacePath || '').trim() : undefined;
     const filesystemPath = req.body?.filesystemPath !== undefined ? String(req.body.filesystemPath || '').trim() : undefined;
+    const referenceRoot = req.body?.x4ReferenceRoot !== undefined ? String(req.body.x4ReferenceRoot || '').trim() : undefined;
 
     // Paths save INDEPENDENTLY of schema validity. The schema directory is validated and
     // REPORTED, never a hard gate — you can save just the workspace/filesystem/game paths
@@ -2956,6 +2995,7 @@ app.post("/api/schema/config", (req, res) => {
       ...(gamePath ? { x4GamePath: gamePath } : {}),
       ...(modWorkspacePath !== undefined ? { modWorkspacePath } : {}),
       ...(filesystemPath !== undefined ? { filesystemPath } : {}),
+      ...(referenceRoot !== undefined ? { x4ReferenceRoot: referenceRoot } : {}),
       xsdSchemaPath: schemaDir,
       schemaFiles: ['md.xsd', 'common.xsd']
     };
@@ -5715,6 +5755,8 @@ const SELFTESTS: Record<string, () => unknown> = {
   "override-map-selftest": runOverrideMapSelftest,
   "catdat-selftest": runCatDatSelftest,
   "object-index-selftest": runObjectIndexSelftest,
+  "reference-corpus-selftest": runReferenceCorpusSelftest,
+  "reference-literal-lint-selftest": runReferenceLiteralLintSelftest,
   "proposal-review-selftest": runProposalReviewSelftest,
   "intent-check-selftest": runIntentCheckSelftest,
   "blueprint-selftest": runBlueprintSelftest,
@@ -5764,6 +5806,7 @@ app.get("/api/agent/selftest-index", (_req, res) => {
 });
 
 registerValidationAgentRoutes(app);
+registerReferenceRoutes(app);
 
 
 // Drift report for one mod present in BOTH the workspace and deployed roots.
@@ -8337,6 +8380,7 @@ if (process.env.NODE_ENV !== "production" || process.env.FORGE_ALLOW_RUN_COMMAND
   });
 }
 
+initializeReferenceCorpus();
 setupDevOrProd().then(() => {
   app.listen(PORT, "127.0.0.1", () => {
     console.log(`X4 Forge Dev Server running on http://127.0.0.1:${PORT}`);
