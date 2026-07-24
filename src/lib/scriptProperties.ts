@@ -44,6 +44,16 @@ export interface SPEntry {
   wildcard: boolean;
   /** contains <import> children — property set is dynamic/incomplete, don't type-check */
   dynamic: boolean;
+  /** return datatype declared by a dynamic import template (faction.<id> -> faction) */
+  dynamicResultType?: string;
+}
+
+export interface ResolvedScriptProperty {
+  name: string;
+  result: string;
+  type: string;
+  owner: string;
+  inherited: boolean;
 }
 
 export interface ScriptPropertyModel {
@@ -138,7 +148,14 @@ export function parseScriptProperties(xml: string): ScriptPropertyModel {
     for (let k = 0; k < kids.length; k++) {
       const kid = kids[k] as unknown as { nodeType: number; nodeName: string; getAttribute?: (n: string) => string | null };
       if (kid.nodeType !== 1) continue;
-      if (kid.nodeName === 'import') { entry.dynamic = true; continue; }
+      if (kid.nodeName === 'import') {
+        entry.dynamic = true;
+        const imported = (kid as unknown as { getElementsByTagName?: (n: string) => ArrayLike<{ getAttribute: (n: string) => string | null }> })
+          .getElementsByTagName?.('property');
+        const resultType = imported?.[0]?.getAttribute?.('type') || '';
+        if (resultType && !entry.dynamicResultType) entry.dynamicResultType = resultType.toLowerCase();
+        continue;
+      }
       if (kid.nodeName !== 'property' || !kid.getAttribute) continue;
       const pname = kid.getAttribute('name') || '';
       if (!pname) continue;
@@ -174,8 +191,33 @@ export function resolveDatatypeHeads(model: ScriptPropertyModel, name: string): 
   return out;
 }
 
+/** Full property records for a datatype, own definitions first then inherited parents. */
+export function resolveDatatypeProperties(model: ScriptPropertyModel, name: string): ResolvedScriptProperty[] {
+  const out: ResolvedScriptProperty[] = [];
+  const seenTypes = new Set<string>();
+  const seenNames = new Set<string>();
+  let current = model.datatypes.get(String(name || '').toLowerCase());
+  let inherited = false;
+  while (current && !seenTypes.has(current.name)) {
+    seenTypes.add(current.name);
+    for (const property of current.properties) {
+      const key = property.name.toLowerCase();
+      if (seenNames.has(key)) continue;
+      seenNames.add(key);
+      out.push({ ...property, owner: current.name, inherited });
+    }
+    current = current.parent ? model.datatypes.get(current.parent) : undefined;
+    inherited = true;
+  }
+  return out;
+}
+
 export function buildScriptPropertyIndex(xml: string): ScriptPropertyIndex {
   const model = parseScriptProperties(xml);
+  return buildScriptPropertyIndexFromModel(model);
+}
+
+export function buildScriptPropertyIndexFromModel(model: ScriptPropertyModel): ScriptPropertyIndex {
   const union = new Set<string>();
   const docs = new Map<string, string>();
   const bareOk = new Set<string>();
@@ -344,6 +386,41 @@ export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex
       out.push(buildSubselectorFinding(masked, pending.at, pending.chainAt, pending.head, index, opts));
     }
   }
+  // Type-aware pass for roots knowable without project-wide data flow: imported
+  // keywords (`faction.<id>`) and variables named exactly after a datatype (`$ship`).
+  const typedChain = /(\$?[A-Za-z_]\w*)((?:\.(?:[A-Za-z_]\w*|\{[^}]*\}|\[[^\]]*\]))+)/g;
+  let typed: RegExpExecArray | null;
+  while ((typed = typedChain.exec(masked)) !== null) {
+    const root = typed[1];
+    const rootName = root.replace(/^\$/, '').toLowerCase();
+    const keyword = !root.startsWith('$') ? index.model.keywords.get(rootName) : undefined;
+    let datatype = root.startsWith('$') && index.model.datatypes.has(rootName) ? rootName : keyword?.dynamicResultType;
+    if (!datatype || !index.model.datatypes.has(datatype)) continue;
+    const typedOffset = typed.index;
+    const segments = [...typed[2].matchAll(/\.([A-Za-z_]\w*|\{[^}]*\}|\[[^\]]*\])/g)]
+      .map(match => ({ value: match[1], at: typedOffset + root.length + (match.index || 0) }));
+    let indexInChain = keyword?.dynamic ? 1 : 0; // imported keyword's first segment is its lookup id
+    for (; indexInChain < segments.length; indexInChain++) {
+      const segment = segments[indexInChain];
+      if (/^[{[]/.test(segment.value)) continue;
+      const properties = resolveDatatypeProperties(index.model, datatype);
+      const property = properties.find(candidate => propertyHead(candidate.name) === segment.value.toLowerCase());
+      if (!property) {
+        // Variable-name typing is a conservative hint, not proof of runtime type. If
+        // the segment exists anywhere in the corpus, retain the legacy union allowance.
+        if (root.startsWith('$') && index.union.has(segment.value.toLowerCase())) break;
+        const chain = `${root}${segments.slice(0, indexInChain + 1).map(value => `.${value.value}`).join('')}`;
+        const candidates = properties.map(candidate => propertyHead(candidate.name)).filter(Boolean);
+        const finding = buildFinding(masked, segment.at, chain, segment.value, datatype, candidates, opts);
+        if (!out.some(existing => existing.code === finding.code && existing.line === finding.line && existing.chain === finding.chain && existing.segment === finding.segment)) out.push(finding);
+        break;
+      }
+      if (/\.\{\$?[A-Za-z_]\w*\}/.test(property.name) && indexInChain + 1 < segments.length) indexInChain++;
+      const nextType = property.type.toLowerCase();
+      if (!nextType || !index.model.datatypes.has(nextType)) break;
+      datatype = nextType;
+    }
+  }
   return out;
 }
 
@@ -382,7 +459,7 @@ function buildFinding(masked: string, at: number, chain: string, segment: string
  * Oracle — fixtures mirror the PROBED real shapes (unpacked 9.00 data).
  * ------------------------------------------------------------------ */
 
-const FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
+export const SCRIPT_PROPERTIES_FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
 <scriptproperties xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="scriptproperties.xsd">
   <keyword name="event" description="Event data access">
     <property name="name" result="Name of event condition that was met" type="string" />
@@ -421,6 +498,12 @@ const FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
   <datatype name="ship" type="object">
     <property name="cargo" result="cargo access" />
   </datatype>
+  <datatype name="faction">
+    <property name="id" result="Faction ID" type="string" />
+    <property name="name" result="Faction name" type="string" />
+    <property name="knownname" result="Known faction name" type="string" />
+    <property name="relationto.{$faction}" result="Relation to another faction" type="relation" />
+  </datatype>
   <datatype name="list">
     <property name="count" result="Number of elements in the list" type="integer" />
     <property name="{$numeric}" result="The numeric-th element in the list (1-based)" />
@@ -436,9 +519,9 @@ export function runScriptPropertiesSelftest(): {
     checks.push({ name, pass: !!cond, detail: detail === undefined ? undefined : (typeof detail === 'string' ? detail : JSON.stringify(detail)) });
 
   // --- parsing the real shape ---
-  const idx = buildScriptPropertyIndex(FIXTURE);
+  const idx = buildScriptPropertyIndex(SCRIPT_PROPERTIES_FIXTURE);
   ok('index loads', idx.loaded);
-  ok('parses keywords + datatypes', idx.model.keywords.size === 3 && idx.model.datatypes.size === 6,
+  ok('parses keywords + datatypes', idx.model.keywords.size === 3 && idx.model.datatypes.size === 7,
     `kw=${idx.model.keywords.size} dt=${idx.model.datatypes.size}`);
   ok('placeholder property indexed by literal head (isclass.{$class} → isclass)',
     idx.model.datatypes.get('component')!.heads.has('isclass'));
@@ -446,10 +529,12 @@ export function runScriptPropertiesSelftest(): {
     idx.model.datatypes.get('list')!.wildcard);
   ok('import-bearing keyword marked dynamic (faction)',
     idx.model.keywords.get('faction')!.dynamic);
+  ok('dynamic import retains result datatype', idx.model.keywords.get('faction')!.dynamicResultType === 'faction');
   ok('datatype inheritance resolves (ship inherits component.exists)',
     resolveDatatypeHeads(idx.model, 'ship').has('exists')
     && resolveDatatypeHeads(idx.model, 'ship').has('hullpercentage')
     && resolveDatatypeHeads(idx.model, 'ship').has('cargo'));
+  ok('full inherited property records retain owner', resolveDatatypeProperties(idx.model, 'ship').some(p => p.name === 'exists' && p.owner === 'component' && p.inherited));
   ok('union contains heads from every level', ['exists', 'isplayerowned', 'cargo', 'param2', 'count'].every(h => idx.union.has(h)),
     [...idx.union].join(','));
 
@@ -492,9 +577,12 @@ export function runScriptPropertiesSelftest(): {
   const evGood = lintScriptPropertyChains('<set_value name="$d" exact="event.param3.$key"/>', idx);
   ok('valid event.param3 passes (dynamic tail skipped)', evGood.length === 0, JSON.stringify(evGood));
 
-  // --- skip rules (false-positive guards) ---
-  ok('dynamic keyword root skipped (faction.argon.name — import-generated)',
+  // --- dynamic typed roots + false-positive guards ---
+  ok('dynamic keyword valid property passes (faction.argon.name)',
     lintScriptPropertyChains('<do_if value="faction.argon.name"/>', idx).length === 0);
+  const factionBad = lintScriptPropertyChains('<do_if value="faction.argon.knownnmae"/>', idx);
+  ok('dynamic keyword result datatype catches unknown property', factionBad.some(f => f.segment === 'knownnmae' && f.root === 'faction'), JSON.stringify(factionBad));
+  ok('dynamic keyword typo has did-you-mean', factionBad.some(f => f.suggestions.includes('knownname')), JSON.stringify(factionBad));
   ok('single-quoted string literals masked',
     lintScriptPropertyChains(`<raise_lua_event name="'ai_influence.chat.fetchmode'"/>`, idx).length === 0);
   ok('comment attributes masked',

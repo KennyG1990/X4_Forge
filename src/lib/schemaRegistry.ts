@@ -121,13 +121,26 @@ const registryCache = new Map<string, { at: number; registry: SchemaRegistry }>(
  * basename (non-DLC then shallower wins — same preference as discoverXsd), with each
  * domain's transitive include chain resolved.
  */
-export function discoverSchemaRegistry(schemaDir: string, gamePath?: string, opts?: { refresh?: boolean }): SchemaRegistry {
-  const cacheKey = `${schemaDir}|${gamePath || ''}`.toLowerCase();
+export function discoverSchemaRegistry(schemaDir: string, gamePath?: string, opts?: { refresh?: boolean; signature?: string }): SchemaRegistry {
+  const cacheKey = `${schemaDir}|${gamePath || ''}|${opts?.signature || ''}`.toLowerCase();
   const hit = registryCache.get(cacheKey);
   if (!opts?.refresh && hit && Date.now() - hit.at < REGISTRY_TTL_MS) return hit.registry;
   const registry = discoverSchemaRegistryUncached(schemaDir, gamePath);
   registryCache.set(cacheKey, { at: Date.now(), registry });
   return registry;
+}
+
+/** Cheap deterministic signature for a bounded schema directory (used by the canonical reference root). */
+export function schemaFilesSignature(schemaDir: string): string {
+  return enumerateXsds(schemaDir)
+    .map(hit => {
+      try {
+        const stat = fs.statSync(hit.path);
+        return `${path.relative(schemaDir, hit.path).replace(/\\/g, '/').toLowerCase()}:${stat.size}:${stat.mtimeMs}`;
+      } catch { return `${hit.path.toLowerCase()}:missing`; }
+    })
+    .sort()
+    .join('|');
 }
 
 function discoverSchemaRegistryUncached(schemaDir: string, gamePath?: string): SchemaRegistry {
@@ -259,6 +272,13 @@ export function runSchemaRegistrySelftest() {
     const junk = byDomain.get('junk');
     const junkIndex = junk ? getDomainIndex(junk) : null;
     ok('junk_xsd_degrades_not_throws', !!junk && !!junkIndex && junkIndex.elementCount === 0, `elements=${junkIndex?.elementCount}`);
+
+    const beforeSignature = schemaFilesSignature(tmp);
+    write('added_after_cache.xsd', xsd(`  <xs:element name="fresh"/>`));
+    const afterSignature = schemaFilesSignature(tmp);
+    const refreshed = discoverSchemaRegistry(tmp, undefined, { signature: afterSignature });
+    ok('schema_signature_changes_on_add', beforeSignature !== afterSignature);
+    ok('signature_cache_key_discovers_added_schema', refreshed.domains.some(domain => domain.domain === 'added_after_cache'));
 
     ok('missing_root_returns_empty', discoverSchemaRegistry(path.join(tmp, 'nope')).domains.length === 0);
   } finally {

@@ -6122,3 +6122,56 @@ commit honored):** bump 0.0.30→0.0.31 → gen-changelog (29 versions, newest 0
 clean) → build-ext → vsce package STABLE (2098 files, 17.0MB) → `ovsx publish` OK ("Published
 x4forge.x4-forge-studio v0.0.31") → store versions API confirmed live → commit. Ships B68 (runaway-indent
 generator fix) as the user-facing delta plus the unification. PUBLISHING.md updated: ships from `main` now.
+
+## ◐ PARTIAL — B73 canonical unpacked-reference API + validation integration (2026-07-23)
+The Forge now has a configurable loose/unpacked X4 reference root (`X4_REFERENCE_ROOT` →
+`config.x4ReferenceRoot` → requested default), validated at startup and surfaced in Directory Settings.
+`src/lib/referenceCorpus.ts` indexes base plus every present official `ego_dlc_*` source once per source
+signature, resolves English names, preserves first-definition provenance, and exposes factions, wares,
+sector/map macros, the full macro catalog, and merged scriptproperties. Read-only public endpoints:
+`/api/reference/{status,factions,wares,sectors,scriptproperties,file,search,selftest}`; raw-file access is
+root-contained and symlink/traversal guarded. Project validation now uses canonical references rather than
+the mixed Object Browser index, unions project-owned definitions, and warns on unknown IDs with suggestions.
+
+**Real-corpus/API evidence:** exactly 32 factions; required provenance for fallensplit/kaori/
+holyorderfanatic/loanshark/trinity; no riptide; 1,902 wares; 170 sectors; 6,505 macros; faction
+scriptproperties expose id/name/knownname; raw bytes match disk; traversal 403 and missing 404; scratch
+project produced warnings for invented faction+ware while project-owned IDs stayed clean. **Gates:** route
+integration 16/16; real corpus 10/10; real HTTP/validation 19/19; oracle board 98/98; precommit/typecheck/
+build exit 0; lint 0 errors (430 existing warnings); graphify 1,953 nodes/4,548 edges. **Review catches:**
+UTF-8 BOM made xmldom silently skip base `index/macros.xml` (2,739 false-incomplete macros); leading-BOM
+normalization restored 6,505 and aggregate selftest 10/10. DLC direct-property scriptproperty diffs now
+augment existing datatypes (selftest 10/10). **PARTIAL residual:** machine-state gate was unanswered, so
+full e2e and rendered Directory Settings inspection were not run. No vanilla/game/mod/config write and no
+Git mutation. Suggested commit title: `feat: expose canonical X4 reference corpus through the Forge API`.
+
+## ◐ PARTIAL — B74 schema-driven X4 completion, hover, and strict validation (2026-07-24)
+The canonical reference root now supplies both values and grammar. `SchemaIndex` resolves the 37
+`libraries/*.xsd` domains plus transitive include/import chains and retains direct-child particles,
+cardinality, attributes, inherited enums/patterns/defaults, documentation, and `xs:any` openness.
+Authenticated `POST /api/reference/complete` and `/hover` select the declared
+`xsi:noNamespaceSchemaLocation` (path/root fallback), return legal contextual XML tokens, canonical IDs,
+and datatype-aware script-expression properties/functions. The existing VS Code/Antigravity providers
+consume those endpoints through the owned sidecar token and retain attach-mode legacy fallback.
+
+Validation reuses the same canonical schema/scriptproperty/reference engines: deterministic illegal
+elements/children/attributes, required attributes, and enum/fixed violations are errors with XSD source
+citations; unknown typed properties/functions and faction/ware/macro/sector references remain warnings
+with suggestions. Corpus truth is preserved: `faction.id: string` is completed and hovered, never hidden.
+Schema and corpus indexes invalidate on root/signature changes; a one-second signature-check throttle
+keeps warm completion at **2.9 ms p95** without reparsing per request.
+
+**Evidence:** focused intelligence 78/78; real corpus 10/10 (32 factions, 1,902 wares, 170 sectors,
+6,505 macros); authenticated real-corpus API/validation 40/40; route integration 16/16; runtime-discovered
+oracle board 100/100; root + extension typechecks; lint 0 errors (430 existing warnings); precommit and
+production build green; graphify refreshed to 2,014 nodes/4,734 edges. Negative paths covered auth 401,
+bad cursor 400, traversal 403, missing file 404, unknown schema empty result, `xs:any` diff payload,
+unknown references/properties, and self-closing sibling nesting.
+
+**Review corrections:** named restriction enum inheritance, CRLF cursor offsets, canonical-result
+truncation, overloaded function selector choice, literal continuation traversal, duplicate schema
+diagnostics, corpus-cache keystroke latency, and a self-closing tag false positive were all found and
+fixed before close. **PARTIAL residual:** full e2e and real rendered Antigravity interaction were not run
+because the machine-state gate found X4 and Antigravity active; no live workspace/game/UI state was
+disturbed. Standalone LSP remains deliberately deferred. No Git mutation. Suggested commit title:
+`feat: add schema-driven X4 completion hover and validation`.

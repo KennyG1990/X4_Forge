@@ -18,7 +18,11 @@
     "precommit:check": "node scripts/precommit-check.mjs",
     "test:canvas": "node scripts/run-e2e.mjs tests/e2e/canvas-interactions.spec.ts tests/e2e/canvas-coverage.spec.ts",
     "test:e2e": "node scripts/run-e2e.mjs",
-    "test:routes": "node scripts/route-integration.mjs"
+    "test:routes": "node scripts/route-integration.mjs",
+    "test:oracles": "node scripts/oracle-integration.mjs",
+    "test:reference-api": "node scripts/reference-api-integration.mjs",
+    "test:reference-corpus": "tsx scripts/reference-corpus-check.ts",
+    "test:schema-intelligence": "tsx scripts/schema-intelligence-check.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",

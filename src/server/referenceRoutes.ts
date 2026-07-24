@@ -10,6 +10,12 @@ import {
   runReferenceCorpusSelftest,
   type ReferenceCorpus,
 } from '../lib/referenceCorpus';
+import {
+  completeReferenceDocument,
+  getReferenceLanguageResources,
+  hoverReferenceDocument,
+  type ReferenceLanguageRequest,
+} from '../lib/referenceLanguage';
 
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function forceRefresh(req: Request): boolean { return /^(1|true|yes)$/i.test(String(req.query.refresh || '')); }
@@ -17,6 +23,25 @@ function forceRefresh(req: Request): boolean { return /^(1|true|yes)$/i.test(Str
 function load(req?: Request): ReferenceCorpus {
   const resolved = resolveXsdConfig();
   return getReferenceCorpus(resolved.x4ReferenceRoot, req ? forceRefresh(req) : false);
+}
+
+export function getCanonicalReferenceCorpus(): ReferenceCorpus | null {
+  try { return load(); } catch { return null; }
+}
+
+function languageRequest(req: Request): ReferenceLanguageRequest {
+  const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+  const filePath = typeof body.path === 'string' ? body.path : '';
+  const content = typeof body.content === 'string' ? body.content : '';
+  const line = Number(body.line);
+  const column = Number(body.column);
+  if (!filePath.trim()) throw new Error('Invalid request: path is required.');
+  if (typeof body.content !== 'string') throw new Error('Invalid request: content must be a string.');
+  if (content.length > 5_000_000) throw new Error('Invalid request: content exceeds 5 MB.');
+  if (!Number.isInteger(line) || !Number.isInteger(column) || line < 0 || column < 0) {
+    throw new Error('Invalid request: line and column must be non-negative integers.');
+  }
+  return { path: filePath, content, line, column };
 }
 
 export function getCanonicalReferenceSets(): { macros: Set<string>; wares: Set<string>; factions: Set<string>; sectors: Set<string> } {
@@ -40,6 +65,7 @@ export function initializeReferenceCorpus(): void {
 
 function sendCorpusError(res: Response, error: unknown): Response {
   const message = errorText(error);
+  if (/invalid request|outside the document|outside line/i.test(message)) return res.status(400).json({ error: message });
   if (/missing path/i.test(message)) return res.status(400).json({ error: message });
   if (/traversal/i.test(message)) return res.status(403).json({ error: message });
   if (/file not found/i.test(message)) return res.status(404).json({ error: message });
@@ -48,6 +74,22 @@ function sendCorpusError(res: Response, error: unknown): Response {
 }
 
 export function registerReferenceRoutes(app: Express): void {
+  app.post('/api/reference/complete', (req, res) => {
+    try {
+      const request = languageRequest(req);
+      const corpus = load(req);
+      return res.json(completeReferenceDocument(request, getReferenceLanguageResources(corpus, request)));
+    } catch (error) { return sendCorpusError(res, error); }
+  });
+
+  app.post('/api/reference/hover', (req, res) => {
+    try {
+      const request = languageRequest(req);
+      const corpus = load(req);
+      return res.json(hoverReferenceDocument(request, getReferenceLanguageResources(corpus, request)));
+    } catch (error) { return sendCorpusError(res, error); }
+  });
+
   app.get('/api/reference/status', (req, res) => {
     try {
       const corpus = load(req);
@@ -128,4 +170,3 @@ export function registerReferenceRoutes(app: Express): void {
     catch (error) { return res.status(500).json({ pass: false, error: errorText(error) }); }
   });
 }
-

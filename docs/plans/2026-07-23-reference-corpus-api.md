@@ -1,4 +1,4 @@
-# B73 · Canonical reference corpus API and validation integration — SPECIFIED 2026-07-23
+# B73 · Canonical reference corpus API and validation integration — PARTIAL 2026-07-23
 
 > **For Agent:** Follow the repository Universal AI Task Workflow. This is a Full-lane validation/API task.
 
@@ -73,3 +73,13 @@
 - Run all applicable contract methods, inspect the complete diff, rebuild graphify, and record proof/limits.
 - Do not claim visual or e2e verification unless those gates actually run.
 
+## CLOSE — 2026-07-23
+
+- **Status:** `PARTIAL`. API/validator/cache/security/static/integration/oracle/build layers are VERIFIED. Full e2e and rendered Directory Settings inspection were not run because the required machine-state answer was not provided.
+- **Implemented:** configurable root precedence; startup availability report; base + every present `ego_dlc_*` discovery; localization; source-signature cache and refresh; faction/ware/sector/macro/scriptproperty indexes; DLC property augmentation; contained raw-file reads; public status/factions/wares/sectors/scriptproperties/file/search/selftest routes; canonical project-validation references plus project-owned definitions; Lua literal warnings and suggestions; Directory Settings field; stable isolated HTTP/oracle/real-corpus harnesses.
+- **Review corrections:** stripped UTF-8 BOM before XML parsing after the real base macro index was silently skipped; macro set rose from 2,739 to 6,505 and `md-audit` returned to zero. Fresh-eyes review added direct DLC scriptproperty augmentation merging.
+- **Evidence:** routes 16/16; real corpus 10/10; real HTTP/API + project validation 19/19; runtime oracle board 98/98 (reference corpus 10/10, literal lint 5/5, aggregate 10/10); typecheck/precommit/build exit 0; lint 0 errors/430 warning-only findings; graphify rebuilt 1,953 nodes/4,548 edges.
+- **Negative paths:** raw traversal 403; missing raw file 404; invented faction/ware warnings name the IDs; project-owned faction/ware IDs clean; `riptide` absent; synthetic DLC add/remove invalidates cache.
+- **Not changed:** vanilla corpus, game/mod directories, standing config, `/api/fs/*` behavior, import/deploy/release/Git state.
+- **Residual proof:** run full e2e only after machine-state confirmation and inspect the Directory Settings field in the rendered host. Until then the user-visible configuration surface remains unverified.
+- **Suggested commit title:** `feat: expose canonical X4 reference corpus through the Forge API`.

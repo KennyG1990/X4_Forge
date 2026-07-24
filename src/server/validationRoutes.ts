@@ -25,6 +25,8 @@ import { extractBaseGameFile as catDatExtractBaseGameFile } from "../lib/x4CatDa
 import { buildScriptPropertyIndex, runScriptPropertiesSelftest, type ScriptPropertyIndex } from "../lib/scriptProperties";
 import { ORDER_PARAM_TYPES, runAiscriptLintSelftest } from "../lib/aiscriptLint";
 import { runMdPitfallSelftest } from "../lib/mdPitfallLints";
+import { getReferenceCorpus } from "../lib/referenceCorpus";
+import { getReferenceScriptPropertyIndex } from "../lib/referenceLanguage";
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -37,6 +39,11 @@ function errText(error: unknown): string {
 // closes ROADMAP AAR item #1 ("no AISCRIPT validation path") without manual setup.
 export function getAiSchemaIndex(): SchemaIndex | null {
   const resolved = resolveXsdConfig();
+  const referenceAi = path.join(resolved.x4ReferenceRoot, "libraries", "aiscripts.xsd");
+  const referenceCommon = path.join(resolved.x4ReferenceRoot, "libraries", "common.xsd");
+  if (fs.existsSync(referenceAi) && fs.existsSync(referenceCommon)) {
+    return buildSchemaIndex(Array.from(new Set([referenceAi, referenceCommon].flatMap(p => expandIncludeChain(p)))));
+  }
   // B51: prefer the DISCOVERED aiscripts.xsd (subdir-aware — the game keeps it in aiscripts/ or
   // libraries/, not at the top level), falling back to a top-level file, then the cat/dat harvest.
   const aiXsd = resolved.aiscriptsXsdPath || path.join(resolved.schemaDir || "", "aiscripts.xsd");
@@ -75,6 +82,16 @@ let scriptPropertyCache: { key: string; index: ScriptPropertyIndex } | null = nu
 export function getScriptPropertyIndex(): ScriptPropertyIndex | null {
   try {
     const resolved = resolveXsdConfig();
+    if (resolved.x4ReferenceExists) {
+      const corpus = getReferenceCorpus(resolved.x4ReferenceRoot);
+      const key = `reference:${corpus.root}:${corpus.signature}`;
+      if (scriptPropertyCache?.key === key) return scriptPropertyCache.index;
+      const index = getReferenceScriptPropertyIndex(corpus);
+      if (index.loaded) {
+        scriptPropertyCache = { key, index };
+        return index;
+      }
+    }
     if (!resolved.x4GamePath) return null;
     const key = resolved.x4GamePath;
     if (scriptPropertyCache && scriptPropertyCache.key === key) return scriptPropertyCache.index;

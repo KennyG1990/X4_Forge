@@ -1,0 +1,458 @@
+/** Cursor-aware X4 language intelligence over the canonical reference corpus and XSD graph. */
+
+import path from 'path';
+import { discoverSchemaRegistry, getDomainIndex, schemaFilesSignature, type SchemaRegistry } from './schemaRegistry';
+import {
+  buildScriptPropertyIndexFromModel,
+  propertyHead,
+  resolveDatatypeProperties,
+  type ScriptPropertyIndex,
+  type ScriptPropertyModel,
+  type SPEntry,
+} from './scriptProperties';
+import { resolveExpressionState, suggestExpression, type ExpressionSuggestOptions } from './expressionSuggest';
+import type { ReferenceCorpus, ScriptPropertyReference } from './referenceCorpus';
+import type { AttrSpec, ElementSpec, SchemaIndex } from './xsdValidate';
+
+export type ReferenceCompletionKind = 'Element' | 'Attribute' | 'Enum' | 'Reference' | 'Property' | 'Function';
+
+export interface ReferenceCompletionItem {
+  label: string;
+  kind: ReferenceCompletionKind;
+  detail?: string;
+  insertText: string;
+  documentation?: string;
+  sortText?: string;
+}
+
+export interface ReferenceHover {
+  kind: 'element' | 'attribute' | 'property' | 'function' | 'reference';
+  label: string;
+  signature: string;
+  documentation?: string;
+  detail?: string;
+}
+
+export interface ReferenceLanguageRequest {
+  path: string;
+  content: string;
+  line: number;
+  column: number;
+}
+
+export interface ReferenceLanguageResources {
+  corpus: ReferenceCorpus;
+  registry: SchemaRegistry;
+  schema: SchemaIndex | null;
+  domain: string;
+  scriptProperties: ScriptPropertyIndex;
+}
+
+interface CursorContext {
+  offset: number;
+  parentTag: string | null;
+  inTag: string | null;
+  inAttrValue: string | null;
+  elementStart: boolean;
+  rootTag: string | null;
+  partialElement: string;
+}
+
+let schemaState: { root: string; checkedAt: number; signature: string; registry: SchemaRegistry } | null = null;
+let scriptState: { corpusSignature: string; index: ScriptPropertyIndex } | null = null;
+const SCHEMA_SIGNATURE_CHECK_MS = 1000;
+
+function blankMarkup(text: string): string {
+  return text
+    .replace(/<!--[\s\S]*?(-->|$)/g, match => ' '.repeat(match.length))
+    .replace(/<!\[CDATA\[[\s\S]*?(\]\]>|$)/g, match => ' '.repeat(match.length));
+}
+
+export function offsetAt(content: string, line: number, column: number): number {
+  if (!Number.isInteger(line) || !Number.isInteger(column) || line < 0 || column < 0) throw new Error('line and column must be non-negative integers.');
+  const text = String(content || '');
+  const lines = text.split(/\r?\n/);
+  if (line >= lines.length) throw new Error(`line ${line} is outside the document.`);
+  if (column > lines[line].length) throw new Error(`column ${column} is outside line ${line}.`);
+  if (line === 0) return column;
+  let currentLine = 0;
+  let offset = 0;
+  while (currentLine < line) {
+    const newline = text.indexOf('\n', offset);
+    if (newline < 0) throw new Error(`line ${line} is outside the document.`);
+    offset = newline + 1;
+    currentLine++;
+  }
+  return offset + column;
+}
+
+export function xmlCursorContext(content: string, offset: number): CursorContext {
+  const prefix = blankMarkup(String(content || '').slice(0, Math.max(0, offset)));
+  const rootMatch = /<(?!\?|!|\/)([A-Za-z_][\w.:-]*)/.exec(prefix);
+  const rootTag = rootMatch ? rootMatch[1].toLowerCase() : null;
+  const lastLt = prefix.lastIndexOf('<');
+  const lastGt = prefix.lastIndexOf('>');
+  let inTag: string | null = null;
+  let inAttrValue: string | null = null;
+  let elementStart = false;
+  let partialElement = '';
+  if (lastLt > lastGt) {
+    const body = prefix.slice(lastLt + 1);
+    if (!body.startsWith('?') && !body.startsWith('!')) {
+      const name = /^\/?([A-Za-z_][\w.:-]*)?/.exec(body)?.[1]?.toLowerCase() || null;
+      if (/^\/?[A-Za-z_\w.:-]*$/.test(body)) {
+        elementStart = !body.startsWith('/');
+        partialElement = body.replace(/^\//, '').toLowerCase();
+      } else if (name) {
+        inTag = name;
+        const attr = /([A-Za-z_][\w.:-]*)\s*=\s*"[^"]*$/.exec(body);
+        if (attr) inAttrValue = attr[1].toLowerCase();
+      }
+    }
+  }
+  const stack: string[] = [];
+  const tagRe = /<(\/)?([A-Za-z_][\w.:-]*)((?:"[^"]*"|[^"<>])*?)(\/)?>/g;
+  let match: RegExpExecArray | null;
+  while ((match = tagRe.exec(prefix)) !== null) {
+    const name = match[2].toLowerCase();
+    if (match[1]) {
+      for (let index = stack.length - 1; index >= 0; index--) {
+        if (stack[index] === name) { stack.length = index; break; }
+      }
+    } else if (!match[4]) stack.push(name);
+  }
+  return { offset, parentTag: stack.at(-1) || null, inTag, inAttrValue, elementStart, rootTag, partialElement };
+}
+
+function entryFromReference(reference: ScriptPropertyReference): SPEntry {
+  const heads = new Set<string>();
+  const headDocs = new Map<string, string>();
+  let wildcard = false;
+  for (const property of reference.properties) {
+    const head = propertyHead(property.name);
+    if (!head) wildcard = true;
+    else {
+      heads.add(head);
+      if (property.result && !headDocs.has(head)) headDocs.set(head, property.result);
+    }
+  }
+  return {
+    kind: reference.kind,
+    name: reference.name,
+    parent: reference.parent,
+    heads,
+    headDocs,
+    propNames: reference.properties.map(property => property.name),
+    properties: reference.properties.map(property => ({ ...property })),
+    wildcard,
+    dynamic: reference.dynamic,
+    dynamicResultType: reference.dynamicResultType,
+  };
+}
+
+function scriptIndexFor(corpus: ReferenceCorpus): ScriptPropertyIndex {
+  if (scriptState?.corpusSignature === corpus.signature) return scriptState.index;
+  const model: ScriptPropertyModel = { keywords: new Map(), datatypes: new Map(), parsedProperties: 0 };
+  for (const reference of corpus.scriptProperties) {
+    const entry = entryFromReference(reference);
+    (entry.kind === 'keyword' ? model.keywords : model.datatypes).set(entry.name, entry);
+    model.parsedProperties += entry.properties.length;
+  }
+  const index = buildScriptPropertyIndexFromModel(model);
+  scriptState = { corpusSignature: corpus.signature, index };
+  return index;
+}
+
+export function getReferenceScriptPropertyIndex(corpus: ReferenceCorpus): ScriptPropertyIndex {
+  return scriptIndexFor(corpus);
+}
+
+function registryFor(corpus: ReferenceCorpus): SchemaRegistry {
+  const schemaDir = path.join(corpus.root, 'libraries');
+  const now = Date.now();
+  if (schemaState && schemaState.root.toLowerCase() === schemaDir.toLowerCase() && now - schemaState.checkedAt < SCHEMA_SIGNATURE_CHECK_MS) {
+    return schemaState.registry;
+  }
+  const signature = schemaFilesSignature(schemaDir);
+  if (schemaState && schemaState.root.toLowerCase() === schemaDir.toLowerCase() && schemaState.signature === signature) {
+    schemaState.checkedAt = now;
+    return schemaState.registry;
+  }
+  const registry = discoverSchemaRegistry(schemaDir, undefined, { signature });
+  schemaState = { root: schemaDir, checkedAt: now, signature, registry };
+  return registry;
+}
+
+export function declaredSchemaDomain(content: string): string | null {
+  const match = /\bxsi:noNamespaceSchemaLocation\s*=\s*["']([^"']+)["']/i.exec(String(content || '').slice(0, 32768));
+  if (!match) return null;
+  const basename = match[1].replace(/\\/g, '/').split('/').pop() || '';
+  return basename.toLowerCase().replace(/\.xsd$/, '') || null;
+}
+
+function rootElement(content: string): string | null {
+  const clean = String(content || '').slice(0, 32768).replace(/<!--[\s\S]*?-->/g, '');
+  return /<(?!\?|!)([A-Za-z_][\w.:-]*)/.exec(clean)?.[1]?.toLowerCase() || null;
+}
+
+export function fallbackSchemaDomain(filePath: string, content: string): string | null {
+  const normalized = String(filePath || '').replace(/\\/g, '/').toLowerCase();
+  const root = rootElement(content);
+  if (/(^|\/)aiscripts\//.test(normalized) || root === 'aiscript') return 'aiscripts';
+  if (/(^|\/)md\//.test(normalized) || root === 'mdscript') return 'md';
+  if (root === 'diff') return 'diff';
+  const library = /(^|\/)libraries\/([^/]+)\.xml$/.exec(normalized)?.[2];
+  if (library) return library;
+  return root;
+}
+
+export function getReferenceLanguageResources(corpus: ReferenceCorpus, request: Pick<ReferenceLanguageRequest, 'path' | 'content'>): ReferenceLanguageResources {
+  const registry = registryFor(corpus);
+  const declared = declaredSchemaDomain(request.content);
+  const fallback = fallbackSchemaDomain(request.path, request.content);
+  const domain = declared || fallback || 'none';
+  const info = registry.domains.find(candidate => candidate.domain === domain);
+  return {
+    corpus,
+    registry,
+    schema: info ? getDomainIndex(info) : null,
+    domain,
+    scriptProperties: scriptIndexFor(corpus),
+  };
+}
+
+function referenceKind(attr: AttrSpec | undefined): 'faction' | 'ware' | 'sector' | 'macro' | null {
+  const type = `${attr?.type || ''} ${attr?.baseType || ''}`.toLowerCase();
+  if (type.includes('faction')) return 'faction';
+  if (type.includes('ware')) return 'ware';
+  if (type.includes('sector')) return 'sector';
+  if (type.includes('macro') || type.includes('component')) return 'macro';
+  return null;
+}
+
+function dynamicValues(corpus: ReferenceCorpus): ExpressionSuggestOptions['dynamicValues'] {
+  return {
+    faction: corpus.factions.map(value => ({ id: value.id, label: value.name, documentation: `${value.name} · ${value.source}` })),
+    ware: corpus.wares.map(value => ({ id: value.id, label: value.name, documentation: `${value.name} · ${value.group} · ${value.source}` })),
+    sector: corpus.sectors.map(value => ({ id: value.id, label: value.name, documentation: `${value.name} · ${value.source}` })),
+    macro: [...corpus.references.macros].map(id => ({ id })),
+  };
+}
+
+function expressionAttribute(attrName: string, attr: AttrSpec | undefined): boolean {
+  const type = `${attr?.type || ''} ${attr?.baseType || ''}`.toLowerCase();
+  return type.includes('expression') || new Set(['value', 'exact', 'min', 'max', 'amount', 'check', 'condition']).has(attrName);
+}
+
+function requiredSnippet(name: string, spec: ElementSpec | undefined): string {
+  const required = spec ? [...spec.attributes].filter(([, attr]) => attr.required).map(([attr]) => attr) : [];
+  return required.length ? `${name} ${required.map((attr, index) => `${attr}="\${${index + 1}}"`).join(' ')}` : name;
+}
+
+function referenceItems(kind: NonNullable<ReturnType<typeof referenceKind>>, corpus: ReferenceCorpus, attr: AttrSpec | undefined): ReferenceCompletionItem[] {
+  const type = `${attr?.type || ''} ${attr?.baseType || ''}`.toLowerCase();
+  if (kind === 'faction') return corpus.factions.map((value, index) => ({
+    label: value.id, kind: 'Reference', detail: `${value.name} · ${value.source}`,
+    insertText: type.includes('expr') || type.includes('lookup') ? `faction.${value.id}` : value.id,
+    documentation: `Faction ${value.id}; category=${value.category}; isreal=${value.isreal}`,
+    sortText: String(index).padStart(5, '0'),
+  }));
+  if (kind === 'ware') return corpus.wares.map((value, index) => ({
+    label: value.id, kind: 'Reference', detail: `${value.name} · ${value.group} · ${value.source}`,
+    insertText: type.includes('expr') || type.includes('lookup') ? `ware.${value.id}` : value.id,
+    documentation: value.tags.length ? `Tags: ${value.tags.join(', ')}` : undefined,
+    sortText: String(index).padStart(5, '0'),
+  }));
+  if (kind === 'sector') return corpus.sectors.map((value, index) => ({
+    label: value.id, kind: 'Reference', detail: `${value.name} · ${value.source}`, insertText: value.id,
+    sortText: String(index).padStart(5, '0'),
+  }));
+  return [...corpus.references.macros].sort().map((id, index) => ({
+    label: id, kind: 'Reference', detail: 'Canonical X4 macro', insertText: id,
+    sortText: String(index).padStart(5, '0'),
+  }));
+}
+
+export function completeReferenceDocument(request: ReferenceLanguageRequest, resources: ReferenceLanguageResources): ReferenceCompletionItem[] {
+  const offset = offsetAt(request.content, request.line, request.column);
+  const context = xmlCursorContext(request.content, offset);
+  const schema = resources.schema;
+  if (context.inTag && context.inAttrValue) {
+    const element = schema?.elements.get(context.inTag);
+    const attr = element?.attributes.get(context.inAttrValue);
+    if (expressionAttribute(context.inAttrValue, attr)) {
+      const suggestions = suggestExpression(request.content, offset, resources.scriptProperties, { dynamicValues: dynamicValues(resources.corpus) });
+      if (suggestions.length) return suggestions.map((suggestion, index) => ({
+        label: suggestion.label,
+        kind: suggestion.kind === 'function' ? 'Function' : suggestion.kind === 'reference' ? 'Reference' : 'Property',
+        detail: [suggestion.ownerType, suggestion.propertyName, suggestion.resultType].filter(Boolean).join(' · ') || suggestion.source,
+        insertText: suggestion.insert,
+        documentation: suggestion.detail,
+        sortText: String(index).padStart(5, '0'),
+      }));
+    }
+    if (attr?.enumValues?.length) return attr.enumValues.map((value, index) => ({
+      label: value, kind: 'Enum', detail: `${context.inTag}@${context.inAttrValue}`, insertText: value,
+      documentation: attr.documentation, sortText: String(index).padStart(5, '0'),
+    }));
+    const kind = referenceKind(attr);
+    return kind ? referenceItems(kind, resources.corpus, attr) : [];
+  }
+
+  if (context.inTag) {
+    const element = schema?.elements.get(context.inTag);
+    if (!element?.resolved) return [];
+    return [...element.attributes.entries()]
+      .sort((a, b) => Number(b[1].required) - Number(a[1].required) || a[0].localeCompare(b[0]))
+      .map(([name, attr], index) => ({
+        label: name, kind: 'Attribute',
+        detail: `${attr.required ? 'required' : 'optional'}${attr.type ? ` · ${attr.type}` : ''}`,
+        insertText: `${name}="\${1}"`, documentation: attr.documentation,
+        sortText: `${attr.required ? '0' : '1'}${String(index).padStart(5, '0')}`,
+      }));
+  }
+
+  if (context.elementStart && context.parentTag) {
+    const parent = schema?.elements.get(context.parentTag);
+    if (!parent || parent.openChildren) return [];
+    return [...parent.children]
+      .filter(name => !context.partialElement || name.startsWith(context.partialElement))
+      .filter(name => schema?.elements.has(name))
+      .sort()
+      .map((name, index) => {
+        const child = schema?.elements.get(name);
+        const particle = parent.childSpecs.get(name);
+        return {
+          label: name, kind: 'Element' as const,
+          detail: particle ? `${particle.particle} · ${particle.minOccurs}..${particle.maxOccurs === null ? '∞' : particle.maxOccurs}` : resources.domain,
+          insertText: requiredSnippet(name, child), documentation: child?.documentation,
+          sortText: String(index).padStart(5, '0'),
+        };
+      });
+  }
+  return [];
+}
+
+function wordAt(content: string, offset: number): { word: string; start: number; end: number } | null {
+  let start = offset;
+  let end = offset;
+  while (start > 0 && /[A-Za-z0-9_.:-]/.test(content[start - 1])) start--;
+  while (end < content.length && /[A-Za-z0-9_.:-]/.test(content[end])) end++;
+  const word = content.slice(start, end);
+  return word ? { word, start, end } : null;
+}
+
+export function hoverReferenceDocument(request: ReferenceLanguageRequest, resources: ReferenceLanguageResources): ReferenceHover | null {
+  const offset = offsetAt(request.content, request.line, request.column);
+  const context = xmlCursorContext(request.content, offset);
+  const token = wordAt(request.content, offset);
+  if (!token) return null;
+  const leaf = token.word.split('.').pop()!.toLowerCase();
+
+  if (context.inTag && context.inAttrValue) {
+    const element = resources.schema?.elements.get(context.inTag);
+    const attr = element?.attributes.get(context.inAttrValue);
+    if (expressionAttribute(context.inAttrValue, attr)) {
+      const leafStart = token.end - leaf.length;
+      const state = resolveExpressionState(request.content, leafStart, resources.scriptProperties, { dynamicValues: dynamicValues(resources.corpus) });
+      if (state?.datatype && resources.scriptProperties.model.datatypes.has(state.datatype)) {
+        const property = resolveDatatypeProperties(resources.scriptProperties.model, state.datatype).find(candidate => propertyHead(candidate.name) === leaf);
+        if (property) return {
+          kind: /[.<{]/.test(property.name) ? 'function' : 'property', label: property.name,
+          signature: `${property.owner}.${property.name}${property.type ? `: ${property.type}` : ''}`,
+          documentation: property.result, detail: property.inherited ? `Inherited from ${property.owner}` : `Datatype ${property.owner}`,
+        };
+      }
+    }
+    const faction = resources.corpus.factions.find(value => value.id === leaf);
+    if (faction) return { kind: 'reference', label: faction.id, signature: `faction.${faction.id}`, documentation: faction.name, detail: faction.source };
+    const ware = resources.corpus.wares.find(value => value.id === leaf);
+    if (ware) return { kind: 'reference', label: ware.id, signature: `ware.${ware.id}`, documentation: ware.name, detail: `${ware.group} · ${ware.source}` };
+    if (attr && leaf === context.inAttrValue) return {
+      kind: 'attribute', label: leaf, signature: `${context.inTag}@${leaf}: ${attr.type || attr.baseType || 'string'}`,
+      documentation: attr.documentation, detail: attr.required ? 'required' : 'optional',
+    };
+  }
+
+  const elementName = leaf;
+  const element = resources.schema?.elements.get(elementName);
+  if (element && request.content.slice(Math.max(0, token.start - 2), token.start).includes('<')) {
+    const attrs = [...element.attributes].filter(([, attr]) => attr.required).map(([name]) => name);
+    return {
+      kind: 'element', label: elementName,
+      signature: `<${elementName}${attrs.length ? ` ${attrs.map(name => `${name}="…"`).join(' ')}` : ''}>`,
+      documentation: element.documentation,
+      detail: `${element.children.size} child element(s) · ${element.attributes.size} attribute(s)`,
+    };
+  }
+  return null;
+}
+
+export function clearReferenceLanguageCaches(): void {
+  schemaState = null;
+  scriptState = null;
+}
+
+export function runReferenceLanguageSelftest() {
+  const checks: { name: string; pass: boolean; detail?: string }[] = [];
+  const ok = (name: string, pass: boolean, detail?: unknown) => checks.push({
+    name, pass, ...(detail === undefined ? {} : { detail: typeof detail === 'string' ? detail : JSON.stringify(detail) }),
+  });
+  const cursor = (marked: string) => {
+    const marker = marked.indexOf('|');
+    const content = marked.replace('|', '');
+    const before = marked.slice(0, marker);
+    const rows = before.split('\n');
+    return { content, line: rows.length - 1, column: rows.at(-1)!.length };
+  };
+  const attr = (type?: string, required = false): AttrSpec => ({ required, type });
+  const element = (attributes: Array<[string, AttrSpec]>, children: string[] = []): ElementSpec => ({
+    attributes: new Map(attributes), openAttributes: false, resolved: true,
+    children: new Set(children), childSpecs: new Map(children.map(name => [name, { name, particle: 'sequence' as const, minOccurs: 0, maxOccurs: 1 }])),
+    openChildren: false,
+  });
+  const model: ScriptPropertyModel = { keywords: new Map(), datatypes: new Map(), parsedProperties: 1 };
+  model.keywords.set('faction', {
+    kind: 'keyword', name: 'faction', heads: new Set(), headDocs: new Map(), propNames: [], properties: [], wildcard: false, dynamic: true, dynamicResultType: 'faction',
+  });
+  model.datatypes.set('faction', {
+    kind: 'datatype', name: 'faction', heads: new Set(['id']), headDocs: new Map([['id', 'Faction ID']]), propNames: ['id'],
+    properties: [{ name: 'id', result: 'Faction ID', type: 'string' }], wildcard: false, dynamic: false,
+  });
+  const schema: SchemaIndex = {
+    loaded: true, sourceFiles: ['md.xsd', 'common.xsd'], elementCount: 4,
+    elements: new Map([
+      ['cue', element([], ['conditions', 'actions', 'cues'])],
+      ['conditions', element([])], ['actions', element([])], ['cues', element([])],
+      ['event_owner', element([['owner', attr('faction')]])],
+      ['set_value', element([['exact', attr('expression')]])],
+    ]),
+  };
+  const corpus = {
+    root: 'fixture', generatedAt: '', signature: 'fixture', sourceFiles: [], wares: [], sectors: [], scriptProperties: [],
+    factions: [{ id: 'player', name: 'Player', source: 'base', category: 'player', isreal: false }, { id: 'argon', name: 'Argon', source: 'base', category: 'political', isreal: true }],
+    references: { macros: new Set<string>(), wares: new Set<string>(), factions: new Set<string>(), sectors: new Set<string>() },
+  } as ReferenceCorpus;
+  const resources: ReferenceLanguageResources = {
+    corpus, registry: { roots: [], domains: [] }, schema, domain: 'md', scriptProperties: buildScriptPropertyIndexFromModel(model),
+  };
+  const child = cursor('<cue><|');
+  ok('contextual child completion', completeReferenceDocument({ path: 'md/x.xml', ...child }, resources).map(item => item.label).join(',') === 'actions,conditions,cues');
+  const lookup = cursor('<set_value exact="faction.|"/>');
+  ok('canonical dynamic lookup completion', completeReferenceDocument({ path: 'md/x.xml', ...lookup }, resources).length === 2);
+  const props = cursor('<set_value exact="faction.player.|"/>');
+  ok('dynamic lookup resolves datatype', completeReferenceDocument({ path: 'md/x.xml', ...props }, resources).some(item => item.label === 'id' && item.kind === 'Property'));
+  const hover = cursor('<set_value exact="faction.player.i|d"/>');
+  const hoverResult = hoverReferenceDocument({ path: 'md/x.xml', ...hover }, resources);
+  ok('typed property hover resolves signature', hoverResult?.kind === 'property' && hoverResult.signature === 'faction.id: string', hoverResult);
+  const owner = cursor('<event_owner owner="|"/>');
+  ok('reference typed attribute completion', completeReferenceDocument({ path: 'md/x.xml', ...owner }, resources).length === 2);
+  ok('declared schema wins', declaredSchemaDomain('<x xmlns:xsi="x" xsi:noNamespaceSchemaLocation="../md.xsd"/>') === 'md');
+  ok('path fallback routes aiscript', fallbackSchemaDomain('aiscripts/test.xml', '<aiscript/>') === 'aiscripts');
+  let rejected = false;
+  try { offsetAt('<x/>', 3, 0); } catch { rejected = true; }
+  ok('invalid cursor rejected', rejected);
+  ok('CRLF cursor offset is exact', offsetAt('<x>\r\n  <y/>', 1, 2) === 7, offsetAt('<x>\r\n  <y/>', 1, 2));
+  const passed = checks.filter(check => check.pass).length;
+  return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
+}

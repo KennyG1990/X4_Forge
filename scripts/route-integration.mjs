@@ -67,9 +67,10 @@ async function req(method, urlPath, token, body) {
 
 let child;
 async function main() {
-  child = spawn('npx', ['tsx', 'server.ts'], {
+  const tsxCli = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  child = spawn(process.execPath, [tsxCli, 'server.ts'], {
     cwd: process.cwd(),
-    shell: process.platform === 'win32',
+    shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PORT: String(PORT), NODE_ENV: 'development', STUDIO_API_TOKEN: SESSION_TOKEN, X4_STATE_DIR: stateDir, X4_DATA_DIR: dataDir, X4_REFERENCE_ROOT: referenceRoot },
   });

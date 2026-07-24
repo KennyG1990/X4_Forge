@@ -24,7 +24,7 @@ import fs from "fs";
 import path from "path";
 import { compareModCopies, type DriftReport, type FileFingerprint } from "../lib/modDrift";
 import { resolveXsdConfig } from "../lib/xsdParser";
-import { discoverSchemaRegistry, expandIncludeChain } from "../lib/schemaRegistry";
+import { discoverSchemaRegistry, expandIncludeChain, schemaFilesSignature } from "../lib/schemaRegistry";
 import { validateRoutedFiles, type RoutedFileResult } from "../lib/schemaRouting";
 import { buildSchemaIndex, validateXmlAgainstSchema, type XsdDiagnostic } from "../lib/xsdValidate";
 import {
@@ -55,7 +55,11 @@ import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "
  */
 export function getSchemaIndex() {
   const resolved = resolveXsdConfig();
-  const roots = [resolved.mdXsdPath, resolved.commonXsdPath].filter((p): p is string => !!p);
+  const referenceLibraries = path.join(resolved.x4ReferenceRoot, "libraries");
+  const referenceRoots = [path.join(referenceLibraries, "md.xsd"), path.join(referenceLibraries, "common.xsd")]
+    .filter(p => fs.existsSync(p));
+  const roots = (referenceRoots.length === 2 ? referenceRoots : [resolved.mdXsdPath, resolved.commonXsdPath])
+    .filter((p): p is string => !!p);
   const expanded = Array.from(new Set(roots.flatMap(p => expandIncludeChain(p))));
   return buildSchemaIndex(expanded.length ? expanded : roots);
 }
@@ -64,6 +68,7 @@ export interface ProjectValidationReferences {
   macros?: Set<string>;
   wares?: Set<string>;
   factions?: Set<string>;
+  sectors?: Set<string>;
 }
 
 export interface ProjectValidationResult {
@@ -125,16 +130,18 @@ export interface ProjectValidationResult {
 
 /** Copy canonical sets and admit definitions owned by this project. Never mutate shared cache sets. */
 function referencesForProject(project: ExtensionProject, base?: ProjectValidationReferences): ProjectValidationReferences | undefined {
-  const available = !!(base?.macros?.size || base?.wares?.size || base?.factions?.size);
+  const available = !!(base?.macros?.size || base?.wares?.size || base?.factions?.size || base?.sectors?.size);
   if (!available) return undefined; // canonical corpus unavailable: do not validate against project-only partial sets
   const references: ProjectValidationReferences = {
     macros: new Set(base?.macros || []),
     wares: new Set(base?.wares || []),
     factions: new Set(base?.factions || []),
+    sectors: new Set(base?.sectors || []),
   };
   for (const file of project.files) {
     if (typeof file.content !== 'string') continue;
     for (const m of file.content.matchAll(/<macro\b[^>]*\bname\s*=\s*["']([^"']+)["']/gi)) references.macros!.add(m[1].toLowerCase());
+    for (const m of file.content.matchAll(/<macro\b[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*\bclass\s*=\s*["']sector["']/gi)) references.sectors!.add(m[1].toLowerCase());
     for (const m of file.content.matchAll(/<ware\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)) references.wares!.add(m[1].toLowerCase());
     for (const m of file.content.matchAll(/<faction\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)) {
       const id = m[1].toLowerCase(); references.factions!.add(id); references.factions!.add(`faction.${id}`);
@@ -168,7 +175,7 @@ export function runProjectValidation(
       for (const f of project.files) {
         if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
           schemaFindings.push(...validateXmlAgainstSchema(f.content, mdIndex, {
-            filePath: f.path, domain: "mission_director", reportUnknownElements: true, references,
+            filePath: f.path, domain: "mission_director", reportUnknownElements: true, references, strictStructure: true,
           }));
         }
       }
@@ -179,7 +186,7 @@ export function runProjectValidation(
       for (const f of project.files) {
         if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
           schemaFindings.push(...validateXmlAgainstSchema(f.content, aiIndexRef, {
-            filePath: f.path, domain: "ai_scripts", reportUnknownElements: true, references,
+            filePath: f.path, domain: "ai_scripts", reportUnknownElements: true, references, strictStructure: true,
           }));
         }
       }
@@ -192,16 +199,33 @@ export function runProjectValidation(
   let routed: RoutedFileResult[] = [];
   try {
     const resolved = resolveXsdConfig();
-    const registry = (resolved.schemaDir || resolved.x4GamePath)
-      ? discoverSchemaRegistry(resolved.schemaDir, resolved.x4GamePath || undefined)
+    const referenceLibraries = path.join(resolved.x4ReferenceRoot, "libraries");
+    const useReferenceSchemas = fs.existsSync(referenceLibraries);
+    const registry = (useReferenceSchemas || resolved.schemaDir || resolved.x4GamePath)
+      ? discoverSchemaRegistry(
+          useReferenceSchemas ? referenceLibraries : resolved.schemaDir,
+          useReferenceSchemas ? undefined : resolved.x4GamePath || undefined,
+          useReferenceSchemas ? { signature: schemaFilesSignature(referenceLibraries) } : undefined,
+        )
       : null;
     routed = validateRoutedFiles(
       project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string })),
       registry,
-      { references },
+      { references, strictStructure: useReferenceSchemas },
     );
     for (const r of routed) schemaFindings.push(...r.findings);
   } catch { /* routing degrades silently; md/aiscripts layers already reported */ }
+
+  // MD/AI files intentionally pass through the dedicated indexes and the general
+  // registry router. Collapse identical diagnostics at this shared boundary so a
+  // single schema violation is never reported twice to API/editor consumers.
+  const seenSchemaFindings = new Set<string>();
+  for (let index = schemaFindings.length - 1; index >= 0; index--) {
+    const finding = schemaFindings[index];
+    const key = [finding.severity, finding.filePath, finding.line, finding.code, finding.sourceRef, finding.message].join('|');
+    if (seenSchemaFindings.has(key)) schemaFindings.splice(index, 1);
+    else seenSchemaFindings.add(key);
+  }
 
   const aiscriptLint: AiscriptLintFinding[] = [];
   try {
@@ -229,11 +253,10 @@ export function runProjectValidation(
     for (const f of project.files) {
       if (typeof f.content !== 'string') continue;
       const kind = f.kind || classifyPath(f.path);
-      // MD/AIScript literals are checked against their schema semantic types above.
-      // This extra layer is for Lua's explicit Get*Data("literal", ...) forms.
-      if (kind === 'lua') {
-        referenceFindings.push(...lintReferenceLiterals(f.content, references, { filePath: f.path, kind }));
-      }
+      // The pure linter is quiet outside its explicit expression/attribute/API
+      // shapes, so running it for every textual project file also covers generic
+      // XML categories without inventing a non-existent `xml` classifier kind.
+      referenceFindings.push(...lintReferenceLiterals(f.content, references, { filePath: f.path, kind }));
     }
   }
 

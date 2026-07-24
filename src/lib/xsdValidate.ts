@@ -15,6 +15,8 @@
  */
 
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { XMLParser } from 'fast-xml-parser';
 
 export interface XsdDiagnostic {
@@ -27,13 +29,26 @@ export interface XsdDiagnostic {
   code?: string;
 }
 
-interface AttrSpec {
+export interface AttrSpec {
   required: boolean;
   enumValues?: string[];
   type?: string;
+  baseType?: string;
+  patterns?: string[];
+  defaultValue?: string;
+  fixedValue?: string;
+  documentation?: string;
 }
 
-interface ElementSpec {
+export interface ChildSpec {
+  name: string;
+  particle: 'sequence' | 'choice' | 'all' | 'group' | 'unknown';
+  minOccurs: number;
+  /** null means XSD maxOccurs="unbounded". */
+  maxOccurs: number | null;
+}
+
+export interface ElementSpec {
   attributes: Map<string, AttrSpec>;
   /** true when the element's complexType permits arbitrary attributes (anyAttribute) */
   openAttributes: boolean;
@@ -41,6 +56,12 @@ interface ElementSpec {
   resolved: boolean;
   /** lowercased names of child elements this element may contain (best-effort) */
   children: Set<string>;
+  /** direct child particle metadata, conservatively merged across same-name contexts */
+  childSpecs: Map<string, ChildSpec>;
+  /** true when xs:any permits arbitrary direct child payloads */
+  openChildren: boolean;
+  typeName?: string;
+  documentation?: string;
 }
 
 export interface SchemaIndex {
@@ -81,6 +102,25 @@ function collectEnums(node: AnyNode | undefined): string[] {
     .map(e => e.value)
     .filter((v): v is string => typeof v === 'string' && v.length > 0);
   return Array.from(new Set(enums));
+}
+
+function textOf(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value).trim();
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  return textOf(record['#text'] ?? record.text);
+}
+
+function documentationOf(node: AnyNode | undefined): string | undefined {
+  const annotation = node?.['xs:annotation'];
+  const docs = arrayOf(annotation?.['xs:documentation']).map(textOf).filter(Boolean);
+  return docs.length ? docs.join('\n') : undefined;
+}
+
+function occurs(value: unknown, fallback: number): number | null {
+  if (String(value).toLowerCase() === 'unbounded') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 // MULTI-SLOT cache (audit A1, 2026-07-09): the old single-slot `cached` let the md and
@@ -154,7 +194,16 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
       result = sound && all.length ? Array.from(new Set(all)) : null;
     } else {
       const e = collectEnums(st);
-      result = e.length ? e : null;
+      if (e.length) {
+        result = e;
+      } else {
+        const restriction = arrayOf(st['xs:restriction'])[0] as AnyNode | undefined;
+        const base = typeof restriction?.base === 'string' ? restriction.base : undefined;
+        // Named restrictions commonly refine a shared enum type without repeating
+        // its values. Follow that base edge so common.xsd enums survive into the
+        // including schema. Built-in/unknown bases remain deliberately unrestricted.
+        result = base ? enumsOfSimpleType(base, stack) : null;
+      }
     }
     stack.delete(name);
     resolvedSimpleEnums.set(name, result);
@@ -164,6 +213,30 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     const e = enumsOfSimpleType(name, new Set());
     if (e && e.length) simpleTypeEnums[name] = e;
   }
+  const simpleTypeMeta = new Map<string, { baseType?: string; patterns: string[]; documentation?: string }>();
+  const metaOfSimpleType = (name: string, stack = new Set<string>()): { baseType?: string; patterns: string[]; documentation?: string } => {
+    const cachedMeta = simpleTypeMeta.get(name);
+    if (cachedMeta) return cachedMeta;
+    const st = simpleTypeRaw.get(name);
+    if (!st || stack.has(name)) return { patterns: [] };
+    stack.add(name);
+    const restriction = arrayOf(st['xs:restriction'])[0] as AnyNode | undefined;
+    const base = typeof restriction?.base === 'string' ? restriction.base : undefined;
+    const inherited = base && simpleTypeRaw.has(base) ? metaOfSimpleType(base, stack) : { patterns: [] };
+    const patterns = [
+      ...inherited.patterns,
+      ...arrayOf(restriction?.['xs:pattern']).map((p: AnyNode) => String(p?.value || '')).filter(Boolean),
+    ];
+    const meta = {
+      baseType: inherited.baseType || base,
+      patterns: Array.from(new Set(patterns)),
+      documentation: documentationOf(st) || inherited.documentation,
+    };
+    stack.delete(name);
+    simpleTypeMeta.set(name, meta);
+    return meta;
+  };
+  for (const name of simpleTypeRaw.keys()) metaOfSimpleType(name);
   for (const root of roots) {
     arrayOf(root['xs:schema']?.['xs:attributeGroup']).forEach((g: AnyNode) => {
       if (g.name) attributeGroups.set(g.name, g);
@@ -214,11 +287,81 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     }
   }
 
+  function collectChildSpecs(
+    typeNode: AnyNode,
+    into: Map<string, ChildSpec>,
+    open: { v: boolean },
+    seenTypes: Set<string>,
+    seenGroups: Set<string>,
+    particle: ChildSpec['particle'] = 'unknown',
+    depth = 0,
+  ) {
+    if (!typeNode || typeof typeNode !== 'object' || depth > 40) return;
+    if (typeNode['xs:any']) open.v = true;
+    for (const [key, value] of Object.entries(typeNode)) {
+      if (key === 'xs:annotation' || key === 'xs:attribute' || key === 'xs:attributeGroup' || key === 'xs:simpleType' || key === 'xs:any') continue;
+      const nextParticle: ChildSpec['particle'] = key === 'xs:sequence' ? 'sequence'
+        : key === 'xs:choice' ? 'choice'
+          : key === 'xs:all' ? 'all'
+            : particle;
+      if (key === 'xs:element') {
+        for (const el of arrayOf(value)) {
+          const rawName = el?.name || el?.ref;
+          if (typeof rawName !== 'string' || !rawName) continue;
+          const name = rawName.toLowerCase();
+          const candidate: ChildSpec = {
+            name,
+            particle: nextParticle,
+            minOccurs: occurs(el.minOccurs, 1) as number,
+            maxOccurs: occurs(el.maxOccurs, 1),
+          };
+          const prev = into.get(name);
+          if (!prev) into.set(name, candidate);
+          else {
+            // Same-name element declarations are context dependent in X4. Merge toward
+            // permissiveness so completion remains complete and validation avoids false errors.
+            prev.minOccurs = Math.min(prev.minOccurs, candidate.minOccurs);
+            prev.maxOccurs = prev.maxOccurs === null || candidate.maxOccurs === null
+              ? null
+              : Math.max(prev.maxOccurs, candidate.maxOccurs);
+            if (prev.particle !== candidate.particle) prev.particle = 'unknown';
+          }
+        }
+        continue;
+      }
+      if (key === 'xs:group') {
+        for (const group of arrayOf(value)) {
+          const ref = group?.ref || group?.name;
+          if (ref && groups.has(ref) && !seenGroups.has(ref)) {
+            seenGroups.add(ref);
+            collectChildSpecs(groups.get(ref)!, into, open, seenTypes, seenGroups, 'group', depth + 1);
+          } else if (group && typeof group === 'object') {
+            collectChildSpecs(group, into, open, seenTypes, seenGroups, 'group', depth + 1);
+          }
+        }
+        continue;
+      }
+      if (key === 'base' && typeof value === 'string' && complexTypes.has(value) && !seenTypes.has(value)) {
+        seenTypes.add(value);
+        collectChildSpecs(complexTypes.get(value)!, into, open, seenTypes, seenGroups, nextParticle, depth + 1);
+        continue;
+      }
+      if (typeof value === 'object' && value !== null) {
+        collectChildSpecs(value, into, open, seenTypes, seenGroups, nextParticle, depth + 1);
+      }
+    }
+  }
+
   const addAttr = (attr: AnyNode, into: Map<string, AttrSpec>) => {
     if (!attr?.name) return;
     const inlineEnums = collectEnums(attr['xs:simpleType']);
     const typeEnums = attr.type ? simpleTypeEnums[attr.type] : undefined;
     const enumValues = inlineEnums.length ? inlineEnums : typeEnums;
+    const inlineRestriction = arrayOf(attr['xs:simpleType']?.['xs:restriction'])[0] as AnyNode | undefined;
+    const typeMeta = attr.type ? simpleTypeMeta.get(attr.type) : undefined;
+    const inlinePatterns = arrayOf(inlineRestriction?.['xs:pattern'])
+      .map((p: AnyNode) => String(p?.value || ''))
+      .filter(Boolean);
     const lname = String(attr.name).toLowerCase();
     const prev = into.get(lname);
     // The same attribute can be declared by MULTIPLE attributeGroups within one type
@@ -237,7 +380,12 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     into.set(lname, {
       required: Boolean(prev?.required) || attr.use === 'required',
       enumValues: mergedEnums,
-      type: attr.type || prev?.type
+      type: attr.type || prev?.type,
+      baseType: typeMeta?.baseType || inlineRestriction?.base || prev?.baseType,
+      patterns: Array.from(new Set([...(prev?.patterns || []), ...inlinePatterns, ...(typeMeta?.patterns || [])])),
+      defaultValue: attr.default ?? prev?.defaultValue,
+      fixedValue: attr.fixed ?? prev?.fixedValue,
+      documentation: documentationOf(attr) || typeMeta?.documentation || prev?.documentation,
     });
   };
 
@@ -279,15 +427,25 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     }
   }
 
-  const resolveElementAttrs = (el: AnyNode): { attrs: Map<string, AttrSpec>; open: boolean; resolved: boolean; children: Set<string> } => {
+  const resolveElementAttrs = (el: AnyNode): {
+    attrs: Map<string, AttrSpec>;
+    open: boolean;
+    resolved: boolean;
+    children: Set<string>;
+    childSpecs: Map<string, ChildSpec>;
+    openChildren: boolean;
+  } => {
     const into = new Map<string, AttrSpec>();
     const children = new Set<string>();
+    const childSpecs = new Map<string, ChildSpec>();
     const open = { v: false };
+    const openChildren = { v: false };
     let resolved = false;
     // inline complexType
     if (el['xs:complexType']) {
       collectTypeAttrs(el['xs:complexType'], into, new Set(), new Set(), open);
       collectChildren(el['xs:complexType'], children, new Set(), new Set());
+      collectChildSpecs(el['xs:complexType'], childSpecs, openChildren, new Set(), new Set());
       resolved = true;
     }
     // named type reference
@@ -295,13 +453,24 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
       const t = complexTypes.get(el.type)!;
       collectTypeAttrs(t, into, new Set(), new Set([el.type]), open);
       collectChildren(t, children, new Set([el.type]), new Set());
+      collectChildSpecs(t, childSpecs, openChildren, new Set([el.type]), new Set());
       resolved = true;
     }
-    return { attrs: into, open: open.v, resolved, children };
+    return { attrs: into, open: open.v, resolved, children, childSpecs, openChildren: openChildren.v };
   };
 
   const elements = new Map<string, ElementSpec>();
-  const addElement = (name: string, attrs: Map<string, AttrSpec>, open: boolean, resolved: boolean, children: Set<string>) => {
+  const addElement = (
+    name: string,
+    attrs: Map<string, AttrSpec>,
+    open: boolean,
+    resolved: boolean,
+    children: Set<string>,
+    childSpecs: Map<string, ChildSpec>,
+    openChildren: boolean,
+    typeName?: string,
+    documentation?: string,
+  ) => {
     const lname = name.toLowerCase();
     const prev = elements.get(lname);
     if (prev) {
@@ -334,14 +503,40 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
         prev.attributes.set(k, {
           required: Boolean(p?.required) && Boolean(v?.required),
           enumValues: enumValues && enumValues.length ? enumValues : undefined,
-          type: (v?.type) || p?.type
+          type: (v?.type) || p?.type,
+          baseType: v?.baseType || p?.baseType,
+          patterns: Array.from(new Set([...(p?.patterns || []), ...(v?.patterns || [])])),
+          defaultValue: v?.defaultValue ?? p?.defaultValue,
+          fixedValue: v?.fixedValue ?? p?.fixedValue,
+          documentation: v?.documentation || p?.documentation,
         });
       }
       prev.openAttributes = prev.openAttributes || open;
+      prev.openChildren = prev.openChildren || openChildren;
       prev.resolved = prev.resolved || resolved;
       for (const c of children) prev.children.add(c);
+      for (const [child, candidate] of childSpecs) {
+        const existing = prev.childSpecs.get(child);
+        if (!existing) prev.childSpecs.set(child, { ...candidate });
+        else {
+          existing.minOccurs = Math.min(existing.minOccurs, candidate.minOccurs);
+          existing.maxOccurs = existing.maxOccurs === null || candidate.maxOccurs === null ? null : Math.max(existing.maxOccurs, candidate.maxOccurs);
+          if (existing.particle !== candidate.particle) existing.particle = 'unknown';
+        }
+      }
+      prev.typeName = prev.typeName || typeName;
+      prev.documentation = prev.documentation || documentation;
     } else {
-      elements.set(lname, { attributes: attrs, openAttributes: open, resolved, children });
+      elements.set(lname, {
+        attributes: attrs,
+        openAttributes: open,
+        resolved,
+        children,
+        childSpecs,
+        openChildren,
+        typeName,
+        documentation,
+      });
     }
   };
 
@@ -349,8 +544,8 @@ export function buildSchemaIndex(xsdPaths: string[]): SchemaIndex {
     for (const el of collectByKey(root, 'xs:element')) {
       const name = el?.name;
       if (typeof name !== 'string' || !name) continue;
-      const { attrs, open, resolved, children } = resolveElementAttrs(el);
-      addElement(name, attrs, open, resolved, children);
+      const { attrs, open, resolved, children, childSpecs, openChildren } = resolveElementAttrs(el);
+      addElement(name, attrs, open, resolved, children, childSpecs, openChildren, typeof el.type === 'string' ? el.type : undefined, documentationOf(el));
     }
   }
 
@@ -400,6 +595,37 @@ function scanTags(xml: string): RawTag[] {
   return tags;
 }
 
+interface TagEvent { name: string; close: boolean; selfClosing: boolean; line: number }
+
+function scanTagEvents(xml: string): TagEvent[] {
+  const masked = String(xml || '').replace(
+    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g,
+    (s) => s.replace(/[^\n]/g, ' '),
+  );
+  const events: TagEvent[] = [];
+  const re = /<(\/)?([A-Za-z_][\w.:-]*)(?:(?:"[^"]*"|'[^']*'|[^'"<>])*)?(\/?)>/g;
+  let match: RegExpExecArray | null;
+  let line = 1;
+  let last = 0;
+  while ((match = re.exec(masked)) !== null) {
+    for (let i = last; i < match.index; i++) if (masked.charCodeAt(i) === 10) line++;
+    events.push({
+      name: match[2].toLowerCase(),
+      close: !!match[1],
+      selfClosing: !match[1] && /\/\s*>$/.test(match[0]),
+      line,
+    });
+    for (let i = match.index; i < re.lastIndex; i++) if (masked.charCodeAt(i) === 10) line++;
+    last = re.lastIndex;
+  }
+  return events;
+}
+
+function schemaCitation(index: SchemaIndex): string {
+  const files = index.sourceFiles.map(p => p.replace(/\\/g, '/').split('/').pop()).filter(Boolean);
+  return Array.from(new Set(files)).slice(0, 4).join(' + ') || 'configured XSD';
+}
+
 // Structural/known tags that may not carry attribute specs in our index but are
 // valid; never report these as "unknown element".
 const ALWAYS_KNOWN = new Set([
@@ -414,6 +640,10 @@ export interface ValidateOptions {
   domain?: string;
   reportUnknownElements?: boolean; // default false (info-only, can false-positive)
   reportUnknownAttributes?: boolean; // default true (warning)
+  /** Promote deterministic schema violations to errors and check direct-child legality. */
+  strictStructure?: boolean;
+  /** Validate XSD regex patterns only when the caller has proven JS/XSD regex compatibility. */
+  checkPatterns?: boolean;
   checkTimeFormat?: boolean; // default true
   /**
    * Real game-data reference sets, keyed by the schema's semantic attribute
@@ -424,6 +654,7 @@ export interface ValidateOptions {
     macros?: Set<string>;   // type "macroname"/"macro"
     wares?: Set<string>;    // type "warename"/"ware" (literal only)
     factions?: Set<string>; // type "faction" (literal only)
+    sectors?: Set<string>;  // type "sector"/"sectorname" (literal only)
   };
 }
 
@@ -475,26 +706,28 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
   const filePath = opts.filePath;
   const reportUnknownAttr = opts.reportUnknownAttributes !== false;
   const reportUnknownEl = opts.reportUnknownElements === true;
+  const strict = opts.strictStructure === true;
+  const citation = schemaCitation(index);
 
   for (const tag of scanTags(xml)) {
     const lname = tag.name.toLowerCase();
     const spec = index.elements.get(lname);
 
     if (!spec) {
-      if (reportUnknownEl && !ALWAYS_KNOWN.has(lname)) {
+      if (reportUnknownEl && (strict || !ALWAYS_KNOWN.has(lname))) {
         // WARNING (not info): an element the game schema doesn't recognize is a real
         // risk — almost always a typo or a fabricated element name. Surfacing it as a
         // warning makes it count in the Doctor and matches the on-canvas node badge,
         // instead of being buried as info. The wording stays honest about the rare
         // schema-incompleteness case.
         out.push({
-          severity: 'warning',
+          severity: strict ? 'error' : 'warning',
           domain,
           filePath,
           line: tag.line,
           sourceRef: `${tag.name}`,
           code: 'XSD_UNKNOWN_ELEMENT',
-          message: `Element <${tag.name}> is not declared in the game schema (md.xsd/common.xsd) — likely a typo or wrong element name. (If it is a deliberate custom element, it can be ignored.)`
+          message: `Element <${tag.name}> is not declared by ${citation}.`
         });
       }
       continue;
@@ -510,15 +743,15 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       if (!aspec) {
         // Only flag unknown attributes when we actually resolved this element's
         // attribute set; otherwise we'd false-positive on unresolved types.
-        if (reportUnknownAttr && !spec.openAttributes && spec.resolved && spec.attributes.size > 0) {
+        if (reportUnknownAttr && !spec.openAttributes && spec.resolved && (strict || spec.attributes.size > 0)) {
           out.push({
-            severity: 'warning',
+            severity: strict ? 'error' : 'warning',
             domain,
             filePath,
             line: tag.line,
             sourceRef: `${tag.name}@${attr.name}`,
             code: 'XSD_UNKNOWN_ATTRIBUTE',
-            message: `<${tag.name}> has attribute "${attr.name}" which is not declared for this element in the schema.`
+            message: `<${tag.name}> has attribute "${attr.name}" which is not declared for this element in ${citation}.`
           });
         }
         continue;
@@ -535,8 +768,30 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
             line: tag.line,
             sourceRef: `${tag.name}@${attr.name}`,
             code: 'XSD_ENUM_VIOLATION',
-            message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" is not a valid value. Allowed: ${aspec.enumValues.slice(0, 12).join(', ')}${aspec.enumValues.length > 12 ? ', …' : ''}.`
+            message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates its enumeration in ${citation}. Allowed: ${aspec.enumValues.slice(0, 12).join(', ')}${aspec.enumValues.length > 12 ? ', …' : ''}.`
           });
+        }
+      }
+
+      if (aspec.fixedValue !== undefined && attr.value !== aspec.fixedValue) {
+        out.push({
+          severity: 'error', domain, filePath, line: tag.line,
+          sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_FIXED_VIOLATION',
+          message: `<${tag.name}> attribute "${attr.name}" must equal fixed schema value "${aspec.fixedValue}" in ${citation}.`,
+        });
+      }
+
+      if (opts.checkPatterns === true && aspec.patterns?.length && attr.value && !/[{[$]/.test(attr.value)) {
+        for (const pattern of aspec.patterns) {
+          try {
+            if (!new RegExp(`^(?:${pattern})$`).test(attr.value)) {
+              out.push({
+                severity: 'error', domain, filePath, line: tag.line,
+                sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_PATTERN_VIOLATION',
+                message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates pattern /${pattern}/ from ${citation}.`,
+              });
+            }
+          } catch { /* XSD regex syntax not representable by JavaScript: do not guess. */ }
         }
       }
 
@@ -567,6 +822,21 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
         }
       }
 
+      // Ware lookups use the same explicit expression form (`ware.<id>`), while
+      // the canonical ware set stores bare IDs. Validate the unambiguous suffix
+      // even when the containing XSD attribute is the broader expression type.
+      const wareExpression = attr.value?.match(/^ware\.([A-Za-z_][\w]*)$/i);
+      if (wareExpression && opts.references?.wares?.size) {
+        const wareId = wareExpression[1].toLowerCase();
+        if (!opts.references.wares.has(wareId)) {
+          out.push({
+            severity: 'warning', domain, filePath, line: tag.line,
+            sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_WARE',
+            message: `<${tag.name}> ${attr.name}="${attr.value}" names unknown ware id "${wareId}" in the configured canonical X4 corpus.${referenceSuggestion(wareId, opts.references.wares)}`,
+          });
+        }
+      }
+
       // Reference existence check, driven by the schema's semantic type.
       const refs = opts.references;
       if (refs && attr.value && isLiteralRef(attr.value)) {
@@ -584,6 +854,12 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_WARE',
             message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known ware id in the configured canonical X4 corpus (${refs.wares.size} wares).${referenceSuggestion(attr.value, refs.wares)}`
           });
+        } else if ((t === 'sector' || t === 'sectorname') && refs.sectors && refs.sectors.size && !refs.sectors.has(lv)) {
+          out.push({
+            severity: 'warning', domain, filePath, line: tag.line,
+            sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_SECTOR',
+            message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known sector macro in the configured canonical X4 corpus (${refs.sectors.size} sectors).${referenceSuggestion(attr.value, refs.sectors)}`
+          });
         }
       }
     }
@@ -597,7 +873,7 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       if (aspec.required && !present.has(aname)) {
         const isEventCondition = lname.startsWith('event_');
         out.push({
-          severity: isEventCondition ? 'error' : 'warning',
+          severity: strict || isEventCondition ? 'error' : 'warning',
           domain,
           filePath,
           line: tag.line,
@@ -605,11 +881,76 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
           code: 'XSD_MISSING_REQUIRED',
           message: isEventCondition
             ? `<${tag.name}> is missing required attribute "${aname}" per the schema. An event condition missing a required attribute silently never registers in-game — the cue will never fire.`
-            : `<${tag.name}> is missing required attribute "${aname}" per the schema.`
+            : `<${tag.name}> is missing required attribute "${aname}" per ${citation}.`
         });
       }
     }
   }
 
+  if (strict) {
+    const stack: string[] = [];
+    for (const event of scanTagEvents(xml)) {
+      if (event.close) {
+        for (let i = stack.length - 1; i >= 0; i--) {
+          if (stack[i] === event.name) { stack.length = i; break; }
+        }
+        continue;
+      }
+      const parentName = stack.length ? stack[stack.length - 1] : null;
+      if (parentName) {
+        const parent = index.elements.get(parentName);
+        if (parent?.resolved && !parent.openChildren && !parent.children.has(event.name)) {
+          out.push({
+            severity: 'error', domain, filePath, line: event.line,
+            sourceRef: `${parentName}>${event.name}`, code: 'XSD_ILLEGAL_CHILD',
+            message: `<${event.name}> is not a legal direct child of <${parentName}> per ${citation}. Allowed direct children: ${[...parent.children].sort().slice(0, 30).join(', ')}${parent.children.size > 30 ? ', …' : ''}.`,
+          });
+        }
+      }
+      if (!event.selfClosing) stack.push(event.name);
+    }
+  }
+
   return out;
+}
+
+export function runXsdValidateSelftest() {
+  const checks: { name: string; pass: boolean; detail?: string }[] = [];
+  const ok = (name: string, pass: boolean, detail?: unknown) => checks.push({
+    name, pass, ...(detail === undefined ? {} : { detail: typeof detail === 'string' ? detail : JSON.stringify(detail) }),
+  });
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-xsd-model-'));
+  try {
+    const file = path.join(tmp, 'fixture.xsd');
+    fs.writeFileSync(file, `<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+      <xs:simpleType name="modeBase"><xs:restriction base="xs:string"><xs:enumeration value="a"/><xs:enumeration value="b"/><xs:pattern value="[ab]"/></xs:restriction></xs:simpleType>
+      <xs:simpleType name="mode"><xs:restriction base="modeBase"/></xs:simpleType>
+      <xs:element name="root"><xs:complexType><xs:sequence><xs:element ref="child" minOccurs="0" maxOccurs="2"/></xs:sequence><xs:attribute name="mode" type="mode" use="required" default="a"/><xs:attribute name="exact" type="xs:string"/></xs:complexType></xs:element>
+      <xs:element name="child"><xs:complexType><xs:choice><xs:element ref="leaf"/><xs:any minOccurs="0"/></xs:choice></xs:complexType></xs:element>
+      <xs:element name="leaf"><xs:complexType/></xs:element>
+      <xs:element name="other"><xs:complexType/></xs:element>
+    </xs:schema>`, 'utf8');
+    const index = buildSchemaIndex([file]);
+    const root = index.elements.get('root');
+    ok('child_particle_cardinality_indexed', root?.childSpecs.get('child')?.particle === 'sequence'
+      && root.childSpecs.get('child')?.minOccurs === 0 && root.childSpecs.get('child')?.maxOccurs === 2, root?.childSpecs.get('child'));
+    ok('attribute_enum_pattern_default_indexed', root?.attributes.get('mode')?.enumValues?.length === 2
+      && root.attributes.get('mode')?.patterns?.includes('[ab]') && root.attributes.get('mode')?.defaultValue === 'a', root?.attributes.get('mode'));
+    ok('named_restriction_inherits_base_enumeration', root?.attributes.get('mode')?.enumValues?.join(',') === 'a,b', root?.attributes.get('mode'));
+    ok('xs_any_opens_children', index.elements.get('child')?.openChildren === true);
+    const illegal = validateXmlAgainstSchema('<root mode="a"><other/></root>', index, { strictStructure: true, reportUnknownElements: true });
+    ok('illegal_direct_child_is_error', illegal.some(d => d.code === 'XSD_ILLEGAL_CHILD' && d.severity === 'error'), illegal);
+    const badEnum = validateXmlAgainstSchema('<root mode="z"/>', index, { strictStructure: true, checkPatterns: true });
+    ok('enum_and_pattern_are_errors', badEnum.some(d => d.code === 'XSD_ENUM_VIOLATION') && badEnum.some(d => d.code === 'XSD_PATTERN_VIOLATION'), badEnum);
+    const openPayload = validateXmlAgainstSchema('<child><other/></child>', index, { strictStructure: true, reportUnknownElements: true });
+    ok('xs_any_payload_not_illegal_child', !openPayload.some(d => d.code === 'XSD_ILLEGAL_CHILD'), openPayload);
+    const badWare = validateXmlAgainstSchema('<root mode="a" exact="ware.energycellz"/>', index, { references: { wares: new Set(['energycells']) } });
+    ok('expression_ware_reference_warns_with_suggestion', badWare.some(d => d.code === 'REF_UNKNOWN_WARE' && d.severity === 'warning' && d.message.includes('energycells')), badWare);
+    const siblings = validateXmlAgainstSchema('<root mode="a"><child/><child/></root>', index, { strictStructure: true, reportUnknownElements: true });
+    ok('self_closing_siblings_do_not_nest', !siblings.some(d => d.code === 'XSD_ILLEGAL_CHILD'), siblings);
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+  const passed = checks.filter(c => c.pass).length;
+  return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
 }

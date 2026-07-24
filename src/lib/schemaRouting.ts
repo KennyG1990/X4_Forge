@@ -171,9 +171,10 @@ export function lintTFileStructure(xml: string, filePath?: string): XsdDiagnosti
  * ------------------------------------------------------------------ */
 
 export interface RoutedValidationOptions {
-  references?: { macros?: Set<string>; wares?: Set<string>; factions?: Set<string> };
+  references?: { macros?: Set<string>; wares?: Set<string>; factions?: Set<string>; sectors?: Set<string> };
   /** override the corpus-proven set (tests + corpus-proof runs); defaults to CORPUS_PROVEN_DOMAINS */
   provenDomains?: Set<string>;
+  strictStructure?: boolean;
 }
 
 /**
@@ -208,6 +209,7 @@ export function validateRoutedFiles(
         const findings = diffIndex
           ? cap('diff', validateXmlAgainstSchema(f.content, diffIndex, {
               filePath: f.path, domain: 'diff', reportUnknownElements: false, references: opts.references,
+              strictStructure: opts.strictStructure,
             }))
           : [];
         results.push({ path: f.path, route, domainAvailable: !!diffIndex, severityCapped: !proven.has('diff'), findings });
@@ -231,6 +233,7 @@ export function validateRoutedFiles(
       // domains get attribute/enum/required checks only until reference-set work (phase 3).
       reportUnknownElements: false,
       references: opts.references,
+      strictStructure: opts.strictStructure,
     });
     results.push({
       path: f.path,

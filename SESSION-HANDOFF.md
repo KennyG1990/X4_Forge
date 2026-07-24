@@ -1,74 +1,68 @@
-# SESSION-HANDOFF — X4 Forge (degradation checkpoint 2026-07-23)
+# SESSION-HANDOFF — X4 Forge (B74 PARTIAL close 2026-07-24)
 
-## 1. Project / bounded unit
+## Project / objective
 
-- **Project:** X4 Forge extension + Express sidecar in `F:\DEV_ENV\X4_Forge`, `main`.
-- **Task:** B73 — expose a configurable loose/unpacked X4 reference corpus through read-only APIs and use canonical IDs in validation.
-- **Workflow position:** `CLASSIFY ✅ → PLAN ✅ → BASELINE ✅ → RECONCILE ✅ → DOCUMENT PLAN ✅ → IMPLEMENT ◐ → VALIDATE (paused) → REVIEW → DOCUMENT CLOSE → AAR`.
-- **Plan/acceptance contract:** `docs/plans/2026-07-23-reference-corpus-api.md`.
+- Project: X4 Forge at `F:\DEV_ENV\X4_Forge`.
+- Active task: B74 schema-driven autocomplete and validation, extending B73 canonical reference values.
+- User decisions: expose corpus-truth `faction.id`; HTTP completion/hover wired into existing extension providers; standalone LSP deferred; deterministic XSD violations are errors; unknown properties/functions/reference IDs are suggestion-bearing warnings.
+- Plan: `docs/plans/2026-07-24-schema-intelligence.md` (`SPECIFIED`, Full lane).
 
-## 2. Baseline / ownership
+## Baseline / ownership
 
-- Pre-change `HEAD == origin/main == b20687887fe8facfc699c1d6bcfa03291b26d675`.
-- `BACKLOG.md` already contained user-owned uncommitted B71/B72 additions; preserve them. B73 was added above them without rewriting their text.
-- Pre-change `npm run typecheck` passed (exit 0, 19.6 s).
-- No Git mutation, commit, push, publish, game-directory write, mod write, or live-workspace swap was performed.
+- Observed revision: `5b960d10b648fbf2b9bb912da9f451f27940cc01` (`feat(reference): Introduce canonical corpus API and validation`).
+- Preserve all pre-existing Part 1 modified/untracked files recorded in the prior handoff and plan.
+- No Git mutation, publish, game/mod-directory write, standing-config write, or external side effect performed.
 
-## 3. Reconciliation facts
+## Reconciliation
 
-- B46 already specified full-corpus reference sets. Existing `getReferenceSets()` came from `getObjectIndex()`, which mixes game install + mod workspace + filesystem roots; it is not a canonical validation source.
-- Existing seams reused: `xsdValidate` semantic reference checks, `runProjectValidation`, scriptproperties parser/lint, object-index localization helpers, schema/config API, Directory Settings, public GET allowlist, selftest registry.
-- Authoritative 9.00 corpus has exactly 32 unique faction IDs: base 21 plus official DLC additions. Required IDs are present and `riptide` is absent.
-- User premise corrected: `libraries/scriptproperties.xml:1821` defines faction property `id` (`result="ID"`, `type="string"`). The API must expose it.
-- `category` and `isreal` are not faction XML attributes. B73 documents them as derived authoring fields: player; hidden→system; nodiplomacyselection/aggressive→hostile; otherwise political; `isreal=true` only for political.
+- Reuse `schemaRegistry`, `SchemaIndex`, `langService`, `expressionSuggest`, `scriptProperties`, Part 1 `referenceCorpus`, project validation, legacy language routes, and existing extension providers.
+- Existing gaps: no cursor-aware POST engine, no datatype return-flow, no canonical dynamic IDs in expression completion, no direct-child XSD errors, no exact XSD signature invalidation.
+- Canonical grammar source for B74 is `<x4ReferenceRoot>/libraries/*.xsd`; explicit `xsi:noNamespaceSchemaLocation` will outrank existing path/root fallback routing.
 
-## 4. Implementation currently on disk
+## Implementation complete
 
-- `src/lib/xsdParser.ts`: additive `x4ReferenceRoot`; precedence `X4_REFERENCE_ROOT` → config → requested default; resolved existence flag.
-- `src/lib/referenceCorpus.ts` (new): base + sorted `ego_dlc_*` faction/ware/map/macro/scriptproperty discovery, localization, first-definition provenance, source-stat signature cache, safe raw-file resolver, DLC add/remove/cache/path oracle.
-- `src/server/referenceRoutes.ts` (new): public read-only status/factions/wares/sectors/scriptproperties/file/search/selftest routes; startup loader; canonical validation-set service.
-- `src/lib/referenceLint.ts` (new): explicit Lua `GetWareData`/`GetFactionData`/`GetMacroData` literal warnings and suggestions; pure oracle.
-- `src/lib/x4ObjectIndex.ts`: localization parser/resolver exported for reuse.
-- `src/lib/scriptProperties.ts`: additive full property records (`name`, `result`, `type`) retained in each entry.
-- `src/lib/xsdValidate.ts`: unknown faction/macro/ware findings are advisory warnings and include cheap suggestions.
-- `src/server/projectValidation.ts`: canonical sets copied per project, project-owned macro/ware/faction definitions unioned, Lua literal findings layered/flattended.
-- `server.ts`: route registration/allowlist/startup load, canonical sets replacing mixed-root validation sets, config POST field, selftest registrations, agent schema documentation.
-- `src/components/DirectorySettingsModal.tsx`: unpacked-reference field and availability state.
-- `scripts/route-integration.mjs`: isolated synthetic reference root + public/raw/traversal checks.
-- `BACKLOG.md`: B73 SPECIFIED entry. `docs/plans/2026-07-23-reference-corpus-api.md`: Full-lane task record/contract.
+- `src/lib/xsdValidate.ts`: exported rich attribute/child/element metadata; particle/cardinality/default/pattern/docs/base metadata; `xs:any` openness; strict deterministic unknown element/attribute/required/enum/pattern/fixed/direct-child diagnostics; focused selftest.
+- `src/lib/schemaRegistry.ts`: optional signature-aware cache key and cheap `schemaFilesSignature()` seam.
+- `src/lib/scriptProperties.ts`: dynamic import result datatype, inherited full property records, enriched fixture.
+- `src/lib/expressionSuggest.ts`: datatype-aware expression state, canonical dynamic IDs/selectors, inherited properties, return types, conservative variable-name datatype inference.
+- `scripts/schema-intelligence-check.ts` + `test:schema-intelligence` package script.
+- `src/lib/referenceLanguage.ts`: zero-based CRLF-safe cursor context; schema selection; legal child/required-first attribute/enum/canonical-reference/expression completion; typed hover; root/XSD signature caching.
+- `src/server/referenceRoutes.ts`: authenticated `POST /api/reference/complete` and `/hover` with bounded payload and coordinate rejection.
+- `vscode-extension/src/extension.ts`: owned-sidecar authenticated completion/hover calls mapped to VS Code items/snippets/Markdown; attach-mode legacy fallback retained.
+- Project validation now prefers the canonical reference-root schemas, emits strict deterministic XSD errors, warning-only typed-property/reference findings, and deduplicates overlapping dedicated/routed schema diagnostics.
+- `referenceCorpus.ts` signature scans are throttled to one second so keystroke requests reuse the indexed corpus; explicit refresh remains immediate.
+- `scripts/reference-api-integration.mjs` covers the real corpus, 32 faction completions, `faction.id`, contextual cue children, hover, auth/400 negatives, diff payload, strict validation findings, and warm p95.
 
-## 5. Evidence already green
+## Current evidence
 
-- Post-implementation `npm run typecheck`: exit 0 (15.4 s).
-- `runReferenceCorpusSelftest`: 9/9 PASS — cache reuse, localization, macro index, faction.id, DLC add invalidation, DLC removal invalidation, safe file, traversal rejection.
-- `runReferenceLiteralLintSelftest`: 5/5 PASS — faction/ware suggestions, Lua literal warning, Lua comment exclusion, known macro clean.
-- Real configured corpus direct load: 32 factions, 1,902 wares, 170 unique sectors, 194 indexed source files.
-- Required provenance: fallensplit→ego_dlc_split; kaori→ego_dlc_timelines; holyorderfanatic→base; loanshark→ego_dlc_pirate; trinity→base; riptide absent.
-- Faction datatype first properties observed: id/string, name/string, rawname/string, knownname/string, shortname/string.
+- `npm run test:schema-intelligence`: 78/78 PASS.
+- `npm run test:reference-corpus`: 10/10 PASS against unpacked 9.00 (32 factions, 1,902 wares, 170 sectors, 6,505 macros).
+- `npm run test:reference-api`: 40/40 PASS; 37 schemas, MD/common resolved, warm p95 2.9 ms.
+- `npm run test:routes`: 16/16 PASS; `npm run test:oracles`: 100/100 PASS.
+- `npm run typecheck`: PASS.
+- `npx tsc -p vscode-extension/tsconfig.json --noEmit`: PASS.
+- `npm run lint`: PASS with 0 errors / 430 existing warnings; precommit and production build PASS.
+- `graphify update .`: 2,014 nodes / 4,734 edges / 122 communities.
+- `git diff --check`: PASS; only existing LF→CRLF notices.
+- Review fixes already landed: inherited named-enum restrictions; no 5,000-macro or 24-expression truncation; CRLF cursor offsets; duplicate schema finding collapse; MD/AI `ware.<id>` and faction/ware/macro literal lint wiring; sector-set correction.
 
-## 6. Degradation / AAR trigger
+## Remaining validation / close
 
-- Three PowerShell inline-command input failures clustered: embedded regex quote parsing twice and `$f` expansion inside a `tsx -e` XML fixture once. These are command-wrapper failures, not code/test failures.
-- Rule of Three fired. Strategic Pivot choice: no more inline `tsx -e` or regex-heavy PowerShell validation. Resume only with file-backed selftest endpoints, `npm run test:routes`, and ordinary npm scripts.
-- The third attempted validation did not run; it produced no Forge result and changed no files.
+- Code, headless validation, review, plan, ROADMAP, capability-map delta, and both AAR ledgers are complete.
+- Status is PARTIAL only for machine-gated full e2e and real rendered Antigravity completion/hover proof.
 
-## 7. Exact next unit after Ken says `Execute`
+## Remaining operator gates
 
-1. Run `npm run test:routes` (isolated server/fixture; no live workspace swap).
-2. Fix only reproduced failures, then `npm run typecheck`, `npm run lint`, `node scripts/oracle-sweep.mjs`, `npm run precommit:check`, `npm run build`.
-3. Use an isolated HTTP server/harness to call the real reference endpoints and POST a project-validation fixture; do not use inline `tsx -e`.
-4. MACHINE-STATE GATE still unanswered. Before `npm run test:e2e`, ask/confirm: Forge app state, X4 running, machine quiet. Verify e2e workspace-guard restoration afterward.
-5. Fresh-eyes diff review; `graphify update .`; update capability map, B46/B73 records, ROADMAP/BACKLOG, project/global AAR, and overwrite this handoff with the final close.
-6. Directory Settings is user-visible: without real rendered-host inspection, final UI proof is `PARTIAL` even if all static/API gates pass.
+- Machine-state question was asked. Passive check found X4 PID 57972 plus Antigravity running, so live-server/e2e/rendered-host validation is frozen until Ken confirms safe state.
+- Eyeball queue when safe:
+  1. Close X4; save/close any active Forge editor work; confirm the machine is quiet.
+  2. From this repo run `npm run test:e2e`; confirm the verdict parser reports PASS and the workspace guard restored the real workspace.
+  3. In Antigravity open an MD XML file inside the configured mod root, place the caret directly under `<cue>`, invoke completion, and confirm contextual `conditions`, `actions`, `cues`, and `delay` entries rather than a flat vocabulary.
+  4. In an expression attribute type `faction.player.`, confirm real faction properties including `id`, `knownname`, `primaryrace`, and `relationto`; hover `id` and confirm `faction.id: string` plus documentation.
+  5. Open Directory Settings and confirm the unpacked reference root is visible/valid (the remaining B73 rendered check).
+- Commit question: was the previous B73 close committed? If not, B73+B74 are now one uncommitted blast radius. Suggested B74 title: `feat: add schema-driven X4 completion hover and validation`.
 
-## 8. Existing unrelated eyeball queue
+## AAR state
 
-- B64-U2: scratch failing deploy → GuidedRail deploy step must render rose/red.
-- B56/B57: installed VSIX Problems/IntelliSense/go-to-def/MCP/two-way-adopt checks.
-- B64 U1/A1, B65 follow-ons, B69 CodeMirror UI checks remain separate from B73.
-
-## 9. Commit question
-
-- No commit was made. The current B73 work is an uncommitted degradation checkpoint.
-- Suggested close title if/when VERIFIED: `feat: expose canonical X4 reference corpus through the Forge API`.
-
+- Triggered: reconciliation changed architecture; command orchestration failures caused a strategic pivot; focused tests/typecheck caught and corrected multiple issues; fresh-eyes review forced completeness/latency/reference-lint fixes; `reviewctl` is unavailable.
+- Durable project/workflow AAR, capability-map delta, ROADMAP close, and plan close are written.

@@ -1,5 +1,10 @@
 {
   "_comment": "Plain-English release notes for the CHANGELOG (B60). ONE human step per release: add a version key with a few user-facing bullets — what a modder can now DO or what got better. Everything else (version list, dates, ordering, the shipped CHANGELOG.md) is generated automatically by `npm run changelog`. Versions with no entry here fall back to a cleaned-up commit subject.",
+  "0.0.32": [
+    "XML authoring now has schema-aware completion: child elements, attributes, enum values, and canonical faction, ware, sector, and macro ids come directly from X4's unpacked XSDs and reference data.",
+    "MD and AI-script expressions now complete and document real datatype properties and functions — including chained results such as faction.player.relationto — with hover signatures and return types.",
+    "Validation now reports deterministic XSD violations as errors and unknown script properties, functions, or reference ids as suggestion-bearing warnings while you edit."
+  ],
   "0.0.31": [
     "Fixed a bug where imported raw XML (cues loaded from an existing mod and kept verbatim) gained more and more leading whitespace on every save — indentation is now stable no matter how many times you save, and previously affected files self-heal on their next save.",
     "Housekeeping: the project's development history was unified onto the main branch — no user-facing change beyond this cleaner foundation for updates."

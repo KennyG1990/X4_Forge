@@ -6,14 +6,6 @@
 
 ## P0 — Active
 
-### B73 · Canonical unpacked-reference API + validation integration `SPECIFIED`
-Expose base + `ego_dlc_*` faction/ware/sector/scriptproperty data from a configurable unpacked corpus
-through path-contained read-only endpoints, backed by a source-signature cache. Replace the mixed
-game/mod reference sets used by project validation with canonical sets plus project-owned definitions;
-unknown faction/ware/macro literals warn with suggestions. Reconciled plan and acceptance contract:
-`docs/plans/2026-07-23-reference-corpus-api.md`. Corpus correction: 9.00 does expose `faction.id` in
-`scriptproperties.xml`; `category`/`isreal` are derived authoring metadata, not native faction attrs.
-
 ### B72 · Lua GetComponentData semantics lint — close the blind spot that let a 12k-error bug pass validation `spec'd`
 Motivated 2026-07-21: x4_ai_influence's aic_uix.lua fed the `"sector"` property (returns the sector NAME
 string — vanilla menu_map.lua:9302 pairs "sectorid"+"sector" as id+name) into ConvertStringToLuaID →
@@ -236,7 +228,7 @@ Now paths save independently; schema is validated + REPORTED (amber "saved, sche
 never a hard gate. Server + DirectorySettingsModal. Live-proven: workspace-only save persists;
 valid schema still loads (unpacked libraries → 402 events/807 actions). tsc/e2e 19/19.
 
-### B46 · Full-corpus schema/reference validation — Phases 1–2 ✅ VERIFIED 2026-07-16; Phase 3 `spec'd`
+### B46 · Full-corpus schema/reference validation — Phases 1–2 ✅ VERIFIED 2026-07-16; Phase 3 reference-set slice ◐ PARTIAL 2026-07-23
 **Phase 1 (multi-schema loader) SHIPPED:** `src/lib/schemaRegistry.ts` — discovers EVERY *.xsd
 under the configured schema folder + game folder (bounded walk mirroring B51, base-over-DLC),
 resolves transitive include chains, builds lazy per-domain indexes via the existing
@@ -257,9 +249,13 @@ vanilla findings) → diff-wrapper-only; invented `<language id>` t-check remove
 omit it). **P2 residual (`spec'd`, small):** palette `loadSchemaLibrary` (xsdParser) is still
 include-blind — 382 events instead of 402 on unpacked-ROOT configs (pointing at `libraries/`
 works). Same `expandIncludeChain` treatment; verify palette count 402 after.
-**Phase 3 (`spec'd`):** full-corpus reference sets (9,884 files, SQLite-cached);
-`reportUnknownElements` for routed domains rides on it. Plan (incl. P2 reconciled design +
-corpus corrections): `docs/plans/2026-07-15-full-corpus-validation.md`.
+**Phase 3 reference-set slice ◐ PARTIAL 2026-07-23:** B73 shipped a configurable, cached,
+read-only base+official-DLC corpus for factions, wares, sectors/macros, and scriptproperties;
+public APIs expose it and project validation consumes canonical sets plus project-owned definitions.
+This closes the high-value ID-reference slice. The original broader 9,884-file SQLite index and
+example-retrieval/prompt-delivery scope remain `spec'd`. B73 close: ROADMAP +
+`docs/plans/2026-07-23-reference-corpus-api.md`. Original plan:
+`docs/plans/2026-07-15-full-corpus-validation.md`.
 
 ### B55 · Validation-driven agent loop — Phase 1 ◐ PARTIAL 2026-07-16 → ROADMAP; Phases 2–3 `spec'd`
 **Phase 1 SHIPPED (composite-validator repair loop):** `src/lib/agentLoop.ts` (oracle 12/12) +

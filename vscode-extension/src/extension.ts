@@ -99,11 +99,11 @@ async function attachSidecarDebugger(debugPort: number, appRoot: string, brk: bo
   }
 }
 
-async function fetchWithTimeout(url: string, ms: number): Promise<Response | null> {
+async function fetchWithTimeout(url: string, ms: number, init: RequestInit = {}): Promise<Response | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   try {
-    return await fetch(url, { signal: ctrl.signal });
+    return await fetch(url, { ...init, signal: ctrl.signal });
   } catch {
     return null;
   } finally {
@@ -808,6 +808,47 @@ function relModPath(root: string, fsPath: string): string {
   return path.relative(root, fsPath).replace(/\\/g, "/");
 }
 
+interface ReferenceCompletionPayload {
+  label: string;
+  kind: "Element" | "Attribute" | "Enum" | "Reference" | "Property" | "Function";
+  detail?: string;
+  insertText: string;
+  documentation?: string;
+  sortText?: string;
+}
+
+interface ReferenceHoverPayload {
+  kind: "element" | "attribute" | "property" | "function" | "reference";
+  label: string;
+  signature: string;
+  documentation?: string;
+  detail?: string;
+}
+
+async function referenceLanguagePost<T>(route: "complete" | "hover", body: Record<string, unknown>): Promise<T | null> {
+  if (!backend?.token) return null; // attach mode has no credential; legacy public GET remains the fallback
+  try {
+    const response = await fetchWithTimeout(`${backend.baseUrl}/api/reference/${route}`, 3000, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response?.ok) return null;
+    return await response.json() as T;
+  } catch { return null; }
+}
+
+function completionKind(kind: ReferenceCompletionPayload["kind"]): vscode.CompletionItemKind {
+  switch (kind) {
+    case "Element": return vscode.CompletionItemKind.Class;
+    case "Attribute": return vscode.CompletionItemKind.Property;
+    case "Enum": return vscode.CompletionItemKind.EnumMember;
+    case "Reference": return vscode.CompletionItemKind.Reference;
+    case "Function": return vscode.CompletionItemKind.Method;
+    default: return vscode.CompletionItemKind.Field;
+  }
+}
+
 function registerLangProviders(context: vscode.ExtensionContext): void {
   const selector: vscode.DocumentSelector = [{ scheme: "file", pattern: "**/*.xml" }];
 
@@ -820,6 +861,24 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
         const ctx = xmlCursorContext(text, doc.offsetAt(pos));
         const file = relModPath(root, doc.uri.fsPath);
         const rootHint = ctx.rootTag || "";
+
+        const modern = await referenceLanguagePost<ReferenceCompletionPayload[]>("complete", {
+          path: file,
+          content: text,
+          line: pos.line,
+          column: pos.character,
+        });
+        if (modern !== null) {
+          if (!modern.length) return undefined;
+          return modern.map((payload, index) => {
+            const item = new vscode.CompletionItem(payload.label, completionKind(payload.kind));
+            item.detail = payload.detail;
+            item.insertText = new vscode.SnippetString(payload.insertText);
+            item.sortText = payload.sortText || String(index).padStart(5, "0");
+            if (payload.documentation) item.documentation = new vscode.MarkdownString(payload.documentation);
+            return item;
+          });
+        }
 
         if (ctx.elementStart && ctx.parentTag) {
           const data = await langGet<{ items: Array<{ tag: string; curated: boolean; requiredAttrs: string[]; summary?: string }> }>(
@@ -866,6 +925,20 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
       async provideHover(doc, pos) {
         const root = modRootFor(doc.uri.fsPath);
         if (!root) return undefined;
+        const modern = await referenceLanguagePost<ReferenceHoverPayload>("hover", {
+          path: relModPath(root, doc.uri.fsPath),
+          content: doc.getText(),
+          line: pos.line,
+          column: pos.character,
+        });
+        if (modern) {
+          const modernRange = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
+          const markdown = new vscode.MarkdownString();
+          markdown.appendCodeblock(modern.signature, "x4");
+          if (modern.documentation) markdown.appendMarkdown(`\n${modern.documentation}\n`);
+          if (modern.detail) markdown.appendMarkdown(`\n_${modern.detail}_`);
+          return new vscode.Hover(markdown, modernRange);
+        }
         const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
         if (!range) return undefined;
         const word = doc.getText(range);

@@ -55,7 +55,8 @@ import { runAiScriptRoundtripSelftest, parseAiScriptXml } from "./src/lib/aiScri
 import { runLuaMdBindingSelftest } from "./src/lib/luaMdBinding";
 import { runPositionPickerSelftest } from "./src/lib/positionPicker";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, extractEntries as catDatExtractEntries, findCatDatArchives, parseCat, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
-import { buildSchemaIndex, validateXmlAgainstSchema, type SchemaIndex } from "./src/lib/xsdValidate";
+import { buildSchemaIndex, validateXmlAgainstSchema, runXsdValidateSelftest, type SchemaIndex } from "./src/lib/xsdValidate";
+import { runReferenceLanguageSelftest } from "./src/lib/referenceLanguage";
 import { parseXMLToWorkspace, extractTopLevelCueXml } from "./src/lib/xmlParser";
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
@@ -127,7 +128,7 @@ import { registerSelftests } from "./src/server/selftestRegistry";
 import { createAgentKeyStore, scopeAllows, runAgentKeysSelftest, AGENT_KEY_TTLS, AGENT_KEY_PREFIX, type AgentKeyScope } from "./src/lib/agentKeys";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
-import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest } from "./src/lib/schemaRegistry";
+import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest, schemaFilesSignature } from "./src/lib/schemaRegistry";
 import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
 import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
 import { buildAgentsMd, buildNotesMd, runAgentBriefSelftest } from "./src/lib/agentBrief";
@@ -1460,9 +1461,9 @@ function rebuildObjectIndexNow(resolved: ResolvedXsdConfig, roots: string[], cac
 // via `new Set([...])`; xsdValidate only `.has()`-reads — verified 2026-07-18), so sharing the
 // cached sets is safe.
 /** Canonical reference sets from the configured unpacked root (never mod/workspace data). */
-function getReferenceSets(): { macros: Set<string>; wares: Set<string>; factions: Set<string> } {
-  const { macros, wares, factions } = getCanonicalReferenceSets();
-  return { macros, wares, factions };
+function getReferenceSets(): { macros: Set<string>; wares: Set<string>; factions: Set<string>; sectors: Set<string> } {
+  const { macros, wares, factions, sectors } = getCanonicalReferenceSets();
+  return { macros, wares, factions, sectors };
 }
 
 // B61: the learned jobs vocabulary (classes/orders/sizes) is expensive-ish to build (parse the ~15k-line
@@ -1576,7 +1577,7 @@ function runSchemaValidation(files: Record<string, string>, modId: string): Serv
   const validateFile = (filePath: string, domain: string, reportUnknownElements: boolean, useIndex: SchemaIndex) => {
     const xml = files[filePath];
     if (!xml) return;
-    const diags = validateXmlAgainstSchema(xml, useIndex, { filePath, domain, reportUnknownElements, references });
+    const diags = validateXmlAgainstSchema(xml, useIndex, { filePath, domain, reportUnknownElements, references, strictStructure: true });
     for (const d of diags) {
       out.push({
         severity: d.severity,
@@ -1609,11 +1610,17 @@ function runSchemaValidation(files: Record<string, string>, modId: string): Serv
   // documents). Degrades to nothing on schema-less instances.
   try {
     const resolved = resolveXsdConfig();
-    const registry = (resolved.schemaDir || resolved.x4GamePath)
-      ? discoverSchemaRegistry(resolved.schemaDir, resolved.x4GamePath || undefined)
+    const referenceLibraries = path.join(resolved.x4ReferenceRoot, 'libraries');
+    const useReferenceSchemas = fs.existsSync(referenceLibraries);
+    const registry = (useReferenceSchemas || resolved.schemaDir || resolved.x4GamePath)
+      ? discoverSchemaRegistry(
+          useReferenceSchemas ? referenceLibraries : resolved.schemaDir,
+          useReferenceSchemas ? undefined : resolved.x4GamePath || undefined,
+          useReferenceSchemas ? { signature: schemaFilesSignature(referenceLibraries) } : undefined,
+        )
       : null;
     const routedInputs = Object.entries(files).map(([p, content]) => ({ path: p, content }));
-    for (const r of validateRoutedFiles(routedInputs, registry, { references })) {
+    for (const r of validateRoutedFiles(routedInputs, registry, { references, strictStructure: useReferenceSchemas })) {
       for (const d of r.findings) {
         out.push({
           severity: d.severity,
@@ -2485,14 +2492,20 @@ Analyze this trace and return the structured issues diagnostics and suggestions.
  * Exposes core constants, valid selection macro values, structural boundaries, and base templates.
  * Extremely helpful for AI agents to understand exactly what values are valid before making updates.
  */
-// B46 Phase 1 (2026-07-16): multi-schema registry — discover EVERY *.xsd under the configured
-// schema folder (and game folder), with per-domain include chains; ?domain=<name> lazily builds
-// that one domain's element index. Read-only; nothing routes validation through this yet (phase 2).
+// B46/B74 multi-schema registry — prefer the canonical unpacked reference-root libraries,
+// falling back to the legacy schema/game paths, with per-domain include chains;
+// ?domain=<name> lazily builds that one domain's element index.
 app.get("/api/agent/schema-registry", (req, res) => {
   try {
     const resolved = resolveXsdConfig();
-    const schemaDir = resolved.schemaDir || "";
-    const registry = discoverSchemaRegistry(schemaDir, resolved.x4GamePath || undefined, { refresh: req.query.refresh === "1" });
+    const referenceLibraries = path.join(resolved.x4ReferenceRoot, "libraries");
+    const useReferenceSchemas = fs.existsSync(referenceLibraries);
+    const schemaDir = useReferenceSchemas ? referenceLibraries : resolved.schemaDir || "";
+    const registry = discoverSchemaRegistry(
+      schemaDir,
+      useReferenceSchemas ? undefined : resolved.x4GamePath || undefined,
+      { refresh: req.query.refresh === "1", ...(useReferenceSchemas ? { signature: schemaFilesSignature(referenceLibraries) } : {}) },
+    );
     const wanted = typeof req.query.domain === "string" ? req.query.domain.toLowerCase() : "";
     const body: Record<string, unknown> = {
       roots: registry.roots,
@@ -5732,6 +5745,8 @@ const SELFTESTS: Record<string, () => unknown> = {
   "schema-discovery-selftest": runSchemaDiscoverySelftest,
   "schema-registry-selftest": runSchemaRegistrySelftest,
   "schema-routing-selftest": runSchemaRoutingSelftest,
+  "xsd-model-selftest": runXsdValidateSelftest,
+  "reference-language-selftest": runReferenceLanguageSelftest,
   "agent-loop-selftest": runAgentLoopSelftest,
   "lang-service-selftest": runLangServiceSelftest,
   "agent-brief-selftest": runAgentBriefSelftest,

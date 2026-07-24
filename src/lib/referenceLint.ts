@@ -4,6 +4,7 @@ export interface ReferenceLiteralSets {
   factions?: Set<string>;
   wares?: Set<string>;
   macros?: Set<string>;
+  sectors?: Set<string>;
 }
 
 export interface ReferenceLiteralFinding {
@@ -60,7 +61,7 @@ export function lintReferenceLiterals(
   references: ReferenceLiteralSets,
   opts: { filePath?: string; kind?: string } = {},
 ): ReferenceLiteralFinding[] {
-  if (!content || (!references.factions?.size && !references.wares?.size && !references.macros?.size)) return [];
+  if (!content || (!references.factions?.size && !references.wares?.size && !references.macros?.size && !references.sectors?.size)) return [];
   const isLua = opts.kind === 'lua' || /\.lua$/i.test(opts.filePath || '');
   const masked = maskComments(content, isLua);
   const findings: ReferenceLiteralFinding[] = [];
@@ -84,6 +85,8 @@ export function lintReferenceLiterals(
 
   // Unambiguous MD/AIScript expression form, also used in Lua strings sent to MD.
   for (const m of masked.matchAll(/\bfaction\.([A-Za-z_][\w-]*)\b/g)) add('faction', m[1], m.index || 0, references.factions);
+  for (const m of masked.matchAll(/\bware\.([A-Za-z_][\w-]*)\b/g)) add('ware', m[1], m.index || 0, references.wares);
+  for (const m of masked.matchAll(/\bmacro\.([A-Za-z_][\w-]*)\b/g)) add('macro', m[1], m.index || 0, references.macros);
 
   if (isLua) {
     // Corpus-proven literal APIs. Variable first arguments are intentionally skipped.
@@ -95,7 +98,7 @@ export function lintReferenceLiterals(
     // schema-less installs and for diff payloads whose domain schema is wrapper-only.
     for (const m of masked.matchAll(/\bware\s*=\s*(["'])([A-Za-z_][\w-]*)\1/g)) add('ware', m[2], m.index || 0, references.wares);
     for (const m of masked.matchAll(/\bmacro\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/g)) add('macro', m[2], m.index || 0, references.macros);
-    for (const m of masked.matchAll(/\bsector\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/g)) add('sector', m[2], m.index || 0, references.macros);
+    for (const m of masked.matchAll(/\bsector\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/g)) add('sector', m[2], m.index || 0, references.sectors || references.macros);
   }
   return findings;
 }
@@ -105,13 +108,16 @@ export function runReferenceLiteralLintSelftest() {
     factions: new Set(['argon', 'faction.argon', 'fallensplit', 'faction.fallensplit']),
     wares: new Set(['energycells', 'water']),
     macros: new Set(['ship_arg_l_destroyer_01_a_macro', 'cluster_01_sector001_macro']),
+    sectors: new Set(['cluster_01_sector001_macro']),
   };
-  const xml = '<do_if value="faction.argonn.name"/><ware ware="energcells"/><create_ship macro="ship_arg_l_destroyer_01_a_macro"/>';
+  const xml = '<do_if value="faction.argonn.name"/><set_value exact="ware.energcells"/><ware ware="energcells"/><create_ship macro="ship_arg_l_destroyer_01_a_macro"/><find_sector sector="cluster_01_sector002_macro"/>';
   const lua = '-- GetWareData("boguscomment", "name")\nlocal n=GetWareData("waterr", "name")';
   const findings = [...lintReferenceLiterals(xml, refs, { filePath: 'md/test.xml', kind: 'md' }), ...lintReferenceLiterals(lua, refs, { filePath: 'ui/test.lua', kind: 'lua' })];
   const checks = [
     { name: 'bad faction warned with suggestion', pass: findings.some(f => f.kind === 'faction' && f.id === 'argonn' && f.suggestions.includes('argon')) },
     { name: 'bad XML ware warned', pass: findings.some(f => f.kind === 'ware' && f.id === 'energcells') },
+    { name: 'bad expression ware warned', pass: findings.some(f => f.kind === 'ware' && f.id === 'energcells' && f.suggestions.includes('energycells')) },
+    { name: 'bad sector uses sector catalog', pass: findings.some(f => f.kind === 'sector' && f.id === 'cluster_01_sector002_macro') },
     { name: 'bad Lua literal ware warned', pass: findings.some(f => f.kind === 'ware' && f.id === 'waterr') },
     { name: 'Lua comment ignored', pass: !findings.some(f => f.id === 'boguscomment') },
     { name: 'known macro clean', pass: !findings.some(f => f.kind === 'macro') },
@@ -119,4 +125,3 @@ export function runReferenceLiteralLintSelftest() {
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
 }
-

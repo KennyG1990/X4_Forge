@@ -54,6 +54,7 @@ export interface ScriptPropertyReference {
   name: string;
   parent?: string;
   dynamic: boolean;
+  dynamicResultType?: string;
   properties: ScriptPropertyRecord[];
   /** Function-like selector properties; X4 stores these as `<property>` records too. */
   functions: ScriptPropertyRecord[];
@@ -79,7 +80,8 @@ export interface ReferenceCorpus {
 type ReferenceFileKind = 'factions' | 'wares' | 'scriptproperties' | 'localization' | 'map' | 'macro-index';
 interface ReferenceFile { absolute: string; relative: string; source: ReferenceSource; kind: ReferenceFileKind }
 
-let cache: { root: string; signature: string; corpus: ReferenceCorpus } | null = null;
+let cache: { root: string; signature: string; corpus: ReferenceCorpus; checkedAt: number } | null = null;
+const REFERENCE_SIGNATURE_CHECK_MS = 1000;
 
 function isDirectory(p: string): boolean {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
@@ -101,7 +103,10 @@ function attrs(el: any, name: string): string {
 
 function parseXml(xml: string): any | null {
   try {
-    const doc = new DOMParser({ onError: () => { /* tolerate recoverable corpus noise */ } }).parseFromString(xml, 'text/xml');
+    // Several canonical index files begin with a UTF-8 BOM. xmldom otherwise
+    // treats the following XML declaration as position 1 and rejects the file.
+    const normalized = xml.replace(/^\uFEFF/, '');
+    const doc = new DOMParser({ onError: () => { /* tolerate recoverable corpus noise */ } }).parseFromString(normalized, 'text/xml');
     return doc?.documentElement ? doc : null;
   } catch { return null; }
 }
@@ -250,20 +255,62 @@ function parseSectorsAndMacros(files: ReferenceFile[], loc: LocalizationMap): { 
 
 function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReference[] {
   const found = new Map<string, ScriptPropertyReference>();
+  const merge = (
+    kind: ScriptPropertyReference['kind'],
+    nameInput: string,
+    propertiesInput: ScriptPropertyRecord[],
+    parent?: string,
+    dynamic = false,
+    dynamicResultType?: string,
+  ) => {
+    const name = nameInput.trim().toLowerCase();
+    if (!name) return;
+    const key = `${kind}:${name}`;
+    const existing = found.get(key);
+    const propertyMap = new Map((existing?.properties || []).map(property => [property.name, property]));
+    for (const property of propertiesInput) propertyMap.set(property.name, { ...property });
+    const properties = [...propertyMap.values()];
+    found.set(key, existing ? {
+      ...existing,
+      parent: parent || existing.parent,
+      dynamic: existing.dynamic || dynamic,
+      dynamicResultType: dynamicResultType || existing.dynamicResultType,
+      properties,
+      functions: properties.filter(property => /[.<{]/.test(property.name)),
+    } : {
+      kind,
+      name,
+      parent,
+      dynamic,
+      dynamicResultType,
+      properties,
+      functions: properties.filter(property => /[.<{]/.test(property.name)),
+    });
+  };
   for (const file of files.filter(f => f.kind === 'scriptproperties')) {
-    const model = parseScriptProperties(fs.readFileSync(file.absolute, 'utf8'));
+    const xml = fs.readFileSync(file.absolute, 'utf8');
+    const model = parseScriptProperties(xml);
     for (const entry of [...model.keywords.values(), ...model.datatypes.values()]) {
-      const key = `${entry.kind}:${entry.name}`;
-      if (found.has(key)) continue;
-      const properties = entry.properties.map(p => ({ ...p }));
-      found.set(key, {
-        kind: entry.kind,
-        name: entry.name,
-        parent: entry.parent,
-        dynamic: entry.dynamic,
-        properties,
-        functions: properties.filter(p => /[.<{]/.test(p.name)),
-      });
+      merge(entry.kind, entry.name, entry.properties, entry.parent, entry.dynamic, entry.dynamicResultType);
+    }
+    // DLC diffs commonly add properties directly to an existing datatype/keyword,
+    // with the owner present only in the selector rather than as a payload element.
+    const document = parseXml(xml);
+    if (!document) continue;
+    for (const patchTag of ['add', 'replace']) {
+      const patches = document.getElementsByTagName(patchTag);
+      for (let i = 0; i < patches.length; i++) {
+        const selector = attrs(patches[i], 'sel');
+        const owner = selector.match(/(?:^|\/)(datatype|keyword)\s*\[\s*@name\s*=\s*(['"])([^'"]+)\2\s*\]/i);
+        if (!owner) continue;
+        const propertyNodes = patches[i].getElementsByTagName('property');
+        const properties: ScriptPropertyRecord[] = [];
+        for (let j = 0; j < propertyNodes.length; j++) {
+          const name = attrs(propertyNodes[j], 'name').trim();
+          if (name) properties.push({ name, result: attrs(propertyNodes[j], 'result'), type: attrs(propertyNodes[j], 'type') });
+        }
+        if (properties.length) merge(owner[1].toLowerCase() as ScriptPropertyReference['kind'], owner[3], properties);
+      }
     }
   }
   return [...found.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
@@ -302,11 +349,18 @@ export function clearReferenceCorpusCache(): void { cache = null; }
 export function getReferenceCorpus(rootInput: string, force = false): ReferenceCorpus {
   const root = path.resolve(String(rootInput || '').trim());
   if (!isDirectory(root)) throw new Error(`X4 unpacked reference root does not exist or is not a directory: ${root}`);
+  const now = Date.now();
+  if (!force && cache && cache.root.toLowerCase() === root.toLowerCase() && now - cache.checkedAt < REFERENCE_SIGNATURE_CHECK_MS) {
+    return cache.corpus;
+  }
   const files = discoverReferenceFiles(root);
   const signature = signatureFor(files);
-  if (!force && cache && cache.root.toLowerCase() === root.toLowerCase() && cache.signature === signature) return cache.corpus;
+  if (!force && cache && cache.root.toLowerCase() === root.toLowerCase() && cache.signature === signature) {
+    cache.checkedAt = now;
+    return cache.corpus;
+  }
   const corpus = buildCorpus(root, files, signature);
-  cache = { root, signature, corpus };
+  cache = { root, signature, corpus, checkedAt: now };
   return corpus;
 }
 
@@ -344,7 +398,7 @@ export function runReferenceCorpusSelftest(): {
     write('libraries/factions.xml', '<factions><faction id="argon" name="{1,1}" tags="claimspace economic"/><faction id="ownerless" tags="hidden"/></factions>');
     write('libraries/wares.xml', '<wares><ware id="energycells" name="{1,2}" group="energy" tags="economy container"/></wares>');
     write('libraries/scriptproperties.xml', '<scriptproperties><datatype name="faction" type="dbdata"><property name="id" result="ID" type="string"/><property name="name" result="Name" type="string"/></datatype></scriptproperties>');
-    write('index/macros.xml', '<index><entry name="ship_test_macro" value="assets/ship_test"/></index>');
+    write('index/macros.xml', '\uFEFF<?xml version="1.0" encoding="utf-8"?><index><entry name="ship_test_macro" value="assets/ship_test"/></index>');
     write('maps/test/sectors.xml', '<macros><macro name="Cluster_Test_Sector001_macro" class="sector"><properties><identification name="{1,3}"/></properties></macro></macros>');
     clearReferenceCorpusCache();
     const first = getReferenceCorpus(tmp);
@@ -355,14 +409,18 @@ export function runReferenceCorpusSelftest(): {
     ok('macro catalog indexed', first.references.macros.has('ship_test_macro'));
     ok('faction datatype exposes id', first.scriptProperties.find(p => p.kind === 'datatype' && p.name === 'faction')?.properties.some(p => p.name === 'id' && p.type === 'string') === true);
     write('extensions/ego_dlc_test/libraries/factions.xml', '<diff><add sel="/factions"><faction id="dlcfaction" name="DLC" tags="economic"/></add></diff>');
-    const added = getReferenceCorpus(tmp);
-    ok('DLC add invalidates cache', added !== second && added.factions.some(f => f.id === 'dlcfaction' && f.source === 'ego_dlc_test'));
+    write('extensions/ego_dlc_test/libraries/scriptproperties.xml', '<diff><add sel="/scriptproperties/datatype[@name=\'faction\']"><property name="dlcproperty" result="DLC value" type="string"/></add></diff>');
+    const added = getReferenceCorpus(tmp, true);
+    ok('DLC add appears after cache refresh', added !== second && added.factions.some(f => f.id === 'dlcfaction' && f.source === 'ego_dlc_test'));
+    ok('DLC scriptproperty overlays base datatype', added.scriptProperties.find(p => p.kind === 'datatype' && p.name === 'faction')?.properties.some(p => p.name === 'dlcproperty' && p.type === 'string') === true);
     fs.rmSync(path.join(tmp, 'extensions', 'ego_dlc_test'), { recursive: true, force: true });
-    const removed = getReferenceCorpus(tmp);
-    ok('DLC removal invalidates cache', removed !== added && !removed.factions.some(f => f.id === 'dlcfaction'));
+    const removed = getReferenceCorpus(tmp, true);
+    ok('DLC removal appears after cache refresh', removed !== added && !removed.factions.some(f => f.id === 'dlcfaction'));
     ok('safe file resolves', resolveReferenceFile(tmp, 'libraries/factions.xml').endsWith(path.join('libraries', 'factions.xml')));
     let traversal = false; try { resolveReferenceFile(tmp, '../outside.xml'); } catch (e) { traversal = /traversal/i.test(String(e)); }
     ok('traversal rejected', traversal);
+    let missingRoot = false; try { getReferenceCorpus(path.join(tmp, 'missing-root'), true); } catch (e) { missingRoot = /does not exist/i.test(String(e)); }
+    ok('missing reference root fails explicitly', missingRoot);
   } finally {
     clearReferenceCorpusCache();
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* temp cleanup only */ }
@@ -370,4 +428,3 @@ export function runReferenceCorpusSelftest(): {
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
 }
-
