@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
@@ -43,6 +44,7 @@ import {
   type X4UiLayoutOperation,
   type X4UiLayoutProgram,
   type X4UiLayoutProgramResult,
+  type X4UiLayoutPreviewSampleBinding,
   type X4UiLayoutRowNode,
   type X4UiLayoutSourcePin,
   type X4UiLayoutTableNode,
@@ -57,6 +59,8 @@ import {
 } from './x4UiLayoutProgram';
 import {
   projectX4UiEditorSession,
+  updateX4UiEditorLoopState,
+  updateX4UiEditorPathState,
 } from './x4UiEditorSession';
 import { resolveXsdConfig } from './xsdParser';
 import {
@@ -1249,6 +1253,7 @@ const cloneKernelState = (state: HelperTableState): HelperTableState => JSON.par
 
 const jsonEqual = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 const cloneJsonValue = <T>(value: T): T => value === undefined ? value : JSON.parse(JSON.stringify(value)) as T;
+const sha256Json = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex').toUpperCase();
 
 const sceneLineSourceCodePointRangesMatchLayout = (scene: X4UiScene): boolean => {
   let lineCount = 0;
@@ -7888,7 +7893,7 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
   const configuredSessionReceiptConstants = Object.freeze([
     { label: 'MENU', sourceSha256: configuredSourceHashes.MENU, samples: 22, consumed: 10, notConsumed: 12, operations: 66, appliedOperations: 27, cells: 88, gaps: 99 },
     { label: 'HUB', sourceSha256: configuredSourceHashes.HUB, samples: 9, consumed: 7, notConsumed: 2, operations: 18, appliedOperations: 11, cells: 4, gaps: 12 },
-    { label: 'COMM', sourceSha256: configuredSourceHashes.COMM, samples: 4, consumed: 4, notConsumed: 0, operations: 14, appliedOperations: 12, cells: 3, gaps: 6 },
+    { label: 'COMM', sourceSha256: configuredSourceHashes.COMM, samples: 2, consumed: 2, notConsumed: 0, operations: 14, appliedOperations: 12, cells: 3, gaps: 6 },
   ] as const);
   assert(configuredSessionReceiptConstants.length === 3 && configuredSessionReceiptConstants.every(entry => /^[A-F0-9]{64}$/.test(entry.sourceSha256)), 'B119 configured source receipt constants must retain all three source hashes');
   console.log(`B119 configured-session receipt constants only: ${JSON.stringify(configuredSessionReceiptConstants)}`);
@@ -8272,7 +8277,7 @@ test('B119 direct Helper scale aliases cross the Scene structure boundary', () =
   assert(sceneResult.scene.gameTruth === 'Not verified in game' && sceneResult.verification.gameVerified === false, 'direct Helper scale fixture must remain Not verified in game');
 });
 
-test('B119 exact source formula crosses the existing Scene consumer with a finite frame rect', () => {
+test('B119 exact source formulas retain accepted unsupplied COMM structure at the Scene boundary', () => {
   const projected = rawProjectionFor([
     'local menu = { name = "B119ExactFormula", layer = 1 }',
     'local width = Helper.scaleX(530)',
@@ -8314,6 +8319,153 @@ test('B119 exact source formula crosses the existing Scene consumer with a finit
     && frameRect.width === 530 && frameRect.height === 436,
   `exact formula Scene frame rect must be finite and exact: ${JSON.stringify({ status: sceneResult.status, frameRect })}`);
   assert(sceneResult.scene.gameTruth === 'Not verified in game' && sceneResult.verification.gameVerified === false, 'exact formula Scene fixture must remain Not verified in game');
+
+  const commSourceText = [
+    'local menu = { name = "B119PortableCommUnsupplied", layer = 4 }',
+    'function menu.display(dynamicTitle)',
+    '  local vw = Helper.viewWidth or 1920',
+    '  local vh = Helper.viewHeight or 1080',
+    '  local mx = math.floor(vw * (36 / 2560))',
+    '  local my = math.floor(vh * (36 / 1440))',
+    '  local frame = Helper.createFrameHandle(menu, { width = vw, height = vh })',
+    '  local table = frame:addTable(3, { tabOrder = menu._tab, x = mx, y = my, width = vw - mx * 2, reserveScrollBar = false, backgroundID = "solid", scaling = true })',
+    '  table:setColWidthPercent(1, 70)',
+    '  table:setColWidthPercent(2, 15)',
+    '  table:setColWidthPercent(3, 15)',
+    '  local row = table:addRow(true, {})',
+    '  row[1]:createText("COMM CHANNEL    " .. tostring(dynamicTitle or "unknown"), { fontsize = 13 })',
+    '  row[2]:createButton({ active = true }):setText("DOSSIER", { halign = "center" })',
+    '  row[3]:createButton({ active = true }):setText("END", { halign = "center" })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const commModel = buildX4UiCallModel({
+    rel: 'selftest/b119-comm-unsupplied-source-formulas.lua',
+    text: commSourceText,
+    sourcePath: 'selftest/b119-comm-unsupplied-source-formulas.lua',
+  });
+  const commTargetCatalog = createX4UiLayoutTargetCatalog(commModel);
+  const commTarget = commTargetCatalog.targets.find(candidate => candidate.name === 'menu.display');
+  const commBaseProfile = rawProducerProjection.program?.profile;
+  assert(commTarget !== undefined && commBaseProfile !== undefined, 'portable unsupplied COMM formula fixture must expose menu.display and the producer profile');
+  const commProducerProfile = {
+    ...commBaseProfile,
+    id: 'b119-comm-unsupplied-source-formulas-profile',
+    source: commTargetCatalog.sourceIdentity,
+    frame: { width: 1920, height: 1080 },
+    helper: {
+      ...commBaseProfile.helper,
+      constants: {
+        ...commBaseProfile.helper.constants,
+        viewWidth: { value: 1920, source: pin(707) },
+        viewHeight: { value: 1080, source: pin(708) },
+      },
+    },
+    defaults: {
+      standardButtonHeight: commBaseProfile.defaults.standardButtonHeight,
+    },
+  } as Parameters<typeof projectX4UiLayoutProgram>[2];
+  const commProjected = projectX4UiLayoutProgram(commModel, commTarget, commProducerProfile);
+  assert('program' in commProjected
+    && commProjected.program !== undefined
+    && 'evidenceAuthority' in commProjected
+    && commProjected.evidenceAuthority !== undefined,
+  'portable unsupplied COMM formula fixture must issue a producer authority pair');
+  const commProgram = commProjected.program;
+  const commResult = commProjected as X4UiLayoutProgramResult;
+  const commSceneProfile: X4UiSceneProfile = Object.freeze({
+    id: 'b119-comm-unsupplied-source-formulas-scene-profile',
+    provenance: 'B119 portable unsupplied COMM source-formula fixture',
+    source: commProgram.profile.source,
+    helper: { sourcePath: HELPER_PATH, sha256: X4_LAYOUT_PROVENANCE.helperSha256 },
+    widget: { sourcePath: WIDGET_PATH, sha256: X4_LAYOUT_PROVENANCE.widgetSha256 },
+    fonts: sceneProfile.fonts,
+    drawable: { width: commProgram.profile.frame.width, height: commProgram.profile.frame.height },
+    textPolicy: sceneProfile.textPolicy,
+  });
+  const commAuthority = producerAuthority(commResult);
+  const commPair = validateX4UiLayoutEvidencePair(commProgram, commAuthority);
+  const commTable = commProgram.tables[0];
+  const commRow = commProgram.rows[0];
+  const commCells = commProgram.cells;
+  const commSampleExpressions = new Set(commProgram.sampleCatalog.entries.map(entry => entry.expression));
+  const commTitleExpression = '"COMM CHANNEL    " .. tostring(dynamicTitle or "unknown")';
+  assert(commPair.valid, `portable unsupplied COMM producer/evidence pair must validate: ${JSON.stringify(commPair)}`);
+  assert(commProgram.sampleCatalog.entries.length === 2
+    && commSampleExpressions.has('menu._tab')
+    && commSampleExpressions.has(commTitleExpression)
+    && !['vw', 'vh', 'mx', 'my', 'vw - mx * 2'].some(expression => commSampleExpressions.has(expression)),
+  `portable COMM catalog must retain only the two dynamic inputs: ${JSON.stringify(commProgram.sampleCatalog.entries)}`);
+  assert(commProgram.previewSampleBindings.length === 0, 'portable COMM must begin with no supplied preview samples');
+  assert(commProgram.frames.length === 1
+    && commProgram.tables.length === 1
+    && commProgram.rows.length === 1
+    && commCells.length === 3
+    && commTable?.rowIds.length === 1
+    && commTable.rowIds[0] === commRow?.id
+    && commRow.cellIds.length === 3
+    && commRow.cellIds.every((id, index) => id === commCells[index]?.id),
+  `portable unsupplied COMM must retain the exact accepted structural ownership: ${JSON.stringify({ frames: commProgram.frames, tables: commProgram.tables, rows: commProgram.rows, cells: commCells })}`);
+  assert(commTable.kernelState?.final === true
+    && commTable.kernelState.rows.length === 1
+    && JSON.stringify(commTable.kernelState.rows[0].cells.map(cell => cell.type)) === JSON.stringify(['text', 'button', 'button'])
+    && commProgram.operations.some(operation => operation.kind === 'addRow' && operation.rowId === commRow.id && operation.status === 'applied'),
+  `portable unsupplied COMM must retain the source-known finalized kernel row: ${JSON.stringify({ table: commTable, row: commRow })}`);
+  assert(commProgram.frames[0].descriptorFacts.width?.status === 'known'
+    && commProgram.frames[0].descriptorFacts.width.value === 1920
+    && commProgram.frames[0].descriptorFacts.height?.status === 'known'
+    && commProgram.frames[0].descriptorFacts.height.value === 1080
+    && commTable.descriptorFacts.x?.status === 'known'
+    && commTable.descriptorFacts.x.value === 27
+    && commTable.descriptorFacts.y?.status === 'known'
+    && commTable.descriptorFacts.y.value === 27
+    && commTable.descriptorFacts.requestedWidth?.status === 'known'
+    && commTable.descriptorFacts.requestedWidth.value === 1866,
+  `portable COMM viewport arithmetic must remain exact source evidence: ${JSON.stringify({ frame: commProgram.frames[0].descriptorFacts, table: commTable.descriptorFacts })}`);
+  const commSceneResult = buildX4UiScene(commResult, corpus, commSceneProfile);
+  assert(commSceneResult.status !== 'refused', `portable unsupplied COMM must cross Scene: ${JSON.stringify(commSceneResult)}`);
+  const commScene = commSceneResult.scene;
+  const commSceneRow = commScene.rows[0];
+  assert(commScene.frames.length === 1
+    && commScene.tables.length === 1
+    && commScene.rows.length === 1
+    && commScene.cells.length === 3
+    && commScene.widgets.length === 0
+    && commScene.texts.length === 0
+    && commScene.glyphs.length === 0,
+  `portable unsupplied COMM Scene must retain structure without inventing drawable content: ${JSON.stringify(commScene)}`);
+  assert(commSceneRow?.id === `scene:${commRow.id}`
+    && commSceneRow.parentId === `scene:${commTable.id}`
+    && commSceneRow.rect === undefined
+    && commSceneRow.completeness === 'unavailable'
+    && commSceneRow.provenance === 'source-derived'
+    && commScene.cells.every((cell, index) => cell.id === `scene:${commCells[index].id}`
+      && cell.parentId === commSceneRow.id
+      && cell.rect === undefined
+      && cell.completeness === 'unavailable'
+      && cell.provenance === 'source-derived'),
+  `portable unsupplied COMM Scene nodes must preserve exact owners while withholding geometry: ${JSON.stringify({ row: commSceneRow, cells: commScene.cells })}`);
+  assert(commScene.gaps.some(gap => gap.category === 'table' && gap.expression === 'menu._tab')
+    && commScene.gaps.some(gap => gap.category === 'text' && gap.expression === commTitleExpression)
+    && commScene.gaps.filter(gap => gap.category === 'cell' && gap.reason === 'cell parent row/table geometry is unavailable').length === 3,
+  `portable unsupplied COMM Scene must expose the dynamic and child-geometry gaps: ${JSON.stringify(commScene.gaps)}`);
+  assert(commScene.gameTruth === 'Not verified in game' && commSceneResult.verification.gameVerified === false, 'portable unsupplied COMM Scene must remain Not verified in game');
+
+  const hostileProgram = cloneProgram(commProgram);
+  const hostileRow = hostileProgram.rows.find(candidate => candidate.id === commRow.id)!;
+  delete (hostileRow as unknown as { tableId?: string }).tableId;
+  const hostileAuthority = synchronizedAuthority(commAuthority, hostileProgram);
+  freezeFixtureGraph(hostileProgram);
+  freezeFixtureGraph(hostileAuthority);
+  const hostilePair = validateX4UiLayoutEvidencePair(hostileProgram, hostileAuthority);
+  const hostileStage = diagnoseX4UiSceneStructureForTest(hostileProgram, hostileAuthority);
+  const hostileResult = buildX4UiScene({ ...commResult, program: hostileProgram, evidenceAuthority: hostileAuthority } as X4UiLayoutProgramResult, corpus, commSceneProfile);
+  assert(!hostilePair.valid
+    && 'reason' in hostilePair
+    && hostilePair.reason === 'program materialized row has incomplete table/kernel ownership',
+  `synchronized COMM missing-owner hostile must fail producer authority validation: ${JSON.stringify(hostilePair)}`);
+  assert(hostileStage === `row-reciprocal:${commRow.id}` && refusalHasNoScene(hostileResult),
+    `portable COMM missing-owner hostile must fail closed before Scene materialization: ${JSON.stringify({ hostileStage, hostileResult })}`);
 });
 
 test('B119 direct Helper scale calls accept Lua whitespace at the Scene boundary', () => {
@@ -8587,9 +8739,9 @@ const b119ConfiguredSourceSpecs = [
       _choiceY: 734,
       _readSpan: 6,
     },
-    expectedLayout: { samples: 22, consumed: 10, notConsumed: 12, operations: 66, applied: 27, frames: 1, tables: 4, rows: 9, cells: 88, gaps: 99 },
-    expectedScene: { frames: 1, tables: 4, rows: 2, cells: 16, widgets: 3, texts: 5, glyphs: 7, gaps: 141, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
-    expectedPaint: { commands: 207, diagnostics: 169 },
+    expectedLayout: { samples: 19, consumed: 7, notConsumed: 12, operations: 66, applied: 27, frames: 1, tables: 4, rows: 9, cells: 88, gaps: 108 },
+    expectedScene: { frames: 1, tables: 4, rows: 2, cells: 16, widgets: 3, texts: 5, glyphs: 7, gaps: 150, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
+    expectedPaint: { commands: 216, diagnostics: 178 },
   },
   {
     label: 'HUB',
@@ -8609,7 +8761,7 @@ const b119ConfiguredSourceSpecs = [
     targetName: 'comm.display',
     sourceSha256: '88FAB05A79EF33CB28E098081EA6A5E29E8F3B7C4150C39BF38913C51C063511',
     consumerNumbers: { vw: 1920, vh: 1080, mx: 27, my: 27, 'vw - mx * 2': 1866 },
-    expectedLayout: { samples: 4, consumed: 4, notConsumed: 0, operations: 14, applied: 12, frames: 1, tables: 1, rows: 1, cells: 3, gaps: 6 },
+    expectedLayout: { samples: 2, consumed: 2, notConsumed: 0, operations: 14, applied: 12, frames: 1, tables: 1, rows: 1, cells: 3, gaps: 6 },
     expectedScene: { frames: 1, tables: 1, rows: 1, cells: 3, widgets: 3, texts: 5, glyphs: 52, gaps: 27, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
     expectedPaint: { commands: 104, diagnostics: 38 },
   },
@@ -8742,7 +8894,8 @@ if (b119ConfiguredCensus.status === 'unavailable') {
     const executed: B119ConfiguredSourceLabel[] = [];
     for (const source of b119ConfiguredSourceSpecs) {
       const sourcePath = b119ConfiguredCensus.sourcePaths[source.label];
-      const sourceText = readFileSync(sourcePath, 'utf8');
+      const sourceBytesBefore = readFileSync(sourcePath);
+      const sourceText = sourceBytesBefore.toString('utf8');
     const workspace = {
       id: 'b119-exact-' + source.label.toLowerCase(),
       name: 'B119 exact ' + source.label + ' session census',
@@ -8762,6 +8915,7 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         { path: source.relativePath, content: sourceText, reason: 'unparsed' },
       ],
     } as Parameters<typeof projectX4UiEditorSession>[0]['workspace'];
+    const workspaceJsonBefore = JSON.stringify(workspace);
     const profile = { width: 1920, height: 1080, uiScale: 1 } as const;
     const baseline = projectX4UiEditorSession({ workspace, corpus: undefined, profile });
     const file = baseline.source.bundle?.sourceFiles.find(candidate => candidate.path === source.relativePath);
@@ -8793,10 +8947,10 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       ? selectedEntries.filter(entry => /[A-Za-z_][A-Za-z0-9_.:]*\s*\(/.test(entry.expression))
       : [];
     if (source.label === 'COMM') {
-      assert(selectedEntries.length === 4
+      assert(selectedEntries.length === 2
         && commOpaqueEntries.length === 1
         && commCallEntries.length === 1
-        && commCallEntries[0]?.id === commOpaqueEntries[0]?.id, 'COMM exact catalog must issue four selected samples including exactly one opaque title entry: ' + JSON.stringify({ selected: selectedEntries.length, opaque: commOpaqueEntries.length, callShaped: commCallEntries.length }));
+        && commCallEntries[0]?.id === commOpaqueEntries[0]?.id, 'COMM exact catalog must issue two selected samples including exactly one opaque title entry: ' + JSON.stringify({ selected: selectedEntries.length, opaque: commOpaqueEntries.length, callShaped: commCallEntries.length }));
       const commOpaqueEntry = commOpaqueEntries[0];
       assert(commOpaqueEntry.source.start.line === 505 && commOpaqueEntry.source.end.line === 506, 'COMM opaque title entry must bind source lines 505-506: ' + JSON.stringify(commOpaqueEntry.source));
       const unprovidedSceneResult = unsampled.preview.scene;
@@ -8816,14 +8970,14 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       assert(JSON.stringify(unprovidedSceneGeometry) === JSON.stringify({
         frames: 1,
         tables: 1,
-        rows: 0,
-        cells: 0,
+        rows: 1,
+        cells: 3,
         widgets: 0,
         texts: 0,
         glyphs: 0,
-        gaps: 23,
+        gaps: 24,
         drawable: { x: 0, y: 0, width: 1920, height: 1080 },
-      }), 'COMM exact unprovided Scene must remain the zero-widget incomplete result: ' + JSON.stringify(unprovidedSceneGeometry));
+      }), 'COMM exact unprovided Scene must retain source-known row/cell structure without drawable content: ' + JSON.stringify(unprovidedSceneGeometry));
       assert(unsampled.preview.status === 'partial' && unprovidedSceneResult.status === 'partial', 'COMM exact unprovided session must remain incomplete before its opaque title is supplied: ' + JSON.stringify({ previewStatus: unsampled.preview.status, sceneStatus: unprovidedSceneResult.status, previewGaps: unsampled.preview.gaps.length, canRender: unsampled.canRender }));
     }
     const values = selectedEntries.map(entry => ({
@@ -8914,71 +9068,310 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       const selectedProfile = { width: 2560, height: 1440, uiScale: 1.4 } as const;
       const selectedUnprojected = projectX4UiEditorSession({ workspace, corpus, profile: selectedProfile, selection });
       const selectedPathCatalog = selectedUnprojected.pathCatalog;
-      const selectedSampleCatalog = selectedUnprojected.sampleCatalog;
-      assert(selectedPathCatalog !== undefined && selectedSampleCatalog !== null
+      const selectedLoopCatalog = selectedUnprojected.previewLoopCatalog;
+      assert(selectedPathCatalog !== null && selectedLoopCatalog !== null
         && selectedUnprojected.pathBinding !== undefined
         && selectedUnprojected.pathCatalogAuthority !== undefined
-        && selectedUnprojected.sampleBinding !== undefined
-        && selectedUnprojected.sampleCatalogAuthority !== undefined, 'MENU selected canonical case must issue both path and sample authorities');
+        && selectedUnprojected.pathCatalogAuthority.kind === 'x4-ui-editor-preview-path-catalog-authority'
+        && selectedUnprojected.pathBinding.catalogId === selectedPathCatalog.id
+        && selectedUnprojected.loopBinding !== undefined
+        && selectedUnprojected.previewLoopCatalogAuthority !== undefined
+        && selectedUnprojected.previewLoopCatalogAuthority.kind === 'x4-ui-editor-preview-loop-catalog-authority'
+        && selectedUnprojected.loopCatalogAuthority === selectedUnprojected.previewLoopCatalogAuthority
+        && selectedUnprojected.loopBinding.catalogId === selectedLoopCatalog.id
+        && selectedUnprojected.loopCatalog === selectedLoopCatalog, 'MENU selected canonical case must issue exact path/loop catalogs, bindings, and opaque authorities');
       const selectedPathEntries = selectedPathCatalog.entries.filter(entry => [711, 717, 721].includes(entry.boundary.start.line)
         && entry.arm === 'then');
       assert(selectedPathEntries.length === 3, 'MENU selected canonical case must issue exactly the direct-target 711/717/721 then arms: ' + JSON.stringify(selectedPathEntries));
-      const selectedPaths = {
-        catalogId: selectedPathCatalog.id,
-        source: selectedPathCatalog.sourceIdentity,
-        selections: selectedPathEntries.map(entry => ({ id: entry.id, boundaryId: entry.boundaryId, armId: entry.armId })),
-      };
-      const selectedValues = selectedSampleCatalog.entries.map((entry, index) => {
-        const exactValue: number | string | undefined = {
-          4: 600,
-          5: 670,
-          6: 1050,
-          7: 99,
-          8: 600,
-          9: 1050,
-          10: 'Faction Officer      ^ scroll - 4 of 8 turns',
-          11: 600,
-          12: 770,
-          13: 1050,
-          14: 'ON THE TABLE - PAYMENT REQUESTED',
-          15: 'ref 24K',
-        }[index];
-        return {
-          id: entry.id,
-          value: exactValue ?? (entry.expectedType === 'boolean' ? true : entry.expectedType === 'number' ? 80 : 'sampled'),
-        };
+      let selectedPaths: Parameters<typeof projectX4UiEditorSession>[0]['paths'];
+      for (const entry of selectedPathEntries) {
+        const updated = updateX4UiEditorPathState(
+          selectedPaths,
+          selectedPathCatalog,
+          entry.id,
+          selectedUnprojected.pathCatalogAuthority,
+        );
+        assert(updated.status === 'accepted', 'MENU selected canonical path update must be accepted: ' + JSON.stringify(updated));
+        selectedPaths = updated.paths;
+      }
+      assert(selectedPaths !== undefined && selectedPaths.selections.length === 3, 'MENU selected canonical path state must contain exactly three accepted selections: ' + JSON.stringify(selectedPaths));
+
+      const selectedPathUnprojected = projectX4UiEditorSession({
+        workspace,
+        corpus,
+        profile: selectedProfile,
+        selection,
+        paths: selectedPaths,
+        pathBinding: selectedUnprojected.pathBinding,
+        pathCatalogAuthority: selectedUnprojected.pathCatalogAuthority,
       });
-      const selectedSampleInput = {
-        catalogId: selectedSampleCatalog.id,
-        source: selectedSampleCatalog.sourceIdentity,
-        values: selectedValues,
+      const selectedPathSampleCatalog = selectedPathUnprojected.sampleCatalog;
+      assert(selectedPathUnprojected.pathReconciliation.status === 'accepted'
+        && selectedPathSampleCatalog !== null
+        && selectedPathUnprojected.sampleBinding !== undefined
+        && selectedPathUnprojected.sampleCatalogAuthority !== undefined, 'MENU selected canonical path stage must issue a new sample catalog, binding, and authority');
+      const selectedStringSamples: Readonly<Record<number, string>> = {
+        553: 'Faction Officer      ^ scroll - 4 of 8 turns',
+        726: 'ON THE TABLE - PAYMENT REQUESTED',
+        729: 'ref 24K',
+      };
+      const selectedSampleValueFor = (entry: typeof selectedPathSampleCatalog.entries[number]): number | string | boolean => {
+        if (entry.previewLoop !== undefined) {
+          const line = entry.source.start.line;
+          const iteration = entry.previewLoop.iteration;
+          if (line === 742) {
+            const value = ({ 1: 'They provide', 2: 'You provide' } as const)[iteration as 1 | 2];
+            if (value === undefined) throw new Error(`MENU loop label sample has unexpected iteration ${iteration}`);
+            return value;
+          }
+          if (line === 744) {
+            const value = ({ 1: 'two escort wings', 2: '24000 Cr' } as const)[iteration as 1 | 2];
+            if (value === undefined) throw new Error(`MENU loop value sample has unexpected iteration ${iteration}`);
+            return value;
+          }
+          throw new Error(`MENU loop sample appeared at unexpected source line ${line}`);
+        }
+        if (entry.expectedType === 'boolean') return true;
+        if (entry.expectedType === 'number') {
+          return source.consumerNumbers[entry.expression as keyof typeof source.consumerNumbers] ?? 80;
+        }
+        return selectedStringSamples[entry.source.start.line] ?? 'sampled';
+      };
+      const selectedPathSampleValues = selectedPathSampleCatalog.entries.map(entry => ({
+        id: entry.id,
+        value: selectedSampleValueFor(entry),
+      }));
+      const selectedPathSampleInput = {
+        catalogId: selectedPathSampleCatalog.id,
+        source: selectedPathSampleCatalog.sourceIdentity,
+        values: selectedPathSampleValues,
       };
       const conservative = projectX4UiEditorSession({
         workspace,
         corpus,
         profile: selectedProfile,
         selection,
-        samples: selectedSampleInput,
-        sampleBinding: selectedUnprojected.sampleBinding,
-        sampleCatalogAuthority: selectedUnprojected.sampleCatalogAuthority,
+        samples: selectedPathSampleInput,
+        sampleBinding: selectedPathUnprojected.sampleBinding,
+        sampleCatalogAuthority: selectedPathUnprojected.sampleCatalogAuthority,
+        paths: selectedPathUnprojected.paths,
+        pathBinding: selectedPathUnprojected.pathBinding,
+        pathCatalogAuthority: selectedPathUnprojected.pathCatalogAuthority,
       });
-      const conservativeProgram = conservative.preview.program !== null && conservative.preview.program.status !== 'refused'
-        ? conservative.preview.program.program
+      const conservativeProgramResult = conservative.preview.program;
+      const conservativeProgram = conservativeProgramResult !== null && conservativeProgramResult.status !== 'refused'
+        ? conservativeProgramResult.program
         : undefined;
-      const conservativeNestedOperations = conservativeProgram?.operations.filter(operation => [725, 726, 729, 741, 742, 744, 750, 751, 755].includes(operation.source.start.line)) ?? [];
-      assert(conservativeNestedOperations.length > 0
-        && conservativeNestedOperations.every(operation => operation.status === 'conditional' || operation.status === 'unreachable'), 'MENU canonical no-selection case must retain conservative nested pending evidence: ' + JSON.stringify(conservativeNestedOperations.map(operation => ({ line: operation.source.start.line, kind: operation.kind, status: operation.status }))));
+      const conservativeEvidenceAuthority = conservativeProgramResult !== null && conservativeProgramResult.status !== 'refused'
+        ? conservativeProgramResult.evidenceAuthority
+        : undefined;
+      const conservativeStage = conservativeProgram === undefined || conservativeEvidenceAuthority === undefined
+        ? 'preview-program-unavailable'
+        : diagnoseX4UiSceneStructureForTest(conservativeProgram, conservativeEvidenceAuthority);
+      const conservativeLoopOperations = conservativeProgram?.operations.filter(operation => [741, 742, 744].includes(operation.source.start.line)) ?? [];
+      assert(conservativeLoopOperations.length === 5
+        && conservativeLoopOperations.every(operation => operation.status === 'conditional' || operation.status === 'unreachable'), 'MENU canonical no-loop case must retain conditional 741/742/744 evidence: ' + JSON.stringify(conservativeLoopOperations.map(operation => ({ line: operation.source.start.line, kind: operation.kind, status: operation.status }))));
+      const conservativeLayout = conservativeProgram === undefined ? undefined : {
+        samples: selectedPathSampleValues.length,
+        consumed: conservativeProgram.previewSampleBindings.filter(binding => binding.status === 'consumed').length,
+        notConsumed: conservativeProgram.previewSampleBindings.filter(binding => binding.status !== 'consumed').length,
+        operations: conservativeProgram.operations.length,
+        applied: conservativeProgram.operations.filter(operation => operation.status === 'applied').length,
+        frames: conservativeProgram.frames.length,
+        tables: conservativeProgram.tables.length,
+        rows: conservativeProgram.rows.length,
+        cells: conservativeProgram.cells.length,
+      };
+      assert(conservativeProgram !== undefined
+        && conservativeEvidenceAuthority !== undefined
+        && validateX4UiLayoutEvidencePair(conservativeProgram, conservativeEvidenceAuthority).valid
+        && conservativeStage === undefined
+        && conservativeLayout.samples === 19
+        && conservativeLayout.consumed === 9
+        && conservativeLayout.notConsumed === 10
+        && conservativeLayout.operations === 66
+        && conservativeLayout.applied === 35
+        && conservativeLayout.frames === 1
+        && conservativeLayout.tables === 4
+        && conservativeLayout.rows === 9
+        && conservativeLayout.cells === 88, 'MENU canonical no-loop selected path-only census must remain 19/9/10, 66/35, and 1/4/9/88: ' + JSON.stringify({ layout: conservativeLayout, stage: conservativeStage }));
+      console.log('B119 canonical selected path-only receipt: ' + JSON.stringify({
+        layout: conservativeLayout,
+        pathReconciliation: conservative.pathReconciliation.status,
+        sampleReconciliation: conservative.sampleReconciliation.status,
+        scene: conservative.preview.scene?.status,
+        paint: conservative.paint?.status,
+        canRender: conservative.canRender,
+        gameTruth: conservative.gameTruth,
+        gameVerified: conservative.gameVerified,
+      }));
+
+      const selectedLoopEntries = selectedPathUnprojected.previewLoopCatalog?.entries.filter(entry => entry.depth === 1 && entry.source.start.line === 733) ?? [];
+      assert(selectedLoopEntries.length === 1, 'MENU selected canonical case must issue exactly one direct single-depth loop at source line 733: ' + JSON.stringify(selectedLoopEntries));
+      const selectedLoopEntry = selectedLoopEntries[0];
+      assert(selectedLoopEntry !== undefined && selectedLoopEntry.kind === 'generic-for', 'MENU selected canonical line-733 loop entry must be a direct generic-for loop: ' + JSON.stringify(selectedLoopEntry));
+      const loopUpdate = updateX4UiEditorLoopState(
+        undefined,
+        selectedPathUnprojected.previewLoopCatalog,
+        selectedLoopEntry.id,
+        2,
+        selectedPathUnprojected.previewLoopCatalogAuthority,
+      );
+      assert(loopUpdate.status === 'accepted'
+        && loopUpdate.loops !== undefined
+        && loopUpdate.loops.selections.length === 1
+        && loopUpdate.loops.selections[0]?.id === selectedLoopEntry.id
+        && loopUpdate.loops.selections[0]?.iterationCount === 2, 'MENU selected canonical loop update must accept only the line-733 loop with count 2: ' + JSON.stringify(loopUpdate));
+      const selectedLoops = loopUpdate.loops;
+      const selectedLoopUnprojected = projectX4UiEditorSession({
+        workspace,
+        corpus,
+        profile: selectedProfile,
+        selection,
+        paths: selectedPathUnprojected.paths,
+        pathBinding: selectedPathUnprojected.pathBinding,
+        pathCatalogAuthority: selectedPathUnprojected.pathCatalogAuthority,
+        loops: selectedLoops,
+        loopBinding: selectedPathUnprojected.loopBinding,
+        loopCatalogAuthority: selectedPathUnprojected.previewLoopCatalogAuthority,
+      });
+      const selectedLoopSampleCatalog = selectedLoopUnprojected.sampleCatalog;
+      assert(selectedLoopUnprojected.pathReconciliation.status === 'accepted'
+        && selectedLoopUnprojected.loopReconciliation.status === 'accepted'
+        && selectedLoopSampleCatalog !== null
+        && selectedLoopUnprojected.sampleBinding !== undefined
+        && selectedLoopUnprojected.sampleBinding.catalogId === selectedLoopSampleCatalog.id
+        && selectedLoopUnprojected.sampleCatalogAuthority !== undefined
+        && selectedLoopUnprojected.sampleCatalogAuthority.kind === 'x4-ui-editor-sample-catalog-authority', 'MENU selected canonical loop stage must issue an accepted iteration-scoped sample catalog, binding, and authority: ' + JSON.stringify({ preview: selectedLoopUnprojected.preview, pathReconciliation: selectedLoopUnprojected.pathReconciliation, loopReconciliation: selectedLoopUnprojected.loopReconciliation }));
+      const selectedLoopSourceContains = (source: typeof selectedLoopEntry.source, container: typeof selectedLoopEntry.source): boolean => source.file === container.file
+        && source.start.offset >= container.start.offset
+        && source.end.offset <= container.end.offset;
+      const selectedLoopScopedEntries = selectedLoopSampleCatalog.entries.filter(entry => selectedLoopSourceContains(entry.source, selectedLoopEntry.source));
+      const loopSampleEntries = selectedLoopScopedEntries.filter(entry => entry.previewLoop !== undefined
+        && (entry.source.start.line === 742 || entry.source.start.line === 744));
+      const loopSampleKeys = loopSampleEntries.map(entry => `${entry.source.start.line}:${entry.previewLoop?.iteration}`);
+      assert(loopSampleEntries.length === 4
+        && selectedLoopScopedEntries.length === 4
+        && selectedLoopSampleCatalog.entries.filter(entry => entry.previewLoop !== undefined).length === 4
+        && new Set(loopSampleEntries.map(entry => entry.id)).size === 4
+        && new Set(loopSampleKeys).size === 4
+        && new Set(loopSampleKeys).size === new Set(['742:1', '742:2', '744:1', '744:2']).size
+        && ['742:1', '742:2', '744:1', '744:2'].every(key => loopSampleKeys.includes(key))
+        && loopSampleEntries.every(entry => entry.previewLoop !== undefined
+          && entry.previewLoop.entryId === selectedLoopEntry.id
+          && entry.previewLoop.loopId === selectedLoopEntry.loopId
+          && isDeepStrictEqual(entry.previewLoop.source, selectedLoopEntry.source)
+          && entry.previewLoop.iterationCount === 2
+          && entry.consumers.length > 0
+          && entry.consumers.every(consumer => isDeepStrictEqual(consumer.previewLoop, entry.previewLoop))), 'MENU selected canonical loop sample catalog must contain four reciprocal 742/744 iteration entries: ' + JSON.stringify(loopSampleEntries));
+      const sampleSemanticIdentity = (entry: typeof selectedPathSampleCatalog.entries[number]): unknown => ({
+        source: entry.source,
+        expectedType: entry.expectedType,
+        expression: entry.expression,
+        previewLoop: entry.previewLoop === undefined ? undefined : {
+          entryId: entry.previewLoop.entryId,
+          loopId: entry.previewLoop.loopId,
+          iteration: entry.previewLoop.iteration,
+          iterationCount: entry.previewLoop.iterationCount,
+        },
+      });
+      const sampleDiagnosticPartition = (catalog: typeof selectedPathSampleCatalog): unknown => ({
+        catalogId: catalog.id,
+        source: catalog.sourceIdentity,
+        outsideSelectedLoop: catalog.entries.filter(entry => !selectedLoopSourceContains(entry.source, selectedLoopEntry.source)).map(sampleSemanticIdentity),
+        insideSelectedLoop: catalog.entries.filter(entry => selectedLoopSourceContains(entry.source, selectedLoopEntry.source)).map(sampleSemanticIdentity),
+      });
+      console.log('B119 MENU loop sample catalog transition diagnostic receipt: ' + JSON.stringify({
+        selectedLoopEntry: {
+          id: selectedLoopEntry.id,
+          loopId: selectedLoopEntry.loopId,
+          source: selectedLoopEntry.source,
+        },
+        selectedPathSampleCatalog: sampleDiagnosticPartition(selectedPathSampleCatalog),
+        selectedLoopSampleCatalog: sampleDiagnosticPartition(selectedLoopSampleCatalog),
+        sampleBindingCatalogId: selectedLoopUnprojected.sampleBinding.catalogId,
+        sampleCatalogAuthorityKind: selectedLoopUnprojected.sampleCatalogAuthority.kind,
+      }));
+      const sampleSemanticKey = (entry: typeof selectedPathSampleCatalog.entries[number]): string => JSON.stringify({
+        source: entry.source,
+        expectedType: entry.expectedType,
+        expression: entry.expression,
+      });
+      const selectedPathExternalGenericKeys = selectedPathSampleCatalog.entries
+        .filter(entry => entry.previewLoop === undefined && !selectedLoopSourceContains(entry.source, selectedLoopEntry.source))
+        .map(sampleSemanticKey)
+        .sort();
+      const selectedLoopExternalGenericKeys = selectedLoopSampleCatalog.entries
+        .filter(entry => entry.previewLoop === undefined && !selectedLoopSourceContains(entry.source, selectedLoopEntry.source))
+        .map(sampleSemanticKey)
+        .sort();
+      assert(isDeepStrictEqual(selectedPathExternalGenericKeys, selectedLoopExternalGenericKeys), 'MENU selected canonical loop stage must preserve every external generic sample semantically: ' + JSON.stringify({ before: selectedPathExternalGenericKeys, after: selectedLoopExternalGenericKeys }));
+      const expectedLoopPlaceholderKeys = [
+        JSON.stringify({
+          source: {
+            file: 'ui/addons/ai_influence_chat/aic_menu.lua',
+            start: { line: 742, column: 48, offset: 44581 },
+            end: { line: 742, column: 77, offset: 44610 },
+          },
+          expectedType: 'string',
+          expression: 'asciiClean(tostring(r.label))',
+        }),
+        JSON.stringify({
+          source: {
+            file: 'ui/addons/ai_influence_chat/aic_menu.lua',
+            start: { line: 744, column: 48, offset: 44754 },
+            end: { line: 744, column: 77, offset: 44783 },
+          },
+          expectedType: 'string',
+          expression: 'asciiClean(tostring(r.value))',
+        }),
+      ].sort();
+      const selectedPathLoopPlaceholderEntries = selectedPathSampleCatalog.entries.filter(entry => entry.previewLoop === undefined
+        && selectedLoopSourceContains(entry.source, selectedLoopEntry.source));
+      assert(isDeepStrictEqual(selectedPathLoopPlaceholderEntries.map(sampleSemanticKey).sort(), expectedLoopPlaceholderKeys), 'MENU selected canonical loop stage must prove the exact generic loop-body placeholders at lines 742/744: ' + JSON.stringify(selectedPathLoopPlaceholderEntries.map(sampleSemanticIdentity)));
+      const selectedLoopGenericEntries = selectedLoopSampleCatalog.entries.filter(entry => entry.previewLoop === undefined
+        && selectedLoopSourceContains(entry.source, selectedLoopEntry.source));
+      assert(selectedLoopGenericEntries.length === 0, 'MENU selected canonical loop stage must leave no generic loop-body placeholder: ' + JSON.stringify(selectedLoopGenericEntries.map(sampleSemanticIdentity)));
+      assert(isDeepStrictEqual(loopSampleEntries.map(sampleSemanticKey).sort(), [...expectedLoopPlaceholderKeys, ...expectedLoopPlaceholderKeys].sort()), 'MENU selected canonical loop stage must replace those exact placeholders with four scoped entries: ' + JSON.stringify(loopSampleEntries.map(sampleSemanticIdentity)));
+      const selectedLoopSampleValues = selectedLoopSampleCatalog.entries.map(entry => ({
+        id: entry.id,
+        value: selectedSampleValueFor(entry),
+      }));
+      const expectedSelectedLoopSampleReceipt = [
+        { line: 742, iteration: 1, expression: 'asciiClean(tostring(r.label))', expectedType: 'string', value: 'They provide' },
+        { line: 742, iteration: 2, expression: 'asciiClean(tostring(r.label))', expectedType: 'string', value: 'You provide' },
+        { line: 744, iteration: 1, expression: 'asciiClean(tostring(r.value))', expectedType: 'string', value: 'two escort wings' },
+        { line: 744, iteration: 2, expression: 'asciiClean(tostring(r.value))', expectedType: 'string', value: '24000 Cr' },
+      ];
+      const selectedLoopSampleReceipt = loopSampleEntries.map(entry => ({
+        line: entry.source.start.line,
+        iteration: entry.previewLoop?.iteration,
+        expression: entry.expression,
+        expectedType: entry.expectedType,
+        value: selectedLoopSampleValues.find(sample => sample.id === entry.id)?.value,
+      }));
+      assert(selectedLoopSampleCatalog.entries.length === 21
+        && selectedLoopSampleValues.length === 21
+        && isDeepStrictEqual(selectedLoopSampleReceipt, expectedSelectedLoopSampleReceipt), 'MENU selected canonical sample catalog must retain exactly 21 entries and the four issued loop values: ' + JSON.stringify({ count: selectedLoopSampleCatalog.entries.length, loop: selectedLoopSampleReceipt }));
+      const selectedLoopSampleInput = {
+        catalogId: selectedLoopSampleCatalog.id,
+        source: selectedLoopSampleCatalog.sourceIdentity,
+        values: selectedLoopSampleValues,
+      };
       const selected = projectX4UiEditorSession({
         workspace,
         corpus,
         profile: selectedProfile,
         selection,
-        samples: selectedSampleInput,
-        sampleBinding: selectedUnprojected.sampleBinding,
-        sampleCatalogAuthority: selectedUnprojected.sampleCatalogAuthority,
-        paths: selectedPaths,
-        pathBinding: selectedUnprojected.pathBinding,
-        pathCatalogAuthority: selectedUnprojected.pathCatalogAuthority,
+        samples: selectedLoopSampleInput,
+        sampleBinding: selectedLoopUnprojected.sampleBinding,
+        sampleCatalogAuthority: selectedLoopUnprojected.sampleCatalogAuthority,
+        paths: selectedLoopUnprojected.paths,
+        pathBinding: selectedLoopUnprojected.pathBinding,
+        pathCatalogAuthority: selectedLoopUnprojected.pathCatalogAuthority,
+        loops: selectedLoopUnprojected.loops,
+        loopBinding: selectedLoopUnprojected.loopBinding,
+        loopCatalogAuthority: selectedLoopUnprojected.previewLoopCatalogAuthority,
       });
       const selectedProgramResult = selected.preview.program;
       const selectedProgram = selectedProgramResult !== null && selectedProgramResult.status !== 'refused'
@@ -8992,8 +9385,11 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         : selectedEvidenceAuthority === undefined
           ? 'preview-evidence-authority-unavailable'
           : diagnoseX4UiSceneStructureForTest(selectedProgram, selectedEvidenceAuthority);
+      const selectedEvidencePair = selectedProgram === undefined || selectedEvidenceAuthority === undefined
+        ? undefined
+        : validateX4UiLayoutEvidencePair(selectedProgram, selectedEvidenceAuthority);
       const selectedLayout = selectedProgram === undefined ? undefined : {
-        samples: selectedValues.length,
+        samples: selectedLoopSampleValues.length,
         consumed: selectedProgram.previewSampleBindings.filter(binding => binding.status === 'consumed').length,
         notConsumed: selectedProgram.previewSampleBindings.filter(binding => binding.status !== 'consumed').length,
         operations: selectedProgram.operations.length,
@@ -9002,7 +9398,10 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         tables: selectedProgram.tables.length,
         rows: selectedProgram.rows.length,
         cells: selectedProgram.cells.length,
+        gaps: selectedProgram.gaps.length,
       };
+      assert(selectedLayout !== undefined
+        && isDeepStrictEqual(selectedLayout, { samples: 21, consumed: 13, notConsumed: 8, operations: 71, applied: 41, frames: 1, tables: 4, rows: 10, cells: 100, gaps: 109 }), 'MENU selected canonical loop Layout census must remain the exact 21/13/8, 71/41, 1/4/10/100/109 receipt: ' + JSON.stringify(selectedLayout));
       const selectedOperationReceipt = selectedProgram?.operations
         .filter(operation => [711, 717, 721, 725, 726, 729, 741, 742, 744, 750, 751, 755, 826, 830, 838, 840].includes(operation.source.start.line))
         .map(operation => ({
@@ -9040,9 +9439,11 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         profile: selectedProfile,
         sourceSha256: selectedPathCatalog.sourceIdentity.sha256,
         pathLines: selectedPathEntries.map(entry => ({ line: entry.boundary.start.line, invocationIds: entry.invocationIds.length, arm: entry.arm })),
-        sampleValues: selectedSampleCatalog.entries
-          .map((entry, index) => ({ line: entry.source.start.line, value: selectedValues[index]?.value }))
-          .filter((_, index) => [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(index)),
+        sampleValues: selectedLoopSampleCatalog.entries.map(entry => ({
+          line: entry.source.start.line,
+          iteration: entry.previewLoop?.iteration,
+          value: selectedLoopSampleValues.find(sample => sample.id === entry.id)?.value,
+        })),
         layout: selectedLayout,
         firstSceneStage: selectedStage,
         producer: selectedOperationReceipt,
@@ -9068,15 +9469,9 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         gameTruth: selected.gameTruth,
         gameVerified: selected.gameVerified,
       }));
-      assert(selected.pathReconciliation.status === 'accepted' && selected.sampleReconciliation.status === 'accepted', 'MENU selected canonical path/sample authority must be accepted');
-      assert(selectedLayout !== undefined
-        && selectedLayout.samples === 22
-        && selectedLayout.operations === 66
-        && selectedLayout.applied === 35
-        && selectedLayout.frames === 1
-        && selectedLayout.tables === 4
-        && selectedLayout.rows === 9
-        && selectedLayout.cells === 88, 'MENU selected canonical Layout counts must be 66/35 and 1/4/9/88: ' + JSON.stringify(selectedLayout));
+      assert(selected.pathReconciliation.status === 'accepted'
+        && selected.loopReconciliation.status === 'accepted'
+        && selected.sampleReconciliation.status === 'accepted', 'MENU selected canonical path/loop/sample authorities must be accepted');
       assert(selectedProgram !== undefined, 'MENU selected canonical projection must expose its Layout program');
       const selectedFactValue = (fact: X4UiLayoutDescriptorFact | undefined): unknown => fact?.status === 'known' ? fact.value : undefined;
       const selectedOperation = (line: number, kind: X4UiLayoutOperation['kind']): X4UiLayoutOperation | undefined => selectedProgram?.operations.find(operation => operation.source.start.line === line && operation.kind === kind);
@@ -9088,6 +9483,86 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       const selectedEnd = selectedOperation(840, 'createButton');
       const selectedLoopOperations = selectedProgram?.operations.filter(operation => operation.kind === 'createText'
         && (operation.source.start.line === 742 || operation.source.start.line === 744)) ?? [];
+      const selectedActiveWrapperSourceLines = new Set([727, 731, 743, 745, 754]);
+      const selectedActiveWrapperOccurrences = selectedProgram.operations.flatMap(operation => {
+        const fontProperty = operation.metadata.semantics.properties?.find(property => property.normalizedName === 'fontsize');
+        const value = fontProperty?.value;
+        const local = value?.localInvocationResult;
+        return local === undefined ? [] : [{ operation, value, local }];
+      }).filter(candidate => selectedActiveWrapperSourceLines.has(candidate.local.source.start.line)
+        && (candidate.local.expression === '_font(10)' || candidate.local.expression === '_font(9)'));
+      const selectedActiveWrapperInvocationIds = new Set(selectedActiveWrapperOccurrences.map(candidate => candidate.local.invocationId));
+      const selectedActiveWrapperInvocations = [...selectedActiveWrapperInvocationIds].map(invocationId =>
+        file.callModel.localInvocations.find(invocation => invocation.id === invocationId));
+      const selectedActiveWrapperExpressionForLine = (line: number): '_font(10)' | '_font(9)' => line === 727 ? '_font(10)' : '_font(9)';
+      const selectedActiveWrapperReceipt = [...selectedActiveWrapperSourceLines].map(line => {
+        const expression = selectedActiveWrapperExpressionForLine(line);
+        const occurrences = selectedActiveWrapperOccurrences.filter(candidate => candidate.local.source.start.line === line);
+        const input = expression === '_font(10)' ? 10 : 9;
+        return {
+          line,
+          expression,
+          invocationIds: [...new Set(occurrences.map(candidate => candidate.local.invocationId))],
+          occurrences: occurrences.length,
+          iterations: occurrences.map(candidate => candidate.operation.previewLoop?.iteration ?? null),
+          wrapperResults: occurrences.map(() => Math.ceil(input * selectedProfile.uiScale)),
+        };
+      });
+      assert(selectedActiveWrapperOccurrences.length === 7
+        && selectedActiveWrapperInvocationIds.size === 5
+        && selectedActiveWrapperInvocations.length === 5
+        && selectedActiveWrapperInvocations.every(invocation => invocation !== undefined
+          && invocation.status === 'supported'
+          && invocation.resolution === 'direct'
+          && invocation.resultConsumed
+          && invocation.arguments.length === 1
+          && invocation.arguments[0]?.status === 'static'
+          && invocation.arguments[0].type === 'number')
+        && isDeepStrictEqual(selectedActiveWrapperReceipt, [
+          { line: 727, expression: '_font(10)', invocationIds: selectedActiveWrapperReceipt[0]?.invocationIds, occurrences: 1, iterations: [null], wrapperResults: [14] },
+          { line: 731, expression: '_font(9)', invocationIds: selectedActiveWrapperReceipt[1]?.invocationIds, occurrences: 1, iterations: [null], wrapperResults: [13] },
+          { line: 743, expression: '_font(9)', invocationIds: selectedActiveWrapperReceipt[2]?.invocationIds, occurrences: 2, iterations: [1, 2], wrapperResults: [13, 13] },
+          { line: 745, expression: '_font(9)', invocationIds: selectedActiveWrapperReceipt[3]?.invocationIds, occurrences: 2, iterations: [1, 2], wrapperResults: [13, 13] },
+          { line: 754, expression: '_font(9)', invocationIds: selectedActiveWrapperReceipt[4]?.invocationIds, occurrences: 1, iterations: [null], wrapperResults: [13] },
+        ].map((expected, index) => ({
+          ...expected,
+          invocationIds: selectedActiveWrapperReceipt[index]?.invocationIds,
+        })))
+        && selectedActiveWrapperReceipt.every(receipt => receipt.invocationIds.length === 1)
+        && new Set(selectedActiveWrapperReceipt.flatMap(receipt => receipt.invocationIds)).size === 5, 'MENU selected canonical source must expose exactly five active _font wrapper invocations and seven issued occurrences: ' + JSON.stringify({ receipt: selectedActiveWrapperReceipt, invocations: selectedActiveWrapperInvocations }));
+      const selectedLoopFontReceipt = selectedLoopOperations.map(operation => {
+        const fontProperty = operation.metadata.semantics.properties?.find(property => property.normalizedName === 'fontsize');
+        const value = fontProperty?.value;
+        const local = value?.localInvocationResult;
+        return {
+          operationId: operation.id,
+          line: operation.source.start.line,
+          wrapperLine: local?.source.start.line,
+          iteration: operation.previewLoop?.iteration,
+          expression: local?.expression,
+          wrapperResult: local?.expression === '_font(9)' ? Math.ceil(9 * selectedProfile.uiScale) : undefined,
+          descriptor: {
+            status: operation.descriptorFacts.fontsize?.status,
+            value: operation.descriptorFacts.fontsize?.status === 'known' ? operation.descriptorFacts.fontsize.value : undefined,
+            provenance: operation.descriptorFacts.fontsize?.status === 'known'
+              ? operation.descriptorFacts.fontsize.provenance
+              : undefined,
+          },
+        };
+      });
+      assert(isDeepStrictEqual(selectedLoopFontReceipt.map(receipt => ({
+        line: receipt.line,
+        wrapperLine: receipt.wrapperLine,
+        iteration: receipt.iteration,
+        expression: receipt.expression,
+        wrapperResult: receipt.wrapperResult,
+        descriptor: receipt.descriptor,
+      })), [
+        { line: 742, wrapperLine: 743, iteration: 1, expression: '_font(9)', wrapperResult: 13, descriptor: { status: 'known', value: 19, provenance: 'direct-helper-scale' } },
+        { line: 744, wrapperLine: 745, iteration: 1, expression: '_font(9)', wrapperResult: 13, descriptor: { status: 'known', value: 19, provenance: 'direct-helper-scale' } },
+        { line: 742, wrapperLine: 743, iteration: 2, expression: '_font(9)', wrapperResult: 13, descriptor: { status: 'known', value: 19, provenance: 'direct-helper-scale' } },
+        { line: 744, wrapperLine: 745, iteration: 2, expression: '_font(9)', wrapperResult: 13, descriptor: { status: 'known', value: 19, provenance: 'direct-helper-scale' } },
+      ]), 'MENU selected canonical loop text font receipt must retain source _font(9)=13 and descriptor fontsize=19 with direct-helper-scale provenance: ' + JSON.stringify(selectedLoopFontReceipt));
       assert(selectedProgram?.localExpansion === undefined && selectedProgram.previewPathSelections.length === 3, 'MENU selected canonical projection must forward three path selections without replaying local invocations');
       assert(selectedPendingHeader?.status === 'unresolved'
         && selectedFactValue(selectedPendingHeader.descriptorFacts.primaryContent) === 'ON THE TABLE - PAYMENT REQUESTED'
@@ -9105,12 +9580,389 @@ if (b119ConfiguredCensus.status === 'unavailable') {
           send: selectedSend,
           end: selectedEnd,
         }));
-      assert(selectedLoopOperations.length === 2 && selectedLoopOperations.every(operation => operation.status === 'conditional'), 'MENU selected canonical pending.rows loop terms must remain conditional and unavailable: ' + JSON.stringify(selectedLoopOperations));
+      const selectedLoopRowOperations = selectedProgram.operations.filter(operation => operation.kind === 'addRow' && operation.source.start.line === 741);
+      const selectedLoopRowIds = new Set(selectedLoopRowOperations.map(operation => operation.rowId).filter((rowId): rowId is string => rowId !== undefined));
+      const selectedLoopTextOperationIds = new Set(selectedLoopOperations.map(operation => operation.id));
+      const selectedLoopSampleBindingsById = new Map(selectedProgram.previewSampleBindings.map(binding => [binding.id, binding] as const));
+      const selectedLoopConsumerOperationIds = new Set(loopSampleEntries.flatMap(entry => entry.consumers.map(consumer => consumer.operationId)));
+      const selectedLoopTextContent = new Set(['They provide', 'two escort wings', 'You provide', '24000 Cr']);
+      const selectedLoopExpectedContent = (line: number, iteration: number): string | undefined => {
+        if (line === 742) return iteration === 1 ? 'They provide' : iteration === 2 ? 'You provide' : undefined;
+        if (line === 744) return iteration === 1 ? 'two escort wings' : iteration === 2 ? '24000 Cr' : undefined;
+        return undefined;
+      };
+      assert(selectedLoopRowOperations.length === 2
+        && selectedLoopRowIds.size === 2
+        && selectedLoopOperations.length === 4
+        && selectedLoopTextOperationIds.size === 4
+        && selectedLoopOperations.every(operation => operation.status !== 'conditional' && operation.status !== 'unreachable')
+        && loopSampleEntries.every(entry => selectedLoopSampleBindingsById.get(entry.id)?.status === 'consumed')
+        && selectedLoopConsumerOperationIds.size === 4
+        && [...selectedLoopConsumerOperationIds].every(operationId => selectedLoopTextOperationIds.has(operationId))
+        && selectedLoopOperations.every(operation => operation.previewLoop !== undefined
+          && selectedLoopExpectedContent(operation.source.start.line, operation.previewLoop.iteration) === selectedFactValue(operation.descriptorFacts.primaryContent))
+        && selectedLoopOperations.every(operation => operation.descriptorFacts.color?.status === 'unavailable'), 'MENU selected canonical loop rows/texts must expand to two rows, four consumed operations, four exact primary-content facts, and unavailable colors: ' + JSON.stringify({ rows: selectedLoopRowOperations, texts: selectedLoopOperations, samples: loopSampleEntries }));
+      const selectedScene = selected.preview.scene !== null && selected.preview.scene.status !== 'refused'
+        ? selected.preview.scene.scene
+        : undefined;
+      const selectedSceneCensus = selectedScene === undefined ? undefined : {
+        format: selectedScene.format,
+        version: selectedScene.version,
+        status: selectedScene.status,
+        gameTruth: selectedScene.gameTruth,
+        programStatus: selectedScene.programStatus,
+        drawableRect: selectedScene.drawableRect,
+        counts: {
+          frames: selectedScene.frames.length,
+          tables: selectedScene.tables.length,
+          rows: selectedScene.rows.length,
+          cells: selectedScene.cells.length,
+          widgets: selectedScene.widgets.length,
+          texts: selectedScene.texts.length,
+          glyphs: selectedScene.glyphs.length,
+          gaps: selectedScene.gaps.length,
+        },
+          loopBindings: selectedScene.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined),
+      };
+      const selectedPaintPlan = selected.paint !== null && selected.paint.status !== 'refused' ? selected.paint.plan : undefined;
+      const selectedPaintCensus = selectedPaintPlan === undefined ? undefined : {
+        format: selectedPaintPlan.format,
+        version: selectedPaintPlan.version,
+        status: selectedPaintPlan.status,
+        gameTruth: selectedPaintPlan.gameTruth,
+        gameVerified: selectedPaintPlan.gameVerified,
+        sceneStatus: selectedPaintPlan.sceneStatus,
+        logicalDrawable: selectedPaintPlan.logicalDrawable,
+        counts: {
+          layers: selectedPaintPlan.layers.length,
+          commands: selectedPaintPlan.layers.reduce((count, layer) => count + layer.commands.length, 0),
+          diagnostics: selectedPaintPlan.diagnostics.length,
+          selectedNodeIds: selectedPaintPlan.selectedNodeIds.length,
+          keepOuts: selectedPaintPlan.keepOuts.length,
+        },
+        plan: selectedPaintPlan,
+      };
+      const selectedGapSource = (source: X4UiSceneSourceLocation): unknown => ({
+        file: source.file,
+        ...(source.sourcePath === undefined ? {} : { sourcePath: source.sourcePath }),
+        start: source.start,
+        end: source.end,
+      });
+      const selectedGeometryCategories = new Set(['geometry', 'height', 'width', 'table', 'row', 'cell']);
+      const selectedTableGeometryGapIds = new Set(['scene-gap:000078', 'scene-gap:000079']);
+      const selectedGapReceipt = (gap: X4UiScene['gaps'][number]): unknown => ({
+        id: gap.id,
+        category: gap.category,
+        status: gap.status,
+        reason: gap.reason,
+        expression: gap.expression ?? null,
+        source: selectedGapSource(gap.source),
+        previewLoop: gap.previewLoop === undefined ? null : {
+          iteration: gap.previewLoop.iteration,
+          iterationCount: gap.previewLoop.iterationCount,
+        },
+      });
+      const selectedSceneGaps = selectedScene?.gaps ?? [];
+      const selectedFrame = selectedScene?.frames[0];
+      const selectedCtTable = selectedScene?.tables.find(table => table.id.includes('|ct|'));
+      const selectedFrameGeometryGaps = selectedFrame === undefined
+        ? []
+        : selectedSceneGaps.filter(gap => selectedFrame.diagnosticLinks.includes(gap.id) && selectedGeometryCategories.has(gap.category));
+      const selectedCtTableGeometryGaps = selectedCtTable === undefined
+        ? []
+        : selectedSceneGaps.filter(gap => selectedCtTable.diagnosticLinks.includes(gap.id) && selectedTableGeometryGapIds.has(gap.id));
+      const selectedLoopGeometryGaps = selectedSceneGaps.filter(gap => gap.previewLoop !== undefined
+        && selectedGeometryCategories.has(gap.category)
+        && (gap.source.start.line === 742 || gap.source.start.line === 744));
+      const selectedLoopSampleResolution = selectedLoopGeometryGaps.map(gap => ({
+        id: gap.id,
+        issuedSampleKeys: loopSampleEntries
+          .filter(entry => entry.previewLoop !== undefined && isDeepStrictEqual(entry.previewLoop, gap.previewLoop))
+          .map(entry => `${entry.source.start.line}:${entry.previewLoop!.iteration}`),
+        issuedSampleExpressions: loopSampleEntries
+          .filter(entry => entry.previewLoop !== undefined && isDeepStrictEqual(entry.previewLoop, gap.previewLoop))
+          .map(entry => entry.expression),
+        issuedSampleTypes: loopSampleEntries
+          .filter(entry => entry.previewLoop !== undefined && isDeepStrictEqual(entry.previewLoop, gap.previewLoop))
+          .map(entry => entry.expectedType),
+        resolvesGap: false,
+        resolutionReason: 'issued loop samples are string values; this gap requires an accepted numeric height/font fact',
+      }));
+      const selectedGeometryReceipt = {
+        frame: selectedFrame === undefined ? undefined : {
+          id: selectedFrame.id,
+          rect: selectedFrame.rect,
+          geometryGapIds: selectedFrameGeometryGaps.map(gap => gap.id),
+        },
+        table: selectedCtTable === undefined ? undefined : {
+          id: selectedCtTable.id,
+          rect: selectedCtTable.rect,
+          geometryGapIds: selectedCtTableGeometryGaps.map(gap => gap.id),
+          diagnosticGapIds: selectedCtTable.diagnosticLinks,
+        },
+        frameGaps: selectedFrameGeometryGaps.map(selectedGapReceipt),
+        tableGaps: selectedCtTableGeometryGaps.map(selectedGapReceipt),
+        loopGaps: selectedLoopGeometryGaps.map(selectedGapReceipt),
+        issuedLoopSampleResolution: selectedLoopSampleResolution,
+      };
+      const selectedSceneReceipt = selectedSceneCensus === undefined
+        ? undefined
+        : { hash: sha256Json(selectedSceneCensus), counts: selectedSceneCensus.counts };
+      const selectedPaintReceipt = selectedPaintCensus === undefined
+        ? {
+          planReached: false,
+          status: selected.paint?.status ?? null,
+          refusal: selected.paint?.status === 'refused' ? selected.paint.refusal : null,
+          hash: null,
+          counts: null,
+        }
+        : {
+          planReached: true,
+          status: selectedPaintCensus.status,
+          refusal: null,
+          hash: sha256Json(selectedPaintCensus),
+          counts: selectedPaintCensus.counts,
+        };
+      console.log('B119 exact selected Scene boundary receipt: ' + JSON.stringify(selectedGeometryReceipt));
+      console.log('B119 exact selected Scene/Paint receipt: ' + JSON.stringify({
+        scene: selectedSceneReceipt,
+        paint: selectedPaintReceipt,
+      }));
+      assert(selectedScene !== undefined && selectedEvidenceAuthority !== undefined, 'MENU selected canonical Scene and evidence authority are required for provenance boundary regressions');
+      const expectedSelectedTableSource = {
+        file: 'ui/addons/ai_influence_chat/aic_menu.lua',
+        start: { line: 693, column: 15, offset: 41156 },
+        end: { line: 696, column: 59, offset: 41418 },
+      };
+      const expectedSelectedTableGeometryGaps = [
+        {
+          id: 'scene-gap:000078',
+          category: 'program-node',
+          status: 'incomplete',
+          reason: 'accepted layout node table:table|ct|call|ui/addons/ai_influence_chat/aic_menu.lua||693:15:41156|696:59:41418|frame|| retained status partial',
+          expression: null,
+          source: expectedSelectedTableSource,
+          previewLoop: null,
+        },
+        {
+          id: 'scene-gap:000079',
+          category: 'scrollbar',
+          status: 'unsupported',
+          reason: 'runtime scrollbar acceptance and visibility remain unavailable beyond the helper descriptor projection',
+          expression: null,
+          source: expectedSelectedTableSource,
+          previewLoop: null,
+        },
+      ];
+      const expectedSelectedLoopGeometryGaps: unknown[] = [];
+      const expectedSelectedLoopSampleResolution: unknown[] = [];
+      assert(selectedFrame !== undefined
+        && isDeepStrictEqual(selectedFrame.rect, { x: 0, y: 0, width: 2560, height: 1440 })
+        && selectedFrameGeometryGaps.length === 0
+        && selectedCtTable !== undefined
+        && isDeepStrictEqual(selectedCtTable.rect, { x: 600, y: 734, width: 1050, height: 148 })
+        && isDeepStrictEqual(selectedCtTableGeometryGaps.map(selectedGapReceipt), expectedSelectedTableGeometryGaps)
+        && isDeepStrictEqual(selectedLoopGeometryGaps.map(selectedGapReceipt), expectedSelectedLoopGeometryGaps)
+        && isDeepStrictEqual(selectedLoopSampleResolution, expectedSelectedLoopSampleResolution)
+        && selectedScene.texts.length === 14
+        && selectedScene.widgets.length === 11, 'MENU selected Scene boundary must pin the accepted frame/table rects, clear loop geometry gaps, and retain source-backed text/widgets: ' + JSON.stringify(selectedGeometryReceipt));
+      assert(isDeepStrictEqual(selectedSceneReceipt, {
+        hash: '83BB4960E327FE272B7352CAFBBBEBDD2AC3389B6E2BB14F15A04BB8216DE92B',
+        counts: { frames: 1, tables: 4, rows: 6, cells: 64, widgets: 11, texts: 14, glyphs: 196, gaps: 174 },
+      }), 'MENU selected exact Scene receipt drifted: ' + JSON.stringify(selectedSceneReceipt));
+      assert(isDeepStrictEqual(selectedPaintReceipt, {
+        planReached: true,
+        status: 'partial',
+        refusal: null,
+        hash: 'C438F8D5C953BF884AB5CF7F1E060A8A800B8D4B4B350AC4788D95CD9B2DBCD9',
+        counts: { layers: 4, commands: 562, diagnostics: 266, selectedNodeIds: 0, keepOuts: 0 },
+      }), 'MENU selected exact Paint boundary receipt drifted: ' + JSON.stringify(selectedPaintReceipt));
+      const selectedSceneLoopBindings = selectedScene.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined);
+      const expectedSceneLoopBindings = selectedProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined).map(binding => ({
+        id: binding.id,
+        value: binding.value,
+        expectedType: binding.expectedType,
+        source: binding.source,
+        provenance: binding.provenance,
+        status: binding.status,
+        ...(binding.reason === undefined ? {} : { reason: binding.reason }),
+        previewLoop: binding.previewLoop,
+      }));
+      assert(selectedSceneLoopBindings.length === 4
+        && isDeepStrictEqual(selectedSceneLoopBindings, expectedSceneLoopBindings), 'MENU selected Scene preview must preserve all four issued loop bindings, values, and full reciprocal instances in issued order: ' + JSON.stringify({ actual: selectedSceneLoopBindings, expected: expectedSceneLoopBindings }));
+
+      type SelectedLoopMutation = (program: X4UiLayoutProgram, binding: X4UiLayoutPreviewSampleBinding) => void;
+      const runSelectedLoopMutation = (label: string, mutate: SelectedLoopMutation): void => {
+        const hostileProgram = cloneProgram(selectedProgram);
+        const hostileBinding = hostileProgram.previewSampleBindings.find(binding => binding.id === selectedSceneLoopBindings[0]?.id);
+        assert(hostileBinding !== undefined && hostileBinding.previewLoop !== undefined, `${label} requires a selected loop binding`);
+        mutate(hostileProgram, hostileBinding);
+        let stage: string | undefined;
+        let threw = false;
+        try {
+          stage = diagnoseX4UiSceneStructureForTest(hostileProgram, selectedEvidenceAuthority);
+        } catch {
+          threw = true;
+        }
+        assert(!threw && stage !== undefined, `${label} escaped the Scene provenance boundary: ${JSON.stringify({ stage, threw })}`);
+      };
+      const mutateSelectedLoop = (mutate: (loop: Record<string, unknown>) => void): SelectedLoopMutation => (_program, binding) => {
+        mutate(binding.previewLoop as unknown as Record<string, unknown>);
+      };
+      runSelectedLoopMutation('unknown loop key', mutateSelectedLoop(loop => { loop.unexpected = true; }));
+      runSelectedLoopMutation('null loop structure', (_program, binding) => { (binding as unknown as Record<string, unknown>).previewLoop = null; });
+      runSelectedLoopMutation('malformed loop depth', mutateSelectedLoop(loop => { loop.depth = 2; }));
+      runSelectedLoopMutation('stale loop instance id', mutateSelectedLoop(loop => { loop.id = 'stale-preview-loop-instance'; }));
+      runSelectedLoopMutation('stale loop entry id', mutateSelectedLoop(loop => { loop.entryId = 'stale-preview-loop-entry'; }));
+      runSelectedLoopMutation('stale loop id', mutateSelectedLoop(loop => { loop.loopId = 'stale-preview-loop'; }));
+      runSelectedLoopMutation('stale loop source', mutateSelectedLoop(loop => {
+        const loopSource = loop.source as Record<string, unknown>;
+        const start = loopSource.start as Record<string, unknown>;
+        loop.source = { ...loopSource, start: { ...start, offset: (start.offset as number) + 1 } };
+      }));
+      runSelectedLoopMutation('stale loop kind', mutateSelectedLoop(loop => { loop.kind = 'while'; }));
+      runSelectedLoopMutation('stale loop multiplicity', mutateSelectedLoop(loop => { loop.multiplicity = 'one-or-more'; }));
+      runSelectedLoopMutation('stale loop iteration', mutateSelectedLoop(loop => { loop.iteration = 2; }));
+      runSelectedLoopMutation('stale loop iteration count', mutateSelectedLoop(loop => { loop.iterationCount = 1; }));
+      let getterExecutions = 0;
+      runSelectedLoopMutation('loop accessor', (_program, binding) => {
+        const loop = binding.previewLoop as unknown as Record<string, unknown>;
+        Object.defineProperty(loop, 'iteration', {
+          configurable: true,
+          enumerable: true,
+          get: () => {
+            getterExecutions += 1;
+            throw new Error('hostile previewLoop getter executed');
+          },
+        });
+      });
+      assert(getterExecutions === 0, `loop accessor was read ${getterExecutions} time(s)`);
+
+      const oneSidedBinding = cloneProgram(selectedProgram);
+      const oneSidedBindingNode = oneSidedBinding.previewSampleBindings.find(binding => binding.id === selectedSceneLoopBindings[0]?.id);
+      assert(oneSidedBindingNode !== undefined, 'one-sided sample binding regression requires its binding');
+      delete (oneSidedBindingNode as unknown as Record<string, unknown>).previewLoop;
+      assert(diagnoseX4UiSceneStructureForTest(oneSidedBinding, selectedEvidenceAuthority) !== undefined, 'one-sided sample binding loop provenance escaped the Scene boundary');
+
+      const oneSidedOperation = cloneProgram(selectedProgram);
+      const oneSidedOperationNode = oneSidedOperation.operations.find(operation => operation.previewLoop !== undefined && operation.kind === 'createText');
+      assert(oneSidedOperationNode !== undefined, 'one-sided operation regression requires a loop-scoped createText');
+      delete (oneSidedOperationNode as unknown as Record<string, unknown>).previewLoop;
+      assert(diagnoseX4UiSceneStructureForTest(oneSidedOperation, selectedEvidenceAuthority) !== undefined, 'one-sided operation loop provenance escaped the Scene boundary');
+
+      const oneSidedGap = cloneProgram(selectedProgram);
+      const oneSidedGapNode = oneSidedGap.gaps.find(gap => gap.previewLoop !== undefined);
+      assert(oneSidedGapNode !== undefined, 'one-sided gap regression requires a loop-scoped gap');
+      delete (oneSidedGapNode as unknown as Record<string, unknown>).previewLoop;
+      assert(diagnoseX4UiSceneStructureForTest(oneSidedGap, selectedEvidenceAuthority) !== undefined, 'one-sided gap loop provenance escaped the Scene boundary');
+
+      const mismatchedConsumer = cloneProgram(selectedProgram);
+      const mismatchedEntry = mismatchedConsumer.sampleCatalog.entries.find(entry => entry.previewLoop !== undefined);
+      assert(mismatchedEntry !== undefined && mismatchedEntry.consumers[0] !== undefined, 'mismatched consumer regression requires a loop-scoped sample consumer');
+      delete (mismatchedEntry.consumers[0] as unknown as Record<string, unknown>).previewLoop;
+      assert(diagnoseX4UiSceneStructureForTest(mismatchedConsumer, selectedEvidenceAuthority) !== undefined, 'mismatched sample consumer loop provenance escaped the Scene boundary');
+
+      const mismatchedAuthority = cloneProgram(selectedProgram);
+      const authorityCopy = cloneJsonValue(selectedEvidenceAuthority);
+      const authorityOperation = authorityCopy.operations.find(operation => operation.previewLoop !== undefined && operation.kind === 'createText');
+      assert(authorityOperation !== undefined, 'mismatched authority regression requires a loop-scoped authority operation');
+      delete (authorityOperation as unknown as Record<string, unknown>).previewLoop;
+      assert(diagnoseX4UiSceneStructureForTest(mismatchedAuthority, authorityCopy) !== undefined, 'mismatched authority loop provenance escaped the Scene boundary');
+
+      const reversedRows = cloneProgram(selectedProgram);
+      const reversedTable = reversedRows.tables.find(table => table.id.split('|')[1] === 'ct');
+      assert(reversedTable !== undefined, 'reversed row-order regression requires the selected ct table');
+      const reversedIndexes = reversedTable.rowIds
+        .map((rowId, index) => selectedLoopRowIds.has(rowId) ? index : -1)
+        .filter(index => index >= 0);
+      assert(reversedIndexes.length === 2, 'reversed row-order regression requires exactly two selected loop rows');
+      const reversedRowIds = [...reversedTable.rowIds];
+      const reversedFirst = reversedIndexes[0]!;
+      const reversedSecond = reversedIndexes[1]!;
+      [reversedRowIds[reversedFirst], reversedRowIds[reversedSecond]] = [reversedRowIds[reversedSecond]!, reversedRowIds[reversedFirst]!];
+      (reversedTable as unknown as { rowIds: string[] }).rowIds = reversedRowIds;
+      const reversedStage = diagnoseX4UiSceneStructureForTest(reversedRows, selectedEvidenceAuthority);
+      assert(reversedStage === `table-row-source-order:${reversedTable.id}`, `reversed issued iteration order escaped the equal-source row exception: ${JSON.stringify({ expected: `table-row-source-order:${reversedTable.id}`, actual: reversedStage })}`);
+
+      const staleRows = cloneProgram(selectedProgram);
+      const staleRowOperation = staleRows.operations.find(operation => operation.kind === 'addRow' && operation.previewLoop?.iteration === 2);
+      assert(staleRowOperation?.previewLoop !== undefined, 'stale row iteration regression requires the second issued loop row');
+      (staleRowOperation.previewLoop as unknown as { iteration: number }).iteration = 1;
+      const staleRowStage = diagnoseX4UiSceneStructureForTest(staleRows, selectedEvidenceAuthority);
+      assert(staleRowStage !== undefined, 'stale issued iteration order escaped the Scene provenance boundary');
+      const selectedSceneLoopTexts = selectedScene?.texts.filter(text => selectedLoopTextContent.has(text.content)) ?? [];
+      const selectedSceneLoopOwnerRows = new Set(selectedSceneLoopTexts.map(text => {
+        const widget = selectedScene?.widgets.find(candidate => candidate.textIds.includes(text.id));
+        const cell = widget === undefined ? undefined : selectedScene?.cells.find(candidate => candidate.id === widget.cellId);
+        return cell?.rowId;
+      }).filter((rowId): rowId is string => rowId !== undefined));
+      const selectedSceneGlyphIds = new Set(selectedScene?.glyphs.map(glyph => glyph.id));
+      const selectedLoopTextSceneReceipt = selectedLoopOperations.map(operation => {
+        const expectedContent = operation.previewLoop === undefined
+          ? undefined
+          : selectedLoopExpectedContent(operation.source.start.line, operation.previewLoop.iteration);
+        const sampleEntry = loopSampleEntries.find(entry => entry.consumers.some(consumer => consumer.operationId === operation.id));
+        const sampleValue = sampleEntry === undefined
+          ? undefined
+          : selectedLoopSampleValues.find(sample => sample.id === sampleEntry.id)?.value;
+        const widget = selectedScene?.widgets.find(candidate => candidate.cellId === `scene:${operation.cellId}`);
+        const text = widget === undefined
+          ? undefined
+          : widget.textIds
+            .map(textId => selectedScene?.texts.find(candidate => candidate.id === textId))
+            .find(candidate => candidate?.content === expectedContent);
+        const cell = widget === undefined ? undefined : selectedScene?.cells.find(candidate => candidate.id === widget.cellId);
+        const glyphIds = text?.lines.flatMap(line => line.glyphIds) ?? [];
+        return {
+          operationId: operation.id,
+          line: operation.source.start.line,
+          iteration: operation.previewLoop?.iteration,
+          sampleId: sampleEntry?.id,
+          sampleValue,
+          content: text?.content,
+          rowId: cell?.rowId,
+          glyphCount: glyphIds.length,
+          glyphsOwned: glyphIds.length > 0 && glyphIds.every(glyphId => selectedSceneGlyphIds.has(glyphId)),
+        };
+      });
       assert(selectedStage === undefined, 'MENU selected canonical program still refuses at Scene structure stage ' + String(selectedStage));
-      assert(selected.preview.scene !== null && selected.preview.scene.status !== 'refused', 'MENU selected canonical session must reach non-refused Scene: ' + JSON.stringify(selected.preview.scene));
-      assert(selected.paint !== null && selected.paint.status !== 'refused' && selected.canRender, 'MENU selected canonical session must reach Paint and canRender');
+      assert(selectedEvidencePair?.valid === true, 'MENU selected canonical program/evidence reciprocity must validate: ' + JSON.stringify(selectedEvidencePair));
+      assert(selectedScene !== undefined
+        && selectedSceneLoopTexts.length === 4
+        && new Set(selectedSceneLoopTexts.map(text => text.content)).size === 4
+        && selectedSceneLoopOwnerRows.size === 2, 'MENU selected canonical Scene must contain four exact loop texts assigned to two distinct row owners: ' + JSON.stringify({ texts: selectedSceneLoopTexts, ownerRows: [...selectedSceneLoopOwnerRows] }));
+      assert(isDeepStrictEqual(selectedLoopTextSceneReceipt.map(receipt => ({
+        line: receipt.line,
+        iteration: receipt.iteration,
+        sampleValue: receipt.sampleValue,
+        content: receipt.content,
+      })), [
+        { line: 742, iteration: 1, sampleValue: 'They provide', content: 'They provide' },
+        { line: 744, iteration: 1, sampleValue: 'two escort wings', content: 'two escort wings' },
+        { line: 742, iteration: 2, sampleValue: 'You provide', content: 'You provide' },
+        { line: 744, iteration: 2, sampleValue: '24000 Cr', content: '24000 Cr' },
+      ])
+        && selectedLoopTextSceneReceipt.length === 4
+        && new Set(selectedLoopTextSceneReceipt.map(receipt => receipt.content)).size === 4
+        && new Set(selectedLoopTextSceneReceipt.map(receipt => receipt.rowId).filter((rowId): rowId is string => rowId !== undefined)).size === 2
+        && [...selectedLoopTextSceneReceipt.reduce((counts, receipt) => {
+          if (receipt.rowId !== undefined) counts.set(receipt.rowId, (counts.get(receipt.rowId) ?? 0) + 1);
+          return counts;
+        }, new Map<string, number>()).values()].every(count => count === 2)
+        && selectedLoopTextSceneReceipt.every(receipt => receipt.rowId !== undefined && receipt.glyphCount > 0 && receipt.glyphsOwned), 'MENU selected canonical loop texts must retain all four sampled contents, two row owners, and nonzero owned glyphs per operation: ' + JSON.stringify(selectedLoopTextSceneReceipt));
+      assert(selected.preview.scene !== null
+        && selected.preview.scene.status !== 'refused'
+        && selected.preview.scene.scene.verification.gameVerified === false
+        && selected.preview.verification.gameVerified === false, 'MENU selected canonical session must reach non-refused Scene while remaining Not verified in game');
+      assert(selected.paint !== null
+        && selected.paint.status !== 'refused'
+        && selected.paint.verification.gameVerified === false
+        && selected.canRender, 'MENU selected canonical session must reach Paint and canRender');
       assert(selected.gameTruth === 'Not verified in game' && selected.gameVerified === false, 'MENU selected canonical case must remain Not verified in game');
     }
+
+    assert(isDeepStrictEqual(readFileSync(sourcePath), sourceBytesBefore), source.label + ' configured source bytes changed during the census');
+    assert(JSON.stringify(workspace) === workspaceJsonBefore, source.label + ' configured workspace JSON changed during the census');
 
     console.log('B119 exact configured public-session census ' + source.label + ': ' + JSON.stringify({
       sourceSha256: source.sourceSha256,

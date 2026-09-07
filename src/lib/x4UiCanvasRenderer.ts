@@ -209,6 +209,11 @@ type TintDomain = 'source-literal-percent-alpha' | 'canonical-xml-byte-alpha';
 type TintSlot = 'table-background' | 'cell-background' | 'widget-background' | 'editbox-inner-background' | 'widget-border' | 'widget-highlight' | 'widget-icon' | 'primary-text' | 'secondary-text';
 
 interface ValidatedTint {
+  readonly owner: {
+    readonly kind: 'geometry' | 'glyph';
+    readonly commandId: string;
+    readonly ownerId: string;
+  };
   readonly field: 'backgroundColor' | 'cellbgcolor' | 'bgcolor' | 'editboxBackgroundBlackColor' | 'bordercolor' | 'highlightcolor' | 'defaultTextColor' | 'color';
   readonly slot: TintSlot;
   readonly domain: TintDomain;
@@ -738,11 +743,18 @@ const validColorChannelEvidence = (value: unknown, expected: unknown, maximum: n
 };
 
 const validateBasePreviewTint = (value: unknown): Validation<ValidatedTint> => {
-  if (!exactRecord(value, ['kind', 'completeness', 'field', 'slot', 'value', 'domain', 'provenance', 'expression', 'source', 'gameVerification'], ['sourcePin', 'sampleId'])) {
+  if (!exactRecord(value, ['kind', 'completeness', 'owner', 'field', 'slot', 'value', 'domain', 'provenance', 'expression', 'source', 'gameVerification'], ['sourcePin', 'sampleId'])) {
     return refusal('invalid-command', 'basePreviewTints contains an unexpected, inherited, sparse, or accessor tint record');
   }
   if (fieldValue(value, 'kind') !== 'base-preview-tint' || fieldValue(value, 'completeness') !== 'partial') {
     return refusal('invalid-command', 'basePreviewTints tint completeness or kind is invalid');
+  }
+  const owner = fieldValue(value, 'owner');
+  if (!exactRecord(owner, ['kind', 'commandId', 'ownerId'])
+    || (fieldValue(owner, 'kind') !== 'geometry' && fieldValue(owner, 'kind') !== 'glyph')
+    || !nonEmptyString(fieldValue(owner, 'commandId'))
+    || !nonEmptyString(fieldValue(owner, 'ownerId'))) {
+    return refusal('invalid-command', 'basePreviewTints command-owner binding is malformed');
   }
   const field = fieldValue(value, 'field');
   const slot = fieldValue(value, 'slot');
@@ -847,6 +859,11 @@ const validateBasePreviewTint = (value: unknown): Validation<ValidatedTint> => {
   return {
     ok: true,
     value: {
+      owner: {
+        kind: fieldValue(owner, 'kind') as 'geometry' | 'glyph',
+        commandId: fieldValue(owner, 'commandId') as string,
+        ownerId: fieldValue(owner, 'ownerId') as string,
+      },
       field: field as ValidatedTint['field'],
       slot: slot as TintSlot,
       domain: domain as TintDomain,
@@ -1378,6 +1395,15 @@ const validateCommand = (
       const tintResult = validateBasePreviewTints(fieldValue(value, 'basePreviewTints'));
       if (isValidationFailure(tintResult)) return { ok: false, refusal: tintResult.refusal };
       tints = tintResult.value;
+      const nodeId = fieldValue(value, 'nodeId');
+      const commandId = fieldValue(value, 'id');
+      if (!nonEmptyString(nodeId)
+        || !nonEmptyString(commandId)
+        || !tints.every(tint => tint.owner.kind === 'geometry'
+          && tint.owner.commandId === commandId
+          && tint.owner.ownerId === nodeId)) {
+        return refusal('invalid-command', 'basePreviewTints command-owner binding does not match geometry nodeId');
+      }
       const activeFillCount = tints.filter(tint => tint.slot === 'table-background' || tint.slot === 'cell-background' || tint.slot === 'widget-background').length;
       if (activeFillCount > 1) return refusal('invalid-command', 'node geometry carries multiple reassigned base fill tints');
       const innerTintCount = tints.filter(tint => tint.slot === 'editbox-inner-background').length;
@@ -1416,7 +1442,8 @@ const validateCommand = (
     const lineIndex = fieldValue(value, 'lineIndex');
     const codePoint = fieldValue(value, 'codePoint');
     const glyphIndex = fieldValue(value, 'glyphIndex');
-    if (!safeInteger(lineIndex) || !safeInteger(codePoint) || (codePoint as number) > 0x10ffff || (codePoint as number) >= 0xd800 && (codePoint as number) <= 0xdfff || !safeInteger(glyphIndex, 1) || !nonEmptyString(fieldValue(value, 'textId')) || !validRange(fieldValue(value, 'sourceRange')) || !validRange(fieldValue(value, 'sourceCodePointRange')) || typeof fieldValue(value, 'isEllipsis') !== 'boolean') {
+    const textId = fieldValue(value, 'textId');
+    if (!safeInteger(lineIndex) || !safeInteger(codePoint) || (codePoint as number) > 0x10ffff || (codePoint as number) >= 0xd800 && (codePoint as number) <= 0xdfff || !safeInteger(glyphIndex, 1) || !nonEmptyString(textId) || !validRange(fieldValue(value, 'sourceRange')) || !validRange(fieldValue(value, 'sourceCodePointRange')) || typeof fieldValue(value, 'isEllipsis') !== 'boolean') {
       return refusal('invalid-command', 'glyph command metadata is unsafe or malformed');
     }
     const map = fieldValue(font.descriptor, 'codePointToGlyphIndex') as readonly unknown[];
@@ -1442,6 +1469,13 @@ const validateCommand = (
         return refusal('invalid-command', 'glyph basePreviewTints must carry exactly its parent primary or secondary text tint');
       }
       tint = tintResult.value[0];
+      const commandId = fieldValue(value, 'id');
+      if (!nonEmptyString(commandId)
+        || tint.owner.kind !== 'glyph'
+        || tint.owner.commandId !== commandId
+        || tint.owner.ownerId !== textId) {
+        return refusal('invalid-command', 'basePreviewTints command-owner binding does not match glyph textId');
+      }
     }
     return {
       ok: true,
@@ -1576,7 +1610,6 @@ const validatePlan = (
   const keepOutEntries = new Set<string>();
   const issuedOrders = new Set<number>();
   const previousLayerOrders = [-1, -1, -1, -1];
-  const tintOwners = new Map<string, string>();
   const glyphTintOwners = new Map<string, string>();
   for (let layerIndex = 0; layerIndex < 4; layerIndex += 1) {
     const layer = layers[layerIndex];
@@ -1600,14 +1633,6 @@ const validatePlan = (
         if (typeof entryId === 'string' && keepOutEntries.has(entryId)) return refusal('duplicate-command', `keep-out entry ${entryId} is duplicated`);
         if (typeof entryId === 'string') keepOutEntries.add(entryId);
       }
-      if (command.value.kind === 'node-geometry' && command.value.tints !== undefined) {
-        const owner = nonEmptyString(fieldValue(commandValue, 'nodeId')) ? fieldValue(commandValue, 'nodeId') as string : id;
-        for (const tint of command.value.tints) {
-          const priorOwner = tintOwners.get(tint.factKey);
-          if (priorOwner !== undefined && priorOwner !== owner) return refusal('invalid-command', 'basePreviewTints fact is reassigned across geometry owners');
-          tintOwners.set(tint.factKey, owner);
-        }
-      }
       if (command.value.kind === 'glyph-alpha-blit') {
         const textId = fieldValue(commandValue, 'textId');
         if (!nonEmptyString(textId)) return refusal('invalid-command', 'glyph text owner is malformed');
@@ -1616,11 +1641,6 @@ const validatePlan = (
         const priorTextTint = glyphTintOwners.get(owner);
         if (priorTextTint !== undefined && priorTextTint !== tintKey) return refusal('invalid-command', 'glyph basePreviewTints are reassigned within one text owner');
         glyphTintOwners.set(owner, tintKey);
-        if (command.value.tint !== undefined) {
-          const priorOwner = tintOwners.get(command.value.tint.factKey);
-          if (priorOwner !== undefined && priorOwner !== owner) return refusal('invalid-command', 'basePreviewTints fact is reassigned across geometry and glyph owners');
-          tintOwners.set(command.value.tint.factKey, owner);
-        }
       }
       validatedLayers[layerIndex].push(command.value);
       flattened.push(command.value);

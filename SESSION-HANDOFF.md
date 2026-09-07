@@ -1,104 +1,108 @@
-# Session handoff — B119 deterministic-math `0.0.72` released; AI benchmark remains open
+# Session handoff — B119 public/installed `0.0.74` verified; full AI benchmark remains open
 
-Date: `2026-09-06`
+Date: `2026-09-07`
 Project: `F:\DEV_ENV\X4_Forge`
-Status: bounded deterministic-math/release/install/public-parity unit `VERIFIED`; overall B119
-`IN_PROGRESS / PARTIAL / Not verified in game`
+Status: bounded command-bound tint, public release, installed two-profile render/export, and authority-lifecycle unit
+`VERIFIED`; overall B119 `IN_PROGRESS / PARTIAL / Not verified in game`
 
 ## Session-start brief
 
 - **Project identity:** X4 Forge B119, the linter-first source-faithful X4 Lua UI editor; GitHub owner #41.
 - **Eyeball queue:**
-  1. In installed Forge, select workspace `x4 AiLive` -> `HUD & Lua UI` -> exact source
-     `ui/addons/ai_influence_chat/aic_menu.lua` -> target `menu.display` -> enter the displayed owner-issued samples,
-     ending with `_choiceY = 979`. Confirm the native Canvas shows the low edit box plus `SEND` and `END`, and that
-     the page still says `Not verified in game`.
-  2. For the remaining AI benchmark, launch X4 -> load the current proving save -> use `Speak to AI` -> capture the
-     selected compact direction, expanded COMM, proposal gate/sheet, and each hub tab through valid current paths.
-     Compare only against Forge output with the same source hash, drawable, scale, samples, and branch selections.
-     Do not treat missing runtime body content as a preview success or a game failure.
-- **Commit question:** answered. Feature checkpoint
-  `b3613e2f9e6fe6418dbf3c6879c8a6bb9b2a0b12` (`feat(ui-editor): resolve source math geometry and publish
-  0.0.72`) is pushed; local `HEAD`, `origin/main`, and the direct remote `main` ref were read back byte-exact. This
-  external-projection receipt is the next docs-only commit point.
+  1. Full AI Influence benchmark: open Antigravity -> X4 Forge Studio -> workspace `x4 AiLive` -> `HUD & Lua UI` ->
+     `X4 SOURCE PREVIEW`; select each exact AI Lua source/target and the owner-issued path/loop/sample values for the
+     compact direction, expanded COMM, proposal gate/sheet, and hub tabs; compare against all supplied `00` and
+     `1a`-`1j` images at their recorded profile. Mark runtime-built or unresolved bodies absent, not guessed.
+  2. Current in-game census when the preview side is ready: launch X4 -> load the proving save -> `Speak to AI` ->
+     capture the same current path states -> close each panel normally -> exit X4; compare only exact source/profile
+     pairs and inspect the scoped debuglog for view/Lua failures. This is the authority for player-visible claims.
+- **Commit question:** current `HEAD`, upstream, and direct remote are all
+  `37a248cd2a84386ddba1d7232800cc83ef350a5f`. The current B119/release/record checkpoint is intentionally uncommitted
+  until final record review and a fresh complete precommit pass; commit and push it next using only the explicit owned
+  paths below.
 
-## Exact current evidence
+## Current implementation and release checkpoint
 
-- Committed implementation/test paths:
-  `src/lib/x4UiCallModel.ts`, `src/lib/x4UiCallModel.selftest.ts`, `src/lib/x4UiLayoutProgram.ts`, and
-  `src/lib/x4UiLayoutProgram.selftest.ts`. Release paths:
-  `vscode-extension/package.json`, `vscode-extension/release-notes.json`, and
-  `vscode-extension/CHANGELOG.md`. Records: this file, `BACKLOG.md`, and
-  `docs/plans/2026-09-02-b119-canonical-source-editor-game-pipeline.md`. Preserve every other dirty path.
-- Focused gates: call model `102/102`; layout `721 passed / 1 standing skip / 722 total`; linter `140/140`;
-  whole-repository TypeScript, exact four-file ESLint, and diff hygiene green. The fifteen reproduced false-known
-  math/global mutation paths now fail closed; pure/non-math/Helper/post-use controls remain known.
-- Real-source probe: exact current `aic_menu.lua -> menu.display`, SHA-256
-  `4253D9BD9DE4113D4DE0B881DBF5A1E90CAA7B30F735BA925403EBEF7EC47DD7`, `parsed=true`, projection `partial`,
-  resolved `px=600`, resolved `tw=1050`, one `_choiceY` occurrence, and `19` samples total.
-- Broad gates: oracle wrapper `134/134`; serial E2E `106/106`, zero failed/flaky/bad/quarantined, `treeGone=true`,
-  ports `3100/3101` closed; production build `1,848` modules; staged app probe `16/16`; and complete precommit green
-  after the final release and record edits (`12` capabilities / `297` routes, `82` receipt routes / `57` surfaces,
-  typecheck and size guards included).
-- Live mod workspace stayed clean at `4c0a422b7e3d0f492b572b9da8d2d7ea19a2b453`. Excluding `.git`, payload
-  fingerprint is `127 files / 19 directories / 11,262,724 bytes /
-  9B1A0021A22927D55168A8904C255CEDC630853DB02B07389A64742E269C0BEC`.
+- Command-bound source-tint ownership is implemented in `src/lib/x4UiPaintPlan.ts` and
+  `src/lib/x4UiCanvasRenderer.ts` with their selftests. Geometry tints bind to exact `commandId`/`nodeId`; glyph tints
+  bind to parent `textId`. Repeated literals from finite source loops are valid only under their exact issued owners;
+  copied, reassigned, missing, accessor-backed, sparse, and hostile structures refuse before allocation.
+- The broader B119 checkpoint also changes the existing Source Editor, EditorSession, LayoutProgram, PreviewPipeline,
+  and Scene owners plus focused tests and `tests/e2e/x4-ui-source-editor.spec.ts`. No parallel renderer, compiler,
+  deployer, or workspace owner was added.
+- Intended tracked feature/release paths are exactly:
+  `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`,
+  `src/components/X4UiSourceEditor.tsx`, `src/components/X4UiSourceEditor.selftest.tsx`,
+  `src/lib/x4UiEditorSession.ts`, `src/lib/x4UiEditorSession.selftest.ts`,
+  `src/lib/x4UiLayoutProgram.ts`, `src/lib/x4UiLayoutProgram.selftest.ts`,
+  `src/lib/x4UiPaintPlan.ts`, `src/lib/x4UiPaintPlan.selftest.ts`,
+  `src/lib/x4UiPreviewPipeline.ts`, `src/lib/x4UiPreviewPipeline.selftest.ts`,
+  `src/lib/x4UiScene.ts`, `src/lib/x4UiScene.selftest.ts`,
+  `src/lib/x4UiCanvasRenderer.ts`, `src/lib/x4UiCanvasRenderer.selftest.ts`,
+  `tests/e2e/x4-ui-source-editor.spec.ts`, `vscode-extension/package.json`,
+  `vscode-extension/release-notes.json`, and `vscode-extension/CHANGELOG.md`.
+- Required tracked records to include at close: `BACKLOG.md` and this file. Preserve every other modified, deleted,
+  or untracked path. The installed validator and receipts under `dev-docs/` are intentionally ignored evidence and
+  must not be broad-added.
 
-## Release / install / rendered-host proof
+## Validation already passed
 
-- Local stable VSIX: `F:\DEV_ENV\X4_Forge\vscode-extension\x4-forge-studio-0.0.72.vsix`, `2,107` archive
-  entries / `2,105` payload files, `26,303,425` bytes, SHA-256
-  `5C6B2C20C42E93359DED03DBF199F00C1C858AFCC579388F10F94818CDDEA4B0`. Package inspection found no secret or
-  machine-path leak.
-- OpenVSX publication succeeded once. `/latest` and direct version endpoint now return `0.0.72`; independent public
-  download is exactly `26,303,425` bytes with the same SHA-256. Do not republish.
-- Retained prior install:
-  `C:\Users\Moshi\AppData\Local\Temp\x4forge-b119-0.0.71-final-install-backup-20260906T024434135Z`.
-  Installed `0.0.72` matches all `2,105` package files with only expected `.vsixmanifest`; Antigravity is open.
-  Installed sidecar is port `60966`, one supervisor plus one server, root HTTP `200`, configured corpus exact,
-  unauthenticated config `401`, runtime oracles `134/134`.
-- Exact installed target exposes `19` preview-only samples and `33` branch boundaries. The unsampled state refuses
-  source composition. Supplying the first eleven required samples, ending with `_choiceY=979`, produces
-  `rendered/current` and one native `2560x1440` Canvas. Visual inspection confirms only the source-static edit box,
-  `SEND`, and `END`; runtime rail/transcript/choice content is not invented.
-- Retained screenshot:
-  `dev-docs/b119-ai-influence-dogfood/installed-release-20260906/installed-0.0.72-menu-display-sampled-current-2560x1440.png`,
-  `45,676` bytes, SHA-256
-  `5286095C6B16A15230D79F770B4FB6CD026B80BC08F59E32D215FC4AD37D6A8F` (evidence directory is intentionally
-  ignored by Git). A later refused branch state retained that bitmap as `stale`, proving current-only replacement.
-- X4 is stopped. No mod/game/settings/save/corpus byte changed in the `0.0.72` parser-only release. Prior same-source
-  X4 receipts remain valid evidence for their bounded runs but do not make this preview game-verified.
+- Focused command-bound repair: Paint `211/211`; Canvas `171/171`, including `77/77` causal Stage-B checks;
+  TypeScript, exact bounded ESLint, and diff hygiene pass.
+- Full release gates: runtime oracles `134/134`; serial E2E `106/106` in `12.1m`, zero failed/flaky/bad/skipped or
+  incomplete results, complete lifecycle ownership, `treeGone=true`; production build `1,848` modules; Graphify
+  `10,582` nodes / `26,672` edges / `316` communities with no tracked Graphify delta; complete precommit green.
+- Local/public stable VSIX is `26,315,067` bytes, SHA-256
+  `63213F694CA72303A6B444B6697402A425DD4F1AE53FF45DDE07F9AD72D9C267`. OpenVSX direct/latest `0.0.74` and an
+  independent public download match exactly. `_published["0.0.74"] = "2026-09-07"` now records the exceptional
+  pre-corrective-commit publication; canonical changelog order is unchanged. Do not republish.
+- Installed `0.0.74` matches all `2,105` packaged payload files with only expected host metadata. A complete `0.0.73`
+  rollback copy is at
+  `C:\Users\Moshi\AppData\Local\Temp\x4forge-installed-0.0.74-f4bd49008ad148d29b383876532a8d2b\rollback-0.0.73\x4forge.x4-forge-studio-0.0.73`.
+  Installed sidecar listener remains PID `55096` on port `54793`; installed runtime oracles pass `134/134`.
 
-## Current boundary and next bounded unit
+## Accepted installed visual and authority-lifecycle evidence
 
-- The original literal UI-editor brief has retained linter and three-menu same-source Forge/X4 evidence, including
-  `125` measured features with maximum normalized delta `3 px <= 5 px`. This release closes the real-source math
-  geometry gap and public distribution of that repair.
-- Overall B119 remains open because the full twelve-reference AI Influence reconstruction/current-path visual census,
-  complete runtime-built menu bodies, and universal Helper/widget/C++ frame acceptance are not proven. `1f` remains
-  data-blocked by its missing deterministic pricing contract. Preview always remains `Not verified in game`.
-- Next bounded unit after commit/projection close: launch X4 only if needed for a genuinely new same-source comparison;
-  otherwise continue the exact AI reference census from the existing retained captures and identify the smallest
-  missing source/sample/path capability. Do not reopen already-proven three-menu parity or mutate the live mod without
-  a new reconciled acceptance contract.
+- Validator attempt 3 ran `2026-09-07T13:54:07.593Z` to `2026-09-07T14:14:53.925Z`, exited `0`, and passed
+  `242/242` assertions with zero page/console/request/HTTP/native-dialog errors. One browser/context closed in
+  `finally`; no owned Playwright browser remains.
+- `2560x1440`, effective Helper scale `1.4`, source-derived `_choiceY=769`: current Canvas identity `1`, `285,600`
+  nontransparent / `261,575` nonblack-visible pixels, bbox `1050x272 @ 600,769`; native export `80,991` bytes / SHA
+  `FB3DC6A9D6BA3DFB87B1BA301D2F3307B34B6D33D1650DC8E48BA64A62150CCF`, equal to mounted Canvas serialization.
+- `1800x900`, effective Helper scale `0.875`, source-derived `_choiceY=481`: replacement identity `2`, `92,988`
+  nontransparent / `83,214` nonblack-visible pixels, bbox `738x126 @ 421,481`; native export `37,140` bytes / SHA
+  `A23B289714EE6A3C87408AF6D7067380D65624B00C8722C80B62E328D5B62803`, equal to mounted Canvas serialization.
+- Clearing source/target retains identity `2` and the exact second hash only as `retained-stale-history` with
+  `currentAuthority:false`, status `stale`, and export unavailable. Final complete authority creates identity `3` at
+  `2560x1440` and exactly reproduces the first hash. Visual review confirms the same `REVIEW`, input, `SEND`, and `END`
+  structure at both scales.
+- Receipt:
+  `dev-docs/b119-ai-influence-dogfood/installed-release-20260907/authority-complete-0.0.74-attempt3/installed-0.0.74-aic-menu-display-receipt.json`,
+  `6,745,911` bytes / SHA-256 `8B62A1E3385706A234977624020835C7C8FF1CC104ACA318F9043098A383AE61`.
+- Safety restored: repository porcelain, exact source SHA
+  `4253D9BD9DE4113D4DE0B881DBF5A1E90CAA7B30F735BA925403EBEF7EC47DD7`, installed package, config, listener
+  identity, root health, original workspace, retained `0.0.73` evidence, and X4-absent state are unchanged.
 
-## Close / AAR state
+## Current boundary and next unit
 
-- No capability-map delta. Project UI gotcha card `40` records the verified source-visible math-authority lesson.
-- Triggered failures to retain: direct oracle without its server (`0/133`) before wrapper pass; one E2E pre-discovery
-  `0xC0000409` before `106/106`; initial workspace fingerprint accidentally included `.git`; OpenVSX indexing lag;
-  blank Electron installer output; supervisor/server process double-count; computer-use controlled-select mismatch;
-  first headless replay on the wrong workspace; expensive all-input projection replay; and unsupported
-  `New-Item -LiteralPath` before exact public-download retry.
-- GitHub #41 comment `5559268309` was written and read back at
-  `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5559268309`; the owner issue remains open.
-- Notion owner `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated in place and read back at
-  `2026-09-06T12:39:28.684Z` with `Status=In Progress`, `Evidence Grade=Partial`, exact commit, comment, release,
-  public hash, causal canvas, and `Not verified in game` boundary present.
-- Google Current Status document `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, accepted the update
-  under required revision
-  `ANLCKQmDhtrpnfO1W9qZ6MVOrOmzKfNGmkBKS448FRbrYxIfcMjuN05OKv67TGvna9Q-6vbzu18Dr6EPWABJ_-TCT1Z_EgF1orlcMRiEQjU-`
-  and was read back at revision
-  `ANLCKQlFytgNaLmoBnbWVFkLjaadVaFfLQtd_RbwbaoUtzWRsZIwDywbjvK8SBkYmYuQZ-4VAb3DpcrGtHrUzSktHmXRHTm2YDf8AHxGfYAJ`.
-  Its top checkpoint, release, knowledge-base, executive-state, and appended receipt fields all contain the exact
-  commit/comment/hash and retain overall `PARTIAL / IN PROGRESS / Not verified in game`.
+- The original supplied UI-editor brief remains `6/6 VERIFIED`. Three exact-source real menus already have X4 and
+  Forge comparisons across `125` declared geometry/text features with maximum normalized delta `3 px <= 5 px`.
+- This checkpoint proves installed source-static preview behavior and authority lifecycle for the tested AI menu path.
+  It does not prove runtime-built AI menu bodies, every supplied reference, arbitrary Lua/Helper/widget behavior,
+  universal C++ frame acceptance, or whole-product 1:1 equivalence. The full twelve-reference AI Influence benchmark
+  and current in-game census remain the next bounded unit; B119 and GitHub #41 stay open.
+- Final exact-path diff hygiene and complete precommit are green. First command next session, if this close is
+  interrupted before commit: inspect `git status --short`, then exact-stage/commit/push only the `21` owned paths and
+  assert local/upstream/direct-remote parity before updating GitHub #41, Notion, and Google Current Status.
+
+## Close / AAR / external projection state
+
+- Plan, BACKLOG, capability-map delta, project AAR, and UI quick-reference card 58 now carry the accepted checkpoint.
+  External GitHub/Notion/Drive projections are still stale at the prior checkpoint and must be updated only after the
+  new source commit exists, then read back.
+- AAR triggers retained: attempt 1 reused one profile's absolute `_choiceY`; attempt 2 conflated a mounted stale bitmap
+  with current authority; one parent pure-helper command initially supplied the wrong object shape. Attempt 3 corrects
+  the validator only and preserves both failed receipts. No `0.0.75` product release is warranted.
+- Security action remains: rotate/revoke the OpenVSX PAT exposed during the earlier `0.0.73` token-bearing terminal
+  title. The `0.0.74` publication did not place the PAT in a command argument or output.
+- No native Luna worker remains open. Antigravity is running; X4 is stopped; installed sidecar is healthy.

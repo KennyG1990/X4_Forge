@@ -10,13 +10,19 @@ import {
   X4_UI_EDITOR_SESSION_GAME_TRUTH,
   X4_UI_EDITOR_UNSELECTED_SOURCE,
   adoptX4UiEditorCanvasResult,
-  projectX4UiEditorSession,
+  createX4UiEditorSessionOwner,
+  resetX4UiEditorLoopState,
   resetX4UiEditorPathState,
+  sameX4UiEditorLoopBinding,
   sameX4UiEditorPathBinding,
   sameX4UiEditorSampleBinding,
+  updateX4UiEditorLoopState,
   updateX4UiEditorPathState,
   updateX4UiEditorSampleState,
   type X4UiEditorCanvasState,
+  type X4UiEditorLoopBinding,
+  type X4UiEditorLoopCatalogAuthority,
+  type X4UiEditorLoopState,
   type X4UiEditorPathBinding,
   type X4UiEditorPathCatalogAuthority,
   type X4UiEditorPathState,
@@ -28,6 +34,7 @@ import {
   type X4UiEditorSessionProjection,
 } from '../lib/x4UiEditorSession';
 import type {
+  X4UiLayoutPreviewLoopCatalog,
   X4UiLayoutPreviewPathCatalog,
   X4UiLayoutPreviewPathSelectionInput,
   X4UiLayoutPreviewSampleCatalog,
@@ -199,8 +206,11 @@ interface ProjectionView {
   readonly canRender?: boolean;
 }
 
-interface PreviewView {
+interface SourceCandidateCatalogView {
   readonly sourceCandidates: readonly unknown[];
+}
+
+interface PreviewView extends SourceCandidateCatalogView {
   readonly lint: readonly unknown[];
 }
 
@@ -365,8 +375,8 @@ const targetKeyFor = (candidate: ValueRecord, index: number): string => (
   `${index}:${stringValue(candidate.id, 'unavailable')}:${stringValue(candidate.kind, 'unavailable')}`
 );
 
-const sourceCandidatesFor = (preview: PreviewView): readonly SourceCandidateView[] => (
-  preview.sourceCandidates.map((value, index) => {
+const sourceCandidatesFor = (catalog: SourceCandidateCatalogView): readonly SourceCandidateView[] => (
+  catalog.sourceCandidates.map((value, index) => {
     const candidate = asRecord(value) ?? {};
     const targets = asArray(candidate.targets).flatMap((targetValue, targetIndex) => {
       const target = asRecord(targetValue);
@@ -2537,6 +2547,82 @@ export function X4UiSourceEditorPreviewPaths({
   );
 }
 
+export interface X4UiSourceEditorPreviewLoopsProps {
+  readonly catalog: X4UiLayoutPreviewLoopCatalog | null;
+  readonly loops: X4UiEditorLoopState;
+  readonly onLoopIteration: (entryId: string, raw: string) => void;
+  readonly onReset: () => void;
+  readonly error?: string;
+}
+
+const loopIterationFor = (
+  loops: X4UiEditorLoopState,
+  entryId: string,
+): number | undefined => loops?.selections.find(selection => selection.id === entryId)?.iterationCount;
+
+const loopControlValue = (loops: X4UiEditorLoopState, entryId: string): string => {
+  const value = loopIterationFor(loops, entryId);
+  return value === undefined ? '' : String(value);
+};
+
+const loopSourceLabel = (entry: X4UiLayoutPreviewLoopCatalog['entries'][number]): string => {
+  const sourcePath = entry.source.sourcePath ?? entry.source.file;
+  return `${sourcePath}:${entry.source.start.line}:${entry.source.start.column + 1}-${entry.source.end.line}:${entry.source.end.column + 1}`;
+};
+
+export function X4UiSourceEditorPreviewLoops({
+  catalog,
+  loops,
+  onLoopIteration,
+  onReset,
+  error,
+}: X4UiSourceEditorPreviewLoopsProps) {
+  const hasEntries = catalog !== null && catalog.entries.length > 0;
+  return (
+    <section data-testid="x4-ui-preview-loops-region" className="mt-3 rounded border border-indigo-500/30 bg-indigo-950/10 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <h2 className="text-[10px] font-bold uppercase tracking-wider text-indigo-300">Preview Loop Iterations</h2>
+        <span data-testid="x4-ui-preview-loops-preview-only" className="font-bold text-amber-300">Preview only</span>
+      </div>
+      <div className="mt-2 text-amber-200">Finite loop selections affect preview replay only. They never change source, workspace, export bytes, linter truth, deploy state, or <span className="font-bold">Not verified in game</span>.</div>
+      {catalog === null ? (
+        <div data-testid="x4-ui-preview-loops-empty" className="mt-2 text-slate-500">Select an exact source and target to expose the owner-issued preview loop catalog.</div>
+      ) : catalog.entries.length === 0 ? (
+        <div data-testid="x4-ui-preview-loops-none" className="mt-2 text-slate-500">The selected layout program declares no selectable direct preview loops.</div>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {catalog.entries.map(entry => (
+            <label key={entry.id} data-testid={`x4-ui-preview-loop-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
+              <span className="font-bold text-slate-200">Loop {entry.id}</span>
+              <span data-testid={`x4-ui-preview-loop-source-${entry.id}`} className="break-all">Source range: {loopSourceLabel(entry)}</span>
+              <span data-testid={`x4-ui-preview-loop-metadata-${entry.id}`} className="break-all">Kind: {entry.kind} · multiplicity: {entry.multiplicity} · ID: {entry.id} · depth: {entry.depth} · provenance: {entry.provenance}</span>
+              <span className="flex flex-col gap-1 text-slate-500">
+                Preview only · iterations (1–16)
+                <input
+                  data-testid={`x4-ui-preview-loop-control-${entry.id}`}
+                  type="number"
+                  min={1}
+                  max={16}
+                  step={1}
+                  value={loopControlValue(loops, entry.id)}
+                  onChange={event => onLoopIteration(entry.id, event.target.value)}
+                  placeholder=""
+                  className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                />
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" data-testid="x4-ui-preview-loops-reset" onClick={onReset} disabled={!hasEntries || loops === undefined} className="rounded border border-indigo-500/30 px-2 py-1 text-[9px] font-bold uppercase text-indigo-300 disabled:border-white/10 disabled:text-slate-600">Reset preview loop iterations</button>
+        <span data-testid="x4-ui-preview-loops-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
+      </div>
+      {error !== undefined && <div data-testid="x4-ui-preview-loops-error" className="mt-2 break-words text-red-300">{error}</div>}
+    </section>
+  );
+}
+
 export default function X4UiSourceEditor({
   workspace,
   corpusLoader,
@@ -2553,14 +2639,18 @@ export default function X4UiSourceEditor({
   const [userScale, setUserScale] = useState(X4_UI_SOURCE_EDITOR_DEFAULT_USER_SCALE);
   const [sourceSelector, setSourceSelector] = useState('');
   const [targetSelector, setTargetSelector] = useState('');
-  const [sampleInput, setSampleInput] = useState<X4UiEditorSampleState>(undefined);
-  const [sampleBinding, setSampleBinding] = useState<X4UiEditorSampleBinding | undefined>(undefined);
-  const [sampleCatalogAuthority, setSampleCatalogAuthority] = useState<X4UiEditorSampleCatalogAuthority | undefined>(undefined);
-  const [sampleError, setSampleError] = useState<string | undefined>(undefined);
   const [pathInput, setPathInput] = useState<X4UiEditorPathState>(undefined);
   const [pathBinding, setPathBinding] = useState<X4UiEditorPathBinding | undefined>(undefined);
   const [pathCatalogAuthority, setPathCatalogAuthority] = useState<X4UiEditorPathCatalogAuthority | undefined>(undefined);
   const [pathError, setPathError] = useState<string | undefined>(undefined);
+  const [loopInput, setLoopInput] = useState<X4UiEditorLoopState>(undefined);
+  const [loopBinding, setLoopBinding] = useState<X4UiEditorLoopBinding | undefined>(undefined);
+  const [loopCatalogAuthority, setLoopCatalogAuthority] = useState<X4UiEditorLoopCatalogAuthority | undefined>(undefined);
+  const [loopError, setLoopError] = useState<string | undefined>(undefined);
+  const [sampleInput, setSampleInput] = useState<X4UiEditorSampleState>(undefined);
+  const [sampleBinding, setSampleBinding] = useState<X4UiEditorSampleBinding | undefined>(undefined);
+  const [sampleCatalogAuthority, setSampleCatalogAuthority] = useState<X4UiEditorSampleCatalogAuthority | undefined>(undefined);
+  const [sampleError, setSampleError] = useState<string | undefined>(undefined);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [enabledEntryIds, setEnabledEntryIds] = useState<readonly string[]>([]);
   const [manualCalibrationState, setManualCalibrationState] = useState<X4UiManualCalibrationState>(() => createX4UiManualCalibrationState());
@@ -2572,6 +2662,9 @@ export default function X4UiSourceEditor({
     context: null,
     staged: {},
   }));
+  const loopInputRef = useRef<X4UiEditorLoopState>(undefined);
+  const loopCatalogRef = useRef<X4UiLayoutPreviewLoopCatalog | null>(null);
+  const loopCatalogAuthorityRef = useRef<X4UiEditorLoopCatalogAuthority | undefined>(undefined);
   const sourceEditContextRef = useRef<X4UiSourceEditContext | null>(null);
   const sourceEditDraftRef = useRef(sourceEditDraft);
   const canvasStateRef = useRef(canvasState);
@@ -2587,6 +2680,10 @@ export default function X4UiSourceEditor({
   const manualSessionInput = useMemo(
     () => buildX4UiManualCalibrationSessionInput(manualCalibrationState),
     [manualCalibrationState],
+  );
+  const sessionOwner = useMemo(
+    () => createX4UiEditorSessionOwner(workspace),
+    [workspace],
   );
 
   useEffect(() => {
@@ -2650,19 +2747,7 @@ export default function X4UiSourceEditor({
     : undefined;
 
   const selection = useMemo(() => {
-    const provisionalInput = {
-      workspace,
-      corpus: canonicalCorpus,
-      profile: profileValue,
-      enabledEntryIds,
-      manualCalibrations: manualSessionInput.manualCalibrations,
-      enabledManualEntryIds: manualSessionInput.enabledManualEntryIds,
-      ...(canonicalColorEvidence === undefined ? {} : { colorEvidence: canonicalColorEvidence }),
-      ...(activePresetId === null ? {} : { activePresetId }),
-    } as unknown as X4UiEditorSessionInput;
-    const provisionalProjection = projectX4UiEditorSession(provisionalInput);
-    const provisionalPreview = previewFor(provisionalProjection);
-    const candidates = sourceCandidatesFor(provisionalPreview);
+    const candidates = sourceCandidatesFor(sessionOwner.candidateCatalog);
     const reconciled = reconcileX4UiEditorSelections({
       sourceSelector,
       targetSelector,
@@ -2692,16 +2777,9 @@ export default function X4UiSourceEditor({
       },
     };
   }, [
-    activePresetId,
-    canonicalColorEvidence,
-    canonicalCorpus,
-    enabledEntryIds,
-    manualSessionInput.enabledManualEntryIds,
-    manualSessionInput.manualCalibrations,
-    profileValue,
+    sessionOwner,
     sourceSelector,
     targetSelector,
-    workspace,
   ]);
 
   const sessionInput = useMemo(() => ({
@@ -2712,12 +2790,15 @@ export default function X4UiSourceEditor({
     manualCalibrations: manualSessionInput.manualCalibrations,
     enabledManualEntryIds: manualSessionInput.enabledManualEntryIds,
     ...(canonicalColorEvidence === undefined ? {} : { colorEvidence: canonicalColorEvidence }),
-    ...(sampleBinding === undefined ? {} : { sampleBinding }),
-    ...(sampleCatalogAuthority === undefined ? {} : { sampleCatalogAuthority }),
-    ...(sampleInput === undefined ? {} : { samples: sampleInput }),
     ...(pathBinding === undefined ? {} : { pathBinding }),
     ...(pathCatalogAuthority === undefined ? {} : { pathCatalogAuthority }),
     ...(pathInput === undefined ? {} : { paths: pathInput }),
+    ...(loopBinding === undefined ? {} : { loopBinding }),
+    ...(loopCatalogAuthority === undefined ? {} : { loopCatalogAuthority }),
+    ...(loopInput === undefined ? {} : { loops: loopInput }),
+    ...(sampleBinding === undefined ? {} : { sampleBinding }),
+    ...(sampleCatalogAuthority === undefined ? {} : { sampleCatalogAuthority }),
+    ...(sampleInput === undefined ? {} : { samples: sampleInput }),
     ...(activePresetId === null ? {} : { activePresetId }),
     ...(selection.selection === undefined ? {} : { selection: selection.selection }),
   }) as unknown as X4UiEditorSessionInput, [
@@ -2727,21 +2808,27 @@ export default function X4UiSourceEditor({
     enabledEntryIds,
     manualSessionInput.enabledManualEntryIds,
     manualSessionInput.manualCalibrations,
+    pathBinding,
+    pathCatalogAuthority,
+    pathInput,
+    loopBinding,
+    loopCatalogAuthority,
+    loopInput,
     profileValue,
     sampleBinding,
     sampleCatalogAuthority,
     sampleInput,
-    pathBinding,
-    pathCatalogAuthority,
-    pathInput,
     selection.selection,
     workspace,
   ]);
 
   const projection = useMemo(
-    () => projectX4UiEditorSession(sessionInput),
-    [sessionInput],
+    () => sessionOwner.project(sessionInput),
+    [sessionInput, sessionOwner],
   );
+  loopInputRef.current = loopInput;
+  loopCatalogRef.current = projection.loopCatalog;
+  loopCatalogAuthorityRef.current = projection.loopCatalogAuthority;
   const projectionView = projectionFor(projection);
   const preview = previewFor(projection);
   const currentVerificationSnapshot = useMemo(
@@ -2822,22 +2909,55 @@ export default function X4UiSourceEditor({
   }, [sourceEditContext]);
 
   useEffect(() => {
-    if (projection.samples !== sampleInput) setSampleInput(projection.samples);
-    if (!sameX4UiEditorSampleBinding(projection.sampleBinding, sampleBinding)) setSampleBinding(projection.sampleBinding);
-    if (projection.sampleCatalogAuthority !== sampleCatalogAuthority) setSampleCatalogAuthority(projection.sampleCatalogAuthority);
-    if (projection.sampleReconciliation.status !== 'accepted') {
-      setSampleError(projection.sampleReconciliation.message);
-    }
-  }, [projection.sampleBinding, projection.sampleCatalogAuthority, projection.sampleReconciliation, projection.samples, sampleBinding, sampleCatalogAuthority, sampleInput]);
-
-  useEffect(() => {
     if (projection.paths !== pathInput) setPathInput(projection.paths);
-    if (!sameX4UiEditorPathBinding(projection.pathBinding, pathBinding)) setPathBinding(projection.pathBinding);
-    if (projection.pathCatalogAuthority !== pathCatalogAuthority) setPathCatalogAuthority(projection.pathCatalogAuthority);
+    if (projection.paths === undefined) {
+      if (pathBinding !== undefined) setPathBinding(undefined);
+      if (pathCatalogAuthority !== undefined) setPathCatalogAuthority(undefined);
+    } else {
+      if (!sameX4UiEditorPathBinding(projection.pathBinding, pathBinding)) setPathBinding(projection.pathBinding);
+      if (projection.pathCatalogAuthority !== pathCatalogAuthority) setPathCatalogAuthority(projection.pathCatalogAuthority);
+    }
     if (projection.pathReconciliation.status !== 'accepted') {
       setPathError(projection.pathReconciliation.message);
     }
   }, [pathBinding, pathCatalogAuthority, pathInput, projection.pathBinding, projection.pathCatalogAuthority, projection.pathReconciliation, projection.paths]);
+
+  useEffect(() => {
+    const projectionRequiresLoopStateSync = projection.loopReconciliation.status !== 'accepted'
+      || projection.loopReconciliation.changed;
+    if (projectionRequiresLoopStateSync) {
+      if (projection.loops !== loopInputRef.current) {
+        loopInputRef.current = projection.loops;
+        setLoopInput(projection.loops);
+      }
+    }
+    if (projection.loops === undefined) {
+      if (loopBinding !== undefined) setLoopBinding(undefined);
+      if (loopCatalogAuthority !== undefined) setLoopCatalogAuthority(undefined);
+    } else if (!sameX4UiEditorLoopBinding(projection.loopBinding, loopBinding)) {
+      setLoopBinding(projection.loopBinding);
+      setLoopCatalogAuthority(projection.loopCatalogAuthority);
+    } else if (loopCatalogAuthority === undefined && projection.loopCatalogAuthority !== undefined) {
+      setLoopCatalogAuthority(projection.loopCatalogAuthority);
+    }
+    if (projection.loopReconciliation.status !== 'accepted') {
+      setLoopError(projection.loopReconciliation.message);
+    }
+  }, [loopBinding, loopCatalogAuthority, loopInput, projection.loopBinding, projection.loopCatalogAuthority, projection.loopReconciliation, projection.loops]);
+
+  useEffect(() => {
+    if (projection.samples !== sampleInput) setSampleInput(projection.samples);
+    if (projection.samples === undefined) {
+      if (sampleBinding !== undefined) setSampleBinding(undefined);
+      if (sampleCatalogAuthority !== undefined) setSampleCatalogAuthority(undefined);
+    } else {
+      if (!sameX4UiEditorSampleBinding(projection.sampleBinding, sampleBinding)) setSampleBinding(projection.sampleBinding);
+      if (projection.sampleCatalogAuthority !== sampleCatalogAuthority) setSampleCatalogAuthority(projection.sampleCatalogAuthority);
+    }
+    if (projection.sampleReconciliation.status !== 'accepted') {
+      setSampleError(projection.sampleReconciliation.message);
+    }
+  }, [projection.sampleBinding, projection.sampleCatalogAuthority, projection.sampleReconciliation, projection.samples, sampleBinding, sampleCatalogAuthority, sampleInput]);
 
   useEffect(() => {
     if (selection.reconciled.sourceSelector !== sourceSelector) setSourceSelector(selection.reconciled.sourceSelector);
@@ -3009,22 +3129,66 @@ export default function X4UiSourceEditor({
     setManualCalibrationState(previous => removeX4UiManualCalibrationRow(previous, rowId));
   };
 
-  const updateSample = (entryId: string, raw: string): void => {
-    const result = updateX4UiEditorSampleState(sampleInput, projection.sampleCatalog, entryId, raw, projection.sampleCatalogAuthority);
-    setSampleInput(result.samples);
-    setSampleError(result.status === 'refused' ? result.message : undefined);
-  };
-
   const updatePath = (entryId: string): void => {
     const result = updateX4UiEditorPathState(pathInput, projection.pathCatalog, entryId, projection.pathCatalogAuthority);
     setPathInput(result.paths);
+    if (result.status !== 'refused') {
+      setPathBinding(result.paths === undefined ? undefined : projection.pathBinding);
+      setPathCatalogAuthority(result.paths === undefined ? undefined : projection.pathCatalogAuthority);
+    }
     setPathError(result.status === 'refused' ? result.message : undefined);
   };
 
   const resetPaths = (): void => {
     const result = resetX4UiEditorPathState(pathInput, projection.pathCatalog, projection.pathCatalogAuthority);
     setPathInput(result.paths);
+    if (result.status !== 'refused') {
+      setPathBinding(undefined);
+      setPathCatalogAuthority(undefined);
+    }
     setPathError(result.status === 'refused' ? result.message : undefined);
+  };
+
+  const updateLoop = (entryId: string, raw: string): void => {
+    const result = updateX4UiEditorLoopState(
+      loopInputRef.current,
+      loopCatalogRef.current,
+      entryId,
+      raw,
+      loopCatalogAuthorityRef.current,
+    );
+    loopInputRef.current = result.loops;
+    setLoopInput(result.loops);
+    if (result.status !== 'refused') {
+      setLoopBinding(result.loops === undefined ? undefined : projection.loopBinding);
+      setLoopCatalogAuthority(result.loops === undefined ? undefined : projection.loopCatalogAuthority);
+    }
+    setLoopError(result.status === 'refused' ? result.message : undefined);
+  };
+
+  const resetLoops = (): void => {
+    const result = resetX4UiEditorLoopState(
+      loopInputRef.current,
+      loopCatalogRef.current,
+      loopCatalogAuthorityRef.current,
+    );
+    loopInputRef.current = result.loops;
+    setLoopInput(result.loops);
+    if (result.status !== 'refused') {
+      setLoopBinding(undefined);
+      setLoopCatalogAuthority(undefined);
+    }
+    setLoopError(result.status === 'refused' ? result.message : undefined);
+  };
+
+  const updateSample = (entryId: string, raw: string): void => {
+    const result = updateX4UiEditorSampleState(sampleInput, projection.sampleCatalog, entryId, raw, projection.sampleCatalogAuthority);
+    setSampleInput(result.samples);
+    if (result.status !== 'refused') {
+      setSampleBinding(result.samples === undefined ? undefined : projection.sampleBinding);
+      setSampleCatalogAuthority(result.samples === undefined ? undefined : projection.sampleCatalogAuthority);
+    }
+    setSampleError(result.status === 'refused' ? result.message : undefined);
   };
 
   const stageSourceEdit = (entryId: string, raw: string): void => {
@@ -3465,19 +3629,27 @@ export default function X4UiSourceEditor({
 
       <X4UiSourceEditorPreviewGeometry scene={projection.preview.scene} />
 
-      <X4UiSourceEditorSamples
-        catalog={projection.sampleCatalog}
-        samples={projection.samples}
-        onSampleInput={updateSample}
-        error={sampleError}
-      />
-
       <X4UiSourceEditorPreviewPaths
         catalog={projection.pathCatalog}
         paths={projection.paths}
         onPathSelection={updatePath}
         onReset={resetPaths}
         error={pathError}
+      />
+
+      <X4UiSourceEditorPreviewLoops
+        catalog={projection.loopCatalog}
+        loops={projection.loops}
+        onLoopIteration={updateLoop}
+        onReset={resetLoops}
+        error={loopError}
+      />
+
+      <X4UiSourceEditorSamples
+        catalog={projection.sampleCatalog}
+        samples={projection.samples}
+        onSampleInput={updateSample}
+        error={sampleError}
       />
 
       <section data-testid="x4-ui-keepout-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">

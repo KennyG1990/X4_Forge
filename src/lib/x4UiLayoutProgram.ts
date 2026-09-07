@@ -18,6 +18,9 @@ import type {
   X4UiBranchPathSegment,
   X4UiDirectHelperScaleResultIdentity,
   X4UiFunctionContext,
+  X4UiLoopKind,
+  X4UiLoopMultiplicity,
+  X4UiLoopPathSegment,
   X4UiLocalFunctionDeclaration,
   X4UiLocalFunctionInvocation,
   X4UiLocalFunctionParameterIdentity,
@@ -223,6 +226,7 @@ export interface X4UiLayoutPreviewSampleConsumer {
   readonly operationKind: X4UiRelevantCallName;
   readonly field: string;
   readonly source: X4UiSourceLocation;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
 }
 
 export interface X4UiLayoutPreviewSampleCatalogEntry {
@@ -232,6 +236,7 @@ export interface X4UiLayoutPreviewSampleCatalogEntry {
   readonly source: X4UiSourceLocation;
   readonly consumers: readonly X4UiLayoutPreviewSampleConsumer[];
   readonly provenance: 'preview-only';
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
 }
 
 export interface X4UiLayoutPreviewSampleCatalog {
@@ -258,6 +263,7 @@ export interface X4UiLayoutPreviewSampleBinding extends X4UiLayoutPreviewSampleV
   readonly provenance: 'preview-only';
   readonly status: 'consumed' | 'not-applied';
   readonly reason?: string;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
 }
 
 export interface X4UiLayoutPinnedNumber {
@@ -302,6 +308,62 @@ export interface X4UiLayoutProjectionProfile {
     readonly maxDepth: number;
     readonly maxInvocations: number;
   };
+}
+
+/** A single bounded preview iteration of one owner-issued direct-target loop. */
+export interface X4UiLayoutPreviewLoopInstance {
+  readonly id: string;
+  readonly entryId: string;
+  readonly loopId: string;
+  readonly source: X4UiSourceLocation;
+  readonly kind: X4UiLoopKind;
+  readonly multiplicity: X4UiLoopMultiplicity;
+  readonly depth: 1;
+  readonly iteration: number;
+  readonly iterationCount: number;
+}
+
+export interface X4UiLayoutPreviewLoopCatalogEntry {
+  readonly id: string;
+  readonly loopId: string;
+  readonly source: X4UiSourceLocation;
+  readonly kind: X4UiLoopKind;
+  readonly multiplicity: X4UiLoopMultiplicity;
+  readonly depth: 1;
+  readonly callIds: readonly string[];
+  readonly provenance: 'preview-only';
+}
+
+export interface X4UiLayoutPreviewLoopCatalog {
+  readonly id: string;
+  readonly sourceIdentity: X4UiLayoutModelIdentity;
+  readonly targetId: string;
+  /** Deterministic identity of the complete normalized projection profile. */
+  readonly profileId: string;
+  readonly entries: readonly X4UiLayoutPreviewLoopCatalogEntry[];
+}
+
+export interface X4UiLayoutPreviewLoopSelectionValue {
+  readonly id: string;
+  readonly iterationCount: number;
+}
+
+export interface X4UiLayoutPreviewLoopSelectionInput {
+  readonly catalogId: string;
+  readonly source: X4UiLayoutModelIdentity;
+  readonly targetId: string;
+  /** Exact catalog-issued normalized-profile identity, not the caller's profile.id. */
+  readonly profileId: string;
+  readonly selections: readonly X4UiLayoutPreviewLoopSelectionValue[];
+}
+
+export interface X4UiLayoutPreviewLoopSelectionBinding extends X4UiLayoutPreviewLoopSelectionValue {
+  readonly loopId: string;
+  readonly source: X4UiSourceLocation;
+  readonly kind: X4UiLoopKind;
+  readonly multiplicity: X4UiLoopMultiplicity;
+  readonly depth: 1;
+  readonly provenance: 'preview-only';
 }
 
 export interface X4UiLayoutPreviewPathCatalogEntry {
@@ -438,6 +500,7 @@ export interface X4UiLayoutGap {
   readonly source: X4UiSourceLocation;
   readonly operationId?: string;
   readonly nodeId?: string;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
 }
 
 export interface X4UiLayoutHeight {
@@ -481,6 +544,7 @@ export interface X4UiLayoutOperation {
   readonly kernel?: X4UiLayoutKernelTransition;
   readonly scale?: X4UiLayoutScaleResolution;
   readonly descriptorFacts: X4UiLayoutDescriptorFacts;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
   readonly localExpansion?: {
     readonly invocationId: string;
     readonly ancestry: readonly string[];
@@ -510,6 +574,7 @@ export interface X4UiLayoutEvidenceCall {
   readonly streamIndex: number;
   readonly status: X4UiLayoutOperationStatus;
   readonly reachability: X4UiLayoutEvidenceReachability;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
   readonly expansion?: X4UiLayoutEvidenceExpansionLink;
 }
 
@@ -527,6 +592,7 @@ export interface X4UiLayoutEvidenceOperation {
   readonly rowId?: string;
   readonly cellId?: string;
   readonly reason?: string;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
   readonly expansion?: X4UiLayoutEvidenceExpansionLink;
   readonly snapshot: X4UiLayoutOperation;
 }
@@ -542,6 +608,7 @@ export interface X4UiLayoutEvidenceSourceBinding {
   readonly streamIndex: number;
   readonly reachability: X4UiLayoutEvidenceReachability;
   readonly metadata: X4UiLayoutCallMetadata;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
   readonly expansion?: X4UiLayoutEvidenceExpansionLink;
 }
 
@@ -553,6 +620,7 @@ export interface X4UiLayoutEvidenceGap {
   readonly source: X4UiSourceLocation;
   readonly operationId?: string;
   readonly nodeId?: string;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
 }
 
 export interface X4UiLayoutEvidenceInvocation {
@@ -626,6 +694,9 @@ export interface X4UiLayoutEvidenceAuthority {
   /** Exact source-bound branch authority used by both direct and expanded preview calls. */
   readonly previewPathCatalog: X4UiLayoutPreviewPathCatalog;
   readonly previewPathSelections: readonly X4UiLayoutPreviewPathSelectionBinding[];
+  /** Exact source-bound finite loop authority used by direct-target preview replay. */
+  readonly previewLoopCatalog: X4UiLayoutPreviewLoopCatalog;
+  readonly previewLoopSelections: readonly X4UiLayoutPreviewLoopSelectionBinding[];
   readonly expansion?: X4UiLayoutEvidenceExpansion;
 }
 
@@ -731,6 +802,9 @@ export interface X4UiLayoutProgram {
   /** Exact source-bound branch catalog; selections are preview-only inputs. */
   readonly previewPathCatalog: X4UiLayoutPreviewPathCatalog;
   readonly previewPathSelections: readonly X4UiLayoutPreviewPathSelectionBinding[];
+  /** Exact source-bound finite loop authority used by direct-target preview replay. */
+  readonly previewLoopCatalog: X4UiLayoutPreviewLoopCatalog;
+  readonly previewLoopSelections: readonly X4UiLayoutPreviewLoopSelectionBinding[];
   readonly localExpansion?: X4UiLayoutLocalExpansionState;
   readonly verification: {
     readonly game: typeof X4_UI_LAYOUT_GAME_TRUTH;
@@ -801,6 +875,11 @@ export type X4UiLayoutProgramResult =
         | 'malformed-preview-path'
         | 'preview-path-source-mismatch'
         | 'invalid-preview-path'
+        | 'malformed-preview-loop'
+        | 'preview-loop-source-mismatch'
+        | 'preview-loop-target-mismatch'
+        | 'preview-loop-profile-mismatch'
+        | 'invalid-preview-loop'
         | 'malformed-color-evidence'
         | 'malformed-corpus-evidence';
       readonly message: string;
@@ -1422,6 +1501,11 @@ const refusalResult = (
     | 'malformed-preview-path'
     | 'preview-path-source-mismatch'
     | 'invalid-preview-path'
+    | 'malformed-preview-loop'
+    | 'preview-loop-source-mismatch'
+    | 'preview-loop-target-mismatch'
+    | 'preview-loop-profile-mismatch'
+    | 'invalid-preview-loop'
     | 'malformed-color-evidence'
     | 'malformed-corpus-evidence',
   message: string,
@@ -1955,6 +2039,11 @@ const directHelperScaleResultIsBound = (
 
 const scopedLocationKey = (source: X4UiSourceLocation, instanceScope = ''): string =>
   `${instanceScope}|${locationKey(source)}`;
+
+const instanceScopeForCall = (call: ProjectableCall | undefined): string => [
+  call?.expansionInstance?.ancestry.join('>') || '',
+  call?.previewLoop ? `@preview-loop:${call.previewLoop.id}` : '',
+].filter(Boolean).join('>');
 
 const directScaleForValue = (
   values: ReadonlyMap<string, DirectScaleValue> | undefined,
@@ -2693,8 +2782,18 @@ const unresolved = <T>(
 const sampleSourceForValue = (value: X4UiValue): X4UiSourceLocation =>
   value.directHelperScaleResult?.callSource || value.localInvocationResult?.source || value.location;
 
+const sampleCatalogSourceForValue = (
+  value: X4UiValue,
+  allowNumericExpressionSamples: boolean,
+): X4UiSourceLocation =>
+  allowNumericExpressionSamples && value.numericExpression?.source
+    ? value.numericExpression.source
+    : sampleSourceForValue(value);
+
 const evidenceExpressionForValue = (value: X4UiValue | undefined): string | undefined =>
   value?.numericExpression?.expression || value?.localInvocationResult?.expression || value?.expression;
+
+const NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR = 'numeric expression root has no exact source binding';
 
 const resolveNumericExpression = (
   value: X4UiValue,
@@ -2831,12 +2930,44 @@ const resolveNumber = (
   instanceScope = '',
   model?: X4UiCallModel,
   localScaleFontWrapperValues?: ReadonlyMap<string, DirectScaleValue>,
+  previewLoopId = '',
 ): Resolution<number> => {
+  const descriptorError = value?.numericExpression !== undefined && model !== undefined
+    ? numericExpressionError(value.numericExpression, value, model)
+    : undefined;
+  if (value?.numericExpression !== undefined
+    && model !== undefined
+    && descriptorError !== undefined
+    && descriptorError !== NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR) {
+    return {
+      gap: {
+        category,
+        status: 'unsupported',
+        expression: value.numericExpression.expression,
+        reason: `${label} numeric expression rejected: ${descriptorError}`,
+        source: cloneLocation(value.numericExpression.source),
+      },
+    };
+  }
+  const sample = value && (value.numericExpression === undefined || model !== undefined)
+    ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'number', previewLoopId))
+      || (value.numericExpression?.source
+        ? previewSamples?.get(rangeAndTypeKey(value.numericExpression.source, 'number', previewLoopId))
+        : undefined)
+    : undefined;
+  if (sample && typeof sample.value === 'number') {
+    consumedSamples?.add(sample.entry.id);
+    return {
+      value: sample.value,
+      source: cloneLocation(sample.entry.source),
+      provenance: 'preview-sample',
+      sampleId: sample.entry.id,
+    };
+  }
   if (value?.numericExpression !== undefined) {
     if (!model) {
       return unresolved(value, category, `${label} numeric expression has no source model`, fallbackSource);
     }
-    const descriptorError = numericExpressionError(value.numericExpression, value, model);
     if (descriptorError) {
       return {
         gap: {
@@ -2892,16 +3023,6 @@ const resolveNumber = (
     }
     return unresolved(value, 'constant', `${label} uses an unknown Helper constant`, fallbackSource);
   }
-  const sample = value ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'number')) : undefined;
-  if (sample && typeof sample.value === 'number') {
-    consumedSamples?.add(sample.entry.id);
-    return {
-      value: sample.value,
-      source: cloneLocation(sample.entry.source),
-      provenance: 'preview-sample',
-      sampleId: sample.entry.id,
-    };
-  }
   return unresolved(value, category, `${label} is not a complete static number`, fallbackSource);
 };
 
@@ -2912,11 +3033,14 @@ const resolveBoolean = (
   fallbackSource: X4UiSourceLocation,
   previewSamples?: ReadonlyMap<string, ResolvedPreviewSample>,
   consumedSamples?: Set<string>,
+  previewLoopId = '',
 ): Resolution<boolean> =>
   value?.status === 'static' && value.type === 'boolean' && typeof value.value === 'boolean'
     ? { value: value.value, source: cloneLocation(value.location), provenance: 'source-literal' }
     : (() => {
-      const sample = value ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'boolean')) : undefined;
+      const sample = value
+        ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'boolean', previewLoopId))
+        : undefined;
       if (sample && typeof sample.value === 'boolean') {
         consumedSamples?.add(sample.entry.id);
         return {
@@ -2977,11 +3101,14 @@ const resolveString = (
   fallbackSource: X4UiSourceLocation,
   previewSamples?: ReadonlyMap<string, ResolvedPreviewSample>,
   consumedSamples?: Set<string>,
+  previewLoopId = '',
 ): Resolution<string> =>
   value?.status === 'static' && value.type === 'string' && typeof value.value === 'string'
     ? { value: value.value, source: cloneLocation(value.location), provenance: 'source-literal' }
     : (() => {
-      const sample = value ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'string')) : undefined;
+      const sample = value
+        ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'string', previewLoopId))
+        : undefined;
       if (sample && typeof sample.value === 'string') {
         consumedSamples?.add(sample.entry.id);
         return {
@@ -3628,11 +3755,11 @@ const isCallReachabilityBlocked = (
   const context = call.context;
   if (context.reachability === 'unreachable'
     || context.branchPath.some(segment => segment.reachability === 'unreachable')) return 'unreachable';
-  if (context.loopPath.length > 0) return 'conditional';
+  if (context.loopPath.length > 0 && call.previewLoop === undefined) return 'conditional';
   const selectedArmIds = call.expansionInstance
     ? new Set(call.expansionInstance.selectedArmIds)
     : undefined;
-  if (call.expansionInstance || selectedPaths !== undefined) {
+  if (call.expansionInstance || call.previewLoop !== undefined || selectedPaths !== undefined) {
     if (context.branchPath.some(segment => {
       const selected = selectedPaths?.get(segment.boundaryId);
       return selectedPaths !== undefined
@@ -3736,6 +3863,7 @@ const addGap = (
     source: cloneLocation(gap.source),
     ...(gap.operationId ? { operationId: gap.operationId } : {}),
     ...(gap.nodeId ? { nodeId: gap.nodeId } : {}),
+    ...(gap.previewLoop ? { previewLoop: cloneDeep(gap.previewLoop) as X4UiLayoutPreviewLoopInstance } : {}),
   };
   gaps.push(normalized);
   if (evidenceGaps) evidenceGaps.push(cloneDeep(normalized) as X4UiLayoutGap);
@@ -3777,6 +3905,7 @@ const kernelFailureGap = (
 };
 
 interface ProjectableCall extends X4UiCallRecord {
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
   readonly expansionInstance?: {
     readonly invocationId: string;
     readonly ancestry: readonly string[];
@@ -3818,6 +3947,7 @@ const operationIdFor = (call: ProjectableCall): string =>
     'operation',
     `${call.order}|${call.name}|${locationKey(call.source)}`
       + (call.expansionInstance ? `|${call.expansionInstance.ancestry.join('>')}` : '')
+      + (call.previewLoop ? `|preview-loop:${call.previewLoop.id}` : '')
   );
 
 const evidenceCallIdFor = (call: ProjectableCall): string =>
@@ -3833,10 +3963,12 @@ const sampleIdFor = (
   identity: X4UiLayoutModelIdentity,
   source: X4UiSourceLocation,
   expectedType: X4UiLayoutScalarType,
+  previewLoopId?: string,
 ): string => programId(
   'preview-sample',
   `${identity.sha256}|${source.start.line}:${source.start.column}:${source.start.offset}`
-    + `-${source.end.line}:${source.end.column}:${source.end.offset}|${expectedType}`,
+    + `-${source.end.line}:${source.end.column}:${source.end.offset}|${expectedType}`
+    + (previewLoopId ? `|preview-loop:${previewLoopId}` : ''),
 );
 
 const PROPERTY_SAMPLE_TYPES: Readonly<Record<string, X4UiLayoutScalarType | undefined>> = Object.freeze({
@@ -3883,8 +4015,9 @@ const isSampleableValue = (
   value: X4UiValue,
   expectedType: X4UiLayoutScalarType,
   allowLocalInvocationResults: boolean,
+  allowNumericExpressionSamples = false,
 ): boolean => {
-  if (value.numericExpression) return false;
+  if (value.numericExpression && !allowNumericExpressionSamples) return false;
   if (value.localInvocationResult && allowLocalInvocationResults) {
     return value.status !== 'static'
       && !value.reference
@@ -3916,6 +4049,7 @@ const createPreviewSampleCatalog = (
   resolvedDirectScaleLocations: ReadonlySet<string>,
   resolvedLocalScaleFontInvocationIds: ReadonlySet<string> = new Set(),
   allowLocalInvocationResults = false,
+  allowNumericExpressionSamples = false,
 ): X4UiLayoutPreviewSampleCatalog => {
   type MutableEntry = {
     id: string;
@@ -3924,6 +4058,7 @@ const createPreviewSampleCatalog = (
     source: X4UiSourceLocation;
     consumers: X4UiLayoutPreviewSampleConsumer[];
     provenance: 'preview-only';
+    previewLoop?: X4UiLayoutPreviewLoopInstance;
   };
   const entries = new Map<string, MutableEntry>();
   const collect = (
@@ -3932,17 +4067,19 @@ const createPreviewSampleCatalog = (
     value: X4UiValue | undefined,
     expectedType: X4UiLayoutScalarType,
   ): void => {
-    if (!value || !isSampleableValue(value, expectedType, allowLocalInvocationResults)) return;
+    if (!value || !isSampleableValue(value, expectedType, allowLocalInvocationResults, allowNumericExpressionSamples)) return;
     if (value.localInvocationResult
       && resolvedLocalScaleFontInvocationIds.has(value.localInvocationResult.invocationId)) return;
-    const sampleSource = sampleSourceForValue(value);
+    const sampleSource = sampleCatalogSourceForValue(value, allowNumericExpressionSamples);
     if (resolvedDirectScaleLocations.has(locationKey(sampleSource))) return;
-    const id = sampleIdFor(identity, sampleSource, expectedType);
+    const previewLoop = call.previewLoop;
+    const id = sampleIdFor(identity, sampleSource, expectedType, previewLoop?.id);
     const consumer: X4UiLayoutPreviewSampleConsumer = {
       operationId: operationIdFor(call),
       operationKind: call.name,
       field,
       source: cloneLocation(value.location),
+      ...(previewLoop ? { previewLoop: cloneDeep(previewLoop) as X4UiLayoutPreviewLoopInstance } : {}),
     };
     const existing = entries.get(id);
     if (existing) {
@@ -3953,11 +4090,12 @@ const createPreviewSampleCatalog = (
     }
     entries.set(id, {
       id,
-      expression: evidenceExpressionForValue(value) || value.expression,
+      expression: value.numericExpression ? value.expression : evidenceExpressionForValue(value) || value.expression,
       expectedType,
       source: cloneLocation(sampleSource),
       consumers: [consumer],
       provenance: 'preview-only',
+      ...(previewLoop ? { previewLoop: cloneDeep(previewLoop) as X4UiLayoutPreviewLoopInstance } : {}),
     });
   };
 
@@ -4010,8 +4148,11 @@ interface NormalizedPreviewSamples {
   readonly ordered: readonly ResolvedPreviewSample[];
 }
 
-const rangeAndTypeKey = (source: X4UiSourceLocation, expectedType: X4UiLayoutScalarType): string =>
-  `${locationKey(source)}|${expectedType}`;
+const rangeAndTypeKey = (
+  source: X4UiSourceLocation,
+  expectedType: X4UiLayoutScalarType,
+  previewLoopId = '',
+): string => `${locationKey(source)}|${expectedType}${previewLoopId ? `|preview-loop:${previewLoopId}` : ''}`;
 
 const scalarType = (value: X4UiLayoutScalar): X4UiLayoutScalarType => typeof value as X4UiLayoutScalarType;
 
@@ -4026,7 +4167,8 @@ const normalizePreviewSamples = (
   if (!isObject(input) || typeof input.catalogId !== 'string' || !isObject(input.source) || !Array.isArray(input.values)) {
     return { ok: false, code: 'malformed-samples', message: 'preview samples must carry catalogId, exact source identity, and a values array' };
   }
-  if (typeof input.source.file !== 'string'
+  if (!exactKeys(input.source, ['file', 'sha256'], ['sourcePath'])
+    || typeof input.source.file !== 'string'
     || (input.source.sourcePath !== undefined && typeof input.source.sourcePath !== 'string')
     || !isHexSha256(input.source.sha256)) {
     return { ok: false, code: 'malformed-samples', message: 'preview sample source identity is malformed' };
@@ -4062,7 +4204,10 @@ const normalizePreviewSamples = (
   return {
     ok: true,
     value: {
-      byRangeAndType: new Map(ordered.map(sample => [rangeAndTypeKey(sample.entry.source, sample.entry.expectedType), sample])),
+      byRangeAndType: new Map(ordered.map(sample => [
+        rangeAndTypeKey(sample.entry.source, sample.entry.expectedType, sample.entry.previewLoop?.id),
+        sample,
+      ])),
       ordered,
     },
   };
@@ -4229,6 +4374,362 @@ const normalizePreviewPaths = (
   return { ok: true, value: { byBoundary: selectedBoundaries, ordered } };
 };
 
+const previewLoopCatalogIdFor = (
+  identity: X4UiLayoutModelIdentity,
+  target: X4UiLayoutTarget,
+  profileId: string,
+): string => programId(
+  'preview-loop-catalog',
+  `${identity.sha256}|${locationKey(target.source)}|${profileId}`,
+);
+
+const previewLoopProfileIdFor = (
+  profile: X4UiLayoutProjectionProfile,
+): string => programId('preview-loop-profile', sha256(JSON.stringify(profile)));
+
+const previewLoopIdFor = (
+  identity: X4UiLayoutModelIdentity,
+  segment: X4UiLoopPathSegment,
+): string => programId(
+  'preview-loop',
+  `${identity.sha256}|${locationKey(segment.source)}|${segment.kind}|${segment.multiplicity}`,
+);
+
+const previewLoopEntryIdFor = (
+  identity: X4UiLayoutModelIdentity,
+  target: X4UiLayoutTarget,
+  profileId: string,
+  segment: X4UiLoopPathSegment,
+): string => programId(
+  'preview-loop-entry',
+  `${identity.sha256}|${locationKey(target.source)}|${profileId}|${locationKey(segment.source)}`,
+);
+
+const previewLoopCallIdFor = (
+  identity: X4UiLayoutModelIdentity,
+  call: X4UiCallRecord,
+): string => programId(
+  'preview-loop-call',
+  `${identity.sha256}|${call.order}|${call.name}|${locationKey(call.source)}`,
+);
+
+const createPreviewLoopCatalog = (
+  model: X4UiCallModel,
+  identity: X4UiLayoutModelIdentity,
+  target: X4UiLayoutTarget,
+  profileId: string,
+): X4UiLayoutPreviewLoopCatalog => {
+  type MutableEntry = {
+    id: string;
+    loopId: string;
+    source: X4UiSourceLocation;
+    kind: X4UiLoopKind;
+    multiplicity: X4UiLoopMultiplicity;
+    depth: 1;
+    callIds: string[];
+    provenance: 'preview-only';
+  };
+  const entries = new Map<string, MutableEntry>();
+  const directCalls = model.records
+    .filter((record): record is X4UiCallRecord => record.recordType === 'call'
+      && locationsEqual(record.context.source, target.source)
+      && EVIDENCE_RELEVANT_CALL_NAMES.includes(record.name))
+    .sort((left, right) => left.order - right.order);
+  for (const call of directCalls) {
+    if (call.context.loopPath.length !== 1) continue;
+    const segment = call.context.loopPath[0];
+    if (!locationContains(target.source, segment.source) || !locationContains(segment.source, call.source)) continue;
+    const sourceKey = locationKey(segment.source);
+    const existing = entries.get(sourceKey);
+    if (existing) {
+      const callId = previewLoopCallIdFor(identity, call);
+      if (!existing.callIds.includes(callId)) existing.callIds.push(callId);
+      continue;
+    }
+    entries.set(sourceKey, {
+      id: previewLoopEntryIdFor(identity, target, profileId, segment),
+      loopId: previewLoopIdFor(identity, segment),
+      source: cloneLocation(segment.source),
+      kind: segment.kind,
+      multiplicity: segment.multiplicity,
+      depth: 1,
+      callIds: [previewLoopCallIdFor(identity, call)],
+      provenance: 'preview-only',
+    });
+  }
+  const ordered = [...entries.values()]
+    .filter(entry => entry.callIds.length > 0)
+    .sort((left, right) => left.source.start.offset - right.source.start.offset || left.id.localeCompare(right.id));
+  return freezeDeep({
+    id: previewLoopCatalogIdFor(identity, target, profileId),
+    sourceIdentity: cloneDeep(identity) as X4UiLayoutModelIdentity,
+    targetId: target.id,
+    profileId,
+    entries: ordered,
+  });
+};
+
+interface NormalizedPreviewLoops {
+  readonly bySource: ReadonlyMap<string, X4UiLayoutPreviewLoopSelectionBinding>;
+  readonly ordered: readonly X4UiLayoutPreviewLoopSelectionBinding[];
+}
+
+const normalizePreviewLoops = (
+  input: X4UiLayoutPreviewLoopSelectionInput | undefined,
+  identity: X4UiLayoutModelIdentity,
+  target: X4UiLayoutTarget,
+  profileId: string,
+  catalog: X4UiLayoutPreviewLoopCatalog,
+):
+  | { ok: true; value: NormalizedPreviewLoops }
+  | {
+    ok: false;
+    code: 'malformed-preview-loop' | 'preview-loop-source-mismatch' | 'preview-loop-target-mismatch'
+      | 'preview-loop-profile-mismatch' | 'invalid-preview-loop';
+    message: string;
+  } => {
+  if (input === undefined) return { ok: true, value: { bySource: new Map(), ordered: [] } };
+  if (!safeExactDataKeys(input, ['catalogId', 'source', 'targetId', 'profileId', 'selections'])
+    || typeof safeDataField(input, 'catalogId') !== 'string'
+    || typeof safeDataField(input, 'targetId') !== 'string'
+    || typeof safeDataField(input, 'profileId') !== 'string') {
+    return { ok: false, code: 'malformed-preview-loop', message: 'preview-loop input must carry catalogId, exact source identity, targetId, profileId, and a selections array' };
+  }
+  const catalogId = safeDataField(input, 'catalogId') as string;
+  const sourceValue = safeDataField(input, 'source');
+  const targetId = safeDataField(input, 'targetId') as string;
+  const inputProfileId = safeDataField(input, 'profileId') as string;
+  const selectionValues = safeDenseDataArray(safeDataField(input, 'selections'));
+  if (selectionValues === null) {
+    return { ok: false, code: 'malformed-preview-loop', message: 'preview-loop selections must be a dense own-data array' };
+  }
+  if (!safeExactDataKeys(sourceValue, ['file', 'sha256'], ['sourcePath'])
+    || typeof safeDataField(sourceValue, 'file') !== 'string'
+    || (safeDataField(sourceValue, 'sourcePath') !== undefined && typeof safeDataField(sourceValue, 'sourcePath') !== 'string')
+    || !isHexSha256(safeDataField(sourceValue, 'sha256'))) {
+    return { ok: false, code: 'malformed-preview-loop', message: 'preview-loop source identity is malformed' };
+  }
+  const source = sourceValue as Record<string, unknown>;
+  const sourceFile = safeDataField(source, 'file') as string;
+  const sourcePath = safeDataField(source, 'sourcePath');
+  const sourceSha256 = safeDataField(source, 'sha256') as string;
+  if (sourceFile !== identity.file
+    || !sameOptionalString(typeof sourcePath === 'string' ? sourcePath : undefined, identity.sourcePath)
+    || sourceSha256.toUpperCase() !== identity.sha256) {
+    return { ok: false, code: 'preview-loop-source-mismatch', message: 'preview-loop source identity is stale or does not match the selected source target' };
+  }
+  if (targetId !== target.id || catalog.targetId !== target.id) {
+    return { ok: false, code: 'preview-loop-target-mismatch', message: 'preview-loop target identity does not match the selected target' };
+  }
+  if (inputProfileId !== profileId || catalog.profileId !== profileId) {
+    return { ok: false, code: 'preview-loop-profile-mismatch', message: 'preview-loop profile identity does not match the selected projection profile' };
+  }
+  if (catalogId !== catalog.id) {
+    return { ok: false, code: 'invalid-preview-loop', message: 'preview-loop catalog identity does not match the exact owner-issued catalog' };
+  }
+  const byId = new Map(catalog.entries.map(entry => [entry.id, entry]));
+  const selectedIds = new Set<string>();
+  const selected: X4UiLayoutPreviewLoopSelectionBinding[] = [];
+  for (const candidate of selectionValues) {
+    if (!safeExactDataKeys(candidate, ['id', 'iterationCount'])
+      || typeof safeDataField(candidate, 'id') !== 'string'
+      || (safeDataField(candidate, 'id') as string).length === 0
+      || typeof safeDataField(candidate, 'iterationCount') !== 'number'
+      || !Number.isFinite(safeDataField(candidate, 'iterationCount'))) {
+      return { ok: false, code: 'malformed-preview-loop', message: 'each preview-loop selection requires an ID and finite iterationCount' };
+    }
+    const candidateId = safeDataField(candidate, 'id') as string;
+    const iterationCount = safeDataField(candidate, 'iterationCount') as number;
+    if (!Number.isSafeInteger(iterationCount)
+      || iterationCount < 1
+      || iterationCount > 16) {
+      return { ok: false, code: 'invalid-preview-loop', message: `preview-loop iterationCount must be an integer from 1 through 16: ${candidateId}` };
+    }
+    if (selectedIds.has(candidateId)) {
+      return { ok: false, code: 'invalid-preview-loop', message: `duplicate preview-loop selection ID: ${candidateId}` };
+    }
+    const entry = byId.get(candidateId);
+    if (!entry) return { ok: false, code: 'invalid-preview-loop', message: `unknown or extra preview-loop selection ID: ${candidateId}` };
+    selectedIds.add(candidateId);
+    selected.push({
+      id: entry.id,
+      iterationCount,
+      loopId: entry.loopId,
+      source: cloneLocation(entry.source),
+      kind: entry.kind,
+      multiplicity: entry.multiplicity,
+      depth: 1,
+      provenance: 'preview-only',
+    });
+  }
+  const ordered = catalog.entries
+    .filter(entry => selectedIds.has(entry.id))
+    .map(entry => selected.find(candidate => candidate.id === entry.id)!);
+  return { ok: true, value: { bySource: new Map(ordered.map(binding => [locationKey(binding.source), binding])), ordered } };
+};
+
+const previewLoopInstanceFor = (
+  selection: X4UiLayoutPreviewLoopSelectionBinding,
+  iteration: number,
+): X4UiLayoutPreviewLoopInstance => ({
+  id: programId('preview-loop-instance', `${selection.id}|${selection.iterationCount}|${iteration}`),
+  entryId: selection.id,
+  loopId: selection.loopId,
+  source: cloneLocation(selection.source),
+  kind: selection.kind,
+  multiplicity: selection.multiplicity,
+  depth: 1,
+  iteration,
+  iterationCount: selection.iterationCount,
+});
+
+const previewLoopInstancePrefix = (instance: X4UiLayoutPreviewLoopInstance): string =>
+  `@preview-loop-instance:${instance.id}`;
+
+const instantiatePreviewLoopReference = (
+  reference: X4UiValueReference,
+  instance: X4UiLayoutPreviewLoopInstance,
+  ownedPaths: ReadonlySet<string>,
+): X4UiValueReference => {
+  const cloned = cloneDeep(reference) as X4UiValueReference;
+  const prefix = previewLoopInstancePrefix(instance);
+  if (cloned.kind !== 'global' && locationContains(instance.source, cloned.source)) {
+    cloned.path = prefixInstancePath(prefix, cloned.path)!;
+  }
+  if (cloned.parentPath && ownedPaths.has(cloned.parentPath)) {
+    cloned.parentPath = prefixInstancePath(prefix, cloned.parentPath);
+  }
+  if (cloned.relatedPath && ownedPaths.has(cloned.relatedPath)) {
+    cloned.relatedPath = prefixInstancePath(prefix, cloned.relatedPath);
+  }
+  if (cloned.index) cloned.index = instantiatePreviewLoopValue(cloned.index, instance, ownedPaths);
+  return cloned;
+};
+
+const instantiatePreviewLoopValue = (
+  value: X4UiValue,
+  instance: X4UiLayoutPreviewLoopInstance,
+  ownedPaths: ReadonlySet<string>,
+): X4UiValue => {
+  const result = cloneDeep(value) as X4UiValue;
+  if (result.reference) {
+    result.reference = instantiatePreviewLoopReference(result.reference, instance, ownedPaths);
+    if (['frame', 'table', 'row', 'cell'].includes(result.reference.kind)
+      && ['call', 'alias', 'index'].includes(result.reference.origin)) {
+      result.status = 'static';
+      delete result.reason;
+    }
+  }
+  return result;
+};
+
+const instantiatePreviewLoopTree = (
+  value: unknown,
+  instance: X4UiLayoutPreviewLoopInstance,
+  ownedPaths: ReadonlySet<string>,
+): unknown => {
+  if (isValueShape(value)) return instantiatePreviewLoopValue(value, instance, ownedPaths);
+  if (Array.isArray(value)) return value.map(child => instantiatePreviewLoopTree(child, instance, ownedPaths));
+  if (isObject(value)) {
+    const result: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) result[key] = instantiatePreviewLoopTree(child, instance, ownedPaths);
+    return result;
+  }
+  return value;
+};
+
+const instantiatePreviewLoopCall = (
+  call: ProjectableCall,
+  instance: X4UiLayoutPreviewLoopInstance,
+  ownedPaths: ReadonlySet<string>,
+): ProjectableCall => {
+  const transformed = instantiatePreviewLoopTree(call, instance, ownedPaths) as ProjectableCall;
+  const result: ProjectableCall = {
+    ...transformed,
+    ...(call.result ? { result: instantiatePreviewLoopReference(call.result, instance, ownedPaths) } : {}),
+    previewLoop: instance,
+  };
+  if (callDataFlowSatisfied(result)) delete result.semantics.dataFlow;
+  return result;
+};
+
+const previewLoopOwnedReferencePaths = (
+  calls: readonly ProjectableCall[],
+  source: X4UiSourceLocation,
+): ReadonlySet<string> => {
+  const paths = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (isValueShape(value)) {
+      const reference = value.reference;
+      if (reference && reference.kind !== 'global' && locationContains(source, reference.source)) {
+        if (reference.path) paths.add(reference.path);
+      }
+      if (reference?.index) visit(reference.index);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (isObject(value)) {
+      if (typeof value.kind === 'string' && typeof value.path === 'string' && isSourceLocationShape(value.source)) {
+        const reference = value as unknown as X4UiValueReference;
+        if (reference.kind !== 'global' && locationContains(source, reference.source)) paths.add(reference.path);
+        if (reference.index) visit(reference.index);
+        return;
+      }
+      for (const child of Object.values(value)) visit(child);
+    }
+  };
+  for (const call of calls) visit(call);
+  return paths;
+};
+
+const expandPreviewLoops = (
+  calls: readonly ProjectableCall[],
+  normalized: NormalizedPreviewLoops,
+  identity: X4UiLayoutModelIdentity,
+  catalog: X4UiLayoutPreviewLoopCatalog,
+): ProjectableCall[] => {
+  const catalogEntries = new Map(catalog.entries.map(entry => [entry.id, entry] as const));
+  const expandedEntries = new Set<string>();
+  const output: ProjectableCall[] = [];
+  for (const call of calls) {
+    if (call.expansionInstance !== undefined || call.context.loopPath.length !== 1) {
+      output.push(call);
+      continue;
+    }
+    const segment = call.context.loopPath[0];
+    const sourceKey = locationKey(segment.source);
+    const selection = normalized.bySource.get(sourceKey);
+    if (!selection) {
+      output.push(call);
+      continue;
+    }
+    const entry = catalogEntries.get(selection.id);
+    const selectedCallIds = new Set(entry?.callIds || []);
+    if (!entry || !locationsEqual(entry.source, selection.source)
+      || !selectedCallIds.has(previewLoopCallIdFor(identity, call))) {
+      output.push(call);
+      continue;
+    }
+    if (expandedEntries.has(entry.id)) continue;
+    expandedEntries.add(entry.id);
+    const bodyCalls = calls
+      .filter(candidate => candidate.expansionInstance === undefined
+        && candidate.context.loopPath.length === 1
+        && locationsEqual(candidate.context.loopPath[0].source, selection.source)
+        && selectedCallIds.has(previewLoopCallIdFor(identity, candidate)))
+      .sort((left, right) => left.order - right.order);
+    const ownedPaths = previewLoopOwnedReferencePaths(bodyCalls, selection.source);
+    for (let iteration = 1; iteration <= selection.iterationCount; iteration += 1) {
+      const instance = previewLoopInstanceFor(selection, iteration);
+      for (const bodyCall of bodyCalls) output.push(instantiatePreviewLoopCall(bodyCall, instance, ownedPaths));
+    }
+  }
+  return output;
+};
+
 interface MutableLocalInvocation extends Mutable<Omit<X4UiLayoutLocalInvocation, 'operationIds'>> {
   operationIds: string[];
 }
@@ -4265,6 +4766,35 @@ const isValueShape = (value: unknown): value is X4UiValue =>
   && typeof value.type === 'string'
   && typeof value.expression === 'string'
   && isSourceLocationShape(value.location);
+
+const targetNeedsNumericExpressionPreviewSamples = (
+  model: X4UiCallModel,
+  targetCalls: readonly ProjectableCall[],
+  selectedPreviewPaths?: ReadonlyMap<string, X4UiLayoutPreviewPathCatalogEntry>,
+): boolean => {
+  const seen = new Set<object>();
+  const visit = (value: unknown): boolean => {
+    if (value === null || typeof value !== 'object') return false;
+    const objectValue = value as object;
+    if (seen.has(objectValue)) return false;
+    seen.add(objectValue);
+    if (isValueShape(value)) {
+      if (value.numericExpression !== undefined
+        && numericExpressionError(value.numericExpression, value, model) === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR) {
+        return true;
+      }
+      return value.reference?.index ? visit(value.reference.index) : false;
+    }
+    if (Array.isArray(value)) return value.some(visit);
+    return Object.values(value).some(visit);
+  };
+  const result = targetCalls.some(call => {
+    if (call.context.loopPath.length > 0 && call.previewLoop === undefined) return false;
+    if (isCallReachabilityBlocked(call, selectedPreviewPaths)) return false;
+    return visit(call.semantics);
+  });
+  return result;
+};
 
 const prefixInstancePath = (prefix: string, path: string | undefined): string | undefined =>
   path === undefined || prefix.length === 0 || path === 'Helper' || path.startsWith(`${prefix}|`)
@@ -4708,22 +5238,55 @@ const exactLocalScaleFontWrapperSource = (
   return localAstSource(model, protectedCall);
 };
 
+const activeLocalInvocationResultIdsFor = (
+  targetCalls: readonly ProjectableCall[],
+  selectedPreviewPaths?: ReadonlyMap<string, X4UiLayoutPreviewPathCatalogEntry>,
+): ReadonlySet<string> => {
+  const result = new Set<string>();
+  const seen = new Set<object>();
+  const collect = (value: unknown): void => {
+    if (value === null || typeof value !== 'object') return;
+    const objectValue = value as object;
+    if (seen.has(objectValue)) return;
+    seen.add(objectValue);
+    if (isValueShape(value)) {
+      const invocationId = value.localInvocationResult?.invocationId;
+      if (typeof invocationId === 'string') result.add(invocationId);
+      if (value.reference?.index) collect(value.reference.index);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const child of value) collect(child);
+      return;
+    }
+    for (const child of Object.values(value)) collect(child);
+  };
+  for (const call of targetCalls) {
+    if (call.context.loopPath.length > 0 && call.previewLoop === undefined) continue;
+    if (isCallReachabilityBlocked(call, selectedPreviewPaths)) continue;
+    collect(call.semantics);
+  }
+  return result;
+};
+
 const localScaleFontWrapperValuesFor = (
   model: X4UiCallModel,
   profile: X4UiLayoutProjectionProfile,
+  activeInvocationIds: ReadonlySet<string> = new Set(),
 ): ReadonlyMap<string, DirectScaleValue> => {
   const result = new Map<string, DirectScaleValue>();
   const index = numericExpressionSourceAstIndex(model);
   if (index.error) return result;
   const declarations = new Map((model.localFunctions || []).map(declaration => [declaration.id, declaration]));
   for (const invocation of model.localInvocations || []) {
+    const activeUnderTargetCalls = activeInvocationIds.has(invocation.id);
     if (invocation.status !== 'supported'
       || invocation.resolution !== 'direct'
       || !invocation.resultConsumed
       || !invocation.calleeDeclarationId
-      || invocation.context.reachability !== 'reachable'
-      || invocation.context.branchPath.length > 0
-      || invocation.context.loopPath.length > 0
+      || !activeUnderTargetCalls
+      || invocation.context.reachability === 'unreachable'
+      || invocation.context.branchPath.some(segment => segment.reachability === 'unreachable')
       || invocation.arguments.length !== 1) continue;
     const declaration = declarations.get(invocation.calleeDeclarationId);
     const argument = invocation.arguments[0];
@@ -5070,6 +5633,9 @@ const makeOperation = (call: ProjectableCall, status: X4UiLayoutOperationStatus,
   status,
   metadata: cloneMetadata(call),
   descriptorFacts: {},
+  ...(call.previewLoop
+    ? { previewLoop: cloneDeep(call.previewLoop) as X4UiLayoutPreviewLoopInstance }
+    : {}),
   ...(call.expansionInstance ? {
     localExpansion: {
       invocationId: call.expansionInstance.invocationId,
@@ -5097,6 +5663,7 @@ const cloneEvidenceGap = (gap: X4UiLayoutGap): X4UiLayoutEvidenceGap => ({
   source: cloneLocation(gap.source),
   ...(Object.prototype.hasOwnProperty.call(gap, 'operationId') ? { operationId: gap.operationId } : {}),
   ...(Object.prototype.hasOwnProperty.call(gap, 'nodeId') ? { nodeId: gap.nodeId } : {}),
+  ...(gap.previewLoop ? { previewLoop: cloneDeep(gap.previewLoop) as X4UiLayoutPreviewLoopInstance } : {}),
 });
 
 const evidenceExpansionLinkFor = (
@@ -5256,6 +5823,8 @@ const buildEvidenceAuthority = (
   cells: readonly X4UiLayoutCellNode[],
   previewPathCatalog: X4UiLayoutPreviewPathCatalog,
   previewPathSelections: readonly X4UiLayoutPreviewPathSelectionBinding[],
+  previewLoopCatalog: X4UiLayoutPreviewLoopCatalog,
+  previewLoopSelections: readonly X4UiLayoutPreviewLoopSelectionBinding[],
   localExpansion?: X4UiLayoutLocalExpansionState,
 ): X4UiLayoutEvidenceAuthority => {
   const relevantCalls = targetCalls.filter(call => EVIDENCE_RELEVANT_CALL_NAMES.includes(call.name));
@@ -5295,6 +5864,9 @@ const buildEvidenceAuthority = (
       streamIndex,
       status: operation.status,
       reachability: evidenceReachabilityFor(call, selectedPaths),
+      ...(call.previewLoop
+        ? { previewLoop: cloneDeep(call.previewLoop) as X4UiLayoutPreviewLoopInstance }
+        : {}),
       ...(expansion ? { expansion: cloneDeep(expansion) as X4UiLayoutEvidenceExpansionLink } : {}),
     });
     sourceBindings.push({
@@ -5308,6 +5880,9 @@ const buildEvidenceAuthority = (
       streamIndex,
       reachability: evidenceReachabilityFor(call, selectedPaths),
       metadata: cloneJsonLike(operation.metadata) as X4UiLayoutCallMetadata,
+      ...(call.previewLoop
+        ? { previewLoop: cloneDeep(call.previewLoop) as X4UiLayoutPreviewLoopInstance }
+        : {}),
       ...(expansion ? { expansion: cloneDeep(expansion) as X4UiLayoutEvidenceExpansionLink } : {}),
     });
     authorityOperations.push({
@@ -5324,6 +5899,9 @@ const buildEvidenceAuthority = (
       ...(operation.rowId ? { rowId: operation.rowId } : {}),
       ...(operation.cellId ? { cellId: operation.cellId } : {}),
       ...(operation.reason ? { reason: operation.reason } : {}),
+      ...(call.previewLoop
+        ? { previewLoop: cloneDeep(call.previewLoop) as X4UiLayoutPreviewLoopInstance }
+        : {}),
       ...(expansion ? { expansion: cloneDeep(expansion) as X4UiLayoutEvidenceExpansionLink } : {}),
       snapshot: cloneJsonLike(operation) as X4UiLayoutOperation,
     });
@@ -5351,6 +5929,8 @@ const buildEvidenceAuthority = (
     unlinkedGapIndexes,
     previewPathCatalog: cloneDeep(previewPathCatalog) as X4UiLayoutPreviewPathCatalog,
     previewPathSelections: cloneDeep(previewPathSelections) as X4UiLayoutPreviewPathSelectionBinding[],
+    previewLoopCatalog: cloneDeep(previewLoopCatalog) as X4UiLayoutPreviewLoopCatalog,
+    previewLoopSelections: cloneDeep(previewLoopSelections) as X4UiLayoutPreviewLoopSelectionBinding[],
     ...(localExpansion ? { expansion: cloneEvidenceExpansion(localExpansion) } : {}),
   });
 };
@@ -5392,6 +5972,7 @@ const addOperationGap = (
   operationId: operation.id,
   ...(expression ? { expression } : {}),
   ...(nodeId ? { nodeId } : {}),
+  ...(operation.previewLoop ? { previewLoop: operation.previewLoop } : {}),
 }, evidenceGaps);
 
 const addOperationGapToProgram = addOperationGap;
@@ -5516,6 +6097,8 @@ const finishProgram = (
   consumedSamples: ReadonlySet<string>,
   previewPathCatalog: X4UiLayoutPreviewPathCatalog,
   previewPathSelections: readonly X4UiLayoutPreviewPathSelectionBinding[],
+  previewLoopCatalog: X4UiLayoutPreviewLoopCatalog,
+  previewLoopSelections: readonly X4UiLayoutPreviewLoopSelectionBinding[],
   model: X4UiCallModel,
   targetCalls: readonly ProjectableCall[],
   operationEvents: readonly EvidenceOperationEvent[],
@@ -5618,12 +6201,17 @@ const finishProgram = (
       source: sample.entry.source,
       provenance: 'preview-only',
       status: consumedSamples.has(sample.entry.id) ? 'consumed' : 'not-applied',
+      ...(sample.entry.previewLoop
+        ? { previewLoop: cloneDeep(sample.entry.previewLoop) as X4UiLayoutPreviewLoopInstance }
+        : {}),
       ...(!consumedSamples.has(sample.entry.id)
         ? { reason: 'sample was valid but its conditional, unreachable, or unresolved owner was not applied' }
         : {}),
     })),
     previewPathCatalog,
     previewPathSelections,
+    previewLoopCatalog,
+    previewLoopSelections,
     ...(localExpansion ? { localExpansion } : {}),
     verification: { game: X4_UI_LAYOUT_GAME_TRUTH, gameVerified: false },
   };
@@ -5642,6 +6230,8 @@ const finishProgram = (
     program.cells,
     program.previewPathCatalog,
     program.previewPathSelections,
+    program.previewLoopCatalog,
+    program.previewLoopSelections,
     localExpansion,
   );
   const result = freezeDeep({
@@ -5679,6 +6269,63 @@ const exactKeys = (
   optional: readonly string[] = [],
 ): boolean => required.every(key => Object.prototype.hasOwnProperty.call(value, key))
   && Object.keys(value).every(key => required.includes(key) || optional.includes(key));
+
+const safeExactDataKeys = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): value is Record<string, unknown> => {
+  const allowed = new Set([...required, ...optional]);
+  try {
+    if (!isObject(value)) return false;
+    const keys = Reflect.ownKeys(value);
+    if (!required.every(key => keys.includes(key))) return false;
+    return keys.every(key => {
+      if (typeof key !== 'string' || !allowed.has(key)) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor !== undefined && descriptor.enumerable === true && 'value' in descriptor;
+    });
+  } catch {
+    return false;
+  }
+};
+
+const safeDataField = (value: Record<string, unknown>, key: string): unknown => {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const safeDenseDataArray = (value: unknown): readonly unknown[] | null => {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
+    const keys = Reflect.ownKeys(value);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (lengthDescriptor === undefined
+      || lengthDescriptor.enumerable
+      || !('value' in lengthDescriptor)
+      || !Number.isSafeInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 0) return null;
+    const length = lengthDescriptor.value;
+    const indexKeys = keys.filter(key => key !== 'length');
+    if (indexKeys.length !== length
+      || indexKeys.some(key => typeof key !== 'string'
+        || !/^(0|[1-9][0-9]*)$/.test(key)
+        || Number(key) >= length)) return null;
+    const values: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || descriptor.enumerable !== true || !('value' in descriptor)) return null;
+      values.push(descriptor.value);
+    }
+    return values;
+  } catch {
+    return null;
+  }
+};
 
 const jsonEqual = (left: unknown, right: unknown): boolean => {
   const comparedPairs = new Map<object, Set<object>>();
@@ -5794,6 +6441,10 @@ const closedJsonDomain = (value: unknown, path = 'value', active = new Set<objec
   try {
     prototype = Object.getPrototypeOf(objectValue);
     if (Object.getOwnPropertySymbols(objectValue).length > 0) return `${path} contains symbol keys`;
+    const descriptors = Object.getOwnPropertyDescriptors(objectValue);
+    if (Object.values(descriptors).some(descriptor => !('value' in descriptor))) {
+      return `${path} contains accessor properties`;
+    }
     if (Array.isArray(objectValue)) {
       if (prototype !== Array.prototype) return `${path} has a non-array prototype`;
       const arrayValue = objectValue as readonly unknown[];
@@ -5804,7 +6455,7 @@ const closedJsonDomain = (value: unknown, path = 'value', active = new Set<objec
       }
       active.add(objectValue);
       for (let index = 0; index < arrayValue.length; index += 1) {
-        const error = closedJsonDomain(arrayValue[index], `${path}[${index}]`, active);
+        const error = closedJsonDomain(descriptors[String(index)].value, `${path}[${index}]`, active);
         if (error) return error;
       }
       active.delete(objectValue);
@@ -5813,7 +6464,7 @@ const closedJsonDomain = (value: unknown, path = 'value', active = new Set<objec
     if (prototype !== Object.prototype && prototype !== null) return `${path} has a non-record prototype`;
     active.add(objectValue);
     for (const key of Object.keys(objectValue)) {
-      const error = closedJsonDomain((objectValue as Record<string, unknown>)[key], `${path}.${key}`, active);
+      const error = closedJsonDomain(descriptors[key].value, `${path}.${key}`, active);
       if (error) return error;
     }
     active.delete(objectValue);
@@ -7165,7 +7816,7 @@ const schemaOperation = (
   ownerEvidence?: OperationOwnerEvidenceNodes,
 ): ClosedSchemaError => {
   const objectError = schemaObject(value, path, ['id', 'kind', 'source', 'sourceOrder', 'modelOrder', 'status', 'metadata', 'descriptorFacts'], [
-    'frameId', 'tableId', 'rowId', 'cellId', 'reason', 'kernel', 'scale', 'localExpansion',
+    'frameId', 'tableId', 'rowId', 'cellId', 'reason', 'kernel', 'scale', 'previewLoop', 'localExpansion',
   ]);
   if (objectError) return objectError;
   const operation = value as Record<string, unknown>;
@@ -7184,6 +7835,7 @@ const schemaOperation = (
     || schemaOptional(operation, 'reason', schemaString, path)
     || schemaOptional(operation, 'kernel', schemaTransition, path)
     || schemaOptional(operation, 'scale', schemaScale, path)
+    || schemaOptional(operation, 'previewLoop', schemaPreviewLoopInstance, path)
     || schemaOptional(operation, 'localExpansion', schemaLocalOperationExpansion, path)
     || (ownerEvidence ? schemaOperationOwnerShape(operation, path, ownerEvidence) : undefined);
 };
@@ -7299,6 +7951,86 @@ const schemaAnalysis = (value: unknown, path: string): ClosedSchemaError => {
     || schemaEnum(analysis.gameVerification, `${path}.gameVerification`, [X4_UI_LAYOUT_GAME_TRUTH]);
 };
 
+const schemaPreviewLoopInstance = (value: unknown, path: string): ClosedSchemaError => {
+  const objectError = schemaObject(value, path, [
+    'id', 'entryId', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'iteration', 'iterationCount',
+  ]);
+  if (objectError) return objectError;
+  const instance = value as Record<string, unknown>;
+  const error = schemaString(instance.id, `${path}.id`, true)
+    || schemaString(instance.entryId, `${path}.entryId`, true)
+    || schemaString(instance.loopId, `${path}.loopId`, true)
+    || schemaSource(instance.source, `${path}.source`)
+    || schemaEnum(instance.kind, `${path}.kind`, ['while', 'repeat', 'numeric-for', 'generic-for'])
+    || schemaEnum(instance.multiplicity, `${path}.multiplicity`, ['zero-or-more', 'one-or-more'])
+    || schemaIndex(instance.depth, `${path}.depth`)
+    || schemaPositiveIndex(instance.iteration, `${path}.iteration`)
+    || schemaPositiveIndex(instance.iterationCount, `${path}.iterationCount`);
+  if (error) return error;
+  if (instance.depth !== 1) return `${path}.depth must be exactly 1`;
+  if ((instance.iterationCount as number) > 16 || (instance.iteration as number) > (instance.iterationCount as number)) {
+    return `${path} has an invalid finite iteration bound`;
+  }
+  return undefined;
+};
+
+const schemaPreviewLoopCatalog = (value: unknown, path: string): ClosedSchemaError => {
+  const objectError = schemaObject(value, path, ['id', 'sourceIdentity', 'targetId', 'profileId', 'entries']);
+  if (objectError) return objectError;
+  const catalog = value as Record<string, unknown>;
+  const error = schemaString(catalog.id, `${path}.id`, true)
+    || schemaSourceIdentity(catalog.sourceIdentity, `${path}.sourceIdentity`)
+    || schemaString(catalog.targetId, `${path}.targetId`, true)
+    || schemaString(catalog.profileId, `${path}.profileId`, true)
+    || schemaArray(catalog.entries, `${path}.entries`);
+  if (error) return error;
+  for (const [index, entryValue] of (catalog.entries as readonly unknown[]).entries()) {
+    const entryPath = `${path}.entries[${index}]`;
+    const entryError = schemaObject(entryValue, entryPath, [
+      'id', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'callIds', 'provenance',
+    ]);
+    if (entryError) return entryError;
+    const entry = entryValue as Record<string, unknown>;
+    const fieldError = schemaString(entry.id, `${entryPath}.id`, true)
+      || schemaString(entry.loopId, `${entryPath}.loopId`, true)
+      || schemaSource(entry.source, `${entryPath}.source`)
+      || schemaEnum(entry.kind, `${entryPath}.kind`, ['while', 'repeat', 'numeric-for', 'generic-for'])
+      || schemaEnum(entry.multiplicity, `${entryPath}.multiplicity`, ['zero-or-more', 'one-or-more'])
+      || schemaIndex(entry.depth, `${entryPath}.depth`)
+      || schemaIdArray(entry.callIds, `${entryPath}.callIds`)
+      || schemaEnum(entry.provenance, `${entryPath}.provenance`, ['preview-only']);
+    if (fieldError) return fieldError;
+    if (entry.depth !== 1 || (entry.callIds as readonly unknown[]).length === 0) {
+      return `${entryPath} must describe a single-depth loop with direct-target calls`;
+    }
+  }
+  return undefined;
+};
+
+const schemaPreviewLoopSelections = (value: unknown, path: string): ClosedSchemaError => {
+  const arrayError = schemaArray(value, path);
+  if (arrayError) return arrayError;
+  for (const [index, selectionValue] of (value as readonly unknown[]).entries()) {
+    const selectionPath = `${path}[${index}]`;
+    const objectError = schemaObject(selectionValue, selectionPath, [
+      'id', 'iterationCount', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'provenance',
+    ]);
+    if (objectError) return objectError;
+    const selection = selectionValue as Record<string, unknown>;
+    const fieldError = schemaString(selection.id, `${selectionPath}.id`, true)
+      || schemaPositiveIndex(selection.iterationCount, `${selectionPath}.iterationCount`)
+      || schemaString(selection.loopId, `${selectionPath}.loopId`, true)
+      || schemaSource(selection.source, `${selectionPath}.source`)
+      || schemaEnum(selection.kind, `${selectionPath}.kind`, ['while', 'repeat', 'numeric-for', 'generic-for'])
+      || schemaEnum(selection.multiplicity, `${selectionPath}.multiplicity`, ['zero-or-more', 'one-or-more'])
+      || schemaIndex(selection.depth, `${selectionPath}.depth`)
+      || schemaEnum(selection.provenance, `${selectionPath}.provenance`, ['preview-only']);
+    if (fieldError) return fieldError;
+    if ((selection.iterationCount as number) > 16 || (selection.depth as number) !== 1) return `${selectionPath} has an invalid finite loop selection`;
+  }
+  return undefined;
+};
+
 const schemaSampleCatalog = (value: unknown, path: string): ClosedSchemaError => {
   const objectError = schemaObject(value, path, ['id', 'sourceIdentity', 'targetId', 'entries']);
   if (objectError) return objectError;
@@ -7309,7 +8041,7 @@ const schemaSampleCatalog = (value: unknown, path: string): ClosedSchemaError =>
     || schemaArray(catalog.entries, `${path}.entries`);
   if (errors) return errors;
   for (const [index, entryValue] of (catalog.entries as readonly unknown[]).entries()) {
-    const entryError = schemaObject(entryValue, `${path}.entries[${index}]`, ['id', 'expression', 'expectedType', 'source', 'consumers', 'provenance']);
+    const entryError = schemaObject(entryValue, `${path}.entries[${index}]`, ['id', 'expression', 'expectedType', 'source', 'consumers', 'provenance'], ['previewLoop']);
     if (entryError) return entryError;
     const entry = entryValue as Record<string, unknown>;
     const error = schemaString(entry.id, `${path}.entries[${index}].id`, true)
@@ -7317,16 +8049,18 @@ const schemaSampleCatalog = (value: unknown, path: string): ClosedSchemaError =>
       || schemaScalarType(entry.expectedType, `${path}.entries[${index}].expectedType`)
       || schemaSource(entry.source, `${path}.entries[${index}].source`)
       || schemaArray(entry.consumers, `${path}.entries[${index}].consumers`)
-      || schemaEnum(entry.provenance, `${path}.entries[${index}].provenance`, ['preview-only']);
+      || schemaEnum(entry.provenance, `${path}.entries[${index}].provenance`, ['preview-only'])
+      || schemaOptional(entry, 'previewLoop', schemaPreviewLoopInstance, `${path}.entries[${index}]`);
     if (error) return error;
     for (const [consumerIndex, consumerValue] of (entry.consumers as readonly unknown[]).entries()) {
-      const consumerError = schemaObject(consumerValue, `${path}.entries[${index}].consumers[${consumerIndex}]`, ['operationId', 'operationKind', 'field', 'source']);
+      const consumerError = schemaObject(consumerValue, `${path}.entries[${index}].consumers[${consumerIndex}]`, ['operationId', 'operationKind', 'field', 'source'], ['previewLoop']);
       if (consumerError) return consumerError;
       const consumer = consumerValue as Record<string, unknown>;
       const consumerFieldError = schemaString(consumer.operationId, `${path}.entries[${index}].consumers[${consumerIndex}].operationId`, true)
         || schemaEnum(consumer.operationKind, `${path}.entries[${index}].consumers[${consumerIndex}].operationKind`, EVIDENCE_RELEVANT_CALL_NAMES)
         || schemaString(consumer.field, `${path}.entries[${index}].consumers[${consumerIndex}].field`, true)
-        || schemaSource(consumer.source, `${path}.entries[${index}].consumers[${consumerIndex}].source`);
+        || schemaSource(consumer.source, `${path}.entries[${index}].consumers[${consumerIndex}].source`)
+        || schemaOptional(consumer, 'previewLoop', schemaPreviewLoopInstance, `${path}.entries[${index}].consumers[${consumerIndex}]`);
       if (consumerFieldError) return consumerFieldError;
     }
   }
@@ -7337,7 +8071,7 @@ const schemaSampleBindings = (value: unknown, path: string): ClosedSchemaError =
   const arrayError = schemaArray(value, path);
   if (arrayError) return arrayError;
   for (const [index, bindingValue] of (value as readonly unknown[]).entries()) {
-    const objectError = schemaObject(bindingValue, `${path}[${index}]`, ['id', 'value', 'expectedType', 'source', 'provenance', 'status'], ['reason']);
+    const objectError = schemaObject(bindingValue, `${path}[${index}]`, ['id', 'value', 'expectedType', 'source', 'provenance', 'status'], ['reason', 'previewLoop']);
     if (objectError) return objectError;
     const binding = bindingValue as Record<string, unknown>;
     const error = schemaString(binding.id, `${path}[${index}].id`, true)
@@ -7346,7 +8080,8 @@ const schemaSampleBindings = (value: unknown, path: string): ClosedSchemaError =
       || schemaSource(binding.source, `${path}[${index}].source`)
       || schemaEnum(binding.provenance, `${path}[${index}].provenance`, ['preview-only'])
       || schemaEnum(binding.status, `${path}[${index}].status`, ['consumed', 'not-applied'])
-      || schemaOptional(binding, 'reason', schemaString, `${path}[${index}]`);
+      || schemaOptional(binding, 'reason', schemaString, `${path}[${index}]`)
+      || schemaOptional(binding, 'previewLoop', schemaPreviewLoopInstance, `${path}[${index}]`);
     if (error) return error;
   }
   return undefined;
@@ -7448,7 +8183,7 @@ const schemaLocalExpansion = (value: unknown, path: string): ClosedSchemaError =
 };
 
 const schemaGap = (value: unknown, path: string): ClosedSchemaError => {
-  const objectError = schemaObject(value, path, ['category', 'status', 'reason', 'source'], ['expression', 'operationId', 'nodeId']);
+  const objectError = schemaObject(value, path, ['category', 'status', 'reason', 'source'], ['expression', 'operationId', 'nodeId', 'previewLoop']);
   if (objectError) return objectError;
   const gap = value as Record<string, unknown>;
   return schemaEnum(gap.category, `${path}.category`, X4_LAYOUT_GAP_CATEGORIES)
@@ -7457,12 +8192,13 @@ const schemaGap = (value: unknown, path: string): ClosedSchemaError => {
     || schemaSource(gap.source, `${path}.source`)
     || schemaOptional(gap, 'expression', schemaString, path)
     || schemaOptional(gap, 'operationId', (child, childPath) => schemaString(child, childPath, true), path)
-    || schemaOptional(gap, 'nodeId', (child, childPath) => schemaString(child, childPath, true), path);
+    || schemaOptional(gap, 'nodeId', (child, childPath) => schemaString(child, childPath, true), path)
+    || schemaOptional(gap, 'previewLoop', schemaPreviewLoopInstance, path);
 };
 
 const schemaProgram = (value: unknown): ClosedSchemaError => {
   const objectError = schemaObject(value, 'program', [
-    'status', 'target', 'profile', 'analysis', 'localIdentities', 'frames', 'tables', 'rows', 'cells', 'operations', 'gaps', 'sampleCatalog', 'previewSampleBindings', 'previewPathCatalog', 'previewPathSelections', 'verification',
+    'status', 'target', 'profile', 'analysis', 'localIdentities', 'frames', 'tables', 'rows', 'cells', 'operations', 'gaps', 'sampleCatalog', 'previewSampleBindings', 'previewPathCatalog', 'previewPathSelections', 'previewLoopCatalog', 'previewLoopSelections', 'verification',
   ], ['localExpansion']);
   if (objectError) return objectError;
   const program = value as Record<string, unknown>;
@@ -7480,6 +8216,8 @@ const schemaProgram = (value: unknown): ClosedSchemaError => {
     || schemaSampleBindings(program.previewSampleBindings, 'program.previewSampleBindings')
     || schemaPreviewCatalog(program.previewPathCatalog, 'program.previewPathCatalog')
     || schemaPreviewPathSelections(program.previewPathSelections, 'program.previewPathSelections')
+    || schemaPreviewLoopCatalog(program.previewLoopCatalog, 'program.previewLoopCatalog')
+    || schemaPreviewLoopSelections(program.previewLoopSelections, 'program.previewLoopSelections')
     || schemaObject(program.verification, 'program.verification', ['game', 'gameVerified'])
     || ((program.verification as Record<string, unknown>).game === X4_UI_LAYOUT_GAME_TRUTH
       ? undefined
@@ -7550,7 +8288,7 @@ const schemaEvidenceExpansionLink = (value: unknown, path: string): ClosedSchema
 const schemaAuthorityCall = (value: unknown, path: string): ClosedSchemaError => {
   const objectError = schemaObject(value, path, [
     'id', 'operationId', 'kind', 'source', 'sourceOrder', 'modelOrder', 'streamIndex', 'status', 'reachability',
-  ], ['expansion']);
+  ], ['previewLoop', 'expansion']);
   if (objectError) return objectError;
   const call = value as Record<string, unknown>;
   return schemaString(call.id, `${path}.id`, true)
@@ -7562,13 +8300,14 @@ const schemaAuthorityCall = (value: unknown, path: string): ClosedSchemaError =>
     || schemaIndex(call.streamIndex, `${path}.streamIndex`)
     || schemaEnum(call.status, `${path}.status`, ['applied', 'rejected', 'unresolved', 'unreachable', 'conditional'])
     || schemaEnum(call.reachability, `${path}.reachability`, ['reachable', 'conditional', 'unreachable'])
+    || schemaOptional(call, 'previewLoop', schemaPreviewLoopInstance, path)
     || schemaOptional(call, 'expansion', schemaEvidenceExpansionLink, path);
 };
 
 const schemaAuthorityOperation = (value: unknown, path: string): ClosedSchemaError => {
   const objectError = schemaObject(value, path, [
     'id', 'callId', 'kind', 'source', 'sourceOrder', 'modelOrder', 'streamIndex', 'status', 'snapshot',
-  ], ['frameId', 'tableId', 'rowId', 'cellId', 'reason', 'expansion']);
+  ], ['frameId', 'tableId', 'rowId', 'cellId', 'reason', 'previewLoop', 'expansion']);
   if (objectError) return objectError;
   const operation = value as Record<string, unknown>;
   return schemaString(operation.id, `${path}.id`, true)
@@ -7584,6 +8323,7 @@ const schemaAuthorityOperation = (value: unknown, path: string): ClosedSchemaErr
     || schemaOptional(operation, 'rowId', (child, childPath) => schemaString(child, childPath, true), path)
     || schemaOptional(operation, 'cellId', (child, childPath) => schemaString(child, childPath, true), path)
     || schemaOptional(operation, 'reason', schemaString, path)
+    || schemaOptional(operation, 'previewLoop', schemaPreviewLoopInstance, path)
     || schemaOptional(operation, 'expansion', schemaEvidenceExpansionLink, path)
     || schemaOperation(operation.snapshot, `${path}.snapshot`);
 };
@@ -7591,7 +8331,7 @@ const schemaAuthorityOperation = (value: unknown, path: string): ClosedSchemaErr
 const schemaAuthoritySourceBinding = (value: unknown, path: string): ClosedSchemaError => {
   const objectError = schemaObject(value, path, [
     'id', 'callId', 'operationId', 'kind', 'source', 'sourceOrder', 'modelOrder', 'streamIndex', 'reachability', 'metadata',
-  ], ['expansion']);
+  ], ['previewLoop', 'expansion']);
   if (objectError) return objectError;
   const binding = value as Record<string, unknown>;
   const sourceError = schemaSource(binding.source, `${path}.source`);
@@ -7607,6 +8347,7 @@ const schemaAuthoritySourceBinding = (value: unknown, path: string): ClosedSchem
     || schemaIndex(binding.streamIndex, `${path}.streamIndex`)
     || schemaEnum(binding.reachability, `${path}.reachability`, ['reachable', 'conditional', 'unreachable'])
     || schemaMetadata(binding.metadata, `${path}.metadata`, binding.expansion !== undefined)
+    || schemaOptional(binding, 'previewLoop', schemaPreviewLoopInstance, path)
     || schemaOptional(binding, 'expansion', schemaEvidenceExpansionLink, path);
 };
 
@@ -7724,7 +8465,7 @@ const schemaEvidenceLocalIdentities = (
 
 const schemaAuthority = (value: unknown): ClosedSchemaError => {
   const objectError = schemaObject(value, 'authority', [
-    'version', 'sourceIdentity', 'profile', 'targetId', 'targetSource', 'calls', 'operations', 'sourceBindings', 'nodes', 'localIdentities', 'gaps', 'linkedGapIndexes', 'unlinkedGapIndexes', 'previewPathCatalog', 'previewPathSelections',
+    'version', 'sourceIdentity', 'profile', 'targetId', 'targetSource', 'calls', 'operations', 'sourceBindings', 'nodes', 'localIdentities', 'gaps', 'linkedGapIndexes', 'unlinkedGapIndexes', 'previewPathCatalog', 'previewPathSelections', 'previewLoopCatalog', 'previewLoopSelections',
   ], ['expansion']);
   if (objectError) return objectError;
   const authority = value as Record<string, unknown>;
@@ -7742,6 +8483,8 @@ const schemaAuthority = (value: unknown): ClosedSchemaError => {
     || schemaArray(authority.unlinkedGapIndexes, 'authority.unlinkedGapIndexes')
     || schemaPreviewCatalog(authority.previewPathCatalog, 'authority.previewPathCatalog')
     || schemaPreviewPathSelections(authority.previewPathSelections, 'authority.previewPathSelections')
+    || schemaPreviewLoopCatalog(authority.previewLoopCatalog, 'authority.previewLoopCatalog')
+    || schemaPreviewLoopSelections(authority.previewLoopSelections, 'authority.previewLoopSelections')
     || schemaObject(authority.nodes, 'authority.nodes', ['frames', 'tables', 'rows', 'cells'])
     || schemaEvidenceLocalIdentities(authority.localIdentities, 'authority.localIdentities', authority.sourceIdentity as X4UiLayoutModelIdentity);
   if (baseError) return baseError;
@@ -7891,7 +8634,7 @@ export const validateX4UiLayoutEvidencePair = (
   const manifest = isObject(manifestValue) && !Array.isArray(manifestValue) ? manifestValue : undefined;
   if (!manifest) return fail('evidence authority is missing or malformed');
   if (!exactKeys(manifest, [
-    'version', 'sourceIdentity', 'profile', 'targetId', 'targetSource', 'calls', 'operations', 'sourceBindings', 'nodes', 'localIdentities', 'gaps', 'linkedGapIndexes', 'unlinkedGapIndexes', 'previewPathCatalog', 'previewPathSelections',
+    'version', 'sourceIdentity', 'profile', 'targetId', 'targetSource', 'calls', 'operations', 'sourceBindings', 'nodes', 'localIdentities', 'gaps', 'linkedGapIndexes', 'unlinkedGapIndexes', 'previewPathCatalog', 'previewPathSelections', 'previewLoopCatalog', 'previewLoopSelections',
   ], ['expansion'])) return fail('evidence authority contains an unknown or missing top-level key');
   if (manifest.version !== 3) return fail('evidence authority version is unsupported');
   if (manifest.targetId !== program.target.id) return fail('evidence authority target identity does not match the program target');
@@ -7919,6 +8662,84 @@ export const validateX4UiLayoutEvidencePair = (
   if (!jsonEqual(manifest.previewPathSelections, program.previewPathSelections)) {
     return fail('evidence authority preview-path selections do not exactly match the emitted program selections');
   }
+  if (!jsonEqual(manifest.previewLoopCatalog, program.previewLoopCatalog)) {
+    return fail('evidence authority preview-loop catalog does not exactly match the emitted program catalog');
+  }
+  if (!jsonEqual(manifest.previewLoopSelections, program.previewLoopSelections)) {
+    return fail('evidence authority preview-loop selections do not exactly match the emitted program selections');
+  }
+  const expectedLoopProfileId = previewLoopProfileIdFor(program.profile);
+  if (program.previewLoopCatalog.profileId !== expectedLoopProfileId
+    || !jsonEqual(program.previewLoopCatalog.sourceIdentity, program.target.sourceIdentity)
+    || program.previewLoopCatalog.targetId !== program.target.id
+    || program.previewLoopCatalog.id !== previewLoopCatalogIdFor(
+      program.target.sourceIdentity,
+      program.target,
+      expectedLoopProfileId,
+    )) {
+    return fail('program preview-loop catalog is not exactly source/target/profile bound');
+  }
+  const loopEntriesById = new Map<string, X4UiLayoutPreviewLoopCatalogEntry>();
+  for (const [index, entry] of program.previewLoopCatalog.entries.entries()) {
+    if (loopEntriesById.has(entry.id)) return fail('program preview-loop catalog contains duplicate entry IDs', index);
+    if (entry.depth !== 1 || entry.callIds.length === 0) return fail('program preview-loop catalog entry is not a single-depth direct-target loop', index);
+    loopEntriesById.set(entry.id, entry);
+  }
+  const loopSelectionsById = new Map<string, X4UiLayoutPreviewLoopSelectionBinding>();
+  for (const [index, selection] of program.previewLoopSelections.entries()) {
+    const entry = loopEntriesById.get(selection.id);
+    if (loopSelectionsById.has(selection.id)
+      || !entry
+      || selection.depth !== 1
+      || selection.iterationCount < 1
+      || selection.iterationCount > 16
+      || selection.loopId !== entry.loopId
+      || selection.kind !== entry.kind
+      || selection.multiplicity !== entry.multiplicity
+      || !locationsEqual(selection.source, entry.source)) {
+      return fail('program preview-loop selection is not exact catalog-bound authority', index);
+    }
+    loopSelectionsById.set(selection.id, selection);
+  }
+  const validateLoopInstance = (
+    value: X4UiLayoutPreviewLoopInstance | undefined,
+    path: string,
+  ): X4UiLayoutEvidenceValidationResult | undefined => {
+    if (value === undefined) return undefined;
+    const selection = loopSelectionsById.get(value.entryId);
+    if (!selection || value.loopId !== selection.loopId
+      || !locationsEqual(value.source, selection.source)
+      || value.kind !== selection.kind
+      || value.multiplicity !== selection.multiplicity
+      || value.depth !== 1
+      || value.iteration < 1
+      || value.iteration > value.iterationCount
+      || value.iterationCount !== selection.iterationCount
+      || !jsonEqual(value, previewLoopInstanceFor(selection, value.iteration))) {
+      return fail(`${path} is not a deterministic selected preview-loop instance`);
+    }
+    return undefined;
+  };
+  for (const [index, operation] of program.operations.entries()) {
+    const loopError = validateLoopInstance(operation.previewLoop, `program.operations[${index}].previewLoop`);
+    if (loopError) return loopError;
+  }
+  const sampleBindingsById = new Map(program.previewSampleBindings.map(binding => [binding.id, binding] as const));
+  for (const [index, entry] of program.sampleCatalog.entries.entries()) {
+    const loopError = validateLoopInstance(entry.previewLoop, `program.sampleCatalog.entries[${index}].previewLoop`);
+    if (loopError) return loopError;
+    const binding = sampleBindingsById.get(entry.id);
+    if (binding !== undefined && !jsonEqual(binding.previewLoop, entry.previewLoop)) {
+      return fail('preview sample binding does not preserve its loop instance identity', index);
+    }
+    for (const [consumerIndex, consumer] of entry.consumers.entries()) {
+      const operation = program.operations.find(candidate => candidate.id === consumer.operationId);
+      if (!operation || !jsonEqual(consumer.previewLoop, entry.previewLoop)
+        || !jsonEqual(operation.previewLoop, entry.previewLoop)) {
+        return fail('preview sample consumer is not reciprocal with its loop-scoped operation', consumerIndex);
+      }
+    }
+  }
   if (!jsonEqual(program.localIdentities, manifest.localIdentities)) {
     return fail('program and evidence authority local identity ledgers are not exactly equal');
   }
@@ -7941,6 +8762,7 @@ export const validateX4UiLayoutEvidencePair = (
       || sourceBinding.modelOrder !== operation.modelOrder
       || sourceBinding.streamIndex !== index
       || !jsonEqual(sourceBinding.metadata, operation.metadata)
+      || !jsonEqual(sourceBinding.previewLoop, operation.previewLoop)
       || !jsonEqual(sourceBinding.metadata, authorityOperation.snapshot.metadata)) {
       return fail('emitted operation metadata does not match detached source-call binding', index);
     }
@@ -7949,6 +8771,7 @@ export const validateX4UiLayoutEvidencePair = (
       || sourceBinding.callId !== call.id
       || sourceBinding.operationId !== call.operationId
       || sourceBinding.reachability !== call.reachability
+      || !jsonEqual(sourceBinding.previewLoop, call.previewLoop)
       || !jsonEqual(sourceBinding.expansion, call.expansion)) {
       return fail('detached source-call binding does not match its source-call evidence', index);
     }
@@ -8534,10 +9357,10 @@ export const validateX4UiLayoutEvidencePair = (
     ...program.cells.map(cell => cell.id),
   ]);
   const callKeys = ['id', 'operationId', 'kind', 'source', 'sourceOrder', 'modelOrder', 'streamIndex', 'status', 'reachability'];
-  const callOptionalKeys = ['expansion'];
+  const callOptionalKeys = ['previewLoop', 'expansion'];
   const operationKeys = ['id', 'callId', 'kind', 'source', 'sourceOrder', 'modelOrder', 'streamIndex', 'status', 'snapshot'];
   const operationOptionalKeys = [
-    'frameId', 'tableId', 'rowId', 'cellId', 'reason', 'expansion',
+    'frameId', 'tableId', 'rowId', 'cellId', 'reason', 'previewLoop', 'expansion',
   ];
   for (let index = 0; index < calls.length; index += 1) {
     const callValue = calls[index];
@@ -8576,6 +9399,7 @@ export const validateX4UiLayoutEvidencePair = (
       'operation',
       `${call.modelOrder}|${call.kind}|${locationKey(call.source)}`
         + (call.expansion ? `|${call.expansion.ancestry.join('>')}` : '')
+        + (call.previewLoop ? `|preview-loop:${call.previewLoop.id}` : '')
     );
     if (operationEvidence.id !== expectedOperationId
       || call.operationId !== expectedOperationId
@@ -8619,6 +9443,11 @@ export const validateX4UiLayoutEvidencePair = (
       || operationEvidence.cellId !== operation.cellId
       || operationEvidence.reason !== operation.reason) {
       return fail('evidence call or operation does not exactly match the emitted operation', index);
+    }
+    if (!jsonEqual(call.previewLoop, operation.previewLoop)
+      || !jsonEqual(operationEvidence.previewLoop, operation.previewLoop)
+      || !jsonEqual(operationEvidence.snapshot.previewLoop, operation.previewLoop)) {
+      return fail('evidence loop identity does not exactly match the emitted operation', index);
     }
     const reachability = call.reachability;
     if (!['reachable', 'conditional', 'unreachable'].includes(String(reachability))) {
@@ -8835,7 +9664,7 @@ export const validateX4UiLayoutEvidencePair = (
     }
   }
   const gapKeys = ['category', 'status', 'reason', 'source'];
-  const gapOptionalKeys = ['expression', 'operationId', 'nodeId'];
+  const gapOptionalKeys = ['expression', 'operationId', 'nodeId', 'previewLoop'];
   if (manifestGaps.length !== program.gaps.length) return fail('evidence gap cardinality does not match the program gap ledger');
   for (let index = 0; index < manifestGaps.length; index += 1) {
     const manifestGapValue = manifestGaps[index];
@@ -8853,18 +9682,28 @@ export const validateX4UiLayoutEvidencePair = (
       || (Object.prototype.hasOwnProperty.call(manifestGap, 'nodeId') && !evidenceId(manifestGap.nodeId))) {
       return fail('evidence gap field domain is invalid', index);
     }
+    const programGapLoopError = validateLoopInstance(gap.previewLoop, `program.gaps[${index}].previewLoop`);
+    if (programGapLoopError) return programGapLoopError;
+    const manifestGapLoopError = validateLoopInstance(manifestGap.previewLoop, `evidence.gaps[${index}].previewLoop`);
+    if (manifestGapLoopError) return manifestGapLoopError;
     if (manifestGap.category !== gap.category
       || manifestGap.status !== gap.status
       || manifestGap.reason !== gap.reason
       || !locationsEqual(manifestGap.source, gap.source)
       || !jsonEqual(manifestGap.expression, gap.expression)
       || !jsonEqual(manifestGap.operationId, gap.operationId)
-      || !jsonEqual(manifestGap.nodeId, gap.nodeId)) {
+      || !jsonEqual(manifestGap.nodeId, gap.nodeId)
+      || !jsonEqual(manifestGap.previewLoop, gap.previewLoop)) {
       return fail('evidence gap does not exactly match the program gap ledger', index);
     }
-    if (manifestGap.operationId !== undefined
-      && (typeof manifestGap.operationId !== 'string' || !operationIds.has(manifestGap.operationId))) {
-      return fail('evidence gap references an unknown operation', index);
+    if (manifestGap.operationId !== undefined) {
+      if (typeof manifestGap.operationId !== 'string' || !operationIds.has(manifestGap.operationId)) {
+        return fail('evidence gap references an unknown operation', index);
+      }
+      const operation = program.operations.find(candidate => candidate.id === manifestGap.operationId);
+      if (!operation || (manifestGap.previewLoop !== undefined && !jsonEqual(manifestGap.previewLoop, operation.previewLoop))) {
+        return fail('evidence gap loop identity does not exactly match its referenced operation', index);
+      }
     }
   }
   const linkedIndexes = manifest.linkedGapIndexes;
@@ -9035,7 +9874,9 @@ export const validateX4UiLayoutEvidencePair = (
  * conditional invocation arms for preview only. The optional sixth parameter
  * is loader-issued P2 canonical-default color evidence. The optional seventh
  * parameter is the exact loader-issued X4 9.00 corpus authority used for the
- * bounded font/property projection. No ambient state is consulted.
+ * bounded font/property projection. The optional eighth parameter selects
+ * finite direct-target loop iterations from the owner-issued source/profile-
+ * bound loop catalog. No ambient state is consulted.
  */
 export function projectX4UiLayoutProgram(
   model: X4UiCallModel,
@@ -9045,6 +9886,7 @@ export function projectX4UiLayoutProgram(
   previewPathInput?: X4UiLayoutPreviewPathSelectionInput,
   colorEvidenceInput?: X4UiCorpusCanonicalColorSuccess,
   canonicalCorpusInput?: X4UiCorpusCanonicalSuccess,
+  previewLoopInput?: X4UiLayoutPreviewLoopSelectionInput,
 ): X4UiLayoutProgramResult {
   if (colorEvidenceInput !== undefined && !isX4UiCorpusCanonicalColorSuccess(colorEvidenceInput)) {
     return refusalResult('malformed-color-evidence', 'color evidence is not the exact loader-issued P2 canonical authority');
@@ -9097,6 +9939,23 @@ export function projectX4UiLayoutProgram(
   const selectedPreviewPaths = normalizedPaths.value.ordered.length === 0
     ? undefined
     : normalizedPaths.value.byBoundary;
+  const previewLoopProfileId = previewLoopProfileIdFor(profileValue);
+  const previewLoopCatalog = createPreviewLoopCatalog(
+    model,
+    normalizedProfile.value.sourceIdentity,
+    target,
+    previewLoopProfileId,
+  );
+  const normalizedLoops = normalizePreviewLoops(
+    previewLoopInput,
+    normalizedProfile.value.sourceIdentity,
+    target,
+    previewLoopProfileId,
+    previewLoopCatalog,
+  );
+  if (normalizedLoops.ok === false) {
+    return refusalResult(normalizedLoops.code, normalizedLoops.message, model, target.source);
+  }
   const localExpansionPlan = profileValue.localExpansion
     ? buildLocalExpansionPlan(
       model,
@@ -9106,7 +9965,12 @@ export function projectX4UiLayoutProgram(
       normalizedPaths.value
     )
     : undefined;
-  const targetCalls: ProjectableCall[] = localExpansionPlan?.calls || directTargetCalls;
+  const targetCalls: ProjectableCall[] = expandPreviewLoops(
+    localExpansionPlan?.calls || directTargetCalls,
+    normalizedLoops.value,
+    normalizedProfile.value.sourceIdentity,
+    previewLoopCatalog,
+  );
   const directScaleValues = new Map<string, DirectScaleValue>();
   const resolvedDirectScaleLocations = new Set<string>();
   for (const call of targetCalls) {
@@ -9114,7 +9978,7 @@ export function projectX4UiLayoutProgram(
       || isCallReachabilityBlocked(call, selectedPreviewPaths)
       || !isHelperReceiver(call)
       || call.semantics.dataFlow) continue;
-    const instanceScope = call.expansionInstance?.ancestry.join('>') || '';
+    const instanceScope = instanceScopeForCall(call);
     const scale = call.semantics.scale;
     const enabled = scale?.enabled
       ? resolveBoolean(scale.enabled, 'scale', `${call.name} enabled`, call.source)
@@ -9134,6 +9998,8 @@ export function projectX4UiLayoutProgram(
         ['scaleX', 'scaleY'],
         instanceScope,
         model,
+        undefined,
+        call.previewLoop?.id || '',
       );
       if (font.value === undefined || fontSize.value === undefined || font.gap || fontSize.gap || enabled.gap) continue;
       result = scaleFont(font.value, fontSize.value, profileValue.metrics.uiScale, enabled.value);
@@ -9150,6 +10016,8 @@ export function projectX4UiLayoutProgram(
         ['scaleX', 'scaleY'],
         instanceScope,
         model,
+        undefined,
+        call.previewLoop?.id || '',
       );
       if (input.value === undefined || input.gap || enabled.gap) continue;
       result = call.name === 'scaleX'
@@ -9166,8 +10034,10 @@ export function projectX4UiLayoutProgram(
       resolvedDirectScaleLocations.add(locationKey(call.source));
     }
   }
-  const localScaleFontWrapperValues = localScaleFontWrapperValuesFor(model, profileValue);
+  const activeLocalInvocationIds = activeLocalInvocationResultIdsFor(targetCalls, selectedPreviewPaths);
+  const localScaleFontWrapperValues = localScaleFontWrapperValuesFor(model, profileValue, activeLocalInvocationIds);
   const resolvedLocalScaleFontInvocationIds = new Set(localScaleFontWrapperValues.keys());
+  const allowNumericExpressionSamples = targetNeedsNumericExpressionPreviewSamples(model, targetCalls, selectedPreviewPaths);
   const sampleCatalog = createPreviewSampleCatalog(
     normalizedProfile.value.sourceIdentity,
     target,
@@ -9175,6 +10045,7 @@ export function projectX4UiLayoutProgram(
     resolvedDirectScaleLocations,
     resolvedLocalScaleFontInvocationIds,
     Boolean(localExpansionPlan),
+    allowNumericExpressionSamples,
   );
   const normalizedSamples = normalizePreviewSamples(
     previewSampleInput,
@@ -9348,9 +10219,10 @@ export function projectX4UiLayoutProgram(
     previewSamples.byRangeAndType,
     consumedSamples,
     allowedScaleKinds,
-    activeCall?.expansionInstance?.ancestry.join('>') || '',
+    instanceScopeForCall(activeCall),
     model,
     localScaleFontWrapperValues,
+    activeCall?.previewLoop?.id || '',
   );
 
   const resolveProjectedBoolean = (
@@ -9365,6 +10237,7 @@ export function projectX4UiLayoutProgram(
     source,
     previewSamples.byRangeAndType,
     consumedSamples,
+    activeCall?.previewLoop?.id || '',
   );
 
   const resolveProjectedString = (
@@ -9379,6 +10252,7 @@ export function projectX4UiLayoutProgram(
     source,
     previewSamples.byRangeAndType,
     consumedSamples,
+    activeCall?.previewLoop?.id || '',
   );
 
   const frameTextureLayerNameForCall = (
@@ -11674,7 +12548,15 @@ export function projectX4UiLayoutProgram(
       let hasGap = false;
       let scaleResult: LayoutResult<number> | undefined;
       if (call.name === 'scaleFont') {
-        const font = resolveString(scale?.fontname, 'scale', 'scaleFont font name', call.source);
+        const font = resolveString(
+          scale?.fontname,
+          'scale',
+          'scaleFont font name',
+          call.source,
+          undefined,
+          undefined,
+          call.previewLoop?.id || '',
+        );
         const fontSize = resolveNumber(
           scale?.fontsize,
           profileValue,
@@ -11685,10 +12567,14 @@ export function projectX4UiLayoutProgram(
           undefined,
           undefined,
           ['scaleX', 'scaleY'],
-          call.expansionInstance?.ancestry.join('>') || '',
+          instanceScopeForCall(call),
           model,
+          undefined,
+          call.previewLoop?.id || '',
         );
-        const enabled = scale?.enabled ? resolveBoolean(scale.enabled, 'scale', 'scaleFont enabled', call.source) : { value: undefined };
+        const enabled = scale?.enabled
+          ? resolveBoolean(scale.enabled, 'scale', 'scaleFont enabled', call.source, undefined, undefined, call.previewLoop?.id || '')
+          : { value: undefined };
         for (const resolution of [font, fontSize, enabled]) {
           appendGapForResolution(operation, resolution, undefined);
           if (resolution.gap) hasGap = true;
@@ -11707,10 +12593,14 @@ export function projectX4UiLayoutProgram(
           undefined,
           undefined,
           ['scaleX', 'scaleY'],
-          call.expansionInstance?.ancestry.join('>') || '',
+          instanceScopeForCall(call),
           model,
+          undefined,
+          call.previewLoop?.id || '',
         );
-        const enabled = scale?.enabled ? resolveBoolean(scale.enabled, 'scale', `${call.name} enabled`, call.source) : { value: undefined };
+        const enabled = scale?.enabled
+          ? resolveBoolean(scale.enabled, 'scale', `${call.name} enabled`, call.source, undefined, undefined, call.previewLoop?.id || '')
+          : { value: undefined };
         for (const resolution of [input, enabled]) {
           appendGapForResolution(operation, resolution, undefined);
           if (resolution.gap) hasGap = true;
@@ -11971,6 +12861,9 @@ export function projectX4UiLayoutProgram(
       reason: 'valid preview sample was not applied because its owner/control-flow context was not applied',
       expression: sample.entry.expression,
       source: sample.entry.source,
+      ...(sample.entry.previewLoop
+        ? { previewLoop: cloneDeep(sample.entry.previewLoop) as X4UiLayoutPreviewLoopInstance }
+        : {}),
     });
   }
 
@@ -12035,7 +12928,8 @@ export function projectX4UiLayoutProgram(
     incomplete: analysis.incomplete || gaps.length > 0,
     staticSource: analysis.incomplete || gaps.length > 0 ? 'incomplete' : 'complete',
   }, frames, tables, rows, cells, operations, gaps, sampleCatalog, previewSamples, consumedSamples,
-  previewPathCatalog, normalizedPaths.value.ordered, model,
+  previewPathCatalog, normalizedPaths.value.ordered,
+  previewLoopCatalog, normalizedLoops.value.ordered, model,
   targetCalls, operationEvents, nodeLedgerEvents, gapEvents, localExpansionState, colorEvidenceInput);
 }
 

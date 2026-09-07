@@ -16,6 +16,10 @@ import {
   projectX4UiPreviewPipeline,
   type X4UiPreviewPipelineInput,
   type X4UiPreviewPipelineResult,
+  type X4UiPreviewLoopCatalog,
+  type X4UiPreviewLoopInput,
+  type X4UiPreviewLoopSelectionInput,
+  type X4UiPreviewLoopSelection,
   type X4UiPreviewSelection,
 } from './x4UiPreviewPipeline';
 import type {
@@ -70,6 +74,59 @@ type EditorWorkspace = Parameters<typeof buildX4UiWorkspaceSource>[0];
 
 export type X4UiEditorSampleState = X4UiLayoutPreviewSampleInput | undefined;
 
+/** Source/target/profile-bound loop selections accepted by the layout owner. */
+export type X4UiEditorLoopState = X4UiPreviewLoopInput | undefined;
+
+/** Alias for callers that name the state by its selection role. */
+export type X4UiEditorLoopSelectionState = X4UiEditorLoopState;
+
+export type X4UiEditorLoopReconciliationCode =
+  | 'catalog-unavailable'
+  | 'catalog-authority-required'
+  | 'malformed-catalog'
+  | 'duplicate-catalog-entry'
+  | 'malformed-loops'
+  | 'stale-loops'
+  | 'unknown-loop'
+  | 'duplicate-loop'
+  | 'nonfinite-iteration-count'
+  | 'iteration-count-out-of-range';
+
+export type X4UiEditorLoopReconciliation =
+  | {
+    readonly status: 'accepted';
+    readonly loops: X4UiEditorLoopState;
+    readonly changed: boolean;
+  }
+  | {
+    readonly status: 'cleared';
+    readonly loops: undefined;
+    readonly changed: true;
+    readonly code: 'catalog-unavailable' | 'stale-loops';
+    readonly message: string;
+  }
+  | {
+    readonly status: 'refused';
+    readonly loops: X4UiEditorLoopState;
+    readonly changed: boolean;
+    readonly code: Exclude<X4UiEditorLoopReconciliationCode, 'catalog-unavailable' | 'stale-loops'>;
+    readonly message: string;
+  };
+
+export type X4UiEditorLoopUpdateResult =
+  | {
+    readonly status: 'accepted' | 'reset';
+    readonly loops: X4UiEditorLoopState;
+    readonly changed: boolean;
+  }
+  | {
+    readonly status: 'refused';
+    readonly loops: X4UiEditorLoopState;
+    readonly changed: boolean;
+    readonly code: X4UiEditorLoopReconciliationCode;
+    readonly message: string;
+  };
+
 export interface X4UiEditorSampleBinding {
   readonly catalogId: string;
   readonly programKey: string;
@@ -80,6 +137,18 @@ export interface X4UiEditorSampleBinding {
 /** Opaque authority issued by the selected projected editor session. */
 export interface X4UiEditorSampleCatalogAuthority {
   readonly kind: 'x4-ui-editor-sample-catalog-authority';
+}
+
+/** Opaque authority issued by the selected projected editor session. */
+export interface X4UiEditorLoopCatalogAuthority {
+  readonly kind: 'x4-ui-editor-preview-loop-catalog-authority';
+}
+
+export interface X4UiEditorLoopBinding {
+  readonly catalogId: string;
+  readonly programKey: string;
+  readonly profileKey: string;
+  readonly selectionKey: string;
 }
 
 export type X4UiEditorPathState = X4UiLayoutPreviewPathSelectionInput | undefined;
@@ -266,6 +335,17 @@ export interface X4UiEditorSessionInput {
   readonly pathBinding?: X4UiEditorPathBinding;
   /** Editor-only session-issued path authority; never forwarded to the layout-program owner. */
   readonly pathCatalogAuthority?: X4UiEditorPathCatalogAuthority;
+  /** Canonical source/target/profile-bound loop state; editor authority is separate. */
+  readonly loops?: X4UiPreviewLoopInput;
+  /** Compatibility alias for loops; duplicate defined aliases must be exactly equivalent. */
+  readonly loopInput?: X4UiPreviewLoopInput;
+  /** Owner-vocabulary compatibility alias for loops; duplicate defined aliases must be exactly equivalent. */
+  readonly previewLoopInput?: X4UiPreviewLoopInput;
+  readonly loopBinding?: X4UiEditorLoopBinding;
+  /** Canonical editor-only session-issued loop authority; never forwarded to the layout owner. */
+  readonly loopCatalogAuthority?: X4UiEditorLoopCatalogAuthority;
+  /** Compatibility alias; when both aliases are defined they must name the same issued object. */
+  readonly previewLoopCatalogAuthority?: X4UiEditorLoopCatalogAuthority;
   readonly activePresetId?: KeepOutContextPresetId | string;
   readonly enabledEntryIds?: readonly string[];
   /** Session-local screenshot evidence; never persisted or forwarded as an entry. */
@@ -273,6 +353,23 @@ export interface X4UiEditorSessionInput {
   /** Manual calibration IDs must be explicitly enabled before reaching Paint. */
   readonly enabledManualEntryIds?: readonly string[];
   readonly [key: string]: unknown;
+}
+
+/**
+ * Source/target discovery emitted from one immutable workspace-source result.
+ * The catalog is owner-issued and never accepts caller-provided source authority.
+ */
+export interface X4UiEditorCandidateCatalog {
+  readonly sourceCandidates: X4UiPreviewPipelineResult['sourceCandidates'];
+}
+
+/**
+ * One source-owned editor projection owner. The owner binds candidate discovery
+ * and all selected projections to one immutable workspace-source result.
+ */
+export interface X4UiEditorSessionOwner {
+  readonly candidateCatalog: X4UiEditorCandidateCatalog;
+  readonly project: (input: X4UiEditorSessionInput) => X4UiEditorSessionProjection;
 }
 
 export type X4UiEditorNormalizedProfile = X4UiEditorProfile;
@@ -324,6 +421,15 @@ export interface X4UiEditorSessionProjection {
   readonly paths: X4UiEditorPathState;
   readonly pathBinding: X4UiEditorPathBinding | undefined;
   readonly pathReconciliation: X4UiEditorPathReconciliation;
+  readonly previewLoopCatalog: X4UiPreviewLoopCatalog | null;
+  readonly previewLoopCatalogAuthority: X4UiEditorLoopCatalogAuthority | undefined;
+  readonly previewLoopInput: X4UiEditorLoopState;
+  readonly previewLoopSelections: readonly X4UiPreviewLoopSelection[];
+  readonly loopCatalog: X4UiPreviewLoopCatalog | null;
+  readonly loopCatalogAuthority: X4UiEditorLoopCatalogAuthority | undefined;
+  readonly loops: X4UiEditorLoopState;
+  readonly loopBinding: X4UiEditorLoopBinding | undefined;
+  readonly loopReconciliation: X4UiEditorLoopReconciliation;
   readonly keepOutPresets: readonly X4UiEditorKeepOutPresetProjection[];
   /** Alias retained for callers that call the entries simply presets. */
   readonly presets: readonly X4UiEditorKeepOutPresetProjection[];
@@ -366,7 +472,7 @@ type NormalizedInput = {
   readonly colorEvidence?: X4UiCorpusCanonicalColorSuccess;
   readonly selection?: X4UiPreviewSelection;
   readonly profile: X4UiEditorNormalizedProfile;
-  readonly issues: readonly string[];
+  readonly issues: string[];
   readonly manualCalibrations: readonly unknown[] | undefined;
   readonly manualCalibrationsMalformed: boolean;
   readonly enabledManualEntryIds: readonly string[];
@@ -522,6 +628,32 @@ function sampleSourceMatchesIdentity(
   return source.file === identity.file && source.sourcePath === identity.sourcePath;
 }
 
+function closedSamplePreviewLoop(
+  value: unknown,
+  identity: X4UiLayoutModelIdentity,
+): boolean {
+  if (!hasClosedOwnDataFields(value, [
+    'id', 'entryId', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'iteration', 'iterationCount',
+  ])
+    || !isNonEmptyString(dataField(value, 'id'))
+    || !isNonEmptyString(dataField(value, 'entryId'))
+    || !isNonEmptyString(dataField(value, 'loopId'))
+    || !isNonEmptyString(dataField(value, 'kind'))
+    || !isNonEmptyString(dataField(value, 'multiplicity'))
+    || dataField(value, 'depth') !== 1
+    || !closedSampleSourceLocation(dataField(value, 'source'))
+    || !Number.isSafeInteger(dataField(value, 'iteration'))
+    || !Number.isSafeInteger(dataField(value, 'iterationCount'))) return false;
+  const source = dataField(value, 'source') as X4UiLayoutModelIdentity & { readonly start: object; readonly end: object };
+  const iteration = dataField(value, 'iteration') as number;
+  const iterationCount = dataField(value, 'iterationCount') as number;
+  return sampleSourceMatchesIdentity(source, identity)
+    && iteration >= 1
+    && iterationCount >= 1
+    && iterationCount <= 16
+    && iteration <= iterationCount;
+}
+
 function validateSampleCatalog(
   value: unknown,
 ):
@@ -538,12 +670,13 @@ function validateSampleCatalog(
   if (entries === null) return { ok: false, code: 'malformed-catalog', message: 'preview sample catalog entries must be a dense own-data array' };
   const ids = new Set<string>();
   for (const entryValue of entries) {
-    if (!hasClosedOwnDataFields(entryValue, ['id', 'expression', 'expectedType', 'source', 'consumers', 'provenance'])
+    if (!hasClosedOwnDataFields(entryValue, ['id', 'expression', 'expectedType', 'source', 'consumers', 'provenance'], ['previewLoop'])
       || !isNonEmptyString(dataField(entryValue, 'id'))
       || !isNonEmptyString(dataField(entryValue, 'expression'))
       || !isLayoutScalarType(dataField(entryValue, 'expectedType'))
       || dataField(entryValue, 'provenance') !== 'preview-only'
-      || !closedSampleSourceLocation(dataField(entryValue, 'source'))) {
+      || !closedSampleSourceLocation(dataField(entryValue, 'source'))
+      || (hasOwn(entryValue, 'previewLoop') && !closedSamplePreviewLoop(dataField(entryValue, 'previewLoop'), sourceIdentity))) {
       return { ok: false, code: 'malformed-catalog', message: 'preview sample catalog contains a malformed entry' };
     }
     const entryId = dataField(entryValue, 'id') as string;
@@ -561,11 +694,12 @@ function validateSampleCatalog(
     }
     const consumerKeys = new Set<string>();
     for (const consumerValue of consumers) {
-      if (!hasClosedOwnDataFields(consumerValue, ['operationId', 'operationKind', 'field', 'source'])
+      if (!hasClosedOwnDataFields(consumerValue, ['operationId', 'operationKind', 'field', 'source'], ['previewLoop'])
         || !isNonEmptyString(dataField(consumerValue, 'operationId'))
         || !X4_UI_LAYOUT_SAMPLE_OPERATION_KINDS.has(String(dataField(consumerValue, 'operationKind')))
         || !isNonEmptyString(dataField(consumerValue, 'field'))
-        || !closedSampleSourceLocation(dataField(consumerValue, 'source'))) {
+        || !closedSampleSourceLocation(dataField(consumerValue, 'source'))
+        || (hasOwn(consumerValue, 'previewLoop') && !closedSamplePreviewLoop(dataField(consumerValue, 'previewLoop'), sourceIdentity))) {
         return { ok: false, code: 'malformed-catalog', message: `preview sample catalog entry ${entryId} has a malformed consumer` };
       }
       const consumerSource = dataField(consumerValue, 'source') as X4UiLayoutModelIdentity & { readonly start: object; readonly end: object };
@@ -775,6 +909,331 @@ function pathInputFor(
   });
 }
 
+function loopSourceMatchesIdentity(
+  source: { readonly file: string; readonly sourcePath?: string },
+  identity: X4UiLayoutModelIdentity,
+): boolean {
+  return source.file === identity.file && source.sourcePath === identity.sourcePath;
+}
+
+function validateLoopCatalog(
+  value: unknown,
+):
+  | { readonly ok: true; readonly catalog: X4UiPreviewLoopCatalog }
+  | { readonly ok: false; readonly code: 'malformed-catalog' | 'duplicate-catalog-entry'; readonly message: string } {
+  if (!hasClosedOwnDataFields(value, ['id', 'sourceIdentity', 'targetId', 'profileId', 'entries'])
+    || !isNonEmptyString(dataField(value, 'id'))
+    || !closedSampleSourceIdentity(dataField(value, 'sourceIdentity'))
+    || !isNonEmptyString(dataField(value, 'targetId'))
+    || !isNonEmptyString(dataField(value, 'profileId'))) {
+    return { ok: false, code: 'malformed-catalog', message: 'preview loop catalog is malformed' };
+  }
+  const sourceIdentity = dataField(value, 'sourceIdentity') as X4UiLayoutModelIdentity;
+  const entries = closedArrayValues(dataField(value, 'entries'));
+  if (entries === null) return { ok: false, code: 'malformed-catalog', message: 'preview loop catalog entries must be a dense own-data array' };
+  const ids = new Set<string>();
+  const callIds = new Set<string>();
+  for (const entryValue of entries) {
+    if (!hasClosedOwnDataFields(entryValue, ['id', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'callIds', 'provenance'])
+      || !isNonEmptyString(dataField(entryValue, 'id'))
+      || !isNonEmptyString(dataField(entryValue, 'loopId'))
+      || !closedSampleSourceLocation(dataField(entryValue, 'source'))
+      || !isNonEmptyString(dataField(entryValue, 'kind'))
+      || !isNonEmptyString(dataField(entryValue, 'multiplicity'))
+      || dataField(entryValue, 'depth') !== 1
+      || dataField(entryValue, 'provenance') !== 'preview-only') {
+      return { ok: false, code: 'malformed-catalog', message: 'preview loop catalog contains a malformed entry' };
+    }
+    const entryId = dataField(entryValue, 'id') as string;
+    if (ids.has(entryId)) return { ok: false, code: 'duplicate-catalog-entry', message: `duplicate preview loop catalog ID: ${entryId}` };
+    ids.add(entryId);
+    const entrySource = dataField(entryValue, 'source') as X4UiLayoutModelIdentity & { readonly start: object; readonly end: object };
+    if (!loopSourceMatchesIdentity(entrySource, sourceIdentity)) {
+      return { ok: false, code: 'malformed-catalog', message: `preview loop catalog entry ${entryId} has a foreign source identity` };
+    }
+    const entryCallIds = closedArrayValues(dataField(entryValue, 'callIds'));
+    if (entryCallIds === null || entryCallIds.length === 0 || entryCallIds.some(callId => !isNonEmptyString(callId))) {
+      return { ok: false, code: 'malformed-catalog', message: `preview loop catalog entry ${entryId} has malformed call IDs` };
+    }
+    for (const callId of entryCallIds as readonly string[]) {
+      if (callIds.has(callId)) return { ok: false, code: 'malformed-catalog', message: `preview loop catalog call ID is duplicated: ${callId}` };
+      callIds.add(callId);
+    }
+  }
+  return { ok: true, catalog: value as unknown as X4UiPreviewLoopCatalog };
+}
+
+function loopCatalogFor(preview: X4UiPreviewPipelineResult): X4UiPreviewLoopCatalog | null {
+  const programResult = isRecord(preview.program) ? preview.program : null;
+  const program = isRecord(programResult?.program) ? programResult.program : null;
+  if (program === null || preview.previewLoopCatalog === null) return null;
+  const rawCatalog = dataField(program, 'previewLoopCatalog');
+  if (rawCatalog === null || rawCatalog === undefined) return null;
+  const catalogResult = validateLoopCatalog(rawCatalog);
+  if (catalogResult.ok === false) return null;
+  const target = dataField(program, 'target');
+  const targetIdentity = isRecord(target) ? dataField(target, 'sourceIdentity') : undefined;
+  return isRecord(target)
+    && isNonEmptyString(dataField(target, 'id'))
+    && closedSampleSourceIdentity(targetIdentity)
+    && catalogResult.catalog.targetId === dataField(target, 'id')
+    && sameLayoutIdentity(catalogResult.catalog.sourceIdentity, targetIdentity)
+    && preview.previewLoopCatalog === rawCatalog
+    ? catalogResult.catalog
+    : null;
+}
+
+function loopInputFor(
+  catalog: X4UiPreviewLoopCatalog,
+  selections: readonly X4UiPreviewLoopSelectionInput[],
+): X4UiEditorLoopState {
+  if (selections.length === 0) return undefined;
+  return freezeDeep({
+    catalogId: catalog.id,
+    source: {
+      file: catalog.sourceIdentity.file,
+      ...(catalog.sourceIdentity.sourcePath === undefined ? {} : { sourcePath: catalog.sourceIdentity.sourcePath }),
+      sha256: catalog.sourceIdentity.sha256,
+    },
+    targetId: catalog.targetId,
+    profileId: catalog.profileId,
+    selections: selections.map(selection => ({
+      id: selection.id,
+      iterationCount: selection.iterationCount,
+    })),
+  }) as X4UiEditorLoopState;
+}
+
+function sameLoopInput(left: X4UiEditorLoopState, right: X4UiEditorLoopState): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.catalogId !== right.catalogId
+    || !sameLayoutIdentity(left.source, right.source)
+    || left.targetId !== right.targetId
+    || left.profileId !== right.profileId
+    || left.selections.length !== right.selections.length) return false;
+  return left.selections.every((selection, index) => {
+    const candidate = right.selections[index];
+    return candidate !== undefined
+      && candidate.id === selection.id
+      && candidate.iterationCount === selection.iterationCount;
+  });
+}
+
+type LoopAliasResolution = {
+  readonly value: unknown;
+  readonly refusal?: {
+    readonly code: 'malformed-loops' | 'catalog-authority-required';
+    readonly message: string;
+  };
+};
+
+const LOOP_STATE_ALIAS_FIELDS = ['loops', 'loopInput', 'previewLoopInput'] as const;
+const LOOP_AUTHORITY_ALIAS_FIELDS = ['loopCatalogAuthority', 'previewLoopCatalogAuthority'] as const;
+
+function loopInputForAliasComparison(value: unknown): X4UiPreviewLoopInput | null {
+  if (!hasClosedOwnDataFields(value, ['catalogId', 'source', 'targetId', 'profileId', 'selections'])
+    || !isNonEmptyString(dataField(value, 'catalogId'))
+    || !closedSampleSourceIdentity(dataField(value, 'source'))
+    || !isNonEmptyString(dataField(value, 'targetId'))
+    || !isNonEmptyString(dataField(value, 'profileId'))) return null;
+  const selections = closedArrayValues(dataField(value, 'selections'));
+  if (selections === null) return null;
+  const normalizedSelections: X4UiPreviewLoopSelectionInput[] = [];
+  const seen = new Set<string>();
+  for (const selection of selections) {
+    if (!hasClosedOwnDataFields(selection, ['id', 'iterationCount'])
+      || !isNonEmptyString(dataField(selection, 'id'))
+      || typeof dataField(selection, 'iterationCount') !== 'number') return null;
+    const id = dataField(selection, 'id') as string;
+    const iterationCount = dataField(selection, 'iterationCount') as number;
+    if (!Number.isFinite(iterationCount)
+      || !Number.isSafeInteger(iterationCount)
+      || iterationCount < 1
+      || iterationCount > 16
+      || seen.has(id)) return null;
+    seen.add(id);
+    normalizedSelections.push({ id, iterationCount });
+  }
+  normalizedSelections.sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  const source = dataField(value, 'source') as X4UiLayoutModelIdentity;
+  return {
+    catalogId: dataField(value, 'catalogId') as string,
+    source: {
+      file: source.file,
+      ...(source.sourcePath === undefined ? {} : { sourcePath: source.sourcePath }),
+      sha256: source.sha256,
+    },
+    targetId: dataField(value, 'targetId') as string,
+    profileId: dataField(value, 'profileId') as string,
+    selections: normalizedSelections,
+  };
+}
+
+function resolveLoopStateAliases(raw: JsonRecord): LoopAliasResolution {
+  const supplied: unknown[] = [];
+  for (const name of LOOP_STATE_ALIAS_FIELDS) {
+    const field = ownInputField(raw, name);
+    if (!field.present) continue;
+    if (!field.valid) {
+      return {
+        value: undefined,
+        refusal: {
+          code: 'malformed-loops',
+          message: `${name} must be an enumerable own data field and must not be an accessor`,
+        },
+      };
+    }
+    if (field.value !== undefined) supplied.push(field.value);
+  }
+  if (supplied.length > 1) {
+    const canonical = loopInputForAliasComparison(supplied[0]);
+    const candidates = supplied.slice(1).map(loopInputForAliasComparison);
+    if (canonical === null || candidates.some(candidate => candidate === null)) {
+      return {
+        value: undefined,
+        refusal: {
+          code: 'malformed-loops',
+          message: 'defined preview loop state aliases must each satisfy the exact closed loop-state contract',
+        },
+      };
+    }
+    if (candidates.some(candidate => !sameLoopInput(canonical, candidate ?? undefined))) {
+      return {
+        value: undefined,
+        refusal: {
+          code: 'malformed-loops',
+          message: 'defined preview loop state aliases conflict; use canonical loops or equivalent compatibility aliases',
+        },
+      };
+    }
+  }
+  return { value: supplied[0] };
+}
+
+function resolveLoopAuthorityAliases(raw: JsonRecord): LoopAliasResolution {
+  const supplied: unknown[] = [];
+  for (const name of LOOP_AUTHORITY_ALIAS_FIELDS) {
+    const field = ownInputField(raw, name);
+    if (!field.present) continue;
+    if (!field.valid) {
+      return {
+        value: undefined,
+        refusal: {
+          code: 'catalog-authority-required',
+          message: `${name} must be an enumerable own data field and must not be an accessor`,
+        },
+      };
+    }
+    if (field.value !== undefined) supplied.push(field.value);
+  }
+  if (supplied.length > 1) {
+    const authority = supplied[0];
+    if (supplied.some(candidate => candidate !== authority) || issuedLoopCatalogAuthorityFor(authority) === null) {
+      return {
+        value: undefined,
+        refusal: {
+          code: 'catalog-authority-required',
+          message: 'loop authority aliases must reference the exact same authority object issued by this editor session',
+        },
+      };
+    }
+  }
+  return { value: supplied[0] };
+}
+
+function loopSelectionValuesFor(value: unknown): readonly X4UiPreviewLoopSelection[] | null {
+  const values = closedArrayValues(value);
+  if (values === null) return null;
+  return values as unknown as readonly X4UiPreviewLoopSelection[];
+}
+
+function loopSelectionsForProgram(preview: X4UiPreviewPipelineResult): readonly X4UiPreviewLoopSelection[] {
+  const programResult = isRecord(preview.program) ? preview.program : null;
+  const program = isRecord(programResult?.program) ? programResult.program : null;
+  if (program === null) return [];
+  return loopSelectionValuesFor(dataField(program, 'previewLoopSelections')) ?? [];
+}
+
+function loopBindingFor(
+  preview: X4UiPreviewPipelineResult,
+  profile: X4UiEditorNormalizedProfile,
+  selection: X4UiPreviewSelection | undefined,
+  catalog: X4UiPreviewLoopCatalog | null,
+): X4UiEditorLoopBinding | undefined {
+  const programResult = isRecord(preview.program) ? preview.program : null;
+  const program = isRecord(programResult?.program) ? programResult.program : null;
+  if (catalog === null || program === null) return undefined;
+  const target = isRecord(dataField(program, 'target')) ? dataField(program, 'target') : undefined;
+  return freezeDeep({
+    catalogId: catalog.id,
+    programKey: stableDataKey({ target, previewLoopCatalog: catalog }),
+    profileKey: stableDataKey(profile),
+    selectionKey: stableDataKey({
+      sourceIndex: selection?.sourceIndex,
+      path: selection?.path,
+      sourceIdentity: selection?.sourceIdentity,
+      target: target ?? selection?.target,
+    }),
+  });
+}
+
+function isLoopBinding(value: unknown): value is X4UiEditorLoopBinding {
+  return hasClosedOwnDataFields(value, ['catalogId', 'programKey', 'profileKey', 'selectionKey'])
+    && isNonEmptyString(dataField(value, 'catalogId'))
+    && isNonEmptyString(dataField(value, 'programKey'))
+    && isNonEmptyString(dataField(value, 'profileKey'))
+    && isNonEmptyString(dataField(value, 'selectionKey'));
+}
+
+export function sameX4UiEditorLoopBinding(left: unknown, right: unknown): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (!isLoopBinding(left) || !isLoopBinding(right)) return false;
+  const leftRecord = left as unknown as JsonRecord;
+  const rightRecord = right as unknown as JsonRecord;
+  return dataField(leftRecord, 'catalogId') === dataField(rightRecord, 'catalogId')
+    && dataField(leftRecord, 'programKey') === dataField(rightRecord, 'programKey')
+    && dataField(leftRecord, 'profileKey') === dataField(rightRecord, 'profileKey')
+    && dataField(leftRecord, 'selectionKey') === dataField(rightRecord, 'selectionKey');
+}
+
+type IssuedLoopCatalogAuthority = {
+  catalog: X4UiPreviewLoopCatalog;
+  binding: X4UiEditorLoopBinding;
+};
+
+const issuedLoopCatalogAuthorities = new WeakMap<object, IssuedLoopCatalogAuthority>();
+
+function issueLoopCatalogAuthority(
+  catalog: X4UiPreviewLoopCatalog,
+  binding: X4UiEditorLoopBinding,
+): X4UiEditorLoopCatalogAuthority {
+  const authority = Object.freeze({ kind: 'x4-ui-editor-preview-loop-catalog-authority' as const });
+  issuedLoopCatalogAuthorities.set(authority, { catalog, binding });
+  return authority;
+}
+
+function issuedLoopCatalogAuthorityFor(value: unknown): IssuedLoopCatalogAuthority | null {
+  if (value === null || typeof value !== 'object') return null;
+  return issuedLoopCatalogAuthorities.get(value) ?? null;
+}
+
+function rebindLoopCatalogAuthority(
+  value: unknown,
+  catalog: X4UiPreviewLoopCatalog | null,
+  binding: X4UiEditorLoopBinding | undefined,
+): X4UiEditorLoopCatalogAuthority | undefined {
+  if (catalog === null || binding === undefined) return undefined;
+  const record = issuedLoopCatalogAuthorityFor(value);
+  if (record === null || !sameX4UiEditorLoopBinding(record.binding, binding)) return undefined;
+  if (record.catalog === catalog) return value as X4UiEditorLoopCatalogAuthority;
+  return issueLoopCatalogAuthority(catalog, binding);
+}
+
+function loopCatalogAuthorityMatches(catalog: unknown, authority: unknown): boolean {
+  const record = issuedLoopCatalogAuthorityFor(authority);
+  return record !== null && record.catalog === catalog;
+}
+
 function stableDataKey(value: unknown, active = new WeakSet<object>()): string {
   if (value === undefined) return 'undefined';
   if (value === null) return 'null';
@@ -796,26 +1255,284 @@ function stableDataKey(value: unknown, active = new WeakSet<object>()): string {
   return result;
 }
 
+const SESSION_PROJECTION_CACHE_DATA_FIELDS = Object.freeze([
+  'profile',
+  'selection',
+  'samples',
+  'sampleBinding',
+  'paths',
+  'pathBinding',
+  'loops',
+  'loopInput',
+  'previewLoopInput',
+  'loopBinding',
+  'activePresetId',
+  'enabledEntryIds',
+  'manualCalibrations',
+  'enabledManualEntryIds',
+] as const);
+
+const SESSION_PROJECTION_CACHE_AUTHORITY_FIELDS = Object.freeze([
+  'sampleCatalogAuthority',
+  'pathCatalogAuthority',
+  'loopCatalogAuthority',
+  'previewLoopCatalogAuthority',
+] as const);
+
+interface X4UiEditorSessionProjectionCacheSignature {
+  readonly dataKey: string;
+  readonly corpus: unknown;
+  readonly colorEvidence: unknown;
+  readonly authorities: readonly {
+    readonly present: boolean;
+    readonly value: unknown;
+  }[];
+}
+
+/**
+ * Serialize only ordinary dense data. Cache-ineligible shapes continue through
+ * the full projector, so accessors, custom prototypes, cycles, and mutable
+ * binary payloads can never be hidden behind an earlier result.
+ */
+function cacheableStableDataKey(value: unknown, active = new WeakSet<object>()): string | null {
+  try {
+    if (value === undefined) return 'undefined';
+    if (value === null) return 'null';
+    if (typeof value === 'string') return `string:${JSON.stringify(value)}`;
+    if (typeof value === 'number') return `number:${String(value)}`;
+    if (typeof value === 'boolean') return `boolean:${String(value)}`;
+    if (typeof value !== 'object') return null;
+    const objectValue = value as object;
+    if (active.has(objectValue)) return null;
+    active.add(objectValue);
+    let result: string | null;
+    if (Array.isArray(objectValue)) {
+      const values = denseArrayValues(objectValue);
+      if (values === null) result = null;
+      else {
+        const childKeys: string[] = [];
+        for (const child of values) {
+          const childKey = cacheableStableDataKey(child, active);
+          if (childKey === null) {
+            active.delete(objectValue);
+            return null;
+          }
+          childKeys.push(childKey);
+        }
+        result = `[${childKeys.join(',')}]`;
+      }
+    } else {
+      const prototype = Object.getPrototypeOf(objectValue);
+      if (prototype !== Object.prototype && prototype !== null) result = null;
+      else {
+        const keys = Reflect.ownKeys(objectValue);
+        if (keys.some((key): boolean => typeof key !== 'string')) result = null;
+        else {
+          const stringKeys = (keys as string[]).sort();
+          const fields: string[] = [];
+          result = '';
+          for (const key of stringKeys) {
+            const descriptor = Object.getOwnPropertyDescriptor(objectValue, key);
+            if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+              result = null;
+              break;
+            }
+            const childKey = cacheableStableDataKey(descriptor.value, active);
+            if (childKey === null) {
+              result = null;
+              break;
+            }
+            fields.push(`${JSON.stringify(key)}:${childKey}`);
+          }
+          if (result !== null) result = `{${fields.join(',')}}`;
+        }
+      }
+    }
+    active.delete(objectValue);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+function editorSessionProjectionCacheSignature(
+  input: X4UiEditorSessionInput,
+): X4UiEditorSessionProjectionCacheSignature | null {
+  try {
+    if (!isRecord(input)) return null;
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    for (const key of Reflect.ownKeys(input)) {
+      if (typeof key !== 'string') return null;
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return null;
+    }
+
+    const corpusField = ownInputField(input, 'corpus');
+    if (!corpusField.valid) return null;
+    const corpus = corpusField.value;
+    if (corpus !== undefined && corpus !== null && !safeCanonical(corpus)) return null;
+
+    const colorField = ownInputField(input, 'colorEvidence');
+    if (!colorField.valid) return null;
+    const colorEvidence = colorField.value;
+    if (colorEvidence !== undefined && !isX4UiCorpusCanonicalColorSuccess(colorEvidence)) return null;
+
+    const dataFields: string[] = [];
+    for (const key of SESSION_PROJECTION_CACHE_DATA_FIELDS) {
+      const field = ownInputField(input, key);
+      if (!field.valid) return null;
+      if (!field.present) {
+        dataFields.push(`${key}:absent`);
+        continue;
+      }
+      const fieldKey = cacheableStableDataKey(field.value);
+      if (fieldKey === null) return null;
+      dataFields.push(`${key}:present:${fieldKey}`);
+    }
+
+    const authorities = SESSION_PROJECTION_CACHE_AUTHORITY_FIELDS.map(key => {
+      const field = ownInputField(input, key);
+      return {
+        present: field.present,
+        value: field.valid ? field.value : null,
+        valid: field.valid,
+      };
+    });
+    if (authorities.some(authority => !authority.valid)) return null;
+    return {
+      dataKey: dataFields.join('|'),
+      corpus,
+      colorEvidence,
+      authorities: authorities.map(({ present, value }) => ({ present, value })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sameEditorSessionProjectionCacheSignature(
+  left: X4UiEditorSessionProjectionCacheSignature,
+  right: X4UiEditorSessionProjectionCacheSignature,
+): boolean {
+  return left.dataKey === right.dataKey
+    && left.corpus === right.corpus
+    && left.colorEvidence === right.colorEvidence
+    && left.authorities.length === right.authorities.length
+    && left.authorities.every((authority, index) => {
+      const candidate = right.authorities[index];
+      return candidate !== undefined
+        && authority.present === candidate.present
+        && authority.value === candidate.value;
+    });
+}
+
+interface X4UiEditorSessionInputCapture {
+  readonly input: X4UiEditorSessionInput;
+  readonly signature: X4UiEditorSessionProjectionCacheSignature | null;
+  readonly refused: boolean;
+}
+
+function captureX4UiEditorSessionInput(
+  input: unknown,
+  ownerWorkspace: EditorWorkspace,
+): X4UiEditorSessionInputCapture {
+  const fallback = (): X4UiEditorSessionInputCapture => {
+    const snapshot = Object.create(null) as JsonRecord;
+    Object.defineProperty(snapshot, 'workspace', {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: ownerWorkspace,
+    });
+    return { input: snapshot as X4UiEditorSessionInput, signature: null, refused: true };
+  };
+
+  try {
+    if (!isRecord(input)) return fallback();
+    const prototype = Object.getPrototypeOf(input);
+    const plainPrototype = prototype === Object.prototype || prototype === null;
+    const snapshot = Object.create(plainPrototype ? prototype : null) as JsonRecord;
+    let cacheable = plainPrototype;
+    let refused = false;
+    for (const key of Reflect.ownKeys(input)) {
+      if (typeof key !== 'string') {
+        cacheable = false;
+        continue;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (descriptor === undefined) return fallback();
+      if ('value' in descriptor) {
+        if (!descriptor.enumerable) cacheable = false;
+        if (key !== 'workspace') {
+          Object.defineProperty(snapshot, key, {
+            configurable: true,
+            enumerable: descriptor.enumerable,
+            writable: true,
+            value: descriptor.value,
+          });
+        }
+      } else {
+        cacheable = false;
+        if (key !== 'colorEvidence') refused = true;
+        if (key !== 'workspace') {
+          Object.defineProperty(snapshot, key, {
+            configurable: true,
+            enumerable: false,
+            writable: true,
+            value: undefined,
+          });
+        }
+      }
+    }
+    Object.defineProperty(snapshot, 'workspace', {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: ownerWorkspace,
+    });
+    const detachedInput = snapshot as X4UiEditorSessionInput;
+    return {
+      input: detachedInput,
+      signature: cacheable ? editorSessionProjectionCacheSignature(detachedInput) : null,
+      refused,
+    };
+  } catch {
+    return fallback();
+  }
+}
+
 function sampleBindingFor(
   preview: X4UiPreviewPipelineResult,
   profile: X4UiEditorNormalizedProfile,
   selection: X4UiPreviewSelection | undefined,
   catalog: X4UiLayoutPreviewSampleCatalog | null,
+  paths: X4UiEditorPathState,
+  loops: X4UiEditorLoopState,
 ): X4UiEditorSampleBinding | undefined {
   const programResult = isRecord(preview.program) ? preview.program : null;
   const program = isRecord(programResult?.program) ? programResult.program : null;
   if (catalog === null || program === null) return undefined;
   const target = isRecord(dataField(program, 'target')) ? dataField(program, 'target') : undefined;
+  const programBinding = {
+    target,
+    sampleCatalog: catalog,
+    ...(paths === undefined ? {} : { paths }),
+    ...(loops === undefined ? {} : { loops }),
+  };
+  const selectionBinding = {
+    sourceIndex: selection?.sourceIndex,
+    path: selection?.path,
+    sourceIdentity: selection?.sourceIdentity,
+    target: target ?? selection?.target,
+    ...(paths === undefined ? {} : { paths }),
+    ...(loops === undefined ? {} : { loops }),
+  };
   return freezeDeep({
     catalogId: catalog.id,
-    programKey: stableDataKey({ target, sampleCatalog: catalog }),
+    programKey: stableDataKey(programBinding),
     profileKey: stableDataKey(profile),
-    selectionKey: stableDataKey({
-      sourceIndex: selection?.sourceIndex,
-      path: selection?.path,
-      sourceIdentity: selection?.sourceIdentity,
-      target: target ?? selection?.target,
-    }),
+    selectionKey: stableDataKey(selectionBinding),
   });
 }
 
@@ -1446,6 +2163,277 @@ export function resetX4UiEditorPathState(
   };
 }
 
+/** Reconcile preview-only loop selections against one exact layout-program catalog. */
+export function reconcileX4UiEditorLoopState(
+  loops: unknown,
+  catalog: unknown,
+  authority: unknown,
+): X4UiEditorLoopReconciliation {
+  if (catalog === null || catalog === undefined) {
+    if (loops === undefined) return { status: 'accepted', loops: undefined, changed: false };
+    return {
+      status: 'cleared',
+      loops: undefined,
+      changed: true,
+      code: 'catalog-unavailable',
+      message: 'preview loops were cleared because no selected layout-program catalog is available',
+    };
+  }
+  if (!loopCatalogAuthorityMatches(catalog, authority)) {
+    return {
+      status: 'refused',
+      loops: undefined,
+      changed: true,
+      code: 'catalog-authority-required',
+      message: 'preview loops require the exact catalog authority issued by the selected editor session',
+    };
+  }
+  const catalogResult = validateLoopCatalog(catalog);
+  if (catalogResult.ok === false) {
+    return {
+      status: 'refused',
+      loops: undefined,
+      changed: true,
+      code: catalogResult.code,
+      message: catalogResult.message,
+    };
+  }
+  if (loops === undefined) return { status: 'accepted', loops: undefined, changed: false };
+  if (!hasClosedOwnDataFields(loops, ['catalogId', 'source', 'targetId', 'profileId', 'selections'])
+    || !isNonEmptyString(dataField(loops, 'catalogId'))
+    || !closedSampleSourceIdentity(dataField(loops, 'source'))
+    || !isNonEmptyString(dataField(loops, 'targetId'))
+    || !isNonEmptyString(dataField(loops, 'profileId'))) {
+    return {
+      status: 'refused',
+      loops: undefined,
+      changed: true,
+      code: 'malformed-loops',
+      message: 'preview loops must carry catalogId, exact source identity, targetId, profileId, and a selections array',
+    };
+  }
+  const selections = closedArrayValues(dataField(loops, 'selections'));
+  if (selections === null) {
+    return {
+      status: 'refused',
+      loops: undefined,
+      changed: true,
+      code: 'malformed-loops',
+      message: 'preview loop selections must be a dense own-data array',
+    };
+  }
+  const typedLoops = loops as unknown as X4UiPreviewLoopInput;
+  const suppliedCatalogId = dataField(loops, 'catalogId');
+  const suppliedSource = dataField(loops, 'source');
+  const suppliedTargetId = dataField(loops, 'targetId');
+  const suppliedProfileId = dataField(loops, 'profileId');
+  if (suppliedCatalogId !== catalogResult.catalog.id
+    || !sameLayoutIdentity(suppliedSource as X4UiLayoutModelIdentity, catalogResult.catalog.sourceIdentity)
+    || suppliedTargetId !== catalogResult.catalog.targetId
+    || suppliedProfileId !== catalogResult.catalog.profileId) {
+    return {
+      status: 'cleared',
+      loops: undefined,
+      changed: true,
+      code: 'stale-loops',
+      message: 'preview loops were cleared because source, target, exact normalized profile, or catalog identity changed',
+    };
+  }
+  const entriesById = new Map(catalogResult.catalog.entries.map(entry => [entry.id, entry]));
+  const seen = new Set<string>();
+  const selected: X4UiPreviewLoopSelectionInput[] = [];
+  for (const selection of selections) {
+    if (!hasClosedOwnDataFields(selection, ['id', 'iterationCount'])
+      || !isNonEmptyString(dataField(selection, 'id'))
+      || typeof dataField(selection, 'iterationCount') !== 'number') {
+      return {
+        status: 'refused',
+        loops: undefined,
+        changed: true,
+        code: 'malformed-loops',
+        message: 'each preview loop selection requires an ID and numeric iterationCount',
+      };
+    }
+    const id = dataField(selection, 'id') as string;
+    const iterationCount = dataField(selection, 'iterationCount') as number;
+    if (!Number.isFinite(iterationCount)) {
+      return {
+        status: 'refused',
+        loops: undefined,
+        changed: true,
+        code: 'nonfinite-iteration-count',
+        message: `preview loop iterationCount must be finite: ${id}`,
+      };
+    }
+    if (!Number.isSafeInteger(iterationCount) || iterationCount < 1 || iterationCount > 16) {
+      return {
+        status: 'refused',
+        loops: undefined,
+        changed: true,
+        code: 'iteration-count-out-of-range',
+        message: `preview loop iterationCount must be an integer from 1 through 16: ${id}`,
+      };
+    }
+    if (seen.has(id)) {
+      return {
+        status: 'refused',
+        loops: undefined,
+        changed: true,
+        code: 'duplicate-loop',
+        message: `duplicate preview loop selection ID: ${id}`,
+      };
+    }
+    if (entriesById.get(id) === undefined) {
+      return {
+        status: 'refused',
+        loops: undefined,
+        changed: true,
+        code: 'unknown-loop',
+        message: `unknown or no-longer-catalogued preview loop ID: ${id}`,
+      };
+    }
+    seen.add(id);
+    selected.push({ id, iterationCount } as X4UiPreviewLoopSelectionInput);
+  }
+  const ordered = catalogResult.catalog.entries
+    .map(entry => selected.find(selection => selection.id === entry.id))
+    .filter((selection): selection is X4UiPreviewLoopSelectionInput => selection !== undefined);
+  const normalized = loopInputFor(catalogResult.catalog, ordered);
+  if (normalized === undefined) return { status: 'accepted', loops: undefined, changed: true };
+  if (sameLoopInput(typedLoops, normalized)) return { status: 'accepted', loops: typedLoops, changed: false };
+  return { status: 'accepted', loops: normalized, changed: true };
+}
+
+/** Alias retained for callers that name the state by its selection role. */
+export const reconcileX4UiEditorLoopSelections = reconcileX4UiEditorLoopState;
+
+function parseLoopIterationCount(raw: unknown):
+  | { readonly status: 'accepted'; readonly value: number }
+  | { readonly status: 'refused'; readonly code: 'malformed-loops' | 'nonfinite-iteration-count' | 'iteration-count-out-of-range'; readonly message: string } {
+  let value: number;
+  if (typeof raw === 'number') value = raw;
+  else if (typeof raw === 'string' && raw.trim() !== '') value = Number(raw.trim());
+  else return { status: 'refused', code: 'malformed-loops', message: 'preview loop iterationCount must be a number or numeric control value' };
+  if (!Number.isFinite(value)) return { status: 'refused', code: 'nonfinite-iteration-count', message: 'preview loop iterationCount must be finite' };
+  if (!Number.isSafeInteger(value) || value < 1 || value > 16) {
+    return { status: 'refused', code: 'iteration-count-out-of-range', message: 'preview loop iterationCount must be an integer from 1 through 16' };
+  }
+  return { status: 'accepted', value };
+}
+
+/** Apply one finite loop-iteration control update. */
+export function updateX4UiEditorLoopState(
+  current: X4UiEditorLoopState,
+  catalog: unknown,
+  entryId: string,
+  raw: unknown,
+  authority: unknown,
+): X4UiEditorLoopUpdateResult {
+  const reconciled = reconcileX4UiEditorLoopState(current, catalog, authority);
+  if (reconciled.status === 'refused') {
+    return {
+      status: 'refused',
+      loops: reconciled.loops,
+      changed: reconciled.changed,
+      code: reconciled.code,
+      message: reconciled.message,
+    };
+  }
+  if (catalog === null || catalog === undefined) {
+    return {
+      status: 'refused',
+      loops: reconciled.loops,
+      changed: reconciled.changed,
+      code: 'catalog-unavailable',
+      message: 'preview loop updates require an available selected layout-program catalog',
+    };
+  }
+  const catalogResult = validateLoopCatalog(catalog);
+  if (catalogResult.ok === false) {
+    return {
+      status: 'refused',
+      loops: undefined,
+      changed: true,
+      code: catalogResult.code,
+      message: catalogResult.message,
+    };
+  }
+  const entry = catalogResult.catalog.entries.find(candidate => candidate.id === entryId);
+  if (entry === undefined) {
+    return {
+      status: 'refused',
+      loops: reconciled.loops,
+      changed: reconciled.changed,
+      code: 'unknown-loop',
+      message: `unknown preview loop ID: ${entryId}`,
+    };
+  }
+  const parsed = parseLoopIterationCount(raw);
+  if (parsed.status === 'refused') {
+    return {
+      status: 'refused',
+      loops: reconciled.loops,
+      changed: reconciled.changed,
+      code: parsed.code,
+      message: parsed.message,
+    };
+  }
+  const selections = (reconciled.loops?.selections ?? [])
+    .filter(selection => selection.id !== entry.id)
+    .concat([{ id: entry.id, iterationCount: parsed.value } as X4UiPreviewLoopSelectionInput]);
+  const updated = reconcileX4UiEditorLoopState({
+    catalogId: catalogResult.catalog.id,
+    source: catalogResult.catalog.sourceIdentity,
+    targetId: catalogResult.catalog.targetId,
+    profileId: catalogResult.catalog.profileId,
+    selections,
+  }, catalogResult.catalog, authority);
+  if (updated.status !== 'accepted') {
+    return {
+      status: 'refused',
+      loops: updated.loops,
+      changed: true,
+      code: updated.code,
+      message: updated.message,
+    };
+  }
+  const loopStateChanged = !sameLoopInput(reconciled.loops, updated.loops);
+  return {
+    status: 'accepted',
+    loops: updated.loops,
+    changed: reconciled.changed || loopStateChanged,
+  };
+}
+
+/** Alias retained for callers that name the operation by its selection role. */
+export const updateX4UiEditorLoopSelection = updateX4UiEditorLoopState;
+
+/** Reset all preview loop selections after authority validation. */
+export function resetX4UiEditorLoopState(
+  current: X4UiEditorLoopState,
+  catalog: unknown,
+  authority: unknown,
+): X4UiEditorLoopUpdateResult {
+  const reconciled = reconcileX4UiEditorLoopState(current, catalog, authority);
+  if (reconciled.status === 'refused') {
+    return {
+      status: 'refused',
+      loops: reconciled.loops,
+      changed: reconciled.changed,
+      code: reconciled.code,
+      message: reconciled.message,
+    };
+  }
+  return {
+    status: 'reset',
+    loops: undefined,
+    changed: reconciled.loops !== undefined || reconciled.changed,
+  };
+}
+
+/** Alias retained for callers that name the operation by its selection role. */
+export const resetX4UiEditorLoopSelections = resetX4UiEditorLoopState;
+
 function copySource(value: X4UiEditorProfileSource): X4UiEditorProfileSource {
   return {
     file: value.file,
@@ -1631,6 +2619,7 @@ function previewFor(
   selection: X4UiPreviewSelection | undefined,
   samples: X4UiLayoutPreviewSampleInput | undefined,
   paths: X4UiLayoutPreviewPathSelectionInput | undefined,
+  loops: X4UiPreviewLoopInput | undefined,
   colorEvidence: X4UiCorpusCanonicalColorSuccess | undefined,
 ): X4UiPreviewPipelineResult {
   const previewInput: X4UiPreviewPipelineInput = {
@@ -1649,6 +2638,7 @@ function previewFor(
     ...(selection === undefined ? {} : { selection }),
     ...(samples === undefined ? {} : { samples }),
     ...(paths === undefined ? {} : { paths }),
+    ...(loops === undefined ? {} : { previewLoopInput: loops }),
   };
   try {
     return projectX4UiPreviewPipeline(previewInput);
@@ -1666,6 +2656,7 @@ function previewFor(
       },
       samples: undefined,
       paths: undefined,
+      previewLoopInput: undefined,
     });
   }
 }
@@ -1852,11 +2843,60 @@ function makeSessionReason(
   return preview.selection.reason;
 }
 
-/** Project one complete, side-effect-free editor session. */
-export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEditorSessionProjection {
+function refusedX4UiEditorSessionProjection(error: unknown): X4UiEditorSessionProjection {
+  const fallback = normalizeInput(undefined);
+  const source = buildSource(fallback);
+  const preview = previewFor(source, undefined, fallback.profile, undefined, undefined, undefined, undefined, undefined);
+  const keepOutPresets = keepOutPresetsFor(fallback.profile.drawable, null, undefined);
+  const manualCalibrations: readonly X4UiEditorManualCalibrationProjection[] = [];
+  return freezeDeep({
+    status: 'refused' as const,
+    gameTruth: X4_UI_EDITOR_SESSION_GAME_TRUTH,
+    gameVerified: false as const,
+    normalizedProfile: fallback.profile,
+    profile: fallback.profile,
+    source,
+    preview,
+    sampleCatalog: null,
+    sampleCatalogAuthority: undefined,
+    samples: undefined,
+    sampleBinding: undefined,
+    sampleReconciliation: { status: 'accepted', samples: undefined, changed: false },
+    pathCatalog: null,
+    pathCatalogAuthority: undefined,
+    paths: undefined,
+    pathBinding: undefined,
+    pathReconciliation: { status: 'accepted', paths: undefined, changed: false },
+    previewLoopCatalog: null,
+    previewLoopCatalogAuthority: undefined,
+    previewLoopInput: undefined,
+    previewLoopSelections: [],
+    loopCatalog: null,
+    loopCatalogAuthority: undefined,
+    loops: undefined,
+    loopBinding: undefined,
+    loopReconciliation: { status: 'accepted', loops: undefined, changed: false },
+    keepOutPresets,
+    presets: keepOutPresets,
+    activePresetId: null,
+    activePreset: null,
+    activeKeepOuts: [],
+    keepOuts: [],
+    manualCalibrations,
+    paint: null,
+    canRender: false,
+    reason: error instanceof Error ? error.message : 'editor session refused malformed input',
+  });
+}
+
+/** Project one complete, side-effect-free editor session from one owner source. */
+function projectX4UiEditorSessionFromSource(
+  input: X4UiEditorSessionInput,
+  sourceOverride?: X4UiWorkspaceSource,
+): X4UiEditorSessionProjection {
   try {
     const normalized = normalizeInput(input);
-    const source = buildSource(normalized);
+    const source = sourceOverride ?? buildSource(normalized);
     const corpus = normalized.raw.corpus;
     const activePresetId = typeof normalized.raw.activePresetId === 'string'
       && getKeepOutPreset(normalized.raw.activePresetId as KeepOutContextPresetId) !== undefined
@@ -1866,22 +2906,23 @@ export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEdi
       && normalized.raw.enabledEntryIds.every(value => typeof value === 'string')
       ? Array.from(new Set(normalized.raw.enabledEntryIds))
       : undefined;
-    const catalogPreview = previewFor(source, corpus, normalized.profile, normalized.selection, undefined, undefined, normalized.colorEvidence);
-    const sampleCatalog = sampleCatalogFor(catalogPreview);
+    const loopStateAliases = resolveLoopStateAliases(normalized.raw);
+    const loopAuthorityAliases = resolveLoopAuthorityAliases(normalized.raw);
+    const suppliedLoopInput = loopStateAliases.value;
+    const catalogPreview = previewFor(
+      source,
+      corpus,
+      normalized.profile,
+      normalized.selection,
+      undefined,
+      undefined,
+      undefined,
+      normalized.colorEvidence,
+    );
     const pathCatalog = pathCatalogFor(catalogPreview);
-    const sampleBinding = sampleBindingFor(catalogPreview, normalized.profile, normalized.selection, sampleCatalog);
+    const loopCatalog = loopCatalogFor(catalogPreview);
     const pathBinding = pathBindingFor(catalogPreview, normalized.profile, normalized.selection, pathCatalog);
-    const issuedSampleCatalogAuthority = sampleCatalog !== null && sampleBinding !== undefined
-      ? issueSampleCatalogAuthority(sampleCatalog, sampleBinding)
-      : undefined;
-    const suppliedSampleCatalogAuthority = hasOwn(normalized.raw, 'sampleCatalogAuthority')
-      ? normalized.raw.sampleCatalogAuthority
-      : undefined;
-    const sampleCatalogAuthority = rebindSampleCatalogAuthority(
-      suppliedSampleCatalogAuthority,
-      sampleCatalog,
-      sampleBinding,
-    ) ?? issuedSampleCatalogAuthority;
+    const loopBinding = loopBindingFor(catalogPreview, normalized.profile, normalized.selection, loopCatalog);
     const issuedPathCatalogAuthority = pathCatalog !== null && pathBinding !== undefined
       ? issuePathCatalogAuthority(pathCatalog, pathBinding)
       : undefined;
@@ -1893,6 +2934,19 @@ export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEdi
       pathCatalog,
       pathBinding,
     ) ?? issuedPathCatalogAuthority;
+    const issuedLoopCatalogAuthority = loopCatalog !== null && loopBinding !== undefined
+      ? issueLoopCatalogAuthority(loopCatalog, loopBinding)
+      : undefined;
+    const suppliedLoopCatalogAuthority = loopAuthorityAliases.value;
+    const reboundLoopCatalogAuthority = rebindLoopCatalogAuthority(
+      suppliedLoopCatalogAuthority,
+      loopCatalog,
+      loopBinding,
+    );
+    const loopCatalogAuthority = reboundLoopCatalogAuthority ?? issuedLoopCatalogAuthority;
+    const suppliedSampleCatalogAuthority = hasOwn(normalized.raw, 'sampleCatalogAuthority')
+      ? normalized.raw.sampleCatalogAuthority
+      : undefined;
     const suppliedSamples = hasOwn(normalized.raw, 'samples') ? normalized.raw.samples : undefined;
     const suppliedSampleBinding = hasOwn(normalized.raw, 'sampleBinding')
       ? normalized.raw.sampleBinding
@@ -1900,30 +2954,6 @@ export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEdi
     const suppliedPaths = hasOwn(normalized.raw, 'paths') ? normalized.raw.paths : undefined;
     const suppliedPathBinding = hasOwn(normalized.raw, 'pathBinding')
       ? normalized.raw.pathBinding
-      : undefined;
-    let sampleReconciliation: X4UiEditorSampleReconciliation;
-    if (suppliedSamples !== undefined
-      && sampleBinding !== undefined
-      && !sameX4UiEditorSampleBinding(suppliedSampleBinding, sampleBinding)) {
-      sampleReconciliation = {
-        status: 'cleared',
-        samples: undefined,
-        changed: true,
-        code: 'stale-samples',
-        message: 'preview samples were cleared because the selected program or normalized profile identity changed',
-      };
-    } else {
-      const authorityForReconciliation = suppliedSamples === undefined
-        ? sampleCatalogAuthority
-        : suppliedSampleCatalogAuthority;
-      sampleReconciliation = reconcileX4UiEditorSampleState(
-        suppliedSamples,
-        sampleCatalog,
-        authorityForReconciliation,
-      );
-    }
-    const samples = sampleReconciliation.status === 'accepted'
-      ? sampleReconciliation.samples
       : undefined;
     let pathReconciliation: X4UiEditorPathReconciliation;
     if (suppliedPaths !== undefined
@@ -1949,13 +2979,127 @@ export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEdi
     const paths = pathReconciliation.status === 'accepted'
       ? pathReconciliation.paths
       : undefined;
-    const preview = samples === undefined && paths === undefined
+    let loopReconciliation: X4UiEditorLoopReconciliation;
+    const suppliedLoopBinding = hasOwn(normalized.raw, 'loopBinding')
+      ? normalized.raw.loopBinding
+      : undefined;
+    if (loopStateAliases.refusal !== undefined) {
+      loopReconciliation = {
+        status: 'refused',
+        loops: undefined,
+        changed: true,
+        code: loopStateAliases.refusal.code,
+        message: loopStateAliases.refusal.message,
+      };
+    } else if (loopAuthorityAliases.refusal !== undefined) {
+      loopReconciliation = {
+        status: 'refused',
+        loops: undefined,
+        changed: true,
+        code: loopAuthorityAliases.refusal.code,
+        message: loopAuthorityAliases.refusal.message,
+      };
+    } else if (suppliedLoopInput !== undefined
+      && loopBinding !== undefined
+      && !sameX4UiEditorLoopBinding(suppliedLoopBinding, loopBinding)) {
+      loopReconciliation = {
+        status: 'cleared',
+        loops: undefined,
+        changed: true,
+        code: 'stale-loops',
+        message: 'preview loops were cleared because the selected program or normalized profile identity changed',
+      };
+    } else {
+      const authorityForReconciliation = suppliedLoopCatalogAuthority === undefined
+        ? loopCatalogAuthority
+        : reboundLoopCatalogAuthority ?? suppliedLoopCatalogAuthority;
+      loopReconciliation = reconcileX4UiEditorLoopState(
+        suppliedLoopInput,
+        loopCatalog,
+        authorityForReconciliation,
+      );
+    }
+    const loops = loopReconciliation.status === 'accepted'
+      ? loopReconciliation.loops
+      : undefined;
+
+    // Stage two accepts only the already-reconciled path and loop state. Its
+    // loop expansion is what authoritatively determines the iteration-scoped
+    // sample catalog for stage three.
+    const sampleCatalogPreview = paths === undefined && loops === undefined
       ? catalogPreview
-      : previewFor(source, corpus, normalized.profile, normalized.selection, samples, paths, normalized.colorEvidence);
+      : previewFor(
+        source,
+        corpus,
+        normalized.profile,
+        normalized.selection,
+        undefined,
+        paths,
+        loops,
+        normalized.colorEvidence,
+      );
+    const sampleCatalog = sampleCatalogFor(sampleCatalogPreview);
+    const sampleBinding = sampleBindingFor(
+      sampleCatalogPreview,
+      normalized.profile,
+      normalized.selection,
+      sampleCatalog,
+      paths,
+      loops,
+    );
+    const issuedSampleCatalogAuthority = sampleCatalog !== null && sampleBinding !== undefined
+      ? issueSampleCatalogAuthority(sampleCatalog, sampleBinding)
+      : undefined;
+    const sampleCatalogAuthority = rebindSampleCatalogAuthority(
+      suppliedSampleCatalogAuthority,
+      sampleCatalog,
+      sampleBinding,
+    ) ?? issuedSampleCatalogAuthority;
+    let sampleReconciliation: X4UiEditorSampleReconciliation;
+    if (suppliedSamples !== undefined
+      && sampleBinding !== undefined
+      && !sameX4UiEditorSampleBinding(suppliedSampleBinding, sampleBinding)) {
+      sampleReconciliation = {
+        status: 'cleared',
+        samples: undefined,
+        changed: true,
+        code: 'stale-samples',
+        message: 'preview samples were cleared because the selected program, paths, loops, or normalized profile identity changed',
+      };
+    } else {
+      const authorityForReconciliation = suppliedSamples === undefined
+        ? sampleCatalogAuthority
+        : suppliedSampleCatalogAuthority;
+      sampleReconciliation = reconcileX4UiEditorSampleState(
+        suppliedSamples,
+        sampleCatalog,
+        authorityForReconciliation,
+      );
+    }
+    const samples = sampleReconciliation.status === 'accepted'
+      ? sampleReconciliation.samples
+      : undefined;
+    // Stage three remains the final sample-bound render when samples are
+    // accepted. With no sample input, its inputs are identical to stage two,
+    // so the already-computed stage-two result is the exact final result.
+    const preview = samples === undefined
+      ? sampleCatalogPreview
+      : previewFor(
+        source,
+        corpus,
+        normalized.profile,
+        normalized.selection,
+        samples,
+        paths,
+        loops,
+        normalized.colorEvidence,
+      );
+    const previewLoopSelections = loopSelectionsForProgram(preview);
     const sessionIssues = [
       ...normalized.issues,
       ...(sampleReconciliation.status === 'refused' ? [sampleReconciliation.message] : []),
       ...(pathReconciliation.status === 'refused' ? [pathReconciliation.message] : []),
+      ...(loopReconciliation.status === 'refused' ? [loopReconciliation.message] : []),
     ];
     const keepOutPresets = keepOutPresetsFor(normalized.profile.drawable, activePresetId, enabledEntryIds);
     const manualCalibrations = manualCalibrationProjections(
@@ -2005,6 +3149,15 @@ export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEdi
       paths,
       pathBinding,
       pathReconciliation,
+      previewLoopCatalog: loopCatalog,
+      previewLoopCatalogAuthority: loopCatalogAuthority,
+      previewLoopInput: loops,
+      previewLoopSelections,
+      loopCatalog,
+      loopCatalogAuthority,
+      loops,
+      loopBinding,
+      loopReconciliation,
       keepOutPresets,
       presets: keepOutPresets,
       activePresetId,
@@ -2017,41 +3170,67 @@ export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEdi
       reason: makeSessionReason(sessionIssues, preview, paint, canRender),
     });
   } catch (error) {
-    const fallback = normalizeInput(undefined);
-    const source = buildSource(fallback);
-    const preview = previewFor(source, undefined, fallback.profile, undefined, undefined, undefined, undefined);
-    const keepOutPresets = keepOutPresetsFor(fallback.profile.drawable, null, undefined);
-    const manualCalibrations: readonly X4UiEditorManualCalibrationProjection[] = [];
-    return freezeDeep({
-      status: 'refused' as const,
-      gameTruth: X4_UI_EDITOR_SESSION_GAME_TRUTH,
-      gameVerified: false as const,
-      normalizedProfile: fallback.profile,
-      profile: fallback.profile,
-      source,
-      preview,
-      sampleCatalog: null,
-      sampleCatalogAuthority: undefined,
-      samples: undefined,
-      sampleBinding: undefined,
-      sampleReconciliation: { status: 'accepted', samples: undefined, changed: false },
-      pathCatalog: null,
-      pathCatalogAuthority: undefined,
-      paths: undefined,
-      pathBinding: undefined,
-      pathReconciliation: { status: 'accepted', paths: undefined, changed: false },
-      keepOutPresets,
-      presets: keepOutPresets,
-      activePresetId: null,
-      activePreset: null,
-      activeKeepOuts: [],
-      keepOuts: [],
-      manualCalibrations,
-      paint: null,
-      canRender: false,
-      reason: error instanceof Error ? error.message : 'editor session refused malformed input',
-    });
+    return refusedX4UiEditorSessionProjection(error);
   }
+}
+
+/** Project one complete, side-effect-free editor session. */
+export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEditorSessionProjection {
+  return projectX4UiEditorSessionFromSource(input);
+}
+
+/**
+ * Create the source owner used by the mounted editor's candidate catalog and
+ * selected projections. Only the owner may retain the built source; callers
+ * still provide ordinary session inputs and cannot inject a source projection.
+ */
+export function createX4UiEditorSessionOwner(workspace: unknown): X4UiEditorSessionOwner {
+  const ownerWorkspace = workspace as EditorWorkspace;
+  let source: X4UiWorkspaceSource;
+  try {
+    source = buildSource(normalizeInput({ workspace: ownerWorkspace }));
+  } catch {
+    source = buildSource(normalizeInput(undefined));
+  }
+  const candidatePreview = previewFor(
+    source,
+    undefined,
+    X4_UI_EDITOR_DEFAULT_PROFILE,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  );
+  const candidateCatalog = freezeDeep({
+    sourceCandidates: candidatePreview.sourceCandidates,
+  });
+  let previousProjection: {
+    readonly signature: X4UiEditorSessionProjectionCacheSignature;
+    readonly projection: X4UiEditorSessionProjection;
+  } | undefined;
+  return Object.freeze({
+    candidateCatalog,
+    project: (input: X4UiEditorSessionInput): X4UiEditorSessionProjection => {
+      const capture = captureX4UiEditorSessionInput(input, ownerWorkspace);
+      if (capture.refused) {
+        previousProjection = undefined;
+        return refusedX4UiEditorSessionProjection('editor session input capture refused');
+      }
+      const signature = capture.signature;
+      if (signature !== null
+        && previousProjection !== undefined
+        && sameEditorSessionProjectionCacheSignature(previousProjection.signature, signature)) {
+        return previousProjection.projection;
+      }
+      const projection = projectX4UiEditorSessionFromSource(
+        capture.input,
+        source,
+      );
+      previousProjection = signature === null ? undefined : { signature, projection };
+      return projection;
+    },
+  });
 }
 
 const CANVAS_GAME_TRUTH = X4_UI_EDITOR_SESSION_GAME_TRUTH;

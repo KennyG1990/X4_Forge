@@ -37,6 +37,10 @@ import {
   type X4UiPreviewPipelineResult,
 } from './x4UiPreviewPipeline';
 import {
+  projectX4UiEditorSession,
+  updateX4UiEditorLoopState,
+} from './x4UiEditorSession';
+import {
   projectX4UiPaintPlan,
   type X4UiPaintPlan,
   type X4UiPaintPlanResult,
@@ -392,6 +396,34 @@ function colorSourceFixture(): X4UiWorkspaceSource {
     ].join('\n')),
     passthrough('ui/color.lua', lua, { reason: 'unparsed' }),
   ]));
+}
+
+function loopColorWorkspaceFixture(): ModWorkspace {
+  const lua = [
+    'local menu = { name = "LoopColor", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80, layer = 1 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    'table:setColWidth(1, 100, false)',
+    'local items = { { label = "They provide" }, { label = "You provide" } }',
+    'for _, item in ipairs(items) do',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createButton({ height = 8, affectRowHeight = true, bgcolor = { r = 13, g = 23, b = 33, a = 43 } }):setText(item.label, { x = 0, y = 0 })',
+    'end',
+    'frame:display()',
+    '',
+  ].join('\n');
+  return workspace([
+    passthrough('ui.xml', [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<addon name="loop-color-fixture">',
+      '  <environment type="menus">',
+      '    <file name="ui/loop-color.lua" />',
+      '  </environment>',
+      '</addon>',
+      '',
+    ].join('\n')),
+    passthrough('ui/loop-color.lua', lua, { reason: 'unparsed' }),
+  ]);
 }
 
 function boundedCompositionSourceFixture(): X4UiWorkspaceSource {
@@ -2232,6 +2264,136 @@ async function main(): Promise<void> {
     const colorPaintCommands = colorPaint !== undefined && colorPaint.status !== 'refused'
       ? commandList(colorPaint.plan)
       : [];
+    const loopColorWorkspace = loopColorWorkspaceFixture();
+    const loopColorSource = buildX4UiWorkspaceSource(loopColorWorkspace);
+    const loopColorSourceFile = loopColorSource.bundle?.sourceFiles.find(file => file.path === 'ui/loop-color.lua');
+    const loopColorCatalog = loopColorSourceFile === undefined ? undefined : createX4UiLayoutTargetCatalog(loopColorSourceFile.callModel);
+    const loopColorTarget = loopColorCatalog?.targets.find(candidate => candidate.kind === 'top-level');
+    const loopColorSelection = loopColorSourceFile !== undefined && loopColorCatalog !== undefined && loopColorTarget !== undefined
+      ? {
+        sourceIndex: loopColorSourceFile.index,
+        path: loopColorSourceFile.path,
+        sourceIdentity: loopColorCatalog.sourceIdentity,
+        target: { ...loopColorTarget, id: loopColorTarget.id },
+      }
+      : undefined;
+    const loopColorProfile = { width: 100, height: 80, uiScale: 1 } as const;
+    const loopColorUnprojected = loopColorSelection === undefined
+      ? undefined
+      : projectX4UiEditorSession({ workspace: loopColorWorkspace, corpus, colorEvidence, profile: loopColorProfile, selection: loopColorSelection });
+    const loopColorLoopCatalog = loopColorUnprojected?.previewLoopCatalog;
+    const loopColorLoopEntry = loopColorLoopCatalog?.entries[0];
+    const loopColorLoopUpdate = loopColorLoopCatalog === null || loopColorLoopEntry === undefined || loopColorUnprojected?.previewLoopCatalogAuthority === undefined
+      ? undefined
+      : updateX4UiEditorLoopState(undefined, loopColorLoopCatalog, loopColorLoopEntry.id, 2, loopColorUnprojected.previewLoopCatalogAuthority);
+    const loopColorProjected = loopColorLoopUpdate?.status === 'accepted' && loopColorLoopUpdate.loops !== undefined
+      && loopColorUnprojected?.loopBinding !== undefined && loopColorUnprojected.previewLoopCatalogAuthority !== undefined
+      ? projectX4UiEditorSession({
+        workspace: loopColorWorkspace,
+        corpus,
+        colorEvidence,
+        profile: loopColorProfile,
+        selection: loopColorSelection,
+        loops: loopColorLoopUpdate.loops,
+        loopBinding: loopColorUnprojected.loopBinding,
+        loopCatalogAuthority: loopColorUnprojected.previewLoopCatalogAuthority,
+      })
+      : undefined;
+    const loopColorSampleCatalog = loopColorProjected?.sampleCatalog;
+    const loopColorSampleValues = loopColorSampleCatalog?.entries.map(entry => ({
+      id: entry.id,
+      value: entry.expectedType === 'boolean' ? true : entry.expectedType === 'number' ? 1 : 'loop sample',
+    }));
+    const loopColorSelected = loopColorProjected?.sampleBinding !== undefined
+      && loopColorProjected.sampleCatalogAuthority !== undefined
+      && loopColorSampleCatalog !== null
+      && loopColorSampleValues !== undefined
+      ? projectX4UiEditorSession({
+        workspace: loopColorWorkspace,
+        corpus,
+        colorEvidence,
+        profile: loopColorProfile,
+        selection: loopColorSelection,
+        loops: loopColorProjected.loops,
+        loopBinding: loopColorProjected.loopBinding,
+        loopCatalogAuthority: loopColorProjected.previewLoopCatalogAuthority,
+        samples: { catalogId: loopColorSampleCatalog.id, source: loopColorSampleCatalog.sourceIdentity, values: loopColorSampleValues },
+        sampleBinding: loopColorProjected.sampleBinding,
+        sampleCatalogAuthority: loopColorProjected.sampleCatalogAuthority,
+      })
+      : undefined;
+    const loopColorPaint = loopColorSelected?.paint;
+    const loopColorCommands = loopColorPaint !== undefined && loopColorPaint.status !== 'refused'
+      ? commandList(loopColorPaint.plan)
+      : [];
+    const loopColorGeometryCommands = loopColorCommands.filter(command => command.kind === 'node-geometry');
+    const loopColorTintGroups = new Map<string, JsonRecord[]>();
+    for (const command of loopColorGeometryCommands) {
+      const tints = command.basePreviewTints;
+      if (!Array.isArray(tints)) continue;
+      for (const tint of tints) {
+        const tintRecord = asRecord(tint);
+        const signature = colorFactSignature(tintRecord);
+        if (tintRecord === undefined || signature === undefined) continue;
+        const group = loopColorTintGroups.get(signature) ?? [];
+        group.push(tintRecord);
+        loopColorTintGroups.set(signature, group);
+      }
+    }
+    const repeatedLoopColorGroup = [...loopColorTintGroups.values()].find(group => group.length >= 2);
+    const repeatedLoopColorCommands = repeatedLoopColorGroup === undefined
+      ? []
+      : loopColorGeometryCommands.filter(command => Array.isArray(command.basePreviewTints)
+        && command.basePreviewTints.some(tint => repeatedLoopColorGroup.includes(asRecord(tint) as JsonRecord)));
+    const loopColorTrace: TraceEntry[] = [];
+    const loopColorOutput: RasterOutput = {};
+    const loopColorAttempt = loopColorPaint === undefined || loopColorPaint.status === 'refused'
+      ? undefined
+      : attemptRenderWithOptions(loopColorPaint, corpus, {
+        surfaceFactory: makeRasterFactory(loopColorTrace, loopColorOutput),
+        presentation: 'source-composition',
+      });
+    const loopColorResult = completedResult(loopColorAttempt);
+    const loopColorPixels = rasterPixelCounts(loopColorOutput);
+    const repeatedLoopColorTint = repeatedLoopColorGroup?.[0];
+    const repeatedLoopColorSource = asRecord(repeatedLoopColorTint?.source);
+    const repeatedLoopColorStart = asRecord(repeatedLoopColorSource?.start);
+    const repeatedLoopColorEnd = asRecord(repeatedLoopColorSource?.end);
+    familyCheck(
+      'stage-b-causal',
+      'B119 causal loop-expanded repeated source tint reaches Canvas allocation and paints source pixels',
+      loopColorPaint !== undefined
+        && loopColorPaint.status !== 'refused'
+        && repeatedLoopColorGroup !== undefined
+        && repeatedLoopColorCommands.length >= 2
+        && loopColorAttempt?.threw === false
+        && loopColorResult?.status === 'rendered'
+        && loopColorTrace.some(entry => entry.role === 'composite')
+        && loopColorPixels.nonBlack > 0,
+      {
+        loopCatalogEntries: loopColorLoopCatalog?.entries.length,
+        loopUpdateStatus: loopColorLoopUpdate?.status,
+        sampleCatalogEntries: loopColorSampleCatalog?.entries.length,
+        selectedPreviewStatus: loopColorSelected?.preview.status,
+        paintStatus: loopColorPaint?.status,
+        previewSceneStatus: loopColorSelected?.preview.scene?.status,
+        paintLayerCounts: loopColorPaint?.status === 'refused' || loopColorPaint === undefined ? undefined : loopColorPaint.plan.layers.map(layer => ({ kind: layer.kind, count: layer.commands.length })),
+        geometryOwnerCount: repeatedLoopColorCommands.length,
+        geometryOwnersDistinct: new Set(repeatedLoopColorCommands.map(command => command.nodeId)).size,
+        repeatedSourceFact: repeatedLoopColorTint === undefined || repeatedLoopColorSource === undefined || repeatedLoopColorStart === undefined || repeatedLoopColorEnd === undefined
+          ? undefined
+          : {
+            field: asRecord(repeatedLoopColorTint)?.field,
+            slot: asRecord(repeatedLoopColorTint)?.slot,
+            file: repeatedLoopColorSource.file,
+            startOffset: repeatedLoopColorStart.offset,
+            endOffset: repeatedLoopColorEnd.offset,
+          },
+        result: loopColorResult === undefined ? undefined : receiptSummary(loopColorResult.receipt),
+        trace: loopColorTrace.filter(entry => entry.role === 'composite').length,
+        pixels: loopColorPixels,
+      },
+    );
     const colorGeometryCommands = colorPaintCommands.filter(command => command.kind === 'node-geometry');
     const colorGeometryTints = colorGeometryCommands.flatMap(command => {
       const tints = command.basePreviewTints;
@@ -3350,7 +3512,88 @@ async function main(): Promise<void> {
         if (sourceTint === undefined || targetCommand === undefined || typeof sourceOwner !== 'string' || typeof targetOwner !== 'string') return;
         const reassigned = JSON.parse(JSON.stringify(sourceTint)) as JsonRecord;
         targetCommand.basePreviewTints = [reassigned];
-        reassignedTintOwnerApplied = sourceOwner !== targetOwner && colorFactSignature(sourceTint) === colorFactSignature(reassigned);
+        const sourceBinding = asRecord(sourceTint.owner);
+        reassignedTintOwnerApplied = sourceOwner !== targetOwner
+          && colorFactSignature(sourceTint) === colorFactSignature(reassigned)
+          && sourceBinding?.kind === 'geometry'
+          && sourceBinding.commandId === sourceCommand?.id
+          && sourceBinding.ownerId === sourceOwner;
+      });
+      let geometryToGlyphCopyApplied = false;
+      const hostileGeometryToGlyphCopy = hostileRender((_plan, layers) => {
+        const geometryCommands = layers.flatMap(layer => layer.commands).filter(command => command.kind === 'node-geometry');
+        const sourceCommand = geometryCommands.find(command => Array.isArray(command.basePreviewTints) && command.basePreviewTints.length > 0);
+        const sourceTint = sourceCommand?.basePreviewTints?.[0];
+        const targetCommand = layers.flatMap(layer => layer.commands).find(command => command.kind === 'glyph-alpha-blit');
+        if (sourceCommand === undefined || sourceTint === undefined || targetCommand === undefined) return;
+        const copied = JSON.parse(JSON.stringify(sourceTint)) as JsonRecord;
+        targetCommand.basePreviewTints = [copied];
+        const owner = asRecord(sourceTint.owner);
+        geometryToGlyphCopyApplied = owner?.kind === 'geometry' && colorFactSignature(sourceTint) === colorFactSignature(copied);
+      });
+      let glyphToGeometryCopyApplied = false;
+      const hostileGlyphToGeometryCopy = hostileRender((_plan, layers) => {
+        const sourceCommand = layers.flatMap(layer => layer.commands).find(command => command.kind === 'glyph-alpha-blit' && Array.isArray(command.basePreviewTints) && command.basePreviewTints.length > 0);
+        const sourceTint = sourceCommand?.basePreviewTints?.[0];
+        const targetCommand = layers.flatMap(layer => layer.commands).find(command => command.kind === 'node-geometry');
+        if (sourceCommand === undefined || sourceTint === undefined || targetCommand === undefined) return;
+        const copied = JSON.parse(JSON.stringify(sourceTint)) as JsonRecord;
+        targetCommand.basePreviewTints = [copied];
+        const owner = asRecord(sourceTint.owner);
+        glyphToGeometryCopyApplied = owner?.kind === 'glyph' && colorFactSignature(sourceTint) === colorFactSignature(copied);
+      });
+      let wrongTintOwnerApplied = false;
+      const hostileWrongTintOwner = hostileRender((_plan, layers) => {
+        const command = firstTintCommand(layers);
+        const tint = command?.basePreviewTints?.[0];
+        const owner = tint === undefined ? undefined : asRecord(tint.owner);
+        if (owner === undefined || typeof owner.ownerId !== 'string') return;
+        const wrongOwnerId = `${owner.ownerId}:wrong-owner`;
+        owner.ownerId = wrongOwnerId;
+        wrongTintOwnerApplied = wrongOwnerId.endsWith(':wrong-owner');
+      });
+      let missingTintOwnerApplied = false;
+      const hostileMissingTintOwner = hostileRender((_plan, layers) => {
+        const command = firstTintCommand(layers);
+        const tint = command?.basePreviewTints?.[0];
+        if (tint === undefined) return;
+        missingTintOwnerApplied = Reflect.deleteProperty(tint, 'owner');
+      });
+      let extraTintOwnerFieldApplied = false;
+      const hostileExtraTintOwnerField = hostileRender((_plan, layers) => {
+        const command = firstTintCommand(layers);
+        const tint = command?.basePreviewTints?.[0];
+        const owner = tint === undefined ? undefined : asRecord(tint.owner);
+        if (owner === undefined) return;
+        owner.unexpected = true;
+        extraTintOwnerFieldApplied = owner.unexpected === true;
+      });
+      let prototypeTintOwnerApplied = false;
+      const hostilePrototypeTintOwner = hostileRender((_plan, layers) => {
+        const command = firstTintCommand(layers);
+        const tint = command?.basePreviewTints?.[0];
+        const owner = tint === undefined ? undefined : asRecord(tint.owner);
+        if (owner === undefined) return;
+        Object.setPrototypeOf(owner, { inheritedOwner: true });
+        prototypeTintOwnerApplied = Object.getPrototypeOf(owner) !== Object.prototype;
+      });
+      let accessorTintOwnerApplied = false;
+      let accessorTintOwnerReads = 0;
+      const hostileAccessorTintOwner = hostileRender((_plan, layers) => {
+        const command = firstTintCommand(layers);
+        const tint = command?.basePreviewTints?.[0];
+        const owner = tint === undefined ? undefined : asRecord(tint.owner);
+        if (owner === undefined) return;
+        Reflect.deleteProperty(owner, 'ownerId');
+        Object.defineProperty(owner, 'ownerId', {
+          configurable: true,
+          enumerable: true,
+          get: () => {
+            accessorTintOwnerReads += 1;
+            throw new Error('selftest hostile owner getter executed');
+          },
+        });
+        accessorTintOwnerApplied = true;
       });
       let duplicateTintSlotApplied = false;
       const hostileDuplicateTintSlot = hostileRender((_plan, layers) => {
@@ -3515,7 +3758,14 @@ async function main(): Promise<void> {
       familyCheck('stage-b-causal', 'P6 out-of-declaration channel source offsets refuse before allocation strengthening', channelOffsetEscapeApplied && hostileAccepted(hostileChannelOffsetEscape.attempt, hostileChannelOffsetEscape.activity), { mutationApplied: channelOffsetEscapeApplied, hostile: receiptSummary(completedResult(hostileChannelOffsetEscape.attempt)?.receipt), activity: activitySignature(hostileChannelOffsetEscape.activity) });
       familyCheck('stage-b-causal', 'P6 out-of-declaration channel keySource offsets refuse before allocation strengthening', keySourceOffsetEscapeApplied && hostileAccepted(hostileKeySourceOffsetEscape.attempt, hostileKeySourceOffsetEscape.activity), { mutationApplied: keySourceOffsetEscapeApplied, hostile: receiptSummary(completedResult(hostileKeySourceOffsetEscape.attempt)?.receipt), activity: activitySignature(hostileKeySourceOffsetEscape.activity) });
       familyCheck('stage-b-causal', 'P6 duplicate exact tint fact refuses before allocation strengthening', duplicateTintFactApplied && hostileAccepted(hostileDuplicateTintFact.attempt, hostileDuplicateTintFact.activity), { mutationApplied: duplicateTintFactApplied, hostile: receiptSummary(completedResult(hostileDuplicateTintFact.attempt)?.receipt), activity: activitySignature(hostileDuplicateTintFact.activity) });
-      familyCheck('stage-b-causal', 'P6 tint fact reassigned across distinct geometry owners refuses before allocation strengthening', reassignedTintOwnerApplied && hostileAccepted(hostileReassignedTintOwner.attempt, hostileReassignedTintOwner.activity), { mutationApplied: reassignedTintOwnerApplied, hostile: receiptSummary(completedResult(hostileReassignedTintOwner.attempt)?.receipt), activity: activitySignature(hostileReassignedTintOwner.activity) });
+      familyCheck('stage-b-causal', 'P6 copied geometry tint with its issued owner binding on another geometry command refuses before allocation', reassignedTintOwnerApplied && hostileAccepted(hostileReassignedTintOwner.attempt, hostileReassignedTintOwner.activity), { mutationApplied: reassignedTintOwnerApplied, hostile: receiptSummary(completedResult(hostileReassignedTintOwner.attempt)?.receipt), activity: activitySignature(hostileReassignedTintOwner.activity) });
+      familyCheck('stage-b-causal', 'P6 copied geometry tint onto a glyph command refuses before allocation', geometryToGlyphCopyApplied && hostileAccepted(hostileGeometryToGlyphCopy.attempt, hostileGeometryToGlyphCopy.activity), { mutationApplied: geometryToGlyphCopyApplied, hostile: receiptSummary(completedResult(hostileGeometryToGlyphCopy.attempt)?.receipt), activity: activitySignature(hostileGeometryToGlyphCopy.activity) });
+      familyCheck('stage-b-causal', 'P6 copied glyph tint onto a geometry command refuses before allocation', glyphToGeometryCopyApplied && hostileAccepted(hostileGlyphToGeometryCopy.attempt, hostileGlyphToGeometryCopy.activity), { mutationApplied: glyphToGeometryCopyApplied, hostile: receiptSummary(completedResult(hostileGlyphToGeometryCopy.attempt)?.receipt), activity: activitySignature(hostileGlyphToGeometryCopy.activity) });
+      familyCheck('stage-b-causal', 'P6 wrong tint owner refuses before allocation', wrongTintOwnerApplied && hostileAccepted(hostileWrongTintOwner.attempt, hostileWrongTintOwner.activity), { mutationApplied: wrongTintOwnerApplied, hostile: receiptSummary(completedResult(hostileWrongTintOwner.attempt)?.receipt), activity: activitySignature(hostileWrongTintOwner.activity) });
+      familyCheck('stage-b-causal', 'P6 missing tint owner refuses before allocation', missingTintOwnerApplied && hostileAccepted(hostileMissingTintOwner.attempt, hostileMissingTintOwner.activity), { mutationApplied: missingTintOwnerApplied, hostile: receiptSummary(completedResult(hostileMissingTintOwner.attempt)?.receipt), activity: activitySignature(hostileMissingTintOwner.activity) });
+      familyCheck('stage-b-causal', 'P6 extra tint owner field refuses before allocation', extraTintOwnerFieldApplied && hostileAccepted(hostileExtraTintOwnerField.attempt, hostileExtraTintOwnerField.activity), { mutationApplied: extraTintOwnerFieldApplied, hostile: receiptSummary(completedResult(hostileExtraTintOwnerField.attempt)?.receipt), activity: activitySignature(hostileExtraTintOwnerField.activity) });
+      familyCheck('stage-b-causal', 'P6 custom-prototype tint owner refuses before allocation', prototypeTintOwnerApplied && hostileAccepted(hostilePrototypeTintOwner.attempt, hostilePrototypeTintOwner.activity), { mutationApplied: prototypeTintOwnerApplied, hostile: receiptSummary(completedResult(hostilePrototypeTintOwner.attempt)?.receipt), activity: activitySignature(hostilePrototypeTintOwner.activity) });
+      familyCheck('stage-b-causal', 'P6 accessor tint owner refuses without getter execution before allocation', accessorTintOwnerApplied && accessorTintOwnerReads === 0 && hostileAccepted(hostileAccessorTintOwner.attempt, hostileAccessorTintOwner.activity), { mutationApplied: accessorTintOwnerApplied, getterReads: accessorTintOwnerReads, hostile: receiptSummary(completedResult(hostileAccessorTintOwner.attempt)?.receipt), activity: activitySignature(hostileAccessorTintOwner.activity) });
       familyCheck('stage-b-causal', 'P6 duplicate slot with distinct tint fact refuses before allocation strengthening', duplicateTintSlotApplied && hostileAccepted(hostileDuplicateTintSlot.attempt, hostileDuplicateTintSlot.activity), { mutationApplied: duplicateTintSlotApplied, hostile: receiptSummary(completedResult(hostileDuplicateTintSlot.attempt)?.receipt), activity: activitySignature(hostileDuplicateTintSlot.activity) });
       const hostileSourceFractionalBoundary = hostileRender((_plan, layers) => {
         const tint = allTintRecords(layers).find(candidate => candidate.domain === 'source-literal-percent-alpha');
@@ -5187,8 +5437,11 @@ async function main(): Promise<void> {
       for (const command of layers.flatMap(layer => layer.commands)) {
         command.order = nextOrder;
         nextOrder += 1;
-        if (command.kind === 'glyph-alpha-blit') command.basePreviewTints = [JSON.parse(JSON.stringify(tint)) as JsonRecord];
-        else Reflect.deleteProperty(command, 'basePreviewTints');
+        if (command.kind === 'glyph-alpha-blit') {
+          const issuedTint = JSON.parse(JSON.stringify(tint)) as JsonRecord;
+          issuedTint.owner = { kind: 'glyph', commandId: command.id, ownerId: command.textId };
+          command.basePreviewTints = [issuedTint];
+        } else Reflect.deleteProperty(command, 'basePreviewTints');
       }
     });
   };

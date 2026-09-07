@@ -74,6 +74,7 @@ export interface X4UiPaintEditBoxCompositionEvidence {
 export interface X4UiPaintBasePreviewTint {
   readonly kind: 'base-preview-tint';
   readonly completeness: 'partial';
+  readonly owner: X4UiPaintBasePreviewTintOwner;
   readonly field: X4UiSceneColorFact['field'];
   readonly slot: X4UiSceneColorFact['slot'];
   readonly value: X4UiSceneColorFact['value'];
@@ -84,6 +85,12 @@ export interface X4UiPaintBasePreviewTint {
   readonly sourcePin?: X4UiSceneColorFact['sourcePin'];
   readonly sampleId?: X4UiSceneColorFact['sampleId'];
   readonly gameVerification: typeof NOT_VERIFIED_IN_GAME;
+}
+
+export interface X4UiPaintBasePreviewTintOwner {
+  readonly kind: 'geometry' | 'glyph';
+  readonly commandId: string;
+  readonly ownerId: string;
 }
 
 export type X4UiPaintLayerKind =
@@ -318,6 +325,39 @@ const exactOwnDataKeys = (value: object, required: readonly string[], optional: 
   });
 };
 
+const plainDataRecord = (value: unknown): value is JsonRecord => {
+  if (!isRecord(value)) return false;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+};
+
+const ownDataValue = (value: object, field: string): unknown => Object.getOwnPropertyDescriptor(value, field)?.value;
+
+const closedArrayValues = (value: unknown): readonly unknown[] | null => {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length !== 0) return null;
+    const names = Object.getOwnPropertyNames(value);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (lengthDescriptor === undefined || !Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value')
+      || lengthDescriptor.enumerable || typeof lengthDescriptor.value !== 'number' || !Number.isSafeInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 0 || names.length !== lengthDescriptor.value + 1
+      || names.some(name => name !== 'length' && (!/^(0|[1-9][0-9]*)$/.test(name) || Number(name) >= lengthDescriptor.value))) return null;
+    const values: unknown[] = [];
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return null;
+      values.push(descriptor.value);
+    }
+    return values;
+  } catch {
+    return null;
+  }
+};
+
 const exactKeys = (value: JsonRecord, required: readonly string[], optional: readonly string[] = []): boolean => {
   const allowed = new Set([...required, ...optional]);
   const keys = ownKeys(value);
@@ -516,20 +556,27 @@ const tableBackgroundTintApplicable = (node: Node): boolean => {
   return field.valid && typeof field.value === 'string' && field.value.length > 0;
 };
 
-const copyBasePreviewTint = (fact: X4UiSceneColorFact): X4UiPaintBasePreviewTint => {
+const copyBasePreviewTint = (
+  fact: X4UiSceneColorFact,
+  owner: X4UiPaintBasePreviewTintOwner,
+): X4UiPaintBasePreviewTint => {
   const copiedFact = materializePaintJsonDomain(fact) as JsonRecord;
   return {
     kind: 'base-preview-tint',
     completeness: 'partial',
     ...copiedFact,
+    owner: { kind: owner.kind, commandId: owner.commandId, ownerId: owner.ownerId },
     gameVerification: NOT_VERIFIED_IN_GAME,
   } as X4UiPaintBasePreviewTint;
 };
 
-const basePreviewTintsForNode = (node: Node): readonly X4UiPaintBasePreviewTint[] =>
+const basePreviewTintsForNode = (
+  node: Node,
+  owner: X4UiPaintBasePreviewTintOwner,
+): readonly X4UiPaintBasePreviewTint[] =>
   colorFactsForNode(node)
     .filter(fact => fact.slot !== 'table-background' || tableBackgroundTintApplicable(node))
-    .map(copyBasePreviewTint);
+    .map(fact => copyBasePreviewTint(fact, owner));
 
 const sourceValid = (value: unknown): value is X4UiSceneSourceLocation => {
   if (!isRecord(value) || !exactKeys(value, ['file', 'start', 'end'], ['sourcePath']) || typeof value.file !== 'string' || value.file.length === 0) return false;
@@ -540,6 +587,76 @@ const sourceValid = (value: unknown): value is X4UiSceneSourceLocation => {
   const start = value.start as JsonRecord;
   const end = value.end as JsonRecord;
   return Number(end.offset) >= Number(start.offset);
+};
+
+const closedSourceValid = (value: unknown): value is X4UiSceneSourceLocation => {
+  if (!plainDataRecord(value) || !exactOwnDataKeys(value, ['file', 'start', 'end'], ['sourcePath'])) return false;
+  const file = ownDataValue(value, 'file');
+  const sourcePath = ownDataValue(value, 'sourcePath');
+  const start = ownDataValue(value, 'start');
+  const end = ownDataValue(value, 'end');
+  if (typeof file !== 'string' || file.length === 0
+    || sourcePath !== undefined && (typeof sourcePath !== 'string' || sourcePath.length === 0)) return false;
+  const positionValid = (position: unknown): boolean => plainDataRecord(position)
+    && exactOwnDataKeys(position, ['line', 'column', 'offset'])
+    && isSafeInteger(ownDataValue(position, 'line'), 1)
+    && isSafeInteger(ownDataValue(position, 'column'), 0)
+    && isSafeInteger(ownDataValue(position, 'offset'), 0);
+  if (!positionValid(start) || !positionValid(end)) return false;
+  return Number(ownDataValue(end as object, 'offset')) >= Number(ownDataValue(start as object, 'offset'));
+};
+
+const PREVIEW_LOOP_KEYS = ['id', 'entryId', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'iteration', 'iterationCount'] as const;
+const PREVIEW_LOOP_KINDS = new Set(['while', 'repeat', 'numeric-for', 'generic-for']);
+const PREVIEW_LOOP_MULTIPLICITIES = new Set(['zero-or-more', 'one-or-more']);
+
+const previewLoopValid = (value: unknown): boolean => {
+  if (!plainDataRecord(value) || !exactOwnDataKeys(value, PREVIEW_LOOP_KEYS)) return false;
+  const id = ownDataValue(value, 'id');
+  const entryId = ownDataValue(value, 'entryId');
+  const loopId = ownDataValue(value, 'loopId');
+  const source = ownDataValue(value, 'source');
+  const kind = ownDataValue(value, 'kind');
+  const multiplicity = ownDataValue(value, 'multiplicity');
+  const depth = ownDataValue(value, 'depth');
+  const iteration = ownDataValue(value, 'iteration');
+  const iterationCount = ownDataValue(value, 'iterationCount');
+  return [id, entryId, loopId, kind, multiplicity].every(item => typeof item === 'string' && item.length > 0)
+    && closedSourceValid(source)
+    && PREVIEW_LOOP_KINDS.has(kind as string)
+    && PREVIEW_LOOP_MULTIPLICITIES.has(multiplicity as string)
+    && depth === 1
+    && isSafeInteger(iteration, 1) && iteration <= 16
+    && isSafeInteger(iterationCount, 1) && iterationCount <= 16
+    && iteration <= iterationCount;
+};
+
+const PREVIEW_SAMPLE_EXPECTED_TYPES = new Set(['string', 'number', 'boolean']);
+const PREVIEW_SAMPLE_STATUSES = new Set(['consumed', 'not-applied']);
+
+const previewSampleBindingValid = (value: unknown): boolean => {
+  if (!plainDataRecord(value) || !exactOwnDataKeys(value, ['id', 'value', 'expectedType', 'source', 'provenance', 'status'], ['reason', 'previewLoop'])) return false;
+  const id = ownDataValue(value, 'id');
+  const sampleValue = ownDataValue(value, 'value');
+  const expectedType = ownDataValue(value, 'expectedType');
+  const source = ownDataValue(value, 'source');
+  const provenance = ownDataValue(value, 'provenance');
+  const status = ownDataValue(value, 'status');
+  const reason = ownDataValue(value, 'reason');
+  const loopField = ownDataField(value, 'previewLoop');
+  if (typeof id !== 'string' || id.length === 0
+    || typeof expectedType !== 'string' || !PREVIEW_SAMPLE_EXPECTED_TYPES.has(expectedType)
+    || !closedSourceValid(source)
+    || provenance !== 'preview-only'
+    || typeof status !== 'string' || !PREVIEW_SAMPLE_STATUSES.has(status)
+    || reason !== undefined && typeof reason !== 'string'
+    || !loopField.valid) return false;
+  const valueMatchesType = expectedType === 'string'
+    ? typeof sampleValue === 'string'
+    : expectedType === 'number'
+      ? isFiniteSafe(sampleValue)
+      : typeof sampleValue === 'boolean';
+  return valueMatchesType && (!loopField.present || previewLoopValid(loopField.value));
 };
 
 const rectValid = (value: unknown): value is X4UiSceneRect =>
@@ -1072,23 +1189,37 @@ const sceneNodeShapeValid = (node: unknown): node is Node => {
 
 const SCENE_GAP_CATEGORIES = new Set(['profile', 'target', 'source', 'analysis', 'data-flow', 'frame', 'table', 'row', 'cell', 'count', 'index', 'span', 'width', 'percentage', 'height', 'options', 'constant', 'scale', 'sample', 'local-expansion', 'preview-path', 'text', 'parse', 'unsupported', 'layer', 'menu', 'edit-box', 'fontsize', 'property', 'number', 'geometry', 'fixed-section', 'clip', 'scrollbar', 'font', 'paint', 'texture', 'state', 'widget', 'program-node', 'operation', 'kernel', 'backdrop']);
 
-const sceneGapValid = (value: unknown): boolean =>
-  isRecord(value) && exactKeys(value, ['id', 'category', 'status', 'reason', 'source'], ['expression', 'sourcePin', 'operationId', 'nodeId', 'previewOnly', 'textRange', 'lineIndex'])
-  && typeof value.id === 'string' && value.id.length > 0 && SCENE_GAP_CATEGORIES.has(String(value.category)) && ['unknown', 'incomplete', 'unsupported', 'refused'].includes(String(value.status)) && typeof value.reason === 'string' && value.reason.length > 0 && sourceValid(value.source)
-  && (value.expression === undefined || typeof value.expression === 'string') && (value.sourcePin === undefined || sourcePinValid(value.sourcePin)) && (value.operationId === undefined || typeof value.operationId === 'string') && (value.nodeId === undefined || typeof value.nodeId === 'string')
-  && (value.previewOnly === undefined || typeof value.previewOnly === 'boolean') && (value.textRange === undefined || sourceRangeValid(value.textRange)) && (value.lineIndex === undefined || isSafeInteger(value.lineIndex, 0));
+const sceneGapValid = (value: unknown): boolean => {
+  if (!plainDataRecord(value) || !exactOwnDataKeys(value, ['id', 'category', 'status', 'reason', 'source'], ['expression', 'sourcePin', 'operationId', 'nodeId', 'previewOnly', 'textRange', 'lineIndex', 'previewLoop'])) return false;
+  const previewLoop = ownDataField(value, 'previewLoop');
+  return typeof ownDataValue(value, 'id') === 'string' && (ownDataValue(value, 'id') as string).length > 0
+    && SCENE_GAP_CATEGORIES.has(String(ownDataValue(value, 'category')))
+    && ['unknown', 'incomplete', 'unsupported', 'refused'].includes(String(ownDataValue(value, 'status')))
+    && typeof ownDataValue(value, 'reason') === 'string' && (ownDataValue(value, 'reason') as string).length > 0
+    && sourceValid(ownDataValue(value, 'source'))
+    && (ownDataValue(value, 'expression') === undefined || typeof ownDataValue(value, 'expression') === 'string')
+    && (ownDataValue(value, 'sourcePin') === undefined || sourcePinValid(ownDataValue(value, 'sourcePin')))
+    && (ownDataValue(value, 'operationId') === undefined || typeof ownDataValue(value, 'operationId') === 'string')
+    && (ownDataValue(value, 'nodeId') === undefined || typeof ownDataValue(value, 'nodeId') === 'string')
+    && (ownDataValue(value, 'previewOnly') === undefined || typeof ownDataValue(value, 'previewOnly') === 'boolean')
+    && (ownDataValue(value, 'textRange') === undefined || sourceRangeValid(ownDataValue(value, 'textRange')))
+    && (ownDataValue(value, 'lineIndex') === undefined || isSafeInteger(ownDataValue(value, 'lineIndex'), 0))
+    && previewLoop.valid && (!previewLoop.present || previewLoopValid(previewLoop.value));
+};
 
 const sameStringArray = (left: unknown, right: readonly string[]): boolean =>
   Array.isArray(left) && left.length === right.length && left.every((value, index) => value === right[index]);
 
-const scenePreviewValid = (value: unknown): boolean =>
-  isRecord(value)
-  && exactKeys(value, ['provenance', 'sampleBindings', 'pathSelections'])
-  && value.provenance === 'preview-only'
-  && Array.isArray(value.sampleBindings)
-  && Array.isArray(value.pathSelections)
-  && jsonDomain(value.sampleBindings)
-  && jsonDomain(value.pathSelections);
+const scenePreviewValid = (value: unknown): boolean => {
+  if (!plainDataRecord(value) || !exactOwnDataKeys(value, ['provenance', 'sampleBindings', 'pathSelections'])) return false;
+  const provenance = ownDataValue(value, 'provenance');
+  const sampleBindings = closedArrayValues(ownDataValue(value, 'sampleBindings'));
+  const pathSelections = closedArrayValues(ownDataValue(value, 'pathSelections'));
+  if (provenance !== 'preview-only' || sampleBindings === null || pathSelections === null
+    || !sampleBindings.every(previewSampleBindingValid) || !jsonDomain(pathSelections)) return false;
+  const bindingIds = sampleBindings.map(binding => ownDataValue(binding as object, 'id'));
+  return new Set(bindingIds as string[]).size === bindingIds.length;
+};
 
 const layoutQuadMatchesGlyph = (layoutQuad: JsonRecord, glyph: X4UiSceneGlyphNode): boolean => {
   const exactFields = ['codePoint', 'glyphIndex', 'width', 'height', 'bitmapHeight', 'lineBoxHeight', 'bearingX', 'bitmapWidth', 'advance', 'scaledAdvance', 'isEllipsis'];
@@ -1140,7 +1271,8 @@ const sceneValid = (scene: X4UiScene, corpus: X4UiCorpusCanonicalSuccess): boole
     || (scene.status !== 'projected' && scene.status !== 'partial') || (scene.programStatus !== 'projected' && scene.programStatus !== 'partial')
     || scene.gameTruth !== X4_UI_SCENE_GAME_TRUTH || !isRecord(scene.verification) || !exactKeys(scene.verification, ['game', 'gameVerified']) || scene.verification.game !== X4_UI_SCENE_GAME_TRUTH || scene.verification.gameVerified !== false
     || !rectValid(scene.drawableRect) || scene.drawableRect.x !== 0 || scene.drawableRect.y !== 0 || scene.drawableRect.width <= 0 || scene.drawableRect.height <= 0
-    || !sceneProfileValid(scene.profile) || !profileMatchesCorpus(scene, corpus) || !scenePreviewValid(scene.preview) || !diagnosticStyleValid(scene.diagnosticStyle)) return false;
+    || !sceneProfileValid(scene.profile) || !profileMatchesCorpus(scene, corpus) || !diagnosticStyleValid(scene.diagnosticStyle)) return false;
+  if (!scenePreviewValid(scene.preview)) return false;
   const collections: readonly (readonly Node[])[] = [scene.frames, scene.tables, scene.rows, scene.cells, scene.widgets, scene.texts, scene.glyphs];
   if (!collections.every(Array.isArray)) return false;
   const nodes = collections.flat();
@@ -1584,7 +1716,7 @@ export function projectX4UiPaintPlan(input: X4UiPaintPlanInput): X4UiPaintPlanRe
       const clippedGeometry = geometry === undefined ? undefined : intersect(geometry, clip);
       const drawableGeometry = clippedGeometry !== undefined && hasArea(clippedGeometry) ? clippedGeometry : undefined;
       const base = diagnosticBase(`geometry:${node.id}`, 'diagnostic-background', order++, node, frameId);
-      const basePreviewTints = basePreviewTintsForNode(node);
+      const basePreviewTints = basePreviewTintsForNode(node, { kind: 'geometry', commandId: base.id, ownerId: node.id });
       const editboxInner = previewInnerGeometryForEditBox(node, clip, basePreviewTints);
       const commandPreviewTints = editboxInner === undefined
         ? basePreviewTints.filter(tint => tint.slot !== 'editbox-inner-background')
@@ -1633,7 +1765,7 @@ export function projectX4UiPaintPlan(input: X4UiPaintPlanInput): X4UiPaintPlanRe
       const frameId = frameIdFor(node, byId);
       const commandBase = { ...diagnosticBase(`glyph:${glyph.id}`, 'glyph-alpha-blits', order++, node, frameId), clipRect: rectCopy(clip) };
       const identity = fontName === 'Zekton' ? ZEKTON_CORPUS_ASSETS.regular : ZEKTON_CORPUS_ASSETS.bold;
-      const basePreviewTints = basePreviewTintsForNode(text as unknown as Node);
+      const basePreviewTints = basePreviewTintsForNode(text as unknown as Node, { kind: 'glyph', commandId: commandBase.id, ownerId: glyph.textId });
       glyphs.push({ ...commandBase, kind: 'glyph-alpha-blit', textId: glyph.textId, lineIndex: glyph.lineIndex, codePoint: glyph.codePoint, glyphIndex: glyph.glyphIndex, descriptor: copyFontPin({ descriptor: identity.descriptor, atlas: identity.atlas }).descriptor, atlas: { ...copyFontPin({ descriptor: identity.descriptor, atlas: identity.atlas }).atlas, width: font.atlas.width, height: font.atlas.height }, sourceRect: clipped.source, destinationRect: clipped.destination, sourceRange: { start: glyph.sourceRange.start, end: glyph.sourceRange.end }, sourceCodePointRange: { start: glyph.sourceCodePointRange.start, end: glyph.sourceCodePointRange.end }, isEllipsis: glyph.quad.isEllipsis, ...(basePreviewTints.length === 0 ? {} : { basePreviewTints }) });
     }
     for (const gap of scene.gaps) {

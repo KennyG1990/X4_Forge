@@ -3,6 +3,19 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.74 — 2026-09-07
+
+- Loop-expanded UI commands can now reuse one source tint fact when each expanded tint is bound to the geometry command or glyph it was issued for.
+- Paint records each tint owner against its geometry command or node, or its glyph command or text ID, and Canvas accepts reuse only when every binding matches. Copied, reassigned, missing, wrong, inherited, accessor, and extra-field owners are still refused before allocation.
+- Preview remains explicitly Not verified in game; this repair does not claim engine acceptance, 1:1 parity, arbitrary Lua execution, or completion of the twelve-reference AI Influence benchmark.
+
+## 0.0.73 — 2026-09-07
+
+- Source-defined branch choices and finite preview loop counts now remain stable across mounted rerenders instead of accepted input being overwritten by older derived state.
+- Source and target discovery is retained by exact workspace identity, so drawable resolution, UI scale, and profile changes reproject the selected menu without rebuilding the same candidate catalog.
+- Equivalent projection reuse is allowed only from one coherent inert-data capture; unsafe getters or reflection, mutable values, or changed authority refuse or reproject instead of replaying stale geometry.
+- Exact configured-source MENU, HUB, and COMM receipts continue to separate source-known numeric geometry from explicit preview-only runtime samples. The UI remains Not verified in game.
+
 ## 0.0.72 — 2026-09-06
 
 - Preview can now resolve supported deterministic layout math directly from real Lua source: closed numeric math.floor, math.ceil, math.min, and math.max expressions can become preview geometry.

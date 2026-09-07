@@ -2010,6 +2010,31 @@ SHA-256 `5C6B2C20C42E93359DED03DBF199F00C1C858AFCC579388F10F94818CDDEA4B0`. Full
 Influence reconstruction and universal engine acceptance remain open; overall B119 stays `IN_PROGRESS / PARTIAL`.
 Full record: `docs/plans/2026-09-02-b119-canonical-source-editor-game-pipeline.md`. No capability-map delta.
 
+**B119 command-bound tint and public `0.0.74` checkpoint 2026-09-07 — BOUNDED VERIFIED / FULL B119 PARTIAL:** The
+installed AI `aic_menu.lua -> menu.display` dogfood reproduced a false refusal when one source color literal expanded
+through a finite loop into several valid paint owners. Paint now binds every tint to its issued geometry `commandId` /
+`nodeId` or glyph parent `textId`; copied, reassigned, missing, accessor-backed, and structurally hostile owners still
+refuse before allocation. Focused Paint passes `211/211` and Canvas `171/171`; runtime oracles pass `134/134`; serial
+E2E passes `106/106` in `12.1m` with complete lifecycle cleanup; production build, Graphify
+`10,582/26,672/316`, and complete precommit pass. Public OpenVSX `0.0.74` and its independent download equal the
+reviewed local VSIX at `26,315,067` bytes / SHA-256
+`63213F694CA72303A6B444B6697402A425DD4F1AE53FF45DDE07F9AD72D9C267`; installed payload and runtime parity are
+exact. The earlier `0.0.73` token-bearing terminal-title incident still requires PAT rotation/revocation.
+
+The final installed `0.0.74` lifecycle validator passes `242/242`. Exact owner-issued source authority produces one
+current/exportable Canvas at `2560x1440` (Helper scale `1.4`, `_choiceY=769`, identity `1`, export
+`FB3DC6...50CCF`) and one replacement current/exportable Canvas at `1800x900` (scale `0.875`, `_choiceY=481`,
+identity `2`, export `A23B28...B62803`). Clearing source retains identity `2` and the same pixels only as stale visual
+history with export unavailable; final authority restoration creates identity `3` and exactly reproduces the primary
+hash. All four states were visually inspected; Git/source/install/config/listener/X4-absent fingerprints restored.
+Receipt: `dev-docs/b119-ai-influence-dogfood/installed-release-20260907/authority-complete-0.0.74-attempt3/installed-0.0.74-aic-menu-display-receipt.json`,
+`6,745,911` bytes / SHA-256 `8B62A1E3385706A234977624020835C7C8FF1CC104ACA318F9043098A383AE61`.
+
+This is installed source-faithful Forge preview proof, not universal C++ acceptance or full game parity. The original
+literal brief remains `6/6 VERIFIED`; the twelve-reference AI Influence reconstruction/current in-game census and
+runtime-built menu bodies remain open, so B119 and GitHub #41 stay `IN_PROGRESS / PARTIAL / Not verified in game`.
+Exact plan and AAR: `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`.
+
 ### B115 · Forge Capability Convergence `in_progress` (P0, PRIORITY OVERRIDE)
 
 Ken explicitly promoted GitHub initiative #9 and child requests #10–#21 above the active R13 close on 2026-07-31.

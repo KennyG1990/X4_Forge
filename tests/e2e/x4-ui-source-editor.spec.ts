@@ -57,6 +57,14 @@ const sourceEditorWorkspace = {
         'row[1]:createText("P7 E2E source")',
         'frame:display()',
         '',
+        'function menu.previewLoop()',
+        '  local loopFrame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  for i = 1, 2 do',
+        '    loopFrame:addTable(1, { width = 100 })',
+        '  end',
+        '  loopFrame:display()',
+        'end',
+        '',
       ].join('\n'),
     },
   ],
@@ -488,6 +496,44 @@ test('SourceEditor exports only the current mounted PNG evidence', async ({ page
   await expect(page.getByTestId('x4-ui-canvas-export-native-width')).toHaveText('2560');
   await expect(page.getByTestId('x4-ui-canvas-export-native-height')).toHaveText('1440');
   await expect(page.getByTestId('x4-ui-canvas-export-boundary')).toHaveText(/^Preview evidence only · Not verified in game$/);
+
+  const previewPathsRegion = page.getByTestId('x4-ui-preview-paths-region');
+  const previewLoopsRegion = page.getByTestId('x4-ui-preview-loops-region');
+  const previewSamplesRegion = page.getByTestId('x4-ui-samples-region');
+  await expect(previewPathsRegion).toBeVisible();
+  await expect(previewLoopsRegion).toBeVisible();
+  await expect(previewSamplesRegion).toBeVisible();
+  await expect(previewLoopsRegion.getByTestId('x4-ui-preview-loops-preview-only')).toHaveText('Preview only');
+  await expect(previewLoopsRegion.getByTestId('x4-ui-preview-loops-truth')).toHaveText('Not verified in game');
+  const previewPanelOrder = await page.evaluate(() => {
+    const ids = ['x4-ui-preview-paths-region', 'x4-ui-preview-loops-region', 'x4-ui-samples-region'];
+    const positions = ids.map(id => {
+      const element = document.querySelector(`[data-testid="${id}"]`);
+      return element === null ? -1 : Array.from(document.querySelectorAll('[data-testid]')).indexOf(element);
+    });
+    return positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!));
+  });
+  expect(previewPanelOrder).toBe(true);
+
+  const loopTargetOption = targetSelector.locator('option').filter({ hasText: 'menu.previewLoop' }).first();
+  await expect(loopTargetOption).toHaveCount(1);
+  const loopTargetValue = await loopTargetOption.getAttribute('value');
+  if (loopTargetValue === null) throw new Error('SourceEditor loop fixture target option has no value');
+  await targetSelector.selectOption(loopTargetValue);
+  const loopControl = previewLoopsRegion.locator('input[data-testid^="x4-ui-preview-loop-control-"]').first();
+  await expect(loopControl).toHaveCount(1);
+  await expect(loopControl).toHaveValue('');
+  await expect(loopControl).toHaveAttribute('min', '1');
+  await expect(loopControl).toHaveAttribute('max', '16');
+  await expect(loopControl).toHaveAttribute('step', '1');
+  await loopControl.fill('4');
+  await expect(loopControl).toHaveValue('4');
+  await expect(previewLoopsRegion.getByTestId('x4-ui-preview-loops-truth')).toHaveText('Not verified in game');
+  await previewLoopsRegion.getByTestId('x4-ui-preview-loops-reset').click();
+  await expect(loopControl).toHaveValue('');
+  await expect(previewLoopsRegion.getByTestId('x4-ui-preview-loops-truth')).toHaveText('Not verified in game');
+  await targetSelector.selectOption(targetValue);
+  await expect(canvas).toHaveCount(1);
 
   await page.evaluate(() => {
     const host = document.querySelector('[data-testid="x4-ui-canvas-host"]');

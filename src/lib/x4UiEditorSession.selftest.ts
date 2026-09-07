@@ -38,12 +38,16 @@ import {
   X4_UI_EDITOR_SESSION_GAME_TRUTH,
   X4_UI_EDITOR_UNSELECTED_SOURCE,
   adoptX4UiEditorCanvasResult,
+  createX4UiEditorSessionOwner,
   parseX4UiEditorSampleInput,
   projectX4UiEditorSession,
+  reconcileX4UiEditorLoopState,
   reconcileX4UiEditorPathState,
   reconcileX4UiEditorSampleState,
+  resetX4UiEditorLoopState,
   resetX4UiEditorPathState,
   sameX4UiEditorPathBinding,
+  updateX4UiEditorLoopState,
   updateX4UiEditorPathState,
   updateX4UiEditorSampleState,
   type X4UiEditorPathCatalogAuthority,
@@ -567,6 +571,64 @@ function sampleWorkspace(): ModWorkspace {
       '',
     ].join('\n'), { reason: 'unparsed' }),
   ]);
+}
+
+function loopWorkspace(): ModWorkspace {
+  return workspace([
+    passthrough('ui.xml', [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<addon name="editor-session-loops">',
+      '  <environment type="menus">',
+      '    <file name="ui/loops.lua" />',
+      '  </environment>',
+      '</addon>',
+      '',
+    ].join('\n')),
+    passthrough('ui/loops.lua', [
+      'local menu = { name = "EditorSessionLoops", layer = 1 }',
+      'function menu.display(dynamicText)',
+      '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+      '  local table = frame:addTable(1, { width = 100 })',
+      '  for i = 1, 3 do',
+      '    local row = table:addRow(false, {})',
+      '    row[1]:createText(dynamicText, { height = 10 })',
+      '  end',
+      '  frame:display()',
+      'end',
+      '',
+    ].join('\n'), { reason: 'unparsed' }),
+  ], { id: 'batch-7a-editor-session-loops' });
+}
+
+function loopPathWorkspace(): ModWorkspace {
+  return workspace([
+    passthrough('ui.xml', [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<addon name="editor-session-loop-paths">',
+      '  <environment type="menus">',
+      '    <file name="ui/loop-paths.lua" />',
+      '  </environment>',
+      '</addon>',
+      '',
+    ].join('\n')),
+    passthrough('ui/loop-paths.lua', [
+      'local menu = { name = "EditorSessionLoopPaths", layer = 1 }',
+      'function menu.display(tab, dynamicText)',
+      '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+      '  local table = frame:addTable(1, { width = 100 })',
+      '  for i = 1, 3 do',
+      '    local row = table:addRow(false, {})',
+      '    if tab == "first" then',
+      '      row[1]:createText(dynamicText, { height = 10 })',
+      '    else',
+      '      row[1]:createText("other", { height = 10 })',
+      '    end',
+      '  end',
+      '  frame:display()',
+      'end',
+      '',
+    ].join('\n'), { reason: 'unparsed' }),
+  ], { id: 'batch-7a-editor-session-loop-paths' });
 }
 
 const pathLua = [
@@ -1970,6 +2032,313 @@ async function run(): Promise<void> {
     assert.equal(projectedPaint.plan.logicalDrawable.height, 80);
   }
 
+  recordSessionCausal(
+    'B119 session reuses equivalent no-input catalog stages within one editor reprojection',
+    true,
+    'the final no-input projection reuses the already-computed path and sample catalog results while preserving their public stage outputs',
+    markSeamReached => {
+      markSeamReached();
+      const finalProgram = projected.preview.program;
+      return {
+        pathCatalogReused: projected.pathCatalog !== null && projected.pathCatalog === projected.preview.pathCatalog,
+        sampleCatalogReused: finalProgram !== undefined
+          && finalProgram.status !== 'refused'
+          && projected.sampleCatalog !== null
+          && projected.sampleCatalog === finalProgram.program.sampleCatalog,
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.pathCatalogReused === true && value.sampleCatalogReused === true;
+    },
+  );
+
+  const editorSessionOwner = createX4UiEditorSessionOwner(exact.workspace);
+  const hostileOwnerColorInput = { ...exact } as Record<string, unknown>;
+  let hostileOwnerColorGetterReads = 0;
+  Object.defineProperty(hostileOwnerColorInput, 'colorEvidence', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      hostileOwnerColorGetterReads += 1;
+      throw new Error('owner colorEvidence getter executed');
+    },
+  });
+  const directHostileOwnerColorProjection = p7SessionSafeProjection(hostileOwnerColorInput);
+  const hostileColorOwner = createX4UiEditorSessionOwner(exact.workspace);
+  recordSessionCausal(
+    'causal-owner-color-accessor-is-not-spread',
+    true,
+    'owner capture must not invoke an enumerable throwing colorEvidence getter and must retain the direct projector no-color refusal',
+    markSeamReached => {
+      markSeamReached();
+      let ownerThrew = false;
+      let ownerProjection: unknown;
+      try {
+        ownerProjection = hostileColorOwner.project(hostileOwnerColorInput as unknown as X4UiEditorSessionInput);
+      } catch (error) {
+        ownerThrew = true;
+        ownerProjection = { threw: true, error: error instanceof Error ? error.message : String(error) };
+      }
+      return {
+        getterReads: hostileOwnerColorGetterReads,
+        ownerThrew,
+        directNoColor: p7SessionNoColorBehavior(directHostileOwnerColorProjection),
+        ownerNoColor: p7SessionNoColorBehavior(ownerProjection),
+        directReceipt: p7SessionReceipt(directHostileOwnerColorProjection),
+        ownerReceipt: p7SessionReceipt(ownerProjection),
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.getterReads === 0
+        && value.ownerThrew === false
+        && value.directNoColor === true
+        && value.ownerNoColor === true
+        && JSON.stringify(value.ownerReceipt) === JSON.stringify(value.directReceipt);
+    },
+  );
+
+  const hostileOwnerProfileInput = { ...exact } as Record<string, unknown>;
+  let hostileOwnerProfileGetterReads = 0;
+  Object.defineProperty(hostileOwnerProfileInput, 'profile', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      hostileOwnerProfileGetterReads += 1;
+      throw new Error('owner profile getter executed');
+    },
+  });
+  const directHostileOwnerProfileProjection = p7SessionSafeProjection(hostileOwnerProfileInput);
+  const directHostileOwnerProfileGetterReads = hostileOwnerProfileGetterReads;
+  hostileOwnerProfileGetterReads = 0;
+  const hostileProfileOwner = createX4UiEditorSessionOwner(exact.workspace);
+  recordSessionCausal(
+    'causal-owner-non-color-accessor-refuses',
+    true,
+    'a non-color accessor must not be sanitized into a usable/default projection; owner behavior must remain fail-closed without invoking the original getter',
+    markSeamReached => {
+      markSeamReached();
+      const ownerProjection = hostileProfileOwner.project(hostileOwnerProfileInput as unknown as X4UiEditorSessionInput);
+      const directRecord = p7SessionRecord(directHostileOwnerProfileProjection);
+      const ownerRecord = p7SessionRecord(ownerProjection);
+      return {
+        getterReads: hostileOwnerProfileGetterReads,
+        directGetterReads: directHostileOwnerProfileGetterReads,
+        directStatus: directRecord?.status,
+        directCanRender: directRecord?.canRender,
+        ownerStatus: ownerRecord?.status,
+        ownerCanRender: ownerRecord?.canRender,
+        directReceipt: p7SessionReceipt(directHostileOwnerProfileProjection),
+        ownerReceipt: p7SessionReceipt(ownerProjection),
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.getterReads === 0
+        && value.directStatus === 'refused'
+        && value.directCanRender === false
+        && value.ownerStatus === 'refused'
+        && value.ownerCanRender === false;
+    },
+  );
+
+  const revokedOwnerInput = Proxy.revocable({ ...exact }, {});
+  revokedOwnerInput.revoke();
+  const throwingReflectionCounts = { getPrototypeOf: 0, ownKeys: 0, getOwnPropertyDescriptor: 0, get: 0 };
+  const throwingReflectionInput = new Proxy({ ...exact }, {
+    get: () => {
+      throwingReflectionCounts.get += 1;
+      throw new Error('owner reflection input getter executed');
+    },
+    getPrototypeOf: () => {
+      throwingReflectionCounts.getPrototypeOf += 1;
+      throw new Error('owner reflection prototype executed');
+    },
+    ownKeys: () => {
+      throwingReflectionCounts.ownKeys += 1;
+      throw new Error('owner reflection ownKeys executed');
+    },
+    getOwnPropertyDescriptor: () => {
+      throwingReflectionCounts.getOwnPropertyDescriptor += 1;
+      throw new Error('owner reflection descriptor executed');
+    },
+  });
+  const reflectionOwner = createX4UiEditorSessionOwner(exact.workspace);
+  recordSessionCausal(
+    'causal-owner-reflection-fallback-refuses',
+    true,
+    'revoked and throwing-reflection inputs must become deterministic refusal projections without retrying hostile reflection or invoking a getter',
+    markSeamReached => {
+      markSeamReached();
+      const revokedProjection = reflectionOwner.project(revokedOwnerInput.proxy as unknown as X4UiEditorSessionInput);
+      const throwingProjection = reflectionOwner.project(throwingReflectionInput as unknown as X4UiEditorSessionInput);
+      return {
+        revoked: {
+          status: revokedProjection.status,
+          canRender: revokedProjection.canRender,
+          reason: revokedProjection.reason,
+        },
+        throwing: {
+          status: throwingProjection.status,
+          canRender: throwingProjection.canRender,
+          reason: throwingProjection.reason,
+        },
+        traps: { ...throwingReflectionCounts },
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      const revoked = value.revoked as JsonRecord | undefined;
+      const throwing = value.throwing as JsonRecord | undefined;
+      const traps = value.traps as JsonRecord | undefined;
+      return revoked?.status === 'refused'
+        && revoked.canRender === false
+        && throwing?.status === 'refused'
+        && throwing.canRender === false
+        && traps?.getPrototypeOf === 1
+        && traps.ownKeys === 0
+        && traps.getOwnPropertyDescriptor === 0
+        && traps.get === 0;
+    },
+  );
+
+  const ownerFacadeDescriptorProfile = {
+    ...exact.profile,
+    drawable: { width: 100, height: 80 },
+  };
+  const ownerFacadeGetterProfile = {
+    ...exact.profile,
+    drawable: { width: 125, height: 80 },
+  };
+  const ownerFacadeTarget = { ...exact, profile: ownerFacadeGetterProfile };
+  const ownerFacadeExpectedDescriptorReads = Reflect.ownKeys(ownerFacadeTarget).length;
+  let ownerFacadeDescriptorReads = 0;
+  let ownerFacadeProfileGetReads = 0;
+  const ownerFacadeInput = new Proxy(ownerFacadeTarget, {
+    get: (current, property, receiver) => {
+      if (property === 'profile') ownerFacadeProfileGetReads += 1;
+      return Reflect.get(current, property, receiver);
+    },
+    getOwnPropertyDescriptor: (current, property) => {
+      const descriptor = Reflect.getOwnPropertyDescriptor(current, property);
+      if (descriptor !== undefined) {
+        ownerFacadeDescriptorReads += 1;
+        if (property === 'profile' && 'value' in descriptor) {
+          return { ...descriptor, value: ownerFacadeDescriptorProfile };
+        }
+      }
+      return descriptor;
+    },
+  });
+  const facadeOwner = createX4UiEditorSessionOwner(exact.workspace);
+  recordSessionCausal(
+    'causal-owner-descriptor-facade-captures-one-authority',
+    true,
+    'owner signature and projection must use one detached own-data descriptor capture without a spread-time get or reflected profile swap',
+    markSeamReached => {
+      markSeamReached();
+      const descriptorReadsBeforeFirst = ownerFacadeDescriptorReads;
+      const first = facadeOwner.project(ownerFacadeInput as unknown as X4UiEditorSessionInput);
+      const firstDescriptorReads = ownerFacadeDescriptorReads - descriptorReadsBeforeFirst;
+      const descriptorReadsBeforeReplay = ownerFacadeDescriptorReads;
+      const replay = facadeOwner.project(ownerFacadeInput as unknown as X4UiEditorSessionInput);
+      const replayDescriptorReads = ownerFacadeDescriptorReads - descriptorReadsBeforeReplay;
+      return {
+        descriptorReads: ownerFacadeDescriptorReads,
+        firstDescriptorReads,
+        replayDescriptorReads,
+        expectedDescriptorReads: ownerFacadeExpectedDescriptorReads,
+        profileGetReads: ownerFacadeProfileGetReads,
+        firstWidth: first.normalizedProfile.drawable.width,
+        replayWidth: replay.normalizedProfile.drawable.width,
+        replayed: replay === first,
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.firstDescriptorReads === value.expectedDescriptorReads
+        && value.replayDescriptorReads === value.expectedDescriptorReads
+        && value.profileGetReads === 0
+        && value.firstWidth === ownerFacadeDescriptorProfile.drawable.width
+        && value.replayWidth === ownerFacadeDescriptorProfile.drawable.width
+        && value.replayed === true;
+    },
+  );
+
+  const ownerCandidateCatalog = editorSessionOwner.candidateCatalog;
+  const ownerSelected = editorSessionOwner.project(exact);
+  const ownerSelectedReplay = editorSessionOwner.project(exact);
+  const mutableOwnerProfile = { width: 100, height: 80, uiScale: 1 };
+  const mutableOwnerInput: X4UiEditorSessionInput = {
+    ...exact,
+    profile: mutableOwnerProfile,
+  };
+  const mutableOwnerProjection = editorSessionOwner.project(mutableOwnerInput);
+  mutableOwnerProfile.width = 125;
+  const mutatedOwnerProjection = editorSessionOwner.project(mutableOwnerInput);
+  const driftingWorkspace = sourceFixture(false, { id: 'x4-ui-editor-session-owner-drift-workspace' });
+  const driftSessionOwner = createX4UiEditorSessionOwner(driftingWorkspace);
+  const driftInput: X4UiEditorSessionInput = {
+    workspace: driftingWorkspace,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+  };
+  const driftProjectionBefore = driftSessionOwner.project(driftInput);
+  const driftCandidateCatalogBefore = JSON.stringify(driftSessionOwner.candidateCatalog);
+  const driftingSourceFile = driftingWorkspace.passthroughFiles[1] as { content: string };
+  driftingSourceFile.content = `${driftingSourceFile.content}\n-- in-place drift must not enter the bound owner`;
+  const driftProjectionAfter = driftSessionOwner.project(driftInput);
+  const replacementSessionOwner = createX4UiEditorSessionOwner({
+    ...(exact.workspace as ModWorkspace),
+    id: 'x4-ui-editor-session-owner-replacement-workspace',
+  });
+  recordSessionCausal(
+    'B119 editor owner retains one immutable source candidate catalog beside selected projection',
+    true,
+    'the owner exposes one stable immutable candidate catalog, reuses only an unchanged equivalent selected input, detects in-place profile mutation instead of returning stale state, keeps source authority private, and gives a new workspace owner a distinct catalog',
+    markSeamReached => {
+      markSeamReached();
+      return {
+        candidateCatalogStable: editorSessionOwner.candidateCatalog === ownerCandidateCatalog,
+        candidateCatalogFrozen: Object.isFrozen(ownerCandidateCatalog)
+          && Object.isFrozen(ownerCandidateCatalog.sourceCandidates),
+        candidateCatalogAvailable: ownerCandidateCatalog.sourceCandidates.length > 0,
+        candidateCatalogMatchesSelected: JSON.stringify(ownerCandidateCatalog.sourceCandidates)
+          === JSON.stringify(ownerSelected.preview.sourceCandidates),
+        equivalentSelectedProjectionReused: ownerSelectedReplay === ownerSelected,
+        mutableInputReprojected: mutatedOwnerProjection !== mutableOwnerProjection
+          && mutableOwnerProjection.normalizedProfile.drawable.width === 100
+          && mutatedOwnerProjection.normalizedProfile.drawable.width === 125,
+        workspaceDriftNotAccepted: driftProjectionAfter === driftProjectionBefore
+          && driftProjectionAfter.source === driftProjectionBefore.source
+          && JSON.stringify(driftSessionOwner.candidateCatalog) === driftCandidateCatalogBefore,
+        replacementCatalogDistinct: replacementSessionOwner.candidateCatalog !== ownerCandidateCatalog,
+        sourceAuthorityPrivate: !Object.hasOwn(editorSessionOwner, 'source'),
+        selectedProjectionAvailable: ownerSelected.preview.selection.status === 'selected',
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.candidateCatalogStable === true
+        && value.candidateCatalogFrozen === true
+        && value.candidateCatalogAvailable === true
+        && value.candidateCatalogMatchesSelected === true
+        && value.equivalentSelectedProjectionReused === true
+        && value.mutableInputReprojected === true
+        && value.workspaceDriftNotAccepted === true
+        && value.replacementCatalogDistinct === true
+        && value.sourceAuthorityPrivate === true
+        && value.selectedProjectionAvailable === true;
+    },
+  );
+
   const sampleWorkspaceValue = sampleWorkspace();
   const sampleWorkspaceObject = sampleWorkspaceValue;
   const sampleSourceFileObject = sampleWorkspaceValue.passthroughFiles[1];
@@ -2325,6 +2694,608 @@ async function run(): Promise<void> {
   expectSampleRefusal('sample value accessor', reconcileX4UiEditorSampleState({ ...sampleState, values: [sampleValueAccessor, ...sampleState.values.slice(1)] }, sampleCatalog, sampleCatalogAuthority));
   const missingSampleValue = { id: sampleValue.id };
   expectSampleRefusal('sample value missing scalar', reconcileX4UiEditorSampleState({ ...sampleState, values: [missingSampleValue, ...sampleState.values.slice(1)] }, sampleCatalog, sampleCatalogAuthority));
+
+  const loopWorkspaceValue = loopWorkspace();
+  const loopWorkspaceJson = JSON.stringify(loopWorkspaceValue);
+  const loopSeed = projectX4UiEditorSession({ workspace: loopWorkspaceValue, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE });
+  const loopSelection = selectionFor(loopSeed.source, 'ui/loops.lua', 'function');
+  const loopUnprojected = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+  });
+  const loopCatalog = loopUnprojected.loopCatalog;
+  const loopBinding = loopUnprojected.loopBinding;
+  const loopCatalogAuthority = loopUnprojected.loopCatalogAuthority;
+  assert.ok(loopCatalog, 'loop fixture projection must expose the exact catalog issued with its authority');
+  assert.ok(loopBinding, 'loop fixture projection must issue an editor-only binding');
+  assert.ok(loopCatalogAuthority, 'loop fixture projection must issue a catalog authority');
+  assert.equal(loopUnprojected.loops, undefined, 'omitting loop input must leave loop selections conditional');
+  assert.equal(loopUnprojected.previewLoopSelections.length, 0, 'omitting loop input must not claim a selected loop');
+  const loopEntry = loopCatalog.entries[0];
+  assert.ok(loopEntry, 'loop fixture must expose one direct loop entry');
+  assert.equal(loopEntry.depth, 1);
+  assert.equal(loopEntry.provenance, 'preview-only');
+  assert.ok(loopEntry.callIds.length > 0);
+  const loopCountOne = updateX4UiEditorLoopState(undefined, loopCatalog, loopEntry.id, '1', loopCatalogAuthority);
+  assert.equal(loopCountOne.status, 'accepted');
+  assert.equal(loopCountOne.loops?.selections[0]?.iterationCount, 1);
+  const loopCountSixteen = updateX4UiEditorLoopState(undefined, loopCatalog, loopEntry.id, 16, loopCatalogAuthority);
+  assert.equal(loopCountSixteen.status, 'accepted');
+  assert.equal(loopCountSixteen.loops?.selections[0]?.iterationCount, 16);
+  const loopCountThree = updateX4UiEditorLoopState(undefined, loopCatalog, loopEntry.id, 3, loopCatalogAuthority);
+  assert.equal(loopCountThree.status, 'accepted');
+  assert.ok(loopCountThree.loops);
+  const loopSelected = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+    previewLoopInput: loopCountThree.loops,
+    loopBinding,
+    loopCatalogAuthority,
+  });
+  assert.equal(loopSelected.loopReconciliation.status, 'accepted');
+  assert.equal(loopSelected.loops?.selections[0]?.iterationCount, 3);
+  assert.equal(loopSelected.previewLoopSelections.length, 1);
+  assert.equal(loopSelected.previewLoopSelections[0]?.iterationCount, 3);
+  assert.ok(loopSelected.sampleCatalog, 'selected loop must issue an iteration-scoped sample catalog');
+  assert.equal(loopSelected.sampleCatalog.entries.length, 3);
+  assert.equal(new Set(loopSelected.sampleCatalog.entries.map(entry => entry.id)).size, 3);
+  assert.equal(loopSelected.sampleCatalog.entries.every(entry => entry.previewLoop?.iterationCount === 3), true);
+  assert.ok(loopSelected.sampleBinding, 'selected loop sample catalog must issue a bound sample authority');
+  assert.ok(loopSelected.sampleCatalogAuthority, 'selected loop sample catalog must issue an opaque sample authority');
+  assertFrozenGraph(loopSelected.loops);
+  assertFrozenGraph(loopSelected.loopBinding);
+  assertFrozenGraph(loopSelected.loopCatalogAuthority);
+  assert.equal(JSON.stringify(loopSelected.loops).length > 0, true);
+  assert.equal(JSON.stringify(loopSelected.loopBinding).length > 0, true);
+  assert.equal(loopSelected.gameTruth, 'Not verified in game');
+  assert.equal(loopSelected.preview.gameTruth, 'Not verified in game');
+  assert.equal(loopSelected.preview.verification.gameVerified, false);
+
+  const loopSampleEntry = loopSelected.sampleCatalog.entries[0];
+  assert.ok(loopSampleEntry);
+  const loopSampleState: X4UiEditorSampleState = {
+    catalogId: loopSelected.sampleCatalog.id,
+    source: loopSelected.sampleCatalog.sourceIdentity,
+    values: [{ id: loopSampleEntry.id, value: 'loop sample' }],
+  };
+  const loopSampled = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+    previewLoopInput: loopSelected.loops,
+    loopBinding: loopSelected.loopBinding,
+    loopCatalogAuthority: loopSelected.loopCatalogAuthority,
+    samples: loopSampleState,
+    sampleBinding: loopSelected.sampleBinding,
+    sampleCatalogAuthority: loopSelected.sampleCatalogAuthority,
+  });
+  assert.equal(loopSampled.loopReconciliation.status, 'accepted');
+  assert.equal(loopSampled.sampleReconciliation.status, 'accepted');
+  assert.equal(loopSampled.samples, loopSampleState);
+  assert.equal(loopSampled.preview.previewLoopInput?.selections[0]?.iterationCount, 3);
+  assert.equal(loopSampled.preview.program?.status === 'refused', false);
+
+  const loopCountChanged = updateX4UiEditorLoopState(
+    loopSampled.loops,
+    loopSampled.loopCatalog,
+    loopEntry.id,
+    1,
+    loopSampled.loopCatalogAuthority,
+  );
+  assert.equal(loopCountChanged.status, 'accepted');
+  const staleLoopSamples = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+    loops: loopCountChanged.loops,
+    loopBinding: loopSampled.loopBinding,
+    loopCatalogAuthority: loopSampled.loopCatalogAuthority,
+    samples: loopSampleState,
+    sampleBinding: loopSampled.sampleBinding,
+    sampleCatalogAuthority: loopSampled.sampleCatalogAuthority,
+  });
+  assert.equal(staleLoopSamples.loopReconciliation.status, 'accepted');
+  assert.equal(staleLoopSamples.sampleReconciliation.status, 'cleared');
+  assert.equal(staleLoopSamples.samples, undefined, 'changing loop iteration count must clear old per-iteration samples');
+  const resetLoop = resetX4UiEditorLoopState(
+    loopCountChanged.loops,
+    staleLoopSamples.loopCatalog,
+    staleLoopSamples.loopCatalogAuthority,
+  );
+  assert.equal(resetLoop.status, 'reset');
+  assert.equal(resetLoop.loops, undefined);
+
+  const loopCurrent = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+    loops: loopSelected.loops,
+    loopBinding: staleLoopSamples.loopBinding,
+    loopCatalogAuthority: staleLoopSamples.loopCatalogAuthority,
+  });
+  const loopState = loopCurrent.loops;
+  assert.ok(loopState);
+  const loopSelectionValue = loopState.selections[0];
+  assert.ok(loopSelectionValue);
+  const loopInputCandidate = (change: (state: JsonRecord) => void): unknown => {
+    const candidate = {
+      ...loopState,
+      selections: [{ ...loopSelectionValue }],
+    } as unknown as JsonRecord;
+    change(candidate);
+    return candidate;
+  };
+  const loopInvalidCases: readonly [string, unknown][] = [
+    ['zero iteration count', loopInputCandidate(candidate => {
+      const selections = candidate.selections as JsonRecord[];
+      selections[0].iterationCount = 0;
+    })],
+    ['seventeen iteration count', loopInputCandidate(candidate => {
+      const selections = candidate.selections as JsonRecord[];
+      selections[0].iterationCount = 17;
+    })],
+    ['fractional iteration count', loopInputCandidate(candidate => {
+      const selections = candidate.selections as JsonRecord[];
+      selections[0].iterationCount = 1.5;
+    })],
+    ['nonfinite iteration count', loopInputCandidate(candidate => {
+      const selections = candidate.selections as JsonRecord[];
+      selections[0].iterationCount = Number.POSITIVE_INFINITY;
+    })],
+    ['duplicate loop selection', { ...loopState, selections: [{ ...loopSelectionValue }, { ...loopSelectionValue }] }],
+    ['unknown loop selection', { ...loopState, selections: [{ ...loopSelectionValue, id: 'unknown-loop' }] }],
+    ['extra loop selection field', { ...loopState, selections: [{ ...loopSelectionValue, extra: true }] }],
+    ['malformed loop selection', { ...loopState, selections: [{ id: loopSelectionValue.id }] }],
+    ['extra loop input field', { ...loopState, extra: true }],
+  ];
+  for (const [name, candidate] of loopInvalidCases) {
+    const invalid = projectX4UiEditorSession({
+      workspace: loopWorkspaceValue,
+      corpus: undefined,
+      profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+      selection: loopSelection,
+      loops: candidate as X4UiEditorSessionInput['loops'],
+      loopBinding: loopCurrent.loopBinding,
+      loopCatalogAuthority: loopCurrent.loopCatalogAuthority,
+    });
+    assert.equal(invalid.loopReconciliation.status, 'refused', `${name} must be refused through the session`);
+    assert.equal(invalid.loops, undefined, `${name} must not remain forwardable`);
+    assert.equal(invalid.status, 'refused', `${name} must refuse the session`);
+  }
+
+  const forgedLoopAuthority = JSON.parse(JSON.stringify(loopCurrent.loopCatalogAuthority)) as unknown;
+  const forgedLoopProjection = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+    loops: loopState,
+    loopBinding: loopCurrent.loopBinding,
+    loopCatalogAuthority: forgedLoopAuthority as X4UiEditorSessionInput['loopCatalogAuthority'],
+  });
+  assert.equal(forgedLoopProjection.loopReconciliation.status, 'refused');
+  assert.equal(forgedLoopProjection.loopReconciliation.code, 'catalog-authority-required');
+  assert.equal(forgedLoopProjection.loops, undefined);
+
+  const loopAuthorityCurrent = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+    loops: loopState,
+    loopBinding: forgedLoopProjection.loopBinding,
+    loopCatalogAuthority: forgedLoopProjection.loopCatalogAuthority,
+  });
+  assert.equal(loopAuthorityCurrent.loopReconciliation.status, 'accepted');
+  const loopReplay = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection,
+    loops: loopState,
+    loopBinding: loopAuthorityCurrent.loopBinding,
+    loopCatalogAuthority: loopAuthorityCurrent.loopCatalogAuthority,
+  });
+  assert.equal(JSON.stringify(loopAuthorityCurrent), JSON.stringify(loopReplay), 'loop session replay must be deterministic');
+
+  const loopStaleCases: readonly [string, unknown][] = [
+    ['source drift', { ...loopState, source: { ...loopState.source, sha256: 'b'.repeat(64) } }],
+    ['target drift', { ...loopState, targetId: 'target-drift' }],
+    ['profile drift', { ...loopState, profileId: 'profile-drift' }],
+    ['catalog drift', { ...loopState, catalogId: `${loopState.catalogId}:drift` }],
+  ];
+  for (const [name, candidate] of loopStaleCases) {
+    const stale = reconcileX4UiEditorLoopState(candidate, loopReplay.loopCatalog, loopReplay.loopCatalogAuthority);
+    assert.equal(stale.status, 'cleared', `${name} must clear loop state`);
+    assert.equal(stale.loops, undefined, `${name} must not remain forwardable`);
+    assert.equal(stale.code, 'stale-loops');
+  }
+  const malformedLoopCatalog = { ...loopReplay.loopCatalog, entries: [{ ...loopEntry, depth: 2 }] };
+  const malformedLoopCatalogResult = reconcileX4UiEditorLoopState(loopState, malformedLoopCatalog, loopReplay.loopCatalogAuthority);
+  assert.equal(malformedLoopCatalogResult.status, 'refused');
+  assert.equal(malformedLoopCatalogResult.loops, undefined);
+  const loopProfileDrift = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: {
+      ...X4_UI_EDITOR_DEFAULT_PROFILE,
+      drawable: { width: X4_UI_EDITOR_DEFAULT_PROFILE.drawable.width + 1, height: X4_UI_EDITOR_DEFAULT_PROFILE.drawable.height },
+    },
+    selection: loopSelection,
+    loops: loopState,
+    loopBinding: loopReplay.loopBinding,
+    loopCatalogAuthority: loopReplay.loopCatalogAuthority,
+  });
+  assert.equal(loopProfileDrift.loopReconciliation.status, 'cleared');
+  assert.equal(loopProfileDrift.loops, undefined);
+  const loopTargetDrift = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: { ...loopSelection, target: { ...loopSelection.target, id: `${loopSelection.target.id}:drift` } },
+    loops: loopState,
+    loopBinding: loopReplay.loopBinding,
+    loopCatalogAuthority: loopReplay.loopCatalogAuthority,
+  });
+  assert.equal(loopTargetDrift.loops, undefined);
+  assert.equal(loopTargetDrift.loopReconciliation.status, 'cleared');
+  assert.equal(JSON.stringify(loopWorkspaceValue), loopWorkspaceJson, 'loop actions must not mutate workspace bytes or identity');
+
+  const makeLoopAliasFixture = () => {
+    const projection = projectX4UiEditorSession({
+      workspace: loopWorkspaceValue,
+      corpus: undefined,
+      profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+      selection: loopSelection,
+    });
+    const catalog = projection.loopCatalog;
+    const binding = projection.loopBinding;
+    const authority = projection.loopCatalogAuthority;
+    const entry = catalog?.entries[0];
+    if (catalog === null || binding === undefined || authority === undefined || entry === undefined) {
+      throw new Error('loop alias fixture did not issue catalog, binding, authority, and entry');
+    }
+    const updated = updateX4UiEditorLoopState(undefined, catalog, entry.id, 3, authority);
+    if (updated.status !== 'accepted' || updated.loops === undefined) {
+      throw new Error('loop alias fixture did not create accepted loop state');
+    }
+    return { loops: updated.loops, binding, authority };
+  };
+  const loopAliasReceipt = (projection: ReturnType<typeof projectX4UiEditorSession>): JsonRecord => ({
+    status: projection.status,
+    reconciliationStatus: projection.loopReconciliation.status,
+    reconciliationCode: projection.loopReconciliation.status === 'accepted'
+      ? undefined
+      : projection.loopReconciliation.code,
+    loopsForwardable: projection.loops !== undefined,
+    previewLoopsForwarded: projection.preview.previewLoopInput !== undefined,
+    iterationCount: projection.loops?.selections[0]?.iterationCount,
+    gameTruth: projection.gameTruth,
+    gameVerified: projection.gameVerified,
+    previewGameTruth: projection.preview.gameTruth,
+    previewGameVerified: projection.preview.verification.gameVerified,
+  });
+  const isLoopAliasRefusal = (value: unknown, code: string): boolean => {
+    if (value === null || typeof value !== 'object') return false;
+    const receipt = value as JsonRecord;
+    return receipt.status === 'refused'
+      && receipt.reconciliationStatus === 'refused'
+      && receipt.reconciliationCode === code
+      && receipt.loopsForwardable === false
+      && receipt.previewLoopsForwarded === false;
+  };
+
+  recordSessionCausal(
+    'causal-conflicting-loop-state-aliases-refuse-and-clear',
+    loopState !== undefined,
+    'different defined loops and loopInput values refuse the session and neither state reaches the final projection',
+    markSeamReached => {
+      const fixture = makeLoopAliasFixture();
+      const conflicting = {
+        ...fixture.loops,
+        selections: fixture.loops.selections.map(selection => ({
+          ...selection,
+          iterationCount: selection.iterationCount + 1,
+        })),
+      };
+      markSeamReached();
+      return loopAliasReceipt(projectX4UiEditorSession({
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: fixture.loops,
+        loopInput: conflicting,
+        loopBinding: fixture.binding,
+        loopCatalogAuthority: fixture.authority,
+      }));
+    },
+    observed => isLoopAliasRefusal(observed, 'malformed-loops'),
+  );
+
+  recordSessionCausal(
+    'causal-equivalent-loop-state-aliases-use-canonical-loops',
+    loopState !== undefined,
+    'equivalent closed-data values in all state aliases are accepted and canonical loops wins resolution',
+    markSeamReached => {
+      const fixture = makeLoopAliasFixture();
+      const loopInputAlias = JSON.parse(JSON.stringify(fixture.loops)) as X4UiEditorSessionInput['loopInput'];
+      const ownerAlias = JSON.parse(JSON.stringify(fixture.loops)) as X4UiEditorSessionInput['previewLoopInput'];
+      markSeamReached();
+      const result = projectX4UiEditorSession({
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: fixture.loops,
+        loopInput: loopInputAlias,
+        previewLoopInput: ownerAlias,
+        loopBinding: fixture.binding,
+        loopCatalogAuthority: fixture.authority,
+      });
+      return {
+        ...loopAliasReceipt(result),
+        canonicalIdentity: result.loops === fixture.loops,
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.reconciliationStatus === 'accepted'
+        && value.loopsForwardable === true
+        && value.previewLoopsForwarded === true
+        && value.iterationCount === 3
+        && value.canonicalIdentity === true;
+    },
+  );
+
+  recordSessionCausal(
+    'causal-conflicting-loop-authority-aliases-refuse-and-clear',
+    loopState !== undefined,
+    'different issued objects in the two authority aliases refuse the session and clear forwardable loops',
+    markSeamReached => {
+      const fixture = makeLoopAliasFixture();
+      const conflictingAuthority = makeLoopAliasFixture().authority;
+      markSeamReached();
+      return loopAliasReceipt(projectX4UiEditorSession({
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: fixture.loops,
+        loopBinding: fixture.binding,
+        loopCatalogAuthority: fixture.authority,
+        previewLoopCatalogAuthority: conflictingAuthority,
+      }));
+    },
+    observed => isLoopAliasRefusal(observed, 'catalog-authority-required'),
+  );
+
+  recordSessionCausal(
+    'causal-identical-loop-authority-aliases-are-accepted',
+    loopState !== undefined,
+    'the exact same issued authority object may be supplied through both authority aliases',
+    markSeamReached => {
+      const fixture = makeLoopAliasFixture();
+      markSeamReached();
+      return loopAliasReceipt(projectX4UiEditorSession({
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: fixture.loops,
+        loopBinding: fixture.binding,
+        loopCatalogAuthority: fixture.authority,
+        previewLoopCatalogAuthority: fixture.authority,
+      }));
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.reconciliationStatus === 'accepted'
+        && value.loopsForwardable === true
+        && value.previewLoopsForwarded === true
+        && value.iterationCount === 3;
+    },
+  );
+
+  let hostileLoopAliasGetterReads = 0;
+  recordSessionCausal(
+    'causal-hostile-loop-alias-descriptors-refuse-without-getter',
+    loopState !== undefined,
+    'accessor and non-enumerable loop aliases are malformed, refuse publicly, clear loops, and never invoke the getter',
+    markSeamReached => {
+      const accessorFixture = makeLoopAliasFixture();
+      const accessorInput: JsonRecord = {
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: accessorFixture.loops,
+        loopBinding: accessorFixture.binding,
+        loopCatalogAuthority: accessorFixture.authority,
+      };
+      Object.defineProperty(accessorInput, 'loopInput', {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          hostileLoopAliasGetterReads += 1;
+          throw new Error('hostile loop alias getter executed');
+        },
+      });
+      const nonEnumerableFixture = makeLoopAliasFixture();
+      const nonEnumerableInput: JsonRecord = {
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: nonEnumerableFixture.loops,
+        loopBinding: nonEnumerableFixture.binding,
+        loopCatalogAuthority: nonEnumerableFixture.authority,
+      };
+      Object.defineProperty(nonEnumerableInput, 'previewLoopInput', {
+        configurable: true,
+        enumerable: false,
+        value: nonEnumerableFixture.loops,
+      });
+      markSeamReached();
+      const accessorResult = projectX4UiEditorSession(accessorInput as unknown as X4UiEditorSessionInput);
+      const nonEnumerableResult = projectX4UiEditorSession(nonEnumerableInput as unknown as X4UiEditorSessionInput);
+      return {
+        getterReads: hostileLoopAliasGetterReads,
+        accessor: loopAliasReceipt(accessorResult),
+        nonEnumerable: loopAliasReceipt(nonEnumerableResult),
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.getterReads === 0
+        && isLoopAliasRefusal(value.accessor, 'malformed-loops')
+        && isLoopAliasRefusal(value.nonEnumerable, 'malformed-loops');
+    },
+  );
+
+  recordSessionCausal(
+    'causal-loop-alias-boundary-never-claims-game-verification',
+    loopState !== undefined,
+    'accepted duplicate aliases and refused conflicting aliases both remain Not verified in game',
+    markSeamReached => {
+      const acceptedFixture = makeLoopAliasFixture();
+      const refusedFixture = makeLoopAliasFixture();
+      const conflicting = {
+        ...refusedFixture.loops,
+        selections: refusedFixture.loops.selections.map(selection => ({
+          ...selection,
+          iterationCount: selection.iterationCount + 1,
+        })),
+      };
+      markSeamReached();
+      const accepted = projectX4UiEditorSession({
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: acceptedFixture.loops,
+        loopInput: JSON.parse(JSON.stringify(acceptedFixture.loops)) as X4UiEditorSessionInput['loopInput'],
+        loopBinding: acceptedFixture.binding,
+        loopCatalogAuthority: acceptedFixture.authority,
+      });
+      const refused = projectX4UiEditorSession({
+        workspace: loopWorkspaceValue,
+        corpus: undefined,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+        selection: loopSelection,
+        loops: refusedFixture.loops,
+        previewLoopInput: conflicting,
+        loopBinding: refusedFixture.binding,
+        loopCatalogAuthority: refusedFixture.authority,
+      });
+      return {
+        accepted: loopAliasReceipt(accepted),
+        refused: loopAliasReceipt(refused),
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      const receipts = [value.accepted, value.refused];
+      return receipts.every(receipt => {
+        if (receipt === null || typeof receipt !== 'object') return false;
+        const item = receipt as JsonRecord;
+        return item.gameTruth === 'Not verified in game'
+          && item.gameVerified === false
+          && item.previewGameTruth === 'Not verified in game'
+          && item.previewGameVerified === false;
+      });
+    },
+  );
+
+  const loopPathWorkspaceValue = loopPathWorkspace();
+  const loopPathSeed = projectX4UiEditorSession({ workspace: loopPathWorkspaceValue, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE });
+  const loopPathSelection = selectionFor(loopPathSeed.source, 'ui/loop-paths.lua', 'function');
+  const loopPathUnprojected = projectX4UiEditorSession({
+    workspace: loopPathWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopPathSelection,
+  });
+  assert.ok(loopPathUnprojected.pathCatalog);
+  assert.ok(loopPathUnprojected.pathBinding);
+  assert.ok(loopPathUnprojected.pathCatalogAuthority);
+  assert.ok(loopPathUnprojected.loopCatalog);
+  assert.ok(loopPathUnprojected.loopBinding);
+  assert.ok(loopPathUnprojected.loopCatalogAuthority);
+  const loopPathEntry = loopPathUnprojected.pathCatalog.entries.find(entry => entry.arm === 'then');
+  const loopPathLoopEntry = loopPathUnprojected.loopCatalog.entries[0];
+  assert.ok(loopPathEntry && loopPathLoopEntry);
+  const loopPathState = {
+    catalogId: loopPathUnprojected.pathCatalog.id,
+    source: loopPathUnprojected.pathCatalog.sourceIdentity,
+    selections: [{ id: loopPathEntry.id, boundaryId: loopPathEntry.boundaryId, armId: loopPathEntry.armId }],
+  };
+  const loopPathLoopState = updateX4UiEditorLoopState(
+    undefined,
+    loopPathUnprojected.loopCatalog,
+    loopPathLoopEntry.id,
+    3,
+    loopPathUnprojected.loopCatalogAuthority,
+  );
+  assert.equal(loopPathLoopState.status, 'accepted');
+  const pathLoopProjection = projectX4UiEditorSession({
+    workspace: loopPathWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopPathSelection,
+    paths: loopPathState,
+    pathBinding: loopPathUnprojected.pathBinding,
+    pathCatalogAuthority: loopPathUnprojected.pathCatalogAuthority,
+    loops: loopPathLoopState.loops,
+    loopBinding: loopPathUnprojected.loopBinding,
+    loopCatalogAuthority: loopPathUnprojected.loopCatalogAuthority,
+  });
+  assert.equal(pathLoopProjection.pathReconciliation.status, 'accepted');
+  assert.equal(pathLoopProjection.loopReconciliation.status, 'accepted');
+  assert.ok(pathLoopProjection.sampleCatalog);
+  assert.equal(pathLoopProjection.sampleCatalog.entries.length, 3);
+  assert.equal(pathLoopProjection.preview.paths?.selections.length, 1);
+  assert.equal(pathLoopProjection.preview.previewLoopSelections.length, 1);
+  const coexistSampleEntry = pathLoopProjection.sampleCatalog.entries[0];
+  assert.ok(coexistSampleEntry);
+  const coexistSamples: X4UiEditorSampleState = {
+    catalogId: pathLoopProjection.sampleCatalog.id,
+    source: pathLoopProjection.sampleCatalog.sourceIdentity,
+    values: [{ id: coexistSampleEntry.id, value: 'coexistence sample' }],
+  };
+  const coexistSampled = projectX4UiEditorSession({
+    workspace: loopPathWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopPathSelection,
+    paths: loopPathState,
+    pathBinding: pathLoopProjection.pathBinding,
+    pathCatalogAuthority: pathLoopProjection.pathCatalogAuthority,
+    loops: pathLoopProjection.loops,
+    loopBinding: pathLoopProjection.loopBinding,
+    loopCatalogAuthority: pathLoopProjection.loopCatalogAuthority,
+    samples: coexistSamples,
+    sampleBinding: pathLoopProjection.sampleBinding,
+    sampleCatalogAuthority: pathLoopProjection.sampleCatalogAuthority,
+  });
+  assert.equal(coexistSampled.pathReconciliation.status, 'accepted');
+  assert.equal(coexistSampled.loopReconciliation.status, 'accepted');
+  assert.equal(coexistSampled.sampleReconciliation.status, 'accepted');
+  assert.equal(coexistSampled.samples, coexistSamples);
+  assert.equal(coexistSampled.preview.paths?.selections.length, 1);
+  assert.equal(coexistSampled.preview.previewLoopSelections.length, 1);
+  assert.equal(coexistSampled.preview.gameTruth, 'Not verified in game');
 
   const pathWorkspaceValue = pathWorkspace();
   const pathWorkspaceJson = JSON.stringify(pathWorkspaceValue);

@@ -24,6 +24,8 @@ import {
   type X4UiLayoutProgram,
   type X4UiLayoutProgramResult,
   type X4UiLayoutEvidenceAuthority,
+  type X4UiLayoutPreviewLoopInstance,
+  type X4UiLayoutPreviewSampleBinding,
   type X4UiLayoutRowNode,
   type X4UiLayoutSourcePin,
   type X4UiLayoutTableNode,
@@ -236,6 +238,7 @@ export interface X4UiSceneGap {
   readonly sourcePin?: X4UiLayoutSourcePin;
   readonly operationId?: string;
   readonly nodeId?: string;
+  readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
   readonly previewOnly?: boolean;
   readonly textRange?: {
     readonly start: number;
@@ -489,7 +492,7 @@ export interface X4UiScene {
   readonly gaps: readonly X4UiSceneGap[];
   readonly preview: {
     readonly provenance: 'preview-only';
-    readonly sampleBindings: readonly unknown[];
+    readonly sampleBindings: readonly X4UiLayoutPreviewSampleBinding[];
     readonly pathSelections: readonly unknown[];
   };
   readonly diagnosticStyle: X4UiSceneDiagnosticStyle;
@@ -648,6 +651,18 @@ const sourceCopy = (source: X4UiSceneSourceLocation): X4UiSceneSourceLocation =>
     start: { line: source.start.line, column: source.start.column, offset: source.start.offset },
     end: { line: source.end.line, column: source.end.column, offset: source.end.offset },
   });
+
+const previewLoopCopy = (loop: X4UiLayoutPreviewLoopInstance): X4UiLayoutPreviewLoopInstance => ({
+  id: loop.id,
+  entryId: loop.entryId,
+  loopId: loop.loopId,
+  source: sourceCopy(loop.source),
+  kind: loop.kind,
+  multiplicity: loop.multiplicity,
+  depth: 1,
+  iteration: loop.iteration,
+  iterationCount: loop.iterationCount,
+});
 
 const sourcePinIsValid = (pin: unknown): pin is X4UiLayoutSourcePin => {
   if (!isRecord(pin)) return false;
@@ -3748,6 +3763,17 @@ const kernelStateAppendsRowFromFinalized = (finalized: HelperTableState, after: 
     finalized,
   );
 
+const sameIssuedPreviewLoopSelection = (
+  left: X4UiLayoutPreviewLoopInstance,
+  right: X4UiLayoutPreviewLoopInstance,
+): boolean => left.entryId === right.entryId
+  && left.loopId === right.loopId
+  && sameStructuralValue(left.source, right.source)
+  && left.kind === right.kind
+  && left.multiplicity === right.multiplicity
+  && left.depth === right.depth
+  && left.iterationCount === right.iterationCount;
+
 const creatorTypeForOperation = (kind: X4UiLayoutOperation['kind']): 'text' | 'editbox' | 'button' | 'icon' | undefined =>
   kind === 'createText' ? 'text'
     : kind === 'createEditBox' ? 'editbox'
@@ -4156,7 +4182,7 @@ const validateCompleteProducerChain = (
   const chainFailure = (_stage: string): false => false;
   const chainCandidates = program.operations
     .filter(operation => KERNEL_PRODUCER_KINDS.has(operation.kind) && operationBelongsToTable(program, operation, table))
-  const chain = chainCandidates.some(operation => operation.localExpansion !== undefined)
+  const chain = chainCandidates.some(operation => operation.localExpansion !== undefined || operation.previewLoop !== undefined)
     ? chainCandidates
     : chainCandidates.slice().sort((left, right) => left.modelOrder - right.modelOrder);
   const deterministic = chain.filter(operation => operation.status === 'applied' || (operation.status === 'unresolved' && producerTransition(operation) !== undefined));
@@ -4172,7 +4198,9 @@ const validateCompleteProducerChain = (
     }
     const transition = producerTransition(operation);
     if (!transition || transition.stateBefore === undefined || transition.stateAfter === undefined) return chainFailure(`transition:${operation.id}`);
-    if (!sameKernelStateIgnoringUndefinedOptionals(transition.stateBefore, previous)) return chainFailure(`continuity:${operation.id}`);
+    if (!sameKernelStateIgnoringUndefinedOptionals(transition.stateBefore, previous)) {
+      return chainFailure(`continuity:${operation.id}`);
+    }
     if (operation.kind === 'addRow') {
       if (transition.stateBefore.rows.length === 0) {
         const finalized = finalizeHelperTable(transition.stateBefore);
@@ -4213,9 +4241,19 @@ const validateSetColSpanProducerTransition = (
   const spanFailure = (): false => false;
   const transition = producerTransition(operation);
   if (!transition || !transition.stateBefore || !transition.stateAfter) return spanFailure();
-  const previousByOrder = program.operations
-    .filter(candidate => candidate.tableId === operation.tableId && KERNEL_PRODUCER_KINDS.has(candidate.kind) && candidate.modelOrder < operation.modelOrder && producerTransition(candidate) !== undefined)
-    .sort((left, right) => right.modelOrder - left.modelOrder)[0];
+  const operationIndex = program.operations.indexOf(operation);
+  const previousByOrder = operation.previewLoop !== undefined
+    ? operationIndex < 0
+      ? undefined
+      : program.operations.slice(0, operationIndex).reverse().find(candidate => candidate.tableId === operation.tableId
+        && KERNEL_PRODUCER_KINDS.has(candidate.kind)
+        && producerTransition(candidate) !== undefined
+        && candidate.previewLoop !== undefined
+        && sameIssuedPreviewLoopSelection(candidate.previewLoop, operation.previewLoop)
+        && candidate.previewLoop.iteration === operation.previewLoop.iteration)
+    : program.operations
+      .filter(candidate => candidate.tableId === operation.tableId && KERNEL_PRODUCER_KINDS.has(candidate.kind) && candidate.modelOrder < operation.modelOrder && producerTransition(candidate) !== undefined)
+      .sort((left, right) => right.modelOrder - left.modelOrder)[0];
   const previousTransition = previousByOrder === undefined ? undefined : producerTransition(previousByOrder);
   if (previousTransition?.stateAfter !== undefined && !sameStructuralValue(previousTransition.stateAfter, transition.stateBefore)) return spanFailure();
   const row = program.rows.find(candidate => candidate.id === operation.rowId);
@@ -4725,13 +4763,14 @@ const validateLocalExpansion = (value: unknown): boolean =>
   && uniqueStringArray(value.previewPathSelectionIds);
 
 const validateOperation = (operation: unknown): operation is X4UiLayoutOperation => {
-  if (!isRecord(operation) || !exactKeys(operation, ['id', 'kind', 'source', 'sourceOrder', 'modelOrder', 'status', 'metadata', 'descriptorFacts'], ['frameId', 'tableId', 'rowId', 'cellId', 'reason', 'kernel', 'scale', 'localExpansion'])) return false;
+  if (!closedDataRecord(operation, ['id', 'kind', 'source', 'sourceOrder', 'modelOrder', 'status', 'metadata', 'descriptorFacts'], ['frameId', 'tableId', 'rowId', 'cellId', 'reason', 'kernel', 'scale', 'previewLoop', 'localExpansion'])) return false;
   if (typeof operation.id !== 'string' || operation.id.length === 0 || typeof operation.kind !== 'string' || !SUPPORTED_OPERATION_KINDS.has(operation.kind) || !sourceIsValid(operation.source) || !isSafeIntegerAtLeast(operation.sourceOrder, 0) || operation.sourceOrder !== operation.source.start.offset || !isSafeIntegerAtLeast(operation.modelOrder, 0) || !validateOperationMetadata(operation.metadata) || !validateFacts(operation.descriptorFacts)) return false;
   if (!['applied', 'rejected', 'unresolved', 'unreachable', 'conditional'].includes(String(operation.status))) return false;
   if (operation.reason !== undefined && typeof operation.reason !== 'string') return false;
   for (const key of ['frameId', 'tableId', 'rowId', 'cellId'] as const) if (operation[key] !== undefined && (typeof operation[key] !== 'string' || operation[key].length === 0)) return false;
   if (operation.kernel !== undefined && !validateKernelTransition(operation.kernel)) return false;
   if (operation.scale !== undefined && !validateScaleResolution(operation.scale)) return false;
+  if (!optionalPreviewLoopValue(operation).valid) return false;
   if (operation.localExpansion !== undefined && !validateLocalExpansion(operation.localExpansion)) return false;
   return true;
 };
@@ -4863,13 +4902,66 @@ const validateModelIdentity = (value: unknown): boolean => {
   return value.sourcePath === undefined || (typeof value.sourcePath === 'string' && value.sourcePath.length > 0);
 };
 
+const PREVIEW_LOOP_KINDS = new Set(['while', 'repeat', 'numeric-for', 'generic-for']);
+const PREVIEW_LOOP_MULTIPLICITIES = new Set(['zero-or-more', 'one-or-more']);
+const PREVIEW_LOOP_INSTANCE_KEYS = [
+  'id', 'entryId', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'iteration', 'iterationCount',
+] as const;
+
+const validatePreviewLoopInstance = (value: unknown): value is X4UiLayoutPreviewLoopInstance => {
+  if (!closedDataRecord(value, PREVIEW_LOOP_INSTANCE_KEYS)) return false;
+  const instance = value as Record<string, unknown>;
+  return typeof instance.id === 'string'
+    && instance.id.length > 0
+    && typeof instance.entryId === 'string'
+    && instance.entryId.length > 0
+    && typeof instance.loopId === 'string'
+    && instance.loopId.length > 0
+    && closedSourceIsValid(instance.source)
+    && typeof instance.kind === 'string'
+    && PREVIEW_LOOP_KINDS.has(instance.kind)
+    && typeof instance.multiplicity === 'string'
+    && PREVIEW_LOOP_MULTIPLICITIES.has(instance.multiplicity)
+    && isSafeIntegerAtLeast(instance.depth, 1)
+    && instance.depth === 1
+    && isSafeIntegerAtLeast(instance.iteration, 1)
+    && isSafeIntegerAtLeast(instance.iterationCount, 1)
+    && instance.iteration <= 16
+    && instance.iterationCount <= 16
+    && instance.iteration <= instance.iterationCount;
+};
+
+interface OptionalPreviewLoopValue {
+  readonly valid: boolean;
+  readonly value?: X4UiLayoutPreviewLoopInstance;
+}
+
+const optionalPreviewLoopValue = (value: unknown): OptionalPreviewLoopValue => {
+  if (!isRecord(value)) return { valid: false };
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'previewLoop');
+  if (descriptor === undefined) return { valid: !('previewLoop' in value) };
+  if (!('value' in descriptor) || descriptor.enumerable !== true || !validatePreviewLoopInstance(descriptor.value)) return { valid: false };
+  return { valid: true, value: descriptor.value };
+};
+
+const sameOptionalPreviewLoop = (left: unknown, right: unknown): boolean => {
+  const leftLoop = optionalPreviewLoopValue(left);
+  const rightLoop = optionalPreviewLoopValue(right);
+  return leftLoop.valid
+    && rightLoop.valid
+    && (leftLoop.value === undefined
+      ? rightLoop.value === undefined
+      : rightLoop.value !== undefined && sameStructuralValue(leftLoop.value, rightLoop.value));
+};
+
 const validatePreviewSampleBinding = (value: unknown): boolean => {
-  if (!isRecord(value) || !exactKeys(value, ['id', 'value', 'expectedType', 'source', 'provenance', 'status'], ['reason'])) return false;
-  if (typeof value.id !== 'string' || value.id.length === 0 || !validScalar(value.value) || !sourceIsValid(value.source) || value.provenance !== 'preview-only') return false;
-  if (value.expectedType !== 'number' && value.expectedType !== 'string' && value.expectedType !== 'boolean') return false;
-  if ((value.expectedType === 'number' && typeof value.value !== 'number') || (value.expectedType === 'string' && typeof value.value !== 'string') || (value.expectedType === 'boolean' && typeof value.value !== 'boolean')) return false;
-  if (value.status !== 'consumed' && value.status !== 'not-applied') return false;
-  return value.reason === undefined || typeof value.reason === 'string';
+  if (!closedDataRecord(value, ['id', 'value', 'expectedType', 'source', 'provenance', 'status'], ['reason', 'previewLoop'])) return false;
+  const binding = value as Record<string, unknown>;
+  if (typeof binding.id !== 'string' || binding.id.length === 0 || !validScalar(binding.value) || !closedSourceIsValid(binding.source) || binding.provenance !== 'preview-only') return false;
+  if (binding.expectedType !== 'number' && binding.expectedType !== 'string' && binding.expectedType !== 'boolean') return false;
+  if ((binding.expectedType === 'number' && typeof binding.value !== 'number') || (binding.expectedType === 'string' && typeof binding.value !== 'string') || (binding.expectedType === 'boolean' && typeof binding.value !== 'boolean')) return false;
+  if (binding.status !== 'consumed' && binding.status !== 'not-applied') return false;
+  return (binding.reason === undefined || typeof binding.reason === 'string') && optionalPreviewLoopValue(binding).valid;
 };
 
 const validatePreviewPathSelection = (value: unknown): boolean => {
@@ -4920,6 +5012,94 @@ const validatePreviewSerialization = (program: Record<string, unknown>): boolean
   if (!Array.isArray(program.previewSampleBindings) || !program.previewSampleBindings.every(validatePreviewSampleBinding)) return false;
   if (program.localExpansion === undefined) return true;
   return validateLocalExpansionShape(program.localExpansion);
+};
+
+const validatePreviewLoopSelectionBinding = (value: unknown): boolean => {
+  if (!closedDataRecord(value, ['id', 'iterationCount', 'loopId', 'source', 'kind', 'multiplicity', 'depth', 'provenance'])) return false;
+  const selection = value as Record<string, unknown>;
+  return typeof selection.id === 'string'
+    && selection.id.length > 0
+    && isSafeIntegerAtLeast(selection.iterationCount, 1)
+    && selection.iterationCount <= 16
+    && typeof selection.loopId === 'string'
+    && selection.loopId.length > 0
+    && closedSourceIsValid(selection.source)
+    && typeof selection.kind === 'string'
+    && PREVIEW_LOOP_KINDS.has(selection.kind)
+    && typeof selection.multiplicity === 'string'
+    && PREVIEW_LOOP_MULTIPLICITIES.has(selection.multiplicity)
+    && selection.depth === 1
+    && selection.provenance === 'preview-only';
+};
+
+const previewLoopMatchesIssuedAuthority = (
+  loop: X4UiLayoutPreviewLoopInstance | undefined,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+): boolean => {
+  if (loop === undefined) return true;
+  const selection = evidenceAuthority.previewLoopSelections.find(candidate => candidate.id === loop.entryId);
+  return selection !== undefined
+    && validatePreviewLoopSelectionBinding(selection)
+    && loop.id === `preview-loop-instance:${selection.id}|${selection.iterationCount}|${loop.iteration}`
+    && loop.entryId === selection.id
+    && loop.loopId === selection.loopId
+    && sameStructuralValue(loop.source, selection.source)
+    && loop.kind === selection.kind
+    && loop.multiplicity === selection.multiplicity
+    && loop.depth === 1
+    && loop.iteration >= 1
+    && loop.iteration <= selection.iterationCount
+    && loop.iterationCount === selection.iterationCount;
+};
+
+const validatePreviewLoopReciprocity = (
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+): boolean => {
+  if (!Array.isArray(evidenceAuthority.sourceBindings)
+    || evidenceAuthority.sourceBindings.length !== program.operations.length) return false;
+  for (let index = 0; index < program.operations.length; index += 1) {
+    const operation = program.operations[index];
+    const authorityOperation = evidenceAuthority.operations[index];
+    const authorityCall = evidenceAuthority.calls[index];
+    const sourceBinding = evidenceAuthority.sourceBindings[index];
+    if (authorityOperation === undefined || authorityCall === undefined || sourceBinding === undefined
+      || !sameOptionalPreviewLoop(operation, authorityOperation)
+      || !sameOptionalPreviewLoop(operation, authorityCall)
+      || !sameOptionalPreviewLoop(operation, sourceBinding)
+      || !sameOptionalPreviewLoop(operation, authorityOperation.snapshot)
+      || !previewLoopMatchesIssuedAuthority(optionalPreviewLoopValue(operation).value, evidenceAuthority)) return false;
+  }
+  if (program.gaps.length !== evidenceAuthority.gaps.length) return false;
+  for (let index = 0; index < program.gaps.length; index += 1) {
+    const programGap = program.gaps[index];
+    const authorityGap = evidenceAuthority.gaps[index];
+    if (authorityGap === undefined
+      || !sameOptionalPreviewLoop(programGap, authorityGap)
+      || !previewLoopMatchesIssuedAuthority(optionalPreviewLoopValue(programGap).value, evidenceAuthority)) return false;
+  }
+  const bindingsById = new Map(program.previewSampleBindings.map(binding => [binding.id, binding] as const));
+  for (const binding of program.previewSampleBindings) {
+    const bindingLoop = optionalPreviewLoopValue(binding);
+    if (!bindingLoop.valid || !previewLoopMatchesIssuedAuthority(bindingLoop.value, evidenceAuthority)) return false;
+  }
+  if (!isRecord(program.sampleCatalog) || !Array.isArray(program.sampleCatalog.entries)) return false;
+  for (const entry of program.sampleCatalog.entries) {
+    if (!isRecord(entry) || typeof entry.id !== 'string') return false;
+    const entryLoop = optionalPreviewLoopValue(entry);
+    if (!entryLoop.valid || !previewLoopMatchesIssuedAuthority(entryLoop.value, evidenceAuthority)) return false;
+    const binding = bindingsById.get(entry.id);
+    if (binding !== undefined && !sameOptionalPreviewLoop(binding, entry)) return false;
+    if (!Array.isArray(entry.consumers)) return false;
+    for (const consumer of entry.consumers) {
+      if (!isRecord(consumer)
+        || typeof consumer.operationId !== 'string'
+        || !sameOptionalPreviewLoop(consumer, entry)) return false;
+      const operation = program.operations.find(candidate => candidate.id === consumer.operationId);
+      if (operation === undefined || !sameOptionalPreviewLoop(operation, entry)) return false;
+    }
+  }
+  return true;
 };
 
 const isGeneratedGlyphIdFor = (id: string, textId: string): boolean => {
@@ -5058,17 +5238,27 @@ const validateProgramStructure = (
   // Expanded local invocations retain callee modelOrder; the issued occurrence ledger authorizes safe duplicates.
   const modelOrders = new Set<number>();
   const modelOrderInvocations = new Map<number, Set<string>>();
+  const modelOrderPreviewLoops = new Map<number, Set<string>>();
   for (const operation of program.operations) {
      if (!validateOperation(operation) || ids.has(operation.id)) return refuseStructure(`operation:${operation.id}`);
     ids.add(operation.id);
     if (operation.localExpansion !== undefined && !sourceBoundLocalExpansion(operation)) return refuseStructure(`local-expansion-operation:${operation.id}`);
     if (modelOrders.has(operation.modelOrder)) {
       const invocations = modelOrderInvocations.get(operation.modelOrder);
-      if (invocations === undefined || operation.localExpansion === undefined || invocations.has(operation.localExpansion.invocationId)) return refuseStructure(`model-order:${operation.id}`);
-      invocations.add(operation.localExpansion.invocationId);
+      const previewLoops = modelOrderPreviewLoops.get(operation.modelOrder);
+      if (operation.localExpansion !== undefined) {
+        if (invocations === undefined || previewLoops !== undefined || invocations.has(operation.localExpansion.invocationId)) return refuseStructure(`model-order:${operation.id}`);
+        invocations.add(operation.localExpansion.invocationId);
+      } else if (operation.previewLoop !== undefined) {
+        if (previewLoops === undefined || invocations !== undefined || previewLoops.has(operation.previewLoop.id)) return refuseStructure(`model-order:${operation.id}`);
+        previewLoops.add(operation.previewLoop.id);
+      } else {
+        return refuseStructure(`model-order:${operation.id}`);
+      }
     } else {
       modelOrders.add(operation.modelOrder);
       if (operation.localExpansion !== undefined) modelOrderInvocations.set(operation.modelOrder, new Set([operation.localExpansion.invocationId]));
+      if (operation.previewLoop !== undefined) modelOrderPreviewLoops.set(operation.modelOrder, new Set([operation.previewLoop.id]));
     }
   }
   if (evidenceAuthority.operations.length !== program.operations.length
@@ -5187,8 +5377,9 @@ const validateProgramStructure = (
   // validation must not reconstruct a second, approximate expansion language.
   for (const gap of program.gaps) {
     const categories = new Set(['profile', 'target', 'source', 'analysis', 'data-flow', 'frame', 'table', 'row', 'cell', 'count', 'index', 'span', 'width', 'percentage', 'height', 'options', 'constant', 'scale', 'sample', 'local-expansion', 'preview-path', 'text', 'parse', 'unsupported', 'layer', 'menu', 'edit-box', 'fontsize', 'property']);
-     if (!isRecord(gap) || !exactKeys(gap, ['category', 'status', 'reason', 'source'], ['expression', 'operationId', 'nodeId']) || !sourceIsValid(gap.source) || typeof gap.reason !== 'string' || !categories.has(String(gap.category)) || !['dynamic', 'unknown', 'unsupported', 'incomplete', 'refused'].includes(String(gap.status)) || (gap.expression !== undefined && typeof gap.expression !== 'string') || (gap.operationId !== undefined && typeof gap.operationId !== 'string') || (gap.nodeId !== undefined && typeof gap.nodeId !== 'string')) return refuseStructure('gap');
+     if (!closedDataRecord(gap, ['category', 'status', 'reason', 'source'], ['expression', 'operationId', 'nodeId', 'previewLoop']) || !sourceIsValid(gap.source) || typeof gap.reason !== 'string' || !categories.has(String(gap.category)) || !['dynamic', 'unknown', 'unsupported', 'incomplete', 'refused'].includes(String(gap.status)) || (gap.expression !== undefined && typeof gap.expression !== 'string') || (gap.operationId !== undefined && typeof gap.operationId !== 'string') || (gap.nodeId !== undefined && typeof gap.nodeId !== 'string') || !optionalPreviewLoopValue(gap).valid) return refuseStructure('gap');
   }
+  if (!validatePreviewLoopReciprocity(typedProgram, evidenceAuthority)) return refuseStructure('preview-loop-reciprocity');
   for (const operation of typedProgram.operations) {
     if (!validateB119UnsupportedPropertyGaps(typedProgram, evidenceAuthority, operation)) {
       return refuseStructure(`unsupported-property:${operation.id}`);
@@ -5524,11 +5715,26 @@ const validateProgramStructure = (
   for (const table of program.tables) {
     let previousRowIndex: number | undefined;
     let previousRowSourceOrder: number | undefined;
+    let previousRowPreviewLoop: X4UiLayoutPreviewLoopInstance | undefined;
+    const rowPreviewLoop = (row: X4UiLayoutRowNode): X4UiLayoutPreviewLoopInstance | undefined => {
+      const addRowOperations = row.operationIds
+        .map(operationId => typedProgram.operations.find(operation => operation.id === operationId))
+        .filter((operation): operation is X4UiLayoutOperation => operation !== undefined && operation.kind === 'addRow');
+      return addRowOperations.length === 1 ? addRowOperations[0].previewLoop : undefined;
+    };
     for (const rowId of table.rowIds) {
       const row = program.rows.find(candidate => candidate.id === rowId);
       if (!row) return refuseStructure(`table-row-missing:${table.id}`);
-      if (previousRowSourceOrder !== undefined && sourceOrder(row.source) <= previousRowSourceOrder) return refuseStructure(`table-row-source-order:${table.id}`);
+      const currentRowPreviewLoop = rowPreviewLoop(row);
+      if (previousRowSourceOrder !== undefined
+        && (sourceOrder(row.source) < previousRowSourceOrder
+          || (sourceOrder(row.source) === previousRowSourceOrder
+            && (previousRowPreviewLoop === undefined
+              || currentRowPreviewLoop === undefined
+              || !sameIssuedPreviewLoopSelection(previousRowPreviewLoop, currentRowPreviewLoop)
+              || currentRowPreviewLoop.iteration <= previousRowPreviewLoop.iteration)))) return refuseStructure(`table-row-source-order:${table.id}`);
       previousRowSourceOrder = sourceOrder(row.source);
+      previousRowPreviewLoop = currentRowPreviewLoop;
       if (row.rowIndex !== undefined) {
         if (previousRowIndex !== undefined && row.rowIndex <= previousRowIndex) return refuseStructure(`table-row-index-order:${table.id}`);
         previousRowIndex = row.rowIndex;
@@ -5900,6 +6106,7 @@ export function projectX4UiScene(
       ...(gap.expression ? { expression: gap.expression } : {}),
       ...(gap.operationId ? { operationId: gap.operationId } : {}),
       ...(gap.nodeId ? { nodeId: gap.nodeId } : {}),
+      ...(gap.previewLoop === undefined ? {} : { previewLoop: previewLoopCopy(gap.previewLoop) }),
     });
     context.programGapIds.set(index, id);
   });
@@ -5933,6 +6140,7 @@ export function projectX4UiScene(
         reason: operation.reason || `operation ${operation.id} was not fully applied`,
         source: sourceCopy(operation.source),
         operationId: operation.id,
+        ...(operation.previewLoop === undefined ? {} : { previewLoop: previewLoopCopy(operation.previewLoop) }),
       });
     }
   }
@@ -5974,6 +6182,7 @@ export function projectX4UiScene(
         provenance: binding.provenance,
         status: binding.status,
         ...(binding.reason === undefined ? {} : { reason: binding.reason }),
+        ...(binding.previewLoop === undefined ? {} : { previewLoop: previewLoopCopy(binding.previewLoop) }),
       })),
       pathSelections: (program.localExpansion?.previewPathSelections || []).map(selection => ({
         id: selection.id,

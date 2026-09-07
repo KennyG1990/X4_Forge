@@ -19,8 +19,10 @@ import {
   type X4UiLayoutEvidenceAuthority,
   type X4UiLayoutProjectionProfile,
   type X4UiLayoutPreviewPathSelectionInput,
+  type X4UiLayoutPreviewLoopSelectionInput,
   type X4UiLayoutPreviewSampleInput,
   type X4UiLayoutProgram,
+  type X4UiLayoutProgramResult,
   type X4UiLayoutTarget,
   type X4UiLayoutTargetSelector,
 } from './x4UiLayoutProgram';
@@ -706,6 +708,71 @@ const b119LocalScaleFontWrapperSource = [
   'row[1]:createText("title", { fontsize = font(18) })',
   'row[2]:createButton({ height = 0 }):setText("CLOSE", { fontsize = font(13) })',
   'frame:display()',
+].join('\n');
+
+const b119LocalScaleFontWrapperBranchLoopSource = [
+  'local Helper = rawget(_G, "Helper")',
+  'local menu = { name = "B119LocalScaleFontWrapperBranchLoop", layer = 1 }',
+  'local function font(size)',
+  '  local ok, v = pcall(function() return Helper.scaleFont("Zekton", size) end)',
+  '  if ok and type(v) == "number" and v > 0 then return v end',
+  '  return size',
+  'end',
+  'function menu.display()',
+  '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+  '  local table = frame:addTable(1, { width = 100, scaling = true })',
+  '  if showRows then',
+  '    local header = table:addRow(false, {})',
+  '    header[1]:createText("branch", { fontsize = font(10) })',
+  '    for _, item in ipairs(rows) do',
+  '      local row = table:addRow(false, {})',
+  '      row[1]:createText("loop", { fontsize = font(9) })',
+  '    end',
+  '  end',
+  '  frame:display()',
+  'end',
+].join('\n');
+
+const b119LocalScaleFontWrapperLocalHelperLoopSource = [
+  'local Helper = rawget(_G, "Helper")',
+  'local menu = { name = "B119LocalScaleFontWrapperLocalHelperLoop", layer = 1 }',
+  'local function font(size)',
+  '  local ok, v = pcall(function() return Helper.scaleFont("Zekton", size) end)',
+  '  if ok and type(v) == "number" and v > 0 then return v end',
+  '  return size',
+  'end',
+  'local function render(row)',
+  '  for _, item in ipairs(rows) do',
+  '    row[1]:createText("helper-loop", { height = 16, fontsize = font(9) })',
+  '  end',
+  'end',
+  'function menu.display()',
+  '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+  '  local tableHandle = frame:addTable(1, { width = 100, scaling = true })',
+  '  local row = tableHandle:addRow(false, {})',
+  '  render(row)',
+  '  frame:display()',
+  'end',
+].join('\n');
+
+const b119LocalScaleFontWrapperDormantLocalHelperSource = [
+  'local Helper = rawget(_G, "Helper")',
+  'local menu = { name = "B119LocalScaleFontWrapperDormantLocalHelper", layer = 1 }',
+  'local function font(size)',
+  '  local ok, v = pcall(function() return Helper.scaleFont("Zekton", size) end)',
+  '  if ok and type(v) == "number" and v > 0 then return v end',
+  '  return size',
+  'end',
+  'local function dormant(row)',
+  '  row[1]:createText("dormant", { height = 16, fontsize = font(9) })',
+  'end',
+  'function menu.display()',
+  '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+  '  local tableHandle = frame:addTable(1, { width = 100, scaling = true })',
+  '  local row = tableHandle:addRow(false, {})',
+  '  row[1]:createText("active", { height = 16, fontsize = font(9) })',
+  '  frame:display()',
+  'end',
 ].join('\n');
 
 const b119LocalScaleFontWrapperPostDeclarationRebindSource = [
@@ -4406,6 +4473,362 @@ const run = (): {
       gaps: localScaleFontWrapperProgram.gaps,
       validation: localScaleFontWrapperAuthority && validateX4UiLayoutEvidencePair(localScaleFontWrapperProgram, localScaleFontWrapperAuthority),
     }));
+
+  const branchLoopWrapperModel = buildX4UiCallModel(input(
+    b119LocalScaleFontWrapperBranchLoopSource,
+    'selftest/b119-local-scale-font-wrapper-branch-loop.lua',
+  ));
+  const branchLoopWrapperTarget = namedTarget(branchLoopWrapperModel, 'menu.display');
+  const branchLoopWrapperProfile = profileFor(branchLoopWrapperModel, {
+    minTextHeight: 16,
+    uiScale: 1.4,
+    localExpansion: { maxDepth: 2, maxInvocations: 4 },
+  });
+  const branchLoopWrapperUnselectedResult = projectX4UiLayoutProgram(
+    branchLoopWrapperModel,
+    branchLoopWrapperTarget,
+    branchLoopWrapperProfile,
+  );
+  const branchLoopWrapperUnselectedProgram = programOf(branchLoopWrapperUnselectedResult);
+  const branchLoopWrapperPathEntry = branchLoopWrapperUnselectedProgram.previewPathCatalog.entries.find(entry =>
+    entry.arm === 'then' && entry.boundary.start.line === 11);
+  const branchLoopWrapperLoopEntry = branchLoopWrapperUnselectedProgram.previewLoopCatalog.entries.find(entry => entry.source.start.line === 14);
+  const branchLoopWrapperPathInput = branchLoopWrapperPathEntry === undefined
+    ? undefined
+    : {
+      catalogId: branchLoopWrapperUnselectedProgram.previewPathCatalog.id,
+      source: branchLoopWrapperUnselectedProgram.previewPathCatalog.sourceIdentity,
+      selections: [{
+        id: branchLoopWrapperPathEntry.id,
+        boundaryId: branchLoopWrapperPathEntry.boundaryId,
+        armId: branchLoopWrapperPathEntry.armId,
+      }],
+    } satisfies X4UiLayoutPreviewPathSelectionInput;
+  const branchLoopWrapperLoopInput = branchLoopWrapperLoopEntry === undefined
+    ? undefined
+    : {
+      catalogId: branchLoopWrapperUnselectedProgram.previewLoopCatalog.id,
+      source: branchLoopWrapperUnselectedProgram.previewLoopCatalog.sourceIdentity,
+      targetId: branchLoopWrapperUnselectedProgram.target.id,
+      profileId: branchLoopWrapperUnselectedProgram.previewLoopCatalog.profileId,
+      selections: [{ id: branchLoopWrapperLoopEntry.id, iterationCount: 2 }],
+    } satisfies X4UiLayoutPreviewLoopSelectionInput;
+  const branchLoopWrapperBranchOnlyResult = branchLoopWrapperPathInput === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      branchLoopWrapperModel,
+      branchLoopWrapperTarget,
+      branchLoopWrapperProfile,
+      undefined,
+      branchLoopWrapperPathInput,
+    );
+  const branchLoopWrapperLoopOnlyResult = branchLoopWrapperLoopInput === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      branchLoopWrapperModel,
+      branchLoopWrapperTarget,
+      branchLoopWrapperProfile,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      branchLoopWrapperLoopInput,
+    );
+  const branchLoopWrapperSelectedResult = branchLoopWrapperPathInput === undefined || branchLoopWrapperLoopInput === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      branchLoopWrapperModel,
+      branchLoopWrapperTarget,
+      branchLoopWrapperProfile,
+      undefined,
+      branchLoopWrapperPathInput,
+      undefined,
+      undefined,
+      branchLoopWrapperLoopInput,
+    );
+  const branchLoopWrapperSelectedProgram = branchLoopWrapperSelectedResult === undefined || branchLoopWrapperSelectedResult.status === 'refused'
+    ? undefined
+    : branchLoopWrapperSelectedResult.program;
+  const branchLoopWrapperOperationText = (candidate: X4UiLayoutProgram['operations'][number]): string =>
+    b119LocalScaleFontWrapperBranchLoopSource.slice(candidate.source.start.offset, candidate.source.end.offset);
+  const branchLoopWrapperFontSizeValue = (candidate: X4UiLayoutProgram['operations'][number]) =>
+    candidate.metadata.semantics.properties?.find(property => property.normalizedName === 'fontsize')?.value;
+  const branchLoopWrapperUnselectedTexts = branchLoopWrapperUnselectedProgram.operations.filter(operation =>
+    operation.kind === 'createText' && branchLoopWrapperOperationText(operation).includes('createText('));
+  const branchLoopWrapperBranchOnlyProgram = branchLoopWrapperBranchOnlyResult?.status === 'refused'
+    ? undefined
+    : branchLoopWrapperBranchOnlyResult?.program;
+  const branchLoopWrapperBranchOnlyLoopTexts = branchLoopWrapperBranchOnlyProgram?.operations.filter(operation =>
+    operation.kind === 'createText' && branchLoopWrapperOperationText(operation).includes('"loop"')) || [];
+  const branchLoopWrapperLoopOnlyProgram = branchLoopWrapperLoopOnlyResult?.status === 'refused'
+    ? undefined
+    : branchLoopWrapperLoopOnlyResult?.program;
+  const branchLoopWrapperLoopOnlyTexts = branchLoopWrapperLoopOnlyProgram?.operations.filter(operation =>
+    operation.kind === 'createText' && branchLoopWrapperOperationText(operation).includes('"loop"')) || [];
+  const branchLoopWrapperSelectedTexts = branchLoopWrapperSelectedProgram?.operations.filter(operation =>
+    operation.kind === 'createText') || [];
+  const branchLoopWrapperSelectedLoopTexts = branchLoopWrapperSelectedTexts.filter(operation =>
+    branchLoopWrapperOperationText(operation).includes('"loop"'));
+  const branchLoopWrapperSelectedBranchText = branchLoopWrapperSelectedTexts.find(operation =>
+    branchLoopWrapperOperationText(operation).includes('"branch"'));
+  const branchLoopWrapperSelectedLoopFontValues = branchLoopWrapperSelectedLoopTexts.map(operation => ({
+    input: branchLoopWrapperFontSizeValue(operation)?.localInvocationResult?.expression,
+    descriptor: operation.descriptorFacts.fontsize,
+  }));
+  const branchLoopWrapperUnselectedFontEvidence = branchLoopWrapperUnselectedTexts.map(operation => {
+    const expression = branchLoopWrapperFontSizeValue(operation)?.localInvocationResult?.expression;
+    return {
+      expression,
+      descriptor: operation.descriptorFacts.fontsize,
+      sample: expression === undefined
+        ? undefined
+        : branchLoopWrapperUnselectedProgram.sampleCatalog.entries.find(entry =>
+          entry.expression === expression
+            && entry.expectedType === 'number'
+            && entry.consumers.some(consumer => consumer.operationId === operation.id)),
+    };
+  });
+  const branchLoopWrapperBranchOnlyWrapperTexts = branchLoopWrapperBranchOnlyProgram?.operations.filter(operation =>
+    operation.kind === 'createText' && branchLoopWrapperOperationText(operation).includes('fontsize = font(')) || [];
+  const branchLoopWrapperBranchOnlyFontEvidence = branchLoopWrapperBranchOnlyWrapperTexts.map(operation => {
+    const expression = branchLoopWrapperFontSizeValue(operation)?.localInvocationResult?.expression;
+    return {
+      expression,
+      descriptor: operation.descriptorFacts.fontsize,
+      sample: expression === undefined
+        ? undefined
+        : branchLoopWrapperBranchOnlyProgram?.sampleCatalog.entries.find(entry =>
+          entry.expression === expression
+            && entry.expectedType === 'number'
+            && entry.consumers.some(consumer => consumer.operationId === operation.id)),
+    };
+  });
+  const branchLoopWrapperLoopOnlyWrapperTexts = branchLoopWrapperLoopOnlyProgram?.operations.filter(operation =>
+    operation.kind === 'createText' && branchLoopWrapperOperationText(operation).includes('fontsize = font(')) || [];
+  const branchLoopWrapperLoopOnlyFontEvidence = branchLoopWrapperLoopOnlyWrapperTexts.map(operation => {
+    const expression = branchLoopWrapperFontSizeValue(operation)?.localInvocationResult?.expression;
+    return {
+      expression,
+      descriptor: operation.descriptorFacts.fontsize,
+      sample: expression === undefined
+        ? undefined
+        : branchLoopWrapperLoopOnlyProgram?.sampleCatalog.entries.find(entry =>
+          entry.expression === expression
+            && entry.expectedType === 'number'
+            && entry.consumers.some(consumer => consumer.operationId === operation.id)),
+    };
+  });
+  const branchLoopWrapperUnresolvedAndSampled = (evidence: readonly {
+    readonly expression: string | undefined;
+    readonly descriptor: X4UiLayoutProgram['operations'][number]['descriptorFacts'][string] | undefined;
+    readonly sample: X4UiLayoutProgram['sampleCatalog']['entries'][number] | undefined;
+  }[]): boolean => evidence.length > 0 && evidence.every(candidate =>
+    typeof candidate.expression === 'string'
+      && candidate.descriptor?.status !== 'known'
+      && candidate.sample?.provenance === 'preview-only'
+      && candidate.sample.expectedType === 'number');
+  check('B119 selected branch plus selected finite loop resolves only active local Helper.scaleFont wrappers',
+    branchLoopWrapperUnselectedResult.status !== 'refused'
+      && branchLoopWrapperPathEntry !== undefined
+      && branchLoopWrapperLoopEntry !== undefined
+      && branchLoopWrapperBranchOnlyResult?.status !== 'refused'
+      && branchLoopWrapperLoopOnlyResult?.status !== 'refused'
+      && branchLoopWrapperSelectedResult?.status !== 'refused'
+      && branchLoopWrapperUnselectedTexts.length === 2
+      && branchLoopWrapperUnselectedTexts.every(operation => operation.status === 'conditional')
+      && branchLoopWrapperUnresolvedAndSampled(branchLoopWrapperUnselectedFontEvidence)
+      && branchLoopWrapperBranchOnlyWrapperTexts.length === 2
+      && branchLoopWrapperBranchOnlyLoopTexts.length === 1
+      && branchLoopWrapperBranchOnlyLoopTexts.every(operation => operation.status === 'conditional')
+      && branchLoopWrapperBranchOnlyFontEvidence.some(candidate =>
+        candidate.expression === 'font(10)'
+          && candidate.descriptor?.status === 'known'
+          && candidate.descriptor.value === 20)
+      && branchLoopWrapperUnresolvedAndSampled(
+        branchLoopWrapperBranchOnlyFontEvidence.filter(candidate => candidate.expression === 'font(9)'),
+      )
+      && branchLoopWrapperBranchOnlyProgram?.operations.some(operation =>
+        operation.kind === 'createText'
+          && branchLoopWrapperOperationText(operation).includes('"branch"')
+          && operation.status !== 'conditional') === true
+      && branchLoopWrapperLoopOnlyTexts.length === 2
+      && branchLoopWrapperLoopOnlyTexts.every(operation => operation.status === 'conditional')
+      && branchLoopWrapperLoopOnlyWrapperTexts.length === 3
+      && branchLoopWrapperUnresolvedAndSampled(branchLoopWrapperLoopOnlyFontEvidence)
+      && branchLoopWrapperSelectedProgram !== undefined
+      && branchLoopWrapperSelectedProgram.previewPathSelections.length === 1
+      && branchLoopWrapperSelectedProgram.previewLoopSelections.length === 1
+      && branchLoopWrapperSelectedLoopTexts.length === 2
+      && branchLoopWrapperSelectedBranchText?.descriptorFacts.fontsize.status === 'known'
+      && branchLoopWrapperSelectedBranchText.descriptorFacts.fontsize.value === 20
+      && branchLoopWrapperSelectedLoopFontValues.length === 2
+      && branchLoopWrapperSelectedLoopFontValues.every(candidate =>
+        candidate.input === 'font(9)'
+          && candidate.descriptor.status === 'known'
+          && candidate.descriptor.value === 19
+          && candidate.descriptor.provenance === 'direct-helper-scale')
+      && branchLoopWrapperSelectedProgram.rows.length === 3
+      && branchLoopWrapperSelectedProgram.rows.every(row => row.height?.status === 'known')
+      && !branchLoopWrapperSelectedProgram.sampleCatalog.entries.some(entry => entry.expression === 'font(9)' || entry.expression === 'font(10)'),
+    detail({
+      unselected: {
+        status: branchLoopWrapperUnselectedResult.status,
+        texts: branchLoopWrapperUnselectedTexts.map(operation => ({ status: operation.status, source: branchLoopWrapperOperationText(operation) })),
+      },
+      branchOnly: {
+        status: branchLoopWrapperBranchOnlyResult?.status,
+        loopTexts: branchLoopWrapperBranchOnlyLoopTexts.map(operation => operation.status),
+        fontEvidence: branchLoopWrapperBranchOnlyFontEvidence,
+      },
+      loopOnly: {
+        status: branchLoopWrapperLoopOnlyResult?.status,
+        loopTexts: branchLoopWrapperLoopOnlyTexts.map(operation => operation.status),
+        fontEvidence: branchLoopWrapperLoopOnlyFontEvidence,
+      },
+      unselectedFontEvidence: branchLoopWrapperUnselectedFontEvidence,
+      selected: {
+        status: branchLoopWrapperSelectedResult?.status,
+        pathSelections: branchLoopWrapperSelectedProgram?.previewPathSelections,
+        loopSelections: branchLoopWrapperSelectedProgram?.previewLoopSelections,
+        branchFont: branchLoopWrapperSelectedBranchText?.descriptorFacts.fontsize,
+        loopFonts: branchLoopWrapperSelectedLoopFontValues,
+        rows: branchLoopWrapperSelectedProgram?.rows.map(row => row.height),
+      },
+    }));
+
+  const dormantLocalHelperWrapperModel = buildX4UiCallModel(input(
+    b119LocalScaleFontWrapperDormantLocalHelperSource,
+    'selftest/b119-local-scale-font-wrapper-dormant-local-helper.lua',
+  ));
+  const dormantLocalHelperWrapperTarget = namedTarget(dormantLocalHelperWrapperModel, 'menu.display');
+  const dormantLocalHelperWrapperProfile = profileFor(dormantLocalHelperWrapperModel, {
+    minTextHeight: 16,
+    uiScale: 1.4,
+    localExpansion: { maxDepth: 2, maxInvocations: 4 },
+  });
+  const dormantLocalHelperWrapperResult = projectX4UiLayoutProgram(
+    dormantLocalHelperWrapperModel,
+    dormantLocalHelperWrapperTarget,
+    dormantLocalHelperWrapperProfile,
+  );
+  const dormantLocalHelperWrapperProgram = resultProgram(dormantLocalHelperWrapperResult);
+  const dormantLocalHelperWrapperTexts = dormantLocalHelperWrapperProgram?.operations.filter(operation =>
+    operation.kind === 'createText') || [];
+  const dormantLocalHelperWrapperActiveText = dormantLocalHelperWrapperTexts.find(operation =>
+    b119LocalScaleFontWrapperDormantLocalHelperSource.slice(operation.source.start.offset, operation.source.end.offset)
+      .includes('"active"'));
+  const dormantLocalHelperWrapperDormantText = dormantLocalHelperWrapperTexts.find(operation =>
+    b119LocalScaleFontWrapperDormantLocalHelperSource.slice(operation.source.start.offset, operation.source.end.offset)
+      .includes('"dormant"'));
+  const dormantLocalHelperWrapperFontValue = (operation: X4UiLayoutProgram['operations'][number] | undefined) =>
+    operation?.metadata.semantics.properties?.find(property => property.normalizedName === 'fontsize')?.value;
+  const dormantLocalHelperWrapperActiveFontValue = dormantLocalHelperWrapperFontValue(dormantLocalHelperWrapperActiveText);
+  const dormantLocalHelperWrapperInvocations = dormantLocalHelperWrapperModel.localInvocations
+    .filter(invocation => invocation.calleeExpression === 'font');
+  const dormantLocalHelperWrapperActiveInvocation = dormantLocalHelperWrapperInvocations.find(invocation =>
+    invocation.id === dormantLocalHelperWrapperActiveFontValue?.localInvocationResult?.invocationId);
+  const dormantLocalHelperWrapperDormantInvocation = dormantLocalHelperWrapperInvocations.find(invocation =>
+    invocation.id !== dormantLocalHelperWrapperActiveInvocation?.id);
+  const dormantLocalHelperWrapperDeclaration = dormantLocalHelperWrapperModel.localFunctions.find(candidate =>
+    candidate.name === 'dormant');
+  const dormantLocalHelperWrapperIssuedInvocationIds = new Set(
+    dormantLocalHelperWrapperTexts.flatMap(operation => {
+      const invocationId = dormantLocalHelperWrapperFontValue(operation)?.localInvocationResult?.invocationId;
+      return invocationId === undefined ? [] : [invocationId];
+    }),
+  );
+  check('B119 reachable target excludes dormant local-helper wrapper results from surviving font evidence',
+    dormantLocalHelperWrapperResult.status !== 'refused'
+      && dormantLocalHelperWrapperProgram !== undefined
+      && dormantLocalHelperWrapperTexts.length === 1
+      && dormantLocalHelperWrapperActiveText !== undefined
+      && dormantLocalHelperWrapperDormantText === undefined
+      && dormantLocalHelperWrapperActiveInvocation?.status === 'supported'
+      && dormantLocalHelperWrapperActiveInvocation.resolution === 'direct'
+      && dormantLocalHelperWrapperActiveInvocation.resultConsumed
+      && dormantLocalHelperWrapperDormantInvocation?.status === 'supported'
+      && dormantLocalHelperWrapperDormantInvocation.resolution === 'direct'
+      && dormantLocalHelperWrapperDormantInvocation.resultConsumed
+      && dormantLocalHelperWrapperInvocations.length === 2
+      && dormantLocalHelperWrapperActiveInvocation.context.source !== undefined
+      && dormantLocalHelperWrapperDormantInvocation.context.source !== undefined
+      && locationsSameForTest(dormantLocalHelperWrapperActiveInvocation.context.source, dormantLocalHelperWrapperTarget.source)
+      && locationsSameForTest(dormantLocalHelperWrapperDormantInvocation.context.source, dormantLocalHelperWrapperDeclaration?.source)
+      && dormantLocalHelperWrapperIssuedInvocationIds.size === 1
+      && dormantLocalHelperWrapperIssuedInvocationIds.has(dormantLocalHelperWrapperActiveInvocation.id)
+      && !dormantLocalHelperWrapperIssuedInvocationIds.has(dormantLocalHelperWrapperDormantInvocation.id)
+      && dormantLocalHelperWrapperActiveText.descriptorFacts.fontsize.status === 'known'
+      && dormantLocalHelperWrapperActiveText.descriptorFacts.fontsize.value === 19
+      && dormantLocalHelperWrapperActiveText.descriptorFacts.fontsize.provenance === 'direct-helper-scale'
+      && !dormantLocalHelperWrapperProgram.sampleCatalog.entries.some(entry => entry.expression === 'font(9)'),
+    detail({
+      status: dormantLocalHelperWrapperResult.status,
+      texts: dormantLocalHelperWrapperTexts,
+      activeInvocation: dormantLocalHelperWrapperActiveInvocation,
+      dormantInvocation: dormantLocalHelperWrapperDormantInvocation,
+      dormantDeclaration: dormantLocalHelperWrapperDeclaration,
+      issuedInvocationIds: [...dormantLocalHelperWrapperIssuedInvocationIds],
+      sampleCatalog: dormantLocalHelperWrapperProgram?.sampleCatalog,
+    }));
+
+  const localHelperLoopWrapperModel = buildX4UiCallModel(input(
+    b119LocalScaleFontWrapperLocalHelperLoopSource,
+    'selftest/b119-local-scale-font-wrapper-local-helper-loop.lua',
+  ));
+  const localHelperLoopWrapperTarget = namedTarget(localHelperLoopWrapperModel, 'menu.display');
+  const localHelperLoopWrapperProfile = profileFor(localHelperLoopWrapperModel, {
+    minTextHeight: 16,
+    localExpansion: { maxDepth: 2, maxInvocations: 4 },
+  });
+  const localHelperLoopWrapperResult = projectX4UiLayoutProgram(
+    localHelperLoopWrapperModel,
+    localHelperLoopWrapperTarget,
+    localHelperLoopWrapperProfile,
+  );
+  const localHelperLoopWrapperProgram = resultProgram(localHelperLoopWrapperResult);
+  const localHelperLoopWrapperTextOperations = localHelperLoopWrapperProgram?.operations.filter(operation =>
+    operation.kind === 'createText'
+      && b119LocalScaleFontWrapperLocalHelperLoopSource.slice(operation.source.start.offset, operation.source.end.offset)
+        .includes('"helper-loop"')) || [];
+  const localHelperLoopWrapperText = localHelperLoopWrapperTextOperations[0];
+  const localHelperLoopWrapperFontValue = localHelperLoopWrapperText?.metadata.semantics.properties?.find(property =>
+    property.normalizedName === 'fontsize')?.value;
+  const localHelperLoopWrapperSample = localHelperLoopWrapperText && localHelperLoopWrapperProgram
+    ? localHelperLoopWrapperProgram.sampleCatalog.entries.find(entry =>
+      entry.expression === 'font(9)'
+        && entry.expectedType === 'number'
+        && entry.consumers.some(consumer => consumer.operationId === localHelperLoopWrapperText.id))
+    : undefined;
+  const localHelperLoopWrapperInvocation = localHelperLoopWrapperModel.localInvocations.find(invocation =>
+    invocation.calleeExpression === 'font');
+  const localHelperLoopWrapperExpandedInvocation = localHelperLoopWrapperProgram?.localExpansion?.invocations.find(invocation =>
+    invocation.status === 'expanded');
+  check('B119 local-helper-owned loop wrapper stays conditional and sampled without loop replay',
+    localHelperLoopWrapperResult.status !== 'refused'
+      && localHelperLoopWrapperProgram !== undefined
+      && localHelperLoopWrapperProgram.previewLoopCatalog.entries.length === 0
+      && localHelperLoopWrapperExpandedInvocation !== undefined
+      && localHelperLoopWrapperInvocation?.status === 'supported'
+      && localHelperLoopWrapperInvocation.resolution === 'direct'
+      && localHelperLoopWrapperInvocation.resultConsumed
+      && localHelperLoopWrapperInvocation.context.loopPath.length > 0
+      && localHelperLoopWrapperTextOperations.length === 1
+      && localHelperLoopWrapperText?.previewLoop === undefined
+      && localHelperLoopWrapperText.localExpansion !== undefined
+      && localHelperLoopWrapperText.status === 'conditional'
+      && localHelperLoopWrapperFontValue?.localInvocationResult?.expression === 'font(9)'
+      && localHelperLoopWrapperText.descriptorFacts.fontsize?.status !== 'known'
+      && localHelperLoopWrapperSample?.provenance === 'preview-only'
+      && localHelperLoopWrapperSample.expectedType === 'number',
+    detail({
+      status: localHelperLoopWrapperResult.status,
+      refusal: 'refusal' in localHelperLoopWrapperResult ? localHelperLoopWrapperResult.refusal : undefined,
+      loopCatalog: localHelperLoopWrapperProgram?.previewLoopCatalog,
+      expandedInvocation: localHelperLoopWrapperExpandedInvocation,
+      wrapperInvocation: localHelperLoopWrapperInvocation,
+      text: localHelperLoopWrapperText,
+      sample: localHelperLoopWrapperSample,
+    }));
   const structuredRawgetWrapperModel = buildX4UiCallModel(input(
     b119LocalScaleFontWrapperStructuredRawgetSource,
     'selftest/b119-local-scale-font-wrapper-structured-rawget.lua',
@@ -4977,6 +5400,294 @@ const run = (): {
       refusal: pipelineFormulaSampleAttempt && refusalCode(pipelineFormulaSampleAttempt),
       bindings: pipelineFormulaSampleAttemptProgram?.previewSampleBindings,
       frame: pipelineFormulaSampleAttemptProgram?.frames[0]?.descriptorFacts,
+    }));
+
+  const commCatalogCouplingSource = [
+    'local menu = { name = "SyntheticCommCatalog", layer = 4 }',
+    'function menu.display(dynamicTitle)',
+    '  local vw = Helper.viewWidth or 1920',
+    '  local vh = Helper.viewHeight or 1080',
+    '  local mx = math.floor(vw * (36 / 2560))',
+    '  local my = math.floor(vh * (36 / 1440))',
+    '  local frame = Helper.createFrameHandle(menu, { width = vw, height = vh })',
+    '  local table = frame:addTable(3, { tabOrder = menu._tab, x = mx, y = my, width = vw - mx * 2 })',
+    '  local row = table:addRow(true, {})',
+    '  row[1]:createText("COMM CHANNEL    " .. tostring(dynamicTitle or "unknown"), { fontsize = 13 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const commCatalogCouplingModel = buildX4UiCallModel(input(
+    commCatalogCouplingSource,
+    'selftest/b119-comm-catalog-coupling.lua',
+  ));
+  const commCatalogCouplingTarget = namedTarget(commCatalogCouplingModel, 'menu.display');
+  const commCatalogCouplingProgram = resultProgram(projectX4UiLayoutProgram(
+    commCatalogCouplingModel,
+    commCatalogCouplingTarget,
+    profileFor(commCatalogCouplingModel),
+  ));
+  const commCatalogCouplingEntries = commCatalogCouplingProgram?.sampleCatalog.entries || [];
+  const commCatalogCouplingTitle = '"COMM CHANNEL    " .. tostring(dynamicTitle or "unknown")';
+  const commCatalogCouplingNumericExpressions = new Set(['vw', 'vh', 'mx', 'my', 'vw - mx * 2']);
+  check('B119 synthetic COMM-shaped catalog keeps exact numeric formulas out while retaining tab/title samples',
+    commCatalogCouplingModel.parsed
+      && commCatalogCouplingProgram !== undefined
+      && commCatalogCouplingEntries.length === 2
+      && commCatalogCouplingEntries.map(entry => entry.expression).join('|') === `menu._tab|${commCatalogCouplingTitle}`
+      && commCatalogCouplingEntries.filter(entry => entry.expectedType === 'number').map(entry => entry.expression).join(',') === 'menu._tab'
+      && commCatalogCouplingEntries.filter(entry => entry.expectedType === 'string' && entry.expression === commCatalogCouplingTitle).length === 1
+      && !commCatalogCouplingEntries.some(entry => commCatalogCouplingNumericExpressions.has(entry.expression))
+      && factValue(commCatalogCouplingProgram.frames[0]?.descriptorFacts.width) === CAPTURED_VIEW_WIDTH
+      && factValue(commCatalogCouplingProgram.frames[0]?.descriptorFacts.height) === CAPTURED_VIEW_HEIGHT
+      && factValue(commCatalogCouplingProgram.tables[0]?.descriptorFacts.x) === 1
+      && factValue(commCatalogCouplingProgram.tables[0]?.descriptorFacts.y) === 2
+      && factValue(commCatalogCouplingProgram.tables[0]?.descriptorFacts.requestedWidth) === 98,
+    detail({
+      status: commCatalogCouplingProgram?.status,
+      entries: commCatalogCouplingEntries,
+      frame: commCatalogCouplingProgram?.frames[0]?.descriptorFacts,
+      table: commCatalogCouplingProgram?.tables[0]?.descriptorFacts,
+    }));
+
+  const numericPreviewFallbackSource = [
+    'local menu = { name = "PreviewFallback", layer = 4 }',
+    'function menu.display()',
+    '  local vw = Helper.viewWidth or 1920',
+    '  local vh = Helper.viewHeight or 1080',
+    '  local width = Helper.scaleX(530)',
+    '  local x = ((vw or 1920) - width) / 2',
+    '  local my = math.floor((vh or 1080) * 0.5)',
+    '  local w = vw - x * 2',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, y = my, width = vw, height = vh, layer = 4 })',
+    '  local tab = frame:addTable(2, { width = w })',
+    '  local row = tab:addRow(false, {})',
+    '  row[1]:createText("one", { x = x, y = my, width = w })',
+    '  row = tab:addRow(false, {})',
+    '  row[1]:createText("two", { x = x, y = my, width = w })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const numericPreviewFallbackModel = buildX4UiCallModel(input(
+    numericPreviewFallbackSource,
+    'selftest/b119-numeric-preview-fallback.lua',
+  ));
+  const numericPreviewFallbackTarget = namedTarget(numericPreviewFallbackModel, 'menu.display');
+  const numericPreviewFallbackBaseProfile = profileFor(numericPreviewFallbackModel);
+  const numericPreviewFallbackProfile: X4UiLayoutProjectionProfile = {
+    ...numericPreviewFallbackBaseProfile,
+    id: 'selftest-b119-numeric-preview-fallback-1920x1080',
+    frame: { width: 1920, height: 1080 },
+    helper: {
+      ...numericPreviewFallbackBaseProfile.helper,
+      constants: {
+        ...numericPreviewFallbackBaseProfile.helper.constants,
+        viewWidth: pin(1920, 707),
+        viewHeight: pin(1080, 708),
+      },
+    },
+  };
+  const numericPreviewFallbackBaseResult = projectX4UiLayoutProgram(
+    numericPreviewFallbackModel,
+    numericPreviewFallbackTarget,
+    numericPreviewFallbackProfile,
+  );
+  const numericPreviewFallbackBaseProgram = resultProgram(numericPreviewFallbackBaseResult);
+  const numericPreviewFallbackModelRecord = jsonClone(numericPreviewFallbackModel) as unknown as ValueRecord;
+  const numericPreviewFallbackPropertyRecords = numericPreviewFallbackModelRecord.properties as ValueRecord[];
+  const numericPreviewFallbackFrameXProperty = numericPreviewFallbackPropertyRecords.find(property =>
+    property.name === 'x'
+      && (property.value as ValueRecord | undefined)?.expression === 'x');
+  const numericPreviewFallbackFrameXContextSource = (numericPreviewFallbackFrameXProperty?.context as ValueRecord | undefined)
+    ?.source as ValueRecord | undefined;
+  const numericPreviewFallbackFrameXContextStart = numericPreviewFallbackFrameXContextSource?.start as ValueRecord | undefined;
+  const numericPreviewFallbackFrameXContextEnd = numericPreviewFallbackFrameXContextSource?.end as ValueRecord | undefined;
+  const numericPreviewFallbackFrameXContextOffsetBefore = numericPreviewFallbackFrameXContextStart?.offset;
+  const numericPreviewFallbackFrameXContextEndOffsetBefore = numericPreviewFallbackFrameXContextEnd?.offset;
+  if (typeof numericPreviewFallbackFrameXContextStart?.offset === 'number') {
+    numericPreviewFallbackFrameXContextStart.offset += 1;
+  }
+  if (typeof numericPreviewFallbackFrameXContextEnd?.offset === 'number') {
+    numericPreviewFallbackFrameXContextEnd.offset += 1;
+  }
+  const numericPreviewFallbackRootContextMismatch = typeof numericPreviewFallbackFrameXContextOffsetBefore === 'number'
+    && typeof numericPreviewFallbackFrameXContextEndOffsetBefore === 'number'
+    && numericPreviewFallbackFrameXContextStart?.offset === numericPreviewFallbackFrameXContextOffsetBefore + 1
+    && numericPreviewFallbackFrameXContextEnd?.offset === numericPreviewFallbackFrameXContextEndOffsetBefore + 1;
+  const numericPreviewFallbackModelWithoutRootBinding = freezeClone(numericPreviewFallbackModelRecord) as unknown as X4UiCallModel;
+  const numericPreviewFallbackTargetWithoutRootBinding = namedTarget(
+    numericPreviewFallbackModelWithoutRootBinding,
+    'menu.display',
+  );
+  const numericPreviewFallbackUnsampledResult = projectX4UiLayoutProgram(
+    numericPreviewFallbackModelWithoutRootBinding,
+    numericPreviewFallbackTargetWithoutRootBinding,
+    numericPreviewFallbackProfile,
+  );
+  const numericPreviewFallbackUnsampledProgram = resultProgram(numericPreviewFallbackUnsampledResult);
+  const numericPreviewFallbackNumericNames = new Set(['vw', 'vh', 'x', 'my', 'w']);
+  const numericPreviewFallbackEntries = numericPreviewFallbackUnsampledProgram?.sampleCatalog.entries.filter(entry =>
+    entry.expectedType === 'number' && numericPreviewFallbackNumericNames.has(entry.expression)) || [];
+  const numericPreviewFallbackXEntry = numericPreviewFallbackEntries.find(entry => entry.expression === 'x');
+  const numericPreviewFallbackSampleValues: Readonly<Record<string, number>> = {
+    vw: numericPreviewFallbackProfile.frame.width,
+    vh: numericPreviewFallbackProfile.frame.height,
+    x: (numericPreviewFallbackProfile.frame.width - 530) / 2,
+    my: Math.floor(numericPreviewFallbackProfile.frame.height * 0.5),
+    w: 530,
+  };
+  const numericPreviewFallbackSamples: X4UiLayoutPreviewSampleInput | undefined = numericPreviewFallbackUnsampledProgram
+    ? {
+      catalogId: numericPreviewFallbackUnsampledProgram.sampleCatalog.id,
+      source: numericPreviewFallbackUnsampledProgram.sampleCatalog.sourceIdentity,
+      values: numericPreviewFallbackEntries.map(entry => ({
+        id: entry.id,
+        value: numericPreviewFallbackSampleValues[entry.expression],
+      })),
+    }
+    : undefined;
+  const numericPreviewFallbackSampledResult = numericPreviewFallbackSamples
+    ? projectX4UiLayoutProgram(
+      numericPreviewFallbackModelWithoutRootBinding,
+      numericPreviewFallbackTargetWithoutRootBinding,
+      numericPreviewFallbackProfile,
+      numericPreviewFallbackSamples,
+    )
+    : undefined;
+  const numericPreviewFallbackSampledProgram = numericPreviewFallbackSampledResult
+    ? resultProgram(numericPreviewFallbackSampledResult)
+    : undefined;
+  const numericPreviewFallbackSampledAuthority = numericPreviewFallbackSampledResult
+    ? evidenceAuthorityOf(numericPreviewFallbackSampledResult)
+    : undefined;
+  const numericPreviewFallbackBaseFrame = numericPreviewFallbackBaseProgram?.frames[0];
+  const numericPreviewFallbackUnsampledFrame = numericPreviewFallbackUnsampledProgram?.frames[0];
+  const numericPreviewFallbackSampledFrame = numericPreviewFallbackSampledProgram?.frames[0];
+  const numericPreviewFallbackSampledSchema = numericPreviewFallbackSampledProgram && numericPreviewFallbackSampledAuthority
+    ? safeSchemaPairValidation(numericPreviewFallbackSampledProgram, numericPreviewFallbackSampledAuthority)
+    : { threw: false, valid: false, reason: 'numeric preview fallback sample pair missing' };
+  check('B119 exact-root numeric fallback admits source-derived geometry only after binding loss and deduplicates use sites',
+    numericPreviewFallbackModel.parsed
+      && numericPreviewFallbackFrameXProperty !== undefined
+      && numericPreviewFallbackRootContextMismatch
+      && numericPreviewFallbackModelWithoutRootBinding.aliases.filter(alias => alias.name === 'x').length
+        === numericPreviewFallbackModel.aliases.filter(alias => alias.name === 'x').length
+      && numericPreviewFallbackBaseProgram !== undefined
+      && numericPreviewFallbackBaseProgram.sampleCatalog.entries.length === 0
+      && factProvenance(numericPreviewFallbackBaseFrame?.descriptorFacts.x) === 'source-literal'
+      && numericPreviewFallbackUnsampledProgram !== undefined
+      && numericPreviewFallbackEntries.map(entry => entry.expression).join(',') === 'vw,vh,x,my,w'
+      && numericPreviewFallbackXEntry !== undefined
+      && numericPreviewFallbackXEntry.source.start.line === 6
+      && numericPreviewFallbackXEntry.consumers.length === 3
+      && numericPreviewFallbackXEntry.consumers.every(consumer => consumer.field === 'x')
+      && factValue(numericPreviewFallbackUnsampledFrame?.descriptorFacts.x) === undefined
+      && numericPreviewFallbackUnsampledFrame?.descriptorFacts.x.status === 'unavailable'
+      && numericPreviewFallbackUnsampledFrame.descriptorFacts.x.reason.includes('numeric expression root has no exact source binding')
+      && numericPreviewFallbackSampledResult?.status !== 'refused'
+      && numericPreviewFallbackSampledProgram !== undefined
+      && factValue(numericPreviewFallbackSampledFrame?.descriptorFacts.x) === 695
+      && factProvenance(numericPreviewFallbackSampledFrame?.descriptorFacts.x) === 'preview-sample'
+      && factValue(numericPreviewFallbackSampledFrame.descriptorFacts.width) === 1920
+      && factValue(numericPreviewFallbackSampledFrame.descriptorFacts.height) === 1080
+      && numericPreviewFallbackSampledProgram.cells.length === 4
+      && numericPreviewFallbackSampledProgram.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 5
+      && numericPreviewFallbackSampledSchema.threw === false
+      && numericPreviewFallbackSampledSchema.valid === true,
+    detail({
+      base: {
+        status: numericPreviewFallbackBaseResult.status,
+        samples: numericPreviewFallbackBaseProgram?.sampleCatalog.entries,
+        frame: numericPreviewFallbackBaseFrame?.descriptorFacts,
+      },
+      binding: {
+        frameXProperty: numericPreviewFallbackFrameXProperty?.name,
+        rootContextMismatch: numericPreviewFallbackRootContextMismatch,
+        contextStartOffsetBefore: numericPreviewFallbackFrameXContextOffsetBefore,
+        contextStartOffsetAfter: numericPreviewFallbackFrameXContextStart?.offset,
+      },
+      fallback: {
+        status: numericPreviewFallbackUnsampledResult.status,
+        samples: numericPreviewFallbackEntries.map(entry => ({
+          expression: entry.expression,
+          sourceLine: entry.source.start.line,
+          consumers: entry.consumers.length,
+        })),
+        frame: numericPreviewFallbackUnsampledFrame?.descriptorFacts,
+      },
+      sampled: {
+        status: numericPreviewFallbackSampledResult?.status,
+        frame: numericPreviewFallbackSampledFrame?.descriptorFacts,
+        consumed: numericPreviewFallbackSampledProgram?.previewSampleBindings.filter(binding => binding.status === 'consumed').length,
+        cells: numericPreviewFallbackSampledProgram?.cells.length,
+        bindings: numericPreviewFallbackSampledProgram?.previewSampleBindings.map(binding => ({
+          expression: numericPreviewFallbackSampledProgram.sampleCatalog.entries.find(entry => entry.id === binding.id)?.expression,
+          status: binding.status,
+        })),
+        schema: numericPreviewFallbackSampledSchema,
+      },
+    }));
+  const numericPreviewFallbackHostileModelRecord = jsonClone(
+    numericPreviewFallbackModelWithoutRootBinding,
+  ) as unknown as ValueRecord;
+  let numericPreviewFallbackHostileMyCopies = 0;
+  const corruptNumericPreviewFallbackMyDescriptors = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(corruptNumericPreviewFallbackMyDescriptors);
+      return;
+    }
+    if (value === null || typeof value !== 'object') return;
+    const record = value as ValueRecord;
+    const descriptor = record.numericExpression;
+    if (descriptor !== null
+      && typeof descriptor === 'object'
+      && !Array.isArray(descriptor)
+      && (descriptor as ValueRecord).expression === 'math.floor((vh or 1080) * 0.5)') {
+      (descriptor as ValueRecord).kind = 'forged-numeric-node';
+      numericPreviewFallbackHostileMyCopies += 1;
+    }
+    Object.values(record).forEach(corruptNumericPreviewFallbackMyDescriptors);
+  };
+  corruptNumericPreviewFallbackMyDescriptors(numericPreviewFallbackHostileModelRecord);
+  const numericPreviewFallbackHostileModel = freezeClone(
+    numericPreviewFallbackHostileModelRecord,
+  ) as unknown as X4UiCallModel;
+  const numericPreviewFallbackHostileTarget = namedTarget(numericPreviewFallbackHostileModel, 'menu.display');
+  const numericPreviewFallbackHostileResult = numericPreviewFallbackSamples
+    ? projectX4UiLayoutProgram(
+      numericPreviewFallbackHostileModel,
+      numericPreviewFallbackHostileTarget,
+      numericPreviewFallbackProfile,
+      numericPreviewFallbackSamples,
+    )
+    : undefined;
+  const numericPreviewFallbackHostileProgram = numericPreviewFallbackHostileResult
+    ? resultProgram(numericPreviewFallbackHostileResult)
+    : undefined;
+  const numericPreviewFallbackHostileFrame = numericPreviewFallbackHostileProgram?.frames[0];
+  const numericPreviewFallbackHostileMyEntry = numericPreviewFallbackHostileProgram?.sampleCatalog.entries.find(entry =>
+    entry.expression === 'my');
+  const numericPreviewFallbackHostileMyBinding = numericPreviewFallbackHostileMyEntry
+    ? numericPreviewFallbackHostileProgram.previewSampleBindings.find(binding =>
+      binding.id === numericPreviewFallbackHostileMyEntry!.id)
+    : undefined;
+  const numericPreviewFallbackHostileXEntry = numericPreviewFallbackHostileProgram?.sampleCatalog.entries.find(entry =>
+    entry.expression === 'x');
+  const numericPreviewFallbackHostileXBinding = numericPreviewFallbackHostileProgram?.previewSampleBindings.find(binding =>
+    binding.id === numericPreviewFallbackHostileXEntry?.id);
+  check('B119 numeric fallback never lets a supplied sample bypass malformed descriptor validation',
+    numericPreviewFallbackHostileMyCopies > 1
+      && numericPreviewFallbackHostileResult?.status !== 'refused'
+      && numericPreviewFallbackHostileProgram !== undefined
+      && numericPreviewFallbackHostileFrame?.descriptorFacts.y.status === 'unavailable'
+      && numericPreviewFallbackHostileFrame.descriptorFacts.y.reason.includes('numeric expression operator or node kind is unsupported')
+      && numericPreviewFallbackHostileMyBinding?.status === 'not-applied'
+      && numericPreviewFallbackHostileXBinding?.status === 'consumed',
+    detail({
+      mutatedCopies: numericPreviewFallbackHostileMyCopies,
+      status: numericPreviewFallbackHostileResult?.status,
+      y: numericPreviewFallbackHostileFrame?.descriptorFacts.y,
+      myBinding: numericPreviewFallbackHostileMyBinding,
+      xBinding: numericPreviewFallbackHostileXBinding,
     }));
   check('B119 exact pipeline local scale results project one frame/table, six rows, and twelve owned base cells',
     pipelineAtOneResult.status !== 'refused'
@@ -15731,6 +16442,723 @@ const run = (): {
         && attack.validation.valid === false,
       detail(attack));
   }
+
+  const loopSource = [
+    'local menu = { name = "Finite loop preview", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local ct = frame:addTable(2, { width = 100 })',
+    'for _, item in ipairs(rows) do',
+    '  local row = ct:addRow(false, {})',
+    '  row[1]:createText(item.label, { height = 16 })',
+    '  row[2]:createText(item.value, { height = 16 })',
+    'end',
+    'frame:display()',
+  ].join('\n');
+  const loopModel = buildX4UiCallModel(input(loopSource, 'selftest/b119-finite-loop.lua'));
+  const loopTarget = topTarget(loopModel);
+  const loopProfile = profileFor(loopModel, { minTextHeight: 16 });
+  const loopUnselectedResult = projectX4UiLayoutProgram(loopModel, loopTarget, loopProfile);
+  const loopUnselectedProgram = resultProgram(loopUnselectedResult);
+  const loopEntry = loopUnselectedProgram?.previewLoopCatalog.entries[0];
+  const loopSelectionInput: X4UiLayoutPreviewLoopSelectionInput | undefined = loopUnselectedProgram && loopEntry
+    ? {
+      catalogId: loopUnselectedProgram.previewLoopCatalog.id,
+      source: loopUnselectedProgram.previewLoopCatalog.sourceIdentity,
+      targetId: loopUnselectedProgram.target.id,
+      profileId: loopUnselectedProgram.previewLoopCatalog.profileId,
+      selections: [{ id: loopEntry.id, iterationCount: 2 }],
+    }
+    : undefined;
+  const loopSelectedUnsampledResult = loopSelectionInput
+    ? projectX4UiLayoutProgram(loopModel, loopTarget, loopProfile, undefined, undefined, undefined, undefined, loopSelectionInput)
+    : loopUnselectedResult;
+  const loopSelectedUnsampledProgram = resultProgram(loopSelectedUnsampledResult);
+  const loopSampleInput: X4UiLayoutPreviewSampleInput | undefined = loopSelectedUnsampledProgram
+    ? {
+      catalogId: loopSelectedUnsampledProgram.sampleCatalog.id,
+      source: loopSelectedUnsampledProgram.sampleCatalog.sourceIdentity,
+      values: loopSelectedUnsampledProgram.sampleCatalog.entries.map(entry => ({
+        id: entry.id,
+        value: `${entry.previewLoop?.iteration || 0}:${entry.expression}`,
+      })),
+    }
+    : undefined;
+  const loopSelectedResult = loopSelectionInput && loopSampleInput
+    ? projectX4UiLayoutProgram(loopModel, loopTarget, loopProfile, loopSampleInput, undefined, undefined, undefined, loopSelectionInput)
+    : loopSelectedUnsampledResult;
+  const loopProgram = resultProgram(loopSelectedResult);
+  const loopAuthority = evidenceAuthorityOf(loopSelectedResult);
+  const loopBodySource = loopEntry?.source;
+  const loopBodyOperations = loopUnselectedProgram && loopBodySource
+    ? loopUnselectedProgram.operations.filter(operation => operation.source.start.offset >= loopBodySource.start.offset
+      && operation.source.end.offset <= loopBodySource.end.offset)
+    : [];
+  const loopTextOperations = loopProgram?.operations.filter(operation => operation.kind === 'createText') || [];
+  const loopRows = loopProgram?.rows.filter(row => row.rowIndex !== undefined) || [];
+  const loopCells = loopProgram?.cells.filter(cell => cell.rowIndex !== undefined) || [];
+  const loopSampleEntries = loopProgram?.sampleCatalog.entries.filter(entry => entry.previewLoop !== undefined) || [];
+  check(
+    'B119 finite loop catalog is owner-issued and no-selection calls remain conditional',
+    loopUnselectedProgram !== undefined
+      && loopUnselectedResult.status !== 'refused'
+      && loopUnselectedProgram.previewLoopCatalog.entries.length === 1
+      && loopUnselectedProgram.previewLoopSelections.length === 0
+      && loopBodyOperations.length > 0
+      && loopBodyOperations.every(operation => operation.status === 'conditional' && operation.previewLoop === undefined),
+    detail({
+      status: loopUnselectedResult.status,
+      catalog: loopUnselectedProgram?.previewLoopCatalog,
+      operations: loopBodyOperations,
+    }),
+  );
+  check(
+    'B119 selected generic-for loop creates two ordered rows and four cells with shared outer table',
+    loopProgram !== undefined
+      && loopSelectedResult.status !== 'refused'
+      && loopProgram.previewLoopSelections.length === 1
+      && loopRows.length === 2
+      && loopCells.length === 4
+      && loopProgram.tables.length === 1
+      && loopRows.every(row => row.tableId === loopProgram.tables[0].id)
+      && loopCells.every(cell => cell.tableId === loopProgram.tables[0].id)
+      && new Set(loopRows.map(row => row.id)).size === 2
+      && new Set(loopCells.map(cell => cell.id)).size === 4
+      && loopProgram.operations.filter(operation => operation.kind === 'addRow').length === 2,
+    detail({
+      status: loopSelectedResult.status,
+      refusal: 'refusal' in loopSelectedResult ? loopSelectedResult.refusal : undefined,
+      rows: loopRows,
+      cells: loopCells,
+      tables: loopProgram?.tables,
+      addRows: loopProgram?.operations.filter(operation => operation.kind === 'addRow'),
+    }),
+  );
+  check(
+    'B119 loop operation and source identities are distinct per iteration in source order',
+    loopProgram !== undefined
+      && loopTextOperations.length === 4
+      && loopTextOperations.every(operation => operation.previewLoop !== undefined)
+      && JSON.stringify(loopTextOperations.map(operation => operation.previewLoop?.iteration)) === JSON.stringify([1, 1, 2, 2])
+      && new Set(loopTextOperations.map(operation => operation.id)).size === 4
+      && new Set(loopTextOperations.map(operation => operation.previewLoop?.id)).size === 2
+      && new Set(loopRows.map(row => row.identity?.path)).size === 2
+      && new Set(loopCells.map(cell => cell.identity?.path)).size === 4
+      && loopProgram.operations.filter(operation => operation.kind === 'addTable').length === 1,
+    detail({
+      textOperations: loopTextOperations,
+      rowIdentities: loopRows.map(row => row.identity),
+      cellIdentities: loopCells.map(cell => cell.identity),
+      addTables: loopProgram?.operations.filter(operation => operation.kind === 'addTable'),
+    }),
+  );
+  check(
+    'B119 loop-scoped samples are independent, consumed, and reciprocal with scalar facts',
+    loopProgram !== undefined
+      && loopSelectedResult.status !== 'refused'
+      && loopSampleEntries.length === 4
+      && new Set(loopSampleEntries.map(entry => entry.id)).size === 4
+      && new Set(loopSampleEntries.map(entry => entry.previewLoop?.iteration)).size === 2
+      && loopSampleEntries.every(entry => entry.consumers.length > 0
+        && entry.consumers.every(consumer => consumer.previewLoop?.id === entry.previewLoop?.id
+          && loopProgram.operations.some(operation => operation.id === consumer.operationId
+            && operation.previewLoop?.id === entry.previewLoop?.id)))
+      && loopProgram.previewSampleBindings.length === 4
+      && loopProgram.previewSampleBindings.every(binding => binding.status === 'consumed'
+        && binding.previewLoop !== undefined
+        && loopSampleEntries.some(entry => entry.id === binding.id
+          && entry.previewLoop?.id === binding.previewLoop?.id))
+      && loopTextOperations.every(operation => {
+        const fact = operation.descriptorFacts.text;
+        const entry = loopSampleEntries.find(candidate => candidate.consumers.some(consumer => consumer.operationId === operation.id && consumer.field === 'text'));
+        return fact?.status === 'known' && fact.sampleId !== undefined && entry?.id === fact.sampleId;
+      }),
+    detail({
+      sampleEntries: loopSampleEntries,
+      bindings: loopProgram?.previewSampleBindings,
+      textFacts: loopTextOperations.map(operation => ({ id: operation.id, fact: operation.descriptorFacts.text })),
+    }),
+  );
+  const loopPairValidation = loopProgram && loopAuthority
+    ? validateX4UiLayoutEvidencePair(loopProgram, loopAuthority)
+    : { valid: false as const, reason: 'loop program/evidence fixture missing' };
+  const loopGapOperation = loopTextOperations.find(operation => operation.previewLoop !== undefined);
+  const loopGapIndex = loopProgram?.gaps.length ?? 0;
+  const loopGap = loopGapOperation?.previewLoop
+    ? {
+      category: 'text' as const,
+      status: 'unsupported' as const,
+      reason: 'loop-scoped layout evidence gap fixture',
+      source: loopGapOperation.source,
+      operationId: loopGapOperation.id,
+      previewLoop: loopGapOperation.previewLoop,
+    }
+    : undefined;
+  const loopGapProgram = loopProgram && loopGap
+    ? mutateProgramJson(loopProgram, candidate => {
+      (candidate.gaps as unknown[]).push(jsonClone(loopGap));
+    })
+    : undefined;
+  const loopGapAuthority = loopAuthority && loopGap
+    ? mutateAuthorityJson(loopAuthority, candidate => {
+      (candidate.gaps as unknown[]).push(jsonClone(loopGap));
+      (candidate.linkedGapIndexes as unknown[]).push(loopGapIndex);
+    })
+    : undefined;
+  const loopGapPairValidation = loopGapProgram && loopGapAuthority
+    ? validateX4UiLayoutEvidencePair(loopGapProgram, loopGapAuthority)
+    : { valid: false as const, reason: 'loop gap program/evidence fixture missing' };
+  check(
+    'B119 selected loop-scoped gap provenance remains pair-valid',
+    loopGapProgram !== undefined
+      && loopGapAuthority !== undefined
+      && loopGapProgram.gaps.length === loopGapIndex + 1
+      && loopGapProgram.gaps[loopGapIndex].previewLoop !== undefined
+      && loopGapPairValidation.valid,
+    detail({
+      status: loopSelectedResult.status,
+      gapCount: loopGapProgram?.gaps.length,
+      loopGap: loopGapProgram?.gaps[loopGapIndex],
+      validation: loopGapPairValidation,
+    }),
+  );
+  const validateLoopGapPair = (
+    candidateProgram: X4UiLayoutProgram | undefined,
+    candidateAuthority: EvidenceAuthorityLike | undefined,
+  ): ReturnType<typeof validateX4UiLayoutEvidencePair> => {
+    if (!candidateProgram || !candidateAuthority) return { valid: false, reason: 'loop gap fixture missing' };
+    try {
+      return validateX4UiLayoutEvidencePair(candidateProgram, candidateAuthority);
+    } catch {
+      return { valid: false, reason: 'loop gap validator threw' };
+    }
+  };
+  const mutateLoopGapProgram = (
+    mutate: (gap: Record<string, unknown>) => void,
+  ): X4UiLayoutProgram | undefined => loopGapProgram
+    ? mutateProgramJson(loopGapProgram, candidate => {
+      const gap = (candidate.gaps as Record<string, unknown>[])[loopGapIndex];
+      if (gap) mutate(gap);
+    })
+    : undefined;
+  const mutateLoopGapAuthority = (
+    mutate: (gap: Record<string, unknown>) => void,
+  ): EvidenceAuthorityLike | undefined => loopGapAuthority
+    ? mutateAuthorityJson(loopGapAuthority, candidate => {
+      const gap = (candidate.gaps as Record<string, unknown>[])[loopGapIndex];
+      if (gap) mutate(gap);
+    })
+    : undefined;
+  const missingLoopCases = [
+    {
+      name: 'authority missing loop provenance',
+      program: loopGapProgram,
+      authority: mutateLoopGapAuthority(gap => { delete gap.previewLoop; }),
+    },
+    {
+      name: 'program missing loop provenance',
+      program: mutateLoopGapProgram(gap => { delete gap.previewLoop; }),
+      authority: loopGapAuthority,
+    },
+  ].map(candidate => ({
+    name: candidate.name,
+    validation: validateLoopGapPair(candidate.program, candidate.authority),
+  }));
+  check(
+    'B119 one-sided loop provenance removal fails closed',
+    missingLoopCases.every(candidate => candidate.validation.valid === false
+      && candidate.validation.reason === 'evidence gap does not exactly match the program gap ledger'),
+    detail(missingLoopCases),
+  );
+  const loopInstanceMutations: ReadonlyArray<readonly [string, (value: Record<string, unknown>) => void]> = [
+    ['iteration', value => { value.iteration = 2; }],
+    ['iterationCount', value => { value.iterationCount = 1; }],
+    ['entry identity', value => { value.entryId = 'stale-preview-loop-entry'; }],
+    ['loop identity', value => { value.loopId = 'stale-preview-loop'; }],
+  ];
+  const staleLoopCases = loopInstanceMutations.map(([name, mutate]) => ({
+    name,
+    validation: validateLoopGapPair(
+      loopGapProgram,
+      mutateLoopGapAuthority(gap => {
+        const previewLoop = gap.previewLoop as Record<string, unknown> | undefined;
+        if (previewLoop) mutate(previewLoop);
+      }),
+    ),
+  }));
+  check(
+    'B119 forged or stale gap loop instances fail deterministic authority validation',
+    staleLoopCases.every(candidate => candidate.validation.valid === false
+      && candidate.validation.reason === 'evidence.gaps[0].previewLoop is not a deterministic selected preview-loop instance'),
+    detail(staleLoopCases),
+  );
+  const extraLoopFieldAuthority = mutateLoopGapAuthority(gap => {
+    const previewLoop = gap.previewLoop as Record<string, unknown> | undefined;
+    if (previewLoop) previewLoop.extra = true;
+  });
+  const extraLoopFieldValidation = validateLoopGapPair(loopGapProgram, extraLoopFieldAuthority);
+  check(
+    'B119 gap loop provenance rejects extra unknown fields',
+    extraLoopFieldValidation.valid === false
+      && extraLoopFieldValidation.reason === 'authority schema is invalid: authority.gaps[0].previewLoop contains an unknown or missing key',
+    detail({ validation: extraLoopFieldValidation }),
+  );
+  const malformedLoopAuthority = mutateLoopGapAuthority(gap => { gap.previewLoop = null; });
+  const malformedLoopValidation = validateLoopGapPair(loopGapProgram, malformedLoopAuthority);
+  check(
+    'B119 malformed gap loop provenance fails closed',
+    malformedLoopValidation.valid === false
+      && malformedLoopValidation.reason === 'authority schema is invalid: authority.gaps[0].previewLoop must be a record',
+    detail({ validation: malformedLoopValidation }),
+  );
+  const freezeDataOnly = <T>(value: T): T => {
+    const seen = new Set<object>();
+    const visit = (candidate: unknown): void => {
+      if (!candidate || typeof candidate !== 'object') return;
+      const objectValue = candidate as object;
+      if (seen.has(objectValue)) return;
+      seen.add(objectValue);
+      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(objectValue))) {
+        if ('value' in descriptor) visit(descriptor.value);
+      }
+      Object.freeze(objectValue);
+    };
+    visit(value);
+    return value;
+  };
+  let loopAccessorReads = 0;
+  const accessorLoopAuthority = loopGapAuthority
+    ? jsonClone(loopGapAuthority) as unknown as Record<string, unknown>
+    : undefined;
+  if (accessorLoopAuthority) {
+    const gap = (accessorLoopAuthority.gaps as Record<string, unknown>[])[loopGapIndex];
+    Object.defineProperty(gap, 'previewLoop', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        loopAccessorReads += 1;
+        throw new Error('gap preview-loop accessor must not execute');
+      },
+    });
+    freezeDataOnly(accessorLoopAuthority);
+  }
+  const accessorLoopValidation = validateLoopGapPair(
+    loopGapProgram,
+    accessorLoopAuthority as unknown as EvidenceAuthorityLike | undefined,
+  );
+  check(
+    'B119 malformed accessor gap loop payload fails closed without invoking its getter',
+    accessorLoopValidation.valid === false && loopAccessorReads === 0,
+    detail({ validation: accessorLoopValidation, loopAccessorReads }),
+  );
+  const alternateLoopInstance = loopGap?.previewLoop && loopTextOperations
+    .find(operation => operation.previewLoop?.iteration !== loopGap.previewLoop?.iteration)?.previewLoop;
+  const mismatchedGapOperationProgram = alternateLoopInstance
+    ? mutateLoopGapProgram(gap => { gap.previewLoop = jsonClone(alternateLoopInstance); })
+    : undefined;
+  const mismatchedGapOperationAuthority = alternateLoopInstance
+    ? mutateLoopGapAuthority(gap => { gap.previewLoop = jsonClone(alternateLoopInstance); })
+    : undefined;
+  const mismatchedGapOperationValidation = validateLoopGapPair(
+    mismatchedGapOperationProgram,
+    mismatchedGapOperationAuthority,
+  );
+  check(
+    'B119 gap loop identity must reciprocate with its referenced operation',
+    alternateLoopInstance !== undefined
+      && mismatchedGapOperationValidation.valid === false
+      && mismatchedGapOperationValidation.reason === 'evidence gap loop identity does not exactly match its referenced operation',
+    detail({ validation: mismatchedGapOperationValidation }),
+  );
+  const noLoopOperation = loopProgram?.operations.find(operation => operation.previewLoop === undefined);
+  const noLoopGapIndex = loopProgram?.gaps.length ?? 0;
+  const noLoopGap = noLoopOperation
+    ? {
+      category: 'table' as const,
+      status: 'unknown' as const,
+      reason: 'no-loop gap remains a valid optional provenance case',
+      source: noLoopOperation.source,
+      operationId: noLoopOperation.id,
+    }
+    : undefined;
+  const noLoopProgram = loopProgram && noLoopGap
+    ? mutateProgramJson(loopProgram, candidate => {
+      (candidate.gaps as unknown[]).push(jsonClone(noLoopGap));
+    })
+    : undefined;
+  const noLoopAuthority = loopAuthority && noLoopGap
+    ? mutateAuthorityJson(loopAuthority, candidate => {
+      (candidate.gaps as unknown[]).push(jsonClone(noLoopGap));
+      (candidate.linkedGapIndexes as unknown[]).push(noLoopGapIndex);
+    })
+    : undefined;
+  const noLoopValidation = validateLoopGapPair(noLoopProgram, noLoopAuthority);
+  check(
+    'B119 equivalent valid no-loop gap provenance remains accepted',
+    noLoopOperation !== undefined && noLoopGap !== undefined && noLoopValidation.valid,
+    detail({ operation: noLoopOperation?.id, validation: noLoopValidation }),
+  );
+  check(
+    'B119 loop program/evidence schema, reciprocity, round-trip, freeze, and game boundary hold',
+    loopProgram !== undefined
+      && loopAuthority !== undefined
+      && loopPairValidation.valid
+      && JSON.stringify(jsonClone(loopProgram)) === JSON.stringify(loopProgram)
+      && JSON.stringify(jsonClone(loopAuthority)) === JSON.stringify(loopAuthority)
+      && Object.isFrozen(loopProgram)
+      && Object.isFrozen(loopProgram.previewLoopCatalog)
+      && Object.isFrozen(loopProgram.previewLoopSelections)
+      && Object.isFrozen(loopAuthority)
+      && loopProgram.verification.game === X4_UI_LAYOUT_GAME_TRUTH
+      && loopProgram.verification.gameVerified === false,
+    detail({
+      validation: loopPairValidation,
+      game: loopProgram?.verification,
+      loopCatalogFrozen: loopProgram ? Object.isFrozen(loopProgram.previewLoopCatalog) : false,
+    }),
+  );
+  const loopRefusal = (candidate: unknown): string | undefined => {
+    if (!loopSelectionInput) return undefined;
+    const result = projectX4UiLayoutProgram(
+      loopModel,
+      loopTarget,
+      loopProfile,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      candidate as X4UiLayoutPreviewLoopSelectionInput,
+    );
+    return 'refusal' in result ? result.refusal.code : undefined;
+  };
+  const loopBaseSelection = loopSelectionInput?.selections[0];
+  const loopInvalidCases = loopSelectionInput && loopBaseSelection && loopEntry
+    ? [
+      {
+        name: 'duplicate',
+        input: { ...loopSelectionInput, selections: [loopBaseSelection, loopBaseSelection] },
+        code: 'invalid-preview-loop',
+      },
+      {
+        name: 'extra',
+        input: { ...loopSelectionInput, selections: [{ id: 'extra-loop-selection', iterationCount: 2 }] },
+        code: 'invalid-preview-loop',
+      },
+      {
+        name: 'extra-field',
+        input: { ...loopSelectionInput, selections: [{ ...loopBaseSelection, extra: true }] },
+        code: 'malformed-preview-loop',
+      },
+      {
+        name: 'malformed',
+        input: { ...loopSelectionInput, selections: [{ id: loopEntry.id } as unknown as typeof loopBaseSelection] },
+        code: 'malformed-preview-loop',
+      },
+      {
+        name: 'non-integer',
+        input: { ...loopSelectionInput, selections: [{ ...loopBaseSelection, iterationCount: 1.5 }] },
+        code: 'invalid-preview-loop',
+      },
+      ...[0, -1, 17].map(iterationCount => ({
+        name: `count-${iterationCount}`,
+        input: { ...loopSelectionInput, selections: [{ ...loopBaseSelection, iterationCount }] },
+        code: 'invalid-preview-loop',
+      })),
+      {
+        name: 'stale-source',
+        input: { ...loopSelectionInput, source: { ...loopSelectionInput.source, sha256: '0'.repeat(64) } },
+        code: 'preview-loop-source-mismatch',
+      },
+      {
+        name: 'target-mismatch',
+        input: { ...loopSelectionInput, targetId: 'stale-target-id' },
+        code: 'preview-loop-target-mismatch',
+      },
+      {
+        name: 'profile-mismatch',
+        input: { ...loopSelectionInput, profileId: 'stale-profile-id' },
+        code: 'preview-loop-profile-mismatch',
+      },
+    ]
+    : [];
+  const loopInvalidResults = loopInvalidCases.map(candidate => ({
+    ...candidate,
+    actual: loopRefusal(candidate.input),
+  }));
+  check(
+    'B119 every invalid loop selection class refuses with its typed code',
+    loopInvalidResults.length === 11 && loopInvalidResults.every(candidate => candidate.actual === candidate.code),
+    detail(loopInvalidResults),
+  );
+  let hostileLoopSelectionReads = 0;
+  const hostileLoopInput = loopSelectionInput
+    ? (() => {
+      const candidate = { ...loopSelectionInput } as Record<string, unknown>;
+      Object.defineProperty(candidate, 'selections', {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          hostileLoopSelectionReads += 1;
+          throw new Error('hostile loop selections accessor must not execute');
+        },
+      });
+      return candidate;
+    })()
+    : undefined;
+  let hostileLoopResult: X4UiLayoutProgramResult | Error | undefined;
+  if (hostileLoopInput !== undefined) {
+    try {
+      hostileLoopResult = projectX4UiLayoutProgram(
+        loopModel,
+        loopTarget,
+        loopProfile,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        hostileLoopInput as unknown as X4UiLayoutPreviewLoopSelectionInput,
+      );
+    } catch (error) {
+      hostileLoopResult = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  let hostileLoopProxyReads = 0;
+  const hostileLoopProxyInput = loopSelectionInput === undefined
+    ? undefined
+    : new Proxy(loopSelectionInput, {
+      get: () => {
+        hostileLoopProxyReads += 1;
+        throw new Error('hostile loop input proxy getter must not execute');
+      },
+    });
+  const revokedLoopInput = loopSelectionInput === undefined
+    ? undefined
+    : (() => {
+      const revocable = Proxy.revocable(loopSelectionInput, {});
+      revocable.revoke();
+      return revocable.proxy;
+    })();
+  let hostileLoopProxyResult: X4UiLayoutProgramResult | Error | undefined;
+  if (hostileLoopProxyInput !== undefined) {
+    try {
+      hostileLoopProxyResult = projectX4UiLayoutProgram(
+        loopModel,
+        loopTarget,
+        loopProfile,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        hostileLoopProxyInput,
+      );
+    } catch (error) {
+      hostileLoopProxyResult = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  let revokedLoopResult: X4UiLayoutProgramResult | Error | undefined;
+  if (revokedLoopInput !== undefined) {
+    try {
+      revokedLoopResult = projectX4UiLayoutProgram(
+        loopModel,
+        loopTarget,
+        loopProfile,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        revokedLoopInput,
+      );
+    } catch (error) {
+      revokedLoopResult = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  check(
+    'B119 hostile loop selection accessors refuse and proxy reads never execute getters',
+    hostileLoopInput === undefined
+      || (hostileLoopResult !== undefined
+        && !(hostileLoopResult instanceof Error)
+        && 'refusal' in hostileLoopResult
+        && hostileLoopResult.refusal.code === 'malformed-preview-loop'
+        && hostileLoopSelectionReads === 0
+        && hostileLoopProxyResult !== undefined
+        && !(hostileLoopProxyResult instanceof Error)
+        && hostileLoopProxyReads === 0
+        && revokedLoopResult !== undefined
+        && !(revokedLoopResult instanceof Error)
+        && 'refusal' in revokedLoopResult
+        && revokedLoopResult.refusal.code === 'malformed-preview-loop'),
+    detail({
+      result: hostileLoopResult instanceof Error ? hostileLoopResult.message : hostileLoopResult,
+      hostileLoopSelectionReads,
+      proxyResult: hostileLoopProxyResult instanceof Error ? hostileLoopProxyResult.message : hostileLoopProxyResult,
+      hostileLoopProxyReads,
+      revokedResult: revokedLoopResult instanceof Error ? revokedLoopResult.message : revokedLoopResult,
+    }),
+  );
+  const resizedLoopProfile: X4UiLayoutProjectionProfile = {
+    ...loopProfile,
+    frame: { ...loopProfile.frame, width: loopProfile.frame.width + 1 },
+    helper: {
+      ...loopProfile.helper,
+      constants: {
+        ...loopProfile.helper.constants,
+        viewWidth: pin(loopProfile.frame.width + 1, 707),
+      },
+    },
+  };
+  const resizedLoopProfileResult = loopSelectionInput
+    ? projectX4UiLayoutProgram(
+      loopModel,
+      loopTarget,
+      resizedLoopProfile,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      loopSelectionInput,
+    )
+    : loopUnselectedResult;
+  check(
+    'B119 loop input is bound to the exact normalized profile despite a reused human profile ID',
+    resizedLoopProfile.id === loopProfile.id
+      && 'refusal' in resizedLoopProfileResult
+      && resizedLoopProfileResult.refusal.code === 'preview-loop-profile-mismatch',
+    detail(resizedLoopProfileResult),
+  );
+
+  const nestedLoopSource = [
+    'local Helper = rawget(_G, "Helper")',
+    'local function font(size)',
+    '  local ok, v = pcall(function() return Helper.scaleFont("Zekton", size) end)',
+    '  if ok and type(v) == "number" and v > 0 then return v end',
+    '  return size',
+    'end',
+    'local menu = { name = "Nested loop preview", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local ct = frame:addTable(1, { width = 100 })',
+    'for _, item in ipairs(rows) do',
+    '  local row = ct:addRow(false, {})',
+    '  for _, nested in ipairs(item.children) do',
+    '    row[1]:createText(nested.label, { height = 16, fontsize = font(9) })',
+    '  end',
+    'end',
+    'frame:display()',
+  ].join('\n');
+  const nestedLoopModel = buildX4UiCallModel(input(nestedLoopSource, 'selftest/b119-nested-loop.lua'));
+  const nestedLoopTarget = topTarget(nestedLoopModel);
+  const nestedLoopProfile = profileFor(nestedLoopModel, {
+    minTextHeight: 16,
+    localExpansion: { maxDepth: 2, maxInvocations: 4 },
+  });
+  const nestedLoopBase = resultProgram(projectX4UiLayoutProgram(nestedLoopModel, nestedLoopTarget, nestedLoopProfile));
+  const nestedEntry = nestedLoopBase?.previewLoopCatalog.entries[0];
+  const nestedLoopInput: X4UiLayoutPreviewLoopSelectionInput | undefined = nestedLoopBase && nestedEntry
+    ? {
+      catalogId: nestedLoopBase.previewLoopCatalog.id,
+      source: nestedLoopBase.previewLoopCatalog.sourceIdentity,
+      targetId: nestedLoopBase.target.id,
+      profileId: nestedLoopBase.previewLoopCatalog.profileId,
+      selections: [{ id: nestedEntry.id, iterationCount: 2 }],
+    }
+    : undefined;
+  const nestedLoopResult = nestedLoopInput
+    ? projectX4UiLayoutProgram(nestedLoopModel, nestedLoopTarget, nestedLoopProfile, undefined, undefined, undefined, undefined, nestedLoopInput)
+    : projectX4UiLayoutProgram(nestedLoopModel, nestedLoopTarget, nestedLoopProfile);
+  const nestedLoopProgram = resultProgram(nestedLoopResult);
+  const nestedLoopBody = nestedEntry && nestedLoopProgram
+    ? nestedLoopProgram.operations.filter(operation => operation.source.start.offset >= nestedEntry.source.start.offset
+      && operation.source.end.offset <= nestedEntry.source.end.offset)
+    : [];
+  const nestedOperation = nestedLoopBody.find(operation => operation.kind === 'createText');
+  const nestedFontValue = nestedOperation?.metadata.semantics.properties?.find(property =>
+    property.normalizedName === 'fontsize')?.value;
+  const nestedFontSample = nestedOperation && nestedLoopProgram
+    ? nestedLoopProgram.sampleCatalog.entries.find(entry =>
+      entry.expression === 'font(9)'
+        && entry.expectedType === 'number'
+        && entry.consumers.some(consumer => consumer.operationId === nestedOperation.id))
+    : undefined;
+  const nestedFontInvocation = nestedLoopModel.localInvocations.find(invocation =>
+    invocation.calleeExpression === 'font');
+  check(
+    'B119 nested loop wrapper remains unreplayed, conditional, and sampled',
+    nestedLoopProgram !== undefined
+      && nestedLoopResult.status !== 'refused'
+      && nestedLoopProgram.previewLoopCatalog.entries.length === 1
+      && nestedOperation !== undefined
+      && nestedOperation.previewLoop === undefined
+      && nestedOperation.status === 'conditional'
+      && nestedOperation.descriptorFacts.fontsize?.status !== 'known'
+      && nestedFontValue?.localInvocationResult?.expression === 'font(9)'
+      && nestedFontInvocation?.status === 'supported'
+      && nestedFontInvocation.resolution === 'direct'
+      && nestedFontInvocation.resultConsumed
+      && nestedFontInvocation.context.loopPath.length >= 2
+      && nestedFontSample?.provenance === 'preview-only'
+      && nestedFontSample.expectedType === 'number',
+    detail({
+      status: nestedLoopResult.status,
+      refusal: 'refusal' in nestedLoopResult ? nestedLoopResult.refusal : undefined,
+      catalog: nestedLoopProgram?.previewLoopCatalog,
+      nestedOperation,
+      nestedFontInvocation,
+      nestedFontSample,
+    }),
+  );
+
+  const helperLoopSource = [
+    'local function renderRow(frame, row, item)',
+    '  row[1]:createText(item.label, { height = 16 })',
+    'end',
+    'local menu = { name = "Loop helper preview", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local ct = frame:addTable(1, { width = 100 })',
+    'for _, item in ipairs(rows) do',
+    '  local row = ct:addRow(false, {})',
+    '  renderRow(frame, row, item)',
+    'end',
+    'frame:display()',
+  ].join('\n');
+  const helperLoopModel = buildX4UiCallModel(input(helperLoopSource, 'selftest/b119-loop-helper.lua'));
+  const helperLoopTarget = topTarget(helperLoopModel);
+  const helperLoopProfile = profileFor(helperLoopModel, { minTextHeight: 16, localExpansion: { maxDepth: 4, maxInvocations: 8 } });
+  const helperLoopBaseResult = projectX4UiLayoutProgram(helperLoopModel, helperLoopTarget, helperLoopProfile);
+  const helperLoopBase = resultProgram(helperLoopBaseResult);
+  const helperEntry = helperLoopBase?.previewLoopCatalog.entries[0];
+  const helperLoopInput: X4UiLayoutPreviewLoopSelectionInput | undefined = helperLoopBase && helperEntry
+    ? {
+      catalogId: helperLoopBase.previewLoopCatalog.id,
+      source: helperLoopBase.previewLoopCatalog.sourceIdentity,
+      targetId: helperLoopBase.target.id,
+      profileId: helperLoopBase.previewLoopCatalog.profileId,
+      selections: [{ id: helperEntry.id, iterationCount: 2 }],
+    }
+    : undefined;
+  const helperLoopResult = helperLoopInput
+    ? projectX4UiLayoutProgram(helperLoopModel, helperLoopTarget, helperLoopProfile, undefined, undefined, undefined, undefined, helperLoopInput)
+    : helperLoopBaseResult;
+  const helperLoopProgram = resultProgram(helperLoopResult);
+  const helperLoopInvocation = helperLoopProgram?.localExpansion?.invocations.find(invocation => invocation.status === 'looped');
+  const helperLoopAddRows = helperLoopProgram?.operations.filter(operation => operation.kind === 'addRow') || [];
+  const helperLoopCreateTexts = helperLoopProgram?.operations.filter(operation => operation.kind === 'createText') || [];
+  check(
+    'B119 direct loop replay composes with local expansion while the loop-owned helper remains looped',
+    helperLoopProgram !== undefined
+      && helperLoopResult.status !== 'refused'
+      && helperLoopInvocation !== undefined
+      && helperEntry?.callIds.length === 1
+      && helperLoopProgram.previewLoopSelections.length === 1
+      && helperLoopAddRows.length === 2
+      && helperLoopAddRows.every(operation => operation.status === 'applied' && operation.previewLoop !== undefined)
+      && new Set(helperLoopAddRows.map(operation => operation.id)).size === 2
+      && new Set(helperLoopAddRows.map(operation => operation.previewLoop?.id)).size === 2
+      && helperLoopCreateTexts.length === 0,
+    detail({
+      status: helperLoopResult.status,
+      invocation: helperLoopInvocation,
+      selections: helperLoopProgram?.previewLoopSelections,
+      operations: [...helperLoopAddRows, ...helperLoopCreateTexts],
+    }),
+  );
 
   const passed = checks.filter(candidate => candidate.pass && !candidate.skipped).length;
   const skipped = checks.filter(candidate => candidate.skipped).length;

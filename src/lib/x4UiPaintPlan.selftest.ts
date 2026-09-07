@@ -42,6 +42,10 @@ import {
   type X4UiPreviewPipelineResult,
 } from './x4UiPreviewPipeline';
 import {
+  projectX4UiEditorSession,
+  updateX4UiEditorLoopState,
+} from './x4UiEditorSession';
+import {
   projectX4UiPaintPlan as projectX4UiPaintPlanDirect,
   type X4UiPaintPlanInput,
   type X4UiPaintPlanResult,
@@ -545,6 +549,34 @@ function sourceFixture(): X4UiWorkspaceSource {
     ].join('\n')),
     passthrough('ui/canonical.lua', lua, { reason: 'unparsed' }),
   ]));
+}
+
+function loopWorkspaceFixture(textOptions = '{ height = 8 }'): ModWorkspace {
+  const lua = [
+    'local menu = { name = "LoopCanonical", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80, layer = 1 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    'table:setColWidth(1, 100, false)',
+    'local items = { { label = "They provide" }, { label = "You provide" } }',
+    'for _, item in ipairs(items) do',
+    '  local row = table:addRow(false, {})',
+    `  row[1]:createText(item.label, ${textOptions})`,
+    'end',
+    'frame:display()',
+    '',
+  ].join('\n');
+  return workspace([
+    passthrough('ui.xml', [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<addon name="loop-canonical-fixture">',
+      '  <environment type="menus">',
+      '    <file name="ui/loop.lua" />',
+      '  </environment>',
+      '</addon>',
+      '',
+    ].join('\n')),
+    passthrough('ui/loop.lua', lua, { reason: 'unparsed' }),
+  ]);
 }
 
 function frameTextureSourceFixture(
@@ -1224,6 +1256,103 @@ function phaseCSceneAttack(
   });
 }
 
+type LoopPaintTarget = 'gap' | 'binding';
+type LoopPaintMutation = (loop: JsonRecord, owner: JsonRecord, getterReads: { value: number }) => void;
+
+function loopPaintTarget(candidate: X4UiScene, targetKind: LoopPaintTarget): { readonly loop: JsonRecord; readonly owner: JsonRecord } | undefined {
+  if (targetKind === 'binding') {
+    const binding = candidate.preview.sampleBindings.find(item => item.previewLoop !== undefined);
+    const bindingRecord = binding === undefined ? undefined : asRecord(binding);
+    const loop = bindingRecord === undefined ? undefined : asRecord(bindingRecord.previewLoop);
+    return loop === undefined || bindingRecord === undefined ? undefined : { loop, owner: bindingRecord };
+  }
+  const gap = candidate.gaps.find(item => item.previewLoop !== undefined);
+  const gapRecord = gap === undefined ? undefined : asRecord(gap);
+  const loop = gapRecord === undefined ? undefined : asRecord(gapRecord.previewLoop);
+  return loop === undefined || gapRecord === undefined ? undefined : { loop, owner: gapRecord };
+}
+
+function runLoopPaintHostileCase(
+  name: string,
+  scene: X4UiScene | undefined,
+  corpus: X4UiCorpusCanonicalSuccess | undefined,
+  authority: X4UiPreviewPipelineResult | undefined,
+  targetKind: LoopPaintTarget,
+  mutate: LoopPaintMutation,
+): void {
+  const baseline = scene === undefined || corpus === undefined || authority === undefined
+    ? undefined
+    : projectX4UiPaintPlanDirect({ scene, corpus, previewAuthority: authority });
+  const candidate = scene === undefined ? undefined : clonedScene(scene);
+  const getterReads = { value: 0 };
+  let result: X4UiPaintPlanResult | undefined;
+  let threw = false;
+  let error: string | undefined;
+  if (candidate !== undefined && corpus !== undefined && authority !== undefined) {
+    try {
+      const target = loopPaintTarget(candidate, targetKind);
+      if (target === undefined) throw new Error(`${targetKind} loop target unavailable`);
+      mutate(target.loop, target.owner, getterReads);
+      result = projectX4UiPaintPlanDirect({ scene: candidate, corpus, previewAuthority: authority });
+    } catch (caught) {
+      threw = true;
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+  }
+  check(name,
+    baseline?.status !== 'refused'
+      && !threw
+      && result?.status === 'refused'
+      && result.refusal.code === 'invalid-scene'
+      && getterReads.value === 0,
+  {
+    fixtureReady: baseline?.status !== 'refused' && candidate !== undefined && corpus !== undefined && authority !== undefined,
+    targetKind,
+    baselineStatus: baseline?.status,
+    resultStatus: result?.status,
+    refusal: result?.status === 'refused' ? result.refusal : undefined,
+    getterReads: getterReads.value,
+    threw,
+    error,
+  });
+}
+
+function runLoopPaintForgedAuthorityCase(
+  name: string,
+  scene: X4UiScene | undefined,
+  corpus: X4UiCorpusCanonicalSuccess | undefined,
+  authority: X4UiPreviewPipelineResult | undefined,
+): void {
+  const baseline = scene === undefined || corpus === undefined || authority === undefined
+    ? undefined
+    : projectX4UiPaintPlanDirect({ scene, corpus, previewAuthority: authority });
+  let result: X4UiPaintPlanResult | undefined;
+  let threw = false;
+  let error: string | undefined;
+  if (scene !== undefined && corpus !== undefined && authority !== undefined) {
+    try {
+      const forgedAuthority = JSON.parse(JSON.stringify(authority)) as X4UiPreviewPipelineResult;
+      result = projectX4UiPaintPlanDirect({ scene, corpus, previewAuthority: forgedAuthority });
+    } catch (caught) {
+      threw = true;
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+  }
+  check(name,
+    baseline?.status !== 'refused'
+      && !threw
+      && result?.status === 'refused'
+      && result.refusal.code === 'invalid-scene',
+  {
+    fixtureReady: baseline?.status !== 'refused' && scene !== undefined && corpus !== undefined && authority !== undefined,
+    baselineStatus: baseline?.status,
+    resultStatus: result?.status,
+    refusal: result?.status === 'refused' ? result.refusal : undefined,
+    threw,
+    error,
+  });
+}
+
 async function main(): Promise<void> {
   assertProxyTrapCensusOracleSensitivity(PAINT_ONE_ITEM_TOCTOU_PROXY_TRAPS);
   let canonical: X4UiCorpusCanonicalSuccess | undefined;
@@ -1261,6 +1390,187 @@ async function main(): Promise<void> {
       : undefined;
     baseInput = scene === undefined ? undefined : { scene, corpus: canonical };
     check('loader-issued canonical corpus and source-backed Scene fixture', canonical !== undefined && scene !== undefined, { pipelineStatus: pipeline.status, sceneStatus: pipeline.scene?.status, sceneRefusal: pipeline.scene && pipeline.scene.status === 'refused' ? pipeline.scene.refusal : undefined, programStatus: pipeline.program?.status, operationCount: pipeline.program && 'program' in pipeline.program ? pipeline.program.program.operations.length : undefined, gaps: pipeline.gaps, selection: pipeline.selection, source: pipeline.source.status, corpus: pipeline.corpus.status });
+
+    const loopWorkspace = loopWorkspaceFixture('{ font = "Zekton", fontsize = 16 }');
+    const loopSource = buildX4UiWorkspaceSource(loopWorkspace);
+    const loopSelection = selectionFor(loopSource, 'ui/loop.lua');
+    const loopProfile = { width: 100, height: 80, uiScale: 1 } as const;
+    const loopUnprojected = projectX4UiEditorSession({ workspace: loopWorkspace, corpus: canonical, profile: loopProfile, selection: loopSelection });
+    const loopCatalog = loopUnprojected.previewLoopCatalog;
+    const loopEntry = loopCatalog?.entries[0];
+    const loopUpdate = loopCatalog === null || loopEntry === undefined || loopUnprojected.previewLoopCatalogAuthority === undefined
+      ? undefined
+      : updateX4UiEditorLoopState(undefined, loopCatalog, loopEntry.id, 2, loopUnprojected.previewLoopCatalogAuthority);
+    const loopProjected = loopUpdate?.status === 'accepted' && loopUpdate.loops !== undefined
+      && loopUnprojected.loopBinding !== undefined && loopUnprojected.previewLoopCatalogAuthority !== undefined
+      ? projectX4UiEditorSession({
+        workspace: loopWorkspace,
+        corpus: canonical,
+        profile: loopProfile,
+        selection: loopSelection,
+        loops: loopUpdate.loops,
+        loopBinding: loopUnprojected.loopBinding,
+        loopCatalogAuthority: loopUnprojected.previewLoopCatalogAuthority,
+      })
+      : undefined;
+    const loopSampleCatalog = loopProjected?.sampleCatalog;
+    const loopSampleValues = loopSampleCatalog?.entries.map(entry => ({
+      id: entry.id,
+      value: entry.expectedType === 'boolean' ? true : entry.expectedType === 'number' ? 1 : 'loop sample',
+    }));
+    const loopSelected = loopProjected?.sampleBinding !== undefined
+      && loopProjected.sampleCatalogAuthority !== undefined
+      && loopSampleCatalog !== null
+      && loopSampleValues !== undefined
+      ? projectX4UiEditorSession({
+        workspace: loopWorkspace,
+        corpus: canonical,
+        profile: loopProfile,
+        selection: loopSelection,
+        loops: loopProjected.loops,
+        loopBinding: loopProjected.loopBinding,
+        loopCatalogAuthority: loopProjected.previewLoopCatalogAuthority,
+        samples: { catalogId: loopSampleCatalog.id, source: loopSampleCatalog.sourceIdentity, values: loopSampleValues },
+        sampleBinding: loopProjected.sampleBinding,
+        sampleCatalogAuthority: loopProjected.sampleCatalogAuthority,
+      })
+      : undefined;
+    const loopPreSampleScene = loopProjected?.preview.scene !== null && loopProjected?.preview.scene !== undefined
+      && loopProjected.preview.scene.status !== 'refused'
+      ? loopProjected.preview.scene.scene
+      : undefined;
+    const loopConsumedScene = loopSelected?.preview.scene !== null && loopSelected?.preview.scene !== undefined
+      && loopSelected.preview.scene.status !== 'refused'
+      ? loopSelected.preview.scene.scene
+      : undefined;
+    const loopPreSamplePaint = loopProjected?.paint;
+    const loopConsumedPaint = loopSelected?.paint;
+    check('B119 producer-issued pre-sample Scene accepts loop gaps with zero loop bindings', loopPreSampleScene !== undefined
+      && loopPreSampleScene.gaps.some(gap => gap.previewLoop !== undefined)
+      && loopPreSampleScene.preview.sampleBindings.every(binding => binding.previewLoop === undefined)
+      && loopPreSamplePaint?.status !== 'refused', {
+      loopCatalogEntries: loopCatalog?.entries.length,
+      loopEntry: loopEntry?.id,
+      loopUpdate: loopUpdate?.status,
+      sampleCatalogEntries: loopSampleCatalog?.entries.length,
+      preSampleSceneStatus: loopProjected?.preview.scene?.status,
+      preSamplePaintStatus: loopPreSamplePaint?.status,
+      loopGapCount: loopPreSampleScene?.gaps.filter(gap => gap.previewLoop !== undefined).length,
+      loopBindingCount: loopPreSampleScene?.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined).length,
+    });
+    check('B119 producer-issued gapless Scene accepts consumed loop bindings', loopConsumedScene !== undefined
+      && loopConsumedScene.gaps.every(gap => gap.previewLoop === undefined)
+      && loopConsumedScene.preview.sampleBindings.some(binding => binding.previewLoop !== undefined && binding.status === 'consumed')
+      && loopConsumedPaint?.status !== 'refused', {
+      consumedSceneStatus: loopSelected?.preview.scene?.status,
+      consumedPaintStatus: loopConsumedPaint?.status,
+      loopGapCount: loopConsumedScene?.gaps.filter(gap => gap.previewLoop !== undefined).length,
+      loopBindingCount: loopConsumedScene?.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined).length,
+      loopBindingStatuses: loopConsumedScene?.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined).map(binding => binding.status),
+    });
+    const loopPreSampleAuthority = loopProjected?.preview as unknown as X4UiPreviewPipelineResult | undefined;
+    const loopConsumedAuthority = loopSelected?.preview as unknown as X4UiPreviewPipelineResult | undefined;
+    const exactLoopBindings = loopConsumedScene?.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined) ?? [];
+    const exactLoopGaps = loopPreSampleScene?.gaps.filter(gap => gap.previewLoop !== undefined) ?? [];
+    check('B119 Paint mirrors the closed loop kind, multiplicity, and sample status enums', exactLoopBindings.length > 0
+      && exactLoopGaps.length > 0
+      && exactLoopBindings.every(binding => binding.previewLoop?.kind === 'generic-for'
+        && binding.previewLoop.multiplicity === 'zero-or-more'
+        && binding.status === 'consumed')
+      && exactLoopGaps.every(gap => gap.previewLoop?.kind === 'generic-for'
+        && gap.previewLoop.multiplicity === 'zero-or-more'), {
+      bindingEnums: exactLoopBindings.map(binding => ({ kind: binding.previewLoop?.kind, multiplicity: binding.previewLoop?.multiplicity, status: binding.status })),
+      gapEnums: exactLoopGaps.map(gap => ({ kind: gap.previewLoop?.kind, multiplicity: gap.previewLoop?.multiplicity })),
+    });
+    const noLoopPaint = scene === undefined || baseInput === undefined ? undefined : projectX4UiPaintPlan(baseInput);
+    check('B119 no-loop Scene preview remains Paint-compatible', scene !== undefined
+      && scene.preview.sampleBindings.every(binding => binding.previewLoop === undefined)
+      && noLoopPaint?.status !== 'refused', {
+      sceneStatus: noLoopPaint?.status,
+      loopBindingCount: scene?.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined).length,
+    });
+
+    runLoopPaintHostileCase('B119 Paint rejects null previewLoop records', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', (_loop, owner) => {
+      owner.previewLoop = null;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects extra previewLoop keys', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.unexpected = true;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects malformed previewLoop source', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.source = null;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects custom-prototype previewLoop records', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      Object.setPrototypeOf(loop, { inherited: true });
+    });
+    const originalIteration = Object.getOwnPropertyDescriptor(Object.prototype, 'iteration');
+    try {
+      Object.defineProperty(Object.prototype, 'iteration', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: 1,
+      });
+      runLoopPaintHostileCase('B119 Paint rejects inherited previewLoop fields', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+        delete loop.iteration;
+      });
+    } finally {
+      if (originalIteration === undefined) Reflect.deleteProperty(Object.prototype, 'iteration');
+      else Object.defineProperty(Object.prototype, 'iteration', originalIteration);
+    }
+    runLoopPaintHostileCase('B119 Paint rejects non-enumerable previewLoop fields', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      const descriptor = Object.getOwnPropertyDescriptor(loop, 'iteration');
+      if (descriptor === undefined || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) throw new Error('previewLoop iteration descriptor unavailable');
+      Object.defineProperty(loop, 'iteration', { ...descriptor, enumerable: false });
+    });
+    runLoopPaintHostileCase('B119 Paint rejects previewLoop accessors without getter execution', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', (loop, _owner, getterReads) => {
+      Object.defineProperty(loop, 'iteration', {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          getterReads.value += 1;
+          throw new Error('hostile previewLoop getter executed');
+        },
+      });
+    });
+    runLoopPaintHostileCase('B119 Paint rejects unsupported previewLoop kind', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.kind = 'unsupported-kind';
+    });
+    runLoopPaintHostileCase('B119 Paint rejects unsupported previewLoop multiplicity', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.multiplicity = 'unsupported-multiplicity';
+    });
+    runLoopPaintHostileCase('B119 Paint rejects stale previewLoop instance id', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.id = 'stale-loop-instance';
+    });
+    runLoopPaintHostileCase('B119 Paint rejects stale previewLoop entry id', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.entryId = 'stale-loop-entry';
+    });
+    runLoopPaintHostileCase('B119 Paint rejects stale previewLoop id', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.loopId = 'stale-loop';
+    });
+    runLoopPaintHostileCase('B119 Paint rejects invalid previewLoop iteration range', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.iteration = 0;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects invalid previewLoop iteration count', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.iterationCount = 17;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects previewLoop iteration/count mismatch', loopPreSampleScene, canonical, loopPreSampleAuthority, 'gap', loop => {
+      loop.iteration = 2;
+      loop.iterationCount = 1;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects unsupported sample binding expectedType', loopConsumedScene, canonical, loopConsumedAuthority, 'binding', (_loop, owner) => {
+      owner.expectedType = 'object';
+    });
+    runLoopPaintHostileCase('B119 Paint rejects sample binding value/type mismatch', loopConsumedScene, canonical, loopConsumedAuthority, 'binding', (_loop, owner) => {
+      owner.value = 1;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects malformed sample binding reason', loopConsumedScene, canonical, loopConsumedAuthority, 'binding', (_loop, owner) => {
+      owner.reason = 1;
+    });
+    runLoopPaintHostileCase('B119 Paint rejects unsupported sample binding status', loopConsumedScene, canonical, loopConsumedAuthority, 'binding', (_loop, owner) => {
+      owner.status = 'not-consumed';
+    });
+    runLoopPaintForgedAuthorityCase('B119 Paint rejects forged authority for a structurally mismatched loop Scene', loopConsumedScene, canonical, loopConsumedAuthority);
+
 
     const frameTexturePaintCase = (blurBackground: boolean, unresolvedNonEmptyTexture = false, includeVisualCause = false) => {
       const frameTextureSource = frameTextureSourceFixture(blurBackground, unresolvedNonEmptyTexture, includeVisualCause);
@@ -2013,6 +2323,33 @@ async function main(): Promise<void> {
         facts: (text as unknown as JsonRecord).colorFacts,
         glyphs: colorPaintCommands.filter(command => command.kind === 'glyph-alpha-blit' && command.textId === text.id).length,
       })),
+    });
+    const colorTintOwnerBindingsValid = colorPaintCommands.every(command => {
+      const tints = (command as unknown as JsonRecord).basePreviewTints;
+      if (!Array.isArray(tints)) return true;
+      return tints.every(tintValue => {
+        const owner = asRecord(tintValue === null || typeof tintValue !== 'object' ? undefined : (tintValue as JsonRecord).owner);
+        if (owner === undefined) return false;
+        if (command.kind === 'node-geometry') return owner.kind === 'geometry'
+          && owner.commandId === command.id
+          && owner.ownerId === command.nodeId;
+        if (command.kind === 'glyph-alpha-blit') return owner.kind === 'glyph'
+          && owner.commandId === command.id
+          && owner.ownerId === command.textId;
+        return false;
+      });
+    });
+    check('P5 causal Paint emits closed command-owner bindings for every geometry and glyph tint', colorPaint?.status !== 'refused' && colorTintOwnerBindingsValid, {
+      paintStatus: colorPaint?.status,
+      invalidBindings: colorPaintCommands.flatMap(command => {
+        const tints = (command as unknown as JsonRecord).basePreviewTints;
+        if (!Array.isArray(tints)) return [];
+        return tints.filter(tintValue => {
+          const owner = asRecord(tintValue === null || typeof tintValue !== 'object' ? undefined : (tintValue as JsonRecord).owner);
+          return owner === undefined || command.kind === 'node-geometry' && (owner.kind !== 'geometry' || owner.commandId !== command.id || owner.ownerId !== command.nodeId)
+            || command.kind === 'glyph-alpha-blit' && (owner.kind !== 'glyph' || owner.commandId !== command.id || owner.ownerId !== command.textId);
+        }).map(tintValue => ({ command: command.id, kind: command.kind, tint: tintValue }));
+      }),
     });
 
     const colorDiagnostics = colorPaint?.status === 'refused' ? [] : colorPaint.plan.diagnostics;

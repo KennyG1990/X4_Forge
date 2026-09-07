@@ -56,6 +56,32 @@ import {
   type ZektonWrapMode,
 } from './x4UiTextLayout';
 
+type X4UiLayoutProgramProjection<T> = T extends { readonly program?: infer P }
+  ? NonNullable<P>
+  : never;
+
+type X4UiLayoutProgramProjectionValue = X4UiLayoutProgramProjection<X4UiLayoutProgramResult>;
+
+/** Exact loop authority input accepted by the layout-program owner. */
+export type X4UiPreviewLoopInput = NonNullable<Parameters<typeof projectX4UiLayoutProgram>[7]>;
+
+/** Exact user-selection member accepted inside the loop input. */
+type X4UiPreviewLoopInputSelection<T> = T extends {
+  readonly selections: readonly (infer S)[];
+} ? S : never;
+
+export type X4UiPreviewLoopSelectionInput = X4UiPreviewLoopInputSelection<X4UiPreviewLoopInput>;
+
+/** Exact loop catalog issued by the layout-program owner. */
+export type X4UiPreviewLoopCatalog = X4UiLayoutProgramProjectionValue extends {
+  readonly previewLoopCatalog?: infer C;
+} ? NonNullable<C> : never;
+
+/** Exact loop selection value issued by the layout-program owner. */
+export type X4UiPreviewLoopSelection = X4UiLayoutProgramProjectionValue extends {
+  readonly previewLoopSelections?: readonly (infer S)[];
+} ? S : never;
+
 export const X4_UI_PREVIEW_PIPELINE_VERSION = 1 as const;
 export const X4_UI_PREVIEW_GAME_TRUTH = NOT_VERIFIED_IN_GAME;
 
@@ -133,6 +159,8 @@ export interface X4UiPreviewPipelineInput {
   readonly selection?: X4UiPreviewSelection;
   readonly samples?: X4UiLayoutPreviewSampleInput;
   readonly paths?: X4UiLayoutPreviewPathSelectionInput;
+  /** Source/target/profile-bound loop authority input issued by the layout owner. */
+  readonly previewLoopInput?: X4UiPreviewLoopInput;
   readonly tableView?: Readonly<Record<string, X4UiSceneTableViewState>>;
   readonly textPolicy?: X4UiPreviewTextPolicyInput;
 }
@@ -265,6 +293,12 @@ export interface X4UiPreviewPipelineResult {
   readonly pathCatalog: X4UiLayoutPreviewPathCatalog | null;
   /** Accepted preview-only path state, reissued from the selected program. */
   readonly paths: X4UiLayoutPreviewPathSelectionInput | undefined;
+  /** Source/target/profile-bound loop catalog issued by the selected layout program. */
+  readonly previewLoopCatalog: X4UiPreviewLoopCatalog | null;
+  /** Accepted loop selections reissued by the selected layout program. */
+  readonly previewLoopSelections: readonly X4UiPreviewLoopSelection[];
+  /** Accepted preview-only loop state, reissued from the selected program. */
+  readonly previewLoopInput: X4UiPreviewLoopInput | undefined;
   readonly profile: {
     readonly layout?: X4UiLayoutProjectionProfile;
     readonly scene?: X4UiSceneProfile;
@@ -900,6 +934,42 @@ const previewPathsForProgram = (
   };
 };
 
+const previewLoopInputFor = (
+  catalog: X4UiPreviewLoopCatalog,
+  selections: readonly X4UiPreviewLoopSelection[],
+): X4UiPreviewLoopInput | undefined => {
+  if (selections.length === 0) return undefined;
+  return freezeDeep({
+    catalogId: catalog.id,
+    source: cloneJson(catalog.sourceIdentity) as X4UiLayoutModelIdentity,
+    targetId: catalog.targetId,
+    profileId: catalog.profileId,
+    selections: selections.map(selection => ({
+      id: selection.id,
+      iterationCount: selection.iterationCount,
+    })),
+  }) as X4UiPreviewLoopInput;
+};
+
+const previewLoopsForProgram = (
+  program: X4UiLayoutProgramResult,
+): {
+  readonly previewLoopCatalog: X4UiPreviewLoopCatalog | null;
+  readonly previewLoopSelections: readonly X4UiPreviewLoopSelection[];
+  readonly previewLoopInput: X4UiPreviewLoopInput | undefined;
+} => {
+  if (!('program' in program) || program.program === undefined) {
+    return { previewLoopCatalog: null, previewLoopSelections: [], previewLoopInput: undefined };
+  }
+  const catalog = program.program.previewLoopCatalog;
+  const selections = program.program.previewLoopSelections;
+  return {
+    previewLoopCatalog: catalog,
+    previewLoopSelections: selections,
+    previewLoopInput: previewLoopInputFor(catalog, selections),
+  };
+};
+
 const baseResult = (
   source: X4UiWorkspaceSource,
   corpus: unknown,
@@ -928,6 +998,9 @@ const baseResult = (
   },
   pathCatalog: null,
   paths: undefined,
+  previewLoopCatalog: null,
+  previewLoopSelections: [],
+  previewLoopInput: undefined,
   lint,
   gaps,
   authority: {
@@ -977,6 +1050,9 @@ const invalidInputResult = (message: string): X4UiPreviewPipelineResult => {
     profile: {},
     pathCatalog: null,
     paths: undefined,
+    previewLoopCatalog: null,
+    previewLoopSelections: [],
+    previewLoopInput: undefined,
     lint: [],
     gaps: [{ stage: 'source' as const, reason: message }],
     authority: {
@@ -1104,8 +1180,10 @@ export function projectX4UiPreviewPipeline(input: X4UiPreviewPipelineInput): X4U
       input.paths,
       colorEvidence,
       canonical,
+      input.previewLoopInput,
     );
     const previewPaths = previewPathsForProgram(program);
+    const previewLoops = previewLoopsForProgram(program);
     if (program.status === 'refused' && 'refusal' in program) {
       gaps.push({ stage: 'program', reason: program.refusal.message });
       return freezeDeep({
@@ -1123,6 +1201,9 @@ export function projectX4UiPreviewPipeline(input: X4UiPreviewPipelineInput): X4U
         },
         pathCatalog: previewPaths.pathCatalog,
         paths: previewPaths.paths,
+        previewLoopCatalog: previewLoops.previewLoopCatalog,
+        previewLoopSelections: previewLoops.previewLoopSelections,
+        previewLoopInput: previewLoops.previewLoopInput,
         program,
       });
     }
@@ -1143,6 +1224,9 @@ export function projectX4UiPreviewPipeline(input: X4UiPreviewPipelineInput): X4U
         },
         pathCatalog: previewPaths.pathCatalog,
         paths: previewPaths.paths,
+        previewLoopCatalog: previewLoops.previewLoopCatalog,
+        previewLoopSelections: previewLoops.previewLoopSelections,
+        previewLoopInput: previewLoops.previewLoopInput,
         program,
         scene: refusedScene('canonical configured-corpus evidence is unavailable; no Scene geometry was produced'),
       });
@@ -1163,6 +1247,9 @@ export function projectX4UiPreviewPipeline(input: X4UiPreviewPipelineInput): X4U
       selectedTarget: target,
       pathCatalog: previewPaths.pathCatalog,
       paths: previewPaths.paths,
+      previewLoopCatalog: previewLoops.previewLoopCatalog,
+      previewLoopSelections: previewLoops.previewLoopSelections,
+      previewLoopInput: previewLoops.previewLoopInput,
       profile: {
         layout: layoutProfile,
         scene: sceneProfile,

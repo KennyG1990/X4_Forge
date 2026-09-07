@@ -1302,6 +1302,30 @@ const partialLua = [
   '',
 ].join('\n');
 
+const previewLoopXml = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<addon name="preview-loop-fixture">',
+  '  <environment type="menus">',
+  '    <file name="ui/loop.lua" />',
+  '  </environment>',
+  '</addon>',
+  '',
+].join('\n');
+
+const previewLoopLua = [
+  'local menu = { name = "PreviewLoop", layer = 1 }',
+  'function menu.display(dynamicText)',
+  '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+  '  local table = frame:addTable(1, { width = 100 })',
+  '  for i = 1, 3 do',
+  '    local row = table:addRow(false, {})',
+  '    row[1]:createText(dynamicText, { height = 10 })',
+  '  end',
+  '  frame:display()',
+  'end',
+  '',
+].join('\n');
+
 const outOfScopeLua = [
   'local menu = { name = "B119OutOfScopePreview", layer = 1 }',
   'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
@@ -1420,7 +1444,7 @@ function pipelineInput(
   source: X4UiWorkspaceSource,
   selection?: X4UiPreviewSelection,
   corpus: unknown = null,
-  options: Pick<X4UiPreviewPipelineInput, 'samples' | 'paths' | 'tableView' | 'textPolicy'> = {},
+  options: Pick<X4UiPreviewPipelineInput, 'samples' | 'paths' | 'previewLoopInput' | 'tableView' | 'textPolicy'> = {},
   profileOverrides: Partial<Pick<X4UiPreviewProfileInput, 'truthGrade' | 'minTextHeight' | 'localExpansion' | 'drawable' | 'uiScale'>> = {},
   colorEvidence?: unknown,
 ): X4UiPreviewPipelineInput {
@@ -1458,7 +1482,7 @@ function pipeline(
   source: X4UiWorkspaceSource,
   selection?: X4UiPreviewSelection,
   corpus: unknown = null,
-  options: Pick<X4UiPreviewPipelineInput, 'samples' | 'paths' | 'tableView' | 'textPolicy'> = {},
+  options: Pick<X4UiPreviewPipelineInput, 'samples' | 'paths' | 'previewLoopInput' | 'tableView' | 'textPolicy'> = {},
   profileOverrides: Partial<Pick<X4UiPreviewProfileInput, 'truthGrade' | 'minTextHeight' | 'localExpansion' | 'drawable' | 'uiScale'>> = {},
   colorEvidence?: unknown,
 ) {
@@ -1762,6 +1786,75 @@ check('pipeline output is deeply frozen',
   && (replayA.program === undefined || Object.isFrozen(replayA.program)));
 check('pipeline output is JSON serializable', JSON.stringify(replayA).length > 0);
 check('aliases expose the same pure projector', buildX4UiPreviewPipeline === projectX4UiPreviewPipeline);
+
+const previewLoopSource = sourceFor([
+  passthrough('ui.xml', previewLoopXml),
+  passthrough('ui/loop.lua', previewLoopLua, { reason: 'unparsed' }),
+]);
+const previewLoopSelection = selectionFor(previewLoopSource, 'ui/loop.lua', 'function', 'menu.display');
+const previewLoopCatalogProjection = pipeline(previewLoopSource, previewLoopSelection);
+const previewLoopCatalog = previewLoopCatalogProjection.previewLoopCatalog;
+const previewLoopEntry = previewLoopCatalog?.entries[0];
+const previewLoopInput = previewLoopCatalog === null || previewLoopEntry === undefined
+  ? undefined
+  : {
+    catalogId: previewLoopCatalog.id,
+    source: previewLoopCatalog.sourceIdentity,
+    targetId: previewLoopCatalog.targetId,
+    profileId: previewLoopCatalog.profileId,
+    selections: [{ id: previewLoopEntry.id, iterationCount: 3 }],
+  };
+const previewLoopProjected = previewLoopInput === undefined
+  ? previewLoopCatalogProjection
+  : pipeline(previewLoopSource, previewLoopSelection, null, { previewLoopInput });
+const previewLoopProgram = previewLoopProjected.program !== undefined && previewLoopProjected.program.status !== 'refused'
+  ? previewLoopProjected.program.program
+  : undefined;
+const previewLoopSampleEntries = previewLoopProgram?.sampleCatalog.entries ?? [];
+check('preview loop catalog is issued without user loop authority and omission remains conditional',
+  previewLoopCatalogProjection.previewLoopCatalog !== null
+  && previewLoopCatalogProjection.previewLoopSelections.length === 0
+  && previewLoopCatalogProjection.previewLoopInput === undefined
+  && previewLoopCatalogProjection.previewLoopCatalog.entries.every(entry => entry.depth === 1 && entry.provenance === 'preview-only' && entry.callIds.length > 0),
+  {
+    catalogId: previewLoopCatalog?.id,
+    entryCount: previewLoopCatalog?.entries.length,
+    selectionCount: previewLoopCatalogProjection.previewLoopSelections.length,
+  });
+check('preview loop input is forwarded into per-iteration program and sample projections',
+  previewLoopInput !== undefined
+  && previewLoopProjected.program?.status !== 'refused'
+  && previewLoopProjected.previewLoopSelections.length === 1
+  && previewLoopProjected.previewLoopSelections[0]?.iterationCount === 3
+  && previewLoopProjected.previewLoopInput?.selections[0]?.iterationCount === 3
+  && previewLoopSampleEntries.length === 3
+  && new Set(previewLoopSampleEntries.map(entry => entry.id)).size === 3
+  && previewLoopSampleEntries.every(entry => entry.previewLoop?.iterationCount === 3),
+  {
+    inputIssued: previewLoopInput !== undefined,
+    programStatus: previewLoopProjected.program?.status,
+    selectionCount: previewLoopProjected.previewLoopSelections.length,
+    sampleCount: previewLoopSampleEntries.length,
+  });
+check('preview loop pipeline preserves truthful game verification state',
+  previewLoopProjected.gameTruth === 'Not verified in game'
+  && previewLoopProjected.verification.game === 'Not verified in game'
+  && previewLoopProjected.verification.gameVerified === false,
+  { gameTruth: previewLoopProjected.gameTruth, verification: previewLoopProjected.verification });
+const previewLoopInvalidIteration = previewLoopInput === undefined
+  ? previewLoopCatalogProjection
+  : pipeline(previewLoopSource, previewLoopSelection, null, {
+    previewLoopInput: {
+      ...previewLoopInput,
+      selections: [{ id: previewLoopEntry?.id ?? '', iterationCount: 0 }],
+    },
+  });
+check('invalid preview loop iteration count is refused through the public pipeline',
+  previewLoopInput !== undefined
+  && previewLoopInvalidIteration.program?.status === 'refused'
+  && previewLoopInvalidIteration.status === 'refused'
+  && previewLoopInvalidIteration.gameTruth === 'Not verified in game',
+  { status: previewLoopInvalidIteration.status, programStatus: previewLoopInvalidIteration.program?.status });
 
 async function runIndependentReviewCorrections(): Promise<{
   readonly canonicalProjected: boolean;
