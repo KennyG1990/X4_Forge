@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert';
+import { createHash } from 'node:crypto';
 import type { ModWorkspace, PassthroughFile } from '../types';
 import {
   buildX4UiWorkspaceSource,
@@ -44,6 +45,7 @@ import {
 import {
   projectX4UiEditorSession,
   updateX4UiEditorLoopState,
+  updateX4UiEditorPathState,
 } from './x4UiEditorSession';
 import {
   projectX4UiPaintPlan as projectX4UiPaintPlanDirect,
@@ -783,6 +785,351 @@ function selectionFor(source: X4UiWorkspaceSource, path = 'ui/canonical.lua'): X
   return { sourceIndex: file.index, path: file.path, sourceIdentity: catalog.sourceIdentity, target: { ...target, id: target.id } };
 }
 
+const B119_AIC_SHEET_SOURCE_BASE64 = [
+  'LS0gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09',
+  'PT09PT0KLS0gQUkgSU5GTFVFTkNFIC0gQUdSRUVNRU5UIFNIRUVUICAoZGVzaWduIDFlOiAxZS1nYXRlLWFncmVlbWVudC1zaGVldC5wbmcpCi0tCi0tIFRo',
+  'ZSBoZWF2eS1jb21taXRtZW50IGNvbmZpcm0gZ2F0ZS4gMWQgaXMgdGhlIGV2ZXJ5ZGF5IGFwcHJvdmFsIGFuZCByZW5kZXJzIElOTElORSBpbiB0aGUKLS0g',
+  'Y29udmVyc2F0aW9uOyB0aGlzIGlzIGZvciB0cmVhdGllcywgdHJpYnV0ZSBhbmQgYXNzZXQgdHJhbnNmZXJzLCBhbmQgaXQgcmVhZHMgYXMgYSBjb250cmFj',
+  'dDoKLS0gbnVtYmVyZWQgY2xhdXNlcywgZWFjaCB3aXRoIHRoZSBjb25zZXF1ZW5jZSBvZiBicmVha2luZyBpdCwgb3ZlciBhbiBleHBsaWNpdCBzdGF0ZW1l',
+  'bnQgb2Ygd2hhdAotLSB0aGUgc2F2ZSBpcyBhYm91dCB0byBjaGFuZ2UuCi0tCi0tIFNBTUUgUEVORElORyBBQ1RJT04gQVMgMWQuIEl0IHJlYWRzIG1lbnUu',
+  'X3BlbmRpbmdBY3Rpb24gdGhyb3VnaCBBSV9JbmZsdWVuY2UuQWdyZWVtZW50U2hlZXQgLQotLSB0aGVyZSBpcyBubyBzZWNvbmQgcHJvcG9zYWwgb2JqZWN0',
+  'LCBzbyB0aGUgc2hlZXQgY2Fubm90IHByZXNlbnQgdGVybXMgdGhlIGlubGluZSBnYXRlIGRvZXMgbm90Ci0tIGFsc28gaG9sZC4KLS0KLS0gVEhFIFJVTEUg',
+  'VEhBVCBNQUtFUyBJVCBXT1JUSCBSRUFESU5HOiBub24tZXZlbnRzIGFyZSBzdGlsbCBwcmludGVkLiAiU2hpcHMgc3Bhd25lZDogbm9uZSIgYW5kCi0tICJT',
+  'ZWN0b3IgdHJhbnNmZXI6IGRpc2FibGVkX3VudGlsX3Rlc3RlZCIgYXBwZWFyIGV2ZW4gdGhvdWdoIG5vdGhpbmcgaGFwcGVucy4gQW4gb21pdHRlZCByb3cK',
+  'LS0gcmVhZHMgYXMgInVua25vd24iOyBhIHN0YXRlZCBub3RoaW5nIHJlYWRzIGFzICJub3RoaW5nIi4gVGhhdCBpcyB0aGUgd2hvbGUgcG9pbnQgb2YgdGhl',
+  'IHNoZWV0LgotLQotLSBSZW5kZXIgY29uc3RyYWludHMgKHByb3ZlbiBpbiBnYW1lLCBjaGVhcCB0byB2aW9sYXRlKToKLS0gICAqIGFkZFRhYmxlKE4pIGFi',
+  'b3ZlIH4xMiBtYWtlcyB0aGUgZW5naW5lIHJlZnVzZSB0aGUgV0hPTEUgZnJhbWUsIHNpbGVudGx5LiBOb3RoaW5nIGhlcmUKLS0gICAgIGV4Y2VlZHMgMTIu',
+  'Ci0tICAgKiBDb2x1bW4gd2lkdGhzIGFyZSBpbW11dGFibGUgYWZ0ZXIgdGhlIGZpcnN0IGFkZFJvdygpLgotLSAgICogZm9udHNpemUgdGFrZXMgRk9OVCB1',
+  'bml0cyB2aWEgSGVscGVyLnNjYWxlRm9udCwgbm90IHNjYWxlWSBwaXhlbHMuCi0tICAgKiBBU0NJSSBvbmx5IGluIHJlbmRlcmVkIGxpdGVyYWxzLgotLSA9',
+  'PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09',
+  'PQoKbG9jYWwgSGVscGVyID0gcmF3Z2V0KF9HLCAiSGVscGVyIikKbG9jYWwgZnVuY3Rpb24gcmVmcmVzaEhlbHBlcigpIGlmIG5vdCBIZWxwZXIgdGhlbiBI',
+  'ZWxwZXIgPSByYXdnZXQoX0csICJIZWxwZXIiKSBlbmQgcmV0dXJuIEhlbHBlciBlbmQKCkFJQ19TaGVldF9NZW51ID0geyBuYW1lID0gIkFJQ19TaGVldCIs',
+  'IGxheWVyID0gNCwgYWN0aXZlID0gZmFsc2UgfQpsb2NhbCBzaGVldCA9IEFJQ19TaGVldF9NZW51Cgpsb2NhbCBmdW5jdGlvbiBsb2cobSkgaWYgRGVidWdF',
+  'cnJvciB0aGVuIERlYnVnRXJyb3IoIltBSUNIQVRdW1NIRUVUXSAiIC4uIHRvc3RyaW5nKG0pKSBlbmQgZW5kCgpsb2NhbCBUT0sgPSB7CiAgICBwYW5lbCAg',
+  'ID0geyByID0gICAzLCBnID0gIDEwLCBiID0gIDE4LCBhID0gOTAgfSwKICAgIGhlYWRlciAgPSB7IHIgPSAgMTUsIGcgPSAgODIsIGIgPSAxMzYsIGEgPSA2',
+  'MCB9LAogICAgYnRuICAgICA9IHsgciA9ICAxNSwgZyA9ICA4MiwgYiA9IDEzNiwgYSA9IDEwMCB9LAogICAgYnRuUHJpICA9IHsgciA9ICAyNiwgZyA9IDEy',
+  'MiwgYiA9IDE5NCwgYSA9IDEwMCB9LAogICAgbGFiZWwgICA9IHsgciA9IDE0MywgZyA9IDE4MiwgYiA9IDIxNiwgYSA9IDEwMCB9LAogICAgdmFsdWUgICA9',
+  'IHsgciA9IDIyNiwgZyA9IDI0MCwgYiA9IDI1MywgYSA9IDEwMCB9LAogICAgaGVhZGluZyA9IHsgciA9IDIwNywgZyA9IDIzMCwgYiA9IDI1MSwgYSA9IDEw',
+  'MCB9LAogICAgYWNjZW50ICA9IHsgciA9IDEyNCwgZyA9IDIwMCwgYiA9IDI1NSwgYSA9IDEwMCB9LAogICAgZ29vZCAgICA9IHsgciA9ICA3MCwgZyA9IDIx',
+  'NywgYiA9ICA5MiwgYSA9IDEwMCB9LAogICAgbnBjICAgICA9IHsgciA9IDI1NSwgZyA9IDE3NiwgYiA9ICA4NCwgYSA9IDEwMCB9LAogICAgeW91ICAgICA9',
+  'IHsgciA9ICA3MCwgZyA9IDIxNywgYiA9ICA5MiwgYSA9IDEwMCB9LAogICAgYmFkICAgICA9IHsgciA9IDIyNiwgZyA9ICA5NiwgYiA9ICA3NiwgYSA9IDEw',
+  'MCB9LAogICAgZGltICAgICA9IHsgciA9IDEyMCwgZyA9IDE0MCwgYiA9IDE2MCwgYSA9IDEwMCB9LAp9Cgpsb2NhbCBmdW5jdGlvbiBhc2NpaShzKQogICAg',
+  'cyA9IHRvc3RyaW5nKHMgb3IgIiIpCiAgICBsb2NhbCBvdXQgPSB7fQogICAgZm9yIGkgPSAxLCAjcyBkbwogICAgICAgIGxvY2FsIGIgPSBzOmJ5dGUoaSkK',
+  'ICAgICAgICBvdXRbI291dCArIDFdID0gKGIgPj0gMzIgYW5kIGIgPD0gMTI2KSBhbmQgc3RyaW5nLmNoYXIoYikgb3IgIiAiCiAgICBlbmQKICAgIHJldHVy',
+  'biAodGFibGUuY29uY2F0KG91dCk6Z3N1YigiJXMrJCIsICIiKSkKZW5kCgpsb2NhbCBmdW5jdGlvbiBmb250KHNpemUpCiAgICBsb2NhbCBvaywgdiA9IHBj',
+  'YWxsKGZ1bmN0aW9uKCkgcmV0dXJuIEhlbHBlci5zY2FsZUZvbnQoIlpla3RvbiIsIHNpemUpIGVuZCkKICAgIGlmIG9rIGFuZCB0eXBlKHYpID09ICJudW1i',
+  'ZXIiIGFuZCB2ID4gMCB0aGVuIHJldHVybiB2IGVuZAogICAgcmV0dXJuIHNpemUKZW5kCgpsb2NhbCBmdW5jdGlvbiB0ZXJtKCkgcmV0dXJuIHJhd2dldChf',
+  'RywgIlg0X1Rlcm1pbmFsX01lbnUiKSBlbmQKCmxvY2FsIGZ1bmN0aW9uIHRvbmVDb2xvcih0KQogICAgdCA9IHRvc3RyaW5nKHQgb3IgIiIpCiAgICBpZiB0',
+  'ID09ICJnb29kIiB0aGVuIHJldHVybiBUT0suZ29vZCBlbmQKICAgIGlmIHQgPT0gImJhZCIgIHRoZW4gcmV0dXJuIFRPSy5iYWQgZW5kCiAgICBpZiB0ID09',
+  'ICJkaW0iICB0aGVuIHJldHVybiBUT0subGFiZWwgZW5kCiAgICByZXR1cm4gVE9LLnZhbHVlCmVuZAoKZnVuY3Rpb24gc2hlZXQuZGlzcGxheSgpCiAgICBy',
+  'ZWZyZXNoSGVscGVyKCkKICAgIGlmIG5vdCBIZWxwZXIgdGhlbiBsb2coImRpc3BsYXkgQUJPUlQ6IEhlbHBlciBuaWwiKTsgcmV0dXJuIGVuZAogICAgaWYg',
+  'c2hlZXQuZnJhbWUgdGhlbiBIZWxwZXIuY2xlYXJEYXRhRm9yUmVmcmVzaChzaGVldCwgc2hlZXQubGF5ZXIpIGVuZAogICAgc2hlZXQuX3RhYiA9IDAKCiAg',
+  'ICBsb2NhbCB2dyA9IEhlbHBlci52aWV3V2lkdGggb3IgMTkyMAogICAgbG9jYWwgdmggPSBIZWxwZXIudmlld0hlaWdodCBvciAxMDgwCgogICAgc2hlZXQu',
+  'ZnJhbWUgPSBIZWxwZXIuY3JlYXRlRnJhbWVIYW5kbGUoc2hlZXQsIHsgeCA9IDAsIHkgPSAwLCB3aWR0aCA9IHZ3LCBoZWlnaHQgPSB2aCwKICAgICAgICAg',
+  'ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGxheWVyID0gc2hlZXQubGF5ZXIsIHN0YW5kYXJkQnV0dG9ucyA9IHt9LAogICAg',
+  'ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgYmx1ckJhY2tncm91bmQgPSB0cnVlIH0pCiAgICBsb2NhbCBmcmFtZSA9',
+  'IHNoZWV0LmZyYW1lCgogICAgLS0gVGhlIGRlc2lnbiBjZW50cmVzIGEgMTE0MHB4IHNoZWV0IG9uIGEgMjU2MHB4IGNhbnZhczogNDQuNSUgb2YgdGhlIHdp',
+  'ZHRoLgogICAgbG9jYWwgdyAgPSBtYXRoLmZsb29yKHZ3ICogKDExNDAgLyAyNTYwKSkKICAgIGxvY2FsIHggID0gbWF0aC5mbG9vcigodncgLSB3KSAvIDIp',
+  'CiAgICBsb2NhbCB5ICA9IG1hdGguZmxvb3IodmggKiAwLjEwKQoKICAgIGxvY2FsIG0gPSB0ZXJtKCkKICAgIGxvY2FsIHBlbmRpbmcgPSBtIGFuZCBtLl9w',
+  'ZW5kaW5nQWN0aW9uCiAgICBsb2NhbCBiciA9IHJhd2dldChfRywgIkFJX0luZmx1ZW5jZSIpCiAgICBsb2NhbCBkYXRhID0gbmlsCiAgICBpZiBiciBhbmQg',
+  'YnIuQWdyZWVtZW50U2hlZXQgYW5kIHBlbmRpbmcgdGhlbgogICAgICAgIGxvY2FsIG9rLCB2ID0gcGNhbGwoYnIuQWdyZWVtZW50U2hlZXQsIHBlbmRpbmcp',
+  'CiAgICAgICAgaWYgb2sgYW5kIHR5cGUodikgPT0gInRhYmxlIiB0aGVuIGRhdGEgPSB2IGVuZAogICAgZW5kCgogICAgLS0gTk8gRlVMTC1TQ1JFRU4gQkFD',
+  'S0RST1AuIFR3byBhcHByb2FjaGVzIHdlcmUgdHJpZWQgYW5kIGJvdGggZmFpbGVkIGluIGdhbWU6IGJhY2tncm91bmRJRAogICAgLS0gb24gY3JlYXRlRnJh',
+  'bWVIYW5kbGUgaXMgaWdub3JlZCBieSB0aGUgZW5naW5lLCBhbmQgYSB0YWJsZSBvZiBFTVBUWSByb3dzIGRvZXMgbm90IHBhaW50ICh0aGUKICAgIC0tIGNs',
+  'YXVzZSB0ZXh0IHJlbmRlcmVkIG92ZXIgYmFyZSBjb2NrcGl0IGFuZCB3YXMgdW5yZWFkYWJsZSkuIFRoZSBkZXNpZ24gYXNrcyBmb3IgYSBwYW5lbCBmaWxs',
+  'CiAgICAtLSBiZWhpbmQgdGhlIGNvbnRlbnQsIG5vdCBhIHBhZ2Ugc2hlZXQgLSBzbyBldmVyeSB0YWJsZSBiZWxvdyBjYXJyaWVzIFRPSy5wYW5lbCBpdHNl',
+  'bGYsIHdoaWNoCiAgICAtLSBpcyB0aGUgb25lIHRoaW5nIHByb3ZlbiB0byBkcmF3LgoKICAgIC0tIEhlYWRlcjogdGl0bGUgbGVmdCwgdHggaWQgKyBpZGVt',
+  'cG90ZW5jeSBtYXJrZXIgcmlnaHQuCiAgICBzaGVldC5fdGFiID0gc2hlZXQuX3RhYiArIDEKICAgIGxvY2FsIGh0ID0gZnJhbWU6YWRkVGFibGUoMiwgeyB0',
+  'YWJPcmRlciA9IHNoZWV0Ll90YWIsIHggPSB4LCB5ID0geSwgd2lkdGggPSB3LAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGJhY2tncm91',
+  'bmRJRCA9ICJzb2xpZCIsIGJhY2tncm91bmRDb2xvciA9IFRPSy5wYW5lbCwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBoaWdobGlnaHRN',
+  'b2RlID0gIm9mZiIgfSkKICAgIGh0OnNldENvbFdpZHRoUGVyY2VudCgxLCA1NSkKICAgIGh0OnNldENvbFdpZHRoUGVyY2VudCgyLCA0NSkKICAgIGxvY2Fs',
+  'IGhyID0gaHQ6YWRkUm93KGZhbHNlLCB7fSkKICAgIGhyWzFdOmNyZWF0ZVRleHQoIlRFUk1TIE9GRkVSRUQiLCB7IGNvbG9yID0gVE9LLmhlYWRpbmcsIGZv',
+  'bnRzaXplID0gZm9udCgxMykgfSkKICAgIGhyWzJdOmNyZWF0ZVRleHQoZGF0YSBhbmQgZGF0YS50eCBhbmQgKCJyZWYgIiAuLiBzdHJpbmcudXBwZXIoYXNj',
+  'aWkoZGF0YS50eCkpKSBvciAiIiwKICAgICAgICAgICAgICAgICAgICAgeyBjb2xvciA9IFRPSy5sYWJlbCwgaGFsaWduID0gInJpZ2h0IiwgZm9udHNpemUg',
+  'PSBmb250KDkpIH0pCiAgICB5ID0geSArIEhlbHBlci5zY2FsZVkoMzQpCgogICAgaWYgbm90IGRhdGEgdGhlbgogICAgICAgIHNoZWV0Ll90YWIgPSBzaGVl',
+  'dC5fdGFiICsgMQogICAgICAgIGxvY2FsIG50ID0gZnJhbWU6YWRkVGFibGUoMSwgeyB0YWJPcmRlciA9IHNoZWV0Ll90YWIsIHggPSB4LCB5ID0geSwgd2lk',
+  'dGggPSB3LAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBiYWNrZ3JvdW5kSUQgPSAic29saWQiLCBiYWNrZ3JvdW5kQ29sb3IgPSBU',
+  'T0sucGFuZWwsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGhpZ2hsaWdodE1vZGUgPSAib2ZmIiB9KQogICAgICAgIG50OmFkZFJv',
+  'dyhmYWxzZSwge30pWzFdOmNyZWF0ZVRleHQoCiAgICAgICAgICAgICJOb2JvZHkgaGFzIHB1dCB0ZXJtcyB0byB5b3UuIFRoaXMgb3BlbnMgd2hlbiBzb21l',
+  'b25lIGRvZXMuIiwKICAgICAgICAgICAgeyBjb2xvciA9IFRPSy5sYWJlbCwgd29yZHdyYXAgPSB0cnVlLCBmb250c2l6ZSA9IGZvbnQoMTApIH0pCiAgICAg',
+  'ICAgZnJhbWU6ZGlzcGxheSgpCiAgICAgICAgcmV0dXJuCiAgICBlbmQKCiAgICAtLSBQYXJ0aWVzIGxpbmUuIFBsYXllciBncmVlbiwgZmFjdGlvbiBhbWJl',
+  'ciAtIGNvbG91ciBpcyBzdGF0ZSwgbm90IGRlY29yYXRpb24uCiAgICBzaGVldC5fdGFiID0gc2hlZXQuX3RhYiArIDEKICAgIGxvY2FsIHB0ID0gZnJhbWU6',
+  'YWRkVGFibGUoMSwgeyB0YWJPcmRlciA9IHNoZWV0Ll90YWIsIHggPSB4LCB5ID0geSwgd2lkdGggPSB3LAogICAgICAgICAgICAgICAgICAgICAgICAgICAg',
+  'ICAgICAgIGJhY2tncm91bmRJRCA9ICJzb2xpZCIsIGJhY2tncm91bmRDb2xvciA9IFRPSy5wYW5lbCwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg',
+  'ICAgICBoaWdobGlnaHRNb2RlID0gIm9mZiIgfSkKICAgIHB0OmFkZFJvdyhmYWxzZSwge30pWzFdOmNyZWF0ZVRleHQoCiAgICAgICAgIkJldHdlZW4geW91',
+  'IGFuZCAiIC4uIGFzY2lpKGRhdGEud2hvKQogICAgICAgIC4uIChkYXRhLmJ5IGFuZCAoIiwgZW50ZXJlZCBieSAiIC4uIGFzY2lpKGRhdGEuYnkpKSBvciAi',
+  'IikKICAgICAgICAuLiAoZGF0YS5yb2xlIGFuZCAoIiAoIiAuLiBhc2NpaShkYXRhLnJvbGUpIC4uICIpIikgb3IgIiIpIC4uICIuIiwKICAgICAgICB7IGNv',
+  'bG9yID0gVE9LLnZhbHVlLCB3b3Jkd3JhcCA9IHRydWUsIGZvbnRzaXplID0gZm9udCgxMCkgfSkKICAgIHkgPSB5ICsgSGVscGVyLnNjYWxlWSgzMCkKCiAg',
+  'ICAtLSBDbGF1c2VzOiBtb25vIG51bWJlciBndXR0ZXIsIGNsYXVzZSB0ZXh0LCBjb25zZXF1ZW5jZSBub3RlIGJlbmVhdGguCiAgICBmb3IgXywgYyBpbiBp',
+  'cGFpcnMoZGF0YS5jbGF1c2VzIG9yIHt9KSBkbwogICAgICAgIHNoZWV0Ll90YWIgPSBzaGVldC5fdGFiICsgMQogICAgICAgIGxvY2FsIGN0ID0gZnJhbWU6',
+  'YWRkVGFibGUoMiwgeyB0YWJPcmRlciA9IHNoZWV0Ll90YWIsIHggPSB4LCB5ID0geSwgd2lkdGggPSB3LAogICAgICAgICAgICAgICAgICAgICAgICAgICAg',
+  'ICAgICAgICAgICBiYWNrZ3JvdW5kSUQgPSAic29saWQiLCBiYWNrZ3JvdW5kQ29sb3IgPSBUT0sucGFuZWwsCiAgICAgICAgICAgICAgICAgICAgICAgICAg',
+  'ICAgICAgICAgICAgIGhpZ2hsaWdodE1vZGUgPSAib2ZmIiB9KQogICAgICAgIGN0OnNldENvbFdpZHRoUGVyY2VudCgxLCA4KQogICAgICAgIGN0OnNldENv',
+  'bFdpZHRoUGVyY2VudCgyLCA5MikKICAgICAgICBsb2NhbCByID0gY3Q6YWRkUm93KGZhbHNlLCB7fSkKICAgICAgICByWzFdOmNyZWF0ZVRleHQoYXNjaWko',
+  'Yy5uKSwgeyBjb2xvciA9IFRPSy5hY2NlbnQsIGZvbnRzaXplID0gZm9udCgxMCkgfSkKICAgICAgICByWzJdOmNyZWF0ZVRleHQoYXNjaWkoYy50ZXh0KSwg',
+  'eyBjb2xvciA9IFRPSy52YWx1ZSwgd29yZHdyYXAgPSB0cnVlLCBmb250c2l6ZSA9IGZvbnQoMTApIH0pCiAgICAgICAgeSA9IHkgKyBIZWxwZXIuc2NhbGVZ',
+  'KDI2KQogICAgICAgIGlmIGMubm90ZSB0aGVuCiAgICAgICAgICAgIHNoZWV0Ll90YWIgPSBzaGVldC5fdGFiICsgMQogICAgICAgICAgICBsb2NhbCBudDIg',
+  'PSBmcmFtZTphZGRUYWJsZSgyLCB7IHRhYk9yZGVyID0gc2hlZXQuX3RhYiwgeCA9IHgsIHkgPSB5LCB3aWR0aCA9IHcsCiAgICAgICAgICAgICAgICAgICAg',
+  'ICAgICAgICAgICAgICAgICAgICAgICAgYmFja2dyb3VuZElEID0gInNvbGlkIiwgYmFja2dyb3VuZENvbG9yID0gVE9LLnBhbmVsLAogICAgICAgICAgICAg',
+  'ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGhpZ2hsaWdodE1vZGUgPSAib2ZmIiB9KQogICAgICAgICAgICBudDI6c2V0Q29sV2lkdGhQZXJjZW50',
+  'KDEsIDgpCiAgICAgICAgICAgIG50MjpzZXRDb2xXaWR0aFBlcmNlbnQoMiwgOTIpCiAgICAgICAgICAgIGxvY2FsIHIyID0gbnQyOmFkZFJvdyhmYWxzZSwg',
+  'e30pCiAgICAgICAgICAgIHIyWzFdOmNyZWF0ZVRleHQoIiIsIHt9KQogICAgICAgICAgICByMlsyXTpjcmVhdGVUZXh0KGFzY2lpKGMubm90ZSksIHsgY29s',
+  'b3IgPSBUT0subGFiZWwsIHdvcmR3cmFwID0gdHJ1ZSwgZm9udHNpemUgPSBmb250KDkpIH0pCiAgICAgICAgICAgIHkgPSB5ICsgSGVscGVyLnNjYWxlWSgy',
+  'MikKICAgICAgICBlbmQKICAgICAgICB5ID0geSArIEhlbHBlci5zY2FsZVkoNikKICAgIGVuZAoKICAgIC0tIFdIQVQgQ0hBTkdFUyBJTiBZT1VSIFNBVkUg',
+  'LSB0aGUgc2VjdGlvbiB0aGF0IGp1c3RpZmllcyB0aGUgd2hvbGUgc2NyZWVuLgogICAgeSA9IHkgKyBIZWxwZXIuc2NhbGVZKDgpCiAgICBzaGVldC5fdGFi',
+  'ID0gc2hlZXQuX3RhYiArIDEKICAgIGxvY2FsIHNiID0gZnJhbWU6YWRkVGFibGUoMSwgeyB0YWJPcmRlciA9IHNoZWV0Ll90YWIsIHggPSB4LCB5ID0geSwg',
+  'd2lkdGggPSB3LAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGJhY2tncm91bmRJRCA9ICJzb2xpZCIsIGJhY2tncm91bmRDb2xvciA9IFRP',
+  'Sy5oZWFkZXIsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgaGlnaGxpZ2h0TW9kZSA9ICJvZmYiIH0pCiAgICBzYjphZGRSb3coZmFsc2Us',
+  'IHt9KVsxXTpjcmVhdGVUZXh0KCJXSEFUIFRISVMgQ09TVFMgWU9VIiwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgeyBjb2xvciA9',
+  'IFRPSy5oZWFkaW5nLCBmb250c2l6ZSA9IGZvbnQoMTApIH0pCiAgICB5ID0geSArIEhlbHBlci5zY2FsZVkoMzApCgogICAgZm9yIF8sIGQgaW4gaXBhaXJz',
+  'KGRhdGEuZGlmZiBvciB7fSkgZG8KICAgICAgICBzaGVldC5fdGFiID0gc2hlZXQuX3RhYiArIDEKICAgICAgICBsb2NhbCBkdCA9IGZyYW1lOmFkZFRhYmxl',
+  'KDIsIHsgdGFiT3JkZXIgPSBzaGVldC5fdGFiLCB4ID0geCwgeSA9IHksIHdpZHRoID0gdywKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg',
+  'ICAgYmFja2dyb3VuZElEID0gInNvbGlkIiwgYmFja2dyb3VuZENvbG9yID0gVE9LLnBhbmVsLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg',
+  'ICAgICBoaWdobGlnaHRNb2RlID0gIm9mZiIgfSkKICAgICAgICBkdDpzZXRDb2xXaWR0aFBlcmNlbnQoMSwgMzUpCiAgICAgICAgZHQ6c2V0Q29sV2lkdGhQ',
+  'ZXJjZW50KDIsIDY1KQogICAgICAgIGxvY2FsIHIgPSBkdDphZGRSb3coZmFsc2UsIHt9KQogICAgICAgIHJbMV06Y3JlYXRlVGV4dChhc2NpaShkLmxhYmVs',
+  'KSwgeyBjb2xvciA9IFRPSy5sYWJlbCwgZm9udHNpemUgPSBmb250KDEwKSB9KQogICAgICAgIHJbMl06Y3JlYXRlVGV4dChhc2NpaShkLnZhbHVlKSwgeyBj',
+  'b2xvciA9IHRvbmVDb2xvcihkLnRvbmUpLCBoYWxpZ24gPSAicmlnaHQiLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBmb250',
+  'c2l6ZSA9IGZvbnQoMTApIH0pCiAgICAgICAgeSA9IHkgKyBIZWxwZXIuc2NhbGVZKDI0KQogICAgZW5kCgogICAgLS0gU0lHTiAvIENPVU5URVIgLyBXQUxL',
+  'IEFXQVkuIEV2ZXJ5IG9uZSBvZiB0aGVzZSByb3V0ZXMgYmFjayB0aHJvdWdoIHRoZSBjb252ZXJzYXRpb24ncyBvd24KICAgIC0tIG9uSW5wdXQsIHNvIHNp',
+  'Z25pbmcgaGVyZSBpcyB0aGUgc2FtZSBhY3QgYXMgY29uZmlybWluZyBpbmxpbmUgLSBvbmUgY29kZSBwYXRoLCBvbmUgcmVjZWlwdC4KICAgIHkgPSB5ICsg',
+  'SGVscGVyLnNjYWxlWSgxNCkKICAgIHNoZWV0Ll90YWIgPSBzaGVldC5fdGFiICsgMQogICAgbG9jYWwgYnQgPSBmcmFtZTphZGRUYWJsZSgxMiwgeyB0YWJP',
+  'cmRlciA9IHNoZWV0Ll90YWIsIHggPSB4LCB5ID0geSwgd2lkdGggPSB3LAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBiYWNrZ3JvdW5k',
+  'SUQgPSAic29saWQiLCBiYWNrZ3JvdW5kQ29sb3IgPSBUT0sucGFuZWwsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGhpZ2hsaWdodE1v',
+  'ZGUgPSAib2ZmIiB9KQogICAgbG9jYWwgYnIyID0gYnQ6YWRkUm93KHRydWUsIHt9KQogICAgYnIyWzFdOnNldENvbFNwYW4oNCk6Y3JlYXRlQnV0dG9uKHsg',
+  'YWN0aXZlID0gdHJ1ZSB9KQogICAgICAgIDpzZXRUZXh0KCJTSUdOIEFORCBUUkFOU0ZFUiIsIHsgaGFsaWduID0gImNlbnRlciIgfSkKICAgIGJyMlsxXS5o',
+  'YW5kbGVycy5vbkNsaWNrID0gZnVuY3Rpb24oKQogICAgICAgIHNoZWV0LmNsb3NlKCkKICAgICAgICAtLSBJbnRlcm5hbCBjb250cm9sIGxpbmUsIG5ldmVy',
+  'IHJlbmRlcmVkIC0gaXQgaXMgdGhlIHNhbWUgdG9rZW4gdGhlIHdoZWVsIHNlbmRzLgogICAgICAgIGlmIG0gYW5kIG0ub25JbnB1dCB0aGVuIHBjYWxsKG0u',
+  'b25JbnB1dCwgIl9fcGF5X2Z1bGwiKSBlbmQgLS1bW3ZvY2FiLW9rXV0KICAgIGVuZAogICAgYnIyWzVdOnNldENvbFNwYW4oNCk6Y3JlYXRlQnV0dG9uKHsg',
+  'YWN0aXZlID0gdHJ1ZSB9KQogICAgICAgIDpzZXRUZXh0KCJDT1VOVEVSLU9GRkVSIiwgeyBoYWxpZ24gPSAiY2VudGVyIiB9KQogICAgYnIyWzVdLmhhbmRs',
+  'ZXJzLm9uQ2xpY2sgPSBmdW5jdGlvbigpCiAgICAgICAgc2hlZXQuY2xvc2UoKQogICAgICAgIGlmIG0gdGhlbiBtLl9hbW91bnRNb2RlID0gdHJ1ZSBlbmQK',
+  'ICAgIGVuZAogICAgYnIyWzldOnNldENvbFNwYW4oNCk6Y3JlYXRlQnV0dG9uKHsgYWN0aXZlID0gdHJ1ZSB9KQogICAgICAgIDpzZXRUZXh0KCJXQUxLIEFX',
+  'QVkiLCB7IGhhbGlnbiA9ICJjZW50ZXIiIH0pCiAgICBicjJbOV0uaGFuZGxlcnMub25DbGljayA9IGZ1bmN0aW9uKCkKICAgICAgICBzaGVldC5jbG9zZSgp',
+  'CiAgICAgICAgLS0gUmVmdXNpbmcgaXMgYSBjb252ZXJzYXRpb25hbCBtb3ZlIHRoZSBjb3JyZXNwb25kZW50IGFuc3dlcnMsIG5ldmVyIGEgc2lsZW50IGRp',
+  'c21pc3MuCiAgICAgICAgaWYgbSBhbmQgbS5vbklucHV0IHRoZW4gcGNhbGwobS5vbklucHV0LCAiX19yZWZ1c2UiKSBlbmQKICAgIGVuZAoKICAgIGZyYW1l',
+  'OmRpc3BsYXkoKQogICAgbG9nKCJkaXNwbGF5IERPTkUgY2xhdXNlcz0iIC4uIHRvc3RyaW5nKCMoZGF0YS5jbGF1c2VzIG9yIHt9KSkpCmVuZAoKc2hlZXQu',
+  'dXBkYXRlSW50ZXJ2YWwgPSAwLjEKZnVuY3Rpb24gc2hlZXQub25VcGRhdGUoKQogICAgaWYgc2hlZXQuX3JlZnJlc2ggYW5kIHNoZWV0LmFjdGl2ZSB0aGVu',
+  'IHNoZWV0Ll9yZWZyZXNoID0gbmlsOyBzaGVldC5kaXNwbGF5KCkgZW5kCmVuZApmdW5jdGlvbiBzaGVldC5yZWZyZXNoKCkgc2hlZXQuX3JlZnJlc2ggPSB0',
+  'cnVlIGVuZAoKZnVuY3Rpb24gc2hlZXQuZW5zdXJlUmVnaXN0ZXJlZCgpCiAgICByZWZyZXNoSGVscGVyKCkKICAgIF9HLk1lbnVzID0gX0cuTWVudXMgb3Ig',
+  'e30KICAgIGxvY2FsIGZvdW5kID0gZmFsc2UKICAgIGZvciBpLCBtbSBpbiBpcGFpcnMoX0cuTWVudXMpIGRvIGlmIG1tLm5hbWUgPT0gc2hlZXQubmFtZSB0',
+  'aGVuIF9HLk1lbnVzW2ldID0gc2hlZXQ7IGZvdW5kID0gdHJ1ZTsgYnJlYWsgZW5kIGVuZAogICAgaWYgbm90IGZvdW5kIHRoZW4gdGFibGUuaW5zZXJ0KF9H',
+  'Lk1lbnVzLCBzaGVldCkgZW5kCiAgICBpZiBIZWxwZXIgYW5kIEhlbHBlci5yZWdpc3Rlck1lbnUgYW5kIG5vdCBzaGVldC5fcmVnaXN0ZXJlZCB0aGVuCiAg',
+  'ICAgICAgbG9jYWwgb2sgPSBwY2FsbChIZWxwZXIucmVnaXN0ZXJNZW51LCBzaGVldCk7IHNoZWV0Ll9yZWdpc3RlcmVkID0gb2sKICAgIGVuZAogICAgbG9n',
+  'KCJlbnN1cmVSZWdpc3RlcmVkIHJlZ2lzdGVyZWQ9IiAuLiB0b3N0cmluZyhzaGVldC5fcmVnaXN0ZXJlZCA9PSB0cnVlKSkKICAgIHJldHVybiBzaGVldC5f',
+  'cmVnaXN0ZXJlZCA9PSB0cnVlCmVuZAoKZnVuY3Rpb24gc2hlZXQub3BlbigpCiAgICBzaGVldC5fb3BlblJlcXVlc3RlZCA9IHRydWUKICAgIHNoZWV0LmVu',
+  'c3VyZVJlZ2lzdGVyZWQoKQogICAgaWYgT3Blbk1lbnUgdGhlbiBPcGVuTWVudShzaGVldC5uYW1lLCBuaWwsIG5pbCwgdHJ1ZSkKICAgIGVsc2VpZiBzaGVl',
+  'dC5vblNob3dNZW51IHRoZW4gc2hlZXQub25TaG93TWVudSgpIGVuZAplbmQKCmZ1bmN0aW9uIHNoZWV0Lm9uU2hvd01lbnUoKQogICAgcmVmcmVzaEhlbHBl',
+  'cigpCiAgICBpZiBub3Qgc2hlZXQuX29wZW5SZXF1ZXN0ZWQgdGhlbgogICAgICAgIGlmIEhlbHBlciBhbmQgSGVscGVyLmNsb3NlTWVudUFuZFJldHVybiB0',
+  'aGVuIHBjYWxsKEhlbHBlci5jbG9zZU1lbnVBbmRSZXR1cm4sIHNoZWV0KSBlbmQKICAgICAgICBzaGVldC5jbGVhbnVwKCkKICAgICAgICByZXR1cm4KICAg',
+  'IGVuZAogICAgc2hlZXQuX29wZW5SZXF1ZXN0ZWQgPSBmYWxzZQogICAgc2hlZXQuYWN0aXZlID0gdHJ1ZQogICAgc2hlZXQuZGlzcGxheSgpCmVuZAoKZnVu',
+  'Y3Rpb24gc2hlZXQuc2hvd01lbnVDYWxsYmFjaygpIHNoZWV0Lm9uU2hvd01lbnUoKSBlbmQKZnVuY3Rpb24gc2hlZXQub25DbG9zZUVsZW1lbnQoKSBzaGVl',
+  'dC5jbG9zZSgpIGVuZApmdW5jdGlvbiBzaGVldC5jbGVhbnVwKCkgc2hlZXQuYWN0aXZlID0gZmFsc2U7IHNoZWV0LmZyYW1lID0gbmlsIGVuZApmdW5jdGlv',
+  'biBzaGVldC5jbG9zZSgpCiAgICBzaGVldC5jbGVhbnVwKCkKICAgIGlmIEhlbHBlciBhbmQgSGVscGVyLmNsb3NlTWVudUFuZFJldHVybiB0aGVuIHBjYWxs',
+  'KEhlbHBlci5jbG9zZU1lbnVBbmRSZXR1cm4sIHNoZWV0KSBlbmQKZW5kCgpwY2FsbChzaGVldC5lbnN1cmVSZWdpc3RlcmVkKQpsb2coImFpY19zaGVldC5s',
+  'dWEgbG9hZGVkIikK',
+].join('');
+const B119_AIC_SHEET_RELATIVE_PATH = 'ui/addons/ai_influence_chat/aic_sheet.lua';
+const B119_AIC_SHEET_TARGET_NAME = 'sheet.display';
+const B119_AIC_SHEET_SOURCE_SHA256 = 'A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37';
+
+function exactAicSheetSource(): { readonly source: X4UiWorkspaceSource; readonly workspace: ModWorkspace } {
+  const sourceText = Buffer.from(B119_AIC_SHEET_SOURCE_BASE64, 'base64').toString('utf8');
+  const sourceSha256 = createHash('sha256').update(sourceText, 'utf8').digest('hex').toUpperCase();
+  assert.equal(sourceSha256, B119_AIC_SHEET_SOURCE_SHA256, 'B119 exact aic_sheet source SHA-256 drifted');
+  const sheetWorkspace = workspace([
+    passthrough('ui.xml', [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<addon name="b119-aic-sheet-causal">',
+      '  <environment type="menus">',
+      `    <file name="${B119_AIC_SHEET_RELATIVE_PATH}" />`,
+      '  </environment>',
+      '</addon>',
+      '',
+    ].join('\n')),
+    passthrough(B119_AIC_SHEET_RELATIVE_PATH, sourceText, { reason: 'unparsed' }),
+  ]);
+  return { workspace: sheetWorkspace, source: buildX4UiWorkspaceSource(sheetWorkspace) };
+}
+
+function aicSheetSampleValue(entry: {
+  readonly expectedType: string;
+  readonly expression: string;
+  readonly source: { readonly start: { readonly line: number } };
+  readonly previewLoop?: { readonly iteration: number };
+}): string | number | boolean {
+  if (entry.expectedType === 'boolean') return false;
+  const line = entry.source.start.line;
+  const iteration = entry.previewLoop?.iteration;
+  if (entry.expectedType === 'string') {
+    if (line === 118) return 'TX-CAUSAL';
+    if (line === 140) return 'Between you and CAUSAL COUNTERPARTY.';
+    if (line === 155) return `CLAUSE-${iteration ?? 'UNKNOWN'}`;
+    if (line === 156) return `CLAUSE TEXT ${iteration ?? 'UNKNOWN'}`;
+    if (line === 167) return `NOTE ${iteration ?? 'UNKNOWN'}`;
+    if (line === 191) return `COST-${iteration ?? 'UNKNOWN'}`;
+    if (line === 192) return `VALUE-${iteration ?? 'UNKNOWN'}`;
+    throw new Error(`B119 aic_sheet string sample appeared at unexpected source line ${line}`);
+  }
+  const expression = entry.expression.replace(/\s+/g, '');
+  if (expression === 'vw' || expression.includes('viewWidth')) return 2560;
+  if (expression === 'vh' || expression.includes('viewHeight')) return 1440;
+  if (expression === 'w' || expression.includes('1140/2560')) return 1140;
+  if (expression.includes('0.10')) return 144;
+  const scaled = expression.match(/(?:Helper\.)?scale[XY]\(([0-9]+(?:\.[0-9]+)?)\)/);
+  if (scaled?.[1] !== undefined) return Math.floor(Number(scaled[1]) * 1.4 + 0.5);
+  const font = expression.match(/^font\(([0-9]+(?:\.[0-9]+)?)\)$/);
+  if (font?.[1] !== undefined) return Math.floor(Number(font[1]) * 1.4 + 0.5);
+  if (expression === 'sheet._tab') {
+    if (line === 111) return 1;
+    if (line === 124 || line === 136) return 2;
+    if (line === 149 && iteration !== undefined) return iteration * 2 + 1;
+    if (line === 160 && iteration !== undefined) return iteration * 2 + 2;
+    if (line === 176) return 11;
+    if (line === 185 && iteration !== undefined) return iteration + 11;
+    if (line === 201) return 16;
+  }
+  if (expression === 'y') {
+    if (line === 124 || line === 136) return 192;
+    if (line === 149 && iteration !== undefined) return 234 + ((iteration - 1) * 75);
+    if (line === 160 && iteration !== undefined) return 270 + ((iteration - 1) * 75);
+    if (line === 176) return 545;
+    if (line === 185 && iteration !== undefined) return 587 + ((iteration - 1) * 34);
+    if (line === 201) return 743;
+  }
+  throw new Error(`B119 aic_sheet numeric sample appeared at unexpected source line ${line}: ${entry.expression}`);
+}
+
+function projectExactAicSheetAuthorityComplete(canonical: X4UiCorpusCanonicalSuccess): {
+  readonly source: X4UiWorkspaceSource;
+  readonly session: ReturnType<typeof projectX4UiEditorSession>;
+  readonly scene: X4UiScene | undefined;
+  readonly paint: X4UiPaintPlanResult;
+  readonly sampleCount: number;
+  readonly tabOrder: readonly number[];
+  readonly yPositions: readonly number[];
+  readonly pathSelections: readonly { readonly startLine: number; readonly endLine: number; readonly arm: string }[];
+  readonly loopSelections: readonly { readonly id: string; readonly iterationCount: number }[];
+} {
+  const exactSource = exactAicSheetSource();
+  const source = exactSource.source;
+  const sheetWorkspace = exactSource.workspace;
+  const file = source.bundle?.sourceFiles.find(candidate => candidate.path === B119_AIC_SHEET_RELATIVE_PATH);
+  assert(file !== undefined, 'B119 exact aic_sheet source did not materialize through the workspace source projector');
+  const catalog = createX4UiLayoutTargetCatalog(file.callModel);
+  assert.equal(catalog.sourceIdentity.sha256, B119_AIC_SHEET_SOURCE_SHA256, 'B119 exact aic_sheet projected source SHA-256 drifted');
+  const target = catalog.targets.find(candidate => candidate.name === B119_AIC_SHEET_TARGET_NAME);
+  assert(target !== undefined, 'B119 exact aic_sheet source did not issue sheet.display');
+  const selection: X4UiPreviewSelection = {
+    sourceIndex: file.index,
+    path: file.path,
+    sourceIdentity: catalog.sourceIdentity,
+    target: { ...target, id: target.id },
+  };
+  const profile = { width: 2560, height: 1440, uiScale: 1.4 } as const;
+  const unprojected = projectX4UiEditorSession({ workspace: sheetWorkspace, corpus: canonical, profile, selection });
+  const pathCatalog = unprojected.pathCatalog;
+  const pathCatalogAuthority = unprojected.pathCatalogAuthority;
+  assert(pathCatalog !== null && pathCatalogAuthority !== undefined && unprojected.pathBinding !== undefined, 'B119 exact aic_sheet must issue path authority and binding');
+  const pathEntries = pathCatalog.entries.filter(entry => [98, 158].includes(entry.boundary.start.line));
+  assert(pathEntries.length === 2, `B119 exact aic_sheet must issue data-present/note-present paths: ${JSON.stringify(pathEntries)}`);
+  let paths: Parameters<typeof projectX4UiEditorSession>[0]['paths'];
+  for (const entry of pathEntries) {
+    const update = updateX4UiEditorPathState(paths, pathCatalog, entry.id, pathCatalogAuthority);
+    assert(update.status === 'accepted' && update.paths !== undefined, `B119 exact aic_sheet path selection was refused: ${JSON.stringify(update)}`);
+    paths = update.paths;
+  }
+  assert(paths !== undefined && paths.selections.length === 2, 'B119 exact aic_sheet must select both requested source paths');
+  const loopCatalog = unprojected.previewLoopCatalog;
+  const loopCatalogAuthority = unprojected.previewLoopCatalogAuthority;
+  assert(loopCatalog !== null && loopCatalog.entries.length === 2, `B119 exact aic_sheet must issue both source loops: ${JSON.stringify(loopCatalog)}`);
+  assert(loopCatalogAuthority !== undefined && unprojected.loopBinding !== undefined, 'B119 exact aic_sheet must issue loop authority and binding');
+  let loops: Parameters<typeof projectX4UiEditorSession>[0]['loops'];
+  for (const entry of loopCatalog.entries) {
+    const update = updateX4UiEditorLoopState(loops, loopCatalog, entry.id, 4, loopCatalogAuthority);
+    assert(update.status === 'accepted' && update.loops !== undefined, `B119 exact aic_sheet loop selection was refused: ${JSON.stringify(update)}`);
+    loops = update.loops;
+  }
+  const loopProjected = projectX4UiEditorSession({
+    workspace: sheetWorkspace,
+    corpus: canonical,
+    profile,
+    selection,
+    paths,
+    pathBinding: unprojected.pathBinding,
+    pathCatalogAuthority,
+    loops,
+    loopBinding: unprojected.loopBinding,
+    loopCatalogAuthority,
+  });
+  const sampleCatalog = loopProjected.sampleCatalog;
+  assert(sampleCatalog !== null && loopProjected.sampleBinding !== undefined && loopProjected.sampleCatalogAuthority !== undefined, 'B119 exact aic_sheet must issue its loop-expanded sample authority');
+  assert.equal(sampleCatalog.entries.length, 55, 'B119 exact aic_sheet must issue all 55 scenario samples');
+  const values = sampleCatalog.entries.map(entry => ({ id: entry.id, value: aicSheetSampleValue(entry) }));
+  const sampleValueAt = (line: number, expression: string, iteration?: number): number => {
+    const sampleIndex = sampleCatalog.entries.findIndex(entry =>
+      entry.source.start.line === line
+      && entry.expression === expression
+      && entry.previewLoop?.iteration === iteration);
+    assert(sampleIndex >= 0, 'B119 exact aic_sheet missing ' + expression + ' sample at line ' + line + ' iteration ' + (iteration ?? 'scalar'));
+    const value = values[sampleIndex]?.value;
+    assert.equal(typeof value, 'number', 'B119 exact aic_sheet ' + expression + ' sample at line ' + line + ' must be numeric');
+    return value as number;
+  };
+  const tabOrder = [
+    sampleValueAt(111, 'sheet._tab'),
+    sampleValueAt(136, 'sheet._tab'),
+    ...[1, 2, 3, 4].flatMap(iteration => [
+      sampleValueAt(149, 'sheet._tab', iteration),
+      sampleValueAt(160, 'sheet._tab', iteration),
+    ]),
+    sampleValueAt(176, 'sheet._tab'),
+    ...[1, 2, 3, 4].map(iteration => sampleValueAt(185, 'sheet._tab', iteration)),
+    sampleValueAt(201, 'sheet._tab'),
+  ];
+  const yPositions = [
+    sampleValueAt(136, 'y'),
+    ...[1, 2, 3, 4].flatMap(iteration => [
+      sampleValueAt(149, 'y', iteration),
+      sampleValueAt(160, 'y', iteration),
+    ]),
+    sampleValueAt(176, 'y'),
+    ...[1, 2, 3, 4].map(iteration => sampleValueAt(185, 'y', iteration)),
+    sampleValueAt(201, 'y'),
+  ];
+  assert.deepEqual(tabOrder, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], 'B119 exact aic_sheet active data-present tab order drifted');
+  assert.deepEqual(yPositions, [192, 234, 270, 309, 345, 384, 420, 459, 495, 545, 587, 621, 655, 689, 743], 'B119 exact aic_sheet active data-present y positions drifted');
+  const session = projectX4UiEditorSession({
+    workspace: sheetWorkspace,
+    corpus: canonical,
+    profile,
+    selection,
+    paths: loopProjected.paths,
+    pathBinding: loopProjected.pathBinding,
+    pathCatalogAuthority: loopProjected.pathCatalogAuthority,
+    loops: loopProjected.loops,
+    loopBinding: loopProjected.loopBinding,
+    loopCatalogAuthority: loopProjected.previewLoopCatalogAuthority,
+    samples: { catalogId: sampleCatalog.id, source: sampleCatalog.sourceIdentity, values },
+    sampleBinding: loopProjected.sampleBinding,
+    sampleCatalogAuthority: loopProjected.sampleCatalogAuthority,
+  });
+  const sceneResult = session.preview.scene;
+  const scene = sceneResult !== null && sceneResult.status !== 'refused' ? sceneResult.scene : undefined;
+  const paint = scene === undefined
+    ? session.paint ?? ({ status: 'refused', refusal: { code: 'invalid-scene', message: 'exact aic_sheet Scene was unavailable' }, gameTruth: NOT_VERIFIED_IN_GAME, verification: { game: NOT_VERIFIED_IN_GAME, gameVerified: false } } as X4UiPaintPlanResult)
+    : projectX4UiPaintPlanDirect({ scene, corpus: canonical, previewAuthority: session.preview });
+  return {
+    source,
+    session,
+    scene,
+    paint,
+    sampleCount: values.length,
+    tabOrder,
+    yPositions,
+    pathSelections: pathEntries.map(entry => ({ startLine: entry.boundary.start.line, endLine: entry.boundary.end.line, arm: entry.arm })),
+    loopSelections: loops?.selections ?? [],
+  };
+}
+
 function clonedScene(scene: X4UiScene): X4UiScene {
   return JSON.parse(JSON.stringify(scene)) as X4UiScene;
 }
@@ -1364,6 +1711,69 @@ async function main(): Promise<void> {
   try {
     canonical = await loadCanonicalFixture();
     colorEvidence = await loadCanonicalColorFixture();
+    const sheetCausal = projectExactAicSheetAuthorityComplete(canonical);
+    const sheetScene = sheetCausal.scene;
+    const sheetPaintCommands = sheetCausal.paint.status === 'refused'
+      ? []
+      : sheetCausal.paint.plan.layers.flatMap(layer => layer.commands);
+    const sheetHasNonzeroPaint = sheetPaintCommands.some(command => {
+      const record = asRecord(command);
+      return ['geometry', 'innerGeometry', 'destinationRect'].some(field => {
+        const geometry = record === undefined ? undefined : asRecord(record[field]);
+        return geometry !== undefined && typeof geometry.width === 'number' && geometry.width > 0 && typeof geometry.height === 'number' && geometry.height > 0;
+      });
+    });
+    const sheetPaintGameTruth = sheetCausal.paint.status === 'refused'
+      ? sheetCausal.paint.gameTruth
+      : sheetCausal.paint.plan.gameTruth;
+    console.log('B119 causal aic_sheet -> sheet.display receipt: ' + JSON.stringify({
+      sourceSha256: B119_AIC_SHEET_SOURCE_SHA256,
+      target: B119_AIC_SHEET_TARGET_NAME,
+      profile: { width: 2560, height: 1440, uiScale: 1.4 },
+      sampleCount: sheetCausal.sampleCount,
+      pathSelections: sheetCausal.pathSelections,
+      loopSelections: sheetCausal.loopSelections.map(selection => selection.iterationCount),
+      tabOrder: sheetCausal.tabOrder,
+      yPositions: sheetCausal.yPositions,
+      scene: sheetScene === undefined ? undefined : {
+        status: sheetScene.status,
+        frames: sheetScene.frames.length,
+        tables: sheetScene.tables.length,
+        rows: sheetScene.rows.length,
+        cells: sheetScene.cells.length,
+        widgets: sheetScene.widgets.length,
+        texts: sheetScene.texts.length,
+        glyphs: sheetScene.glyphs.length,
+        gaps: sheetScene.gaps.length,
+      },
+      paint: sheetCausal.paint.status === 'refused'
+        ? { status: sheetCausal.paint.status, refusal: sheetCausal.paint.refusal }
+        : { status: sheetCausal.paint.status, commandCount: sheetPaintCommands.length, hasNonzeroPaint: sheetHasNonzeroPaint, gameTruth: sheetPaintGameTruth, gameVerified: sheetCausal.paint.verification.gameVerified },
+    }));
+    check('causal-aic-sheet-authority-complete-reaches-nonzero-paint', sheetScene !== undefined
+      && (sheetCausal.paint.status === 'projected' || sheetCausal.paint.status === 'partial')
+      && sheetHasNonzeroPaint
+      && sheetPaintGameTruth === NOT_VERIFIED_IN_GAME
+      && sheetCausal.paint.verification.gameVerified === false, {
+      fixtureReady: sheetScene !== undefined
+        && sheetCausal.sampleCount === 55
+        && sheetCausal.pathSelections.length === 2
+        && JSON.stringify(sheetCausal.pathSelections) === JSON.stringify([
+          { startLine: 98, endLine: 101, arm: 'then' },
+          { startLine: 158, endLine: 169, arm: 'then' },
+        ])
+        && sheetCausal.loopSelections.length === 2
+        && sheetCausal.loopSelections.every(selection => selection.iterationCount === 4),
+      sceneStatus: sheetScene?.status,
+      paintStatus: sheetCausal.paint.status,
+      refusal: sheetCausal.paint.status === 'refused' ? sheetCausal.paint.refusal : undefined,
+      sessionPaintStatus: sheetCausal.session.paint?.status,
+      sessionPaintRefusal: sheetCausal.session.paint?.status === 'refused' ? sheetCausal.session.paint.refusal : undefined,
+      commandCount: sheetPaintCommands.length,
+      hasNonzeroPaint: sheetHasNonzeroPaint,
+      gameTruth: sheetPaintGameTruth,
+      gameVerified: sheetCausal.paint.verification.gameVerified,
+    });
     const source = sourceFixture();
     const selection = selectionFor(source);
     const profile = buildX4UiPreviewProfile({

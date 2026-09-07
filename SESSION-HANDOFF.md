@@ -1,115 +1,103 @@
-# Session handoff — B119 `0.0.74` source, install, and projections verified; full AI benchmark remains open
+# Session handoff — B119 `0.0.75` installed agreement sheet verified; current X4 `1e` proof open
 
 Date: `2026-09-07`
 Project: `F:\DEV_ENV\X4_Forge`
-Status: bounded command-bound tint, public release, installed two-profile render/export, and authority-lifecycle unit
+Status: bounded canonical frame-table repair, public/installed `0.0.75`, and installed nonzero agreement-sheet replay
 `VERIFIED`; overall B119 `IN_PROGRESS / PARTIAL / Not verified in game`
 
 ## Session-start brief
 
 - **Project identity:** X4 Forge B119, the linter-first source-faithful X4 Lua UI editor; GitHub owner #41.
 - **Eyeball queue:**
-  1. Full AI Influence benchmark: open Antigravity -> X4 Forge Studio -> workspace `x4 AiLive` -> `HUD & Lua UI` ->
-     `X4 SOURCE PREVIEW`; select each exact AI Lua source/target and the owner-issued path/loop/sample values for the
-     compact direction, expanded COMM, proposal gate/sheet, and hub tabs; compare against all supplied `00` and
-     `1a`-`1j` images at their recorded profile. Mark runtime-built or unresolved bodies absent, not guessed.
-  2. Current in-game census when the preview side is ready: launch X4 -> load the proving save -> `Speak to AI` ->
-     capture the same current path states -> close each panel normally -> exit X4; compare only exact source/profile
-     pairs and inspect the scoped debuglog for view/Lua failures. This is the authority for player-visible claims.
-- **Commit question:** feature/source checkpoint `c61a26d8060762a19af35eec9762764cdf3aeb2d` is committed and pushed with
-  exact local `HEAD`, configured upstream, and direct-remote parity at its close. GitHub, Notion, and Drive projections
-  are read back. This handoff and the matching plan/BACKLOG projection receipts form the documentation-close commit;
-  after that commit, verify local/upstream/direct-remote parity and expect no staged B119 residue.
+  1. Current X4 agreement sheet: launch X4 -> load the proving save -> `Speak to AI` -> seed a proposal -> invoke the
+     agreement sheet through a valid native control or registered debug path -> capture it -> close normally -> exit X4
+     -> inspect the scoped debuglog. Do not infer success from Forge, deployment, or absence of a Lua error.
+  2. Full AI Influence benchmark: in Antigravity -> X4 Forge Studio -> workspace `x4 AiLive` -> `HUD & Lua UI` ->
+     `X4 SOURCE PREVIEW`; reproduce each exact source/target and owner-issued path/loop/sample authority for the compact
+     direction, expanded COMM, proposal/sheet, and hub tabs; compare each visible result with the original-detail
+     supplied references. Keep runtime-built or unresolved content absent rather than guessed.
+- **Commit question:** the prior close `1fb1bd784f60b19a3abc5deba91510b8228d86f2` is pushed. The `0.0.75` source and
+  release checkpoint is published and installed but not yet committed at this handoff snapshot. Run final exact-path
+  precommit, stage only the owned paths below, commit/push, then write and read back GitHub/Notion/Drive projections.
 
-## Current implementation and release checkpoint
+## Current bounded repair
 
-- Command-bound source-tint ownership is implemented in `src/lib/x4UiPaintPlan.ts` and
-  `src/lib/x4UiCanvasRenderer.ts` with their selftests. Geometry tints bind to exact `commandId`/`nodeId`; glyph tints
-  bind to parent `textId`. Repeated literals from finite source loops are valid only under their exact issued owners;
-  copied, reassigned, missing, accessor-backed, sparse, and hostile structures refuse before allocation.
-- The broader B119 checkpoint also changes the existing Source Editor, EditorSession, LayoutProgram, PreviewPipeline,
-  and Scene owners plus focused tests and `tests/e2e/x4-ui-source-editor.spec.ts`. No parallel renderer, compiler,
-  deployer, or workspace owner was added.
-- Source checkpoint `c61a26d8060762a19af35eec9762764cdf3aeb2d` changed exactly these tracked feature/release paths:
-  `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`,
-  `src/components/X4UiSourceEditor.tsx`, `src/components/X4UiSourceEditor.selftest.tsx`,
-  `src/lib/x4UiEditorSession.ts`, `src/lib/x4UiEditorSession.selftest.ts`,
-  `src/lib/x4UiLayoutProgram.ts`, `src/lib/x4UiLayoutProgram.selftest.ts`,
-  `src/lib/x4UiPaintPlan.ts`, `src/lib/x4UiPaintPlan.selftest.ts`,
-  `src/lib/x4UiPreviewPipeline.ts`, `src/lib/x4UiPreviewPipeline.selftest.ts`,
-  `src/lib/x4UiScene.ts`, `src/lib/x4UiScene.selftest.ts`,
-  `src/lib/x4UiCanvasRenderer.ts`, `src/lib/x4UiCanvasRenderer.selftest.ts`,
-  `tests/e2e/x4-ui-source-editor.spec.ts`, `vscode-extension/package.json`,
-  `vscode-extension/release-notes.json`, and `vscode-extension/CHANGELOG.md`.
-- The same source commit included `BACKLOG.md` and this file at its pre-projection state. The current documentation
-  close owns only `BACKLOG.md`, this file, and `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`. Preserve
-  every other modified, deleted, or untracked path. The trusted-read and installed receipts under `dev-docs/` are
-  intentionally ignored evidence and must not be broad-added.
+- Exact source: `F:\DEV_ENV\projects\Mods\X4Mods\x4_ai_influence\ui\addons\ai_influence_chat\aic_sheet.lua`.
+  SHA-256: `A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37`; target `sheet.display`; selected
+  data-present path `98-101`, note-present path `158-169`, clause and save-diff loops both `4/4`, all `55/55` issued
+  scenario samples.
+- **[REPRODUCED]** `scene-frame-tables` falsely refused the authority-complete source because runtime loop execution
+  interleaved clause/note tables while Scene emitted tables in stable source order. Both ledgers contained the same
+  valid tables in different order.
+- `src/lib/x4UiScene.ts` now sorts each frame's referenced table IDs by the same source-offset/ID contract used for the
+  emitted Scene table ledger before strict comparison. No weaker set comparison or missing-table tolerance was added.
+- `src/lib/x4UiPaintPlan.selftest.ts` embeds the exact portable source fixture, asserts its SHA and complete authority,
+  and proves the repaired source reaches one partial Scene (`1` frame, `17` tables, `16` rows, `40` cells, `31`
+  widgets, `34` texts, `276` glyphs, `240` gaps) and partial Paint (`767` commands, nonzero geometry) with exact
+  `Not verified in game` / `gameVerified:false` truth.
 
-## Validation already passed
+## Validation and release evidence
 
-- Focused command-bound repair: Paint `211/211`; Canvas `171/171`, including `77/77` causal Stage-B checks;
-  TypeScript, exact bounded ESLint, and diff hygiene pass.
-- Full release gates: runtime oracles `134/134`; serial E2E `106/106` in `12.1m`, zero failed/flaky/bad/skipped or
-  incomplete results, complete lifecycle ownership, `treeGone=true`; production build `1,848` modules; Graphify
-  `10,582` nodes / `26,672` edges / `316` communities with no tracked Graphify delta; complete precommit green.
-- Local/public stable VSIX is `26,315,067` bytes, SHA-256
-  `63213F694CA72303A6B444B6697402A425DD4F1AE53FF45DDE07F9AD72D9C267`. OpenVSX direct/latest `0.0.74` and an
-  independent public download match exactly. `_published["0.0.74"] = "2026-09-07"` now records the exceptional
-  pre-corrective-commit publication; canonical changelog order is unchanged. Do not republish.
-- Installed `0.0.74` matches all `2,105` packaged payload files with only expected host metadata. A complete `0.0.73`
-  rollback copy is at
-  `C:\Users\Moshi\AppData\Local\Temp\x4forge-installed-0.0.74-f4bd49008ad148d29b383876532a8d2b\rollback-0.0.73\x4forge.x4-forge-studio-0.0.73`.
-  Installed sidecar listener remains PID `55096` on port `54793`; installed runtime oracles pass `134/134`.
+- Focused gates: Scene `179/179`; Paint `212/212`; hostile Paint Phase 6C `51/51`; TypeScript, scoped ESLint, and
+  exact-path diff hygiene green.
+- Full gates: installed runtime oracles `134/134`; accepted serial E2E rerun `106/106` in `8.7m`, zero
+  failed/flaky/bad/quarantined, JSON verdict, `treeGone=true`; production build `1,848` modules; Graphify refreshed to
+  `10,586` nodes / `26,687` edges / `332` communities; complete precommit green. The first E2E attempt ended after 62
+  tests with child exit `0xC0000409`; it was rejected, lifecycle cleanup was verified, and the unchanged rerun is the
+  accepted evidence.
+- Public/local VSIX: `F:\DEV_ENV\X4_Forge\vscode-extension\x4-forge-studio-0.0.75.vsix`, `26,316,960` bytes,
+  SHA-256 `F3662F134C4023B156DAD2F264AFDC8330B758D529E9DCD13CE19ED3EA4FF36`. OpenVSX direct/latest and the independent
+  download at `C:\Users\Moshi\AppData\Local\Temp\x4forge-openvsx-parity-20260907-1837\x4forge.x4-forge-studio-0.0.75.vsix`
+  match exactly. Version `0.0.75` was published once; do not republish.
+- Installed rollback: `C:\Users\Moshi\AppData\Local\Temp\x4forge-installed-0.0.75-20260907-140525-f6d5f95e9eef4b5094e51e719005dfaf\x4forge.x4-forge-studio-0.0.74`.
+  Installed `0.0.75` package parity is exact apart from expected IDE `.vsixmanifest`; installed runtime oracles are
+  `134/134`.
 
-## Accepted installed visual and authority-lifecycle evidence
+## Installed visual result and honest boundary
 
-- Validator attempt 3 ran `2026-09-07T13:54:07.593Z` to `2026-09-07T14:14:53.925Z`, exited `0`, and passed
-  `242/242` assertions with zero page/console/request/HTTP/native-dialog errors. One browser/context closed in
-  `finally`; no owned Playwright browser remains.
-- `2560x1440`, effective Helper scale `1.4`, source-derived `_choiceY=769`: current Canvas identity `1`, `285,600`
-  nontransparent / `261,575` nonblack-visible pixels, bbox `1050x272 @ 600,769`; native export `80,991` bytes / SHA
-  `FB3DC6A9D6BA3DFB87B1BA301D2F3307B34B6D33D1650DC8E48BA64A62150CCF`, equal to mounted Canvas serialization.
-- `1800x900`, effective Helper scale `0.875`, source-derived `_choiceY=481`: replacement identity `2`, `92,988`
-  nontransparent / `83,214` nonblack-visible pixels, bbox `738x126 @ 421,481`; native export `37,140` bytes / SHA
-  `A23B289714EE6A3C87408AF6D7067380D65624B00C8722C80B62E328D5B62803`, equal to mounted Canvas serialization.
-- Clearing source/target retains identity `2` and the exact second hash only as `retained-stale-history` with
-  `currentAuthority:false`, status `stale`, and export unavailable. Final complete authority creates identity `3` at
-  `2560x1440` and exactly reproduces the first hash. Visual review confirms the same `REVIEW`, input, `SEND`, and `END`
-  structure at both scales.
-- Receipt:
-  `dev-docs/b119-ai-influence-dogfood/installed-release-20260907/authority-complete-0.0.74-attempt3/installed-0.0.74-aic-menu-display-receipt.json`,
-  `6,745,911` bytes / SHA-256 `8B62A1E3385706A234977624020835C7C8FF1CC104ACA318F9043098A383AE61`.
-- Safety restored: repository porcelain, exact source SHA
-  `4253D9BD9DE4113D4DE0B881DBF5A1E90CAA7B30F735BA925403EBEF7EC47DD7`, installed package, config, listener
-  identity, root health, original workspace, retained `0.0.73` evidence, and X4-absent state are unchanged.
+- The installed editor selected workspace `x4 AiLive · 806765`, exact source/target above, both selected paths, both
+  loops at `4/4`, and all `55/55` sample values. One current/export-eligible `2560x1440` Canvas visibly rendered the
+  complete source-authored agreement sheet with clauses, notes, four cost rows, and three footer actions. Permanent
+  truth copy remained `Preview evidence only · Not verified in game`.
+- Original-detail comparison against
+  `C:\Users\Moshi\Desktop\# AI Influence mod UI design\design_handoff_ai_influence\screenshots\1e-gate-agreement-sheet.png`
+  is `VISUALLY DIVERGENT`: current source says `TERMS OFFERED` and `WHAT THIS COSTS YOU`; the reference says
+  `PROPOSED AGREEMENT` and `WHAT CHANGES IN YOUR SAVE`; source buttons are equal thirds while the reference uses
+  unequal widths; synthetic `CLAUSE-*` values clip in the source's 8% gutter; dynamic `toneColor(d.tone)` samples do
+  not visibly paint every right-side value.
+- Export eligibility was visible, but the browser download-event wait timed out and reset the CUA session before a
+  Save As/file receipt. Do not claim exported-file proof from this run. A stale CUA trusted worker had also grown to
+  roughly 3 GB and was removed by resetting the CUA runtime; keep future browser automation bounded.
+- No current X4 `1e` capture was produced. The normal source path still depends on the extra non-rendering `REVIEW`
+  control, and this runtime exposed no native-app CUA surface. The installed Forge result proves this bounded
+  source-to-preview pipeline, not X4 C++ frame acceptance, player-visible parity, or universal 1:1 behavior.
 
-## Current boundary and next unit
+## Owned paths and preservation boundary
 
-- The original supplied UI-editor brief remains `6/6 VERIFIED`. Three exact-source real menus already have X4 and
-  Forge comparisons across `125` declared geometry/text features with maximum normalized delta `3 px <= 5 px`.
-- This checkpoint proves installed source-static preview behavior and authority lifecycle for the tested AI menu path.
-  It does not prove runtime-built AI menu bodies, every supplied reference, arbitrary Lua/Helper/widget behavior,
-  universal C++ frame acceptance, or whole-product 1:1 equivalence. The full twelve-reference AI Influence benchmark
-  and current in-game census remain the next bounded unit; B119 and GitHub #41 stay open.
-- Final exact-path diff hygiene, complete precommit, commit hook, source push, and three-way source-ref parity are green.
-  First command next session: inspect `git status --short` and confirm no B119 path is staged; then begin the full
-  twelve-reference benchmark from this source checkpoint. Do not repeat the completed `0.0.74` publish/install/projection
-  work.
+- Tracked source/release paths for the pending source commit:
+  `src/lib/x4UiScene.ts`, `src/lib/x4UiPaintPlan.selftest.ts`,
+  `vscode-extension/package.json`, `vscode-extension/release-notes.json`,
+  `vscode-extension/CHANGELOG.md`, `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, `BACKLOG.md`, and this
+  file.
+- Ignored evidence intentionally remains outside Git:
+  `dev-docs/b119-ai-influence-dogfood/visual-release-20260905/CENSUS.md`, installed/package/download artifacts, and the
+  external UI quick-reference card 59.
+- Preserve every other modified, deleted, or untracked repository path. In particular, do not stage the unrelated
+  onboarding/bugs/data/docs/scripts changes, `test-results/.last-run.json`, existing evidence PNGs, `media/`, package
+  workspace files, or the untracked marketing showcase spec.
 
-## Close / AAR / external projection state
+## Close, projections, and next unit
 
-- Plan, BACKLOG, capability-map delta, project AAR, and UI quick-reference card 58 carry the accepted checkpoint.
-  GitHub #41 comment `5572535524` was written and read back. Notion owner
-  `3b84618e-d15b-8190-821e-c0eb96f43d5a` was read back at `In Progress / Partial` with source commit, release hashes,
-  `242/242`, `134/134`, and `106/106` evidence. Google Current Status tab `t.0` was revision-guarded from
-  `ANLCKQlp81AQ0tuQO9BUj2oi02eqY2-ETqz9bLexRCfrjPh1wi7W3VYlIBbxp6OUPJ5Lc6cYsA773jWZrhpMxd2JFhhlgJUGD-OMNKsehKNO`
-  to `ANLCKQndwLZg7Au5avTjDeR8XAck4SP4PASfvJ4iIEPCCi0CwCmP6Mlq0AZXU3WZ0sXmUZOxHuW3ejLzPfgyY0UV5mmlFtbtsvsxZqAtajNL`;
-  its top authority fields, executive paragraph, and appended `HEADING_2` checkpoint were read back. The trusted read
-  found zero protected controls and preserved the existing native date element.
-- AAR triggers retained: attempt 1 reused one profile's absolute `_choiceY`; attempt 2 conflated a mounted stale bitmap
-  with current authority; one parent pure-helper command initially supplied the wrong object shape. Attempt 3 corrects
-  the validator only and preserves both failed receipts. No `0.0.75` product release is warranted.
+- Project AAR now records the failed-first E2E, corrected release-worker cwd, missing inspector argument, null install
+  exit-code wrapper, browser-field concurrency, export timeout, stale CUA worker, and untracked E2E inventory hazard.
+  UI quick-reference card 59 records canonical child-ledger ordering. No capability-map delta and no cross-project AAR.
+- After the exact source commit/push, update and read back GitHub #41, Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a`, and Google Current Status document
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, with the source hash, package hash, installed visual
+  result, and the same overall `PARTIAL / Not verified in game` boundary. Then record those receipts in a docs-close
+  commit and assert local/upstream/direct-remote equality.
+- The next bounded B119 unit is a valid current native X4 invocation and capture for `sheet.display`, followed by only
+  source-backed corrections toward the `1e` reference and the remaining twelve-image census. Do not rebuild the
+  renderer, republish `0.0.75`, or mark GitHub #41 complete.
 - Security action remains: rotate/revoke the OpenVSX PAT exposed during the earlier `0.0.73` token-bearing terminal
-  title. The `0.0.74` publication did not place the PAT in a command argument or output.
-- No native Luna worker remains open. Antigravity is running; X4 is stopped; installed sidecar is healthy.
+  title. The `0.0.75` publication did not expose the PAT in an argument or output.

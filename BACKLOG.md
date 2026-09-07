@@ -2040,6 +2040,31 @@ tracking, and direct-remote parity. GitHub #41 comment `5572535524`, Notion owne
 `ANLCKQndwLZg7Au5avTjDeR8XAck4SP4PASfvJ4iIEPCCi0CwCmP6Mlq0AZXU3WZ0sXmUZOxHuW3ejLzPfgyY0UV5mmlFtbtsvsxZqAtajNL`
 were written and read back with the same bounded-verified / overall-partial boundary.
 
+**B119 canonical frame-table order and public `0.0.75` checkpoint 2026-09-07 — BOUNDED VERIFIED / FULL B119
+PARTIAL:** Exact current `aic_sheet.lua -> sheet.display` reproduced a false `scene-frame-tables` refusal even though
+the runtime loop ledger and source ledger named the same valid tables. Scene now canonicalizes each frame's table IDs
+by the same source-offset/ID order used for emitted tables before strict relationship validation. An exact embedded
+source fixture asserts SHA-256 `A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37`, both selected paths,
+both loops at `4/4`, and all `55/55` samples. It reaches one partial Scene with `17` tables / `16` rows / `40` cells /
+`31` widgets / `34` texts and a partial Paint plan with `767` commands and nonzero geometry while retaining
+`Not verified in game` and `gameVerified:false`.
+
+Focused Scene `179/179`, Paint `212/212`, hostile Paint `51/51`, typecheck, scoped lint, production build (`1,848`
+modules), Graphify (`10,586/26,687/332`), complete precommit, installed runtime oracles `134/134`, and the accepted
+serial E2E rerun `106/106` are green. The first E2E attempt ended after 62 tests with Windows `0xC0000409`; it was
+rejected, cleaned up, and not counted. Public OpenVSX `0.0.75`, the reviewed local package, and an independent registry
+download match exactly at `26,316,960` bytes / SHA-256
+`F3662F134C4023B156DAD2F264AFDC8330B758D529E9DCD13CE19ED3EA4FF36`; installed package/runtime parity is exact.
+
+Installed Antigravity visually rendered the full loop-heavy agreement sheet at `2560x1440` from the exact authority
+above with export eligible. Original-detail comparison against `1e-gate-agreement-sheet.png` remains red: the current
+source headings, equal-third actions, synthetic gutter clipping, and incomplete dynamic-tone paint differ from the
+reference. The native Export click did not yield a Save As receipt before the automation session timed out, and no
+current X4 `1e` capture exists. Therefore this release proves the source-to-installed-Forge pipeline and repairs the
+false linter/Scene refusal; it does not prove source-to-design parity, X4 C++ acceptance, the full twelve-reference
+reconstruction, or B119 completion. GitHub #41 remains open. Exact record:
+`docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`; no capability-map delta.
+
 ### B115 · Forge Capability Convergence `in_progress` (P0, PRIORITY OVERRIDE)
 
 Ken explicitly promoted GitHub initiative #9 and child requests #10–#21 above the active R13 close on 2026-07-31.

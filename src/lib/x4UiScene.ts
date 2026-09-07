@@ -1694,6 +1694,7 @@ const frameTextureSurfaceFor = (
 const buildFrameNodes = (
   context: BuildContext,
   framesById: ReadonlyMap<string, X4UiLayoutFrameNode>,
+  tablesById: ReadonlyMap<string, X4UiLayoutTableNode>,
 ): { readonly frames: readonly X4UiSceneFrameNode[]; readonly frameRects: ReadonlyMap<string, X4UiSceneRect>; readonly frameClips: ReadonlyMap<string, X4UiSceneRect> } => {
   const frames: X4UiSceneFrameNode[] = [];
   const frameRects = new Map<string, X4UiSceneRect>();
@@ -1730,7 +1731,11 @@ const buildFrameNodes = (
       provenanceLinks: nodeLinks,
       diagnosticLinks: links,
       diagnosticStyle: diagnosticStyleForGeometry(Boolean(frameRect)),
-      tableIds: frame.tableIds.map(id => `scene:${id}`),
+      tableIds: frame.tableIds
+        .map(id => tablesById.get(id))
+        .filter((table): table is X4UiLayoutTableNode => table !== undefined)
+        .sort((left, right) => compareSourceOrder(sourceOrder(left.source), sourceOrder(right.source)) || left.id.localeCompare(right.id))
+        .map(table => `scene:${table.id}`),
       ...frameSurface,
     });
   }
@@ -6115,7 +6120,7 @@ export function projectX4UiScene(
   const rowsById = new Map(program.rows.map(row => [row.id, row]));
   const cellsById = new Map(program.cells.map(cell => [cell.id, cell]));
   const operationsById = new Map(program.operations.map(operation => [operation.id, operation]));
-  const frameResult = buildFrameNodes(context, framesById);
+  const frameResult = buildFrameNodes(context, framesById, tablesById);
   const tables: X4UiSceneTableNode[] = [];
   const rows: X4UiSceneRowNode[] = [];
   const cells: X4UiSceneCellNode[] = [];

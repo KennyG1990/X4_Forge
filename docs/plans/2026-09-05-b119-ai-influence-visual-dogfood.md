@@ -1516,3 +1516,123 @@ Lane: `FULL`
 - **Close status:** the command-bound tint/source-loop/public-installed `0.0.74` unit is `VERIFIED`; overall B119 and
   GitHub #41 remain `IN_PROGRESS / PARTIAL / Not verified in game`. The next bounded unit is the complete twelve-image
   AI Influence reconstruction and current-game census, not another release or preview-only claim.
+
+### BASELINE / RECONCILE — `aic_sheet.lua -> sheet.display` authority-complete refusal
+
+- **Bounded unit:** continue the twelve-reference census with the exact workspace source
+  `ui/addons/ai_influence_chat/aic_sheet.lua`, SHA-256
+  `A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37`, target `sheet.display`
+  (lines `75-228`). The selected path authority is the data-present arm at `98-101` and the optional-note arm at
+  `158-169`; the debug arm at `31`, `sheet.frame` arm at `122`, and unreachable `Helper == nil` arm remain clear.
+  Both source loops are owner-issued at exactly `4`: clauses `147-171` and save diffs `183-195`.
+- **Complete authority baseline:** the mounted installed `0.0.74` editor reports all `55/55` issued scenario samples
+  valid. The profile is `2560 x 1440`, effective Helper scale `1.4`; the source-derived table positions are
+  `144`, `192`, clause/note pairs `234/270`, `309/345`, `384/420`, `459/495`, section `545`, diffs
+  `587/621/655/689`, and buttons `743`. Source, target, branches, loops, corpus identity, and every sample are current.
+- **`[REPRODUCED]` production refusal:** before sample completion, Canvas correctly failed closed for missing
+  renderer-issued visible geometry. After all `55` inputs became valid, Scene remained `partial` with `11`
+  source-linked width/height diagnostics (the source expresses frame dimensions through `vw`, `vh`, and table width
+  `w`), and Paint still refused with `Scene evidence is malformed, stale, cyclic, or carries engine/game paint truth`.
+  Canvas export is unavailable. This is not an incomplete-input explanation; the composite `sceneValid()` guard in
+  `src/lib/x4UiPaintPlan.ts` rejects a fully authority-complete issued Scene, but its exact failed invariant is not yet
+  exposed.
+- **Authoritative references and reused owners:** shipped `helper.lua`/corpus profile remain the metric and layout
+  authority. Reuse the existing Source -> Layout Program -> Session -> Scene -> Paint Plan -> Canvas chain; do not
+  create another renderer, parser, or acceptance path. The relevant current owners are `x4UiScene`,
+  `x4UiPaintPlan`, `x4UiLayoutProgram`, and `x4UiPreviewPipeline` plus their existing selftests.
+- **Risk / rollback:** the main risk is weakening a defensive Scene boundary and allowing malformed, stale, cyclic,
+  cross-profile, or game-truth-bearing evidence to paint. Restrict any repair to the existing owner and its causal
+  regressions. Rollback is the exact pre-worker diff against `1fb1bd784f60b19a3abc5deba91510b8228d86f2`; no mod,
+  corpus, game, installed extension, release metadata, settings, or external projection may change in this unit.
+
+### REVISED PLAN / ACCEPTANCE — isolate the failed Scene invariant before repair
+
+- First add a causal fail-first regression that reproduces the complete `sheet.display` Scene shape and the current
+  `invalid-scene` refusal. The receipt must identify the exact `sceneValid()` predicate that fails; elapsed time,
+  zero geometry, and generic error text are not diagnoses.
+- Repair only the existing projection/validation owner proven responsible. A valid authority-complete
+  `sheet.display` projection must reach one current, nonzero, export-enabled Canvas bound to the exact source hash,
+  target, corpus, and profile, while retaining exact `Not verified in game` truth.
+- Negative acceptance remains mandatory: malformed shape, stale/cross-profile authority, duplicate/orphan/cyclic
+  relationships, invalid preview provenance, and any engine/game paint-truth injection must continue to refuse. No
+  fixture may bypass production validation and no acceptance criterion may be weakened to make the source pass.
+- Required validation for this bounded repair is the causal regression, the complete focused Scene/Paint/Layout/
+  Preview selftests, TypeScript, scoped lint/diff hygiene, and a fresh installed-product replay of the exact
+  `aic_sheet.lua -> sheet.display` authority. Release/build/E2E and current X4 proof follow only if production code
+  changes and the focused repair is green. Evidence stays under
+  `dev-docs/b119-ai-influence-dogfood/installed-release-20260907/`; overall B119 remains `PARTIAL / Not verified in
+  game` until the complete reference census and current X4 captures close.
+
+### IMPLEMENT / FOCUSED VALIDATE — loop-issued frame table order
+
+- **`[REPRODUCED]` exact failed invariant:** the authority-complete fixture failed `scene-frame-tables`. Runtime loop
+  execution records each frame's table IDs in interleaved clause/note order, while canonical Scene tables are emitted
+  in stable source order. Both ledgers contained the same valid tables, but the strict ordered relationship check
+  correctly refused their inconsistent serialization.
+- **Bounded repair:** `buildFrameNodes()` now receives the authoritative layout-table map and canonicalizes each
+  frame's table references with the same `(source offset, id)` ordering used by Scene table emission. No geometry,
+  expression, corpus, paint, export, or game-truth policy changed.
+- **Causal regression:** the portable exact-source fixture asserts SHA-256
+  `A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37`, target `sheet.display`, both selected
+  source paths, both loop counts `4/4`, all `55` samples, exact tab order `1-16`, and exact source-derived y positions.
+  It now projects a `partial` Scene with `1` frame, `17` tables, `16` rows, `40` cells, `31` widgets, `34` texts,
+  `276` glyphs, and `240` explicit gaps; Paint remains `partial` but emits `767` commands with nonzero geometry and
+  exact `Not verified in game / gameVerified:false`.
+- **Independent focused evidence:** `x4UiScene.selftest.ts` passed `179/179`; `x4UiPaintPlan.selftest.ts` passed
+  `212/212` including `51/51` Phase 6C hostile mutations and all existing malformed/stale/cyclic/ordering/truth
+  refusal families; `npm run typecheck`, scoped ESLint, and exact-path `git diff --check` passed. Installed-product,
+  package, public-registry, and current-X4 validation remain pending, so this repair is not yet a release close.
+
+### VALIDATE — release, package, install, and installed `sheet.display`
+
+- **Broad gates:** the first full serial E2E attempt terminated after `62` tests with Windows child exit
+  `3221226505 / 0xC0000409` and no authoritative structured verdict, so it remains failed evidence. One unchanged,
+  independent rerun passed `106/106` in `8.7m` with zero failed, flaky, bad, quarantined, skipped, or incomplete
+  results and `treeGone=true`. The ephemeral tree stopped, ports `3100/3101` cleared, and the live workspace receipt
+  remained unchanged. Production build passed at `1,848` modules; `graphify update .` completed at
+  `10,586` nodes / `26,687` edges / `332` communities with no tracked graph delta; complete precommit passed.
+- **Package:** version `0.0.75` stages and builds cleanly, staged-app probe passes `16/16`, and package inspection
+  reports `2,107` archive entries / `2,105` payload files. Local VSIX
+  `vscode-extension/x4-forge-studio-0.0.75.vsix` is exactly `26,316,960` bytes with SHA-256
+  `F3662F134C4023B156DAD2F264AFDC8330B758D529E9DCD13CE19ED3EA4FF36E`. The first inspector invocation omitted its
+  required VSIX argument and failed without mutation; the corrected exact invocation passed.
+- **Public registry:** OpenVSX accepted one publication of `x4forge.x4-forge-studio v0.0.75`; it was not retried while
+  indexing lagged. At `2026-09-07T18:36:21Z`, both `/latest` and the direct `0.0.75` endpoint returned `0.0.75` and
+  the same download URL. An independent registry download is exactly `26,316,960` bytes with the local SHA-256 above.
+  The retained temporary parity copy is
+  `C:\Users\Moshi\AppData\Local\Temp\x4forge-openvsx-parity-20260907-1837\x4forge.x4-forge-studio-0.0.75.vsix`.
+- **Installed product:** the exact prior `0.0.74` extension was copied before install to
+  `C:\Users\Moshi\AppData\Local\Temp\x4forge-installed-0.0.75-20260907-140525-f6d5f95e9eef4b5094e51e719005dfaf\x4forge.x4-forge-studio-0.0.74`
+  (`2,106` files; manifest SHA-256 `340F5F95B09553BEE8D4BCAFB423A2394DAE9F8D1C16C03FDF6CAD094C752523`).
+  Installed `0.0.75` matches all `2,105` package payload files with only the expected host `.vsixmanifest` extra and
+  IDE `__metadata` normalization. The installed sidecar started from the `0.0.75` payload on port `52240`; root health
+  returned `200`; installed runtime oracles passed `134/134`. The install wrapper incorrectly interpreted a null
+  PowerShell `$LASTEXITCODE` as failure after the IDE had already installed successfully; payload inspection, rather
+  than a second install, supplied the authority.
+- **Exact installed replay:** the mounted editor selected workspace `x4 AiLive`, exact source
+  `ui/addons/ai_influence_chat/aic_sheet.lua` at SHA-256
+  `A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37`, target `sheet.display`, data-present
+  `98-101`, note-present `158-169`, both loops `4/4`, and all `55/55` exact values with zero retained mismatches. It
+  issued one native `2560x1440` Canvas, status `rendered/current`, enabled `Export current PNG`, and retained
+  `Preview evidence only / Not verified in game`. Direct visual inspection shows nonzero source paint: four
+  clause/note pairs, four cost rows, the section bar, and `SIGN AND TRANSFER / COUNTER-OFFER / WALK AWAY` buttons.
+  A browser download-event probe timed out and did not produce a final-file receipt, so this run proves mounted/export-
+  eligible pixels, not completed Save As. The timeout reset only the automation session; the rendered tab remained.
+
+### REVIEW — installed source output versus reference `1e`
+
+- Reference `design_handoff_ai_influence/screenshots/1e-gate-agreement-sheet.png` was reopened and inspected at
+  original detail on `2026-09-07`. The installed output matches the authored Lua's high-level table order, centered
+  agreement sheet, four clause/note pairs, save/cost section, and three-action footer. This crosses the previously
+  blocked Source -> Layout -> Scene -> Paint -> Canvas installed pipeline for a loop-heavy real AI source.
+- It does **not** match reference `1e`: current source says `TERMS OFFERED` instead of `PROPOSED AGREEMENT`, says
+  `WHAT THIS COSTS YOU` instead of `WHAT CHANGES IN YOUR SAVE`, uses equal-third buttons instead of the reference's
+  wider first/second and narrower third proportions, and the fixture uses synthetic labels. `CLAUSE-*` truncates in
+  the authored 8% gutter and dynamic `toneColor(d.tone)` leaves the sampled right-side values without complete source-
+  proven color paint. These are current-source/reference or still-unresolved dynamic-evidence differences, not proof
+  that Forge may invent a prettier result.
+- **Requirement disposition:** the causal frame-table-order defect, broad product gates, public package, installed
+  package/runtime, and exact authority-complete visible replay are done and evidenced. Current X4 acceptance for this
+  exact sheet, complete reference reconstruction, all twelve current-game captures, arbitrary Lua coverage, universal
+  C++ frame acceptance, and a product-wide 1:1 claim remain open. Overall B119 therefore remains
+  `IN_PROGRESS / PARTIAL / Not verified in game`; no capability-map delta.

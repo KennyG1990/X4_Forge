@@ -3,6 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.75 — 2026-09-07
+
+- Valid loop-issued tables are no longer falsely refused when frame source order and table source order differ.
+- The exact 55-sample agreement-sheet regression now reaches nonzero Paint instead of stopping at that false refusal.
+- Preview remains explicitly Not verified in game; this repair does not claim X4/C++ acceptance, pixel parity, full AI Influence reconstruction, or completion of B119.
+
 ## 0.0.74 — 2026-09-07
 
 - Loop-expanded UI commands can now reuse one source tint fact when each expanded tint is bound to the geometry command or glyph it was issued for.
