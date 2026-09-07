@@ -1594,7 +1594,7 @@ Lane: `FULL`
 - **Package:** version `0.0.75` stages and builds cleanly, staged-app probe passes `16/16`, and package inspection
   reports `2,107` archive entries / `2,105` payload files. Local VSIX
   `vscode-extension/x4-forge-studio-0.0.75.vsix` is exactly `26,316,960` bytes with SHA-256
-  `F3662F134C4023B156DAD2F264AFDC8330B758D529E9DCD13CE19ED3EA4FF36E`. The first inspector invocation omitted its
+  `F3662F134C4023B156DAD2F264AFDC8330B758D529E9DCD13CE19ED3EA4FF36`. The first inspector invocation omitted its
   required VSIX argument and failed without mutation; the corrected exact invocation passed.
 - **Public registry:** OpenVSX accepted one publication of `x4forge.x4-forge-studio v0.0.75`; it was not retried while
   indexing lagged. At `2026-09-07T18:36:21Z`, both `/latest` and the direct `0.0.75` endpoint returned `0.0.75` and
@@ -1636,3 +1636,29 @@ Lane: `FULL`
   exact sheet, complete reference reconstruction, all twelve current-game captures, arbitrary Lua coverage, universal
   C++ frame acceptance, and a product-wide 1:1 claim remain open. Overall B119 therefore remains
   `IN_PROGRESS / PARTIAL / Not verified in game`; no capability-map delta.
+
+### DOCUMENT CLOSE — `0.0.75` source commit and external projections
+
+- **Source commit / push:** `9996299877719b004a1fec1c2adda39f8fded292` contains exactly the reviewed eight paths
+  (`658` insertions / `98` deletions). Its commit hook repeated complete precommit and exited `0`. `git push origin
+  main` succeeded; local `HEAD`, configured upstream, and direct `refs/heads/main` read back exactly equal to the full
+  source commit.
+- **GitHub owner:** issue #41 remains open. Checkpoint comment `5574824809` was created and independently read back at
+  `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5574824809`; it records the canonical-order repair,
+  exact source authority, focused/broad gates, public package parity, installed visual result, failed-first E2E, and
+  the explicit design/X4/full-benchmark boundary.
+- **Notion owner:** page `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated in place and read back with Status
+  `In Progress`, Evidence Grade `Partial`, commit `9996299`, GitHub comment `5574824809`, package/source hashes,
+  installed nonzero agreement sheet, and the same remaining boundary. No duplicate task was created.
+- **Google Current Status:** the checked-in file-backed trusted read scanned document
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, at required revision
+  `ANLCKQndwLZg7Au5avTjDeR8XAck4SP4PASfvJ4iIEPCCi0CwCmP6Mlq0AZXU3WZ0sXmUZOxHuW3ejLzPfgyY0UV5mmlFtbtsvsxZqAtajNL`.
+  It found zero protected controls, zero opaque controls, zero authoritative dropdowns, and one existing native date
+  element. One atomic, tab-scoped, revision-guarded batch preserved that structure, refreshed the six top authority
+  paragraphs, and appended a peer `HEADING_2` checkpoint. Narrow readback verified the exact commit, release, comment,
+  boundary, paragraph types, and target at resulting revision
+  `ANLCKQk7bLVU_Vby6HAOBLoNf8eSTsrczHzKV7elPqQSuTLrr_eA6c6wXM7xgjupE4NQMQ5pvThRbLr5ty_-XUV991UEYD3Ydye9PjanX2KF`.
+- **Close status:** the canonical frame-table order/public-installed `0.0.75` unit is `VERIFIED`; overall B119 and
+  GitHub #41 remain `IN_PROGRESS / PARTIAL / Not verified in game`. The next bounded unit is a valid current native
+  X4 invocation/capture for `sheet.display`, followed by source-backed `1e` corrections and the remaining
+  twelve-reference census.

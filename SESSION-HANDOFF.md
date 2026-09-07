@@ -16,9 +16,9 @@ Status: bounded canonical frame-table repair, public/installed `0.0.75`, and ins
      `X4 SOURCE PREVIEW`; reproduce each exact source/target and owner-issued path/loop/sample authority for the compact
      direction, expanded COMM, proposal/sheet, and hub tabs; compare each visible result with the original-detail
      supplied references. Keep runtime-built or unresolved content absent rather than guessed.
-- **Commit question:** the prior close `1fb1bd784f60b19a3abc5deba91510b8228d86f2` is pushed. The `0.0.75` source and
-  release checkpoint is published and installed but not yet committed at this handoff snapshot. Run final exact-path
-  precommit, stage only the owned paths below, commit/push, then write and read back GitHub/Notion/Drive projections.
+- **Commit question:** source checkpoint `9996299877719b004a1fec1c2adda39f8fded292` is committed and pushed after the
+  commit hook repeated complete precommit. Local `HEAD`, configured upstream, and direct remote are equal. GitHub,
+  Notion, and Drive projections are read back. Commit only this documentation close, then reassert three-way parity.
 
 ## Current bounded repair
 
@@ -74,11 +74,11 @@ Status: bounded canonical frame-table repair, public/installed `0.0.75`, and ins
 
 ## Owned paths and preservation boundary
 
-- Tracked source/release paths for the pending source commit:
-  `src/lib/x4UiScene.ts`, `src/lib/x4UiPaintPlan.selftest.ts`,
-  `vscode-extension/package.json`, `vscode-extension/release-notes.json`,
-  `vscode-extension/CHANGELOG.md`, `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, `BACKLOG.md`, and this
-  file.
+- Source/release checkpoint `9996299877719b004a1fec1c2adda39f8fded292` owns exactly:
+  `src/lib/x4UiScene.ts`, `src/lib/x4UiPaintPlan.selftest.ts`, `vscode-extension/package.json`,
+  `vscode-extension/release-notes.json`, `vscode-extension/CHANGELOG.md`,
+  `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, `BACKLOG.md`, and this file. The pending documentation
+  close owns only the latter three Markdown paths.
 - Ignored evidence intentionally remains outside Git:
   `dev-docs/b119-ai-influence-dogfood/visual-release-20260905/CENSUS.md`, installed/package/download artifacts, and the
   external UI quick-reference card 59.
@@ -91,11 +91,15 @@ Status: bounded canonical frame-table repair, public/installed `0.0.75`, and ins
 - Project AAR now records the failed-first E2E, corrected release-worker cwd, missing inspector argument, null install
   exit-code wrapper, browser-field concurrency, export timeout, stale CUA worker, and untracked E2E inventory hazard.
   UI quick-reference card 59 records canonical child-ledger ordering. No capability-map delta and no cross-project AAR.
-- After the exact source commit/push, update and read back GitHub #41, Notion page
-  `3b84618e-d15b-8190-821e-c0eb96f43d5a`, and Google Current Status document
-  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, with the source hash, package hash, installed visual
-  result, and the same overall `PARTIAL / Not verified in game` boundary. Then record those receipts in a docs-close
-  commit and assert local/upstream/direct-remote equality.
+- GitHub #41 comment `5574824809` was written and independently read back. Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated in place and read back at `In Progress / Partial` with source
+  commit, package/source hashes, installed visual result, and the open X4/design boundary. Google Current Status
+  document `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, passed the file-backed trusted read with zero
+  protected/opaque controls, zero authoritative dropdowns, and one preserved native date element; its guarded batch
+  advanced revision from
+  `ANLCKQndwLZg7Au5avTjDeR8XAck4SP4PASfvJ4iIEPCCi0CwCmP6Mlq0AZXU3WZ0sXmUZOxHuW3ejLzPfgyY0UV5mmlFtbtsvsxZqAtajNL`
+  to `ANLCKQk7bLVU_Vby6HAOBLoNf8eSTsrczHzKV7elPqQSuTLrr_eA6c6wXM7xgjupE4NQMQ5pvThRbLr5ty_-XUV991UEYD3Ydye9PjanX2KF`.
+  Exact target, H2 style, top authority fields, commit, comment, and boundary were read back.
 - The next bounded B119 unit is a valid current native X4 invocation and capture for `sheet.display`, followed by only
   source-backed corrections toward the `1e` reference and the remaining twelve-image census. Do not rebuild the
   renderer, republish `0.0.75`, or mark GitHub #41 complete.

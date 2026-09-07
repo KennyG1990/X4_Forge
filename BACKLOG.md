@@ -2065,6 +2065,12 @@ false linter/Scene refusal; it does not prove source-to-design parity, X4 C++ ac
 reconstruction, or B119 completion. GitHub #41 remains open. Exact record:
 `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`; no capability-map delta.
 
+Projection close: source checkpoint `9996299877719b004a1fec1c2adda39f8fded292` is pushed with exact local,
+tracking, and direct-remote parity. GitHub #41 comment `5574824809`, Notion owner
+`3b84618e-d15b-8190-821e-c0eb96f43d5a` (`In Progress / Partial`), and Google Current Status tab `t.0` revision
+`ANLCKQk7bLVU_Vby6HAOBLoNf8eSTsrczHzKV7elPqQSuTLrr_eA6c6wXM7xgjupE4NQMQ5pvThRbLr5ty_-XUV991UEYD3Ydye9PjanX2KF`
+were written and read back with the same bounded-verified / overall-partial boundary.
+
 ### B115 · Forge Capability Convergence `in_progress` (P0, PRIORITY OVERRIDE)
 
 Ken explicitly promoted GitHub initiative #9 and child requests #10–#21 above the active R13 close on 2026-07-31.
