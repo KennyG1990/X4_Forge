@@ -1,4 +1,4 @@
-# Session handoff — B119 public/installed `0.0.74` verified; full AI benchmark remains open
+# Session handoff — B119 `0.0.74` source, install, and projections verified; full AI benchmark remains open
 
 Date: `2026-09-07`
 Project: `F:\DEV_ENV\X4_Forge`
@@ -16,10 +16,10 @@ Status: bounded command-bound tint, public release, installed two-profile render
   2. Current in-game census when the preview side is ready: launch X4 -> load the proving save -> `Speak to AI` ->
      capture the same current path states -> close each panel normally -> exit X4; compare only exact source/profile
      pairs and inspect the scoped debuglog for view/Lua failures. This is the authority for player-visible claims.
-- **Commit question:** current `HEAD`, upstream, and direct remote are all
-  `37a248cd2a84386ddba1d7232800cc83ef350a5f`. The current B119/release/record checkpoint is intentionally uncommitted
-  until final record review and a fresh complete precommit pass; commit and push it next using only the explicit owned
-  paths below.
+- **Commit question:** feature/source checkpoint `c61a26d8060762a19af35eec9762764cdf3aeb2d` is committed and pushed with
+  exact local `HEAD`, configured upstream, and direct-remote parity at its close. GitHub, Notion, and Drive projections
+  are read back. This handoff and the matching plan/BACKLOG projection receipts form the documentation-close commit;
+  after that commit, verify local/upstream/direct-remote parity and expect no staged B119 residue.
 
 ## Current implementation and release checkpoint
 
@@ -30,7 +30,7 @@ Status: bounded command-bound tint, public release, installed two-profile render
 - The broader B119 checkpoint also changes the existing Source Editor, EditorSession, LayoutProgram, PreviewPipeline,
   and Scene owners plus focused tests and `tests/e2e/x4-ui-source-editor.spec.ts`. No parallel renderer, compiler,
   deployer, or workspace owner was added.
-- Intended tracked feature/release paths are exactly:
+- Source checkpoint `c61a26d8060762a19af35eec9762764cdf3aeb2d` changed exactly these tracked feature/release paths:
   `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`,
   `src/components/X4UiSourceEditor.tsx`, `src/components/X4UiSourceEditor.selftest.tsx`,
   `src/lib/x4UiEditorSession.ts`, `src/lib/x4UiEditorSession.selftest.ts`,
@@ -41,9 +41,10 @@ Status: bounded command-bound tint, public release, installed two-profile render
   `src/lib/x4UiCanvasRenderer.ts`, `src/lib/x4UiCanvasRenderer.selftest.ts`,
   `tests/e2e/x4-ui-source-editor.spec.ts`, `vscode-extension/package.json`,
   `vscode-extension/release-notes.json`, and `vscode-extension/CHANGELOG.md`.
-- Required tracked records to include at close: `BACKLOG.md` and this file. Preserve every other modified, deleted,
-  or untracked path. The installed validator and receipts under `dev-docs/` are intentionally ignored evidence and
-  must not be broad-added.
+- The same source commit included `BACKLOG.md` and this file at its pre-projection state. The current documentation
+  close owns only `BACKLOG.md`, this file, and `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`. Preserve
+  every other modified, deleted, or untracked path. The trusted-read and installed receipts under `dev-docs/` are
+  intentionally ignored evidence and must not be broad-added.
 
 ## Validation already passed
 
@@ -91,15 +92,21 @@ Status: bounded command-bound tint, public release, installed two-profile render
   It does not prove runtime-built AI menu bodies, every supplied reference, arbitrary Lua/Helper/widget behavior,
   universal C++ frame acceptance, or whole-product 1:1 equivalence. The full twelve-reference AI Influence benchmark
   and current in-game census remain the next bounded unit; B119 and GitHub #41 stay open.
-- Final exact-path diff hygiene and complete precommit are green. First command next session, if this close is
-  interrupted before commit: inspect `git status --short`, then exact-stage/commit/push only the `21` owned paths and
-  assert local/upstream/direct-remote parity before updating GitHub #41, Notion, and Google Current Status.
+- Final exact-path diff hygiene, complete precommit, commit hook, source push, and three-way source-ref parity are green.
+  First command next session: inspect `git status --short` and confirm no B119 path is staged; then begin the full
+  twelve-reference benchmark from this source checkpoint. Do not repeat the completed `0.0.74` publish/install/projection
+  work.
 
 ## Close / AAR / external projection state
 
-- Plan, BACKLOG, capability-map delta, project AAR, and UI quick-reference card 58 now carry the accepted checkpoint.
-  External GitHub/Notion/Drive projections are still stale at the prior checkpoint and must be updated only after the
-  new source commit exists, then read back.
+- Plan, BACKLOG, capability-map delta, project AAR, and UI quick-reference card 58 carry the accepted checkpoint.
+  GitHub #41 comment `5572535524` was written and read back. Notion owner
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` was read back at `In Progress / Partial` with source commit, release hashes,
+  `242/242`, `134/134`, and `106/106` evidence. Google Current Status tab `t.0` was revision-guarded from
+  `ANLCKQlp81AQ0tuQO9BUj2oi02eqY2-ETqz9bLexRCfrjPh1wi7W3VYlIBbxp6OUPJ5Lc6cYsA773jWZrhpMxd2JFhhlgJUGD-OMNKsehKNO`
+  to `ANLCKQndwLZg7Au5avTjDeR8XAck4SP4PASfvJ4iIEPCCi0CwCmP6Mlq0AZXU3WZ0sXmUZOxHuW3ejLzPfgyY0UV5mmlFtbtsvsxZqAtajNL`;
+  its top authority fields, executive paragraph, and appended `HEADING_2` checkpoint were read back. The trusted read
+  found zero protected controls and preserved the existing native date element.
 - AAR triggers retained: attempt 1 reused one profile's absolute `_choiceY`; attempt 2 conflated a mounted stale bitmap
   with current authority; one parent pure-helper command initially supplied the wrong object shape. Attempt 3 corrects
   the validator only and preserves both failed receipts. No `0.0.75` product release is warranted.

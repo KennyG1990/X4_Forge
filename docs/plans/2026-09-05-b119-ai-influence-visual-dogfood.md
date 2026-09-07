@@ -1492,3 +1492,27 @@ Lane: `FULL`
 - **Review verdict:** approved for exact staging and commit. No acceptance criterion was weakened and no unrelated
   dirty path is owned. The commit hook must repeat complete precommit on the final staged state. External GitHub,
   Notion, and Drive projections remain intentionally pending until the exact commit hash exists.
+
+### DOCUMENT CLOSE — source commit and external projections
+
+- **Source commit / push:** `c61a26d8060762a19af35eec9762764cdf3aeb2d` contains exactly the reviewed `21`
+  tracked paths and `9,245` insertions / `506` deletions. Its commit hook repeated complete precommit and exited `0`.
+  `git push origin main` succeeded; local `HEAD`, configured upstream, and direct `refs/heads/main` read back exactly
+  equal to the full source commit.
+- **GitHub owner:** issue #41 remains open. Checkpoint comment `5572535524` was created and read back at
+  `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5572535524`; it records `0.0.74`, `242/242`, both
+  profile hashes, public package parity, `134/134`, `106/106`, `1,848` modules, original brief `6/6`, and the explicit
+  full-benchmark/C++ boundary.
+- **Notion owner:** page `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated in place and read back with Status
+  `In Progress`, Evidence Grade `Partial`, source commit, GitHub comment, package/hash, installed lifecycle, and the
+  same remaining boundary. No duplicate task was created.
+- **Google Current Status:** the file-backed trusted read scanned document
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, at required revision
+  `ANLCKQlp81AQ0tuQO9BUj2oi02eqY2-ETqz9bLexRCfrjPh1wi7W3VYlIBbxp6OUPJ5Lc6cYsA773jWZrhpMxd2JFhhlgJUGD-OMNKsehKNO`.
+  It found zero protected controls, zero opaque controls, zero dropdowns, and one existing native date element. One
+  atomic, tab-scoped, revision-guarded batch updated the top authority fields and executive state and appended a
+  `HEADING_2` checkpoint. Narrow readback verified the expected text/style at resulting revision
+  `ANLCKQndwLZg7Au5avTjDeR8XAck4SP4PASfvJ4iIEPCCi0CwCmP6Mlq0AZXU3WZ0sXmUZOxHuW3ejLzPfgyY0UV5mmlFtbtsvsxZqAtajNL`.
+- **Close status:** the command-bound tint/source-loop/public-installed `0.0.74` unit is `VERIFIED`; overall B119 and
+  GitHub #41 remain `IN_PROGRESS / PARTIAL / Not verified in game`. The next bounded unit is the complete twelve-image
+  AI Influence reconstruction and current-game census, not another release or preview-only claim.
