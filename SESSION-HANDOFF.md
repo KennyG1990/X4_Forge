@@ -20,14 +20,15 @@ Status: the bounded `1e` agreement-sheet correction is `VERIFIED`; overall B119 
   3. **`1f` counter-offer mechanics.** This remains data-blocked and deliberately unsupported, not a completed partial
      item: no deterministic accept/counter/break-off contract exists. Do not fabricate probabilities or implement it
      under the current visual-census unit.
-- **Commit question:** the source correction and this documentation close still need the parent-owned exact-path
-  commits. This worker did not stage, commit, push, or alter Git metadata. Use the pre-written title
-  `B119: close verified 1e agreement-sheet correction records`; do not invent a future commit SHA.
+- **Commit question:** the substantive AI Influence and Forge commits are pushed; only this records-only close is
+  pending as a parent action. This worker did not stage, commit, push, or alter Git metadata. Suggested title:
+  `docs(b119): reconcile agreement-sheet close projections`. Do not invent this records-only commit's future SHA.
 
 ## Verified bounded state
 
-- Forge HEAD and `origin/main` before this unit: `859e81fbad829242ddd5e13232617b0269099e28`. AI repo HEAD and
-  `origin/master` before its pending source commit: `4c0a422b7e3d0f492b572b9da8d2d7ea19a2b453`.
+- Forge substantive commit `73a0067ff7068c493de6625fe014a3893d17d7cd` is pushed; local HEAD, `origin/main`, and the
+  direct GitHub remote matched. AI Influence source commit `a4ff27814bb964f9fefce26cc05b38cccf8f66c1` is pushed; local
+  HEAD, `origin/master`, and the direct GitHub remote matched.
 - Current AI source and deployed Lua are LF-only, `12,655` bytes, SHA-256
   `CD687E78F4D957DF95DBF1F645692CF9DFF105A9680F68547C68223D392F7695`. The exact correction is
   `PROPOSED AGREEMENT`, `WHAT CHANGES IN YOUR SAVE`, ASCII `tx ... - idempotent`, and footer `addTable(10)` spans
@@ -50,7 +51,9 @@ Status: the bounded `1e` agreement-sheet correction is `VERIFIED`; overall B119 
   `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/`;
   `x4-native-agreement-sheet-current-2560x1392.png` is `1,535,566` bytes / SHA-256
   `2AEE12CC76F02E75C44FA11747485014A849C1FB9FEAB5051AD41BC008C8ACC3`; `debuglog-current-session.txt` is
-  `16,859` bytes / SHA-256 `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`.
+  `16,859` bytes / SHA-256 `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`. The committed
+  screenshot/log are in Forge commit `73a0067`. Final manual precommit and the commit hook passed; Graphify
+  background refresh completed with no pending graph changes.
 - The current-session log has exactly one expected launcher marker and one expected sheet marker, and zero refused/
   timeout, scrollbar, `DisplayView`, setup-view, traceback, or Lua Error signatures. The temporary `pipeline_test`
   launch passed all `11` checks, then the scratch fixture was restored and the game target is absent.
@@ -65,17 +68,27 @@ Status: the bounded `1e` agreement-sheet correction is `VERIFIED`; overall B119 
   `655331A4423A550532042B23C8E60141A60DCC0E1C42D4DE6DA653DAAD1C1689`. Stale CAS returned HTTP `409` with no
   mutation; guarded write returned HTTP `200`; restored validation was `0` errors / `0` warnings.
 
-## Durable records and pending projections
+## Durable records and completed projections
 
 - The plan now appends IMPLEMENT, VALIDATE, REVIEW, CLOSE, and AAR for this continuation. The bounded `1e` unit is
   `VERIFIED`; full B119 remains `IN_PROGRESS / PARTIAL`.
 - BACKLOG has a concise `1e` verified checkpoint and still keeps B119 open. The evidence receipt README is at
   `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/README.md`.
-- The project AAR records the fill-timeout, canvas-scroll, bounded-search, and redaction hazards. UI gotchas card `63`
-  records the reproduced Forge-editor distinction between `rendered/current` freshness and complete scenario inputs;
-  it is not an X4-engine rule.
-- `no capability-map delta`; no global workflow AAR update is part of this unit. GitHub #41, Notion, and Google Drive
-  remain pending parent updates after the exact source/documentation commits. No future commit SHA is recorded.
+- The project AAR records the fill-timeout, canvas-scroll, bounded-search, redaction, and Google Docs end-index
+  correction hazards. UI gotchas card `63` records the reproduced Forge-editor distinction between `rendered/current`
+  freshness and complete scenario inputs; no new UI KB card was added in this close.
+- GitHub #41 remains open with verified checkpoint comment `5589908501`
+  (`https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5589908501`). Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress` / `Evidence Grade Partial`, contains both
+  exact commits, the GitHub comment, and the new `1e` section at top, and exposes no revision ID. Google Doc
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back at final revision
+  `ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`,
+  paragraph count `722`, with `HEADING_2` indexes `145587-145635` and a correct one-period final boundary.
+- The first revision-guarded Google append inserted at `145585`, mistaking the prior paragraph's final period for the
+  terminal newline; the second revision-guarded batch inserted the missing period at `145585` and deleted the extra
+  period after shifted indexes. This was an external-document index error, not a product/runtime failure. All three
+  external projections are complete. `no capability-map delta`; no global workflow AAR update is part of this unit;
+  no OpenVSX publication belongs to it. The records-only commit remains parent-owned; no future SHA is recorded.
 
 ## Exact next source-backed B119 unit
 
@@ -115,7 +128,8 @@ deployment boundaries; do not reopen `1f` mechanics or claim universal parity fr
 
 The baseline contains unrelated onboarding/bug/data/docs/scripts changes, server and test changes,
 `test-results/.last-run.json`, extension evidence, `artifacts/`, `media/`, package-workspace files, lockfiles, and
-untracked showcase/marketing files. They are user-owned and remain untouched. This worker changed only the six owned
-documentation paths: the plan, BACKLOG, this handoff, the one evidence README, the project AAR, and the UI gotchas guide.
-No source/test file, AI Influence mod or deployed/game file, screenshot/log byte, capability map, global AAR, Git
-metadata, or external service record was changed.
+untracked showcase/marketing files. They are user-owned and remain untouched. The prior continuation changed only the
+six owned documentation paths: the plan, BACKLOG, this handoff, the one evidence README, the project AAR, and the UI
+gotchas guide. This records-only close changes only the five owned records named in its work order. No source/test
+file, AI Influence mod or deployed/game file, screenshot/log byte, capability map, global AAR, Git metadata, or new
+external service record was changed by this close.

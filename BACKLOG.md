@@ -62,7 +62,16 @@ without clipping; durable screenshot/log evidence is under
 `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/`. Focused tests,
 typecheck, scoped lint, and diff hygiene passed. No Forge export PNG was saved; this bounded unit is `VERIFIED`, but
 the full twelve-reference/current-game census and broader arbitrary-Lua/Helper/widget/C++ coverage remain open.
-`no capability-map delta`; parent exact-path commits and GitHub #41, Notion, and Drive updates remain pending.
+`no capability-map delta`; AI Influence source commit `a4ff27814bb964f9fefce26cc05b38cccf8f66c1` and Forge substantive
+commit `73a0067ff7068c493de6625fe014a3893d17d7cd` are pushed with local/configured-upstream/direct-remote parity.
+GitHub #41 remains open with verified checkpoint comment `5589908501`
+(`https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5589908501`). Notion page
+`3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress` / `Evidence Grade Partial`, with both exact
+commits, the GitHub comment, and the new `1e` section at top; Google Doc
+`17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back at final revision
+`ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`.
+All three external projections are complete; no OpenVSX publication belongs to this unit. The records-only close
+remains parent-owned. Overall B119 stays open and `IN_PROGRESS / PARTIAL`.
 **Original-brief audit 2026-09-05 — 5/6 VERIFIED / 1/6 PARTIAL:** exact hand-written Lua round-trip, all eleven
 linter trap families including pre-export `addTable(24)` rejection, deploy-bound `Not verified in game` truth, and the
 fixed-drawable X4 user-scale contract are `VERIFIED`. All four keep-out contexts now also have installed, non-null,

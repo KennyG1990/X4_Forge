@@ -82,6 +82,25 @@ The Forge export download timed out. No durable Forge PNG was saved, and no Forg
 visible installed-app canvas is direct observed proof; the native screenshot and current-session log above are the only
 durable image/log artifacts for this receipt.
 
+## External projection close
+
+- AI Influence source commit `a4ff27814bb964f9fefce26cc05b38cccf8f66c1` is pushed; local `HEAD`, `origin/master`, and
+  the direct GitHub remote matched. Forge substantive commit `73a0067ff7068c493de6625fe014a3893d17d7cd` is pushed;
+  local `HEAD`, `origin/main`, and the direct GitHub remote matched. The committed native log at `73a0067` remains
+  `16,859` bytes / SHA-256 `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`; the committed
+  screenshot remains `1,535,566` bytes / SHA-256
+  `2AEE12CC76F02E75C44FA11747485014A849C1FB9FEAB5051AD41BC008C8ACC3`.
+- GitHub owner issue #41 remains open; verified checkpoint comment `5589908501` was read back at
+  `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5589908501`.
+- Notion page `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress` / `Evidence Grade Partial`,
+  contains both exact commits, the GitHub comment, and the new `1e` section at top, and exposed no revision ID.
+- Google Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back at final revision
+  `ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`.
+  Paragraph count is `722`; the new `HEADING_2` is at indexes `145587-145635`, and the final boundary paragraph is
+  correct and ends with one period.
+- All three external projections are complete for this checkpoint. The records-only commit remains parent-owned and
+  must not be given a future SHA. Overall B119 remains `IN_PROGRESS / PARTIAL`; no capability-map delta is claimed.
+
 ## Validation and restoration
 
 - Focused tests passed: PaintPlan `213/213`, LayoutKernel `34/34`, Scene `179/179`, CanvasRenderer `171/171`,
@@ -106,5 +125,4 @@ durable image/log artifacts for this receipt.
 The bounded `1e` unit is `VERIFIED`. Full B119 remains `IN_PROGRESS / PARTIAL`: the complete twelve-reference/current-
 game visual census and broader arbitrary-Lua/Helper/widget/C++ coverage remain open. This receipt makes no claim of
 full B119 completion, pixel-perfect parity, or a saved Forge export. `no capability-map delta`; the existing
-capability is strengthened by evidence rather than extended. Parent exact-path commits and GitHub #41, Notion, and
-Google Drive updates remain pending after the source commit.
+capability is strengthened by evidence rather than extended.

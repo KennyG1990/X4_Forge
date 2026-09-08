@@ -2273,9 +2273,24 @@ Lane: `FULL`
 - **Overall B119 boundary:** deliberately `IN_PROGRESS / PARTIAL`. The full twelve-reference/current-game visual
   census and broader arbitrary-Lua/Helper/widget/C++ coverage remain open. There is no claim of full B119 completion,
   pixel-perfect parity, or saved Forge export.
-- **Durable records:** this plan, BACKLOG, the overwritten SESSION-HANDOFF, the new evidence receipt, the project AAR,
-  and KB card `63` are the requested documentation surfaces. `no capability-map delta`; the existing capability is
-  strengthened by evidence rather than extended.
+- **Durable records:** this plan, BACKLOG, the overwritten SESSION-HANDOFF, the new evidence receipt, and the project
+  AAR are the records surfaces for this close; no new UI KB card was added. `no capability-map delta`; the existing
+  capability is strengthened by evidence rather than extended.
+- **Google Docs correction and final projection state:** the first revision-guarded append inserted at index `145585`,
+  incorrectly treating `endIndex-1` as the terminal newline; it was the prior paragraph's final period. Readback
+  showed that paragraph missing its period and the new final paragraph ending with two periods. A second
+  revision-guarded batch inserted the missing period at `145585` and deleted the extra period after shifted indexes.
+  The final Google Doc readback is document `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, revision
+  `ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`,
+  paragraph count `722`, with the new `HEADING_2` at indexes `145587-145635` and a correct final boundary paragraph
+  ending with one period. This was an external-document index error, not a product/runtime failure.
+- **Completed source and external projections:** AI Influence source commit `a4ff27814bb964f9fefce26cc05b38cccf8f66c1`
+  and Forge substantive commit `73a0067ff7068c493de6625fe014a3893d17d7cd` are pushed with local, configured-upstream,
+  and direct-remote parity. GitHub #41 remains open with verified checkpoint comment `5589908501`
+  (`https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5589908501`). Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress` / `Evidence Grade Partial`, with both exact
+  commits, the GitHub comment, and the new `1e` section at top; Notion exposed no revision ID. All three external
+  projections are complete for this checkpoint.
 
 ### CLOSE
 
@@ -2286,11 +2301,25 @@ Lane: `FULL`
   truth boundaries.
 - **What was not changed:** no TypeScript, Lua, source, test, mod, game, screenshot, log, Git metadata, capability map,
   global workflow AAR, or external service record was modified by this documentation unit.
-- **Pending parent actions:** the parent owns the exact-path source/documentation commits and the pending GitHub #41,
-  Notion, and Google Drive updates after those commits. No future commit SHA is invented here.
+- **Completed source/projection state:** the AI Influence source commit `a4ff27814bb964f9fefce26cc05b38cccf8f66c1` and
+  Forge substantive commit `73a0067ff7068c493de6625fe014a3893d17d7cd` are pushed; local HEAD, configured upstream, and
+  direct GitHub remote matched for each. The committed native log at `73a0067` remains `16,859` bytes / SHA-256
+  `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`, and the committed screenshot remains
+  `1,535,566` bytes / SHA-256 `2AEE12CC76F02E75C44FA11747485014A849C1FB9FEAB5051AD41BC008C8ACC3`. Final manual
+  precommit and the commit hook passed; Graphify background refresh completed with no pending graph changes.
+- **External readback:** GitHub #41 remains open with verified checkpoint comment `5589908501`
+  (`https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5589908501`). Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress` / `Evidence Grade Partial`, contains both
+  exact commits, the GitHub comment, and the new `1e` section at top, and exposes no revision ID. Google Doc
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back at final revision
+  `ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`,
+  paragraph count `722`; its new `HEADING_2` is at indexes `145587-145635`, and the final boundary paragraph is
+  correct with one period. The failed-first/corrected Google append was an external-document index error, not a
+  product/runtime failure. All three external projections are complete. The records-only commit remains a parent
+  action; this close must not name its future SHA.
 - **Rollback/checkpoint:** restore the six owned documentation paths to their pre-edit bytes; the source rollback remains
   the independent pre-change `12,626`-byte `A09A66...D34` identity if the parent elects to reverse the source unit.
-- **Suggested close title:** `B119: close verified 1e agreement-sheet correction records`.
+- **Suggested close title:** `docs(b119): reconcile agreement-sheet close projections`.
 
 ### AAR
 
@@ -2327,9 +2356,23 @@ Lane: `FULL`
   succeeded. Treat redacted tool output as sensitive and keep secrets out of durable records.
 - **Highest-risk evidenced weakness:** a `rendered/current` preview can be fresh and visually plausible while still
   lacking runtime-dependent scenario inputs. This is a reproduced Forge-editor gotcha, not an X4-engine rule.
+- **Google Docs projection trigger:** the first revision-guarded append inserted at `145585`, incorrectly assuming
+  `endIndex-1` was the terminal newline; it was the prior paragraph's final period. Readback showed the prior
+  paragraph without its period and the new final paragraph with two periods. A second revision-guarded batch inserted
+  the missing period at `145585` and deleted the extra period after shifted indexes. Final readback is document
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, revision
+  `ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`,
+  paragraph count `722`, `HEADING_2` indexes `145587-145635`, and a correct one-period final boundary. This was an
+  external-document index error, not a product/runtime failure.
 - **Evidence:** the receipt README under
   `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/`, the native
   screenshot/log there, and this plan.
-- **Durable boundary:** `no capability-map delta`; no global workflow AAR delta. The next source-backed B119 unit is
-  the remaining twelve-reference/current-game visual census with corrections only where the source and native evidence
-  justify them; `1f` mechanics remain out of scope.
+- **Completed projection state:** AI Influence source commit `a4ff27814bb964f9fefce26cc05b38cccf8f66c1` and Forge
+  substantive commit `73a0067ff7068c493de6625fe014a3893d17d7cd` are pushed with local/configured-upstream/direct-remote
+  parity. GitHub #41 remains open with verified comment `5589908501`; Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress` / `Evidence Grade Partial` with both commits,
+  the comment, and the new `1e` section; Google tab `t.0` reads back at the final revision above. All three external
+  projections are complete. No OpenVSX publication belongs to this unit, no capability-map delta or global AAR delta
+  was made, and no new UI KB card was added. The records-only commit remains parent-owned; do not name its future SHA.
+- **Durable boundary:** the next source-backed B119 unit is the remaining twelve-reference/current-game visual census
+  with corrections only where the source and native evidence justify them; `1f` mechanics remain out of scope.
