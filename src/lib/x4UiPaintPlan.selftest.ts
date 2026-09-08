@@ -930,11 +930,58 @@ const B119_AIC_SHEET_SOURCE_BASE64 = [
 const B119_AIC_SHEET_RELATIVE_PATH = 'ui/addons/ai_influence_chat/aic_sheet.lua';
 const B119_AIC_SHEET_TARGET_NAME = 'sheet.display';
 const B119_AIC_SHEET_SOURCE_SHA256 = 'A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37';
+const B119_AIC_SHEET_PREVIOUS_SOURCE_BYTES = 12626;
+const B119_AIC_SHEET_PREVIOUS_SOURCE_SHA256 = 'A09A66B4BF98491B627304FD0F198B3893A21F9EE18BF8AA0979BB82220D4E34';
+const B119_AIC_SHEET_CURRENT_SOURCE_BYTES = 12655;
+const B119_AIC_SHEET_CURRENT_SOURCE_SHA256 = 'CD687E78F4D957DF95DBF1F645692CF9DFF105A9680F68547C68223D392F7695';
+const B119_AIC_SHEET_CURRENT_FOOTER_COLUMN_COUNT = 10;
+const B119_AIC_SHEET_CURRENT_FOOTER_SPANS = [4, 4, 2] as const;
 
-function exactAicSheetSource(): { readonly source: X4UiWorkspaceSource; readonly workspace: ModWorkspace } {
+function b119AicSheetHistoricalSourceText(): string {
   const sourceText = Buffer.from(B119_AIC_SHEET_SOURCE_BASE64, 'base64').toString('utf8');
   const sourceSha256 = createHash('sha256').update(sourceText, 'utf8').digest('hex').toUpperCase();
-  assert.equal(sourceSha256, B119_AIC_SHEET_SOURCE_SHA256, 'B119 exact aic_sheet source SHA-256 drifted');
+  assert.equal(sourceSha256, B119_AIC_SHEET_SOURCE_SHA256, 'B119 historical exact aic_sheet source SHA-256 drifted');
+  return sourceText;
+}
+
+function replaceB119AicSheetSourceOnce(sourceText: string, from: string, to: string, label: string): string {
+  assert.equal(sourceText.split(from).length - 1, 1, `B119 current aic_sheet ${label} replacement count drifted`);
+  return sourceText.replace(from, to);
+}
+
+function b119AicSheetCurrentSourceText(): string {
+  let sourceText = b119AicSheetHistoricalSourceText();
+  const scrollbarRepairIndexes = new Set([0, 3, 4, 6]);
+  let scrollbarMatchCount = 0;
+  sourceText = sourceText.replace(/highlightMode = "off" \}\)/g, match => {
+    const occurrence = scrollbarMatchCount++;
+    return scrollbarRepairIndexes.has(occurrence)
+      ? 'highlightMode = "off", reserveScrollBar = false })'
+      : match;
+  });
+  assert.equal(scrollbarMatchCount, 8, 'B119 historical aic_sheet scrollbar repair census drifted');
+  assert.equal(Buffer.byteLength(sourceText, 'utf8'), B119_AIC_SHEET_PREVIOUS_SOURCE_BYTES, 'B119 previous aic_sheet byte count drifted');
+  assert.equal(createHash('sha256').update(sourceText, 'utf8').digest('hex').toUpperCase(), B119_AIC_SHEET_PREVIOUS_SOURCE_SHA256, 'B119 previous aic_sheet source SHA-256 reconciliation drifted');
+
+  sourceText = replaceB119AicSheetSourceOnce(sourceText, '"TERMS OFFERED"', '"PROPOSED AGREEMENT"', 'heading');
+  sourceText = replaceB119AicSheetSourceOnce(
+    sourceText,
+    '("ref " .. string.upper(ascii(data.tx)))',
+    '("tx " .. string.upper(ascii(data.tx)) .. " - idempotent")',
+    'transaction wording',
+  );
+  sourceText = replaceB119AicSheetSourceOnce(sourceText, '"WHAT THIS COSTS YOU"', '"WHAT CHANGES IN YOUR SAVE"', 'section heading');
+  sourceText = replaceB119AicSheetSourceOnce(sourceText, 'local bt = frame:addTable(12,', `local bt = frame:addTable(${B119_AIC_SHEET_CURRENT_FOOTER_COLUMN_COUNT},`, 'footer column count');
+  sourceText = replaceB119AicSheetSourceOnce(sourceText, 'br2[9]:setColSpan(4)', `br2[9]:setColSpan(${B119_AIC_SHEET_CURRENT_FOOTER_SPANS[2]})`, 'footer narrow span');
+
+  assert.equal(Buffer.byteLength(sourceText, 'utf8'), B119_AIC_SHEET_CURRENT_SOURCE_BYTES, 'B119 current aic_sheet byte count drifted');
+  assert.equal(sourceText.includes('\r'), false, 'B119 current aic_sheet must remain LF-only');
+  assert.equal(createHash('sha256').update(sourceText, 'utf8').digest('hex').toUpperCase(), B119_AIC_SHEET_CURRENT_SOURCE_SHA256, 'B119 current aic_sheet source SHA-256 drifted');
+  return sourceText;
+}
+
+function exactAicSheetSource(): { readonly source: X4UiWorkspaceSource; readonly workspace: ModWorkspace } {
+  const sourceText = b119AicSheetHistoricalSourceText();
   const sheetWorkspace = workspace([
     passthrough('ui.xml', [
       '<?xml version="1.0" encoding="utf-8"?>',
@@ -948,6 +995,39 @@ function exactAicSheetSource(): { readonly source: X4UiWorkspaceSource; readonly
     passthrough(B119_AIC_SHEET_RELATIVE_PATH, sourceText, { reason: 'unparsed' }),
   ]);
   return { workspace: sheetWorkspace, source: buildX4UiWorkspaceSource(sheetWorkspace) };
+}
+
+function currentAicSheetSourceContract(): {
+  readonly sourceText: string;
+  readonly source: X4UiWorkspaceSource;
+  readonly catalog: ReturnType<typeof createX4UiLayoutTargetCatalog>;
+  readonly footerSpans: readonly number[];
+} {
+  const sourceText = b119AicSheetCurrentSourceText();
+  const sheetWorkspace = workspace([
+    passthrough('ui.xml', [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<addon name="b119-aic-sheet-current">',
+      '  <environment type="menus">',
+      `    <file name="${B119_AIC_SHEET_RELATIVE_PATH}" />`,
+      '  </environment>',
+      '</addon>',
+      '',
+    ].join('\n')),
+    passthrough(B119_AIC_SHEET_RELATIVE_PATH, sourceText, { reason: 'unparsed' }),
+  ]);
+  const source = buildX4UiWorkspaceSource(sheetWorkspace);
+  const file = source.bundle?.sourceFiles.find(candidate => candidate.path === B119_AIC_SHEET_RELATIVE_PATH);
+  assert(file !== undefined, 'B119 current aic_sheet source did not materialize through the workspace source projector');
+  const catalog = createX4UiLayoutTargetCatalog(file.callModel);
+  assert.equal(catalog.sourceIdentity.sha256, B119_AIC_SHEET_CURRENT_SOURCE_SHA256, 'B119 current aic_sheet projected source SHA-256 drifted');
+  const footerStart = sourceText.indexOf(`local bt = frame:addTable(${B119_AIC_SHEET_CURRENT_FOOTER_COLUMN_COUNT},`);
+  const footerEnd = sourceText.indexOf('\n    frame:display()', footerStart);
+  assert(footerStart >= 0 && footerEnd > footerStart, 'B119 current aic_sheet footer source range was not found');
+  const footerSource = sourceText.slice(footerStart, footerEnd);
+  const footerSpans = [...footerSource.matchAll(/br2\[\d+\]:setColSpan\((\d+)\)/g)].map(match => Number(match[1]));
+  assert.deepEqual(footerSpans, B119_AIC_SHEET_CURRENT_FOOTER_SPANS, 'B119 current aic_sheet footer span geometry drifted');
+  return { sourceText, source, catalog, footerSpans };
 }
 
 function aicSheetSampleValue(entry: {
@@ -1711,6 +1791,28 @@ async function main(): Promise<void> {
   try {
     canonical = await loadCanonicalFixture();
     colorEvidence = await loadCanonicalColorFixture();
+    const currentAicSheet = currentAicSheetSourceContract();
+    const currentAicSheetTarget = currentAicSheet.catalog.targets.find(candidate => candidate.name === B119_AIC_SHEET_TARGET_NAME);
+    console.log('B119 reconciled current aic_sheet source -> sheet.display contract: ' + JSON.stringify({
+      historicalFixtureSha256: B119_AIC_SHEET_SOURCE_SHA256,
+      previousSource: { bytes: B119_AIC_SHEET_PREVIOUS_SOURCE_BYTES, sha256: B119_AIC_SHEET_PREVIOUS_SOURCE_SHA256 },
+      currentSource: { bytes: B119_AIC_SHEET_CURRENT_SOURCE_BYTES, sha256: currentAicSheet.catalog.sourceIdentity.sha256 },
+      target: currentAicSheetTarget?.name,
+      footer: { columns: B119_AIC_SHEET_CURRENT_FOOTER_COLUMN_COUNT, spans: currentAicSheet.footerSpans },
+    }));
+    check('causal-aic-sheet-current-source-hash-and-footer-geometry', currentAicSheetTarget !== undefined
+      && currentAicSheet.catalog.sourceIdentity.sha256 === B119_AIC_SHEET_CURRENT_SOURCE_SHA256
+      && currentAicSheet.sourceText.includes('"PROPOSED AGREEMENT"')
+      && currentAicSheet.sourceText.includes('("tx " .. string.upper(ascii(data.tx)) .. " - idempotent")')
+      && currentAicSheet.sourceText.includes('"WHAT CHANGES IN YOUR SAVE"')
+      && currentAicSheet.footerSpans.length === B119_AIC_SHEET_CURRENT_FOOTER_SPANS.length
+      && currentAicSheet.footerSpans.every((span, index) => span === B119_AIC_SHEET_CURRENT_FOOTER_SPANS[index]), {
+      historicalFixtureSha256: B119_AIC_SHEET_SOURCE_SHA256,
+      previousSource: { bytes: B119_AIC_SHEET_PREVIOUS_SOURCE_BYTES, sha256: B119_AIC_SHEET_PREVIOUS_SOURCE_SHA256 },
+      currentSource: { bytes: B119_AIC_SHEET_CURRENT_SOURCE_BYTES, sha256: currentAicSheet.catalog.sourceIdentity.sha256 },
+      target: currentAicSheetTarget?.name,
+      footer: { columns: B119_AIC_SHEET_CURRENT_FOOTER_COLUMN_COUNT, spans: currentAicSheet.footerSpans },
+    });
     const sheetCausal = projectExactAicSheetAuthorityComplete(canonical);
     const sheetScene = sheetCausal.scene;
     const sheetPaintCommands = sheetCausal.paint.status === 'refused'

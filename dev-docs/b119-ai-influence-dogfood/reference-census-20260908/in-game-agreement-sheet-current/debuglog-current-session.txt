@@ -1,0 +1,230 @@
+Logfile started, time Tue Sep 08 11:31:57 2026
+[Network] 0.00 Connecting to auto patcher server...
+[Network] 0.00 Auto patcher connection established.
+[Network] 0.00 Receiving data...
+[Network] 0.00 Patching finished (validation only): Update is required but was not downloaded
+[General] 0.00 ======================================
+[=ERROR=] 0.00 Could not validate and update the venture DLC. Online mode will be disabled.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 File I/O: Could not find signature file '.\extensions\sn_mod_support_apis\content.xml.sig' (there will be no more errors for missing signatures; enable debug filter 'fileio' to get all signature verification failures)
+[General] 0.00 ======================================
+[FileIO ] 0.00 File I/O: Failed to verify the file signature for file '.\extensions\sn_mod_support_apis\content.xml' (error: 14)
+[FileIO ] 0.00 File I/O: Failed to verify the file signature for file '.\extensions\sn_mod_support_apis\t\0001.xml' (error: 14)
+[FileIO ] 0.00 File I/O: Failed to verify the file signature for file '.\extensions\x4_ai_influence\t\0001-l044.xml' (error: 14)
+[General] 0.00 'NVIDIA GeForce RTX 5070' NVIDIA v616.64.0 (Vulkan 1.4.351) check=1
+[FileIO ] 0.00 File I/O: Failed to verify the file signature for file '.\extensions\x4_ai_influence\libraries\wares.xml' (error: 14)
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740464516' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723443697' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740475307' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723509437' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723123472' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740366208' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723172880' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723001823' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723105572' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723385890' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723105288' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723003402' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723001114' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723002213' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723000623' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723054534' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723054610' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723458637' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740363409' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740476954' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723518975' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723458508' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740623088' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723095857' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723233885' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723210687' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1722972994' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723126283' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740363245' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723437458' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723124638' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1722953677' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723272276' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723509281' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723408704' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723454852' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1723272177' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740460055' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1722986502' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 LibraryLoadout():
+Loadout 'player_1740715277' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[General] 0.00 ======================================
+[=ERROR=] 0.00 ConstructionPlan():
+Construction plan 'player_1740631515' requires extension 'SW Interworlds' version 85 or greater in the game folder but no version is available.
+[General] 0.00 ======================================
+[Init   ] 0.00 Entering startmenu in 9.00 (611726)
+[Init   ] 1.21 Game initialisation time until intro video: 53 seconds
+[FileIO ] 20.76 File I/O: Failed to verify the file signature for file '.\extensions\sn_mod_support_apis\ui.xml' (error: 14)
+[FileIO ] 20.76 File I/O: Failed to verify the file signature for file '.\extensions\x4_ai_influence\ui.xml' (error: 14)
+[FileIO ] 20.76 File I/O: Failed to verify the file signature for file '.\extensions\pipeline_test\ui.xml' (error: 14)
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][UIX] STARTING LOAD rev=aichat-r1
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][UIX] events registered (43): AIChat.ctxrefresh, AIChat.planreview, AIChat.npcact, AIChat.open, AIChat.direct_probe, AIChat.backend_config, AIChat.faction_names, AIChat.mod_reset, AIChat.trade_intel, AIChat.espionage_tick, AIChat.initiative_tick, AIChat.intel_delivered, AIChat.diplo_analyze, AIChat.trade_council, AIChat.contract_withdraw_shim, AIChat.contagion_at, AIChat.plague_event, AIChat.newscast, AIChat.pol_event, AIChat.toggles_config, AIChat.transfer_done, AIChat.transfer_failed, AIChat.ship_lost, AIChat.world_event, AIChat.diplo_statement, AIChat.u1_probe, AIChat.card_loaded, AIChat.starttyping, AIChat.close, AIChat.poll, AIChat.index_npcs, AIChat.relation_report, AIChat.mint_contract, AIChat.hostile_event, AIChat.sync_relations, AIChat.npc_skills, AIChat.opord_order_event, AIChat.opord_issued, AIChat.opord_force_request, AIChat.contract_claimed, AIChat.contract_aborted, AIChat.contract_completed, AIChat.build_placed
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][HUB] ensureRegistered registered=false
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][HUB] aic_hub.lua loaded
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][COMM] ensureRegistered registered=false
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][COMM] aic_comm.lua loaded
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][SHEET] ensureRegistered registered=false
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][SHEET] aic_sheet.lua loaded
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [pipeline_test][B119-sheet] armed
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [pipeline_test][B119-sheet] dependency-ready
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [pipeline_test][B119-sheet] fixture-ready clauses=4 diff=4
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][SHEET] ensureRegistered registered=true
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [pipeline_test][B119-sheet] open-requested
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [AICHAT][SHEET] display DONE clauses=4
+[General] 20.76 ======================================
+[General] 20.76 ======================================
+[=ERROR=] 20.76 [pipeline_test][B119-sheet] opened
+[General] 20.76 ======================================

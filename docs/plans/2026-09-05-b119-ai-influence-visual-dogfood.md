@@ -2109,3 +2109,227 @@ Lane: `FULL`
   installed `learning-from-failures` skill; this project AAR is the durable project-specific record.
 - **Fresh-eyes correction:** removed the self-invalidating pre-commit state claim from the handoff and plan; an initial
   exact-marker check then exposed split/inconsistent invariant wording, which was normalized before final validation.
+
+## 2026-09-08 CONTINUATION — twelve-reference readback and bounded `1e` correction
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Bounded unit:** correct only the source-authored `1e` agreement-sheet chrome that the supplied reference specifies
+  unambiguously: the two headings, ASCII idempotency wording, and `40/40/20` action proportions. Perform the source
+  mutation through the installed Forge Source Editor's issued source/CAS controls, then prove the resulting current
+  Canvas, complete-mod validation, exact deploy bytes, and native X4 rendering. This is the first source-backed delta
+  after the full reference census; it is not permission to redesign gameplay or rebuild the renderer.
+- **Assumptions and unresolved facts:** the compact `1d`/`1e`/`1f` PNGs are cropped panel references. Their README
+  dimensions remain authoritative at the declared `2560x1440` design resolution; treating the crop width as the game
+  viewport and widening the sheet to roughly 83% would be a false fix. Dynamic party names, clauses, save deltas, and
+  tones remain runtime-owned. `1f` still has no deterministic price-reaction contract.
+- **Authoritative references:** direct one-image-at-a-time inspection of all twelve supplied files; the handoff README
+  (`1e`: centred 1140 px sheet, `PROPOSED AGREEMENT`, `WHAT CHANGES IN YOUR SAVE`, three footer actions); current
+  `aic_sheet.lua`; configured X4 9.00 Helper/widget/Zekton corpus; installed Forge `0.0.77`; the retained native X4
+  screenshot and current-session log from the corrective close.
+- **In scope:** replace `TERMS OFFERED`; replace `WHAT THIS COSTS YOU`; identify the transaction as `tx ... -
+  idempotent` using ASCII-safe punctuation; change the footer's equal thirds to an exact ten-column `4/4/2` split;
+  update causal exact-source fixtures only when the legitimate source hash/geometry changes require it; validate and
+  deploy through existing Forge owners.
+- **Out of scope:** `1a`; a second comm renderer; `1f` mechanics or fabricated probabilities; runtime copy/data
+  changes; player/faction naming not supplied by current runtime data; hub/comm redesign; arbitrary-Lua coverage;
+  universal C++ frame acceptance; weakening any lint or source-authority gate; another OpenVSX release in this unit.
+- **Risks and authorization boundaries:** an invalid column/span change can make X4 reject the complete frame; a stale
+  source edit can overwrite newer workspace bytes; preview success can be mistaken for game proof. The user has
+  already authorized Forge/game writes and native X4 validation. Source and deployed hashes remain separate until the
+  guarded real deploy. Rollback is the exact pre-change `aic_sheet.lua` byte identity: `12,626` bytes, SHA-256
+  `A09A66B4BF98491B627304FD0F198B3893A21F9EE18BF8AA0979BB82220D4E34`, still present independently in both the
+  Forge workspace and installed extension at baseline; reverse the four issued edits and redeploy if any required gate
+  fails.
+- **Acceptance criteria:**
+  1. Forge issues current source-edit authority for exact `aic_sheet.lua -> sheet.display`; each accepted mutation is
+     CAS-bound and no unrelated byte changes.
+  2. The edited source contains `PROPOSED AGREEMENT`, `WHAT CHANGES IN YOUR SAVE`, ASCII `tx ... - idempotent`,
+     `addTable(10)`, footer spans `4/4/2`, and no new linter error or unresolved structural inconsistency.
+  3. The exact source replays through Source -> Layout -> Scene -> Paint -> Canvas at `2560x1440`; the mounted Canvas
+     is nonzero, visibly shows both headings and the wider/wider/narrower footer, and still says `Not verified in game`.
+  4. Complete-mod validation and deploy-verify dry-run pass; real deploy produces byte-identical source/deployed
+     `aic_sheet.lua` and leaves every unrelated mod file unchanged.
+  5. Native X4 displays the edited sheet with all four clauses, all four save-delta rows, all three usable actions, no
+     clipping introduced by the footer split, and zero scoped frame/view/Lua failures in a current-session log.
+- **Required validation and negative path:** exact source-edit selftest/fixture updates; layout/scene/paint/canvas/lint
+  focused suites implicated by the changed source; TypeScript and scoped lint if Forge tests change; Forge project
+  validation; deploy-verify dry-run/apply; source/deployed whole-tree census; installed Forge visual inspection; native
+  X4 visual/interaction/log inspection. Re-run the `addTable(24)` whole-frame refusal oracle and verify the edited
+  `addTable(10)` stays clean. A stale or mismatched source CAS must refuse without mutation.
+- **Evidence locations:** append under
+  `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/` and a native-X4 child directory; record exact commands,
+  hashes, screenshots, and logs here before any close projection.
+
+### BASELINE / RECONCILE
+
+- **Forge revision:** `859e81fbad829242ddd5e13232617b0269099e28`, equal to configured upstream. Forty-five
+  pre-existing unrelated dirty rows remain outside this unit. Installed `0.0.77` sidecar reports port `61534`; X4 is
+  stopped and installed `pipeline_test` is absent.
+- **Source/deploy identity:** the six principal AI UI Lua files are pairwise byte-identical between
+  `F:\DEV_ENV\projects\Mods\X4Mods\x4_ai_influence` and the installed extension. `aic_sheet.lua` is exactly the
+  pre-change size/hash above.
+- **Direct visual readback:** the earlier multi-image view was discarded because its output truncated. All twelve
+  supplied files were reopened individually and visually inspected in this continuation; all ten retained current-X4
+  surface captures were then reopened individually. The observed classification is:
+
+| Reference | Direction / owner | Current evidence | Reconciled status and exact gap |
+| --- | --- | --- | --- |
+| `00-brief` | design-system authority | direct reference inspection | Governs flat chrome, palette, widget-only construction, and honest gated states; not a screen. |
+| `00-vanilla-reference` | native-X4 authority | direct reference inspection | Confirms flat blue bars, dense rows, state colour, and live-scene composition; not a screen. |
+| `1a` | alternate comm direction | none required | Deliberately unsupported because `1b` is selected; do not render both. |
+| `1b` | `aic_menu.lua -> menu.display` | `x4-current-source-1b-main.jpg` | Native accepted. NPC and wheel remain visible; the narrower plate is a deliberate measured keep-out adaptation. Rail/transcript density and some hierarchy remain divergent. |
+| `1c` | `aic_comm.lua -> comm.display` | `x4-current-source-1c-expanded.jpg` | Native accepted. Three regions exist, but body fill, populated transcript/leverage hierarchy, spacing, and reference density diverge. Runtime-empty data is not a renderer failure. |
+| `1d` | pending branch in `aic_menu.lua` | `x4-current-source-1d-inline-proposal.jpg` | Native accepted and exactly three payment choices render. The source-authored extra `REVIEW` widget and rightmost compact `END` do not paint; sheet-transition ownership remains unresolved. |
+| `1e` | `aic_sheet.lua -> sheet.display` | retained installed Forge replay and `in-game-20260908-scrollbar-clean/x4-native-agreement-sheet-2544x1354.jpg` | Source/Forge/X4 path is proven. Headings, idempotency wording, and equal-third footer differ from the reference; this unit corrects only those source-backed deltas. |
+| `1f` | no shipping owner | direct reference inspection | Data-blocked and deliberately unimplemented. No authoritative accept/counter/break-off probability contract exists. |
+| `1g` | Dossier branch in `aic_hub.lua` | `x4-current-source-hub-dossier.jpg` | Native accepted. Faction/data regions render, but the icon rail, bounded body fill, selected-faction composition, row density, and typography diverge. |
+| `1h` | Influence branch in `aic_hub.lua` | `x4-current-source-hub-influence.jpg` | Native accepted with honest empty-state copy. Reference meters/chooser/receipts require populated runtime data; panel fill and hierarchy still diverge independently. |
+| `1i` | Intel + News branches in `aic_hub.lua` | `x4-current-source-hub-intel.jpg`; `x4-current-source-hub-news.jpg` | Both native tabs render. Intel lacks reference filters/meters/bounds; News is a compressed ledger rather than headline/body/action rows. |
+| `1j` | Fleet + Settings branches in `aic_hub.lua` | `x4-current-source-hub-fleet.jpg`; `x4-current-source-hub-settings.jpg` | Both native tabs render. Honest empty Fleet data is distinct from its missing receipt-table composition; Settings exposes live state but differs in rows/actions and density. |
+
+- **Existing capability reused:** `X4UiSourceEditor`, `x4UiSourceEdits`, `x4UiLayoutProgram`, `x4UiScene`,
+  `x4UiPaintPlan`, `x4UiCanvasRenderer`, `x4UiLint`, artifact/deploy owners, and the current game-verification state. No
+  parallel parser, renderer, linter, scenario system, or writer is allowed.
+- **Couplings checked:** source literal/structural edit authority; exact-source fixture hashes and issued operation IDs;
+  ten-column span legality; source/workspace/deploy identity; preview/current-game truth separation; native frame
+  acceptance and scoped logs.
+- **Capability-map delta:** no delta at plan time. The new census strengthens evidence but does not add a capability.
+- **Plan change:** the census did not justify a broad redesign. It identified a small fully authoritative `1e` delta
+  that can exercise the complete author/edit/preview/deploy/native loop before larger comm/hub visual work.
+- **Reconciliation / scope change (2026-09-08):** the evidence-commit boundary exposed that repository `text: auto`
+  can silently rewrite native CRLF debug-log evidence during ordinary exact-path staging, so artifact-byte correctness
+  requires a repository-owned `.gitattributes` rule in this continuation. Rollback is to remove only the added
+  `dev-docs/**/debuglog*.txt binary` pattern; the parent can then restage the exact log path with the raw-index
+  correction if needed. No captured log bytes, screenshot bytes, index, or Git metadata are changed by this scope.
+
+### IMPLEMENT
+
+- The installed Forge Source Editor issued the exact `aic_sheet.lua -> sheet.display` source/CAS authority. The bounded
+  source correction changed only the specified agreement-sheet chrome: `TERMS OFFERED` became `PROPOSED AGREEMENT`,
+  `WHAT THIS COSTS YOU` became `WHAT CHANGES IN YOUR SAVE`, the transaction line now uses ASCII `tx ... - idempotent`,
+  and the footer changed from equal thirds to `addTable(10)` with spans `4/4/2`. The four retained
+  `reserveScrollBar=false` changes were preserved. The current source/deployed Lua is LF-only, `12,655` bytes, and
+  SHA-256 `CD687E78F4D957DF95DBF1F645692CF9DFF105A9680F68547C68223D392F7695`.
+- The exact source was replayed through the existing Source -> Layout -> Scene -> Paint -> Canvas owners. Both
+  data-present branches were selected, both loop counts were set to `4`, and all `55/55` exact sample controls were
+  populated. No renderer, parser, linter, gameplay, runtime data, mod architecture, or game files were changed by
+  this bounded correction.
+
+### VALIDATE
+
+- **Forge project validation:** `ok: true`; `29` files including `7` Lua files; `0` errors; `5` direct warnings and
+  `10` full-context warnings; `0` new warnings versus baseline. The AI dry-run planned `0` adds, `124` overwrites,
+  `0` deletes, and `6` preserves, with only the managed source sheet changed.
+- **Deploy and byte census:** the guarded real deploy passed all `11` checks. Recovery was
+  `deploy-mtssjb13-d04d986bcca06e24`, the resulting fingerprint was
+  `3dd16a6ed40cefb222649ac7834c2b128c764cddf9e34ac10b4ad5eb81c55edd`, and source, staging, and deployed
+  `aic_sheet.lua` were exact `12,655`-byte / `CD687...F7695` matches. The independent whole-tree comparison found
+  `124` common files and `0` mismatches.
+- **Installed Forge visual proof:** installed Forge `0.0.77` was inspected in the real `x4 AiLive` workspace at
+  `Expert -> HUD & Lua UI`. The readback was `rendered/current`, mounted from the accepted raw paint plan, target
+  `sheet.display`, profile `x4-ui-editor-default` at `2560x1440`, Helper scale `1.4`, native bitmap `2560x1440`,
+  export-ready, and still `Not verified in game`. The visible canvas showed both new headings, `TX-CAUSAL`, the party
+  line, all four clause/note rows, all four cost/value rows, and three footer actions with wider/wider/narrower
+  proportions. The Forge export download timed out; no durable Forge PNG was saved and none is claimed here.
+- **Native X4 proof:** the temporary `pipeline_test` launch used the exact AI sheet and passed all `11` checks, then
+  the scratch fixture was restored and the game target was absent. Native X4 9.00 visibly shows both new headings,
+  the ASCII idempotent transaction wording, four clauses, four save-diff rows, three buttons, and a `40/40/20` footer
+  with no clipping. Durable screenshot evidence is
+  `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/x4-native-agreement-sheet-current-2560x1392.png`
+  (`1,535,566` bytes, SHA-256
+  `2AEE12CC76F02E75C44FA11747485014A849C1FB9FEAB5051AD41BC008C8ACC3`). The current-session log is
+  `debuglog-current-session.txt` in the same directory (`16,859` bytes, SHA-256
+  `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`); it has exactly one expected launcher
+  marker and one expected sheet marker, with zero refused/timeout, scrollbar, `DisplayView`, setup-view, traceback,
+  or Lua Error signatures.
+- **Focused and negative validation:** PaintPlan `213/213`, LayoutKernel `34/34`, Scene `179/179`, CanvasRenderer
+  `171/171`, Linter `153/153`, and PreviewPipeline `122/122` passed. The linter retained the `addTable(24)` refusal
+  and clean `addTable(10)` result. `npm run typecheck`, scoped ESLint, and exact diff hygiene passed. The current
+  selftest reconstructs the exact historical `A09...D34` contract and the current `CD687...F7695` byte/hash and
+  heading/transaction/footer assertions. Deep Scene/Paint replay remains the historical fixture; current deep replay
+  proof is the live installed Forge canvas.
+- **Restoration:** scratch `content.xml` is `367` bytes / `23A7E9A5D789DD31B5BFBFDCF7D9A6B63CB33971170C3C0E64438C77B52A5034`,
+  `ext_01.lua` is `5,488` bytes /
+  `C1D9CD8580C6175E95C543259A2AB19F8B463282BF48B2229EB6013D6052718E`, README is `210` bytes /
+  `31B80A5145A9E9EBAF252C91DF24D58DE29B5BED76BAECC6FB6839E4EDF1C871`, and `ui.xml` is `273` bytes /
+  `655331A4423A550532042B23C8E60141A60DCC0E1C42D4DE6DA653DAAD1C1689`. A stale CAS produced HTTP `409` with no
+  mutation; the guarded write returned HTTP `200`; restored-fixture validation reported `0` errors / `0` warnings.
+
+### REVIEW
+
+- **Requirement 1 — issued authority and bounded mutation:** done and evidenced. The exact source/CAS path was used;
+  no unrelated source bytes or files were accepted by the dry-run/deploy census.
+- **Requirement 2 — source correction and lint:** done and evidenced. Both headings, ASCII `tx ... - idempotent`,
+  `addTable(10)`, and footer spans `4/4/2` are present; the `24`-column refusal remains closed and the current lint
+  result has no new error or unresolved structural inconsistency.
+- **Requirement 3 — Forge canvas:** done and evidenced by the installed-app visual readback and populated `55/55`
+  scenario inputs. It remains Forge preview proof and retains `Not verified in game`; no Forge export PNG exists.
+- **Requirement 4 — complete validation and deployment:** done and evidenced by project validation, dry-run, `11/11`
+  deploy checks, exact source/staging/deployed bytes, and the independent `124`-common-file / `0`-mismatch census.
+- **Requirement 5 — native X4:** done and evidenced for the tested `aic_sheet.lua -> sheet.display` route, one current
+  profile, and the retained screenshot/log. This is not universal C++ acceptance or arbitrary Lua/Helper/widget
+  coverage.
+- **Overall B119 boundary:** deliberately `IN_PROGRESS / PARTIAL`. The full twelve-reference/current-game visual
+  census and broader arbitrary-Lua/Helper/widget/C++ coverage remain open. There is no claim of full B119 completion,
+  pixel-perfect parity, or saved Forge export.
+- **Durable records:** this plan, BACKLOG, the overwritten SESSION-HANDOFF, the new evidence receipt, the project AAR,
+  and KB card `63` are the requested documentation surfaces. `no capability-map delta`; the existing capability is
+  strengthened by evidence rather than extended.
+
+### CLOSE
+
+- **Status:** `VERIFIED` for the bounded B119 `1e` agreement-sheet correction unit; `IN_PROGRESS / PARTIAL` for the
+  overall B119 program.
+- **What changed:** repository records now capture the exact current source/deployed identity, Forge editor proof,
+  native X4 screenshot/log, byte census, focused validation, negative-path restoration, and the preview/export/game
+  truth boundaries.
+- **What was not changed:** no TypeScript, Lua, source, test, mod, game, screenshot, log, Git metadata, capability map,
+  global workflow AAR, or external service record was modified by this documentation unit.
+- **Pending parent actions:** the parent owns the exact-path source/documentation commits and the pending GitHub #41,
+  Notion, and Google Drive updates after those commits. No future commit SHA is invented here.
+- **Rollback/checkpoint:** restore the six owned documentation paths to their pre-edit bytes; the source rollback remains
+  the independent pre-change `12,626`-byte `A09A66...D34` identity if the parent elects to reverse the source unit.
+- **Suggested close title:** `B119: close verified 1e agreement-sheet correction records`.
+
+### AAR
+
+- **Triggers:** one bulk browser fill timed out after `120 s` and left `17/55` values; five bounded batches completed
+  `55/55`. Nested editor scrolling initially produced blank/misaligned captures until the actual canvas was scrolled
+  into view. Two recursive `rg` scans against giant rollout JSONL files consumed about `785 MB` and `1.286 GB`; the
+  processes were verified and terminated. A redaction mistake exposed a local Forge bearer token in tool output; no
+  token or secret is reproduced in this record.
+- **Evidence-integrity trigger:** before the pending evidence commit, exact-path `git add -f` applied the repository
+  `text: auto` filter to the native log: the working/native artifact remained `16,859` bytes / SHA-256
+  `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826` with `230` CR and `230` LF bytes, while the
+  staged/index blob became `16,629` bytes / SHA-256
+  `5E2BE22E13150BDB0338AA7F5D0F242C82BDFBF1827A3126DCE808AC8FF6B3C9` with CR bytes removed. Hashing the staged
+  blob caught it before commit; only that staged path was corrected with an exact no-filter raw blob, restoring
+  `16,859` bytes / `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826` with `230` CR and `230` LF.
+  Check staged/committed evidence from the index/blob, not the working file; this is a Git/evidence-packaging hazard,
+  not an X4-engine or Forge-rendering failure.
+- **Durable fix / scope change:** the repository-owned `.gitattributes` rule `dev-docs/**/debuglog*.txt binary` now
+  supersedes reliance on the one-off no-filter raw-index workaround for future native-log staging. The failed filtered
+  identity (`16,629` bytes / `5E2BE22E13150BDB0338AA7F5D0F242C82BDFBF1827A3126DCE808AC8FF6B3C9`) and corrected
+  native identity (`16,859` bytes / `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`)
+  remain incident evidence. Rollback is removal of the single pattern; the parent can restage the exact path raw if
+  needed.
+- **Sustain:** treat `rendered/current` as source/profile identity freshness, not proof that every runtime-dependent
+  scenario input is populated. Require exact branch/loop/sample readback, durable native screenshot/log evidence, and
+  independent deployment bytes before promoting this path.
+- **Improve work / approach:** use bounded browser fill batches, scroll the real canvas before capture, and keep the
+  current installed Forge proof distinct from native X4 proof. Preserve the complete-scenario `55/55` census alongside
+  the visual receipt.
+- **Improve tools:** search exact pointed files and bounded line ranges; never chase abbreviated hashes recursively
+  through rollout JSONL. A first post-edit marker probe used PowerShell backtick-escaped needles and falsely reported
+  a missing marker; the single-quoted exact readback passed. The first follow-up spawn wrapper also failed before
+  spawning because Markdown backticks were embedded in a JavaScript template literal; a joined plain-string retry
+  succeeded. Treat redacted tool output as sensitive and keep secrets out of durable records.
+- **Highest-risk evidenced weakness:** a `rendered/current` preview can be fresh and visually plausible while still
+  lacking runtime-dependent scenario inputs. This is a reproduced Forge-editor gotcha, not an X4-engine rule.
+- **Evidence:** the receipt README under
+  `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/`, the native
+  screenshot/log there, and this plan.
+- **Durable boundary:** `no capability-map delta`; no global workflow AAR delta. The next source-backed B119 unit is
+  the remaining twelve-reference/current-game visual census with corrections only where the source and native evidence
+  justify them; `1f` mechanics remain out of scope.

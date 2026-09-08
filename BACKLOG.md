@@ -51,6 +51,18 @@ contains the source commit and GitHub comment, and Notion has no revision ID. Go
 its top lines and appended `HEADING_2` record the same bounded-verified / overall-partial boundary. Source/release/
 native close commit `bf03ed9e504b530b054db753bc46faf5ea329208` is already pushed with exact local, configured
 upstream, and direct-remote parity; the external projections are complete for this checkpoint.
+**`1e` agreement-sheet correction checkpoint 2026-09-08 — VERIFIED BOUNDED UNIT / FULL B119 IN_PROGRESS/PARTIAL:**
+the current source and deployed `aic_sheet.lua` are LF-only, `12,655` bytes, and SHA-256
+`CD687E78F4D957DF95DBF1F645692CF9DFF105A9680F68547C68223D392F7695`; the correction supplies `PROPOSED AGREEMENT`,
+`WHAT CHANGES IN YOUR SAVE`, ASCII `tx ... - idempotent`, and a ten-column `4/4/2` footer while retaining the four
+`reserveScrollBar=false` changes. Forge validation is `29` files / `7` Lua / `0` errors; dry-run is `0` add / `124`
+overwrite / `0` delete / `6` preserve; real deploy is `11/11` with an independent `124`-common-file / `0`-mismatch
+census. Native X4 9.00 shows both headings, four clauses, four save-diff rows, three buttons, and `40/40/20` footer
+without clipping; durable screenshot/log evidence is under
+`dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/`. Focused tests,
+typecheck, scoped lint, and diff hygiene passed. No Forge export PNG was saved; this bounded unit is `VERIFIED`, but
+the full twelve-reference/current-game census and broader arbitrary-Lua/Helper/widget/C++ coverage remain open.
+`no capability-map delta`; parent exact-path commits and GitHub #41, Notion, and Drive updates remain pending.
 **Original-brief audit 2026-09-05 — 5/6 VERIFIED / 1/6 PARTIAL:** exact hand-written Lua round-trip, all eleven
 linter trap families including pre-export `addTable(24)` rejection, deploy-bound `Not verified in game` truth, and the
 fixed-drawable X4 user-scale contract are `VERIFIED`. All four keep-out contexts now also have installed, non-null,
