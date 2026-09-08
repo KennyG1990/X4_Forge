@@ -1662,3 +1662,428 @@ Lane: `FULL`
   GitHub #41 remain `IN_PROGRESS / PARTIAL / Not verified in game`. The next bounded unit is a valid current native
   X4 invocation/capture for `sheet.display`, followed by source-backed `1e` corrections and the remaining
   twelve-reference census.
+
+### PLAN / ACCEPTANCE CONTRACT — exact shipping `sheet.display` in native X4
+
+- **Lane / bounded unit:** FULL. Use the existing scratch-only `pipeline_test` extension as a one-run launcher for
+  the deployed, byte-identical `x4_ai_influence` implementation of `AIC_Sheet_Menu.open()`. Prove that the exact
+  shipping `aic_sheet.lua` accepted by the installed Forge source pipeline is also accepted and visibly rendered by
+  the current X4 host. This is an acceptance run, not another renderer implementation.
+- **Authoritative references / assumptions:** workspace and deployed `aic_sheet.lua` must retain SHA-256
+  `A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37`; the shipped Helper/corpus remains layout
+  authority. A deterministic `_pendingAction` fixture is sufficient because `AI_Influence.AgreementSheet()` consumes
+  that table locally. Current X4 C++ frame acceptance and the rendered host are the authority for this gate.
+- **In scope:** add a hard `x4_ai_influence` dependency to the scratch launcher; wait for the shipping globals; save,
+  inject, and later restore one deterministic pending action; call the shipping `AIC_Sheet_Menu.open()`; run Forge
+  import/validation/dry-run/deploy verification; launch X4; capture the visible sheet and post-baseline debug-log
+  receipts; then remove the deployed scratch extension and restore its workspace bytes.
+- **Out of scope:** no Forge production-code change, no `x4_ai_influence` source change, no duplicate sheet/layout
+  implementation, no claim that the production REVIEW transition is proven, no action-button activation, no game
+  save or economy mutation, no source-to-reference cosmetic correction, and no product-wide or universal 1:1 claim.
+- **Baseline / rollback:** local and upstream Forge revision are both
+  `573a577a56f21cbe618cd42061cbf7d5d96423e6`; X4 is stopped; no `pipeline_test` directory is deployed under the game
+  extensions folder; the four-file scratch workspace is checkpointed by exact path, size, and SHA-256 before edit.
+  Rollback restores those bytes and removes only the exact deployed `pipeline_test` target after X4 stops. Existing
+  unrelated Forge worktree changes remain untouched.
+- **Risks / authorization boundary:** auto-open may cover the X4 start screen; agreement buttons could cause AI-mod
+  side effects if activated. The run will capture only, use close/Escape where safe, never activate sheet actions,
+  and stop before any save-discard prompt. User authorization covers Forge deploy, X4 launch/control, evidence
+  capture, cleanup, and the already delegated commit/push workflow.
+- **Acceptance criteria:** (1) source and deployed sheet hashes remain exact; (2) the scratch mod contains only the
+  dependency and deterministic launcher behavior; (3) Forge project validation returns zero errors and its UI linter
+  retains the known blocking-rule families; (4) guarded dry-run and real deploy verification succeed; (5) the
+  post-baseline X4 log contains launcher armed/opened receipts and `[AICHAT][SHEET] display DONE clauses=<n>` with no
+  relevant Lua traceback, `DisplayView`, or view-setup failure; (6) a native X4 screenshot visibly shows the shipping
+  agreement sheet and identifies the tested resolution/UI scale; (7) no sheet action is activated; and (8) cleanup
+  restores the scratch workspace and leaves the game deployment absent.
+- **Negative path:** if the dependency or shipping globals never appear, the launcher must time out with an explicit
+  refusal receipt and must not report success, synthesize a substitute UI, or mutate pending state. Any host rejection
+  or missing visible result keeps B119 `PARTIAL` and preserves the evidence for diagnosis.
+- **Validation / evidence:** record pre/post manifests, Forge API receipts, X4 debug-log slice, native screenshot,
+  resolution/profile, cleanup manifest, and review notes under
+  `dev-docs/b119-ai-influence-dogfood/in-game-20260907-sheet/`. Update the repository plan, handoff, project AAR/
+  knowledge base, capability map only by evidenced delta, GitHub #41, Notion owner page, and Google Current Status at
+  the resulting checkpoint.
+
+### IMPLEMENT / VALIDATE — native X4 `sheet.display` invocation
+
+- The scratch launcher changed only `pipeline_test/content.xml` and `ui/pipeline_test.lua`: one hard
+  `x4_ai_influence` dependency, an idempotent `SetScript("onUpdate", ...)` waiter, a deterministic four-clause/
+  four-diff fixture, exact save/restore of the two process-memory slots it borrowed, and a call to the shipping
+  `AIC_Sheet_Menu.open()`. It registered no menu, emitted no table, and invoked no agreement action.
+- Installed Forge `0.0.75` imported the four-file folder without adopting it into the live canvas. Canonical
+  from-path project validation returned `ok:true`, zero Lua errors/warnings, zero X4 UI errors/warnings, and one
+  honest `x4-ui.verification-gap` info result. The rejected first request used the unsupported `path` field; live
+  capability reconciliation corrected it to `fromPath` without weakening validation.
+- Guarded dry run proved exactly four additions / `8,196` bytes with zero overwrite or deletion. The real loose
+  deploy passed all eleven checklist stages and produced fingerprint
+  `470e6726feea88ce38fc1727900948209df4fb780af6c1c70988878c5c6248c4`, recovery
+  `deploy-mtrp0x4w-c3e41cdf431bcca6`, and history row `mtrp0zh7-671a88f5`.
+- Current X4 visibly rendered the shipping agreement sheet at configured profile `2544x1353 / uiscale 1.0`: four
+  numbered clauses with notes, four save-delta rows, source-authored colors/panel geometry, and all three native
+  buttons. No button was activated. Screenshot
+  `dev-docs/b119-ai-influence-dogfood/in-game-20260907-sheet/x4-native-agreement-sheet-2546x1385.jpg` is `436,734`
+  bytes, SHA-256 `3DADBA8AB83B34C95A41FD56A65ACF32BC399B058C0EC862B05CA085721AB5B8`.
+- The game rotated `debuglog.txt` on launch, invalidating the retained prior byte offset; the complete new
+  `20,096`-byte session log is the authority. It records launcher `armed -> dependency-ready -> fixture-ready ->
+  open-requested -> opened` around `[AICHAT][SHEET] display DONE clauses=4`, with no `DisplayView`, view-setup
+  failure, Lua traceback, or launcher refusal.
+- Cleanup is exact: X4 closed normally; Forge consumed the one-use deploy recovery and restored the game target to
+  `absent`; all four scratch workspace files read back at their exact pre-run SHA-256 values. No save, economy,
+  agreement action, production AI source, neighboring extension, or active Forge canvas changed.
+
+### REVIEW / CLOSE — bounded native proof and reproduced warning
+
+- **Requirement disposition:** all eight acceptance criteria for this bounded invocation are done and evidenced.
+  The exact source accepted by the installed preview pipeline also opened and rendered through X4's native Helper/
+  widget/C++ path. This is real end-to-end proof for this sheet and profile; it is not universal frame acceptance,
+  arbitrary Lua coverage, complete reference parity, or proof for the remaining eleven reference images.
+- **`[REPRODUCED]` source diagnostic:** X4 emitted exactly thirteen
+  `table column finalization with reserveScrollBar: No column with variable width defined` messages. They map
+  one-for-one to the thirteen `aic_sheet.lua` two-column tables whose columns are fully percentage-fixed while the
+  shipped `reserveScrollBar=true` default remains active. X4 disabled the reservation and rendered successfully, so
+  this is not a frame-rejection result. Forge's folder linter reported zero warnings, making it a demonstrated static
+  detection gap.
+- **Bounded close:** native `sheet.display` invocation is `VERIFIED`; overall B119 remains `IN_PROGRESS / PARTIAL`.
+  Evidence: `dev-docs/b119-ai-influence-dogfood/in-game-20260907-sheet/native-x4-proof.md`.
+
+### RECONCILED NEXT PLAN — surface and remove fixed-column scrollbar diagnostics
+
+- **Bounded unit:** extend the existing source linter—without another parser or layout engine—to report a stable,
+  source-located warning when `reserveScrollBar` is true/default and statically proven percentage assignments leave
+  no variable-width column at the first `addRow()` freeze boundary. Then add explicit `reserveScrollBar=false` to the
+  four affected shipping source call sites (one direct plus three loop bodies, thirteen runtime tables in this fixture)
+  and prove the warning disappears in Forge and current X4.
+- **Reuse / non-goals:** reuse the existing call model, first-row column-finalization boundary, Helper kernel
+  `reserve-scrollbar-no-variable-column` diagnostic, project-validation flattening, and IDE Problems projection. Do
+  not duplicate Helper math, change scrollbar layout behavior, infer dynamic column assignments, alter agreement
+  actions/data, or claim pixel/reference parity.
+- **Acceptance:** a fail-first exact-source check reports four source-located warnings—the one header call and the
+  three loop-body call sites whose `4 + 4 + 4` expansion produced the remaining twelve runtime messages, for thirteen in
+  X4—without pretending static source contains thirteen separate calls. Explicit false and at least one genuinely
+  variable column remain clean; unresolved/dynamic cases stay unverified rather than guessed; existing
+  >12-column, colspan, ordering, ASCII, scale-domain, geometry, and provenance rules remain unchanged. The repaired
+  shipping source validates with zero instances, deploys through the guarded route, visibly reopens in X4, and emits
+  zero current-session copies of this diagnostic while retaining `display DONE clauses=4`.
+- **Risks / rollback:** cry-wolf risk is an overbroad static rule; runtime risk is accidental agreement-sheet behavior
+  change. Roll back only the bounded linter/test and `aic_sheet.lua` option additions. Use the same disposable launcher,
+  no action clicks, exact deployment recovery, and current-session log isolation for the rerun.
+- **Required validation:** focused linter/call-model/kernel/project-validation tests; official corpus census and
+  zero-regression rule-family checks; TypeScript, scoped ESLint, diff hygiene, full precommit, production build and
+  serial E2E if Forge source changes; guarded Forge validate/dry-run/deploy; native screenshot and scoped log; exact
+  cleanup; fresh-eyes review; repository/GitHub #41/Notion/Drive/handoff/AAR updates at the checkpoint.
+
+### IMPLEMENT / VALIDATE — fixed-column scrollbar warning and source repair
+
+- The existing linter now emits stable warning `x4-ui.reserve-scrollbar-no-variable-column` only when one compatible
+  reachable table context proves all positive literal columns were uniquely fixed by in-range literal
+  `setColWidth`/`setColWidthPercent` calls before the first `addRow()` while `reserveScrollBar` is true or omitted.
+  Dynamic, branched, duplicate, out-of-range, automatic, and post-freeze cases remain explicit coverage gaps instead
+  of guessed diagnostics. The warning quotes X4's native failure mode and directs the author either to leave a
+  variable column or set `reserveScrollBar=false`.
+- The exact pre-repair `aic_sheet.lua` produced four source-located warnings at lines `111`, `149`, `160`, and `185`,
+  matching the one direct table and three loop-body call sites that expanded to thirteen native runtime diagnostics.
+  The shipping source now adds only `reserveScrollBar=false` to those four table options. Its current SHA-256 is
+  `A09A66B4BF98491B627304FD0F198B3893A21F9EE18BF8AA0979BB82220D4E34`; removing those four exact additions
+  reconstructs the deployed baseline byte-for-byte. Lua parsing passes and the repaired sheet reports zero instances
+  of the new warning.
+- Focused linter tests pass `153/153`; TypeScript, scoped ESLint, exact diff hygiene, production build (`1,848`
+  modules), official corpus census (`81/81` read, zero applicable fatal failures), installed-sidecar runtime oracles
+  (`134/134`), graph refresh, and complete precommit all pass. The first E2E run ended after two tests with the known
+  Windows child teardown code `0xC0000409` and no authoritative verdict; after proving the ephemeral ports clear and
+  the live workspace unchanged, one clean serial rerun passed `106/106` with `treeGone=true`. Current native X4
+  zero-diagnostic proof is still pending, so this bounded repair is not yet closed.
+- Project-wide validation remains valid with zero errors. It also locates three distinct warnings in `aic_comm.lua`,
+  `aic_hub.lua`, and `aic_menu.lua`; those are preserved as separate follow-up findings and are not silently folded
+  into this exact agreement-sheet repair.
+
+### REVISED PLAN / AUTHORIZATION — stable `0.0.76` and native zero-warning proof
+
+- **Bounded release:** publish and install stable `0.0.76` containing only the reviewed linter/test changes, generated
+  release metadata, and the already documented B119 records. Public OpenVSX publication, exact commits, and pushes are
+  within the user's standing authorization. No unrelated dirty path, new renderer behavior, or additional AI source
+  repair enters this release.
+- **Package acceptance:** bump only the established extension version/release-note owners, regenerate the changelog,
+  rebuild and stage the current product, pass staged-app and archive inspection, verify no secret or machine-specific
+  path is packaged, publish exactly once, and establish local/public-download byte and SHA-256 parity before commit.
+  Preserve an exact installed `0.0.75` rollback copy before installing the new package.
+- **Installed/native acceptance:** prove the installed `0.0.76` payload and runtime oracles, then use its guarded Forge
+  validation/deploy path to deploy only the repaired `aic_sheet.lua`. Reuse the already validated disposable launcher,
+  visibly reopen the shipping sheet in current X4 without activating an action, and require `display DONE clauses=4`
+  plus zero current-session copies of the reserve-scrollbar diagnostic. Close X4, remove the launcher deployment,
+  restore its workspace bytes, and retain the intended verified AI source deployment.
+- **Evidence / rollback:** retain package hashes, public endpoints, install parity, Forge deployment receipts, native
+  screenshot/log slice, and cleanup manifests under the existing B119 evidence tree. Package rollback is the saved
+  `0.0.75` installation; mod rollback is Forge's exact deployment recovery plus the pre-repair source hash. Any red
+  package, runtime, linter, deploy, visual, or log gate stops publication/close at its boundary rather than weakening
+  the acceptance contract.
+
+### RELEASE CHECKPOINT / FAILED DEPLOY ORACLE — `0.0.76`
+
+- Stable `0.0.76` was built, staged, inspected, published once to OpenVSX, independently downloaded with exact archive
+  byte/SHA-256 parity, installed in Antigravity, and exercised through the installed sidecar. The local and downloaded
+  VSIX SHA-256 is `0C8E11A8F6FA71B17D013B005448017AD21A7B013BC44E4C879A7162B4DD628D`; the installed runtime passed
+  `134/134` oracles and project validation kept the repaired sheet at zero instances of the new warning.
+- The installed Forge then dry-ran and applied a loose deployment of `x4_ai_influence`. Its internal checklist and
+  artifact verifier returned success, fingerprint
+  `ed7914e1bf62c971377d1d2959a73e4a5941d22b6034c334b86b74612581e5c9`, history row
+  `mts9z4qw-c5ec7cec`, and recovery `deploy-mts9z1ib-b3afd0910f8c3e0d`.
+- **Required external oracle failed:** an independent full-tree byte census found only `83/125` common files still
+  identical after deployment. In addition to the intended sheet change and pre-existing `.forgekeep` difference,
+  forty `.github`/`tools` passthrough files had changed bytes. Forge's `verified:true` result therefore did not prove
+  byte-preserving artifact materialization. X4 was not launched and the deployment was not accepted.
+
+### RECOVERY / REVISED ACCEPTANCE — byte-preserving loose artifacts
+
+- On `2026-09-08`, the one-use hash-guarded recovery completed with `ok:true` and restored fingerprint
+  `a9046192c83c8b5c0a1304af96d64a43a203f5ee8ef5e34987583752884eb295`. Independent post-recovery census proved the
+  exact pre-deploy shape: source `127` files, deployed `126`, common `125`, identical `123`; differences only
+  `.forgekeep` and the intentionally unreleased `aic_sheet.lua`; source-only `.claude/settings.local.json` and
+  `.gitignore`; deployed-only `.mcp.json`. The deployed sheet returned to SHA-256
+  `A0D38877D74A4F196B78A3B70ECFAF08956BDEA4C9287FD110665A3F3DCE9A37`, no transaction siblings remained, and X4
+  stayed stopped. Recovery replay correctly refused with HTTP `409` / `RECOVERY_ALREADY_USED`.
+- **Bounded repair:** reproduce the corruption in an isolated artifact fixture, trace the existing plan/materialize/
+  verify/replace owners, and make opaque passthrough content byte-preserving end to end. The verifier must compare the
+  materialized artifact to its byte-authoritative plan so this mutation class cannot return success. Do not change UI
+  rendering, linter semantics, AI behavior, or unrelated deployment policy.
+- **Acceptance:** binary and non-UTF-8 passthrough fixtures retain exact bytes, sizes, and SHA-256 through loose staging
+  and replacement; a paired mutation fails verification before target promotion; rollback and one-use replay remain
+  green; focused tests, typecheck, scoped lint, build, runtime oracles, serial E2E, and precommit pass. Publish a new
+  corrective version rather than republishing `0.0.76`, install it, then repeat the real-mod dry run/deploy and require
+  a full-tree external byte census before launching X4. Only after exact deployment may the zero-warning native sheet
+  rerun proceed.
+
+### IMPLEMENT / FOCUSED VALIDATE — byte-authoritative passthrough repair
+
+- The JSON-safe workspace contract now marks loaded non-text payloads with `contentEncoding: "base64"`; legacy
+  `reason: "binary"` entries without the marker remain supported. At the artifact ownership boundary, Forge accepts
+  only canonical Base64 and converts it to a raw `Buffer` before planning, hashing, preview, loose deployment, or
+  release preparation. Malformed or noncanonical input fails closed before materialization or promotion.
+- The causal server fixture failed first at `87/94`: a loaded `.py` file was planned as `64` bytes of Base64 text,
+  arbitrary non-UTF-8 bytes were not preserved, legacy markerless decoding failed, and malformed Base64 was promoted.
+  After the repair, the same source-level integration receipt passes `94/94`, including exact `.py`, non-UTF-8, and
+  empty-file bytes; original size/SHA-256 metadata; one-byte tamper rejection; legacy compatibility; text passthrough;
+  omitted disk fallback; precedence; and fail-closed malformed input.
+- Independent parent validation on `2026-09-08` passed `npm run test:artifact-pipeline` at `47/47`, `npm run
+  typecheck` with exit `0`, scoped ESLint with `0` errors (`267` standing warnings), exact diff hygiene, runtime
+  oracles `134/134`, production build at `1,848` modules, built `dist/server.cjs` artifact selftest `94/94`, linter
+  selftest `153/153`, and official 9.00 corpus census `81/81` with zero applicable fatal errors. The first corpus
+  attempt incorrectly reached unrelated Deckwright on port `3000` and returned HTTP `401`; the accepted rerun used
+  the known installed Forge authority at `59838`. An intermediate test-only TypeScript narrowing error was retained
+  as a failed attempt, corrected, and rerun green.
+- The temporary source and production-proof servers were stopped. Platform policy rejected deletion of the isolated
+  `148,690`-byte production-proof root after its exact Temp containment and dead-port checks passed; retain
+  `C:\Users\Moshi\AppData\Local\Temp\x4forge-b119-prod-proof-c9cadacac4314431b77ca92df6c380a0` as explicit
+  disposable residue rather than bypassing the restriction. Installed Antigravity sidecar PID `4316` remains live
+  on `59838` and X4 remains stopped.
+- **Checkpoint status at this pre-corrective boundary:** the byte-integrity repair is `VERIFIED` at
+  focused/static/integration layers. The serial E2E/precommit, production package/install, corrected real-mod deploy
+  plus independent full-tree byte census, and final native zero-warning proof were the next gates at that time; the
+  completed corrective close below records them. No capability-map delta had yet been recorded at this boundary.
+
+### DURABLE PROJECTION CHECKPOINT — byte repair remains partial
+
+- **GitHub owner:** issue #41 remains open. Partial checkpoint comment `5580924546` was created and read back with the
+  `0.0.76` false-green, exact recovery fingerprint, focused repair evidence, and remaining release/native gates.
+- **Notion owner:** page `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated in place and read back at `In Progress` /
+  `Partial`, with both review dates at `2026-09-08`, GitHub comment `5580924546`, and the byte-authoritative repair as
+  the newest dated section. No completion or GitHub-close claim was written.
+- **Google Current Status:** the checked-in file-backed trusted-read bridge scanned document
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, at revision
+  `ANLCKQmKoGurKNtB-GPpsYuOt5vFZWz67zzhB6id8aBb5dZPPjCnjQgM3Ox-lS6Ce7u9iUvtxkBLyXtowzfp1kl8wqe3r8zUqKFozsOWHidl`
+  with zero protected or opaque controls. A revision-guarded update changed six unique status paragraphs exactly once
+  and appended a peer `HEADING_2` checkpoint. Paragraph/style readback verified the heading and body at final revision
+  `ANLCKQn8JuPfEOM2TKFjk9tqPQMefrRtXNOmsqerh7i_KoHgSkw7uF_9U36yEwx239h451QSfZEreiBheKDh8BlTlUSdzr_Rnsfj_DHw7iXw`.
+  Trusted-read evidence is retained under
+  `artifacts/google-docs-trusted-read-b119-20260908-byte-repair-a3/`.
+- **Projection AAR trigger:** two loader-only trusted-read attempts failed before any Google read or write because the
+  connector runtime lacked `atob` and `TextDecoder`; the accepted third attempt used an equivalent byte-checked
+  decoder. Connector success was not accepted until exact occurrence counts, revision IDs, paragraph text, and heading
+  style were independently read back. Repository Markdown remains authoritative.
+
+### REVIEW / CORRECTIVE RELEASE CANDIDATE — `0.0.77`
+
+- Fresh-eyes review found no blocking defect in the repair. Graphify resolves the shared conversion boundary to all
+  five relevant consumers: deployment preview, loose/catalog compile, release preparation, the server integration
+  selftest, and the release handler. Workspace sanitization preserves the explicit encoding marker; canonical padded
+  Base64, empty bytes, legacy markerless binary entries, text passthrough, omitted disk fallback, and malformed/tampered
+  negatives are covered. No artifact caller was found still forwarding the JSON representation directly.
+- The scrollbar-warning review also remains clean: it emits only after one compatible first-row freeze boundary and
+  unique in-range literal coverage of every column; explicit false, an automatic column, dynamic values, duplicate or
+  out-of-range indexes, post-freeze assignments, and incompatible branches/contexts do not produce the warning.
+  Automated `reviewctl` was unavailable because this repository has neither the command nor `.reviewctl` rules; the
+  project-native type/lint/oracle/fixture gates remain the declared automated review surfaces.
+- Exact native Luna `01a07fe9-1e2a-76b1-81e3-0d9af34dc594` changed only the three existing release owners and was
+  closed after terminal `VERIFIED`. `vscode-extension/package.json` is now `0.0.77`; `release-notes.json` retains
+  published `0.0.76` and adds the corrective `0.0.77` date/bullets; the supported generator places both versions in
+  newest-first order in `CHANGELOG.md`. Generator and selftest (`17/17`), JSON/changelog assertions, and owned-path
+  `git diff --check` pass. Parent selftest also passed `17/17`; its first metadata assertion used an incorrect historical
+  changelog title, and the second retry had a PowerShell quoting error. Neither mutated a file. The corrected exact
+  assertion passed. The subsequent package, publication, install, E2E, real-mod byte census, and native rerun are
+  recorded as completed in the corrective close below; final source commit remains a parent action.
+
+### CONTINUATION / RECONCILED PLAN — relocatable isolated E2E ports (completed)
+
+- **Baseline:** the preceding promotional turn created a Discord card but changed no B119 product or release state.
+  Fresh host inspection on `2026-09-08` confirms X4 is stopped, installed Forge `0.0.76` remains live on `59838`,
+  source metadata remains `0.0.77`, and the changelog selftest is `17/17` with owned-path `git diff --check` green.
+  Unrelated Deckwright servers currently own `3100` (PID `49000`) and `3000` (PID `51192`) and together retain about
+  `3.0 GiB`; they are outside this task and must not be stopped, reused, or mutated.
+- **Reconcile:** Playwright's isolated stack is otherwise correctly self-owned, but `playwright.config.ts` fixes its
+  web/API ports at `3100/3101`, and six specs plus two iframe fixtures embed those origins directly. The existing
+  `PLAYWRIGHT_BASE_URL` override changes only browser navigation and therefore cannot relocate the complete API/proxy
+  contract. No existing complete-stack alternate-port owner was found.
+- **Bounded implementation:** add strict task-specific web/API port overrides while preserving `3100/3101` defaults;
+  expose one shared pair of loopback origins; replace only the E2E hardcoded consumers; and extend the existing
+  ephemeral-environment selftest. Invalid, duplicate, or live-stack `3000/3001` selections must fail closed. Do not
+  change Forge production code, product behavior, package metadata, Deckwright, installed Forge, or any live workspace.
+- **Acceptance / negative path:** default imports retain exact `3100/3101`; an override pair such as `3200/3201`
+  reaches Playwright navigation, Vite proxying, API webServer, fixture helpers, direct requests, and iframe fixtures
+  coherently; malformed/out-of-range/equal/protected selections are rejected deterministically. Focused selftest,
+  typecheck, diff hygiene, then the authoritative serial E2E gate on confirmed-free alternate ports must pass with a
+  complete green verdict and `treeGone=true`; post-run census must prove Deckwright PIDs/listeners and the installed
+  Forge listener/workspace were untouched. This harness repair is required only to unblock the existing B119 gate and
+  does not weaken or replace any product acceptance criterion.
+
+### IMPLEMENT / FOCUSED VALIDATE — relocatable isolated E2E ports
+
+- Exact native Luna `01a08001-97cd-7b21-b0bf-e8bcf16c4b26` changed only nine declared harness paths, reached terminal
+  `VERIFIED`, and was closed immediately. `playwright.config.ts` now resolves strict own-data decimal overrides
+  `X4_FORGE_E2E_WEB_PORT` / `X4_FORGE_E2E_API_PORT`, retains exact `3100/3101` defaults, exports one loopback origin
+  pair, and refuses malformed, fractional, zero, out-of-range, equal, inherited, accessor-backed, or protected
+  `3000/3001` selections before startup. A conflicting `PLAYWRIGHT_BASE_URL` also fails closed instead of splitting
+  browser and server authority.
+- All direct request helpers and both native-host iframe fixtures now consume the shared origin exports; no literal
+  `http://127.0.0.1:3100` or `:3101` remains in the checked harness boundary. Worker validation passed the default and
+  `3200/3201` selftests, all declared negative cases, matching/conflicting base-URL checks, TypeScript, and scoped diff
+  hygiene. Independent parent reruns passed both selftest profiles, reproduced the expected base-URL refusal, found
+  zero hardcoded origin leftovers, and passed scoped `git diff --check`.
+- **Current status:** the bounded harness repair and authoritative full serial E2E are `VERIFIED`; the suite passed
+  `106/106` on `3200/3201` with complete `verdict/treeGone`, and the live workspace plus unrelated listeners remained
+  unchanged. The worker's first selftest edit had a syntax failure before correction, so this is a triggered AAR:
+  retain exact failed-attempt accounting and never treat a blank worker wait as terminal. No product, installed game,
+  mod, or remote projection was changed by the harness unit.
+
+## 2026-09-08 CORRECTIVE RELEASE / NATIVE RERUN CLOSE — `0.0.77`
+
+### PLAN
+
+- **Bounded unit:** close the already executed corrective `0.0.77` release, repaired real-mod deployment, and native
+  X4 rerun for the exact shipping `aic_sheet.lua -> sheet.display` path. This is a documentation close; it does not
+  authorize another package, deploy, game launch, evidence rewrite, remote update, commit, or push.
+- **Assumptions / authoritative references:** the baseline is Forge `HEAD 573a577a56f21cbe618cd42061cbf7d5d96423e6`;
+  the supplied release, deployment, native log, screenshot, and cleanup facts are authoritative. The shipped X4 9.00
+  Helper/widget corpus remains layout authority. No remote identifier or future commit hash is available for this
+  close, so none is asserted.
+- **In scope:** durable status, evidence, boundary, capability delta, project AAR, backlog correction, handoff
+  transfer, and deduplicated UI gotchas for the completed release/native rerun.
+- **Out of scope:** production/test code, mod or game directories, retained screenshots/logs, Git metadata, GitHub,
+  Notion, Drive, global workflow AAR, new package/deploy/game activity, and any claim of universal C++ acceptance,
+  arbitrary Lua/Helper/widget parity, or complete twelve-reference reconstruction.
+- **Risks / authorization:** documentation can overstate one native surface as a product-wide result, and stale
+  pending language can hide the completed gates. The rollback is textual: preserve prior dirty files, inspect the
+  six owned-file diff, and restore only this documentation edit if the parent rejects it. No external side effect is
+  performed by this unit.
+- **Acceptance contract:** the corrective release/native rerun is `VERIFIED`; the supplied literal brief is `6/6
+  VERIFIED`; overall B119 remains `IN_PROGRESS / PARTIAL`; the independent byte census, package/install parity,
+  E2E verdict, native screenshot/log, cleanup, capability delta, AAR, and gotcha updates are recorded exactly; no
+  remote IDs or commit hashes are invented.
+- **Required validation:** run `git diff --check` on the three repository-owned docs; compute SHA-256 and size for
+  all six owned files; search final owned docs for stale claims that `0.0.77`, its package/install, or the native
+  rerun is still pending; confirm only the six owned paths changed relative to the pre-edit baseline.
+- **Evidence locations:** stable VSIX at
+  `F:\DEV_ENV\X4_Forge\vscode-extension\x4-forge-studio-0.0.77.vsix`; retained native evidence under
+  `F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260908-scrollbar-clean\`; plan, backlog,
+  handoff, `F:\StarForge\wiki\x4-forge\capability-map.md`,
+  `F:\StarForge\wiki\x4-forge\aar-log.md`, and the UI quick reference are the durable records.
+
+### VALIDATE
+
+- **Source / static:** the repaired deployed and source `aic_sheet.lua` are both `12,626` bytes with SHA-256
+  `A09A66B4BF98491B627304FD0F198B3893A21F9EE18BF8AA0979BB82220D4E34`. The real-mod deploy passed all `11` checks.
+  Its independent whole-tree census found `124` identical common files and only the intentional `.forgekeep`
+  difference. The temporary `pipeline_test` launcher also passed all `11` checks and an exact source/deployed
+  four-file census. These are byte-authoritative deployment results, separate from Forge's internal receipt.
+- **Package / install:** stable `0.0.77` was built, published exactly once on OpenVSX, independently downloaded
+  with exact local/public parity, installed in Antigravity, and passed installed runtime oracles `134/134`. The
+  retained local VSIX is `26,321,722` bytes with SHA-256
+  `D1349AC2A3D43FEFD07CAA64BF262FFF4D4F10DEE6E38F453DC0EDAC737486F6`.
+- **Integration / harness:** full isolated E2E passed `106/106` on `3200/3201` with complete `verdict/treeGone`
+  and unchanged live state. Precommit passed before this final documentation close.
+- **Native visual / game log:** X4 9.00 visibly rendered the repaired full AI agreement sheet through the native
+  Helper/widget/C++ route at drawable `2544x1353` (Steam capture `2544x1354`), UI scale `1.0`. Visible content is
+  `TERMS OFFERED`, ref `B119-FIXTURE-0001`, four clauses/notes, `WHAT THIS COSTS YOU`, four delta rows, and three
+  native buttons. The retained screenshot
+  `F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260908-scrollbar-clean\x4-native-agreement-sheet-2544x1354.jpg`
+  is `553,321` bytes / SHA-256
+  `989C03A39F162F8A42121243797896084EBFBB64650C3A08B8CD9E01FE961C7B`; the retained log is `16,859` bytes / SHA-256
+  `5C00FFB818A23BB19B84D67D4373F06EE199329343BB01755217BABF3B14AB2F` at
+  `F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260908-scrollbar-clean\debuglog-current-session.txt`.
+- **Scoped log census:** the current session has exactly one each of launcher armed, dependency-ready,
+  fixture-ready `clauses=4 diff=4`, open-requested, `[AICHAT][SHEET] display DONE clauses=4`, and launcher opened.
+  It has zero `reserveScrollBar`, `DisplayView`, `Failed to set up the view`, `stack traceback`, `Lua Error`, launcher
+  refusal, or timeout diagnostics. This proves the tested source/path/profile, not universal engine acceptance.
+- **Cleanup / negative paths:** temporary deployment recovery was consumed; game `pipeline_test` is absent and X4
+  process count is `0`. The scratch four-file fixture was restored exactly: `content.xml` `367` bytes /
+  `23A7E9...A5034`; README `210` bytes / `31B80A...C871`; `ui.xml` `273` bytes / `655331...1689`; Lua `5,488`
+  bytes / `C1D9CD...2718E`. Only two temporary source files changed during proof, and both were restored through
+  Forge strict CAS.
+- **CAS negative:** strict Forge CAS compares digest strings lexically to its lowercase digest. An uppercase-equivalent
+  `expectedSha256` reproduced a false `409 FILE_CHANGED` with no mutation; the lowercase canonical digest succeeded.
+  This is a Forge tooling gotcha, not an X4 engine law.
+
+### REVIEW
+
+- **Corrective release / native rerun:** done and evidenced as `VERIFIED` across source/static, package/public,
+  installed runtime, independent deployment bytes, isolated E2E, native visual, current-session log, and cleanup.
+- **Supplied literal brief:** `6/6 VERIFIED`.
+- **Overall B119:** deliberately `IN_PROGRESS / PARTIAL`. The full twelve-reference AI Influence
+  reconstruction/current-game visual census remains open, as do universal C++ acceptance and arbitrary
+  Lua/Helper/widget coverage. The evidence does not justify a universal 1:1 or all-Lua parity claim.
+- **Durable records:** the capability map gains the bounded byte-authoritative/native-sheet delta; the project AAR
+  records the triggered lessons; cards 9 and 15 are updated in place and cards 61-62 add only the nonduplicate CAS
+  and Steam launch-evidence lessons. BACKLOG and SESSION-HANDOFF now agree with this status.
+- **External boundary:** GitHub #41 remains open. External GitHub/Notion/Drive updates and the final source commit
+  are parent actions; this worker invents no IDs, revision strings, or commit hashes.
+
+### CLOSE
+
+- **Status:** `VERIFIED` for the corrective `0.0.77` / native X4 sheet unit; `PARTIAL` for overall B119, which
+  remains `IN_PROGRESS / PARTIAL`.
+- **What changed:** this plan now records the final release, package/install, independent real-mod census, native
+  screenshot/log, cleanup, negative-path, review, and AAR evidence. Related durable records were synchronized only
+  within the six owned paths.
+- **What was not changed:** no implementation source, tests, mod/game files, evidence artifacts, Git metadata, or
+  remote service state. Unrelated dirty and showcase artifacts remain preserved.
+- **Capability-map delta:** one evidenced delta for byte-authoritative real-mod deployment and the exact repaired
+  agreement-sheet native path, with an explicit boundary against universal claims.
+- **Remaining concerns:** complete twelve-reference/current-game census, universal C++ acceptance, arbitrary
+  Lua/Helper/widget coverage, parent-owned external projections, and final source commit.
+- **Suggested commit title:** parent action only; no commit was made by this worker.
+
+### AAR
+
+- **Triggers:** stale durable-writer inventory was corrected truthfully; uppercase SHA lexical false conflict was
+  reproduced; the first round-trip assertion checked nonexistent `ok` instead of success; Steam displayed a custom-
+  launch-arguments modal; browser-only mcp CUA required fallback to native `@oai/sky`; repeated PowerShell
+  foreach-pipeline parser mistakes occurred; output was overbroad; the first post-write hash assertion used
+  intermediate pre-final-edit values and was rerun with the final values; OpenVSX propagation lag was handled without
+  republish; locked SQLite was excluded from the whole-tree hash; unrelated showcase artifacts were preserved.
+- **Sustain:** keep source/static, package/public, installed runtime, independent deployment bytes, native visual,
+  current-session log, and cleanup as separate authorities. Require an external full-tree census after real-mod
+  deploy, exact lower-case CAS digests, current-session log isolation, and explicit scope boundaries before claiming
+  a native result.
+- **Improve work / approach:** correct stale status claims as part of the same close, record negative-path evidence
+  without relabeling it as an engine failure, and close the disposable launcher/fixture only after exact restoration.
+  Preserve historical checkpoint details while marking the latest close as authoritative.
+- **Improve tools:** reduce read output before parallel inspection; use one quoting-safe PowerShell form at a time;
+  treat a launch command's exit/no-log result as incomplete until the native Steam/X4 modal, process, window, and
+  current-session log are observed; keep OpenVSX propagation waits read-only and never republish an accepted version.
+- **Highest-risk evidenced weakness:** a verified package or native sheet can be overgeneralized into universal X4
+  or design-parity truth. The exact tested `aic_sheet.lua -> sheet.display` path at one profile is now real evidence,
+  but runtime-built surfaces, the remaining references, and arbitrary Helper/widget/C++ behavior remain unproven.
+- **Evidence:** this plan; the retained native screenshot/log directory; stable VSIX size/hash above; source/deployed
+  `aic_sheet.lua` size/hash above; E2E `106/106`; installed oracles `134/134`; real-mod `11/11` plus independent
+  `124`-common-file census.
+- **Durable lesson:** no global workflow AAR delta. The reusable artifact-byte lesson is already promoted in the
+  installed `learning-from-failures` skill; this project AAR is the durable project-specific record.

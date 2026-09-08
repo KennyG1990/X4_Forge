@@ -44,6 +44,10 @@ function sha256File(filePath: string): string {
   return hash.digest('hex');
 }
 
+function sha256Buffer(content: Buffer): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
 function included(plan: ArtifactPlan, relativePath: string) {
   return plan.entries.find(entry => entry.path === relativePath);
 }
@@ -93,6 +97,11 @@ try {
   write(source, 'preview.jpg', Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   write(source, 'ext_07.cat', 'opaque pre-existing catalog manifest');
   write(source, 'ext_07.dat', Buffer.from([0xca, 0x7a, 0x10, 0x07]));
+  const loadedTextPath = 'tools/forge.py';
+  const loadedTextBytes = Buffer.from('#!/usr/bin/env python3\nprint("loaded bytes")\n', 'utf8');
+  const loadedBinaryPath = 'loaded/raw-bytes.arbitrary';
+  const loadedBinaryBytes = Buffer.from([0x00, 0xff, 0x10, 0x20, 0x80]);
+  const loadedEmptyPath = 'loaded/empty.bin';
 
   const plan = buildArtifactPlan({
     sourceRoot: source,
@@ -100,7 +109,18 @@ try {
       'md/generated.xml': '<?xml version="1.0"?><mdscript name="Generated"><cues/></mdscript>',
       'replace/me.txt': 'generated version',
     },
+    passthroughFiles: {
+      [loadedTextPath]: loadedTextBytes,
+      [loadedBinaryPath]: loadedBinaryBytes,
+      [loadedEmptyPath]: Buffer.alloc(0),
+    },
   });
+  const loadedTextEntry = included(plan, loadedTextPath);
+  const loadedTextContent = loadedTextEntry?.content;
+  const loadedBinaryEntry = included(plan, loadedBinaryPath);
+  const loadedBinaryContent = loadedBinaryEntry?.content;
+  const loadedEmptyEntry = included(plan, loadedEmptyPath);
+  const loadedEmptyContent = loadedEmptyEntry?.content;
 
   check('plan succeeds', plan.ok, plan.errors.join('; '));
   check('large text is source-copy', included(plan, 'ui/over-256k.lua')?.disposition === 'source-copy');
@@ -110,6 +130,25 @@ try {
   check('unknown extension defaults to source-copy', included(plan, 'libraries/arbitrary.unknownxml')?.disposition === 'source-copy');
   check('unicode path survives planning', included(plan, 'unicode/船/данные.bin')?.disposition === 'source-copy');
   check('empty file survives planning', included(plan, 'empty/zero.bin')?.size === 0);
+  check(
+    'loaded .py passthrough Buffer keeps original plan bytes and hash',
+    loadedTextEntry?.disposition === 'generated'
+      && loadedTextEntry.size === loadedTextBytes.length
+      && loadedTextEntry.sha256 === sha256Buffer(loadedTextBytes)
+      && Buffer.isBuffer(loadedTextContent)
+      && loadedTextContent.equals(loadedTextBytes),
+  );
+  check(
+    'loaded arbitrary and empty passthrough Buffers keep exact plan bytes',
+    loadedBinaryEntry?.size === loadedBinaryBytes.length
+      && loadedBinaryEntry.sha256 === sha256Buffer(loadedBinaryBytes)
+      && Buffer.isBuffer(loadedBinaryContent)
+      && loadedBinaryContent.equals(loadedBinaryBytes)
+      && loadedEmptyEntry?.size === 0
+      && loadedEmptyEntry.sha256 === sha256Buffer(Buffer.alloc(0))
+      && Buffer.isBuffer(loadedEmptyContent)
+      && loadedEmptyContent.length === 0,
+  );
   check('git metadata excluded', plan.excluded.some(entry => entry.path === '.git/**'));
   check('agent metadata excluded', ['.claude/**', '.kilo/**', '.forge/**'].every(p => plan.excluded.some(entry => entry.path === p)));
   check('node_modules excluded', plan.excluded.some(entry => entry.path === 'node_modules/**'));
@@ -124,9 +163,26 @@ try {
   check('materialized artifact verifies', verification.ok, verification.errors.join('; '));
   check('large text hash-identical', sha256File(path.join(source, 'ui', 'over-256k.lua')) === sha256File(path.join(output, 'ui', 'over-256k.lua')));
   check('multi-megabyte binary hash-identical', sha256File(path.join(source, 'assets', 'multi-megabyte.weirdbin')) === sha256File(path.join(output, 'assets', 'multi-megabyte.weirdbin')));
+  check('loaded .py passthrough materializes exact bytes', fs.readFileSync(path.join(output, ...loadedTextPath.split('/'))).equals(loadedTextBytes));
+  check('loaded arbitrary passthrough materializes exact bytes', fs.readFileSync(path.join(output, ...loadedBinaryPath.split('/'))).equals(loadedBinaryBytes));
+  check('loaded empty passthrough remains empty', fs.readFileSync(path.join(output, ...loadedEmptyPath.split('/'))).equals(Buffer.alloc(0)));
   check('generated replacement wins', fs.readFileSync(path.join(output, 'replace', 'me.txt'), 'utf8') === 'generated version');
   check('excluded paths absent', !fs.existsSync(path.join(output, '.git')) && !fs.existsSync(path.join(output, 'private')));
   check('runtime-owned paths absent from fresh artifact', !fs.existsSync(path.join(output, 'runtime')));
+
+  const loadedTamperPath = path.join(output, ...loadedTextPath.split('/'));
+  const loadedOriginalBytes = fs.readFileSync(loadedTamperPath);
+  const loadedTamperedBytes = Buffer.from(loadedOriginalBytes);
+  loadedTamperedBytes[0] ^= 0xff;
+  fs.writeFileSync(loadedTamperPath, loadedTamperedBytes);
+  const loadedTamperVerification = verifyMaterializedArtifact(plan, output);
+  fs.writeFileSync(loadedTamperPath, loadedOriginalBytes);
+  check(
+    'loaded passthrough byte tamper is rejected',
+    !loadedTamperVerification.ok
+      && loadedTamperVerification.errors.some(error => error.includes(loadedTextPath) && error.includes('mismatch')),
+    loadedTamperVerification.errors.join('; '),
+  );
 
   const catalogEntries = plan.entries
     .filter(entry => entry.path !== 'content.xml' && !entry.catalogLoose)

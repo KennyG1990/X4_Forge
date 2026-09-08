@@ -7,11 +7,11 @@
  */
 import { randomBytes } from 'node:crypto';
 import { ACTION_OPERATION_ID_HEADER, createActionOperationId } from '../../shared/actionOperationId';
-import { E2E_API_PORT, E2E_TOKEN } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
 
 // B41: 127.0.0.1, never "localhost" — the API binds IPv4-only (server.ts listen)
 // and resolver family order varies per run on Windows (see playwright.config note).
-const API = `http://127.0.0.1:${E2E_API_PORT}`;
+const API = E2E_API_ORIGIN;
 const CLIENT_ID = 'client_e2e_fixture_0001';
 let workspaceIdPromise: Promise<string> | null = null;
 

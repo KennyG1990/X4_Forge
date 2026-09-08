@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
-import { E2E_TOKEN } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
 import { seedServerWorkspace } from './ephemeral';
 
-const API = 'http://127.0.0.1:3101';
+const API = E2E_API_ORIGIN;
 const auth = { Authorization: `Bearer ${E2E_TOKEN}`, 'Content-Type': 'application/json' };
 
 test('reviewed exact suppression creates rules, rejects stale/error paths, and removes only the warning', async ({ request }) => {

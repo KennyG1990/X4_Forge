@@ -338,6 +338,175 @@ export function runX4UiLintSelftest(): X4UiLintSelftestResult {
   check('outside-branch plus compatible arm percentages still error', hasCode(outsideInsidePercent, 'x4-ui.column-percentage-total', 'error'), detail(outsideInsidePercent));
   check('nested sibling branches do not aggregate percentages', nestedSiblingPercent.verificationGaps.some(gap => gap.category === 'percentage') && !hasCode(nestedSiblingPercent, 'x4-ui.column-percentage-total'), detail(nestedSiblingPercent));
 
+  const reserveOmittedPercent = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'table:setColWidthPercent(1, 50)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveExplicitTruePercent = lint(baseFrame('2, { width = 2, height = 20, reserveScrollBar = true }', [
+    'table:setColWidthPercent(1, 50)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveOmittedMixed = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveExplicitTrueMixed = lint(baseFrame('2, { width = 2, height = 20, reserveScrollBar = true }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveFalse = lint(baseFrame('2, { width = 2, height = 20, reserveScrollBar = false }', [
+    'table:setColWidthPercent(1, 50)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveAutomatic = lint(baseFrame('3, { width = 2, height = 20 }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveNoRow = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+  ].join('\n')));
+  const reserveDuplicate = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidth(1, 10)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveOutOfRange = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidth(3, 10)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reservePostFreeze = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'local row = table:addRow(nil, { height = 10 })',
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+  ].join('\n')));
+  const reserveIncompatibleBranches = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'if mode then',
+    '  table:setColWidth(1, 10)',
+    'else',
+    '  table:setColWidthPercent(2, 50)',
+    'end',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveIncompatibleContext = lint([
+    'local menu = { name = "Main", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 100 })',
+    'local table = frame:addTable(2, { width = 2, height = 20 })',
+    'local function configure() table:setColWidth(1, 10) table:setColWidthPercent(2, 50) end',
+    'local row = table:addRow(nil, { height = 10 })',
+    'frame:display()',
+  ].join('\n'));
+  const reserveDynamic = lint(baseFrame('2, { width = 2, height = 20, reserveScrollBar = getReserve() }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveDynamicCount = lint([
+    'local menu = { name = "Main", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 100 })',
+    'local count = getCount()',
+    'local table = frame:addTable(count, { width = 2, height = 20, reserveScrollBar = true })',
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+    'frame:display()',
+  ].join('\n'));
+  const reserveDynamicIndex = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'local index = getIndex()',
+    'table:setColWidth(index, 10)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveDynamicWidth = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'local width = getWidth()',
+    'table:setColWidth(1, width)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveDynamicPercentage = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'local percentage = getPercentage()',
+    'table:setColWidthPercent(1, percentage)',
+    'table:setColWidth(2, 10)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+  const reserveUnknownReceiver = lint(baseFrame('2, { width = 2, height = 20 }', [
+    'local unknownTable = getTable()',
+    'unknownTable:setColWidth(1, 10)',
+    'unknownTable:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n')));
+
+  const reserveCode = 'x4-ui.reserve-scrollbar-no-variable-column';
+  const reserveWarning = (result: X4UiLintResult): boolean => {
+    const findings = result.findings.filter(finding => finding.code === reserveCode);
+    return findings.length === 1
+      && findings[0].severity === 'warning'
+      && !result.hasErrors;
+  };
+  check('omitted/default-true all-percent coverage warns', reserveWarning(reserveOmittedPercent), detail(reserveOmittedPercent));
+  check('explicit-true all-percent coverage warns', reserveWarning(reserveExplicitTruePercent), detail(reserveExplicitTruePercent));
+  check('omitted/default-true mixed pixel/percent coverage warns', reserveWarning(reserveOmittedMixed), detail(reserveOmittedMixed));
+  check('explicit-true mixed pixel/percent coverage warns', reserveWarning(reserveExplicitTrueMixed), detail(reserveExplicitTrueMixed));
+  const reserveFinding = reserveOmittedMixed.findings.find(finding => finding.code === reserveCode);
+  check('reserve warning is source-located, exact, non-fatal, and actionable', Boolean(
+    reserveFinding
+      && reserveFinding.message.includes('table column finalization with reserveScrollBar: No column with variable width defined, cannot reserve additional space')
+      && reserveFinding.cause.includes('omitted')
+      && reserveFinding.cause.includes('defaults it to true')
+      && reserveFinding.failureMode.includes('continues rendering')
+      && !reserveFinding.failureMode.toLowerCase().includes('entire frame')
+      && !reserveFinding.failureMode.toLowerCase().includes('refus')
+      && reserveFinding.evidenceBoundary.includes('positive integer literal table count')
+      && reserveFinding.evidenceBoundary.includes('first addRow boundary')
+      && reserveFinding.nextAction.includes('reserveScrollBar = false')
+      && reserveFinding.location.file === 'selftest/ui.lua'
+      && reserveFinding.location.start.line === 3
+      && reserveFinding.source.start.line === 3
+  ), detail(reserveOmittedMixed));
+  check('explicit false suppresses the reserve warning', !hasCode(reserveFalse, reserveCode), detail(reserveFalse));
+  check('an automatic column suppresses the reserve warning', !hasCode(reserveAutomatic, reserveCode), detail(reserveAutomatic));
+  check('a table with no row does not trigger the reserve warning', !hasCode(reserveNoRow, reserveCode) && !reserveNoRow.hasVerificationGaps, detail(reserveNoRow));
+  check('duplicate or out-of-range coverage does not trigger the reserve warning', !hasCode(reserveDuplicate, reserveCode) && !hasCode(reserveOutOfRange, reserveCode), JSON.stringify({ duplicate: detail(reserveDuplicate), outOfRange: detail(reserveOutOfRange) }));
+  check('post-freeze assignments remain owned by width-after-first-row', !hasCode(reservePostFreeze, reserveCode) && hasCode(reservePostFreeze, 'x4-ui.width-after-first-row', 'error'), detail(reservePostFreeze));
+  check('incompatible branches and contexts remain conservative', reserveIncompatibleBranches.hasVerificationGaps
+    && !hasCode(reserveIncompatibleBranches, reserveCode)
+    && reserveIncompatibleContext.hasVerificationGaps
+    && !hasCode(reserveIncompatibleContext, reserveCode), JSON.stringify({ branches: detail(reserveIncompatibleBranches), context: detail(reserveIncompatibleContext) }));
+  check('dynamic reserve/count/index/width/percentage/ownership remain gaps without the reserve warning', reserveDynamic.hasVerificationGaps
+    && !hasCode(reserveDynamic, reserveCode)
+    && reserveDynamicCount.hasVerificationGaps
+    && !hasCode(reserveDynamicCount, reserveCode)
+    && reserveDynamicIndex.hasVerificationGaps
+    && !hasCode(reserveDynamicIndex, reserveCode)
+    && reserveDynamicWidth.hasVerificationGaps
+    && !hasCode(reserveDynamicWidth, reserveCode)
+    && reserveDynamicPercentage.hasVerificationGaps
+    && !hasCode(reserveDynamicPercentage, reserveCode)
+    && reserveUnknownReceiver.hasVerificationGaps
+    && !hasCode(reserveUnknownReceiver, reserveCode), JSON.stringify({
+      reserve: detail(reserveDynamic),
+      count: detail(reserveDynamicCount),
+      index: detail(reserveDynamicIndex),
+      width: detail(reserveDynamicWidth),
+      percentage: detail(reserveDynamicPercentage),
+      receiver: detail(reserveUnknownReceiver),
+    }));
+  const reserveRepeatedText = baseFrame('2, { width = 2, height = 20 }', [
+    'table:setColWidth(1, 10)',
+    'table:setColWidthPercent(2, 50)',
+    'local row = table:addRow(nil, { height = 10 })',
+  ].join('\n'));
+  const reserveRepeatedA = lint(reserveRepeatedText, 'selftest/reserve-deterministic.lua');
+  const reserveRepeatedB = lint(reserveRepeatedText, 'selftest/reserve-deterministic.lua');
+  check('reserve warning evaluation is byte-for-byte deterministic', JSON.stringify(reserveRepeatedA) === JSON.stringify(reserveRepeatedB), `${detail(reserveRepeatedA)} !== ${detail(reserveRepeatedB)}`);
+
   const colspanGood = lint(baseFrame('3, { width = 2, height = 20 }', [
     'local row = table:addRow(nil, { height = 10 })',
     'row[2]:setColSpan(2)'

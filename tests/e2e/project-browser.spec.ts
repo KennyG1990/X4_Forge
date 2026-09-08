@@ -2,13 +2,13 @@ import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { E2E_TOKEN } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
 import { readServerWorkspace } from './ephemeral';
 
 const workspacePath = 'D:\\X4ForgeMods';
 const filesystemPath = 'G:\\Games\\X4 Foundations\\extensions';
 const gamePath = 'G:\\Games\\X4 Foundations';
-const API = 'http://127.0.0.1:3101';
+const API = E2E_API_ORIGIN;
 const auth = { Authorization: `Bearer ${E2E_TOKEN}` };
 
 function modRoot(name: string) {

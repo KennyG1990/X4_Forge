@@ -29,7 +29,8 @@ import {
   ModWorkspace,
   PatchBlock,
   sanitizeWorkspace,
-  type AIBehaviorScript
+  type AIBehaviorScript,
+  type PassthroughFile,
 } from "./src/types";
 import {
   toSafeModId,
@@ -1246,6 +1247,45 @@ app.get('/api/agent/capabilities/effective', (req, res) => {
 });
 
 type CompiledFileManifest = Record<string, string>;
+
+const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function decodeLoadedBinaryPassthrough(content: string, relativePath: string): Buffer {
+  if (!CANONICAL_BASE64.test(content)) {
+    throw new Error(`Invalid canonical base64 for loaded binary passthrough: ${relativePath}`);
+  }
+  const decoded = Buffer.from(content, 'base64');
+  if (decoded.toString('base64') !== content) {
+    throw new Error(`Invalid canonical base64 for loaded binary passthrough: ${relativePath}`);
+  }
+  return decoded;
+}
+
+/** Convert the JSON-safe workspace manifest into byte-authoritative artifact inputs. */
+function buildArtifactPassthroughFiles(
+  workspaceInput: unknown,
+  passthroughManifest: CompiledFileManifest,
+): Record<string, string | Buffer> {
+  const ws = activeBuildWorkspace(workspaceInput);
+  const passthroughByPath = new Map<string, PassthroughFile>();
+  for (const pf of ws.passthroughFiles || []) {
+    if (!pf || typeof pf.path !== 'string') continue;
+    const rel = pf.path.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!rel || rel.includes('..')) continue;
+    const key = rel.toLowerCase();
+    if (!passthroughByPath.has(key)) passthroughByPath.set(key, pf);
+  }
+
+  const artifactFiles: Record<string, string | Buffer> = {};
+  for (const [rel, manifestContent] of Object.entries(passthroughManifest)) {
+    const pf = passthroughByPath.get(rel.toLowerCase());
+    if (!pf || pf.omitted || pf.content === undefined) continue;
+    artifactFiles[rel] = pf.reason === 'binary' || pf.contentEncoding === 'base64'
+      ? decodeLoadedBinaryPassthrough(manifestContent, rel)
+      : manifestContent;
+  }
+  return artifactFiles;
+}
 
 type ServerDiagnostic = {
   severity: "error" | "warning" | "info";
@@ -7587,7 +7627,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   //   generated   — the studio regenerates this path from modeled domains on export
   //   partial     — known domain but not yet parsed to editable; preserved verbatim
   //   passthrough — unknown domain; preserved verbatim
-  //   binary      — non-text; not loaded into the workspace
+  //   binary      — non-text; loaded as JSON-safe base64 when within the inline caps
   type FileClass = 'editable' | 'generated' | 'partial' | 'passthrough' | 'binary';
   const classification: { path: string; class: FileClass; note?: string }[] = [];
   const passthroughFiles: any[] = [];
@@ -7629,7 +7669,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
       let content = '';
       try { content = fs.readFileSync(absPath, 'base64'); } catch { continue; }
       inlinedBytes += content.length;
-      passthroughFiles.push({ path: rel, content, reason: 'binary' });
+      passthroughFiles.push({ path: rel, content, contentEncoding: 'base64', reason: 'binary' });
       classification.push({ path: rel, class: 'binary', note: 'binary file, preserved verbatim via base64 encoding' });
       continue;
     }
@@ -11573,7 +11613,7 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
     const plan = buildArtifactPlan({
       sourceRoot: hasDiskSource ? stampedSource : '',
       generatedFiles: generated.generatedFiles,
-      passthroughFiles: generated.passthroughFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles),
     });
     if (!plan.ok) return { error: `Cannot preview: artifact planning failed — ${plan.errors.join('; ')}` };
 
@@ -11728,7 +11768,7 @@ function compileWorkspaceToFolder(
     const plan = buildArtifactPlan({
       sourceRoot,
       generatedFiles: generated.generatedFiles,
-      passthroughFiles: generated.passthroughFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(ws, generated.passthroughFiles),
     });
     if (!plan.ok) throw new Error(`Artifact planning failed: ${plan.errors.join('; ')}`);
 
@@ -11954,7 +11994,14 @@ function runCompileArtifactSelftest() {
     sourceWrite('content.xml', '<?xml version="1.0"?><content id="artifact_integration" name="Artifact Integration" version="100" author="Forge" description="Artifact Integration"/>');
     sourceWrite('md/source.xml', '<?xml version="1.0"?><mdscript name="ArtifactIntegration"><cues/></mdscript>');
     sourceWrite('assets/over-legacy-total.bin', Buffer.alloc((7 * 1024 * 1024) + 19, 0x6d));
-    sourceWrite('unknown/deep/path/file.arbitrary', Buffer.from([0x00, 0xff, 0x10, 0x20]));
+    const binaryTextPath = 'tools/forge.py';
+    const binaryTextBytes = Buffer.from('#!/usr/bin/env python3\nprint("artifact bytes")\n', 'utf8');
+    const arbitraryBinaryPath = 'unknown/deep/path/file.arbitrary';
+    const arbitraryBinaryBytes = Buffer.from([0x00, 0xff, 0x10, 0x20]);
+    const emptyBinaryPath = 'unknown/empty-loaded.bin';
+    sourceWrite(binaryTextPath, binaryTextBytes);
+    sourceWrite(arbitraryBinaryPath, arbitraryBinaryBytes);
+    sourceWrite(emptyBinaryPath, Buffer.alloc(0));
     sourceWrite('unicode/船.txt', 'payload');
     sourceWrite('runtime/state.db', 'source placeholder');
     const precedencePath = 'ui/pipeline_test.lua';
@@ -11970,6 +12017,18 @@ function runCompileArtifactSelftest() {
     sourceWrite('.forgeartifact.json', JSON.stringify({ runtimeOwned: ['runtime/**'] }));
 
     const imported = importModFolder(source);
+    const importedBinaryText = (imported.workspace.passthroughFiles || []).find(file => file.path.toLowerCase() === binaryTextPath.toLowerCase());
+    const serializedImported = JSON.parse(JSON.stringify(imported.workspace));
+    const serializedBinaryText = (serializedImported.passthroughFiles || []).find((file: any) => String(file.path || '').toLowerCase() === binaryTextPath.toLowerCase());
+    record(
+      'B119 loaded non-whitelisted text is JSON-safe canonical base64',
+      importedBinaryText?.reason === 'binary'
+        && importedBinaryText?.content === binaryTextBytes.toString('base64')
+        && importedBinaryText?.contentEncoding === 'base64'
+        && typeof serializedBinaryText?.content === 'string'
+        && serializedBinaryText?.content === binaryTextBytes.toString('base64'),
+      JSON.stringify({ reason: importedBinaryText?.reason, contentEncoding: importedBinaryText?.contentEncoding }),
+    );
     const importedIdentityWorkspace = {
       ...imported.workspace,
       sourceFolder: 'F:\\Mods\\x4_ai_influence - Copy\\',
@@ -12011,6 +12070,65 @@ function runCompileArtifactSelftest() {
         return file;
       }),
     });
+    const binaryBuild = buildWorkspaceFileManifest(precedenceWorkspace);
+    const binaryPlan = buildArtifactPlan({
+      sourceRoot: source,
+      generatedFiles: binaryBuild.generatedFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(precedenceWorkspace, binaryBuild.passthroughFiles),
+    });
+    const binaryTextEntry = binaryPlan.entries.find(entry => entry.path.toLowerCase() === binaryTextPath.toLowerCase());
+    const arbitraryBinaryEntry = binaryPlan.entries.find(entry => entry.path.toLowerCase() === arbitraryBinaryPath.toLowerCase());
+    const emptyBinaryEntry = binaryPlan.entries.find(entry => entry.path.toLowerCase() === emptyBinaryPath.toLowerCase());
+    const sha256Bytes = (bytes: Buffer) => crypto.createHash('sha256').update(bytes).digest('hex');
+    record(
+      'B119 artifact plan uses decoded .py bytes and original hash',
+      binaryPlan.ok
+        && !!binaryTextEntry
+        && binaryTextEntry.size === binaryTextBytes.length
+        && binaryTextEntry.sha256 === sha256Bytes(binaryTextBytes)
+        && Buffer.isBuffer(binaryTextEntry.content)
+        && binaryTextEntry.content.equals(binaryTextBytes),
+      binaryTextEntry ? `${binaryTextEntry.size} bytes ${binaryTextEntry.sha256}` : binaryPlan.errors.join('; '),
+    );
+    record(
+      'B119 artifact plan uses arbitrary non-UTF8 bytes and empty binary safely',
+      binaryPlan.ok
+        && !!arbitraryBinaryEntry
+        && arbitraryBinaryEntry.size === arbitraryBinaryBytes.length
+        && arbitraryBinaryEntry.sha256 === sha256Bytes(arbitraryBinaryBytes)
+        && Buffer.isBuffer(arbitraryBinaryEntry.content)
+        && arbitraryBinaryEntry.content.equals(arbitraryBinaryBytes)
+        && !!emptyBinaryEntry
+        && emptyBinaryEntry.size === 0
+        && emptyBinaryEntry.sha256 === sha256Bytes(Buffer.alloc(0))
+        && Buffer.isBuffer(emptyBinaryEntry.content)
+        && emptyBinaryEntry.content.length === 0,
+      binaryPlan.errors.join('; '),
+    );
+    const legacyBinaryWorkspace = JSON.parse(JSON.stringify(precedenceWorkspace));
+    legacyBinaryWorkspace.passthroughFiles = (legacyBinaryWorkspace.passthroughFiles || []).map((file: any) => {
+      if (String(file.path || '').toLowerCase() !== binaryTextPath.toLowerCase()) return file;
+      const legacyFile = { ...file };
+      delete legacyFile.contentEncoding;
+      return legacyFile;
+    });
+    const legacyBinaryBuild = buildWorkspaceFileManifest(legacyBinaryWorkspace);
+    const legacyBinaryPlan = buildArtifactPlan({
+      sourceRoot: source,
+      generatedFiles: legacyBinaryBuild.generatedFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(legacyBinaryWorkspace, legacyBinaryBuild.passthroughFiles),
+    });
+    const legacyBinaryEntry = legacyBinaryPlan.entries.find(entry => entry.path.toLowerCase() === binaryTextPath.toLowerCase());
+    record(
+      'B119 legacy markerless binary passthrough remains byte-authoritative',
+      legacyBinaryPlan.ok
+        && !!legacyBinaryEntry
+        && Buffer.isBuffer(legacyBinaryEntry.content)
+        && legacyBinaryEntry.content.equals(binaryTextBytes)
+        && legacyBinaryEntry.size === binaryTextBytes.length
+        && legacyBinaryEntry.sha256 === sha256Bytes(binaryTextBytes),
+      legacyBinaryPlan.errors.join('; '),
+    );
     const committedPassthroughHash = crypto.createHash('sha256').update(committedPassthroughLua, 'utf8').digest('hex');
     const previewTarget = path.join(root, 'preview-target');
     fs.mkdirSync(path.join(previewTarget, 'ui'), { recursive: true });
@@ -12029,6 +12147,52 @@ function runCompileArtifactSelftest() {
       'B119 loose materialization writes loaded workspace passthrough bytes',
       fs.readFileSync(path.join(looseTarget, ...precedencePath.split('/'))).equals(Buffer.from(committedPassthroughLua, 'utf8')),
       path.join(looseTarget, precedencePath),
+    );
+    record(
+      'B119 loose materialization writes exact non-whitelisted text bytes',
+      fs.readFileSync(path.join(looseTarget, ...binaryTextPath.split('/'))).equals(binaryTextBytes),
+      binaryTextPath,
+    );
+    record(
+      'B119 loose materialization writes exact arbitrary non-UTF8 bytes',
+      fs.readFileSync(path.join(looseTarget, ...arbitraryBinaryPath.split('/'))).equals(arbitraryBinaryBytes),
+      arbitraryBinaryPath,
+    );
+    record(
+      'B119 loaded empty binary remains empty after loose materialization',
+      fs.readFileSync(path.join(looseTarget, ...emptyBinaryPath.split('/'))).equals(Buffer.alloc(0)),
+      emptyBinaryPath,
+    );
+    const beforeTamperVerification = verifyMaterializedArtifact(binaryPlan, looseTarget);
+    record('B119 byte-authoritative loose artifact verifies before tamper', beforeTamperVerification.ok, beforeTamperVerification.errors.join('; '));
+    const tamperPath = path.join(looseTarget, ...binaryTextPath.split('/'));
+    const originalTamperBytes = fs.readFileSync(tamperPath);
+    const tamperedBytes = Buffer.from(originalTamperBytes);
+    tamperedBytes[0] ^= 0xff;
+    fs.writeFileSync(tamperPath, tamperedBytes);
+    const tamperedVerification = verifyMaterializedArtifact(binaryPlan, looseTarget);
+    fs.writeFileSync(tamperPath, originalTamperBytes);
+    record(
+      'B119 materialized byte tamper is rejected by the existing verifier',
+      !tamperedVerification.ok && tamperedVerification.errors.some(error => error.toLowerCase().includes(binaryTextPath.toLowerCase()) && error.toLowerCase().includes('mismatch')),
+      tamperedVerification.errors.join('; '),
+    );
+    const malformedBinaryWorkspace = JSON.parse(JSON.stringify(precedenceWorkspace));
+    malformedBinaryWorkspace.passthroughFiles = (malformedBinaryWorkspace.passthroughFiles || []).map((file: any) => {
+      if (String(file.path || '').toLowerCase() !== binaryTextPath.toLowerCase()) return file;
+      return { ...file, content: 'Zm8', contentEncoding: 'base64', omitted: false };
+    });
+    const malformedDeployRoot = path.join(root, 'malformed-binary-extensions');
+    let malformedError = '';
+    try {
+      compileWorkspaceToFolder(malformedBinaryWorkspace, malformedDeployRoot, 'store', false, 'loose');
+    } catch (error) {
+      malformedError = error instanceof Error ? error.message : String(error);
+    }
+    record(
+      'B119 malformed or noncanonical binary base64 fails closed before promotion',
+      /base64|encoded/i.test(malformedError) && !fs.existsSync(path.join(malformedDeployRoot, effectiveModId(malformedBinaryWorkspace))),
+      malformedError || 'malformed binary unexpectedly materialized',
     );
     record(
       'B119 loose materialization falls back to omitted passthrough disk bytes',
@@ -12113,7 +12277,7 @@ function runCompileArtifactSelftest() {
     const importedPlan = buildArtifactPlan({
       sourceRoot: source,
       generatedFiles: importedBuild.generatedFiles,
-      passthroughFiles: importedBuild.passthroughFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(imported.workspace, importedBuild.passthroughFiles),
     });
     record(
       'runtime-owned loaded passthrough stays outside the built artifact',
@@ -13627,7 +13791,7 @@ function prepareReleaseBuild(
     const plan = buildArtifactPlan({
       sourceRoot,
       generatedFiles,
-      passthroughFiles: built.passthroughFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(workspace, built.passthroughFiles),
       // Steam preview media is not game payload. Exclude every source candidate from
       // CAT/DAT ownership, validate the user's one selected image, then add exactly that
       // image to staging after catalog generation. Nexus keeps source media normally.

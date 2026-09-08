@@ -4,14 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { needsManifestMaterialization } from '../../src/lib/nativeEditor';
-import { E2E_TOKEN } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_TOKEN, E2E_WEB_ORIGIN } from '../../playwright.config';
 import { parseXMLToWorkspace } from '../../src/lib/xmlParser';
 import { mdStemFingerprint } from '../../src/lib/mdFileIdentity';
 import { applyNodeSelectionDocument, buildNodeSelectionDocument, isNodeSelectionFailure } from '../../src/lib/nodeSelectionDocument';
 import { seedServerWorkspace } from './ephemeral';
 import { validatePackageReadiness } from '../../src/lib/modCompiler';
 
-const API = 'http://127.0.0.1:3101';
+const API = E2E_API_ORIGIN;
 const auth = { Authorization: `Bearer ${E2E_TOKEN}` };
 
 test('package readiness distinguishes data-only, inert legacy MD, empty, and real MD projects', () => {
@@ -234,7 +234,7 @@ test('rendered modifier selection sends exactly the selected graph snippets to t
     }
   });
   await page.setContent(`<!doctype html><html><body style="margin:0">
-    <iframe id="forge" src="http://127.0.0.1:3100/" style="border:0;width:1600px;height:1000px"></iframe>
+    <iframe id="forge" src="${E2E_WEB_ORIGIN}/" style="border:0;width:1600px;height:1000px"></iframe>
     <script>
       window.__nativeMessages = [];
       window.addEventListener('message', event => {

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { seedServerWorkspace } from './ephemeral';
-import { E2E_TOKEN } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
 
 const workspace = buildTemplateWorkspace('welcome');
 
@@ -19,7 +19,7 @@ test('native authoring uses the same project validator that feeds Antigravity di
   await expect(page.locator('.cm-content')).toHaveCount(0);
 
   const validate = async (content: string) => {
-    const response = await request.post('http://127.0.0.1:3101/api/agent/project/validate', {
+    const response = await request.post(`${E2E_API_ORIGIN}/api/agent/project/validate`, {
       headers: { Authorization: `Bearer ${E2E_TOKEN}` },
       data: { project: { id: 'native-validation', name: 'native-validation', files: [{ path: 'md/continuous.xml', kind: 'md', content }] } },
     });

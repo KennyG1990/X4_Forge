@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import type { RuntimeDebuggerPayload } from '../../src/lib/runtimeDebuggerView';
 import type { ModWorkspace } from '../../src/types';
+import { E2E_WEB_ORIGIN } from '../../playwright.config';
 import { seedServerWorkspace } from './ephemeral';
 
 const RUNTIME_NODE_ID = 'cancel_conversation';
@@ -376,7 +377,7 @@ async function bootRuntimeDebugger(
 
   if (options.nativeHost) {
     await page.setContent(`<!doctype html><html><body style="margin:0">
-      <iframe id="forge" src="http://127.0.0.1:3100/" style="border:0;width:1600px;height:1000px"></iframe>
+      <iframe id="forge" src="${E2E_WEB_ORIGIN}/" style="border:0;width:1600px;height:1000px"></iframe>
       <script>
         window.__nativeMessages = [];
         window.addEventListener('message', event => {

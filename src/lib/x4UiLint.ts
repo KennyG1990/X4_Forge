@@ -28,6 +28,7 @@ export const X4_UI_LINT_RULES = {
   tableWidthMinimum: 'x4-ui.table-width-minimum',
   columnIndex: 'x4-ui.column-index',
   widthAfterFirstRow: 'x4-ui.width-after-first-row',
+  reserveScrollBarNoVariableColumn: 'x4-ui.reserve-scrollbar-no-variable-column',
   percentageTotal: 'x4-ui.column-percentage-total',
   colspanOverrun: 'x4-ui.colspan-overrun',
   fontScale: 'x4-ui.font-scale',
@@ -98,6 +99,7 @@ interface TableInfo {
   tableHeight?: X4UiValue;
   tableY?: X4UiValue;
   maxVisibleHeight?: X4UiValue;
+  reserveScrollBar?: X4UiValue;
   frameKey?: string;
   rowCalls: X4UiCallRecord[];
   editBoxDefaultCalls: X4UiCallRecord[];
@@ -423,6 +425,7 @@ class X4UiLintEvaluator {
     this.checkTableColumnLimits();
     this.checkTableWidths();
     this.checkColumnOwnershipAndWidthFreeze();
+    this.checkReserveScrollBarNoVariableColumn();
     this.checkPercentages();
     this.checkColspans();
     this.checkFontsAndRenderedText();
@@ -638,6 +641,7 @@ class X4UiLintEvaluator {
         tableHeight: call.semantics.height,
         tableY: projectedProperty(call, ['y']),
         maxVisibleHeight: projectedProperty(call, ['maxVisibleHeight']),
+        reserveScrollBar: projectedProperty(call, ['reserveScrollBar']),
         rowCalls: [],
         editBoxDefaultCalls: []
       };
@@ -896,6 +900,167 @@ class X4UiLintEvaluator {
           call.semantics.table?.expression || '<column-width table>'
         );
       }
+    }
+  }
+
+  private checkReserveScrollBarNoVariableColumn(): void {
+    const diagnostic = 'table column finalization with reserveScrollBar: No column with variable width defined, cannot reserve additional space';
+
+    for (const table of this.tables.values()) {
+      const options = table.call.semantics.options;
+      if (options && (options.status !== 'static' || options.type !== 'reference')) {
+        this.addGap(
+          'property',
+          valueStatus(options, 'reference'),
+          options.location,
+          'reserveScrollBar behavior is unverified because addTable options are dynamic or not a statically resolved object',
+          options.expression,
+        );
+        continue;
+      }
+
+      const reserveValue = table.reserveScrollBar;
+      const reserve = reserveValue ? staticBoolean(reserveValue) : true;
+      if (reserve === false) continue;
+      if (reserve === undefined) {
+        if (reserveValue) {
+          this.addGap(
+            'property',
+            valueStatus(reserveValue, 'boolean'),
+            reserveValue.location,
+            'reserveScrollBar is dynamic or not a statically known boolean, so the Helper default reservation behavior is unverified',
+            reserveValue.expression,
+          );
+        }
+        continue;
+      }
+
+      const count = staticNumber(table.countValue);
+      if (count === undefined || !Number.isInteger(count) || count <= 0) {
+        this.addGap(
+          'count',
+          valueStatus(table.countValue, 'number'),
+          table.countValue?.location || table.call.source,
+          'reserveScrollBar variable-column proof requires a positive integer literal table count',
+          table.countValue?.expression || '<missing table column count>',
+        );
+        continue;
+      }
+
+      if (table.rowCalls.length === 0) continue;
+      if (!callsPairwiseCompatible([table.call, ...table.rowCalls])) {
+        this.addGap(
+          'data-flow',
+          'unknown',
+          table.call.source,
+          'reserveScrollBar variable-column proof is unverified because same-table addRow calls do not share one compatible execution context or branch path',
+          table.call.result?.path || '<first addRow>',
+        );
+        continue;
+      }
+
+      const firstRow = table.rowCalls.reduce((earliest, row) =>
+        row.sourceOrder < earliest.sourceOrder ? row : earliest);
+      const preFreezeCalls = this.calls.filter(call => {
+        if (call.name !== 'setColWidth' && call.name !== 'setColWidthPercent') return false;
+        if (call.sourceOrder >= firstRow.sourceOrder) return false;
+        return this.tableKeyFromValue(call.semantics.table) === table.key;
+      });
+      if (preFreezeCalls.length === 0) continue;
+
+      if (!callsPairwiseCompatible([table.call, firstRow, ...preFreezeCalls])) {
+        this.addGap(
+          'data-flow',
+          'unknown',
+          preFreezeCalls[0].source,
+          'reserveScrollBar variable-column proof is unverified because pre-freeze width assignments and the first addRow do not share one compatible execution context or branch path',
+          preFreezeCalls[0].semantics.table?.expression || '<column-width table>',
+        );
+        continue;
+      }
+
+      const coveredColumns = new Set<number>();
+      let coverageUnverified = false;
+      for (const call of preFreezeCalls) {
+        if (call.method !== ':') {
+          this.addGap(
+            'data-flow',
+            'unsupported',
+            call.source,
+            'reserveScrollBar variable-column proof requires a colon-style setColWidth* call with a resolved table receiver',
+            call.semantics.table?.expression || `<${call.name}>`,
+          );
+          coverageUnverified = true;
+          continue;
+        }
+
+        const indexValue = call.semantics.index;
+        const index = staticNumber(indexValue);
+        if (index === undefined || !Number.isInteger(index)) {
+          this.addGap(
+            'index',
+            valueStatus(indexValue, 'number'),
+            indexValue?.location || call.source,
+            'reserveScrollBar variable-column proof requires a statically known integer column index',
+            indexValue?.expression || '<missing column index>',
+          );
+          coverageUnverified = true;
+          continue;
+        }
+
+        const widthValue = call.name === 'setColWidth'
+          ? call.semantics.width
+          : call.semantics.percentage;
+        const width = staticNumber(widthValue);
+        if (width === undefined || width < 0) {
+          this.addGap(
+            call.name === 'setColWidth' ? 'width' : 'percentage',
+            valueStatus(widthValue, 'number'),
+            widthValue?.location || call.source,
+            `reserveScrollBar variable-column proof requires a statically known non-negative ${call.name === 'setColWidth' ? 'column width' : 'column percentage'}`,
+            widthValue?.expression || '<missing column width>',
+          );
+          coverageUnverified = true;
+          continue;
+        }
+
+        if (call.name === 'setColWidth' && call.semantics.scaling) {
+          const scaling = staticBoolean(call.semantics.scaling);
+          if (scaling === undefined) {
+            this.addGap(
+              'scale',
+              valueStatus(call.semantics.scaling, 'boolean'),
+              call.semantics.scaling.location,
+              'reserveScrollBar variable-column proof requires statically valid setColWidth scaling semantics',
+              call.semantics.scaling.expression,
+            );
+            coverageUnverified = true;
+            continue;
+          }
+        }
+
+        if (index < 1 || index > count || coveredColumns.has(index)) {
+          coverageUnverified = true;
+          continue;
+        }
+        coveredColumns.add(index);
+      }
+
+      if (coverageUnverified || coveredColumns.size !== count) continue;
+
+      const location = reserveValue?.location || table.call.source;
+      this.addFinding({
+        rule: X4_UI_LINT_RULES.reserveScrollBarNoVariableColumn,
+        severity: 'warning',
+        message: diagnostic,
+        cause: reserveValue
+          ? `reserveScrollBar is explicitly true and every one of the ${count} table columns is fixed by a unique literal pre-freeze setColWidth* assignment.`
+          : `reserveScrollBar is omitted, so Helper defaults it to true; every one of the ${count} table columns is fixed by a unique literal pre-freeze setColWidth* assignment.`,
+        failureMode: 'Helper emits the observed diagnostic, disables scrollbar reservation for this table, and continues rendering; this path does not reject the frame.',
+        evidenceBoundary: 'This warning requires a positive integer literal table count, a same-table reachable compatible first addRow, unique in-range literal column indexes, statically valid non-negative literal widths or percentages, compatible execution contexts, and assignments before that first addRow boundary. Dynamic, unresolved, incompatible, duplicate, out-of-range, automatic, and post-freeze coverage is not treated as proof.',
+        nextAction: 'Add reserveScrollBar = false to this addTable options object at the reported source location, or intentionally leave at least one column variable; then verify the rendered Helper table in X4.',
+        location,
+      });
     }
   }
 

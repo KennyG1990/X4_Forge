@@ -11,9 +11,54 @@ import * as path from 'path';
  * shared-server model required (the half-isolation behind incident classes B15, #70,
  * and the 07-12 suppression interplay).
  */
-export const E2E_WEB_PORT = 3100;
-export const E2E_API_PORT = 3101;
+const DEFAULT_E2E_WEB_PORT = 3100;
+const DEFAULT_E2E_API_PORT = 3101;
+const PROTECTED_LIVE_STACK_PORTS = new Set([3000, 3001]);
+const DECIMAL_PORT = /^\d+$/;
+
+function formatPortValue(value: unknown): string {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+}
+
+function resolvePort(env: Readonly<Record<string, unknown>>, name: string, fallback: number): number {
+  const descriptor = Object.getOwnPropertyDescriptor(env, name);
+  if (descriptor === undefined) return fallback;
+  if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+    throw new Error(`Invalid ${name}: expected an own data property containing a decimal integer from 1 to 65535; received an accessor property.`);
+  }
+  const raw = descriptor.value;
+  if (typeof raw !== 'string' || !DECIMAL_PORT.test(raw)) {
+    throw new Error(`Invalid ${name}: expected a decimal integer from 1 to 65535; received ${formatPortValue(raw)}.`);
+  }
+  const port = Number(raw);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid ${name}: expected a decimal integer from 1 to 65535; received ${formatPortValue(raw)}.`);
+  }
+  return port;
+}
+
+export function resolveE2ePorts(env: Readonly<Record<string, unknown>> = process.env): { webPort: number; apiPort: number } {
+  const webPort = resolvePort(env, 'X4_FORGE_E2E_WEB_PORT', DEFAULT_E2E_WEB_PORT);
+  const apiPort = resolvePort(env, 'X4_FORGE_E2E_API_PORT', DEFAULT_E2E_API_PORT);
+
+  if (PROTECTED_LIVE_STACK_PORTS.has(webPort)) {
+    throw new Error(`Invalid E2E port selection: X4_FORGE_E2E_WEB_PORT=${webPort} is protected because 3000/3001 belong to the live stack; choose an alternate loopback port.`);
+  }
+  if (PROTECTED_LIVE_STACK_PORTS.has(apiPort)) {
+    throw new Error(`Invalid E2E port selection: X4_FORGE_E2E_API_PORT=${apiPort} is protected because 3000/3001 belong to the live stack; choose an alternate loopback port.`);
+  }
+  if (webPort === apiPort) {
+    throw new Error(`Invalid E2E port selection: web and API ports must differ; both resolved to ${webPort}. Set X4_FORGE_E2E_WEB_PORT and X4_FORGE_E2E_API_PORT to distinct ports.`);
+  }
+  return { webPort, apiPort };
+}
+
+const E2E_PORTS = resolveE2ePorts();
+export const E2E_WEB_PORT = E2E_PORTS.webPort;
+export const E2E_API_PORT = E2E_PORTS.apiPort;
 export const E2E_TOKEN = 'x4forge-e2e-ephemeral-token';
+export const E2E_WEB_ORIGIN = `http://127.0.0.1:${E2E_WEB_PORT}`;
+export const E2E_API_ORIGIN = `http://127.0.0.1:${E2E_API_PORT}`;
 export const E2E_VITE_ENV = {
   API_PORT: String(E2E_API_PORT),
   STUDIO_API_TOKEN: E2E_TOKEN,
@@ -26,7 +71,24 @@ const E2E_STATE_DIR = path.join(os.tmpdir(), `x4forge-e2e-state-${process.pid}`)
 // request context resolves localhost to ::1 and does NOT fall back. A mismatched
 // draw refuses every API call (reproduced 2026-07-15: ECONNREFUSED ::1:3100 failed
 // all 19 tests). Same class as vite.config's proxy 127.0.0.1 comment.
-const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${E2E_WEB_PORT}`;
+function resolvePlaywrightBaseUrl(value: string | undefined): string {
+  if (!value) return E2E_WEB_ORIGIN;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`Invalid PLAYWRIGHT_BASE_URL: expected an absolute http://127.0.0.1 URL on E2E web port ${E2E_WEB_PORT}; received ${formatPortValue(value)}.`);
+  }
+  const effectivePort = parsed.port ? Number(parsed.port) : parsed.protocol === 'http:' ? 80 : 443;
+  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || effectivePort !== E2E_WEB_PORT) {
+    throw new Error(`Invalid PLAYWRIGHT_BASE_URL: it must stay on ${E2E_WEB_ORIGIN} (a path may be appended); received ${formatPortValue(value)}.`);
+  }
+  return value;
+}
+
+const E2E_BASE_URL = resolvePlaywrightBaseUrl(process.env.PLAYWRIGHT_BASE_URL);
+const E2E_STORAGE_ORIGIN = new URL(E2E_BASE_URL).origin;
 
 /**
  * Mutable directory settings stay in E2E_STATE_DIR, but canonical game data is a
@@ -94,7 +156,7 @@ export default defineConfig({
     // prove the newcomer default; keeping the suite explicit avoids mode-dependent tests.
     storageState: {
       cookies: [],
-      origins: [{ origin: E2E_BASE_URL, localStorage: [{ name: 'x4_forge_experience_mode', value: 'expert' }] }],
+      origins: [{ origin: E2E_STORAGE_ORIGIN, localStorage: [{ name: 'x4_forge_experience_mode', value: 'expert' }] }],
     },
   },
   webServer: [
@@ -103,7 +165,7 @@ export default defineConfig({
       // The UI server is intentionally started by global setup through the Vite JS API;
       // Playwright's webServer command path uses shell:true and is not a direct Vite owner.
       command: 'node node_modules/tsx/dist/cli.mjs server.ts',
-      url: `http://127.0.0.1:${E2E_API_PORT}/api/agent/schema`,
+      url: `${E2E_API_ORIGIN}/api/agent/schema`,
       reuseExistingServer: false,
       timeout: 120_000,
       stdout: 'pipe',

@@ -22,6 +22,28 @@ bundle. All twelve reference images (`00` plus `1a`-`1j`) must be visually inspe
 the real X4 Lua rather than porting the HTML/CSS prototype. Build recommended screen `1b` first, then the remaining
 comm-link, confirmation-gate, and hub screens. Compare Forge output to the 2560x1440 references, preserve the measured
 conversation-wheel/NPC keep-outs, and require deployed X4 screenshots before any 1:1 claim.
+**Corrective release/native rerun checkpoint 2026-09-08 — VERIFIED CORRECTIVE UNIT / FULL B119 PARTIAL:** stable
+`0.0.77` is built, published exactly once on OpenVSX, independently downloaded with exact local/public parity,
+installed in Antigravity, and its installed runtime oracles pass `134/134`. The stable VSIX is
+`vscode-extension/x4-forge-studio-0.0.77.vsix`, `26,321,722` bytes, SHA-256
+`D1349AC2A3D43FEFD07CAA64BF262FFF4D4F10DEE6E38F453DC0EDAC737486F6`. Full isolated serial E2E passes `106/106`
+on `3200/3201` with complete verdict/treeGone and unchanged live state; precommit passed before this documentation
+close. The repaired real-mod deploy passed all `11` checks and an independent whole-tree census found `124` identical
+common files with only the intentional `.forgekeep` difference. `aic_sheet.lua` source and deployed bytes are both
+`12,626` bytes / SHA-256
+`A09A66B4BF98491B627304FD0F198B3893A21F9EE18BF8AA0979BB82220D4E34`.
+The temporary `pipeline_test` launcher deployment also passed all `11` checks and an exact source/deployed four-file
+census before its recovery was consumed.
+
+The exact deployed source then rendered the full agreement sheet in X4 9.00 through the native Helper/widget/C++
+route at drawable `2544x1353` (Steam capture `2544x1354`), UI scale `1.0`; the retained screenshot and current-session
+log are under `dev-docs/b119-ai-influence-dogfood/in-game-20260908-scrollbar-clean/`. The log has exactly one each of
+the launcher/dependency/fixture/open/display/opened receipts, zero `reserveScrollBar` diagnostics, and zero scoped
+view/Lua/launcher/timeout failures. Recovery was consumed, `pipeline_test` is absent from game extensions, and X4
+process count is `0`; scratch files were restored exactly through Forge strict CAS. The corrective unit and supplied
+literal brief are `VERIFIED`, but full twelve-reference AI Influence reconstruction/current-game visual census,
+universal C++ acceptance, and arbitrary Lua/Helper/widget coverage remain open. GitHub #41 remains open; external
+projection updates and the final source commit are parent actions. No remote IDs or commit hashes are asserted here.
 **Original-brief audit 2026-09-05 — 5/6 VERIFIED / 1/6 PARTIAL:** exact hand-written Lua round-trip, all eleven
 linter trap families including pre-export `addTable(24)` rejection, deploy-bound `Not verified in game` truth, and the
 fixed-drawable X4 user-scale contract are `VERIFIED`. All four keep-out contexts now also have installed, non-null,

@@ -3,6 +3,21 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.77 — 2026-09-08
+
+- Imported passthrough files remain byte-for-byte identical through preview, loose deploy, and release preparation; Forge no longer materializes them as Base64 text.
+- Binary, non-UTF-8, script, and empty files keep their raw bytes, size, and SHA-256, including legacy binary workspaces.
+- Malformed or noncanonical Base64, and any materialization mismatch, now fail before Forge promotes the target.
+- This corrective release retains the 0.0.76 scrollbar warning; it does not claim universal C++ acceptance or B119 completion.
+
+## 0.0.76 — 2026-09-07
+
+- Forge now gives a source-located, warning-only diagnostic when Helper scrollbar reservation is true or omitted (the default) and every table column is statically proven fixed before the first addRow.
+- When this warning appears, a modder can fix the layout by intentionally leaving at least one column variable or by setting reserveScrollBar = false in the addTable options.
+- Dynamic, branched, unresolved, or otherwise unproven column-width cases remain explicitly unverified; Forge does not guess that the reservation rule applies.
+- The rule is grounded in a real current-X4 agreement-sheet run: four source call sites expanded to thirteen runtime diagnostics, while X4 still rendered after reservation was disabled.
+- This release does not claim universal C++ acceptance, pixel parity, or completion of B119.
+
 ## 0.0.75 — 2026-09-07
 
 - Valid loop-issued tables are no longer falsely refused when frame source order and table source order differ.

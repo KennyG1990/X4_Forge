@@ -284,6 +284,8 @@ export interface PassthroughFile {
   path: string;
   /** verbatim file content; omitted for tracked-on-disk oversized files */
   content?: string;
+  /** JSON-safe content encoding for loaded non-text bytes; absent legacy binary entries are base64 too. */
+  contentEncoding?: 'base64';
   /** classification of why this file is preserved raw rather than modeled */
   reason?: 'unknown_domain' | 'unparsed' | 'binary' | 'partial' | 'too_large';
   /** true when the file is tracked on disk but not loaded into memory (e.g. binary/too-large); content is absent and must never be overwritten with empty output */
@@ -2081,6 +2083,7 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       .map((f: any) => ({
         path: String(f.path).replace(/\\/g, '/').replace(/^\/+/, ''),
         ...(typeof f.content === 'string' ? { content: String(f.content) } : {}),
+        ...(f.contentEncoding === 'base64' ? { contentEncoding: 'base64' as const } : {}),
         reason: ['unknown_domain', 'unparsed', 'binary', 'partial', 'too_large'].includes(f.reason) ? f.reason : 'unknown_domain',
         ...(f.omitted === true ? { omitted: true } : {}),
         ...(Number.isFinite(Number(f.bytes)) ? { bytes: Number(f.bytes) } : {})
