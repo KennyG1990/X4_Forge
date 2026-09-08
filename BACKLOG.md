@@ -42,8 +42,15 @@ the launcher/dependency/fixture/open/display/opened receipts, zero `reserveScrol
 view/Lua/launcher/timeout failures. Recovery was consumed, `pipeline_test` is absent from game extensions, and X4
 process count is `0`; scratch files were restored exactly through Forge strict CAS. The corrective unit and supplied
 literal brief are `VERIFIED`, but full twelve-reference AI Influence reconstruction/current-game visual census,
-universal C++ acceptance, and arbitrary Lua/Helper/widget coverage remain open. GitHub #41 remains open; external
-projection updates and the final source commit are parent actions. No remote IDs or commit hashes are asserted here.
+universal C++ acceptance, and arbitrary Lua/Helper/widget coverage remain open. GitHub #41 remains open; final
+checkpoint comment `5585124340` and the current `0.0.77` issue-body evidence retain two open owner-close boundaries.
+Notion owner page `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated and read back as `In Progress / Partial`; it
+contains the source commit and GitHub comment, and Notion has no revision ID. Google Doc
+`17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, was read back at revision
+`ANLCKQnoHPL-JGrvYPUGVeCg4BaeRsI_kFTcXvKjgR3EfCfMn7eokIvbTYRVy3LouxQ12D1Y8GJeryOQ5mbbvcGQ0nFfuBKJPlnpDgCC6B-S`;
+its top lines and appended `HEADING_2` record the same bounded-verified / overall-partial boundary. Source/release/
+native close commit `bf03ed9e504b530b054db753bc46faf5ea329208` is already pushed with exact local, configured
+upstream, and direct-remote parity; the external projections are complete for this checkpoint.
 **Original-brief audit 2026-09-05 — 5/6 VERIFIED / 1/6 PARTIAL:** exact hand-written Lua round-trip, all eleven
 linter trap families including pre-export `addTable(24)` rejection, deploy-bound `Not verified in game` truth, and the
 fixed-drawable X4 user-scale contract are `VERIFIED`. All four keep-out contexts now also have installed, non-null,

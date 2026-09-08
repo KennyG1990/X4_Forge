@@ -1968,29 +1968,40 @@ Lane: `FULL`
 
 ### PLAN
 
-- **Bounded unit:** close the already executed corrective `0.0.77` release, repaired real-mod deployment, and native
-  X4 rerun for the exact shipping `aic_sheet.lua -> sheet.display` path. This is a documentation close; it does not
-  authorize another package, deploy, game launch, evidence rewrite, remote update, commit, or push.
-- **Assumptions / authoritative references:** the baseline is Forge `HEAD 573a577a56f21cbe618cd42061cbf7d5d96423e6`;
-  the supplied release, deployment, native log, screenshot, and cleanup facts are authoritative. The shipped X4 9.00
-  Helper/widget corpus remains layout authority. No remote identifier or future commit hash is available for this
-  close, so none is asserted.
-- **In scope:** durable status, evidence, boundary, capability delta, project AAR, backlog correction, handoff
-  transfer, and deduplicated UI gotchas for the completed release/native rerun.
-- **Out of scope:** production/test code, mod or game directories, retained screenshots/logs, Git metadata, GitHub,
-  Notion, Drive, global workflow AAR, new package/deploy/game activity, and any claim of universal C++ acceptance,
-  arbitrary Lua/Helper/widget parity, or complete twelve-reference reconstruction.
-- **Risks / authorization:** documentation can overstate one native surface as a product-wide result, and stale
-  pending language can hide the completed gates. The rollback is textual: preserve prior dirty files, inspect the
-  six owned-file diff, and restore only this documentation edit if the parent rejects it. No external side effect is
+- **Bounded unit:** reconcile the already executed corrective `0.0.77` release, repaired real-mod deployment, native
+  X4 rerun for the exact shipping `aic_sheet.lua -> sheet.display` path, and the completed external readbacks into this
+  plan, `BACKLOG.md`, and `SESSION-HANDOFF.md`. This is a records-only reconciliation; it does not authorize another
+  package, deploy, game launch, evidence rewrite, remote update, commit, or push.
+- **Assumptions / authoritative references:** source/release/native close commit
+  `bf03ed9e504b530b054db753bc46faf5ea329208` is already pushed and is the exact named evidence commit. GitHub owner
+  issue `KennyG1990/X4_Forge #41` remains open; final checkpoint comment is
+  `5585124340`, and its body contains current `0.0.77` evidence with two open owner-close boundaries. Notion owner
+  page `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated and read back as `In Progress / Partial`; it contains the
+  commit and GitHub comment, and Notion has no revision ID. Google Doc
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, was read back at revision
+  `ANLCKQnoHPL-JGrvYPUGVeCg4BaeRsI_kFTcXvKjgR3EfCfMn7eokIvbTYRVy3LouxQ12D1Y8GJeryOQ5mbbvcGQ0nFfuBKJPlnpDgCC6B-S`;
+  its top lines and appended `HEADING_2` record the same bounded-verified / overall-partial boundary. The shipped
+  X4 9.00 Helper/widget corpus remains layout authority.
+- **In scope:** record the exact source commit, GitHub comment/body state, Notion page/status, Google tab/revision
+  readback, durable status, remaining gates, and parent next action in the three owned repository records.
+- **Out of scope:** production/test code, mod or game directories, retained screenshots/logs, Git metadata, new
+  external connector operations, global workflow AAR, new package/deploy/game activity, and any claim of universal C++
+  acceptance, arbitrary Lua/Helper/widget parity, or complete twelve-reference reconstruction.
+- **Risks / authorization:** documentation can overstate one native surface as a product-wide result, and outdated
+  status language can hide the completed gates. The rollback is textual: preserve prior dirty files, inspect the
+  three-record diff, and restore only this documentation edit if the parent rejects it. No external side effect is
   performed by this unit.
 - **Acceptance contract:** the corrective release/native rerun is `VERIFIED`; the supplied literal brief is `6/6
-  VERIFIED`; overall B119 remains `IN_PROGRESS / PARTIAL`; the independent byte census, package/install parity,
-  E2E verdict, native screenshot/log, cleanup, capability delta, AAR, and gotcha updates are recorded exactly; no
-  remote IDs or commit hashes are invented.
-- **Required validation:** run `git diff --check` on the three repository-owned docs; compute SHA-256 and size for
-  all six owned files; search final owned docs for stale claims that `0.0.77`, its package/install, or the native
-  rerun is still pending; confirm only the six owned paths changed relative to the pre-edit baseline.
+  VERIFIED`; overall B119 remains `IN_PROGRESS / PARTIAL`; the three records carry the exact source commit and
+  external readbacks, preserve the full twelve-reference/current-game census and universal arbitrary-Lua/Helper/widget/
+  C++ gates as open, describe the source commit and projections only as completed evidence, and invent no ID, revision,
+  or hash.
+- **Required validation:** run `git diff --check` on the three repository-owned docs; search all three for the exact
+  commit, GitHub comment, Notion page/status, complete Google revision, partial boundary, and remaining gates; verify
+  the current sections contain no stale source-commit or external-projection status; compare `git status --short` with
+  the captured pre-edit baseline and confirm only the three owned records were added as changes. Do not run precommit,
+  E2E, build, game, deploy, package,
+  publish, or external connector operations for this reconciliation.
 - **Evidence locations:** stable VSIX at
   `F:\DEV_ENV\X4_Forge\vscode-extension\x4-forge-studio-0.0.77.vsix`; retained native evidence under
   `F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260908-scrollbar-clean\`; plan, backlog,
@@ -2043,23 +2054,32 @@ Lane: `FULL`
 - **Durable records:** the capability map gains the bounded byte-authoritative/native-sheet delta; the project AAR
   records the triggered lessons; cards 9 and 15 are updated in place and cards 61-62 add only the nonduplicate CAS
   and Steam launch-evidence lessons. BACKLOG and SESSION-HANDOFF now agree with this status.
-- **External boundary:** GitHub #41 remains open. External GitHub/Notion/Drive updates and the final source commit
-  are parent actions; this worker invents no IDs, revision strings, or commit hashes.
+- **External / source boundary:** GitHub #41 remains open; final checkpoint comment `5585124340` and the current
+  `0.0.77` issue-body evidence retain two open owner-close boundaries. Notion owner page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `In Progress / Partial` and contains the source commit and
+  GitHub comment; Notion has no revision ID. Google Doc
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back at revision
+  `ANLCKQnoHPL-JGrvYPUGVeCg4BaeRsI_kFTcXvKjgR3EfCfMn7eokIvbTYRVy3LouxQ12D1Y8GJeryOQ5mbbvcGQ0nFfuBKJPlnpDgCC6B-S`;
+  its top lines and appended `HEADING_2` carry the same bounded-verified / overall-partial boundary. Source/release/
+  native close commit `bf03ed9e504b530b054db753bc46faf5ea329208` is already pushed and remains the exact named evidence
+  commit. These three records form the records-only close; the close uses
+  exact staged-path selection and final local/configured-upstream/direct-remote parity. The parent's final report and
+  current Git state are the evidence. This record intentionally does not invent or chase its own commit hash.
 
 ### CLOSE
 
 - **Status:** `VERIFIED` for the corrective `0.0.77` / native X4 sheet unit; `PARTIAL` for overall B119, which
   remains `IN_PROGRESS / PARTIAL`.
 - **What changed:** this plan now records the final release, package/install, independent real-mod census, native
-  screenshot/log, cleanup, negative-path, review, and AAR evidence. Related durable records were synchronized only
-  within the six owned paths.
-- **What was not changed:** no implementation source, tests, mod/game files, evidence artifacts, Git metadata, or
-  remote service state. Unrelated dirty and showcase artifacts remain preserved.
+  screenshot/log, cleanup, negative-path, review, AAR evidence, exact source commit, and external readbacks; the
+  current B119 checkpoint and handoff are synchronized within the three owned paths.
+- **What was not changed:** no implementation source, tests, mod/game files, evidence artifacts, Git metadata, or new
+  remote service state. Historical entries and unrelated dirty/showcase artifacts remain preserved.
 - **Capability-map delta:** one evidenced delta for byte-authoritative real-mod deployment and the exact repaired
   agreement-sheet native path, with an explicit boundary against universal claims.
-- **Remaining concerns:** complete twelve-reference/current-game census, universal C++ acceptance, arbitrary
-  Lua/Helper/widget coverage, parent-owned external projections, and final source commit.
-- **Suggested commit title:** parent action only; no commit was made by this worker.
+- **Remaining concerns:** complete twelve-reference/current-game census and universal arbitrary-Lua/Helper/widget/C++
+  acceptance.
+- **Suggested records-only close title:** `B119: reconcile 0.0.77 native-X4 close records`.
 
 ### AAR
 
@@ -2087,3 +2107,5 @@ Lane: `FULL`
   `124`-common-file census.
 - **Durable lesson:** no global workflow AAR delta. The reusable artifact-byte lesson is already promoted in the
   installed `learning-from-failures` skill; this project AAR is the durable project-specific record.
+- **Fresh-eyes correction:** removed the self-invalidating pre-commit state claim from the handoff and plan; an initial
+  exact-marker check then exposed split/inconsistent invariant wording, which was normalized before final validation.

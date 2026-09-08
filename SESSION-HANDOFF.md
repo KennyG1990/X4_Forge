@@ -13,12 +13,14 @@ VERIFIED`; overall B119 remains `IN_PROGRESS / PARTIAL`.
      Ken check: open the B119 plan and retained native evidence, inspect each `00` and `1a`-`1j` reference beside the
      corresponding current X4/source result, classify every image, and record any source-backed correction before
      calling parity. Do not promote Forge preview or one native sheet to universal truth.
-  2. Universal C++ acceptance and arbitrary Lua/Helper/widget coverage remain open. Click-by-click Ken check for any
-     proposed player-facing claim: inspect the exact deployed source/path/profile in X4, then compare the scoped log
-     and screenshot; mark only the observed surface as closed.
-- **Commit question:** baseline `HEAD == 573a577a56f21cbe618cd42061cbf7d5d96423e6`. This documentation close is
-  uncommitted. Parent must review the six owned-file diff, perform any authorized external projections, then exact-
-  stage and commit/push; do not invent the future commit hash.
+  2. Universal arbitrary-Lua/Helper/widget/C++ acceptance remains open. Click-by-click Ken check for any proposed
+     player-facing claim: inspect the exact deployed source/path/profile in X4, then compare the scoped log and
+     screenshot; mark only the observed surface as closed.
+- **Records-only close invariant:** source/release/native close commit
+  `bf03ed9e504b530b054db753bc46faf5ea329208` is pushed and remains the exact named evidence commit. These three
+  records form the records-only close; the close uses
+  exact staged-path selection and final local/configured-upstream/direct-remote parity. The parent's final report and
+  current Git state are the evidence. This handoff intentionally does not invent or chase its own commit hash.
 
 ## Verified corrective state
 
@@ -54,17 +56,27 @@ VERIFIED`; overall B119 remains `IN_PROGRESS / PARTIAL`.
 - `F:\StarForge\wiki\x4-forge\capability-map.md` records a bounded byte-authoritative real-mod/native-sheet delta.
   `F:\StarForge\wiki\x4-forge\aar-log.md` records sustain, work/approach, tools, highest-risk, and all close
   triggers. The UI gotchas guide updates cards 9 and 15 in place and adds only cards 61-62.
-- GitHub #41 remains open. External GitHub/Notion/Drive projections and the final source commit are parent actions;
-  no new remote IDs, revisions, or commit hashes are recorded here.
-- Overall B119 is not complete: the twelve-reference reconstruction/current-game census, universal C++ acceptance,
-  and arbitrary Lua/Helper/widget coverage remain open. The exact native sheet proof is one source/path/profile,
-  not a universal 1:1 or all-Lua claim.
+- GitHub #41 remains open; final checkpoint comment `5585124340` and the current `0.0.77` issue-body evidence retain
+  two open owner-close boundaries. Notion owner page `3b84618e-d15b-8190-821e-c0eb96f43d5a` was updated and read back
+  as `In Progress / Partial`; it contains the source commit and GitHub comment, and Notion has no revision ID. Google
+  Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, was read back at revision
+  `ANLCKQnoHPL-JGrvYPUGVeCg4BaeRsI_kFTcXvKjgR3EfCfMn7eokIvbTYRVy3LouxQ12D1Y8GJeryOQ5mbbvcGQ0nFfuBKJPlnpDgCC6B-S`;
+  its top lines and appended `HEADING_2` record the same bounded-verified / overall-partial boundary. No new
+  external connector operation is part of this reconciliation.
+- Source/release/native close commit `bf03ed9e504b530b054db753bc46faf5ea329208` is pushed and remains the exact named
+  evidence commit. The records-only close uses exact staged-path selection and final
+  local/configured-upstream/direct-remote parity verification, evidenced by the parent's final report and current Git
+  state without naming its own commit hash.
+- Overall B119 is not complete: the twelve-reference reconstruction/current-game census remains open, and the
+  universal arbitrary-Lua/Helper/widget/C++ acceptance boundary remains open. The exact native sheet proof is one
+  source/path/profile, not a universal 1:1 or all-Lua claim.
 
 ## Exact next unit
 
-Parent close actions are to reconcile this six-file diff, perform any authorized external projections, and commit/push
-with exact path selection. The next substantive B119 unit is the full twelve-reference AI Influence reconstruction and
-current-game visual census, with source-backed corrections only; it must retain the current native/package boundaries.
+The records-only close procedure uses exact staged-path selection and final local/configured-upstream/direct-remote
+parity verification; the parent's final report and current Git state are authority. The next substantive unit is the
+full twelve-reference AI Influence reconstruction and current-game visual census with source-backed corrections only;
+retain the current native/package boundaries.
 
 ## Hazards
 
@@ -77,12 +89,13 @@ current-game visual census, with source-backed corrections only; it must retain 
 - The E2E harness uses `3200/3201` when the default ports are occupied; never touch unrelated listeners or run a
   second stack in parallel. Do not launch apps or rerun game/deploy work from this docs handoff.
 - Preserve the unrelated showcase artifacts and every other pre-existing modified, deleted, or untracked path.
-  This worker changed only the six authorized documentation paths; do not revert, stage, commit, push, publish, or
-  rewrite Git metadata.
+  Only the three authorized documentation paths belong to this records-only close; exclude every unrelated path from
+  staging, commit, and push, and do not revert, publish, or rewrite Git metadata.
 
 ## Preservation boundary
 
 The baseline dirty tree includes unrelated onboarding/bug/data/docs/scripts changes, server and test changes,
 `test-results/.last-run.json`, extension evidence, `artifacts/`, `media/`, package-workspace files, lockfiles, and
 untracked showcase/marketing files. They are user-owned and remain untouched. No mod/game directory, retained
-screenshot/log, global workflow AAR, GitHub, Notion, Drive, or remote service was changed by this worker.
+screenshot/log, global workflow AAR, or new GitHub, Notion, Drive, or remote-service operation was performed by this
+reconciliation; the supplied external readbacks are recorded above.
