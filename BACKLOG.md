@@ -44,6 +44,27 @@ then terminated with Windows 0xC0000409; a separate tail batch terminated with t
 Bounded behavior batches are green (focused B119 10/10 and XML patch 2/2), but this is not a 106/106 full-suite pass.
 No commit/push or external projection is claimed. Keep the crash as an open harness issue, keep the real-mod :98
 finding write-gated, and continue B119 IN_PROGRESS / PARTIAL.
+**2026-09-09 post-commit external-projection close — PARTIAL / FULL B119 IN_PROGRESS:** checkpoint commit
+`09926efdb21271a6098bc5bd379b7ed182667909` (`feat(b119): checkpoint source-faithful UI replay and linter`) is
+complete and pushed; `HEAD`, `origin/main`, and the direct remote match, and the staged index is empty. The commit
+contains exactly 25 paths: 18 tracked implementation/record files and 7 exact evidence files; `4639` insertions and
+`747` deletions. Final manual precommit and commit-hook precommit both passed. Current validation remains installed
+oracles `134/134`; focused B119 E2E `10/10`; isolated XML `2/2`; isolated project-browser repro `1/1`; typecheck,
+lint (`0` errors), precommit, and build green. The required current monolithic E2E remains RED after repeatable
+Windows child exit `3221226505 / 0xC0000409` without a complete structured receipt. Do not claim a current
+`106/106`; the older `0.0.77` `106/106` result is historical only. Evidence receipt:
+`dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay/README.md`.
+GitHub #41 is OPEN; its body was updated and new checkpoint comment `5603257267` was read back at
+`https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5603257267`. Notion page
+`3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress`, Evidence Grade `Partial`, and contains the
+new commit/comment/red-gate section at top. Google Doc
+`17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back revision
+`ANLCKQk4F14GwWk68VhKaxI0b21sPVd4KiRw763IijA80qwF_NLRxTF1F0uT9m-UXcveRRZFFDbHR7QqybNTMtYATT7_TVvgaX1XYyD9yw44`,
+`731` paragraphs, one `HEADING_2` named `B119 source replay + native compact/expanded checkpoint — 2026-09-09`,
+the updated repository head, and an intact one-period prior boundary. Overall B119 remains `IN_PROGRESS / PARTIAL`.
+Same-state pending-branch parity, the full twelve-reference census, arbitrary Lua/Helper/widget coverage, universal
+C++ acceptance, monolithic E2E process stability, and the separately write-gated real-mod `cancel_conversation`
+defect remain open. No live mod/game write was performed in this projection unit.
 **Corrective release/native rerun checkpoint 2026-09-08 — VERIFIED CORRECTIVE UNIT / FULL B119 PARTIAL:** stable
 `0.0.77` is built, published exactly once on OpenVSX, independently downloaded with exact local/public parity,
 installed in Antigravity, and its installed runtime oracles pass `134/134`. The stable VSIX is

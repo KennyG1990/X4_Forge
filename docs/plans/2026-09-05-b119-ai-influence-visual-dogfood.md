@@ -3424,3 +3424,38 @@ The following are scoped repair requirements, not completed fixes:
   coverage without a structured report, leaving a red gate even when every bounded behavior route observed is green.
 - **Global/project lessons banked:** this plan and the project AAR only; no capability-map delta and no external
   projection.
+
+## 2026-09-09 POST-COMMIT — source replay/native compact-expanded external projection
+
+### DOCUMENT CLOSE — POST-COMMIT EXTERNAL PROJECTION
+
+- **Bounded unit:** record the completed post-commit external projection for the source-faithful replay/native
+  compact-expanded checkpoint while keeping overall B119 `IN_PROGRESS / PARTIAL`. This is a records-only close:
+  BACKLOG, SESSION-HANDOFF, this plan, and the project AAR are in scope; no implementation, test, evidence-binary,
+  mod, game, installed-extension, deploy, config, save, capability-map, UI-gotcha, OpenVSX, or Git mutation belongs
+  here.
+- **Commit/readback:** checkpoint commit `09926efdb21271a6098bc5bd379b7ed182667909`, titled
+  `feat(b119): checkpoint source-faithful UI replay and linter`, contains exactly 25 paths: 18 tracked
+  implementation/record files and 7 exact evidence files, with `4639` insertions and `747` deletions. `HEAD`,
+  `origin/main`, and the direct remote matched; the staged index was empty after push. Final manual precommit and
+  commit-hook precommit both passed.
+- **Current validation:** installed oracles `134/134`; focused B119 E2E `10/10`; isolated XML `2/2`; isolated
+  project-browser repro `1/1`; typecheck, lint (`0` errors), precommit, and build green. The required monolithic E2E
+  remains RED after repeatable Windows child exit `3221226505 / 0xC0000409` without a complete structured receipt.
+  There is no current `106/106` claim; the older `0.0.77` `106/106` result is historical only.
+- **Evidence:** `dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay/README.md` is the retained
+  receipt.
+- **External projection readback:** GitHub #41 is OPEN, its body was updated, and checkpoint comment `5603257267`
+  reads back at `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5603257267`. Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back Status `In Progress`, Evidence Grade `Partial`, and the new
+  commit/comment/red-gate section at top. Google Doc
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back revision
+  `ANLCKQk4F14GwWk68VhKaxI0b21sPVd4KiRw763IijA80qwF_NLRxTF1F0uT9m-UXcveRRZFFDbHR7QqybNTMtYATT7_TVvgaX1XYyD9yw44`,
+  `731` paragraphs, one `HEADING_2` named `B119 source replay + native compact/expanded checkpoint — 2026-09-09`,
+  the updated repository head, and an intact one-period prior boundary.
+- **Review/close:** the external projections are complete for this checkpoint, but overall B119 remains
+  `IN_PROGRESS / PARTIAL`. Same-state pending-branch parity, the full twelve-reference census, arbitrary
+  Lua/Helper/widget coverage, universal C++ acceptance, monolithic E2E process stability, and the separately
+  write-gated real-mod `cancel_conversation` defect remain open. No live mod/game write was performed in this
+  projection unit; no capability-map delta or UI-gotcha delta was made.
+- **Suggested commit title:** `docs(b119): record post-commit external projection readback`.
