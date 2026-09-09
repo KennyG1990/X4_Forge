@@ -3806,3 +3806,362 @@ real-game/product scope.
   accepted `batchUpdate` is not proof of clean rendered or text output.
 - **Close boundary:** this AAR does not alter the `IN_PROGRESS / PARTIAL` overall B119 status and records no capability-map
   delta.
+
+## 2026-09-09 Next bounded call-model verification-gap census — SPECIFIED
+
+### PLAN
+
+- **Lane and bounded unit:** Full lane; status SPECIFIED for an actionable read-only census of call-model
+  verification gaps across the existing official X4 UI corpus. Extend the current linter census owner; do not
+  implement the unit in this planning checkpoint.
+- **Objective:** reuse the existing manifest selection, single filesystem read, analyzeLuaFiles call, and structured
+  analysis.x4UiResults output to summarize where source-backed call-model verification is incomplete.
+- **Assumptions and unresolved facts:** the current installed Forge sidecar at
+  http://127.0.0.1:60836 is the read-only authority for the supplied baseline; the inline analysis describes observed
+  records, not support priorities or complete underlying truth. The existing twelve-reference visual census already
+  exists and is not duplicated by this unit.
+- **Authoritative references:** HEAD and origin/main 1d41ce369241a5335ac47fe96ced16814dcaa960; the existing
+  scripts/x4-ui-lint-corpus-check.ts owner; its analyzeLuaFiles and analysis.x4UiResults contract; the installed
+  sidecar baseline below; the current B119 plan; and the permanent boundary Preview for layout; game for truth.
+- **Existing capability reused:** official base/DLC UI manifest filtering, bounded pagination, contained file reads,
+  analyzer invocation, current X4 UI summary, fatal/not-applicable classification, and exit-code behavior. No second
+  filesystem scanner, parser, source executor, renderer, or visual-reference census is planned.
+- **In scope:** one structured verification-gap census attached to the existing report; category/status aggregation;
+  affected-file counts; normalized relative-path examples; deterministic bounded top-file ranking; explicit evidence
+  completeness and reasons; selftests and the named read-only live receipt.
+- **Out of scope:** changing analyzer rules or severity, converting gaps into fatal findings, changing current
+  manifest/read/exit semantics, source text or secret output, arbitrary-Lua or C++ acceptance, source execution,
+  twelve-reference reconstruction, Forge/X4 writes or parity validation, live-mod repair, deploy, OpenVSX, GitHub,
+  Notion, Drive, and capability-map/AAR-ledger edits. Same-state pending-branch Forge/X4 parity remains a separate
+  write-gated product/proof unit.
+- **Risks and authorization boundaries:** the current report covers 7.7 MB and takes about 19.6 seconds; emitting
+  13,731 individual records would create an output and memory risk. A bounded aggregate can hide per-gap detail,
+  and truncation can make a seemingly precise total incomplete. New fields must contain only analyzer-owned category,
+  status, counts, and normalized manifest-relative paths; never source text, messages, absolute paths, or secrets.
+  This checkpoint authorizes documentation only.
+- **Rollback/checkpoint:** no implementation or runtime mutation is made here. Roll back the future implementation
+  with the exact reviewed owner-script/test diff and roll back this checkpoint with an exact reviewed revert of the
+  three owned records, preserving all unrelated dirty paths.
+- **Deterministic schema intent:** add one report object named x4UiVerificationGapCensus with totalGaps,
+  affectedFiles, byCategoryStatus, topFiles, evidenceComplete, and incompletenessReasons. The object is present on
+  every report, including manifest-unavailable and read-failure outcomes. byCategoryStatus has one row per observed
+  normalized category/status pair with gap and affected-file counts plus its own representativePaths sample, capped
+  at 3 unique POSIX-normalized relative paths and lexically sorted. There is no separate global representativePaths
+  field. Rows sort by category then status. topFiles is capped at 12 files and ranked by gap count descending, then
+  path ascending; any category or status lists on a top-file row are sorted. No per-gap array is emitted.
+- **Invalid category/status evidence:** category and status are internal typed analyzer fields, but the aggregation
+  boundary still validates their runtime shape. A non-string or empty value is counted in a reserved invalid-evidence
+  bucket, forces evidenceComplete=false, and adds an invalid-category-status reason. It is never silently coerced to
+  the analyzer's legitimate unknown status.
+- **Count reconciliation:** totalGaps must equal the sum of every per-file result.verificationGapCount, the count of
+  observed structured gap records, and the sum of byCategoryStatus gap counts. Any disagreement forces
+  evidenceComplete=false and adds an explicit verification-gap-count-mismatch reason with the compared counts;
+  the report retains the observed bounded count rather than silently choosing a supposedly authoritative total.
+- **Failure-report shape:** manifest-unavailable reports carry the census object with zero counts, empty rows/top
+  files, evidenceComplete=false, and a manifest-unavailable reason. Read-failure reports retain any observed bounded
+  aggregates from successfully analyzed files, set evidenceComplete=false, and include read-failure and any count/
+  result-coverage reasons. Existing report status and process exit behavior remain unchanged.
+- **Completeness rule:** evidenceComplete is true only when the manifest is complete/current, every selected file is
+  read and represented in analysis.x4UiResults, truncatedFiles is zero, category/status evidence is valid, and every
+  gap-count reconciliation above is exact. Any per-file truncation forces false and records a reason, even when the
+  observed aggregate and process exit are otherwise clean.
+- **Acceptance criteria:** (1) the existing one-pass census and analysis.x4UiResults are reused; (2) aggregate totals,
+  category/status rows, affected-file counts, per-row three-path samples, and top-file ranking are deterministic;
+  (3) totalGaps reconciles exactly across per-file counts, observed structured gaps, and aggregate rows, with mismatch
+  made explicitly incomplete; (4) the census object is always present and failure reports carry zero or observed
+  bounded counts plus explicit reasons; (5) output is bounded to the declared per-row samples/top files and omits
+  source text/secrets/absolute paths from the new object; (6) current fatal, warning, not-applicable, status, and exit
+  behavior is unchanged; (7) truncation, malformed internal evidence, and other incomplete evidence are explicit;
+  (8) the unchanged sidecar/corpus reproduces the observed 13,731 total without treating the six buckets or four
+  highest files as support priorities; and (9) no preview result is promoted to game truth.
+- **Evidence destination:** future selftest/live receipts belong under
+  dev-docs/b119-ai-influence-dogfood/x4-ui-verification-gap-census/. This planning checkpoint writes no evidence
+  artifact and claims no implementation or verification.
+
+### BASELINE
+
+- Forge HEAD and origin/main are 1d41ce369241a5335ac47fe96ced16814dcaa960. The worktree has unrelated dirty and
+  untracked paths; the three owned records had no worker changes before this patch.
+- Installed Forge sidecar baseline: manifest ready; 81 selected/read; 0 failed; 7,669,552 bytes; 81 X4 UI files;
+  0 applicable fatal errors; 6 not-applicable findings; 29 warnings; 70 unverified files; 26 truncated files;
+  13,731 verification gaps; 19,600 ms; process exit 0. The user reported the machine quiet, X4 stopped, and
+  Antigravity/Forge available.
+- Same-81-file inline analysis observed exactly 13,731 structured gaps. Largest observed category/status buckets were
+  data-flow/unknown 4,227 across 69 files; text/dynamic 2,441 across 39; index/unknown 2,334 across 48;
+  text/unknown 980 across 45; fontsize/unknown 629 across 31; and menu/dynamic 570 across 20.
+- Highest observed files were menu_map.lua 3,187, menu_playerinfo.lua 1,100, gameoptions.lua 1,075, and helper.lua
+  574; all four were marked truncated. These observations are bounded evidence only, not support priorities or proof
+  that the underlying per-file counts are complete. Current completeness is false because 26 files are truncated.
+
+### RECONCILE
+
+- The current script already owns the resource path from manifest status through official entry selection, one read
+  pass, analyzeLuaFiles, and report construction. The planned census extends that report rather than rebuilding any
+  resource reader or parser.
+- The existing twelve-reference visual census is already present in the B119 records; this unit reports call-model
+  observability only and does not create a second visual census or claim layout/game parity.
+- Couplings to preserve are analysis.x4UiResults to x4UiSummary, report status/severity, fatal/not-applicable handling,
+  manifest-unavailable behavior, and corpusExitCode. No capability-map delta is made at specification time.
+- The first inline diagnostic attempt failed because tsx eval used top-level await under CommonJS; the async-IIFE
+  retry passed. This is a tooling/AAR trigger, not corpus or implementation evidence.
+
+### DOCUMENT PLAN
+
+- This section is the durable reconciled plan for the next implementation worker. It remains SPECIFIED until the owner
+  script and its tests are changed and every required validation is run. No external projection or issue-owner
+  operation is part of this planning checkpoint.
+
+### IMPLEMENT
+
+- Planned implementation is limited to the existing linter owner and its existing selftest surface. It will add the
+  bounded aggregation/report schema and fail-first fixtures only; no implementation is performed by this worker.
+- **Fail-first gate (2026-09-09T15:46:06.4170852-04:00):** the two causal census-contract checks were added before
+  the production aggregation. Safe Node `v24.19.0` ran
+  `node_modules/tsx/dist/cli.mjs scripts/x4-ui-lint-corpus-check.ts --selftest` and exited `1`; the exact stdout was:
+
+  ```json
+  {
+    "pass": false,
+    "checks": [
+      {
+        "name": "verification-gap-census-is-always-present",
+        "pass": false,
+        "detail": "present=false"
+      },
+      {
+        "name": "verification-gap-census-contract-fields-exist",
+        "pass": false,
+        "detail": "census=null"
+      },
+      {
+        "name": "official-source-and-domain-filter",
+        "pass": true,
+        "detail": "selected=[\"subst_lua/a.lua\",\"ui/z.lua\"]"
+      },
+      {
+        "name": "contained-relative-path",
+        "pass": true
+      },
+      {
+        "name": "contained-absolute-path",
+        "pass": true
+      },
+      {
+        "name": "parent-traversal-rejected",
+        "pass": true
+      },
+      {
+        "name": "root-itself-rejected",
+        "pass": true
+      },
+      {
+        "name": "loopback-port-validation",
+        "pass": true
+      },
+      {
+        "name": "loopback-url-validation",
+        "pass": true
+      },
+      {
+        "name": "manifest-page-generation-match",
+        "pass": true
+      },
+      {
+        "name": "manifest-page-url-is-bounded",
+        "pass": true
+      },
+      {
+        "name": "exact-restricted-online-code-is-the-only-not-applicable-class",
+        "pass": true,
+        "detail": "notApplicable=[\"lua.restricted_online_call\",\"lua.restricted_online_call\"]"
+      },
+      {
+        "name": "not-applicable-findings-remain-visible-with-exact-reason",
+        "pass": true,
+        "detail": "reason=Not applicable only for this trusted official base/DLC source census: the lua.restricted_online_call rule is scoped to non-verified sources. The finding remains visible here and is not disabled for mod validation."
+      },
+      {
+        "name": "applicable-fatal-and-exit-behavior-is-preserved",
+        "pass": true,
+        "detail": "applicableFatal=2"
+      }
+    ]
+  }
+  ```
+
+### VALIDATE
+
+- Fail first with synthetic result permutations and truncation/invalid-manifest fixtures; retain the red receipt
+  before implementation, then run the script selftest through safe Node:
+  C:\Users\Moshi\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe
+  node_modules/tsx/dist/cli.mjs scripts/x4-ui-lint-corpus-check.ts --selftest.
+- Run the live read-only corpus command through that same safe Node against
+  http://127.0.0.1:60836 with JSON output; compare deterministic counts, bucket rows, bounded samples, top-file
+  ordering, exact totalGaps reconciliation, completeness=false, and unchanged exit/severity behavior. Verify the
+  sidecar, X4, and protected state remain untouched.
+- Run npm run typecheck, scoped ESLint for the owner script and directly added selftest surface, scoped git diff
+  --check, reread the exact diff, and later npm run precommit:check. The planning checkpoint does not run any of
+  these implementation/live validations.
+- Validation currently unavailable: implementation, script selftest, safe-Node live receipt, and later precommit are
+  intentionally deferred to the next worker; no result is promoted here.
+
+### NEGATIVE / FAILURE PATHS
+
+- A permutation of identical structured gaps must produce byte-identical category/status rows, per-row examples,
+  top files, and completeness reasons.
+- Each category/status row's representativePaths must never exceed 3, contain duplicates, include an absolute path,
+  or vary under input ordering; topFiles must never exceed 12, and equal counts tie-break by normalized path.
+- Synthetic count disagreement must prove totalGaps is checked against both the sum of per-file
+  result.verificationGapCount and observed structured gaps; every mismatch must be named and incomplete.
+- Any truncated file must force evidenceComplete=false; missing/read-failed or incomplete manifest state must also
+  remain explicit rather than being reported as a complete census.
+- Gap-only, warning-only, unverified, or truncated results must preserve the current process exit semantics; applicable
+  fatal findings and read failures must still return exit 1, while not-applicable findings remain visible and excluded
+  as before.
+- Invalid or missing manifest/status data must retain manifest-unavailable behavior, avoid a manifest request when
+  the existing status gate says it is not ready/current, and still emit the zeroed census object with explicit
+  incompleteness reasons. Read failures must emit observed bounded counts when available and remain incomplete.
+- Malformed category/status fixtures must enter the reserved invalid-evidence bucket and set the explicit reason;
+  they must never be normalized to unknown or accepted as complete.
+- Serialized new census fields must reject absolute paths, source text, analyzer messages, and secret-like payloads;
+  only normalized relative paths and counts may survive.
+
+### REVIEW
+
+- Re-read the request, this section, the owner diff, and the selftests. Check one-pass reuse, all schema fields,
+  per-row sorting/tie-break rules, limits, exact count reconciliation, always-present failure shape, invalid-evidence
+  handling, truncation honesty, no-leakage behavior, preserved exit/severity semantics, and the preview/game-truth
+  boundary. Any missed acceptance item returns to implementation and validation.
+
+### DOCUMENT CLOSE
+
+- Future close is VERIFIED only if every declared selftest, safe-Node live run, typecheck, scoped lint, diff hygiene,
+  and later precommit passes. Otherwise use PARTIAL, FAILED, or BLOCKED with the exact missing evidence. Overall B119
+  remains IN_PROGRESS / PARTIAL, and the twelve-reference, same-state pending-branch parity, arbitrary-Lua/Helper/
+  widget, C++ acceptance, and real-mod correction boundaries remain open.
+- Future evidence must state whether the report is complete; the current baseline must not be described as complete.
+- Suggested future commit title: docs(b119): specify call-model verification-gap census.
+
+### AAR
+
+- **Trigger:** the first inline tsx diagnostic used top-level await under CommonJS and failed; the async-IIFE retry
+  passed. Preserve both attempts and use an explicit async wrapper for future inline probes.
+- **Sustain:** keep one manifest/read/analyze authority, bounded report fields, deterministic ordering, and separate
+  preview/layout evidence from game truth.
+- **Improve work / approach:** treat truncated per-file analysis as an incomplete census even when the process exits 0;
+  do not promote high-count files or buckets into support priorities without complete evidence.
+- **Improve tools:** prefer a script selftest or async-IIFE eval over top-level await in the current tsx CommonJS mode,
+  and capture bounded JSON instead of printing individual gaps.
+- **Highest-risk evidenced weakness:** a clean exit with a large verification-gap count and truncated files can look
+  actionable while still lacking complete underlying coverage. The explicit completeness flag and truncation reasons
+  are the bounded risk reduction.
+- **Global/project lessons banked:** this planning record only; no external AAR ledger, capability map, implementation,
+  evidence, mod, game, installed, or service path is changed.
+
+## 2026-09-09 Next bounded call-model verification-gap census — IMPLEMENTED / VALIDATED
+
+### IMPLEMENT
+
+- **Bounded result:** the existing `scripts/x4-ui-lint-corpus-check.ts` now exports typed
+  `X4UiVerificationGapCensus` bucket/top-file/report interfaces and one pure
+  `aggregateX4UiVerificationGapCensus` boundary. `X4UiCorpusReport` always carries the object, including the existing
+  manifest-unavailable base shape; successful and read-failure reports aggregate the existing `analysis.x4UiResults`
+  and `analysis.x4UiSummary` after the unchanged single manifest/read/analyze path.
+- **Deterministic contract:** category/status rows are sorted and retain at most three safe POSIX-relative examples;
+  top files are capped at twelve, sorted by observed gap count descending then path, with sorted category/status lists
+  and a typed `truncated` flag. `totalGaps` is the observed structured count and is checked against summed per-file
+  counts and aggregate buckets. Truncation, invalid category/status values, unsafe paths, read/coverage failures, and
+  manifest incompleteness are explicit; source text, messages, expressions, source paths, and secrets are not copied
+  into the new object.
+- **Selftest surface:** added causal fail-first contract checks plus deterministic permutation, cap/tie,
+  truncation, count mismatch, malformed evidence, unsafe path, manifest/read-failure, no-leakage, and unchanged
+  exit-semantics fixtures. No analyzer, parser, scanner, source execution, renderer, visual census, product UI, or
+  runtime behavior changed.
+- **Scope change:** none. The pre-existing planning hunks and unrelated dirty/untracked paths were preserved. The
+  first typecheck attempt exposed a missing `LuaStaticX4UiFileResult` type import; the minimal owner-script import
+  repair was required for the declared typed boundary and was validated below.
+
+### VALIDATE
+
+- **Fail-first:** before production aggregation, safe Node `v24.19.0` ran
+  `C:\Users\Moshi\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe node_modules/tsx/dist/cli.mjs scripts/x4-ui-lint-corpus-check.ts --selftest`; exit `1` with exactly the two new census-contract checks false and all pre-existing checks true. Exact stdout is retained above and in
+  `dev-docs/b119-ai-influence-dogfood/x4-ui-verification-gap-census/live-readonly-receipt.json` under `failFirst`.
+- **Focused selftest:** the same safe Node command after implementation exited `0`; `23/23` checks passed.
+- **Live read-only corpus:** safe Node `--json --base-url=http://127.0.0.1:60836` exited `0`. It reproduced
+  `ready/current`, `81/81` selected/read, `0` failed, `7,669,552` bytes, `81` X4 UI files, `0` applicable fatal
+  errors, `6` not-applicable findings (`6` errors, still visible), `29` warnings, `70` unverified files, `26`
+  truncated files, `13,731` verification gaps, status `no-known-fatal-static-gaps`, and report exit `0`.
+  The census reports `totalGaps=13,731`, `affectedFiles=70`, `30` deterministic rows, `12` ranked top files, exact
+  count reconciliation, and `evidenceComplete=false` only because `truncated-files: 26`. The full bounded object is
+  retained in `live-readonly-receipt.json`; the README records the command, version, baseline, and evidence boundary.
+- **Typecheck:** first `npm run typecheck` attempt failed with six `TS2304` missing-type-import errors in the owner
+  script; after the minimal import repair, `npm run typecheck` exited `0`.
+- **Scoped lint:** safe Node `node_modules/eslint/bin/eslint.js scripts/x4-ui-lint-corpus-check.ts` exited `0`.
+- **Diff hygiene:** `git diff --check` on exactly the six owned paths exited `0` (only expected LF/CRLF warnings).
+- **Repository gate:** `npm run precommit:check` exited `0` with tripwires `0/58`, runtime bootstrap `59/59`, E2E
+  verdict selftest `55/55`, Vite/product-copy/durable-writer/capability/MCP/action-receipt audits green, typecheck
+  green, and `[precommit] OK`.
+- **Protected-state result:** no mod, game, installed Forge, configured corpus, service, config, Git, external record,
+  deployment, publication, or runtime state was written. The live command used only the existing read-only authority.
+
+### NEGATIVE / FAILURE PATHS
+
+- The selftest proves permutation-stable rows/top files, three-path and twelve-file bounds, lexical tie ordering,
+  exact per-file/observed/aggregate mismatch reporting, truncation incompleteness, reserved
+  `invalid-evidence/invalid-evidence` handling, unsafe-path omission, manifest-unavailable zero shape, observed
+  read-failure shape, no new-object source/message/secret leakage, and gap-only exit `0` with existing fatal/read
+  failure exit behavior unchanged.
+- Live output contains no `sourcePath`, source text, messages, expressions, secrets, or absolute paths inside
+  `x4UiVerificationGapCensus`; the only absolute path in the receipt is the explicitly recorded safe-Node command.
+
+### REVIEW
+
+- **Requirements:** one-pass manifest/read/analyze reuse — done; typed always-present report object — done; category /
+  status aggregation and affected-file counts — done; three-path and twelve-file bounds/order — done; exact count
+  reconciliation and observed-total retention — done; invalid evidence and unsafe-path handling — done; truncation /
+  manifest / read completeness reasons — done; fatal/warning/not-applicable/status/exit semantics — evidenced
+  unchanged; concise text and JSON output — done; no visual/game or arbitrary-Lua/C++ promotion — preserved.
+- **Fresh-eyes findings:** the initial missing type import was corrected before final gates. The final owner diff has
+  no second `analyzeLuaFiles` call, no new scanner/parser/renderer, no raw gap array, no analyzer message/source
+  fields in the new object, and no writes outside the six owned paths. No capability-map delta.
+
+### DOCUMENT CLOSE
+
+- **Status:** `VERIFIED` for this bounded read-only call-model verification-gap census; overall B119 remains
+  `IN_PROGRESS / PARTIAL`.
+- **Evidence:** `dev-docs/b119-ai-influence-dogfood/x4-ui-verification-gap-census/README.md` and
+  `dev-docs/b119-ai-influence-dogfood/x4-ui-verification-gap-census/live-readonly-receipt.json`.
+- **Deliberately not changed:** analyzer rules/severity, existing manifest/read/exit semantics, the twelve-reference
+  visual census, same-state pending-branch parity, real-mod MD correction, arbitrary-Lua/Helper/widget coverage,
+  universal C++ acceptance, Forge/X4 writes, deploy, publish, or external projections.
+- **Rollback:** exact reviewed revert of the owner-script implementation/selftests and these owned documentation /
+  evidence additions; no protected or live state needs recovery.
+- **Remaining concerns:** the live total and buckets are observed bounded call-model evidence and remain incomplete
+  while 26 per-file results are truncated. Preview remains for layout and game remains for truth; no universal
+  fidelity or product completion claim follows.
+- **Suggested commit title:** `feat(b119): add bounded call-model verification-gap census`.
+
+### AAR
+
+- **Triggers:** the parent planning record's earlier top-level-await/CommonJS diagnostic remains prior planning context;
+  this unit also had the reproduced first typecheck failure for the missing owner-script type import. Both are retained
+  as non-clean evidence; the repair was minimal and final typecheck/precommit passed.
+- **Tool trigger:** the first final live-assertion wrapper failed before executing the repository command because the
+  orchestration string had malformed PowerShell quoting (`SyntaxError: Unexpected string`). An explicit `String.raw`
+  retry executed the exact assertion and passed; no repository or live state was touched by the failed wrapper.
+- **Parent-review trigger:** the first README close assertion used a contiguous exact substring and failed only because
+  Markdown wrapped the sentence across a newline. The whitespace-normalized retry passed; diff check, receipt, and
+  analyzer-call checks were green, and no repository or live state changed.
+- **Sustain:** retain one manifest/read/analyze authority, aggregate structured `analysis.x4UiResults`, cap output,
+  sort deterministically, and keep preview/layout evidence separate from game truth.
+- **Improve work / approach:** add the report contract to the same selftest surface before implementation so a missing
+  always-present field fails causally; retain observed totals and make truncated evidence visibly incomplete even when
+  the process exits `0`.
+- **Improve tools:** typed cross-module additions should be followed immediately by a focused typecheck; the first
+  run caught the missing import before the broader precommit gate. The exact red fail-first stdout and bounded live
+  JSON receipt are more useful than emitting individual gaps.
+- **Highest-risk evidenced weakness:** a clean process exit can still accompany a large, truncated verification-gap
+  set that looks actionable. `evidenceComplete=false`, explicit truncation reasons, bounded samples, and the observed-
+  total label reduce that false-confidence risk without changing exit semantics.
+- **Global/project lessons banked:** repository plan, backlog, handoff, README, and receipt only; no external AAR
+  ledger, capability map, mod, game, installed, or service path changed.

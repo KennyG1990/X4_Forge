@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { latestPath } from '../src/lib/instanceDiscovery';
-import { analyzeLuaFiles, type LuaFileInput, type LuaStaticAnalysisResult, type LuaStaticX4UiSummary } from '../src/lib/luaStaticAnalysis';
+import { analyzeLuaFiles, type LuaFileInput, type LuaStaticAnalysisResult, type LuaStaticX4UiFileResult, type LuaStaticX4UiSummary } from '../src/lib/luaStaticAnalysis';
 import type { ReferenceManifestFile } from '../src/lib/referenceManifest';
 
 const MAX_FATAL_FINDINGS = 100;
@@ -51,6 +51,48 @@ export interface X4UiCorpusSelftestResult {
   checks: X4UiCorpusSelftestCheck[];
 }
 
+type X4UiVerificationGapCategoryValue = LuaStaticX4UiFileResult['result']['verificationGaps'][number]['category'];
+type X4UiVerificationGapStatusValue = LuaStaticX4UiFileResult['result']['verificationGaps'][number]['status'];
+
+export const X4_UI_VERIFICATION_GAP_INVALID_EVIDENCE_BUCKET = 'invalid-evidence';
+
+type X4UiVerificationGapCensusCategory = X4UiVerificationGapCategoryValue | typeof X4_UI_VERIFICATION_GAP_INVALID_EVIDENCE_BUCKET;
+type X4UiVerificationGapCensusStatus = X4UiVerificationGapStatusValue | typeof X4_UI_VERIFICATION_GAP_INVALID_EVIDENCE_BUCKET;
+
+export interface X4UiVerificationGapCensusBucket {
+  category: X4UiVerificationGapCensusCategory;
+  status: X4UiVerificationGapCensusStatus;
+  gapCount: number;
+  affectedFileCount: number;
+  representativePaths: string[];
+}
+
+export interface X4UiVerificationGapCensusTopFile {
+  path: string;
+  gapCount: number;
+  categories: X4UiVerificationGapCensusCategory[];
+  statuses: X4UiVerificationGapCensusStatus[];
+  truncated: boolean;
+}
+
+export interface X4UiVerificationGapCensus {
+  totalGaps: number;
+  affectedFiles: number;
+  byCategoryStatus: X4UiVerificationGapCensusBucket[];
+  topFiles: X4UiVerificationGapCensusTopFile[];
+  evidenceComplete: boolean;
+  incompletenessReasons: string[];
+}
+
+export interface X4UiVerificationGapCensusContext {
+  manifestAvailable: boolean;
+  manifestCurrent: boolean;
+  manifestComplete: boolean;
+  selectedPaths: readonly string[];
+  readPaths: readonly string[];
+  filesFailed: number;
+}
+
 export interface X4UiCorpusReport {
   status: 'no-known-fatal' | 'no-known-fatal-static-gaps' | 'fatal-findings' | 'read-failures' | 'manifest-unavailable';
   authorityBaseUrl: string | null;
@@ -81,6 +123,7 @@ export interface X4UiCorpusReport {
   fatalFindings: X4UiCorpusFatalFinding[];
   fatalFindingsTruncated: boolean;
   x4UiSummary: LuaStaticX4UiSummary;
+  x4UiVerificationGapCensus: X4UiVerificationGapCensus;
   exitCode: 0 | 1;
 }
 
@@ -130,6 +173,79 @@ function compareStrings(left: string, right: string): number {
 
 function normalizeManifestPath(manifestPath: string): string {
   return manifestPath.replace(/\\/g, '/');
+}
+
+const X4_UI_VERIFICATION_GAP_CATEGORIES: readonly X4UiVerificationGapCategoryValue[] = [
+  'parse',
+  'unsupported',
+  'count',
+  'index',
+  'span',
+  'width',
+  'percentage',
+  'height',
+  'layer',
+  'menu',
+  'data-flow',
+  'text',
+  'edit-box',
+  'fontsize',
+  'property',
+  'scale',
+  'truncated',
+];
+
+const X4_UI_VERIFICATION_GAP_STATUSES: readonly X4UiVerificationGapStatusValue[] = [
+  'static',
+  'dynamic',
+  'unknown',
+  'unsupported',
+];
+
+function isX4UiVerificationGapCategory(value: unknown): value is X4UiVerificationGapCategoryValue {
+  return typeof value === 'string'
+    && X4_UI_VERIFICATION_GAP_CATEGORIES.includes(value as X4UiVerificationGapCategoryValue);
+}
+
+function isX4UiVerificationGapStatus(value: unknown): value is X4UiVerificationGapStatusValue {
+  return typeof value === 'string'
+    && X4_UI_VERIFICATION_GAP_STATUSES.includes(value as X4UiVerificationGapStatusValue);
+}
+
+function safeCensusRelativePath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = normalizeManifestPath(value.trim());
+  if (!normalized || normalized.includes('\0')) return null;
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) return null;
+  if (normalized.split('/').some(segment => segment === '..')) return null;
+
+  const posixNormalized = path.posix.normalize(normalized);
+  if (
+    posixNormalized === '.'
+    || posixNormalized === '..'
+    || posixNormalized.startsWith('../')
+    || posixNormalized.startsWith('/')
+  ) return null;
+  return posixNormalized;
+}
+
+function nonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function comparablePath(value: unknown, index: number): string {
+  return typeof value === 'string' ? normalizeManifestPath(value) : `__invalid_path_${index}`;
+}
+
+function samePathSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) return false;
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) return false;
+  }
+  return true;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -407,6 +523,219 @@ export function corpusExitCode(applicableFatalErrors: number, filesFailed: numbe
   return applicableFatalErrors > 0 || filesFailed > 0 ? 1 : 0;
 }
 
+interface X4UiVerificationGapBucketAccumulator {
+  category: X4UiVerificationGapCensusCategory;
+  status: X4UiVerificationGapCensusStatus;
+  gapCount: number;
+  fileKeys: Set<string>;
+  representativePaths: Set<string>;
+}
+
+interface X4UiVerificationGapFileAccumulator {
+  path: string | null;
+  gapCount: number;
+  categories: Set<X4UiVerificationGapCensusCategory>;
+  statuses: Set<X4UiVerificationGapCensusStatus>;
+  truncated: boolean;
+}
+
+function emptyX4UiVerificationGapCensus(reason: string): X4UiVerificationGapCensus {
+  return {
+    totalGaps: 0,
+    affectedFiles: 0,
+    byCategoryStatus: [],
+    topFiles: [],
+    evidenceComplete: false,
+    incompletenessReasons: [reason],
+  };
+}
+
+/** Pure, bounded aggregation of the existing per-file X4 UI verification-gap results. */
+export function aggregateX4UiVerificationGapCensus(
+  x4UiResults: readonly LuaStaticX4UiFileResult[],
+  x4UiSummary: LuaStaticX4UiSummary,
+  context: X4UiVerificationGapCensusContext,
+): X4UiVerificationGapCensus {
+  const reasons = new Set<string>();
+  const addReason = (reason: string): void => {
+    reasons.add(reason);
+  };
+  const contextRecord = asRecord(context);
+  const selectedValue = contextRecord?.selectedPaths;
+  const readValue = contextRecord?.readPaths;
+  const selectedPaths = Array.isArray(selectedValue) ? selectedValue : [];
+  const readPaths = Array.isArray(readValue) ? readValue : [];
+  const results = Array.isArray(x4UiResults) ? x4UiResults : [];
+  const summaryRecord = asRecord(x4UiSummary);
+  let resultShapeInvalid = !Array.isArray(x4UiResults)
+    || !Array.isArray(selectedValue)
+    || !Array.isArray(readValue)
+    || !summaryRecord;
+
+  const filesFailedValue = nonNegativeSafeInteger(contextRecord?.filesFailed);
+  const filesFailed = filesFailedValue ?? 0;
+  if (filesFailedValue === null) resultShapeInvalid = true;
+
+  const summaryTruncatedCountValue = nonNegativeSafeInteger(summaryRecord?.truncatedCount);
+  const summaryTruncatedCount = summaryTruncatedCountValue ?? 0;
+  if (summaryTruncatedCountValue === null) resultShapeInvalid = true;
+
+  const representedRawPaths = results.map(result => asRecord(result)?.rel);
+  const selectedComparable = selectedPaths.map((value, index) => comparablePath(value, index));
+  const readComparable = readPaths.map((value, index) => comparablePath(value, index));
+  const representedComparable = representedRawPaths.map((value, index) => comparablePath(value, index));
+  const coverageHasDuplicates = [selectedComparable, readComparable, representedComparable]
+    .some(values => new Set(values).size !== values.length);
+  const coverageCountsMatch = selectedPaths.length === readPaths.length
+    && readPaths.length === results.length
+    && filesFailed === 0;
+  const coverageSetsMatch = samePathSet(selectedComparable, readComparable)
+    && samePathSet(selectedComparable, representedComparable);
+  if (!coverageCountsMatch || coverageHasDuplicates || !coverageSetsMatch) {
+    addReason(`result-coverage-mismatch: selected=${selectedPaths.length}, read=${readPaths.length}, represented=${results.length}`);
+  }
+
+  if (contextRecord?.manifestAvailable !== true || contextRecord?.manifestCurrent !== true) {
+    addReason('manifest-unavailable');
+  } else if (contextRecord.manifestComplete !== true) {
+    addReason('manifest-incomplete');
+  }
+  if (filesFailed > 0) addReason(`read-failure: ${filesFailed}`);
+
+  let unsafePathCount = 0;
+  for (const value of [...selectedPaths, ...readPaths, ...representedRawPaths]) {
+    if (!safeCensusRelativePath(value)) unsafePathCount += 1;
+  }
+  if (unsafePathCount > 0) addReason(`unsafe-path: ${unsafePathCount} path(s) omitted from bounded census fields`);
+
+  const buckets = new Map<string, X4UiVerificationGapBucketAccumulator>();
+  const files = new Map<string, X4UiVerificationGapFileAccumulator>();
+  let declaredPerFileGapCount = 0;
+  let invalidPerFileGapCounts = 0;
+  let observedStructuredGapCount = 0;
+  let invalidCategoryStatusCount = 0;
+  let observedTruncatedFiles = 0;
+
+  for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
+    const resultEntry = asRecord(results[resultIndex]);
+    const safePath = safeCensusRelativePath(resultEntry?.rel);
+    const resultRecord = asRecord(resultEntry?.result);
+    if (!resultEntry || !resultRecord) {
+      resultShapeInvalid = true;
+      continue;
+    }
+
+    const declaredCount = nonNegativeSafeInteger(resultRecord.verificationGapCount);
+    if (declaredCount === null) invalidPerFileGapCounts += 1;
+    else declaredPerFileGapCount += declaredCount;
+
+    const rawGaps = resultRecord.verificationGaps;
+    if (!Array.isArray(rawGaps)) {
+      resultShapeInvalid = true;
+      continue;
+    }
+    const truncated = resultRecord.hasTruncatedEvidence === true || resultRecord.verificationGapsTruncated === true;
+    if (truncated) observedTruncatedFiles += 1;
+    const fileKey = safePath ?? `__unsafe_file_${resultIndex}`;
+
+    for (const rawGap of rawGaps) {
+      observedStructuredGapCount += 1;
+      const gapRecord = asRecord(rawGap);
+      const categoryValue = gapRecord?.category;
+      const statusValue = gapRecord?.status;
+      const categoryValid = isX4UiVerificationGapCategory(categoryValue);
+      const statusValid = isX4UiVerificationGapStatus(statusValue);
+      const validEvidence = categoryValid && statusValid;
+      if (!validEvidence) invalidCategoryStatusCount += 1;
+      const category: X4UiVerificationGapCensusCategory = validEvidence
+        ? categoryValue
+        : X4_UI_VERIFICATION_GAP_INVALID_EVIDENCE_BUCKET;
+      const status: X4UiVerificationGapCensusStatus = validEvidence
+        ? statusValue
+        : X4_UI_VERIFICATION_GAP_INVALID_EVIDENCE_BUCKET;
+      const bucketKey = `${category}\u0000${status}`;
+      let bucket = buckets.get(bucketKey);
+      if (!bucket) {
+        bucket = {
+          category,
+          status,
+          gapCount: 0,
+          fileKeys: new Set<string>(),
+          representativePaths: new Set<string>(),
+        };
+        buckets.set(bucketKey, bucket);
+      }
+      bucket.gapCount += 1;
+      bucket.fileKeys.add(fileKey);
+      if (safePath) bucket.representativePaths.add(safePath);
+
+      let file = files.get(fileKey);
+      if (!file) {
+        file = {
+          path: safePath,
+          gapCount: 0,
+          categories: new Set<X4UiVerificationGapCensusCategory>(),
+          statuses: new Set<X4UiVerificationGapCensusStatus>(),
+          truncated,
+        };
+        files.set(fileKey, file);
+      }
+      file.gapCount += 1;
+      file.categories.add(category);
+      file.statuses.add(status);
+      file.truncated = file.truncated || truncated;
+    }
+  }
+
+  if (invalidPerFileGapCounts > 0) addReason(`verification-gap-count-invalid: ${invalidPerFileGapCounts}`);
+  if (invalidCategoryStatusCount > 0) addReason(`invalid-category-status: ${invalidCategoryStatusCount}`);
+  const truncatedFiles = Math.max(summaryTruncatedCount, observedTruncatedFiles);
+  if (truncatedFiles > 0) addReason(`truncated-files: ${truncatedFiles}`);
+  if (summaryTruncatedCount !== observedTruncatedFiles) {
+    addReason(`truncation-count-mismatch: summary=${summaryTruncatedCount}, observed=${observedTruncatedFiles}`);
+  }
+
+  const bucketValues = [...buckets.values()].sort((left, right) =>
+    compareStrings(left.category, right.category) || compareStrings(left.status, right.status));
+  const byCategoryStatus = bucketValues.map(bucket => ({
+    category: bucket.category,
+    status: bucket.status,
+    gapCount: bucket.gapCount,
+    affectedFileCount: bucket.fileKeys.size,
+    representativePaths: [...bucket.representativePaths].sort(compareStrings).slice(0, 3),
+  }));
+  const aggregateBucketGapCount = bucketValues.reduce((total, bucket) => total + bucket.gapCount, 0);
+  if (
+    declaredPerFileGapCount !== observedStructuredGapCount
+    || observedStructuredGapCount !== aggregateBucketGapCount
+    || declaredPerFileGapCount !== aggregateBucketGapCount
+  ) {
+    addReason(`verification-gap-count-mismatch: per-file=${declaredPerFileGapCount}, observed=${observedStructuredGapCount}, aggregate=${aggregateBucketGapCount}`);
+  }
+
+  const topFiles = [...files.values()]
+    .filter(file => file.path !== null)
+    .sort((left, right) => right.gapCount - left.gapCount || compareStrings(left.path!, right.path!))
+    .slice(0, 12)
+    .map(file => ({
+      path: file.path!,
+      gapCount: file.gapCount,
+      categories: [...file.categories].sort(compareStrings),
+      statuses: [...file.statuses].sort(compareStrings),
+      truncated: file.truncated,
+    }));
+
+  if (resultShapeInvalid) addReason('result-shape-invalid');
+  return {
+    totalGaps: observedStructuredGapCount,
+    affectedFiles: files.size,
+    byCategoryStatus,
+    topFiles,
+    evidenceComplete: reasons.size === 0,
+    incompletenessReasons: [...reasons].sort(compareStrings),
+  };
+}
+
 function guidanceForManifest(status: ParsedManifestStatus): string {
   return `Forge /api/reference/status is not ready/current (available=${status.available}, state=${status.state}, generation=${status.generation || '(none)'}). No /api/reference/manifest request was made; refresh through the existing Forge reference-manifest owner, then rerun this read-only census.`;
 }
@@ -441,6 +770,7 @@ function baseReport(startedAt: number, authorityUrl: string | null, configuredRo
     fatalFindings: [],
     fatalFindingsTruncated: false,
     x4UiSummary: { ...EMPTY_X4_UI_SUMMARY },
+    x4UiVerificationGapCensus: emptyX4UiVerificationGapCensus('manifest-unavailable'),
     exitCode: 1,
   };
 }
@@ -457,6 +787,18 @@ function finishReport(
   const x4UiSummary = analysis.x4UiSummary;
   const selectedPaths = selectedEntries.map(entry => normalizeManifestPath(entry.path));
   const failedFiles = sortReadFailures(readResult.failedFiles);
+  const x4UiVerificationGapCensus = aggregateX4UiVerificationGapCensus(
+    analysis.x4UiResults,
+    x4UiSummary,
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths,
+      readPaths: readResult.readPaths,
+      filesFailed: failedFiles.length,
+    },
+  );
   const hasStaticGaps = analysis.findings.some(finding => finding.severity === 'warning')
     || x4UiSummary.verificationGapCount > 0
     || x4UiSummary.unverifiedCount > 0
@@ -495,6 +837,7 @@ function finishReport(
     fatalFindings: allFatalFindings.slice(0, MAX_FATAL_FINDINGS),
     fatalFindingsTruncated: allFatalFindings.length > MAX_FATAL_FINDINGS,
     x4UiSummary,
+    x4UiVerificationGapCensus,
     exitCode: corpusExitCode(classification.applicableFatalErrors, failedFiles.length),
   };
 }
@@ -556,6 +899,72 @@ function syntheticManifestFile(filePath: string, source: string, domain: string,
   };
 }
 
+interface SyntheticGapInput {
+  category: unknown;
+  status: unknown;
+  expression?: string;
+  reason?: string;
+}
+
+function syntheticX4UiFileResult(
+  rel: string,
+  gaps: readonly SyntheticGapInput[],
+  options: { declaredCount?: number; truncated?: boolean } = {},
+): LuaStaticX4UiFileResult {
+  const truncated = options.truncated === true;
+  const hasVerificationGaps = gaps.length > 0 || truncated;
+  const location = {
+    file: rel,
+    sourcePath: 'C:\\sensitive\\source.lua',
+    start: { line: 1, column: 0, offset: 0 },
+    end: { line: 1, column: 1, offset: 1 },
+  };
+  const verificationGaps = gaps.map(gap => ({
+    code: 'x4-ui.verification-gap',
+    category: gap.category,
+    status: gap.status,
+    expression: gap.expression || 'SECRET_SOURCE_TEXT',
+    reason: gap.reason || 'SECRET_ANALYZER_MESSAGE',
+    location,
+    source: location,
+  })) as unknown as LuaStaticX4UiFileResult['result']['verificationGaps'];
+  return {
+    rel,
+    source: 'loose',
+    sourcePath: 'C:\\sensitive\\source.lua',
+    result: {
+      parsed: true,
+      findings: [],
+      verificationGaps,
+      verificationGapsTruncated: truncated,
+      hasErrors: false,
+      hasWarnings: false,
+      hasVerificationGaps,
+      hasTruncatedEvidence: truncated,
+      isStaticallyVerified: !hasVerificationGaps,
+      status: hasVerificationGaps ? 'not-statically-verified' : 'clean',
+      summary: hasVerificationGaps ? 'Not statically verified' : 'No known rule violated',
+      errorCount: 0,
+      warningCount: 0,
+      verificationGapCount: options.declaredCount ?? gaps.length,
+    },
+  };
+}
+
+function syntheticX4UiSummary(results: readonly LuaStaticX4UiFileResult[]): LuaStaticX4UiSummary {
+  return {
+    filesAnalyzed: results.length,
+    errorCount: 0,
+    warningCount: 0,
+    verificationGapCount: results.reduce((total, file) => total + file.result.verificationGapCount, 0),
+    filesWithErrors: 0,
+    filesWithWarnings: 0,
+    cleanCount: results.filter(file => file.result.status === 'clean').length,
+    unverifiedCount: results.filter(file => !file.result.isStaticallyVerified).length,
+    truncatedCount: results.filter(file => file.result.hasTruncatedEvidence || file.result.verificationGapsTruncated).length,
+  };
+}
+
 export function runX4UiCorpusCensusSelftest(): X4UiCorpusSelftestResult {
   const root = path.resolve('synthetic-x4-reference-root');
   const entries = [
@@ -599,7 +1008,162 @@ export function runX4UiCorpusCensusSelftest(): X4UiCorpusSelftestResult {
     },
   ] as LuaStaticFinding[];
   const classified = classifyCorpusFindings(syntheticFindings);
+  const baseReportShape = baseReport(0, null, root, 'invalid') as unknown as Record<string, unknown>;
+  const baseCensus = baseReportShape.x4UiVerificationGapCensus as Record<string, unknown> | undefined;
+  const orderedGapResults = [
+    syntheticX4UiFileResult('ui/z.lua', [
+      { category: 'text', status: 'dynamic' },
+      { category: 'index', status: 'unknown' },
+    ]),
+    syntheticX4UiFileResult('ui/a.lua', [{ category: 'text', status: 'dynamic' }]),
+    syntheticX4UiFileResult('subst_lua/m.lua', [{ category: 'menu', status: 'unsupported' }]),
+  ];
+  const orderedGapPaths = orderedGapResults.map(result => result.rel);
+  const orderedGapSummary = syntheticX4UiSummary(orderedGapResults);
+  const orderedGapCensus = aggregateX4UiVerificationGapCensus(
+    orderedGapResults,
+    orderedGapSummary,
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: orderedGapPaths,
+      readPaths: orderedGapPaths,
+      filesFailed: 0,
+    },
+  );
+  const permutedGapPaths = [...orderedGapPaths].reverse();
+  const permutedGapCensus = aggregateX4UiVerificationGapCensus(
+    [...orderedGapResults].reverse(),
+    orderedGapSummary,
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: permutedGapPaths,
+      readPaths: permutedGapPaths,
+      filesFailed: 0,
+    },
+  );
+  const capTieResults = Array.from({ length: 13 }, (_, index) => {
+    const name = String(index + 1).padStart(2, '0');
+    return syntheticX4UiFileResult(`ui/tie-${name}.lua`, [{ category: 'width', status: 'static' }]);
+  });
+  const capTiePaths = capTieResults.map(result => result.rel);
+  const capTieCensus = aggregateX4UiVerificationGapCensus(
+    capTieResults,
+    syntheticX4UiSummary(capTieResults),
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: capTiePaths,
+      readPaths: capTiePaths,
+      filesFailed: 0,
+    },
+  );
+  const truncatedResult = syntheticX4UiFileResult('ui/truncated.lua', [{ category: 'height', status: 'unknown' }], { truncated: true });
+  const truncatedCensus = aggregateX4UiVerificationGapCensus(
+    [truncatedResult],
+    syntheticX4UiSummary([truncatedResult]),
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: ['ui/truncated.lua'],
+      readPaths: ['ui/truncated.lua'],
+      filesFailed: 0,
+    },
+  );
+  const mismatchResult = syntheticX4UiFileResult('ui/mismatch.lua', [
+    { category: 'count', status: 'unknown' },
+    { category: 'count', status: 'unknown' },
+  ], { declaredCount: 3 });
+  const mismatchCensus = aggregateX4UiVerificationGapCensus(
+    [mismatchResult],
+    syntheticX4UiSummary([mismatchResult]),
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: ['ui/mismatch.lua'],
+      readPaths: ['ui/mismatch.lua'],
+      filesFailed: 0,
+    },
+  );
+  const malformedResult = syntheticX4UiFileResult('ui/malformed.lua', [{ category: 42, status: '' }]);
+  const malformedCensus = aggregateX4UiVerificationGapCensus(
+    [malformedResult],
+    syntheticX4UiSummary([malformedResult]),
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: ['ui/malformed.lua'],
+      readPaths: ['ui/malformed.lua'],
+      filesFailed: 0,
+    },
+  );
+  const unsafeResult = syntheticX4UiFileResult('C:\\secrets\\source.lua', [{
+    category: 'text',
+    status: 'dynamic',
+    expression: 'SECRET_SOURCE_TEXT',
+    reason: 'SECRET_ANALYZER_MESSAGE',
+  }]);
+  const unsafeCensus = aggregateX4UiVerificationGapCensus(
+    [unsafeResult],
+    syntheticX4UiSummary([unsafeResult]),
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: ['C:\\secrets\\source.lua'],
+      readPaths: ['C:\\secrets\\source.lua'],
+      filesFailed: 0,
+    },
+  );
+  const manifestUnavailableCensus = aggregateX4UiVerificationGapCensus(
+    [],
+    { ...EMPTY_X4_UI_SUMMARY },
+    {
+      manifestAvailable: false,
+      manifestCurrent: false,
+      manifestComplete: false,
+      selectedPaths: [],
+      readPaths: [],
+      filesFailed: 0,
+    },
+  );
+  const readFailureResult = syntheticX4UiFileResult('ui/read.lua', [{ category: 'parse', status: 'unsupported' }]);
+  const readFailureCensus = aggregateX4UiVerificationGapCensus(
+    [readFailureResult],
+    syntheticX4UiSummary([readFailureResult]),
+    {
+      manifestAvailable: true,
+      manifestCurrent: true,
+      manifestComplete: true,
+      selectedPaths: ['ui/read.lua', 'ui/missing.lua'],
+      readPaths: ['ui/read.lua'],
+      filesFailed: 1,
+    },
+  );
   const checks: X4UiCorpusSelftestCheck[] = [
+    {
+      name: 'verification-gap-census-is-always-present',
+      pass: !!baseCensus,
+      detail: `present=${!!baseCensus}`,
+    },
+    {
+      name: 'verification-gap-census-contract-fields-exist',
+      pass: !!baseCensus
+        && baseCensus.totalGaps === 0
+        && baseCensus.affectedFiles === 0
+        && Array.isArray(baseCensus.byCategoryStatus)
+        && Array.isArray(baseCensus.topFiles)
+        && baseCensus.evidenceComplete === false
+        && Array.isArray(baseCensus.incompletenessReasons),
+      detail: `census=${JSON.stringify(baseCensus ?? null)}`,
+    },
     {
       name: 'official-source-and-domain-filter',
       pass: JSON.stringify(selected) === JSON.stringify(['subst_lua/a.lua', 'ui/z.lua']),
@@ -672,6 +1236,92 @@ export function runX4UiCorpusCensusSelftest(): X4UiCorpusSelftestResult {
         && corpusExitCode(0, 1) === 1,
       detail: `applicableFatal=${classified.applicableFatalErrors}`,
     },
+    {
+      name: 'verification-gap-census-is-deterministic-under-permutation',
+      pass: orderedGapCensus.evidenceComplete
+        && JSON.stringify(orderedGapCensus) === JSON.stringify(permutedGapCensus),
+      detail: `total=${orderedGapCensus.totalGaps}`,
+    },
+    {
+      name: 'verification-gap-census-reconciles-all-counts',
+      pass: orderedGapCensus.totalGaps === 4
+        && orderedGapCensus.affectedFiles === 3
+        && orderedGapCensus.byCategoryStatus.reduce((total, bucket) => total + bucket.gapCount, 0) === 4
+        && orderedGapCensus.byCategoryStatus.every(bucket => bucket.representativePaths.length <= 3)
+        && orderedGapCensus.topFiles[0]?.categories.join(',') === 'index,text'
+        && orderedGapCensus.topFiles[0]?.statuses.join(',') === 'dynamic,unknown',
+      detail: `buckets=${JSON.stringify(orderedGapCensus.byCategoryStatus)}`,
+    },
+    {
+      name: 'verification-gap-census-cap-and-tie-order-are-bounded',
+      pass: capTieCensus.topFiles.length === 12
+        && capTieCensus.topFiles[0]?.path === 'ui/tie-01.lua'
+        && capTieCensus.topFiles[11]?.path === 'ui/tie-12.lua'
+        && capTieCensus.byCategoryStatus.length === 1
+        && capTieCensus.byCategoryStatus[0].representativePaths.length === 3
+        && JSON.stringify(capTieCensus.byCategoryStatus[0].representativePaths)
+          === JSON.stringify(['ui/tie-01.lua', 'ui/tie-02.lua', 'ui/tie-03.lua']),
+      detail: `topFiles=${capTieCensus.topFiles.length}`,
+    },
+    {
+      name: 'verification-gap-census-truncation-is-incomplete',
+      pass: truncatedCensus.totalGaps === 1
+        && !truncatedCensus.evidenceComplete
+        && truncatedCensus.topFiles[0]?.truncated === true
+        && truncatedCensus.incompletenessReasons.some(reason => reason.startsWith('truncated-files: ')),
+      detail: `reasons=${JSON.stringify(truncatedCensus.incompletenessReasons)}`,
+    },
+    {
+      name: 'verification-gap-census-count-mismatch-is-explicit',
+      pass: mismatchCensus.totalGaps === 2
+        && !mismatchCensus.evidenceComplete
+        && mismatchCensus.incompletenessReasons.includes(
+          'verification-gap-count-mismatch: per-file=3, observed=2, aggregate=2',
+        ),
+      detail: `reasons=${JSON.stringify(mismatchCensus.incompletenessReasons)}`,
+    },
+    {
+      name: 'verification-gap-census-invalid-evidence-is-reserved',
+      pass: malformedCensus.totalGaps === 1
+        && !malformedCensus.evidenceComplete
+        && malformedCensus.byCategoryStatus.some(bucket =>
+          bucket.category === X4_UI_VERIFICATION_GAP_INVALID_EVIDENCE_BUCKET
+          && bucket.status === X4_UI_VERIFICATION_GAP_INVALID_EVIDENCE_BUCKET)
+        && !malformedCensus.byCategoryStatus.some(bucket => bucket.status === 'unknown')
+        && malformedCensus.incompletenessReasons.some(reason => reason.startsWith('invalid-category-status: ')),
+      detail: `buckets=${JSON.stringify(malformedCensus.byCategoryStatus)}`,
+    },
+    {
+      name: 'verification-gap-census-unsafe-paths-and-sensitive-fields-do-not-leak',
+      pass: !unsafeCensus.evidenceComplete
+        && unsafeCensus.topFiles.length === 0
+        && unsafeCensus.byCategoryStatus.every(bucket => bucket.representativePaths.length === 0)
+        && unsafeCensus.incompletenessReasons.some(reason => reason.startsWith('unsafe-path: '))
+        && !JSON.stringify(unsafeCensus).includes('C:\\secrets\\source.lua')
+        && !JSON.stringify(unsafeCensus).includes('SECRET_SOURCE_TEXT')
+        && !JSON.stringify(unsafeCensus).includes('SECRET_ANALYZER_MESSAGE'),
+      detail: `census=${JSON.stringify(unsafeCensus)}`,
+    },
+    {
+      name: 'verification-gap-census-failure-shapes-remain-explicit',
+      pass: manifestUnavailableCensus.totalGaps === 0
+        && manifestUnavailableCensus.affectedFiles === 0
+        && manifestUnavailableCensus.byCategoryStatus.length === 0
+        && manifestUnavailableCensus.topFiles.length === 0
+        && !manifestUnavailableCensus.evidenceComplete
+        && manifestUnavailableCensus.incompletenessReasons.includes('manifest-unavailable')
+        && readFailureCensus.totalGaps === 1
+        && readFailureCensus.byCategoryStatus.length === 1
+        && !readFailureCensus.evidenceComplete
+        && readFailureCensus.incompletenessReasons.some(reason => reason.startsWith('read-failure: '))
+        && readFailureCensus.incompletenessReasons.some(reason => reason.startsWith('result-coverage-mismatch: ')),
+      detail: `readFailureReasons=${JSON.stringify(readFailureCensus.incompletenessReasons)}`,
+    },
+    {
+      name: 'verification-gap-census-does-not-change-gap-only-exit-semantics',
+      pass: orderedGapCensus.totalGaps > 0 && corpusExitCode(0, 0) === 0 && corpusExitCode(0, 1) === 1,
+      detail: `gapOnlyExit=${corpusExitCode(0, 0)}`,
+    },
   ];
   return { pass: checks.every(check => check.pass), checks };
 }
@@ -695,6 +1345,24 @@ function printTextReport(report: X4UiCorpusReport): void {
   console.log(`unverified files: ${report.unverifiedFiles}`);
   console.log(`truncated files: ${report.truncatedFiles}`);
   console.log(`verification gaps: ${report.verificationGaps}`);
+  const gapCensus = report.x4UiVerificationGapCensus;
+  console.log(`verification-gap census: ${gapCensus.totalGaps} gaps across ${gapCensus.affectedFiles} files; evidenceComplete=${gapCensus.evidenceComplete}`);
+  if (gapCensus.incompletenessReasons.length) {
+    console.log(`verification-gap census reasons: ${gapCensus.incompletenessReasons.join('; ')}`);
+  }
+  if (gapCensus.byCategoryStatus.length) {
+    console.log('verification-gap census buckets:');
+    for (const bucket of gapCensus.byCategoryStatus) {
+      const paths = bucket.representativePaths.length ? bucket.representativePaths.join(', ') : '(no safe paths)';
+      console.log(`  ${bucket.category}/${bucket.status}: ${bucket.gapCount} gaps across ${bucket.affectedFileCount} files [${paths}]`);
+    }
+  }
+  if (gapCensus.topFiles.length) {
+    console.log('verification-gap census top files:');
+    for (const file of gapCensus.topFiles) {
+      console.log(`  ${file.path}: ${file.gapCount} gaps [${file.categories.join(', ')}] [${file.statuses.join(', ')}] truncated=${file.truncated}`);
+    }
+  }
   console.log('selected paths:');
   for (const filePath of report.selectedPaths) console.log(`  ${filePath}`);
   if (!report.selectedPaths.length) console.log('  (none)');

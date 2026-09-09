@@ -18,6 +18,17 @@ output says only `No known rule violated` and `Not verified in game`.
 Primary current plan: `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`. Historical source-first records:
 `docs/plans/2026-08-10-b119-x4-ui-editor-linter-first.md` and `docs/plans/2026-08-10-b119-x4-ui-editor-source-first-design.md`.
 Owner: GitHub #41.
+**2026-09-09 bounded call-model verification-gap census — VERIFIED / FULL B119 IN_PROGRESS / PARTIAL:** the existing
+read-only X4 UI corpus census now attaches an always-present bounded `x4UiVerificationGapCensus`, reusing the existing
+manifest/read/analyzeLuaFiles path, `analysis.x4UiResults`, and `x4UiSummary`. It adds no scanner, parser, source
+execution path, renderer, or duplicate visual census. The live sidecar receipt reproduces 81 selected/read, 0 failed,
+81 X4 UI files, 13,731 observed gaps, 26 truncated files, and exit 0; the bounded census reports 70 affected files,
+deterministic category/status rows with at most 3 sorted relative paths each, and at most 12 ranked top files.
+`totalGaps` reconciles per-file, observed structured, and aggregate counts; truncation makes evidence incomplete while
+preserving current fatal/warning/not-applicable/status/exit semantics. Manifest/read failures and malformed evidence
+remain explicit, and unsafe paths/source fields do not enter the new object. Evidence:
+`dev-docs/b119-ai-influence-dogfood/x4-ui-verification-gap-census/`. Same-state pending-branch Forge/X4 parity and
+the real-mod MD correction remain separate write-gated work; no overall B119 completion or arbitrary-Lua/C++ claim.
 The final dogfood fixture is the supplied `C:\Users\Moshi\Desktop\# AI Influence mod UI design\design_handoff_ai_influence`
 bundle. All twelve reference images (`00` plus `1a`-`1j`) must be visually inspected and the finished Forge must author
 the real X4 Lua rather than porting the HTML/CSS prototype. Build recommended screen `1b` first, then the remaining
