@@ -7809,3 +7809,43 @@ canonical API, MCP, public/install evidence, and the broader unfinished oracle s
 
 This close changes documentation only. Public VSIX bytes, installed Antigravity bytes, mod/game files, and source
 debug-log content are unchanged.
+
+## 2026-09-09 — B119 Windows runtime bootstrap and monolithic E2E reliability — VERIFIED bounded checkpoint
+
+The existing one-worker unsharded E2E runner now automatically and fail-closed hands off from system Node `24.15.0`
+/ libuv `1.51.0` to the verified safe Node `24.19.0` / libuv `1.52.1` before Playwright startup. Safe-current-runtime,
+candidate selection, recursion, child-`PATH`, hostile-input, receipt, and runner integration coverage passes at
+runtime-bootstrap `59/59`, run-e2e policy `55/55`, and runner integration `13/13`. Official `npm run lint` passes with
+exit `0`, `0` errors, and the existing `600` warnings.
+
+The current tracked-only monolithic run covers `23` specs / `106` tests with one worker and passes `106/106` in
+`15.1m`. Authoritative receipt `test-results/e2e-verdict.json` has SHA-256
+`9CBA11CE26DF2B23E098F185EAF9F21A1265ADBA891AFD7681C3F02357A80BD6`; it records `childExit=0`, a complete
+structured report, `treeGone=true`, and no remaining PIDs. An invalid absolute candidate fails closed as
+`candidate-file-inaccessible` with exit `1` before browser/server startup, no verdict receipt, no relevant PID change,
+and zero listeners on `3200/3201`.
+
+Deckwright PID `43112` on `3100`, installed Forge PID `23764` on `60836`, X4 absence, closed post-run `3200/3201`, and
+all protected live roots/config identities remained unchanged. Repeated `0xC0000409` termination under the system
+runtime was eliminated in this safe-runtime run; that elimination is observed. The approximately `98%` Node/libuv
+association is a same-machine A/B inference, and the exact native stack remains unknown.
+
+Final post-record gates are green. Deterministic `graphify update .` exited `0` at `10,713` nodes / `27,009` edges /
+`334` communities; its five generated files refreshed on disk, but exact `git status`, diff-stat, and diff-check prove
+no tracked Graphify delta, and HTML was skipped at the `5,000`-node limit. Independent explain anchors
+`bootstrapE2eRuntime()` at `scripts/e2e-runtime-bootstrap.mjs:486` (degree `18`, imported by `run-e2e.mjs`) and
+`runE2e` at line `1044` (degree `17`); the graph does not extract a direct call edge.
+
+The final `npm run precommit:check` exited `0`: tripwires `0/58`, canon mirrors identical, bootstrap `59/59`, runner
+policy `55/55`, Vite lifecycle/product copy `PASS`, durable writers `15/15` with the complete filesystem/host-store/
+browser-output/SQLite/transaction/run/exec/pragma inventory, capability contract `12/297/1/11` at SHA-256
+`bb467c4b70402b3dd31571dbe10d60ec05653dc6f6600f043037e993f2920337c`, MCP capability `PASS`, action receipts
+`882` routes / `57` surfaces at SHA-256
+`396865ea4e877035d8f8c29607d9b5e22dd5ca891b420855b59efbf8087b23bb`, typecheck and size checks `PASS`, and final
+`[precommit] OK`. No Graphify output belongs in the exact-path commit.
+
+This checkpoint closes only Windows runtime-bootstrap and monolithic-gate reliability. Preview for layout; game for
+truth. Overall B119 remains `IN_PROGRESS / PARTIAL`; same-state renderer/source parity, the twelve-reference
+current-game census, arbitrary Lua/Helper/widget coverage, universal C++ acceptance, and the separately write-gated
+real-mod correction remain open. No release, universal parity, universal acceptance, or overall-B119 completion is
+claimed. Planned checkpoint subject: `fix(e2e): select safe Windows Node runtime`.

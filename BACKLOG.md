@@ -62,9 +62,15 @@ new commit/comment/red-gate section at top. Google Doc
 `ANLCKQk4F14GwWk68VhKaxI0b21sPVd4KiRw763IijA80qwF_NLRxTF1F0uT9m-UXcveRRZFFDbHR7QqybNTMtYATT7_TVvgaX1XYyD9yw44`,
 `731` paragraphs, one `HEADING_2` named `B119 source replay + native compact/expanded checkpoint — 2026-09-09`,
 the updated repository head, and an intact one-period prior boundary. Overall B119 remains `IN_PROGRESS / PARTIAL`.
-Same-state pending-branch parity, the full twelve-reference census, arbitrary Lua/Helper/widget coverage, universal
-C++ acceptance, monolithic E2E process stability, and the separately write-gated real-mod `cancel_conversation`
-defect remain open. No live mod/game write was performed in this projection unit.
+**2026-09-09 current B119 gate state — FULL B119 `IN_PROGRESS / PARTIAL`:** the bounded Windows runtime-bootstrap and
+monolithic-gate reliability unit is `VERIFIED`; durable implementation, validation, and review detail is in
+`docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md` and the dated ROADMAP entry. Parent review is complete;
+deterministic Graphify refresh passed at `10,713` nodes / `27,009` edges / `334` communities with no tracked graph
+delta, and final post-record precommit passed `[precommit] OK`. Exact-path commit/push/parity proof and existing
+GitHub/Notion/Google Doc projection are next. Actual remaining B119 product work is same-state pending-branch Forge/X4
+parity, the full twelve-reference current-game census, bounded arbitrary Lua/Helper/widget and universal C++ acceptance
+coverage, and the separately write-gated real-mod `cancel_conversation` correction. Preview for layout; game for truth.
+No release, universal parity, or overall-B119 completion claim follows.
 **Corrective release/native rerun checkpoint 2026-09-08 — VERIFIED CORRECTIVE UNIT / FULL B119 PARTIAL:** stable
 `0.0.77` is built, published exactly once on OpenVSX, independently downloaded with exact local/public parity,
 installed in Antigravity, and its installed runtime oracles pass `134/134`. The stable VSIX is

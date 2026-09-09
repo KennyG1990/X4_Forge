@@ -23,6 +23,7 @@ import {
 } from './e2e-flake-policy.mjs';
 import { inspectTerminalPlaywrightReport } from './e2e-terminal-contract.mjs';
 import { superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
+import { bootstrapE2eRuntime } from './e2e-runtime-bootstrap.mjs';
 
 const ROOT = process.cwd();
 const DEFAULT_MANIFEST_PATH = path.join(ROOT, 'scripts', 'e2e-quarantine.json');
@@ -1045,6 +1046,7 @@ export async function runE2e({
   manifest,
   manifestPath = DEFAULT_MANIFEST_PATH,
   receiptPath = DEFAULT_RECEIPT_PATH,
+  env = process.env,
   spawnImpl = spawn,
   superviseImpl = superviseSpawnedE2eProcess,
   writeJsonAtomicImpl = writeJsonAtomic,
@@ -1113,7 +1115,7 @@ export async function runE2e({
     ], {
       shell: false,
       stdio: ['inherit', 'pipe', 'pipe'],
-      env: { ...process.env, PLAYWRIGHT_JSON_OUTPUT_NAME: jsonPath },
+      env: { ...env, PLAYWRIGHT_JSON_OUTPUT_NAME: jsonPath },
     });
   } catch {
     interactionFailed = true;
@@ -1518,6 +1520,16 @@ function runPureSelftest() {
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  if (process.argv.includes('--selftest')) process.exit(runPureSelftest() ? 0 : 1);
-  process.exit(await runE2e({ args: process.argv.slice(2) }));
+  const args = process.argv.slice(2);
+  const selftestMode = args.includes('--selftest');
+  const runtime = bootstrapE2eRuntime({
+    scriptPath: process.argv[1],
+    args,
+    cwd: process.cwd(),
+    env: process.env,
+    receiptMutationPolicy: selftestMode ? 'preserve' : 'e2e',
+  });
+  if (runtime.action !== 'run') process.exit(runtime.exitCode ?? 1);
+  if (selftestMode) process.exit(runPureSelftest() ? 0 : 1);
+  process.exit(await runE2e({ args, env: runtime.environment }));
 }

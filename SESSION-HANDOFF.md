@@ -1,121 +1,155 @@
-# Session handoff — B119 2026-09-09 post-commit external projection
+# Session handoff — B119 Windows runtime-bootstrap close
 
 Date: 2026-09-09
 Project: F:\DEV_ENV\X4_Forge
-Status: records projection is complete for this checkpoint; overall B119 remains IN_PROGRESS / PARTIAL.
-Worker boundary: records-only. This handoff, BACKLOG.md, the B119 plan, and the project AAR were updated for the
-projection record. No implementation, test, evidence-binary, real-mod, game, installed-extension, deploy, config,
-save, capability-map, UI-gotcha, OpenVSX, or live mod/game write was performed in this projection unit. The parent
-checkpoint commit, push, and external readbacks recorded below were already completed.
+Status: bounded Windows runtime-bootstrap/monolithic-E2E unit is VERIFIED; overall B119 remains IN_PROGRESS / PARTIAL.
+Final-record worker boundary: exactly `BACKLOG.md`, `SESSION-HANDOFF.md`, `ROADMAP.md`, and
+`docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md` are owned by this refresh. The broader runtime-bootstrap
+unit already contains validated implementation and test changes in separate owned paths; this records worker does not
+edit or rerun them. No Graphify output, evidence binary, installed extension, Forge, mod, game, corpus, config, save,
+Git mutation, GitHub, Notion, Google Drive, OpenVSX, or runtime-state mutation belongs to this refresh.
 
 ## Session-start brief
 
 - Project identity: X4 Forge B119, the source-faithful X4 Lua UI editor and AI Influence visual dogfood; GitHub owner
   #41.
-- Commit point: `09926efdb21271a6098bc5bd379b7ed182667909`, titled
-  `feat(b119): checkpoint source-faithful UI replay and linter`.
-- Commit contents: exactly 25 paths — 18 tracked implementation/record files and 7 exact evidence files — with
-  `4639` insertions and `747` deletions.
-- Git readback: `HEAD`, `origin/main`, and the direct remote matched; the staged index was empty after push.
-- Final gates at the commit point: manual precommit and commit-hook precommit both passed.
-- Commit question: yes, the checkpoint is committed and pushed with remote parity; this projection record is the
-  current handoff. No Git mutation is required for this handoff.
+- Baseline before this runtime unit: `HEAD == origin/main == 8451c061d27300f0859d231bbc3a898723f24d63`.
+- The broader unit's implementation and independent validation are complete. Parent review of the three-record
+  correction, deterministic Graphify refresh, and final post-record precommit are also complete.
+- Worker state at handoff: this final-record Luna is terminal when its report is delivered; no other worker is claimed
+  active. The parent owns exact staging, commit/push proof, and external projection.
+- Local StarForge `capability-map.md` and project `aar-log.md` are already updated. GitHub #41, Notion page
+  `3b84618e-d15b-8190-821e-c0eb96f43d5a`, and Google Doc
+  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE` remain pending.
 
-## Eyeball queue
+## Immediate operational sequence
 
-Remaining partial items need a short Ken screen check before promotion.
+1. **COMPLETE:** parent reviewed the three-record correction; obsolete active `SPECIFIED` and stale monolithic-
+   stability-open claims are removed, ROADMAP history is present, and this sequence exists.
+2. **COMPLETE:** one exact Luna ran deterministic `graphify update .`; it exited `0`, refreshed the generated files,
+   and produced no tracked graph delta.
+3. **COMPLETE:** parent ran final full `npm run precommit:check`; it exited `0` with `[precommit] OK`.
+4. **NEXT:** parent stages exactly these nine repository paths only: `BACKLOG.md`, `ROADMAP.md`,
+   `SESSION-HANDOFF.md`, `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, `package.json`,
+   `scripts/precommit-check.mjs`, `scripts/run-e2e.mjs`, `scripts/e2e-runtime-bootstrap.mjs`, and
+   `scripts/e2e-runtime-bootstrap.selftest.mjs`. Confirm no unrelated staged path and no `graphify-out/**` path.
+5. Parent commits `fix(e2e): select safe Windows Node runtime`, pushes, then proves local `HEAD`, configured upstream
+   `origin/main`, and direct remote are identical and the staged index is clean.
+6. Parent updates and reads back the existing GitHub #41, Notion page
+   `3b84618e-d15b-8190-821e-c0eb96f43d5a`, and Google Doc
+   `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`.
 
-1. Same-state pending-branch Forge/X4 parity. Open the retained evidence README, compare forge-preview.png with
-   design-reference-1d.png, then open the matching pending military-request branch in the installed Forge and X4 at
-   the same drawable, scale, and content state. The retained native compact/expanded images are ordinary current
-   communication-menu state and must not be pixel-compared to the pending preview.
-2. Native compact/expanded interaction. Open the tested communication route; inspect NPC information, transcript,
-   three choices, edit box, SEND, END, and expand/dossier/end controls; click EXPAND and inspect correspondent,
-   leverage, three choices, edit box, and SEND; click END and confirm closure; then read the retained current-session
-   log for scoped markers.
-3. Twelve-reference census. Open supplied 00 and 1a-1j references beside their corresponding evidence and plan
-   rows; classify each as evidenced, alternate, divergent, data-blocked, or unsupported. Do not promote this two-state
-   capture to full twelve-reference completion.
-4. Broader coverage. Review plan rows for arbitrary Lua, Helper/widget, and universal C++ coverage; mark only
-   machine/evidence-supported rows complete and leave unsupported rows partial. No visual sample promotes universal
-   coverage.
-5. Real MD semantic defect. Open the fresh CLI receipt and confirm
-   `md/ai_influence_conversation.xml:98`; before any source change, write a fresh real-mod write-gate paragraph with
-   target, breakage risk, and rollback, then wait for explicit authorization. This projection unit performed no live
-   mod/game write.
+## Final post-record gates
 
-## Evidence and current product boundary
+- Parent review is complete. The verified runtime-bootstrap close remains bounded, ROADMAP now owns its dated
+  history, and BACKLOG lists only current state and actual remaining B119 work.
+- Deterministic `graphify update .` exited `0` at `10,713` nodes / `27,009` edges / `334` communities.
+  `graph.json`, `GRAPH_REPORT.md`, `.graphify_labels.json`, `manifest.json`, and `.graphify_root` refreshed on disk;
+  exact Graphify status and diff-stat were empty and diff-check exited `0`, so no graph output will be staged. HTML
+  was skipped at the `5,000`-node limit. Independent explain locates `bootstrapE2eRuntime()` at
+  `scripts/e2e-runtime-bootstrap.mjs:486` with degree `18` and import by `run-e2e.mjs`; `runE2e` remains indexed at
+  line `1044` with degree `17`, while Graphify extracts no direct call edge.
+- Final post-record `npm run precommit:check` exited `0`: tripwires `0/58`, canon mirrors identical, runtime bootstrap
+  `59/59`, run-e2e policy `55/55`, Vite lifecycle and product copy `PASS`, durable writers `15/15` plus inventory
+  `42` filesystem / `11` host-store / `3` browser-output / `47` SQLite / `7` transactions / `14` run / `14` exec /
+  `2` pragma, capability contract `12` capabilities / `297` routes / `1` registrar / `11` aliases at SHA-256
+  `bb467c4b70402b3dd31571dbe10d60ec05653dc6f6600f043037e993f2920337c`, MCP capability `PASS`, action receipts
+  `882` routes / `57` surfaces at SHA-256
+  `396865ea4e877035d8f8c29607d9b5e22dd5ca891b420855b59efbf8087b23bb`, typecheck `PASS`, size checks
+  `server.ts` `15,356` lines / `797,345` bytes and `mdSemantics.ts` `822` lines / `49,010` bytes, final
+  `[precommit] OK`.
 
-Retained evidence receipt:
-`F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\README.md`.
+## Eyeball queue and next bounded work
 
-- Installed Forge source replay is proven for `ui/addons/ai_influence_chat/aic_menu.lua -> menu.display` at
-  `2560x1440`, effective scale `1.4`, seven branch arms, loop count `3`, and `31` samples. Apply retained the target
-  and export remained `Not verified in game`.
-- Native compact/expanded rendering and interaction are proven only for the tested ordinary communication-menu route:
-  compact showed NPC information, transcript, three choices, edit box, SEND, END, and controls; EXPAND opened the
-  full-screen route with correspondent/leverage blocks and three choices; END closed the overlay/conversation. These
-  are not the pending military-request preview, so same-state visual parity is not proven.
-- The current-session log records display ENTER and DONE plus native interactions despite the MD semantic error and
-  reserveScrollBar diagnostics. Native rendering does not remove the linter finding or prove whole-file/whole-frame
-  acceptance.
-- Fresh read-only real-mod validation returned exit `1`: Lua `0/3`, X4 UI `0/3` with unverified `6` and truncated `4`,
-  MD pitfall `1/0`; finding `md_pitfall.cancel_conversation_actor_or_template` at
-  `md/ai_influence_conversation.xml:98`. The real mod remains untouched and write-gated.
-- Column calibration remains literal `12` clean, literal `13-23` warning/game-check because official X4 9.00 has
-  valid 13-column tables, and literal `24+` blocking only from the reproduced whole-frame incident. This is not a
-  universal above-12 rejection rule.
+1. Same-state pending-branch Forge/X4 parity: compare the retained Forge preview with the matching pending military-
+   request state in X4 at the same drawable, scale, and content state. The native compact/expanded images are ordinary
+   current communication-menu state and are not valid parity evidence for that pending preview.
+2. Complete the supplied twelve-reference (`00`, `1a`-`1j`) census and classify each row by evidence, alternate,
+   divergent, data-blocked, or unsupported state.
+3. Continue bounded coverage work for arbitrary Lua, Helper/widget paths, and universal C++ acceptance only when new
+   evidence supports it; a single visual sample does not promote universal coverage.
+4. The fresh real-mod `cancel_conversation` semantic finding remains separately write-gated and requires explicit
+   authorization before any source/mod write.
 
-## Validation boundary
+## Verified runtime-bootstrap close
 
-- Installed oracles: `134/134`.
-- Focused B119 E2E: `10/10`.
-- Isolated XML: `2/2`.
-- Isolated project-browser reproduction: `1/1`.
-- Typecheck, lint (`0` errors), precommit, and build: green.
-- Required current monolithic E2E: RED after repeatable Windows child exit `3221226505 / 0xC0000409` without a
-  complete structured receipt. Do not claim a current `106/106`; the older `0.0.77` `106/106` result is historical
-  only.
-- The red gate is not erased by the bounded green batches. Overall B119 remains IN_PROGRESS / PARTIAL.
+- The existing one-worker, retry-`1`, structured-receipt/lifecycle-authoritative unsharded E2E runner now selects a
+  verified safe Windows Node runtime before Playwright starts. Safe current runtime proceeds without relaunch; affected
+  runtime performs one private-marker relaunch with the verified runtime directory first in child `PATH` and preserves
+  identity through the runner, Playwright, and literal-`node` webServer. Unsafe, missing, inaccessible, malformed,
+  recursive, or identity-invalid candidates refuse before browser/server startup.
+- System runtime: `C:\Program Files\nodejs\node.exe`, Node `24.15.0`, libuv `1.51.0`.
+- Safe runtime: `C:\Users\Moshi\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe`,
+  Node `24.19.0`, libuv `1.52.1`.
+- Handoff proof: safe `execPath`, version, and libuv were printed with `marker=1`; action exit was `0` and
+  `relaunch-complete` was observed. The repeated system-runtime `0xC0000409` was eliminated in the full run under
+  the selected safe runtime. This is observed same-machine A/B association evidence; approximately `98%` is an
+  inference, and the exact native stack remains unavailable.
+- Focused implementation evidence: runtime-bootstrap `59/59`; run-e2e policy `55/55`; runner integration `13/13`;
+  `node --check` passed for all four touched/new MJS files; typecheck, build (`1,848` modules with the existing chunk
+  warning), and full precommit passed.
+- Official `npm run lint` passed exit `0` with `0` errors and the existing `600` warnings. A supplemental direct
+  `node_modules/.bin/eslint.cmd` run against the four scripts returned `85` errors because the repository config does
+  not provide Node globals for scripts and applies `no-control-regex` to existing runner patterns. That run is outside
+  the official scope (`eslint src server.ts`), is a non-authoritative tooling/config diagnostic, and caused no
+  suppression or code edit.
 
-## External projection readback
+## Authoritative monolithic evidence
 
-- GitHub #41 is OPEN; its body was updated. New checkpoint comment: `5603257267`,
-  `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5603257267`.
-- Notion page `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back Status `In Progress`, Evidence Grade `Partial`, and
-  contains the new commit/comment/red-gate section at top.
-- Google Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back revision
-  `ANLCKQk4F14GwWk68VhKaxI0b21sPVd4KiRw763IijA80qwF_NLRxTF1F0uT9m-UXcveRRZFFDbHR7QqybNTMtYATT7_TVvgaX1XYyD9yw44`,
-  `731` paragraphs, one `HEADING_2` named `B119 source replay + native compact/expanded checkpoint — 2026-09-09`,
-  the updated repository head, and an intact one-period prior boundary.
-- These projections are complete for this checkpoint. They do not promote B119 beyond IN_PROGRESS / PARTIAL.
+- Current tracked-only unsharded E2E: `23` tracked specs / `106` tests, one worker, ports `3200/3201`, invoked from
+  system Node and automatically relaunched to the safe runtime. The only Playwright attempt passed `106/106` in
+  `15.1m`.
+- Receipt: `F:\DEV_ENV\X4_Forge\test-results\e2e-verdict.json`; schema `2`; source `json-report`;
+  `reportCode=structured-report-inspected`; `4,935` bytes; SHA-256
+  `9CBA11CE26DF2B23E098F185EAF9F21A1265ADBA891AFD7681C3F02357A80BD6`.
+- Receipt verdict: `childExit=0`; green; passed `106`; failed/flaky/bad/quarantined `0`; total `106`; report complete;
+  discovered `106`; terminal `106`; report errors `0`; lifecycle complete; trigger `child-close`; child exit code `0`;
+  signal `null`; ownership complete; `treeGone=true`; remaining PIDs empty; `runnerInteractionFailed=false`.
+- Negative containment: invalid absolute override returned `candidate-file-inaccessible`, exit `1`, before browser/
+  server startup; relevant process PID set was unchanged; ports `3200/3201` had zero listeners; no verdict receipt was
+  produced.
 
-## Hot files and next actionable units
+## Machine state and protected identities
 
-- Hot records: `BACKLOG.md`, `SESSION-HANDOFF.md`,
-  `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, and
-  `F:\StarForge\wiki\x4-forge\aar-log.md`.
-- Evidence anchor: `dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay/README.md`.
-- Next actionable units: same-state pending-branch parity; full twelve-reference census; arbitrary Lua/Helper/widget
-  coverage; universal C++ acceptance; monolithic E2E process-stability repair; and the separately authorized,
-  write-gated real-mod `cancel_conversation` correction.
-- Keep the evidence receipt, external readbacks, focused green checks, and monolithic red gate as separate authorities.
-  No future SHA, current full-suite claim, universal parity claim, or universal acceptance claim is authorized by this
-  handoff.
+- Baseline drift was reconciled before E2E: Deckwright is PID `43112` on `3100` (the planned `58660` was stale) and
+  remained unchanged. Installed Forge is PID `23764` on `60836` and remained unchanged. X4 is absent. Ports `3200`
+  and `3201` are closed after the run; no E2E residue remains.
+- Pre/post protected identities matched:
+  - `data`: `3,686` files / `475,086,457` bytes /
+    `63242AB6A3D526BA4498A589DCA4D4833EA3E942F7B11BAEC58962DBCF05C53B`
+  - `.studio-state`: `9` files / `12,382,674` bytes /
+    `34EE865601E144B293A18B44B6EF5413EA7D2C1F99B559C8BF47FC1B07EC0401`
+  - `.studio-api-token`: `D20602CE9A8AFA430CF6E1730F3793F45F1BEFF535A7C7004DA7CE2B53027F3B`
+  - `config.json`: `3EC65D540E6763D13D6F8F27D9005F80C3C855B00D3DCFDD5E7330726AE37779`
+  - `test-results/.last-run.json`: `FFF6299EFB51BA9EF550E500ECC967E972C83E86BE387042C360CAEA7FDBAE29`
+  - `C:\Users\Moshi\.x4forge\latest.json`:
+    `F4BB5A9470FFF8CD3BEA434CCF45A420E5A26C7394EE67254068F537FCA86B07`
+  - `C:\Users\Moshi\.x4forge\instances` tree:
+    `4735A59572088955D11938EC63D545F8D43C0DBB7AF85300DB790321FDF7EBF2`
 
-## Dirty and forbidden-path preservation
+## Hot files and preservation boundary
 
-- The checkout is heavily dirty. Preserve every unrelated implementation, test, deletion, untracked artifact, lockfile,
-  and record change; this projection unit did not normalize or broadly rewrite them.
-- No Git add/commit/push/config/ref operation, Forge/mod/game/corpus/install/config/save mutation, OpenVSX action,
-  capability-map change, or UI-gotcha-card change belongs to this handoff.
+- Broader-unit implementation hot files already handled by the parent/worker: `package.json`, `scripts/precommit-check.mjs`,
+  `scripts/run-e2e.mjs`, `scripts/e2e-runtime-bootstrap.mjs`, and `scripts/e2e-runtime-bootstrap.selftest.mjs`.
+  They are not owned by this final-record worker and must not be edited here.
+- Final records: `BACKLOG.md`, this handoff, `ROADMAP.md`, and the B119 plan. Local StarForge capability-map/project-AAR
+  remain complete and unchanged by this refresh. Graphify is complete with no tracked delta; do not stage graph output.
+- Local StarForge capability-map/project-AAR are complete; GitHub/Notion/Google Drive projection remains pending.
+- The checkout is dirty. Preserve every unrelated implementation, test, deletion, untracked artifact, lockfile, and
+  record change. Do not normalize, revert, stage, commit, push, publish, or alter forbidden state.
+- Permanent UI boundary: **Preview for layout; game for truth.** No current runtime receipt promotes renderer parity,
+  arbitrary Lua support, universal C++ acceptance, full twelve-reference reconstruction, or release readiness.
 
 ## Close state
 
-- Status: PARTIAL for the records projection; overall B119 remains IN_PROGRESS / PARTIAL.
-- Remaining concerns: same-state pending-branch parity, full twelve-reference reconstruction/current-game census,
-  arbitrary Lua/Helper/widget coverage, universal C++ acceptance, monolithic E2E process stability, and the
-  separately write-gated real-mod semantic defect remain open.
-- Rollback for this records unit: restore the pre-write versions of the four named records with a reviewed patch; no
-  live mod/game state needs restoration because none was written in this projection unit.
-- Suggested future records commit title: `docs(b119): record post-commit external projection readback`.
+- Status: `VERIFIED` for the bounded Windows runtime-bootstrap/monolithic-E2E reliability unit; overall B119 remains
+  explicitly `IN_PROGRESS / PARTIAL`.
+- Required refresh checks: re-read the changed sections, run `git diff --check` on the exact four owned records, and
+  report exact status limited to those four paths.
+- Rollback: apply an exact reviewed patch to these four refresh records. The broader implementation rollback, if
+  later required, remains the bounded runner/bootstrap/selftest/precommit diff. No live or protected state was written
+  by this final-record worker.
+- Operational close still pending: exact nine-path stage with no graph/unrelated path, commit, push, local/upstream/
+  direct-remote parity plus clean-index proof, and GitHub/Notion/Google Doc update/readback.
+- Remaining concerns: exact native stack, same-state pending-branch parity, twelve-reference census, arbitrary
+  Lua/Helper/widget coverage, universal C++ acceptance, and the separately write-gated real-mod semantic correction.

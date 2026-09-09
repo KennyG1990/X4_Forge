@@ -141,6 +141,13 @@ function checkE2eVerdict() {
   if (result.status !== 0) throw new Error(`e2e verdict selftest failed with exit ${result.status ?? "unknown"}`);
 }
 
+function checkE2eRuntimeBootstrap() {
+  console.log("[precommit] e2e runtime bootstrap selftest");
+  const result = spawnSync("npm run test:e2e-runtime-bootstrap", { cwd: root, shell: true, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`e2e runtime bootstrap selftest failed with exit ${result.status ?? "unknown"}`);
+}
+
 function checkE2eViteLifecycle() {
   console.log("[precommit] e2e Vite lifecycle selftest");
   const result = spawnSync("npm run test:e2e-vite-server", { cwd: root, shell: true, stdio: "inherit" });
@@ -187,6 +194,7 @@ function checkActionReceiptCoverage() {
 try {
   checkTripwires();
   checkMirrorDrift();
+  checkE2eRuntimeBootstrap();
   checkE2eVerdict();
   checkE2eViteLifecycle();
   checkProductCopy();

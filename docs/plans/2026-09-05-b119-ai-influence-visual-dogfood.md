@@ -3459,3 +3459,305 @@ The following are scoped repair requirements, not completed fixes:
   write-gated real-mod `cancel_conversation` defect remain open. No live mod/game write was performed in this
   projection unit; no capability-map delta or UI-gotcha delta was made.
 - **Suggested commit title:** `docs(b119): record post-commit external projection readback`.
+
+## 2026-09-09 — SPECIFIED — bounded monolithic E2E Windows runtime bootstrap
+
+Status: `SPECIFIED / OVERALL B119 IN_PROGRESS / PARTIAL`
+
+Task: document the reconciled Full-Lane plan for a bounded Windows runtime bootstrap that lets the existing
+unsharded B119 E2E runner select a verified safe Node runtime before Playwright starts. This is a planning-only
+unit; no implementation or test code is changed here.
+
+Lane: `FULL`
+
+### PLAN
+
+- **Bounded unit:** extend the existing `scripts/run-e2e.mjs` owner so the canonical runner remains one monolithic,
+  one-worker, verdict-authoritative process while selecting a safe runtime only when required. A small dedicated pure
+  module/selftest is permitted only if the bootstrap cannot be tested safely in the existing owner.
+- **Assumptions and unresolved facts:** the reproduced differential strongly isolates the system Node/libuv runtime
+  as the leading cause of the Windows crash, but the exact native stack remains unavailable. Explicit opt-in runtime
+  override precedence is an implementation detail; absent that override, the known installed Codex bundled candidate
+  is the only permitted fallback. The safe threshold is Node major `24` and libuv `>=1.52.1`, unless evidence justifies
+  a different compatible threshold without weakening the gate.
+- **Authoritative references:** this B119 plan; `BACKLOG.md`; `SESSION-HANDOFF.md`; the prior same-machine/process-local
+  A/B in `docs/plans/2026-08-10-b119-x4-ui-editor-linter-first.md`; existing `scripts/run-e2e.mjs` verdict,
+  lifecycle, retry, report, and Playwright-spawn ownership; and `playwright.config.ts`'s literal `node` webServer.
+- **In scope for the eventual implementation:** pre-Playwright runtime identity/candidate validation; one guarded
+  relaunch with a private recursion marker; process-local child `PATH` ordering; propagation of the verified identity
+  to the runner, Playwright child, and literal-`node` webServer; pure/integration negative coverage; and the exact
+  focused-to-full validation sequence below.
+- **Out of scope:** a parallel runner; dependency updates; replacing or installing system Node; persistent PATH,
+  registry, config, or Maglev changes; sharding; retry/reporter/receipt weakening; product behavior changes; real mod,
+  game, corpus, installed-extension, live Forge, or protected-root writes; stopping or reusing unrelated Deckwright;
+  and any claim that this plan itself repairs the crash.
+- **Risks and authorization boundaries:** candidate discovery must not widen authority through PATH search, untrusted
+  environment input, accessors, prototypes, malformed metadata, or arbitrary executable selection. Runtime execution
+  is process-local and must not mutate persistent host settings. E2E validation must use ephemeral `3200/3201`, never
+  occupied `3100`, and must preserve the live Forge on `60836` and the absent-X4 state.
+- **Rollback/checkpoint:** revert exactly the bounded runner/bootstrap/test diff and these three records. Do not revert,
+  normalize, or delete unrelated dirty/untracked paths. No system runtime replacement or persistent setting requires
+  rollback under this plan.
+
+- **Acceptance contract:**
+  1. Reuse the existing `scripts/run-e2e.mjs` owner; do not create a parallel test runner. Add a pure module/selftest
+     only if needed for deterministic testability.
+  2. On an already-safe runtime, continue directly with no relaunch.
+  3. On affected Windows runtime(s), resolve an explicit opt-in override first if designed, otherwise the known
+     installed Codex bundled candidate; validate existence, exact executable behavior, Node major `24`, and libuv
+     `>=1.52.1` (or a justified compatible threshold), then relaunch once with a private recursion marker and the safe
+     runtime directory first in the child `PATH`.
+  4. Prove that final runner `process.execPath`, the Playwright child, and the config's literal `node` webServer all
+     resolve to the same verified safe runtime.
+  5. If the candidate is missing, malformed, unsafe, inaccessible, or identity/recursion validation fails, refuse
+     before Playwright/browser/server startup, emit bounded actionable diagnostics, and produce no false-green receipt.
+  6. Preserve one worker, retry `=1`, zero-flake policy, reporters, structured receipt oracle, lifecycle ownership and
+     teardown, port isolation, and all existing runner arguments.
+  7. Tests-first negative coverage must include safe-current-runtime no-relaunch; affected-runtime candidate
+     selection/relaunch; missing/unsafe candidate refusal; recursion-marker loop/bypass refusal; exact PATH placement;
+     and untrusted/accessor/prototype/environment input that must not widen authority as applicable.
+  8. After focused checks, run the current tracked-only unsharded E2E on `3200/3201`. It must complete with a
+     structured zero-failure/zero-flake/zero-bad-result verdict, child exit `0`, `treeGone=true`, and no owned
+     residues; `3200/3201` must be free afterward; live Forge `60836` must be unchanged; Deckwright's `3100` PID
+     `58660` must be preserved; X4 must remain absent; and protected live roots/config must be unchanged.
+  9. A deliberately unsupported-runtime fixture must refuse before browser or server startup.
+  10. The plan remains `SPECIFIED` until those implementation and runtime receipts exist.
+  11. Observed and inferred facts stay separate: the differential is reproduced evidence for runtime association,
+      not an exact native-stack diagnosis.
+  12. Suggested eventual commit title: `fix(e2e): select safe Windows Node runtime`.
+
+- **Required validation for the eventual implementation:** focused pure/integration selftests first; `node --check`;
+  whole-repository typecheck; exact ESLint; diff hygiene; precommit; production build; then one current tracked-only
+  unsharded E2E using `X4_FORGE_E2E_WEB_PORT=3200` and `X4_FORGE_E2E_API_PORT=3201`. The final run must include the
+  containment and protected-state census in the acceptance contract. Do not change the existing retry, reporter,
+  structured-receipt, or one-worker gates to make it pass.
+- **Evidence locations:** this section; the updated `BACKLOG.md` and `SESSION-HANDOFF.md`; focused bootstrap receipts;
+  the final `test-results/e2e-verdict.json`; and the bounded runtime/containment evidence produced by the implementation
+  worker. No new evidence artifact is created by this planning unit.
+
+### BASELINE
+
+- **Revision:** `HEAD == origin/main == 8451c061d27300f0859d231bbc3a898723f24d63`.
+- **System runtime:** `C:\Program Files\nodejs\node.exe`, Node `v24.15.0`, libuv `1.51.0`, Windows build
+  `10.0.26200`.
+- **Known safe runtime:** `C:\Users\Moshi\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe`,
+  Node `v24.19.0`, libuv `1.52.1`.
+- **Observed gate state:** the canonical unsharded E2E under system Node repeatedly terminates with Windows
+  `3221226505 / 0xC0000409` and no complete structured report. The current B119 record therefore remains
+  `PARTIAL`; no current full-suite green claim is authorized.
+- **Host state:** port `3100` is occupied by unrelated Deckwright PID `58660`; use free alternate `3200/3201` and do
+  not stop or reuse Deckwright. Live Forge is on `60836`; X4 is absent.
+- **Existing evidence:** the prior A/B failed under Node `24.15.0`/libuv `1.51.0` and passed under the exact safe
+  Node `24.19.0`/libuv `1.52.1`. The ignored evidence-only `runtime-shim/node.cmd` was never wired into
+  `npm run test:e2e`.
+- **Preservation baseline:** unrelated dirty/untracked paths are not owned by this unit and remain untouched.
+
+### RECONCILE
+
+- **Resources and readers/writers searched:** the existing runner's `process.execPath` Playwright spawn, its report /
+  receipt / lifecycle / retry owners, the config's literal-`node` webServer, the prior A/B record, and the current B119
+  records. No second runner or persistent runtime-selection mechanism is authorized.
+- **Existing capability reused:** `scripts/run-e2e.mjs` already owns verdict parsing, structured receipt validation,
+  lifecycle supervision/teardown, one retry, reporter arguments, and Playwright child creation. `playwright.config.ts`
+  already owns the one-worker ephemeral webServer and `X4_FORGE_E2E_WEB_PORT` / API-port isolation.
+- **Couplings checked:** parent runtime identity -> `process.execPath` -> Playwright child -> config webServer's literal
+  `node`; child `PATH` ordering; recursion marker; existing arguments; report/receipt authority; and teardown/port
+  containment. The safe runtime must cross every one of these boundaries without persistent host mutation.
+- **Capability-map delta:** none. The capability map already records the runner and current unsharded negative; this
+  planning unit adds no capability claim.
+- **Plan changes:** the open crash is now a specified pre-Playwright runtime-selection/bootstrap unit rather than a
+  product or test-oracle redesign. Current red evidence and all existing gate semantics remain unchanged.
+
+### DOCUMENT PLAN
+
+- This section is the reconciled plan and is intentionally marked `SPECIFIED`. A later implementation worker may edit
+  only the bounded runner/bootstrap/test surface named by this contract; this worker edits records only.
+- The unsupported-runtime negative, no-relaunch safe-runtime path, recursion shield, exact PATH proof, and final
+  `3200/3201` containment census are mandatory evidence, not optional follow-up.
+
+### IMPLEMENT
+
+- **Actual bounded changes:** this planning record only; no implementation, test, package, config, runtime, game, mod,
+  installed-extension, evidence-binary, or external-record mutation.
+- **Scope changes:** none.
+
+### VALIDATE
+
+- Required doc-unit check: inspect the exact diff of this plan, `BACKLOG.md`, and `SESSION-HANDOFF.md`.
+- Required doc-unit check: verify that only those three owned paths were targeted by this worker.
+- E2E and code tests: deliberately not run, as required by this docs-only planning unit.
+
+### REVIEW
+
+- The runner ownership, runtime threshold, single-relaunch boundary, recursion/path identity, fail-closed behavior,
+  preserved E2E gates, negative coverage, final containment proof, status, rollback, and commit title are recorded.
+- No implementation evidence exists yet; no requirement is promoted beyond `SPECIFIED`, and overall B119 remains
+  `IN_PROGRESS / PARTIAL`.
+
+### CLOSE
+
+- **Status:** `SPECIFIED` for this bounded planning unit; overall B119 remains `IN_PROGRESS / PARTIAL`.
+- **Remaining concerns:** exact native crash stack is unavailable; implementation must prove candidate precedence and
+  all three runtime identities; the final monolithic E2E and its containment census remain unrun.
+- **Capability-map delta:** none.
+- **Rollback:** exact revert of this records-only diff; later implementation rollback is the exact bounded
+  runner/bootstrap/test revert plus these records.
+- **Suggested eventual commit title:** `fix(e2e): select safe Windows Node runtime`.
+
+### AAR
+
+- **Outcome:** Full-Lane planning completed. The first combined patch attempt was rejected before mutation because its
+  BACKLOG anchor was stale; narrowed exact anchors then applied successfully. No test, scope, or data mutation failure
+  occurred in this records-only unit.
+- **Sustain:** keep the existing runner and structured receipt as the authority; keep observed crash evidence separate
+  from inferred runtime causality; preserve unrelated dirty paths and protected host state.
+- **Improve work / approach:** make runtime identity and candidate precedence explicit before implementation, and test
+  refusal paths before any browser/server startup.
+- **Improve tools:** use exact local anchors for multi-file record patches and verify the rejected attempt changed
+  nothing; implementation should retain machine-readable bootstrap and containment receipts.
+- **Highest-risk evidenced weakness:** the system runtime can terminate the monolithic child after substantial work
+  without a complete report; the bounded fix must fail closed on identity uncertainty and never convert missing report
+  truth into green.
+- **Global/project lessons banked:** none; no capability-map delta and no new evidence artifact.
+
+## 2026-09-09 — VERIFIED — bounded monolithic E2E Windows runtime bootstrap
+
+Status: `VERIFIED bounded unit / OVERALL B119 IN_PROGRESS / PARTIAL`
+
+This appended close records the implementation and independent validation of the prior `SPECIFIED` runtime-bootstrap
+unit. The earlier planning section remains historical and is not rewritten. This close covers only the existing E2E
+runner's Windows runtime handoff and monolithic-gate reliability; it does not close B119, renderer/source parity, or
+real-game/product scope.
+
+### IMPLEMENT
+
+- **Actual bounded changes:** the existing `scripts/run-e2e.mjs` now performs a process-local, fail-closed Windows
+  runtime bootstrap before Playwright starts, reusing its existing one-worker, retry, reporter, structured-receipt,
+  lifecycle, teardown, argument, and port-isolation owners. The bounded helper/selftest surface is
+  `scripts/e2e-runtime-bootstrap.mjs` and `scripts/e2e-runtime-bootstrap.selftest.mjs`; the precommit policy owner is
+  `scripts/precommit-check.mjs`. No parallel runner, dependency, system-Node, persistent PATH, config, Maglev,
+  product, mod, game, or protected-state change was made.
+- **Runtime behavior:** the safe current runtime proceeds without relaunch. An affected runtime validates the permitted
+  candidate, requires Node major `24` and libuv `>=1.52.1`, relaunches once with a private recursion marker and the
+  verified runtime directory first in child `PATH`, and preserves the identity through the runner, Playwright, and the
+  literal-`node` webServer. Missing, unsafe, inaccessible, malformed, recursion-loop, or identity-invalid candidates
+  refuse before browser/server startup.
+- **Observed versus inferred:** the system-to-safe handoff proof printed the safe `execPath`, Node version, libuv
+  version, `marker=1`, `action exit/0`, and `relaunch-complete`. The repeated system-runtime `0xC0000409` was eliminated
+  in the full run under the selected safe runtime. The approximately `98%` runtime association is a same-machine A/B
+  inference; the exact native stack remains unavailable.
+- **Scope changes:** none. This records close does not edit the implementation files listed above.
+
+### VALIDATE
+
+- **Focused implementation evidence supplied by the parent/implementation worker (not rerun in this records-only
+  close):** runtime-bootstrap `59/59`; run-e2e policy `55/55`; runner integration `13/13`; `node --check` passed for
+  all four touched/new MJS files; typecheck passed; production build passed with `1,848` modules and the existing chunk
+  warning; full precommit passed. Official `npm run lint` passed exit `0` with `0` errors and the existing `600`
+  warnings. A supplemental direct `node_modules/.bin/eslint.cmd` invocation against the four touched/new scripts
+  returned `85` errors because the repository ESLint configuration does not provide Node globals for scripts and
+  applies `no-control-regex` to existing runner patterns; that invocation is outside the official scope
+  (`eslint src server.ts`), is a non-authoritative tooling/config diagnostic rather than a product regression, and
+  does not justify suppressions or code edits.
+- **Current tracked-only monolithic E2E evidence:** `23` tracked specs, `106` tests, one worker, retry `1`, ports
+  `3200/3201`, invoked from system Node `24.15.0` / libuv `1.51.0` and automatically relaunched to safe Node
+  `24.19.0` / libuv `1.52.1`. The only Playwright attempt passed `106/106` in `15.1m`.
+- **Authoritative receipt:**
+  `F:\DEV_ENV\X4_Forge\test-results\e2e-verdict.json`, schema `2`, source `json-report`,
+  `reportCode=structured-report-inspected`, `4,935` bytes, SHA-256
+  `9CBA11CE26DF2B23E098F185EAF9F21A1265ADBA891AFD7681C3F02357A80BD6`. It records `childExit=0`, green verdict,
+  `passed=106`, `failed=0`, `flaky=0`, `bad=0`, `quarantined=0`, `total=106`; report complete with
+  `discovered=106`, `terminal=106`, `report errors=0`; lifecycle complete with trigger `child-close`, child exit code
+  `0`, signal `null`, ownership complete, `treeGone=true`, remaining PIDs empty, and
+  `runnerInteractionFailed=false`.
+- **Negative path:** the host-level invalid absolute override returned `candidate-file-inaccessible`, exit `1`, before
+  browser/server startup; the relevant process PID set was unchanged, ports `3200/3201` had zero listeners, and no
+  verdict receipt was produced.
+- **Containment and protected-state evidence:** baseline drift was reconciled before the run: Deckwright was PID
+  `43112` (not the stale planned PID `58660`) on `3100` and remained unchanged; installed Forge PID `23764` on `60836`
+  remained unchanged; X4 was absent; and `3200/3201` were closed afterward. The following identities matched pre/post:
+
+  - `data`: `3,686` files / `475,086,457` bytes / SHA-256
+    `63242AB6A3D526BA4498A589DCA4D4833EA3E942F7B11BAEC58962DBCF05C53B`
+  - `.studio-state`: `9` files / `12,382,674` bytes / SHA-256
+    `34EE865601E144B293A18B44B6EF5413EA7D2C1F99B559C8BF47FC1B07EC0401`
+  - `.studio-api-token`: SHA-256 `D20602CE9A8AFA430CF6E1730F3793F45F1BEFF535A7C7004DA7CE2B53027F3B`
+  - `config.json`: SHA-256 `3EC65D540E6763D13D6F8F27D9005F80C3C855B00D3DCFDD5E7330726AE37779`
+  - `test-results/.last-run.json`: SHA-256
+    `FFF6299EFB51BA9EF550E500ECC967E972C83E86BE387042C360CAEA7FDBAE29`
+  - `C:\Users\Moshi\.x4forge\latest.json`: SHA-256
+    `F4BB5A9470FFF8CD3BEA434CCF45A420E5A26C7394EE67254068F537FCA86B07`
+  - `C:\Users\Moshi\.x4forge\instances`: tree identity
+    `4735A59572088955D11938EC63D545F8D43C0DBB7AF85300DB790321FDF7EBF2`
+
+- **Final post-record gates:** the parent reviewed the three-record correction and confirmed the obsolete active
+  `SPECIFIED` block and stale monolithic-stability-open claim are gone, the ROADMAP verified entry exists, and the
+  handoff sequence is present. One exact Luna ran deterministic `graphify update .`: exit `0`, `10,713` nodes,
+  `27,009` edges, `334` communities. `graph.json`, `GRAPH_REPORT.md`, `.graphify_labels.json`, `manifest.json`, and
+  `.graphify_root` refreshed on disk, while exact Graphify status and diff-stat were empty and diff-check exited `0`;
+  HTML was skipped at the `5,000`-node limit, so no tracked graph delta will be staged. Independent explain anchors
+  `bootstrapE2eRuntime()` at `scripts/e2e-runtime-bootstrap.mjs:486` with degree `18` and import by `run-e2e.mjs`;
+  `runE2e` remains indexed at line `1044` with degree `17`, while Graphify extracts no direct call edge. The final
+  post-record `npm run precommit:check` exited `0`: tripwires `0/58`, canon mirrors identical, runtime bootstrap
+  `59/59`, run-e2e policy `55/55`, Vite lifecycle and product copy `PASS`, durable writers `15/15` plus inventory
+  `42` filesystem / `11` host-store / `3` browser-output / `47` SQLite / `7` transactions / `14` run / `14` exec /
+  `2` pragma, capability contract `12` capabilities / `297` routes / `1` registrar / `11` aliases at SHA-256
+  `bb467c4b70402b3dd31571dbe10d60ec05653dc6f6600f043037e993f2920337c`, MCP capability `PASS`, action receipts
+  `882` routes / `57` surfaces at SHA-256
+  `396865ea4e877035d8f8c29607d9b5e22dd5ca891b420855b59efbf8087b23bb`, typecheck `PASS`, size checks
+  `server.ts` `15,356` lines / `797,345` bytes and `mdSemantics.ts` `822` lines / `49,010` bytes, final
+  `[precommit] OK`.
+- **Records-only validation for this close:** the changed sections were re-read; `git diff --check` was required for
+  `BACKLOG.md`, `SESSION-HANDOFF.md`, and this plan; exact status was limited to those three repository paths, and the
+  two StarForge files were separately verified as changed. No product test, E2E rerun, runtime mutation, or forbidden
+  path access was performed by this records worker.
+- **UI truth boundary:** Preview for layout; game for truth. No screenshot or native run here promotes universal
+  renderer parity, arbitrary Lua support, C++ acceptance, or release readiness.
+
+### REVIEW
+
+- **Done and evidenced:** existing-runner reuse; safe/no-relaunch path; candidate validation and one-time relaunch;
+  Node/libuv threshold; recursion shield; exact child-PATH placement; runner/Playwright/literal-`node` identity;
+  fail-closed negative behavior; preserved one-worker/retry/reporter/receipt/lifecycle/teardown/ports; focused tests;
+  unsupported-runtime/invalid-candidate refusal; complete current `106/106` structured receipt; and containment.
+- **Partial / remains open:** exact native crash stack; same-state pending-branch Forge/X4 parity; complete twelve-reference
+  AI Influence census; arbitrary Lua/Helper/widget coverage; universal C++ acceptance; and the real-mod
+  `cancel_conversation` semantic correction, which remains separately write-gated.
+- **Out of scope:** universal renderer parity, arbitrary Lua execution, C++ acceptance proof, release promotion,
+  OpenVSX/install work, product/mod/game/config/corpus writes, and external projections.
+- **Fresh-eyes finding and repair:** a normal child exit `1` was initially treated as abnormal and could delete the
+  authoritative red receipt. Tests-first repair preserved exit `1` and prevented post-delete; stale-green preclear,
+  selftest receipt preservation, full control-character rejection, freshness coverage, and bounded diagnostics were
+  also corrected. The final focused runtime-bootstrap result is `59/59`.
+
+### CLOSE
+
+- **Status:** `VERIFIED` for the bounded Windows runtime-bootstrap/monolithic-E2E reliability unit; overall B119 remains
+  explicitly `IN_PROGRESS / PARTIAL`.
+- **Capability-map delta:** append one bounded positive entry for the existing E2E runner's automatic fail-closed
+  Windows safe-runtime bootstrap and the current complete monolithic receipt. Do not promote product or renderer claims.
+- **Rollback/checkpoint:** the implementation rollback is the exact bounded runner/bootstrap/selftest/precommit diff;
+  this records rollback is an exact reviewed revert of these five owned record edits. No live or protected state needs
+  restoration because this unit made no persistent runtime/product/mod/game write.
+- **Suggested commit title:** `fix(e2e): select safe Windows Node runtime`.
+
+### AAR
+
+- **Outcome / triggers:** non-clean Full-Lane close. The reproduced system-runtime crash, the initial receipt-deletion
+  P1, two failed PowerShell hash-composition commands, and the supplemental direct-script ESLint diagnostic were
+  corrected or bounded without mutation; the failed commands produced no state change. Official `npm run lint` is
+  the authoritative green result; the direct `85`-error diagnostic remains recorded as tooling/config evidence only.
+  This AAR is limited to the runtime-bootstrap unit.
+- **Sustain:** keep the structured receipt and lifecycle/tree ownership as the authority for E2E truth, and record
+  runtime identity across the parent, Playwright, and literal-`node` webServer before interpreting process exit codes.
+  Keep observed crash elimination separate from inferred Node/libuv causality.
+- **Improve work / approach:** run negative receipt-preservation and unsupported-runtime checks before broad E2E, and
+  refuse false-green conversion whenever report completeness, child exit, or ownership is inconsistent.
+- **Improve tools:** keep exact, quoting-safe record/status/hash commands; avoid composing large PowerShell pipelines
+  for protected-state evidence. A structured runtime handoff marker and bounded receipt make the failure boundary
+  inspectable without relying on a native stack.
+- **Highest-risk evidenced weakness:** Windows runtime/process termination can still occur outside the observed safe
+  runtime, and a missing or stale report can be mistaken for a test result. The bounded fix reduces that risk through
+  identity validation and receipt preservation but does not prove a universal native-stack repair.
+- **Global/project lessons banked:** project AAR and capability-map deltas are appended for this unit; no global ledger,
+  UI gotcha, product, mod, game, release, or external-projection record is changed here.
