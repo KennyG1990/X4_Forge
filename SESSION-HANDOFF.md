@@ -1,135 +1,240 @@
-# Session handoff — B119 `1e` agreement-sheet correction
+# Session handoff — B119 2026-09-09 broad validation/review checkpoint
 
-Date: `2026-09-08`
-Project: `F:\DEV_ENV\X4_Forge`
-Status: the bounded `1e` agreement-sheet correction is `VERIFIED`; overall B119 remains
-`IN_PROGRESS / PARTIAL`.
+Date: 2026-09-09
+Project: F:\DEV_ENV\X4_Forge
+Status: records checkpoint is PARTIAL; overall B119 remains IN_PROGRESS / PARTIAL.
+Worker boundary: records-only. This worker changed only the plan, BACKLOG.md,
+this handoff, and the project AAR. No implementation, test, evidence-binary,
+mod, game, installed-extension, deploy, external-service, Git, commit, push, or
+publish mutation was performed.
 
 ## Session-start brief
 
-- **Project identity:** X4 Forge B119, the source-faithful X4 Lua UI editor and AI Influence visual dogfood; GitHub
-  owner #41.
-- **Eyeball queue:** every remaining partial item requires a short Ken screen check before it is promoted.
-  1. **Full twelve-reference/current-game visual census.** Click-by-click: open the B119 plan and the reference-census
-     directory; open each `00` and `1a`-`1j` reference one at a time beside its current Forge/X4 result; classify it;
-     inspect any source-backed correction in the real native surface; record the screenshot/log boundary. Do not infer
-     parity from Forge preview or from this one native sheet.
-  2. **Universal arbitrary-Lua/Helper/widget/C++ acceptance.** Click-by-click: open the exact deployed source/path/profile
-     in X4; inspect the rendered surface and current-session log; compare the observed route with the claimed coverage;
-     close only the tested surface. Do not turn one accepted `sheet.display` route into an all-Lua claim.
-  3. **`1f` counter-offer mechanics.** This remains data-blocked and deliberately unsupported, not a completed partial
-     item: no deterministic accept/counter/break-off contract exists. Do not fabricate probabilities or implement it
-     under the current visual-census unit.
-- **Commit question:** the substantive AI Influence and Forge commits are pushed; only this records-only close is
-  pending as a parent action. This worker did not stage, commit, push, or alter Git metadata. Suggested title:
-  `docs(b119): reconcile agreement-sheet close projections`. Do not invent this records-only commit's future SHA.
+- Project identity: X4 Forge B119, the source-faithful X4 Lua UI editor and AI
+  Influence visual dogfood; GitHub owner #41.
+- Machine state at the broad checkpoint: installed Antigravity/Forge is
+  running from discovery C:\Users\Moshi\.x4forge\latest.json on port 60836,
+  PID 23764. X4 is closed and the machine was quiet. Port 3100 is unrelated
+  Deckwright PID 45172 and was not touched. B119 E2E used ephemeral ports
+  3200/3201; every run cleaned them.
+- Forge baseline: HEAD == origin/main ==
+  835b59d8e8c35e8001526cad8ab90459a703e1a4. The checkout is heavily dirty;
+  unrelated user and previous work remains untouched.
+- Protected state stayed unchanged after every E2E:
+  test-results/.last-run.json =
+  FFF6299EFB51BA9EF550E500ECC967E972C83E86BE387042C360CAEA7FDBAE29;
+  config.json =
+  3EC65D540E6763D13D6F8F27D9005F80C3C855B00D3DCFDD5E7330726AE37779;
+  C:\Users\Moshi\.x4forge\latest.json =
+  F4BB5A9470FFF8CD3BEA434CCF45A420E5A26C7394EE67254068F537FCA86B07.
+- Commit question: was the last close committed? For this checkpoint, no.
+  This worker did not stage, commit, push, or alter Git metadata. The parent
+  must stage the exact intended paths, commit, push, and assert local,
+  configured-upstream, and direct-remote parity.
 
-## Verified bounded state
+## Eyeball queue
 
-- Forge substantive commit `73a0067ff7068c493de6625fe014a3893d17d7cd` is pushed; local HEAD, `origin/main`, and the
-  direct GitHub remote matched. AI Influence source commit `a4ff27814bb964f9fefce26cc05b38cccf8f66c1` is pushed; local
-  HEAD, `origin/master`, and the direct GitHub remote matched.
-- Current AI source and deployed Lua are LF-only, `12,655` bytes, SHA-256
-  `CD687E78F4D957DF95DBF1F645692CF9DFF105A9680F68547C68223D392F7695`. The exact correction is
-  `PROPOSED AGREEMENT`, `WHAT CHANGES IN YOUR SAVE`, ASCII `tx ... - idempotent`, and footer `addTable(10)` spans
-  `4/4/2`; the prior four `reserveScrollBar=false` changes remain.
-- Forge project validation: `ok: true`, `29` files / `7` Lua, `0` errors, `5` direct warnings / `10` full-context
-  warnings, and `0` new versus baseline. AI dry-run: `0` add / `124` overwrite / `0` delete / `6` preserve. Real
-  deploy passed `11/11`; recovery `deploy-mtssjb13-d04d986bcca06e24`; fingerprint
-  `3dd16a6ed40cefb222649ac7834c2b128c764cddf9e34ac10b4ad5eb81c55edd`; independent census `124` common files,
-  `0` mismatches.
-- Installed Forge `0.0.77` was visually inspected in `x4 AiLive`, `Expert -> HUD & Lua UI`. Both data-present branches
-  were selected, both loop counts were `4`, and all `55/55` samples were populated. Readback was
-  `rendered/current`, accepted raw paint plan, `sheet.display`, `x4-ui-editor-default` `2560x1440`, Helper scale `1.4`,
-  native bitmap `2560x1440`, export-ready, with `Not verified in game` retained. The visible canvas showed both
-  headings, `TX-CAUSAL`, the party line, four clause/note rows, four cost/value rows, and three wider/wider/narrower
-  footer actions.
-- The Forge export download timed out. No durable Forge PNG was saved or claimed. The visible installed-app canvas is
-  direct observed proof; only the native screenshot and current-session log are durable image/log artifacts.
-- Native X4 9.00 visibly shows both new headings, transaction wording, four clauses, four save-diff rows, three
-  buttons, and the `40/40/20` footer without clipping. Durable artifacts:
-  `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/`;
-  `x4-native-agreement-sheet-current-2560x1392.png` is `1,535,566` bytes / SHA-256
-  `2AEE12CC76F02E75C44FA11747485014A849C1FB9FEAB5051AD41BC008C8ACC3`; `debuglog-current-session.txt` is
-  `16,859` bytes / SHA-256 `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`. The committed
-  screenshot/log are in Forge commit `73a0067`. Final manual precommit and the commit hook passed; Graphify
-  background refresh completed with no pending graph changes.
-- The current-session log has exactly one expected launcher marker and one expected sheet marker, and zero refused/
-  timeout, scrollbar, `DisplayView`, setup-view, traceback, or Lua Error signatures. The temporary `pipeline_test`
-  launch passed all `11` checks, then the scratch fixture was restored and the game target is absent.
-- Focused tests passed: PaintPlan `213/213`, LayoutKernel `34/34`, Scene `179/179`, CanvasRenderer `171/171`, Linter
-  `153/153`, PreviewPipeline `122/122`; `addTable(24)` refusal and clean `addTable(10)` were retained. Typecheck,
-  scoped ESLint, and diff hygiene passed. The current selftest reconstructs the historical `A09...D34` and current
-  `CD687...F7695` byte/hash contracts; deep Scene/Paint replay remains the historical fixture, while current deep
-  replay proof is the live installed Forge canvas.
-- Scratch restoration hashes: `content.xml` `367` bytes / `23A7E9A5D789DD31B5BFBFDCF7D9A6B63CB33971170C3C0E64438C77B52A5034`;
-  `ext_01.lua` `5,488` bytes / `C1D9CD8580C6175E95C543259A2AB19F8B463282BF48B2229EB6013D6052718E`;
-  README `210` bytes / `31B80A5145A9E9EBAF252C91DF24D58DE29B5BED76BAECC6FB6839E4EDF1C871`; `ui.xml` `273` bytes /
-  `655331A4423A550532042B23C8E60141A60DCC0E1C42D4DE6DA653DAAD1C1689`. Stale CAS returned HTTP `409` with no
-  mutation; guarded write returned HTTP `200`; restored validation was `0` errors / `0` warnings.
+Every remaining partial item needs a short Ken screen check before promotion.
 
-## Durable records and completed projections
+1. Same-state pending-branch Forge/X4 parity. Click-by-click: open the retained
+   evidence README; open forge-preview.png and design-reference-1d.png; open
+   the installed Forge replay at the pending military-request branch; then
+   open the matching pending branch in X4 and compare only like-for-like
+   state, drawable, scale, and content. The retained native compact/expanded
+   images are ordinary current communication-menu state and must not be
+   pixel-compared to the pending preview.
+2. Native compact/expanded interaction. Click-by-click in a future native X4
+   check: open the tested communication route; inspect NPC information,
+   transcript, three choices, edit box, SEND, END, and expand/dossier/end
+   controls; click EXPAND and inspect correspondent/leverage blocks, three
+   choices, edit box, and SEND; click END; confirm the overlay/conversation
+   closes; then read the retained current-session log for scoped markers.
+3. Twelve-reference census. Click-by-click: open supplied 00 and 1a-1j
+   references beside their corresponding evidence and plan rows; classify
+   each as evidenced, alternate, divergent, data-blocked, or unsupported;
+   do not promote this two-state capture to full twelve-reference completion.
+4. Broader coverage. Click-by-click: review the plan rows for arbitrary
+   Lua, Helper/widget, and universal C++ coverage; open any retained evidence
+   for the tested route; mark only machine/evidence-supported rows complete and
+   leave unsupported rows partial. No visual sample promotes universal
+   coverage.
+5. Real MD semantic defect. Click-by-click before any source change: open the
+   fresh CLI receipt and confirm md/ai_influence_conversation.xml:98;
+   write one fresh real-mod write-gate paragraph stating target, breakage risk,
+   and rollback; wait for explicit authorization before touching the real mod.
 
-- The plan now appends IMPLEMENT, VALIDATE, REVIEW, CLOSE, and AAR for this continuation. The bounded `1e` unit is
-  `VERIFIED`; full B119 remains `IN_PROGRESS / PARTIAL`.
-- BACKLOG has a concise `1e` verified checkpoint and still keeps B119 open. The evidence receipt README is at
-  `dev-docs/b119-ai-influence-dogfood/reference-census-20260908/in-game-agreement-sheet-current/README.md`.
-- The project AAR records the fill-timeout, canvas-scroll, bounded-search, redaction, and Google Docs end-index
-  correction hazards. UI gotchas card `63` records the reproduced Forge-editor distinction between `rendered/current`
-  freshness and complete scenario inputs; no new UI KB card was added in this close.
-- GitHub #41 remains open with verified checkpoint comment `5589908501`
-  (`https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5589908501`). Notion page
-  `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status In Progress` / `Evidence Grade Partial`, contains both
-  exact commits, the GitHub comment, and the new `1e` section at top, and exposes no revision ID. Google Doc
-  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back at final revision
-  `ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`,
-  paragraph count `722`, with `HEADING_2` indexes `145587-145635` and a correct one-period final boundary.
-- The first revision-guarded Google append inserted at `145585`, mistaking the prior paragraph's final period for the
-  terminal newline; the second revision-guarded batch inserted the missing period at `145585` and deleted the extra
-  period after shifted indexes. This was an external-document index error, not a product/runtime failure. All three
-  external projections are complete. `no capability-map delta`; no global workflow AAR update is part of this unit;
-  no OpenVSX publication belongs to it. The records-only commit remains parent-owned; no future SHA is recorded.
+## Current evidence and product boundary
 
-## Exact next source-backed B119 unit
+Retained evidence folder:
+F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\
 
-Continue the full twelve-reference AI Influence reconstruction and current-game visual census, applying only corrections
-directly supported by the source/reference/native evidence. Preserve the current native screenshot/log and package/
-deployment boundaries; do not reopen `1f` mechanics or claim universal parity from `1e`.
+All seven supplied identities were rechecked: forge-preview 497D...E768;
+compact 6A73...D32; expanded F4F1...9BAA; design 195C...5B9; debuglog
+BCDE...0451; README 248998...47BB; CLI receipt B590...36C0E. The specified
+Forge preview filename was absent, but an adjacent .playwright-mcp artifact
+had the expected identity and was retained; the path discrepancy remains
+explicit.
 
-## Hazards
+Installed Forge source replay is proven for
+ui/addons/ai_influence_chat/aic_menu.lua -> menu.display at 2560x1440,
+effective scale 1.4, seven branch arms, loop count 3, and 31 samples.
+Apply retained the target and export remained Not verified in game.
 
-- One bulk browser fill timed out after `120 s` and left `17/55` values; five bounded batches reached `55/55`.
-  `rendered/current` is identity freshness, not proof that all runtime-dependent scenario inputs are populated.
-- Nested editor scrolling initially produced blank/misaligned captures; scroll the actual canvas into view before
-  relying on a visual inspection.
-- Two runaway recursive `rg` scans against giant rollout JSONL files consumed about `785 MB` and `1.286 GB`; both
-  processes were verified and terminated. Search exact pointed files and bounded ranges only.
-- A redaction mistake exposed the local Forge bearer token in tool output. No token or secret is reproduced here; keep
-  credentials out of durable records and treat redacted tool output as sensitive.
-- The Forge export download timed out and produced no durable Forge PNG. Keep native screenshot/log artifacts separate
-  from installed-app export-ready state.
-- Before the pending evidence commit, exact-path `git add -f` applied the repository `text: auto` filter to the native
-  log: the working/native artifact was `16,859` bytes / SHA-256
-  `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826` with `230` CR and `230` LF bytes, while the
-  staged/index blob was `16,629` bytes / SHA-256
-  `5E2BE22E13150BDB0338AA7F5D0F242C82BDFBF1827A3126DCE808AC8FF6B3C9` with CR bytes removed. The parent caught this
-  by hashing the staged blob and corrected only that path with an exact no-filter raw blob; the staged identity is
-  restored to `16,859` bytes / `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826` with `230` CR and
-  `230` LF bytes. Check the index/blob before commit; this is a Git/evidence-packaging hazard, not an X4-engine or
-  Forge-rendering failure.
-- Preserve unrelated dirty files and never launch another deploy/game/E2E run from this docs handoff.
-- Durable repository fix: `.gitattributes` now marks `dev-docs/**/debuglog*.txt binary`, so native debug-log evidence
-  is byte-preserving under ordinary staging and no longer relies on the one-off no-filter raw-index workaround. Keep
-  both the failed filtered identity (`16,629` bytes / `5E2BE22E13150BDB0338AA7F5D0F242C82BDFBF1827A3126DCE808AC8FF6B3C9`)
-  and corrected native identity (`16,859` bytes / `EC759E2279DEC3DAD3C0DA694A51C1A920F04480B3527ED6E7DF94831067B826`)
-  as incident evidence. Rollback is removal of that single pattern; the parent can restage the exact path raw if needed.
+Native compact/expanded rendering and interaction are proven for the tested
+ordinary communication-menu route: compact showed NPC information, transcript,
+three choices, edit box, SEND, END, and controls; EXPAND opened full-screen
+COMM with correspondent/leverage blocks and three choices; END closed the
+overlay/conversation. These native states are not the pending military-request
+preview, so same-state visual parity is not proven.
 
-## Preservation boundary
+The current-session log records the engine diagnostic at line 427,
+onOpenCommLink at 855/858, OpenMenu returned OK at 876, display ENTER at 879,
+reserveScrollBar diagnostics at 882/885 and 1059/1062, and display DONE at
+888/1065. No Failed to set up the view marker or stack traceback was found.
+Native rendering does not remove the linter finding and does not prove
+whole-file or whole-frame acceptance.
 
-The baseline contains unrelated onboarding/bug/data/docs/scripts changes, server and test changes,
-`test-results/.last-run.json`, extension evidence, `artifacts/`, `media/`, package-workspace files, lockfiles, and
-untracked showcase/marketing files. They are user-owned and remain untouched. The prior continuation changed only the
-six owned documentation paths: the plan, BACKLOG, this handoff, the one evidence README, the project AAR, and the UI
-gotchas guide. This records-only close changes only the five owned records named in its work order. No source/test
-file, AI Influence mod or deployed/game file, screenshot/log byte, capability map, global AAR, Git metadata, or new
-external service record was changed by this close.
+Fresh read-only real-mod validation returned exit 1. Summary: Lua 0/3, X4 UI
+0/3 with unverified 6 and truncated 4, MD pitfall 1/0. Finding:
+md_pitfall.cancel_conversation_actor_or_template at
+md/ai_influence_conversation.xml:98. The real mod remains untouched and this
+finding is not a whole-file or whole-frame rejection.
+
+Column calibration remains literal 12 clean, literal 13-23 warning/game-check
+because official X4 9.00 has valid 13-column tables, and literal 24+ blocking
+only from the reproduced whole-frame incident. This is not a universal
+above-12 rejection rule.
+
+Fresh-eyes review corrected the sample-panel sentence to:
+currently applied preview values remain active while edits are staged; staged
+edits take effect only after explicit Apply.
+The mounted regression asserts the full sentence. Review found no production
+regression in identity-bound authority, transactional sample drafts, finite
+numeric-for specialization, or detached conditional alternate-creator evidence.
+
+## Broad validation matrix
+
+- npm run typecheck: exit 0.
+- npm run lint: exit 0; 0 errors and 600 warnings.
+- Oracle sweep: the first node scripts/oracle-sweep.mjs used default port 3001
+  and returned 0/133 fetch failures. This was a target-selection error, not
+  product evidence. With X4_FORGE_BASE=http://127.0.0.1:60836 it returned
+  133/134 because xml-source-spans had a transient fetch failure; the direct
+  endpoint returned HTTP 200 and 4/4. An unchanged complete rerun returned
+  134/134.
+- Focused SourceEditor: 19/19. The two-path diff check passed.
+- E2E first invocation: it accidentally included unrelated untracked
+  tests/e2e/marketing-showcase.spec.ts, expanding inventory to 107. Marketing
+  passed, then the ephemeral API died near project-browser: 66 passed, 41
+  failed, treeGone=true. Live hashes stayed unchanged. The first failing
+  project-browser test passed alone 1/1.
+- Focused B119 E2E: project-validate.spec.ts plus
+  x4-ui-source-editor.spec.ts passed 10/10 with zero failures/flakes and
+  treeGone=true.
+- Canonical inventory: excluding only the unrelated untracked marketing spec,
+  tests 1-74 were green and crossed the earlier failure point, then
+  Playwright/Node terminated with 3221226505 (0xC0000409). No structured final
+  report was produced.
+- Tail batch: 31/33 green, then the same 0xC0000409 after the SourceEditor
+  scale test; two XML tests had not run.
+- XML patch merge: xml-patch-merge.spec.ts passed separately 2/2.
+- E2E conclusion: every canonical behavior was observed green across bounded
+  batches, but the required monolithic full E2E gate is RED because the
+  Windows process terminated twice at different boundaries. This is not a 106/106 full-suite pass; never convert
+  this to a 106/106 full-suite pass. Later bounded runs overwrote
+  test-results/e2e-verdict.json; it is not a combined full-suite receipt.
+- E2E containment: every run cleaned 3200/3201 and preserved the three
+  protected hashes above.
+- npm run precommit:check: exit 0. Tripwires 0/58 source files; canon mirrors
+  identical; E2E verdict selftest 55/55; Vite lifecycle pass; product-copy
+  pass; durable-writer audit pass with 42 filesystem, 11 host-store,
+  3 browser-output, 47 SQLite statements, 7 transactions, 14 runs, 14 execs,
+  and 2 pragmas; capability contract pass with 12 capabilities, 297 routes,
+  1 dynamic registrar, 11 MCP aliases, SHA bb467...2037c; MCP capability
+  pass; action-receipt coverage pass with 882 routes, 57 surfaces, manifest
+  SHA 396865...23bb; typecheck and size checks pass; PRECOMMIT OK.
+- npm run build: exit 0. Vite 1848 modules; dist JavaScript 2.82 MB,
+  gzip 775.64 kB; chunk-size warning only; server.cjs 3.5 MB and map
+  6.6 MB.
+- Evidence/hash negative checks: the first read-only hash command incorrectly
+  used -LiteralPath with a wildcard and failed. The corrected
+  Get-ChildItem | Get-FileHash form passed all seven identities. A read-only
+  git -C F:\StarForge assumption check failed as expected because that path is
+  not a Git repository; it changed no files.
+
+## Exact intended staged path list
+
+For the parent's first B119 records/evidence checkpoint, stage only these
+explicit repository paths; do not use a wildcard and do not stage unrelated
+dirty work:
+
+- F:\DEV_ENV\X4_Forge\BACKLOG.md
+- F:\DEV_ENV\X4_Forge\SESSION-HANDOFF.md
+- F:\DEV_ENV\X4_Forge\docs\plans\2026-09-05-b119-ai-influence-visual-dogfood.md
+- F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\forge-preview.png
+- F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\native-compact.jpg
+- F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\native-expanded.jpg
+- F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\design-reference-1d.png
+- F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\debuglog-current-session.txt
+- F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\README.md
+- F:\DEV_ENV\X4_Forge\dev-docs\b119-ai-influence-dogfood\in-game-20260909-source-replay\x4validate-real-mod-receipt.txt
+
+F:\StarForge\wiki\x4-forge\aar-log.md is an external durable project record,
+not a path in the Forge repository stage list. It was appended for this
+checkpoint; no external projection was performed. Any parent implementation or
+test paths require separate exact-path reconciliation and must not be inferred
+or staged from this records-only handoff.
+
+## Dirty and forbidden-path preservation
+
+Preserve every other dirty Forge path, including implementation sources,
+selftests, tests, deletions, untracked artifacts, lockfiles, and unrelated
+records. Do not touch the real AI Influence source, game, installed extension,
+config, save, capability map, UI gotcha record, Git metadata, or external
+services. No OpenVSX action belongs to this close; installed/public 0.0.77 is
+current.
+
+## Parent next commands
+
+1. Re-read the four owned records and the retained evidence path list; run
+   exact-path diff-check and confirm only intended B119 paths are selected.
+2. Stage the exact records/evidence paths listed above plus any separately
+   reconciled implementation/test paths, then run the final precommit gate.
+3. Commit and push the intended B119 checkpoint and assert local,
+   configured-upstream, and direct-remote parity. This handoff records no
+   commit or push completion.
+4. Synchronize GitHub #41, the Notion owner page, and Google Current Status;
+   read each projection back. Then make a second records-only projection
+   receipt commit. This handoff records no external projection completion.
+5. Keep the monolithic E2E 0xC0000409 failure as an open harness/gate
+   backlog item. Do not scope-creep product code to manufacture a green suite.
+6. Only after a fresh real-mod write-gate paragraph and explicit authorization,
+   perform the separate bounded MD correction and its full validation.
+7. Continue same-state pending-branch parity, the full twelve-reference census,
+   arbitrary Lua/Helper/widget coverage, and universal C++ acceptance. Keep
+   B119 IN_PROGRESS / PARTIAL.
+
+## Close state
+
+Rollback for this worker is limited to restoring the four pre-write record
+hashes with a reviewed patch:
+
+- BACKLOG.md:
+  1717D0E054F5F2DE023DFD974AD67FD98DAAE225680C963F3B0AC1248C6DF4AA
+- SESSION-HANDOFF.md:
+  4E487C7E640EE7E3C0C2B72C2E9B2177E703B20B5CF4A0BBE25F878ED3EAE4CE
+- docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md:
+  F010E6BFF01D63B471FE34608311920DC1A2FF1C77E8D4BA336FBD1DF557C4B1
+- F:\StarForge\wiki\x4-forge\aar-log.md:
+  8435BB6261B923B376419375A113F0B14C3A876F28B7C0F90DD1BBBCBB5F1A7D
+
+Current close: PARTIAL. Product/runtime evidence is proven only for the tested
+installed-Forge source replay and ordinary native compact/expanded routes.
+Not proven: same-state pending-branch Forge-to-X4 visual parity, full
+twelve-reference reconstruction, arbitrary Lua/Helper/widget coverage, and
+universal C++ acceptance. The real-mod cancel_conversation finding remains
+open and write-gated. The monolithic E2E harness crash remains RED/open.
+
+Commit question for the next close: stage and commit the exact intended paths,
+push, verify remote parity, then record the external projection readback. Do
+not claim those actions here.

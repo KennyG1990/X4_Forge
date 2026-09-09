@@ -1186,6 +1186,27 @@ assert.deepEqual(reconcileX4UiEditorSelections({
   targetSelector: targetSelectionTransition.targetSelector,
   candidates: stableSelectionCandidates,
 }), { sourceSelector: 'source-other', targetSelector: '' }, 'changing source must clear the prior target');
+const delimiterTargetBody = 'target:ui/addons/ai_influence_chat/aic_menu.lua||8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD|function|ui/addons/ai_influence_chat/aic_menu.lua||315:0:16768|893:3:53651:function';
+assert.deepEqual(reconcileX4UiEditorSelections({
+  sourceSelector: 'source-real',
+  targetSelector: `12:${delimiterTargetBody}`,
+  candidates: [{ key: 'source-real', targets: [{ key: `13:${delimiterTargetBody}` }] }],
+}), { sourceSelector: 'source-real', targetSelector: `13:${delimiterTargetBody}` }, 'target index drift must rebase on the unique stable target identity');
+assert.deepEqual(reconcileX4UiEditorSelections({
+  sourceSelector: 'source-real',
+  targetSelector: `12:${delimiterTargetBody}`,
+  candidates: [{ key: 'source-real', targets: [{ key: '13:another-target:function' }] }],
+}), { sourceSelector: 'source-real', targetSelector: '' }, 'missing drifted target authority must remain fail-closed');
+assert.deepEqual(reconcileX4UiEditorSelections({
+  sourceSelector: 'source-real',
+  targetSelector: `12:${delimiterTargetBody}`,
+  candidates: [{ key: 'source-real', targets: [{ key: `13:${delimiterTargetBody}` }, { key: `14:${delimiterTargetBody}` }] }],
+}), { sourceSelector: 'source-real', targetSelector: '' }, 'ambiguous drifted target authority must remain fail-closed');
+assert.deepEqual(reconcileX4UiEditorSelections({
+  sourceSelector: 'source-real',
+  targetSelector: 'invalid-target-authority',
+  candidates: [{ key: 'source-real', targets: [{ key: `13:${delimiterTargetBody}` }] }],
+}), { sourceSelector: 'source-real', targetSelector: '' }, 'invalid target authority must remain fail-closed');
 console.log('X4UiSourceEditor selection reconciliation regression: valid target retention 1/1; no-auto-select 1/1; source-change reset 1/1');
 
 assert.equal(classifyX4UiCorpusLoadResult({
@@ -1576,6 +1597,19 @@ const sourceText = readFileSync(new URL('./X4UiSourceEditor.tsx', import.meta.ur
 const selftestText = readFileSync(new URL('./X4UiSourceEditor.selftest.tsx', import.meta.url), 'utf8');
 const uiBuilderText = readFileSync(new URL('./UIBuilder.tsx', import.meta.url), 'utf8');
 const appText = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const projectionMemoSource = sourceText.match(/ {2}const projection = useMemo\([\s\S]*?\n {2}\);/)?.[0] ?? '';
+const projectionObserverContractRows = [
+  ['projection memo computes the session projection', /const next = sessionOwner\.project\(sessionInput\);/.test(projectionMemoSource)],
+  ['projection memo has no render-phase observer callback', !/sessionProjectionObserverRef\.current\?\.\(next\)/.test(projectionMemoSource)],
+  ['observer callback is keyed to committed projection in an effect', /useEffect\(\(\) => \{\s*sessionProjectionObserverRef\.current\?\.\(projection\);\s*\}, \[projection\]\);/s.test(sourceText)],
+  ['observer ref remains fresh for the latest callback', /sessionProjectionObserverRef\.current = onSessionProjection;/.test(sourceText)],
+] as const;
+const projectionObserverContractMissing = projectionObserverContractRows.filter(([, pass]) => !pass).map(([name]) => name);
+assert.deepEqual(
+  projectionObserverContractMissing,
+  [],
+  `B119 projection observer committed-effect fail-first red assertions: ${projectionObserverContractMissing.join(', ')}`,
+);
 assert.doesNotMatch(appText, /setX4UiVerificationSnapshot\(null\)/, 'App must not clobber the child-owned current snapshot from a parent layout effect');
 assert.match(appText, /refreshExperienceConfirmationPreservingX4UiSnapshot/);
 assert.match(sourceText, /return \(\) => onVerificationSnapshotChange\(null\);/, 'SourceEditor cleanup remains the null-emission owner');
@@ -1629,7 +1663,12 @@ assert.match(sourceText, /projection\.sampleBinding/);
 assert.match(sourceText, /sameX4UiEditorSampleBinding/);
 assert.match(sourceText, /sampleCatalogAuthority/);
 assert.match(sourceText, /projection\.sampleCatalogAuthority/);
-assert.match(sourceText, /updateX4UiEditorSampleState\(sampleInput, projection\.sampleCatalog, entryId, raw, projection\.sampleCatalogAuthority\)/);
+assert.match(sourceText, /const updateSample = \(entryId: string, raw: string\): void => \{/);
+assert.match(sourceText, /setSampleDraft\(previous =>/);
+assert.match(sourceText, /applyX4UiEditorSampleDraft\(sampleInput, catalog, draft\.values, draft\.authority\)/);
+assert.match(sourceText, /onApply=\{applySampleDraft\}/);
+assert.match(sourceText, /onReset=\{resetSampleDraft\}/);
+assert.doesNotMatch(sourceText, /updateX4UiEditorSampleState\(sampleInput, projection\.sampleCatalog, entryId, raw, projection\.sampleCatalogAuthority\)/);
 assert.match(sourceText, /X4UiSourceEditorPreviewPaths/);
 assert.match(sourceText, /X4UiSourceEditorPreviewLoops/);
 assert.match(sourceText, /pathBinding/);
@@ -4523,7 +4562,10 @@ function p7SourceReceipt(value: unknown): unknown {
   if (record === undefined) return value;
   if (typeof record.error === 'string') return { error: record.error };
   const receipt: Record<string, unknown> = {};
-  for (const key of ['status', 'accepted', 'detail', 'colorStatus', 'colorDetail', 'getterReads', 'getTrapReads', 'threw', 'dualCanonical', 'detached', 'timeout', 'statusCallCount', 'overlapBeforeEitherSettled', 'callsUseSharedSignal', 'coreCanonical', 'colorCanonical', 'canonicalCount', 'failedBranchOrdinary', 'coreLoaderStarted', 'colorLoaderStarted', 'branchStartsBeforeSettlement', 'injectedBranchRejected', 'branchSignalsUseSharedSignal', 'initialCanvasStatus', 'initialCanvasDetail', 'parentInitialSnapshot', 'sourceOnlyCanvasStatus', 'sourceOnlyCanvasDetail', 'parentSourceOnlySnapshot', 'sourceOnlyCanvasRetained', 'currentCanvasStatus', 'currentCanvasDetail', 'currentCanvasMounted', 'currentCanvasReplaced', 'currentCanvasWidth', 'currentCanvasHeight', 'targetCommitCanvasStatus', 'parentTargetSnapshot', 'parentTargetCallbackCanvasStatus', 'parentTargetCallbackCanvasMounted', 'parentTargetCallbackExportDisabled', 'currentExportDisabled', 'currentExportStatus', 'currentExportProfile', 'currentNativeBitmapWidth', 'currentNativeBitmapHeight', 'currentSourceIdentity', 'currentTargetMetadata', 'currentSceneStatus', 'presetActive', 'presetCanvasStatus', 'presetExportDisabled', 'staleCanvasStatus', 'staleCanvasRetained', 'staleExportStatus', 'restoredCanvasStatus', 'restoredCanvasReplaced', 'restoredExportDisabled', 'sourcePath', 'targetOptionCount', 'targetOptionValueBefore', 'targetOptionValueAfter', 'targetSelectValue', 'targetRetained', 'targetMetadata', 'canvasStatus', 'canvasDetail', 'canvasExportDisabled', 'canvasExportStatus', 'pathRegion', 'parentReconciled', 'fixtureHash', 'targetOptionValue', 'targetCanvasStatus', 'targetCanvasDetail', 'targetCanvasMounted', 'targetCanvasReplaced', 'targetExportDisabled', 'targetExportStatus', 'targetSourceIdentity', 'targetSceneStatus', 'handlerOptionValue', 'handlerCanvasStatus', 'handlerCanvasDetail', 'handlerCanvasMounted', 'handlerExportStatus', 'handlerTargetMetadata', 'restoredCanvasDetail', 'restoredCanvasMounted', 'restoredExportDisabled', 'restoredExportStatus', 'parentReconciliations', 'parentCallbackNotifications', 'gameTruth', 'initialLoopValue', 'immediateLoopValue', 'settledLoopValue', 'acceptedLoopIterationCount', 'invalidLoopValue', 'invalidLoopIterationCount', 'resetLoopValue', 'resetLoopIterationCount', 'loopGameTruth', 'initialOwnerBuilds', 'initialCandidateCatalogBuilds', 'initialCandidateMaterializations', 'initialProvisionalProjectionCalls', 'profileOnlyOwnerBuilds', 'profileOnlyCandidateCatalogBuilds', 'profileOnlyCandidateMaterializations', 'profileOnlyProvisionalProjectionCalls', 'sameWorkspaceParentOwnerBuilds', 'sameWorkspaceParentCandidateCatalogBuilds', 'sameWorkspaceParentCandidateMaterializations', 'sameWorkspaceParentProvisionalProjectionCalls', 'newWorkspaceOwnerBuilds', 'newWorkspaceCandidateCatalogBuilds', 'newWorkspaceCandidateMaterializations', 'newWorkspaceProvisionalProjectionCalls', 'selectedPath', 'selectedTargetId']) {
+  for (const key of ['status', 'accepted', 'detail', 'colorStatus', 'colorDetail', 'getterReads', 'getTrapReads', 'threw', 'dualCanonical', 'detached', 'timeout', 'statusCallCount', 'overlapBeforeEitherSettled', 'callsUseSharedSignal', 'coreCanonical', 'colorCanonical', 'canonicalCount', 'failedBranchOrdinary', 'coreLoaderStarted', 'colorLoaderStarted', 'branchStartsBeforeSettlement', 'injectedBranchRejected', 'branchSignalsUseSharedSignal', 'initialCanvasStatus', 'initialCanvasDetail', 'parentInitialSnapshot', 'sourceOnlyCanvasStatus', 'sourceOnlyCanvasDetail', 'parentSourceOnlySnapshot', 'sourceOnlyCanvasRetained', 'currentCanvasStatus', 'currentCanvasDetail', 'currentCanvasMounted', 'currentCanvasReplaced', 'currentCanvasWidth', 'currentCanvasHeight', 'targetCommitCanvasStatus', 'parentTargetSnapshot', 'parentTargetCallbackCanvasStatus', 'parentTargetCallbackCanvasMounted', 'parentTargetCallbackExportDisabled', 'currentExportDisabled', 'currentExportStatus', 'currentExportProfile', 'currentNativeBitmapWidth', 'currentNativeBitmapHeight', 'currentSourceIdentity', 'currentTargetMetadata', 'currentSceneStatus', 'presetActive', 'presetCanvasStatus', 'presetExportDisabled', 'staleCanvasStatus', 'staleCanvasRetained', 'staleExportStatus', 'restoredCanvasStatus', 'restoredCanvasReplaced', 'restoredExportDisabled', 'sourcePath', 'targetOptionCount', 'targetOptionValueBefore', 'targetOptionValueAfter', 'targetSelectValue', 'targetRetained', 'targetMetadata', 'canvasStatus', 'canvasDetail', 'canvasExportDisabled', 'canvasExportStatus', 'pathRegion', 'loopRegion', 'sampleRegion', 'parentReconciled', 'fixtureHash', 'targetOptionValue', 'targetCanvasStatus', 'targetCanvasDetail', 'targetCanvasMounted', 'targetCanvasReplaced', 'targetExportDisabled', 'targetExportStatus', 'targetSourceIdentity', 'targetSceneStatus', 'handlerOptionValue', 'handlerCanvasStatus', 'handlerCanvasDetail', 'handlerCanvasMounted', 'handlerExportStatus', 'handlerTargetMetadata', 'restoredCanvasDetail', 'restoredCanvasMounted', 'restoredExportDisabled', 'restoredExportStatus', 'parentReconciliations', 'parentCallbackNotifications', 'gameTruth', 'initialLoopValue', 'immediateLoopValue', 'settledLoopValue', 'acceptedLoopIterationCount', 'invalidLoopValue', 'invalidLoopIterationCount', 'resetLoopValue', 'resetLoopIterationCount', 'loopGameTruth', 'initialOwnerBuilds', 'initialCandidateCatalogBuilds', 'initialCandidateMaterializations', 'initialProvisionalProjectionCalls', 'profileOnlyOwnerBuilds', 'profileOnlyCandidateCatalogBuilds', 'profileOnlyCandidateMaterializations', 'profileOnlyProvisionalProjectionCalls', 'sameWorkspaceParentOwnerBuilds', 'sameWorkspaceParentCandidateCatalogBuilds', 'sameWorkspaceParentCandidateMaterializations', 'sameWorkspaceParentProvisionalProjectionCalls', 'newWorkspaceOwnerBuilds', 'newWorkspaceCandidateCatalogBuilds', 'newWorkspaceCandidateMaterializations', 'newWorkspaceProvisionalProjectionCalls', 'selectedPath', 'selectedTargetId', 'requestedTargetKey', 'replacementTargetKey', 'targetSelectValueBeforeProjection', 'targetSelectValueAfterProjection', 'targetOptionAfterProjection', 'targetResetObserved', 'targetRetained']) {
+    if (Object.hasOwn(record, key)) receipt[key] = record[key];
+  }
+  for (const key of ['issuedSampleCount', 'initialProjectionCount', 'stagedProjectionCount', 'appliedProjectionCount', 'invalidProjectionCount', 'stagedControlValues', 'appliedControlValues', 'invalidControlValue', 'invalidAcceptedControlValue', 'resetControlValue', 'initialCanvasPresent', 'stagedCanvasPresent', 'stagedCanvasSame', 'canvasRetainedWhileStaged', 'exportRetainedWhileStaged', 'stagedLabel', 'appliedLabel', 'transientTargetOptionValue', 'transientTargetSelectRawValue', 'transientTargetSelectValue', 'transientTargetSelectText', 'transientProjectionRefused', 'transientRenderRevision']) {
     if (Object.hasOwn(record, key)) receipt[key] = record[key];
   }
   if (Object.hasOwn(record, 'result')) receipt.result = record.result === null ? null : record.result === undefined ? undefined : 'present';
@@ -4965,6 +5007,10 @@ type MountedCandidateProjectionHarnessProps = {
   readonly sourceSelector: string;
   readonly targetSelector: string;
   readonly parentRevision: number;
+  readonly targetKeyDrift?: {
+    readonly initial: string;
+    readonly replacement: string;
+  };
   readonly observed: { latestSelection?: unknown };
 };
 
@@ -4982,12 +5028,20 @@ function compileMountedCandidateProjectionHarness(): React.ComponentType<Mounted
   const selectionSource = sourceText.slice(selectionStartOffset, selectionEndOffset);
   const compiled = transpileModule([
     'export default function MountedCandidateProjectionHarness(props) {',
-    'const { React, createX4UiEditorSessionOwner, reconcileX4UiEditorSelections, sourceCandidatesFor, previewFor, asRecord, workspace, canonicalCorpus, profileValue, enabledEntryIds, manualSessionInput, canonicalColorEvidence, activePresetId, sourceSelector, targetSelector, parentRevision, observed } = props;',
+    'const { React, createX4UiEditorSessionOwner, reconcileX4UiEditorSelections, sourceCandidatesFor, previewFor, asRecord, workspace, canonicalCorpus, profileValue, enabledEntryIds, manualSessionInput, canonicalColorEvidence, activePresetId, sourceSelector, targetSelector: requestedTargetSelector, parentRevision, targetKeyDrift, observed } = props;',
     'const useMemo = React.useMemo;',
+    'const useEffect = React.useEffect;',
+    'const [mountedTargetSelector, setMountedTargetSelector] = React.useState(requestedTargetSelector);',
+    'const targetSelector = mountedTargetSelector;',
     ownerSource,
     selectionSource,
+    'useEffect(() => {',
+    '  if (selection.reconciled.targetSelector !== mountedTargetSelector) setMountedTargetSelector(selection.reconciled.targetSelector);',
+    '}, [selection.reconciled.targetSelector, mountedTargetSelector]);',
+    'observed.latestMountedTargetSelector = mountedTargetSelector;',
     'observed.latestSelection = selection;',
-    'return React.createElement("output", { "data-testid": "x4-ui-candidate-projection-harness", "data-parent-revision": parentRevision }, String(parentRevision));',
+    'const targetSelect = React.createElement("select", { "data-testid": "x4-ui-mounted-target-selector", value: mountedTargetSelector, onChange: event => setMountedTargetSelector(event.target.value) }, [React.createElement("option", { key: "", value: "" }, "Select target…"), ...(selection.source?.targets ?? []).map(target => React.createElement("option", { key: target.key, value: target.key }, target.label))]);',
+    'return React.createElement(React.Fragment, null, targetKeyDrift === undefined ? null : targetSelect, React.createElement("output", { "data-testid": "x4-ui-candidate-projection-harness", "data-parent-revision": parentRevision }, String(parentRevision)));',
     '}',
   ].join('\n'), {
     compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
@@ -5024,9 +5078,11 @@ async function runMountedCandidateProjectionRegression(): Promise<MountedCandida
   let candidateCatalogBuilds = 0;
   let candidateMaterializations = 0;
   let provisionalProjectionCalls = 0;
+  let activeCandidateView = candidateView;
   const createCountingOwner = (): unknown => {
     ownerBuilds += 1;
     candidateCatalogBuilds += 1;
+    activeCandidateView = candidateView;
     const candidateCatalog = Object.freeze({ sourceCandidates: Object.freeze([candidateView.raw]) });
     return Object.freeze({
       candidateCatalog,
@@ -5038,7 +5094,7 @@ async function runMountedCandidateProjectionRegression(): Promise<MountedCandida
   };
   const sourceCandidatesForHarness = (): readonly unknown[] => {
     candidateMaterializations += 1;
-    return Object.freeze([candidateView]);
+    return Object.freeze([activeCandidateView]);
   };
   const previewForHarness = (value: unknown): unknown => (
     value !== null && typeof value === 'object' && 'preview' in value
@@ -5133,6 +5189,151 @@ async function runMountedCandidateProjectionRegression(): Promise<MountedCandida
       newWorkspaceProvisionalProjectionCalls: newWorkspace[3],
       selectedPath: typeof selection?.selection?.path === 'string' ? selection.selection.path : '',
       selectedTargetId: typeof selection?.selection?.target?.id === 'string' ? selection.selection.target.id : '',
+    };
+  } finally {
+    if (root !== undefined) {
+      await act(async () => {
+        root?.unmount();
+        await Promise.resolve();
+      });
+    }
+    restoreGlobals();
+  }
+}
+
+type MountedDelimiterTargetReconciliationReceipt = {
+  readonly requestedTargetKey: string;
+  readonly replacementTargetKey: string;
+  readonly targetSelectValueBeforeProjection: string;
+  readonly targetSelectValueAfterProjection: string;
+  readonly targetOptionAfterProjection: string;
+  readonly selectedPath: string;
+  readonly selectedTargetId: string;
+  readonly targetResetObserved: boolean;
+  readonly targetRetained: boolean;
+};
+
+async function runMountedDelimiterTargetReconciliationRegression(): Promise<MountedDelimiterTargetReconciliationReceipt> {
+  const mountedDocument = new MountedDomDocument();
+  const restoreGlobals = installMountedDomGlobals(mountedDocument);
+  const container = mountedDocument.createElement('div');
+  mountedDocument.body.appendChild(container);
+  const Harness = compileMountedCandidateProjectionHarness();
+  const sourcePath = 'ui/addons/ai_influence_chat/aic_menu.lua';
+  const sourceIdentity = Object.freeze({
+    file: sourcePath,
+    sourcePath,
+    sha256: 'A'.repeat(64),
+  });
+  const targetId = 'target:ui/addons/ai_influence_chat/aic_menu.lua||8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD|function|ui/addons/ai_influence_chat/aic_menu.lua||315:0:16768|893:3:53651';
+  const requestedTargetKey = `12:${targetId}:function`;
+  const replacementTargetKey = `13:${targetId}:function`;
+  const targetRaw = Object.freeze({ id: targetId, kind: 'function', name: 'menu.display' });
+  const candidateRaw = Object.freeze({ path: sourcePath, sourceIdentity, targets: Object.freeze([targetRaw]) });
+  const makeCandidateView = (targetKey: string): unknown => Object.freeze({
+    raw: candidateRaw,
+    index: 0,
+    path: sourcePath,
+    key: 'candidate-source',
+    sourceIdentity,
+    targets: Object.freeze([Object.freeze({ raw: targetRaw, key: targetKey, label: 'menu.display' })]),
+  });
+  let activeCandidateView = makeCandidateView(requestedTargetKey);
+  const createCountingOwner = (workspaceValue: unknown): unknown => {
+    const workspaceId = asRecordHarness(workspaceValue)?.id;
+    const targetKey = workspaceId === 'delimiter-target-replacement' ? replacementTargetKey : requestedTargetKey;
+    activeCandidateView = makeCandidateView(targetKey);
+    const candidateCatalog = Object.freeze({ sourceCandidates: Object.freeze([candidateRaw]) });
+    return Object.freeze({
+      candidateCatalog,
+      project: (): unknown => Object.freeze({ preview: candidateCatalog }),
+    });
+  };
+  const sourceCandidatesForHarness = (): readonly unknown[] => Object.freeze([activeCandidateView]);
+  const previewForHarness = (value: unknown): unknown => (
+    value !== null && typeof value === 'object' && 'preview' in value
+      ? (value as { readonly preview: unknown }).preview
+      : Object.freeze({ sourceCandidates: Object.freeze([]) })
+  );
+  const asRecordHarness = (value: unknown): Record<string, unknown> | null => (
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null
+  );
+  const enabledEntryIds = Object.freeze([]) as readonly string[];
+  const manualSessionInput = Object.freeze({ manualCalibrations: Object.freeze([]), enabledManualEntryIds: Object.freeze([]) });
+  const canonicalColorEvidence = undefined;
+  const activePresetId = null;
+  const initialWorkspace = Object.freeze({ id: 'delimiter-target-initial' });
+  const replacementWorkspace = Object.freeze({ id: 'delimiter-target-replacement' });
+  const profileValue = Object.freeze({ width: 320, height: 360, uiScale: 0.4 });
+  const observed: { latestSelection?: unknown } = {};
+  const flush = async (operation: () => void): Promise<void> => {
+    await act(async () => {
+      operation();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+  let root: ReturnType<typeof createRoot> | undefined;
+  const renderHarness = async (workspaceValue: unknown, parentRevision: number): Promise<void> => {
+    await flush(() => {
+      root ??= createRoot(container as unknown as Element);
+      root.render(<Harness
+        React={React}
+        createX4UiEditorSessionOwner={createCountingOwner}
+        reconcileX4UiEditorSelections={reconcileX4UiEditorSelections}
+        sourceCandidatesFor={sourceCandidatesForHarness}
+        previewFor={previewForHarness}
+        asRecord={asRecordHarness}
+        workspace={workspaceValue}
+        canonicalCorpus={null}
+        profileValue={profileValue}
+        enabledEntryIds={enabledEntryIds}
+        manualSessionInput={manualSessionInput}
+        canonicalColorEvidence={canonicalColorEvidence}
+        activePresetId={activePresetId}
+        sourceSelector="candidate-source"
+        targetSelector={requestedTargetKey}
+        parentRevision={parentRevision}
+        targetKeyDrift={{ initial: requestedTargetKey, replacement: replacementTargetKey }}
+        observed={observed}
+      />);
+    });
+  };
+  try {
+    await renderHarness(initialWorkspace, 0);
+    const initialTargetSelect = mountedElementByTestId(container, 'x4-ui-mounted-target-selector');
+    if (initialTargetSelect === null) throw new Error('delimiter target mounted selector was not rendered');
+    const initialTargetOption = initialTargetSelect.options.find(option => option.value === requestedTargetKey);
+    if (initialTargetOption === undefined) throw new Error(`delimiter target option was not rendered: ${initialTargetSelect.options.map(option => option.value).join('|')}`);
+    await flush(() => {
+      initialTargetSelect.value = initialTargetOption.value;
+      initialTargetSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const targetSelectValueBeforeProjection = (observed as { readonly latestMountedTargetSelector?: unknown }).latestMountedTargetSelector;
+    if (typeof targetSelectValueBeforeProjection !== 'string') throw new Error('delimiter target controlled selection was not committed');
+    await renderHarness(replacementWorkspace, 1);
+    const replacementTargetSelect = mountedElementByTestId(container, 'x4-ui-mounted-target-selector');
+    if (replacementTargetSelect === null) throw new Error('delimiter target mounted selector disappeared after owner replacement');
+    const selected = observed.latestSelection as { readonly selection?: { readonly path?: unknown; readonly target?: { readonly id?: unknown } } } | undefined;
+    const mountedTargetSelector = (observed as { readonly latestMountedTargetSelector?: unknown }).latestMountedTargetSelector;
+    const targetSelectValueAfterProjection = typeof mountedTargetSelector === 'string' && replacementTargetSelect.options.some(option => option.value === mountedTargetSelector)
+      ? mountedTargetSelector
+      : '';
+    const targetOptionAfterProjection = replacementTargetSelect.options.find(option => option.value === replacementTargetKey)?.value ?? '';
+    return {
+      requestedTargetKey,
+      replacementTargetKey,
+      targetSelectValueBeforeProjection,
+      targetSelectValueAfterProjection,
+      targetOptionAfterProjection,
+      selectedPath: typeof selected?.selection?.path === 'string' ? selected.selection.path : '',
+      selectedTargetId: typeof selected?.selection?.target?.id === 'string' ? selected.selection.target.id : '',
+      targetResetObserved: targetSelectValueAfterProjection === '',
+      targetRetained: targetSelectValueBeforeProjection === requestedTargetKey
+        && targetSelectValueAfterProjection === replacementTargetKey
+        && targetOptionAfterProjection === replacementTargetKey,
     };
   } finally {
     if (root !== undefined) {
@@ -5682,6 +5883,12 @@ type MountedLargeSourceTargetSelectionReceipt = {
   readonly sourcePath: string;
   readonly targetOptionCount: number;
   readonly targetOptionValueBefore: string;
+  readonly transientTargetOptionValue: string;
+  readonly transientTargetSelectRawValue: string;
+  readonly transientTargetSelectValue: string;
+  readonly transientTargetSelectText: string;
+  readonly transientProjectionRefused: boolean;
+  readonly transientRenderRevision: number;
   readonly targetOptionValueAfter: string;
   readonly targetSelectValue: string;
   readonly targetRetained: boolean;
@@ -5691,6 +5898,8 @@ type MountedLargeSourceTargetSelectionReceipt = {
   readonly canvasExportDisabled: boolean;
   readonly canvasExportStatus: string;
   readonly pathRegion: string;
+  readonly loopRegion: string;
+  readonly sampleRegion: string;
   readonly parentReconciled: boolean;
 };
 
@@ -5711,18 +5920,24 @@ async function runMountedLargeSourceTargetSelectionRegression(
   const sourceContent = [
     '-- Large canonical source selection regression for the installed UI editor.',
     'local menu = {}',
-    'function menu.display()',
-    '  local frame = Helper.createFrameHandle(menu, {})',
-    '  if menu.active then',
-    '    frame:addTable(2, { width = 530 })',
-    '  elseif menu.retry then',
-    '    frame:addTable(3, { width = 531 })',
-    '  else',
-    '    frame:addTable(4, { width = 532 })',
+    ...helperFunctions.slice(0, 11),
+     'function menu.display()',
+     '  local frame = Helper.createFrameHandle(menu, { width = 90, height = 80 })',
+     '  local table = frame:addTable(1, { width = 90 })',
+     '  local row = table:addRow(false, {})',
+     '  row[1]:createText("menu.display", { height = 10 })',
+     '  if menu.active then',
+     '    for i = 1, 2 do',
+     '      row[1]:createText("active", { height = 10 })',
+     '    end',
+     '  elseif menu.retry then',
+     '    frame:addTable(3, { width = 90 })',
+     '  else',
+     '    frame:addTable(4, { width = 90 })',
     '  end',
     '  frame:display()',
     'end',
-    ...helperFunctions,
+    ...helperFunctions.slice(11),
     'return menu',
   ].join('\n\n');
   const basePassthroughFiles = [
@@ -5757,8 +5972,17 @@ async function runMountedLargeSourceTargetSelectionRegression(
   const mountedSurfaceFactory = (width: number, height: number): MountedCanvasElement => new MountedCanvasElement(mountedDocument, width, height);
   let requestParentRender: (() => void) | undefined;
   let parentRevision = 0;
+  let transientTargetOptionValue = '';
+  let transientTargetSelectRawValue = '';
+  let transientTargetSelectValue = '';
+  let transientTargetSelectText = '';
+  let transientProjectionRefused = false;
+  let transientRenderRevision = 0;
+  let releaseTransient: (() => void) | undefined;
   const MountedSourceEditorParent = (): React.ReactElement => {
     const [, setParentRevision] = React.useState(0);
+    const transientObservedRef = React.useRef(false);
+    const transientReleasedRef = React.useRef(false);
     requestParentRender = () => {
       parentRevision += 1;
       setParentRevision(previous => previous + 1);
@@ -5767,8 +5991,21 @@ async function runMountedLargeSourceTargetSelectionRegression(
       ? baseWorkspace
       : {
         ...baseWorkspace,
-        passthroughFiles: basePassthroughFiles.map(file => ({ ...file })),
+        passthroughFiles: parentRevision > 1 && !transientReleasedRef.current
+          ? []
+          : basePassthroughFiles.map(file => ({ ...file })),
       };
+    React.useLayoutEffect(() => {
+      if (parentRevision <= 1 || transientObservedRef.current) return;
+      transientObservedRef.current = true;
+      transientRenderRevision = parentRevision;
+      releaseTransient = () => {
+        if (transientReleasedRef.current) return;
+        transientReleasedRef.current = true;
+        parentRevision += 1;
+        setParentRevision(previous => previous + 1);
+      };
+    });
     return (
       <X4UiSourceEditor
         workspace={renderedWorkspace}
@@ -5784,7 +6021,7 @@ async function runMountedLargeSourceTargetSelectionRegression(
   try {
     await flush(() => {
       root = createRoot(container as unknown as Element);
-      root.render(<React.StrictMode><MountedSourceEditorParent /></React.StrictMode>);
+      root.render(<MountedSourceEditorParent />);
     });
     const sourceSelect = mountedElementByTestId(container, 'x4-ui-source-selector');
     const targetSelect = mountedElementByTestId(container, 'x4-ui-target-selector');
@@ -5804,7 +6041,18 @@ async function runMountedLargeSourceTargetSelectionRegression(
     await flush(() => {
       sourceTargetSelect.value = targetOptionValueBefore;
       sourceTargetSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+      requestParentRender?.();
+      requestParentRender?.();
     });
+    if (releaseTransient === undefined) throw new Error(`large-source transient owner/catalog projection was not staged at revision ${parentRevision}`);
+    const transientTargetSelect = mountedElementByTestId(container, 'x4-ui-target-selector');
+    transientTargetOptionValue = transientTargetSelect?.options.find(option => option.textContent === 'menu.display')?.value ?? '';
+    transientTargetSelectRawValue = transientTargetSelect?.value ?? '';
+    const transientSelectedOption = transientTargetSelect?.options.find(option => option.value === transientTargetSelect.value);
+    transientTargetSelectValue = transientSelectedOption?.value ?? '';
+    transientTargetSelectText = transientSelectedOption?.textContent ?? transientTargetSelect?.options[0]?.textContent ?? '';
+    transientProjectionRefused = mountedElementText(container, 'x4-ui-canvas-status') === 'refused';
+    await flush(() => releaseTransient?.());
     const finalTargetSelect = mountedElementByTestId(container, 'x4-ui-target-selector');
     const targetOptionAfter = finalTargetSelect === null ? null : mountedOptionByText(finalTargetSelect, 'menu.display');
     const targetOptionValueAfter = targetOptionAfter?.value ?? '';
@@ -5815,11 +6063,19 @@ async function runMountedLargeSourceTargetSelectionRegression(
     const canvasExport = mountedElementByTestId(container, 'x4-ui-canvas-export');
     const canvasExportStatus = mountedElementText(container, 'x4-ui-canvas-export-status');
     const pathRegion = mountedElementText(container, 'x4-ui-preview-paths-region');
+    const loopRegion = mountedElementText(container, 'x4-ui-preview-loops-region');
+    const sampleRegion = mountedElementText(container, 'x4-ui-samples-region');
     if (finalTargetSelect === null) throw new Error('large-source target selector disappeared after target selection');
     return {
       sourcePath: mountedElementText(container, 'x4-ui-selected-source-identity'),
       targetOptionCount,
       targetOptionValueBefore,
+      transientTargetOptionValue,
+      transientTargetSelectRawValue,
+      transientTargetSelectValue,
+      transientTargetSelectText,
+      transientProjectionRefused,
+      transientRenderRevision,
       targetOptionValueAfter,
       targetSelectValue,
       targetRetained: targetSelectValue.length > 0
@@ -5831,6 +6087,8 @@ async function runMountedLargeSourceTargetSelectionRegression(
       canvasExportDisabled: canvasExport?.disabled === true,
       canvasExportStatus,
       pathRegion,
+      loopRegion,
+      sampleRegion,
       parentReconciled: parentRevision > 0,
     };
   } finally {
@@ -6016,6 +6274,225 @@ async function runMountedPreviewLoopStateRegression(
   }
 }
 
+type MountedSampleDraftBatchReceipt = {
+  readonly issuedSampleCount: number;
+  readonly initialProjectionCount: number;
+  readonly stagedProjectionCount: number;
+  readonly appliedProjectionCount: number;
+  readonly invalidProjectionCount: number;
+  readonly stagedControlValues: readonly string[];
+  readonly appliedControlValues: readonly string[];
+  readonly invalidControlValue: string;
+  readonly invalidAcceptedControlValue: string;
+  readonly resetControlValue: string;
+  readonly initialCanvasPresent: boolean;
+  readonly stagedCanvasPresent: boolean;
+  readonly stagedCanvasSame: boolean;
+  readonly canvasRetainedWhileStaged: boolean;
+  readonly exportRetainedWhileStaged: boolean;
+  readonly stagedLabel: string;
+  readonly appliedLabel: string;
+  readonly refusal: string;
+  readonly previewOnly: string;
+  readonly gameTruth: string;
+  readonly renderPhaseStateUpdateWarnings: readonly string[];
+};
+
+const MOUNTED_SAMPLE_DRAFT_PARAMETER_NAMES = Array.from({ length: 31 }, (_, index) => `sample${index}`);
+const MOUNTED_SAMPLE_DRAFT_SOURCE = [
+  'local menu = { name = "Batch Samples", layer = 1 }',
+  `function menu.display(${MOUNTED_SAMPLE_DRAFT_PARAMETER_NAMES.join(', ')})`,
+  '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+  '  local table = frame:addTable(1, { width = sample0 })',
+  '  local row = table:addRow(false, {})',
+  ...MOUNTED_SAMPLE_DRAFT_PARAMETER_NAMES.slice(1).map(parameter => `  row[1]:createText(${parameter}, { height = 10 })`),
+  '  frame:display()',
+  'end',
+  '',
+].join('\n');
+
+async function runMountedSampleDraftBatchRegression(
+  fixture: P7SourceAuthorityFixture,
+): Promise<MountedSampleDraftBatchReceipt> {
+  const mountedDocument = new MountedDomDocument();
+  const restoreGlobals = installMountedDomGlobals(mountedDocument);
+  const container = mountedDocument.createElement('div');
+  mountedDocument.body.appendChild(container);
+  const batchWorkspace = {
+    ...workspace,
+    id: 'x4-ui-source-editor-mounted-sample-draft-batch',
+    compileSettings: { ui: true },
+    passthroughFiles: [
+      {
+        path: 'ui.xml',
+        content: '<?xml version="1.0" encoding="utf-8"?>\n<addon name="batch_samples"><environment type="menus"><file name="ui/batch-samples.lua" /></environment></addon>',
+        reason: 'unknown_domain',
+      },
+      { path: 'ui/batch-samples.lua', content: MOUNTED_SAMPLE_DRAFT_SOURCE, reason: 'partial' },
+    ],
+  } as unknown as React.ComponentProps<typeof X4UiSourceEditor>['workspace'];
+  const flush = async (operation: () => void): Promise<void> => {
+    await act(async () => {
+      operation();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+  const canonicalLoader = async (): Promise<{ readonly core: P7SourceAuthorityFixture['core']; readonly color: P7SourceAuthorityFixture['color'] }> => ({
+    core: fixture.core,
+    color: fixture.color,
+  });
+  const mountedSurfaceFactory = (width: number, height: number): MountedCanvasElement => new MountedCanvasElement(mountedDocument, width, height);
+  const observedProjections = new Set<object>();
+  const renderPhaseStateUpdateWarnings: string[] = [];
+  const ObservedSourceEditor = X4UiSourceEditor as unknown as React.ComponentType<Record<string, unknown>>;
+  const ProjectionObservingParent = (): React.ReactElement => {
+    const [, setParentProjection] = React.useState<unknown>(null);
+    return React.createElement(ObservedSourceEditor, {
+      workspace: batchWorkspace,
+      corpusLoader: canonicalLoader,
+      surfaceFactory: mountedSurfaceFactory,
+      onVerificationSnapshotChange: () => undefined,
+      onSessionProjection: (projection: unknown) => {
+        if (projection !== null && typeof projection === 'object') observedProjections.add(projection);
+        setParentProjection(() => projection);
+      },
+    });
+  };
+  const sampleControls = (): MountedDomElement[] => container.querySelectorAll('input').filter(element => (
+    element.getAttribute('data-testid') ?? ''
+  ).startsWith('x4-ui-sample-control-'));
+  const sampleControlAt = (index: number): MountedDomElement => {
+    const control = sampleControls()[index];
+    if (control === undefined) throw new Error(`mounted sample draft control ${index} was not rendered`);
+    return control;
+  };
+  let root: ReturnType<typeof createRoot> | undefined;
+  const previousConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    const message = args.map(value => String(value)).join(' ');
+    if (/Cannot update a component.*while rendering a different component/i.test(message)) {
+      renderPhaseStateUpdateWarnings.push(message);
+    }
+    previousConsoleError(...args);
+  };
+  try {
+    await flush(() => {
+      root = createRoot(container as unknown as Element);
+      root.render(<React.StrictMode><ProjectionObservingParent /></React.StrictMode>);
+    });
+    const sourceSelect = mountedElementByTestId(container, 'x4-ui-source-selector');
+    if (sourceSelect === null) throw new Error('mounted sample draft SourceEditor source selector was not rendered');
+    const sourceOption = mountedOptionByText(sourceSelect, 'ui/batch-samples.lua');
+    if (sourceOption === null) throw new Error('mounted sample draft SourceEditor did not expose ui/batch-samples.lua');
+    await flush(() => {
+      sourceSelect.value = sourceOption.value;
+      sourceSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const targetSelect = mountedElementByTestId(container, 'x4-ui-target-selector');
+    if (targetSelect === null) throw new Error('mounted sample draft target selector was not rendered');
+    const targetOption = mountedOptionByText(targetSelect, 'menu.display');
+    if (targetOption === null) throw new Error('mounted sample draft SourceEditor did not expose menu.display');
+    await flush(() => {
+      targetSelect.value = targetOption.value;
+      targetSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const initialControls = sampleControls();
+    if (initialControls.length !== 31) throw new Error(`mounted sample draft issued ${initialControls.length} controls, expected 31`);
+    const initialProjectionCount = observedProjections.size;
+    const canvasHost = mountedElementByTestId(container, 'x4-ui-canvas-host');
+    if (canvasHost === null) throw new Error('mounted sample draft canvas host was not rendered');
+    const initialCanvas = canvasHost.firstElementChild;
+    const initialExportIdentity = [
+      mountedElementText(container, 'x4-ui-canvas-export-source'),
+      mountedElementText(container, 'x4-ui-canvas-export-target'),
+      mountedElementText(container, 'x4-ui-canvas-export-profile'),
+      mountedElementText(container, 'x4-ui-canvas-export-status'),
+    ].join('\u0000');
+    const stagedValues = initialControls.map((control, index) => (
+      control.type === 'number' ? '120' : ` exact value ${index} `
+    ));
+    for (let index = 0; index < stagedValues.length; index += 1) {
+      await flush(() => {
+        const control = sampleControlAt(index);
+        control.focus();
+        control.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+        control.value = stagedValues[index]!;
+        control.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+        control.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+      });
+    }
+    const stagedProjectionCount = observedProjections.size;
+    const stagedControlValues = sampleControls().map(control => control.value);
+    const stagedLabel = mountedElementText(container, 'x4-ui-samples-staged');
+    const stagedCanvas = canvasHost.firstElementChild;
+    const stagedExportIdentity = [
+      mountedElementText(container, 'x4-ui-canvas-export-source'),
+      mountedElementText(container, 'x4-ui-canvas-export-target'),
+      mountedElementText(container, 'x4-ui-canvas-export-profile'),
+      mountedElementText(container, 'x4-ui-canvas-export-status'),
+    ].join('\u0000');
+    const applyButton = mountedElementByTestId(container, 'x4-ui-samples-apply');
+    if (applyButton === null) throw new Error('mounted sample draft Apply control was not rendered');
+    await flush(() => applyButton.click());
+    const appliedProjectionCount = observedProjections.size;
+    const appliedControlValues = sampleControls().map(control => control.value);
+    const appliedLabel = mountedElementText(container, 'x4-ui-samples-applied');
+    const numberControl = sampleControls().find(control => control.type === 'number');
+    if (numberControl === undefined) throw new Error('mounted sample draft number control was not rendered');
+    const invalidAcceptedControlValue = numberControl.value;
+    await flush(() => {
+      numberControl.focus();
+      numberControl.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+      numberControl.value = 'not-a-number';
+      numberControl.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+      numberControl.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const invalidApplyButton = mountedElementByTestId(container, 'x4-ui-samples-apply');
+    if (invalidApplyButton === null) throw new Error('mounted sample draft Apply control disappeared after invalid staging');
+    const beforeInvalidApply = observedProjections.size;
+    await flush(() => invalidApplyButton.click());
+    const refusal = mountedElementText(container, 'x4-ui-samples-error');
+    const invalidControlValue = sampleControls().find(control => control.type === 'number')?.value ?? '';
+    const resetButton = mountedElementByTestId(container, 'x4-ui-samples-reset');
+    if (resetButton === null) throw new Error('mounted sample draft Reset control was not rendered');
+    await flush(() => resetButton.click());
+    const resetControlValue = sampleControls().find(control => control.type === 'number')?.value ?? '';
+    return {
+      issuedSampleCount: initialControls.length,
+      initialProjectionCount,
+      stagedProjectionCount,
+      appliedProjectionCount,
+      invalidProjectionCount: beforeInvalidApply,
+      stagedControlValues,
+      appliedControlValues,
+      invalidControlValue,
+      invalidAcceptedControlValue,
+      resetControlValue,
+      initialCanvasPresent: initialCanvas !== null,
+      stagedCanvasPresent: stagedCanvas !== null,
+      stagedCanvasSame: stagedCanvas === initialCanvas,
+      canvasRetainedWhileStaged: stagedCanvas === initialCanvas,
+      exportRetainedWhileStaged: initialExportIdentity === stagedExportIdentity,
+      stagedLabel,
+      appliedLabel,
+      refusal,
+      previewOnly: mountedElementText(container, 'x4-ui-samples-preview-only'),
+      gameTruth: mountedElementText(container, 'x4-ui-samples-truth'),
+      renderPhaseStateUpdateWarnings,
+    };
+  } finally {
+    console.error = previousConsoleError;
+    if (root !== undefined) {
+      await act(async () => {
+        root?.unmount();
+        await Promise.resolve();
+      });
+    }
+    restoreGlobals();
+  }
+}
+
 async function recordP7SourceRow(
   name: string,
   fixtureReady: boolean,
@@ -6045,6 +6522,25 @@ async function runP7SourceEditorCanonicalColorMatrix(): Promise<void> {
   const core = fixture?.core;
   const color = fixture?.color;
   const fixtureReady = fixture !== undefined;
+
+  await recordP7SourceRow(
+    'B119 mounted delimiter-heavy real target does not reset when owner projection renumbers it',
+    true,
+    'the mounted SourceEditor owner/selection path accepts the exact aic_menu.lua menu.display target key, then retains its target selection and owner-issued source identity when a parent/workspace rerender changes only the positional target prefix',
+    runMountedDelimiterTargetReconciliationRegression,
+    observed => {
+      const receipt = p7SourceRecord(observed);
+      return receipt?.requestedTargetKey === '12:target:ui/addons/ai_influence_chat/aic_menu.lua||8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD|function|ui/addons/ai_influence_chat/aic_menu.lua||315:0:16768|893:3:53651:function'
+        && receipt.replacementTargetKey === receipt.requestedTargetKey.replace(/^12:/, '13:')
+        && receipt.targetSelectValueBeforeProjection === receipt.requestedTargetKey
+        && receipt.targetSelectValueAfterProjection === receipt.replacementTargetKey
+        && receipt.targetOptionAfterProjection === receipt.replacementTargetKey
+        && receipt.selectedPath === 'ui/addons/ai_influence_chat/aic_menu.lua'
+        && receipt.selectedTargetId === 'target:ui/addons/ai_influence_chat/aic_menu.lua||8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD|function|ui/addons/ai_influence_chat/aic_menu.lua||315:0:16768|893:3:53651'
+        && receipt.targetResetObserved === false
+        && receipt.targetRetained === true;
+    },
+  );
 
   await recordP7SourceRow(
     'P12 mounted profile-only edit does not invoke provisional candidate projection',
@@ -6095,6 +6591,52 @@ async function runP7SourceEditorCanonicalColorMatrix(): Promise<void> {
         && receipt.loopGameTruth === 'Not verified in game'
         && typeof receipt.parentReconciliations === 'number'
         && receipt.parentReconciliations >= 2;
+    },
+  );
+
+  await recordP7SourceRow(
+    'B119 mounted sample draft stages all issued values before one explicit Apply',
+    fixtureReady,
+    'the mounted editor stages all 31 sample controls without a projection or canvas/export change, Apply creates one new projection, invalid input is refused without replacing accepted state, Reset discards the draft while preserving the permanent preview truth boundary, and the parent observer produces no render-phase state-update warning',
+    async () => {
+      if (fixture === undefined) throw new Error(fixtureError ?? 'SourceEditor B119 sample draft fixture unavailable');
+      return runMountedSampleDraftBatchRegression(fixture);
+    },
+    observed => {
+      const receipt = p7SourceRecord(observed);
+      const staged = Array.isArray(receipt?.stagedControlValues) ? receipt.stagedControlValues : [];
+      const applied = Array.isArray(receipt?.appliedControlValues) ? receipt.appliedControlValues : [];
+      const initialProjectionCount = p7SourceNumber(receipt, 'initialProjectionCount');
+      const stagedProjectionCount = p7SourceNumber(receipt, 'stagedProjectionCount');
+      const appliedProjectionCount = p7SourceNumber(receipt, 'appliedProjectionCount');
+      const invalidProjectionCount = p7SourceNumber(receipt, 'invalidProjectionCount');
+      return receipt?.issuedSampleCount === 31
+        && initialProjectionCount !== undefined
+        && stagedProjectionCount !== undefined
+        && appliedProjectionCount !== undefined
+        && invalidProjectionCount !== undefined
+        && initialProjectionCount > 0
+        && stagedProjectionCount === initialProjectionCount
+        && appliedProjectionCount === initialProjectionCount + 1
+        && invalidProjectionCount === appliedProjectionCount
+        && staged.length === 31
+        && applied.length === 31
+        && staged.some(value => value === ' exact value 1 ')
+        && applied.some(value => value === ' exact value 1 ')
+        && receipt.canvasRetainedWhileStaged === true
+        && receipt.exportRetainedWhileStaged === true
+        && typeof receipt.stagedLabel === 'string'
+        && receipt.stagedLabel.includes('staged')
+        && receipt.appliedLabel === 'currently applied preview values remain active while edits are staged; staged edits take effect only after explicit Apply.'
+        && receipt.invalidControlValue === 'not-a-number'
+        && receipt.invalidAcceptedControlValue === '120'
+        && receipt.resetControlValue === '120'
+        && typeof receipt.refusal === 'string'
+        && receipt.refusal.length > 0
+        && receipt.previewOnly === 'Preview only'
+        && receipt.gameTruth === 'Not verified in game'
+        && Array.isArray(receipt.renderPhaseStateUpdateWarnings)
+        && receipt.renderPhaseStateUpdateWarnings.length === 0;
     },
   );
 
@@ -6179,18 +6721,30 @@ async function runP7SourceEditorCanonicalColorMatrix(): Promise<void> {
         && receipt.targetOptionCount >= 90
         && typeof receipt.targetOptionValueBefore === 'string'
         && receipt.targetOptionValueBefore.length > 0
+        && receipt.targetOptionValueBefore.startsWith('12:target:ui/addons/ai_influence_chat/aic_menu.lua||')
+        && receipt.targetOptionValueBefore.includes('|function|ui/addons/ai_influence_chat/aic_menu.lua||')
+        && receipt.targetOptionValueBefore.endsWith(':function')
         && receipt.targetOptionValueAfter === receipt.targetOptionValueBefore
         && receipt.targetSelectValue === receipt.targetOptionValueBefore
         && receipt.targetRetained === true
+        && receipt.transientTargetOptionValue === ''
+        && receipt.transientTargetSelectRawValue === receipt.targetOptionValueBefore
+        && receipt.transientTargetSelectValue === ''
+        && receipt.transientTargetSelectText === 'Select target…'
+        && receipt.transientProjectionRefused === true
         && typeof receipt.targetMetadata === 'string'
         && receipt.targetMetadata.includes('menu.display')
-        && receipt.canvasStatus === 'refused'
+        && receipt.canvasStatus === 'rendered/current'
         && typeof receipt.canvasDetail === 'string'
-        && receipt.canvasDetail.includes('source-composition has no renderer-issued visible source geometry fill/border or canonical tinted glyph; visual diagnostics require an authoritative source operation')
-        && receipt.canvasExportDisabled === true
-        && receipt.canvasExportStatus === 'unavailable · Current rendered canvas evidence is unavailable or stale.'
+        && !receipt.canvasDetail.includes('exact source index/path/identity and target ID/range are required')
+        && receipt.canvasExportDisabled === false
+        && receipt.canvasExportStatus === 'ready · native PNG export uses the mounted current canvas'
         && typeof receipt.pathRegion === 'string'
         && receipt.pathRegion.includes('Preview branch paths')
+        && typeof receipt.loopRegion === 'string'
+        && receipt.loopRegion.includes('Preview Loop Iterations')
+        && typeof receipt.sampleRegion === 'string'
+        && receipt.sampleRegion.includes('Preview-only samples')
         && receipt.parentReconciled === true;
     },
   );

@@ -21,7 +21,7 @@ Lane: `FULL`
   2. Each shipping Lua source imports and re-exports with the same calls and values; every preview carries `Not verified in game` until an exact clean deploy and explicit X4 confirmation.
   3. Forge produces non-zero current canvases for the selected `1b` comm surface, `1c` expanded surface, `1d` pending gate, `1e` agreement sheet, and all six hub tabs using only owner-issued source targets and named samples where runtime text is dynamic.
   4. Any linter-blocking source is refused before export/deploy, including `addTable(24)`; no rule is weakened to admit current source.
-  5. Any accepted correction is authored through Forge's existing guarded source/CAS path, survives round-trip, validates as a complete mod, deploys through `deploy-verify`, and is observed in X4 with zero scoped frame/view/Lua failures.
+  5. Any accepted correction is a bounded Luna source edit. Use Forge's guarded source/CAS path where it represents the edit; if the Source Editor cannot encode a structural deletion, apply that deletion as a bounded direct Luna patch, then import, replay, and read it back through Forge. The correction must survive round-trip, validate as a complete mod, deploy through `deploy-verify`, and be observed in X4 with zero scoped frame/view/Lua failures; do not falsely attribute a direct structural patch to Forge authorship.
   6. `1f` is not shipped with fabricated probabilities. It may be classified or rendered as an explicitly fixture-bound, not-in-game design benchmark only; a functional shipping menu requires a separate deterministic pricing contract.
 - **Required validation:** focused owner selftests; whole-repository typecheck and exact-path lint; AI mod Lua/glyph/vocabulary/menu gates; Forge complete mod validation; guarded dry-run and real deploy when bytes change; installed package parity if Forge product code changes; native Forge visual inspection; native X4 capture and interaction; scoped debuglog census; full precommit before commit. Run serial E2E, production build/package/probe, installed oracles, and OpenVSX checks only when their touched surface makes them applicable.
 - **Negative/failure paths:** dynamic values without supplied samples remain honestly unavailable rather than guessed; stale source/workspace/deploy identities refuse; a known `>12` table fixture refuses; `1f` refuses promotion to shipping without the deterministic price model; the isolated `pipeline_test` folder must not disappear and must be restored after AI capture unless continued isolation is documented.
@@ -43,13 +43,13 @@ Lane: `FULL`
 - **Couplings checked:** one conversation state and send path across `1b`/`1c`/`1d`/`1e`; one hub accessor surface across `1g`-`1j`; source-folder/workspace CAS; source versus loose staging versus installed target; static gate enrollment in the mod deploy script; preview versus game-verification authority.
 - **Capability-map delta:** none at specification time. Record only demonstrated new or invalidated capability at close.
 - **Plan changes from reconciliation:** changed from greenfield UI construction to audit/repair/dogfood of existing shipping surfaces; isolated `pipeline_test` before AI runtime capture; explicitly separated the data-blocked `1f` functional surface from visual benchmark work.
-- **Current visual census checkpoint:** current-source X4 captures now exist for `1b`, expanded `1c`, inline `1d`, and all six hub tabs under `dev-docs/b119-ai-influence-dogfood/`. All rendered in X4 without a frame refusal. In `1d`, the source-authored `REVIEW` footer button was not visible or clickable at its expected cell, so `1e` is not yet re-established through the current interaction path.
-- **`1d` source/reference reconciliation:** the authoritative `1d` mock contains exactly three action buttons (confirm, counter, refuse) followed by one informational footer; it does not contain a `REVIEW` button. Shipping `aic_menu.lua` instead adds a fourth `REVIEW` route inside the footer and uses it to open `1e`. The missing native button is therefore still valuable renderer/geometry evidence, but making that extra button visible is not itself the final player-facing fix. The later mod correction must preserve the specified three-choice surface and select the `1e`/`1f` transition from an authoritative proposal-type or interaction contract rather than retaining an accidental fourth action.
-- **Native right-edge symptom:** the same accepted X4 frame also omitted the compact input row's source-authored rightmost `END` button while retaining the preceding `SEND` button. No scoped `DisplayView`, setup, colspan, or Lua failure accompanied either omission. This narrows the runtime symptom to right-edge widget geometry/composition or overlapping-menu behavior, not the known whole-frame rejection class.
+- **Current visual census checkpoint:** current-source X4 captures now exist for `1b`, expanded `1c`, the proposal block inside expanded `1c`, and all six hub tabs under `dev-docs/b119-ai-influence-dogfood/`. All rendered in X4 without a frame refusal. The file named `x4-current-source-1d-inline-proposal.jpg` is an expanded `aic_comm.lua -> comm.display` (`1c`) capture, not compact `aic_menu.lua` evidence. Expanded `aic_comm` intentionally owns exactly three choices and no `REVIEW`; this screenshot says nothing about whether compact `aic_menu` paints a `REVIEW` control.
+- **`1d` source/reference reconciliation:** the authoritative `1d` mock requires exactly three action buttons (confirm, counter, refuse), no `REVIEW`, and one informational footer on proposal surfaces. The expanded `aic_comm` screenshot already has the intended three-choice ownership. Its observed mismatch is the header, transaction label, five term-row presentation, and footer copy/semantics. Compact `aic_menu` action behavior remains untested by this screenshot. A later compact-source correction may remove `REVIEW`, if present, as an implementation decision supported by the reference and existing route ownership—not as repair of an observed X4 omission. The existing auto-promotion into expanded `1c` remains untouched; the `1e` transition remains unresolved/out of scope.
+- **Native ownership/right-edge boundary:** the expanded `aic_comm` screenshot intentionally has `END` in the title bar and only `SEND` in its input row. It proves neither compact `aic_menu` `REVIEW` behavior nor compact `END` behavior. Any compact right-edge diagnosis requires separate compact-surface evidence; no engine omission is inferred from this expanded frame.
 - **First exact Forge loss point:** after all 22 source-bound scalar samples were supplied, Forge rendered only the bottom edit box plus `SEND` and `END`. The accepted Layout program recorded 66 operations but applied only 27; 39 remained conditional/unresolved. Twelve valid samples were not consumed because their owner/control-flow contexts were not applied. The existing exact-source regression fixture freezes this reduced result (`3` widgets, `5` text records, `7` glyphs), so the current test proves structural acceptance rather than visual completeness.
 - **Existing infrastructure to extend:** `x4UiLayoutProgram` already issues source-hash-bound preview-path catalogs and validates mutually exclusive arm selections for expanded local-function invocations. The editor session and source editor do not expose or reconcile that authority, direct target calls do not consume it, and loop bodies remain intentionally unreplayed. The next unit extends this owner rather than creating a second scenario system.
 - **Revised bounded implementation unit:** thread owner-issued preview-path catalogs and selections through Preview Pipeline -> Editor Session -> Source Editor; permit a selected source arm to materialize direct target calls as well as expanded local-helper calls; retain loop bodies as explicit unavailable evidence. Selection is preview-only, mutually exclusive per boundary, source/target/profile-bound, stale-clearing, and never changes source or game-verification state.
-- **Revised unit acceptance:** a portable direct-branch fixture and the exact current `aic_menu.lua` pending-action header/footer path must render when their exact arms are selected; unselected sibling arms remain unapplied; conflicting, extra, stale, source-mismatched, malformed, and statically unreachable selections refuse or clear at their owning boundary; no loop is replayed; `Not verified in game` remains invariant. The native `REVIEW`/`END` discrepancy is investigated only after this preview unit exposes the authored source geometry. Preview fidelity to current source and final fidelity to the supplied design remain separate acceptance questions.
+- **Revised unit acceptance:** a portable direct-branch fixture and the exact current `aic_menu.lua` pending-action header/footer path must render when their exact arms are selected; unselected sibling arms remain unapplied; conflicting, extra, stale, source-mismatched, malformed, and statically unreachable selections refuse or clear at their owning boundary; no loop is replayed; `Not verified in game` remains invariant. The expanded `aic_comm` header/tx/five-term/footer mismatch is investigated separately from compact `aic_menu` `REVIEW`/`END`, which this screenshot does not test. Preview fidelity to current source and final fidelity to the supplied design remain separate acceptance questions.
 - **Installed-candidate interaction finding:** packaged extension `0.0.70` installed with staged-app parity and reopened as Forge `v1.0.501` at the installed sidecar. The new `Preview branch paths` surface is visibly present. Browser Playwright/AX `selectOption` calls reconciled `menu.display` back to `Select target...`, but a native Antigravity dropdown selection retained both exact `aic_menu.lua` and `menu.display` across render cycles. The browser reset is therefore automation-path-specific and is not accepted as a normal-user component failure.
 - **Native session authority refusal:** the retained native target did issue a current session, but Source-safe property controls reported `READ-ONLY · PROVENANCE-DRIFT`: `layout evidence pair was not issued for the canonical complete source call model`. The exact issued context ends in `catalog:source:missing`; no owner-issued frame/display insertion authority is available. Evidence: `dev-docs/b119-ai-influence-dogfood/visual-release-20260905/native-forge-menu-display-session-controls.jpg`.
 - **Independent native branch/Scene refusal:** after selecting the exact pending-action `then` arms at source lines `711`, `717`, and `721`, and supplying the source-bound geometry/text samples needed by those calls, the installed Forge retained the selections but classified the canvas `stale`. The exact reason is `Session is not renderable: layout program is malformed, incomplete in required structure, or internally mismatched`. This is now the branch-path acceptance blocker; it is independent of the source-edit authority refusal. Evidence: `dev-docs/b119-ai-influence-dogfood/visual-release-20260905/native-forge-menu-display-selected-path-stale-canvas.png`.
@@ -2180,7 +2180,7 @@ Lane: `FULL`
 | `1a` | alternate comm direction | none required | Deliberately unsupported because `1b` is selected; do not render both. |
 | `1b` | `aic_menu.lua -> menu.display` | `x4-current-source-1b-main.jpg` | Native accepted. NPC and wheel remain visible; the narrower plate is a deliberate measured keep-out adaptation. Rail/transcript density and some hierarchy remain divergent. |
 | `1c` | `aic_comm.lua -> comm.display` | `x4-current-source-1c-expanded.jpg` | Native accepted. Three regions exist, but body fill, populated transcript/leverage hierarchy, spacing, and reference density diverge. Runtime-empty data is not a renderer failure. |
-| `1d` | pending branch in `aic_menu.lua` | `x4-current-source-1d-inline-proposal.jpg` | Native accepted and exactly three payment choices render. The source-authored extra `REVIEW` widget and rightmost compact `END` do not paint; sheet-transition ownership remains unresolved. |
+| `1d` | proposal contract across compact `aic_menu` and expanded `aic_comm`; current image owner is `aic_comm.lua -> comm.display` | `x4-current-source-1d-inline-proposal.jpg` | Expanded `aic_comm` is native-accepted and intentionally owns exactly three payment choices with no `REVIEW`. Its mismatch is header/tx/five-term/footer copy and semantics. Compact `aic_menu` `REVIEW`/`END` behavior is untested by this image; auto-promotion remains untouched and sheet-transition ownership remains unresolved. |
 | `1e` | `aic_sheet.lua -> sheet.display` | retained installed Forge replay and `in-game-20260908-scrollbar-clean/x4-native-agreement-sheet-2544x1354.jpg` | Source/Forge/X4 path is proven. Headings, idempotency wording, and equal-third footer differ from the reference; this unit corrects only those source-backed deltas. |
 | `1f` | no shipping owner | direct reference inspection | Data-blocked and deliberately unimplemented. No authoritative accept/counter/break-off probability contract exists. |
 | `1g` | Dossier branch in `aic_hub.lua` | `x4-current-source-hub-dossier.jpg` | Native accepted. Faction/data regions render, but the icon rail, bounded body fill, selected-faction composition, row density, and typography diverge. |
@@ -2376,3 +2376,1051 @@ Lane: `FULL`
   was made, and no new UI KB card was added. The records-only commit remains parent-owned; do not name its future SHA.
 - **Durable boundary:** the next source-backed B119 unit is the remaining twelve-reference/current-game visual census
   with corrections only where the source and native evidence justify them; `1f` mechanics remain out of scope.
+
+## 2026-09-08 CONTINUATION — specified `1d` source/reference alignment and right-edge/native proof
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Status:** `SPECIFIED`; this is the next bounded unit, before implementation. This planning checkpoint changes
+  records only and makes no implementation or acceptance claim.
+- **Bounded unit:** reconcile the authoritative `1d` inline-proposal reference with the current `aic_menu.lua`
+  source path and the accepted native frame; specify only the unambiguous presentation/source alignment and the
+  causal Forge/native proof needed to close it. Keep the existing 1d payment routes and refusal behavior intact.
+- **Assumptions and unresolved facts:** the supplied reference is a design contract for labels, row order, action
+  count, whitelist presentation, and informational footer; dynamic party, asset, relation, and amount values remain
+  runtime-owned. The current auto-promotion into expanded `1c` is an existing user-authored decision. Its transition
+  ownership is unresolved and must not be silently removed. The compact `END` omission is a separate right-edge
+  symptom; the current image is expanded `1c`, where `END` exists in the title bar and the input intentionally has
+  only `SEND`. `1f` has no deterministic price/counter-offer contract.
+- **Authoritative references:** the handoff README and
+  `C:\Users\Moshi\Desktop\# AI Influence mod UI design\design_handoff_ai_influence\screenshots\1d-gate-inline-proposal.png`
+  (SHA-256 `195C20E272EF09AAF00D237C84FD18EB0EF60780EB0F06E39F01EC4F20AC25B9`); the current native evidence
+  `dev-docs/b119-ai-influence-dogfood/x4-current-source-1d-inline-proposal.jpg` (SHA-256
+  `DB8C29DE3F98C342E36F34BB04999B9CA0E4B1AF7CBAC29E505862E1B1411D79`); the exact current Lua identities below;
+  and the existing Forge Source -> Layout -> Scene -> Paint -> Canvas owners and their project gates.
+- **In scope:** only unambiguous 1d presentation/source alignment; causal exact-source tests and fixtures; relevant
+  branch/loop/sample authority consumption; Forge Source -> Layout -> Scene -> Paint -> Canvas proof; complete-mod
+  validation; guarded exact deploy and whole-tree census; installed Forge visual proof; native X4 screenshot,
+  interaction, and current-session log; and design/current comparison. Header, term labels, config-key presentation,
+  and sample/seed values may change only where source/reference semantics are explicit. The full footer remains
+  informational. Preview must retain `Not verified in game`.
+- **Out of scope:** runtime/game mechanics, payment dispatch, refusal-as-live-chat behavior, or redesign of the three
+  existing action routes; `1f` mechanics or probabilities; invented data; compact-menu `END` repair from the expanded
+  screenshot; silent removal of the existing 1c auto-promotion; universal C++/Lua parity; capability-map/AAR-ledger
+  edits; external-service changes; OpenVSX unless product/release code changes; and stage/commit/push.
+- **Proposal-action rule:** the reference and existing route ownership require exactly three actions and no `REVIEW`
+  on both compact and expanded proposal surfaces. Expanded `aic_comm` already owns that shape. If compact `aic_menu`
+  contains a fourth `REVIEW`, remove it as a bounded implementation decision supported by the reference and route
+  ownership—not as repair of an observed X4 omission. Keep the existing auto-promotion into expanded `1c` untouched
+  and record the 1e transition as unresolved/out of scope. Any 1e vocabulary suppression or wording adjustment must
+  be separately justified as necessary gate repair and must preserve the 1d reference contract. Do not invent a 1f
+  transition or mechanics.
+- **Risks and authorization boundaries:** this worker is records-only. A later source edit should use Forge-issued
+  source/CAS authority where the Source Editor represents the operation. If it cannot encode a structural deletion,
+  the mandated Luna worker may apply a bounded direct source patch, then import, replay, and read back the result
+  through Forge and use its source/CAS authority where supported. Record the actual authoring path; do not claim Forge
+  authored a direct deletion. Preserve unrelated dirty files. A preview can be fresh without being visible or
+  game-verified; native frame acceptance can diverge from reference presentation. No mod, game, deployed, source,
+  test, capability-map, AAR, Git, or external-service mutation is authorized by this checkpoint.
+- **Rollback/checkpoint:** restore the three owned records to their exact pre-edit bytes: plan
+  `244516` bytes / SHA-256 `87E8407E3214869D6429C6FDEEE4FCC2ECDF626BCB7B9FC5C35FACA95E9ACD03`, BACKLOG
+  `331217` bytes / SHA-256 `D88654BEBE87749B5FB9C92E84F435BA1E28F54602F36A214CC317F334086B3D`, and SESSION-HANDOFF
+  `11568` bytes / SHA-256 `8BC20CC3C9E300E03EB05D02DE945CF4BA68342C148615DC54C5829370601DB6`. The future source rollback
+  identity is the exact pre-change bytes/hashes for `aic_menu.lua`, `aic_uix.lua`, and `aic_comm.lua` recorded in
+  the baseline below.
+- **Acceptance criteria:**
+  1. Both compact and expanded proposal surfaces have exactly three actions and no `REVIEW`; existing auto-promotion
+     into expanded `1c` is unchanged.
+  2. The reference header/tx/term labels are presented, `Whitelist` is always present by its config key, runtime
+     values are honest, and green is used only when permitted.
+  3. Refusal remains a real NPC-visible chat line, not a silent dismiss.
+  4. Exact current source produces a nonzero Forge Canvas with no false-success; relevant branch/loop/sample
+     authority is consumed, and the applicable warning remains visible.
+  5. The linter retains the `>12` whole-frame refusal and the current legal `<=12` table behavior.
+  6. Complete-mod gates and the exact guarded-deploy census pass.
+  7. The current X4 session visibly paints the intended proposal block, three actions, and informational footer,
+     with zero scoped `DisplayView`, Lua, or traceback failures.
+  8. Rollback is demonstrated by the exact pre-change bytes/hashes.
+  9. Overall B119 remains `PARTIAL`; `1f` and universal C++ acceptance remain open.
+- **Required validation and negative path (planned, not run in this planning checkpoint):** targeted AI
+  `commgate`, `commfullgate`, vocabulary, glyph, and Lua gates; relevant Forge LayoutProgram, Scene, Paint, Canvas,
+  Linter, and PreviewPipeline tests plus exact-source fixture updates; typecheck and scoped lint; project
+  validate/dry-run/apply and an independent whole-tree census; installed Forge visual inspection; native X4
+  visual/interaction/current-session log inspection; stale-CAS refusal with no mutation; `>12`-column refusal while
+  current legal `<=12` tables remain accepted; and `precommit`. No OpenVSX check is applicable unless product or
+  release code changes.
+- **Evidence locations:** retain the supplied current image under `dev-docs/b119-ai-influence-dogfood/`; place any
+  future 1d Forge/native screenshot, log, fixture receipt, source/deploy census, and comparison record under a
+  clearly named `dev-docs/b119-ai-influence-dogfood/1d-inline-proposal-20260908/` child. This plan, BACKLOG, and
+  SESSION-HANDOFF are the only records changed by this planning checkpoint.
+
+### BASELINE / RECONCILE
+
+- **Revisions and machine state:** Forge `HEAD == origin/main ==
+  835b59d8e8c35e8001526cad8ab90459a703e1a4`; AI Influence `HEAD == origin/master ==
+  a4ff27814bb964f9fefce26cc05b38cccf8f66c1`. Both relevant trees are clean in the owned scope; unrelated Forge
+  dirty files are user-owned and preserved. X4 is stopped and the machine is quiet.
+- **Current source identities:** `aic_menu.lua`
+  `4253D9BD9DE4113D4DE0B881DBF5A1E90CAA7B30F735BA925403EBEF7EC47DD7`; `aic_uix.lua`
+  `E119ADA60E0BB48A7ACEFC065087A62601A4552389A911238D509F33F570276B`; `aic_comm.lua`
+  `88FAB05A79EF33CB28E098081EA6A5E29E8F3B7C4150C39BF38913C51C063511`.
+- **[REPRODUCED] Fail-first native evidence:** the current screenshot is expanded `aic_comm.lua -> comm.display`
+  (`1c`), which intentionally owns exactly three payment choices and no `REVIEW`. It shows `ON THE TABLE - PAYMENT
+  REQUESTED`, `ref AIC-7F31C2`, `Reason given`, `Ships committed`, and `Clearance`. The supplied reference requires
+  `PENDING — MILITARY REQUEST` (ASCII-safe equivalent for implementation), `tx aic-7f31c2`, `They provide`, `You
+  provide`, `Relation effect`, `Assets used`, `Whitelist`, exactly three actions, and an informational footer. The
+  fail-first mismatch is the header, tx, five term rows, and footer copy/semantics—not a missing `REVIEW`. This image
+  provides no evidence about compact `aic_menu` `REVIEW` behavior and does not authorize changing auto-promotion.
+- **Ownership/right-edge boundary:** the expanded `aic_comm` image intentionally has `END` in the title bar and only
+  `SEND` in its input row. Compact `aic_menu` `REVIEW` and `END` behavior remain untested by this screenshot and need
+  separate compact-surface evidence; no X4 omission is inferred.
+- **Baseline gates (already run, red state retained):** `python tools/commgate.py` is `PASS` with `5` states / `0`
+  failures; `python tools/commfullgate.py` is `PASS` with `6` / `0`; `python tools/vocabgate.py` is `FAIL` with two
+  pre-existing findings at `aic_sheet.lua:118` for exact reference wording `tx` and `- idempotent`. This planning
+  checkpoint does not edit or resolve those findings.
+
+| Surface | Reference contract | Current/native evidence | Disposition for the next unit |
+| --- | --- | --- | --- |
+| Header and transaction | `PENDING — MILITARY REQUEST`; `tx aic-7f31c2` | `ON THE TABLE - PAYMENT REQUESTED`; `ref AIC-7F31C2` | Align only the explicit header/tx presentation, preserving honest runtime identity. |
+| Terms | `They provide`; `You provide`; `Relation effect`; `Assets used`; `Whitelist` | `They provide`; `You provide`; `Reason given`; `Ships committed`; `Clearance` | Use source/reference semantics for labels; preserve dynamic values and do not change mechanics. |
+| Whitelist | Always present as `relation_delta_limited`; green when permitted | Current native state exposes an authorized/green clearance | Retain the key and gate colour semantics; no invented permission state. |
+| Actions | Confirm, counter, refuse; exactly three; no `REVIEW` | Expanded `aic_comm` intentionally owns exactly three choices and no `REVIEW`; compact `aic_menu` is untested by this image | Require exactly three/no `REVIEW` on both proposal surfaces from the reference and route ownership. If compact removal is needed, treat it as an implementation decision, not an observed X4 omission; leave auto-promotion untouched. |
+| Footer and refusal | Informational footer; refusal is conversational | Current footer is informational; refusal must stay NPC-visible | Keep footer informational and preserve live-chat refusal dispatch. |
+| Right edge | Compact `END` is a separate concern | Expanded 1c title bar has `END`; input has only `SEND` | Prove/classify separately; do not infer compact omission here. |
+
+- **Existing capability reused:** the current AI Influence source path, Forge Source -> Layout -> Scene -> Paint ->
+  Canvas pipeline, exact-source fixtures, linter, complete-mod validator, guarded deployment, installed Forge, and
+  native X4/current-session evidence path. No parallel parser, renderer, source editor, fixture system, deployer, or
+  mechanics path is in scope.
+- **Couplings checked:** source literals and config-key labels; action count and route ownership; refusal dispatch and
+  NPC-visible transcript; branch/loop/sample authority and preview warning; source/workspace/deployed byte identity;
+  native frame acceptance versus rendered design; expanded 1c versus compact input right-edge behavior; and the
+  pre-existing 1e vocabulary gate.
+- **Capability-map delta:** none recorded here. The capability map is forbidden to this worker, and this planning
+  record claims no new capability.
+- **Plan change:** the prior broad twelve-reference continuation is narrowed to the next source-backed `1d`
+  presentation alignment and right-edge/native proof unit. The current image is explicitly owned by expanded
+  `aic_comm`, so its header/tx/five-term/footer mismatch is separated from untested compact `aic_menu` `REVIEW`/`END`
+  behavior. The existing auto-promotion remains untouched and the 1e transition remains unresolved/out of scope.
+
+### IMPLEMENT (planned only; not started)
+
+1. Reconcile exact current ownership across compact `aic_menu.lua -> menu.display` and expanded
+   `aic_comm.lua -> comm.display`; read back the relevant header, term, whitelist, action, footer, branch/loop, and
+   sample/seed facts through Forge. Use Forge source/CAS editing only for operations it can represent. If compact
+   `REVIEW` deletion is structural and unsupported, apply a bounded direct source patch through the mandated Luna
+   worker, then import, replay, and read back the exact result through Forge without claiming Forge authored it.
+2. Align only labels/config-key presentation and explicit sample/seed semantics. Preserve payment dispatch, the three
+   action routes, refusal-as-live-chat, and the full informational footer. If compact `REVIEW` exists, remove it as
+   the reference/route-ownership decision; keep auto-promotion unchanged and record the 1e transition as unresolved.
+3. Replay the exact source through Layout -> Scene -> Paint -> Canvas with the relevant owner-issued authorities;
+   require a nonzero Canvas, retained `Not verified in game`, consumed branch/loop/sample evidence, and no false
+   success. Update only causal exact-source fixtures required by the legitimate source/geometry contract.
+4. Run complete-mod validation, guarded dry-run/apply, exact source/staging/deployed census, installed Forge visual
+   inspection, and a current X4 screenshot/interaction/log session. Restore any disposable fixture exactly.
+
+### VALIDATE (planned only; not started)
+
+- Record every method in the required-validation list above with its exact command/result/evidence path. Do not turn
+  the baseline `commgate`/`commfullgate` green state into implementation proof, and do not hide the red vocabulary
+  baseline.
+- Reject stale or mismatched CAS without mutation; retain the `>12` whole-frame refusal and legal `<=12` table
+  acceptance. Confirm no scoped `DisplayView`, Lua, or traceback failure in the current X4 session.
+- Keep installed Forge visual proof separate from native X4 proof. The preview warning remains `Not verified in
+  game` until exact deploy and current X4 confirmation.
+
+### REVIEW
+
+- **Plan and evidence boundary:** done for this checkpoint; the supplied reference, expanded-`aic_comm` ownership of
+  the current native image, current source hashes, header/tx/five-term/footer fail-first mismatch, untested compact
+  controls, scope, acceptance, rollback, and required gates are recorded above.
+- **Implementation/acceptance:** intentionally not started. All nine acceptance criteria remain open for the next
+  implementation worker.
+- **Red baseline:** the two `aic_sheet.lua:118` vocabulary findings are pre-existing and remain unmodified; any
+  later repair must be separately justified as a necessary gate repair and preserve the 1d contract.
+- **Overall B119:** remains `IN_PROGRESS / PARTIAL`; `1f` and universal C++ acceptance remain open.
+
+### CLOSE
+
+- **Status:** `SPECIFIED` for the next bounded `1d` unit; `PARTIAL / IN_PROGRESS` for overall B119.
+- **What changed:** only this append-only plan record was extended with the reconciled 1d source/reference contract,
+  baseline evidence, future implementation steps, acceptance criteria, negative paths, and validation record.
+- **What was not changed:** no implementation/source/test file, AI Influence repository, game/deployed directory,
+  capability map, AAR ledger, Git metadata, external service, or runtime state.
+- **Rollback/checkpoint:** restore the three pre-edit record hashes listed in the plan contract; future code rollback is
+  the exact pre-change Lua bytes/hashes listed above.
+- **Suggested records-only title:** `docs(b119): specify 1d source alignment and native proof`.
+
+### AAR
+
+- **Triggers:** review corrected a wrong-surface ownership inference: an expanded `aic_comm` screenshot had been
+  attributed to compact `aic_menu`, creating a false X4-omission story. The required baseline vocabulary gate is red
+  with two pre-existing findings; the first combined patch was rejected on stale BACKLOG context, the first delete/add
+  handoff patch form was invalid, and one read-only final assertion wrapper failed on JavaScript quoting. All were
+  corrected or retried without product or scope impact; no implementation command was attempted and no task-caused
+  product failure is claimed.
+- **Sustain:** keep design/reference, source authority, Forge preview, deploy bytes, native image, and current-session
+  log as separate evidence layers; keep the expanded-1c and compact-menu right-edge claims separate.
+- **Improve work / approach:** make the action-count and 1e-transition decision explicit before any source mutation;
+  use only semantics supported by the reference and current source/runtime.
+- **Improve tools:** use exact-source fixtures and Forge import/replay/readback, while distinguishing Forge-authored
+  edits from bounded direct Luna structural patches; record the baseline red gate before any future repair; use exact
+  local patch context and quoting-safe assertion wrappers; do not use one surface's screenshot as evidence for another.
+- **[REPRODUCED] Highest-risk evidenced weakness:** wrong-surface ownership inference. Treating the expanded
+  `aic_comm` screenshot as compact `aic_menu` evidence manufactured a false engine-omission claim and could drive the
+  wrong structural repair. Every visual claim must name the actual source/target owner before interpreting controls.
+- **Durable boundary:** no project AAR ledger, capability map, external projection, implementation, or validation result
+  is changed or claimed by this planning checkpoint.
+
+## 2026-09-08 CONTINUATION — installed Forge `1d` false-success and fail-first repair gate
+
+### RECONCILE / REVISED PLAN
+
+- **Status and boundary:** `SPECIFIED` for the next implementation unit; overall B119 remains `PARTIAL / IN_PROGRESS`.
+  This append is records-only. The AI source edits and two Forge exact-source selftest edits already uncommitted from
+  the active bounded unit are preserved, but are not validated or claimed here.
+- **Installed/repository distinction:** the reproduced installed sidecar is Forge `v1.0.509` with extension `0.0.77`.
+  It selected exact current `aic_menu.lua -> menu.display`, with `aic_menu.lua` SHA-256
+  `6DDA7D81AD7073C405B15DB911AA68777B9DAFA1DE33EE0F56855657C3A3CA07`. This is installed-product evidence only;
+  it must not be conflated with current repository source or treated as source/install parity.
+- **[REPRODUCED] Installed replay authority:** the UI retained six path choices — `735 then`, `741 then`, `745 then`,
+  `807 else`, `827 then`, and `833 then` — plus loops `757=5` and `829=3`; all `29/29` scalar samples were bound.
+  The UI still reported `rendered/current`, `session partial`, and `canRender=true`.
+- **[REPRODUCED] False-success receipt:** the Program had `91` operations and `13` rows; Scene had `16` widgets and
+  `18` texts; Paint had `913` commands and `396` glyph commands, but only `7` tinted glyphs, all from SEND line `858`
+  and END line `860`. Scene contained the header, tx, ten five-row label/value strings, footer, SEND, and END, but no
+  three proposal action labels.
+- **[REPRODUCED] Unavailable color evidence:** header/term/footer `createText` color facts were unavailable. Current
+  source and installed runtime both reproduce `TOK.value`/`TOK.label` as source-literal table entries that may have
+  been mutated after an opaque local-helper escape; `TOK.header` is actually missing from the `TOK` declaration, and
+  loop value color `vc` is unresolved.
+- **[REPRODUCED, causal]** Source composition intentionally skips glyph-alpha-blit commands without a tint; this
+  explains why proposal text is absent from the bitmap. This is causal evidence, not a hypothesis. The action outer row
+  at line `828` applies, but all three expanded line `832/834` operations remain unresolved because the numeric loop
+  variable `slot` is not specialized into `(slot - 1) * 4 + 1`, leaving `row[?]` with no applied cell identity. This is
+  also causal evidence.
+- **Test-gap finding:** prior exact-source tests pinned proposal Scene/glyph counts while explicitly accepting
+  unavailable colors; they did not select/assert the action branch, loop, labels, or source-composition pixels.
+- **Performance/UX concern:** adding action selections changed sample-catalog identity and cleared prior samples;
+  replaying all `29` values through the UI took about `3.5` minutes because every input reran the full pipeline. This is
+  not part of the immediate fidelity repair unless acceptance requires it.
+
+### REVISED ACCEPTANCE / IMPLEMENTATION GATE
+
+The following are scoped repair requirements, not completed fixes:
+
+1. Add fail-first exact-current-source tests that reproduce no proposal source-composition pixels and unresolved action
+   receivers before repair.
+2. Require the existing CallModel owner to retain source-owned literal color evidence through a statically proven
+   non-mutating local-helper path; explicit or unknown mutation remains fail-closed. Add the missing `TOK.header` source
+   token separately as an actual source defect.
+3. Require the existing preview-loop owner to specialize the bounded numeric induction variable so
+   `row[(slot - 1) * 4 + 1]` resolves to exact columns `1`, `5`, and `9` for iterations `1`, `2`, and `3`; ownership /
+   evidence reciprocity and hostile/stale cases remain strict.
+4. Exact `1d` source composition must visibly paint the header, tx, all five term rows, green permitted whitelist,
+   informational footer, exactly three action buttons, SEND, and END; it must contain no REVIEW and retain
+   `Not verified in game`.
+5. Do not fake unknown dynamic colors or paint untinted diagnostic glyphs as source composition.
+6. As applicable, require focused CallModel, Layout, Scene, Paint, Canvas, Preview, Session, and SourceEditor tests,
+   then typecheck/lint, followed by rebuilt installed-product visual replay before any later deploy/native-X4 step.
+   This records-only continuation authorizes neither deploy nor native X4 validation yet.
+
+### CLOSE / ROLLBACK / AAR
+
+- **Validation boundary:** no implementation, deploy, native X4 run, or acceptance validation is run or claimed here;
+  `Not verified in game` remains invariant. The next exact action is the fail-first test work above, followed by the
+  named focused gates and rebuilt installed replay.
+- **Records-only rollback:** restore only the three owned records to their pre-worker bytes captured at this continuation:
+  plan `263356` bytes / SHA-256 `23EA493E9DF58EAA48AFB023232B7CE3C45C968FF262DB1E5DD4146C5A5DE4F1`, BACKLOG
+  `332731` / `78B2513FDC38E6FD42AB048A4A39E1AA6A8FA2476C7E9025B3611DDBE2D7232E`, and SESSION-HANDOFF `7709` /
+  `B297EB9852C54754D8E1519615EBEB256AA8AF0F6A17FA4A3680E5E19DB001F4`. No source, test, product, game, or deploy
+  rollback is in scope.
+- **AAR trigger:** the installed `rendered/current` receipt was a reproduced false-success and changed the acceptance
+  contract. Sustain the source-composition versus diagnostic-paint boundary; improve fail-first exact-source coverage;
+  defer the replay-time performance concern unless it blocks acceptance. No completed repair or capability-map delta is
+  claimed.
+
+## 2026-09-09 CONTINUATION — SPECIFIED installed sample-edit performance repair
+
+- **Status:** `SPECIFIED`; this addendum records the installed baseline and authorizes a bounded implementation/test
+  unit only. It does not claim a repair, source parity, deploy, game validation, or dogfood completion.
+- **Installed baseline:** exact `ui/addons/ai_influence_chat/aic_menu.lua`, `90,018` bytes, SHA-256
+  `8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD`; the installed Source Editor issued `31`
+  sample values across `7` selected paths with `3` loop iterations. One accessibility-tree `setValue` sample edit
+  produced FPS `3` and a `13,093 ms` main-thread longtask.
+- **Reproduced product defect:** this is observed installed-product jank, not a wall-clock test artifact. The current
+  per-control flow commits each sample edit into the accepted session and reruns the full preview pipeline, so the
+  observed stall blocks the B119 visual dogfood proof: the editor cannot credibly establish current, interactive
+  source-preview evidence while one ordinary sample edit freezes the main thread.
+- **Bounded repair / acceptance:** add causal fail-first tests, then make sample controls stage exact typed draft values
+  without changing accepted `sampleInput`; an explicit Apply validates and commits the full draft through the existing
+  owner-issued catalog/authority, with explicit Reset and fail-closed drift/refusal behavior. Reuse immutable
+  source-owner stage-one and reconciled path/loop stage-two previews across sample-only projections; cache keys must
+  include every real source, corpus, profile, selection, color, path/loop, binding, and authority dependency. Preserve
+  source identity, validators, canvas/export evidence, exact hashes/receipts, `Preview only`, and `Not verified in
+  game`; no workspace/source/export/deploy/game writes are in scope.
+- **Required proof:** retain the red fail-first receipt here, then run the focused session/component/pipeline/layout/
+  paint tests, configured-source Scene test when available, typecheck, scoped ESLint, and owned-path diff hygiene.
+- **Fail-first red receipt:** `npx tsx src/lib/x4UiEditorSession.selftest.ts` exited `1` with
+  `BATCH_8C1_CORRECTION_SESSION_CAUSAL total=21 passed=20`; the new causal row observed
+  `stageOneCatalogReused=false`, `stageTwoSampleCatalogReused=false`, and accepted final sample changes. `npx tsx
+  src/components/X4UiSourceEditor.selftest.tsx` exited `1`; the new mounted row issued exactly `31` controls and
+  stopped at `mounted sample draft Apply control was not rendered` (the prior `17` rows passed). These are the
+  pre-repair red contracts for redundant preview work and per-edit committed sample UI.
+
+## 2026-09-09 CONTINUATION — IMPLEMENTED / VALIDATED bounded sample-edit repair
+
+- **Status:** `VERIFIED` for this bounded source-editor/session unit; overall B119 remains `IN PROGRESS / PARTIAL`.
+- **Implementation:** sample controls now retain exact raw strings in an owner-bound draft and do not alter accepted
+  `sampleInput` or current preview evidence while typing. Explicit `Apply staged samples` calls the new validated
+  full-draft transaction; invalid, missing, stale, or drifted values refuse visibly and retain the last accepted
+  state. `Reset staged samples` discards only the draft. Draft visibility requires the exact catalog, binding, and
+  authority; source/target/profile/workspace drift therefore clears it fail-closed. `Preview only` and `Not verified
+  in game` remain unchanged.
+- **Stage reuse:** the existing session owner now holds an owner-local, opaque-token cache for immutable stage-one
+  catalog preview and reconciled path/loop stage-two sample-catalog preview. Keys include owner/source identity,
+  corpus identity and content boundary, normalized profile, exact selection, color authority/boundary, reconciled
+  paths/loops, and their exact binding/authority references. A changed accepted sample reuses those stages and creates
+  only the final sample-bound preview; hostile or cache-ineligible data bypasses reuse.
+- **Validation:** Session `23/23` causal plus P7 canonical-color `7/7`; mounted Source Editor `18/18`, including
+  `31` staged controls, unchanged projection count before Apply, one Apply projection, exact spaced strings, refusal,
+  and Reset; Preview Pipeline `122/122`; Layout Program `749` passed / `1` intentional configured-corpus skip
+  (`750` total); configured strict Scene `179/179` with MENU/HUB/COMM `3/3`; Paint Plan `213/213`; TypeScript;
+  scoped ESLint over the four changed TS/TSX implementation/selftest files; and owned-path `git diff --check` all
+  passed. No E2E, build, packaging, install, deploy, game, or external-record operation was run.
+- **Invariant review:** exact configured source census continued to report MENU hash
+  `8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD`, HUB hash
+  `657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F`, and COMM hash
+  `5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E`; the Scene/ Paint/provenance census and
+  permanent game-truth boundary remained green. No capability-map delta. BACKLOG was not changed by this worker.
+- **Baseline / rollback:** pre-existing unrelated dirty state was preserved. Rollback is the bounded follow-up diff in
+  the two implementation files and their two selftests plus this plan addendum; no source-fixture, workspace, export,
+  mod, game, installed, or deploy bytes were written. Only the owned implementation, selftest, and plan paths changed.
+- **AAR:** the fail-first red contract was useful and exposed the per-keystroke commit seam. During repair, the
+  mounted harness needed browser-like focus/propertychange events and its receipt sanitizer needed explicit fields;
+  both were corrected and the final mounted receipt passed. Sustain owner-issued authority checks and deterministic
+  projection-count oracles. Highest-risk remaining weakness is that installed visual replay and non-null current-canvas
+  proof are intentionally deferred to the parent; this worker's mounted fixture proves evidence identity is unchanged
+  while staged, including the valid null-to-null case before accepted samples render. Suggested commit title:
+  `B119 batch sample edits through owner-stage reuse`.
+
+## 2026-09-09 CONTINUATION — SPECIFIED MD `cancel_conversation` semantic lint repair
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Status:** `SPECIFIED` for this bounded Full-lane unit; overall B119 remains `PARTIAL / IN_PROGRESS`. The
+  pre-worker baseline is the existing dirty plan only; the five implementation/test files below were clean.
+- **Bounded unit:** extend the existing `mdPitfallLints` -> `runProjectValidation` path with one deterministic,
+  blocking semantic rule: every real MD `<cancel_conversation>` must contain `actor` or `template`. Extend the
+  existing project-validation summary, flattening, and agent-history summary without creating a parallel validator.
+- **Observed authority:** native X4 9.00 reported `[=ERROR=] ... Neither of the attributes 'actor' and 'template' is
+  present!` for `md/ai_influence_conversation.xml` line 98, `<cancel_conversation force="true"/>`. X4 9.00
+  `common.xsd` routes the element through `conversationactor`, whose two attributes are individually optional; this
+  lint is therefore an observed engine semantic disjunction, not an XSD-requiredness claim. Vanilla corpus good shape:
+  `<cancel_conversation actor="$Guide"/>`.
+- **In scope:** a stable `md_pitfall.*` error code and exact relative file/line finding; actor/template disjunction
+  detection with structural source mapping; additive `mdPitfallErrors` summary and corrected warning-only count;
+  shared `ok`/flatten/history behavior; focused selftests, API regression coverage, and the named validation gates.
+- **Out of scope / non-goals:** runtime debugger/parser changes, XSD edits or claims that XSD enforces the rule,
+  context validation beyond the observed actor/template disjunction, warning suppression changes, non-MD lint rules,
+  mod/game/live-directory/config/deploy/package/publish/Git changes, and unrelated dirty files.
+- **Risks and authorization boundaries:** only the six owned paths may change. XML comments, CDATA/text decoys,
+  malformed input, non-mdscript documents, and unrelated tags must remain quiet; no false-success fallback is allowed.
+  The unrelated Deckwright process PID 45172 owns TCP 3100; do not kill, reuse, or mutate it.
+- **Rollback/checkpoint:** restore each owned file to its pre-edit bytes using these SHA-256 identities: plan
+  `F1724E127779D5720C8306FAEA36FFEBC398F66D07809C55E36C14E494A8A334`; `src/lib/mdPitfallLints.ts`
+  `8D8B3823E8216CA776599456DDBF789B7295BB3A6F14CEDBC79843C7C00BBA69`; `src/server/projectValidation.ts`
+  `C44953CA22B62F0B5E5E586CDE5C7EC2D088945A4F112F4C53423699B59F08B1`; `src/lib/agentHistory.ts`
+  `38D1784F80775AA08B4727C13E97C8993E6CA9DB0ECF5CA60A160F46578510D1`; `src/lib/agentHistory.selftest.ts`
+  `736E239C773DF1F9F46C6E16A0A621723852562129D1A4649444592B7DE10619`; `tests/e2e/project-validate.spec.ts`
+  `4637F2D8FF98FA47201D5C4F7A5EC8A0E0E69D222A7A3813447C4320071E5336`.
+- **Acceptance:** real missing-attribute input yields exactly one error with stable code, exact project-relative path,
+  exact line, engine-failure explanation, and actor/template examples; actor-only and template-only (with context)
+  pass; both absent fail; decoys/malformed/non-MD/unrelated tags do not flag; existing three warnings retain code,
+  severity, and behavior; `mdPitfallErrors` and `mdPitfallWarnings` are separate with warnings excluding errors; any
+  pitfall error makes `ok=false`; flattening preserves severity/code/filePath/line; history counts and names the first
+  pitfall diagnostic; API validation rejects only the bad fixture and accepts the good fixtures.
+- **Required validation / negative paths:** first add fail-first tests and capture the causal red receipt; then run
+  `runMdPitfallSelftest`, `runProjectValidationSelftest`, `runAgentHistorySelftest`, `npm run typecheck`, scoped
+  ESLint for every changed TS/TSX file, and owned-path `git diff --check`. Run focused
+  `tests/e2e/project-validate.spec.ts` with workers=1 on the explicitly supported alternate ports 3200/3201 when
+  free; preserve the unrelated 3100 owner and verify alternate listeners terminate.
+- **Evidence boundary:** record the causal red receipt after fail-first edits, then exact green command results,
+  changed-file diff/review, negative-path results, and final status in this plan. This record does not prove real X4
+  runtime or player experience; no game or live-mod validation is applicable or authorized.
+
+### BASELINE / RECONCILE
+
+- Existing owner and consumers: `lintMdPitfalls` owns MD pitfall findings; `runProjectValidation` owns shared verdict
+  and summary; `flattenProjectValidation` owns flat diagnostics; existing agent-history validation summaries consume
+  `summary` plus the first flat diagnostic. `runtimeDebugger.ts` already recognizes the engine signature and is not
+  touched. No capability-map delta.
+- Current baseline hashes and dirty scope are the rollback checkpoint above. No source/test implementation edits have
+  been made at this planning point.
+
+### IMPLEMENT / VALIDATE / REVIEW / CLOSE / AAR
+
+- **State:** not started; fail-first tests are the next action. Do not mark this unit complete until the required
+  results are appended below. Preserve overall B119 `PARTIAL / IN_PROGRESS`.
+
+### FAIL-FIRST RECEIPT (pre-repair)
+
+- `npx tsx -e "import { runMdPitfallSelftest } from './src/lib/mdPitfallLints.ts'; const r = runMdPitfallSelftest(); console.log(JSON.stringify(r)); if (!r.allPassed) process.exit(1)"` -> exit `1`; `allPassed=false`, `passed=20`, `total=22`. The two new assertions failed: `cancel_conversation without actor/template is one blocking finding` had detail `[]`, and `cancel_conversation with neither attribute fails` was false. Existing warning and degradation checks passed.
+- `npx tsx -e "import { runAgentHistorySelftest } from './src/lib/agentHistory.selftest.ts'; const r = runAgentHistorySelftest(); console.log(JSON.stringify(r)); if (!r.pass) process.exit(1)"` -> exit `1`. The two new assertions failed: current history output was `Validated 1 file — 0 errors, 2 warnings`, so the MD pitfall was neither counted as an error nor named as the first diagnostic.
+- The first `runProjectValidationSelftest` invocation did not return within the orchestration window; a second invocation remained responsive while building the configured schema/index path. Its terminal result is recorded below.
+- `npx tsx -e "import { runProjectValidationSelftest } from './src/server/projectValidation.ts'; const r = runProjectValidationSelftest(); console.log(JSON.stringify(r)); if (!r.pass) process.exit(1)"` -> exit `1` before the source repair. The new `cancel_conversation_missing_actor_or_template_is_blocking_and_located` and `cancel_conversation_actor_and_template_forms_pass_validation` checks were false; the returned summary had no `mdPitfallErrors` and no semantic finding. The same baseline receipt also reported the pre-existing `literal_13_columns_is_fatal_and_source_located` check false; this unit does not alter that unrelated Lua selftest path.
+
+### FRESH-EYES CORRECTION
+
+- **Runtime wording boundary:** X4 emitted the exact engine `ERROR` for the no-actor/no-template element at startup/load. In the tested session the compact and expanded UI still rendered and `END` closed the conversation. The engine error is non-clean and therefore blocks Forge validation, but this rule does not establish action, whole-file, or whole-frame failure. Finding text and tests use the narrower startup/load diagnostic wording and explicitly avoid rejection claims.
+
+## 2026-09-09 CONTINUATION — IMPLEMENTED / VALIDATED MD `cancel_conversation` semantic lint
+
+### IMPLEMENT
+
+- Added `md_pitfall.cancel_conversation_actor_or_template` to the existing MD pitfall owner. It parses real
+  `cancel_conversation` elements and reports the exact opening-tag line and project-relative path. Malformed XML is
+  owned by structural/wellformedness validation; when exact source-offset mapping is unavailable, this semantic pass
+  skips rather than fabricating a finding. The message cites the observed startup/load engine
+  `ERROR`, gives actor/template examples, states the XSD limitation, and does not assert action/file/frame failure.
+- Extended the shared validation result with additive `summary.mdPitfallErrors`; warning counts now include only warning
+  findings, pitfall errors make `ok` false, and flattened pitfall diagnostics retain `filePath`, severity, code, and
+  line. Agent-history validation totals now include `mdPitfallErrors` and name the first flat diagnostic.
+- Added fail-first and green coverage for actor/template forms, comments, CDATA/text decoys, non-MD, malformed and
+  garbage input, exact source mapping, shared summary/flattening, history wording, and API validation. No runtime
+  parser, XSD, mod, game, live directory, config, or unrelated path was changed.
+
+### VALIDATE
+
+- `npx tsx -e "import { runMdPitfallSelftest } from './src/lib/mdPitfallLints.ts'; const r = runMdPitfallSelftest(); console.log(JSON.stringify(r)); if (!r.allPassed) process.exit(1)"` -> exit `0`; `allPassed=true`, `passed=22`, `total=22`.
+- `npx tsx -e "import { runAgentHistorySelftest } from './src/lib/agentHistory.selftest.ts'; const r = runAgentHistorySelftest(); console.log(JSON.stringify(r)); if (!r.pass) process.exit(1)"` -> exit `0`; all checks passed, including MD pitfall error counting and
+  first-diagnostic naming.
+- `npx tsx -e "import { runProjectValidationSelftest } from './src/server/projectValidation.ts'; const r = runProjectValidationSelftest(); console.log(JSON.stringify({pass:r.pass, failed:r.checks.filter(c => !c.pass)})); if (!r.pass) process.exit(1)"` -> exit `1`; the two new MD checks passed, but the pre-existing
+  `literal_13_columns_is_fatal_and_source_located` check remains false. The standalone fixture receipt showed the
+  existing analyzer output (`x4-ui.add-table-column-limit` warning plus `lua.menu_never_opened` error), confirming this
+  is outside the MD unit and was present in the pre-repair fail-first receipt.
+- `npm run typecheck` -> exit `0`.
+- `npx eslint --no-error-on-unmatched-pattern src/lib/mdPitfallLints.ts src/server/projectValidation.ts src/lib/agentHistory.ts src/lib/agentHistory.selftest.ts tests/e2e/project-validate.spec.ts` -> exit `0`; 0 errors and 8 existing `no-explicit-any` warnings in the two pre-existing implementation files.
+- `& { $env:X4_FORGE_E2E_WEB_PORT='3200'; $env:X4_FORGE_E2E_API_PORT='3201'; npx playwright test tests/e2e/project-validate.spec.ts --workers=1 }` -> exit `0`; `7 passed (46.0s)`. Ports 3200/3201 were free before launch and had no listeners afterward. Port 3100 remained owned by the preserved Deckwright PID 45172.
+- `git diff --check --` restricted to the six owned paths -> exit `0`. Owned status contains only the plan and five
+  implementation/test files; no forbidden path was edited.
+- Negative-path result: the MD selftest's comments, CDATA, escaped text, unrelated tag, non-mdscript, malformed, and
+  garbage cases produced no new semantic finding. The pre-repair red receipts are recorded above.
+
+### REVIEW
+
+- Missing attributes -> one stable error with exact line/path: done and evidenced by MD, project, and E2E checks.
+- Actor and template-with-context -> accepted: done and evidenced by project and E2E checks.
+- XSD/runtime wording boundary -> done; no XSD disjunction claim and no action/whole-file/whole-frame failure claim.
+- Existing warning rules and warning-only count -> done by the 22-check MD oracle and filtered summary implementation.
+- Shared `ok`, flattening, and history -> done and evidenced by project/history/E2E checks.
+- Required project selftest -> partial: one unrelated baseline Lua assertion remains red; no scope-expanding repair was made.
+
+### CLOSE
+
+- **Status:** `PARTIAL` for this bounded unit solely because the required project selftest still has the pre-existing
+  Lua assertion failure; the new MD behavior and alternate-port API regression are green. Overall B119 remains
+  `PARTIAL / IN_PROGRESS`.
+- **Capability-map delta:** none.
+- **Rollback:** restore the six owned paths to the pre-edit hashes recorded in the SPECIFIED addendum; no mod, game,
+  live-directory, config, deployment, package, publish, or Git mutation occurred.
+- **Remaining concern:** the stale `literal_13_columns_is_fatal_and_source_located` project selftest needs a separate
+  bounded owner decision; it is not evidence against this MD semantic lint.
+
+### AAR
+
+- **Triggers:** fail-first tests were intentionally red; the first combined implementation patch partially applied and
+  required a retry; typecheck caught two new selftest typing errors; a fresh-eyes review corrected an overbroad runtime
+  failure phrase; and the existing project selftest remained red. All task-caused issues were corrected; the stale
+  Lua assertion is explicitly retained as partial.
+- **Sustain:** keep the engine diagnostic, Forge blocking verdict, and in-game action/UI outcome as separate evidence
+  layers; use structural parsing plus source-preserving offsets for semantic XML rules.
+- **Improve work / approach:** include the exact fail-first receipt before implementation and require tests to guard
+  against whole-file or action-failure wording when the observed evidence is only an engine startup/load error.
+- **Improve tools:** the project selftest has a stale Lua oracle that should be reconciled in its own bounded task; no
+  fix was smuggled into this MD lint unit.
+- **Highest-risk evidenced weakness:** a stale unrelated oracle can make a correctly scoped validation run look wholly
+  red; retain per-check receipts and distinguish baseline failures from the new acceptance contract.
+
+## 2026-09-09 CONTINUATION — SPECIFIED B119 project-validation column-boundary oracle repair
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Status:** `SPECIFIED` for this bounded Full-lane unit; overall B119 remains `PARTIAL / IN_PROGRESS`.
+- **Bounded unit:** correct only `runProjectValidationSelftest` so its X4 UI `addTable` fixtures prove the calibrated
+  12-clean, 13-warning/nonblocking, and 24-error/blocking boundaries; keep the existing MD `cancel_conversation`
+  checks intact and do not change the production Lua linter.
+- **Baseline / reconciliation:** current revision `835b59d`; both owned paths are pre-existing dirty files from the
+  adjacent MD unit and are preserved. The shared project validator already consumes the production X4 UI analyzer;
+  this unit repairs only its contradictory selftest oracle. Official X4 9.00 counterexamples recorded by the
+  authoritative production contract include `menu_map.lua:13514`, `menu_scenario_selection.lua:290`, and
+  `menu_ship_comparison.lua:303`. No capability-map delta.
+- **In scope:** separate literal 13-column warning and literal 24-column fatal fixtures/variables, source-location
+  assertions, calibrated warning/error severity and summary/verdict assertions, and this plan record.
+- **Out of scope:** production severity or threshold, `src/lib/x4UiLint.ts`, any other source/test/doc, mod/game/live
+  directories, external records, and Git mutations.
+- **Acceptance:** 12 remains clean/ok; 13 yields exactly one line-3 `x4-ui.add-table-column-limit` warning in
+  `ui/warning_columns.lua`, no corresponding error, remains ok, and communicates the unbisected 13-23 range plus
+  valid 13-column counterexamples without an ENTIRE-frame refusal claim; 24 yields exactly one line-3 error in
+  `ui/too_many_columns.lua`, makes validation not ok, and includes `ENTIRE frame` plus `Failure mode:`. Dynamic
+  counts remain one info/unverified nonblocking summary; the percentage warning and both existing MD semantic checks
+  remain green; `runProjectValidationSelftest` returns `pass: true`; only the two owned paths differ.
+- **Rollback / evidence:** restore the pre-subunit owned bytes by SHA-256 (`projectValidation.ts`
+  `6F443B599EDF4DEBF9A15BB7D3D3CF2CC769D898343FEED5AD752981BF1D1B90`; this plan
+  `BC19646778616BB3253A94993BA81FF332949F1BB14A8BC7AA4CF8B71736834`). Evidence is the exact command receipts,
+  focused test output, and owned-path diff/check recorded below.
+- **Required validation / negative path:** cite the existing fail-first receipt where the exact project selftest exits
+  `1` only on `literal_13_columns_is_fatal_and_source_located`; run the specified project/UI integration/typecheck/
+  scoped-lint/diff-check commands, and verify 12/13/24, dynamic, percentage-warning, and both MD checks in the green
+  selftest. Do not run full E2E or precommit in this worker.
+
+### IMPLEMENT / VALIDATE / REVIEW / CLOSE / AAR
+
+- **State:** implemented and validated; implementation remained limited to the selftest fixture/assertion correction
+  described above.
+
+### IMPLEMENT
+
+- Added separate literal `warningColumnsLua` (`addTable(13)`) and `fatalColumnsLua` (`addTable(24)`) fixtures. The
+  13-column assertion now requires one source-located warning, no X4 UI error, `ok: true`, the calibrated
+  unbisected/official-counterexample wording, and no `ENTIRE frame` phrase. The 24-column assertion retains the
+  source-located blocking error checks and now proves that boundary explicitly. The existing percentage-warning,
+  dynamic-count, and both `cancel_conversation` fixtures/checks remain intact. No production linter or threshold changed.
+
+### VALIDATE
+
+- Fail-first receipt already recorded above and reproduced before implementation with the exact requested command:
+  `npx tsx -e "import { runProjectValidationSelftest } from './src/server/projectValidation.ts'; const r=runProjectValidationSelftest(); console.log(JSON.stringify(r,null,2)); process.exit(r.pass?0:1)"`
+  -> exit `1`; only `literal_13_columns_is_fatal_and_source_located` was false, while the other six checks were true.
+- `npx tsx -e "import { runProjectValidationSelftest } from './src/server/projectValidation.ts'; const r=runProjectValidationSelftest(); console.log(JSON.stringify(r,null,2)); process.exit(r.pass?0:1)"`
+  -> exit `0`; `pass: true`; all seven checks passed. The 13-column receipt was exactly one line-3 warning at
+  `ui/warning_columns.lua` with no ENTIRE-frame phrase; the 24-column receipt was exactly one line-3 error at
+  `ui/too_many_columns.lua` containing `ENTIRE frame` and `Failure mode:`.
+- `npx tsx src/lib/x4UiLint.selftest.ts` -> exit `0`; `allPassed=true`, `153/153`.
+- `npm run test:x4-ui-integration` -> exit `0`; `21/21 allPassed=true`.
+- `npm run typecheck` -> exit `0`; `tsc --noEmit` passed.
+- `npx eslint src/server/projectValidation.ts` -> exit `0`; 0 errors and 1 existing `no-explicit-any` warning at
+  `src/server/projectValidation.ts:238`.
+- `git diff --check -- src/server/projectValidation.ts docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`
+  -> exit `0`; only line-ending normalization warnings were emitted.
+- Negative-path result: 12 stayed clean, dynamic count stayed one info/unverified nonblocking summary, the percentage
+  warning stayed nonblocking, 13 stayed warning-only, 24 stayed blocking, and both MD semantic checks stayed green.
+  Full E2E and precommit were not run per the work order.
+
+### REVIEW
+
+- 12 clean boundary -> done and evidenced.
+- 13 warning/nonblocking boundary with exact code/path/line, calibrated wording, and no ENTIRE-frame claim -> done and
+  evidenced.
+- 24 blocking boundary with exact code/path/line and known failure-mode wording -> done and evidenced.
+- Dynamic, percentage-warning, and existing `cancel_conversation` behavior -> retained and green.
+- Production linter severity/threshold and forbidden paths -> unchanged; only the two owned paths were written.
+
+### CLOSE
+
+- **Status:** `VERIFIED` for this bounded oracle-repair unit; overall B119 remains `PARTIAL / IN_PROGRESS`.
+- **Capability-map delta:** none.
+- **Rollback:** restore the two pre-subunit owned bytes using the SHA-256 identities in the plan contract; no mod,
+  game, live-directory, external-record, or Git mutation occurred.
+- **Remaining concerns:** no task-scoped acceptance concern remains. Full E2E/precommit are intentionally outside this
+  worker's required validation.
+- **Suggested commit title:** `test(b119): calibrate project validation table boundary oracle`.
+
+### AAR
+
+- **Triggers:** the intentional fail-first project selftest was red; one additional read-only diagnostic probe failed
+  once because shell-escaped Lua quotes reached the parser, then a corrected probe produced the expected 13/24
+  receipts. No repository mutation resulted from the failed probe.
+- **Sustain:** keep separate fixtures for adjacent severity boundaries and assert both finding metadata and verdict
+  semantics through the shared project-validation path.
+- **Improve work / approach:** use a fixture name that states the calibrated boundary (`warning_columns` versus
+  `too_many_columns`) so a later oracle cannot infer severity from a generic `fatal` variable.
+- **Improve tools:** inline PowerShell/tsx diagnostic probes are sensitive to nested quoting; prefer the repository
+  selftest command or a quoting-safe fixture path for future probes.
+- **Highest-risk evidenced weakness:** a stale project-level oracle can reject valid production-contract behavior and
+  obscure unrelated regressions; per-boundary receipts now make that mismatch explicit.
+- **Global/project lessons banked:** this plan close is the durable project record; no external ledger or capability-map
+  update was in scope.
+
+## 2026-09-09 CONTINUATION — SPECIFIED B119 CLI summary and semantic-lint wording coupling repair
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Status:** `SPECIFIED` for this bounded Full-lane subunit; overall B119 remains `PARTIAL / IN_PROGRESS`.
+- **Bounded unit:** make the standalone human CLI summary expose the existing authoritative Lua, X4 UI, and MD
+  pitfall error/warning counts (including X4 UI unverified/truncated counts), and correct only the
+  `cancel_conversation` semantic-lint comments/documentation so skipped source mappings and structurally malformed XML
+  are described accurately.
+- **Baseline:** the supplied read-only real-mod CLI receipt exits `1`, includes the exact
+  `md_pitfall.cancel_conversation_actor_or_template` finding at `md/ai_influence_conversation.xml:98`, but omits all
+  three semantic-summary families. Existing selftests require malformed/non-MD input to produce no semantic finding.
+- **Reconcile:** `scripts/x4validate.ts` already has a JSON branch that serializes the production result unchanged and a
+  human branch reading `result.summary`; the supplied production contract already provides
+  `luaErrors/luaWarnings`, `x4UiErrors/x4UiWarnings/x4UiUnverified/x4UiTruncated`, and
+  `mdPitfallErrors/mdPitfallWarnings`. `src/lib/mdPitfallLints.ts` already skips when exact offsets are unavailable and
+  on parse/non-MD input; only its misleading comments and the prior plan wording need correction.
+- **In scope:** three owned paths only: aligned human summary lines in `scripts/x4validate.ts`; comments in
+  `src/lib/mdPitfallLints.ts`; this subunit's plan wording and close evidence.
+- **Out of scope:** JSON shape/text, lint severity/finding text/parser logic/verdict, the calibrated `addTable` contract,
+  structural validation, mod/game/corpus/live-directory/config/installed-extension paths, external records, Git metadata,
+  E2E, build, deploy, game, and full precommit.
+- **Risks and authorization boundaries:** human-only output must use authoritative summary fields directly and must not
+  alter JSON or flattening. The semantic-lint edit must remain comment-only; no real mod or game bytes may be written.
+- **Rollback/checkpoint:** restore the three pre-subunit owned files to these SHA-256 identities: `scripts/x4validate.ts`
+  `E1B5B3CA4B185F4DAA4C0CE5DE1B323D78119DA0E1629FFE42A96C39A8123E7B`, `src/lib/mdPitfallLints.ts`
+  `7BF27E63F0E23513BFF1ECBFCBE471CD3FB7BA4EC56AA71DDCCC47E4C02326D3`, and this plan
+  `5841103B9D693CDC9A1807CD082182E2CE7A17879130D52F4D3D930B39868078`.
+- **Acceptance:** human output has explicit Lua errors/warnings, X4 UI errors/warnings with unverified/truncated counts,
+  and MD pitfall errors/warnings; real-mod validation remains exit `1` with MD pitfall `1/0` and the exact source-located
+  finding; `--json` retains the summary fields without human labels; `--help` succeeds; both named selftests pass;
+  typecheck, scoped ESLint, and owned-path diff check pass; only these three owned paths change.
+- **Required validation / negative path:** record the fail-first receipt, rerun the real-mod human and `--json` commands
+  without writing the mod, parse/assert the JSON contract, run `--help`, both selftests, typecheck, scoped ESLint, and
+  `git diff --check` on the exact owned paths. Confirm no human summary labels enter JSON and no semantic behavior changes.
+- **Evidence:** terminal receipts in the worker report and this plan's `FAIL-FIRST`, `VALIDATE`, `REVIEW`, `CLOSE`, and
+  `AAR` sections; no external record or capability-map delta.
+
+### FAIL-FIRST RECEIPT (pre-repair)
+
+- `npm run validate:mod -- "G:\SteamLibrary\steamapps\common\X4 Foundations\extensions\x4_ai_influence"` -> exit `1`;
+  human summary reported the older categories only, while `Findings (25)` contained the exact
+  `[error] md_pitfall.cancel_conversation_actor_or_template` at `md/ai_influence_conversation.xml:98`. Lua, X4 UI,
+  and MD pitfall summary lines were absent.
+
+### IMPLEMENT / VALIDATE / REVIEW / CLOSE / AAR
+
+- **State:** implementation complete; close is `PARTIAL` solely because the pre-existing `--help` path exits `2`
+  although this subunit's acceptance says help must succeed. Overall B119 remains `PARTIAL / IN_PROGRESS`.
+
+### IMPLEMENT
+
+- Added human-only summary lines that read `result.summary` directly for Lua errors/warnings, X4 UI errors/warnings
+  with unverified/truncated counts, and MD pitfall errors/warnings. The `--json` branch and flattened result were not
+  changed.
+- Corrected only non-executable wording: malformed/non-MD XML is owned by structural/wellformedness validation, and
+  unavailable exact source mapping skips the semantic finding rather than fabricating one. The parser, finding text,
+  severity, source mapping, and verdict behavior were not changed.
+
+### VALIDATE
+
+- **Fail-first:** `npm run validate:mod -- "G:\SteamLibrary\steamapps\common\X4 Foundations\extensions\x4_ai_influence"`
+  -> exit `1`; the pre-repair summary omitted Lua, X4 UI, and MD pitfall families while the exact semantic finding was
+  present at `md/ai_influence_conversation.xml:98`.
+- **Human CLI:** the same command -> exit `1`; assertions passed for the exact finding and these lines:
+  `Lua errors/warnings: 0/3`, `X4 UI errors/warnings: 0/3 (unverified: 6, truncated: 4)`, and
+  `MD pitfall errors/warnings: 1/0`. The real mod was read only.
+- **JSON CLI:** `npx tsx scripts/x4validate.ts "G:\SteamLibrary\steamapps\common\X4 Foundations\extensions\x4_ai_influence" --json`
+  -> process exit `1`; stdout parsed as JSON, `summary.mdPitfallErrors === 1`,
+  `summary.mdPitfallWarnings === 0`, and no human summary labels were present.
+- **Help:** `npx tsx scripts/x4validate.ts --help` printed help, but the underlying process returned exit `2`
+  (`$LASTEXITCODE=2`; the command runner surfaced nonzero as `1`). This is the existing `process.exit(2)` usage path,
+  not a change from this subunit.
+- **MD selftest:** `npx tsx -e "import { runMdPitfallSelftest } from './src/lib/mdPitfallLints.ts'; const r = runMdPitfallSelftest(); console.log(JSON.stringify(r)); if (!r.allPassed) process.exit(1)"`
+  -> exit `0`; `allPassed=true`, `passed=22`, `total=22`.
+- **Project selftest:** `npx tsx -e "import { runProjectValidationSelftest } from './src/server/projectValidation.ts'; const r = runProjectValidationSelftest(); console.log(JSON.stringify(r)); if (!r.pass) process.exit(1)"`
+  -> exit `0`; `pass=true`, all `7/7` checks passed.
+- **Typecheck:** `npm run typecheck` -> exit `0`; `tsc --noEmit` passed.
+- **Scoped ESLint:** `npx eslint scripts/x4validate.ts src/lib/mdPitfallLints.ts` -> exit `0`.
+- **Diff hygiene:** `git diff --check -- scripts/x4validate.ts src/lib/mdPitfallLints.ts docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`
+  -> exit `0`; Git emitted only its existing LF-to-CRLF working-copy warning for the plan.
+- **Negative/behavior result:** actor-only/template-only forms, malformed/non-MD/garbage inputs, existing warning rules,
+  the real-mod semantic error, JSON fields, and verdict behavior remained as required; no mod/game/live path was written.
+
+### REVIEW
+
+- CLI family counts -> done and evidenced in human output; counts come directly from authoritative summary fields.
+- JSON contract -> done and evidenced; no human-only labels or shape changes.
+- Semantic-lint wording -> done and evidenced; comments/docs only, with MD selftest `22/22` and project selftest `7/7`.
+- Help-success criterion -> partial: existing CLI usage branch returns `2`; changing that adjacent behavior was not part of
+  the two-gap work order and was not made by this worker.
+- Scope -> three owned paths intentionally changed; no forbidden path was written by this worker; no capability-map delta.
+
+### CLOSE
+
+- **Status:** `PARTIAL` for this bounded subunit solely due the pre-existing nonzero `--help` result; all requested summary,
+  JSON, real-mod, selftest, typecheck, ESLint, and diff-hygiene implementation checks passed.
+- **Rollback:** restore the three pre-subunit owned bytes using the SHA-256 identities recorded in the SPECIFIED contract;
+  no mod, game, live-directory, external-record, or Git mutation occurred.
+- **Remaining concern:** coordinator decision required on whether the existing help exit-status mismatch may be handled in
+  a separate bounded CLI behavior unit. Full E2E, build, deploy, game, and precommit remain intentionally out of scope.
+
+### AAR
+
+- **Triggers:** intentional fail-first receipt; required help gate reproduced red; two initial tool-call syntax retries;
+  one documentation-order correction after review; and a Git line-ending warning. This is a non-clean close.
+- **Sustain:** use authoritative summary fields and retain focused semantic/project selftests to prove additive CLI output
+  did not change lint behavior or JSON output.
+- **Improve work / approach:** the first plan insertion matched a prior repeated commit-title anchor and temporarily split
+  that unit's AAR; unique section anchors plus an immediate tail review caught and repaired the record ordering.
+- **Improve tools:** nested PowerShell/JavaScript quoting caused avoidable command retries, and the command wrapper normalized
+  Node nonzero exit codes; capture `$LASTEXITCODE` inside a successful wrapper when exact nonzero distinctions matter.
+- **Highest-risk evidenced weakness:** the existing `--help` exit-status contract conflicts with this unit's stated
+  acceptance, leaving an otherwise green implementation `PARTIAL` until the coordinator resolves that scope boundary.
+- **Global/project lessons banked:** this plan record only; no external ledger or capability-map update was in scope.
+
+## 2026-09-09 CONTINUATION — SPECIFIED B119 standalone CLI help exit-status repair
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Status:** `SPECIFIED` for this bounded Full-lane subunit; overall B119 remains `PARTIAL / IN_PROGRESS`.
+- **Baseline:** `npx tsx scripts/x4validate.ts --help` prints usage and exits `2`; `npx tsx scripts/x4validate.ts` prints usage and exits `2`. The current branch combines `!positional.length` with `flags.has("--help")` and always calls `process.exit(2)`.
+- **Reconcile:** the standalone CLI already has the authoritative human summary lines and JSON/result paths from the immediately prior unit. This repair changes only usage dispatch so explicit help succeeds without loading a mod; missing or invalid positional input remains a usage/load failure. No validation, JSON, finding, severity, or load-failure logic is to be redesigned.
+- **In scope:** `scripts/x4validate.ts` help/missing-argument exit handling and, only if needed, spacing-only alignment of the three existing Lua/X4 UI/MD human summary lines; this plan record's close/AAR.
+- **Out of scope:** validation engine behavior, JSON shape/content, finding text/severity, mod/game/corpus/live-directory/config/installed-extension paths, external records, Git metadata, E2E, build, precommit, deploy, game, network, and any non-whitespace summary change.
+- **Rollback/checkpoint:** restore the two owned files to their pre-subunit SHA-256 identities: `scripts/x4validate.ts` `CD240302DD199B9C7C1B1D52693D94CC0271FB4AF020D7321E5F017A4A95E47A`; this plan `4E0006E68A369E7FE40D3F01CF335074057BF7F9678C92BB9BF90ADB882643E6`.
+- **Acceptance:** explicit `--help` prints usage, does not attempt a mod load, and exits `0`; no-argument invocation prints usage and exits `2`; an invalid/nonexistent positional folder prints load failure and exits `2`; real-mod human validation remains read-only, exits `1`, and retains the authoritative Lua, X4 UI, and MD pitfall summary lines including MD `1/0` and the exact source-located finding; real-mod `--json` remains exit `1`, parses with `summary.mdPitfallErrors === 1` and `summary.mdPitfallWarnings === 0`, and contains no human summary labels; both named selftests remain `22/22` and `7/7`; typecheck, scoped ESLint, and owned-path diff check pass; only the two owned paths are written by this worker.
+- **Required validation / negative path:** run every command supplied in the work order, including exact nonzero exit capture; verify help does not reach the load path, missing input remains usage failure, invalid input remains load failure, human/JSON behavior is preserved, and no forbidden path is changed by this worker. Do not run E2E, build, precommit, deploy, game, network, external-record, or other write operations.
+- **Evidence:** exact command receipts in the worker report and this plan's `VALIDATE`, `REVIEW`, `CLOSE`, and `AAR` sections; no capability-map delta or external record.
+
+### FAIL-FIRST RECEIPT (pre-repair)
+
+- `npx tsx scripts/x4validate.ts --help` -> exit `2`; usage printed before any mod-load attempt.
+- `npx tsx scripts/x4validate.ts` -> exit `2`; usage printed for the missing positional argument.
+
+### IMPLEMENT
+
+- Changed only the existing pre-load usage branch's exit selection: `--help` now exits `0`, while the same branch still exits `2` when no positional argument is supplied.
+- Aligned the complete human summary count block with whitespace only; all summary labels and authoritative `result.summary` expressions, including the three prior Lua/X4 UI/MD lines, remain unchanged.
+
+### VALIDATE
+
+- `npx tsx scripts/x4validate.ts --help` -> exit `0`; usage printed and no load-failure text appeared.
+- `npx tsx scripts/x4validate.ts` -> exit `2`; usage printed.
+- `npx tsx scripts/x4validate.ts "F:\\DEV_ENV\\X4_Forge\\__b119_missing_mod_folder__"` -> exit `2`; printed `No loadable mod files found under:` and the expected extension-folder guidance.
+- `npm run validate:mod -- "G:\\SteamLibrary\\steamapps\\common\\X4 Foundations\\extensions\\x4_ai_influence"` -> exit `1`; human output retained `Lua errors/warnings: 0/3`, `X4 UI errors/warnings: 0/3 (unverified: 6, truncated: 4)`, `MD pitfall errors/warnings: 1/0`, and the exact `md_pitfall.cancel_conversation_actor_or_template` finding at `md/ai_influence_conversation.xml:98`. The real mod was read only.
+- `npx tsx scripts/x4validate.ts "G:\\SteamLibrary\\steamapps\\common\\X4 Foundations\\extensions\\x4_ai_influence" --json` -> exit `1`; stdout parsed as JSON, `summary.mdPitfallErrors === 1`, `summary.mdPitfallWarnings === 0`, and no human summary labels were present.
+- `npx tsx -e "import { runMdPitfallSelftest } from './src/lib/mdPitfallLints.ts'; const r = runMdPitfallSelftest(); console.log(JSON.stringify(r)); if (!r.allPassed) process.exit(1)"` -> exit `0`; `allPassed=true`, `22/22`.
+- `npx tsx -e "import { runProjectValidationSelftest } from './src/server/projectValidation.ts'; const r = runProjectValidationSelftest(); console.log(JSON.stringify(r)); if (!r.pass) process.exit(1)"` -> exit `0`; `pass=true`, `7/7` checks passed.
+- `npm run typecheck` -> exit `0`; `tsc --noEmit` passed.
+- `npx eslint scripts/x4validate.ts` -> exit `0`.
+- `git diff --check -- scripts/x4validate.ts docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md` -> exit `0`; only the existing plan LF-to-CRLF warning was emitted.
+- Post-edit SHA-256: `scripts/x4validate.ts` `4960DDCABB4296627A56A96619C786949B75CE9D3CE5F774BB4339C599C875DE`; this plan `5285DA6D80BD1CC4775D2B6AC216849B0F812522A365C6724665AE9B62375FD8`.
+- Negative-path result: help bypassed loading, missing input remained usage failure, invalid input remained load failure, JSON stayed machine-only, and validation/selftest verdict and severity behavior remained unchanged.
+
+### REVIEW
+
+- Help success and no-load behavior -> done and evidenced.
+- Missing-argument and invalid-folder exit `2` behavior -> done and evidenced.
+- Real-mod human summary/finding behavior -> done and evidenced.
+- Real-mod JSON shape/summary and absence of human labels -> done and evidenced.
+- MD `22/22`, project `7/7`, typecheck, scoped ESLint, and owned-path diff hygiene -> done and evidenced.
+- Scope -> only `scripts/x4validate.ts` and this plan were written by this worker; no forbidden path or Git metadata was written, and no capability-map delta exists.
+
+### CLOSE
+
+- **Status:** `VERIFIED` for this bounded CLI repair; overall B119 remains `PARTIAL / IN_PROGRESS`.
+- **Rollback:** restore the two pre-subunit owned bytes using the SHA-256 identities in the SPECIFIED contract; no mod, game, live-directory, external-record, or Git mutation occurred.
+- **Remaining concerns:** no task-scoped acceptance concern remains. E2E, build, precommit, deploy, game, network, and external-record checks were intentionally not run per the work order.
+- **Suggested commit title:** `fix(b119): return success for x4validate help`.
+
+### AAR
+
+- **Triggers:** the first smoke assertion wrapper mishandled PowerShell output arrays; a second wrapper assumed a nonexistent project-selftest `total` field; typecheck required a bounded poll; and Git reported its existing line-ending warning. The underlying CLI and tests were then rerun with corrected assertions and passed.
+- **Sustain:** keep help dispatch before target resolution, use authoritative summary fields directly, and assert nonzero child-process exits from inside a wrapper while parsing the actual result shape.
+- **Improve work / approach:** test wrappers should join captured output before substring assertions and count the selftest's returned checks instead of assuming an undocumented total field.
+- **Improve tools:** long-running typecheck needs explicit session capture/polling; the command runner's initial timeout did not itself provide a terminal exit code.
+- **Highest-risk evidenced weakness:** wrapper-level assumptions can falsely report a green implementation as failed or obscure the real exit status; the corrected receipts now distinguish harness errors from product behavior.
+- **Global/project lessons banked:** this plan record only; no external ledger or capability-map update was in scope.
+
+## 2026-09-09 CONTINUATION — B119 installed-Forge source replay and native compact/expanded evidence close
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Status:** PARTIAL for this bounded evidence close; overall B119 remains IN_PROGRESS / PARTIAL.
+- **Bounded unit:** make the observed installed-Forge source replay, native X4 compact/expanded interaction, current-session
+  log, and fresh read-only real-mod linter result durable in one evidence folder and align the plan, backlog, handoff,
+  capability map, project AAR, and UI gotcha record.
+- **Baseline:** Forge HEAD and origin/main were both 835b59d8e8c35e8001526cad8ab90459a703e1a4; the repository had
+  unrelated dirty source, test, deletion, and untracked paths, including pre-existing edits to this plan, BACKLOG.md,
+  and SESSION-HANDOFF.md. The X4 process was not running; Steam remained open. The specified Forge preview filename was
+  absent, but an adjacent same-folder file had the expected 190509 bytes and exact expected SHA256.
+- **Reconcile:** the existing B119 source-first/linter and native evidence records already provide the authoritative
+  route facts, so this close adds a durable evidence package rather than a second renderer, validator, or mod fix.
+  The Forge preview is the pending military-request branch; native compact/expanded captures are the ordinary current
+  communication-menu state. The real-mod semantic defect remains present and is a separate write-gated correction.
+- **In scope:** the new folder under dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay and the six
+  named records owned by this worker; read-only identity checks for the supplied artifacts and one fresh read-only
+  validate:mod run.
+- **Out of scope:** all implementation/test/source edits, mod/workspace/game/installed/config/save/external writes,
+  deployment, X4 launch, source repair, external projections, Git mutation, same-state pixel comparison, universal C++
+  acceptance, arbitrary Lua coverage, and full twelve-reference completion.
+- **Acceptance:** destination artifacts have the expected byte counts and SHA256; README and the plain-text receipt
+  separate preview, native, linter, and unproven parity; every record keeps the overall IN_PROGRESS / PARTIAL boundary;
+  the real-mod finding is recorded without repair; only owned paths change.
+- **Required validation / negative path:** verify source and destination identities; capture the real-mod exit 1 and
+  exact summary/finding; confirm the log line evidence and absence of view-failure/traceback markers; run exact-path
+  diff-check and re-read owned changes. Do not claim that the semantic error rejected the whole file or frame.
+- **Evidence:** dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay/README.md and
+  x4validate-real-mod-receipt.txt, plus the copied binaries and current-session log.
+
+### BASELINE / RECONCILE
+
+- Inputs B-E matched their expected identities. The specified A path was not present; the same .playwright-mcp
+  directory contained one 190509-byte file with the expected SHA256, and that exact-hash source was recorded in README.
+- The fresh validation command was read-only and returned exit 1 with Lua 0/3, X4 UI 0/3 (unverified 6, truncated 4),
+  MD pitfall 1/0, and md_pitfall.cancel_conversation_actor_or_template at md/ai_influence_conversation.xml:98.
+- The current log records the engine diagnostic at line 427, onOpenCommLink at 855/858, OpenMenu returned OK at 876,
+  display ENTER at 879, reserveScrollBar diagnostics at 882/885 and 1059/1062, and display DONE at 888/1065. No
+  Failed to set up the view marker or stack traceback was present.
+- The calibrated table rule remains literal 12 clean, literal 13-23 warning/game-check, and literal 24+ blocking
+  from the reproduced whole-frame incident. This is not a universal above-12 rejection claim.
+- **Capability-map delta:** the shared validator/CLI semantic rule and this exact native source replay strengthen the
+  existing linter/native evidence capability; the external capability map is updated in the same close.
+
+### IMPLEMENT
+
+- Created the stable evidence folder and copied only the four images and current-session log after identity checks.
+- Added README.md and x4validate-real-mod-receipt.txt with observed-versus-inferred boundaries and exact receipts.
+- Appended this close, the backlog checkpoint, the overwritten handoff, the capability-map delta, the project AAR,
+  and the nonduplicate UI KB updates. No source, mod, game, installed, external-service, or Git mutation occurred.
+
+### VALIDATE
+
+- Destination hash readback: all five copied artifacts retained the expected byte counts and SHA256.
+- Fresh read-only real-mod validation: exit 1; exact summary families and finding are retained in the receipt.
+- Native evidence readback: compact showed NPC info/transcript/three choices/editbox/SEND/END plus controls; EXPAND
+  opened full-screen COMM with correspondent/leverage blocks and three choices; END closed the overlay/conversation.
+- Retained focused milestones are MD 22/22, project validation 7/7, UI linter 153/153, history 21/21, targeted project
+  E2E 7/7 on 3200/3201, typecheck green, scoped lint green, and verified CLI help/missing/invalid behavior.
+- Exact-path git diff --check passed with exit 0; it emitted only the existing LF-to-CRLF working-copy warnings for
+  the three repo records. Final owned-path readback passed. Broad E2E/build/precommit and external projection readback
+  remain parent-owned next actions.
+
+### REVIEW
+
+- Evidence folder and hashes -> done for the copied bytes; the specified Forge preview path discrepancy is explicitly
+  retained rather than hidden.
+- Forge source replay -> done and bounded to aic_menu.lua -> menu.display, 2560x1440, effective scale 1.4, seven
+  branch arms, loop count 3, and 31 samples.
+- Native rendering -> done for the observed ordinary compact/expanded state; not evidence for the pending preview state.
+- Linter/render relationship -> done and honestly separated: the linter blocks clean validation, while native rendering
+  and END evidence do not support a whole-file or whole-frame rejection claim.
+- Parity and coverage -> not proven: no same-state pixel comparison, full twelve-reference completion, arbitrary Lua/
+  Helper/widget coverage, or universal C++ acceptance.
+- Real-mod repair -> deliberately deferred until a fresh write-gate paragraph and explicit authorization.
+
+### CLOSE
+
+- **Status:** PARTIAL for this bounded documentation/evidence close; overall B119 remains IN_PROGRESS / PARTIAL.
+- **Rollback:** remove only the new evidence folder and restore only these owned record edits using a reviewed patch;
+  no source/mod/game/Git/external rollback was needed or performed.
+- **Remaining concerns:** the exact specified preview path is absent even though an adjacent exact-hash artifact was
+  retained; native and preview states are unlike scenarios; the real MD semantic defect still makes validation red;
+  broad validation, exact-path commit/push, external projection/readback, and the separately gated source correction
+  remain open.
+- **Suggested parent commit title:** docs(b119): retain 2026-09-09 source replay evidence.
+
+### AAR
+
+- **Triggers:** the specified preview filename was missing, the required real-mod command correctly returned nonzero,
+  and this close required reconciliation of stale current-action wording. The evidence boundary was preserved.
+- **Sustain:** keep linter verdict, native visual/log evidence, and scenario input identity as separate authorities; use
+  exact destination hashes and a manually curated small receipt.
+- **Improve work / approach:** name the actual source path whenever a provided evidence filename drifts, and state
+  unlike-state comparison limits before discussing parity.
+- **Improve tools:** keep one worker on this records-only batch, close terminal work promptly, and capture wrapper exit
+  status inside the wrapper when a read-only command is expected to return 1.
+- **Highest-risk evidenced weakness:** native rendering can coexist with a semantic error and reserve-scrollbar
+  diagnostics, so treating either linter status or a plausible frame as a complete engine verdict can produce a false
+  boundary.
+- **Global/project lessons banked:** this close is mirrored in the project AAR, capability map, and UI gotcha record; no
+  external projection or source correction is claimed.
+
+## 2026-09-09 B119 review-repair unit — SPECIFIED
+
+### PLAN / ACCEPTANCE CONTRACT
+
+- **Status:** `SPECIFIED` for this bounded review-repair unit; overall B119 remains `IN_PROGRESS / PARTIAL`.
+- **Baseline:** the owned B119 source and selftests are intentionally dirty at HEAD `835b59d8e8c35e8001526cad8ab90459a703e1a4`; projection `useMemo` currently notifies during render, `cancel_conversation` detail repeats its structured path, and history totals omit authoritative validation families.
+- **Scope:** repair only the projection observer timing, diagnostic path prose, and validation-history error/warning aggregation; add focused regression coverage in owned selftests, with the named E2E file only if a direct cross-layer assertion is necessary.
+- **Out of scope:** renderer redesign, unrelated behavior, mod/game/installed/config/save paths, deployment, launch, external records, Git mutation, and broad E2E/build/precommit.
+- **Rollback:** restore only this unit's reviewed hunks in the owned plan/source/test paths; preserve all pre-existing unrelated dirty work.
+- **Acceptance:** render-time projection computation is pure and committed projections reach the freshest observer through an effect; `cancel_conversation` preserves error/code/structured `filePath`/exact line while printing the path once; history counts all specified error families once, honors `activeWarnings`, and uses a deterministic non-overlapping legacy fallback; first-diagnostic naming and clean `0/0` behavior remain intact; only owned paths change; B119 remains `PARTIAL`.
+- **Negative checks:** fail-first assertions capture each current defect; mounted projection does not update parent state during child render; X4 UI errors/warnings are not added again to Lua totals; the real-mod CLI finding line contains the path exactly once and the expected overall exit remains `1`.
+- **Evidence:** this plan's implementation/validation/review/close/AAR append, focused selftest receipts, fresh read-only CLI receipt, typecheck, scoped ESLint, and exact-owned-path diff hygiene output.
+
+### FAIL-FIRST RECEIPTS
+
+- `npx tsx -e ...runMdPitfallSelftest...` -> exit `1`, `22/23`; the new structured-location assertion observed `md/ai_influence_conversation.xml` still appended in `detail`.
+- `npx tsx -e ...runAgentHistorySelftest...` -> exit `1`, `75/79`; the new error-family case observed `5` instead of `9`, active warnings observed `99` instead of `4`, flat fallback observed `8` instead of `2`, and family fallback observed `3` instead of `13`.
+- `npx tsx src/components/X4UiSourceEditor.selftest.tsx` -> exit `1`; the new source-contract receipt reported the render-phase observer callback and missing committed-projection effect, so the mounted assertion did not run yet.
+
+### IMPLEMENT
+
+- Made `X4UiSourceEditor`'s projection `useMemo` compute only `sessionOwner.project(sessionInput)` and moved observer notification to a `[projection]` `useEffect`, retaining the fresh callback ref.
+- Removed only the duplicated `opts.filePath` prose from the `cancel_conversation` finding; structured `filePath`, exact line, engine semantics, and bounded no-whole-frame wording remain.
+- Centralized the specified validation error families and warning fallback families in `agentHistory`; `activeWarnings` and flat-warning precedence are honored without adding X4 UI subsets to Lua totals.
+- Added focused MD/history/source-contract regressions and a mounted StrictMode parent-state-update probe. No E2E file was changed.
+
+### VALIDATE
+
+- Fail-first receipts: MD exit `1` at `22/23`; history exit `1` at `75/79`; SourceEditor exit `1` on the two missing projection-contract assertions.
+- MD pitfall selftest -> exit `0`, `23/23`.
+- Agent history selftest -> exit `0`, `79/79`; first-diagnostic naming and clean `0/0` remain passing.
+- Project-validation selftest -> exit `0`, `7/7` after the initial nonexistent-path lookup was corrected to the exported selftest in `src/server/projectValidation.ts`.
+- X4UiSourceEditor selftest (`npx tsx src/components/X4UiSourceEditor.selftest.tsx`) -> exit `0`; P7 matrix `19/19`, including no render-phase parent state-update warning under StrictMode.
+- Fresh read-only real-mod CLI -> expected exit `1`; 29 files loaded, MD pitfall `1/0`, and the `cancel_conversation` finding line contains `md/ai_influence_conversation.xml` exactly once at `:98`. No real-mod mutation occurred.
+- `npm run typecheck` -> exit `0`.
+- Scoped ESLint on the five changed TS/TSX paths -> exit `0`, 0 errors and 11 existing `no-explicit-any` warnings in `agentHistory.ts`.
+- Exact owned-path `git diff --check` -> exit `0`; only the existing plan LF-to-CRLF warning was emitted.
+- Broad E2E, build, precommit, deploy, game, and external-record checks were not run per the work order.
+
+### REVIEW
+
+- Projection purity and committed notification -> done and evidenced by source-contract assertions plus the mounted parent-state-update probe.
+- Cancel finding authority -> done: severity/code behavior remains, structured path and exact line remain, and CLI prose has one path occurrence.
+- Validation history totals -> done: structural/Lua/unresolved/cross-file/schema/aiscript/MD/diff/rules errors are counted once; `activeWarnings`, flat fallback, complete family fallback, and X4 UI non-duplication are covered.
+- First diagnostic and clean behavior -> done by the existing and new history checks.
+- Scope and repository hygiene -> done for this worker's writes: the plan and five implementation/test files only; the pre-existing dirty E2E file was not edited. No forbidden path was written or used for implementation.
+- B119 boundary -> intentionally remains `IN_PROGRESS / PARTIAL`; broader runtime/game and parent-owned stack gates remain outside this unit.
+
+### CLOSE
+
+- **Status:** `VERIFIED` for this bounded B119 review-repair unit; overall B119 remains `IN_PROGRESS / PARTIAL`.
+- **Rollback:** restore only this unit's reviewed hunks in the plan, SourceEditor, pitfall, and history files; all unrelated dirty work remains preserved.
+- **Capability-map delta:** no capability-map delta; this repairs existing projection, diagnostic, and history infrastructure.
+- **Remaining concerns:** the real mod still has its pre-existing semantic `cancel_conversation` error; no mod repair was authorized. Broad E2E/build/precommit and in-game experience proof remain parent-owned.
+- **Suggested commit title:** `fix(b119): defer projection observers and complete validation history totals`.
+
+### AAR
+
+- **Triggers:** all three fail-first checks were red before repair; the first project-validation command used a nonexistent path; scoped ESLint initially rejected a literal-space regex before the focused fix.
+- **Sustain:** keep the projection computation pure, centralize authoritative validation-family lists, and test structured diagnostic authority separately from human formatting.
+- **Improve work / approach:** locate exported selftests by symbol when the expected filename is absent, and record the exact red receipt before changing implementation.
+- **Improve tools:** the project selftest naming/path is not discoverable from the requested filename alone; the existing lint rule also requires counted regex spaces to use quantifiers.
+- **Highest-risk evidenced weakness:** validation summary schemas can grow new overlapping families; the centralized explicit lists and X4 UI exclusion reduce silent drift, but future fields still need a focused count regression.
+- **Global/project lessons banked:** this plan record only; no external ledger, capability-map, Git, mod, or deployment mutation was in scope.
+
+## 2026-09-09 B119 broad validation/review checkpoint — PARTIAL
+
+### PLAN
+
+- **Lane and bounded unit:** Full lane; durably record the parent coordinator's broad validation and fresh-eyes review
+  checkpoint, refresh the current backlog and handoff, and append the project AAR. This worker is records-only.
+- **Assumptions and authority:** use the current B119 plan, retained source-replay/native evidence, supplied hashes, and
+  the project adapter as authority. The repository is heavily dirty; unrelated work remains user-owned.
+- **In scope:** this plan append, one current B119 BACKLOG checkpoint, the complete overwrite of SESSION-HANDOFF.md,
+  and one project-AAR append.
+- **Out of scope:** implementation and test files, evidence binaries, capability map, UI gotcha records, mod/game/
+  installed/config/save paths, Git metadata mutation, commit/push, OpenVSX, GitHub, Notion, and Google Drive.
+- **Risks and rollback:** preserve unrelated dirty paths and protected live state; rollback is restoration of the four
+  pre-write record hashes supplied for this worker. The monolithic E2E crash and the real-mod semantic finding remain
+  explicit red/open boundaries.
+- **Acceptance:** every broad result below is recorded without converting bounded green batches into a full-suite green;
+  the overall B119 state remains IN_PROGRESS / PARTIAL; the handoff is usable by a fresh agent; no forbidden path is
+  changed.
+- **Required validation and negative path:** re-read all appended/overwritten sections; run exact owned-record
+  diff-check; compare post-write hashes and targeted Git status; retain the wrong-target oracle, transient endpoint,
+  accidental unrelated E2E inclusion, repeatable 0xC0000409, wildcard/hash correction, and expected non-Git failure
+  as negative-path evidence.
+- **Evidence locations:** retained seven-artifact folder
+  dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay/; this plan; BACKLOG.md; SESSION-HANDOFF.md; and
+  F:\StarForge\wiki\x4-forge\aar-log.md.
+- **Suggested commit title:** feat(b119): checkpoint source-faithful UI replay and linter.
+
+### BASELINE
+
+- Forge HEAD and origin/main were both 835b59d8e8c35e8001526cad8ab90459a703e1a4. The checkout was heavily dirty
+  with unrelated user/previous work. Installed Forge was running at port 60836, PID 23764; X4 was closed and the
+  machine was quiet. Port 3100 belonged to unrelated Deckwright PID 45172 and was not touched; the B119 E2E stack used
+  3200/3201 and was cleaned.
+- Pre-write SHA-256 identities were BACKLOG.md
+  1717D0E054F5F2DE023DFD974AD67FD98DAAE225680C963F3B0AC1248C6DF4AA, SESSION-HANDOFF.md
+  4E487C7E640EE7E3C0C2B72C2E9B2177E703B20B5CF4A0BBE25F878ED3EAE4CE, this plan
+  F010E6BFF01D63B471FE34608311920DC1A2FF1C77E8D4BA336FBD1DF557C4B1, and project AAR
+  8435BB6261B923B376419375A113F0B14C3A876F28B7C0F90DD1BBBCBB5F1A7D.
+- Protected hashes remained unchanged after every E2E: test-results/.last-run.json
+  FFF6299EFB51BA9EF550E500ECC967E972C83E86BE387042C360CAEA7FDBAE29, config.json
+  3EC65D540E6763D13D6F8F27D9005F80C3C855B00D3DCFDD5E7330726AE37779, and discovery latest
+  F4BB5A9470FFF8CD3BEA434CCF45A420E5A26C7394EE67254068F537FCA86B07.
+
+### RECONCILE
+
+- The existing source-first/linter, installed Forge replay, native X4 route, and review-repair records were reused.
+  The fresh-eyes review corrected the sample-panel sentence to: currently applied preview values remain active while
+  edits are staged; staged edits take effect only after explicit Apply. The mounted regression asserts the full sentence.
+- Review found no production-logic regression in identity-bound authority, transactional sample drafts, finite numeric
+  specialization, or detached conditional alternate-creator evidence.
+- The broad gate is not equivalent to the bounded behavior inventory: later E2E runs overwrote
+  test-results/e2e-verdict.json, so it is not a combined full-suite receipt. No capability-map delta was discovered.
+
+### IMPLEMENT
+
+- Appended this checkpoint, added the current open BACKLOG checkpoint, appended the project AAR, and overwrote
+  SESSION-HANDOFF.md with the current state transfer.
+- No implementation, test, evidence-binary, mod/game, installed, external-record, or Git write was performed by this
+  worker.
+
+### VALIDATE
+
+- npm run typecheck -> exit 0. npm run lint -> exit 0 with 0 errors and 600 warnings.
+- First node scripts/oracle-sweep.mjs used the default port 3001 and returned 0/133 fetch failures; this was a target
+  selection error, not product evidence. X4_FORGE_BASE=http://127.0.0.1:60836 returned 133/134 after a transient
+  xml-source-spans fetch failure; its direct endpoint returned HTTP 200 and 4/4, and an unchanged rerun returned
+  134/134.
+- Focused SourceEditor was 19/19, including the corrected full Apply sentence; the two-path diff check passed.
+- E2E was intentionally kept red at the monolithic-gate level. The first invocation accidentally included the unrelated
+  untracked tests/e2e/marketing-showcase.spec.ts, expanded inventory to 107, passed the marketing test, then lost the
+  ephemeral API near project-browser: 66 passed, 41 failed, treeGone=true, with live hashes unchanged. The first
+  project-browser failure passed alone 1/1. The focused B119 project-validate plus x4-ui-source-editor run passed
+  10/10 with zero failures/flakes and treeGone=true. The canonical inventory excluding only that marketing spec ran
+  tests 1-74 green, crossed the earlier failure point, then terminated with 3221226505 (0xC0000409) without a
+  structured final report. A tail batch ran 31/33 green and terminated with the same code after the SourceEditor
+  scale test; two XML tests had not run. xml-patch-merge.spec.ts passed separately 2/2. Thus bounded behavior was
+  observed green, but the required monolithic full E2E gate is RED; this is not a 106/106 full-suite pass.
+- Every E2E run cleaned 3200/3201 and preserved the protected hashes. npm run precommit:check -> exit 0: tripwires
+  0/58; canon mirrors identical; E2E verdict selftest 55/55; Vite lifecycle, product-copy, durable-writer
+  (42 filesystem, 11 host-store, 3 browser-output, 47 SQLite statements, 7 transactions, 14 runs, 14 execs,
+  2 pragmas), capability contract (12 capabilities, 297 routes, 1 dynamic registrar, 11 MCP aliases, SHA
+  bb467...2037c), MCP capability, action-receipt coverage (882 routes, 57 surfaces, manifest SHA 396865...23bb),
+  typecheck, and size checks all passed; PRECOMMIT OK.
+- npm run build -> exit 0: Vite 1848 modules; dist JavaScript 2.82 MB, gzip 775.64 kB; chunk-size warning only;
+  server.cjs 3.5 MB and map 6.6 MB.
+- All seven supplied evidence identities were rechecked: forge-preview 497D...E768; compact 6A73...D32; expanded
+  F4F1...9BAA; design 195C...5B9; debuglog BCDE...0451; README 248998...47BB; CLI receipt B590...36C0E. The
+  first read-only hash command incorrectly passed a wildcard to -LiteralPath and failed; the corrected
+  Get-ChildItem | Get-FileHash form passed all seven. A read-only git -C F:\StarForge assumption check failed as
+  expected because that directory is not a Git repository; it changed no files.
+
+### REVIEW
+
+- Broad static, oracle, precommit, build, evidence-identity, cleanup, and protected-hash requirements -> done and
+  evidenced above.
+- Monolithic E2E -> partial/red: two independent canonical boundaries terminated with 0xC0000409, so no combined
+  suite receipt or 106/106 claim is valid.
+- Product/runtime evidence -> done only for the tested installed-Forge source replay and ordinary native compact/
+  expanded rendering and interaction routes. Same-state pending-branch Forge-to-X4 parity, all twelve references,
+  arbitrary Lua/Helper/widget coverage, and universal C++ acceptance remain unproven.
+- Real mod -> deliberately untouched; md/ai_influence_conversation.xml:98 still has cancel_conversation without
+  actor/template and remains a separately write-gated correction.
+- External projections and Git -> not performed by this worker and not claimed. No OpenVSX action belongs here;
+  installed/public 0.0.77 remains current. No capability-map delta.
+
+### CLOSE
+
+- **Status:** PARTIAL for this broad validation/review checkpoint; overall B119 remains IN_PROGRESS / PARTIAL.
+- **Rollback/checkpoint:** restore the four owned records to the supplied pre-write hashes with a reviewed patch. No
+  rollback, source write, mod/game write, external projection, commit, or push occurred.
+- **Remaining concerns:** the monolithic Windows Playwright/Node 0xC0000409 harness failure remains an open gate/
+  backlog issue; the real-mod semantic defect, same-state parity, full twelve-reference census, arbitrary coverage,
+  and universal C++ acceptance remain open. Parent must perform exact-path commit/push and external readback.
+- **Suggested commit title:** feat(b119): checkpoint source-faithful UI replay and linter.
+
+### AAR
+
+- **Triggers:** wrong oracle target, transient oracle endpoint fetch, accidental unrelated E2E inclusion, repeatable
+  monolithic 0xC0000409 termination, an initially incorrect wildcard hash command, an expected non-Git assumption
+  failure, and two wording-tightening patch attempts that failed before mutation due to a wrong path/stale context;
+  all required explicit reconciliation.
+- **Sustain:** separate source/static, installed/runtime, native visual/log, bounded behavior, and monolithic-gate
+  authorities; retain cleanup and protected-hash readback; never turn bounded green batches into full-suite green.
+- **Improve work / approach:** select the installed Forge port explicitly, exclude only the unrelated untracked test
+  by exact path, rerun transient endpoint failures unchanged, and record harness termination boundaries rather than
+  inferring a final verdict.
+- **Improve tools:** use a wildcard-safe file enumeration before hashing and discover repository ownership before
+  issuing Git assumptions; do not cite the overwritten e2e-verdict.json as a combined receipt. One final targeted
+  diff-name readback initially misspelled the plan path and was rerun with the exact path.
+- **Highest-risk evidenced weakness:** the Windows monolithic E2E process can terminate after substantial green
+  coverage without a structured report, leaving a red gate even when every bounded behavior route observed is green.
+- **Global/project lessons banked:** this plan and the project AAR only; no capability-map delta and no external
+  projection.

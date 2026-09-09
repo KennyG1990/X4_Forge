@@ -1,0 +1,30 @@
+B119 read-only real-mod validation receipt
+
+Command:
+npm run validate:mod -- "G:\SteamLibrary\steamapps\common\X4 Foundations\extensions\x4_ai_influence"
+
+Run:
+2026-09-09T07:24:42.7817925-04:00 to 2026-09-09T07:25:11.9730238-04:00
+
+Scope:
+Read-only validation of the installed x4_ai_influence extension. No mod bytes
+were written.
+
+Exit:
+1
+
+Summary:
+Lua errors/warnings: 0/3
+X4 UI errors/warnings: 0/3 (unverified: 6, truncated: 4)
+MD pitfall errors/warnings: 1/0
+Findings (25)
+
+Exact finding:
+[error] md_pitfall.cancel_conversation_actor_or_template
+Path/line: md/ai_influence_conversation.xml:98
+Engine diagnostic: Neither of the attributes 'actor' and 'template' is present!
+
+Boundary:
+This finding blocks clean validation. The tested native compact/expanded UI
+still rendered and END closed the conversation; this receipt does not claim
+whole-file or whole-frame rejection.

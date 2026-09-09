@@ -2235,6 +2235,22 @@ interface NumericExpressionSourceAstIndex {
 
 const numericExpressionSourceAstCache = new WeakMap<X4UiCallModel, NumericExpressionSourceAstIndex>();
 
+/**
+ * Private proof for the one bounded numeric-for specialization supported by
+ * preview expansion.  The public loop schema remains source/provenance-only;
+ * this evidence is recomputed from the exact current model source.
+ */
+interface NumericForBindingProof {
+  readonly source: X4UiSourceLocation;
+  readonly variableName: string;
+  readonly values: readonly number[];
+}
+
+const numericForBindingProofCache = new WeakMap<
+  X4UiCallModel,
+  Map<string, NumericForBindingProof | undefined>
+>();
+
 const sourceAstRange = (node: NumericExpressionSourceAstNode): readonly [number, number] | undefined => {
   if (!Array.isArray(node.range)
     || node.range.length !== 2
@@ -3942,6 +3958,19 @@ const EVIDENCE_RELEVANT_CALL_NAMES: readonly X4UiRelevantCallName[] = Object.fre
   'OpenMenu',
 ]);
 
+const CONDITIONAL_ALTERNATE_CREATOR_REASON =
+  'conditional alternate creator is retained as source evidence but is not linked to the selected cell owner';
+
+const CREATOR_OPERATION_KINDS: readonly X4UiLayoutOperation['kind'][] = Object.freeze([
+  'createText',
+  'createEditBox',
+  'createButton',
+  'createIcon',
+]);
+
+const isCreatorOperationKind = (kind: unknown): kind is X4UiLayoutOperation['kind'] =>
+  typeof kind === 'string' && CREATOR_OPERATION_KINDS.includes(kind as X4UiLayoutOperation['kind']);
+
 const operationIdFor = (call: ProjectableCall): string =>
   programId(
     'operation',
@@ -4590,9 +4619,36 @@ const instantiatePreviewLoopReference = (
   reference: X4UiValueReference,
   instance: X4UiLayoutPreviewLoopInstance,
   ownedPaths: ReadonlySet<string>,
+  model: X4UiCallModel,
+  numericForBinding?: NumericForBindingProof,
 ): X4UiValueReference => {
   const cloned = cloneDeep(reference) as X4UiValueReference;
   const prefix = previewLoopInstancePrefix(instance);
+  const numericIterationValue = numericForBinding
+    && instance.iterationCount === numericForBinding.values.length
+    && instance.iteration >= 1
+    && instance.iteration <= numericForBinding.values.length
+    ? numericForBinding.values[instance.iteration - 1]
+    : undefined;
+  const numericIndex = numericIterationValue !== undefined && cloned.index
+    && locationContains(numericForBinding!.source, cloned.source)
+    ? numericForIndexValueFor(model, cloned.index, numericForBinding!, numericIterationValue)
+    : undefined;
+  if (numericIndex !== undefined && cloned.path.endsWith('[?]')) {
+    cloned.path = `${cloned.path.slice(0, -3)}[${numericIndex}]`;
+    cloned.index = {
+      ...cloned.index,
+      status: 'static',
+      type: 'number',
+      value: numericIndex,
+    };
+    delete cloned.index.reason;
+    delete cloned.index.symbol;
+    delete cloned.index.parameter;
+    delete cloned.index.localInvocationResult;
+    delete cloned.index.directHelperScaleResult;
+    delete cloned.index.numericExpression;
+  }
   if (cloned.kind !== 'global' && locationContains(instance.source, cloned.source)) {
     cloned.path = prefixInstancePath(prefix, cloned.path)!;
   }
@@ -4602,7 +4658,9 @@ const instantiatePreviewLoopReference = (
   if (cloned.relatedPath && ownedPaths.has(cloned.relatedPath)) {
     cloned.relatedPath = prefixInstancePath(prefix, cloned.relatedPath);
   }
-  if (cloned.index) cloned.index = instantiatePreviewLoopValue(cloned.index, instance, ownedPaths);
+  if (cloned.index && numericIndex === undefined) {
+    cloned.index = instantiatePreviewLoopValue(cloned.index, instance, ownedPaths, model, numericForBinding);
+  }
   return cloned;
 };
 
@@ -4610,10 +4668,12 @@ const instantiatePreviewLoopValue = (
   value: X4UiValue,
   instance: X4UiLayoutPreviewLoopInstance,
   ownedPaths: ReadonlySet<string>,
+  model: X4UiCallModel,
+  numericForBinding?: NumericForBindingProof,
 ): X4UiValue => {
   const result = cloneDeep(value) as X4UiValue;
   if (result.reference) {
-    result.reference = instantiatePreviewLoopReference(result.reference, instance, ownedPaths);
+    result.reference = instantiatePreviewLoopReference(result.reference, instance, ownedPaths, model, numericForBinding);
     if (['frame', 'table', 'row', 'cell'].includes(result.reference.kind)
       && ['call', 'alias', 'index'].includes(result.reference.origin)) {
       result.status = 'static';
@@ -4627,12 +4687,16 @@ const instantiatePreviewLoopTree = (
   value: unknown,
   instance: X4UiLayoutPreviewLoopInstance,
   ownedPaths: ReadonlySet<string>,
+  model: X4UiCallModel,
+  numericForBinding?: NumericForBindingProof,
 ): unknown => {
-  if (isValueShape(value)) return instantiatePreviewLoopValue(value, instance, ownedPaths);
-  if (Array.isArray(value)) return value.map(child => instantiatePreviewLoopTree(child, instance, ownedPaths));
+  if (isValueShape(value)) return instantiatePreviewLoopValue(value, instance, ownedPaths, model, numericForBinding);
+  if (Array.isArray(value)) return value.map(child => instantiatePreviewLoopTree(child, instance, ownedPaths, model, numericForBinding));
   if (isObject(value)) {
     const result: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) result[key] = instantiatePreviewLoopTree(child, instance, ownedPaths);
+    for (const [key, child] of Object.entries(value)) {
+      result[key] = instantiatePreviewLoopTree(child, instance, ownedPaths, model, numericForBinding);
+    }
     return result;
   }
   return value;
@@ -4642,11 +4706,15 @@ const instantiatePreviewLoopCall = (
   call: ProjectableCall,
   instance: X4UiLayoutPreviewLoopInstance,
   ownedPaths: ReadonlySet<string>,
+  model: X4UiCallModel,
+  numericForBinding?: NumericForBindingProof,
 ): ProjectableCall => {
-  const transformed = instantiatePreviewLoopTree(call, instance, ownedPaths) as ProjectableCall;
+  const transformed = instantiatePreviewLoopTree(call, instance, ownedPaths, model, numericForBinding) as ProjectableCall;
   const result: ProjectableCall = {
     ...transformed,
-    ...(call.result ? { result: instantiatePreviewLoopReference(call.result, instance, ownedPaths) } : {}),
+    ...(call.result
+      ? { result: instantiatePreviewLoopReference(call.result, instance, ownedPaths, model, numericForBinding) }
+      : {}),
     previewLoop: instance,
   };
   if (callDataFlowSatisfied(result)) delete result.semantics.dataFlow;
@@ -4690,6 +4758,7 @@ const expandPreviewLoops = (
   normalized: NormalizedPreviewLoops,
   identity: X4UiLayoutModelIdentity,
   catalog: X4UiLayoutPreviewLoopCatalog,
+  model: X4UiCallModel,
 ): ProjectableCall[] => {
   const catalogEntries = new Map(catalog.entries.map(entry => [entry.id, entry] as const));
   const expandedEntries = new Set<string>();
@@ -4722,9 +4791,21 @@ const expandPreviewLoops = (
         && selectedCallIds.has(previewLoopCallIdFor(identity, candidate)))
       .sort((left, right) => left.order - right.order);
     const ownedPaths = previewLoopOwnedReferencePaths(bodyCalls, selection.source);
+    const numericForProof = selection.kind === 'numeric-for'
+      ? numericForBindingProofFor(model, selection.source)
+      : undefined;
+    // A source proof describes the complete finite Lua loop. Never partially
+    // specialize a user-selected prefix or suffix of that loop; mismatched
+    // counts stay on the existing unresolved/deferred path.
+    const numericForBinding = numericForProof !== undefined
+      && selection.iterationCount === numericForProof.values.length
+      ? numericForProof
+      : undefined;
     for (let iteration = 1; iteration <= selection.iterationCount; iteration += 1) {
       const instance = previewLoopInstanceFor(selection, iteration);
-      for (const bodyCall of bodyCalls) output.push(instantiatePreviewLoopCall(bodyCall, instance, ownedPaths));
+      for (const bodyCall of bodyCalls) {
+        output.push(instantiatePreviewLoopCall(bodyCall, instance, ownedPaths, model, numericForBinding));
+      }
     }
   }
   return output;
@@ -4999,6 +5080,225 @@ const localAstNodeAt = (
   source.start.offset,
   source.end.offset,
 )) || []).filter(node => node.type === type);
+
+const localAstNumericLiteralValue = (
+  model: X4UiCallModel,
+  value: unknown,
+): number | undefined => {
+  const node = localAstNode(value);
+  const range = node ? sourceAstRange(node) : undefined;
+  if (!node || node.type !== 'NumericLiteral' || !range) return undefined;
+  const source = localAstSource(model, node);
+  const raw = model.file.text.slice(range[0], range[1]);
+  if (!source
+    || typeof node.raw !== 'string'
+    || node.raw !== raw
+    || !NUMERIC_LITERAL_EXPRESSION.test(raw)
+    || !sourceLocationMatchesModel(model, source, raw)
+    || typeof node.value !== 'number'
+    || !Number.isFinite(node.value)
+    || !Number.isSafeInteger(node.value)
+    || Number(raw) !== node.value) return undefined;
+  return node.value;
+};
+
+const localAstNumericForBoundValue = (
+  model: X4UiCallModel,
+  value: unknown,
+): number | undefined => {
+  const node = localAstNode(value);
+  const range = node ? sourceAstRange(node) : undefined;
+  if (!node || !range) return undefined;
+  const source = localAstSource(model, node);
+  const raw = model.file.text.slice(range[0], range[1]);
+  if (!source || !sourceLocationMatchesModel(model, source, raw)) return undefined;
+  if (node.type === 'NumericLiteral') return localAstNumericLiteralValue(model, node);
+  if (node.type !== 'UnaryExpression' || (node.operator !== '+' && node.operator !== '-')) return undefined;
+  const argument = localAstNode(node.argument);
+  const argumentRange = argument ? sourceAstRange(argument) : undefined;
+  if (!argumentRange
+    || argumentRange[0] <= range[0]
+    || argumentRange[1] !== range[1]
+    || !/^[+-]\s*$/.test(model.file.text.slice(range[0], argumentRange[0]))
+    || model.file.text[range[0]] !== node.operator) return undefined;
+  const literal = localAstNumericLiteralValue(model, argument);
+  if (literal === undefined) return undefined;
+  const result = node.operator === '-' ? -literal : literal;
+  return Number.isFinite(result) && Number.isSafeInteger(result) ? result : undefined;
+};
+
+const numericForBodyHasAmbiguousBinding = (
+  value: unknown,
+  variableName: string,
+): boolean => {
+  const containsInductionIdentifier = (candidate: unknown): boolean => {
+    if (Array.isArray(candidate)) return candidate.some(containsInductionIdentifier);
+    const node = localAstNode(candidate);
+    if (!node) return false;
+    if (node.type === 'Identifier') return node.name === variableName;
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+      if (containsInductionIdentifier(child)) return true;
+    }
+    return false;
+  };
+  const visit = (candidate: unknown): boolean => {
+    if (Array.isArray(candidate)) return candidate.some(visit);
+    const node = localAstNode(candidate);
+    if (!node) return false;
+    if (node.type === 'FunctionDeclaration') return containsInductionIdentifier(node);
+    if (node.type === 'ForNumericStatement'
+      || node.type === 'ForGenericStatement') return true;
+    if (node.type === 'LocalStatement'
+      && localAstNodes(node.variables)?.some(variable => localAstIdentifier(variable, variableName))) return true;
+    if (node.type === 'AssignmentStatement') {
+      const variables = localAstNodes(node.variables);
+      if (variables?.some(variable => {
+        if (localAstIdentifier(variable, variableName)) return true;
+        const target = localAstNode(variable);
+        return Boolean(target
+          && (target.type === 'MemberExpression' || target.type === 'IndexExpression')
+          && localAstIdentifier(target.base, variableName));
+      })) return true;
+    }
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+      if (visit(child)) return true;
+    }
+    return false;
+  };
+  return visit(value);
+};
+
+interface NumericForExpressionValue {
+  readonly value: number;
+  readonly usesVariable: boolean;
+}
+
+const numericForExpressionValue = (
+  model: X4UiCallModel,
+  value: unknown,
+  variableName: string,
+  iterationValue: number,
+): NumericForExpressionValue | undefined => {
+  const node = localAstNode(value);
+  if (!node) return undefined;
+  if (node.type === 'NumericLiteral') {
+    const literal = localAstNumericLiteralValue(model, node);
+    return literal === undefined ? undefined : { value: literal, usesVariable: false };
+  }
+  if (node.type === 'Identifier') {
+    return node.name === variableName && node.isLocal === true
+      ? { value: iterationValue, usesVariable: true }
+      : undefined;
+  }
+  if (node.type === 'ParenthesizedExpression') {
+    return numericForExpressionValue(model, node.expression, variableName, iterationValue);
+  }
+  if (node.type === 'UnaryExpression' && (node.operator === '+' || node.operator === '-')) {
+    const argument = numericForExpressionValue(model, node.argument, variableName, iterationValue);
+    if (!argument) return undefined;
+    const result = node.operator === '-' ? -argument.value : argument.value;
+    return Number.isFinite(result) && Number.isSafeInteger(result)
+      ? { value: result, usesVariable: argument.usesVariable }
+      : undefined;
+  }
+  if (node.type !== 'BinaryExpression' || !NUMERIC_EXPRESSION_OPERATORS.includes(node.operator as typeof NUMERIC_EXPRESSION_OPERATORS[number])) {
+    return undefined;
+  }
+  const left = numericForExpressionValue(model, node.left, variableName, iterationValue);
+  const right = numericForExpressionValue(model, node.right, variableName, iterationValue);
+  if (!left || !right) return undefined;
+  if (node.operator === '/' && right.value === 0) return undefined;
+  const result = node.operator === '+'
+    ? left.value + right.value
+    : node.operator === '-'
+      ? left.value - right.value
+      : node.operator === '*'
+        ? left.value * right.value
+        : left.value / right.value;
+  return Number.isFinite(result) && Number.isSafeInteger(result)
+    ? { value: result, usesVariable: left.usesVariable || right.usesVariable }
+    : undefined;
+};
+
+const numericForBindingProofFor = (
+  model: X4UiCallModel,
+  source: X4UiSourceLocation,
+): NumericForBindingProof | undefined => {
+  const key = locationKey(source);
+  const cached = numericForBindingProofCache.get(model);
+  if (cached?.has(key)) return cached.get(key);
+  const finish = (value: NumericForBindingProof | undefined): NumericForBindingProof | undefined => {
+    const entries = numericForBindingProofCache.get(model) || new Map<string, NumericForBindingProof | undefined>();
+    entries.set(key, value);
+    numericForBindingProofCache.set(model, entries);
+    return value;
+  };
+  if (!modelSourceLocationIsExact(model, source)) return finish(undefined);
+  const index = numericExpressionSourceAstIndex(model);
+  if (index.error) return finish(undefined);
+  const loops = localAstNodeAt(index, source, 'ForNumericStatement');
+  if (loops.length !== 1) return finish(undefined);
+  const loop = loops[0];
+  const variable = localAstNode(loop.variable);
+  if (!variable
+    || variable.type !== 'Identifier'
+    || typeof variable.name !== 'string'
+    || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable.name)
+    || variable.isLocal !== true) return finish(undefined);
+  const start = localAstNumericForBoundValue(model, loop.start);
+  const end = localAstNumericForBoundValue(model, loop.end);
+  const step = loop.step === undefined || loop.step === null
+    ? 1
+    : localAstNumericForBoundValue(model, loop.step);
+  if (start === undefined || end === undefined || step === undefined
+    || !Number.isSafeInteger(start)
+    || !Number.isSafeInteger(end)
+    || !Number.isSafeInteger(step)
+    || step === 0) return finish(undefined);
+  const delta = end - start;
+  if (!Number.isSafeInteger(delta)
+    || (delta > 0 && step < 0)
+    || (delta < 0 && step > 0)) return finish(undefined);
+  const count = Math.floor(Math.abs(delta) / Math.abs(step)) + 1;
+  if (!Number.isSafeInteger(count) || count < 1 || count > 16) return finish(undefined);
+  const values = Array.from({ length: count }, (_, iteration) => start + iteration * step);
+  if (!values.every(value => Number.isSafeInteger(value) && Number.isFinite(value))) return finish(undefined);
+  const body = localAstNodes(loop.body);
+  if (!body || numericForBodyHasAmbiguousBinding(body, variable.name)) return finish(undefined);
+  return finish({
+    source: cloneLocation(source),
+    variableName: variable.name,
+    values: Object.freeze(values),
+  });
+};
+
+const numericForIndexValueFor = (
+  model: X4UiCallModel,
+  value: X4UiValue,
+  binding: NumericForBindingProof,
+  iterationValue: number,
+): number | undefined => {
+  if (!modelSourceLocationIsExact(model, value.location)
+    || !locationContains(binding.source, value.location)) return undefined;
+  const index = numericExpressionSourceAstIndex(model);
+  if (index.error) return undefined;
+  const candidates = (index.nodesByRange.get(sourceAstRangeKey(
+    value.location.start.offset,
+    value.location.end.offset,
+  )) || []).filter(node => [
+    'NumericLiteral',
+    'Identifier',
+    'ParenthesizedExpression',
+    'UnaryExpression',
+    'BinaryExpression',
+  ].includes(node.type as string));
+  if (candidates.length !== 1) return undefined;
+  const resolved = numericForExpressionValue(model, candidates[0], binding.variableName, iterationValue);
+  if (!resolved?.usesVariable || !Number.isSafeInteger(resolved.value) || resolved.value < 1) return undefined;
+  return resolved.value;
+};
 
 type LocalScaleFontGlobalAuthority = 'pcall' | 'type' | 'Helper' | 'rawget';
 
@@ -7776,6 +8076,29 @@ const operationMetadataOwnerKeys = (
   return keys;
 };
 
+const isSchemaDetachedConditionalAlternateCreator = (
+  value: Record<string, unknown>,
+  nodes: OperationOwnerEvidenceNodes,
+): boolean => {
+  if (value.status !== 'conditional'
+    || value.reason !== CONDITIONAL_ALTERNATE_CREATOR_REASON
+    || !isCreatorOperationKind(value.kind)
+    || value.frameId !== undefined
+    || value.tableId === undefined
+    || value.rowId === undefined
+    || value.cellId !== undefined
+    || !isObject(value.metadata)) return false;
+  const receiver = value.metadata.receiver;
+  const receiverReference = isObject(receiver) && isObject(receiver.reference)
+    ? receiver.reference
+    : undefined;
+  if (!receiverReference) return false;
+  return nodes.cells.some(candidate => isObject(candidate)
+    && jsonEqual(candidate.identity, receiverReference)
+    && candidate.tableId === value.tableId
+    && candidate.rowId === value.rowId);
+};
+
 const schemaOperationOwnerShape = (
   value: Record<string, unknown>,
   path: string,
@@ -7789,8 +8112,13 @@ const schemaOperationOwnerShape = (
     || value.kernel !== undefined
     || kind === 'addTable';
   const metadataOwnerKeys = operationMetadataOwnerKeys(value, nodes);
-  const expected = new Set<OperationOwnerKey>(requiredByStatus ? allowed : []);
-  if (!requiredByStatus) {
+  const detachedConditionalCreator = isSchemaDetachedConditionalAlternateCreator(value, nodes);
+  const expected = new Set<OperationOwnerKey>(requiredByStatus
+    ? allowed
+    : detachedConditionalCreator
+      ? ['tableId', 'rowId']
+      : []);
+  if (!requiredByStatus && !detachedConditionalCreator) {
     if (metadataOwnerKeys.has('cellId')) {
       for (const key of allowed) expected.add(key);
     } else {
@@ -8269,6 +8597,41 @@ const schemaProgram = (value: unknown): ClosedSchemaError => {
     if (error) return error;
   }
   return undefined;
+};
+
+const isIssuedDetachedConditionalAlternateCreator = (
+  program: X4UiLayoutProgram,
+  operation: X4UiLayoutOperation,
+): boolean => {
+  if (operation.status !== 'conditional'
+    || operation.reason !== CONDITIONAL_ALTERNATE_CREATOR_REASON
+    || !isCreatorOperationKind(operation.kind)
+    || operation.frameId !== undefined
+    || operation.tableId === undefined
+    || operation.rowId === undefined
+    || operation.cellId !== undefined) return false;
+  const references = [
+    operation.metadata.receiver?.reference,
+    operation.metadata.semantics.cell?.reference,
+    operation.metadata.result,
+  ].filter((reference): reference is X4UiValueReference => reference !== undefined);
+  if (references.length === 0 || !references.every(reference => jsonEqual(reference, references[0]))) return false;
+  const receiverReference = references[0];
+  if (receiverReference.kind !== 'cell') return false;
+  const cell = program.cells.find(candidate => candidate.identity !== undefined
+    && jsonEqual(candidate.identity, receiverReference)
+    && candidate.tableId === operation.tableId
+    && candidate.rowId === operation.rowId);
+  if (cell === undefined
+    || cell.operationIds.includes(operation.id)
+    || cell.metadataOperationIds.includes(operation.id)) return false;
+  return program.operations.some(candidate => candidate.id !== operation.id
+    && candidate.status === 'applied'
+    && isCreatorOperationKind(candidate.kind)
+    && candidate.tableId === operation.tableId
+    && candidate.rowId === operation.rowId
+    && candidate.cellId === cell.id
+    && candidate.modelOrder < operation.modelOrder);
 };
 
 const schemaEvidenceExpansionLink = (value: unknown, path: string): ClosedSchemaError => {
@@ -9083,7 +9446,9 @@ export const validateX4UiLayoutEvidencePair = (
       const receiverReference = operation.metadata.receiver?.reference;
       const metadataCell = program.cells.find(candidate => candidate.identity !== undefined
         && receiverReference !== undefined && jsonEqual(candidate.identity, receiverReference));
-      if (metadataCell) return fail('program cell operation omits a source-bound emitted cell owner', index);
+      if (metadataCell && !isIssuedDetachedConditionalAlternateCreator(program, operation)) {
+        return fail('program cell operation omits a source-bound emitted cell owner', index);
+      }
     }
     const requireOperationIdentity = (
       expected: X4UiValueReference | undefined,
@@ -9970,6 +10335,7 @@ export function projectX4UiLayoutProgram(
     normalizedLoops.value,
     normalizedProfile.value.sourceIdentity,
     previewLoopCatalog,
+    model,
   );
   const directScaleValues = new Map<string, DirectScaleValue>();
   const resolvedDirectScaleLocations = new Set<string>();
@@ -11662,21 +12028,45 @@ export function projectX4UiLayoutProgram(
         && found.table !== undefined
         && found.table.kernelState !== undefined
         && found.cell === undefined;
+      const detachedConditionalAlternateCreator = blocked === 'conditional'
+        && call.context.branchPath.length > 0
+        && found.cell !== undefined
+        && operations.some(candidate => candidate.status === 'applied'
+          && isCreatorOperationKind(candidate.kind)
+          && candidate.tableId === found.table?.id
+          && candidate.rowId === found.row?.id
+          && candidate.cellId === found.cell?.id
+          && candidate.modelOrder < call.order);
       setOperationLinks(operation, {
         tableId: found.table?.id,
-        ...(deferredOwner ? {} : { rowId: found.row?.id, cellId: found.cell?.id }),
+        ...(deferredOwner ? {} : { rowId: found.row?.id }),
+        ...(!deferredOwner && !detachedConditionalAlternateCreator ? { cellId: found.cell?.id } : {}),
       });
       appendNodeOperation('table', found.table, operation.id);
       if (!deferredOwner) {
         appendNodeOperation('row', found.row, operation.id);
-        appendNodeOperation('cell', found.cell, operation.id);
+        if (!detachedConditionalAlternateCreator) appendNodeOperation('cell', found.cell, operation.id);
       }
       appendOperation(operation);
       if (deferredOwner) deferredConditionalCellOwners.push({ call, operation });
       if (blocked) {
-        operation.reason = blocked === 'unreachable' ? 'unreachable source operation was recorded but not applied' : 'conditional or looped source operation was recorded but not applied';
+        operation.reason = detachedConditionalAlternateCreator
+          ? CONDITIONAL_ALTERNATE_CREATOR_REASON
+          : blocked === 'unreachable' ? 'unreachable source operation was recorded but not applied' : 'conditional or looped source operation was recorded but not applied';
         if (found.cell) found.cell.hadGap = true;
         markTableGap(found.table);
+        if (detachedConditionalAlternateCreator) {
+          addOperationGap(
+            gaps,
+            operation,
+            'data-flow',
+            'incomplete',
+            operation.reason,
+            call.source,
+            cellReference(call)?.path,
+            found.row?.id,
+          );
+        }
         continue;
       }
       if (!found.table || !found.row || !found.cell || !found.table.kernelState || found.row.rowIndex === undefined) {

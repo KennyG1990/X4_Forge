@@ -112,6 +112,26 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
     ok('validate error names the reason', /resolves to nothing/.test(namedError.title), namedError.title);
     ok('validate error is not a bare count', !/^Validated 2 files — 1 error, 0 warnings$/.test(namedError.title), namedError.title);
 
+    const mdPitfallError = describeAction({
+      kind: 'validate', status: 200, request: {}, files: [],
+      body: {
+        fileCount: 1,
+        summary: { schemaErrors: 0, mdPitfallErrors: 1, mdPitfallWarnings: 2 },
+        flat: [{
+          severity: 'error', code: 'md_pitfall.cancel_conversation_actor_or_template',
+          filePath: 'md/ai_influence_conversation.xml', line: 98,
+          message: "Neither of the attributes 'actor' and 'template' is present!",
+        }],
+      },
+    });
+    ok('MD pitfall errors count as validation errors',
+      mdPitfallError.outcome.status === 'error' && mdPitfallError.title.includes('1 error'), mdPitfallError.title);
+    ok('MD pitfall error names the first diagnostic',
+      mdPitfallError.title.includes('ai_influence_conversation.xml')
+        && mdPitfallError.title.includes('98')
+        && mdPitfallError.title.includes('Neither of the attributes'),
+      mdPitfallError.title);
+
     const multi = describeAction({
       kind: 'validate', status: 200, request: {}, files: [],
       body: {
@@ -125,6 +145,84 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
       kind: 'validate', status: 200, request: {}, files: [], body: { fileCount: 27, summary: { schemaWarnings: 0 }, flat: [] },
     });
     ok('a clean validation keeps the original register', cleanRun.title === 'Validated 27 files — 0 errors, 0 warnings', cleanRun.title);
+
+    const completeErrorSummary = describeAction({
+      kind: 'validate', status: 200, request: {}, files: [],
+      body: {
+        fileCount: 9,
+        summary: {
+          structuralErrors: 1,
+          luaErrors: 1,
+          unresolvedCueRefs: 1,
+          crossFileErrors: 1,
+          schemaErrors: 1,
+          aiscriptErrors: 1,
+          mdPitfallErrors: 1,
+          diffErrors: 1,
+          rulesErrors: 1,
+          x4UiErrors: 100,
+        },
+        flat: [{ severity: 'error', code: 'structural.first', filePath: 'a.xml', line: 1, message: 'first structural error' }],
+      },
+    });
+    ok('validation history counts every authoritative error family exactly once',
+      completeErrorSummary.outcome.status === 'error'
+        && completeErrorSummary.title.includes('9 errors')
+        && completeErrorSummary.title.includes('(+8 more)')
+        && !completeErrorSummary.title.includes('109 errors'),
+      completeErrorSummary.title);
+
+    const activeWarningSummary = describeAction({
+      kind: 'validate', status: 200, request: {}, files: [],
+      body: {
+        fileCount: 4,
+        summary: { activeWarnings: 4, schemaWarnings: 99, x4UiWarnings: 99 },
+      },
+    });
+    ok('activeWarnings is the authoritative active warning total',
+      activeWarningSummary.title === 'Validated 4 files — 0 errors, 4 warnings', activeWarningSummary.title);
+
+    const flatWarningFallback = describeAction({
+      kind: 'validate', status: 200, request: {}, files: [],
+      body: {
+        fileCount: 4,
+        summary: { schemaWarnings: 8, luaWarnings: 8, x4UiWarnings: 8 },
+        flat: [
+          { severity: 'warning', code: 'warning.one', filePath: 'a.xml', line: 2, message: 'first warning' },
+          { severity: 'warning', code: 'warning.two', filePath: 'b.xml', line: 3, message: 'second warning' },
+        ],
+      },
+    });
+    ok('legacy flat warning fallback counts the flat list without X4 UI duplication',
+      flatWarningFallback.outcome.status === 'warn'
+        && flatWarningFallback.title.includes('2 warnings')
+        && !flatWarningFallback.title.includes('8 warnings'),
+      flatWarningFallback.title);
+
+    const familyWarningFallback = describeAction({
+      kind: 'validate', status: 200, request: {}, files: [],
+      body: {
+        fileCount: 4,
+        summary: {
+          luaWarnings: 1,
+          schemaWarnings: 1,
+          scriptPropertyWarnings: 1,
+          mdPitfallWarnings: 1,
+          jobsContentWarnings: 1,
+          waresContentWarnings: 1,
+          migrationWarnings: 1,
+          tFileRefWarnings: 1,
+          tFileCoverageWarnings: 1,
+          factionRelationWarnings: 1,
+          godMacroWarnings: 1,
+          referenceWarnings: 1,
+          diffWarnings: 1,
+          x4UiWarnings: 100,
+        },
+      },
+    });
+    ok('legacy family warning fallback is complete and non-overlapping',
+      familyWarningFallback.title === 'Validated 4 files — 0 errors, 13 warnings', familyWarningFallback.title);
 
     ok('diagnostics are compacted for storage', (() => {
       const d = compactDiagnostics({ flat: [{ severity: 'error', filePath: 'a.xml', line: 3, message: 'boom', code: 'x' }] });

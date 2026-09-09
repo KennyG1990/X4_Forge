@@ -1040,6 +1040,7 @@ class X4UiCallModelBuilder {
   private readonly handlerObjects = new Map<X4UiHandlerRecord, TrackedObject | undefined>();
   private readonly localFunctions: X4UiLocalFunctionDeclaration[] = [];
   private readonly localFunctionByNode = new Map<LuaNode, InternalLocalFunction>();
+  private readonly localHelperParameterSafety = new Map<string, readonly boolean[]>();
   private readonly localInvocations: X4UiLocalFunctionInvocation[] = [];
   private readonly helperReceiverAliases: X4UiHelperReceiverAliasFact[] = [];
   private readonly colorExpressions: X4UiCallColorExpression[] = [];
@@ -1510,12 +1511,135 @@ class X4UiCallModelBuilder {
     for (const value of values) visitValue(value);
   }
 
+  /**
+   * Prove only the local-helper parameters whose values are consumed by the
+   * already-modelled UI surface.  This is deliberately a small effect check:
+   * aliases, returns, assignments, nested functions, and opaque calls remain
+   * unsafe so the normal escape invalidation still applies to them.
+   */
+  private localHelperParameterSafetyFor(localFunction: InternalLocalFunction): readonly boolean[] {
+    const cached = this.localHelperParameterSafety.get(localFunction.declaration.id);
+    if (cached) return cached;
+
+    const parameters = nodeArray(localFunction.node, 'parameters');
+    const parameterIndexes = new Map<string, number>();
+    for (const [index, parameter] of parameters.entries()) {
+      const name = nodeField<string>(parameter, 'name');
+      if (name) parameterIndexes.set(name, index);
+    }
+    const safe = parameters.map(() => true);
+    const references = (node: unknown): number[] => {
+      const found = new Set<number>();
+      const visit = (candidate: unknown): void => {
+        if (Array.isArray(candidate)) {
+          candidate.forEach(visit);
+          return;
+        }
+        if (!isLuaNode(candidate)) return;
+        if (candidate.type === 'Identifier') {
+          const name = nodeField<string>(candidate, 'name');
+          const index = name === undefined ? undefined : parameterIndexes.get(name);
+          if (index !== undefined) found.add(index);
+          return;
+        }
+        for (const [key, child] of Object.entries(candidate)) {
+          if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+          if (Array.isArray(child)) child.forEach(visit);
+          else visit(child);
+        }
+      };
+      visit(node);
+      return [...found];
+    };
+    const mark = (indexes: readonly number[]): void => {
+      for (const index of indexes) safe[index] = false;
+    };
+    const visit = (node: LuaNode): void => {
+      if (node !== localFunction.node && node.type === 'FunctionDeclaration') {
+        mark(references(node));
+        return;
+      }
+
+      if (node.type === 'AssignmentStatement') {
+        mark(references(nodeField<LuaNode>(node, 'variables')));
+        mark(references(nodeField<LuaNode>(node, 'init')));
+        for (const [key, child] of Object.entries(node)) {
+          if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals'
+            || key === 'variables' || key === 'init') continue;
+          if (Array.isArray(child)) child.filter(isLuaNode).forEach(visit);
+          else if (isLuaNode(child)) visit(child);
+        }
+        return;
+      }
+
+      if (node.type === 'LocalStatement') {
+        const variables = nodeArray(node, 'variables');
+        const initializers = nodeArray(node, 'init');
+        for (const variable of variables) {
+          const name = nodeField<string>(variable, 'name');
+          if (name !== undefined && parameterIndexes.has(name)) mark([parameterIndexes.get(name)!]);
+        }
+        for (const [index, initializer] of initializers.entries()) {
+          const used = references(initializer);
+          if (used.length > 0 && variables[index]) mark(used);
+          visit(initializer);
+        }
+        return;
+      }
+
+      if (node.type === 'ReturnStatement') {
+        mark(references(node));
+        return;
+      }
+
+      if (node.type === 'CallExpression'
+        || node.type === 'StringCallExpression'
+        || node.type === 'TableCallExpression') {
+        const shape = this.callShape(node);
+        const modeled = shape.name !== undefined
+          && RELEVANT_CALL_NAMES.has(shape.name as X4UiRelevantCallName)
+          && (shape.method === ':' || shape.method === '.');
+        if (!modeled) {
+          mark(references(shape.receiver));
+          for (const argument of shape.args) mark(references(argument));
+        } else if (shape.receiver) {
+          // A direct parameter used as the receiver of an already-modelled
+          // Helper/UI operation is a supported ownership flow. Indexed or
+          // member-derived receivers remain conservative.
+          if (shape.receiver.type !== 'Identifier') mark(references(shape.receiver));
+        }
+        if (shape.receiver && shape.receiver.type !== 'Identifier') visit(shape.receiver);
+        for (const argument of shape.args) visit(argument);
+        return;
+      }
+
+      if (node.type === 'MemberExpression' || node.type === 'IndexExpression') {
+        mark(references(node));
+      }
+      for (const [key, child] of Object.entries(node)) {
+        if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+        if (Array.isArray(child)) child.filter(isLuaNode).forEach(visit);
+        else if (isLuaNode(child)) visit(child);
+      }
+    };
+    for (const statement of nodeArray(localFunction.node, 'body')) visit(statement);
+    const frozen = Object.freeze([...safe]);
+    this.localHelperParameterSafety.set(localFunction.declaration.id, frozen);
+    return frozen;
+  }
+
   private invalidateOpaqueCallArguments(
     shape: CallShape,
     receiver: InternalValue | undefined,
     args: readonly InternalValue[],
   ): void {
     const values: Array<InternalValue | undefined> = [receiver];
+    const directLocalFunction = shape.method === 'direct' && shape.name
+      ? this.bindings.get(shape.name)?.value.localFunction
+      : undefined;
+    const safeParameters = directLocalFunction && args.length === directLocalFunction.declaration.parameters.length
+      ? this.localHelperParameterSafetyFor(directLocalFunction)
+      : undefined;
     const exactHelperLifecycle = shape.method === '.'
       && Boolean(shape.name && SAFE_HELPER_MENU_LIFECYCLE_CALLS.has(shape.name))
       && receiver?.publicValue.reference?.kind === 'global'
@@ -1529,6 +1653,7 @@ class X4UiCallModelBuilder {
     const rawsetKey = exactGlobalRawset ? staticString(shape.args[1]) : undefined;
 
     for (const [index, argument] of args.entries()) {
+      if (safeParameters?.[index] === true) continue;
       if (index === 0
         && exactHelperLifecycle
         && argument.object?.reference.kind === 'menu') continue;

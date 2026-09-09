@@ -307,6 +307,44 @@ function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+const VALIDATION_ERROR_SUMMARY_FIELDS = [
+  'structuralErrors',
+  'luaErrors',
+  'unresolvedCueRefs',
+  'crossFileErrors',
+  'schemaErrors',
+  'aiscriptErrors',
+  'mdPitfallErrors',
+  'diffErrors',
+  'rulesErrors',
+] as const;
+
+const VALIDATION_WARNING_SUMMARY_FIELDS = [
+  'luaWarnings',
+  'schemaWarnings',
+  'scriptPropertyWarnings',
+  'mdPitfallWarnings',
+  'jobsContentWarnings',
+  'waresContentWarnings',
+  'migrationWarnings',
+  'tFileRefWarnings',
+  'tFileCoverageWarnings',
+  'factionRelationWarnings',
+  'godMacroWarnings',
+  'referenceWarnings',
+  'diffWarnings',
+] as const;
+
+function validationErrorCount(summary: any): number {
+  return VALIDATION_ERROR_SUMMARY_FIELDS.reduce((total, field) => total + numberish(summary?.[field]), 0);
+}
+
+function validationWarningCount(body: any, summary: any): number {
+  if (Object.prototype.hasOwnProperty.call(summary, 'activeWarnings')) return numberish(summary.activeWarnings);
+  if (Array.isArray(body?.flat)) return body.flat.filter((diagnostic: any) => diagnostic?.severity === 'warning').length;
+  return VALIDATION_WARNING_SUMMARY_FIELDS.reduce((total, field) => total + numberish(summary?.[field]), 0);
+}
+
 /**
  * The semantic summary — the core of this feature. One line per action, in the register Ken
  * specified: what happened and how it turned out, never JSON, never a stack trace, never a
@@ -371,8 +409,8 @@ export function describeAction(input: {
   if (kind === 'validate') {
     if (httpFailed) return { title: `Validation call FAILED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.code } };
     const s = body?.summary || {};
-    const errors = numberish(s.schemaErrors) + numberish(s.unresolvedCueRefs) + numberish(s.crossFileErrors) + numberish(s.aiscriptErrors);
-    const warnings = numberish(s.schemaWarnings) + numberish(s.scriptPropertyWarnings) + numberish(s.mdPitfallWarnings);
+    const errors = validationErrorCount(s);
+    const warnings = validationWarningCount(body, s);
     const scanned = numberish(body?.fileCount ?? s.files ?? files.length);
     const scope = scanned ? `Validated ${plural(scanned, 'file')}` : 'Validated project';
     // A count alone is useless: "1 error" does not tell you WHICH error, which is the whole

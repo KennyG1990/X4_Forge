@@ -11134,8 +11134,11 @@ const run = (): {
     '          row[6]:setColSpan(7):createText(term.right, { height = 10 })',
     '        end',
     '        row = table:addRow(true, {})',
-    '        row[1]:setColSpan(9):createText(pendingFooter, { height = 10 })',
-    '        row[10]:setColSpan(3):createButton({ active = true }):setText("REVIEW", { halign = "center" })',
+    '        row[1]:setColSpan(4):createButton({ active = true }):setText("Confirm - pay 2 400 000 Cr", { halign = "left" })',
+    '        row[5]:setColSpan(4):createButton({ active = true }):setText("Enter a different amount", { halign = "left" })',
+    '        row[9]:setColSpan(4):createButton({ active = true }):setText("Refuse to pay", { halign = "left" })',
+    '        row = table:addRow(true, {})',
+    '        row[1]:setColSpan(12):createText(pendingFooter, { height = 10 })',
     '      end',
     '    end',
     '  end',
@@ -11167,11 +11170,11 @@ const run = (): {
           : entry.expectedType === 'boolean'
             ? true
             : entry.expression.toLowerCase().includes('header')
-              ? 'ON THE TABLE - PREVIEW'
+              ? 'PENDING - MILITARY REQUEST'
               : entry.expression.toLowerCase().includes('footer')
-                ? 'Nothing moves until you say so... remember that you did.'
+                ? 'Nothing is executed until you pick. Refusing to their face is a live line they react to - not a silent cancel.'
                 : entry.expression.toLowerCase().includes('tx')
-                  ? 'REF-PREVIEW'
+                  ? 'tx aic-7f31c2'
                   : 'PREVIEW',
       })),
     };
@@ -11207,29 +11210,36 @@ const run = (): {
     hermeticPendingSourceText.slice(operation.source.start.offset, operation.source.end.offset)
   );
   const hermeticHeaderOperation = hermeticPendingOperations.find(operation => operation.kind === 'createText' && hermeticPendingOperationText(operation).includes('pendingHeader'));
+  const hermeticTxOperation = hermeticPendingOperations.find(operation => operation.kind === 'createText' && hermeticPendingOperationText(operation).includes('pendingTx'));
   const hermeticFooterOperation = hermeticPendingOperations.find(operation => operation.kind === 'createText' && hermeticPendingOperationText(operation).includes('pendingFooter'));
-  const hermeticReviewOperation = hermeticPendingOperations.find(operation => operation.kind === 'setText' && hermeticPendingOperationText(operation).includes('"REVIEW"'));
+  const hermeticReviewOperations = hermeticPendingOperations.filter(operation => operation.kind === 'setText' && hermeticPendingOperationText(operation).includes('"REVIEW"'));
+  const hermeticActionOperations = hermeticPendingOperations.filter(operation => operation.kind === 'setText'
+    && (hermeticPendingOperationText(operation).includes('"Confirm - pay 2 400 000 Cr"')
+      || hermeticPendingOperationText(operation).includes('"Enter a different amount"')
+      || hermeticPendingOperationText(operation).includes('"Refuse to pay"')));
   const hermeticTermOperations = hermeticPendingOperations.filter(operation => operation.kind === 'createText'
     && (hermeticPendingOperationText(operation).includes('term.left') || hermeticPendingOperationText(operation).includes('term.right')));
-  const hermeticReviewCell = hermeticPendingSelectedProgram?.cells.find(cell => factValue(cell.descriptorFacts.span) === 3
-    && hermeticPendingSourceText.slice(cell.source.start.offset, cell.source.end.offset).includes('row[10]'));
-  const hermeticReviewRow = hermeticPendingSelectedProgram?.rows.find(row => hermeticPendingSourceText.slice(row.source.start.offset, row.source.end.offset).includes('addRow(true)'));
-  check('B119 hermetic nested pending paths materialize dynamic header and REVIEW ownership while generic-loop terms stay unavailable',
+  const hermeticFooterCell = hermeticPendingSelectedProgram?.cells.find(cell => factValue(cell.descriptorFacts.span) === 12
+    && hermeticPendingSourceText.slice(cell.source.start.offset, cell.source.end.offset).includes('pendingFooter'));
+  check('B119 hermetic nested pending paths materialize header, sampled tx, loop-body terms, footer, and exactly three actions without REVIEW',
     hermeticPendingThenEntries.length === 3
       && hermeticPendingSelected?.status !== 'refused'
       && hermeticPendingSelectedProgram?.localExpansion === undefined
       && hermeticPendingSelectedProgram?.previewPathSelections.length === 3
       && hermeticHeaderOperation?.status !== 'conditional'
-      && hermeticPendingSelectedProgram?.cells.some(cell => factValue(cell.descriptorFacts.primaryContent) === 'ON THE TABLE - PREVIEW')
+      && hermeticPendingSelectedProgram?.cells.some(cell => factValue(cell.descriptorFacts.primaryContent) === 'PENDING - MILITARY REQUEST')
+      && hermeticTxOperation?.status !== 'conditional'
+      && factValue(hermeticTxOperation?.descriptorFacts.primaryContent) === 'tx aic-7f31c2'
+      && hermeticPendingSelectedProgram?.cells.some(cell => factValue(cell.descriptorFacts.primaryContent) === 'tx aic-7f31c2')
       && hermeticFooterOperation?.status !== 'conditional'
-      && hermeticPendingSelectedProgram?.cells.some(cell => factValue(cell.descriptorFacts.primaryContent) === 'Nothing moves until you say so... remember that you did.')
-      && hermeticReviewOperation?.status === 'applied'
-      && factValue(hermeticReviewOperation?.descriptorFacts.text) === 'REVIEW'
-      && hermeticReviewRow?.status !== 'unreachable'
-      && hermeticReviewRow?.status !== 'conditional'
-      && hermeticReviewCell?.status !== 'unreachable'
-      && hermeticReviewCell?.status !== 'conditional'
-      && factValue(hermeticReviewCell?.descriptorFacts.span) === 3
+      && hermeticPendingSelectedProgram?.cells.some(cell => factValue(cell.descriptorFacts.primaryContent) === 'Nothing is executed until you pick. Refusing to their face is a live line they react to - not a silent cancel.')
+      && hermeticFooterCell?.status !== 'unreachable'
+      && hermeticFooterCell?.status !== 'conditional'
+      && hermeticActionOperations.length === 3
+      && hermeticActionOperations.every(operation => operation.status === 'applied')
+      && hermeticActionOperations.map(operation => factValue(operation.descriptorFacts.text)).join('|') === 'Confirm - pay 2 400 000 Cr|Enter a different amount|Refuse to pay'
+      && hermeticReviewOperations.length === 0
+      && !hermeticPendingSourceText.includes('"REVIEW"')
       && hermeticTermOperations.length === 2
       && hermeticTermOperations.every(operation => operation.status === 'conditional')
       && hermeticPendingSelectedProgram?.verification.game === X4_UI_LAYOUT_GAME_TRUTH
@@ -11240,10 +11250,11 @@ const run = (): {
       selectedStatus: hermeticPendingSelected?.status,
       selectedPaths: hermeticPendingSelectedProgram?.previewPathSelections,
       header: hermeticHeaderOperation,
+      tx: hermeticTxOperation,
       footer: hermeticFooterOperation,
-      review: hermeticReviewOperation,
-      reviewRow: hermeticReviewRow,
-      reviewCell: hermeticReviewCell,
+       actions: hermeticActionOperations,
+       review: hermeticReviewOperations,
+       footerCell: hermeticFooterCell,
       termOperations: hermeticTermOperations,
       sourceUnchanged: hermeticPendingBefore === JSON.stringify(hermeticPendingSourceText),
     }));
@@ -16814,6 +16825,348 @@ const run = (): {
       validation: loopPairValidation,
       game: loopProgram?.verification,
       loopCatalogFrozen: loopProgram ? Object.isFrozen(loopProgram.previewLoopCatalog) : false,
+    }),
+  );
+
+  const numericLoopActionSource = [
+    'local menu = { name = "Numeric loop actions", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(12, { width = 100 })',
+    'local row = table:addRow(true, {})',
+    'for slot = 1, 3 do',
+    '  local cell = row[(slot - 1) * 4 + 1]',
+    '  cell:setColSpan(4)',
+    '  cell:createButton({ active = true }):setText("ACTION", {})',
+    'end',
+    'frame:display()',
+  ].join('\n');
+  const numericLoopActionModel = buildX4UiCallModel(input(numericLoopActionSource, 'selftest/b119-numeric-loop-actions.lua'));
+  const numericLoopActionTarget = topTarget(numericLoopActionModel);
+  const numericLoopActionProfile = profileFor(numericLoopActionModel);
+  const numericLoopActionUnselected = projectX4UiLayoutProgram(
+    numericLoopActionModel,
+    numericLoopActionTarget,
+    numericLoopActionProfile,
+  );
+  const numericLoopActionBase = resultProgram(numericLoopActionUnselected);
+  const numericLoopActionEntry = numericLoopActionBase?.previewLoopCatalog.entries[0];
+  const numericLoopActionSelection: X4UiLayoutPreviewLoopSelectionInput | undefined = numericLoopActionBase && numericLoopActionEntry
+    ? {
+      catalogId: numericLoopActionBase.previewLoopCatalog.id,
+      source: numericLoopActionBase.previewLoopCatalog.sourceIdentity,
+      targetId: numericLoopActionBase.target.id,
+      profileId: numericLoopActionBase.previewLoopCatalog.profileId,
+      selections: [{ id: numericLoopActionEntry.id, iterationCount: 3 }],
+    }
+    : undefined;
+  const numericLoopActionSelected = numericLoopActionSelection
+    ? projectX4UiLayoutProgram(
+      numericLoopActionModel,
+      numericLoopActionTarget,
+      numericLoopActionProfile,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      numericLoopActionSelection,
+    )
+    : numericLoopActionUnselected;
+  const numericLoopActionProgram = resultProgram(numericLoopActionSelected);
+  const numericLoopActionSpans = numericLoopActionProgram?.operations.filter(operation => operation.kind === 'setColSpan') ?? [];
+  const numericLoopActionLabels = numericLoopActionProgram?.operations.filter(operation => operation.kind === 'setText'
+    && numericLoopActionSource.slice(operation.source.start.offset, operation.source.end.offset).includes('"ACTION"')) ?? [];
+  const numericLoopActionCellPaths = numericLoopActionLabels.map(operation => {
+    const cell = operation.cellId === undefined ? undefined : numericLoopActionProgram?.cells.find(candidate => candidate.id === operation.cellId);
+    return cell?.identity?.path;
+  });
+  const numericLoopActionCellIndexes = numericLoopActionCellPaths.map(path => {
+    const match = path?.match(/\[(\d+)\]$/);
+    return match ? Number(match[1]) : undefined;
+  });
+  const numericLoopActionCellRoots = numericLoopActionCellPaths.map(path => {
+    const indexStart = path?.lastIndexOf('[') ?? -1;
+    return indexStart > 0 ? path?.slice(0, indexStart) : undefined;
+  });
+  const numericLoopActionRowPath = numericLoopActionProgram?.rows[0]?.identity?.path;
+  check(
+    'B119 fail-first: exact numeric-for action receiver expands to applied source-owned cells 1, 5, and 9 with three labels',
+    numericLoopActionSelection !== undefined
+      && numericLoopActionProgram !== undefined
+      && numericLoopActionSelected.status !== 'refused'
+      && numericLoopActionSpans.length === 3
+      && numericLoopActionLabels.length === 3
+      && numericLoopActionSpans.every(operation => operation.status === 'applied')
+      && numericLoopActionLabels.every(operation => operation.status === 'applied'
+        && operation.descriptorFacts.text?.status === 'known'
+        && operation.descriptorFacts.text.value === 'ACTION')
+      && numericLoopActionRowPath !== undefined
+      && JSON.stringify(numericLoopActionCellIndexes) === JSON.stringify([1, 5, 9])
+      && numericLoopActionCellRoots.every(root => root?.endsWith(`|${numericLoopActionRowPath}`) === true),
+    detail({
+      selection: numericLoopActionSelection,
+      status: numericLoopActionSelected.status,
+      spans: numericLoopActionSpans,
+      labels: numericLoopActionLabels,
+      cellPaths: numericLoopActionCellPaths,
+      cellIndexes: numericLoopActionCellIndexes,
+      rows: numericLoopActionProgram?.rows,
+      cells: numericLoopActionProgram?.cells,
+    }),
+  );
+  const numericLoopNegativeCases = [
+    {
+      name: 'dynamic end bound',
+      source: [
+        'local limit = 3',
+        numericLoopActionSource.replace('for slot = 1, 3 do', 'for slot = 1, limit do'),
+      ].join('\n'),
+    },
+    {
+      name: 'dynamic step',
+      source: [
+        'local stride = 1',
+        numericLoopActionSource.replace('for slot = 1, 3 do', 'for slot = 1, 3, stride do'),
+      ].join('\n'),
+    },
+    {
+      name: 'zero step',
+      source: numericLoopActionSource.replace('for slot = 1, 3 do', 'for slot = 1, 3, 0 do'),
+    },
+    {
+      name: 'shadowed induction binding',
+      source: numericLoopActionSource.replace(
+        '  local cell = row[(slot - 1) * 4 + 1]',
+        '  local slot = unknownSlot\n  local cell = row[(slot - 1) * 4 + 1]',
+      ),
+    },
+    {
+      name: 'selection count shorter than proven source loop',
+      source: numericLoopActionSource,
+      iterationCount: 2,
+    },
+    {
+      name: 'selection count longer than proven source loop',
+      source: numericLoopActionSource,
+      iterationCount: 4,
+    },
+  ].map(candidate => {
+    const model = buildX4UiCallModel(input(candidate.source, `selftest/b119-numeric-loop-${candidate.name.replace(/ /g, '-')}.lua`));
+    const target = topTarget(model);
+    const profile = profileFor(model);
+    const baseResult = projectX4UiLayoutProgram(model, target, profile);
+    const baseProgram = resultProgram(baseResult);
+    const entry = baseProgram?.previewLoopCatalog.entries[0];
+    if (!baseProgram || !entry) return { name: candidate.name, ready: false, staticIndexes: [] as number[], numericPaths: [] as string[] };
+    const selection: X4UiLayoutPreviewLoopSelectionInput = {
+      catalogId: baseProgram.previewLoopCatalog.id,
+      source: baseProgram.previewLoopCatalog.sourceIdentity,
+      targetId: baseProgram.target.id,
+      profileId: baseProgram.previewLoopCatalog.profileId,
+      selections: [{ id: entry.id, iterationCount: candidate.iterationCount ?? 3 }],
+    };
+    const selectedResult = projectX4UiLayoutProgram(
+      model,
+      target,
+      profile,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      selection,
+    );
+    const program = resultProgram(selectedResult);
+    const operations = program?.operations.filter(operation =>
+      operation.kind === 'setColSpan' || operation.kind === 'createButton' || operation.kind === 'setText') || [];
+    const staticIndexes = operations
+      .map(operation => operation.metadata.receiver?.reference?.index)
+      .filter((index): index is NonNullable<typeof index> => index !== undefined && index.status === 'static')
+      .map(index => typeof index.value === 'number' ? index.value : undefined)
+      .filter((index): index is number => index !== undefined);
+    return {
+      name: candidate.name,
+      ready: program !== undefined && selectedResult.status !== 'refused',
+      staticIndexes,
+      numericPaths: operations
+        .map(operation => operation.metadata.receiver?.reference?.path)
+        .filter((path): path is string => typeof path === 'string' && /\[\d+\]$/.test(path)),
+    };
+  });
+  check(
+    'B119 numeric-for specialization stays deferred for dynamic bounds, step, zero step, shadowed binding, and mismatched selection counts',
+    numericLoopNegativeCases.every(candidate => candidate.ready
+      && candidate.staticIndexes.length === 0
+      && candidate.numericPaths.length === 0),
+    detail(numericLoopNegativeCases),
+  );
+  const numericLoopPositiveCases = [
+    {
+      name: 'descending literal loop',
+      source: numericLoopActionSource.replace('for slot = 1, 3 do', 'for slot = 3, 1, -1 do'),
+      iterationCount: 3,
+      expectedIndexes: [9, 5, 1],
+    },
+    {
+      name: 'non-divisible literal endpoint',
+      source: numericLoopActionSource
+        .replace('for slot = 1, 3 do', 'for slot = 1, 6, 2 do')
+        .replace('row[(slot - 1) * 4 + 1]', 'row[slot]')
+        .replace('cell:setColSpan(4)', 'cell:setColSpan(1)'),
+      iterationCount: 3,
+      expectedIndexes: [1, 3, 5],
+    },
+  ].map(candidate => {
+    const model = buildX4UiCallModel(input(candidate.source, `selftest/b119-numeric-loop-${candidate.name.replace(/ /g, '-')}.lua`));
+    const target = topTarget(model);
+    const profile = profileFor(model);
+    const baseProgram = resultProgram(projectX4UiLayoutProgram(model, target, profile));
+    const entry = baseProgram?.previewLoopCatalog.entries[0];
+    if (!baseProgram || !entry) return { ...candidate, ready: false, staticIndexes: [] as number[], labels: 0 };
+    const selection: X4UiLayoutPreviewLoopSelectionInput = {
+      catalogId: baseProgram.previewLoopCatalog.id,
+      source: baseProgram.previewLoopCatalog.sourceIdentity,
+      targetId: baseProgram.target.id,
+      profileId: baseProgram.previewLoopCatalog.profileId,
+      selections: [{ id: entry.id, iterationCount: candidate.iterationCount }],
+    };
+    const selectedResult = projectX4UiLayoutProgram(
+      model,
+      target,
+      profile,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      selection,
+    );
+    const program = resultProgram(selectedResult);
+    const operations = program?.operations.filter(operation =>
+      operation.kind === 'setColSpan' || operation.kind === 'createButton' || operation.kind === 'setText') || [];
+    const staticIndexes = [...new Set(operations
+      .map(operation => operation.metadata.receiver?.reference?.index)
+      .filter((index): index is NonNullable<typeof index> => index !== undefined && index.status === 'static')
+      .map(index => typeof index.value === 'number' ? index.value : undefined)
+      .filter((index): index is number => index !== undefined))];
+    const labels = operations.filter(operation => operation.kind === 'setText'
+      && candidate.source.slice(operation.source.start.offset, operation.source.end.offset).includes('"ACTION"')).length;
+    return {
+      ...candidate,
+      ready: program !== undefined && selectedResult.status !== 'refused',
+      staticIndexes,
+      labels,
+    };
+  });
+  check(
+    'B119 numeric-for specialization accepts bounded descending and non-divisible literal loops with exact source values',
+    numericLoopPositiveCases.every(candidate => candidate.ready
+      && candidate.labels === 3
+      && JSON.stringify(candidate.staticIndexes) === JSON.stringify(candidate.expectedIndexes)),
+    detail(numericLoopPositiveCases),
+  );
+
+  const conditionalAlternateCreatorSource = [
+    'local menu = { name = "Conditional alternate creator", layer = 1 }',
+    'function menu.display() ',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  local table = frame:addTable(1, { width = 100 })',
+    '  local row = table:addRow(false, {})',
+    '  if tone == "ok" then',
+    '    row[1]:createText("ALT_OK", { height = 10 })',
+    '  elseif tone == "gated" then',
+    '    row[1]:createText("ALT_GATED", { height = 10 })',
+    '  else',
+    '    row[1]:createText("ALT_UNKNOWN", { height = 10 })',
+    '  end',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const conditionalAlternateCreatorModel = buildX4UiCallModel(input(
+    conditionalAlternateCreatorSource,
+    'selftest/b119-conditional-alternate-creator.lua',
+  ));
+  const conditionalAlternateCreatorTarget = namedTarget(conditionalAlternateCreatorModel, 'menu.display');
+  const conditionalAlternateCreatorProfile = profileFor(conditionalAlternateCreatorModel);
+  const conditionalAlternateCreatorUnselected = projectX4UiLayoutProgram(
+    conditionalAlternateCreatorModel,
+    conditionalAlternateCreatorTarget,
+    conditionalAlternateCreatorProfile,
+  );
+  const conditionalAlternateCreatorBase = resultProgram(conditionalAlternateCreatorUnselected);
+  const conditionalAlternateCreatorBranch = conditionalAlternateCreatorBase?.previewPathCatalog.entries.find(entry => entry.arm === 'then');
+  const conditionalAlternateCreatorSelection: X4UiLayoutPreviewPathSelectionInput | undefined = conditionalAlternateCreatorBase && conditionalAlternateCreatorBranch
+    ? {
+      catalogId: conditionalAlternateCreatorBase.previewPathCatalog.id,
+      source: conditionalAlternateCreatorBase.previewPathCatalog.sourceIdentity,
+      selections: [{
+        id: conditionalAlternateCreatorBranch.id,
+        boundaryId: conditionalAlternateCreatorBranch.boundaryId,
+        armId: conditionalAlternateCreatorBranch.armId,
+      }],
+    }
+    : undefined;
+  const conditionalAlternateCreatorSelected = conditionalAlternateCreatorSelection === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      conditionalAlternateCreatorModel,
+      conditionalAlternateCreatorTarget,
+      conditionalAlternateCreatorProfile,
+      undefined,
+      conditionalAlternateCreatorSelection,
+    );
+  const conditionalAlternateCreatorProgram = conditionalAlternateCreatorSelected === undefined
+    ? undefined
+    : resultProgram(conditionalAlternateCreatorSelected);
+  const conditionalAlternateCreatorAuthority = conditionalAlternateCreatorSelected === undefined
+    ? undefined
+    : evidenceAuthorityOf(conditionalAlternateCreatorSelected);
+  const conditionalAlternateCreatorOperations = conditionalAlternateCreatorProgram?.operations.filter(operation => operation.kind === 'createText') ?? [];
+  const conditionalAlternateCreatorSelectedOperation = conditionalAlternateCreatorOperations.find(operation =>
+    conditionalAlternateCreatorSource.slice(operation.source.start.offset, operation.source.end.offset).includes('"ALT_OK"'));
+  const conditionalAlternateCreatorUnselectedOperations = conditionalAlternateCreatorOperations.filter(operation =>
+    conditionalAlternateCreatorSource.slice(operation.source.start.offset, operation.source.end.offset).includes('"ALT_GATED"')
+      || conditionalAlternateCreatorSource.slice(operation.source.start.offset, operation.source.end.offset).includes('"ALT_UNKNOWN"'));
+  const conditionalAlternateCreatorGaps = conditionalAlternateCreatorProgram?.gaps ?? [];
+  const conditionalAlternateCreatorAlternateGaps = conditionalAlternateCreatorUnselectedOperations.map(operation =>
+    conditionalAlternateCreatorGaps.find(gap => gap.operationId === operation.id
+      && gap.category === 'data-flow'
+      && gap.status === 'incomplete'
+      && gap.reason === 'conditional alternate creator is retained as source evidence but is not linked to the selected cell owner'));
+  const conditionalAlternateCreatorCell = conditionalAlternateCreatorSelectedOperation?.cellId === undefined
+    ? undefined
+    : conditionalAlternateCreatorProgram?.cells.find(cell => cell.id === conditionalAlternateCreatorSelectedOperation.cellId);
+  check(
+    'B119 conditional alternate creators stay source/evidence-owned without poisoning the selected cell geometry',
+    conditionalAlternateCreatorSelected?.status !== 'refused'
+      && conditionalAlternateCreatorProgram !== undefined
+      && conditionalAlternateCreatorAuthority !== undefined
+      && conditionalAlternateCreatorProgram.target.kind === 'function'
+      && conditionalAlternateCreatorProgram.target.name === 'menu.display'
+      && validateX4UiLayoutEvidencePair(conditionalAlternateCreatorProgram, conditionalAlternateCreatorAuthority).valid
+      && conditionalAlternateCreatorSelectedOperation?.status === 'applied'
+      && conditionalAlternateCreatorSelectedOperation.cellId !== undefined
+      && conditionalAlternateCreatorCell?.operationIds.includes(conditionalAlternateCreatorSelectedOperation.id) === true
+      && conditionalAlternateCreatorUnselectedOperations.length === 2
+      && conditionalAlternateCreatorUnselectedOperations.every(operation => operation.status === 'conditional'
+        && operation.tableId !== undefined
+        && operation.rowId !== undefined
+        && operation.cellId === undefined
+        && operation.reason === 'conditional alternate creator is retained as source evidence but is not linked to the selected cell owner')
+      && conditionalAlternateCreatorAlternateGaps.length === 2
+      && conditionalAlternateCreatorAlternateGaps.every((gap, index) => gap !== undefined
+        && gap.operationId === conditionalAlternateCreatorUnselectedOperations[index].id
+        && gap.source.start.offset === conditionalAlternateCreatorUnselectedOperations[index].source.start.offset
+        && gap.source.end.offset === conditionalAlternateCreatorUnselectedOperations[index].source.end.offset)
+      && conditionalAlternateCreatorCell !== undefined
+      && conditionalAlternateCreatorCell.operationIds.every(operationId => !conditionalAlternateCreatorUnselectedOperations.some(operation => operation.id === operationId)),
+    detail({
+      selection: conditionalAlternateCreatorSelection,
+      selectedStatus: conditionalAlternateCreatorSelected?.status,
+      selectedOperation: conditionalAlternateCreatorSelectedOperation,
+      alternateOperations: conditionalAlternateCreatorUnselectedOperations,
+      alternateGaps: conditionalAlternateCreatorAlternateGaps,
+      cell: conditionalAlternateCreatorCell,
+      authorityValidation: conditionalAlternateCreatorProgram && conditionalAlternateCreatorAuthority
+        ? validateX4UiLayoutEvidencePair(conditionalAlternateCreatorProgram, conditionalAlternateCreatorAuthority)
+        : undefined,
     }),
   );
   const loopRefusal = (candidate: unknown): string | undefined => {

@@ -106,6 +106,7 @@ export interface ProjectValidationResult {
     schemaWarnings: number;
     aiscriptErrors: number;
     scriptPropertyWarnings: number;
+    mdPitfallErrors: number;
     mdPitfallWarnings: number;
     jobsContentWarnings: number;
     waresContentWarnings: number;
@@ -490,6 +491,7 @@ export function runProjectValidation(
 
   const schemaErrors = schemaFindings.filter(d => d.severity === "error").length;
   const aiscriptErrors = aiscriptLint.filter(d => d.severity === "error").length;
+  const mdPitfallErrors = pitfallFindings.filter(finding => finding.severity === "error").length;
   const diffErrors = diffSimulation.reduce((count, file) => count
     + file.findings.filter(finding => finding.severity === 'error').length
     + file.postApplyFindings.filter(finding => finding.severity === 'error').length, 0);
@@ -503,7 +505,7 @@ export function runProjectValidation(
   });
   const result: ProjectValidationResult = {
     ok: structuralErrors === 0 && cueIndex.unresolved.length === 0 && crossFile.ok
-      && schemaErrors === 0 && aiscriptErrors === 0 && diffErrors === 0 && rules.valid
+      && schemaErrors === 0 && aiscriptErrors === 0 && mdPitfallErrors === 0 && diffErrors === 0 && rules.valid
       && luaErrors === 0,
     summary: {
       files: project.files.length,
@@ -526,7 +528,8 @@ export function runProjectValidation(
       schemaWarnings: schemaFindings.filter(d => d.severity === "warning").length,
       aiscriptErrors,
       scriptPropertyWarnings: scriptPropertyFindings.length,
-      mdPitfallWarnings: pitfallFindings.length,
+      mdPitfallErrors,
+      mdPitfallWarnings: pitfallFindings.filter(finding => finding.severity === "warning").length,
       jobsContentWarnings: jobsLintFindings.length,
       waresContentWarnings: waresLintFindings.length,
       migrationWarnings: migrationFindings.length,
@@ -623,7 +626,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.chain, line: f.line, message: `Property chain "${f.chain}": segment "${f.segment}" — ${f.suggestions.length ? `did you mean ${f.suggestions.slice(0, 3).join(", ")}?` : "unknown in scriptproperties.xml."}` });
   }
   for (const f of result.pitfalls.findings) {
-    out.push({ severity: f.severity, code: f.code, sourceRef: f.cue, line: f.line, message: f.detail });
+    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.cue, line: f.line, message: f.detail });
   }
   // B61: jobs content lint — advisory only (WARNING never flips `ok`), one currency with every other layer.
   for (const f of result.jobsLint.findings) {
@@ -714,6 +717,20 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     "OpenMenu('B119', nil, nil, true)",
     '',
   ].join("\n");
+  const warningColumnsLua = [
+    "local menu = { name = 'B119' }",
+    "local frame = Helper.createFrameHandle(menu, {})",
+    "local table = frame:addTable(13)",
+    "OpenMenu('B119', nil, nil, true)",
+    '',
+  ].join("\n");
+  const fatalColumnsLua = [
+    "local menu = { name = 'B119' }",
+    "local frame = Helper.createFrameHandle(menu, {})",
+    "local table = frame:addTable(24)",
+    "OpenMenu('B119', nil, nil, true)",
+    '',
+  ].join("\n");
   const projectFor = (luaPath: string, luaText: string): ExtensionProject => ({
     id: "b119-project-validation-selftest",
     name: "B119 project validation selftest",
@@ -722,18 +739,53 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
       { path: luaPath, kind: classifyPath(luaPath), content: luaText },
     ],
   });
+  const mdProjectFor = (mdPath: string, mdText: string): ExtensionProject => ({
+    id: "b119-project-validation-md-selftest",
+    name: "B119 project validation MD selftest",
+    files: [
+      { path: "content.xml", kind: classifyPath("content.xml"), content: contentXml },
+      { path: mdPath, kind: "md", content: mdText },
+    ],
+  });
+  const cancelMissingXml = [
+    '<mdscript name="CancelSemantic">',
+    '  <cues>',
+    '    <cue name="A">',
+    '      <actions>',
+    '        <cancel_conversation force="true"/>',
+    '      </actions>',
+    '    </cue>',
+    '  </cues>',
+    '</mdscript>',
+  ].join("\n");
+  const cancelActorXml = cancelMissingXml.replace(' force="true"', ' force="true" actor="$Guide"');
+  const cancelTemplateXml = cancelMissingXml.replace(' force="true"', ' force="true" template="$Guide" context="$Context"');
   const clean = runProjectValidation(projectFor("ui/clean12.lua", cleanLua));
-  const fatal = runProjectValidation(projectFor("ui/too_many_columns.lua", cleanLua.replace("addTable(12)", "addTable(13)")));
+  const columnWarning = runProjectValidation(projectFor("ui/warning_columns.lua", warningColumnsLua));
+  const fatal = runProjectValidation(projectFor("ui/too_many_columns.lua", fatalColumnsLua));
   const dynamic = runProjectValidation(projectFor("ui/dynamic_count.lua", dynamicLua));
-  const warning = runProjectValidation(projectFor("ui/partial_columns.lua", warningLua));
+  const percentageWarning = runProjectValidation(projectFor("ui/partial_columns.lua", warningLua));
   const cleanFlat = flattenProjectValidation(clean);
+  const columnWarningFlat = flattenProjectValidation(columnWarning);
   const fatalFlat = flattenProjectValidation(fatal);
   const dynamicFlat = flattenProjectValidation(dynamic);
+  const cancelMissing = runProjectValidation(mdProjectFor("md/cancel-missing.xml", cancelMissingXml));
+  const cancelActor = runProjectValidation(mdProjectFor("md/cancel-actor.xml", cancelActorXml));
+  const cancelTemplate = runProjectValidation(mdProjectFor("md/cancel-template.xml", cancelTemplateXml));
+  const cancelMissingFlat = flattenProjectValidation(cancelMissing);
+  const cancelMissingFindings = cancelMissingFlat.filter(finding =>
+    finding.code === "md_pitfall.cancel_conversation_actor_or_template"
+  );
+  const cancelMissingFinding = cancelMissingFindings[0];
+  const columnWarningFindings = columnWarningFlat.filter(finding =>
+    finding.code === "x4-ui.add-table-column-limit" && finding.filePath === "ui/warning_columns.lua"
+  );
+  const columnWarningFinding = columnWarningFindings[0];
   const fatalFindings = fatalFlat.filter(finding =>
     finding.code === "x4-ui.add-table-column-limit" && finding.filePath === "ui/too_many_columns.lua"
   );
   const fatalFinding = fatalFindings[0];
-  const warningFlat = flattenProjectValidation(warning);
+  const percentageWarningFlat = flattenProjectValidation(percentageWarning);
   const checks = [
     {
       name: "clean_12_columns_remains_ok",
@@ -745,7 +797,21 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
         && !cleanFlat.some(finding => finding.filePath === "ui/clean12.lua" && (finding.severity === "error" || finding.severity === "warning")),
     },
     {
-      name: "literal_13_columns_is_fatal_and_source_located",
+      name: "literal_13_columns_is_warning_and_source_located",
+      pass: columnWarning.ok
+        && columnWarning.summary.luaErrors === 0
+        && columnWarning.summary.x4UiWarnings === 1
+        && columnWarning.summary.x4UiErrors === 0
+        && columnWarningFindings.length === 1
+        && columnWarningFinding?.severity === "warning"
+        && columnWarningFinding.line === 3
+        && columnWarningFinding.message.includes("unbisected 13-23 range")
+        && columnWarningFinding.message.includes("official X4 9.00 sources contain valid 13-column tables")
+        && !columnWarningFinding.message.includes("ENTIRE frame"),
+      detail: JSON.stringify({ summary: columnWarning.summary, finding: columnWarningFinding }),
+    },
+    {
+      name: "literal_24_columns_is_fatal_and_source_located",
       pass: !fatal.ok
         && fatal.summary.luaErrors > 0
         && fatal.summary.x4UiErrors === 1
@@ -754,6 +820,7 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
         && fatalFinding.line === 3
         && fatalFinding.message.includes("ENTIRE frame")
         && fatalFinding.message.includes("Failure mode:"),
+      detail: JSON.stringify({ summary: fatal.summary, finding: fatalFinding }),
     },
     {
       name: "dynamic_columns_are_one_unverified_info_summary",
@@ -767,15 +834,46 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     },
     {
       name: "x4_ui_warning_does_not_fail_validation",
-      pass: warning.ok
-        && warning.summary.luaErrors === 0
-        && warning.summary.x4UiWarnings > 0
-        && warning.summary.x4UiErrors === 0
-        && warningFlat.some(finding =>
+      pass: percentageWarning.ok
+        && percentageWarning.summary.luaErrors === 0
+        && percentageWarning.summary.x4UiWarnings > 0
+        && percentageWarning.summary.x4UiErrors === 0
+        && percentageWarningFlat.some(finding =>
           finding.code === "x4-ui.column-percentage-total"
             && finding.filePath === "ui/partial_columns.lua"
             && finding.severity === "warning"
         ),
+    },
+    {
+      name: "cancel_conversation_missing_actor_or_template_is_blocking_and_located",
+      pass: !cancelMissing.ok
+        && cancelMissing.summary.mdPitfallErrors === 1
+        && cancelMissing.summary.mdPitfallWarnings === 0
+        && cancelMissingFindings.length === 1
+        && cancelMissingFinding?.severity === "error"
+        && cancelMissingFinding.filePath === "md/cancel-missing.xml"
+        && cancelMissingFinding.line === 5
+        && cancelMissingFinding.message.includes("Neither of the attributes")
+        && cancelMissingFinding.message.includes("at startup/load")
+        && cancelMissingFinding.message.includes("does not establish whole-file or whole-frame failure")
+        && !/\b(?:rejects|rejected)\b/i.test(cancelMissingFinding.message)
+        && cancelMissingFinding.message.includes("<cancel_conversation actor=\"$Guide\"/>")
+        && cancelMissingFinding.message.includes("<cancel_conversation template=\"$Guide\" context=\"$Context\"/>")
+        && cancelMissing.pitfalls.findings.filter(finding => finding.severity === "warning").length === cancelMissing.summary.mdPitfallWarnings,
+      detail: JSON.stringify({ summary: cancelMissing.summary, finding: cancelMissingFinding }),
+    },
+    {
+      name: "cancel_conversation_actor_and_template_forms_pass_validation",
+      pass: cancelActor.ok
+        && cancelActor.summary.mdPitfallErrors === 0
+        && cancelActor.pitfalls.findings.every(finding => finding.code !== "md_pitfall.cancel_conversation_actor_or_template")
+        && cancelTemplate.ok
+        && cancelTemplate.summary.mdPitfallErrors === 0
+        && cancelTemplate.pitfalls.findings.every(finding => finding.code !== "md_pitfall.cancel_conversation_actor_or_template"),
+      detail: JSON.stringify({
+        actor: { ok: cancelActor.ok, summary: cancelActor.summary },
+        template: { ok: cancelTemplate.ok, summary: cancelTemplate.summary },
+      }),
     },
   ];
   return { pass: checks.every(check => check.pass), checks };

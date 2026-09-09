@@ -40,7 +40,7 @@ if (!positional.length || flags.has("--help")) {
     "",
     "Exit codes: 0 valid | 1 validation errors | 2 usage/load failure",
   ].join("\n"));
-  process.exit(2);
+  process.exit(flags.has("--help") ? 0 : 2);
 }
 
 const target = path.resolve(positional[0]);
@@ -64,14 +64,17 @@ console.log(`Folder: ${target}`);
 console.log(`Files:  ${s.files} loaded${load.skipped.length ? ` (${load.skipped.length} skipped)` : ""}`);
 console.log("");
 console.log(`Verdict: ${result.ok ? "VALID (no errors)" : "ERRORS FOUND"}`);
-console.log(`  structural errors:        ${s.structuralErrors}`);
-console.log(`  unresolved cue refs:      ${s.unresolvedCueRefs}`);
-console.log(`  cross-file errors:        ${s.crossFileErrors} (missing Lua registers: ${s.mdLuaMissingRegisters}, missing MD listeners: ${s.luaMdMissingListeners})`);
-console.log(`  schema errors/warnings:   ${s.schemaErrors}/${s.schemaWarnings} (md schema: ${result.schema.mdAvailable ? "loaded" : "UNAVAILABLE"}, aiscripts schema: ${result.schema.aiscriptAvailable ? "loaded" : "UNAVAILABLE"})`);
-console.log(`  aiscript lint errors:     ${s.aiscriptErrors}`);
-console.log(`  scriptproperty warnings:  ${s.scriptPropertyWarnings} (index: ${result.scriptProperties.available ? "loaded" : "UNAVAILABLE"})`);
-console.log(`  active/raw warnings:      ${s.activeWarnings}/${s.rawWarnings} (${s.suppressedWarnings} suppressed by reviewed project rules)`);
-console.log(`  project-rules errors:     ${s.rulesErrors} (forge.rules.json: ${result.rules.present ? (result.rules.valid ? `v${result.rules.version} valid` : "INVALID") : "not present"})`);
+console.log(`  structural errors:          ${s.structuralErrors}`);
+console.log(`  unresolved cue refs:        ${s.unresolvedCueRefs}`);
+console.log(`  cross-file errors:          ${s.crossFileErrors} (missing Lua registers: ${s.mdLuaMissingRegisters}, missing MD listeners: ${s.luaMdMissingListeners})`);
+console.log(`  schema errors/warnings:     ${s.schemaErrors}/${s.schemaWarnings} (md schema: ${result.schema.mdAvailable ? "loaded" : "UNAVAILABLE"}, aiscripts schema: ${result.schema.aiscriptAvailable ? "loaded" : "UNAVAILABLE"})`);
+console.log(`  aiscript lint errors:       ${s.aiscriptErrors}`);
+console.log(`  Lua errors/warnings:        ${s.luaErrors}/${s.luaWarnings}`);
+console.log(`  X4 UI errors/warnings:      ${s.x4UiErrors}/${s.x4UiWarnings} (unverified: ${s.x4UiUnverified}, truncated: ${s.x4UiTruncated})`);
+console.log(`  MD pitfall errors/warnings: ${s.mdPitfallErrors}/${s.mdPitfallWarnings}`);
+console.log(`  scriptproperty warnings:    ${s.scriptPropertyWarnings} (index: ${result.scriptProperties.available ? "loaded" : "UNAVAILABLE"})`);
+console.log(`  active/raw warnings:        ${s.activeWarnings}/${s.rawWarnings} (${s.suppressedWarnings} suppressed by reviewed project rules)`);
+console.log(`  project-rules errors:       ${s.rulesErrors} (forge.rules.json: ${result.rules.present ? (result.rules.valid ? `v${result.rules.version} valid` : "INVALID") : "not present"})`);
 console.log("  note: game-object reference checks (macros/wares/factions) run only inside the Forge.");
 
 const lines = flattenProjectValidation(result).map(f =>

@@ -2422,6 +2422,76 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
       && Object.isFrozen(localHelpers.helperReceiverAliases),
     detail(localHelpers.helperReceiverAliases));
 
+  const localColorHelperSource = [
+    'local TOK = {',
+    '  value = { r = 0.11, g = 0.12, b = 0.13, a = 0.14 },',
+    '  label = { r = 0.21, g = 0.22, b = 0.23, a = 0.24 },',
+    '  good = { r = 0.31, g = 0.32, b = 0.33, a = 0.34 },',
+    '  bad = { r = 0.41, g = 0.42, b = 0.43, a = 0.44 },',
+    '  external = { r = 0.51, g = 0.52, b = 0.53, a = 0.54 }',
+    '}',
+    'local function paintProposal(frame, color, text)',
+    '  local table = frame:addTable(1, { width = 100 })',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText(text, { color = color })',
+    'end',
+    'local function mutateColor(color)',
+    '  color.r = 0.99',
+    'end',
+    'local function passToUnknown(color)',
+    '  unknownSink(color)',
+    'end',
+    'local function callExternal(color)',
+    '  createText(color, {})',
+    'end',
+    'local menu = { name = "Local helper colors", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 60 })',
+    'paintProposal(frame, TOK.value, "PENDING - MILITARY REQUEST")',
+    'mutateColor(TOK.good)',
+    'passToUnknown(TOK.label)',
+    'callExternal(TOK.external)',
+    'local table = frame:addTable(4, { width = 100 })',
+    'local row = table:addRow(false, {})',
+    'row[1]:createText("value", { color = TOK.value })',
+    'row[2]:createText("good", { color = TOK.good })',
+    'row[3]:createText("label", { color = TOK.label })',
+    'row[4]:createText("bad", { color = TOK.bad })',
+    'row[5]:createText("external", { color = TOK.external })',
+  ].join('\n');
+  const localColorHelperModel = buildX4UiCallModel(input(localColorHelperSource, 'selftest/local-helper-colors.lua'));
+  const helperColorCall = callContaining(localColorHelperModel, localColorHelperSource, 'createText', 'color = color');
+  const directValueColorCall = callContaining(localColorHelperModel, localColorHelperSource, 'createText', 'color = TOK.value');
+  const directGoodColorCall = callContaining(localColorHelperModel, localColorHelperSource, 'createText', 'color = TOK.good');
+  const directLabelColorCall = callContaining(localColorHelperModel, localColorHelperSource, 'createText', 'color = TOK.label');
+  const directBadColorCall = callContaining(localColorHelperModel, localColorHelperSource, 'createText', 'color = TOK.bad');
+  const directExternalColorCall = callContaining(localColorHelperModel, localColorHelperSource, 'createText', 'color = TOK.external');
+  const helperColor = colorExpression(localColorHelperModel, helperColorCall, 'color');
+  const directValueColor = colorExpression(localColorHelperModel, directValueColorCall, 'color');
+  const directGoodColor = colorExpression(localColorHelperModel, directGoodColorCall, 'color');
+  const directLabelColor = colorExpression(localColorHelperModel, directLabelColorCall, 'color');
+  const directBadColor = colorExpression(localColorHelperModel, directBadColorCall, 'color');
+  const directExternalColor = colorExpression(localColorHelperModel, directExternalColorCall, 'color');
+  check('B119 fail-first: statically non-mutating local helper preserves source-owned proposal color while mutation and opaque escape stay unavailable',
+    helperColor?.kind === 'unresolved'
+      && directValueColor?.kind === 'literal-table'
+      && literalEvidence(localColorHelperSource, directValueColor, 'TOK.value', '{ r = 0.11, g = 0.12, b = 0.13, a = 0.14 }', [0.11, 0.12, 0.13, 0.14])
+      && directGoodColor?.kind === 'unresolved'
+      && directLabelColor?.kind === 'unresolved'
+      && directBadColor?.kind === 'literal-table'
+      && directExternalColor?.kind === 'unresolved'
+      && localColorHelperModel.localInvocations.some(invocation => invocation.calleeExpression === 'paintProposal' && invocation.status === 'supported')
+      && localColorHelperModel.localInvocations.some(invocation => invocation.calleeExpression === 'mutateColor' && invocation.status === 'supported')
+      && localColorHelperModel.localInvocations.some(invocation => invocation.calleeExpression === 'passToUnknown' && invocation.status === 'supported'),
+    detail({
+      helperColor,
+      directValueColor,
+      directGoodColor,
+      directLabelColor,
+      directBadColor,
+      directExternalColor,
+      invocations: localColorHelperModel.localInvocations,
+    }));
+
   const invocationNegativeSource = [
     'local function same(a) return a end',
     'local first = same',

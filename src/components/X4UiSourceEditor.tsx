@@ -10,6 +10,7 @@ import {
   X4_UI_EDITOR_SESSION_GAME_TRUTH,
   X4_UI_EDITOR_UNSELECTED_SOURCE,
   adoptX4UiEditorCanvasResult,
+  applyX4UiEditorSampleDraft,
   createX4UiEditorSessionOwner,
   resetX4UiEditorLoopState,
   resetX4UiEditorPathState,
@@ -18,7 +19,6 @@ import {
   sameX4UiEditorSampleBinding,
   updateX4UiEditorLoopState,
   updateX4UiEditorPathState,
-  updateX4UiEditorSampleState,
   type X4UiEditorCanvasState,
   type X4UiEditorLoopBinding,
   type X4UiEditorLoopCatalogAuthority,
@@ -89,6 +89,8 @@ export interface X4UiSourceEditorProps {
   readonly onWorkspaceEdit?: X4UiWorkspaceEditHandler;
   /** Emits only current plain source/target/profile data; deploy evidence remains parent-owned. */
   readonly onVerificationSnapshotChange?: (snapshot: X4UiGameVerificationCurrentSnapshot | null) => void;
+  /** Test/diagnostic observer for deterministic mounted projection-count evidence. */
+  readonly onSessionProjection?: (projection: X4UiEditorSessionProjection) => void;
 }
 
 export interface X4UiWorkspaceEditRequest {
@@ -185,10 +187,16 @@ export const reconcileX4UiEditorSelections = (input: {
   const source = input.candidates.find(candidate => candidate.key === input.sourceSelector);
   if (source === undefined) return { sourceSelector: '', targetSelector: '' };
   if (input.targetSelector === '') return { sourceSelector: input.sourceSelector, targetSelector: '' };
-  const target = source.targets.find(candidate => candidate.key === input.targetSelector);
+  const target = source.targets.find(candidate => candidate.key === input.targetSelector)
+    ?? (() => {
+      const targetBody = targetKeyBodyFor(input.targetSelector);
+      if (targetBody === null) return undefined;
+      const matches = source.targets.filter(candidate => targetKeyBodyFor(candidate.key) === targetBody);
+      return matches.length === 1 ? matches[0] : undefined;
+    })();
   return {
     sourceSelector: input.sourceSelector,
-    targetSelector: target === undefined ? '' : input.targetSelector,
+    targetSelector: target?.key ?? '',
   };
 };
 
@@ -374,6 +382,16 @@ const sourceKeyFor = (candidate: ValueRecord, index: number): string => (
 const targetKeyFor = (candidate: ValueRecord, index: number): string => (
   `${index}:${stringValue(candidate.id, 'unavailable')}:${stringValue(candidate.kind, 'unavailable')}`
 );
+
+const targetKeyBodyFor = (key: string): string | null => {
+  const separator = key.indexOf(':');
+  if (separator <= 0) return null;
+  const indexText = key.slice(0, separator);
+  if (!/^(0|[1-9]\d*)$/.test(indexText)) return null;
+  const index = Number(indexText);
+  const body = key.slice(separator + 1);
+  return Number.isSafeInteger(index) && index >= 0 && body.length > 0 ? body : null;
+};
 
 const sourceCandidatesFor = (catalog: SourceCandidateCatalogView): readonly SourceCandidateView[] => (
   catalog.sourceCandidates.map((value, index) => {
@@ -2389,8 +2407,18 @@ export function X4UiSourceEditorPreviewGeometry({ scene }: { readonly scene: unk
 export interface X4UiSourceEditorSamplesProps {
   readonly catalog: X4UiLayoutPreviewSampleCatalog | null;
   readonly samples: X4UiLayoutPreviewSampleInput | undefined;
+  readonly draft?: X4UiSourceEditorSampleDraft;
   readonly onSampleInput: (entryId: string, raw: string) => void;
+  readonly onApply?: () => void;
+  readonly onReset?: () => void;
   readonly error?: string;
+}
+
+export interface X4UiSourceEditorSampleDraft {
+  readonly catalog: X4UiLayoutPreviewSampleCatalog;
+  readonly binding: X4UiEditorSampleBinding;
+  readonly authority: X4UiEditorSampleCatalogAuthority;
+  readonly values: Readonly<Record<string, string>>;
 }
 
 const sampleValueFor = (
@@ -2408,6 +2436,16 @@ const sampleControlValue = (
   return typeof value === 'string' ? value : '';
 };
 
+const sampleDraftValuesFor = (
+  samples: X4UiLayoutPreviewSampleInput | undefined,
+  catalog: X4UiLayoutPreviewSampleCatalog,
+): Readonly<Record<string, string>> => Object.freeze(Object.fromEntries(
+  catalog.entries.flatMap(entry => {
+    const value = sampleValueFor(samples, entry.id);
+    return value === undefined ? [] : [[entry.id, sampleControlValue(entry.expectedType, value)] as const];
+  }),
+));
+
 const sampleSourceLabel = (catalog: X4UiLayoutPreviewSampleCatalog, entry: X4UiLayoutPreviewSampleCatalog['entries'][number]): string => {
   const sourcePath = entry.source.sourcePath ?? entry.source.file;
   const sourceIdentity = catalog.sourceIdentity.sourcePath ?? catalog.sourceIdentity.file;
@@ -2417,7 +2455,10 @@ const sampleSourceLabel = (catalog: X4UiLayoutPreviewSampleCatalog, entry: X4UiL
 export function X4UiSourceEditorSamples({
   catalog,
   samples,
+  draft,
   onSampleInput,
+  onApply,
+  onReset,
   error,
 }: X4UiSourceEditorSamplesProps) {
   return (
@@ -2427,6 +2468,8 @@ export function X4UiSourceEditorSamples({
         <span data-testid="x4-ui-samples-preview-only" className="font-bold text-amber-300">Preview only</span>
       </div>
       <div className="mt-2 text-amber-200">Samples affect preview measurement only. They never change source, workspace, export bytes, linter truth, or <span className="font-bold">Not verified in game</span>.</div>
+      <div data-testid="x4-ui-samples-applied" className="mt-2 text-slate-400">currently applied preview values remain active while edits are staged; staged edits take effect only after explicit Apply.</div>
+      <div data-testid="x4-ui-samples-staged" className="mt-1 text-slate-400">{draft === undefined ? 'no staged sample draft' : 'staged sample draft · not applied'}</div>
       {catalog === null ? (
         <div data-testid="x4-ui-samples-empty" className="mt-2 text-slate-500">Select an exact source and target to expose the selected layout-program sample catalog.</div>
       ) : catalog.entries.length === 0 ? (
@@ -2435,7 +2478,9 @@ export function X4UiSourceEditorSamples({
         <div className="mt-2 space-y-2">
           {catalog.entries.map(entry => {
             const value = sampleValueFor(samples, entry.id);
-            const controlValue = sampleControlValue(entry.expectedType, value);
+            const controlValue = draft !== undefined && Object.prototype.hasOwnProperty.call(draft.values, entry.id)
+              ? draft.values[entry.id]!
+              : sampleControlValue(entry.expectedType, value);
             return (
               <label key={entry.id} data-testid={`x4-ui-sample-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
                 <span className="font-bold text-slate-200">{`{${entry.expression}}`} · {entry.expectedType} · {entry.id}</span>
@@ -2454,6 +2499,11 @@ export function X4UiSourceEditorSamples({
           })}
         </div>
       )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" data-testid="x4-ui-samples-apply" onClick={onApply} disabled={draft === undefined || onApply === undefined} className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 disabled:border-white/10 disabled:text-slate-600">Apply staged samples</button>
+        <button type="button" data-testid="x4-ui-samples-reset" onClick={onReset} disabled={draft === undefined || onReset === undefined} className="rounded border border-white/10 px-2 py-1 text-[9px] font-bold uppercase text-slate-300 disabled:border-white/10 disabled:text-slate-600">Reset staged samples</button>
+        <span data-testid="x4-ui-samples-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
+      </div>
       {error !== undefined && <div data-testid="x4-ui-samples-error" className="mt-2 text-red-300">{error}</div>}
     </section>
   );
@@ -2629,6 +2679,7 @@ export default function X4UiSourceEditor({
   surfaceFactory,
   onWorkspaceEdit,
   onVerificationSnapshotChange,
+  onSessionProjection,
 }: X4UiSourceEditorProps) {
   const [profile, setProfile] = useState<X4UiEditorProfileControls>(() => ({
     width: X4_UI_EDITOR_DEFAULT_PROFILE.drawable.width,
@@ -2650,6 +2701,7 @@ export default function X4UiSourceEditor({
   const [sampleInput, setSampleInput] = useState<X4UiEditorSampleState>(undefined);
   const [sampleBinding, setSampleBinding] = useState<X4UiEditorSampleBinding | undefined>(undefined);
   const [sampleCatalogAuthority, setSampleCatalogAuthority] = useState<X4UiEditorSampleCatalogAuthority | undefined>(undefined);
+  const [sampleDraft, setSampleDraft] = useState<X4UiSourceEditorSampleDraft | undefined>(undefined);
   const [sampleError, setSampleError] = useState<string | undefined>(undefined);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [enabledEntryIds, setEnabledEntryIds] = useState<readonly string[]>([]);
@@ -2665,6 +2717,7 @@ export default function X4UiSourceEditor({
   const loopInputRef = useRef<X4UiEditorLoopState>(undefined);
   const loopCatalogRef = useRef<X4UiLayoutPreviewLoopCatalog | null>(null);
   const loopCatalogAuthorityRef = useRef<X4UiEditorLoopCatalogAuthority | undefined>(undefined);
+  const sampleDraftRef = useRef<X4UiSourceEditorSampleDraft | undefined>(sampleDraft);
   const sourceEditContextRef = useRef<X4UiSourceEditContext | null>(null);
   const sourceEditDraftRef = useRef(sourceEditDraft);
   const canvasStateRef = useRef(canvasState);
@@ -2672,7 +2725,10 @@ export default function X4UiSourceEditor({
   const currentVerificationSnapshotRef = useRef<X4UiGameVerificationCurrentSnapshot | null>(null);
   const canvasExportIdentityRef = useRef<X4UiGameVerificationCurrentSnapshot | null>(null);
   const canvasExportInFlightRef = useRef(false);
+  const sessionProjectionObserverRef = useRef(onSessionProjection);
   const [rendererSession] = useState<X4UiCanvasRenderSession>(() => createX4UiCanvasRenderSession());
+
+  sessionProjectionObserverRef.current = onSessionProjection;
 
   const resolvedCorpusLoader = useMemo(() => corpusLoader ?? defaultCorpusLoader, [corpusLoader]);
   const resolvedSurfaceFactory = useMemo(() => surfaceFactory ?? defaultSurfaceFactory, [surfaceFactory]);
@@ -2823,9 +2879,17 @@ export default function X4UiSourceEditor({
   ]);
 
   const projection = useMemo(
-    () => sessionOwner.project(sessionInput),
+    () => {
+      const next = sessionOwner.project(sessionInput);
+      return next;
+    },
     [sessionInput, sessionOwner],
   );
+
+  useEffect(() => {
+    sessionProjectionObserverRef.current?.(projection);
+  }, [projection]);
+
   loopInputRef.current = loopInput;
   loopCatalogRef.current = projection.loopCatalog;
   loopCatalogAuthorityRef.current = projection.loopCatalogAuthority;
@@ -2896,6 +2960,12 @@ export default function X4UiSourceEditor({
   ]);
   sourceEditContextRef.current = sourceEditContext;
   sourceEditDraftRef.current = sourceEditDraft;
+  sampleDraftRef.current = sampleDraft;
+  const sampleDraftMatchesProjection = sampleDraft !== undefined
+    && projection.sampleCatalog === sampleDraft.catalog
+    && projection.sampleCatalogAuthority === sampleDraft.authority
+    && sameX4UiEditorSampleBinding(projection.sampleBinding, sampleDraft.binding);
+  const visibleSampleDraft = sampleDraftMatchesProjection ? sampleDraft : undefined;
   const sourceEditDraftMatches = sourceEditDraft.context !== null
     && !shouldClearX4UiSourceEditState(sourceEditDraft.context, sourceEditContext);
   const visibleSourceEditStaged = sourceEditDraftMatches ? sourceEditDraft.staged : {};
@@ -2960,8 +3030,19 @@ export default function X4UiSourceEditor({
   }, [projection.sampleBinding, projection.sampleCatalogAuthority, projection.sampleReconciliation, projection.samples, sampleBinding, sampleCatalogAuthority, sampleInput]);
 
   useEffect(() => {
-    if (selection.reconciled.sourceSelector !== sourceSelector) setSourceSelector(selection.reconciled.sourceSelector);
-    if (selection.reconciled.targetSelector !== targetSelector) setTargetSelector(selection.reconciled.targetSelector);
+    if (sampleDraft !== undefined && !sampleDraftMatchesProjection) setSampleDraft(undefined);
+  }, [projection.sampleBinding, projection.sampleCatalog, projection.sampleCatalogAuthority, sampleDraft, sampleDraftMatchesProjection]);
+
+  useEffect(() => {
+    // An empty reconciliation is a fail-closed derived view during a transient authority gap;
+    // retain the owner-issued intent so a stable catalog can restore it. selectSource clears the
+    // target explicitly for a genuine source change.
+    if (selection.reconciled.sourceSelector !== '') {
+      if (selection.reconciled.sourceSelector !== sourceSelector) setSourceSelector(selection.reconciled.sourceSelector);
+      if (selection.reconciled.targetSelector !== '' && selection.reconciled.targetSelector !== targetSelector) {
+        setTargetSelector(selection.reconciled.targetSelector);
+      }
+    }
   }, [selection.reconciled.sourceSelector, selection.reconciled.targetSelector, sourceSelector, targetSelector]);
 
   useEffect(() => {
@@ -3182,13 +3263,70 @@ export default function X4UiSourceEditor({
   };
 
   const updateSample = (entryId: string, raw: string): void => {
-    const result = updateX4UiEditorSampleState(sampleInput, projection.sampleCatalog, entryId, raw, projection.sampleCatalogAuthority);
-    setSampleInput(result.samples);
-    if (result.status !== 'refused') {
-      setSampleBinding(result.samples === undefined ? undefined : projection.sampleBinding);
-      setSampleCatalogAuthority(result.samples === undefined ? undefined : projection.sampleCatalogAuthority);
+    const catalog = projection.sampleCatalog;
+    const binding = projection.sampleBinding;
+    const authority = projection.sampleCatalogAuthority;
+    if (catalog === null || binding === undefined || authority === undefined) {
+      setSampleError('preview samples require the exact owner-issued catalog and authority');
+      return;
     }
-    setSampleError(result.status === 'refused' ? result.message : undefined);
+    if (!catalog.entries.some(entry => entry.id === entryId)) {
+      setSampleError(`unknown preview sample ID: ${entryId}`);
+      return;
+    }
+    setSampleDraft(previous => {
+      const previousMatches = previous !== undefined
+        && previous.catalog === catalog
+        && previous.authority === authority
+        && sameX4UiEditorSampleBinding(previous.binding, binding);
+      const values = previousMatches ? previous.values : sampleDraftValuesFor(sampleInput, catalog);
+      return {
+        catalog,
+        binding,
+        authority,
+        values: Object.freeze({ ...values, [entryId]: raw }),
+      };
+    });
+    setSampleError(undefined);
+  };
+
+  const applySampleDraft = (): void => {
+    const draft = sampleDraftRef.current;
+    const catalog = projection.sampleCatalog;
+    const binding = projection.sampleBinding;
+    const authority = projection.sampleCatalogAuthority;
+    if (
+      draft === undefined
+      || catalog === null
+      || binding === undefined
+      || authority === undefined
+      || !sampleDraftMatchesProjection
+    ) {
+      setSampleError('staged preview samples were refused because the owner-issued authority or binding drifted');
+      return;
+    }
+    const result = applyX4UiEditorSampleDraft(sampleInput, catalog, draft.values, draft.authority);
+    if (result.status === 'refused') {
+      setSampleError(result.message);
+      return;
+    }
+    sampleDraftRef.current = undefined;
+    setSampleInput(result.samples);
+    if (result.samples === undefined) {
+      setSampleBinding(undefined);
+      setSampleCatalogAuthority(undefined);
+    } else {
+      setSampleBinding(binding);
+      setSampleCatalogAuthority(authority);
+    }
+    setSampleDraft(undefined);
+    setSampleError(undefined);
+  };
+
+  const resetSampleDraft = (): void => {
+    sampleDraftRef.current = undefined;
+    setSampleDraft(undefined);
+    setSampleError(undefined);
   };
 
   const stageSourceEdit = (entryId: string, raw: string): void => {
@@ -3648,7 +3786,10 @@ export default function X4UiSourceEditor({
       <X4UiSourceEditorSamples
         catalog={projection.sampleCatalog}
         samples={projection.samples}
+        draft={visibleSampleDraft}
         onSampleInput={updateSample}
+        onApply={applySampleDraft}
+        onReset={resetSampleDraft}
         error={sampleError}
       />
 

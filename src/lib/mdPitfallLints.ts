@@ -25,6 +25,9 @@
  *      silently skips); the author meant `$x.$barekey`. Union-aware: vanilla's 6
  *      `$x.<ident>` uses after param3 are all REAL properties (count, buildobject,
  *      roleobject, …) and pass. (This was THE silent killer of the 2026-06-25 hunt.)
+ *   4. `md_pitfall.cancel_conversation_actor_or_template` — X4 emits a startup/load ERROR when
+ *      <cancel_conversation> has neither actor nor template, even though common.xsd leaves each
+ *      attribute individually optional. This is a blocking runtime-semantic check, not an XSD rule.
  *
  *  FALSIFIED BY GROUNDING (deliberately NOT shipped — recorded so nobody re-adds them):
  *   - "event_* handler without instantiate → warn" (6321 vanilla uses).
@@ -37,9 +40,10 @@ import { DOMParser } from '@xmldom/xmldom';
 import { maskNonExpressionSpans } from './scriptProperties';
 
 export interface MdPitfallFinding {
-  code: 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey';
-  severity: 'warning';
+  code: 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey';
+  severity: 'error' | 'warning';
   cue?: string;
+  filePath?: string;
   line?: number;
   detail: string;
 }
@@ -48,6 +52,42 @@ import { directElementChildren, type ElementLike } from './xmlLite';
 
 function lineOf(haystack: string, needleIndex: number): number {
   return haystack.slice(0, Math.max(0, needleIndex)).split('\n').length;
+}
+
+/** Preserve source offsets while excluding markup-looking content that is not an element. */
+function maskXmlDecoys(xml: string): string {
+  return xml.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, match => match.replace(/[^\r\n]/g, ' '));
+}
+
+/** Find real opening-tag offsets after comments and CDATA have been masked. */
+function openingTagOffsets(xml: string, elementName: string): number[] {
+  const masked = maskXmlDecoys(xml);
+  const re = new RegExp(`<${elementName}(?=[\\s/>])`, 'g');
+  const offsets: number[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(masked)) !== null) {
+    let quote = '';
+    let end = match.index + match[0].length;
+    for (; end < masked.length; end++) {
+      const ch = masked[end];
+      if (quote) {
+        if (ch === quote) quote = '';
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '>') {
+        break;
+      }
+    }
+    if (end < masked.length && !quote) offsets.push(match.index);
+  }
+  return offsets;
+}
+
+function hasXmlAttribute(element: ElementLike, name: string): boolean {
+  const candidate = element as unknown as { hasAttribute?: (attributeName: string) => boolean };
+  if (typeof candidate.hasAttribute === 'function') return candidate.hasAttribute(name);
+  const openingTag = element.toString().match(/^<[^>]*>/s)?.[0] || '';
+  return new RegExp(`\\b${name}\\s*=`, 'i').test(openingTag);
 }
 
 /**
@@ -77,11 +117,30 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
 
   // DOM parse for the cue-tree lints
   let doc: { documentElement: ElementLike | null } | null = null;
+  let parseError = false;
   try {
-    doc = new DOMParser({ onError: () => { /* degrade */ } }).parseFromString(xml, 'text/xml') as unknown as { documentElement: ElementLike | null };
+    doc = new DOMParser({ onError: () => { parseError = true; } }).parseFromString(xml, 'text/xml') as unknown as { documentElement: ElementLike | null };
   } catch { return out; }
   const root = doc?.documentElement;
-  if (!root || root.nodeName !== 'mdscript') return out;
+  // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
+  if (!root || root.nodeName !== 'mdscript' || parseError) return out;
+
+  // ---- 4. cancel_conversation runtime semantic requiredness -----------------------------
+  const cancelElements = root.getElementsByTagName('cancel_conversation');
+  const cancelOffsets = openingTagOffsets(xml, 'cancel_conversation');
+  for (let index = 0; index < cancelElements.length; index++) {
+    const element = cancelElements[index];
+    if (hasXmlAttribute(element, 'actor') || hasXmlAttribute(element, 'template')) continue;
+    const offset = cancelOffsets[index];
+    if (offset === undefined) continue; // skip when exact source mapping is unavailable; never fabricate a finding.
+    out.push({
+      code: 'md_pitfall.cancel_conversation_actor_or_template',
+      severity: 'error',
+      filePath: opts.filePath,
+      line: lineOf(xml, offset),
+      detail: `X4 emits the engine ERROR "Neither of the attributes 'actor' and 'template' is present!" at startup/load when <cancel_conversation> has neither attribute. This makes Forge validation non-clean; the engine diagnostic alone does not establish whole-file or whole-frame failure (the tested compact/expanded UI still rendered and END closed the conversation). Use a valid target, for example <cancel_conversation actor="$Guide"/> or <cancel_conversation template="$Guide" context="$Context"/>. X4 common.xsd marks actor and template individually optional; this is a runtime semantic rule, not an XSD-enforced disjunction.`,
+    });
+  }
 
   const cuesBlocks = directElementChildren(root, 'cues');
   const rootCues = cuesBlocks.flatMap(b => directElementChildren(b, 'cue'));
@@ -172,6 +231,57 @@ export function runMdPitfallSelftest(): {
   const ok = (name: string, cond: boolean, detail?: unknown) =>
     checks.push({ name, pass: !!cond, detail: detail === undefined ? undefined : (typeof detail === 'string' ? detail : JSON.stringify(detail)) });
   const lint = (xml: string) => lintMdPitfalls(xml, { propertyUnion: UNION_FIXTURE });
+  const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
+  const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
+
+  // --- 0. cancel_conversation engine semantic requiredness ------------------------------
+  const cancelMissing = [
+    '<mdscript name="T">',
+    '  <cues>',
+    '    <cue name="A">',
+    '      <actions>',
+    '        <cancel_conversation force="true"/>',
+    '      </actions>',
+    '    </cue>',
+    '  </cues>',
+    '</mdscript>',
+  ].join('\n');
+  const missingCancel = cancelFindings(cancelMissing);
+  ok('cancel_conversation without actor/template is one blocking finding',
+    missingCancel.length === 1
+      && missingCancel[0]?.severity === 'error'
+      && missingCancel[0]?.line === 5
+      && missingCancel[0]?.detail.includes('Neither of the attributes')
+      && missingCancel[0]?.detail.includes('at startup/load')
+      && missingCancel[0]?.detail.includes('does not establish whole-file or whole-frame failure')
+      && !/\b(?:rejects|rejected)\b/i.test(missingCancel[0]?.detail || '')
+      && missingCancel[0]?.detail.includes('<cancel_conversation actor="$Guide"/>')
+      && missingCancel[0]?.detail.includes('<cancel_conversation template="$Guide" context="$Context"/>'),
+    missingCancel);
+  const cancelWithStructuredPath = lintMdPitfalls(cancelMissing, {
+    propertyUnion: UNION_FIXTURE,
+    filePath: 'md/ai_influence_conversation.xml',
+  }).filter(f => f.code === cancelFindingCode);
+  ok('cancel_conversation keeps structured file location without duplicate prose path',
+    cancelWithStructuredPath.length === 1
+      && cancelWithStructuredPath[0]?.filePath === 'md/ai_influence_conversation.xml'
+      && cancelWithStructuredPath[0]?.line === 5
+      && !cancelWithStructuredPath[0]?.detail.includes('md/ai_influence_conversation.xml'),
+    cancelWithStructuredPath);
+  ok('cancel_conversation actor form passes', cancelFindings(cancelMissing.replace(' force="true"', ' force="true" actor="$Guide"')).length === 0);
+  ok('cancel_conversation template form passes', cancelFindings(cancelMissing.replace(' force="true"', ' force="true" template="$Guide" context="$Context"')).length === 0);
+  ok('cancel_conversation with neither attribute fails', cancelFindings(cancelMissing).some(f => f.severity === 'error'));
+  const cancelDecoys = `<mdscript name="T"><cues><cue name="A"><actions>
+    <!-- <cancel_conversation force="true"/> -->
+    <![CDATA[<cancel_conversation force="true"/>]]>
+    <debug_text text="'&lt;cancel_conversation force=&quot;true&quot;/&gt;'"/>
+    <conversation force="true"/>
+  </actions></cue></cues></mdscript>`;
+  ok('cancel_conversation decoys and unrelated tags stay quiet', cancelFindings(cancelDecoys).length === 0, cancelFindings(cancelDecoys));
+  ok('cancel_conversation semantic lint skips non-mdscript, malformed, and garbage input',
+    cancelFindings('<aiscript><cancel_conversation force="true"/></aiscript>').length === 0
+      && cancelFindings('<mdscript><cancel_conversation force="true"></mdscript>').length === 0
+      && cancelFindings('not xml').length === 0);
 
   // --- 1. ui_listener_one_shot ---
   const deadListener = `<mdscript name="T"><cues>

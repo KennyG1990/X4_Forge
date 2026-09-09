@@ -59,6 +59,45 @@ test('pitfall lints fire on the proven bug shapes and stay quiet on the proven-g
   expect(codes).toContain('md_pitfall.offer_accepted_keyword_cue');
 });
 
+test('cancel_conversation actor/template semantic lint blocks only the missing-attribute shape', async ({ request }) => {
+  const validateMd = (filePath: string, content: string) => validate(request, { project: { id: 't', name: 't', files: [
+    contentXml,
+    { path: filePath, kind: 'md', content },
+  ] } });
+  const missing = await validateMd('md/cancel-missing.xml', [
+    '<mdscript name="CancelSemantic">',
+    '  <cues>',
+    '    <cue name="A">',
+    '      <actions>',
+    '        <cancel_conversation force="true"/>',
+    '      </actions>',
+    '    </cue>',
+    '  </cues>',
+    '</mdscript>',
+  ].join('\n'));
+  expect(missing.ok).toBe(false);
+  expect(missing.summary.mdPitfallErrors).toBe(1);
+  expect(missing.summary.mdPitfallWarnings).toBe(0);
+  expect(missing.pitfalls.findings).toEqual([expect.objectContaining({
+    code: 'md_pitfall.cancel_conversation_actor_or_template', severity: 'error',
+    line: 5, detail: expect.stringContaining("at startup/load"),
+  })]);
+  expect(missing.pitfalls.findings[0].detail).toContain('does not establish whole-file or whole-frame failure');
+  expect(missing.pitfalls.findings[0].detail).not.toMatch(/\b(?:rejects|rejected)\b/i);
+  expect(missing.flat).toEqual(expect.arrayContaining([expect.objectContaining({
+    code: 'md_pitfall.cancel_conversation_actor_or_template', severity: 'error',
+    filePath: 'md/cancel-missing.xml', line: 5,
+  })]));
+
+  const actor = await validateMd('md/cancel-actor.xml', '<mdscript name="T"><cues><cue name="A"><actions><cancel_conversation actor="$Guide"/></actions></cue></cues></mdscript>');
+  expect(actor.ok).toBe(true);
+  expect(actor.summary.mdPitfallErrors).toBe(0);
+
+  const template = await validateMd('md/cancel-template.xml', '<mdscript name="T"><cues><cue name="A"><actions><cancel_conversation template="$Guide" context="$Context"/></actions></cue></cues></mdscript>');
+  expect(template.ok).toBe(true);
+  expect(template.summary.mdPitfallErrors).toBe(0);
+});
+
 test('fromPath validation reads a real mod folder server-side', async ({ request }) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-from-path-'));
   const staging = path.join(temp, 'staging');

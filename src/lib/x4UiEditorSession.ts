@@ -1282,7 +1282,9 @@ const SESSION_PROJECTION_CACHE_AUTHORITY_FIELDS = Object.freeze([
 interface X4UiEditorSessionProjectionCacheSignature {
   readonly dataKey: string;
   readonly corpus: unknown;
+  readonly corpusBoundary: string | null;
   readonly colorEvidence: unknown;
+  readonly colorBoundary: string | null;
   readonly authorities: readonly {
     readonly present: boolean;
     readonly value: unknown;
@@ -1355,6 +1357,29 @@ function cacheableStableDataKey(value: unknown, active = new WeakSet<object>()):
   }
 }
 
+const PREVIEW_CONTENT_BOUNDARY_FIELDS = Object.freeze([
+  'status',
+  'verification',
+  'evidenceKind',
+  'root',
+  'generation',
+  'manifestGeneration',
+  'identities',
+] as const);
+
+/** Capture the small loader-issued identity envelope without walking binary assets. */
+function previewContentBoundaryKey(value: unknown): string | null {
+  if (value === undefined || value === null) return cacheableStableDataKey(value);
+  if (!isRecord(value)) return null;
+  const boundary = Object.create(null) as JsonRecord;
+  for (const key of PREVIEW_CONTENT_BOUNDARY_FIELDS) {
+    const field = ownInputField(value, key);
+    if (!field.valid) return null;
+    if (field.present) boundary[key] = field.value;
+  }
+  return cacheableStableDataKey(boundary);
+}
+
 function editorSessionProjectionCacheSignature(
   input: X4UiEditorSessionInput,
 ): X4UiEditorSessionProjectionCacheSignature | null {
@@ -1372,11 +1397,15 @@ function editorSessionProjectionCacheSignature(
     if (!corpusField.valid) return null;
     const corpus = corpusField.value;
     if (corpus !== undefined && corpus !== null && !safeCanonical(corpus)) return null;
+    const corpusBoundary = previewContentBoundaryKey(corpus);
+    if (corpusBoundary === null) return null;
 
     const colorField = ownInputField(input, 'colorEvidence');
     if (!colorField.valid) return null;
     const colorEvidence = colorField.value;
     if (colorEvidence !== undefined && !isX4UiCorpusCanonicalColorSuccess(colorEvidence)) return null;
+    const colorBoundary = previewContentBoundaryKey(colorEvidence);
+    if (colorBoundary === null) return null;
 
     const dataFields: string[] = [];
     for (const key of SESSION_PROJECTION_CACHE_DATA_FIELDS) {
@@ -1403,7 +1432,9 @@ function editorSessionProjectionCacheSignature(
     return {
       dataKey: dataFields.join('|'),
       corpus,
+      corpusBoundary,
       colorEvidence,
+      colorBoundary,
       authorities: authorities.map(({ present, value }) => ({ present, value })),
     };
   } catch {
@@ -1417,7 +1448,9 @@ function sameEditorSessionProjectionCacheSignature(
 ): boolean {
   return left.dataKey === right.dataKey
     && left.corpus === right.corpus
+    && left.corpusBoundary === right.corpusBoundary
     && left.colorEvidence === right.colorEvidence
+    && left.colorBoundary === right.colorBoundary
     && left.authorities.length === right.authorities.length
     && left.authorities.every((authority, index) => {
       const candidate = right.authorities[index];
@@ -1894,6 +1927,122 @@ export function updateX4UiEditorSampleState(
   }
   return {
     status: 'accepted',
+    samples: updated.samples,
+    changed: reconciled.changed || updated.changed,
+  };
+}
+
+/** Apply all staged raw sample controls as one validated transaction. */
+export function applyX4UiEditorSampleDraft(
+  current: X4UiEditorSampleState,
+  catalog: unknown,
+  draft: unknown,
+  authority: unknown,
+): X4UiEditorSampleUpdateResult {
+  const reconciled = reconcileX4UiEditorSampleState(current, catalog, authority);
+  if (reconciled.status !== 'accepted') {
+    return {
+      status: 'refused',
+      samples: reconciled.samples,
+      changed: reconciled.changed,
+      code: reconciled.code,
+      message: reconciled.message,
+    };
+  }
+  const catalogResult = validateSampleCatalog(catalog);
+  if (catalogResult.ok === false) {
+    return {
+      status: 'refused',
+      samples: reconciled.samples,
+      changed: true,
+      code: catalogResult.code,
+      message: catalogResult.message,
+    };
+  }
+  if (draft === undefined) return { status: 'accepted', samples: reconciled.samples, changed: reconciled.changed };
+  if (!isRecord(draft)) {
+    return {
+      status: 'refused',
+      samples: reconciled.samples,
+      changed: reconciled.changed,
+      code: 'malformed-input',
+      message: 'preview sample draft must be a plain string-value record',
+    };
+  }
+  let draftEntries: readonly [string, string][];
+  try {
+    const prototype = Object.getPrototypeOf(draft);
+    if (prototype !== Object.prototype && prototype !== null) throw new Error('draft prototype');
+    const entries: [string, string][] = [];
+    for (const key of Reflect.ownKeys(draft)) {
+      if (typeof key !== 'string') throw new Error('draft symbol');
+      const descriptor = Object.getOwnPropertyDescriptor(draft, key);
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor) || typeof descriptor.value !== 'string') {
+        throw new Error('draft value');
+      }
+      entries.push([key, descriptor.value]);
+    }
+    draftEntries = entries;
+  } catch {
+    return {
+      status: 'refused',
+      samples: reconciled.samples,
+      changed: reconciled.changed,
+      code: 'malformed-input',
+      message: 'preview sample draft must contain only own enumerable string values',
+    };
+  }
+  const entriesById = new Map(catalogResult.catalog.entries.map(entry => [entry.id, entry]));
+  const valuesById = new Map((reconciled.samples?.values ?? []).map(value => [value.id, value.value]));
+  for (const [entryId, raw] of draftEntries) {
+    const entry = entriesById.get(entryId);
+    if (entry === undefined) {
+      return {
+        status: 'refused',
+        samples: reconciled.samples,
+        changed: reconciled.changed,
+        code: 'unknown-sample',
+        message: `unknown preview sample ID: ${entryId}`,
+      };
+    }
+    const parsed = parseX4UiEditorSampleInput(entry.expectedType, raw);
+    if (parsed.status === 'refused') {
+      return {
+        status: 'refused',
+        samples: reconciled.samples,
+        changed: reconciled.changed,
+        code: parsed.code,
+        message: parsed.message,
+      };
+    }
+    if (parsed.status === 'reset') valuesById.delete(entryId);
+    else valuesById.set(entryId, parsed.value);
+  }
+  const values = catalogResult.catalog.entries
+    .filter(entry => valuesById.has(entry.id))
+    .map(entry => ({ id: entry.id, value: valuesById.get(entry.id)! }));
+  const updated = reconcileX4UiEditorSampleState(
+    values.length === 0
+      ? undefined
+      : {
+        catalogId: catalogResult.catalog.id,
+        source: catalogResult.catalog.sourceIdentity,
+        values,
+      },
+    catalogResult.catalog,
+    authority,
+  );
+  if (updated.status !== 'accepted') {
+    return {
+      status: 'refused',
+      samples: reconciled.samples,
+      changed: true,
+      code: updated.code,
+      message: updated.message,
+    };
+  }
+  return {
+    status: updated.samples === undefined && reconciled.samples !== undefined ? 'reset' : 'accepted',
     samples: updated.samples,
     changed: reconciled.changed || updated.changed,
   };
@@ -2806,6 +2955,122 @@ function sceneIssued(preview: X4UiPreviewPipelineResult): boolean {
   return preview.scene.status === 'projected' || preview.scene.status === 'partial';
 }
 
+interface X4UiEditorPreviewStageOneKey {
+  readonly ownerToken: object;
+  readonly source: X4UiWorkspaceSource;
+  readonly corpus: unknown;
+  readonly corpusBoundary: string;
+  readonly profileKey: string;
+  readonly selection: X4UiPreviewSelection | undefined;
+  readonly selectionKey: string;
+  readonly colorEvidence: X4UiCorpusCanonicalColorSuccess | undefined;
+  readonly colorBoundary: string;
+}
+
+interface X4UiEditorPreviewStageTwoKey extends X4UiEditorPreviewStageOneKey {
+  readonly paths: X4UiLayoutPreviewPathSelectionInput | undefined;
+  readonly pathsKey: string;
+  readonly pathBinding: X4UiEditorPathBinding | undefined;
+  readonly pathCatalogAuthority: unknown;
+  readonly loops: X4UiPreviewLoopInput | undefined;
+  readonly loopsKey: string;
+  readonly loopBinding: X4UiEditorLoopBinding | undefined;
+  readonly loopCatalogAuthority: unknown;
+}
+
+interface X4UiEditorPreviewStageCache {
+  readonly ownerToken: object;
+  stageOne?: {
+    readonly key: X4UiEditorPreviewStageOneKey;
+    readonly preview: X4UiPreviewPipelineResult;
+  };
+  stageTwo?: {
+    readonly key: X4UiEditorPreviewStageTwoKey;
+    readonly preview: X4UiPreviewPipelineResult;
+  };
+}
+
+function previewStageOneKeyFor(
+  ownerToken: object,
+  source: X4UiWorkspaceSource,
+  corpus: unknown,
+  profile: X4UiEditorNormalizedProfile,
+  selection: X4UiPreviewSelection | undefined,
+  colorEvidence: X4UiCorpusCanonicalColorSuccess | undefined,
+): X4UiEditorPreviewStageOneKey | null {
+  const corpusBoundary = previewContentBoundaryKey(corpus);
+  const profileKey = cacheableStableDataKey(profile);
+  const selectionKey = cacheableStableDataKey(selection);
+  const colorBoundary = previewContentBoundaryKey(colorEvidence);
+  if (corpusBoundary === null || profileKey === null || selectionKey === null || colorBoundary === null) return null;
+  return {
+    ownerToken,
+    source,
+    corpus,
+    corpusBoundary,
+    profileKey,
+    selection,
+    selectionKey,
+    colorEvidence,
+    colorBoundary,
+  };
+}
+
+function samePreviewStageOneKey(
+  left: X4UiEditorPreviewStageOneKey,
+  right: X4UiEditorPreviewStageOneKey,
+): boolean {
+  return left.ownerToken === right.ownerToken
+    && left.source === right.source
+    && left.corpus === right.corpus
+    && left.corpusBoundary === right.corpusBoundary
+    && left.profileKey === right.profileKey
+    && left.selection === right.selection
+    && left.selectionKey === right.selectionKey
+    && left.colorEvidence === right.colorEvidence
+    && left.colorBoundary === right.colorBoundary;
+}
+
+function previewStageTwoKeyFor(
+  stageOneKey: X4UiEditorPreviewStageOneKey,
+  paths: X4UiLayoutPreviewPathSelectionInput | undefined,
+  pathBinding: X4UiEditorPathBinding | undefined,
+  pathCatalogAuthority: unknown,
+  loops: X4UiPreviewLoopInput | undefined,
+  loopBinding: X4UiEditorLoopBinding | undefined,
+  loopCatalogAuthority: unknown,
+): X4UiEditorPreviewStageTwoKey | null {
+  const pathsKey = cacheableStableDataKey(paths);
+  const pathBindingKey = cacheableStableDataKey(pathBinding);
+  const loopsKey = cacheableStableDataKey(loops);
+  const loopBindingKey = cacheableStableDataKey(loopBinding);
+  if (pathsKey === null || pathBindingKey === null || loopsKey === null || loopBindingKey === null) return null;
+  return {
+    ...stageOneKey,
+    paths,
+    pathsKey: `${pathsKey}|binding:${pathBindingKey}`,
+    pathBinding,
+    pathCatalogAuthority,
+    loops,
+    loopsKey: `${loopsKey}|binding:${loopBindingKey}`,
+    loopBinding,
+    loopCatalogAuthority,
+  };
+}
+
+function samePreviewStageTwoKey(
+  left: X4UiEditorPreviewStageTwoKey,
+  right: X4UiEditorPreviewStageTwoKey,
+): boolean {
+  return samePreviewStageOneKey(left, right)
+    && left.pathsKey === right.pathsKey
+    && left.pathBinding === right.pathBinding
+    && left.pathCatalogAuthority === right.pathCatalogAuthority
+    && left.loopsKey === right.loopsKey
+    && left.loopBinding === right.loopBinding
+    && left.loopCatalogAuthority === right.loopCatalogAuthority;
+}
+
 function activePaintKeepOuts(
   presets: readonly X4UiEditorKeepOutPresetProjection[],
   activePresetId: KeepOutContextPresetId | null,
@@ -2893,6 +3158,7 @@ function refusedX4UiEditorSessionProjection(error: unknown): X4UiEditorSessionPr
 function projectX4UiEditorSessionFromSource(
   input: X4UiEditorSessionInput,
   sourceOverride?: X4UiWorkspaceSource,
+  previewCache?: X4UiEditorPreviewStageCache,
 ): X4UiEditorSessionProjection {
   try {
     const normalized = normalizeInput(input);
@@ -2909,7 +3175,22 @@ function projectX4UiEditorSessionFromSource(
     const loopStateAliases = resolveLoopStateAliases(normalized.raw);
     const loopAuthorityAliases = resolveLoopAuthorityAliases(normalized.raw);
     const suppliedLoopInput = loopStateAliases.value;
-    const catalogPreview = previewFor(
+    const stageOneKey = previewCache === undefined
+      ? null
+      : previewStageOneKeyFor(
+        previewCache.ownerToken,
+        source,
+        corpus,
+        normalized.profile,
+        normalized.selection,
+        normalized.colorEvidence,
+      );
+    const cachedStageOne = stageOneKey !== null
+      && previewCache?.stageOne !== undefined
+      && samePreviewStageOneKey(previewCache.stageOne.key, stageOneKey)
+      ? previewCache.stageOne.preview
+      : undefined;
+    const catalogPreview = cachedStageOne ?? previewFor(
       source,
       corpus,
       normalized.profile,
@@ -2919,6 +3200,10 @@ function projectX4UiEditorSessionFromSource(
       undefined,
       normalized.colorEvidence,
     );
+    if (previewCache !== undefined && stageOneKey !== null && cachedStageOne === undefined) {
+      previewCache.stageOne = { key: stageOneKey, preview: catalogPreview };
+      previewCache.stageTwo = undefined;
+    }
     const pathCatalog = pathCatalogFor(catalogPreview);
     const loopCatalog = loopCatalogFor(catalogPreview);
     const pathBinding = pathBindingFor(catalogPreview, normalized.profile, normalized.selection, pathCatalog);
@@ -3026,9 +3311,32 @@ function projectX4UiEditorSessionFromSource(
     // Stage two accepts only the already-reconciled path and loop state. Its
     // loop expansion is what authoritatively determines the iteration-scoped
     // sample catalog for stage three.
+    let stageTwoKey: X4UiEditorPreviewStageTwoKey | null = null;
+    let cachedStageTwo: X4UiPreviewPipelineResult | undefined;
+    if (paths !== undefined || loops !== undefined) {
+      if (previewCache !== undefined
+        && stageOneKey !== null
+        && pathReconciliation.status === 'accepted'
+        && loopReconciliation.status === 'accepted') {
+        stageTwoKey = previewStageTwoKeyFor(
+          stageOneKey,
+          paths,
+          paths === undefined ? undefined : suppliedPathBinding as X4UiEditorPathBinding | undefined,
+          paths === undefined ? undefined : suppliedPathCatalogAuthority,
+          loops,
+          loops === undefined ? undefined : suppliedLoopBinding as X4UiEditorLoopBinding | undefined,
+          loops === undefined ? undefined : suppliedLoopCatalogAuthority,
+        );
+        cachedStageTwo = stageTwoKey !== null
+          && previewCache.stageTwo !== undefined
+          && samePreviewStageTwoKey(previewCache.stageTwo.key, stageTwoKey)
+          ? previewCache.stageTwo.preview
+          : undefined;
+      }
+    }
     const sampleCatalogPreview = paths === undefined && loops === undefined
       ? catalogPreview
-      : previewFor(
+      : cachedStageTwo ?? previewFor(
         source,
         corpus,
         normalized.profile,
@@ -3038,6 +3346,9 @@ function projectX4UiEditorSessionFromSource(
         loops,
         normalized.colorEvidence,
       );
+    if (previewCache !== undefined && stageTwoKey !== null && cachedStageTwo === undefined) {
+      previewCache.stageTwo = { key: stageTwoKey, preview: sampleCatalogPreview };
+    }
     const sampleCatalog = sampleCatalogFor(sampleCatalogPreview);
     const sampleBinding = sampleBindingFor(
       sampleCatalogPreview,
@@ -3186,6 +3497,8 @@ export function projectX4UiEditorSession(input: X4UiEditorSessionInput): X4UiEdi
  */
 export function createX4UiEditorSessionOwner(workspace: unknown): X4UiEditorSessionOwner {
   const ownerWorkspace = workspace as EditorWorkspace;
+  const ownerToken = Object.freeze({});
+  const previewCache: X4UiEditorPreviewStageCache = { ownerToken };
   let source: X4UiWorkspaceSource;
   try {
     source = buildSource(normalizeInput({ workspace: ownerWorkspace }));
@@ -3215,6 +3528,8 @@ export function createX4UiEditorSessionOwner(workspace: unknown): X4UiEditorSess
       const capture = captureX4UiEditorSessionInput(input, ownerWorkspace);
       if (capture.refused) {
         previousProjection = undefined;
+        previewCache.stageOne = undefined;
+        previewCache.stageTwo = undefined;
         return refusedX4UiEditorSessionProjection('editor session input capture refused');
       }
       const signature = capture.signature;
@@ -3226,6 +3541,7 @@ export function createX4UiEditorSessionOwner(workspace: unknown): X4UiEditorSess
       const projection = projectX4UiEditorSessionFromSource(
         capture.input,
         source,
+        capture.signature === null ? undefined : previewCache,
       );
       previousProjection = signature === null ? undefined : { signature, projection };
       return projection;

@@ -38,6 +38,7 @@ import {
   X4_UI_EDITOR_SESSION_GAME_TRUTH,
   X4_UI_EDITOR_UNSELECTED_SOURCE,
   adoptX4UiEditorCanvasResult,
+  applyX4UiEditorSampleDraft,
   createX4UiEditorSessionOwner,
   parseX4UiEditorSampleInput,
   projectX4UiEditorSession,
@@ -2403,6 +2404,146 @@ async function run(): Promise<void> {
   assert.ok(sampleBinding, 'unprojected sample session must issue an editor-only binding');
   assert.ok(sampleExactCatalogAuthority, 'exact sample session must issue a catalog authority');
 
+  const sampleStageOwner = createX4UiEditorSessionOwner(sampleWorkspaceValue);
+  const sampleStageInput: X4UiEditorSessionInput = {
+    workspace: sampleWorkspaceValue,
+    corpus: canonical,
+    profile: sampleExactProfile,
+    selection: sampleSelection,
+  };
+  const sampleStageBase = sampleStageOwner.project(sampleStageInput);
+  const sampleStageAuthority = sampleStageBase.sampleCatalogAuthority;
+  const sampleStageBinding = sampleStageBase.sampleBinding;
+  assert.ok(sampleStageAuthority && sampleStageBinding, 'sample stage owner must issue the selected catalog authority');
+  const sampleStageCatalog = sampleStageBase.sampleCatalog;
+  assert.ok(sampleStageCatalog, 'sample stage owner must expose its immutable sample catalog');
+  const sampleStageNumberEntry = sampleStageCatalog.entries.find(entry => entry.expectedType === 'number');
+  assert.ok(sampleStageNumberEntry, 'sample stage owner must expose a numeric sample entry');
+  const sampleStageStringEntry = sampleStageCatalog.entries.find(entry => entry.expectedType === 'string');
+  assert.ok(sampleStageStringEntry, 'sample stage owner must expose a string sample entry');
+  const sampleStageState: X4UiEditorSampleState = {
+    catalogId: sampleStageCatalog.id,
+    source: sampleStageCatalog.sourceIdentity,
+    values: sampleStageCatalog.entries.map(entry => ({
+      id: entry.id,
+      value: entry.expectedType === 'number' ? 80 : entry.expectedType === 'boolean' ? true : 'Preview text',
+    })),
+  };
+  const sampleStageFirst = sampleStageOwner.project({
+    ...sampleStageInput,
+    samples: sampleStageState,
+    sampleBinding: sampleStageBinding,
+    sampleCatalogAuthority: sampleStageAuthority,
+  });
+  const sampleStageChangedState = updateX4UiEditorSampleState(
+    sampleStageFirst.samples,
+    sampleStageFirst.sampleCatalog,
+    sampleStageNumberEntry.id,
+    '90',
+    sampleStageFirst.sampleCatalogAuthority,
+  );
+  assert.equal(sampleStageChangedState.status, 'accepted', 'sample stage cache fixture update must be accepted');
+  const sampleStageSecond = sampleStageOwner.project({
+    ...sampleStageInput,
+    samples: sampleStageChangedState.samples,
+    sampleBinding: sampleStageBinding,
+    sampleCatalogAuthority: sampleStageAuthority,
+  });
+
+  recordSessionCausal(
+    'B119 sample-only owner projections reuse immutable catalog and stage-two previews',
+    sampleStageCatalog !== null && sampleStageAuthority !== undefined && sampleStageBinding !== undefined && sampleStageChangedState.status === 'accepted',
+    'sample-only projections reuse the source-owned stage-one catalog and reconciled stage-two sample catalog while each changed sample creates only a new final preview',
+    markSeamReached => {
+      markSeamReached();
+      return {
+        stageOneCatalogReused: sampleStageFirst.sampleCatalog === sampleStageBase.sampleCatalog,
+        stageTwoSampleCatalogReused: sampleStageSecond.sampleCatalog === sampleStageFirst.sampleCatalog,
+        finalPreviewChanged: sampleStageFirst.preview !== sampleStageBase.preview
+          && sampleStageSecond.preview !== sampleStageFirst.preview,
+        firstSampleAccepted: sampleStageFirst.sampleReconciliation.status === 'accepted',
+        secondSampleAccepted: sampleStageSecond.sampleReconciliation.status === 'accepted',
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.stageOneCatalogReused === true
+        && value.stageTwoSampleCatalogReused === true
+        && value.finalPreviewChanged === true
+        && value.firstSampleAccepted === true
+        && value.secondSampleAccepted === true;
+    },
+  );
+
+  recordSessionCausal(
+    'B119 sample draft apply is one transaction with bounded refusal and reset',
+    sampleStageFirst.samples !== undefined
+      && sampleStageFirst.sampleCatalog !== null
+      && sampleStageFirst.sampleCatalogAuthority !== undefined
+      && sampleStageStringEntry !== undefined,
+    'the draft preserves exact string spaces, invalid or missing typed values refuse without replacing the accepted state, and an empty raw value resets only its sample',
+    markSeamReached => {
+      markSeamReached();
+      if (sampleStageFirst.samples === undefined || sampleStageFirst.sampleCatalog === null || sampleStageFirst.sampleCatalogAuthority === undefined || sampleStageStringEntry === undefined) {
+        return { fixtureReady: false };
+      }
+      const applied = applyX4UiEditorSampleDraft(
+        sampleStageFirst.samples,
+        sampleStageFirst.sampleCatalog,
+        {
+          [sampleStageNumberEntry.id]: '90',
+          [sampleStageStringEntry.id]: ' exact staged value ',
+        },
+        sampleStageFirst.sampleCatalogAuthority,
+      );
+      const invalid = applyX4UiEditorSampleDraft(
+        sampleStageFirst.samples,
+        sampleStageFirst.sampleCatalog,
+        { [sampleStageNumberEntry.id]: 'not-a-number' },
+        sampleStageFirst.sampleCatalogAuthority,
+      );
+      const missing = applyX4UiEditorSampleDraft(
+        sampleStageFirst.samples,
+        sampleStageFirst.sampleCatalog,
+        { [sampleStageNumberEntry.id]: undefined } as unknown,
+        sampleStageFirst.sampleCatalogAuthority,
+      );
+      const reset = applyX4UiEditorSampleDraft(
+        sampleStageFirst.samples,
+        sampleStageFirst.sampleCatalog,
+        { [sampleStageNumberEntry.id]: '' },
+        sampleStageFirst.sampleCatalogAuthority,
+      );
+      return {
+        appliedAccepted: applied.status === 'accepted',
+        appliedNumber: applied.samples?.values.find(value => value.id === sampleStageNumberEntry.id)?.value,
+        appliedString: applied.samples?.values.find(value => value.id === sampleStageStringEntry.id)?.value,
+        invalidRefused: invalid.status === 'refused',
+        invalidRetained: invalid.samples === sampleStageFirst.samples,
+        missingRefused: missing.status === 'refused',
+        missingRetained: missing.samples === sampleStageFirst.samples,
+        resetAccepted: reset.status === 'accepted',
+        resetNumberPresent: reset.samples?.values.some(value => value.id === sampleStageNumberEntry.id) === true,
+        acceptedReferenceStable: applied.samples !== sampleStageFirst.samples,
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.appliedAccepted === true
+        && value.appliedNumber === 90
+        && value.appliedString === ' exact staged value '
+        && value.invalidRefused === true
+        && value.invalidRetained === true
+        && value.missingRefused === true
+        && value.missingRetained === true
+        && value.resetAccepted === true
+        && value.resetNumberPresent === false
+        && value.acceptedReferenceStable === true;
+    },
+  );
+
   recordSessionCausal(
     'causal-sampleless-preview-is-value-equivalent-and-accepted-samples-reproject',
     sampleBinding !== undefined && sampleExactCatalogAuthority !== undefined,
@@ -3296,6 +3437,91 @@ async function run(): Promise<void> {
   assert.equal(coexistSampled.preview.paths?.selections.length, 1);
   assert.equal(coexistSampled.preview.previewLoopSelections.length, 1);
   assert.equal(coexistSampled.preview.gameTruth, 'Not verified in game');
+
+  const ownerPathLoop = createX4UiEditorSessionOwner(loopPathWorkspaceValue);
+  const ownerPathLoopInput: X4UiEditorSessionInput = {
+    workspace: loopPathWorkspaceValue,
+    corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopPathSelection,
+    paths: loopPathState,
+    pathBinding: loopPathUnprojected.pathBinding,
+    pathCatalogAuthority: loopPathUnprojected.pathCatalogAuthority,
+    loops: loopPathLoopState.loops,
+    loopBinding: loopPathUnprojected.loopBinding,
+    loopCatalogAuthority: loopPathUnprojected.loopCatalogAuthority,
+  };
+  const ownerPathLoopBase = ownerPathLoop.project(ownerPathLoopInput);
+  const ownerPathLoopSampleEntry = ownerPathLoopBase.sampleCatalog?.entries[0];
+  const ownerPathLoopSampleState: X4UiEditorSampleState | undefined = ownerPathLoopSampleEntry === undefined
+    || ownerPathLoopBase.sampleCatalog === null
+    ? undefined
+    : {
+      catalogId: ownerPathLoopBase.sampleCatalog.id,
+      source: ownerPathLoopBase.sampleCatalog.sourceIdentity,
+      values: [{ id: ownerPathLoopSampleEntry.id, value: 'owner stage sample' }],
+    };
+  const ownerPathLoopSampled = ownerPathLoopSampleState === undefined
+    ? undefined
+    : ownerPathLoop.project({
+      ...ownerPathLoopInput,
+      samples: ownerPathLoopSampleState,
+      sampleBinding: ownerPathLoopBase.sampleBinding,
+      sampleCatalogAuthority: ownerPathLoopBase.sampleCatalogAuthority,
+    });
+  const ownerPathLoopChanged = ownerPathLoopSampled === undefined || ownerPathLoopSampled.sampleCatalog === null
+    ? undefined
+    : updateX4UiEditorSampleState(
+      ownerPathLoopSampled.samples,
+      ownerPathLoopSampled.sampleCatalog,
+      ownerPathLoopSampleEntry!.id,
+      'owner stage sample changed',
+      ownerPathLoopSampled.sampleCatalogAuthority,
+    );
+  const ownerPathLoopResampled = ownerPathLoopChanged?.status !== 'accepted'
+    || ownerPathLoopSampled === undefined
+    ? undefined
+    : ownerPathLoop.project({
+      ...ownerPathLoopInput,
+      samples: ownerPathLoopChanged.samples,
+      sampleBinding: ownerPathLoopSampled.sampleBinding,
+      sampleCatalogAuthority: ownerPathLoopSampled.sampleCatalogAuthority,
+    });
+  recordSessionCausal(
+    'B119 owner reuses stage-one and reconciled stage-two previews for selected path-loop sample edits',
+    ownerPathLoopSampled !== undefined && ownerPathLoopChanged !== undefined && ownerPathLoopResampled !== undefined,
+    'selected path and loop authorities remain exact while sample-only owner projections reuse both immutable catalog stages and reproject only the final sample-bound preview',
+    markSeamReached => {
+      markSeamReached();
+      if (ownerPathLoopSampled === undefined || ownerPathLoopChanged === undefined || ownerPathLoopResampled === undefined) return { fixtureReady: false };
+      return {
+        pathReconciliationsAccepted: ownerPathLoopBase.pathReconciliation.status === 'accepted'
+          && ownerPathLoopSampled.pathReconciliation.status === 'accepted'
+          && ownerPathLoopResampled.pathReconciliation.status === 'accepted',
+        loopReconciliationsAccepted: ownerPathLoopBase.loopReconciliation.status === 'accepted'
+          && ownerPathLoopSampled.loopReconciliation.status === 'accepted'
+          && ownerPathLoopResampled.loopReconciliation.status === 'accepted',
+        stageOnePathCatalogReused: ownerPathLoopSampled.pathCatalog === ownerPathLoopBase.pathCatalog
+          && ownerPathLoopResampled.pathCatalog === ownerPathLoopBase.pathCatalog,
+        stageTwoSampleCatalogReused: ownerPathLoopSampled.sampleCatalog === ownerPathLoopBase.sampleCatalog
+          && ownerPathLoopResampled.sampleCatalog === ownerPathLoopBase.sampleCatalog,
+        finalPreviewReprojected: ownerPathLoopSampled.preview !== ownerPathLoopBase.preview
+          && ownerPathLoopResampled.preview !== ownerPathLoopSampled.preview,
+        sampleAccepted: ownerPathLoopSampled.sampleReconciliation.status === 'accepted'
+          && ownerPathLoopResampled.sampleReconciliation.status === 'accepted',
+      };
+    },
+    observed => {
+      if (observed === null || typeof observed !== 'object') return false;
+      const value = observed as JsonRecord;
+      return value.pathReconciliationsAccepted === true
+        && value.loopReconciliationsAccepted === true
+        && value.stageOnePathCatalogReused === true
+        && value.stageTwoSampleCatalogReused === true
+        && value.finalPreviewReprojected === true
+        && value.sampleAccepted === true;
+    },
+  );
 
   const pathWorkspaceValue = pathWorkspace();
   const pathWorkspaceJson = JSON.stringify(pathWorkspaceValue);

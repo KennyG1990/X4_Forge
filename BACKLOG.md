@@ -15,13 +15,35 @@ existing Lua analyzer, project validator, package/export/deploy diagnostics, IDE
 reconciliation corrected the original severity boundary: literal `24+` columns block; `13-23` warn and require game
 verification because official X4 9.00 contains 13-column tables. Dynamic shapes say `not statically verified`; clean
 output says only `No known rule violated` and `Not verified in game`.
-Plan: `docs/plans/2026-08-10-b119-x4-ui-editor-linter-first.md`. Source-first renderer design:
-`docs/plans/2026-08-10-b119-x4-ui-editor-source-first-design.md`. Owner: GitHub #41.
+Primary current plan: `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`. Historical source-first records:
+`docs/plans/2026-08-10-b119-x4-ui-editor-linter-first.md` and `docs/plans/2026-08-10-b119-x4-ui-editor-source-first-design.md`.
+Owner: GitHub #41.
 The final dogfood fixture is the supplied `C:\Users\Moshi\Desktop\# AI Influence mod UI design\design_handoff_ai_influence`
 bundle. All twelve reference images (`00` plus `1a`-`1j`) must be visually inspected and the finished Forge must author
 the real X4 Lua rather than porting the HTML/CSS prototype. Build recommended screen `1b` first, then the remaining
 comm-link, confirmation-gate, and hub screens. Compare Forge output to the 2560x1440 references, preserve the measured
 conversation-wheel/NPC keep-outs, and require deployed X4 screenshots before any 1:1 claim.
+**2026-09-09 source-replay evidence close — PARTIAL / FULL B119 IN_PROGRESS:** stable evidence is retained under
+dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay/ with the installed Forge preview, native compact/
+expanded screenshots, 1d reference, current-session log, and a fresh read-only real-mod receipt. The replay selected
+ui/addons/ai_influence_chat/aic_menu.lua -> menu.display at 2560x1440/effective 1.4 with seven branch arms, loop 3,
+and 31 samples; Apply retained the target and export remained Not verified in game. Native compact/expanded are the
+ordinary current communication-menu state, not the pending military-request preview, so no pixel comparison is valid.
+The log shows display ENTER, display DONE, and the native interactions despite the MD semantic error and reserveScrollBar
+diagnostics; the linter still correctly blocks clean validation without implying whole-frame rejection. The fresh real-mod
+result is exit 1 with Lua 0/3, X4 UI 0/3 (unverified 6, truncated 4), MD pitfall 1/0, and
+md/ai_influence_conversation.xml:98. Literal 12 remains clean, 13-23 warning/game-check, and 24+ blocking from the
+reproduced incident; this is not a universal above-12 claim. Next actions are full broad validation, parent-owned
+exact-path commit/push and GitHub/Notion/Drive readback, then a separate fresh write-gated MD correction if authorized.
+Do not promote B119 beyond IN_PROGRESS / PARTIAL.
+**2026-09-09 broad validation/review checkpoint — PARTIAL / FULL B119 IN_PROGRESS:** typecheck, lint, corrected
+oracle sweep 134/134, precommit, build, evidence identities, cleanup, and protected-hash checks passed. Focused
+SourceEditor is 19/19 and the corrected Apply sentence is asserted. The required monolithic E2E gate is RED: after
+an accidental unrelated marketing-spec inclusion, the canonical inventory crossed the earlier failure point and
+then terminated with Windows 0xC0000409; a separate tail batch terminated with the same code at a different boundary.
+Bounded behavior batches are green (focused B119 10/10 and XML patch 2/2), but this is not a 106/106 full-suite pass.
+No commit/push or external projection is claimed. Keep the crash as an open harness issue, keep the real-mod :98
+finding write-gated, and continue B119 IN_PROGRESS / PARTIAL.
 **Corrective release/native rerun checkpoint 2026-09-08 — VERIFIED CORRECTIVE UNIT / FULL B119 PARTIAL:** stable
 `0.0.77` is built, published exactly once on OpenVSX, independently downloaded with exact local/public parity,
 installed in Antigravity, and its installed runtime oracles pass `134/134`. The stable VSIX is
@@ -72,6 +94,39 @@ commits, the GitHub comment, and the new `1e` section at top; Google Doc
 `ANLCKQlkjRNrBOBicsiCrOHxl6dbIHou63qo8wwCmaIrSSnTF1QHuPsI-7CRVMlv8mg45yMKzku-WwE02RH0VC_2MfNmQ3JuHiC_XfQ2YXP3`.
 All three external projections are complete; no OpenVSX publication belongs to this unit. The records-only close
 remains parent-owned. Overall B119 stays open and `IN_PROGRESS / PARTIAL`.
+**Next bounded `1d` unit specified 2026-09-08 — `SPECIFIED` / FULL B119 `IN_PROGRESS / PARTIAL`:** the authoritative
+reference requires `PENDING — MILITARY REQUEST`, `tx aic-7f31c2`, `They provide / You provide / Relation effect /
+Assets used / Whitelist`, exactly three actions, and an informational footer. The current screenshot is expanded
+`aic_comm.lua -> comm.display` (`1c`), which intentionally owns exactly three choices and no `REVIEW`; it shows
+`ON THE TABLE - PAYMENT REQUESTED`, `ref AIC-7F31C2`, `Reason given`, `Ships committed`, and `Clearance`. Its observed
+mismatch is header/tx/five-term/footer copy and semantics. It says nothing about compact `aic_menu` `REVIEW` or `END`
+behavior. The reference and existing route ownership still require exactly three/no `REVIEW` on both proposal
+surfaces; if compact structural removal is needed and Forge cannot encode it, the mandated Luna worker may apply a
+bounded direct source patch, then import/replay/read back through Forge without claiming Forge authored the deletion.
+Preserve the three payment routes, refusal-as-live-chat, and existing 1c auto-promotion. Baseline gates are commgate
+`PASS 5 states / 0 failures`, commfullgate
+`PASS 6 / 0`, and vocabgate `FAIL` with two pre-existing `aic_sheet.lua:118` findings (`tx`, `- idempotent`); no
+planning-only repair is made. Full scope, acceptance, and future Forge/native proof are in
+`docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`; no implementation or validation is claimed here.
+**Current critical-path blocker continuation 2026-09-08 — installed Forge `1d` false-success, `SPECIFIED` / FULL B119
+`IN_PROGRESS / PARTIAL`:** the installed sidecar is Forge `v1.0.509` with extension `0.0.77`, selecting exact current
+`aic_menu.lua -> menu.display` (`aic_menu.lua` SHA-256
+`6DDA7D81AD7073C405B15DB911AA68777B9DAFA1DE33EE0F56855657C3A3CA07`). It retained six choices (`735 then`, `741
+then`, `745 then`, `807 else`, `827 then`, `833 then`), loops `757=5` / `829=3`, and all `29/29` scalar samples,
+yet reported `rendered/current`, partial session, and `canRender=true`. The exact replay produced Program `91` ops /
+`13` rows, Scene `16` widgets / `18` texts with no three proposal action labels, and Paint `913` commands / `396`
+glyph commands with only `7` tinted glyphs, all from SEND `858` and END `860`. `[REPRODUCED]` Untinted
+glyph-alpha-blit commands are intentionally skipped by source composition; action row `828` applies, while expanded
+`832/834` operations remain unresolved because `slot` does not specialize to `(slot - 1) * 4 + 1`. This is the current
+critical-path fidelity blocker, not a completed repair. The installed receipt is not repository-source parity evidence.
+The prior exact-source tests were too narrow; color evidence, missing `TOK.header`, and the strict loop/action contracts
+are recorded in the plan. Replay-time sample clearing and the roughly `3.5` minute full-pipeline rerun are a deferred
+performance/UX concern, not immediate repair scope.
+**Next exact action:** add the fail-first exact-current-source tests in the existing CallModel/Layout/Scene/Paint/Canvas/
+Preview/Session/SourceEditor owners, then run the focused tests, `npm run typecheck`, and `npm run lint`; rebuild and
+visually replay the installed product before any separately authorized deploy/native-X4 validation. Preserve
+`Not verified in game`; do not fake unknown colors or paint untinted diagnostic glyphs, and do not promote B119 beyond
+`IN_PROGRESS / PARTIAL`.
 **Original-brief audit 2026-09-05 — 5/6 VERIFIED / 1/6 PARTIAL:** exact hand-written Lua round-trip, all eleven
 linter trap families including pre-export `addTable(24)` rejection, deploy-bound `Not verified in game` truth, and the
 fixed-drawable X4 user-scale contract are `VERIFIED`. All four keep-out contexts now also have installed, non-null,
