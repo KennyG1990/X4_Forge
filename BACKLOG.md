@@ -29,6 +29,10 @@ preserving current fatal/warning/not-applicable/status/exit semantics. Manifest/
 remain explicit, and unsafe paths/source fields do not enter the new object. Evidence:
 `dev-docs/b119-ai-influence-dogfood/x4-ui-verification-gap-census/`. Same-state pending-branch Forge/X4 parity and
 the real-mod MD correction remain separate write-gated work; no overall B119 completion or arbitrary-Lua/C++ claim.
+Pushed checkpoint `5d2defa5023dea5ab3cdd6d70feec2945c2c8c08` has exact HEAD/tracking/direct-remote parity. Clean external readbacks:
+GitHub #41 comment `5608587951`; Notion page `3b84618e-d15b-8190-821e-c0eb96f43d5a` at
+`2026-09-09T20:54:06.015Z`; and Google Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, revision
+`ANLCKQnmN-ubG30s8B-ihV7zijc3aS96DsuRrm6GPNUf7Z-eX09SkpTTwzwX_HivuzBpIIAn7C7vD713-pXqiFB1c7KINEODyp2P4-Dbo_wv`.
 The final dogfood fixture is the supplied `C:\Users\Moshi\Desktop\# AI Influence mod UI design\design_handoff_ai_influence`
 bundle. All twelve reference images (`00` plus `1a`-`1j`) must be visually inspected and the finished Forge must author
 the real X4 Lua rather than porting the HTML/CSS prototype. Build recommended screen `1b` first, then the remaining

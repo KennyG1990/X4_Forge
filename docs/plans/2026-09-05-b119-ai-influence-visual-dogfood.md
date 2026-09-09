@@ -4165,3 +4165,39 @@ real-game/product scope.
   total label reduce that false-confidence risk without changing exit semantics.
 - **Global/project lessons banked:** repository plan, backlog, handoff, README, and receipt only; no external AAR
   ledger, capability map, mod, game, installed, or service path changed.
+
+## 2026-09-09 POST-PUSH — verification-gap census external projection/readback
+
+### CLOSE
+
+- **Status:** `VERIFIED` for this records-only post-push projection/readback; the bounded implementation remains
+  `VERIFIED` and overall B119 remains `IN_PROGRESS / PARTIAL`.
+- **Pushed checkpoint:** `HEAD`, tracking, and direct remote matched
+  `5d2defa5023dea5ab3cdd6d70feec2945c2c8c08`, titled
+  `feat(b119): add bounded X4 UI verification-gap census`, with exactly six paths, `1,269` insertions, and `163`
+  deletions. Final manual precommit and commit-hook precommit both ended `[precommit] OK`.
+- **Independent validation:** selftest `23/23`; live `81/81` selected/read, `0` failed, `0` fatal, `6` visible
+  not-applicable findings, `29` warnings, `70` unverified, `26` truncated, `13,731` observed gaps, `70` affected
+  files, `30` rows, `12` top files, row sum `13,731`, and `evidenceComplete=false` only due
+  `truncated-files: 26`. Ordering, bounds, no-leakage, typecheck, scoped ESLint, and diff checks passed. Protected
+  hashes were unchanged; X4 was absent; sidecar PID `23764`; ports `3200/3201` were clear.
+- **GitHub readback:** #41 remains open. Comment `5608587951` at
+  `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5608587951` reads back among `108` comments with
+  exactly one matching heading and the exact commit and boundary.
+- **Notion readback:** page `3b84618e-d15b-8190-821e-c0eb96f43d5a` at
+  `https://app.notion.com/p/3b84618ed15b8190821ec0eb96f43d5a`, last edited
+  `2026-09-09T20:54:06.015Z`, has exactly one matching heading, Status `In Progress`, Evidence Grade `Partial`, and
+  the exact commit/comment/boundary.
+- **Google Drive readback:** Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, final revision
+  `ANLCKQnmN-ubG30s8B-ihV7zijc3aS96DsuRrm6GPNUf7Z-eX09SkpTTwzwX_HivuzBpIIAn7C7vD713-pXqiFB1c7KINEODyp2P4-Dbo_wv`
+  has `751` paragraphs, exactly one matching `HEADING_2`, the exact commit/comment, final paragraph exactly
+  `Boundary: preview for layout; game for truth.`, and zero double-period matches.
+- **Google correction trigger:** the first append again used extracted paragraph `endIndex - 1`; readback showed
+  final `truth..`. One exact revision-locked `replaceAllText` changed one occurrence and final readback was clean.
+  This is a recurrence/process failure. The strengthened global rule forbids extracted `endIndex - 1` as an append
+  primitive and requires `endOfSegmentLocation` with explicit `tabId`, a range refetch before styling, and final
+  paragraph/style readback.
+- **Boundary:** no product, implementation, test, evidence, mod, game, installed, config, runtime, deploy, release,
+  capability-map, or OpenVSX change belongs to this records close. Same-state pending-branch parity and the real-mod
+  MD correction remain separate; preview is for layout, game is for truth.
+- **Suggested commit title:** `docs(b119): close verification-gap census external readbacks`.
