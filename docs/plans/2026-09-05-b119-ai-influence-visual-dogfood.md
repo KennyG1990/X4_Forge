@@ -4270,3 +4270,20 @@ Lane: `FULL`
 
 - **Already-triggered tooling event:** the first read-only PowerShell hash-table probe failed to parse; a corrected probe passed. Retain this as an AAR/tooling event, not as runtime evidence or permission to re-probe protected state. Final close AAR remains pending.
 - **Boundary:** no source/mod/deploy, game, installed Forge, configuration, service, Git, GitHub, Notion, Google Drive, or other external state has been touched by this continuation record.
+
+## 2026-09-09 POST-PUSH — same-state pending-branch parity specification external projection/readback
+
+### CLOSE
+
+- **Status:** `VERIFIED` for this records-only external projection/readback close. The parity execution remains `SPECIFIED` and pending, and overall B119 remains `IN_PROGRESS / PARTIAL`; this is not a runtime, in-game, fidelity, release, or completion claim.
+- **Committed checkpoint:** `HEAD`, tracking, and direct remote matched `bf9472aee4b7550e3d5fc8241f699dc424727fc2`, titled `docs(b119): specify same-state pending-branch parity`. The commit contains only the two owned documentation paths; full precommit and the commit-hook precommit both passed.
+- **GitHub readback:** issue #41 remains open. Comment `5609649730` at `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5609649730` reads back exactly once.
+- **Notion readback:** page `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back exactly one heading `B119 same-state pending-branch parity specified`, with Status `In Progress`, Evidence Grade `Partial`, and the exact commit/comment/boundary.
+- **Google Drive readback:** Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back exactly one matching `HEADING_2` at `153701:153749`, content through `154908`, the exact commit/comment/boundary, and final revision `ANLCKQn_I7mFBERcjhLa-jDvltXL_FUOU0s5-wpz65iVP4RuA3gETEZ_d9-V81LOhqLWxDa1ZoPPHcaSkqifPcpvPkZ2Z5u4MjQZgviB4Epi`.
+- **Boundary:** `Boundary: preview for layout; game for truth.` This close is records-only: no game, save, real-mod, deploy, Forge selection, installed product, configuration, runtime, capability-map, or other product state changed. The protected-state gate remains pending; the machine was reported quiet, but the exact `go` authorization has not been supplied. Pair A remains optional compact `menu.display`; missed transient capture remains `UNPROVEN`. Pair B remains the required expanded `aic_comm.lua -> comm.display` pair with matched source/state/profile.
+- **Capability-map delta:** none.
+
+### AAR
+
+- **Triggered parent-side tooling AAR:** two trusted-read loader attempts failed locally because `atob` and then `TextEncoder` were unavailable; a Windows `ReadAllText` exact-character-count loader succeeded before any Google write. A metadata-fields probe including an unsupported raw Docs `url` returned `400` and was corrected by omitting `url`. A read-only PowerShell Git probe initially parsed `@{upstream}` as a hash literal and succeeded after quoting. These are tooling events, not product/runtime evidence.
+- **Suggested commit title:** `docs(b119): close same-state parity specification readbacks`.

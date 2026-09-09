@@ -3,14 +3,14 @@
 Date: 2026-09-09
 Project: `F:\DEV_ENV\X4_Forge` — B119 source-faithful X4 Lua UI editor and AI Influence visual dogfood.
 Overall status: `IN_PROGRESS / PARTIAL`.
-This bounded planning close: `SPECIFIED`; no runtime verification or completion claim.
+This bounded handoff records the committed `SPECIFIED` parity plan and a `VERIFIED` records-only external projection/readback; no runtime verification or completion claim.
 
 ## Session-start brief
 
 - **Project identity:** X4 Forge B119; the current unit is same-state pending-branch Forge/X4 parity for AI Influence.
 - **Current authority:** Agent Brain recall was weak and unrelated. The current handoff and live state below are authoritative.
-- **Commit baseline:** `HEAD == origin/main == direct remote == 62dcbaa0997f802422483ec1f892c08a4236d050`, titled `docs(b119): close verification-gap census external readbacks`.
-- **Index/worktree baseline:** the staged index was empty before this edit. The only owned uncommitted change is the current `SPECIFIED` section in `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, specifying same-state pending parity. Unrelated dirty and untracked paths pre-existed, are not owned, and must be preserved; do not enumerate or alter them.
+- **Commit baseline:** `HEAD == origin/main == direct remote == bf9472aee4b7550e3d5fc8241f699dc424727fc2`, titled `docs(b119): specify same-state pending-branch parity`.
+- **Index/worktree baseline:** the specification commit contains only the two owned documentation paths; full precommit and the commit-hook precommit both passed. This follow-up is a records-only documentation close in those same two paths. Unrelated dirty and untracked paths pre-existed, are not owned, and must be preserved; do not enumerate or alter them.
 - **Installed state:** Forge `0.0.77` sidecar `http://127.0.0.1:60836`, PID `23764`; the app reports `v1.0.513`, commit `835b59d`. Antigravity is open; X4 is absent; the machine is quiet.
 - **Live selection:** `Player_Elite_Escort`, workspace `ws_0b867b27e92e63432041872c`.
 - **Addressed AiLive authority:** `x4 AiLive` workspace `ws_7478dbf3f00d9ec858806765`, version `1788928293145`, workspace hash `d04e3534e010b727`, snapshot hash `e3fbf946799087e6`, `2930` nodes, source folder `F:\DEV_ENV\projects\Mods\X4Mods\x4_ai_influence`. The read was addressed/read-only and did not switch the live selection.
@@ -69,17 +69,24 @@ The user must reply `go` to the exact authorization paragraph already presented 
 
 ## Acceptance and rollback
 
-- Only this handoff is owned by this bounded transfer; the plan diff remains the parent’s separate uncommitted work.
+- Only the two repository documentation paths are owned by this repository transfer; the parent external bookkeeping is already completed and read back, and no protected product/runtime state operation is in scope.
 - Pair B must be a nonzero current Forge preview and visible native expanded frame with exact `aic_comm.lua -> comm.display` target/source/state/profile and required selection identity. Pair A is optional and its absence is an explicit gap.
 - Source/deployed hashes and save hashes must remain unchanged, or changed saves must be restored byte-for-byte. No DisplayView/Lua failure may be present. No runtime completion claim follows from this specification.
 - Rollback is exact-byte restoration from the temporary save manifest, restoration of `Player_Elite_Escort`, and verification of source/deployed hashes and X4 absence. No sim reset is permitted.
 
 ## Commit question
 
-Was the current `SPECIFIED` plan/handoff commit made? **Not yet at worker time.** Suggested title: `docs(b119): specify same-state pending-branch parity`. The parent will run precommit and the exact-path commit/push.
+Was the `SPECIFIED` parity plan commit made? **Yes:** `bf9472aee4b7550e3d5fc8241f699dc424727fc2`, titled `docs(b119): specify same-state pending-branch parity`. The GitHub, Notion, and Google projections for that checkpoint were also completed and read back exactly once. This records-only follow-up remains the parent’s next exact-path commit/push, with suggested title `docs(b119): close same-state parity specification readbacks`.
 
 ## Current bounded close
 
-- Status: `SPECIFIED` planning/state-transfer close; B119 remains `IN_PROGRESS / PARTIAL`.
-- No runtime, test, build, browser, game, mod, deploy, save, config, or external-record action was performed by this handoff edit.
-- Required worker checks: `git diff --check -- SESSION-HANDOFF.md`; review the owned diff only. No broad tests.
+- Status: `VERIFIED` for the records-only post-push external projection/readback close; parity execution remains `SPECIFIED` and pending; B119 remains `IN_PROGRESS / PARTIAL`.
+- **Committed checkpoint:** `HEAD`, tracking, and direct remote matched `bf9472aee4b7550e3d5fc8241f699dc424727fc2`, titled `docs(b119): specify same-state pending-branch parity`; the commit contains only the two owned documentation paths, and full precommit plus commit-hook precommit passed.
+- **GitHub readback:** issue #41 remains open; comment `5609649730` at `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5609649730` reads back exactly once.
+- **Notion readback:** page `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back exactly one heading `B119 same-state pending-branch parity specified`, Status `In Progress`, Evidence Grade `Partial`, and the exact commit/comment/boundary.
+- **Google Drive readback:** Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back exactly one matching `HEADING_2` at `153701:153749`, content through `154908`, the exact commit/comment/boundary, and final revision `ANLCKQn_I7mFBERcjhLa-jDvltXL_FUOU0s5-wpz65iVP4RuA3gETEZ_d9-V81LOhqLWxDa1ZoPPHcaSkqifPcpvPkZ2Z5u4MjQZgviB4Epi`.
+- **Boundary:** `Boundary: preview for layout; game for truth.` No runtime, game, save, mod, deploy, Forge-selection, installed-product, configuration, capability-map, or other product-state action was performed by this handoff edit. The protected-state gate remains mandatory: machine quiet was reported, but the user has not supplied the exact `go` authorization. Pair A remains optional compact `menu.display` and is `UNPROVEN` if its transient capture is missed; Pair B remains the required expanded `aic_comm.lua -> comm.display` same-target pair.
+- **Capability-map delta:** none.
+- **Triggered parent-side tooling AAR:** two trusted-read loader attempts failed locally because `atob` and then `TextEncoder` were unavailable; a Windows `ReadAllText` exact-character-count loader succeeded before any Google write. A metadata-fields probe including an unsupported raw Docs `url` returned `400` and was corrected by omitting `url`. A read-only PowerShell Git probe initially parsed `@{upstream}` as a hash literal and succeeded after quoting. These are tooling events, not product/runtime evidence.
+- Required worker checks for this documentation follow-up: `git diff --check -- SESSION-HANDOFF.md docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`; review the diff limited to the two owned files; exact text/rg checks for the commit, external identifiers/revision, `SPECIFIED`, `IN_PROGRESS / PARTIAL`, and the mandatory exact-go boundary. No broad tests.
+- Suggested commit title: `docs(b119): close same-state parity specification readbacks`.
