@@ -4201,3 +4201,72 @@ real-game/product scope.
   capability-map, or OpenVSX change belongs to this records close. Same-state pending-branch parity and the real-mod
   MD correction remain separate; preview is for layout, game is for truth.
 - **Suggested commit title:** `docs(b119): close verification-gap census external readbacks`.
+
+## 2026-09-09 CONTINUATION — SPECIFIED same-state pending-branch Forge/X4 parity
+
+Status: `SPECIFIED`
+
+Task: Run the next bounded B119 same-state pending-branch Forge/X4 parity check using the existing visual census and source-replay evidence. Execution has not begun.
+
+Lane: `FULL`
+
+### PLAN
+
+- **Bounded unit:** after the mandatory user write gate, reproduce the `/seedworld` pending branch in Forge and X4 from the supplied same-state baseline, produce the two possible evidence pairs below, and classify parity only when target, source, state, and profile identity match.
+- **Control-flow correction:** `/seedworld` synchronously sets `menu._pendingAction` and calls `aic_menu.lua -> menu.display`. With `menu.updateInterval = 0.1` seconds, the next `onUpdate` sees the pending state and opens `aic_comm.lua -> comm.display`. Compact `menu.display` is therefore transient and may be practically uncapturable. An expanded X4 `comm.display` frame is not comparable to a compact Forge `menu.display` preview even though both read the same pending action.
+- **Reliable proof path:** first create a separate exact-source Forge preview for `aic_comm.lua -> comm.display` using identical `/seedworld` pending values, choices, transcript/context, profile/drawable/scale, and any required source-bound path/loop/sample selections; compare that preview only with the native expanded `comm.display` capture. The existing `forge-preview.png` is compact `menu.display` and cannot be pixel-compared with expanded native evidence.
+- **Evidence-pair shape:** Pair A is the optional compact `menu.display` Forge/native pair, valid only if the transient native compact frame is actually captured. Pair B is the required expanded `comm.display` Forge/native pair and is the reliable same-target pair. If compact native capture is missed, compact parity is `UNPROVEN`; the expanded pair is not a substitute.
+- **Assumptions and unresolved facts:** the exact `/seedworld` pending values, choices, transcript/context, profile/drawable/scale, and any required source-bound path/loop/sample selections remain to be captured in both matching targets. No runtime fact is inferred before capture.
+- **Authoritative references:** the twelve supplied design/reference images and README; `dev-docs/b119-ai-influence-dogfood/visual-release-20260905/CENSUS.md`; `dev-docs/b119-ai-influence-dogfood/in-game-20260909-source-replay/README.md`; the full workspace authorities and source/deployed SHA-256 parity recorded below; and the full save baseline recorded below.
+- **In scope after the mandatory user write gate:** create exact temporary byte backups of `autosave_01`-`autosave_03`; switch Forge only temporarily to `x4 AiLive`; create the exact-source Pair B `aic_comm.lua -> comm.display` preview and, if feasible, Pair A `aic_menu.lua -> menu.display`; launch X4, load `autosave_03`, invoke `/seedworld`, capture the compact transient before promotion if possible and the expanded pending state for Pair B; record pending values, choices, transcript/context, source identity, drawable/profile/scale, source-bound path/loop/sample selections, and log evidence; restore `Player_Elite_Escort` selection; quit without saving; restore any autosave whose hash changes.
+- **State boundary:** `/seedworld` writes real AI Influence memories/intel/world-event/relation-cache state in the loaded save memory. Do not use sim reset.
+- **Out of scope:** source/mod/deploy edits; confirmation, payment, or refusal actions; manual save; full design correction; arbitrary-Lua/Helper/widget completion; universal C++ acceptance; publication/release; and universal pixel-perfect claims.
+- **Risks and authorization boundaries:** autosave persistence of seeded state; Forge selection drift; UI close/crash; transient compact capture loss; and invalid parity from target, source, state, or profile mismatch. The real-mod/game/config write gate remains mandatory and has not yet been crossed. This record authorizes no runtime, protected-state, or external-state operation.
+- **Rollback/checkpoint:** exact autosave byte backups plus pre/post hashes; restoration of the original Forge workspace selection; and source/deployed hash verification. No sim reset is permitted.
+- **Acceptance criteria:** only this owned plan file changes for the specification append; Pair B produces a nonzero current Forge preview and visible native frame with exact `aic_comm.lua -> comm.display` source identity and matched pending values, choices, transcript/context, drawable/profile/scale, and required source-bound selections; Pair A is optional and its absence is an explicit remaining gap, not a Pair B failure; source/deployed files remain unchanged; saves remain unchanged or are exact-byte restored; no DisplayView/Lua failure; retained screenshots and log receipt; and the parity classification does not overstate fidelity. All existing source/deployed/save/no-failure/rollback/evidence requirements remain in force. Overall B119 remains unproven beyond this bounded run.
+- **Required validation and negative path:** validate the exact target/source/state/profile identity, Forge bitmaps, native frames, pending values, choices, transcript/context, drawable/profile/scale/path/loop/sample evidence, source/deployed hashes, and save hashes. Geometry or text comparison across target mismatch is invalid. Ordinary-state native evidence does not count; no auto-confirm and no save; any source/deploy/save drift stops the run and is repaired before close.
+- **Evidence locations:** `dev-docs/b119-ai-influence-dogfood/same-state-pending-parity-20260909/`.
+
+### BASELINE
+
+- **Full workspace authorities:** current live selected workspace is `Player_Elite_Escort`, workspace ID `ws_0b867b27e92e63432041872c`. The addressed `x4 AiLive` read is workspace ID `ws_7478dbf3f00d9ec858806765`, version `1788928293145`, workspace hash `d04e3534e010b727`, snapshot hash `e3fbf946799087e6`, `2930` nodes, `1` text file, and `sourceFolder` `F:\DEV_ENV\projects\Mods\X4Mods\x4_ai_influence`. The addressed read did not switch the live selected workspace.
+- **Installed baseline:** Forge `0.0.77`, sidecar `http://127.0.0.1:60836`, PID `23764`; X4 absent; installed extension reported `v1.0.513`, commit `835b59d`.
+- **Full current source/deployed UI-file parity:** the supplied source and deployed copies match for each listed file: `aic_menu.lua` `8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD`; `aic_comm.lua` `5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E`; `aic_sheet.lua` `682ED230C3ECE1C90C44C25DCA63C026B6182C2FCE4227382202B0AF16286101`; `aic_uix.lua` `C2223F4CDE3178B402F6D474B7AE3A82056A31AF0BECE9BEE7CE9E46DF70DB72`; `md/ai_influence_conversation.xml` `2E064D2B270AB19DC6902C30CAE1B76EE88E180A0DC130488D23E5FC89536BD7`; `content.xml` `A44FDA0C8F3550B3B6C507F9C61FFA7BAAAD0D874807162C4101A5FAB3C13AFC`; `ui.xml` `BB26D38B14AC875F020140E9D19A9EA70F14BB18B27CDFBCCBE099872A6603E5`.
+- **Full save baseline:** `autosave_01.xml.gz` is `72,272,181` bytes, timestamp `2026-09-05T19:23:19.2317283Z`, SHA-256 `4C8ED45E72B579656493A4BEEAEDCAF31E9664BDDE4237BFFC2459C15C6D1242`; `autosave_02.xml.gz` is `70,805,761` bytes, timestamp `2026-09-05T20:43:28.3049108Z`, SHA-256 `0C300066ED7DC88263195CDA6CF255ACE7D75F8DEA8A3F3204D7514506727C0A`; `autosave_03.xml.gz` is `73,081,241` bytes, timestamp `2026-09-05T22:03:38.9988977Z`, SHA-256 `5D764E9562A7B3F6E6540F96E9150459E67C3D81E81890FC821F896C8C32B956`.
+- **Debuglog baseline:** `debuglog.txt` is `308,232` bytes and `2,031` lines, last-write UTC `2026-09-09T09:43:31.8806390Z`, SHA-256 `BCDEE4B4A56E4580DCAFCF95F73FBA4FD066DA4741AE54D2DCB78979D3750451`; X4 remained absent. This is the post-run log delta boundary.
+- **Existing record baseline:** the owned file already contains the visual census and source-replay records being reused. No duplicate visual census is being created, and no runtime work has been performed for this continuation.
+
+### RECONCILE
+
+- **Existing capability reused:** the existing visual census, source-replay README, source/deployed parity evidence, Forge preview path, and X4 capture path; this continuation adds only the same-state pending-branch parity record.
+- **Resources and couplings checked:** the supplied design/reference evidence; `aic_menu.lua -> menu.display`; `aic_comm.lua -> comm.display`; `/seedworld` pending state; `HubPending`; loaded-save memory; full Forge workspace authorities; source/deployed identity; choices; transcript/context; drawable/profile/scale; source-bound path/loop/sample selections; and log evidence. `HubPending` shares the pending values, but that shared data does not make different layout targets pixel-comparable.
+- **Target boundary:** compact `menu.display` and expanded `comm.display` are separate layout targets. The same pending action does not establish geometry/text comparability across them; the source, target, state, and profile must all match.
+- **Capability-map delta:** none proposed; no capability map or other path outside this owned record is changed.
+- **Plan changes:** the parent read-only reconciliation replaces the prior expanded-state fallback with Pair B as a separate exact-source expanded `comm.display` comparison, keeps Pair A optional, and records compact parity as `UNPROVEN` when the transient native frame is missed.
+
+### IMPLEMENT (PENDING)
+
+- No implementation or runtime execution has begun. The bounded actions listed in PLAN remain pending the mandatory user write gate.
+
+### VALIDATE (PENDING)
+
+- Pair A compact `menu.display` captures, Pair B expanded `comm.display` captures, exact target/source/state/profile checks, pending-value/choice/transcript/context checks, path/loop/sample checks, hashes, no-failure check, and save restoration check remain pending. The only record-level checks for this append are the required owned-file diff checks, with no runtime, game, build, precommit, deploy, or external-record operation permitted.
+
+### NEGATIVE / FAILURE PATHS
+
+- Ordinary-state native evidence is non-qualifying. A target, source, pending-value, choice, transcript/context, save, drawable, profile, path/loop/sample, or scale mismatch invalidates pixel comparison. An expanded native `comm.display` frame cannot substitute for a compact `menu.display` frame; if the compact transient is missed, Pair A is `UNPROVEN`. Confirmation/payment/refusal actions, auto-confirm, manual save, and sim reset are prohibited. Any source/deploy/save drift, DisplayView failure, Lua failure, UI close/crash, or failed restoration stops the run and must be repaired before close; otherwise the close cannot be `VERIFIED`.
+
+### REVIEW (PENDING)
+
+- Re-read the supplied continuation requirements and this record against every scope, baseline, target/source/state/profile boundary, risk, rollback, acceptance, negative-path, evidence, and write-gate item. Confirm Pair B is the required reliable same-target pair, Pair A absence is an explicit remaining gap only, no duplicate visual census or completion claim was introduced, overall B119 remains unproven beyond this bounded run, and only the owned file changed.
+
+### CLOSE (PENDING)
+
+- **Status:** `SPECIFIED`; no completion claim. Close remains pending until the bounded parity run and every applicable acceptance check are actually performed. The real-mod/game/config write gate remains mandatory and is not crossed by this record.
+- **Remaining concerns:** compact pending capture may be unavailable and leave Pair A `UNPROVEN`; Pair B still requires a separate exact-source `aic_comm.lua -> comm.display` Forge preview and matching native expanded frame; parity remains invalid unless target, source, state, and profile match; and no runtime evidence exists yet.
+- **Suggested commit title:** `docs(b119): specify same-state pending-branch Forge/X4 parity`.
+
+### AAR
+
+- **Already-triggered tooling event:** the first read-only PowerShell hash-table probe failed to parse; a corrected probe passed. Retain this as an AAR/tooling event, not as runtime evidence or permission to re-probe protected state. Final close AAR remains pending.
+- **Boundary:** no source/mod/deploy, game, installed Forge, configuration, service, Git, GitHub, Notion, Google Drive, or other external state has been touched by this continuation record.
