@@ -1,43 +1,40 @@
-# Session handoff — B119 Windows runtime-bootstrap close
+# Session handoff — B119 Windows safe-runtime external projection/readback close
 
 Date: 2026-09-09
 Project: F:\DEV_ENV\X4_Forge
-Status: bounded Windows runtime-bootstrap/monolithic-E2E unit is VERIFIED; overall B119 remains IN_PROGRESS / PARTIAL.
-Final-record worker boundary: exactly `BACKLOG.md`, `SESSION-HANDOFF.md`, `ROADMAP.md`, and
-`docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md` are owned by this refresh. The broader runtime-bootstrap
-unit already contains validated implementation and test changes in separate owned paths; this records worker does not
-edit or rerun them. No Graphify output, evidence binary, installed extension, Forge, mod, game, corpus, config, save,
-Git mutation, GitHub, Notion, Google Drive, OpenVSX, or runtime-state mutation belongs to this refresh.
+Status: bounded Windows safe-runtime E2E unit and its external projection/readback are VERIFIED; overall B119 remains
+IN_PROGRESS / PARTIAL.
+Records-close boundary: exactly `BACKLOG.md`, `SESSION-HANDOFF.md`,
+`docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, and
+`F:\StarForge\wiki\workflow\aar-log.md` are owned by this refresh. GitHub, Notion, and Google projection/readback were
+the bounded external operations completed by the coordinator; this records worker did not call those services. The
+implementation and test files are already complete and pushed and are not edited or rerun here. No Graphify output,
+evidence binary, installed extension, Forge, mod, game, corpus, config, save, product Git mutation, OpenVSX product
+release, or runtime-state mutation belongs to this records refresh. The parent owns the pending exact records-only
+commit.
 
 ## Session-start brief
 
 - Project identity: X4 Forge B119, the source-faithful X4 Lua UI editor and AI Influence visual dogfood; GitHub owner
   #41.
-- Baseline before this runtime unit: `HEAD == origin/main == 8451c061d27300f0859d231bbc3a898723f24d63`.
-- The broader unit's implementation and independent validation are complete. Parent review of the three-record
-  correction, deterministic Graphify refresh, and final post-record precommit are also complete.
-- Worker state at handoff: this final-record Luna is terminal when its report is delivered; no other worker is claimed
-  active. The parent owns exact staging, commit/push proof, and external projection.
-- Local StarForge `capability-map.md` and project `aar-log.md` are already updated. GitHub #41, Notion page
-  `3b84618e-d15b-8190-821e-c0eb96f43d5a`, and Google Doc
-  `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE` remain pending.
+- Current pushed checkpoint: `HEAD == origin/main == 5a3c5c7f7b1c7555898fc3c36c2e2b90567f0790`, with direct-remote
+  parity already confirmed.
+- The bounded implementation and independent validation are complete. The parent also completed the external
+  projection and readback; this handoff records the supplied identifiers, and this records worker did not call those
+  services.
+- Local StarForge capability-map state has no delta for this records-only unit. The general workflow AAR now contains
+  the Google Docs accepted-write/readback lesson.
 
 ## Immediate operational sequence
 
-1. **COMPLETE:** parent reviewed the three-record correction; obsolete active `SPECIFIED` and stale monolithic-
-   stability-open claims are removed, ROADMAP history is present, and this sequence exists.
-2. **COMPLETE:** one exact Luna ran deterministic `graphify update .`; it exited `0`, refreshed the generated files,
-   and produced no tracked graph delta.
-3. **COMPLETE:** parent ran final full `npm run precommit:check`; it exited `0` with `[precommit] OK`.
-4. **NEXT:** parent stages exactly these nine repository paths only: `BACKLOG.md`, `ROADMAP.md`,
-   `SESSION-HANDOFF.md`, `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, `package.json`,
-   `scripts/precommit-check.mjs`, `scripts/run-e2e.mjs`, `scripts/e2e-runtime-bootstrap.mjs`, and
-   `scripts/e2e-runtime-bootstrap.selftest.mjs`. Confirm no unrelated staged path and no `graphify-out/**` path.
-5. Parent commits `fix(e2e): select safe Windows Node runtime`, pushes, then proves local `HEAD`, configured upstream
-   `origin/main`, and direct remote are identical and the staged index is clean.
-6. Parent updates and reads back the existing GitHub #41, Notion page
-   `3b84618e-d15b-8190-821e-c0eb96f43d5a`, and Google Doc
-   `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`.
+1. **COMPLETE:** the bounded Windows runtime-bootstrap/monolithic-E2E unit is verified, with its focused and canonical
+   receipts recorded in the B119 plan.
+2. **COMPLETE:** checkpoint `5a3c5c7f7b1c7555898fc3c36c2e2b90567f0790` is pushed with exact local/tracking/direct-
+   remote parity.
+3. **COMPLETE:** GitHub #41, Notion, and Google Doc external projections are updated and read back; exact evidence is
+   recorded below. No OpenVSX release belongs to this checkpoint.
+4. **NEXT PRODUCT UNIT:** same-state pending-branch preview/native parity at matching drawable, scale, and content
+   state. The existing ordinary compact/expanded native images are not valid evidence for that pending preview.
 
 ## Final post-record gates
 
@@ -109,6 +106,22 @@ Git mutation, GitHub, Notion, Google Drive, OpenVSX, or runtime-state mutation b
   server startup; relevant process PID set was unchanged; ports `3200/3201` had zero listeners; no verdict receipt was
   produced.
 
+## 2026-09-09 POST-PUSH — Windows safe-runtime external projection/readback
+
+- GitHub issue `#41` remains `OPEN`; comment ID `5606440239` reads back at
+  `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5606440239`. Comment count is `107`, exactly one
+  matching heading is present, and checkpoint commit `5a3c5c7f7b1c7555898fc3c36c2e2b90567f0790` is present.
+- Notion page `3b84618e-d15b-8190-821e-c0eb96f43d5a` reads back `Status=In Progress` and `Evidence Grade=Partial`,
+  last edited `2026-09-09T18:02:38.921Z`, with exactly one matching heading and the exact checkpoint commit plus GitHub
+  comment present. URL: `https://app.notion.com/p/3b84618ed15b8190821ec0eb96f43d5a`.
+- Google Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back final revision
+  `ANLCKQlbFo35T7rDrrPek2updZZbo4UHHRFdFVnDemE_6Rn9mFxhjtTjfGfGcwXguXbJitakfMAhRFLpl4zHX85aWsZrkQ-nCZqz3dymI58z`,
+  `740` paragraphs, exactly one matching `HEADING_2`, the exact checkpoint commit and GitHub comment present, and the
+  prior last paragraph preserved. Final paragraph: exactly `Boundary: preview for layout; game for truth.` URL:
+  `https://docs.google.com/document/d/17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`.
+- External records are projections; repository Markdown remains authoritative. The first Google insertion's extra
+  period was corrected under the required revision ID and final readback is clean.
+
 ## Machine state and protected identities
 
 - Baseline drift was reconciled before E2E: Deckwright is PID `43112` on `3100` (the planned `58660` was stale) and
@@ -132,9 +145,9 @@ Git mutation, GitHub, Notion, Google Drive, OpenVSX, or runtime-state mutation b
 - Broader-unit implementation hot files already handled by the parent/worker: `package.json`, `scripts/precommit-check.mjs`,
   `scripts/run-e2e.mjs`, `scripts/e2e-runtime-bootstrap.mjs`, and `scripts/e2e-runtime-bootstrap.selftest.mjs`.
   They are not owned by this final-record worker and must not be edited here.
-- Final records: `BACKLOG.md`, this handoff, `ROADMAP.md`, and the B119 plan. Local StarForge capability-map/project-AAR
-  remain complete and unchanged by this refresh. Graphify is complete with no tracked delta; do not stage graph output.
-- Local StarForge capability-map/project-AAR are complete; GitHub/Notion/Google Drive projection remains pending.
+- Final records: `BACKLOG.md`, this handoff, the B119 plan, and the general workflow AAR ledger. No capability-map delta
+  belongs to this records-only unit. Graphify is not in scope; do not stage graph output.
+- GitHub/Notion/Google Doc projection and readback are complete for this checkpoint. No OpenVSX release belongs here.
 - The checkout is dirty. Preserve every unrelated implementation, test, deletion, untracked artifact, lockfile, and
   record change. Do not normalize, revert, stage, commit, push, publish, or alter forbidden state.
 - Permanent UI boundary: **Preview for layout; game for truth.** No current runtime receipt promotes renderer parity,
@@ -144,12 +157,15 @@ Git mutation, GitHub, Notion, Google Drive, OpenVSX, or runtime-state mutation b
 
 - Status: `VERIFIED` for the bounded Windows runtime-bootstrap/monolithic-E2E reliability unit; overall B119 remains
   explicitly `IN_PROGRESS / PARTIAL`.
-- Required refresh checks: re-read the changed sections, run `git diff --check` on the exact four owned records, and
-  report exact status limited to those four paths.
+- Required refresh checks: re-read the changed sections, run `git diff --check` on the three repository-owned records,
+  inspect only their Git diff, inspect the workflow AAR tail, and report exact status for all four owned records.
 - Rollback: apply an exact reviewed patch to these four refresh records. The broader implementation rollback, if
   later required, remains the bounded runner/bootstrap/selftest/precommit diff. No live or protected state was written
   by this final-record worker.
-- Operational close still pending: exact nine-path stage with no graph/unrelated path, commit, push, local/upstream/
-  direct-remote parity plus clean-index proof, and GitHub/Notion/Google Doc update/readback.
-- Remaining concerns: exact native stack, same-state pending-branch parity, twelve-reference census, arbitrary
-  Lua/Helper/widget coverage, universal C++ acceptance, and the separately write-gated real-mod semantic correction.
+- Operational close: the exact checkpoint push/parity and GitHub/Notion/Google Doc update/readback are complete. This
+  worker performs no further external calls and must not stage, commit, push, or publish; the parent owns the pending
+  exact records-only commit.
+- Remaining concerns: exact native stack, same-state pending-branch preview/native parity, twelve-reference views,
+  broader arbitrary-Lua/Helper/widget coverage, C++ frame acceptance limits, and the separately write-gated real-mod
+  MD correction. No universal fidelity, arbitrary-Lua coverage, C++ acceptance, release readiness, or overall-B119
+  completion claim is authorized.

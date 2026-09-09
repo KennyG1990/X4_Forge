@@ -3761,3 +3761,48 @@ real-game/product scope.
   identity validation and receipt preservation but does not prove a universal native-stack repair.
 - **Global/project lessons banked:** project AAR and capability-map deltas are appended for this unit; no global ledger,
   UI gotcha, product, mod, game, release, or external-projection record is changed here.
+
+## 2026-09-09 POST-PUSH — Windows safe-runtime external projection/readback
+
+### DOCUMENT CLOSE — EXTERNAL PROJECTION READBACK
+
+- **Status:** `VERIFIED` for this bounded records/readback unit; overall B119 remains `IN_PROGRESS / PARTIAL`.
+- **Scope and authority:** record the completed projection of the already-pushed Windows safe-runtime E2E checkpoint.
+  Repository Markdown remains authoritative; GitHub, Notion, and Google Docs are projections. Their projection and
+  readback were the bounded external operations for this close. No implementation, test, evidence-binary, Forge, mod,
+  game, live-state, OpenVSX, or product-release operation occurred. No product Git mutation occurred; the parent owns
+  the exact records-only commit, which remains pending.
+- **Checkpoint:** HEAD `5a3c5c7f7b1c7555898fc3c36c2e2b90567f0790` was already pushed with exact local/tracking/direct-remote
+  parity.
+- **External readback:**
+  - GitHub issue `#41` remains `OPEN`; comment ID `5606440239` reads back at
+    `https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5606440239`. Comment count is `107`, exactly one
+    matching heading is present, and the exact checkpoint commit is present.
+  - Notion page `3b84618e-d15b-8190-821e-c0eb96f43d5a` remains `Status=In Progress` and `Evidence Grade=Partial`;
+    last edited `2026-09-09T18:02:38.921Z`, exactly one matching heading, and the exact checkpoint commit plus GitHub
+    comment are present. URL: `https://app.notion.com/p/3b84618ed15b8190821ec0eb96f43d5a`.
+  - Google Doc `17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`, tab `t.0`, reads back final revision
+    `ANLCKQlbFo35T7rDrrPek2updZZbo4UHHRFdFVnDemE_6Rn9mFxhjtTjfGfGcwXguXbJitakfMAhRFLpl4zHX85aWsZrkQ-nCZqz3dymI58z`,
+    `740` paragraphs, exactly one matching `HEADING_2`, the exact checkpoint commit and GitHub comment, and the prior
+    last paragraph preserved. Its final paragraph is exactly `Boundary: preview for layout; game for truth.` URL:
+    `https://docs.google.com/document/d/17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE`.
+- **Runtime and E2E evidence:** system Node `24.15.0` / libuv `1.51.0` handed off to safe Node `24.19.0` /
+  libuv `1.52.1`; focused checks are `59/59`, `55/55`, and `13/13`; the canonical tracked-only E2E completed its
+  first attempt with `23` specs and `106/106` in `15.1m`. Receipt SHA-256 is
+  `9CBA11CE26DF2B23E098F185EAF9F21A1265ADBA891AFD7681C3F02357A80BD6`. The invalid override failed closed and
+  containment was clean. No OpenVSX release belongs to this checkpoint.
+- **Remaining product/proof boundaries:** next product unit is same-state preview/native parity. The twelve reference
+  views, broader arbitrary-Lua/Helper/widget coverage, C++ frame acceptance limits, and the separately write-gated
+  real-mod MD correction remain open. Do not claim universal fidelity, arbitrary-Lua coverage, C++ acceptance, release
+  readiness, or overall-B119 completion; preview is for layout and game is for truth.
+- **Capability-map delta:** none for this records-only projection unit.
+
+### AAR
+
+- **Trigger and correction:** the first Google insertion used `endIndex - 1` while assuming the paragraph end included a
+  terminal newline; exact readback exposed `truth..`. The coordinator deleted exactly the final extra period under the
+  required revision ID, and final readback is clean.
+- **Tooling lesson:** inspect the exact returned last paragraph and use a revision-controlled minimal correction; an
+  accepted `batchUpdate` is not proof of clean rendered or text output.
+- **Close boundary:** this AAR does not alter the `IN_PROGRESS / PARTIAL` overall B119 status and records no capability-map
+  delta.

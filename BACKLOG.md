@@ -62,15 +62,22 @@ new commit/comment/red-gate section at top. Google Doc
 `ANLCKQk4F14GwWk68VhKaxI0b21sPVd4KiRw763IijA80qwF_NLRxTF1F0uT9m-UXcveRRZFFDbHR7QqybNTMtYATT7_TVvgaX1XYyD9yw44`,
 `731` paragraphs, one `HEADING_2` named `B119 source replay + native compact/expanded checkpoint — 2026-09-09`,
 the updated repository head, and an intact one-period prior boundary. Overall B119 remains `IN_PROGRESS / PARTIAL`.
-**2026-09-09 current B119 gate state — FULL B119 `IN_PROGRESS / PARTIAL`:** the bounded Windows runtime-bootstrap and
-monolithic-gate reliability unit is `VERIFIED`; durable implementation, validation, and review detail is in
-`docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md` and the dated ROADMAP entry. Parent review is complete;
-deterministic Graphify refresh passed at `10,713` nodes / `27,009` edges / `334` communities with no tracked graph
-delta, and final post-record precommit passed `[precommit] OK`. Exact-path commit/push/parity proof and existing
-GitHub/Notion/Google Doc projection are next. Actual remaining B119 product work is same-state pending-branch Forge/X4
-parity, the full twelve-reference current-game census, bounded arbitrary Lua/Helper/widget and universal C++ acceptance
-coverage, and the separately write-gated real-mod `cancel_conversation` correction. Preview for layout; game for truth.
-No release, universal parity, or overall-B119 completion claim follows.
+**2026-09-09 current B119 gate state — bounded unit `VERIFIED` / FULL B119 `IN_PROGRESS / PARTIAL`:** the Windows
+runtime-bootstrap and monolithic-gate reliability unit is verified; its exact pushed checkpoint is
+`5a3c5c7f7b1c7555898fc3c36c2e2b90567f0790` with local/tracking/direct-remote parity. External projection/readback is
+complete: GitHub #41 remains OPEN with comment `5606440239`
+(`https://github.com/KennyG1990/X4_Forge/issues/41#issuecomment-5606440239`); Notion page
+`3b84618e-d15b-8190-821e-c0eb96f43d5a` remains `Status=In Progress`, `Evidence Grade=Partial`; and Google Doc
+`17VLaIsT499KHg7zg30hOyLaBXB0-9jlrX3dQ63s3dtE` tab `t.0` is read back at final revision
+`ANLCKQlbFo35T7rDrrPek2updZZbo4UHHRFdFVnDemE_6Rn9mFxhjtTjfGfGcwXguXbJitakfMAhRFLpl4zHX85aWsZrkQ-nCZqz3dymI58z`,
+with the exact commit/comment and corrected final boundary present. Runtime evidence is system Node `24.15.0` /
+libuv `1.51.0` -> safe Node `24.19.0` / libuv `1.52.1`; focused checks are `59/59`, `55/55`, and `13/13`; the
+canonical tracked-only E2E is `23` specs / `106/106` on the first attempt in `15.1m`; receipt SHA-256 is
+`9CBA11CE26DF2B23E098F185EAF9F21A1265ADBA891AFD7681C3F02357A80BD6`; invalid override is fail-closed and
+containment is clean. No OpenVSX release belongs to this checkpoint. Remaining product/proof work is same-state
+preview/native parity, the twelve reference views, broader arbitrary-Lua/Helper/widget coverage, C++ frame acceptance
+limits, and a separately write-gated real-mod MD correction. Preview for layout; game for truth. No universal fidelity,
+arbitrary-Lua, C++ acceptance, release-readiness, or overall-B119 completion claim follows.
 **Corrective release/native rerun checkpoint 2026-09-08 — VERIFIED CORRECTIVE UNIT / FULL B119 PARTIAL:** stable
 `0.0.77` is built, published exactly once on OpenVSX, independently downloaded with exact local/public parity,
 installed in Antigravity, and its installed runtime oracles pass `134/134`. The stable VSIX is
