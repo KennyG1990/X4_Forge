@@ -538,6 +538,24 @@ assert.match(pathMarkup, /Reset path selections/);
 assert.match(pathMarkup, /Not verified in game/);
 assert.doesNotMatch(pathMarkup, /programKey|profileKey|selectionKey/);
 
+const dispatchCatalog: X4UiLayoutPreviewPathCatalog = {
+  ...pathCatalog,
+  entries: pathCatalog.entries.slice(0, 2).map((entry, index) => ({ ...entry,
+    arm: 'dispatch', label: index === 0 ? 'DOSSIER' : 'SETTINGS', reachability: 'conditional' })),
+};
+const dispatchMarkup = renderToStaticMarkup(<X4UiSourceEditorPreviewPaths primary
+  catalog={dispatchCatalog} paths={pathInput}
+  onPathSelection={() => { renderedPathSelections += 1; }} onReset={() => { renderedPathSelections += 1; }} />);
+assert.match(dispatchMarkup, /aria-label="Preview section"/);
+assert.match(dispatchMarkup, /<option[^>]*>DOSSIER<\/option>/);
+assert.match(dispatchMarkup, /<option[^>]*>SETTINGS<\/option>/);
+assert.match(dispatchMarkup, /Clear preview choices/);
+assert.doesNotMatch(dispatchMarkup.replace(/<[^>]*>/g, ''), /boundary-one|path-then|Source boundary|arm dispatch|samples\.lua/);
+assert.equal(renderedPathSelections, 0, 'primary dispatch controls do not select a default during rendering');
+const noDispatchMarkup = renderToStaticMarkup(<X4UiSourceEditorPreviewPaths primary
+  catalog={pathCatalog} paths={undefined} onPathSelection={() => undefined} onReset={() => undefined} />);
+assert.equal(noDispatchMarkup, '', 'ordinary branch catalogs do not add a spurious section selector');
+
 const loopCatalog: X4UiLayoutPreviewLoopCatalog = {
   id: 'preview-loop-catalog-selftest',
   sourceIdentity: sampleCatalog.sourceIdentity,

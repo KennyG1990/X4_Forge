@@ -384,6 +384,7 @@ export interface X4UiLayoutPreviewPathCatalogEntry {
   readonly boundary: X4UiSourceLocation;
   readonly arm: X4UiBranchPathSegment['arm'];
   readonly armIndex: number;
+  readonly label?: string;
   readonly reachability: X4UiBranchPathSegment['reachability'];
   readonly invocationIds: readonly string[];
   readonly provenance: 'preview-only';
@@ -684,6 +685,7 @@ export interface X4UiLayoutEvidenceLocalInvocation {
   readonly source: X4UiSourceLocation;
   readonly expression: string;
   readonly calleeDeclarationId?: string;
+  readonly dispatchIndex?: number;
 }
 
 export interface X4UiLayoutEvidenceLocalIdentities {
@@ -5072,6 +5074,7 @@ const createPreviewPathCatalog = (
     boundary: X4UiSourceLocation;
     arm: X4UiBranchPathSegment['arm'];
     armIndex: number;
+    label?: string;
     reachability: X4UiBranchPathSegment['reachability'];
     invocationIds: string[];
     provenance: 'preview-only';
@@ -5099,6 +5102,7 @@ const createPreviewPathCatalog = (
           boundary: cloneLocation(segment.boundary),
           arm: segment.arm,
           armIndex: segment.armIndex,
+          ...(segment.label === undefined ? {} : { label: segment.label }),
           reachability: segment.reachability,
           invocationIds: invocationId === undefined ? [] : [invocationId],
           provenance: 'preview-only'
@@ -7594,7 +7598,9 @@ const buildLocalExpansionPlan = (
           source: invocation.source
         });
       }
-      const childBindings = new Map<string, X4UiValue>();
+      // Forwarded arithmetic can still reference the caller's exact parameter
+      // identities. Keep the ancestry map; sibling invocations receive copies.
+      const childBindings = new Map<string, X4UiValue>(parameterBindings);
       for (const parameter of declaration.parameters) childBindings.set(parameter.id, invocation.arguments[parameter.index]);
       contextSources.set(locationKey(declaration.source), cloneLocation(declaration.source));
       const beforeCount = expandedCount;
@@ -7818,12 +7824,17 @@ const buildEvidenceLocalIdentities = (
       source: cloneLocation(declaration.source),
       parameters: cloneDeep(declaration.parameters) as X4UiLocalFunctionParameterIdentity[],
     })),
-    invocations: orderedInvocations.map(invocation => ({
-      id: invocation.id,
-      source: cloneLocation(invocation.source),
-      expression: model.file.text.slice(invocation.source.start.offset, invocation.source.end.offset),
-      ...(invocation.calleeDeclarationId ? { calleeDeclarationId: invocation.calleeDeclarationId } : {}),
-    })),
+    invocations: orderedInvocations.map(invocation => {
+      const dispatch = invocation.context.branchPath.find(segment => segment.arm === 'dispatch'
+        && locationsEqual(segment.boundary, invocation.source));
+      return {
+        id: invocation.id,
+        source: cloneLocation(invocation.source),
+        expression: model.file.text.slice(invocation.source.start.offset, invocation.source.end.offset),
+        ...(invocation.calleeDeclarationId ? { calleeDeclarationId: invocation.calleeDeclarationId } : {}),
+        ...(dispatch ? { dispatchIndex: dispatch.armIndex } : {}),
+      };
+    }),
   };
 };
 
@@ -10231,14 +10242,18 @@ const schemaPreviewCatalog = (value: unknown, path: string): ClosedSchemaError =
   for (const [index, entryValue] of (catalog.entries as readonly unknown[]).entries()) {
     const entryError = schemaObject(entryValue, `${path}.entries[${index}]`, [
       'id', 'boundaryId', 'armId', 'boundary', 'arm', 'armIndex', 'reachability', 'invocationIds', 'provenance',
-    ]);
+    ], ['label']);
     if (entryError) return entryError;
     const entry = entryValue as Record<string, unknown>;
     const error = schemaString(entry.id, `${path}.entries[${index}].id`, true)
       || schemaString(entry.boundaryId, `${path}.entries[${index}].boundaryId`, true)
       || schemaString(entry.armId, `${path}.entries[${index}].armId`, true)
       || schemaSource(entry.boundary, `${path}.entries[${index}].boundary`)
-      || schemaEnum(entry.arm, `${path}.entries[${index}].arm`, ['then', 'elseif', 'else'])
+      || schemaEnum(entry.arm, `${path}.entries[${index}].arm`, ['then', 'elseif', 'else', 'dispatch'])
+      || (entry.arm === 'dispatch'
+        ? schemaString(entry.label, `${path}.entries[${index}].label`, true)
+          || ((entry.label as string).length > 128 ? `${path}.entries[${index}].label is too long` : undefined)
+        : entry.label !== undefined ? `${path}.entries[${index}].label requires dispatch` : undefined)
       || schemaIndex(entry.armIndex, `${path}.entries[${index}].armIndex`)
       || schemaEnum(entry.reachability, `${path}.entries[${index}].reachability`, ['reachable', 'conditional', 'unreachable'])
       || schemaIdArray(entry.invocationIds, `${path}.entries[${index}].invocationIds`)
@@ -10606,17 +10621,20 @@ const schemaEvidenceLocalIdentities = (
   let previousInvocationEnd = -1;
   for (const [index, invocationValue] of (identities.invocations as readonly unknown[]).entries()) {
     const invocationPath = `${path}.invocations[${index}]`;
-    const invocationObjectError = schemaObject(invocationValue, invocationPath, ['id', 'source', 'expression'], ['calleeDeclarationId']);
+    const invocationObjectError = schemaObject(invocationValue, invocationPath, ['id', 'source', 'expression'], ['calleeDeclarationId', 'dispatchIndex']);
     if (invocationObjectError) return invocationObjectError;
     const invocation = invocationValue as Record<string, unknown>;
     const sourceError = schemaSource(invocation.source, `${invocationPath}.source`)
       || schemaString(invocation.expression, `${invocationPath}.expression`, true)
-      || schemaOptional(invocation, 'calleeDeclarationId', (child, childPath) => schemaString(child, childPath, true), invocationPath);
+      || schemaOptional(invocation, 'calleeDeclarationId', (child, childPath) => schemaString(child, childPath, true), invocationPath)
+      || schemaOptional(invocation, 'dispatchIndex', (child, childPath) => schemaIndex(child, childPath)
+        || ((child as number) >= 32 ? `${childPath} exceeds finite dispatch bound` : undefined), invocationPath);
     if (sourceError) return sourceError;
     const source = invocation.source as X4UiSourceLocation;
     if (source.file !== sourceIdentity.file
       || !sameOptionalString(source.sourcePath, sourceIdentity.sourcePath)
       || invocation.id !== programId('local-invocation', localInvocationIdentityKey(source))
+        + (invocation.dispatchIndex === undefined ? '' : `:dispatch:${invocation.dispatchIndex}`)
       || invocationIds.has(invocation.id as string)
       || source.start.offset < previousInvocationStart
       || (source.start.offset === previousInvocationStart && source.end.offset < previousInvocationEnd)
@@ -11938,10 +11956,13 @@ export const validateX4UiLayoutEvidencePair = (
       const entry = catalog.entries[index];
       if (!isObject(entry) || !exactKeys(entry, [
         'id', 'boundaryId', 'armId', 'boundary', 'arm', 'armIndex', 'reachability', 'invocationIds', 'provenance',
-      ]) || !evidenceId(entry.id) || catalogEntryIds.has(entry.id)
+      ], ['label']) || !evidenceId(entry.id) || catalogEntryIds.has(entry.id)
         || !evidenceId(entry.boundaryId) || !evidenceId(entry.armId)
         || !evidenceSource(entry.boundary)
-        || typeof entry.arm !== 'string'
+        || !['then', 'elseif', 'else', 'dispatch'].includes(String(entry.arm))
+        || (entry.arm === 'dispatch'
+          ? typeof entry.label !== 'string' || entry.label.length < 1 || entry.label.length > 128
+          : entry.label !== undefined)
         || !evidenceSafeIndex(entry.armIndex)
         || !['reachable', 'conditional', 'unreachable'].includes(String(entry.reachability))
         || !Array.isArray(entry.invocationIds)

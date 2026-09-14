@@ -1,69 +1,100 @@
 # Session handoff — B119 canvas-first UI builder
 
 Project F:/DEV_ENV/X4_Forge. Full goal ACTIVE/PARTIAL. Astra directly; no Luna/delegation.
-Complete objective: C:/Users/Moshi/.codex/attachments/d06dfea8-8256-48a5-97f5-b524fac87153/goal-objective.md.
+Objective: C:/Users/Moshi/.codex/attachments/d06dfea8-8256-48a5-97f5-b524fac87153/goal-objective.md.
 
-## Current checkpoint
+## Current PARTIAL local checkpoint
 
-Parent main f296d358b47191a6e136081bc0d7f96d2a8f5807. Current unit source metric arithmetic
-and rendered HUB tab strip VERIFIED. Exact11paths: src/lib/x4UiCallModel.ts and selftest.ts;
-src/lib/x4UiLayoutProgram.ts and selftest.ts; src/lib/x4UiSourceEdits.ts and selftest.ts;
-tests/e2e/x4-ui-source-editor.spec.ts; BACKLOG.md,ROADMAP.md,this handoff,
-docs/plans/2026-09-14-b119-metric-helper.md. Normal local precommit checkpoint is next.
-Actual commit authority:test-results/b119-metric-helper-20260914/checkpoint/{commit-exit,post-commit}.json.
-If receipt absent, observe existing process/active-handle before restarting anything.
-Preserve93unrelated dirty paths; exact-path staging only. No push/install/release.
+HEAD main eda059f1af620cf9f90d0a7b2bf0291e203764d3 (prior metric/tab repair).
+Current protected-tab unit is PARTIAL. Commit title:feat(ui): checkpoint source-bound protected
+preview choices. checkpoint/commit-exit.json and checkpoint/post-commit.json under the evidence
+root below are the final git authority; if missing or failed, do not claim a successful commit.
+Parent is eda059f; resolve current HEAD from git/receipt. Do not treat the plan's prior SPECIFIED
+record as current. Plan:docs/plans/2026-09-14-b119-protected-tab-body.md.
+No push, package, install, native game, real mod or standing-config write.
+Preserve unrelated dirty paths, including Discord deletions, extension0.0.78 changes and old W3B1
+records. Exact-path staging only. test-results/.last-run.json is generated and not checkpoint scope.
 
-## Implemented and proof
+Owned current product/test paths:
+src/lib/x4UiCallModel.ts and .selftest.ts; src/lib/x4UiLayoutProgram.ts and .selftest.ts;
+src/lib/x4UiEditorSession.ts; src/lib/x4UiScene.ts; src/lib/x4UiSourceEdits.ts;
+src/components/X4UiSourceEditor.tsx and .selftest.tsx; tests/e2e/x4-ui-source-editor.spec.ts.
+Owned docs: BACKLOG.md, this handoff, docs/plans/2026-09-14-b119-protected-tab-body.md.
+No ROADMAP promotion: meaningful body acceptance remains unmet.
 
-Source-bound numeric call-result terms feed arithmetic only; standalone opaque helper returns
-keep their original preview samples. Closed tonumber conversion accepts proven numeric terms.
-Exact same-file pure metric wrapper supports renamed function/locals, pinned Helper constant,
-floor and scaleX/Y, literal numeric multipliers including zero/fractions. No arbitrary Lua runtime.
-Reject side effects, helper/math/global mutation/escape, runtime arguments and wrong scale axes.
-Loop bounds retain safe-integer default; source/schema/issuance locks retained.
-Source-edit raw model263069nodes but canonical233107: preserve250000 canonical-data cap,
-512depth and separate2x traversal-work cap; optional undefined retains original allowlist.
-No memoization that would permit exponentially expanded shared data.
+## Implemented / evidenced
 
-Evidence root:test-results/b119-metric-helper-20260914/; RESULTS.md is readable with screenshots.
-Successful receipts in final/: parser-verified152/152; layout-verified1055/1055;
-source-verified174/174 plus existing causal families; types-verified/lint-project terminal0;
-hub-verified original source at1080/1 and1440/1.4: tabY59/80,sixlabels/indexes/widths,
-exact heading CAS/inverse. RealSHA657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F.
-browser-corrected1/1,0failed/flaky/skipped/reporterrors; six source-colored pixel assertions
-and heading/history/export/reopen. Actual tabs/reopened screenshots inspected at2560x1440.
-17:33:23–17:35:29UTC. TreeGone=true,X4absent,onlyDeckwright3100/PID61604 afterwards.
-final/verification.json at17:36:17UTC checks7receipts,current product bytes,source and guards.
-Headless runs used earlier browser-only selector/viewport variant; verifier reconstructs exact
-two-line delta and requires earlier whole-file hash. Corrected browser uses current spec.
-All50protected artifacts/4realLua/19livefiles unchanged;403source members,413run inputs.
+Exact named global pcall and finite immutable function-table dispatch reuse existing local invocation
+expansion. Whole-source mutation/escape guards; explicit bounded dispatch index in evidence,
+source labels in closed catalog schemas. pcall success/results stay unknown. No Lua execution.
+Independent child binding maps preserve ancestor parameters. Review repaired a reproduced
+literal-key table lookup regression; exact fixed-key identity is retained.
+Primary Preview section selector shows six source-derived HUB labels plus Default; preview only.
+Active-path source edits remain locked, intentionally. No competing interpreter or renderer.
 
-## Failure history / review
+Evidence root:test-results/b119-protected-tab-body-20260914/. RESULTS.md links actual screenshot.
+parser-reviewed160/160; layout-reviewed1063/1063; types-reviewed terminal0.
+source-checkpoint174/174 plus causal families; session/scenarios passed; pipeline127/127;
+component-checkpoint/lint-checkpoint/types-after-snapshot passed on unchanged product inputs.
+Scene FAILED194/196. Both exact failures independently reproduce at parent eda059f with all10
+changed executable/test files substituted by git blobs in a416-file isolated source snapshot.
+Portable HUB operations7/gaps3 expected vs9/gaps6 observed; MENU52 vs54 preview inputs.
+scene-head-baseline-receipt.json retains exact messages. No oracle/count change; not a green gate.
+browser-section1/1,0failed/flaky/report errors,18:38:03–18:41:51Z:
+DOSSIER choice leaves Lua/history unchanged, increases hierarchy; clear choice before existing
+heading edit/history/export/reopen. Actual dossier-preview capture was visually inspected.
+Header/tabs visible; BODY STILL BLANK. This is selector/source-preservation proof, NOT body proof.
+TreeGone=true; after state X4 absent, onlyDeckwright3100/PID61604.
+All50protected artifacts/4realLua/19livefiles unchanged. Runner has823 path pins including duplicate
+slash aliases, not823 unique physical inputs. Tests terminal at this record's preparation; the
+normal mandatory commit hook is the next process. Observe it to terminal; no restart on timeout.
 
-First browser/0of1 failed including harness retry: assumed Button hierarchy label does not exist;
-DOM proves Text/Widget. Corrected selector and larger browser viewport retain six pixel assertions.
-Retain parser-red/layout-red/layout-first/layout-second, coupled/source-red/hub failures,
-final/layout-final fractional/axis gaps and final/lint-final overbroad eslint-dot run.
-Actual package lint is eslint src server.ts and passed. Wrong log-parent read corrected.
-Broad initial call-result descriptor suppressed samples; corrected consumer-only issuance.
-Escape check initially confused scalar reads with table escapes; table escapes still rejected.
-reviewctl/BlastRadius unavailable; manual complete diff/ownership/negative review + project gates.
-Plan contains reconciled scope/AAR. Never dump full model/log JSON; use bounded summaries.
+Real source SHA657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F.
+Read configured modWorkspacePath only; real aic_hub.lua remains unchanged.
+body-nested/y-projection diagnostics: body widths559/1287 at1080/1 and746/1714 at1440/1.4.
+First sectionY unavailable: source695 numeric expression rejected because structure does not match
+exact source AST. Later sectionY depends on source helper returns; ascii/string captions unresolved.
+gameVerified=false. Long-task warnings remain; neither smooth UX nor native fidelity is proven.
 
-## Next substantive unit
+## Next action / failure shields
 
-Do not redo tab count/labels/Y or heading repair. HUB runtime TAB_FN/pcall body lines698-699
-remains unsupported. Loop-derived caption/property edits remain locked; screenshots also show
-long-task/FPS warnings. Pixel checks do NOT prove smooth authoring, full menu fidelity or native truth.
-Next planned source-bound body/scenario dispatch and ordinary loop-property authoring, with
-existing parser/source/CAS/history owners. No competing interpreter/renderer. Full all9journeys,
-3menus/12references,current full integration,packaged/installed/native obligations remain.
-Use a fresh task boundary after checkpoint; do not roll another implementation unit into it.
+Finish/verify the13-path PARTIAL local checkpoint using checkpoint.mjs commit/verify and its
+terminal receipts. Normal hook MUST pass. It runs the full precommit command without bypass.
+Do not claim VERIFIED feature, full current integration or body acceptance from that checkpoint.
+Continuation entered degradation territory after an oversized diagnostic dump and malformed search.
+Stop new feature implementation here; next unit starts from this handoff, not another broad rethink.
 
-Eyeball queue: HUD & Lua UI -> Open Lua -> original HUB -> hub.display -> see six tabs ->
-select heading -> Text edit -> Undo/Redo -> Export Lua -> Open exported Lua.
-This proof used headless Chromium, not installed Antigravity. Keep Antigravity foreground during
-Computer Use; honor Escape/tool stop. Recheck X4/ports before heavy runs. Actual mod/game/save/
-config/install writes need impact/rollback paragraph + go. Push ONLY public releases; never
-republish0.0.78. No external wiki/GitHub writes this unit.
+Standalone precommit-checkpoint failed because the assistant's source snapshot under test-results
+was included by root tsconfig. Moved only that scratch snapshot to existing excluded
+temp_import/b119-protected-tab-body-head-scene-20260914; all416hashes checked. Snapshot relocation
+receipt and failed log retained; typecheck recovery passed19:03:39Z. No product/tsconfig edits.
+Do not place source snapshots beneath test-results: Git ignore and the custom input inventory do
+not define TypeScript inputs. The normal commit hook now reruns precommit in the recovered state.
+
+Next actual implementation dependencies: reconcile the two pre-existing scene failures with
+source-bound causal oracles (never just change expected totals), and bounded AST diagnosis for Y695.
+x4UiLayoutProgram.ts numeric validator nodeMatches ~2836 and exact alias resolution are existing
+owners. Do not weaken validation; retain a minimal red generic fixture and current actual failure.
+Direct parameter arithmetic already works; the first theory was disproved by layout-parameter-red.
+Nested arithmetic was repaired via inherited parameter maps; do not reimplement it.
+directScaleForValue already has nearest-ancestor/root fallback; standardButtonHeight is already
+source-pinned25. Remaining numeric helper returns and transformed captions are separate dependencies.
+Source-edit path lock ~1755/1778/7259/8187 requires exact CAS path transfer and rediscovery, not deletion.
+Acceptance: real meaningful body pixels, supported body edit/undo/redo/export/reopen at two profiles.
+Dispatch dropdown alone is explicitly insufficient.
+
+run.mjs uses fresh labels/wx artifacts; never overwrite prior failures or rerun existing labels.
+All source/test/config inputs and git status must stay frozen during any run. Observe active process
+handles to terminal, never restart from a polling timeout. No full model/log dumps; select bounded fields.
+Retain parser/layout red attempts, layout-first missing environment and identity-schema error,
+parameter hypothesis correction and fixed-key review regression. Manual full-diff review used:
+reviewctl and BlastRadius unavailable. No memory/external-ledger writes.
+
+## User-visible proof and operating boundaries
+
+Eyeball queue: open RESULTS.md and inspect actual DOSSIER screenshot; body remains blank.
+Testing is local headless Chromium on isolated3200/3201, not installed Antigravity and not X4.
+During Computer Use keep Antigravity foreground; honor Escape/tool stop. Recheck X4/ports before
+heavy runs. Real mod/game/save/config/install writes require impact+rollback paragraph and explicit go.
+Push ONLY public releases; never republish0.0.78. No GitHub/wiki mutation in this unit.
+Full all9journeys/3menus/12references/current integration/packaged/installed/native obligations remain.

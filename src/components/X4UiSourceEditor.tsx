@@ -4473,6 +4473,7 @@ export function X4UiSourceEditorSamples({
 }
 
 export interface X4UiSourceEditorPreviewPathsProps {
+  readonly primary?: boolean;
   readonly catalog: X4UiLayoutPreviewPathCatalog | null;
   readonly paths: X4UiLayoutPreviewPathSelectionInput | undefined;
   readonly onPathSelection: (entryId: string) => void;
@@ -4491,6 +4492,7 @@ const pathBoundaryLabel = (entry: X4UiLayoutPreviewPathCatalog['entries'][number
 };
 
 export function X4UiSourceEditorPreviewPaths({
+  primary = false,
   catalog,
   paths,
   onPathSelection,
@@ -4505,6 +4507,29 @@ export function X4UiSourceEditorPreviewPaths({
       else current.push(entry);
       return grouped;
     }, new Map<string, X4UiLayoutPreviewPathCatalog['entries'][number][]>()).values()];
+  if (primary) {
+    const dispatchGroups = groups.filter(entries => entries.every(entry => entry.arm === 'dispatch'));
+    if (dispatchGroups.length === 0) return null;
+    return <div data-testid="x4-ui-preview-sections" className="flex min-w-0 flex-wrap items-center gap-2 text-[11px]">
+      {dispatchGroups.map((entries, index) => {
+        const boundaryId = entries[0].boundaryId;
+        const title = dispatchGroups.length === 1 ? 'Preview section' : `Preview section ${index + 1}`;
+        return <label key={boundaryId} className="flex min-w-0 items-center gap-1 text-cyan-200">
+          <span>{title}</span>
+          <select aria-label={title} data-testid={`x4-ui-preview-section-${index}`}
+            value={pathSelectionFor(paths, boundaryId) ?? ''} onChange={event => onPathSelection(event.target.value)}
+            className="max-w-48 rounded border border-cyan-500/30 bg-[#111722] px-2 py-1 text-slate-100">
+            <option value="" disabled>Choose a section</option>
+            {entries.map(entry => <option key={entry.id} value={entry.id} disabled={entry.reachability === 'unreachable'}>{entry.label}</option>)}
+          </select>
+        </label>;
+      })}
+      <span className="text-amber-200" title="Choose which content to preview. This does not change your Lua or the running game.">Preview only · Lua unchanged</span>
+      <button type="button" data-testid="x4-ui-preview-sections-reset" onClick={onReset}
+        disabled={!paths?.selections.length} className="rounded border border-white/10 px-2 py-1 text-slate-300 disabled:text-slate-600">Clear preview choices</button>
+      {error && <span role="alert" className="text-red-300">Preview section was not applied. Reselect the menu if its source changed.</span>}
+    </div>;
+  }
   return (
     <section data-testid="x4-ui-preview-paths-region" className="mt-3 rounded border border-fuchsia-500/30 bg-fuchsia-950/10 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -6670,6 +6695,9 @@ export default function X4UiSourceEditor({
             />
           </div>
         </details>
+
+        <X4UiSourceEditorPreviewPaths primary catalog={projection.pathCatalog} paths={projection.paths}
+          onPathSelection={updatePath} onReset={resetPaths} error={pathError} />
 
         <X4UiSourceEditorNewMenu
           workspace={workspace}

@@ -5082,7 +5082,7 @@ const validateLocalExpansionInvocation = (value: unknown): boolean => {
 };
 
 const validateLocalExpansionCatalogEntry = (value: unknown): boolean => {
-  if (!isRecord(value) || !exactKeys(value, ['id', 'boundaryId', 'armId', 'boundary', 'arm', 'armIndex', 'reachability', 'invocationIds', 'provenance'])) return false;
+  if (!isRecord(value) || !exactKeys(value, ['id', 'boundaryId', 'armId', 'boundary', 'arm', 'armIndex', 'reachability', 'invocationIds', 'provenance'], ['label'])) return false;
   return typeof value.id === 'string'
     && value.id.length > 0
     && typeof value.boundaryId === 'string'
@@ -5090,7 +5090,10 @@ const validateLocalExpansionCatalogEntry = (value: unknown): boolean => {
     && typeof value.armId === 'string'
     && value.armId.length > 0
     && sourceIsValid(value.boundary)
-    && (value.arm === 'then' || value.arm === 'elseif' || value.arm === 'else')
+    && (value.arm === 'then' || value.arm === 'elseif' || value.arm === 'else' || value.arm === 'dispatch')
+    && (value.arm === 'dispatch'
+      ? typeof value.label === 'string' && value.label.length > 0 && value.label.length <= 128
+      : value.label === undefined)
     && isSafeIntegerAtLeast(value.armIndex, 0)
     && (value.reachability === 'reachable' || value.reachability === 'conditional' || value.reachability === 'unreachable')
     && uniqueStringArray(value.invocationIds)

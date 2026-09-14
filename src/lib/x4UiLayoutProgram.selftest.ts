@@ -15229,6 +15229,136 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
         !candidate.expression.includes('Helper.scaleX')),
     detail({ tables: repeatedScaleProgram.tables, operations: repeatedScaleProgram.operations }));
 
+  const finiteTabBodySource = [
+    'local function details(frame)',
+    ' local t=frame:addTable(1,{x=20,y=100,width=200})',
+    ' t:addRow(false,{})[1]:createText("DETAIL BODY",{height=20})',
+    'end',
+    'local function options(frame)',
+    ' local t=frame:addTable(1,{x=20,y=100,width=300})',
+    ' t:addRow(false,{})[1]:createText("OPTION BODY",{height=20})',
+    'end',
+    'local views={DETAILS=details,OPTIONS=options}',
+    'function display()',
+    ' local frame=Helper.createFrameHandle({}, {width=400,height=300})',
+    ' local fn=views[currentTab] or details',
+    ' local ok,err=pcall(fn,frame)',
+    'end',
+  ].join('\n');
+  const finiteTabModel = buildX4UiCallModel(input(finiteTabBodySource, 'selftest/finite-tab-body.lua'));
+  const finiteTabTarget = namedTarget(finiteTabModel, 'display');
+  const finiteTabProfile = profileFor(finiteTabModel, { minTextHeight: 10, localExpansion: { maxDepth: 4, maxInvocations: 8 } });
+  const finiteTabUnselected = programOf(projectX4UiLayoutProgram(finiteTabModel, finiteTabTarget, finiteTabProfile));
+  const finiteTabCatalog = finiteTabUnselected.previewPathCatalog;
+  check('B119 protected function tables expose source labels without painting an unselected body',
+    finiteTabCatalog.entries.map(entry => entry.label).join(',') === 'DETAILS,OPTIONS,Default'
+      && finiteTabUnselected.tables.length === 0
+      && finiteTabUnselected.localExpansion?.invocations.every(value => value.status === 'conditional'),
+    detail({ entries: finiteTabCatalog.entries, tables: finiteTabUnselected.tables, expansion: finiteTabUnselected.localExpansion }));
+  const finiteTabSelectedResults = finiteTabCatalog.entries.map(entry => {
+    const selection: X4UiLayoutPreviewPathSelectionInput = {
+      catalogId: finiteTabCatalog.id, source: finiteTabCatalog.sourceIdentity,
+      selections: [{ id: entry.id, boundaryId: entry.boundaryId, armId: entry.armId }],
+    };
+    const result = projectX4UiLayoutProgram(finiteTabModel, finiteTabTarget, finiteTabProfile, undefined, selection);
+    const program = result.program;
+    const authority = result.status === 'refused' ? undefined : evidenceAuthorityOf(result);
+    return { label: entry.label, selection, result, program, authority };
+  });
+  check('B119 selecting a protected tab expands exactly its body and retains valid preview-only evidence',
+    finiteTabSelectedResults.length === 3 && finiteTabSelectedResults.every(({ label, program, authority }) => program && authority
+      && program.tables.length === 1
+      && program.tables[0].requestedWidth === (label === 'OPTIONS' ? 300 : 200)
+      && program.cells.some(cell => factValue(cell.descriptorFacts.primaryContent) === (label === 'OPTIONS' ? 'OPTION BODY' : 'DETAIL BODY'))
+      && program.localExpansion?.invocations.filter(value => value.status === 'expanded').length === 1
+      && program.verification.game === X4_UI_LAYOUT_GAME_TRUTH
+      && validateX4UiLayoutEvidencePair(program, authority).valid),
+    detail(finiteTabSelectedResults.map(({ label, result, program }) => ({ label, status: result.status,
+      tables: program?.tables.map(table => table.requestedWidth), gaps: program?.gaps }))));
+  const finiteTabFirst = finiteTabSelectedResults[0];
+  check('B119 protected dispatch selections reject stale source identity before projection',
+    finiteTabFirst !== undefined && projectX4UiLayoutProgram(finiteTabModel, finiteTabTarget, finiteTabProfile, undefined,
+      { ...finiteTabFirst.selection, source: { ...finiteTabCatalog.sourceIdentity, sha256: '0'.repeat(64) } }).status === 'refused');
+  if (finiteTabFirst?.program && finiteTabFirst.authority) {
+    const forgedDispatchProgram = JSON.parse(JSON.stringify(finiteTabFirst.program)) as X4UiLayoutProgram;
+    (forgedDispatchProgram.previewPathCatalog.entries[0] as { label: string }).label = 'FORGED';
+    check('B119 dispatch labels cannot be forged independently of issued source evidence',
+      !validateX4UiLayoutEvidencePair(forgedDispatchProgram, finiteTabFirst.authority).valid);
+  }
+
+  const finiteParameterSource = finiteTabBodySource
+    .replace('details(frame)', 'details(frame,w)')
+    .replace('options(frame)', 'options(frame,w)')
+    .replace('width=200', 'width=math.floor(w*0.5)')
+    .replace('width=300})', 'width=math.floor(w*0.75)})')
+    .replace('pcall(fn,frame)', 'pcall(fn,frame,400)');
+  const finiteParameterModel = buildX4UiCallModel(input(finiteParameterSource, 'selftest/finite-parameter-body.lua'));
+  const finiteParameterTarget = namedTarget(finiteParameterModel, 'display');
+  const finiteParameterProfile = profileFor(finiteParameterModel, { minTextHeight: 10, localExpansion: { maxDepth: 4, maxInvocations: 8 } });
+  const finiteParameterCatalog = programOf(projectX4UiLayoutProgram(finiteParameterModel, finiteParameterTarget, finiteParameterProfile)).previewPathCatalog;
+  const finiteParameterPrograms = finiteParameterCatalog.entries.map(entry => programOf(projectX4UiLayoutProgram(
+    finiteParameterModel, finiteParameterTarget, finiteParameterProfile, undefined,
+    { catalogId: finiteParameterCatalog.id, source: finiteParameterCatalog.sourceIdentity,
+      selections: [{ id: entry.id, boundaryId: entry.boundaryId, armId: entry.armId }] },
+  )));
+  check('B119 protected body numeric expressions bind exact caller parameters without invented preview samples',
+    finiteParameterPrograms.length === 3
+      && finiteParameterPrograms.map(program => program.tables[0]?.requestedWidth).join(',') === '200,300,200'
+      && finiteParameterPrograms.every(program => program.tables[0]?.status !== 'refused'),
+    detail(finiteParameterPrograms.map(program => ({ widths: program.tables.map(table => table.requestedWidth), gaps: program.gaps.slice(0, 4) }))));
+
+  const nestedFiniteParameterSource = [
+    'local function panel(frame,width)',
+    ' local t=frame:addTable(1,{x=20,y=100,width=width})',
+    ' t:addRow(false,{})[1]:createText("NESTED BODY",{height=20})',
+    'end',
+    'local function details(frame,w) panel(frame,math.floor(w*0.5)) end',
+    'local function options(frame,w) panel(frame,math.floor(w*0.75)) end',
+    'local views={DETAILS=details,OPTIONS=options}',
+    'function display()',
+    ' local frame=Helper.createFrameHandle({}, {width=400,height=300})',
+    ' local fn=views[currentTab] or details',
+    ' pcall(fn,frame,400)',
+    'end',
+  ].join('\n');
+  const nestedFiniteModel = buildX4UiCallModel(input(nestedFiniteParameterSource, 'selftest/nested-finite-parameter.lua'));
+  const nestedFiniteTarget = namedTarget(nestedFiniteModel, 'display');
+  const nestedFiniteProfile = profileFor(nestedFiniteModel, { minTextHeight: 10, localExpansion: { maxDepth: 4, maxInvocations: 8 } });
+  const nestedFiniteCatalog = programOf(projectX4UiLayoutProgram(nestedFiniteModel, nestedFiniteTarget, nestedFiniteProfile)).previewPathCatalog;
+  const nestedFinitePrograms = nestedFiniteCatalog.entries.map(entry => programOf(projectX4UiLayoutProgram(
+    nestedFiniteModel, nestedFiniteTarget, nestedFiniteProfile, undefined,
+    { catalogId: nestedFiniteCatalog.id, source: nestedFiniteCatalog.sourceIdentity,
+      selections: [{ id: entry.id, boundaryId: entry.boundaryId, armId: entry.armId }] },
+  )));
+  check('B119 nested body helpers preserve parent parameter bindings in forwarded arithmetic',
+    nestedFinitePrograms.length === 3
+      && nestedFinitePrograms.map(program => program.tables[0]?.requestedWidth).join(',') === '200,300,200',
+    detail(nestedFinitePrograms.map(program => ({ widths: program.tables.map(table => table.requestedWidth), gaps: program.gaps.slice(0, 4) }))));
+
+  const siblingParameterSource = nestedFiniteParameterSource.replace('pcall(fn,frame,400)', 'pcall(fn,frame,400)\n pcall(fn,frame,200)');
+  const siblingParameterModel = buildX4UiCallModel(input(siblingParameterSource, 'selftest/sibling-protected-parameters.lua'));
+  const siblingParameterTarget = namedTarget(siblingParameterModel, 'display');
+  const siblingParameterProfile = profileFor(siblingParameterModel, { minTextHeight: 10, localExpansion: { maxDepth: 4, maxInvocations: 8 } });
+  const siblingParameterCatalog = programOf(projectX4UiLayoutProgram(siblingParameterModel, siblingParameterTarget, siblingParameterProfile)).previewPathCatalog;
+  const siblingParameterProgram = programOf(projectX4UiLayoutProgram(siblingParameterModel, siblingParameterTarget, siblingParameterProfile, undefined,
+    { catalogId: siblingParameterCatalog.id, source: siblingParameterCatalog.sourceIdentity,
+      selections: siblingParameterCatalog.entries.filter(entry => entry.label === 'DETAILS')
+        .map(entry => ({ id: entry.id, boundaryId: entry.boundaryId, armId: entry.armId })) }));
+  check('B119 inherited numeric bindings remain isolated between sibling protected invocations',
+    siblingParameterProgram.tables.map(table => table.requestedWidth).join(',') === '200,100');
+  const unknownNestedSource = nestedFiniteParameterSource.replace('pcall(fn,frame,400)', 'pcall(fn,frame,runtimeWidth)');
+  const unknownNestedModel = buildX4UiCallModel(input(unknownNestedSource, 'selftest/unknown-nested-parameter.lua'));
+  const unknownNestedTarget = namedTarget(unknownNestedModel, 'display');
+  const unknownNestedProfile = profileFor(unknownNestedModel, { minTextHeight: 10, localExpansion: { maxDepth: 4, maxInvocations: 8 } });
+  const unknownNestedCatalog = programOf(projectX4UiLayoutProgram(unknownNestedModel, unknownNestedTarget, unknownNestedProfile)).previewPathCatalog;
+  const unknownNestedEntry = unknownNestedCatalog.entries[0];
+  const unknownNestedProgram = programOf(projectX4UiLayoutProgram(unknownNestedModel, unknownNestedTarget, unknownNestedProfile, undefined,
+    { catalogId: unknownNestedCatalog.id, source: unknownNestedCatalog.sourceIdentity,
+      selections: [{ id: unknownNestedEntry.id, boundaryId: unknownNestedEntry.boundaryId, armId: unknownNestedEntry.armId }] }));
+  check('B119 inherited bindings do not invent a width for an unknown caller value',
+    unknownNestedProgram.tables.length === 1 && unknownNestedProgram.tables[0].requestedWidth === undefined
+      && unknownNestedProgram.tables[0].status === 'refused');
+
   const branchExpansionSource = [
     'local Helper = rawget(_G, "Helper")',
     'local function tabPanel(frame, width, label)',

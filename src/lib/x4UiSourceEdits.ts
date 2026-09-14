@@ -4547,11 +4547,14 @@ const structuralProducerSchemaNodeIsValid = (
       && structuralOptionalData(value, 'source', candidate => structuralLocationForText(candidate, text));
   }
   if (schema === 'branch-path') {
-    return structuralRecordKeys(value, ['boundaryId', 'boundary', 'armId', 'arm', 'armIndex', 'reachability'])
+    return structuralRecordKeys(value, ['boundaryId', 'boundary', 'armId', 'arm', 'armIndex', 'reachability'], ['label'])
       && structuralString(ownData(value, 'boundaryId'), true)
       && structuralLocationForText(ownData(value, 'boundary'), text)
       && structuralString(ownData(value, 'armId'), true)
-      && structuralEnum(ownData(value, 'arm'), ['then', 'elseif', 'else'])
+      && structuralEnum(ownData(value, 'arm'), ['then', 'elseif', 'else', 'dispatch'])
+      && (ownData(value, 'arm') === 'dispatch'
+        ? structuralString(ownData(value, 'label'), true) && (ownData(value, 'label') as string).length <= 128
+        : ownData(value, 'label') === undefined)
       && structuralIndex(ownData(value, 'armIndex'))
       && structuralEnum(ownData(value, 'reachability'), ['reachable', 'conditional', 'unreachable']);
   }

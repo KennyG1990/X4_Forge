@@ -4565,8 +4565,8 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
     ...variant,
     probe: protectedCallbackProbe(variant.source, `selftest/protected-shape-${index}.lua`),
   }));
-  check('B119 protected callbacks reject named/dynamic callbacks, parameters, varargs, forwarded arguments, and nesting',
-    protectedShapeProbes.every(candidate => candidate.probe.bodyCalls.length === 0
+  check('B119 protected callbacks reject dynamic callbacks, anonymous parameters, varargs, forwarded arguments, and nesting',
+    protectedShapeProbes.filter(candidate => candidate.label !== 'named callback binding').every(candidate => candidate.probe.bodyCalls.length === 0
       && candidate.probe.bodyInvocations.length === 0),
     detail(protectedShapeProbes.map(candidate => ({
       label: candidate.label,
@@ -4574,6 +4574,127 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
       bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
       gaps: candidate.probe.model.verificationGaps.map(gap => gap.reason),
     }))));
+
+  const namedProtectedModel = protectedShapeProbes.find(candidate => candidate.label === 'named callback binding')!.probe.model;
+  const namedProtectedInvocation = namedProtectedModel.localInvocations.find(candidate => candidate.calleeExpression === 'callback');
+  check('B119 exact named protected helper retains declaration and frame argument under a preview-only success boundary',
+    namedProtectedInvocation?.status === 'supported'
+      && namedProtectedInvocation.arguments.length === 1
+      && namedProtectedInvocation.arguments[0].reference?.kind === 'frame'
+      && namedProtectedInvocation.resultConsumed === false
+      && namedProtectedInvocation.context.reachability === 'conditional'
+      && namedProtectedInvocation.context.branchPath.length === 1
+      && namedProtectedInvocation.context.branchPath[0].boundary.start.offset === namedProtectedInvocation.source.start.offset
+      && namedProtectedModel.localFunctions.some(value => value.id === namedProtectedInvocation.calleeDeclarationId),
+    detail(namedProtectedInvocation));
+
+  const namedProtectedPainter = 'local function paint(frame, width) frame:addTable(1, {width=width}) return 70 end';
+  const protectedNamedVariants = [
+    { name: 'direct', setup: '', callee: 'paint' },
+    { name: 'renamed alias', setup: 'local draw = paint', callee: 'draw' },
+  ].map(variant => {
+    const model = buildX4UiCallModel(input([
+      namedProtectedPainter, variant.setup,
+      'function display()',
+      ' local frame=Helper.createFrameHandle({}, {width=400,height=300})',
+      ` local ok, value=pcall(${variant.callee},frame,200)`,
+      ' frame:addTable(1,{height=value})',
+      'end',
+    ].join('\n'), `selftest/protected-named-${variant.name}.lua`));
+    return { ...variant, model, invocation: model.localInvocations.find(value => value.calleeExpression === variant.callee) };
+  });
+  check('B119 named protected calls preserve forwarded scalar arguments but do not infer pcall success or helper returns',
+    protectedNamedVariants.every(({ model, invocation }) => invocation?.status === 'supported'
+      && invocation.arguments[1].value === 200
+      && !invocation.resultConsumed
+      && model.calls.filter(value => value.context.name === 'display').every(value =>
+        value.arguments.every(argument => !argument.localInvocationResult))),
+    detail(protectedNamedVariants.map(({ name, invocation }) => ({ name, invocation }))));
+
+  const namedProtectedNegatives = [
+    { name: 'shadowed pcall', before: 'local pcall = foreign', after: '', call: 'pcall(paint,frame,200)' },
+    { name: 'global pcall assignment', before: 'pcall = foreign', after: '', call: 'pcall(paint,frame,200)' },
+    { name: 'future environment assignment', before: '', after: '_G.pcall = foreign', call: 'pcall(paint,frame,200)' },
+    { name: 'escaped environment', before: 'sink(_G)', after: '', call: 'pcall(paint,frame,200)' },
+    { name: 'future callee assignment', before: '', after: 'paint = foreign', call: 'pcall(paint,frame,200)' },
+    { name: 'deferred callee assignment', before: 'local function replace() paint = foreign end', after: '', call: 'pcall(paint,frame,200)' },
+    { name: 'missing argument', before: '', after: '', call: 'pcall(paint,frame)' },
+    { name: 'extra argument', before: '', after: '', call: 'pcall(paint,frame,200,300)' },
+    { name: 'dynamic function', before: 'local draw = runtimeFunction', after: '', call: 'pcall(draw,frame,200)' },
+  ].map(variant => {
+    const model = buildX4UiCallModel(input([
+      namedProtectedPainter, variant.before,
+      'function display() local frame=Helper.createFrameHandle({}, {})',
+      variant.call, 'end', variant.after,
+    ].join('\n'), `selftest/protected-named-negative-${variant.name}.lua`));
+    return { name: variant.name, invocations: model.localInvocations.filter(value => value.context.name === 'display') };
+  });
+  check('B119 named protected helpers reject pcall authority hazards, future callee mutation, dynamic identity and wrong arity',
+    namedProtectedNegatives.every(variant => variant.invocations.every(value => value.status !== 'supported')),
+    detail(namedProtectedNegatives));
+
+  const finiteProtectedSource = [
+    'local function details(frame) frame:addTable(1,{width=200}) end',
+    'local function options(frame) frame:addTable(1,{width=300}) end',
+    'local views={DETAILS=details, OPTIONS=options}',
+    'function display() local frame=Helper.createFrameHandle({}, {})',
+    'local fn=views[currentTab] or details',
+    'pcall(fn,frame)',
+    'end',
+  ].join('\n');
+  const finiteProtectedModel = buildX4UiCallModel(input(finiteProtectedSource, 'selftest/finite-protected.lua'));
+  const finiteProtectedCalls = finiteProtectedModel.localInvocations.filter(value => value.source.start.line === 6);
+  check('B119 finite function table dispatch preserves keyed choices and fallback as distinct source-bound preview alternatives',
+    finiteProtectedCalls.length === 3
+      && new Set(finiteProtectedCalls.map(value => value.id)).size === 3
+      && finiteProtectedCalls.every(value => value.status === 'supported'
+        && value.context.branchPath.length === 1
+        && String(value.context.branchPath[0].arm) === 'dispatch'
+        && value.context.reachability === 'conditional'
+        && value.arguments.length === 1 && value.arguments[0].reference?.kind === 'frame'
+        && !value.resultConsumed)
+      && finiteProtectedCalls.map(value => (value.context.branchPath[0] as unknown as { label: string }).label).join(',') === 'DETAILS,OPTIONS,Default',
+    detail(finiteProtectedCalls));
+  const finiteProtectedMutationVariants = [
+    'views.DETAILS = foreign',
+    'views[currentTab] = foreign',
+    'local alias=views',
+    'sink(views)',
+    'local function change() views.OPTIONS = foreign end',
+    'local function change() options = foreign end',
+    'function details(frame) sink(frame) end',
+    'setmetatable(views, foreign)',
+  ].map((mutation, index) => {
+    const model = buildX4UiCallModel(input(`${finiteProtectedSource}\n${mutation}`, `selftest/finite-protected-mutation-${index}.lua`));
+    return { mutation, invocations: model.localInvocations.filter(value => value.source.start.line === 6) };
+  });
+  check('B119 finite dispatch rejects later or deferred table/callee mutation, aliases, escapes and metatable replacement',
+    finiteProtectedMutationVariants.every(variant => variant.invocations.length > 0
+      && variant.invocations.every(value => value.status !== 'supported')),
+    detail(finiteProtectedMutationVariants));
+
+  const fixedLookupModel = buildX4UiCallModel(input(finiteProtectedSource
+    .replace('views[currentTab] or details', 'views["DETAILS"]')
+    .replace('pcall(fn,frame)', 'fn(frame)'), 'selftest/fixed-function-lookup.lua'));
+  check('B119 a proven literal function-table lookup preserves existing direct local-helper expansion',
+    fixedLookupModel.localInvocations.some(value => value.calleeExpression === 'fn' && value.status === 'supported'),
+    detail(fixedLookupModel.localInvocations));
+  const fixedMutationModel = buildX4UiCallModel(input(`${finiteProtectedSource.replace('views[currentTab] or details', 'views["DETAILS"]')}\nviews.DETAILS = foreign`,
+    'selftest/fixed-protected-mutable-table.lua'));
+  check('B119 a fixed-key read cannot bypass protected dispatch mutation checks through a local alias',
+    fixedMutationModel.localInvocations.filter(value => value.source.start.line === 6).every(value => value.status !== 'supported'));
+  const finiteMalformedTables = [
+    '{DETAILS=details,DETAILS=options}', '{[runtimeKey]=details}', '{DETAILS=details,OTHER=foreign}',
+    '{DETAILS=details,OTHER=7}', '{}',
+    `{${Array.from({ length: 33 }, (_, index) => `K${index}=details`).join(',')}}`,
+  ].map((constructor, index) => {
+    const model = buildX4UiCallModel(input(finiteProtectedSource.replace('{DETAILS=details, OPTIONS=options}', constructor),
+      `selftest/finite-protected-shape-${index}.lua`));
+    return model.localInvocations.filter(value => value.source.start.line === 6);
+  });
+  check('B119 finite dispatch rejects duplicate/dynamic keys, unknown or non-function members, empty and excessive tables',
+    finiteMalformedTables.every(invocations => invocations.length > 0 && invocations.every(value => value.status !== 'supported')),
+    detail(finiteMalformedTables));
 
   const limitedProtectedCallbackSource = [
     'local menu = { name = "ProtectedLimit", layer = 1 }',

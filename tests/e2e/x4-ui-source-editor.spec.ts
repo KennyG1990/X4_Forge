@@ -5058,6 +5058,25 @@ for (const realMenu of [
         }
         checkpoints.push({ label: 'six-tabs-rendered', tabInk });
         await capture('tabs');
+        const section = page.getByRole('combobox', { name: 'Preview section', exact: true });
+        await expect(section).toBeVisible();
+        expect(await section.locator('option').allTextContents()).toEqual([
+          'Choose a section', 'DOSSIER', 'INFLUENCE', 'INTEL', 'NEWS', 'FLEET', 'SETTINGS', 'Default',
+        ]);
+        const sectionSourceBefore = await readB119LuaRoundtripSelectedWorkspace(page);
+        const sectionHistoryBefore = await readB119LuaRoundtripHistory(page);
+        const beforeBodyNodes = await hierarchy.getByRole('treeitem').count();
+        await section.selectOption({ label: 'DOSSIER' });
+        await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
+        await expect.poll(() => hierarchy.getByRole('treeitem').count()).toBeGreaterThan(beforeBodyNodes);
+        expect(await readB119LuaRoundtripSelectedWorkspace(page)).toEqual(sectionSourceBefore);
+        expect(await readB119LuaRoundtripHistory(page)).toEqual(sectionHistoryBefore);
+        // This capture documents current body gaps; it is not full-body fidelity
+        // or editable-body acceptance. Clear the scenario before the proven edit.
+        await capture('dossier-preview');
+        await page.getByTestId('x4-ui-preview-sections-reset').click();
+        await expect(section).toHaveValue('');
+        await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
       }
       const node = hierarchy.getByRole('treeitem').filter({ has: page.getByText(`Text · ${realMenu.caption}`, { exact: true }) });
       await expect(node).toHaveCount(1);

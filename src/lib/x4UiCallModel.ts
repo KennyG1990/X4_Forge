@@ -222,11 +222,11 @@ export type X4UiValue = X4UiStaticValue<X4UiLiteral>;
 
 export type X4UiBranchReachability = 'reachable' | 'conditional' | 'unreachable';
 
-export type X4UiBranchArm = 'then' | 'elseif' | 'else';
+export type X4UiBranchArm = 'then' | 'elseif' | 'else' | 'dispatch';
 
 /**
- * One lexical if/elseif/else arm in a record's source path. The boundary ID
- * identifies the whole IfStatement; the arm ID identifies one arm within it.
+ * One source branch or protected preview choice. The boundary ID identifies
+ * its if statement or protected call; the arm ID identifies one alternative.
  */
 export interface X4UiBranchPathSegment {
   readonly boundaryId: string;
@@ -234,6 +234,8 @@ export interface X4UiBranchPathSegment {
   readonly armId: string;
   readonly arm: X4UiBranchArm;
   readonly armIndex: number;
+  /** Source key (or Default) for a finite protected dispatch choice. */
+  readonly label?: string;
   /** Reachability of the path through this arm, including enclosing paths. */
   readonly reachability: X4UiBranchReachability;
 }
@@ -830,6 +832,8 @@ interface InternalValue {
   rowBindingEvidence?: boolean;
   functionNode?: LuaNode;
   localFunction?: InternalLocalFunction;
+  protectedIndirectFunction?: boolean;
+  finiteDispatch?: InternalFiniteDispatch;
   helperAlias?: InternalHelperAlias;
   helperAliasCandidate?: InternalHelperAliasCandidate;
   directHelperScaleCall?: InternalDirectHelperScaleCall;
@@ -848,6 +852,16 @@ interface InternalLocalFunction {
   readonly declaration: X4UiLocalFunctionDeclaration;
   readonly declaredName: string;
   readonly declarationBindingSource: X4UiSourceLocation;
+}
+
+interface InternalFiniteDispatch {
+  readonly table: TrackedObject;
+  readonly name: string;
+  readonly choices: readonly {
+    label: string;
+    callee: InternalLocalFunction;
+    calleeNode: LuaNode;
+  }[];
 }
 
 interface InternalHelperAlias {
@@ -1111,6 +1125,10 @@ class X4UiCallModelBuilder {
   private readonly controlFlowMutationStates: ControlFlowMutationState[] = [];
   private readonly controlFlowReachability = new WeakMap<LuaNode, ControlFlowReachabilityMetadata[]>();
   private readonly processedProtectedCallbacks = new Set<string>();
+  /** Conservative whole-file writes, including deferred bodies, for protected callee identity. */
+  private readonly protectedCalleeWrites = new Set<string>();
+  private sourceAst: LuaNode | undefined;
+  private readonly finiteFunctionTables = new Map<TrackedObject, InternalFiniteDispatch | undefined>();
   private nextObjectId = 1;
   private nextRecordTie = 1;
   private gapsTruncated = false;
@@ -1159,6 +1177,8 @@ class X4UiCallModelBuilder {
       return this.finish(false);
     }
 
+    this.sourceAst = ast;
+    this.scanProtectedCalleeWrites(ast);
     this.scanProtectedCallbackAuthorityHazards(ast);
     this.processStatements(nodeArray(ast, 'body'), new Map(this.bindings), this.topContext);
     return this.finish(true);
@@ -1352,7 +1372,8 @@ class X4UiCallModelBuilder {
     boundaryId: string,
     arm: X4UiBranchArm,
     armIndex: number,
-    armReachability: X4UiBranchReachability
+    armReachability: X4UiBranchReachability,
+    label?: string,
   ): X4UiFunctionContext {
     const reachability = this.combineReachability(parent.reachability, armReachability);
     const segment: X4UiBranchPathSegment = Object.freeze({
@@ -1361,6 +1382,7 @@ class X4UiCallModelBuilder {
       armId: `${boundaryId}:arm:${armIndex}`,
       arm,
       armIndex,
+      ...(label === undefined ? {} : { label }),
       reachability
     });
     return {
@@ -1535,6 +1557,8 @@ class X4UiCallModelBuilder {
       globalAuthority: source.globalAuthority,
       functionNode: source.functionNode,
       localFunction: source.localFunction,
+      protectedIndirectFunction: source.protectedIndirectFunction,
+      finiteDispatch: source.finiteDispatch,
       helperAlias: source.helperAlias,
       helperAliasCandidate: source.helperAliasCandidate,
       directHelperScaleCall: source.directHelperScaleCall
@@ -1855,6 +1879,7 @@ class X4UiCallModelBuilder {
     node: LuaNode,
   ): InternalValue {
     const result = this.valueAtUse(field, node);
+    if (result.localFunction) result.protectedIndirectFunction = true;
     const baseName = baseNode.type === 'Identifier' ? nodeField<string>(baseNode, 'name') : undefined;
     const numericExpression = this.numericExpressionForValue(field, false);
     const normalizedProperty = normalizePropertyName(property);
@@ -2277,6 +2302,57 @@ class X4UiCallModelBuilder {
     return result;
   }
 
+  private finiteFunctionTable(baseNode: LuaNode | undefined, object: TrackedObject): InternalFiniteDispatch | undefined {
+    const name = baseNode?.type === 'Identifier' && nodeField<boolean>(baseNode, 'isLocal') === true
+      ? nodeField<string>(baseNode, 'name') : undefined;
+    if (!name || !object.known || object.mutated || object.escaped || !object.declarationNode
+      || !object.aliases.has(name) || !this.sourceAst) return undefined;
+    if (this.finiteFunctionTables.has(object)) return this.finiteFunctionTables.get(object);
+    this.finiteFunctionTables.set(object, undefined);
+    const fields = nodeArray(object.declarationNode, 'fields');
+    if (fields.length < 1 || fields.length > 32) return undefined;
+    const choices: InternalFiniteDispatch['choices'][number][] = [];
+    const keys = new Set<string>();
+    for (const field of fields) {
+      const keyNode = nodeField<LuaNode>(field, 'key');
+      const label = field.type === 'TableKeyString' ? nodeField<string>(keyNode, 'name')
+        : field.type === 'TableKey' ? staticString(keyNode) : undefined;
+      const calleeNode = nodeField<LuaNode>(field, 'value');
+      const value = label === undefined ? undefined : object.fields.get(label);
+      const callee = value?.localFunction;
+      if (!label || label.length > 128 || keys.has(label) || !callee || value?.protectedIndirectFunction
+        || calleeNode?.type !== 'Identifier'
+        || this.protectedCalleeWrites.has(nodeField<string>(calleeNode, 'name') || '')
+        || this.protectedCalleeWrites.has(callee.declaredName)) return undefined;
+      keys.add(label);
+      choices.push({ label, callee, calleeNode });
+    }
+    // Admit only the exact local constructor and direct index reads. This
+    // whole-file check includes deferred writes and conservatively rejects aliases.
+    const pending: { node: LuaNode; parent?: LuaNode; grandparent?: LuaNode }[] = [{ node: this.sourceAst }];
+    let declarations = 0;
+    while (pending.length) {
+      const { node, parent, grandparent } = pending.pop()!;
+      if (node.type === 'Identifier' && nodeField<string>(node, 'name') === name) {
+        const variables = nodeArray(parent, 'variables');
+        const index = variables.indexOf(node);
+        if (parent?.type === 'LocalStatement' && index >= 0
+          && nodeArray(parent, 'init')[index] === object.declarationNode) declarations += 1;
+        else if (!(parent?.type === 'IndexExpression' && nodeField<LuaNode>(parent, 'base') === node
+          && !(grandparent?.type === 'AssignmentStatement' && nodeArray(grandparent, 'variables').includes(parent)))) return undefined;
+      }
+      for (const [key, child] of Object.entries(node)) {
+        if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+        const children = Array.isArray(child) ? child.filter(isLuaNode) : isLuaNode(child) ? [child] : [];
+        for (const candidate of children) pending.push({ node: candidate, parent: node, grandparent: parent });
+      }
+    }
+    if (declarations !== 1) return undefined;
+    const result = { table: object, name, choices };
+    this.finiteFunctionTables.set(object, result);
+    return result;
+  }
+
   private evaluateIndex(node: LuaNode, context: X4UiFunctionContext): InternalValue {
     const baseNode = nodeField<LuaNode>(node, 'base');
     const indexNode = nodeField<LuaNode>(node, 'index');
@@ -2295,6 +2371,21 @@ class X4UiCallModelBuilder {
       return this.possibleMathAuthorityValue(node, 'dynamic index retains possible math authority');
     }
     if (!base.object) return this.unknown(node, 'reference', 'indexed base value is unresolved');
+
+    const finiteDispatch = this.finiteFunctionTable(baseNode, base.object);
+    if (finiteDispatch) {
+      const literalKey = staticString(indexNode);
+      if (literalKey !== undefined) {
+        const choice = finiteDispatch.choices.find(candidate => candidate.label === literalKey);
+        if (!choice) return { publicValue: this.value(node, 'static', 'nil', null) };
+        const value = this.valueAtUse(base.object.fields.get(literalKey)!, node);
+        value.protectedIndirectFunction = false;
+        return value;
+      }
+      const result = this.dynamic(node, 'function', 'finite source dispatch requires an explicit preview choice');
+      result.finiteDispatch = finiteDispatch;
+      return result;
+    }
 
     if (index.publicValue.status === 'static' && (index.publicValue.type === 'string' || index.publicValue.type === 'number')) {
       const key = String(index.publicValue.value);
@@ -2400,6 +2491,18 @@ class X4UiCallModelBuilder {
     const left = this.evaluate(nodeField<LuaNode>(node, 'left'), context);
     const right = this.evaluate(nodeField<LuaNode>(node, 'right'), context);
     const operator = nodeField<string>(node, 'operator') || '';
+    if (left.finiteDispatch && operator === 'or') {
+      if (!right.localFunction || right.protectedIndirectFunction || !right.sourceNode
+        || left.finiteDispatch.choices.length >= 32
+        || this.protectedCalleeWrites.has(right.localFunction.declaredName)
+        || this.protectedCalleeWrites.has(nodeField<string>(right.sourceNode, 'name') || '')) {
+        return this.dynamic(node, 'function', 'finite dispatch fallback is not an immutable exact local function');
+      }
+      const result = this.dynamic(node, 'function', 'finite source dispatch and fallback require an explicit preview choice');
+      result.finiteDispatch = { ...left.finiteDispatch, choices: [...left.finiteDispatch.choices,
+        { label: 'Default', callee: right.localFunction, calleeNode: right.sourceNode }] };
+      return result;
+    }
     const leftNumericExpression = this.numericExpressionForValue(left);
     const rightNumericExpression = this.numericExpressionForValue(right);
     if ((operator === 'and' || operator === 'or')
@@ -3116,6 +3219,110 @@ class X4UiCallModelBuilder {
     return undefined;
   }
 
+  private scanProtectedCalleeWrites(ast: LuaNode): void {
+    const pending = [ast];
+    while (pending.length > 0) {
+      const node = pending.pop()!;
+      const targets = node.type === 'AssignmentStatement' ? nodeArray(node, 'variables')
+        : node.type === 'FunctionDeclaration' && nodeField<boolean>(node, 'isLocal') !== true
+          ? [nodeField<LuaNode>(node, 'identifier')].filter(isLuaNode) : [];
+      for (const target of targets) {
+        if (target.type !== 'Identifier') continue;
+        const name = nodeField<string>(target, 'name');
+        if (name) this.protectedCalleeWrites.add(name);
+      }
+      for (const [key, child] of Object.entries(node)) {
+        if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+        if (Array.isArray(child)) { for (const candidate of child) if (isLuaNode(candidate)) pending.push(candidate); }
+        else if (isLuaNode(child)) pending.push(child);
+      }
+    }
+  }
+
+  private evaluateNamedProtectedCall(
+    node: LuaNode,
+    shape: CallShape,
+    args: InternalValue[],
+    context: X4UiFunctionContext,
+  ): InternalValue | undefined {
+    if (shape.method !== 'direct' || shape.name !== 'pcall') return undefined;
+    const callbackNode = shape.args[0];
+    const callbackName = callbackNode?.type === 'Identifier' ? nodeField<string>(callbackNode, 'name') : undefined;
+    if (!callbackName || nodeField<boolean>(callbackNode, 'isLocal') !== true) return undefined;
+    const binding = this.bindings.get(callbackName);
+    const localFunction = binding?.value.localFunction;
+    if (!localFunction || args[0]?.localFunction !== localFunction || args[0].protectedIndirectFunction) return undefined;
+    let reason = this.exactGlobalPcallFailureReason(shape);
+    if (!reason && (this.protectedCalleeWrites.has(callbackName)
+      || this.protectedCalleeWrites.has(localFunction.declaredName))) {
+      reason = 'protected local callee or its alias is reassigned in source, including deferred bodies';
+    }
+    if (!reason && this.protectedCallbackAnalysisDepth > 0) reason = 'nested protected callback traversal was refused';
+    const key = this.locationIdentity(this.location(node));
+    if (!reason && this.processedProtectedCallbacks.has(key)) reason = 'protected callback was already processed';
+    if (!reason && this.protectedCallbackCount >= MAX_PROTECTED_CALLBACKS) {
+      reason = `protected callback count exceeds max ${MAX_PROTECTED_CALLBACKS}`;
+    }
+    if (reason) {
+      this.addGap('unsupported', 'unsupported', this.location(node), reason);
+      this.addLocalInvocation(node, shape, args, context, false);
+      this.invalidateOpaqueCallArguments(shape, undefined, args);
+      return this.dynamic(node, 'expression', reason);
+    }
+    this.processedProtectedCallbacks.add(key);
+    this.protectedCallbackCount += 1;
+    const callbackShape: CallShape = {
+      name: callbackName, calleeNode: callbackNode, method: 'direct', args: shape.args.slice(1),
+    };
+    const forwarded = args.slice(1);
+    this.invalidateOpaqueCallArguments(callbackShape, undefined, forwarded);
+    // pcall's first return is success, not the helper return. Its body is only
+    // admitted through the same explicit preview-success boundary as callbacks.
+    this.addLocalInvocation(node, callbackShape, forwarded, this.protectedCallbackContext(context, node), false, binding);
+    return this.dynamic(node, 'expression', 'protected success and return values remain runtime-dependent');
+  }
+
+  private evaluateFiniteProtectedCall(
+    node: LuaNode, shape: CallShape, args: InternalValue[], context: X4UiFunctionContext,
+  ): InternalValue | undefined {
+    if (shape.method !== 'direct' || shape.name !== 'pcall' || !args[0]?.finiteDispatch) return undefined;
+    const dispatch = args[0].finiteDispatch;
+    const source = this.location(node);
+    const key = this.locationIdentity(source);
+    const callbackName = shape.args[0]?.type === 'Identifier' ? nodeField<string>(shape.args[0], 'name') : undefined;
+    let reason = this.exactGlobalPcallFailureReason(shape);
+    if (!reason && (!callbackName || this.protectedCalleeWrites.has(callbackName)
+      || dispatch.table.mutated || dispatch.table.escaped)) reason = 'finite protected dispatch binding or table is mutable or escaped';
+    if (!reason && this.protectedCallbackAnalysisDepth > 0) reason = 'nested protected callback traversal was refused';
+    if (!reason && this.processedProtectedCallbacks.has(key)) reason = 'protected callback was already processed';
+    if (!reason && this.protectedCallbackCount >= MAX_PROTECTED_CALLBACKS) reason = `protected callback count exceeds max ${MAX_PROTECTED_CALLBACKS}`;
+    if (reason) {
+      this.addGap('unsupported', 'unsupported', source, reason);
+      this.addLocalInvocation(node, shape, args, context, false);
+      this.invalidateOpaqueCallArguments(shape, undefined, args);
+      return this.dynamic(node, 'expression', reason);
+    }
+    this.processedProtectedCallbacks.add(key);
+    this.protectedCallbackCount += 1;
+    const boundaryId = `${source.file}|${source.sourcePath || ''}|${source.start.offset}|${source.end.offset}`;
+    for (const [index, choice] of dispatch.choices.entries()) {
+      const callbackShape: CallShape = {
+        method: 'direct', name: nodeField<string>(choice.calleeNode, 'name'),
+        calleeNode: choice.calleeNode, args: shape.args.slice(1),
+      };
+      const binding: Binding = {
+        value: { publicValue: this.value(choice.calleeNode, 'static', 'function'), localFunction: choice.callee },
+        source: choice.callee.declarationBindingSource,
+      };
+      const forwarded = args.slice(1);
+      this.invalidateOpaqueCallArguments(callbackShape, undefined, forwarded);
+      this.addLocalInvocation(node, callbackShape, forwarded,
+        this.branchContext(context, source, boundaryId, 'dispatch', index, 'conditional', choice.label),
+        false, binding, `:dispatch:${index}`);
+    }
+    return this.dynamic(node, 'expression', 'protected dispatch success and return values remain runtime-dependent');
+  }
+
   private isImmediateProtectedCallbackArgument(shape: CallShape, callback: LuaNode): boolean {
     const calleeRange = nodeRange(shape.calleeNode);
     const callbackRange = nodeRange(callback);
@@ -3344,7 +3551,8 @@ class X4UiCallModelBuilder {
     args: InternalValue[],
     context: X4UiFunctionContext,
     resultConsumed: boolean,
-    binding?: Binding
+    binding?: Binding,
+    identitySuffix = '',
   ): X4UiLocalFunctionInvocation {
     const source = this.location(node);
     const localFunction = binding?.value.localFunction;
@@ -3369,7 +3577,7 @@ class X4UiCallModelBuilder {
         : 'direct';
     }
     const invocation: X4UiLocalFunctionInvocation = {
-      id: this.localInvocationId(source),
+      id: this.localInvocationId(source) + identitySuffix,
       source,
       sourceOrder: this.sourceOffset(shape.calleeNode),
       calleeSource: this.location(shape.calleeNode),
@@ -3476,6 +3684,10 @@ class X4UiCallModelBuilder {
     if (rawgetAuthority) return rawgetAuthority;
     const helperAliasCandidate = this.rawgetHelperAliasCandidate(node, shape);
     if (helperAliasCandidate) return helperAliasCandidate;
+    const finiteProtectedCall = this.evaluateFiniteProtectedCall(node, shape, args, context);
+    if (finiteProtectedCall) return finiteProtectedCall;
+    const namedProtectedCall = this.evaluateNamedProtectedCall(node, shape, args, context);
+    if (namedProtectedCall) return namedProtectedCall;
     this.processProtectedCallbackIfPresent(node, shape, context);
 
     if (shape.method === ':'

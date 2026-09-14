@@ -8,6 +8,20 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 protected-tab checkpoint: PARTIAL, implemented dispatch/selector infrastructure.
+Plan:docs/plans/2026-09-14-b119-protected-tab-body.md. Parser160/160,layout1063/1063,typecheck PASS;
+browser-section1/1 proves DOSSIER selection leaves Lua/history unchanged, then heading edit/reopen.
+Actual screenshot inspected: body is STILL BLANK. Two-profile body widths now resolve, but first
+sectionY hits exact numeric AST validation at source695; laterY/helper returns and captions remain.
+Active-path source editing stays locked. Do not equate dispatch recognition with body acceptance.
+Evidence:test-results/b119-protected-tab-body-20260914/RESULTS.md. Source174/174,session,scenarios,
+pipeline127/127,component,lint/types PASS. Scene FAILED194/196, both exact failures reproduced at
+parent eda059f; do not alter expected counts without causal proof. Standalone precommit hit an
+assistant diagnostic-snapshot isolation error; snapshot moved to existing excluded temp_import,
+all416hashes preserved, typecheck recovery PASS. Unchanged normal commit hook must rerun fully;
+checkpoint/{commit-exit,post-commit}.json decides local checkpoint completion. No bypass, full
+integration/native/release/push claim. Full goal PARTIAL; actual body edit still not achieved.
+
 2026-09-14 17:36Z: Source metric arithmetic and rendered HUB tab strip VERIFIED; full goal PARTIAL.
 Real originalHUB Y59/80 at two profiles, allsix labels/indexes/widths, exact heading CAS/inverse.
 Corrected browser1/1: six source-colored text pixel checks, heading/history/export/reopen;

@@ -754,12 +754,15 @@ function validatePathCatalog(
   for (const entryValue of entries) {
     if (!hasClosedOwnDataFields(entryValue, [
       'id', 'boundaryId', 'armId', 'boundary', 'arm', 'armIndex', 'reachability', 'invocationIds', 'provenance',
-    ])
+    ], ['label'])
       || !isNonEmptyString(dataField(entryValue, 'id'))
       || !isNonEmptyString(dataField(entryValue, 'boundaryId'))
       || !isNonEmptyString(dataField(entryValue, 'armId'))
       || !closedSampleSourceLocation(dataField(entryValue, 'boundary'))
-      || !['then', 'elseif', 'else'].includes(String(dataField(entryValue, 'arm')))
+      || !['then', 'elseif', 'else', 'dispatch'].includes(String(dataField(entryValue, 'arm')))
+      || (dataField(entryValue, 'arm') === 'dispatch'
+        ? !isNonEmptyString(dataField(entryValue, 'label')) || (dataField(entryValue, 'label') as string).length > 128
+        : dataField(entryValue, 'label') !== undefined)
       || !Number.isSafeInteger(dataField(entryValue, 'armIndex'))
       || (dataField(entryValue, 'armIndex') as number) < 0
       || !['reachable', 'conditional', 'unreachable'].includes(String(dataField(entryValue, 'reachability')))
