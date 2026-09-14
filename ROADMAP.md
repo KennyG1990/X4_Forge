@@ -8346,3 +8346,45 @@ Evidence:test-results/b119-aligned-text-bounds-20260914/. Allguards/cleanup PASS
 No capability-map delta or Git/external/native writes. Full B119 PARTIAL; full integration,
 packaged/native,3menus/12references/9journeys remain. No Canvas golden changes.
 Commit point: fix(ui): align fontstring bounds with native anchors (not committed).
+
+## 2026-09-14 — B119 linear dense-array validation (bounded VERIFIED)
+
+Existing Canvas helper now uses indexed property-name membership; every prototype,
+descriptor, length, maximum and malformed-key guard retained. Renderer172 baseline ->187
+checks, causal old-helper red, final types/lint PASS. Authorized unchanged browser-history
+journey/profile41.1s and profiling-off40.7s each PASSfirst,0flake/skip/report errors.
+All14 whole-file Lua/canvas states equal pre-repair baseline; screenshots inspected.
+Helper sampled self6.004s ->0.105s; individual profiles, not a general latency guarantee.
+All410 run inputs/protected artifacts/live files preserved, isolated stacks stopped.
+Plan/evidence/review/AAR:docs/plans/2026-09-14-b119-dense-array-validation.md and
+test-results/b119-dense-array-20260914/. No capability-map delta or external writes.
+Full B119 PARTIAL; prior fullgate129pass/2fail/1flake unresolved, package/native pending.
+Commit point: perf(ui): make canvas dense-array validation linear (not committed).
+
+## 2026-09-14 — B119 corrected-probe Lua-file journey (bounded VERIFIED)
+
+Current source completed download/reload/import/edit/history/collision/staged-discard/
+workspace restoration through the real browser,1/1 first-pass with all original assertions.
+16 checkpoints and two independently byte-verified Lua downloads (2818/2815bytes). No page,
+console or network errors. Corrected observer431 events with no overflow/delivery failure;
+original cancelled GET did not recur, so its cause remains UNPROVEN and no exception added.
+Current410 inputs/protected bytes and16 output-file containment verified; isolated tree gone.
+Import/first/second export screenshots inspected. Plan/review/AAR:
+docs/plans/2026-09-14-b119-workspace-abort-trace.md; evidence:
+test-results/b119-workspace-abort-20260914/fixed-verification.json.
+Earlier faulty diagnostic runs remain FAILED. No capability-map delta or external writes.
+Full B119 PARTIAL; old fullgate129pass/2fail/1flake and packaged/native obligations remain.
+Commit point: test(ui): verify Lua-file journey with corrected request probe (not committed).
+
+### 2026-09-14 — B119 full automated integration VERIFIED after renderer repair
+
+Complete132/132 first-pass,0failed/flaky/skipped/reporterrors;12:04:27Z–12:32:49Z.
+Original history, MENU/HUB/COMM, Lua download/reload/import/history/collision/workspace
+cases all passed without deadline or assertion changes. All412pins/403members, protected
+bytes and live state unchanged;17required artifacts contained; full owned tree stopped.
+Independent proof:test-results/b119-full-post-repair-20260914/full-verification.json.
+Actual authoring/property/history/recovery/real-menu screenshots inspected; full-menu
+parity/installed/native proof remains OPEN and full B119 PARTIAL. No new product change,
+commit/push/release/install or capability-map delta in this validation unit.
+Plan/review/AAR:docs/plans/2026-09-14-b119-full-integration-post-repair.md.
+Commit point: test(ui): verify full B119 integration after renderer repair (not committed).

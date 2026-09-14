@@ -1,6 +1,144 @@
 # Session handoff — B119 canvas-first UI builder
 
-Project: F:/DEV_ENV/X4_Forge. Checkpoint preparation: 2026-09-14, local recovery commit on main.
+LATEST: standalone unchanged Vite selftest passed; cause/context difference unresolved.
+One fresh full-hook checkpoint attempt2 prepared; same12paths, original npm hook/deadlines.
+Read test-results/b119-green-checkpoint-20260914/attempt2/{commit-exit,post-commit}.json
+and git status/log for terminal outcome. If it fails, no further checkpoint retry without
+context diagnosis. Previous failed attempt remains evidence. No push/release/install.
+
+CURRENT CHECKPOINT FAILED at precommit12:44:54Z: Vite readiness request timed out.
+No commit: HEAD5b730a6,12paths staged,93excluded preserved; failed-audit.json PASS.
+Current diagnostic is one unchanged Vite lifecycle selftest; do not retry commit or weaken
+timeout from an unexplained pass. Plan:2026-09-14-b119-green-local-checkpoint.md.
+Read its latest close and generated receipts before resuming. No job from commit remains.
+
+CHECKPOINT PREPARED: docs/plans/2026-09-14-b119-green-local-checkpoint.md.
+Exact12-path local commit, parent5b730a6; normal installed precommit hook required.
+Do not assume commit succeeded: read test-results/b119-green-checkpoint-20260914/
+commit-exit.json and post-commit.json, then git log/status. No interim push/install/release.
+After verified checkpoint, NEXT is packaged-host/full imported-menu experience reconciliation,
+not another identical full-suite rerun. All native/installed/full-menu goal limits remain.
+
+Project: F:/DEV_ENV/X4_Forge. Current state: 2026-09-14 12:35Z.
+LATEST VERIFIED: full automated132/132,0failed/flaky/skipped/reporterrors. Session32028
+terminal0 at12:32:49.662Z; no job running. Evidence:test-results/b119-full-post-repair-20260914/
+full-verification.json and full-receipt.json. Independent verifierPASS;412pins/403members,
+50protectedartifacts/4realLua/19livefiles unchanged;17artifactscontained;treeGone=true,
+only3100/PID54964 remains, X4absent. No source changes during run, no commits/pushes.
+History44.8s first pass; MENU/HUB/COMM and Lua-file journey all first pass. Lua16checkpoints,
+two source-byte-matching downloads, no page/console/request errors; trace443events/0aborts.
+Current rendered captures inspected; real imported menu bodies still partial, not native parity.
+NEXT: normal precommit/scoped local checkpoint for renderer+selftest+probe, then packaged-host
+and outstanding full-menu/fidelity acceptance reconciliation. No interim push; do not republish0.0.78.
+Full goal PARTIAL:9journeys/3menus/12references/installed/native obligations retained.
+Plan/review/AAR:docs/plans/2026-09-14-b119-full-integration-post-repair.md.
+
+PRIOR RUN START (COMPLETED; DO NOT RESTART):
+RUNNING full132-test gate: docs/plans/2026-09-14-b119-full-integration-post-repair.md.
+Tool session32028, runnerPID74084, started12:04:27.751Z. Poll SAME live handle; no duplicate
+run/restart from an observation timeout. Evidence:test-results/b119-full-post-repair-20260914/.
+No spec/grep filter,3200/3201,workers1,trace on,CPU profiles off, workspace-abort observer on.
+Preflight syntax/isolation/list PASS;132tests/25files;412pins/403members uncovered0;
+50protectedartifacts/4realLua/19livefiles guardsPASS, X4absent/only3100PID54964.
+All executable inputs frozen until terminal receipt and cleanup. After terminal run
+verify-full.mjs and inspect original current-run screenshots; no green claim from interim ok lines.
+Prior full gate129pass/2fail/1flake retained. No commit/push/release/install/game changes.
+
+PRIOR COMPLETED DIAGNOSTIC:
+LATEST: docs/plans/2026-09-14-b119-reference-cpu.md, statusPARTIAL.
+Direct actual loader force=true measured1142.659/1049.307ms with identical semantic hash;
+parsing/build~708/650ms, discovery~377/354ms. Exact copied stopped-run index inside
+test-results/b119-reference-cpu-20260914/direct-state; source DB/WAL/SHM unchanged.
+Profiled real-MENU run FAILED/non-clean1flaky: cold scan966s exceeded600s first setup;
+retry edit/export/reopen passed, refresh HTTP3610.708ms. Recorder64-slice cutoff missed
+refresh CPU; preserve missing coverage. Screenshots inspected, not native proof.
+Sessions45430 terminal1,19023 terminal0; all413pins/protectedguardsPASS, treeGone=true,
+no running job, only prior3100/PID54964 remains/no X4. No source/test/deadline changes.
+NEXT: full unprofiled integration gate with current renderer repair and retained workspace
+abort observation, after writer/input/machine reconciliation. No focused-pass substitution.
+If timeout recurs, use tested request-triggered CPU capture, not startup-time cutoff.
+Full132 gate still prior129pass/2fail/1flake. No new commit/push/release/install.
+
+PRIOR TRACE LOCALIZATION:
+LATEST DIAGNOSIS: docs/plans/2026-09-14-b119-reference-status-diagnosis.md.
+Reference refresh first request10009.777ms timeout vs retry1743.473ms HTTP200; same
+ready manifest1789370598070-6ab128fc50. Source refresh synchronously bypasses corpus
+caches and runs discovery/stat/parsing. Exact backend CPU/IO/queue owner UNPROVEN.
+No source/test/timeout changes or rerun this turn. NEXT: reconciled isolated server-phase
+timing plan, not increasing10000ms or repeating the passing Lua journey. Degradation
+checkpoint after output/path lookup mistakes; no running job or new Git commit.
+Full gate129pass/2fail/1flake retained. Details, source hashes and AAR in diagnosis plan.
+
+PRIOR CLEAN LUA-FILE JOURNEY:
+LATEST: corrected trace-fixed rendered Lua-file journey VERIFIED for this attempt:
+1/1 first-pass,0failed/flaky/skipped/errors,16 checkpoints through original workspace
+restoration. No original request failure/abort reproduced; cause remains PARTIAL/unproven.
+Evidence:test-results/b119-workspace-abort-20260914/trace-fixed-receipt.json and
+fixed-verification.json. All410 current inputs match; both actual Lua downloads match
+source bytes (2818/2815bytes);16 artifacts contained. Import/exports inspected/shown.
+Observer431 events,0abort/failure/rejection/overflow; final deliveryFailures0. No app errors.
+Session24941 terminal exit0 at11:13:49.854Z; treeGone=true; no job running. All guardsPASS,
+only3100/PID54964 remains/no X4. Reported journey1.1m vs9.1m total including cold indexing.
+NEXT: bounded trace/source diagnosis of the independent corpus-status10s timeout; keep
+workspace cancellation open and probe available, never ignore ERR_ABORTED wholesale.
+Full132 gate stays prior129pass/2fail/1flake; full B119/package/native obligations remain.
+Commit point:test(ui): verify Lua-file journey with corrected request probe (not committed).
+
+PRIOR PROBE REPAIR CHECKPOINT (superseded by clean current-run evidence above):
+CURRENT UNIT PARTIAL:docs/plans/2026-09-14-b119-workspace-abort-trace.md.
+Opt-in workspaceAbortTrace added only to tests/e2e/x4-ui-source-editor.spec.ts. Original
+21 static test call bodies/assertions unchanged; no production change in this unit.
+First rendered diagnostic FAILED due OUR native Response.status() misuse in the observer,
+not a Forge diagnosis. Both attempts reached16 observations/restored-original-workspace
+but recorded zero original request failures/aborts. Error fixed to status property.
+Actual callback-extracted probe red ->green (promise/body/status/abort/failure negatives);
+final types/lint PASS, all guards PASS. All sessions3219/46973/40406 terminal, no job running.
+Evidence:test-results/b119-workspace-abort-20260914/. Cold manifest setup took438s scanning
+1,028,384 files; distinguish it from browser editing. No clean post-fix browser proof yet.
+NEXT: checkpoint.mjs run trace-fixed scripts/run-e2e.mjs tests/e2e/x4-ui-source-editor.spec.ts
+--project=chromium --workers=1 --grep "completes the B119 Lua file download, reload, import,
+history, collision, and workspace journey" --trace=on --output
+test-results/b119-workspace-abort-20260914/browser-fixed (grep is one literal argument).
+Do not overwrite prior run or reuse its temp state. If no abort occurs, cause remains
+unproven; never simply ignore ERR_ABORTED. Source-only/degradation repair checkpoint now.
+User requested seeing tests: show genuine current-run captures/results, explain isolated
+background Chromium vs their open Forge, and preserve Antigravity foreground during CU.
+
+Local checkpoint VERIFIED:5b730a67774516d44b9fff4f4b640b4113ade9ac on main,
+parent93c9af111d63ca77c99dee11f21882c4073bcda6. Normal precommit passed;140 exact
+paths committed,93 excluded changes preserved, index empty at checkpoint. No push/release.
+Proof:test-results/b119-local-checkpoint-20260914/post-commit.json.
+
+Latest bounded repair is VERIFIED:docs/plans/2026-09-14-b119-dense-array-validation.md.
+Only product change is names Set membership in x4UiCanvasRenderer.isDenseArray;
+existing guards and corpus-byte integrity unchanged. Renderer172 baseline ->187 final
+checks PASS, causal old-helper red failed only the intended performance check after
+fixture correction. 8,390,656 estimated linear probes ->4096 indexed lookups.
+Final types/lint PASS; final-types-receipt.json terminal exit0 at09:55:58.633Z.
+Session90292 completed; no validation job remains to restart. All protected guards PASS.
+Current unit source/selftest/plan/handoff/backlog edits are not committed.
+Offline final review10:02Z complete: all410 current inputs match all three passing final
+receipts; AST confirms132 original assertions retained, exact product delta only.
+No new source defect found. Do not repeat static checks as a substitute for rendered proof.
+
+User confirmed go/X4 stopped/machine quiet. Rendered history/profile first-pass41.1s,
+profiling-off first-pass40.7s; both complete1/1,0flake/skip/errors, treeGone=true.
+All14 source/canvas snapshots exactly match pre-repair baseline and each other. Four
+profile captures and final default-off capture inspected; inspector/selection visible.
+Canvas isDenseArray sampled self6.004s ->0.105s; individual-run timing comparison only.
+Other synchronous costs/long-frame HUD remain; do not claim the whole editor is smooth.
+All410 inputs/50 artifacts/four Lua/19 live files protected; only3100/PID54964 remains.
+Sessions79197/5103 terminal, no tests running. No new full-suite run. Source changes
+remain uncommitted; commit point:perf(ui): make canvas dense-array validation linear.
+
+PRIOR NEXT (current probe state above supersedes): resolve Lua-file journey workspace GET ERR_ABORTED from exact request
+lifecycle evidence; old trace diagnosis is a hypothesis, not permission to ignore aborts.
+See docs/plans/2026-09-14-b119-history-trace-diagnosis.md and full-integration plan.
+Corpus-readiness flake also remains. Full gate still129pass/2fail/1flake; full goal PARTIAL.
+No new agents, push, package, install, game/mod/config or external writes. Earlier fixture
+mistakes prompted degradation call; bounded repair now finished before expanding scope.
+
+ARCHIVED CHECKPOINT PREPARATION (superseded by verified state above):
 CURRENT USER REQUEST: "okay do it" — repair the inventory and make the local B119 checkpoint.
 Parent93c9af111d63ca77c99dee11f21882c4073bcda6. Exact set140paths,93excluded; no push/release.
 Confirm actual commit/parent/index and exclusion proof using:

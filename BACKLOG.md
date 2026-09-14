@@ -8,6 +8,53 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 12:35Z: Full current integration VERIFIED132/132,0failed/flaky/skipped/errors.
+History/MENU/HUB/COMM/Lua-file journeys first-pass;412pins/guards/17artifacts/cleanupPASS.
+Source bytes unchanged during run. Rendered captures reviewed; imported bodies remain partial.
+Full builder NOT complete. NEXT precommit/local checkpoint, packaged-host and full-menu/native
+fidelity reconciliation. Plan:docs/plans/2026-09-14-b119-full-integration-post-repair.md.
+
+2026-09-14 11:59Z: Direct real-corpus forced loads measured1.143/1.049s, identical data;
+no basis for changing refresh semantics/deadline. Profiled MENU run non-clean1flaky:
+cold indexing exceeded600s, retry visual edit/reopen passed; CPU cutoff missed HTTP refresh.
+All413pins/guards/cleanup PASS. NEXT full unprofiled integration, not more focused substitutes.
+Evidence/limits:docs/plans/2026-09-14-b119-reference-cpu.md. Full B119 remains PARTIAL.
+
+2026-09-14 11:25Z: Reference-status trace localization VERIFIED; causal diagnosis PARTIAL.
+Forced refresh timed out10009.777ms vs retry1743.473ms on the same ready manifest generation.
+Synchronous discovery/stat/parsing confirmed in source; backend timing still needed.
+No timeout/oracle/product change. Plan:docs/plans/2026-09-14-b119-reference-status-diagnosis.md.
+
+2026-09-14 11:17Z: Corrected-probe Lua-file journey first-pass1/1 VERIFIED this attempt:
+16 checkpoints, two byte-exact exports, reload/import/history/refusal/workspace restoration,
+no page/console/network errors.431 events,0aborts; original cancellation still UNPROVEN.
+All410 inputs/protected guards/cleanup PASS; screenshots inspected/shown. Fullgate remains
+prior129pass/2fail/1flake. NEXT independent corpus-status timeout diagnosis, not more identical
+passing reruns. Plan:docs/plans/2026-09-14-b119-workspace-abort-trace.md; full B119 PARTIAL.
+
+2026-09-14 11:01Z: Workspace-abort diagnostic PARTIAL. Original cancellation not reproduced
+in two attempts; both invalidated by OUR probe's Response.status() page errors. Probe fixed
+and extracted-callback red/green negatives PASS; final types/lint PASS, original test bodies
+unchanged. All processes stopped/guards PASS. Next corrected trace-fixed rendered run;
+no polling/oracle repair authorized by this evidence. Cold reference setup438s is separate
+from editing latency. Plan:docs/plans/2026-09-14-b119-workspace-abort-trace.md.
+
+2026-09-14 10:08Z: Dense-array repair bounded VERIFIED. Authorized history profile41.1s
+and profiling-off40.7s both first-pass1/1,0flake/skip/errors; screenshots inspected, all14
+source/canvas states equal pre-repair baseline. Helper selfCPU6.004s ->0.105s in individual
+profiles; other stalls remain. Static187/187/types/lint retained, all guards/cleanup PASS.
+Plan:docs/plans/2026-09-14-b119-dense-array-validation.md; bounded close in ROADMAP.
+NEXT exact Lua-file workspace-request cancellation diagnosis, then corpus-readiness flake;
+fullgate remains prior129pass/2fail/1flake. No full builder/package/native completion claim.
+
+2026-09-14 09:56Z: Local checkpoint5b730a6 VERIFIED (140paths,93excluded, normal
+precommit passed; no push). Subsequent dense-array performance repair PARTIAL: existing
+helper uses Set membership with all guards retained; renderer187/187, types/lint PASS,
+causal red/green proves4096 indexed lookups replace8,390,656 estimated linear probes.
+Actual editing speed unverified: unchanged rendered history/profile gate awaits current
+machine-state reply. Plan:docs/plans/2026-09-14-b119-dense-array-validation.md.
+All validation jobs terminal/protected guards PASS; no new full run. Fullgoal PARTIAL.
+
 2026-09-14 08:15Z: Actual history CPU profile obtained; existing opt-in fixture shared with
 history, no test bodies/assertions/deadlines changed. Types/lint/list anddefaultoff/profile
 1/1firstpasses. Wholeprofile shows Canvas isDenseArray6.004s; source has quadratic names.includes

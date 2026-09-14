@@ -3627,7 +3627,99 @@ async function setupB119LuaRoundtripFixture(page: Page): Promise<readonly B119Lu
   return unrelatedFiles;
 }
 
-const b119ProfiledTest = test.extend<{ authoringCpuProfile: void }>({
+const b119ProfiledTest = test.extend<{ authoringCpuProfile: void; workspaceAbortTrace: void }>({
+  workspaceAbortTrace: [async ({ page }, runTest, testInfo) => {
+    if (process.env.X4_FORGE_B119_WORKSPACE_TRACE !== '1') {
+      await runTest();
+      return;
+    }
+    const events: Record<string, unknown>[] = [];
+    let overflow = 0;
+    const record = (event: Record<string, unknown>) => {
+      if (events.length < 4096) events.push(event);
+      else overflow += 1;
+    };
+    const requestIds = new WeakMap<object, number>();
+    let nextRequestId = 0;
+    await page.exposeBinding('__b119WorkspaceTrace', (_source, event: Record<string, unknown>) => record(event));
+    page.on('request', request => {
+      if (!/^\/api\/agent\/workspaces?$/.test(new URL(request.url()).pathname)) return;
+      const id = ++nextRequestId;
+      requestIds.set(request, id);
+      record({ kind: 'network-start', id, time: Date.now(), method: request.method(),
+        url: request.url(), workspace: request.headers()['x-workspace-id'] ?? null });
+    });
+    page.on('response', response => {
+      const id = requestIds.get(response.request());
+      if (id !== undefined) record({ kind: 'network-response', id, time: Date.now(), status: response.status() });
+    });
+    page.on('requestfailed', request => {
+      const id = requestIds.get(request);
+      if (id !== undefined) record({ kind: 'network-failed', id, time: Date.now(),
+        startTime: request.timing().startTime, failure: request.failure()?.errorText ?? null });
+    });
+    await page.addInitScript(() => {
+      const observedWindow = window as typeof window & {
+        __b119WorkspaceTrace: (event: Record<string, unknown>) => Promise<void>;
+        __b119WorkspaceTraceFlush?: () => Promise<{ deliveryFailures: number }>;
+      };
+      const documentId = crypto.randomUUID();
+      const pending = new Set<Promise<void>>();
+      let deliveryFailures = 0;
+      let nextId = 0;
+      const emit = (event: Record<string, unknown>) => {
+        const delivery = observedWindow.__b119WorkspaceTrace({ documentId, time: Date.now(),
+          clock: performance.timeOrigin + performance.now(), ...event }).catch(() => { deliveryFailures += 1; });
+        pending.add(delivery);
+        void delivery.then(() => pending.delete(delivery));
+      };
+      observedWindow.__b119WorkspaceTraceFlush = async () => {
+        await Promise.all([...pending]);
+        return { deliveryFailures };
+      };
+      const selected = () => window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() ?? null;
+      const originalFetch = window.fetch;
+      window.fetch = function (input, init) {
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+        if (url.origin !== location.origin || !/^\/api\/agent\/workspaces?$/.test(url.pathname)) {
+          return originalFetch.call(this, input, init);
+        }
+        const id = ++nextId;
+        const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        emit({ kind: 'fetch-start', id, url: url.href, method: init?.method ?? (input instanceof Request ? input.method : 'GET'),
+          workspace: headers.get('x-workspace-id'), selected: selected(), hasSignal: Boolean(signal),
+          aborted: signal?.aborted ?? false, stack: new Error('workspace fetch observation').stack });
+        const aborted = () => emit({ kind: 'signal-abort', id, selected: selected(),
+          reason: signal?.reason instanceof Error ? signal.reason.message : String(signal?.reason),
+          stack: signal?.reason instanceof Error ? signal.reason.stack : null });
+        if (signal?.aborted) aborted();
+        else signal?.addEventListener('abort', aborted, { once: true });
+        // Keep the original promise and body reader. An abort after headers still matters.
+        const promise = originalFetch.call(this, input, init);
+        void promise.then(response => emit({ kind: 'fetch-response', id, status: response.status, selected: selected() }),
+          error => emit({ kind: 'fetch-rejected', id, selected: selected(),
+            error: error instanceof Error ? error.message : String(error) }));
+        return promise;
+      };
+      emit({ kind: 'document-start' });
+    });
+    try {
+      await runTest();
+    } finally {
+      if (!page.isClosed()) {
+        const flushed = await page.evaluate(async () => {
+          const target = window as typeof window & { __b119WorkspaceTraceFlush?: () => Promise<{ deliveryFailures: number }> };
+          return target.__b119WorkspaceTraceFlush?.() ?? null;
+        });
+        record({ kind: 'flush', result: flushed });
+      }
+      const outputPath = testInfo.outputPath('b119-workspace-abort-trace.json');
+      await writeFile(outputPath, JSON.stringify({ events, overflow }, null, 2));
+      await testInfo.attach('b119-workspace-abort-trace', { path: outputPath, contentType: 'application/json' });
+      expect(overflow, 'workspace trace must not silently truncate').toBe(0);
+    }
+  }, { auto: true, timeout: 30_000 }],
   authoringCpuProfile: [async ({ page }, runTest, testInfo) => {
     if (process.env.X4_FORGE_B119_CPU_PROFILE !== '1') {
       await runTest();

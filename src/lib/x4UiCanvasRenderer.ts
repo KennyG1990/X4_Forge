@@ -418,9 +418,10 @@ const isDenseArray = (value: unknown, maximum = MAX_COMMANDS): value is readonly
       || lengthDescriptor.value > maximum) return false;
     const names = Object.getOwnPropertyNames(value);
     if (names.length !== value.length + 1 || !names.includes('length')) return false;
+    const nameSet = new Set(names);
     for (let index = 0; index < value.length; index += 1) {
       const key = String(index);
-      if (!names.includes(key)) return false;
+      if (!nameSet.has(key)) return false;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined
         || !descriptor.enumerable

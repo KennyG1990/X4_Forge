@@ -60,7 +60,7 @@ import {
 } from './x4UiCanvasRenderer';
 
 type JsonRecord = Record<string, unknown>;
-type CheckFamily = 'prior-44' | 'callback-isolation' | 'pre-allocation' | 'emitted-trace' | 'freeze-truth' | 'oracle-sensitivity' | 'batch-6d-causal' | 'stage-b-causal';
+type CheckFamily = 'prior-44' | 'callback-isolation' | 'pre-allocation' | 'emitted-trace' | 'freeze-truth' | 'oracle-sensitivity' | 'batch-6d-causal' | 'stage-b-causal' | 'dense-array-validation';
 type Check = { readonly family: CheckFamily; readonly name: string; readonly pass: boolean; readonly detail?: unknown };
 const checks: Check[] = [];
 
@@ -5265,6 +5265,95 @@ async function main(): Promise<void> {
     if (commands !== undefined && commands.length > 0) delete commands[0];
   });
   renderCase('sparse command array refuses with no surface', sparse, corpus, 'invalid-layer');
+
+  // Reach the real renderer's array boundary, then stop at an independent command
+  // rejection. This separates dense-array acceptance from valid paint semantics.
+  const denseCommands = (length = 4): JsonRecord[] => Array.from({ length }, () => ({ kind: 'unsupported', order: 0 }));
+  const commandArrayPlan = (commands: readonly JsonRecord[]): X4UiPaintPlanResult => forgedResult(paint, (_plan, layers) => {
+    layers[0] = { ...layers[0]!, commands: commands as JsonRecord[] };
+  });
+  const denseLength = 4096;
+  const largeCommands = denseCommands(denseLength);
+  const largeCommandPlan = commandArrayPlan(largeCommands);
+  const denseActivity = emptyActivityLedger();
+  const originalNames = Object.getOwnPropertyNames;
+  const originalIncludes = Array.prototype.includes;
+  const originalHas = Set.prototype.has;
+  let measuredNames: string[] | undefined;
+  let linearSearchCalls = 0;
+  let linearSearchProbes = 0;
+  let indexedLookups = 0;
+  let denseAttempt: RenderAttempt | undefined;
+  try {
+    Object.getOwnPropertyNames = (value: unknown): string[] => {
+      const names = originalNames(value);
+      if (value === largeCommands) measuredNames = names;
+      return names;
+    };
+    Array.prototype.includes = function (this: unknown[], item: unknown, fromIndex?: number): boolean {
+      if (this === measuredNames && typeof item === 'string' && /^(0|[1-9][0-9]*)$/.test(item)) {
+        linearSearchCalls += 1;
+        // Own names of this ordinary dense array are ordered 0..n-1, length.
+        linearSearchProbes += Number(item) + 1;
+      }
+      return originalIncludes.call(this, item, fromIndex);
+    };
+    Set.prototype.has = function (this: Set<unknown>, item: unknown): boolean {
+      if (measuredNames !== undefined && this.size === denseLength + 1
+        && originalHas.call(this, 'length') && originalHas.call(this, '0')
+        && typeof item === 'string' && /^(0|[1-9][0-9]*)$/.test(item)) indexedLookups += 1;
+      return originalHas.call(this, item);
+    };
+    denseAttempt = attemptRender(largeCommandPlan, corpus, makeObservedFactory(denseActivity));
+  } finally {
+    Object.getOwnPropertyNames = originalNames;
+    Array.prototype.includes = originalIncludes;
+    Set.prototype.has = originalHas;
+  }
+  const denseResult = completedResult(denseAttempt);
+  familyCheck('dense-array-validation', 'large dense arrays retain membership validation without quadratic name searches',
+    measuredNames?.length === denseLength + 1
+      && denseResult?.status === 'refused' && denseResult.receipt.refusal.code === 'unsupported-command'
+      && refusalBoundaryIsComplete(denseResult) && activityIsZero(denseActivity)
+      && linearSearchCalls === 0 && indexedLookups === denseLength
+      && linearSearchProbes + indexedLookups <= denseLength * 2,
+    { denseLength, linearSearchCalls, linearSearchProbes, indexedLookups, receipt: receiptSummary(denseResult?.receipt) });
+  console.log(`dense-array membership: ${JSON.stringify({ denseLength, linearSearchCalls, linearSearchProbes, indexedLookups })}`);
+
+  let denseAccessorReads = 0;
+  const denseCases: readonly { name: string; commands: () => readonly JsonRecord[]; code: string }[] = [
+    { name: 'ordinary dense keys', commands: () => denseCommands(), code: 'unsupported-command' },
+    { name: 'frozen dense keys', commands: () => Object.freeze(denseCommands()), code: 'unsupported-command' },
+    { name: 'reordered proxy keys', commands: () => new Proxy(denseCommands(), { ownKeys: target => Reflect.ownKeys(target).reverse() }), code: 'unsupported-command' },
+    { name: 'sparse index', commands: () => { const commands = denseCommands(); delete commands[2]; return commands; }, code: 'invalid-layer' },
+    { name: 'indexed accessor', commands: () => Object.defineProperty(denseCommands(), '2', { enumerable: true, configurable: true, get: () => { denseAccessorReads += 1; return { kind: 'unsupported', order: 0 }; } }), code: 'invalid-layer' },
+    { name: 'non-enumerable index', commands: () => Object.defineProperty(denseCommands(), '2', { enumerable: false }), code: 'invalid-layer' },
+    { name: 'symbol key', commands: () => Object.defineProperty(denseCommands(), Symbol('extra'), { value: 1 }), code: 'invalid-layer' },
+    { name: 'extra string key', commands: () => Object.defineProperty(denseCommands(), 'extra', { value: 1 }), code: 'invalid-layer' },
+    { name: 'wrong prototype', commands: () => Object.setPrototypeOf(denseCommands(), null) as JsonRecord[], code: 'invalid-layer' },
+    { name: 'proxy substitutes an out-of-range key for an existing index', commands: () => new Proxy(denseCommands(), { ownKeys: () => ['0', '1', '3', '4', 'length'] }), code: 'invalid-layer' },
+    { name: 'throwing ownKeys proxy at the earlier truth guard', commands: () => new Proxy(denseCommands(), { ownKeys: () => { throw new Error('fixture ownKeys refusal'); } }), code: 'game-truth' },
+    { name: 'throwing ownKeys proxy at the array guard', commands: () => {
+      let reads = 0;
+      return new Proxy(denseCommands(), { ownKeys: target => {
+        reads += 1;
+        if (reads > 1) throw new Error('fixture array ownKeys refusal');
+        return Reflect.ownKeys(target);
+      } });
+    }, code: 'invalid-layer' },
+    { name: 'over-limit command array', commands: () => denseCommands(100_001), code: 'invalid-layer' },
+  ];
+  for (const entry of denseCases) {
+    const activity = emptyActivityLedger();
+    const attempt = attemptRender(commandArrayPlan(entry.commands()), corpus, makeObservedFactory(activity));
+    const result = completedResult(attempt);
+    familyCheck('dense-array-validation', `${entry.name} preserves the public refusal boundary`,
+      result?.status === 'refused' && result.receipt.refusal.code === entry.code
+        && refusalBoundaryIsComplete(result) && activityIsZero(activity),
+      { expected: entry.code, receipt: receiptSummary(result?.receipt) });
+  }
+  familyCheck('dense-array-validation', 'array validation never evaluates indexed accessors', denseAccessorReads === 0, { denseAccessorReads });
+
   let accessorResultReads = 0;
   const accessorResult = Object.defineProperty({ status: paint.status, verification: paint.verification }, 'plan', { enumerable: true, get: () => { accessorResultReads += 1; return paint.plan; } }) as unknown as X4UiPaintPlanResult;
   renderCase('accessor result refuses with no surface', accessorResult, corpus, 'invalid-result');
@@ -5912,7 +6001,7 @@ async function main(): Promise<void> {
 
   const failed = checks.filter(item => !item.pass);
   const passed = checks.length - failed.length;
-  const familyCounts = (['prior-44', 'callback-isolation', 'pre-allocation', 'emitted-trace', 'freeze-truth', 'oracle-sensitivity', 'batch-6d-causal', 'stage-b-causal'] as const).map(family => {
+  const familyCounts = (['prior-44', 'callback-isolation', 'pre-allocation', 'emitted-trace', 'freeze-truth', 'oracle-sensitivity', 'batch-6d-causal', 'stage-b-causal', 'dense-array-validation'] as const).map(family => {
     const familyChecks = checks.filter(item => item.family === family);
     return { family, passed: familyChecks.filter(item => item.pass).length, total: familyChecks.length };
   });
