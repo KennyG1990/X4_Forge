@@ -8449,3 +8449,19 @@ unchanged real HUB probe at2profiles prove6labels/indices/widths. No new rendere
 or full-E2E proof. Plan/AAR:docs/plans/2026-09-14-b119-ipairs-labels.md.
 Evidence:test-results/b119-ipairs-labels-20260914/verification.json.
 Commit outcome:test-results/b119-ipairs-labels-20260914/checkpoint/post-commit.json.
+
+### 2026-09-14 — B119 source metric arithmetic and rendered HUB tab strip VERIFIED
+
+Pure source-bound metric wrappers and inline numeric scale calls now resolve original HUB
+tab Y59/80 at1080p/scale1 and1440p/scale1.4. No manual Y sample or imported Lua execution.
+Standalone opaque-return samples retained; side effects, replaced/escaped authorities, runtime
+arguments, wrong scale axes and invalid source evidence remain rejected. Parser152/152,
+layout1055/1055,source174/174,types/project lint PASS. Canonical-data/traversal-work budgets
+separated while retaining size/depth/cycle/optional-field rejection. Real heading CAS/inverse
+works at both profiles. Corrected browser1/1 requires actual caption pixels on allsix tabs,
+heading edit/history/export/reopen; screenshots inspected and isolated cleanup/protected guards PASS.
+First selector failure retained. No release/push/install/native or full-current-E2E claim.
+Full B119 PARTIAL: body dispatch, loop-property authoring, UX/performance, all9journeys,
+3menus/12references and packaged/native acceptance remain. Plan/AAR:
+docs/plans/2026-09-14-b119-metric-helper.md. Evidence:test-results/b119-metric-helper-20260914/
+RESULTS.md and final/verification.json. Local commit authority:checkpoint/post-commit.json.

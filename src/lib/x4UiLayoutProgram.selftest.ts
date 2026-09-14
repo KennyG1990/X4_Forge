@@ -1323,6 +1323,47 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
   readonly total: number;
   readonly checks: readonly Check[];
 } => {
+  const metricWrapper = (name = 'metric', localName = 'base', parameter = 'mult', extra = '') =>
+    `local function ${name}(${parameter})\nlocal ${localName} = tonumber(Helper.standardTextHeight) or 19\n${extra}return Helper.scaleY(math.floor(${localName} * (${parameter} or 1)))\nend\n`;
+  for (const uiScale of [1, 1.4]) {
+    const scaled16 = Math.floor(16 * uiScale + 0.5);
+    const metricCases: readonly [string, string, string, number | undefined, ('x' | 'y')?][] = [
+      ['inline scale', '', '7 + Helper.scaleY(16)', 7 + scaled16],
+      ['numeric conversion', '', 'tonumber(Helper.standardTextHeight) or 19', 16],
+      ['metric wrapper', metricWrapper(), '7 + metric(1) + Helper.scaleY(16)', 7 + scaled16 * 2],
+      ['renamed metric wrapper', metricWrapper('lineHeight', 'units', 'factor'), '7 + lineHeight(1) + Helper.scaleY(16)', 7 + scaled16 * 2],
+      ['zero is truthy', metricWrapper(), '7 + metric(0)', 7],
+      ['horizontal metric', metricWrapper().replace('Helper.scaleY', 'Helper.scaleX'), '7 + metric(1)', 7 + scaled16, 'x'],
+      ['wrong scale axis', metricWrapper().replace('Helper.scaleY', 'Helper.scaleX'), '7 + metric(1)', undefined],
+      ['fractional metric', metricWrapper(), '7 + metric(1.3)', 7 + Math.floor(Math.floor(16 * 1.3) * uiScale + 0.5)],
+      ['runtime argument', metricWrapper(), '7 + metric(runtimeMultiplier)', undefined],
+      ['wrapper side effect', metricWrapper('metric', 'base', 'mult', 'touch()\n'), '7 + metric(1)', undefined],
+      ['wrapper replaced', metricWrapper() + 'metric = other\n', '7 + metric(1)', undefined],
+      ['math replaced', metricWrapper() + 'math.floor = other\n', '7 + metric(1)', undefined],
+      ['math replaced through environment', metricWrapper() + '_G.math.floor = other\n', '7 + metric(1)', undefined],
+      ['math escaped', metricWrapper() + 'touch(math)\n', '7 + metric(1)', undefined],
+      ['math aliased and changed', metricWrapper() + 'local m = math; m.floor = other\n', '7 + metric(1)', undefined],
+      ['math function replaced', metricWrapper() + 'function math.floor(x) return 99 end\n', '7 + metric(1)', undefined],
+      ['global environment escaped', metricWrapper() + 'touch(_G)\n', '7 + metric(1)', undefined],
+      ['global environment aliased', metricWrapper() + 'local env = _G; env.tonumber = other\n', '7 + metric(1)', undefined],
+      ['tonumber replaced', metricWrapper() + 'tonumber = other\n', '7 + metric(1)', undefined],
+      ['Helper replaced', metricWrapper() + 'Helper = Other\n', '7 + metric(1)', undefined],
+      ['Helper field replaced', metricWrapper() + 'Helper.scaleY = other\n', '7 + metric(1)', undefined],
+      ['Helper field replaced through environment', metricWrapper() + '_G.Helper.scaleY = other\n', '7 + metric(1)', undefined],
+      ['unknown return', 'local function metric(mult) return getHeight(mult) end\n', '7 + metric(1)', undefined],
+      ['string conversion', '', 'tonumber("16")', undefined],
+    ];
+    for (const [name, prelude, expression, expected, field = 'y'] of metricCases) {
+      const text = 'local f = Helper.createFrameHandle({}, { width = 100, height = 80 })\n' + prelude
+        + `local y = ${expression}\nlocal t = f:addTable(1, { ${field} = y, width = 100, scaling = false })`;
+      const metricModel = buildX4UiCallModel(input(text, `selftest/metric-${name}-${uiScale}.lua`));
+      const metricResult = projectX4UiLayoutProgram(metricModel, topTarget(metricModel), profileFor(metricModel, { uiScale }));
+      const actual = metricResult.program?.tables[0]?.descriptorFacts[field];
+      check(`B119 source metric ${name} at ${uiScale}`, expected === undefined ? actual?.status !== 'known'
+        : actual?.status === 'known' && actual.value === expected,
+      detail({ expected, actual, status: metricResult.status, gaps: metricResult.program?.gaps.filter(gap => gap.expression === 'y') }));
+    }
+  }
   const menuTargetCases: readonly [string, string, readonly string[]][] = [
     ['renamed builder and helpers', `local menu = { name = "Demo" }
       local function refreshHelper() menu.dirty = true end

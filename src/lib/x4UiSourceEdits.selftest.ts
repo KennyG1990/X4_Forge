@@ -5674,6 +5674,24 @@ const run = async (): Promise<void> => {
   const validModel = initial.source.bundle?.sourceFiles.find(file => file.path === 'ui/edit.lua')?.callModel;
   if (!validModel) throw new Error('source fixture call model missing');
   const validEvidence = validModel.calls[0];
+  const definedNodeCount = (value: unknown): number => value === undefined ? 0
+    : 1 + (value !== null && typeof value === 'object'
+      ? Object.values(value).reduce<number>((sum, child) => sum + definedNodeCount(child), 0) : 0);
+  const locationPadding = { file: 'padding.lua', sourcePath: undefined,
+    start: { line: 1, column: 0, offset: 0 }, end: { line: 1, column: 1, offset: 1 } };
+  const paddingCount = Math.floor((249_000 - definedNodeCount(validModel) - 1) / definedNodeCount(locationPadding));
+  const optionalHeavyModel = { ...validModel, boundaryProbe: Array(paddingCount).fill(locationPadding) };
+  check('canonical data budget does not charge parser-owned omitted optional fields',
+    normalizationMessage(optionalHeavyModel) === 'accepted',
+    JSON.stringify({ paddingCount, canonicalNodes: definedNodeCount(optionalHeavyModel), result: normalizationMessage(optionalHeavyModel) }));
+  const overBudgetModel = { ...validModel, boundaryProbe: Array(250_001).fill(0) };
+  const invalidOptionalModel = { ...validModel, boundaryProbe: { ...locationPadding, extra: undefined } };
+  let deepPadding: unknown = 0;
+  for (let i = 0; i < 514; i += 1) deepPadding = { child: deepPadding };
+  const deepBudgetModel = { ...validModel, boundaryProbe: deepPadding };
+  for (const [name, candidate] of [['oversized data', overBudgetModel], ['unknown undefined', invalidOptionalModel], ['deep data', deepBudgetModel]] as const) {
+    check(`canonical data traversal rejects ${name}`, normalizationMessage(candidate) === 'source edit layout model must be closed plain own data', normalizationMessage(candidate));
+  }
   const canonicalUndefinedPaths = ownUndefinedPaths(validModel);
   const canonicalUndefinedFields = [...new Set(canonicalUndefinedPaths.map(path => path.slice(path.lastIndexOf('.') + 1)))].sort();
   const expectedCanonicalUndefinedFields = ['index', 'parentPath', 'reason', 'reference', 'result', 'sourcePath', 'symbol'];

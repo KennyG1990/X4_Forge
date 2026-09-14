@@ -584,6 +584,17 @@ export type X4UiNumericMathFunctionName = 'floor' | 'ceil' | 'min' | 'max';
 
 export type X4UiNumericExpression =
   | {
+    readonly kind: 'call-result';
+    readonly expression: string;
+    readonly source: X4UiSourceLocation;
+  }
+  | {
+    readonly kind: 'number-conversion';
+    readonly operand: X4UiNumericExpression;
+    readonly expression: string;
+    readonly source: X4UiSourceLocation;
+  }
+  | {
     readonly kind: 'table-length';
     readonly base: string;
     readonly tableSource: X4UiSourceLocation;
@@ -1593,6 +1604,15 @@ class X4UiCallModelBuilder {
     if (existing) {
       if (existing.kind === 'literal') this.materializeNumericAliasChain(value, existing);
       return existing;
+    }
+    // Only arithmetic consumers request a numeric term. Standalone opaque
+    // returns must retain their existing source-bound preview-sample contract.
+    const callResult = value.publicValue.localInvocationResult
+      || (value.directHelperScaleCall?.callName !== 'scaleFont' ? value.directHelperScaleCall : undefined);
+    if (callResult) {
+      return freezeNumericExpression({
+        kind: 'call-result', expression: callResult.expression, source: callResult.source,
+      });
     }
     if (allowPreviewInputCandidate && value.tableFieldPreviewCandidate) {
       const candidate = value.tableFieldPreviewCandidate;
@@ -3468,6 +3488,17 @@ class X4UiCallModelBuilder {
 
     const numericMathFunction = this.exactNumericMathFunction(node, shape);
     if (numericMathFunction) return this.evaluateNumericMathCall(node, numericMathFunction, args);
+
+    if (shape.method === 'direct' && shape.name === 'tonumber' && !this.bindings.has('tonumber') && args.length === 1) {
+      const operand = this.numericExpressionForValue(args[0]);
+      if (operand) {
+        const result = this.dynamic(node, 'number', 'numeric conversion is deferred to source-proven layout evaluation');
+        result.publicValue.numericExpression = freezeNumericExpression({
+          kind: 'number-conversion', operand, expression: this.textOf(node), source: this.location(node),
+        });
+        return result;
+      }
+    }
 
     const directBinding = shape.method === 'direct' && shape.name ? this.bindings.get(shape.name) : undefined;
     if (directBinding?.value.localFunction) {

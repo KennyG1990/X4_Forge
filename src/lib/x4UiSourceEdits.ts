@@ -1023,6 +1023,7 @@ const parserOwnedOptionalUndefined = (parent: object, key: string): boolean => {
 
 interface ClosedDataTraversalBudget {
   remaining: number;
+  workRemaining?: number;
 }
 
 const isClosedPlainOwnData = (
@@ -1033,12 +1034,17 @@ const isClosedPlainOwnData = (
   arrayElement = false,
   budget: ClosedDataTraversalBudget = { remaining: 250_000 },
 ): boolean => {
-  if (budget.remaining <= 0 || ancestors.size > 512) return false;
-  budget.remaining -= 1;
-  if (value === null) return true;
+  // Bound both serialized data and traversal work. Parser-owned optional
+  // undefined fields are checked but omitted by canonicalization; charging
+  // them as data makes otherwise identical raw/canonical models disagree.
+  budget.workRemaining ??= budget.remaining * 2;
+  if (budget.remaining <= 0 || budget.workRemaining <= 0 || ancestors.size > 512) return false;
+  budget.workRemaining -= 1;
   if (value === undefined) {
     return !arrayElement && parent !== undefined && key !== undefined && parserOwnedOptionalUndefined(parent, key);
   }
+  budget.remaining -= 1;
+  if (value === null) return true;
   if (typeof value !== 'object') {
     return typeof value === 'string'
       || (typeof value === 'number' && Number.isFinite(value))

@@ -1,68 +1,69 @@
 # Session handoff — B119 canvas-first UI builder
 
-Project F:/DEV_ENV/X4_Forge. Full goal ACTIVE/PARTIAL. Read complete objective:
-C:/Users/Moshi/.codex/attachments/d06dfea8-8256-48a5-97f5-b524fac87153/goal-objective.md.
+Project F:/DEV_ENV/X4_Forge. Full goal ACTIVE/PARTIAL. Astra directly; no Luna/delegation.
+Complete objective: C:/Users/Moshi/.codex/attachments/d06dfea8-8256-48a5-97f5-b524fac87153/goal-objective.md.
 
 ## Current checkpoint
-Parent main dd0548d8a1385d47f3eb20da981ae3e4fb80dcb8 (ipairs labels, already committed).
-Current unit: source-proven-loop direct scalar editing repair VERIFIED.
-Seven selected paths: x4UiLayoutProgram.ts, x4UiSourceEdits.ts and selftest.ts;
-BACKLOG.md, ROADMAP.md, this handoff, docs/plans/2026-09-14-b119-source-loop-edit.md.
-Normal precommit local checkpoint is next; actual commit authority:
-test-results/b119-source-loop-edit-20260914/checkpoint/{commit-exit,post-commit}.json.
-If receipt absent, observe existing exact process before restarting anything. No push.
-93 unrelated dirty paths protected; no broad staging/reset/clean/discard. The authorized
-rendered test updates .last-run.json; reconcile rather than restoring/staging it.
 
-## Implemented and reproduced
-Automatic finite loops occupied a ledger rejected wholesale by old mixed-scalar edit guard.
-Real HUB heading became uneditable. Source-bound loop proof now checked against private exact
-issued model snapshot; actual instantiated input metadata retained for loop calls as for
-local expansion. Direct scalar CAS/reparse reused. Loop-body anchors, structural actions,
-unproven/mismatched counts, path inputs/unconsumed samples/stale/copied authority remain locked.
-Baseline also reproduced loop-contained frame:display getting root deletion authority; existing
-negative now passes unchanged. Two old manual-input fixture loops now use runtimeCount because
-literal1..2 is automatically known; four new numeric/ipairs mixed/all-applied cases cover it.
-Strict evidence validators/schema unchanged. No parallel parser/renderer/history.
+Parent main f296d358b47191a6e136081bc0d7f96d2a8f5807. Current unit source metric arithmetic
+and rendered HUB tab strip VERIFIED. Exact11paths: src/lib/x4UiCallModel.ts and selftest.ts;
+src/lib/x4UiLayoutProgram.ts and selftest.ts; src/lib/x4UiSourceEdits.ts and selftest.ts;
+tests/e2e/x4-ui-source-editor.spec.ts; BACKLOG.md,ROADMAP.md,this handoff,
+docs/plans/2026-09-14-b119-metric-helper.md. Normal local precommit checkpoint is next.
+Actual commit authority:test-results/b119-metric-helper-20260914/checkpoint/{commit-exit,post-commit}.json.
+If receipt absent, observe existing process/active-handle before restarting anything.
+Preserve93unrelated dirty paths; exact-path staging only. No push/install/release.
 
-## Evidence
-Root:test-results/b119-source-loop-edit-20260914/; RESULTS.md is the readable report.
-source-final170/170 plus4caption families; layout-final1007/1007; types-final/lint terminal0.
-hub-final unchanged originalHUB at1920x1080/1 and2560x1440/1.4: exact captionedit/inverse,
-sixlabels/indexes/widths. browser first-pass1/1,0failed/flaky/skipped/reporterrors,treeGone=true.
-Actual edited/reopened screenshots inspected: friendly Text field works; updated caption
-survives history/export/reopen. Header-only rendering remains; taby/body NOT proven.
-verify.mjs terminal0 -> verification.json at16:31:28Z; all6receipts/current413pins checked;
-50protected artifacts/4realLua/19live files unchanged. No full-current-E2E/installed/native claim.
+## Implemented and proof
 
-Prior failure evidence:test-results/b119-hub-render-20260914/ browser0/1 twice.
-Its catalog probe returns locked, not undefined: UI locked-catalog wording misled initial
-exception hypothesis, now rejected. That diagnostic reused inner/outer receipt label, causing
-collision; inner projection receipt is not outer lifecycle proof. New independent guards pass.
-This unit retains source-baseline,source-red,source-first failures with exact logs/receipts.
-Never dump monolithic logs or model JSON: scalar summaries or character-bounded lines only.
-Documentation delete/add-same-path patch was rejected without mutation; retried as one update.
-Checkpoint rather than starting another implementation unit in this long context.
+Source-bound numeric call-result terms feed arithmetic only; standalone opaque helper returns
+keep their original preview samples. Closed tonumber conversion accepts proven numeric terms.
+Exact same-file pure metric wrapper supports renamed function/locals, pinned Helper constant,
+floor and scaleX/Y, literal numeric multipliers including zero/fractions. No arbitrary Lua runtime.
+Reject side effects, helper/math/global mutation/escape, runtime arguments and wrong scale axes.
+Loop bounds retain safe-integer default; source/schema/issuance locks retained.
+Source-edit raw model263069nodes but canonical233107: preserve250000 canonical-data cap,
+512depth and separate2x traversal-work cap; optional undefined retains original allowlist.
+No memoization that would permit exponentially expanded shared data.
+
+Evidence root:test-results/b119-metric-helper-20260914/; RESULTS.md is readable with screenshots.
+Successful receipts in final/: parser-verified152/152; layout-verified1055/1055;
+source-verified174/174 plus existing causal families; types-verified/lint-project terminal0;
+hub-verified original source at1080/1 and1440/1.4: tabY59/80,sixlabels/indexes/widths,
+exact heading CAS/inverse. RealSHA657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F.
+browser-corrected1/1,0failed/flaky/skipped/reporterrors; six source-colored pixel assertions
+and heading/history/export/reopen. Actual tabs/reopened screenshots inspected at2560x1440.
+17:33:23–17:35:29UTC. TreeGone=true,X4absent,onlyDeckwright3100/PID61604 afterwards.
+final/verification.json at17:36:17UTC checks7receipts,current product bytes,source and guards.
+Headless runs used earlier browser-only selector/viewport variant; verifier reconstructs exact
+two-line delta and requires earlier whole-file hash. Corrected browser uses current spec.
+All50protected artifacts/4realLua/19livefiles unchanged;403source members,413run inputs.
+
+## Failure history / review
+
+First browser/0of1 failed including harness retry: assumed Button hierarchy label does not exist;
+DOM proves Text/Widget. Corrected selector and larger browser viewport retain six pixel assertions.
+Retain parser-red/layout-red/layout-first/layout-second, coupled/source-red/hub failures,
+final/layout-final fractional/axis gaps and final/lint-final overbroad eslint-dot run.
+Actual package lint is eslint src server.ts and passed. Wrong log-parent read corrected.
+Broad initial call-result descriptor suppressed samples; corrected consumer-only issuance.
+Escape check initially confused scalar reads with table escapes; table escapes still rejected.
+reviewctl/BlastRadius unavailable; manual complete diff/ownership/negative review + project gates.
+Plan contains reconciled scope/AAR. Never dump full model/log JSON; use bounded summaries.
 
 ## Next substantive unit
-Existing scalar helper rowH / y682 and TAB_FN[hub.tab]/pcall body698-699 remain incomplete.
-Do not repeat count/label recovery or call header-only screenshot a whole-HUB success.
-RealHUB configured modWorkspacePath/x4_ai_influence/ui/addons/ai_influence_chat/aic_hub.lua,
-read-only SHA657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F.
-rowH(mult)105 reads tonumber(Helper.standardTextHeight) or19 and returns
-Helper.scaleY(math.floor(base*(mult or1))); y682=my+rowH(1)+Helper.scaleY(16).
-Tabst xknown/6columns/6labels; y unavailable, body runtime dispatch unsupported.
-Reuse existing resolveNumber, numericExpression AST, localInvocationResult and local-wrapper
-proof owners. Do not invent y or introduce arbitrary Lua execution. All9authoring journeys,
-3wholemenus/12references,current full E2E,packaged/installed/native comparisons remain.
-Eyeball queue: HUD & Lua UI -> Open Lua -> original HUB -> hub.display -> select heading
-in hierarchy -> Text field edit -> Undo/Redo -> Export Lua -> Open exported Lua. Confirm
-caption change; full tabs/body still missing and not awaiting approval as if complete.
 
-## Operator
-Astra directly implements/reviews; no Luna/delegation. Stay local; push ONLY public releases.
-Never republish0.0.78. Realmod/game/save/config/install writes need impact/rollback paragraph
-and explicit go. Latest run X4absent, Deckwright3100/PID61604 only; recheck heavy validation.
-Computer Use keeps Antigravity foreground and stops Escape/tool stop. Tests here were headless
-Playwright on3200/3201, not installed Forge; isolated stack cleaned. No native CU this unit.
-Plan/review/AAR in source-loop-edit plan. No external wiki/issue/memory writes.
+Do not redo tab count/labels/Y or heading repair. HUB runtime TAB_FN/pcall body lines698-699
+remains unsupported. Loop-derived caption/property edits remain locked; screenshots also show
+long-task/FPS warnings. Pixel checks do NOT prove smooth authoring, full menu fidelity or native truth.
+Next planned source-bound body/scenario dispatch and ordinary loop-property authoring, with
+existing parser/source/CAS/history owners. No competing interpreter/renderer. Full all9journeys,
+3menus/12references,current full integration,packaged/installed/native obligations remain.
+Use a fresh task boundary after checkpoint; do not roll another implementation unit into it.
+
+Eyeball queue: HUD & Lua UI -> Open Lua -> original HUB -> hub.display -> see six tabs ->
+select heading -> Text edit -> Undo/Redo -> Export Lua -> Open exported Lua.
+This proof used headless Chromium, not installed Antigravity. Keep Antigravity foreground during
+Computer Use; honor Escape/tool stop. Recheck X4/ports before heavy runs. Actual mod/game/save/
+config/install writes need impact/rollback paragraph + go. Push ONLY public releases; never
+republish0.0.78. No external wiki/GitHub writes this unit.

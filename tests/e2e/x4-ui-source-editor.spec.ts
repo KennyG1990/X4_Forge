@@ -4984,6 +4984,7 @@ for (const realMenu of [
       // real menu during the independent asset/hash bootstrap and call it a render failure.
       await expect(page.getByTestId('x4-ui-corpus-status')).toHaveText('canonical', { timeout: 60_000 });
       await expect(page.getByTestId('x4-ui-corpus-color-status')).toHaveText('canonical', { timeout: 60_000 });
+      if (realMenu.label === 'HUB') await page.setViewportSize({ width: 2560, height: 1440 });
       const empty = await waitB119LuaRoundtripWorkspaceSync(page, 'real-menu empty scratch baseline');
       const fileInput = page.getByLabel('Select one Lua file to open');
       const status = page.getByTestId('x4-ui-lua-status');
@@ -5043,6 +5044,21 @@ for (const realMenu of [
       await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
       if (realMenu.label === 'MENU') await capture('preview-scenario');
       const hierarchy = page.getByTestId('x4-ui-builder-hierarchy-list');
+      if (realMenu.label === 'HUB') {
+        expect(originalText).toMatch(/value\s*=\s*\{ r = 226, g = 240, b = 253, a = 100 \}/);
+        const tabInk = [];
+        for (const label of ['DOSSIER', 'INFLUENCE', 'INTEL', 'NEWS', 'FLEET', 'SETTINGS']) {
+          const tab = hierarchy.getByRole('treeitem').filter({ has: page.getByText(`Text · ${label}`, { exact: true }) });
+          await expect(tab).toHaveCount(1);
+          await tab.click();
+          await expect(page.getByTestId('x4-ui-canvas-selection')).toBeVisible();
+          const ink = await sampleNeutralLightMask(page, { rgb: [226, 240, 253] });
+          expect(ink.count, `${label} must contain real source-colored text pixels`).toBeGreaterThan(0);
+          tabInk.push({ label, ...ink });
+        }
+        checkpoints.push({ label: 'six-tabs-rendered', tabInk });
+        await capture('tabs');
+      }
       const node = hierarchy.getByRole('treeitem').filter({ has: page.getByText(`Text · ${realMenu.caption}`, { exact: true }) });
       await expect(node).toHaveCount(1);
       await node.click();

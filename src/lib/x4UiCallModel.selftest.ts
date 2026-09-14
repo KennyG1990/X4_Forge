@@ -234,6 +234,19 @@ function detail(value: unknown): string {
 }
 
 function run(): { allPassed: boolean; pass: boolean; passed: number; total: number; checks: Check[] } {
+  for (const expression of ['7 + Helper.scaleY(16)', '7 + metric(1) + Helper.scaleY(16)', 'tonumber(Helper.standardTextHeight) or 19']) {
+    const metricModel = buildX4UiCallModel(input([
+      'local function metric(mult)',
+      'local base = tonumber(Helper.standardTextHeight) or 19',
+      'return Helper.scaleY(math.floor(base * (mult or 1)))', 'end',
+      `local y = ${expression}`,
+      'local frame = Helper.createFrameHandle({}, { width = 100, height = 80 })',
+      'local t = frame:addTable(1, { y = y, width = 100, scaling = false })',
+    ].join('\n')));
+    const y = call(metricModel, 'addTable')?.semantics.properties?.find(item => item.normalizedName === 'y')?.value;
+    check(`B119 metric arithmetic preserves exact expression: ${expression}`, y?.numericExpression !== undefined
+      && y.numericExpression.expression === expression && y.status !== 'static', detail(y));
+  }
   const sequenceModel = buildX4UiCallModel(input([
     'local TABS = { "DOSSIER", "INFLUENCE", "INTEL", "NEWS", "FLEET", "SETTINGS" }',
     'local frame = Helper.createFrameHandle({}, { width = 100, height = 80 })',

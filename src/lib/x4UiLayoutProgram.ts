@@ -2274,7 +2274,7 @@ const localScaleFontWrapperForValue = (
     || !sourceLocationMatchesModel(model, value.location, localResult.expression)
     || !locationsEqual(value.location, localResult.source)) return undefined;
   const exact = values.get(invocation.id);
-  return exact?.kind === 'scaleFont' ? exact : undefined;
+  return exact;
 };
 
 const NUMERIC_LITERAL_EXPRESSION = /^(?:0[xX][0-9A-Fa-f]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)$/;
@@ -2831,6 +2831,18 @@ const numericExpressionStructureError = (
       || range[0] !== candidate.source.start.offset
       || range[1] !== candidate.source.end.offset) return false;
     switch (candidate.kind) {
+      case 'call-result':
+        return node.type === 'CallExpression' && (
+          model.calls.some(call => (call.name === 'scaleX' || call.name === 'scaleY')
+            && call.method === '.' && locationsEqual(call.source, candidate.source))
+          || model.localInvocations.some(invocation => invocation.status === 'supported'
+            && locationsEqual(invocation.source, candidate.source)));
+      case 'number-conversion': {
+        const args = localAstNodes(node.arguments);
+        return node.type === 'CallExpression' && localAstIdentifier(node.base, 'tonumber', false)
+          && globalAuthorityAvailableAt(model, 'tonumber', candidate.source)
+          && args?.length === 1 && nodeMatches(candidate.operand, args[0]);
+      }
       case 'literal':
         return node.type === 'NumericLiteral' && node.value === candidate.value;
       case 'preview-input':
@@ -3001,6 +3013,12 @@ const numericExpressionError = (
       }
       const source = candidate.source as X4UiSourceLocation;
       switch (candidate.kind) {
+        case 'call-result':
+          return finish(hasExactRecordKeys(candidate, ['kind', 'expression', 'source'])
+            ? undefined : 'numeric call-result descriptor is malformed');
+        case 'number-conversion':
+          return finish(hasExactRecordKeys(candidate, ['kind', 'operand', 'expression', 'source'])
+            ? visit(candidate.operand) : 'numeric conversion descriptor is malformed');
         case 'literal': {
           if (!hasExactRecordKeys(candidate, ['kind', 'value', 'expression', 'source'])
             || !isFiniteNumber(candidate.value)
@@ -3386,6 +3404,7 @@ const numericPreviewLeavesForValue = (
       case 'literal':
       case 'helper-constant':
       case 'direct-helper-scale':
+      case 'call-result':
       case 'table-length':
         return;
       case 'table-field':
@@ -3396,6 +3415,7 @@ const numericPreviewLeavesForValue = (
         return;
       case 'group':
       case 'unary':
+      case 'number-conversion':
         append(descriptor.operand, sourceValue);
         return;
       case 'binary':
@@ -3429,6 +3449,7 @@ const resolveNumericExpression = (
   model: X4UiCallModel,
   previewLoopId: string,
   parameterBindings?: ReadonlyMap<string, X4UiValue>,
+  localScaleWrapperValues?: ReadonlyMap<string, DirectScaleValue>,
 ): Resolution<number> => {
   const expressionGap = (
     expression: X4UiNumericExpression,
@@ -3465,6 +3486,20 @@ const resolveNumericExpression = (
       : 'source-literal';
   const evaluate = (expression: X4UiNumericExpression): Resolution<number> => {
     switch (expression.kind) {
+      case 'call-result': {
+        const invocation = model.localInvocations.find(item => locationsEqual(item.source, expression.source));
+        const synthetic: X4UiValue = { status: 'dynamic', type: 'expression', expression: expression.expression,
+          location: expression.source, ...(invocation ? { localInvocationResult: {
+            invocationId: invocation.id, source: invocation.source, expression: expression.expression,
+          } } : {}) };
+        const result = directScaleForValue(directScaleValues, synthetic, instanceScope, model)
+          || localScaleFontWrapperForValue(localScaleWrapperValues, synthetic, model);
+        return result && allowedScaleKinds.includes(result.kind)
+          ? { value: result.value, source: cloneLocation(expression.source), provenance: 'direct-helper-scale' }
+          : expressionGap(expression, `${label} call result has no exact source-proven numeric value`);
+      }
+      case 'number-conversion':
+        return evaluate(expression.operand);
       case 'literal':
         return { value: expression.value, source: cloneLocation(expression.source), provenance: 'source-literal' };
       case 'preview-input': {
@@ -3709,6 +3744,7 @@ const resolveNumber = (
       model,
       previewLoopId,
       parameterBindings,
+      localScaleFontWrapperValues,
     );
   }
   if (value?.status === 'static' && value.type === 'number' && isFiniteNumber(value.value)) {
@@ -3719,7 +3755,7 @@ const resolveNumber = (
     return { value: directScale.value, source: cloneLocation(directScale.source), provenance: 'direct-helper-scale' };
   }
   const localScaleFontWrapper = localScaleFontWrapperForValue(localScaleFontWrapperValues, value, model);
-  if (localScaleFontWrapper && allowedScaleKinds.includes('scaleFont')) {
+  if (localScaleFontWrapper && allowedScaleKinds.includes(localScaleFontWrapper.kind)) {
     return {
       value: localScaleFontWrapper.value,
       source: cloneLocation(localScaleFontWrapper.source),
@@ -6517,6 +6553,7 @@ const localAstNodeAt = (
 const localAstNumericLiteralValue = (
   model: X4UiCallModel,
   value: unknown,
+  requireInteger = true,
 ): number | undefined => {
   const node = localAstNode(value);
   const range = node ? sourceAstRange(node) : undefined;
@@ -6530,7 +6567,7 @@ const localAstNumericLiteralValue = (
     || !sourceLocationMatchesModel(model, source, raw)
     || typeof node.value !== 'number'
     || !Number.isFinite(node.value)
-    || !Number.isSafeInteger(node.value)
+    || (requireInteger && !Number.isSafeInteger(node.value))
     || Number(raw) !== node.value) return undefined;
   return node.value;
 };
@@ -6852,7 +6889,7 @@ const numericForIndexValueFor = (
   return resolved.value;
 };
 
-type LocalScaleFontGlobalAuthority = 'pcall' | 'type' | 'Helper' | 'rawget';
+type LocalScaleFontGlobalAuthority = 'pcall' | 'type' | 'Helper' | 'rawget' | 'math' | 'tonumber';
 
 const localAstGlobalEnvironment = (value: unknown): boolean =>
   localAstIdentifier(value, '_G', false) || localAstIdentifier(value, '_ENV', false);
@@ -7093,6 +7130,7 @@ const exactLocalScaleFontWrapperSource = (
 const activeLocalInvocationResultIdsFor = (
   targetCalls: readonly ProjectableCall[],
   selectedPreviewPaths?: ReadonlyMap<string, X4UiLayoutPreviewPathCatalogEntry>,
+  model?: X4UiCallModel,
 ): ReadonlySet<string> => {
   const result = new Set<string>();
   const seen = new Set<object>();
@@ -7101,10 +7139,15 @@ const activeLocalInvocationResultIdsFor = (
     const objectValue = value as object;
     if (seen.has(objectValue)) return;
     seen.add(objectValue);
+    if (isObject(value) && value.kind === 'call-result' && isObject(value.source)) {
+      const invocation = model?.localInvocations.find(item => locationsEqual(item.source, value.source as X4UiSourceLocation));
+      if (invocation) result.add(invocation.id);
+    }
     if (isValueShape(value)) {
       const invocationId = value.localInvocationResult?.invocationId;
       if (typeof invocationId === 'string') result.add(invocationId);
       if (value.reference?.index) collect(value.reference.index);
+      if (value.numericExpression) collect(value.numericExpression);
       return;
     }
     if (Array.isArray(value)) {
@@ -7119,6 +7162,123 @@ const activeLocalInvocationResultIdsFor = (
     collect(call.semantics);
   }
   return result;
+};
+
+/** Source matcher for a pure metric wrapper; it does not execute a function body. */
+const exactLocalMetricScaleWrapper = (
+  model: X4UiCallModel,
+  declaration: X4UiLocalFunctionDeclaration,
+  invocation: X4UiLocalFunctionInvocation,
+  profile: X4UiLayoutProjectionProfile,
+): DirectScaleValue | undefined => {
+  const index = numericExpressionSourceAstIndex(model);
+  const nodes = localAstNodeAt(index, declaration.source, 'FunctionDeclaration');
+  const fn = nodes.length === 1 ? nodes[0] : undefined;
+  const parameters = fn && localAstNodes(fn.parameters);
+  const body = fn && localAstNodes(fn.body);
+  if (!fn || fn.isLocal !== true || !localAstIdentifier(fn.identifier, declaration.name, true)
+    || parameters?.length !== 1 || body?.length !== 2 || declaration.parameters.length !== 1) return undefined;
+  const parameter = declaration.parameters[0];
+  if (!localAstIdentifier(parameters[0], parameter.name, true)) return undefined;
+  const init = localAstNode(body[0]), ret = localAstNode(body[1]);
+  const variables = init && localAstNodes(init.variables), values = init && localAstNodes(init.init);
+  const returns = ret && localAstNodes(ret.arguments);
+  if (init?.type !== 'LocalStatement' || variables?.length !== 1 || values?.length !== 1
+    || ret?.type !== 'ReturnStatement' || returns?.length !== 1) return undefined;
+  const baseName = variables[0].name;
+  if (typeof baseName !== 'string' || baseName === parameter.name || !localAstIdentifier(variables[0], baseName, true)) return undefined;
+  const defaultBase = localAstNode(values[0]);
+  const conversion = defaultBase && localAstNode(defaultBase.left);
+  const conversionArgs = conversion && localAstNodes(conversion.arguments);
+  const constant = conversionArgs?.length === 1 ? localAstNode(conversionArgs[0]) : undefined;
+  const constantName = constant && localAstNode(constant.identifier)?.name;
+  const constantReceiver = constant && localAstNode(constant.base);
+  const constantReceiverSource = constantReceiver && localAstSource(model, constantReceiver);
+  if (defaultBase?.type !== 'LogicalExpression' || defaultBase.operator !== 'or'
+    || localAstNumericLiteralValue(model, defaultBase.right) === undefined
+    || conversion?.type !== 'CallExpression' || !localAstIdentifier(conversion.base, 'tonumber', false)
+    || constant?.type !== 'MemberExpression' || constant.indexer !== '.'
+    || !HELPER_CONSTANT_NAMES.includes(constantName as X4UiLayoutHelperConstantName)
+    || !constantReceiverSource || !exactHelperReceiverIdentity(model, constantReceiver, constantReceiverSource)) return undefined;
+  const scaled = localAstNode(returns[0]), scaleCallee = scaled && localAstNode(scaled.base);
+  const scaleName = scaleCallee && localAstNode(scaleCallee.identifier)?.name;
+  const scaleReceiver = scaleCallee && localAstNode(scaleCallee.base);
+  const scaleReceiverSource = scaleReceiver && localAstSource(model, scaleReceiver);
+  const scaleArgs = scaled && localAstNodes(scaled.arguments);
+  const floorCall = scaleArgs?.length === 1 ? localAstNode(scaleArgs[0]) : undefined;
+  const floorCallee = floorCall && localAstNode(floorCall.base);
+  const floorArgs = floorCall && localAstNodes(floorCall.arguments);
+  const product = floorArgs?.length === 1 ? localAstNode(floorArgs[0]) : undefined;
+  const multiplier = product && localAstNode(product.right);
+  if (scaled?.type !== 'CallExpression' || scaleCallee?.type !== 'MemberExpression' || scaleCallee.indexer !== '.'
+    || (scaleName !== 'scaleX' && scaleName !== 'scaleY') || !scaleReceiverSource
+    || !exactHelperReceiverIdentity(model, scaleReceiver, scaleReceiverSource)
+    || floorCall?.type !== 'CallExpression' || floorCallee?.type !== 'MemberExpression' || floorCallee.indexer !== '.'
+    || !localAstIdentifier(floorCallee.base, 'math', false) || !localAstIdentifier(floorCallee.identifier, 'floor')
+    || product?.type !== 'BinaryExpression' || product.operator !== '*'
+    || !localAstIdentifier(product.left, baseName, true)
+    || multiplier?.type !== 'LogicalExpression' || multiplier.operator !== 'or'
+    || !localAstIdentifier(multiplier.left, parameter.name, true)
+    || localAstNumericLiteralValue(model, multiplier.right) === undefined) return undefined;
+  const calls = localAstNodeAt(index, invocation.source, 'CallExpression');
+  const called = calls.length === 1 ? calls[0] : undefined;
+  const args = called && localAstNodes(called.arguments);
+  const argument = args?.length === 1 ? localAstNumericLiteralValue(model, args[0], false) : undefined;
+  if (!called || !localAstIdentifier(called.base, declaration.name, true) || argument === undefined
+    || !directLiteralArgument(invocation.arguments[0]) || invocation.arguments[0].value !== argument
+    || !globalAuthorityAvailableAt(model, 'math', invocation.source)
+    || !globalAuthorityAvailableAt(model, 'tonumber', invocation.source)) return undefined;
+  const rootName = (value: unknown): string | undefined => {
+    const node = localAstNode(value);
+    if (node?.type === 'Identifier') return typeof node.name === 'string' ? node.name : undefined;
+    if (node?.type === 'MemberExpression' || node?.type === 'IndexExpression') {
+      if (localAstGlobalEnvironment(node.base)) {
+        const member = node.type === 'MemberExpression' ? localAstNode(node.identifier)?.name : localAstStringValue(model, node.index);
+        return typeof member === 'string' ? member : '*';
+      }
+      return rootName(node.base);
+    }
+    return undefined;
+  };
+  const escapesAuthorityTable = (value: unknown): boolean => {
+    const node = localAstNode(value);
+    return localAstGlobalEnvironment(node) || Boolean(node && (node.type === 'Identifier' || localAstGlobalEnvironment(node.base))
+      && ['math', 'Helper', '*'].includes(rootName(node) || ''));
+  };
+  // Reject ambiguous callee bindings, writes to the used standard tables, or escapes.
+  // The exact supported wrapper has no statements that could hide a side effect.
+  for (const group of index.nodesByRange.values()) for (const node of group) {
+    if (node.type === 'FunctionDeclaration' && node !== fn
+      && (localAstIdentifier(node.identifier, declaration.name)
+        || ['math', 'Helper', '*'].includes(rootName(node.identifier) || '')
+        || localAstNodes(node.parameters)?.some(item => localAstIdentifier(item, declaration.name)))) return undefined;
+    if (node.type === 'LocalStatement' && localAstNodes(node.variables)?.some(item => localAstIdentifier(item, declaration.name))) return undefined;
+    if (node.type === 'AssignmentStatement' && localAstNodes(node.variables)?.some(item =>
+      localAstIdentifier(item, declaration.name) || (item.type !== 'Identifier' && ['math', 'Helper', '*'].includes(rootName(item) || '')))) return undefined;
+    if ((node.type === 'AssignmentStatement' || node.type === 'LocalStatement')
+      && localAstNodes(node.init)?.some(escapesAuthorityTable)) return undefined;
+    if (node.type === 'CallExpression' && localAstNodes(node.arguments)?.some(escapesAuthorityTable)) {
+      const arguments_ = localAstNodes(node.arguments);
+      const source = localAstSource(model, node);
+      // Existing loader reads the global environment without handing it to an opaque callee.
+      if (!localAstIdentifier(node.base, 'rawget', false) || arguments_?.length !== 2
+        || !localAstGlobalEnvironment(arguments_[0]) || localAstStringValue(model, arguments_[1]) === undefined
+        || !source || !globalAuthorityAvailableAt(model, 'rawget', source)) return undefined;
+    }
+  }
+  if (scaleReceiver?.isLocal === false) {
+    if (!globalAuthorityAvailableAt(model, 'Helper', invocation.source)) return undefined;
+  } else {
+    const helper = activeHelperReceiverAliasAuthority(model, 'Helper', invocation.source);
+    if (!helper?.callSource || !globalAuthorityAvailableAt(model, 'Helper', helper.callSource)
+      || !globalAuthorityAvailableAt(model, 'rawget', helper.callSource)) return undefined;
+  }
+  const units = profile.helper.constants[constantName as X4UiLayoutHelperConstantName].value;
+  const unscaled = Math.floor(units * argument);
+  if (!Number.isFinite(unscaled)) return undefined;
+  const result = scaleName === 'scaleX' ? scaleX(unscaled, profile.metrics.uiScale) : scaleY(unscaled, profile.metrics.uiScale);
+  return result.status === 'ok' && Number.isFinite(result.value)
+    ? { value: result.value, kind: scaleName, source: invocation.source, instanceScope: '' } : undefined;
 };
 
 const localScaleFontWrapperValuesFor = (
@@ -7142,6 +7302,11 @@ const localScaleFontWrapperValuesFor = (
       || invocation.arguments.length !== 1) continue;
     const declaration = declarations.get(invocation.calleeDeclarationId);
     const argument = invocation.arguments[0];
+    const metric = declaration && exactLocalMetricScaleWrapper(model, declaration, invocation, profile);
+    if (metric) {
+      result.set(invocation.id, metric);
+      continue;
+    }
     if (!declaration
       || !directLiteralArgument(argument)
       || argument.type !== 'number'
@@ -8734,6 +8899,13 @@ const schemaNumericHelperReceiver = (value: unknown, path: string): ClosedSchema
 const schemaNumericExpression = (value: unknown, path: string): ClosedSchemaError => {
   if (!isObject(value)) return `${path} must be a numeric expression descriptor`;
   const candidate = value as Record<string, unknown>;
+  if (candidate.kind === 'call-result' || candidate.kind === 'number-conversion') {
+    return schemaObject(value, path, candidate.kind === 'call-result'
+      ? ['kind', 'expression', 'source'] : ['kind', 'operand', 'expression', 'source'])
+      || schemaString(candidate.expression, `${path}.expression`, true)
+      || schemaSource(candidate.source, `${path}.source`)
+      || (candidate.kind === 'number-conversion' ? schemaNumericExpression(candidate.operand, `${path}.operand`) : undefined);
+  }
   if (candidate.kind === 'literal') {
     const objectError = schemaObject(value, path, ['kind', 'value', 'expression', 'source']);
     if (objectError) return objectError;
@@ -12045,7 +12217,7 @@ export function projectX4UiLayoutProgram(
       resolvedDirectScaleLocations.add(locationKey(call.source));
     }
   }
-  const activeLocalInvocationIds = activeLocalInvocationResultIdsFor(targetCalls, selectedPreviewPaths);
+  const activeLocalInvocationIds = activeLocalInvocationResultIdsFor(targetCalls, selectedPreviewPaths, model);
   const localScaleFontWrapperValues = localScaleFontWrapperValuesFor(model, profileValue, activeLocalInvocationIds);
   const resolvedLocalScaleFontInvocationIds = new Set(localScaleFontWrapperValues.keys());
   const allowNumericExpressionSamples = targetNeedsNumericExpressionPreviewSamples(model, targetCalls, selectedPreviewPaths);

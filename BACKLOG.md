@@ -8,6 +8,17 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 17:36Z: Source metric arithmetic and rendered HUB tab strip VERIFIED; full goal PARTIAL.
+Real originalHUB Y59/80 at two profiles, allsix labels/indexes/widths, exact heading CAS/inverse.
+Corrected browser1/1: six source-colored text pixel checks, heading/history/export/reopen;
+actual tabs/reopened captures inspected. Parser152/152,layout1055/1055,source174/174,types/lint PASS.
+Protected50artifacts/4realLua/19livefiles and isolated cleanup PASS. First browser selector failure retained.
+Next: source-owned editing of loop-derived properties and runtime TAB_FN/pcall body dispatch;
+screenshots expose long-task warnings, not smooth full-UX proof. All9journeys/3menus/12references,
+full-current integration and packaged/installed/native remain. No release/push/install.
+Plan/AAR:docs/plans/2026-09-14-b119-metric-helper.md. Evidence:test-results/b119-metric-helper-20260914/
+RESULTS.md and final/verification.json. Normal local checkpoint next; checkpoint/post-commit.json is authority.
+
 2026-09-14 16:32Z: Source-proven-loop direct caption editing repair VERIFIED; full goal PARTIAL.
 Real HUB edit/undo/redo/export/reopen1/1 first-pass; actual screenshots inspected, stillheader-only.
 Source170/170+4families,layout1007/1007,types/lint and originalHUB two-profileCAS/inverse PASS.
