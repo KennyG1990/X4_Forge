@@ -11,6 +11,242 @@ Lane: FULL. Status: PARTIAL; dispatch/selector infrastructure implemented, body 
 
 ## PLAN
 
+### Declaration-name index — PARTIAL; rendered continuation passes, 21:59Z
+
+Current browser1/1 PASS,0failed/flaky/bad/reporterrors,21:47:57–21:57:03Z. All823path pins,
+HEAD/status,50protected/4realLua/19livefiles unchanged. treeGone=true; X4 absent; only
+Deckwright3100/PID61604 before/after. Same120s and every existing assertion retained.
+Actual real-HUB-reopened.png inspected: AI INFLUENCE HUB,all six tabs,DOSSIERselected,
+FACTIONS/bar visible in independent workspace. Exact source,pixels,hierarchy,history and
+duplicate-import rejection pass. Not helper-body editing or native/installed proof.
+Trace reference fixture395071ms; edit20464ms,undo17863ms,redo15400ms action wall time.
+Immediate-feedback UX remains unmet despite the full journey passing.
+
+name-index-pipeline127/127 and name-index-session PASS. name-index-sceneFAILED194/196;
+summary/failure lines deep-equal body-y/scene-caption.log, previously reproduced on parent.
+No oracle changed. All validation processes terminal, including6260browser,58172scene,59155session.
+Full goal PARTIAL; no capability-map delta. Same-runtime diagnostic now79644.186ms with exact
+output parity, compared with97196.645ms prior and105747.698ms original (single-run comparison).
+
+Checkpoint: existing guarded runner adapted to
+F:/DEV_ENV/X4_Forge/test-results/b119-active-section-edit-20260914/checkpoint.mjs.
+Verify current receipts/eight code-test hashes,scene parity and11exact staged paths; preserve
+93excluded paths; require unchanged normal npm run precommit:check hook. No bypass or push.
+Fresh checkpoint/{baseline,commit-exit,post-commit}.json decides integrity. Title:
+fix(ui): preserve finite-section edits and index source declarations.
+Prepare handoff before commit. This is LOCAL PARTIAL development, not full-feature acceptance.
+
+AAR: sustained causal profiling, mutation/scope negatives and independent rendered review.
+Highest risk remains15–20s authoring stalls; next performance work must target measured validation/
+reprojection without trusting mutable metadata. Known scene failures stay exposed. First BACKLOG
+write failed without a specific cause; read-only inspection found intact bytes, ample disk and
+modify ACLs. One bounded retry succeeded; do not invent a locking/permission diagnosis.
+No external-ledger/memory writes. All9journeys/3menus/12references and helper-body work remain.
+
+21:47Z core implementation validated: name-index-layout1092/1092 plus continuity family,
+name-index-source174/174 plus causal matrices,scenarios,types,8filelint PASS. All terminal0,
+same50/4/19guards/input pins/HEAD/status. Same-runtime diagnostic97196.645->79644.186ms;
+exact real-HUB results deep-equal. About18.1% shorter than prior cache,24.7% versus105747.698
+original baseline; single diagnostic runs, not browser responsiveness proof. Source-map profile
+now leads with closedJsonDomain/jsonEqual/alias binding rather than declaration search.
+Complete incremental grouping/test diff reviewed; preserves original per-name order and visibility
+sort, private source cache lifetime and every authority check. No new trust cache or schema change.
+Next actual browser run name-index-browser keeps120000ms and every existing assertion. Reaudited
+capture/export/observations/CPU fixture destinations: test.info().outputPath; real mod read-only;
+manifest preparation explicitly requires owned ephemeral state database. Current X4 absent,
+onlyDeckwright3100/PID61604,3200/3201 free. No concurrent validation will run during the browser gate.
+
+Previous turn PROGRESS; live baseline64d1296 plus eleven owned dirty paths,93unrelated preserved.
+No validation process remains. Reuse the private source AST declaration cache; its only lookup
+consumer is DeclarationForReference. Index by exact identifier name instead of scanning all
+declarations per reference. Preserve each name's original declaration ordering, visibility/scope
+filter, sort/tie-break and all alias/source/model/evidence checks. No trust or selected-result cache.
+Only F:/DEV_ENV/X4_Forge/src/lib/x4UiLayoutProgram.ts and its .selftest.ts change this step.
+Extend continuity with a same-name declaration in a closed sibling scope, alongside existing
+source replacement/rename/restore and forged-coordinate negatives. Existing shadowing families
+remain mandatory. Rollback only this incremental grouping diff, not the earlier cache/CAS work.
+
+Validation: full layout/source/scenario tests, bundled Node24.19.0 types/lint, exact original-HUB
+two-profile CAS/inverse and fresh CPU profile/name-index-cpu. Compare diagnostic JSON exactly with
+declaration-cpu; report single-pair timings without broader claims. Then rerun actual rendered HUB
+edit/undo/redo/export/reopen at unchanged120s and one worker on3200/3201. Reaudit selected test's
+direct writers and original/live/protected hashes; check machine/process/ports first and cleanup
+after. Evidence remains under test-results/b119-active-section-edit-20260914 with fresh labels.
+No native/install/config/game/mod/publish/push writes. No capability-map delta. Full nine journeys,
+three menus/twelve references, known scene failures and integration/installed/native gates remain.
+
+### Declaration lookup performance — PARTIAL, 2026-09-14 21:36Z
+
+Implemented the bounded AST-owned declaration-list cache and same-model rename/restore tests.
+Validation: declaration-layout1092/1092 including continuity family; declaration-source174/174
+plus causal matrices; declaration-scenarios; declaration-types; declaration-lint8paths all PASS.
+Every run terminal0 and guards50protected/4realLua/19livefiles plus input/HEAD/status unchanged.
+Handles97339,54797,3011,86130,3537 terminal observed; analysis/scenarios completed inline.
+No test process remains. No normal precommit/commit/push or new browser run for the cache.
+
+Same Node24.19.0 profile pair:105747.698ms ->97196.645ms (8.1% shorter sampled interval).
+Exact baseline reconstruction hash matches old pinned input; same diagnostic outputs deep-equal.
+Reproducible source-map analysis: declaration-profile-summary.json and profile-summary.mjs.
+Declaration construction no longer leads; DeclarationForReference repeated name filtering now
+11015ms self (11.3%). This is not a browser responsiveness/universal speedup claim. The prior
+rendered0/1 failure remains open. Next bounded hypothesis: group private AST declarations by name,
+retaining candidate order and recomputing source visibility/alias/issuance checks. No implementation
+of that next step yet. Need unchanged-timeout full rendered journey after adequate optimization.
+
+REVIEW: complete eight-path executable/test diff reread; no additional source-format, trust-cache,
+whole-file rewrite or external mutation. reviewctl and specified BlastRadius path unavailable.
+No capability-map delta; full nine journeys/three menus/twelve references remain unchanged.
+AAR triggered by prior rendered timeout, oversized diagnostic output and one Windows glob lookup
+failure. Sustain causal before/after profiles, baseline hash reconstruction and source-mutability
+negatives. Improve bounded output and explicit Node paths (static tests used system24.15.0;
+profile pair/source/scenarios used bundled24.19.0). Highest evidenced risk remains multi-second
+edit/history; cache results prove only one contributor improved. No external-ledger/memory writes.
+
+Recovered real-cas-cpu terminal0 (21:20:39–21:22:26Z), guards50/4/19 unchanged.
+105747.698ms sampled interval: declaration-list construction12837ms (12.1% self).
+Exact esbuild transform/source map maps generated8:72714 to LayoutProgram6295;
+other substantial costs include closedJsonDomain and jsonEqual. This is a contributor,
+not proof it explains all browser latency. No active profiling process remains.
+
+Bounded next implementation: F:/DEV_ENV/X4_Forge/src/lib/x4UiLayoutProgram.ts only
+reuses the declaration list by its existing private NumericExpressionSourceAstIndex.
+That index is replaced whenever exact model.file.text changes. Store frozen structural
+entries/list in a WeakMap; cache no model aliases, validation result, visible-reference
+decision, issuance or edit authority. Existing node-type index and all validation stay.
+Extend F:/DEV_ENV/X4_Forge/src/lib/x4UiLayoutProgram.selftest.ts continuity family with
+same-model renamed declarations and restoration, retaining forged-coordinate refusal.
+Baseline is current seven-path invocation/CAS diff above64d1296; rollback only this
+additional cache/test diff. No source schema/UI/network/game/config/publication change.
+
+Acceptance: unchanged repeated projection, renamed/replaced/restored same-model source,
+metadata tamper refusal; full layout/source selftests, types and changed-file lint;
+same original-HUB CAS/inverse diagnostic with fresh CPU profile and exact output comparison.
+Record sampled declaration cost and total wall time, not a single-run universal speedup.
+Rendered active-section edit/reopen remains required at unchanged120s; no usable-UX claim
+from this optimization alone. Evidence stays in test-results/b119-active-section-edit-20260914.
+Graph explains DeclarationNodes -> DeclarationForReference and AST-node owner. No capability
+map delta; unrelated dirty paths preserved, no commit until normal precommit passes.
+Fresh review: AST is private and never handed to model callers; source text is cache identity;
+every alias/scope/evidence check still executes. Existing cache does not justify trust caching.
+
+### Invocation correspondence implementation — SPECIFIED, parent64d1296
+
+21:19Z rendered result FAILED0/1, both original/configured retry hit120000ms. Cleanup treeGone=true,
+same50/4/19guards and only pre-existingDeckwright3100 remain. Actual edited screenshot inspected:
+heading AI INFLUENCE HUB is editable; DOSSIER remains selected and FACTIONS/bar visible. First trace
+completed edit/undo/redo/export assertions, then timed out at5164 awaiting the new workspace before
+reopen. test.trace durations: edit click27431ms,undo17903ms,redo19802ms; these include actionability
+and processing waits, not isolated CPU costs. Reopen/current journey NOT verified. No timeout/oracle
+relaxation. Complete source174/174 plus newdispatch family,layout1092/1092,session,scenario-final,
+types-final and7filelint PASS. RealCAS/inverse and transfer atbothprofiles PASS, no realmodwrites.
+
+Next diagnostic within this partial batch: profile the existing read-only/in-memory real-cas.mjs
+with Node's CPU profiler into a fresh explicit real-cas-cpu.cpuprofile under this evidence root.
+Reuse guarded runner and new output label, no browser/service/corpus/model-source modification.
+Before interpreting costs, correlate sampled stacks with wall times; browser trace action duration
+does not itself prove which function is slow. Record bounded top functions/paths and exact terminal
+receipt to select the next repair. Do not cache stale authority, strip checks, or raise timeouts.
+This is diagnostic only; no new performance repair before fresh review. AAR: initial type fixes
+missed two more branches and one repeated refusal-message expectation; all failed receipts retained.
+The highest evidenced weakness is multi-second source-edit/history interaction with an active body.
+
+Execution delta: scenario red reproduced before repair; generic longer/shorter/pre-declaration
+transfer/inverse/redo now pass, including wrong candidate/call/stale/duplicate/ambiguous ledger
+negatives. Original real-transfer-green passed both profiles with all guards. Next planned scalar
+gate enabled ONLY issued finite dispatch selections through exact CAS/reparse/rediscovery; ordinary
+branch paths, helper/out-of-target literals, guessed loops and structural operations remain locked.
+Generic scalar red confirmed old lock; new scalar/inverse case passed, but whole source suite173/174
+found one second hardcoded old refusal message in the loop negative. Actual refusal, unchanged source,
+empty catalog all passed. Update that message only; preserve all behavioral assertions. Typecheck also
+found assertion-narrowed test error-message branches; repair test typing without weakening assertions.
+
+Rendered follow-through updates the existing real-HUB test, retaining source/pixel/history/export/
+reopen checks. Leave DOSSIER active during the heading edit/undo/redo; explicitly reselect after import
+into a fresh workspace (scenarios are local, not embedded Lua). Require exact full canvas bitmap and
+hierarchy equality plus selected DOSSIER and FACTIONS presence throughout. All existing captures,
+downloads and observation artifacts use test.info().outputPath; original mod reads/hash checks and
+ephemeral reference-state path guard reread. No new external writer or timeout change. One isolated
+3200/3201 Chromium worker, recheck machine/ports, final treeGone and50/4/19 guards. This proves a real
+heading edit with the body open, not editable helper-generated FACTIONS or full body fidelity.
+
+Bounded repair: extend existing PreviewSourceMapping with optional before/after CallModel ledgers,
+supplied by LayoutProgram issuance and PreviewScenarios' reparsed files. Resolve each catalog's
+invocation IDs to unique source records, map call/callee/declaration/parameter ranges through the
+exact splice, and compare callee identity, method/status/resolution plus dispatch path identity.
+Never parse IDs to discard their offsets, assume the same dispatch index means the same callee,
+or serialize the ledger as trusted authority. Presentation-only range callers need no new ledger.
+
+Files:src/lib/x4UiPreviewSourceMapping.ts,x4UiLayoutProgram.ts,x4UiPreviewScenarios.ts and existing
+x4UiPreviewScenarios.selftest.ts. SourceEdits and its tests may be extended only after this mapping
+passes, preserving all direct-literal/CAS/issued-evidence checks and structural locks. Existing
+body-probe baseline stays immutable; add a separate green probe under the same evidence root.
+
+Acceptance: generic producer-backed finite dispatch survives longer/shorter/pre-declaration edits,
+reverse splice/redo and saved-scenario migration; replacement of the selected callee with another
+function, duplicate/unknown invocation, removed call, stale source/expectedText and extra writes
+refuse. Original HUB retains DOSSIER at both profiles with different-length heading edits. Then
+prove a source scalar edit with active section (not merely mapper equality). Run scenario,layout,
+source/session regressions,typecheck,exact lint; inspect real rendered active-section edit/history
+if the supported scalar gate is lifted. No native proof or full-body claim from headless success.
+
+Baseline:product/test owners clean at64d1296; three prior diagnostic docs already dirty, preserved.
+Guarded runner fresh labels/pins/50protected/4Lua/19livefiles; machine state checked before heavy runs.
+Rollback only this bounded owned diff. No external writes/push/install; no new network/spend/delete
+surface. Full9journeys/3menus/12references and required scene/integration/installed/native gates remain.
+No capability-map delta yet. Read-only recall had weak historical matches, not implementation proof.
+
+### Active-section edit continuation — SPECIFIED, parent64d1296
+
+20:44:54Z diagnostic close: REPRODUCED, full body-authoring unit PARTIAL. Guarded
+transfer-baseline run terminal0, same input hashes/HEAD/status and50protected/4realLua/19livefiles.
+Both1080/1 and1440/1.4: equal-length AI INFLUENCX retains DOSSIER; seven-character-longer
+AI INFLUENCE EDITED refuses target-mismatch. Boundary interval mapping, arm/index/label all match;
+only invocationIds differ: ui/aic_hub.lua offsets38810..38842 ->38817..38849, dispatch0 unchanged.
+Mapper compares those old/new identifiers verbatim, so matches=false. Wrong expectedText and an
+unrelated extra edit both reject. See transfer-baseline.json and transfer-baseline-receipt.json.
+
+No product/test/authority change and no new rendered proof this batch. Existing caption scene
+remains present at both profiles, active-path catalog remains locked. Do not reuse this diagnostic's
+expected-refusal assertions as the green implementation oracle: retain red evidence and add a fresh
+positive transfer/CAS/undo/reopen test when repaired. Required negatives include wrong candidate,
+callee/declaration change, ambiguous mapping, stale source, replaced/removed call, and copied authority.
+Review found the same mapper serves scenario/history continuation as well as scalar reparse; repair
+that existing shared owner, do not hand-edit IDs only in SourceEdits or delete the current guard.
+First implementation command should locate every createPreviewSourceMapper caller and inspect the
+existing source-owned localInvocations/localFunctions identity ledger before defining correspondence.
+Graphify explain applyX4UiSourceEdit confirmed the existing Layout/SourceEdits/SourceEditor consumers;
+graph traversal only, no semantic extraction. No capability-map delta. Checkpoint remains64d1296;
+new diagnostics and three documentation deltas are uncommitted, no push. CLEAN not claimed: read/query
+friction and degradation call are recorded above. Highest risk is removing a necessary lock while
+source-offset transfer is broken; keep the exact negative/positive contrast and complete authoring gate.
+
+Next bounded step is a read-only/scratch reproduction of the existing preview-path transfer used
+by scalar CAS. SourceEdits currently rejects mixed streams with active paths; LayoutProgram already
+has exact-splice path/loop/sample reissue. PreviewSourceMapping compares invocationIds verbatim.
+Hypothesis: a length-changing heading edit shifts source-issued invocation IDs and therefore loses
+the selected DOSSIER path, although an equal-length edit retains it. Prove this on unchanged original
+HUB at both profiles before changing source-edit authority. Do not remove the active-path lock.
+
+Evidence: test-results/b119-active-section-edit-20260914/. Reuse the prior guarded runner and original
+source/corpus replay probe with new output paths/parent pins. Compare unchanged source, equal-length
+heading splice, and length-changing heading splice; assert exact untouched bytes, fresh catalog
+boundaries, candidate arm/index/label and invocation identity differences, and terminal transfer
+results. Negative controls: nonlocal extra source change and wrong expectedText must refuse. Original
+mod/corpus/live files remain hash-guarded. No browser/native/install/config/public writes this batch.
+
+Acceptance here is a causal dependency reproduction, NOT an editable body or completed journey.
+If reproduced, the next implementation must extend the existing mapper using exact source-owned
+invocation/declaration correspondence, with shifted-source/candidate-swap/stale negatives. Then prove
+scalar CAS, undo/redo and rendered active-section continuity before lifting the applicable lock.
+Helper caption-to-caller edit ownership remains separate required work. Existing scene failures,
+full9journeys/3menus/12references/current integration/installed/native gates are not waived.
+
+Baseline: main64d12964b3301aca7229d1577b783fa14060cceb; previous six-file checkpoint post-commit
+VERIFIED,93unrelated paths unchanged. No new product edits. Rollback only this diagnostic/docs diff.
+No capability-map delta or external issue/wiki write. AAR trigger: oversized combined instruction
+reads and two invalid path queries; corrected by bounded exact-file reads. Degradation was called;
+limit this pass to causal evidence rather than implementing a new authority change on that footing.
+
 - Bounded unit: import unchanged aic_hub.lua, expose source-derived finite tab choices, select a preview body, recover a meaningful body region, and edit one supported source-owned body text/property through existing CAS/history/export/reopen. Dispatch recognition alone is not acceptance.
 - Assumptions: current source SHA is 657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F. Runtime hub.tab and faction data are not known game facts. Existing sectionHeader/note/kvRow return geometry and ascii/string transformations are additional dependencies, not solved by the dispatch change.
 - Authoritative contract: full goal objective in C:/Users/Moshi/.codex/attachments/d06dfea8-8256-48a5-97f5-b524fac87153/goal-objective.md; approved F:/DEV_ENV/X4_Forge/docs/plans/2026-09-10-b119-canvas-first-builder.md; original FORGE-UI-EDITOR-BRIEF.md; actual configured mod source and shipped Helper corpus. Older font/column-count folklore does not override later corpus findings.

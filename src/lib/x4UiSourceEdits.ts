@@ -1753,15 +1753,18 @@ const scalarProgramHasDirectAppliedOperation = (program: X4UiLayoutProgram): boo
 
 // Consumed samples already belong to the validated owner-issued source/consumer
 // ledger. Scalar reparse transfers them through the exact CAS splice and must
-// rediscover an editable entry. Unconsumed inputs and mixed path/loop choices
-// still have no supported scalar continuation proof. Exact finite source loops
+// rediscover an editable entry. Finite dispatch paths follow the same splice via
+// source-owned invocation/callee correspondence. Other branches, unconsumed inputs
+// and preview loop guesses still have no scalar continuation proof. Finite source loops
 // are regenerated from Lua by the layout owner, not trusted as preview guesses.
 const scalarProgramHasUnsupportedPreviewInputs = (
   program: X4UiLayoutProgram,
   evidenceAuthority: X4UiLayoutEvidenceAuthority,
 ): boolean =>
   program.previewSampleBindings.some(binding => binding.status !== 'consumed')
-    || program.previewPathSelections.length > 0
+    || program.previewPathSelections.some(selection => !program.previewPathCatalog.entries.some(entry =>
+      entry.id === selection.id && entry.boundaryId === selection.boundaryId && entry.armId === selection.armId
+        && entry.arm === 'dispatch' && entry.invocationIds.length > 0))
     || !hasOnlySourceProvenX4UiLayoutLoops(program, evidenceAuthority);
 
 const scalarProgramIsEditable = (
@@ -1775,7 +1778,7 @@ const scalarProgramIsEditable = (
 
 const directScalarEvidenceDetail = 'mixed-stream scalar editing requires exact loader-issued canonical corpus, complete issued model/evidence authority, and at least one direct applied operation';
 
-const activePreviewInputDetail = 'mixed-stream scalar editing requires consumed source-bound samples, no active path selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
+const activePreviewInputDetail = 'mixed-stream scalar editing requires consumed source-bound samples, only source-owned finite dispatch selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
 
 const lockedBoundaryCatalog = (
   detail: string,

@@ -5081,12 +5081,16 @@ for (const realMenu of [
         expect(await readB119LuaRoundtripSelectedWorkspace(page)).toEqual(sectionSourceBefore);
         expect(await readB119LuaRoundtripHistory(page)).toEqual(sectionHistoryBefore);
         // First caption pixels are not full-body fidelity or editable-body acceptance.
-        // Clear the scenario before the separately proven heading edit.
+        // Keep this section selected during the heading edit and source history.
         await capture('dossier-preview');
-        await page.getByTestId('x4-ui-preview-sections-reset').click();
-        await expect(section).toHaveValue('');
-        await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
       }
+      const assertSelectedRealSection = async (): Promise<void> => {
+        if (realMenu.label !== 'HUB') return;
+        await expect(page.getByRole('combobox', { name: 'Preview section', exact: true }).locator('option:checked')).toHaveText('DOSSIER');
+        await expect(hierarchy.getByRole('treeitem').filter({ has: page.getByText(/^Text ·\s*FACTIONS$/) })).toHaveCount(1);
+        await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
+      };
+      await assertSelectedRealSection();
       const node = hierarchy.getByRole('treeitem').filter({ has: page.getByText(`Text · ${realMenu.caption}`, { exact: true }) });
       await expect(node).toHaveCount(1);
       await node.click();
@@ -5141,13 +5145,16 @@ for (const realMenu of [
       if (realMenu.label === 'MENU') await expect(page.getByTestId('x4-ui-canvas-zoom-value')).toHaveText('100% preview');
       const editedHistory = await readB119LuaRoundtripHistory(page);
       assertB119LuaRoundtripHistory(editedHistory, b119LuaRoundtripHistoryState(beforeHistory.undo, 'before edit').count + 1, 0, 'real visual edit');
+      await assertSelectedRealSection();
       await capture('edited');
       await page.locator('[data-global-action="undo"]').click();
       await expect.poll(async () => (await readB119LuaRoundtripSelectedWorkspace(page)).serverWorkspace).toEqual(expectedImport);
       await expect.poll(() => readNativeCanvasSignature(page)).toEqual(beforePixels);
+      await assertSelectedRealSection();
       await page.locator('[data-global-action="redo"]').click();
       await expect.poll(async () => (await readB119LuaRoundtripSelectedWorkspace(page)).serverWorkspace).toEqual(editedWorkspace);
       await expect.poll(() => readNativeCanvasSignature(page)).toEqual(editedPixels);
+      await assertSelectedRealSection();
       const exportedPath = await exportLua('edited-export', editedText);
       await page.getByTestId('workspace-switcher').selectOption('__new');
       const dialog = page.getByTestId('dialog-modal');
@@ -5164,6 +5171,10 @@ for (const realMenu of [
         await readB119LuaRoundtripSelectedWorkspace(page), independent.workspaceId, expectedReopen)).toBe(true);
       await selectB119LuaRoundtripSourceAndTarget(page, sourcePath, realMenu.target);
       await applyRealPreviewScenario();
+      if (realMenu.label === 'HUB') {
+        await page.getByRole('combobox', { name: 'Preview section', exact: true }).selectOption({ label: 'DOSSIER' });
+      }
+      await assertSelectedRealSection();
       await expect.poll(() => readNativeCanvasSignature(page)).toEqual(editedPixels);
       expect(b119LuaRoundtripHierarchyIdentity(await readB119LuaRoundtripHierarchy(page))).toEqual(editedHierarchy);
       if (realMenu.label === 'MENU') {

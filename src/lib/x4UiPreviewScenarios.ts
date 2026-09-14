@@ -224,7 +224,8 @@ function scenarioTransferContext(
   if (before.source.bundle.sourceFiles.length !== seed.source.bundle.sourceFiles.length
     || before.source.bundle.sourceFiles.some(file => file.path !== splice.path
       && seed.source.bundle.sourceFiles.find(next => next.path === file.path)?.text !== file.text)) return undefined;
-  const mapper = createPreviewSourceMapper(previousFile.text, nextFile.text, splice);
+  const mapper = createPreviewSourceMapper(previousFile.text, nextFile.text, splice,
+    { before: previousFile.callModel, after: nextFile.callModel });
   if (!mapper) return undefined;
   const { range } = mapper;
   const previousTargets = createX4UiLayoutTargetCatalog(previousFile.callModel);

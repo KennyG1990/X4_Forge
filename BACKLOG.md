@@ -8,6 +8,35 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 21:59Z: selected-DOSSIER heading edit/undo/redo/export/independent reopen now
+VISUALLY VERIFIED1/1 first attempt at unchanged120s. Reopened capture inspected; exact Lua,
+canvas pixels and hierarchy retained. Full goal PARTIAL: actual edit/undo/redo still
+20.5/17.9/15.4s; helper caption editing and later body remain missing. AST declaration-name
+index preserves scope/authority; real-source diagnostic105.7->79.6s (single runs).
+Layout1092/1092,source174/174,session/scenarios,pipeline127/127,types,8filelint PASS. Scene194/196
+has exactly the prior two failures, not waived. Browser cleanup and50/4/19guards PASS.
+Preparing11path LOCAL PARTIAL checkpoint above64d1296; normal precommit required. Completion
+authority:test-results/b119-active-section-edit-20260914/checkpoint/post-commit.json.
+Preserve93unrelated paths. No push/install/native/release. Full9journeys/3menus/12references remain.
+
+2026-09-14 21:36Z: active-section scalar/CAS continuation implemented; full goal PARTIAL.
+Source-owned invocation correspondence keeps DOSSIER across heading edits/history. Latest rendered
+run FAILED0/1 on both120s attempts; actual edited capture shows heading and FACTIONS with DOSSIER
+selected, but reopen is unproven. Trace edit/undo/redo27.4/17.9/19.8s includes actionability waits.
+CPU-grounded private AST declaration cache: same-runtime real-source diagnostic105.7->97.2s (~8%,
+single pair), exact two-profile results unchanged. Remaining name-search cost11s is measured.
+Current layout1092/1092,source174/174,scenario,typecheck,8filelint PASS;50/4/19safety guards PASS.
+Eight code/test + three docs paths uncommitted above64d1296; normal precommit not rerun. No push.
+Evidence:test-results/b119-active-section-edit-20260914/RESULTS.md. Next: bounded declaration-name
+index with same authority checks, then unchanged-timeout rendered reopen. Helper-caption caller
+editing/later body geometry, existing scene failures, full integration/installed/native remain.
+
+2026-09-14 20:44Z: local caption checkpoint64d1296 VERIFIED; next active-section edit blocker
+REPRODUCED at both profiles. Length-changing heading edit shifts invocation IDs and loses DOSSIER
+despite correct mapped boundary; equal-length control retains it. Evidence: test-results/
+b119-active-section-edit-20260914/RESULTS.md. No product/lock change or new rendered proof.
+Next: exact invocation/declaration correspondence in existing preview mapper, then CAS/body ownership.
+
 2026-09-14 20:23Z: first real HUB body caption/bar now VISUALLY VERIFIED; full goal PARTIAL.
 Unchanged original source resolves FACTIONS at two profiles. Existing resolver/AST/parameter owners
 only; bounded byte-cleaning/uppercase recognition with mutation/escape/unknown rejection. Layout

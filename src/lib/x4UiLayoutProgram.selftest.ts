@@ -1312,6 +1312,20 @@ const runB119SourceLookupContinuity = (): void => {
     assert.equal(projectedX(project(reused)), 25,
       `${label}: changed source on the same caller model must invalidate derived lookups`);
     assert.deepEqual(project(reused), project(changed));
+    const renamed = sourceModel(source.replaceAll('vw', 'wx'));
+    Object.assign(reused, renamed);
+    assert.equal(projectedX(project(reused)), 50,
+      `${label}: renamed declarations on the same model rebuild structural lookups`);
+    assert.deepEqual(project(reused), project(renamed));
+    const sibling = sourceModel(source.replace('local px =',
+      'do local vw = Helper.viewHeight end\nlocal px ='));
+    Object.assign(reused, sibling);
+    assert.equal(projectedX(project(reused)), 50,
+      `${label}: same-name declaration in a closed sibling scope cannot shadow the live binding`);
+    assert.deepEqual(project(reused), project(sibling));
+    Object.assign(reused, sourceModel(source));
+    assert.deepEqual(project(reused), first,
+      `${label}: restoring source after two replacements preserves the original projection`);
   }
   console.log('B119_SOURCE_LOOKUP_CONTINUITY PASS: LF/CRLF/BOM/Unicode, repeated output, source replacement and forged-coordinate refusal');
 };

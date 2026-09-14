@@ -1746,6 +1746,53 @@ const runSampledWrappingEdit = (corpus: X4UiCorpusCanonicalSuccess): void => {
   console.log('B119_SAMPLED_WRAPPING_EDIT PASS: exact source scalar/inverse, retained sampled height, stale/copied authority refusal');
 };
 
+const runMixedDispatchCaptionEdit = (corpus: X4UiCorpusCanonicalSuccess): void => {
+  const lua = 'local menu = { name = "DispatchCaption" }\n'
+    + 'local function body(frame)\nlocal t=frame:addTable(1,{width=100,scaling=false})\n'
+    + 'local r=t:addRow(false,{})\nr[1]:createText("BODY",{height=20})\nend\n'
+    + 'local sections={ONE=body}\nfunction menu.display()\n'
+    + 'local frame=Helper.createFrameHandle(menu,{width=400,height=300})\n'
+    + 'local t=frame:addTable(1,{width=300,scaling=false})\nlocal r=t:addRow(false,{})\n'
+    + 'r[1]:createText("HEADING",{height=20})\n'
+    + 'if runtimeExtra then r[1]:createText("HIDDEN",{height=20}) end\n'
+    + 'local selected=sections[section] or body\npcall(selected,frame)\nframe:display()\nend\n';
+  const original = workspace(lua);
+  const context = sessionContextFor(original, corpus, 'ui/edit.lua', target => target.name === 'menu.display', 'mixed dispatch caption');
+  const model = normalizeX4UiSourceEditLayoutModel(context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel)!;
+  const choice = context.program.previewPathCatalog.entries.find(entry => entry.arm === 'dispatch' && entry.label === 'ONE');
+  assert.ok(choice);
+  const projected = projectX4UiLayoutProgram(model, context.program.target, context.program.profile, undefined,
+    { catalogId: context.program.previewPathCatalog.id, source: context.program.previewPathCatalog.sourceIdentity,
+      selections: [{ id: choice.id, boundaryId: choice.boundaryId, armId: choice.armId }] }, undefined, corpus);
+  assert.notEqual(projected.status, 'refused');
+  if (projected.status === 'refused') throw new Error('dispatch source projection refused');
+  assert.ok(projected.program.operations.some(operation => operation.status === 'conditional'));
+  assert.equal(projected.program.previewPathSelections.length, 1);
+  const catalog = discoverX4UiSourceEdits(original, context.source, projected.program, projected.evidenceAuthority);
+  const offset = lua.indexOf('"HEADING"');
+  const entry = catalog.editableEntries.find(candidate => candidate.startOffset === offset && candidate.value === 'HEADING');
+  assert.ok(entry, `direct caption under finite section must be editable: ${catalog.detail}`);
+  assert.equal(catalog.structuralEntries.length, 0, 'mixed dispatch gains no structural authority');
+  assert.equal(catalog.editableEntries.some(candidate => candidate.value === 'HIDDEN' || candidate.value === 'BODY'), false,
+    'conditional and out-of-target helper literals remain locked');
+  const edited = applyX4UiSourceEdit(original, context.source, catalog, entry.id, 'LONGER HEADING');
+  assert.equal(edited.accepted, true, edited.accepted === false ? edited.detail : '');
+  if (!edited.accepted) throw new Error('dispatch scalar edit unexpectedly refused');
+  assert.equal(sourceTextAt(edited, 'ui/edit.lua'), lua.replace('"HEADING"', '"LONGER HEADING"'));
+  const next = edited.catalog.editableEntries.find(candidate => candidate.startOffset === offset && candidate.value === 'LONGER HEADING');
+  assert.ok(next, 'fresh source-owned catalog must rediscover the literal');
+  const inverse = applyX4UiSourceEdit(edited.workspace, edited.source, edited.catalog, next.id, 'HEADING');
+  assert.equal(inverse.accepted, true);
+  assert.equal(sourceTextAt(inverse, 'ui/edit.lua'), lua);
+  assert.equal(sourceTextAt(context, 'ui/edit.lua'), lua);
+  assert.deepEqual(edited.workspace.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'),
+    original.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'));
+  assert.equal(applyX4UiSourceEdit(edited.workspace, edited.source, catalog, entry.id, 'BAD').accepted, false);
+  assert.equal(applyX4UiSourceEdit(original, context.source, structuredClone(catalog), entry.id, 'BAD').accepted, false);
+  assert.equal(discoverX4UiSourceEdits(original, context.source, structuredClone(projected.program), projected.evidenceAuthority).status, 'locked');
+  console.log('B119_DISPATCH_CAPTION_EDIT PASS: direct scalar/inverse/local bytes; mixed helper/branch/structural/stale/copied locks retained');
+};
+
 const runMixedSampledCaptionEdit = (corpus: X4UiCorpusCanonicalSuccess): void => {
   const lua = 'local menu = { name = "MixedSampledCaption" }\nfunction menu.createFrame()\n'
     + 'local frame = Helper.createFrameHandle(menu, { width = 320, height = 260 })\n'
@@ -1950,6 +1997,7 @@ const runSourceProvenLoopCaptionEdits = (corpus: X4UiCorpusCanonicalSuccess): vo
 
 const run = async (): Promise<void> => {
   const canonicalCorpus = await loadCanonicalSourceEditsSelftestCorpus();
+  runMixedDispatchCaptionEdit(canonicalCorpus);
   runSourceProvenLoopCaptionEdits(canonicalCorpus);
   const discoverProperties = Reflect.get(sourceEditMoveSurface, 'discoverX4UiSourceTextPropertyAdditions') as
     (catalog: X4UiSourceEditCatalog, operationId: string) => readonly { property: string; operationId: string }[];
@@ -13589,7 +13637,7 @@ const run = async (): Promise<void> => {
         b119PartialScalarScenarioDirectEntry?.expectedText,
       ));
     const applyValue = scenarioApply?.value;
-    const expectedScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples, no active path selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
+    const expectedScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples, only source-owned finite dispatch selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
     const pass = scenarioContext !== undefined
       && testCase.active(scenarioContext)
       && scenarioContext.program.status === 'partial'
@@ -13821,7 +13869,7 @@ const run = async (): Promise<void> => {
       b119PartialScalarLoopScenarioDirectEntry?.expectedText,
     ));
   const b119PartialScalarLoopScenarioApplyValue = b119PartialScalarLoopScenarioApply?.value;
-  const b119PartialScalarLoopScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples, no active path selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
+  const b119PartialScalarLoopScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples, only source-owned finite dispatch selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
   const b119PartialScalarLoopScenarioRow: Check = {
     name: 'B119 mixed scalar with active source-bound loop input refuses',
     pass: b119PartialScalarLoopScenarioContext !== undefined

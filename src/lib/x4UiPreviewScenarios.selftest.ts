@@ -11,6 +11,7 @@ import { reverseWorkspaceSourceSplice, type WorkspaceSourceSplice } from './work
 import { createX4UiEditorSessionOwner, updateX4UiEditorPathState, updateX4UiEditorLoopState,
   applyX4UiEditorSampleDraft, type X4UiEditorSessionInput, type X4UiEditorSessionProjection } from './x4UiEditorSession';
 import { createX4UiLayoutTargetCatalog } from './x4UiLayoutProgram';
+import { createPreviewSourceMapper } from './x4UiPreviewSourceMapping';
 
 const data = new Map<string, string>([['unrelated-workspace-cache', 'preserve']]);
 let failRead = false;
@@ -85,6 +86,105 @@ const workspace: ModWorkspace = {
   { path: 'ui/scenario.lua', content: lua, reason: 'unparsed' },
 ] };
 const workspaceBefore = JSON.stringify(workspace);
+// Finite dispatch selection must follow source edits, not source-offset ID strings.
+// These are producer-issued catalogs and real scenario replay, never invented authority.
+const dispatchLua = [
+  'local menu = { name = "DispatchScenario" }',
+  'local function first(frame)',
+  ' local row = frame:addTable(1, {width=200}):addRow(false, {})',
+  ' row[1]:createText("FIRST BODY", {height=20})',
+  'end',
+  'local function second(frame)',
+  ' local row = frame:addTable(1, {width=200}):addRow(false, {})',
+  ' row[1]:createText("SECOND BODY", {height=20})',
+  'end',
+  'local builders = { ONE = first, TWO = second }',
+  'function menu.display()',
+  ' local frame = Helper.createFrameHandle(menu, {width=400, height=300})',
+  ' local row = frame:addTable(1, {width=200}):addRow(false, {})',
+  ' row[1]:createText("HEADING", {height=20})',
+  ' local builder = builders[selected] or first',
+  ' pcall(builder, frame)',
+  ' frame:display()',
+  'end',
+].join('\n');
+const dispatchWorkspace = (text: string): ModWorkspace => ({ ...workspace, passthroughFiles:
+  workspace.passthroughFiles!.map(file => file.path === 'ui/scenario.lua' ? { ...file, content: text } : file) });
+const dispatchOriginal = dispatchWorkspace(dispatchLua);
+const dispatchOwner = createX4UiEditorSessionOwner(dispatchOriginal);
+const dispatchSeed = dispatchOwner.project({ workspace: dispatchOriginal, corpus: undefined });
+const dispatchFile = dispatchSeed.source.bundle.sourceFiles.find(file => file.path === 'ui/scenario.lua')!;
+const dispatchTargets = createX4UiLayoutTargetCatalog(dispatchFile.callModel);
+const dispatchTarget = dispatchTargets.targets.find(item => item.name === 'menu.display')!;
+const dispatchInput: X4UiEditorSessionInput = { workspace: dispatchOriginal, corpus: undefined,
+  profile: { width: 1920, height: 1080, uiScale: 1 }, selection: { sourceIndex: dispatchFile.index,
+    path: dispatchFile.path, sourceIdentity: dispatchTargets.sourceIdentity, target: dispatchTarget } };
+const dispatchBase = dispatchOwner.project(dispatchInput);
+const dispatchChoice = dispatchBase.pathCatalog?.entries.find(entry => entry.arm === 'dispatch' && entry.label === 'ONE');
+assert.ok(dispatchChoice, 'generic finite dispatch must be catalogued');
+const dispatchUpdate = updateX4UiEditorPathState(undefined, dispatchBase.pathCatalog, dispatchChoice.id, dispatchBase.pathCatalogAuthority);
+assert.equal(dispatchUpdate.status, 'accepted');
+const dispatchSelected = dispatchOwner.project({ ...dispatchInput, paths: dispatchUpdate.paths,
+  pathBinding: dispatchBase.pathBinding, pathCatalogAuthority: dispatchBase.pathCatalogAuthority });
+const dispatchSaved = capturePreviewScenario(dispatchSelected, scenario.view, 'dispatch-one', 'First body');
+assert.equal(dispatchSaved.ok, true);
+if (!dispatchSaved.ok) throw new Error('dispatch scenario capture unexpectedly refused');
+for (const [expectedText, replacement] of [
+  ['"HEADING"', '"MUCH LONGER HEADING"'],
+  ['"HEADING"', '"H"'],
+  ['"DispatchScenario"', '"Renamed Dispatch Scenario"'],
+] as const) {
+  const startOffset = dispatchLua.indexOf(expectedText);
+  const splice: WorkspaceSourceSplice = { path: dispatchFile.path, startOffset,
+    endOffset: startOffset + expectedText.length, expectedText, replacement };
+  const nextText = dispatchLua.slice(0, startOffset) + replacement + dispatchLua.slice(splice.endOffset);
+  const nextWorkspace = dispatchWorkspace(nextText);
+  const nextOwner = createX4UiEditorSessionOwner(nextWorkspace);
+  const transferred = transferPreviewScenario(nextOwner, { ...dispatchInput, workspace: nextWorkspace },
+    dispatchSaved.scenario, dispatchSelected, splice);
+  assert.equal(transferred.ok, true, `finite dispatch must follow ${replacement}: ${transferred.ok === false ? transferred.message : ''}`);
+  if (!transferred.ok) throw new Error('dispatch transfer unexpectedly refused');
+  assert.equal(transferred.projection.paths?.selections.length, 1);
+  const freshChoice = transferred.projection.pathCatalog?.entries.find(entry => entry.id === transferred.projection.paths?.selections[0]?.id);
+  assert.equal(freshChoice?.label, 'ONE');
+  assert.notDeepEqual(freshChoice?.invocationIds, dispatchChoice.invocationIds, 'shifted IDs must be freshly issued');
+  const nextFile = transferred.projection.source.bundle.sourceFiles.find(file => file.path === dispatchFile.path)!;
+  const models = { before: dispatchFile.callModel, after: nextFile.callModel };
+  const mapper = createPreviewSourceMapper(dispatchLua, nextText, splice, models);
+  assert.ok(mapper);
+  assert.equal(mapper.matches('path', dispatchChoice, freshChoice), true);
+  assert.equal(mapper.matches('path', { ...dispatchChoice, invocationIds: ['unknown-id'] }, freshChoice), false);
+  assert.equal(mapper.matches('path', { ...dispatchChoice, invocationIds: [...dispatchChoice.invocationIds, ...dispatchChoice.invocationIds] }, freshChoice), false);
+  const selectedInvocation = models.before.localInvocations.find(item => item.id === dispatchChoice.invocationIds[0])!;
+  const ambiguous = createPreviewSourceMapper(dispatchLua, nextText, splice, { ...models,
+    before: { ...models.before, localInvocations: [...models.before.localInvocations, selectedInvocation] } });
+  assert.equal(ambiguous?.matches('path', dispatchChoice, freshChoice), false, 'ambiguous source ledger refuses');
+  assert.equal(createPreviewSourceMapper(dispatchLua, nextText, splice, { ...models, before: models.after }), undefined, 'stale source model refuses');
+  const inverse = transferPreviewScenario(dispatchOwner, dispatchInput, transferred.scenario,
+    transferred.projection, reverseWorkspaceSourceSplice(splice));
+  assert.equal(inverse.ok, true, 'inverse source edit retains the selected body');
+  if (!inverse.ok) throw new Error('dispatch inverse unexpectedly refused');
+  assert.deepEqual(inverse.scenario.paths, dispatchSaved.scenario.paths);
+  const redo = transferPreviewScenario(nextOwner, { ...dispatchInput, workspace: nextWorkspace }, inverse.scenario, inverse.projection, splice);
+  assert.equal(redo.ok, true, 'redo retains the selected body');
+  assert.equal(transferPreviewScenario(nextOwner, { ...dispatchInput, workspace: nextWorkspace }, dispatchSaved.scenario,
+    dispatchSelected, { ...splice, expectedText: 'stale source' }).ok, false);
+}
+for (const [expectedText, replacement] of [
+  ['ONE = first', 'ONE = second'],
+  ['pcall(builder, frame)', 'pcall(second, frame)'],
+  ['pcall(builder, frame)', '-- call removed'],
+] as const) {
+  const startOffset = dispatchLua.indexOf(expectedText);
+  const splice: WorkspaceSourceSplice = { path: dispatchFile.path, startOffset,
+    endOffset: startOffset + expectedText.length, expectedText, replacement };
+  const nextWorkspace = dispatchWorkspace(dispatchLua.slice(0, startOffset) + replacement + dispatchLua.slice(splice.endOffset));
+  const nextOwner = createX4UiEditorSessionOwner(nextWorkspace);
+  assert.equal(transferPreviewScenario(nextOwner, { ...dispatchInput, workspace: nextWorkspace }, dispatchSaved.scenario,
+    dispatchSelected, splice).ok, false, `changed dispatch authority must refuse: ${replacement}`);
+}
+assert.deepEqual(dispatchOriginal, dispatchWorkspace(dispatchLua), 'scenario transfer must never mutate source');
+console.log('Preview finite dispatch continuation: PASS (longer/shorter/pre-declaration, inverse/redo, changed candidate/call/stale refusal)');
 const owner = createX4UiEditorSessionOwner(workspace);
 const seed = owner.project({ workspace, corpus: undefined });
 const sourceFile = seed.source.bundle.sourceFiles.find(file => file.path === 'ui/scenario.lua');

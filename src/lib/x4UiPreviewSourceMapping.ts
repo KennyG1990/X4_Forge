@@ -1,4 +1,5 @@
 import type { WorkspaceSourceSplice } from './workspaceUndoHistory';
+import type { X4UiCallModel } from './x4UiCallModel';
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const key = (value: unknown): string => JSON.stringify(value);
@@ -16,12 +17,19 @@ export function mapPreviewSourceRange(start: number, end: number, splice: Worksp
   return undefined;
 }
 
-export function createPreviewSourceMapper(beforeText: string, afterText: string, splice: WorkspaceSourceSplice) {
+export function createPreviewSourceMapper(
+  beforeText: string, afterText: string, splice: WorkspaceSourceSplice,
+  models?: { readonly before: X4UiCallModel; readonly after: X4UiCallModel },
+) {
   if (typeof splice?.path !== 'string' || typeof splice.expectedText !== 'string' || typeof splice.replacement !== 'string'
     || !Number.isSafeInteger(splice.startOffset) || !Number.isSafeInteger(splice.endOffset)
     || splice.startOffset < 0 || splice.endOffset < splice.startOffset || splice.endOffset > beforeText.length
     || beforeText.slice(splice.startOffset, splice.endOffset) !== splice.expectedText
     || afterText !== beforeText.slice(0, splice.startOffset) + splice.replacement + beforeText.slice(splice.endOffset)) return undefined;
+  if (models && (!models.before.parsed || !models.after.parsed
+    || models.before.file.text !== beforeText || models.after.file.text !== afterText
+    || (models.before.file.sourcePath ?? models.before.file.rel) !== splice.path
+    || (models.after.file.sourcePath ?? models.after.file.rel) !== splice.path)) return undefined;
   const spans = splice.retainedSpans ?? [];
   if (!Array.isArray(spans) || spans.length > 2 || spans.some(span => !Number.isSafeInteger(span.beforeStart)
     || !Number.isSafeInteger(span.beforeEnd) || !Number.isSafeInteger(span.afterStart)
@@ -44,9 +52,37 @@ export function createPreviewSourceMapper(beforeText: string, afterText: string,
     if (!record(value)) throw new Error('invalid loop identity');
     return [range(value.source, move), value.kind, value.multiplicity, value.depth, value.iteration, value.iterationCount];
   };
+  // IDs contain source offsets. Resolve them through the caller's existing parsed
+  // models, then compare mapped source identity INCLUDING the selected callee.
+  // Same dispatch slot is not proof of the same function after a table edit.
+  // This is correspondence only; callers still own issuance and CAS validation.
+  const invocations = (value: unknown, move: boolean): unknown => {
+    if (!Array.isArray(value) || value.some(id => typeof id !== 'string')
+      || new Set(value).size !== value.length) throw new Error('invalid path invocation identities');
+    if (!models) return value;
+    const model = move ? models.before : models.after;
+    return value.map(id => {
+      const matches = model.localInvocations.filter(invocation => invocation.id === id);
+      if (matches.length !== 1) throw new Error('path invocation is not unique in source');
+      const invocation = matches[0]!;
+      const declarations = model.localFunctions.filter(declaration => declaration.id === invocation.calleeDeclarationId);
+      if (invocation.status !== 'supported' || declarations.length !== 1) throw new Error('path callee is not source-resolved');
+      const declaration = declarations[0]!;
+      return key([
+        range(invocation.source, move), range(invocation.calleeSource, move), invocation.calleeExpression,
+        invocation.method, invocation.resolution, invocation.resultConsumed,
+        range(declaration.source, move), range(declaration.identifierSource, move), range(declaration.bodySource, move),
+        declaration.name, declaration.hasVarargs,
+        declaration.parameters.map(parameter => [parameter.index, parameter.name, range(parameter.source, move)]),
+        invocation.context.branchPath.map(segment => [range(segment.boundary, move), segment.arm,
+          segment.armIndex, segment.label ?? null, segment.reachability]),
+      ]);
+    }).sort();
+  };
   const descriptor = (kind: 'path' | 'loop' | 'sample', value: unknown, move: boolean): unknown => {
     if (!record(value)) throw new Error('invalid preview descriptor');
-    if (kind === 'path') return [range(value.boundary, move), value.arm, value.armIndex, value.reachability, value.invocationIds];
+    if (kind === 'path') return [range(value.boundary, move), value.arm, value.armIndex, value.label ?? null,
+      value.reachability, invocations(value.invocationIds, move)];
     if (kind === 'loop') return [range(value.source, move), value.kind, value.multiplicity, value.depth];
     if (!Array.isArray(value.consumers)) throw new Error('invalid sample consumers');
     return [range(value.source, move), value.expression, value.expectedType, loop(value.previewLoop, move), value.consumers.map(consumer => {

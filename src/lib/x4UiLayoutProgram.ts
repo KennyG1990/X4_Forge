@@ -1677,7 +1677,7 @@ export const reprojectX4UiLayoutProgramWithIssuedColorAuthority = (
     if (!beforeModel || !hasOnlyJsonDataProperties(sourceSplice)
       || (beforeModel.file.sourcePath ?? beforeModel.file.rel) !== sourceSplice.path
       || (model.file.sourcePath ?? model.file.rel) !== sourceSplice.path) return failTransfer();
-    const mapper = createPreviewSourceMapper(beforeModel.file.text, model.file.text, sourceSplice);
+    const mapper = createPreviewSourceMapper(beforeModel.file.text, model.file.text, sourceSplice, { before: beforeModel, after: model });
     if (!mapper || before.target.kind !== initial.program.target.kind
       || before.target.name !== initial.program.target.name || before.target.handler !== initial.program.target.handler
       || JSON.stringify(mapper.range(before.target.source, true)) !== JSON.stringify(mapper.range(initial.program.target.source, false))) return failTransfer();
@@ -6291,15 +6291,28 @@ const numericExpressionSourceScopeContains = (
   inner: readonly NumericExpressionSourceAstNode[],
 ): boolean => outer.every(scope => inner.includes(scope));
 
+// Structural AST data only. A source replacement creates a new private index;
+// alias metadata, visibility and authority checks are never cached here.
+const numericExpressionSourceDeclarationCache = new WeakMap<
+  NumericExpressionSourceAstIndex,
+  ReadonlyMap<string, readonly NumericExpressionSourceDeclaration[]>
+>();
+const emptyNumericExpressionSourceDeclarations: readonly NumericExpressionSourceDeclaration[] = Object.freeze([]);
+
 const numericExpressionSourceDeclarationNodes = (
   index: NumericExpressionSourceAstIndex,
+  name: string,
 ): readonly NumericExpressionSourceDeclaration[] => {
-  const declarations: NumericExpressionSourceDeclaration[] = [];
+  const cached = numericExpressionSourceDeclarationCache.get(index);
+  if (cached) return cached.get(name) || emptyNumericExpressionSourceDeclarations;
+  const declarations = new Map<string, NumericExpressionSourceDeclaration[]>();
   const add = (statement: NumericExpressionSourceAstNode, target: unknown): void => {
     const targetNode = localAstNode(target);
     const range = sourceAstRange(statement);
     if (targetNode && range && typeof targetNode.name === 'string') {
-      declarations.push({ statement, target: targetNode, range });
+      const named = declarations.get(targetNode.name) || [];
+      named.push(Object.freeze({ statement, target: targetNode, range }));
+      declarations.set(targetNode.name, named);
     }
   };
   for (const statement of numericExpressionSourceAstNodes(index, 'LocalStatement')) {
@@ -6314,7 +6327,9 @@ const numericExpressionSourceDeclarationNodes = (
   for (const statement of numericExpressionSourceAstNodes(index, 'FunctionDeclaration')) {
     if (statement.isLocal === true) add(statement, statement.identifier);
   }
-  return declarations;
+  const result = new Map([...declarations].map(([key, entries]) => [key, Object.freeze(entries)]));
+  numericExpressionSourceDeclarationCache.set(index, result);
+  return result.get(name) || emptyNumericExpressionSourceDeclarations;
 };
 
 const numericExpressionSourceDeclarationVisibleAt = (
@@ -6340,9 +6355,8 @@ const numericExpressionSourceDeclarationForReference = (
   name: string,
   useNode: NumericExpressionSourceAstNode,
 ): NumericExpressionSourceAstNode | undefined => {
-  const candidates = numericExpressionSourceDeclarationNodes(index)
-    .filter(candidate => candidate.target.name === name
-      && numericExpressionSourceDeclarationVisibleAt(candidate, useNode, index))
+  const candidates = numericExpressionSourceDeclarationNodes(index, name)
+    .filter(candidate => numericExpressionSourceDeclarationVisibleAt(candidate, useNode, index))
     .sort((left, right) => {
       const leftScopes = numericExpressionSourceLexicalScopes(index, left.target).length;
       const rightScopes = numericExpressionSourceLexicalScopes(index, right.target).length;
