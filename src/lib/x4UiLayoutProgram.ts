@@ -2596,6 +2596,61 @@ const numericExpressionHasExactAlias = (
   }
 };
 
+const tableAliasCandidateNamesByAst = new WeakMap<
+  NumericExpressionSourceAstIndex,
+  Map<string, ReadonlySet<string>>
+>();
+
+/**
+ * Conservative rejection filter, not alias proof. Only private parsed syntax is
+ * retained. Ignore scope, chronology, writes and hop limits here: over-including
+ * a name costs work, but excluding a possible escape would be unsound.
+ */
+const tableAliasCandidateNames = (
+  index: NumericExpressionSourceAstIndex,
+  tableSource: X4UiSourceLocation,
+): ReadonlySet<string> => {
+  let tables = tableAliasCandidateNamesByAst.get(index);
+  if (!tables) {
+    tables = new Map();
+    tableAliasCandidateNamesByAst.set(index, tables);
+  }
+  const tableKey = sourceAstRangeKey(tableSource.start.offset, tableSource.end.offset);
+  const cached = tables.get(tableKey);
+  if (cached) return cached;
+  const names = new Set<string>();
+  const dependents = new Map<string, Set<string>>();
+  for (const type of ['LocalStatement', 'AssignmentStatement']) {
+    for (const statement of numericExpressionSourceAstNodes(index, type)) {
+      const variables = localAstNodes(statement.variables);
+      const initializers = localAstNodes(statement.init);
+      if (!variables || !initializers) continue;
+      variables.forEach((variable, position) => {
+        if (variable.type !== 'Identifier' || variable.isLocal !== true
+          || typeof variable.name !== 'string') return;
+        const initializer = initializers[position];
+        if (initializer?.type === 'TableConstructorExpression') {
+          const range = sourceAstRange(initializer);
+          if (range?.[0] === tableSource.start.offset && range[1] === tableSource.end.offset) {
+            names.add(variable.name);
+          }
+        } else if (initializer?.type === 'Identifier' && initializer.isLocal === true
+          && typeof initializer.name === 'string') {
+          const targets = dependents.get(initializer.name) || new Set<string>();
+          targets.add(variable.name);
+          dependents.set(initializer.name, targets);
+        }
+      });
+    }
+  }
+  // Set iteration visits added values; cycles terminate because each name is added once.
+  for (const name of names) {
+    for (const dependent of dependents.get(name) || []) names.add(dependent);
+  }
+  tables.set(tableKey, names);
+  return names;
+};
+
 const exactTableSequenceAliasSourceBinding = (
   model: X4UiCallModel,
   baseNode: NumericExpressionSourceAstNode | undefined,
@@ -2605,6 +2660,7 @@ const exactTableSequenceAliasSourceBinding = (
   const index = numericExpressionSourceAstIndex(model);
   if (!baseNode || baseNode.type !== 'Identifier' || baseNode.isLocal !== true
     || typeof baseNode.name !== 'string') return false;
+  if (!tableAliasCandidateNames(index, tableSource).has(baseNode.name)) return false;
    const visited = new Set<string>();
   const prove = (
     name: string,

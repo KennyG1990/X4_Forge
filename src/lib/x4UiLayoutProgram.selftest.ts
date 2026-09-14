@@ -1328,6 +1328,41 @@ const runB119SourceLookupContinuity = (): void => {
       `${label}: restoring source after two replacements preserves the original projection`);
   }
   console.log('B119_SOURCE_LOOKUP_CONTINUITY PASS: LF/CRLF/BOM/Unicode, repeated output, source replacement and forged-coordinate refusal');
+  const sequenceBody = [
+    'local menu = { name = "SequenceLookup" }',
+    'local names = { "one", "two", "three" }',
+    'local copy = names',
+    'local labels = copy',
+    'function menu.display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 80, height = 80 })',
+    '  local tabs = frame:addTable(#labels, { width = 80, scaling = false })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const columns = (model: X4UiCallModel) => project(model)?.tables[0]?.numColumns;
+  for (const text of [sequenceBody, sequenceBody.replaceAll('\n', '\r\n'), `\uFEFF-- \u{1f680}\n${sequenceBody}`]) {
+    const reused = sourceModel(text);
+    const original = project(reused);
+    assert.equal(columns(reused), 3, 'multi-hop table alias survives the source prefilter');
+    for (const changedText of [
+      text + '\nfunction later() labels[1] = nil end',
+      text + '\nlocal escaped = labels\ntouch(escaped)',
+      text.replace('local labels = copy', 'local labels = {}\nlabels = copy'),
+      text.replace('local labels = copy', 'local spare, labels = 0, copy'),
+    ]) {
+      const changed = sourceModel(changedText);
+      Object.assign(reused, changed);
+      assert.notEqual(columns(reused), 3, 'late writes, escapes and unsupported alias transfers remain unproven');
+      assert.deepEqual(project(reused), project(changed), 'same-object source replacement agrees with fresh projection');
+      Object.assign(reused, sourceModel(text));
+      assert.deepEqual(project(reused), original, 'restoring source restores exact output');
+    }
+    const alias = reused.aliases.find(value => value.name === 'labels');
+    assert.ok(alias);
+    (alias.source.end as { offset: number }).offset += 1;
+    assert.notEqual(columns(reused), 3, 'warmed AST candidates cannot authorize forged alias coordinates');
+  }
+  console.log('B119_TABLE_ALIAS_PREFILTER_CONTINUITY PASS: multi-hop, late writes/escapes, assignment/parallel refusal, source replacement and metadata tamper');
 };
 
 const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
@@ -1417,6 +1452,12 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     ['literal tab sequence', sequenceSource(tabSequence), 6],
     ['arithmetic count', sequenceSource(tabSequence, '', '#TABS / 2'), 3],
     ['local alias', sequenceSource(tabSequence, 'local names = TABS', '#names'), 6],
+    ['multi-hop alias', sequenceSource(tabSequence, 'local names = TABS\nlocal labels = names', '#labels'), 6],
+    ['unrelated alias cycle', sequenceSource(tabSequence, 'local a = {}\nlocal b = a\na = b'), 6],
+    ['same-name sibling scope', sequenceSource(tabSequence, 'do local names = {}\ntouch(names) end\nlocal names = TABS', '#names'), 6],
+    ['multi-hop late mutation', sequenceSource(tabSequence, 'local names = TABS\nlocal labels = names', '#TABS', 'function later() labels[1] = nil end'), undefined],
+    ['assignment alias escape', sequenceSource(tabSequence, 'local names = {}\nnames = TABS\ntouch(names)'), undefined],
+    ['parallel alias escape', sequenceSource(tabSequence, 'local spare, names = 0, TABS\ntouch(names)'), undefined],
     ['read-only iteration', sequenceSource(tabSequence, '', '#TABS', 'for i, name in ipairs(TABS) do local copy = name end'), 6],
     ['scalar non-nil sequence', sequenceSource('{ false, 0, "" }'), 3],
     ['empty sequence remains invalid table count', sequenceSource('{}'), undefined],

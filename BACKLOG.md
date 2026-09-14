@@ -8,6 +8,17 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 22:39Z: conservative source-only table-alias candidate prefilter implemented;
+full goalPARTIAL. OriginalHUB paired diagnostic89.651->48.795s with exact result parity.
+Rendered HUB edit/undo/redo/export/independent reopen PASS1/1 first attempt; actions improve
+20.464/17.863/15.400s ->14.372/10.021/10.257s, still not immediate feedback. Reopened capture
+inspected, later body still unresolved. Layout1098/1098,source174/174 andcausal matrices,
+pipeline127/127,session/scenarios/types/lint PASS. SceneFAILED194/196 exactly prior failures.
+All50/4/19guards and isolated cleanup passed. Five-path LOCAL PARTIAL checkpoint pending
+normal precommit abovec0a173b; preserve93unrelated paths. No push/install/native/release.
+Plan:docs/plans/2026-09-14-b119-table-proof-latency.md.
+Evidence:test-results/b119-table-proof-latency-20260914/RESULTS.md.
+
 2026-09-14 21:59Z: selected-DOSSIER heading edit/undo/redo/export/independent reopen now
 VISUALLY VERIFIED1/1 first attempt at unchanged120s. Reopened capture inspected; exact Lua,
 canvas pixels and hierarchy retained. Full goal PARTIAL: actual edit/undo/redo still
