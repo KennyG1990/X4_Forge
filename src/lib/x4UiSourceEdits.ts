@@ -16,6 +16,7 @@ import {
   canonicalizeX4UiLayoutModel,
   createX4UiLayoutTargetCatalog,
   getIssuedX4UiLayoutExpandedCallMetadata,
+  hasOnlySourceProvenX4UiLayoutLoops,
   isExactX4UiLayoutColorValue,
   isIssuedX4UiLayoutEvidencePair,
   isIssuedX4UiLayoutEvidencePairWithCanonicalCorpus,
@@ -1644,6 +1645,9 @@ const editableEntry = (
   if (candidate.operation.localExpansion) {
     return lockedEntry(target, path, candidate, 'unsupported-provenance', 'expanded local-helper occurrences are not direct edit anchors');
   }
+  if (candidate.call.context.loopPath.length > 0) {
+    return lockedEntry(target, path, candidate, 'unsupported-provenance', 'repeated loop occurrences are not independent direct edit anchors');
+  }
   const rawQuote = valueType === 'string' ? quoteStyleOf(expectedText) : undefined;
   if (valueType === 'string' && rawQuote === undefined) {
     return lockedEntry(target, path, candidate, 'unsupported-string-style', 'only existing single- or double-quoted Lua strings are editable');
@@ -1734,6 +1738,7 @@ const validateIssuedEvidencePair = (
 
 const scalarProgramIsActionable = (program: X4UiLayoutProgram): boolean =>
   (program.status === 'projected' || program.status === 'partial')
+  && program.previewLoopSelections.length === 0
   && program.operations.length > 0
   && program.operations.every(operation => operation.status === 'applied');
 
@@ -1743,24 +1748,28 @@ const scalarProgramHasDirectAppliedOperation = (program: X4UiLayoutProgram): boo
 // Consumed samples already belong to the validated owner-issued source/consumer
 // ledger. Scalar reparse transfers them through the exact CAS splice and must
 // rediscover an editable entry. Unconsumed inputs and mixed path/loop choices
-// still have no supported scalar continuation proof.
-const scalarProgramHasUnsupportedPreviewInputs = (program: X4UiLayoutProgram): boolean =>
+// still have no supported scalar continuation proof. Exact finite source loops
+// are regenerated from Lua by the layout owner, not trusted as preview guesses.
+const scalarProgramHasUnsupportedPreviewInputs = (
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+): boolean =>
   program.previewSampleBindings.some(binding => binding.status !== 'consumed')
     || program.previewPathSelections.length > 0
-    || program.previewLoopSelections.length > 0;
+    || !hasOnlySourceProvenX4UiLayoutLoops(program, evidenceAuthority);
 
 const scalarProgramIsEditable = (
   program: X4UiLayoutProgram,
   hasCanonicalCorpus: boolean,
 ): boolean => scalarProgramIsActionable(program)
   || (hasCanonicalCorpus
-    && program.status === 'partial'
+    && (program.status === 'partial' || program.status === 'projected')
     && program.operations.length > 0
     && scalarProgramHasDirectAppliedOperation(program));
 
 const directScalarEvidenceDetail = 'mixed-stream scalar editing requires exact loader-issued canonical corpus, complete issued model/evidence authority, and at least one direct applied operation';
 
-const activePreviewInputDetail = 'mixed-stream scalar editing requires consumed source-bound samples and no active path or loop selections; clear unsupported preview inputs and reproject the target';
+const activePreviewInputDetail = 'mixed-stream scalar editing requires consumed source-bound samples, no active path selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
 
 const lockedBoundaryCatalog = (
   detail: string,
@@ -7235,7 +7244,7 @@ const discoverX4UiSourceEditsUnsafe = (context: X4UiSourceEditTrustedContext): X
         detail: evidenceFailure,
       }));
     }
-    if (!legacyScalarActionable && scalarProgramHasUnsupportedPreviewInputs(context.program)) {
+    if (!legacyScalarActionable && scalarProgramHasUnsupportedPreviewInputs(context.program, context.evidenceAuthority)) {
       return issueCatalog(context, prerequisiteCatalog(context, {
         reason: 'unsupported-provenance',
         detail: activePreviewInputDetail,
@@ -8160,7 +8169,7 @@ const applyX4UiSourceEditUnsafe = (
         evidenceFailure,
       );
     }
-    if (!legacyScalarActionable && scalarProgramHasUnsupportedPreviewInputs(authority.program)) {
+    if (!legacyScalarActionable && scalarProgramHasUnsupportedPreviewInputs(authority.program, authority.evidenceAuthority)) {
       return refusal(
         authority.workspace,
         authority.source,

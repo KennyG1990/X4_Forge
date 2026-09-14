@@ -841,7 +841,7 @@ const b119PartialScalarScenarioLua = [
   '  local row = table:addRow(false, {})',
   '  row[1]:createText("SCENARIO", {})',
   '  if choice then row[2]:createText(dynamicText, { height = h }) end',
-  '  for i = 1, 2 do row[3]:createText(dynamicText, { height = h }) end',
+  '  for i = 1, runtimeCount do row[3]:createText(dynamicText, { height = h }) end',
   '  local other = {}',
   '  other:createButton({ height = h })',
   '  local function localWidth() return 40 end',
@@ -860,7 +860,7 @@ const b119PartialScalarLoopScenarioLua = [
   '  local row = ftable:addRow(false, {})',
   '  row[1]:createText("SCENARIO", {})',
   '  if runtimeCondition then row[1]:createText("BRANCH", {}) end',
-  '  for i = 1, 2 do row[1]:createText("LOOP", {}) end',
+  '  for i = 1, runtimeCount do row[1]:createText("LOOP", {}) end',
   '  frame:display()',
   'end',
   '',
@@ -1883,8 +1883,74 @@ const runLocalInstanceDirectCaptionEdit = (corpus: X4UiCorpusCanonicalSuccess): 
   console.log('B119_LOCAL_INSTANCE_CAPTION PASS: repeated instance identity, literal CAS/inverse, helper/conditional locks and stale/copied/tampered authority refusal');
 };
 
+const runSourceProvenLoopCaptionEdits = (corpus: X4UiCorpusCanonicalSuccess): void => {
+  for (const kind of ['numeric', 'ipairs'] as const) {
+    for (const mixed of [false, true]) {
+      const lua = [
+        'local menu = { name = "SourceLoopEdit" }',
+        'local labels = { "One", "Two", "Three" }',
+        'function menu.createFrame()',
+        'local frame = Helper.createFrameHandle(menu, { width = 400, height = 260 })',
+        'local t = frame:addTable(1, { width = 300, scaling = false })',
+        'local heading = t:addRow(false, {})',
+        'heading[1]:createText("HEADING", {})',
+        kind === 'numeric' ? 'for i = 1, 3 do' : 'for i, label in ipairs(labels) do',
+        'local row = t:addRow(false, {})',
+        kind === 'numeric' ? 'row[1]:createText("LOOP", {})' : 'row[1]:createText(label, {})',
+        'end',
+        ...(mixed ? ['if runtimeExtra then heading[1]:createText("CONDITIONAL", {}) end'] : []),
+        'frame:display()', 'end', '-- unrelated tail',
+      ].join('\n');
+      const original = workspace(lua);
+      const context = sessionContextFor(original, corpus, 'ui/edit.lua', target => target.name === 'menu.createFrame', 'source-proven loop caption');
+      assert.deepEqual(context.program.previewLoopSelections.map(entry => entry.iterationCount), [3]);
+      const catalog = catalogFor(context);
+      const entry = catalog.editableEntries.find(item => item.value === 'HEADING');
+      assert.ok(entry, `${kind}/${mixed}: direct heading must remain editable: ${catalog.detail}`);
+      assert.equal(catalog.structuralEntries.length, 0, 'source-loop replay must not create structural authority');
+      assert.ok(catalog.editableEntries.every(item => item.startOffset < lua.indexOf('for i') || item.startOffset > lua.indexOf('\nend\n')),
+        'loop-body literals are not independent edit anchors');
+      assert.equal(catalog.editableEntries.some(item => item.value === 'CONDITIONAL'), false);
+      const result = applyX4UiSourceEdit(original, context.source, catalog, entry.id, 'EDITED HEADING');
+      assert.equal(result.accepted, true, result.accepted === false ? result.detail : undefined);
+      if (!result.accepted) throw new Error('source-loop heading edit refused');
+      assert.equal(sourceTextAt(result, 'ui/edit.lua'), lua.replace('"HEADING"', '"EDITED HEADING"'));
+      assert.deepEqual(result.workspace.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'),
+        original.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'));
+      const nextContext = sessionContextFor(result.workspace, corpus, 'ui/edit.lua', target => target.name === 'menu.createFrame', 'edited source loop');
+      assert.deepEqual(nextContext.program.previewLoopSelections.map(item => item.iterationCount), [3]);
+      const loopTexts = nextContext.program.operations.filter(item => item.kind === 'createText' && item.source.start.line === 10);
+      assert.deepEqual(loopTexts.map(item => item.descriptorFacts.text?.status === 'known' ? item.descriptorFacts.text.value : undefined),
+        kind === 'numeric' ? ['LOOP', 'LOOP', 'LOOP'] : ['One', 'Two', 'Three']);
+      const next = result.catalog.editableEntries.find(item => item.value === 'EDITED HEADING');
+      assert.ok(next);
+      const inverse = applyX4UiSourceEdit(result.workspace, result.source, result.catalog, next.id, 'HEADING');
+      assert.equal(inverse.accepted, true, inverse.accepted === false ? inverse.detail : undefined);
+      assert.equal(sourceTextAt(inverse, 'ui/edit.lua'), lua);
+      assert.equal(applyX4UiSourceEdit(result.workspace, result.source, catalog, entry.id, 'STALE').accepted, false);
+      assert.equal(applyX4UiSourceEdit(original, context.source, structuredClone(catalog), entry.id, 'COPIED').accepted, false);
+      assert.equal(discoverX4UiSourceEdits(original, context.source, structuredClone(context.program), context.evidenceAuthority).status, 'locked');
+      const model = normalizeX4UiSourceEditLayoutModel(context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel);
+      const loops = context.program.previewLoopCatalog;
+      for (const iterationCount of [2, 3, 4]) {
+        const replay = projectX4UiLayoutProgram(model, context.program.target, context.program.profile,
+          undefined, undefined, undefined, corpus, { catalogId: loops.id, source: loops.sourceIdentity,
+            targetId: loops.targetId, profileId: loops.profileId, selections: [{ id: loops.entries[0]!.id, iterationCount }] });
+        assert.notEqual(replay.status, 'refused');
+        if (replay.status === 'refused') throw new Error('loop count replay refused');
+        const replayCatalog = discoverX4UiSourceEdits(original, context.source, replay.program, replay.evidenceAuthority);
+        assert.equal(replayCatalog.status, iterationCount === 3 ? 'ready' : 'locked', 'only the complete source-proven count grants direct scalar continuation');
+        if (iterationCount !== 3) assert.equal(replayCatalog.editableEntries.length, 0);
+      }
+      assert.equal(sourceTextAt(context, 'ui/edit.lua'), lua);
+      console.log(`B119_SOURCE_LOOP_CAPTION PASS ${kind}/${mixed}: direct CAS/inverse, retained loops, locked loop anchors, stale/copy/mismatched counts`);
+    }
+  }
+};
+
 const run = async (): Promise<void> => {
   const canonicalCorpus = await loadCanonicalSourceEditsSelftestCorpus();
+  runSourceProvenLoopCaptionEdits(canonicalCorpus);
   const discoverProperties = Reflect.get(sourceEditMoveSurface, 'discoverX4UiSourceTextPropertyAdditions') as
     (catalog: X4UiSourceEditCatalog, operationId: string) => readonly { property: string; operationId: string }[];
   const addProperty = Reflect.get(sourceEditMoveSurface, 'applyX4UiSourceTextPropertyAddition') as
@@ -13505,7 +13571,7 @@ const run = async (): Promise<void> => {
         b119PartialScalarScenarioDirectEntry?.expectedText,
       ));
     const applyValue = scenarioApply?.value;
-    const expectedScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples and no active path or loop selections; clear unsupported preview inputs and reproject the target';
+    const expectedScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples, no active path selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
     const pass = scenarioContext !== undefined
       && testCase.active(scenarioContext)
       && scenarioContext.program.status === 'partial'
@@ -13737,7 +13803,7 @@ const run = async (): Promise<void> => {
       b119PartialScalarLoopScenarioDirectEntry?.expectedText,
     ));
   const b119PartialScalarLoopScenarioApplyValue = b119PartialScalarLoopScenarioApply?.value;
-  const b119PartialScalarLoopScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples and no active path or loop selections; clear unsupported preview inputs and reproject the target';
+  const b119PartialScalarLoopScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples, no active path selections, and only source-proven loop counts; clear unsupported preview inputs and reproject the target';
   const b119PartialScalarLoopScenarioRow: Check = {
     name: 'B119 mixed scalar with active source-bound loop input refuses',
     pass: b119PartialScalarLoopScenarioContext !== undefined

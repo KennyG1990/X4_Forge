@@ -8,6 +8,15 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 16:32Z: Source-proven-loop direct caption editing repair VERIFIED; full goal PARTIAL.
+Real HUB edit/undo/redo/export/reopen1/1 first-pass; actual screenshots inspected, stillheader-only.
+Source170/170+4families,layout1007/1007,types/lint and originalHUB two-profileCAS/inverse PASS.
+Retain loop-body/structural/unknown-count/stale authority locks. Existing loop-display deletion
+negative repaired. Guards/cleanup PASS. NEXT rowH/y placement and body dispatch, not more count
+controls. All9journeys/3menus/12references/current full integration/installed/native remain.
+Plan/AAR:docs/plans/2026-09-14-b119-source-loop-edit.md. Readable evidence:
+test-results/b119-source-loop-edit-20260914/RESULTS.md; checkpoint/post-commit.json is git authority.
+
 2026-09-14 15:50Z: Source-bound ipairs labels headless VERIFIED; unit/full goal PARTIAL.
 Unchanged HUB resolves6labels/indexes/widths at2profiles without manual input. Layout1007/1007,
 pipeline127/127,session/types/lint PASS; strict evidence ownership repair preserves duplicate

@@ -1,5 +1,14 @@
 # X4 Forge — Prototype Validation Roadmap
 
+2026-09-14 16:32Z — VERIFIED bounded B119 direct caption editing across source-proven loops.
+Exact private source proofs and loop-input metadata restore scalar CAS without granting
+loop-body or structural edit authority. Source170/170+4caption families,layout1007/1007,
+types/lint and originalHUB two-profileedit/inverse PASS. Unchanged renderedHUB journey1/1
+first-pass: edited heading survives history/export/reopen; screenshots inspected. FullHUB
+stillheader-only, taby/body unresolved; full B119 remains PARTIAL. No push/install/native claim.
+Plan/AAR:docs/plans/2026-09-14-b119-source-loop-edit.md; evidence:
+test-results/b119-source-loop-edit-20260914/{RESULTS.md,verification.json,checkpoint/post-commit.json}.
+
 > ## 🧭 CANONICAL PROJECT — read this first
 >
 > **Canonical name:** **X4 Forge** · **Canonical directory:** `<WORKSPACE_ROOT>` · **Repo:** `KennyG1990/X4_Forge`

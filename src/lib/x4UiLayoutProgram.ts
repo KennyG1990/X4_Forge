@@ -877,6 +877,21 @@ export const getIssuedX4UiLayoutExpandedCallMetadata = (
     ?.expandedCallMetadata.get(operation as X4UiLayoutOperation);
 };
 
+/** Loop counts are edit-safe only when the exact issued source independently proves them. */
+export const hasOnlySourceProvenX4UiLayoutLoops = (
+  program: unknown,
+  evidenceAuthority: unknown,
+): boolean => {
+  if (!isIssuedX4UiLayoutEvidencePair(program, evidenceAuthority)) return false;
+  const issued = program as X4UiLayoutProgram;
+  const model = issuedX4UiLayoutEvidenceAuthorities.get(issued)?.modelSnapshot;
+  if (!model) return false;
+  return issued.previewLoopSelections.every(selection => {
+    const proof = sourceLoopBindingProofFor(model, selection.source, selection.kind);
+    return proof !== undefined && proof.values.length === selection.iterationCount;
+  });
+};
+
 export type X4UiLayoutProgramResult =
   | {
     readonly status: X4UiLayoutProjectionStatus;
@@ -8095,7 +8110,7 @@ const finishProgram = (
       // Preserve the actual instantiated input, independently of the operation's output
       // metadata. Never reconstruct identity by stripping namespaces in a downstream owner.
       expandedCallMetadata: new Map(operationEvents.flatMap((event, index) =>
-        event.call.expansionInstance && !event.call.previewLoop
+        event.call.expansionInstance || event.call.previewLoop
           ? [[result.program.operations[index], freezeDeep(cloneJsonLike(cloneMetadata(event.call))) as X4UiLayoutCallMetadata] as const]
           : [])),
       ...(colorEvidence !== undefined ? { colorEvidence } : {}),
