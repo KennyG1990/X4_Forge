@@ -118,6 +118,170 @@ Modify F:/DEV_ENV/X4_Forge/src/components/X4UiSourceEditor.tsx and its selftest,
 
 ## Prior reconciliation record / AAR
 
+### Body Y continuation — SPECIFIED, parent f688820
+
+Bounded step within the unchanged body-authoring contract: reproduce and repair exact numeric
+alias evaluation order at the existing numericExpressionStructureError owner. Lua5.1 section2.4.3
+evaluates RHS expressions before assignments (https://www.lua.org/manual/5.1/manual.html#2.4.3).
+Hypothesis, not diagnosis: exactNumericExpressionAliasBinding and numericExpressionAliasHasWriteBetween
+mistake the target of the current self-assignment for a completed intervening write. Generic red
+fixtures must prove the error before code changes. No arbitrary Lua evaluation or validator bypass.
+
+Files: x4UiLayoutProgram.ts and its selftest; parser owner only if a reproduced producer defect
+requires it. Existing source AST, declaration/scope, lineage and descriptor equality owners remain.
+Negative gates: prior unknown/conditional writes, sibling scopes, stale captured descriptors,
+simultaneous assignment semantics and deferred closures must not gain invented authority.
+Use unchanged real HUB SHA from the prior receipt at two profiles; require exact first-section Y,
+then inspect remaining captions/helper-return geometry rather than calling numeric proof full UX.
+Run full layout regressions, typecheck, targeted lint and real-source probe with current input hashes.
+No source/corpus/live changes during tests; keep source snapshots only in excluded temp_import.
+Evidence:test-results/b119-body-y-20260914/. Baseline current HEAD f688820;93unrelated paths retained.
+Rollback is the exact owned diff from that commit, never reset/clean. Source-edit active-path lock,
+the two pre-existing scene failures, full integration and all rendered/native obligations remain.
+No capability-map delta yet. No publish/push/install/game/config/external-ledger writes.
+
+Body Y red/green: generic repeated self-assignment failed1063/1064, then existing assignment
+availability/intervening-write checks were corrected to respect complete RHS evaluation. Full
+layout1066/1066, including simultaneous old-value bindings and unknown-write rejection; typecheck
+PASS. Real unchanged HUB first sectionY now98/135 at the two profiles; laterY/captions/edit lock
+remain unresolved. Add explicit source-hash-bound Y assertions to the existing probe.
+Rendered follow-through reuses the byte-unchanged real-HUB test and previously audited outputPath
+capture/download helpers; no new external writer. Recheck X4 and3200/3201, run one worker and verify
+50protected/4realLua/19live-file guards and treeGone. Capture is intermediate body-geometry evidence,
+not full body text/edit acceptance. Review used graphify's existing validator ownership (no semantic
+extraction/token spend) and complete diff; reviewctl/BlastRadius remain unavailable.
+
+### Body Y evidence and next caption dependency, 19:33Z — PARTIAL
+
+### Caption implementation batch — SPECIFIED, 2026-09-14
+
+20:23Z close: first-caption rendered acceptance evidenced; overall body/builder PARTIAL.
+
+Checkpoint preflight correction: compact console summary has verdict.treeGone, but persisted
+receipt has verdict.lifecycle.termination.treeGone/complete. Initial verifier stopped before
+baseline directory creation or staging (index empty confirmed). Read persisted schema, corrected
+the assertion without weakening cleanup, then retry the same unstarted checkpoint. No product,
+test, receipt or hook change. AAR: inspect persisted receipt shape, not console projection.
+caption-bounded1092/1092,caption-bounded-lint,caption-types-close,caption-real-close,source-caption
+174/174 PASS on current product inputs. scene-caption194/196 has byte-identical failure/summary
+lines to source-rhs baseline at f688820; no count/oracle edit. All runners terminal, guards unchanged.
+Six-path local checkpoint via checkpoint.mjs, mandatory unchanged normal precommit hook; final
+checkpoint/post-commit.json is authority. No new release, push, install, external ledger or native.
+Current3executable/test paths plus BACKLOG/plan/handoff only; preserve unrelated93paths.
+Review: caption visible/source-derived, property editing deliberately still locked, later positions
+partial. No full journey promotion. No capability-map delta beyond this local evidence record.
+AAR sustain: original-source two-profile assertions, pixel mask plus manual screenshot, independent
+source/scene regressions, exact path/hash checkpoint. Improve: initial fixture lacked expansion;
+function identity must use invocation owner, not numeric variable scope. Mixed diagnostic logs need
+line-filtered reads; initial combined skill read was too large. Lint/depth-test corrections retained.
+Highest evidenced risk: visible caption mistaken for editable body. Keep explicit locked-state and
+full-objective acceptance gates. Cold million-file manifest scan explains this run's preparation
+delay; do not change timeouts or redirect shared state to hide it. No memory writes.
+
+20:19Z implemented/visually evidenced intermediate slice, full goal PARTIAL:
+- Existing resolver recognizes bounded literal/parameter/concat/ASCII-upper and complete
+  alpha-renamed printable-byte helper structure; invocation owner is CallModel, not numeric aliases.
+  Whole-file library/function escape checks, parameter-write guards, 4096-byte/16-depth resolution
+  and2048-node/40-depth structural matching. No schema, renderer, edit authority or Lua execution.
+- caption-bounded1092/1092 and caption-bounded-lint PASS. Types passed before the final structural
+  matcher bound; refresh current types plus coupled source/scene before checkpoint.
+- caption-real-asserted verified unchanged sourceSHA, first caption and Y98/135 at two profiles;
+  this preceded only the added structural matcher bound. Refresh its exact current receipt.
+- browser-caption PASS1/1,0failed/flaky/bad/reporterrors,20:11:24–20:19:26Z. Current final inputs,
+  treeGone=true,50protected/4realLua/19livefiles unchanged, only Deckwright3100 before/after, X4 absent.
+  Actual screenshot inspected: FACTIONS text and blue first-section bar ARE VISIBLE. Inspector
+  properties remain unavailable/locked; later helper-return sections remain unresolved. The test
+  verifies source-colored glyph pixels, unchanged source/history and existing heading edit/reopen.
+  This is NOT full-body edit acceptance, smooth UX, full integration, installed or native proof.
+- Run duration included cold manifest scan of1,028,384 files; service scanning->ready observed.
+  UI test itself~1.6min. No timeout change or harness bypass. Existing external output audit reused;
+  selected test writes only test.info().outputPath captures/downloads and established scratch state.
+- Review reread all3changed executable/test diffs. reviewctl/BlastRadius unavailable. Temporary
+  debug output removed; no new spend/network/delete surface. Full objective stays unchanged.
+
+Implementation review corrections: numeric local-variable lookup is not function binding authority;
+use CallModel's source-issued invocation/declaration identity for every helper reference. Parameter
+identity points to declarationId, not functionSource. Initial generic test lacked explicit local
+expansion, so its first red was not a precise caption oracle; corrected fixture preserves that
+opt-in. A later all-literal depth case was already folded by CallModel; use a dynamic parameter
+leaf to exercise the new resolver depth limit, preserving existing static literal behavior.
+Lint no-control-regex is retained; ASCII check uses character codes. Temporary scalar debug logs
+were removed before final tests. Baseline/failed receipts retained; do not call these clean runs.
+
+Reuse LayoutProgram's source AST/index and private string resolver. No source-schema change.
+Compared approaches: samples do not solve source-owned authoring; arbitrary Lua execution violates
+the objective; a closed source recognizer preserves the existing proof boundary. Use the last.
+Recognize exact literal/parameter/concat/ASCII uppercase expressions, and alpha-renamed versions
+of the complete printable-byte helper body. Compare parsed structure including operators/literals,
+not helper names. Keep standard-library mutation, alias escape, reflection and parameter writes
+fail-closed; bound recursion/output. UTF8 bytes must match the real source algorithm.
+Files: F:/DEV_ENV/X4_Forge/src/lib/x4UiLayoutProgram.ts and its .selftest.ts; existing body-probe.mjs
+and real-HUB browser test for validation. Baseline f688820 plus already-tested numeric RHS diff.
+Rollback only the new exact diff; preserve existing numeric repair and unrelated93paths.
+First red generic renamed-helper case, then positive/negative families, full layout/type/lint,
+unchanged-source two-profile probe and actual rendered inspection. Update current evidence under
+test-results/b119-body-y-20260914 with fresh caption labels, never overwrite old receipts.
+No external writes/release/install/native or path-edit lock change. Caption pixels are intermediate
+acceptance, not full body editing; all9journeys/3menus/12references remain. No capability-map delta.
+
+- Close diagnostic,19:44–19:45Z: caption-original-scoped and caption-counterfactual both terminal0
+  with guards unchanged. Exact createText starts127;128 is options. In-memory-only literal caption
+  produces first-section text rect(32,98,85.875,19.5) at1080/1 and(43,135,171.75,39) at1440/1.4;
+  outerHeight20/39. Original has no body text. This isolates caption resolution,NOT implemented
+  automatic support,rendered pixels or editing. Unknown tabOrder does not suppress this geometry.
+- Final review:complete two-file product/test diff reread;exact-path diff check passed. Repair
+  uncommitted,normal precommit pending. No product changes after tested inputs. PARTIAL;
+  full-objective obligations unchanged,no capability-map delta.
+- Triggered AAR:oversized nested serialization recurred;initial diagnostic used options line128
+  instead of createText127 and text instead of scene content. Corrected scoped receipts retained.
+  Called degradation territory and stopped new feature implementation. A duplicate-target handoff
+  replacement patch was rejected atomically; recovered with one whole-file Update patch.
+  Sustain original/scratch hashes and independent rendered checks. Improve tools using scalar,
+  source-filtered summaries before serialization. Highest risk:equating geometry with usable
+  authoring;caption pixels and real body edits remain required. No memory/external-ledger writes.
+
+- Coupled refresh terminal: source-rhs PASS174/174; scene-rhs FAILED194/196 with the exact same
+  portable HUB9/6 versus7/3 and MENU54 versus52 assertions as the independently reproduced baseline.
+  Both guards passed; no new scene failure. Current suite is not green.
+- Before caption implementation, run a scratch-only counterfactual through the existing body probe:
+  replace the single source128 caption expression in memory with a literal, compare original and
+  altered-source receipts at both profiles, and inspect text/height/scene facts. Never write the real
+  mod or call this evidence of automatic original-source caption support. This diagnostic checks
+  whether caption resolution is sufficient or further geometry blocks meaningful body pixels.
+
+- Applied only existing-validator assignment timing plus three regression cases. No source-format,
+  renderer, sample, path-edit, game or deployment owner was replaced. The seven-line logic delta
+  remains uncommitted above f688820; do not rerun old checkpoint.mjs against changed inputs.
+- layout-rhs-first1066/1066; types-rhs and lint-rhs passed. real-y-asserted proves source-owned
+  first-sectionY98/135 and retains the active-path edit lock at both profiles. Original4Lua,
+  live19files and protected50artifacts unchanged across every run.
+- browser-y passed1/1,0failed/flaky/report errors,19:26:35–19:32:18Z; treeGone=true. The actual
+  DOSSIER capture was inspected and STILL HAS NO VISIBLE BODY. Numeric recovery is not body pixel
+  acceptance. Header/six-tabs, source/history preservation, heading edit/export/reopen still pass.
+- Remaining current validation: coupled source/session/scene regression refresh and normal precommit
+  before a subsequent commit; existing scene194/196 baseline failures remain open. No new full
+  integration, installed or native claim. Full objective/all9journeys/3menus/12references unchanged.
+- Next bounded dependency SPECIFIED: existing resolveProjectedString -> resolveString only accepts
+  a static string or supplied sample. The real source128 caption is concat + string.upper(ascii(text));
+  first caller supplies literal "factions" at201. The source helper65–73 converts to bytes, retains
+  ASCII32..126, substitutes spaces and trims trailing whitespace. Keep names irrelevant and source
+  canonical. Reuse existing AST/index, exact local invocation/declaration, parameter bindings,
+  source/evidence issuance and string resolution; no new competing expression model or Lua runtime.
+- Before implementing captions, red-test a generic renamed nested helper and exact original source.
+  Prove the complete helper body and standard-library identity before deriving text. Preserve UTF-8
+  byte semantics, output/depth bounds, unknown inputs, local shadowing, reassigned/escaped libraries,
+  reflective access and altered helper bodies as fail-closed cases. Do not infer "ascii" by name or
+  hardcode the HUB caption. Require actual body text pixels and retain the larger body-edit gate.
+- Scene follow-up localization (read-only): portable HUB fixture source includes three direct button
+  calls plus an ipairs loop over three items. Reconcile its operation/gap ledger, not merely7->9.
+  Configured MENU failure is a52-input total assertion after its source-owned geometry checks; identify
+  the exact two extra source expressions before changing any oracle. No scene test changed this turn.
+- AAR: red fixture confirmed assignment timing; review kept declaration/source equality and stale
+  writes intact. Two initial oversized documentation reads were corrected to bounded reads; no data
+  writes resulted. Sustain independent screenshot review: green numeric/test results still coexist
+  with a blank body. Highest risk remains premature body-completion claims; next gate is source-owned
+  caption pixels and then actual editing. No memory/external-ledger writes.
+
 - Initial reconciliation status was SPECIFIED; the implementation checkpoint above supersedes that state without claiming body completion.
 - Baseline diagnostic ran terminal0 at HEAD eda059f; F:/DEV_ENV/X4_Forge/test-results/b119-protected-tab-body-20260914/baseline.json records actual six-function HUB and two renamed cases, with original/input/status guards unchanged. Existing test-results report was queued in Codex. No new browser test was run.
 - Review each requirement against source, rendered artifacts and exact diff. Suggested eventual local title: feat(ui): preview and edit source-bound protected tab bodies. Do not commit or claim this title as achieved from infrastructure alone.

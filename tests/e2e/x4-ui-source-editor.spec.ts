@@ -5071,8 +5071,17 @@ for (const realMenu of [
         await expect.poll(() => hierarchy.getByRole('treeitem').count()).toBeGreaterThan(beforeBodyNodes);
         expect(await readB119LuaRoundtripSelectedWorkspace(page)).toEqual(sectionSourceBefore);
         expect(await readB119LuaRoundtripHistory(page)).toEqual(sectionHistoryBefore);
-        // This capture documents current body gaps; it is not full-body fidelity
-        // or editable-body acceptance. Clear the scenario before the proven edit.
+        const bodyCaption = hierarchy.getByRole('treeitem').filter({ has: page.getByText(/^Text ·\s*FACTIONS$/) });
+        await expect(bodyCaption).toHaveCount(1);
+        await bodyCaption.click();
+        await expect(page.getByTestId('x4-ui-canvas-selection')).toBeVisible();
+        const captionInk = await sampleNeutralLightMask(page, { rgb: [207, 230, 251] });
+        expect(captionInk.count, 'source-derived FACTIONS caption must have actual glyph pixels').toBeGreaterThan(0);
+        checkpoints.push({ label: 'first-body-caption-rendered', captionInk });
+        expect(await readB119LuaRoundtripSelectedWorkspace(page)).toEqual(sectionSourceBefore);
+        expect(await readB119LuaRoundtripHistory(page)).toEqual(sectionHistoryBefore);
+        // First caption pixels are not full-body fidelity or editable-body acceptance.
+        // Clear the scenario before the separately proven heading edit.
         await capture('dossier-preview');
         await page.getByTestId('x4-ui-preview-sections-reset').click();
         await expect(section).toHaveValue('');

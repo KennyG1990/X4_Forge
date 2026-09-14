@@ -8,6 +8,23 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 20:23Z: first real HUB body caption/bar now VISUALLY VERIFIED; full goal PARTIAL.
+Unchanged original source resolves FACTIONS at two profiles. Existing resolver/AST/parameter owners
+only; bounded byte-cleaning/uppercase recognition with mutation/escape/unknown rejection. Layout
+1092/1092,source174/174,typecheck/lint,real-source assertions PASS. Rendered1/1 verifies caption glyph
+pixels plus unchanged Lua/history and heading edit/export/reopen; actual screenshot inspected.
+Scene194/196 has exact prior baseline failures,not waived. Later helper-return positions and active
+path body editing remain open. Six-path LOCAL checkpoint next, normal precommit hook required;
+test-results/b119-body-y-20260914/checkpoint/post-commit.json decides commit integrity.
+No full integration,installed/native,release/push claim. All9journeys/3menus/12references remain.
+
+2026-09-14 19:33Z: bodyY repair PARTIAL/uncommitted above f688820. Existing numeric validator now
+respects RHS-before-assignment; layout1066/1066,types/lint,realY98/135 at2profiles PASS. RenderedHUB1/1
+passes original edit/reopen journey, but inspected DOSSIER screenshot STILL BLANK. Next actual source
+caption127 (concat/uppercase/ASCII helper), then returned helper positions and active-path edits.
+Evidence:test-results/b119-body-y-20260914/RESULTS.md. Coupled regressions/precommit pending; scene
+baseline194/196, full integration, installed/native and all9journeys/3menus/12references remain.
+
 2026-09-14 protected-tab checkpoint: PARTIAL, implemented dispatch/selector infrastructure.
 Plan:docs/plans/2026-09-14-b119-protected-tab-body.md. Parser160/160,layout1063/1063,typecheck PASS;
 browser-section1/1 proves DOSSIER selection leaves Lua/history unchanged, then heading edit/reopen.

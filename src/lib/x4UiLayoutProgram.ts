@@ -2552,6 +2552,7 @@ const exactNumericExpressionAliasBinding = (
     .filter(alias => {
       const binding = numericExpressionAliasSourceBinding(alias, model);
       return binding !== undefined
+        && (useOffset === undefined || (sourceAstRange(binding.statement)?.[1] ?? Infinity) <= useOffset)
         && numericExpressionAliasDescriptorHasExactSourceLineage(descriptor, binding, model, useOffset);
     })
     .filter(alias => numericExpressionAliasSourceBinding(alias, model) !== undefined)
@@ -2568,7 +2569,8 @@ const exactNumericExpressionAliasBinding = (
       || candidate.source.start.offset >= endOffset
       || candidate.context.reachability === 'unreachable') return false;
     const candidateBinding = numericExpressionAliasSourceBinding(candidate, model);
-    return candidateBinding?.declarationOwner === sourceBinding.declarationOwner;
+    return candidateBinding?.declarationOwner === sourceBinding.declarationOwner
+      && (sourceAstRange(candidateBinding.statement)?.[1] ?? Infinity) <= endOffset;
   });
   return sameOwnerLaterBinding
     || (sourceBinding !== undefined && numericExpressionAliasHasWriteBetween(sourceBinding, model, endOffset))
@@ -3849,6 +3851,170 @@ const resolveLuaTruthiness = (
     provenance: 'source-literal',
     sourcePin: HELPER_DEFAULT_PINS.rowSelectable,
   };
+};
+
+// Closed source recognition, not execution of imported Lua. Keep this beside the
+// existing scalar resolver: no additional public expression format or edit owner.
+const printableCaptionTemplate = `local function f(s)
+ s = tostring(s or "")
+ local o = {}
+ for i = 1, #s do
+  local b = s:byte(i)
+  o[#o + 1] = (b >= 32 and b <= 126) and string.char(b) or " "
+ end
+ return (table.concat(o):gsub("%s+$", ""))
+end`;
+const captionLibraryProofs = new WeakMap<NumericExpressionSourceAstIndex, boolean>();
+const captionReflectiveAuthorities = new Set(['string', 'table', 'tostring', 'rawget', '_G', '_ENV',
+  'setfenv', 'getfenv', 'getmetatable', 'setmetatable', 'debug', 'load', 'loadstring', 'dofile', 'os']);
+
+const captionLibrariesAreUnmodified = (model: X4UiCallModel): boolean => {
+  const index = numericExpressionSourceAstIndex(model);
+  const cached = captionLibraryProofs.get(index);
+  if (cached !== undefined) return cached;
+  const finish = (result: boolean): boolean => { captionLibraryProofs.set(index, result); return result; };
+  if (index.error) return finish(false);
+  for (const nodes of index.nodesByRange.values()) for (const node of nodes) {
+    if (node.type !== 'Identifier') continue;
+    if (node.name === '_ENV') return finish(false);
+    if (node.isLocal !== false) continue;
+    if (['setfenv', 'getfenv', 'getmetatable', 'setmetatable', 'debug', 'load', 'loadstring', 'dofile'].includes(String(node.name))) return finish(false);
+    const parent = index.parentByNode.get(node);
+    if (node.name === 'os' && localAstIdentifier(parent?.identifier, 'setlocale')) return finish(false);
+    if (node.name === 'string' || node.name === 'table' || node.name === 'os') {
+      // A library or member may only appear as the receiver of a direct call.
+      // Storing/passing/returning it (including nested table fields) loses authority.
+      const caller = parent && index.parentByNode.get(parent);
+      if (parent?.type !== 'MemberExpression' || parent.base !== node || parent.indexer !== '.'
+        || caller?.type !== 'CallExpression' || caller.base !== parent) return finish(false);
+    }
+    if (node.name === 'tostring' && (parent?.type !== 'CallExpression' || parent.base !== node)) return finish(false);
+    if (node.name === '_G') {
+      if (parent?.type === 'MemberExpression' && parent.base === node && parent.indexer === '.'
+        && !captionReflectiveAuthorities.has(String(localAstNode(parent.identifier)?.name))) continue;
+      const args = parent && localAstNodes(parent.arguments);
+      const source = parent && localAstSource(model, parent);
+      const key = args?.[1] && localAstStringValue(model, args[1]);
+      if (parent?.type !== 'CallExpression' || !localAstIdentifier(parent.base, 'rawget', false)
+        || args?.length !== 2 || args[0] !== node || key === undefined
+        || captionReflectiveAuthorities.has(key)
+        || !source || !globalAuthorityAvailableAt(model, 'rawget', source)) return finish(false);
+    }
+  }
+  return finish(true);
+};
+
+const printableCaptionShape = (fn: NumericExpressionSourceAstNode): string | undefined => {
+  const body = localAstNodes(fn.body), parameters = localAstNodes(fn.parameters);
+  const loop = body?.[2], loopBody = loop && localAstNodes(loop.body);
+  const names = [localAstNode(fn.identifier)?.name, parameters?.[0]?.name,
+    body?.[1] && localAstNodes(body[1].variables)?.[0]?.name,
+    localAstNode(loop?.variable)?.name, loopBody?.[0] && localAstNodes(loopBody[0].variables)?.[0]?.name];
+  if (fn.type !== 'FunctionDeclaration' || fn.isLocal !== true || parameters?.length !== 1
+    || body?.length !== 4 || names.some(name => typeof name !== 'string') || new Set(names).size !== 5) return undefined;
+  const aliases = new Map(names.map((name, i) => [name, `local-${i}`]));
+  let invalid = false;
+  let visited = 0;
+  const shape = (value: unknown, depth = 0): unknown => {
+    if (depth > 40 || ++visited > 2048) { invalid = true; return null; }
+    if (Array.isArray(value)) return value.map(child => shape(child, depth + 1));
+    if (!isObject(value)) return value;
+    const node = value as NumericExpressionSourceAstNode;
+    if (node.type === 'StringLiteral') {
+      const raw = node.raw;
+      if (typeof raw !== 'string' || raw.includes('\\') || !['"', "'"].includes(raw[0]) || raw.at(-1) !== raw[0]) {
+        invalid = true; return null;
+      }
+      return { type: 'StringLiteral', value: raw.slice(1, -1) };
+    }
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !['loc', 'range', 'raw'].includes(key))
+      .map(([key, child]) => [key, key === 'name' && node.type === 'Identifier' && node.isLocal === true
+        ? aliases.get(child) ?? child : shape(child, depth + 1)]));
+  };
+  const result = JSON.stringify(shape(fn));
+  return invalid ? undefined : result;
+};
+let printableCaptionExpectedShape: string | undefined;
+
+const exactPrintableCaptionFunction = (
+  model: X4UiCallModel, call: NumericExpressionSourceAstNode,
+): boolean => {
+  const source = localAstSource(model, call), callee = localAstNode(call.base);
+  const invocation = source && model.localInvocations.find(item => locationsEqual(item.source, source));
+  const declaration = invocation?.status === 'supported' && invocation.calleeDeclarationId
+    ? model.localFunctions.find(item => item.id === invocation.calleeDeclarationId) : undefined;
+  const index = numericExpressionSourceAstIndex(model);
+  const functions = declaration && localAstNodeAt(index, declaration.source, 'FunctionDeclaration');
+  const fn = functions?.length === 1 ? functions[0] : undefined;
+  if (!fn || !declaration || !callee || !localAstIdentifier(callee, declaration.name, true)) return false;
+  if (printableCaptionExpectedShape === undefined) {
+    const template = parse(printableCaptionTemplate, { scope: true, luaVersion: '5.2' });
+    printableCaptionExpectedShape = printableCaptionShape(template.body[0] as unknown as NumericExpressionSourceAstNode);
+  }
+  const shape = printableCaptionShape(fn);
+  if (shape === undefined || shape !== printableCaptionExpectedShape) return false;
+  for (const nodes of index.nodesByRange.values()) for (const node of nodes) {
+    if (!localAstIdentifier(node, declaration.name, true) || node === fn.identifier) continue;
+    const parent = index.parentByNode.get(node);
+    const callSource = parent && localAstSource(model, parent);
+    // Helper declarations have their own scope/escape proof in CallModel. The
+    // numeric local-variable resolver is not authority for a function binding.
+    if (parent?.type !== 'CallExpression' || parent.base !== node || !callSource
+      || !model.localInvocations.some(item => item.status === 'supported'
+        && item.calleeDeclarationId === declaration.id && locationsEqual(item.source, callSource))) return false;
+  }
+  return true;
+};
+
+const sourceCaptionString = (
+  value: X4UiValue, model: X4UiCallModel, bindings?: ReadonlyMap<string, X4UiValue>,
+): string | undefined => {
+  const index = numericExpressionSourceAstIndex(model);
+  const maxBytes = 4096;
+  const bounded = (text: string): string | undefined => text.length <= maxBytes && new TextEncoder().encode(text).length <= maxBytes ? text : undefined;
+  const fromValue = (candidate: X4UiValue, depth: number): string | undefined => {
+    if (depth > 16 || !sourceLocationMatchesModel(model, candidate.location, candidate.expression)) return undefined;
+    const nodes = index.nodesByRange.get(sourceAstRangeKey(candidate.location.start.offset, candidate.location.end.offset));
+    return nodes?.length === 1 ? resolve(nodes[0], depth + 1) : undefined;
+  };
+  const resolve = (node: NumericExpressionSourceAstNode, depth: number): string | undefined => {
+    if (depth > 16) return undefined;
+    const literal = localAstStringValue(model, node);
+    if (literal !== undefined) return bounded(literal);
+    if (node.type === 'Identifier' && typeof node.name === 'string') {
+      const source = localAstSource(model, node);
+      const parameter = source && parameterForPreviewInput({ kind: 'preview-input', expression: node.name, source }, model);
+      const bound = parameter && bindings?.get(parameter.id);
+      if (!parameter || !bound) return undefined;
+      const owner = model.localFunctions.find(item => item.id === parameter.declarationId);
+      if (!owner) return undefined;
+      // Also reject deferred writes from nested closures, not just preceding statements.
+      if (numericExpressionSourceAstNodes(index, 'AssignmentStatement').some(statement => {
+        const location = localAstSource(model, statement);
+        return location && locationContains(owner.source, location)
+          && localAstNodes(statement.variables)?.some(target => localAstIdentifier(target, parameter.name, true));
+      })) return undefined;
+      return fromValue(bound, depth + 1);
+    }
+    if (node.type === 'BinaryExpression' && node.operator === '..') {
+      const left = localAstNode(node.left), right = localAstNode(node.right);
+      const a = left && resolve(left, depth + 1), b = right && resolve(right, depth + 1);
+      return a !== undefined && b !== undefined ? bounded(a + b) : undefined;
+    }
+    if (node.type !== 'CallExpression' || !captionLibrariesAreUnmodified(model)) return undefined;
+    const args = localAstNodes(node.arguments), callee = localAstNode(node.base);
+    if (args?.length !== 1 || !callee) return undefined;
+    const argument = resolve(args[0], depth + 1);
+    if (argument === undefined) return undefined;
+    if (callee.type === 'MemberExpression' && callee.indexer === '.'
+      && localAstIdentifier(callee.base, 'string', false) && localAstIdentifier(callee.identifier, 'upper')) {
+      return Array.from(argument).every(char => char.charCodeAt(0) <= 127)
+        ? argument.replace(/[a-z]/g, c => c.toUpperCase()) : undefined;
+    }
+    if (!exactPrintableCaptionFunction(model, node)) return undefined;
+    return Array.from(new TextEncoder().encode(argument), byte => byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : ' ').join('').replace(/ +$/, '');
+  };
+  return fromValue(value, 0);
 };
 
 const resolveString = (
@@ -6416,6 +6582,10 @@ const numericExpressionAliasHasWriteBetween = (
       && sourceAstRange(declaration)?.[1] === declarationRange[1];
   };
   for (const statement of numericExpressionSourceAstNodes(index, 'AssignmentStatement')) {
+    // Lua evaluates all RHS expressions before assigning any target. A target
+    // textually before this use is not a write yet when the use is in its RHS.
+    const statementRange = sourceAstRange(statement);
+    if (!statementRange || statementRange[1] > useOffset) continue;
     const variables = localAstNodes(statement.variables);
     if (variables?.some(targetWritesName)) return true;
   }
@@ -12488,15 +12658,20 @@ export function projectX4UiLayoutProgram(
     category: X4UiLayoutGapCategory,
     label: string,
     source: X4UiSourceLocation,
-  ): Resolution<string> => resolveString(
-    value,
-    category,
-    label,
-    source,
-    previewSamples.byRangeAndType,
-    consumedSamples,
-    activeCall?.previewLoop?.id || '',
-  );
+  ): Resolution<string> => {
+    const derived = value && value.status !== 'static'
+      ? sourceCaptionString(value, model, activeCall?.parameterBindings) : undefined;
+    if (derived !== undefined) return { value: derived, source: cloneLocation(value!.location), provenance: 'source-literal' };
+    return resolveString(
+      value,
+      category,
+      label,
+      source,
+      previewSamples.byRangeAndType,
+      consumedSamples,
+      activeCall?.previewLoop?.id || '',
+    );
+  };
 
   const frameTextureLayerNameForCall = (
     call: ProjectableCall,

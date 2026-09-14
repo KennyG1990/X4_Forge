@@ -7893,6 +7893,118 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
       frameX: numericAliasFactDetail(numericAliasUnreachableReassignment.program?.frames[0]?.descriptorFacts.x),
     }));
 
+  const printableCaptionSource = [
+    'local function cleanLabel(input)',
+    ' input = tostring(input or "")',
+    ' local pieces = {}',
+    ' for pos = 1, #input do',
+    '  local byte = input:byte(pos)',
+    '  pieces[#pieces + 1] = (byte >= 32 and byte <= 126) and string.char(byte) or " "',
+    ' end',
+    ' return (table.concat(pieces):gsub("%s+$", ""))',
+    'end',
+    'local function section(frame, caption)',
+    ' local t = frame:addTable(1, {width=80})',
+    ' t:addRow(false, {})[1]:createText("  " .. string.upper(cleanLabel(caption)), {height=20})',
+    'end',
+    'local menu = {name="Captions", layer=4}',
+    'function menu.display()',
+    ' local frame = Helper.createFrameHandle(menu, {width=100, height=80, layer=4})',
+    ' section(frame, "factions")',
+    ' frame:display()',
+    'end',
+  ].join('\n');
+  const projectPrintableCaption = (source: string) => {
+    const model = buildX4UiCallModel(input(source, 'selftest/b119-printable-caption.lua'));
+    const result = projectX4UiLayoutProgram(model, namedTarget(model, 'menu.display'),
+      profileFor(model, { localExpansion: { maxDepth: 4, maxInvocations: 12 } }));
+    return { model, result, program: resultProgram(result) };
+  };
+  const printableCaption = projectPrintableCaption(printableCaptionSource);
+  const printableCaptionFact = printableCaption.program?.operations.find(operation => operation.kind === 'createText')?.descriptorFacts.text;
+  check('B119 source-owned caption resolves a renamed printable-byte helper through a local UI parameter',
+    printableCaptionFact?.status === 'known' && printableCaptionFact.value === '  FACTIONS',
+    detail({ fact: printableCaptionFact, status: printableCaption.result.status,
+      operations: printableCaption.program?.operations.map(op => ({kind: op.kind, status: op.status, reason: op.reason})) }));
+  const captionText = (source: string) => projectPrintableCaption(source).program?.operations
+    .find(operation => operation.kind === 'createText')?.descriptorFacts.text;
+  for (const [label, source, expected] of [
+    ['UTF8 bytes', printableCaptionSource.replace('"factions"', '"fá😀ctions  "'), '  F      CTIONS'],
+    ['renamed locals', printableCaptionSource.replaceAll('cleanLabel', 'printable').replaceAll('pieces', 'parts').replaceAll('pos', 'offset'), '  FACTIONS'],
+    ['literal concat', printableCaptionSource.replace('string.upper(cleanLabel(caption))', '"hello" .. " world"'), '  hello world'],
+  ] as const) {
+    const fact = captionText(source);
+    check(`B119 source caption ${label}`, fact?.status === 'known' && fact.value === expected, detail(fact));
+  }
+  for (const [label, source] of [
+    ['changed byte bounds', printableCaptionSource.replace('byte <= 126', 'byte <= 127')],
+    ['changed replacement', printableCaptionSource.replace('or " "', 'or "?"')],
+    ['changed trim', printableCaptionSource.replace('%s+$', '%s+')],
+    ['extra helper effect', printableCaptionSource.replace(' return (table.concat', ' unknownEffect()\n return (table.concat')],
+    ['helper escape', printableCaptionSource + '\nlocal saved = {cleanLabel}'],
+    ['helper reassignment', printableCaptionSource + '\ncleanLabel = other'],
+    ['unknown input', printableCaptionSource.replace('"factions"', 'runtimeCaption()')],
+    ['parameter write', printableCaptionSource.replace(' local t = frame', ' caption = runtimeCaption()\n local t = frame')],
+    ['parameter shadow', printableCaptionSource.replace(' local t = frame', ' local caption = runtimeCaption()\n local t = frame')],
+    ['nested parameter write', printableCaptionSource.replace(' local t = frame', ' local function mutate() caption = "other" end\n local t = frame')],
+    ['library write', printableCaptionSource + '\nstring.upper = other'],
+    ['library escape', printableCaptionSource + '\nlocal saved = {string}'],
+    ['library member escape', printableCaptionSource + '\nlocal saved = string.upper'],
+    ['global reflection', printableCaptionSource + '\nlocal saved = rawget(_G, "string")'],
+    ['reflective debug', printableCaptionSource + '\n_G.debug.setmetatable("", other)'],
+    ['locale alias', printableCaptionSource + '\nlocal locale = os\nlocale.setlocale("tr_TR")'],
+    ['unknown global key', printableCaptionSource + '\n_G[key] = other'],
+    ['tostring write', printableCaptionSource + '\ntostring = other'],
+    ['metatable mutation', printableCaptionSource + '\ndebug.setmetatable("", other)'],
+    ['nonASCII uppercase', printableCaptionSource.replace('string.upper(cleanLabel(caption))', 'string.upper("é")')],
+    ['output bound', printableCaptionSource.replace('"factions"', '"' + 'x'.repeat(4097) + '"')],
+    ['depth bound', printableCaptionSource.replace('string.upper(cleanLabel(caption))', Array(22).fill('"x"').join(' .. ') + ' .. caption')],
+  ] as const) {
+    const fact = captionText(source);
+    check(`B119 source caption rejects ${label}`, fact?.status !== 'known', detail(fact));
+  }
+
+  const numericSelfAssignment = projectNumericAliasChain([
+    'local menu = { name = "NumericSelfAssignment", layer = 4 }',
+    'function menu.display()',
+    ' local y = Helper.viewHeight * 0.1',
+    ' y = y + 2',
+    ' y = y + 3',
+    ' local frame = Helper.createFrameHandle(menu, { y = y, width = 80, height = 80, layer = 4 })',
+    ' frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-self-assignment.lua');
+  check('B119 numeric self-assignment reads the previous value before committing the next binding',
+    factValue(numericSelfAssignment.program?.frames[0]?.descriptorFacts.y) === 13,
+    detail(numericSelfAssignment.program?.frames[0]?.descriptorFacts.y));
+
+  const numericParallelAssignment = projectNumericAliasChain([
+    'local menu = { name = "NumericParallelAssignment", layer = 4 }',
+    'function menu.display()',
+    ' local y = Helper.viewHeight * 0.1',
+    ' local z = Helper.viewHeight * 0.2',
+    ' y, z = z + 1, y + 2',
+    ' local frame = Helper.createFrameHandle(menu, { x = z, y = y, width = 80, height = 80, layer = 4 })',
+    ' frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-parallel-assignment.lua');
+  check('B119 simultaneous numeric assignments read every old RHS binding before any target changes',
+    factValue(numericParallelAssignment.program?.frames[0]?.descriptorFacts.x) === 10
+      && factValue(numericParallelAssignment.program?.frames[0]?.descriptorFacts.y) === 17,
+    detail(numericParallelAssignment.program?.frames[0]?.descriptorFacts));
+  const numericUnknownAssignment = projectNumericAliasChain([
+    'local menu = { name = "NumericUnknownAssignment", layer = 4 }',
+    'function menu.display()',
+    ' local y = Helper.viewHeight * 0.1',
+    ' y = getRuntimeHeight()',
+    ' y = y + 3',
+    ' local frame = Helper.createFrameHandle(menu, { y = y, width = 80, height = 80, layer = 4 })',
+    ' frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-unknown-assignment.lua');
+  check('B119 self-assignment cannot revive a numeric value after an unknown completed write',
+    numericUnknownAssignment.program?.frames[0]?.descriptorFacts.y.status !== 'known');
+
   const numericAliasRootExpression = 'math.floor(vw * ratio)';
   const projectNumericAliasMutation = (
     record: ValueRecord,
