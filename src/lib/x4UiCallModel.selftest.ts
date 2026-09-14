@@ -954,6 +954,504 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
       ),
     }));
 
+  const nestedNumericInputsSource = [
+    'local menu = { name = "NestedNumericInputs", layer = 4 }',
+    'function menu.display()',
+    '  local width = math.floor((runtimeWidth - 24) / 2)',
+    '  local widthAlias = width',
+    '  local ceilValue = math.ceil((runtimeHeight + 1) / 2)',
+    '  local minValue = math.min(width, ceilValue)',
+    '  local maxValue = math.max(0, minValue)',
+    '  local groupedValue = -((runtimeOffset + 8) / 2)',
+    '  local orValue = runtimeZero or 0',
+    '  local known = 200',
+    '  local knownFormula = math.floor((known - 24) / 2)',
+    '  local dynamicText = runtimeText',
+    '  local dynamicFlag = runtimeFlag',
+    '  local data = { caption = runtimeText, active = runtimeFlag }',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 160 })',
+    '  local table = frame:addTable(3, { width = 240, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  table:setColWidth(2, widthAlias, false)',
+    '  table:setColWidth(3, knownFormula, false)',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText(dynamicText, { height = ceilValue, minRowHeight = minValue, active = dynamicFlag })',
+    '  row[2]:createButton({ height = maxValue, active = dynamicFlag })',
+    '  row[1]:createText(data.caption, { active = data.active })',
+    '  row[2]:createButton({ active = data.active })',
+    '  row[3]:createIcon("solid", { height = orValue, affectRowHeight = false })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const nestedNumericInputsModel = buildX4UiCallModel(input(
+    nestedNumericInputsSource,
+    'selftest/b119-nested-numeric-inputs.lua',
+  ));
+  const nestedNumericInputsModelBefore = JSON.stringify(nestedNumericInputsModel);
+  const nestedNumericDescriptor = (name: string): Record<string, unknown> | undefined => {
+    const value = nestedNumericInputsModel.aliases.find(alias => alias.name === name)?.value.numericExpression;
+    return value === null || typeof value !== 'object' || Array.isArray(value)
+      ? undefined
+      : value as unknown as Record<string, unknown>;
+  };
+  const nestedNumericLeaf = (descriptor: unknown, expression: string): Record<string, unknown> | undefined => {
+    const seen = new Set<object>();
+    const visit = (value: unknown): Record<string, unknown> | undefined => {
+      if (value === null || typeof value !== 'object') return undefined;
+      const objectValue = value as object;
+      if (seen.has(objectValue)) return undefined;
+      seen.add(objectValue);
+      if (!Array.isArray(value)) {
+        const record = value as Record<string, unknown>;
+        if (record.kind === 'preview-input' && record.expression === expression) return record;
+        for (const child of Object.values(record)) {
+          const found = visit(child);
+          if (found) return found;
+        }
+      } else {
+        for (const child of value) {
+          const found = visit(child);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    };
+    return visit(descriptor);
+  };
+  const nestedWidthDescriptor = nestedNumericDescriptor('width');
+  const nestedWidthAliasDescriptor = nestedNumericDescriptor('widthAlias');
+  const nestedLeafExpressions = ['runtimeWidth', 'runtimeHeight', 'runtimeOffset', 'runtimeZero'];
+  const nestedLeaves = Object.fromEntries(nestedLeafExpressions.map(expression => [
+    expression,
+    nestedNumericLeaf(
+      nestedNumericInputsModel.aliases
+        .filter(alias => ['width', 'widthAlias', 'ceilValue', 'minValue', 'maxValue', 'groupedValue', 'orValue'].includes(alias.name))
+        .map(alias => alias.value.numericExpression),
+      expression,
+    ),
+  ]));
+  const nestedDescriptorKinds = ['width', 'ceilValue', 'minValue', 'maxValue', 'groupedValue', 'orValue']
+    .map(name => nestedNumericDescriptor(name)?.kind);
+  const nestedDescriptorNames = ['width', 'ceilValue', 'minValue', 'maxValue']
+    .map(name => nestedNumericDescriptor(name)?.name);
+  const nestedAllDescriptorKinds = new Set<string>();
+  const collectNestedDescriptorKinds = (value: unknown): void => {
+    if (value === null || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      value.forEach(collectNestedDescriptorKinds);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (typeof record.kind === 'string') nestedAllDescriptorKinds.add(record.kind);
+    Object.values(record).forEach(collectNestedDescriptorKinds);
+  };
+  ['width', 'ceilValue', 'minValue', 'maxValue', 'groupedValue', 'orValue']
+    .forEach(name => collectNestedDescriptorKinds(nestedNumericDescriptor(name)));
+  const nestedKnownDescriptor = nestedNumericDescriptor('knownFormula');
+  const nestedNumericHasPreviewInput = (value: unknown): boolean => {
+    const seen = new Set<object>();
+    const visit = (candidate: unknown): boolean => {
+      if (candidate === null || typeof candidate !== 'object') return false;
+      const objectValue = candidate as object;
+      if (seen.has(objectValue)) return false;
+      seen.add(objectValue);
+      if (Array.isArray(candidate)) return candidate.some(visit);
+      const record = candidate as Record<string, unknown>;
+      if (record.kind === 'preview-input') return true;
+      return Object.values(record).some(visit);
+    };
+    return visit(value);
+  };
+  const nestedKnownHasPreviewInput = nestedNumericHasPreviewInput(nestedKnownDescriptor);
+  const nestedKnownValue = nestedNumericInputsModel.aliases.find(alias => alias.name === 'knownFormula')?.value;
+  const nestedDynamicText = nestedNumericInputsModel.aliases.find(alias => alias.name === 'dynamicText')?.value;
+  const nestedDynamicFlag = nestedNumericInputsModel.aliases.find(alias => alias.name === 'dynamicFlag')?.value;
+  const nestedDynamicTextCall = nestedNumericInputsModel.calls.find(call => call.name === 'createText');
+  const nestedDynamicFlagCall = nestedNumericInputsModel.calls.find(call => call.name === 'createButton');
+  const nestedDynamicFlagProjection = nestedDynamicFlagCall?.semantics.properties?.find(property =>
+    property.normalizedName === 'active');
+  const nestedTableMemberTextCall = nestedNumericInputsModel.calls.find(call =>
+    call.name === 'createText' && call.semantics.text?.expression === 'data.caption');
+  const nestedTableMemberFlagCall = nestedNumericInputsModel.calls.find(call =>
+    call.name === 'createButton'
+      && call.semantics.properties?.some(property =>
+        property.normalizedName === 'active' && property.value.expression === 'data.active'));
+  const nestedTableMemberFlagProjection = nestedTableMemberFlagCall?.semantics.properties?.find(property =>
+    property.normalizedName === 'active');
+  const nestedWidthLeaf = nestedNumericLeaf(nestedWidthDescriptor, 'runtimeWidth');
+  const nestedWidthAliasLeaf = nestedNumericLeaf(nestedWidthAliasDescriptor, 'runtimeWidth');
+  const nestedFloorArgument = Array.isArray(nestedWidthDescriptor?.arguments)
+    ? nestedWidthDescriptor.arguments[0] as Record<string, unknown> | undefined
+    : undefined;
+  const nestedFloorLeft = nestedFloorArgument && typeof nestedFloorArgument.left === 'object'
+    && nestedFloorArgument.left !== null && !Array.isArray(nestedFloorArgument.left)
+    ? nestedFloorArgument.left as Record<string, unknown>
+    : undefined;
+  const nestedGroupedDescriptor = nestedNumericDescriptor('groupedValue');
+  const nestedGroupedOperand = nestedGroupedDescriptor && typeof nestedGroupedDescriptor.operand === 'object'
+    && nestedGroupedDescriptor.operand !== null && !Array.isArray(nestedGroupedDescriptor.operand)
+    ? nestedGroupedDescriptor.operand as Record<string, unknown>
+    : undefined;
+  const nestedGroupedLeft = nestedGroupedOperand && typeof nestedGroupedOperand.left === 'object'
+    && nestedGroupedOperand.left !== null && !Array.isArray(nestedGroupedOperand.left)
+    ? nestedGroupedOperand.left as Record<string, unknown>
+    : undefined;
+  check('B119 nested numeric inputs preserve exact source-bound leaves, shared roots, and the closed operator set',
+    nestedNumericInputsModel.parsed
+      && nestedWidthDescriptor?.kind === 'math-call'
+      && nestedWidthDescriptor.name === 'floor'
+      && nestedWidthDescriptor.expression === 'math.floor((runtimeWidth - 24) / 2)'
+      && nestedWidthLeaf !== undefined
+      && exactLocatedText(nestedNumericInputsSource, nestedWidthLeaf as { expression?: string; source?: X4UiCallRecord['source'] }, 'runtimeWidth')
+      && nestedWidthAliasLeaf !== undefined
+      && exactLocatedText(nestedNumericInputsSource, nestedWidthAliasLeaf as { expression?: string; source?: X4UiCallRecord['source'] }, 'runtimeWidth')
+      && nestedWidthLeaf.source !== undefined
+      && nestedWidthAliasLeaf.source !== undefined
+      && JSON.stringify(nestedWidthLeaf.source) === JSON.stringify(nestedWidthAliasLeaf.source)
+      && nestedLeaves.runtimeHeight !== undefined
+      && nestedLeaves.runtimeOffset !== undefined
+      && nestedLeaves.runtimeZero !== undefined
+      && nestedDescriptorKinds.every(kind => kind !== undefined)
+      && nestedDescriptorNames.join(',') === 'floor,ceil,min,max'
+      && nestedFloorArgument?.kind === 'binary'
+      && nestedFloorArgument.operator === '/'
+      && exactLocatedText(nestedNumericInputsSource,
+        nestedFloorArgument as { expression?: string; source?: X4UiCallRecord['source'] },
+        '(runtimeWidth - 24) / 2')
+      && nestedFloorLeft?.kind === 'binary'
+      && nestedFloorLeft.operator === '-'
+      && exactLocatedText(nestedNumericInputsSource,
+        nestedFloorLeft as { expression?: string; source?: X4UiCallRecord['source'] },
+        'runtimeWidth - 24')
+      && nestedGroupedDescriptor?.kind === 'unary'
+      && nestedGroupedDescriptor.operator === '-'
+      && exactLocatedText(nestedNumericInputsSource,
+        nestedGroupedDescriptor as { expression?: string; source?: X4UiCallRecord['source'] },
+        '-((runtimeOffset + 8) / 2)')
+      && nestedGroupedOperand?.kind === 'binary'
+      && nestedGroupedOperand.operator === '/'
+      && exactLocatedText(nestedNumericInputsSource,
+        nestedGroupedOperand as { expression?: string; source?: X4UiCallRecord['source'] },
+        '(runtimeOffset + 8) / 2')
+      && nestedGroupedLeft?.kind === 'binary'
+      && nestedGroupedLeft.operator === '+'
+      && exactLocatedText(nestedNumericInputsSource,
+        nestedGroupedLeft as { expression?: string; source?: X4UiCallRecord['source'] },
+        'runtimeOffset + 8')
+      && nestedAllDescriptorKinds.has('unary')
+      && nestedAllDescriptorKinds.has('or')
+      && nestedKnownValue?.status === 'static'
+      && nestedKnownValue.type === 'number'
+      && nestedKnownValue.value === 88
+      && nestedKnownHasPreviewInput === false
+      && nestedDynamicTextCall?.semantics.text?.expression === 'dynamicText'
+      && nestedDynamicTextCall.semantics.text?.numericExpression === undefined
+      && nestedDynamicFlagProjection?.value.expression === 'dynamicFlag'
+      && nestedDynamicFlagProjection.value.numericExpression === undefined
+      && nestedTableMemberTextCall?.semantics.text?.type === 'identifier'
+      && nestedTableMemberTextCall.semantics.text.status === 'unknown'
+      && nestedTableMemberTextCall.semantics.text.expression === 'data.caption'
+      && nestedTableMemberTextCall.semantics.text.numericExpression === undefined
+      && nestedTableMemberFlagProjection?.value.type === 'identifier'
+      && nestedTableMemberFlagProjection.value.status === 'unknown'
+      && nestedTableMemberFlagProjection.value.expression === 'data.active'
+      && nestedTableMemberFlagProjection.value.numericExpression === undefined
+      && JSON.stringify(nestedNumericInputsModel) === nestedNumericInputsModelBefore,
+    detail({
+      aliases: nestedNumericInputsModel.aliases.filter(alias => [
+        'width', 'widthAlias', 'ceilValue', 'minValue', 'maxValue', 'groupedValue', 'orValue',
+        'knownFormula', 'dynamicText', 'dynamicFlag',
+      ].includes(alias.name)),
+      kinds: [...nestedAllDescriptorKinds],
+      leaves: nestedLeaves,
+      knownValue: nestedKnownValue,
+      knownHasPreviewInput: nestedKnownHasPreviewInput,
+      dynamicText: nestedDynamicText,
+      dynamicFlag: nestedDynamicFlag,
+      dynamicTextCall: nestedDynamicTextCall?.semantics.text,
+      dynamicFlagProjection: nestedDynamicFlagProjection,
+      tableMemberText: nestedTableMemberTextCall?.semantics.text,
+      tableMemberFlagProjection: nestedTableMemberFlagProjection,
+    }));
+  check('B119 known local arithmetic is static 88 and never a preview override',
+    nestedKnownValue?.status === 'static'
+      && nestedKnownValue.type === 'number'
+      && nestedKnownValue.value === 88
+      && nestedKnownHasPreviewInput === false,
+    detail({ knownValue: nestedKnownValue, descriptor: nestedKnownDescriptor }));
+  check('B119 string and boolean controls use their actual call semantics without numeric descriptors',
+    nestedDynamicTextCall?.semantics.text?.expression === 'dynamicText'
+      && nestedDynamicTextCall.semantics.text?.type === 'identifier'
+      && nestedDynamicTextCall.semantics.text?.status === 'unknown'
+      && nestedDynamicTextCall.semantics.text?.numericExpression === undefined
+      && nestedDynamicFlagProjection?.value.expression === 'dynamicFlag'
+      && nestedDynamicFlagProjection.value.type === 'identifier'
+      && nestedDynamicFlagProjection.value.status === 'unknown'
+      && nestedDynamicFlagProjection.value.numericExpression === undefined,
+    detail({ text: nestedDynamicTextCall?.semantics.text, flag: nestedDynamicFlagProjection }));
+
+  const originalNumericRootSource = [
+    'local menu = { name = "OriginalNumericRoots", layer = 4 }',
+    'function menu.display()',
+    '  local input = runtimeWidth',
+    '  local alias = input',
+    '  local width = math.floor((alias - 24) / 2)',
+    '  local widthAlias = width',
+    '  local knownInput = 200',
+    '  local knownAlias = knownInput',
+    '  local knownWidth = math.floor((knownAlias - 24) / 2)',
+    '  menu.frame = Helper.createFrameHandle(menu, { x = width, y = widthAlias, width = knownWidth, height = 80 })',
+    'end',
+    'function menu.secondary()',
+    '  local input = runtimeWidth',
+    '  local alias = input',
+    '  local width = math.floor((alias - 24) / 2)',
+    '  menu.frame = Helper.createFrameHandle(menu, { x = width, width = 80, height = 60 })',
+    'end',
+  ].join('\n');
+  const originalNumericRootModel = buildX4UiCallModel(input(
+    originalNumericRootSource,
+    'selftest/b119-original-numeric-roots.lua',
+  ));
+  const originalNumericRootDescriptor = (name: string, functionName = 'menu.display'): Record<string, unknown> | undefined => {
+    const candidate = originalNumericRootModel.aliases.find(alias =>
+      alias.name === name && alias.context.name === functionName)?.value.numericExpression;
+    return candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate)
+      ? candidate as unknown as Record<string, unknown>
+      : undefined;
+  };
+  const originalNumericRootLeaf = (descriptor: unknown, expression: string): Record<string, unknown> | undefined => {
+    const seen = new Set<object>();
+    const visit = (candidate: unknown): Record<string, unknown> | undefined => {
+      if (candidate === null || typeof candidate !== 'object') return undefined;
+      const objectCandidate = candidate as object;
+      if (seen.has(objectCandidate)) return undefined;
+      seen.add(objectCandidate);
+      if (Array.isArray(candidate)) {
+        for (const child of candidate) {
+          const found = visit(child);
+          if (found) return found;
+        }
+        return undefined;
+      }
+      const record = candidate as Record<string, unknown>;
+      if (record.kind === 'preview-input' && record.expression === expression) return record;
+      for (const child of Object.values(record)) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    return visit(descriptor);
+  };
+  const originalNumericRootLeafOffset = (
+    descriptor: unknown,
+    expression: string,
+    boundary: 'start' | 'end',
+  ): number | undefined => {
+    const leaf = originalNumericRootLeaf(descriptor, expression);
+    const source = leaf?.source;
+    if (source === null || typeof source !== 'object' || Array.isArray(source)) return undefined;
+    const point = (source as Record<string, unknown>)[boundary];
+    if (point === null || typeof point !== 'object' || Array.isArray(point)) return undefined;
+    const offset = (point as Record<string, unknown>).offset;
+    return typeof offset === 'number' ? offset : undefined;
+  };
+  const originalNumericRootHasPreviewInput = (descriptor: unknown): boolean => {
+    const seen = new Set<object>();
+    const visit = (candidate: unknown): boolean => {
+      if (candidate === null || typeof candidate !== 'object') return false;
+      const objectCandidate = candidate as object;
+      if (seen.has(objectCandidate)) return false;
+      seen.add(objectCandidate);
+      if (Array.isArray(candidate)) return candidate.some(visit);
+      const record = candidate as Record<string, unknown>;
+      if (record.kind === 'preview-input') return true;
+      return Object.values(record).some(visit);
+    };
+    return visit(descriptor);
+  };
+  const originalNumericRootInputAliases = originalNumericRootModel.aliases.filter(alias =>
+    alias.name === 'input' || alias.name === 'alias');
+  const originalNumericRootRuntimeReads = [
+    ...originalNumericRootModel.aliases.filter(alias => alias.name === 'input'),
+  ].map(alias => alias.value);
+  const originalNumericRootWidth = originalNumericRootDescriptor('width');
+  const originalNumericRootWidthAlias = originalNumericRootDescriptor('widthAlias');
+  const originalNumericRootKnown = originalNumericRootModel.aliases.find(alias =>
+    alias.name === 'knownWidth' && alias.context.name === 'menu.display')?.value;
+  const originalNumericRootAliasDescriptorIsSourceExact = (alias: typeof originalNumericRootInputAliases[number]): boolean => {
+    const descriptor = alias.value.numericExpression;
+    if (descriptor === undefined) return true;
+    const leaf = originalNumericRootLeaf(descriptor, 'runtimeWidth');
+    return leaf !== undefined
+      && exactLocatedText(
+        originalNumericRootSource,
+        leaf as { expression?: string; source?: X4UiCallRecord['source'] },
+        'runtimeWidth',
+      );
+  };
+  check('B119 original scalar reads are captured once and deferred aliases materialize only for numeric consumers',
+    originalNumericRootInputAliases.length === 4
+      && originalNumericRootInputAliases.filter(alias => alias.context.name === 'menu.display').length === 2
+      && originalNumericRootInputAliases.filter(alias => alias.context.name === 'menu.secondary').length === 2
+      && originalNumericRootInputAliases.every(originalNumericRootAliasDescriptorIsSourceExact)
+      && originalNumericRootInputAliases.filter(alias => alias.name === 'input').every(alias => alias.value.expression === 'runtimeWidth')
+      && originalNumericRootInputAliases.filter(alias => alias.name === 'alias').every(alias => alias.value.expression === 'input')
+      && originalNumericRootRuntimeReads.every(value => value.location.start.offset >= 0)
+      && originalNumericRootWidth?.kind === 'math-call'
+      && originalNumericRootWidthAlias?.kind === 'math-call'
+      && originalNumericRootLeaf(originalNumericRootWidth, 'runtimeWidth') !== undefined
+      && originalNumericRootLeaf(originalNumericRootWidthAlias, 'runtimeWidth') !== undefined
+      && originalNumericRootLeaf(originalNumericRootWidth, 'alias') === undefined
+      && originalNumericRootLeaf(originalNumericRootWidth, 'width') === undefined
+      && originalNumericRootKnown?.status === 'static'
+      && originalNumericRootKnown.value === 88
+      && originalNumericRootHasPreviewInput(originalNumericRootKnown.numericExpression) === false,
+    detail({
+      inputAliases: originalNumericRootInputAliases,
+      width: originalNumericRootWidth,
+      widthAlias: originalNumericRootWidthAlias,
+      known: originalNumericRootKnown,
+    }));
+  const originalNumericRootInputSources = originalNumericRootInputAliases
+    .filter(alias => alias.name === 'input')
+    .map(alias => alias.value.location.start.offset);
+  check('B119 identical scalar alias spellings retain distinct source ranges and lexical contexts',
+    new Set(originalNumericRootInputSources).size === 2
+      && originalNumericRootInputAliases
+        .filter(alias => alias.name === 'alias')
+        .every(alias => originalNumericRootSource.slice(alias.source.start.offset, alias.source.end.offset) === 'alias')
+      && originalNumericRootInputAliases
+        .filter(alias => alias.name === 'input')
+        .every(alias => originalNumericRootSource.slice(alias.value.location.start.offset, alias.value.location.end.offset) === 'runtimeWidth')
+      && originalNumericRootInputAliases[0]?.context.source.start.offset !== originalNumericRootInputAliases[2]?.context.source.start.offset,
+    detail({ aliases: originalNumericRootInputAliases, runtimeReadOffsets: originalNumericRootInputSources }));
+
+  const originalNumericTableSource = [
+    'local menu = { name = "OriginalNumericTableRoots", layer = 4 }',
+    'function menu.display()',
+    '  local input = runtimeWidth',
+    '  local alias = input',
+    '  local source = { member = alias, ["string-key"] = alias, [3] = alias, alias, known = 200 }',
+    '  local tableAlias = source',
+    '  local tableCopy = tableAlias',
+    '  local memberInput = tableCopy.member',
+    '  local stringInput = tableCopy["string-key"]',
+    '  local numericInput = tableCopy[3]',
+    '  local positionalInput = tableCopy[1]',
+    '  local knownInput = tableCopy.known',
+    '  local memberWidth = math.floor((memberInput - 24) / 2)',
+    '  local stringWidth = math.floor((stringInput - 24) / 2)',
+    '  local numericWidth = math.floor((numericInput - 24) / 2)',
+    '  local positionalWidth = math.floor((positionalInput - 24) / 2)',
+    '  local knownWidth = math.floor((knownInput - 24) / 2)',
+    '  menu.frame = Helper.createFrameHandle(menu, { x = memberWidth, y = stringWidth, width = numericWidth, height = positionalWidth, layer = knownWidth })',
+    'end',
+  ].join('\n');
+  const originalNumericTableModel = buildX4UiCallModel(input(
+    originalNumericTableSource,
+    'selftest/b119-original-numeric-table-roots.lua',
+  ));
+  const originalNumericTableFrame = originalNumericTableModel.calls.find(candidate => candidate.name === 'createFrameHandle');
+  const originalNumericTableValues = ['x', 'y', 'width', 'height', 'layer'].map(name =>
+    originalNumericTableFrame?.semantics.properties?.find(propertyValue => propertyValue.name === name)?.value);
+  const originalNumericTableDescriptors = originalNumericTableValues.map(value => value?.numericExpression);
+  const originalNumericTableFieldDescriptors = originalNumericTableDescriptors
+    .map(descriptor => {
+      const found: Record<string, unknown>[] = [];
+      const visit = (candidate: unknown): void => {
+        if (candidate === null || typeof candidate !== 'object') return;
+        if (Array.isArray(candidate)) {
+          candidate.forEach(visit);
+          return;
+        }
+        const record = candidate as Record<string, unknown>;
+        if (record.kind === 'table-field') found.push(record);
+        Object.values(record).forEach(visit);
+      };
+      visit(descriptor);
+      return found;
+    });
+  const originalNumericTableFormNames = ['member', 'string-index', 'numeric-index', 'implicit-index'] as const;
+  originalNumericTableFormNames.forEach((form, index) => {
+    const fields = originalNumericTableFieldDescriptors[index] || [];
+    const value = originalNumericTableValues[index];
+    const descriptor = originalNumericTableDescriptors[index];
+    check(`B119 table ${form} preserves the original scalar root and source-owned field`,
+      value !== undefined
+        && descriptor !== undefined
+        && originalNumericRootLeaf(descriptor, 'runtimeWidth') !== undefined
+        && fields.length >= 1
+        && fields[0]?.tableSource !== undefined
+        && String(fields[0]?.property) === ['member', 'string-key', '3', '1'][index],
+      detail({ form, value, descriptor, fields }));
+  });
+  check('B119 known numeric table field remains static with zero preview-input leaves',
+    originalNumericTableValues[4]?.status === 'static'
+      && originalNumericTableValues[4]?.value === 88
+      && originalNumericRootHasPreviewInput(originalNumericTableDescriptors[4]) === false,
+    detail({ value: originalNumericTableValues[4], descriptor: originalNumericTableDescriptors[4] }));
+
+  const originalNumericMemberSource = [
+    'local menu = { name = "OriginalNumericMember", layer = 4 }',
+    'function menu.display()',
+    '  local width = math.floor((runtimeState.width - 24) / 2)',
+    '  local widthAlias = width',
+    '  menu.frame = Helper.createFrameHandle(menu, { width = width, height = widthAlias })',
+    'end',
+  ].join('\n');
+  const originalNumericMemberModel = buildX4UiCallModel(input(
+    originalNumericMemberSource,
+    'selftest/b119-original-numeric-member-root.lua',
+  ));
+  const originalNumericMemberFrame = originalNumericMemberModel.calls.find(candidate => candidate.name === 'createFrameHandle');
+  const originalNumericMemberWidth = originalNumericMemberFrame?.semantics.properties?.find(propertyValue => propertyValue.name === 'width')?.value;
+  const originalNumericMemberHeight = originalNumericMemberFrame?.semantics.properties?.find(propertyValue => propertyValue.name === 'height')?.value;
+  const originalNumericMemberWidthRootStart = originalNumericRootLeafOffset(originalNumericMemberWidth?.numericExpression, 'runtimeState.width', 'start');
+  const originalNumericMemberWidthRootEnd = originalNumericRootLeafOffset(originalNumericMemberWidth?.numericExpression, 'runtimeState.width', 'end');
+  check('B119 already-eligible runtime member reads can be numeric leaves without whole-expression overrides',
+    originalNumericMemberWidth?.numericExpression !== undefined
+      && originalNumericMemberHeight?.numericExpression !== undefined
+      && originalNumericRootLeaf(originalNumericMemberWidth?.numericExpression, 'runtimeState.width') !== undefined
+      && originalNumericRootLeaf(originalNumericMemberHeight?.numericExpression, 'runtimeState.width') !== undefined
+      && originalNumericMemberWidthRootStart !== undefined
+      && originalNumericMemberWidthRootEnd !== undefined
+      && originalNumericMemberSource.slice(originalNumericMemberWidthRootStart, originalNumericMemberWidthRootEnd) === 'runtimeState.width',
+    detail({ width: originalNumericMemberWidth, height: originalNumericMemberHeight }));
+
+  const originalNumericEscapedSource = [
+    'local menu = { name = "OriginalNumericEscaped", layer = 4 }',
+    'function menu.display()',
+    '  local input = runtimeWidth',
+    '  local source = { width = input }',
+    '  local tableAlias = source',
+    '  mutate(tableAlias)',
+    '  local width = math.floor((tableAlias.width - 24) / 2)',
+    '  menu.frame = Helper.createFrameHandle(menu, { width = width, height = 60 })',
+    'end',
+  ].join('\n');
+  const originalNumericEscapedModel = buildX4UiCallModel(input(
+    originalNumericEscapedSource,
+    'selftest/b119-original-numeric-escaped-root.lua',
+  ));
+  const originalNumericEscapedWidth = originalNumericEscapedModel.calls.find(candidate => candidate.name === 'createFrameHandle')
+    ?.semantics.properties?.find(propertyValue => propertyValue.name === 'width')?.value;
+  const originalNumericEscapedFinalWidthOffset = originalNumericEscapedSource.lastIndexOf('width');
+  check('B119 deferred table roots are unavailable after alias escape and do not become source-known',
+    originalNumericEscapedWidth !== undefined
+      && (originalNumericEscapedWidth.status === 'unknown' || originalNumericEscapedWidth.status === 'dynamic')
+      && originalNumericEscapedWidth.expression === 'width'
+      && originalNumericEscapedWidth.location.start.offset === originalNumericEscapedFinalWidthOffset
+      && originalNumericEscapedWidth.location.end.offset === originalNumericEscapedFinalWidthOffset + 'width'.length
+      && originalNumericEscapedSource.slice(
+        originalNumericEscapedWidth.location.start.offset,
+        originalNumericEscapedWidth.location.end.offset,
+      ) === 'width'
+      && originalNumericEscapedWidth.numericExpression === undefined
+      && originalNumericEscapedWidth.value === undefined,
+    detail({ width: originalNumericEscapedWidth, gaps: originalNumericEscapedModel.verificationGaps }));
+
   const overriddenMathSource = [
     'math = { floor = function(v) return 999 end }',
     'local replacedGlobal = math.floor(1.5)',
@@ -2492,6 +2990,1690 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
       invocations: localColorHelperModel.localInvocations,
     }));
 
+  const protectedCallbackSource = [
+    'local function decorate(row)',
+    '  row[1]:createText("helper", {})',
+    'end',
+    'local menu = { name = "ProtectedCallback", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function()',
+    '    local table = frame:addTable(1, { width = 80 })',
+    '    local row = table:addRow(false, {})',
+    '    row[1]:createText("direct", {})',
+    '    decorate(row)',
+    '  end)',
+    '  frame:display()',
+    'end',
+    'local function sibling()',
+    '  local siblingFrame = Helper.createFrameHandle(menu, { width = 90, height = 70 })',
+    '  pcall(function()',
+    '    siblingFrame:addTable(1, { width = 60 })',
+    '  end)',
+    '  siblingFrame:display()',
+    'end',
+  ].join('\n');
+  const protectedCallbackModel = buildX4UiCallModel(input(
+    protectedCallbackSource,
+    'selftest/protected-callback.lua',
+  ));
+  const protectedCallbackStart = protectedCallbackSource.indexOf('pcall(function()');
+  const protectedCallbackEnd = protectedCallbackSource.indexOf('  frame:display()', protectedCallbackStart);
+  const protectedCalls = protectedCallbackModel.calls.filter(candidate =>
+    candidate.source.start.offset >= protectedCallbackStart
+      && candidate.source.end.offset <= protectedCallbackEnd);
+  const protectedInvocations = protectedCallbackModel.localInvocations.filter(candidate =>
+    candidate.source.start.offset >= protectedCallbackStart
+      && candidate.source.end.offset <= protectedCallbackEnd);
+  const protectedBodyInvocations = protectedInvocations.filter(candidate => candidate.calleeExpression !== 'pcall');
+  check('B119 fail-first: immediate protected callback body is source-visible under display context',
+    protectedCalls.map(candidate => candidate.name).join(',') === 'addTable,addRow,createText'
+      && protectedInvocations.some(candidate => candidate.calleeExpression === 'pcall' && candidate.status === 'unsupported')
+      && protectedBodyInvocations.length === 1
+      && protectedBodyInvocations[0]?.calleeExpression === 'decorate'
+      && protectedBodyInvocations[0].status === 'supported'
+      && protectedCalls.every(candidate => candidate.context.name === 'display'
+        && candidate.context.branchPath.length === 1
+        && candidate.context.branchPath[0]?.reachability === 'conditional'
+        && candidate.context.branchPath[0]?.boundary.start.offset === protectedCallbackStart
+        && candidate.context.branchPath[0]?.boundary.end.offset === protectedCallbackEnd - 1
+        && candidate.enclosingStatement.kind !== 'unknown')
+      && protectedBodyInvocations[0]?.context.name === 'display'
+      && protectedBodyInvocations[0]?.context.branchPath.length === 1
+      && protectedCallbackModel.calls
+        .filter(candidate => candidate.context.name === 'sibling')
+        .every(candidate => candidate.context.name === 'sibling'),
+    detail({
+      protectedCallbackStart,
+      protectedCallbackEnd,
+      calls: protectedCalls,
+      invocations: protectedInvocations,
+      bodyInvocations: protectedBodyInvocations,
+      siblingCalls: protectedCallbackModel.calls.filter(candidate => candidate.context.name === 'sibling'),
+    }));
+
+  const protectedCallbackProbe = (sourceText: string, rel: string) => {
+    const model = buildX4UiCallModel(input(sourceText, rel));
+    const pcallStart = sourceText.indexOf('pcall(');
+    const bodyCalls = model.calls.filter(candidate => candidate.context.branchPath.some(segment =>
+      segment.boundary.start.offset === pcallStart));
+    const bodyInvocations = model.localInvocations.filter(candidate => candidate.context.branchPath.some(segment =>
+      segment.boundary.start.offset === pcallStart));
+    return { model, pcallStart, bodyCalls, bodyInvocations };
+  };
+
+  const protectedAuthorityVariants: readonly { label: string; source: string }[] = [
+    {
+      label: 'local direct pcall shadow',
+      source: [
+        'local menu = { name = "LocalPcall", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  local pcall = function(...) return true end',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'global direct pcall rebind',
+      source: [
+        'pcall = function(...) return true end',
+        'local menu = { name = "GlobalPcall", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'global pcall function declaration',
+      source: [
+        'function pcall(...) return true end',
+        'local menu = { name = "GlobalPcallFunction", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: '_G member pcall write',
+      source: [
+        '_G.pcall = function(...) return true end',
+        'local menu = { name = "GlobalMember", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: '_ENV member pcall write',
+      source: [
+        '_ENV.pcall = function(...) return true end',
+        'local menu = { name = "EnvMember", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: '_G static-index pcall write',
+      source: [
+        '_G["pcall"] = function(...) return true end',
+        'local menu = { name = "GlobalIndex", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: '_ENV static-index pcall write',
+      source: [
+        '_ENV["pcall"] = function(...) return true end',
+        'local menu = { name = "EnvIndex", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'dynamic _G index pcall write',
+      source: [
+        'local key = "pcall"',
+        '_G[key] = function(...) return true end',
+        'local menu = { name = "GlobalDynamicIndex", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'global environment replacement',
+      source: [
+        '_ENV = { pcall = function(...) return true end }',
+        'local menu = { name = "EnvReplacement", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'local environment replacement',
+      source: [
+        'local _ENV = { pcall = function(...) return true end }',
+        'local menu = { name = "LocalEnvReplacement", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'rawset global pcall write',
+      source: [
+        'rawset(_G, "pcall", function(...) return true end)',
+        'local menu = { name = "RawsetGlobal", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'rawset dynamic _ENV pcall write',
+      source: [
+        'local key = "pcall"',
+        'rawset(_ENV, key, function(...) return true end)',
+        'local menu = { name = "RawsetDynamic", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedAuthorityProbes = protectedAuthorityVariants.map((variant, index) => ({
+    ...variant,
+    probe: protectedCallbackProbe(variant.source, `selftest/protected-authority-${index}.lua`),
+  }));
+  check('B119 protected callbacks fail closed for local/global pcall authority rebinding and environment writes',
+    protectedAuthorityProbes.every(candidate => candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.probe.model.file.text === candidate.source)
+      && protectedAuthorityProbes.some(candidate => candidate.probe.model.verificationGaps.some(gap =>
+        gap.reason.includes('pcall') || gap.reason.includes('global environment'))),
+    detail(protectedAuthorityProbes.map(candidate => ({
+      label: candidate.label,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => gap.reason),
+    }))));
+
+  const protectedEnvironmentAliasVariants: readonly { label: string; source: string }[] = [
+    {
+      label: 'local _G alias member pcall write',
+      source: [
+        'local env = _G',
+        'env.pcall = function(...) return true end',
+        'local menu = { name = "AliasGlobalMember", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'local _ENV alias member pcall write',
+      source: [
+        'local env = _ENV',
+        'env.pcall = function(...) return true end',
+        'local menu = { name = "AliasEnvMember", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'environment alias chain index pcall write',
+      source: [
+        'local env = _G',
+        'local alias = env',
+        'alias["pcall"] = function(...) return true end',
+        'local menu = { name = "AliasChainIndex", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'assignment-created environment alias member pcall write',
+      source: [
+        'local env',
+        'env = _ENV',
+        'env.pcall = function(...) return true end',
+        'local menu = { name = "AssignedEnvMember", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'rawset environment alias pcall write',
+      source: [
+        'local env = _G',
+        'rawset(env, "pcall", function(...) return true end)',
+        'local menu = { name = "AliasRawset", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'pcall rebind through escaped environment argument',
+      source: [
+        'local function rebind(environment)',
+        '  environment.pcall = function(...) return true end',
+        'end',
+        'local env = _G',
+        'rebind(env)',
+        'local menu = { name = "EscapedEnvironment", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedEnvironmentAliasProbes = protectedEnvironmentAliasVariants.map((variant, index) => ({
+    ...variant,
+    probe: protectedCallbackProbe(variant.source, `selftest/protected-environment-alias-${index}.lua`),
+  }));
+  check('B119 protected callbacks fail closed after aliased or escaped global-environment pcall rebinding',
+    protectedEnvironmentAliasProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.probe.model.verificationGaps.some(gap =>
+        gap.reason.includes('pcall') || gap.reason.includes('global environment'))
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedEnvironmentAliasProbes.map(candidate => ({
+      label: candidate.label,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => gap.reason),
+    }))));
+
+  const staticRawgetReadSource = [
+    'local Helper = rawget(_G, "Helper")',
+    'local formatter = rawget(_G, "ConvertMoneyString")',
+    'local bridge = rawget(_G, "AI_Influence")',
+    'local menu = { name = "StaticRawgetRead", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function()',
+    '    frame:addTable(1, {})',
+    '  end)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const staticRawgetReadProbe = protectedCallbackProbe(
+    staticRawgetReadSource,
+    'selftest/protected-static-rawget-read.lua',
+  );
+  const staticRawgetReadGapLines = staticRawgetReadProbe.model.verificationGaps
+    .filter(gap => gap.source.start.line === 2 || gap.source.start.line === 3)
+    .map(gap => ({ line: gap.source.start.line, reason: gap.reason }));
+  check('B119 fail-first: parsed static-key unshadowed rawget reads do not poison protected pcall authority',
+    staticRawgetReadProbe.model.parsed === true
+      && staticRawgetReadProbe.bodyCalls.map(call => call.name).join(',') === 'addTable'
+      && staticRawgetReadProbe.bodyInvocations.length === 0
+      && staticRawgetReadGapLines.length === 2
+      && staticRawgetReadGapLines.every(gap => gap.reason.includes('Helper receiver rawget key')
+        && !gap.reason.includes('global environment'))
+      && !staticRawgetReadProbe.model.verificationGaps.some(gap => gap.reason.includes('global environment')
+        && gap.reason.includes('protected pcall authority'))
+      && staticRawgetReadProbe.model.file.text === staticRawgetReadSource,
+    detail({
+      parsed: staticRawgetReadProbe.model.parsed,
+      bodyCalls: staticRawgetReadProbe.bodyCalls.map(call => call.name),
+      bodyInvocations: staticRawgetReadProbe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      rawgetReadGaps: staticRawgetReadGapLines,
+      gaps: staticRawgetReadProbe.model.verificationGaps.map(gap => gap.reason),
+    }));
+
+  const protectedRawgetNegativeVariants: readonly { label: string; source: string }[] = [
+    {
+      label: 'dynamic rawget key',
+      source: [
+        'local key = "ConvertMoneyString"',
+        'local formatter = rawget(_G, key)',
+        'local menu = { name = "DynamicRawgetKey", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'shadowed rawget',
+      source: [
+        'local rawget = function() return nil end',
+        'local formatter = rawget(_G, "ConvertMoneyString")',
+        'local menu = { name = "ShadowedRawget", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'extra rawget arguments',
+      source: [
+        'local formatter = rawget(_G, "ConvertMoneyString", nil)',
+        'local menu = { name = "ExtraRawgetArguments", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'non-rawget environment call',
+      source: [
+        'local formatter = get(_G, "ConvertMoneyString")',
+        'local menu = { name = "OtherEnvironmentCall", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'rawset environment write',
+      source: [
+        'rawset(_G, "pcall", function(...) return true end)',
+        'local menu = { name = "RawsetEnvironmentWrite", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'actual environment escape',
+      source: [
+        'local env = _G',
+        'consume(env)',
+        'local menu = { name = "ActualEnvironmentEscape", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedRawgetNegativeProbes = protectedRawgetNegativeVariants.map((variant, index) => ({
+    ...variant,
+    probe: protectedCallbackProbe(variant.source, `selftest/protected-static-rawget-negative-${index}.lua`),
+  }));
+  check('B119 static rawget authority exception keeps dynamic/shadowed/invalid reads, other calls, rawset, and escapes fail closed',
+    protectedRawgetNegativeProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.probe.model.verificationGaps.some(gap =>
+        gap.reason.includes('pcall') || gap.reason.includes('global environment'))
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedRawgetNegativeProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({ line: gap.source.start.line, reason: gap.reason })),
+    }))));
+
+  const protectedRawgetRebindingBody = [
+    'local helperAlias = rawget(_G, "Helper")',
+    'local menu = { name = "RawgetRebinding", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function() frame:addTable(1, {}) end)',
+    '  frame:display()',
+    'end',
+  ];
+  const protectedRawgetRebindingVariants: readonly { label: string; prefix: readonly string[] }[] = [
+    {
+      label: 'same-file global rawget assignment',
+      prefix: ['rawget = function(...) return nil end'],
+    },
+    {
+      label: 'same-file global rawget function declaration',
+      prefix: ['function rawget(...) return nil end'],
+    },
+    {
+      label: '_G member rawget write',
+      prefix: ['_G.rawget = function(...) return nil end'],
+    },
+    {
+      label: '_G static-index rawget write',
+      prefix: ["_G['rawget'] = function(...) return nil end"],
+    },
+    {
+      label: 'aliased environment member rawget write',
+      prefix: [
+        'local env = _G',
+        'env.rawget = function(...) return nil end',
+      ],
+    },
+    {
+      label: 'aliased environment dynamic rawget write',
+      prefix: [
+        'local env = _G',
+        'local key = "rawget"',
+        'env[key] = function(...) return nil end',
+      ],
+    },
+    {
+      label: 'rawset global rawget write',
+      prefix: ['rawset(_G, "rawget", function(...) return nil end)'],
+    },
+    {
+      label: 'rawset global dynamic rawget write',
+      prefix: [
+        'local key = "rawget"',
+        'rawset(_G, key, function(...) return nil end)',
+      ],
+    },
+    {
+      label: 'rawset aliased environment rawget write',
+      prefix: [
+        'local env = _G',
+        'rawset(env, "rawget", function(...) return nil end)',
+      ],
+    },
+    {
+      label: 'rawset aliased environment dynamic rawget write',
+      prefix: [
+        'local env = _G',
+        'local key = "rawget"',
+        'rawset(env, key, function(...) return nil end)',
+      ],
+    },
+  ];
+  const protectedRawgetRebindingProbes = protectedRawgetRebindingVariants.map((variant, index) => {
+    const source = [...variant.prefix, ...protectedRawgetRebindingBody].join('\n');
+    return {
+      ...variant,
+      source,
+      probe: protectedCallbackProbe(source, `selftest/protected-rawget-rebinding-${index}.lua`),
+    };
+  });
+  check('B119 pre-scan rejects rawget rebinding before static reads or exact Helper aliases can bypass authority checks',
+    protectedRawgetRebindingProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.probe.model.verificationGaps.some(gap =>
+        gap.reason.includes('rawget')
+        && gap.reason.includes('protected pcall authority cannot be verified'))
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedRawgetRebindingProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({ line: gap.source.start.line, reason: gap.reason })),
+    }))));
+
+  const protectedRawsetRebindingBody = [
+    'local helperAlias = rawget(_G, "Helper")',
+    'rawset(_G, "safe", {})',
+    'local menu = { name = "RawsetRebinding", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function() frame:addTable(1, {}) end)',
+    '  frame:display()',
+    'end',
+  ];
+  const protectedRawsetRebindingVariants: readonly { label: string; prefix: readonly string[] }[] = [
+    {
+      label: 'same-file global rawset assignment',
+      prefix: ['rawset = function(...) return nil end'],
+    },
+    {
+      label: 'same-file global rawset function declaration',
+      prefix: ['function rawset(...) return nil end'],
+    },
+    {
+      label: '_G member rawset write',
+      prefix: ['_G.rawset = function(...) return nil end'],
+    },
+    {
+      label: '_G static-index rawset write',
+      prefix: ["_G['rawset'] = function(...) return nil end"],
+    },
+    {
+      label: 'aliased environment member rawset write',
+      prefix: [
+        'local env = _G',
+        'env.rawset = function(...) return nil end',
+      ],
+    },
+    {
+      label: 'aliased environment dynamic rawset write',
+      prefix: [
+        'local env = _G',
+        'local key = "rawset"',
+        'env[key] = function(...) return nil end',
+      ],
+    },
+    {
+      label: 'rawset global rawset write',
+      prefix: ['rawset(_G, "rawset", function(...) return nil end)'],
+    },
+    {
+      label: 'rawset global dynamic rawset write',
+      prefix: [
+        'local key = "rawset"',
+        'rawset(_G, key, function(...) return nil end)',
+      ],
+    },
+    {
+      label: 'rawset aliased environment rawset write',
+      prefix: [
+        'local env = _G',
+        'rawset(env, "rawset", function(...) return nil end)',
+      ],
+    },
+    {
+      label: 'rawset aliased environment dynamic rawset write',
+      prefix: [
+        'local env = _G',
+        'local key = "rawset"',
+        'rawset(env, key, function(...) return nil end)',
+      ],
+    },
+  ];
+  const protectedRawsetRebindingProbes = protectedRawsetRebindingVariants.map((variant, index) => {
+    const source = [...variant.prefix, ...protectedRawsetRebindingBody].join('\n');
+    return {
+      ...variant,
+      source,
+      probe: protectedCallbackProbe(source, `selftest/protected-rawset-rebinding-${index}.lua`),
+    };
+  });
+  check('B119 pre-scan rejects rawset rebinding before rawset mutation classification can preserve callback admission',
+    protectedRawsetRebindingProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.probe.model.verificationGaps.some(gap =>
+        gap.reason.includes('global rawset')
+        && gap.reason.includes('protected pcall authority cannot be verified'))
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedRawsetRebindingProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({ line: gap.source.start.line, reason: gap.reason })),
+    }))));
+
+  const protectedRawsetShadowSource = [
+    'local rawset = function(...) return nil end',
+    'local helperAlias = rawget(_G, "Helper")',
+    'rawset(_G, "safe", {})',
+    'local menu = { name = "ShadowedRawset", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function() frame:addTable(1, {}) end)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const protectedRawsetShadowProbe = protectedCallbackProbe(
+    protectedRawsetShadowSource,
+    'selftest/protected-shadowed-rawset.lua',
+  );
+  check('B119 shadowed rawset cannot preserve protected callback admission',
+    protectedRawsetShadowProbe.model.parsed === true
+      && protectedRawsetShadowProbe.bodyCalls.length === 0
+      && protectedRawsetShadowProbe.bodyInvocations.length === 0
+      && protectedRawsetShadowProbe.model.verificationGaps.some(gap =>
+        gap.reason.includes('protected pcall authority cannot be verified'))
+      && protectedRawsetShadowProbe.model.file.text === protectedRawsetShadowSource,
+    detail({
+      parsed: protectedRawsetShadowProbe.model.parsed,
+      bodyCalls: protectedRawsetShadowProbe.bodyCalls.map(call => call.name),
+      bodyInvocations: protectedRawsetShadowProbe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: protectedRawsetShadowProbe.model.verificationGaps.map(gap => ({ line: gap.source.start.line, reason: gap.reason })),
+    }));
+
+  const rawsetValueEscapeSource = [
+    'local holder = {}',
+    'rawset(holder, "env", _G)',
+    'holder.env.pcall = function(fn) return false end',
+    'local menu = { name = "RawsetValueEscape", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function() frame:addTable(1, {}) end)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const rawsetValueEscapeProbe = protectedCallbackProbe(
+    rawsetValueEscapeSource,
+    'selftest/protected-rawset-value-escape.lua',
+  );
+  check('B119 rawset value environment escape fails closed with an explicit authority gap',
+    rawsetValueEscapeProbe.model.parsed === true
+      && rawsetValueEscapeProbe.bodyCalls.length === 0
+      && rawsetValueEscapeProbe.bodyInvocations.length === 0
+      && rawsetValueEscapeProbe.model.verificationGaps.some(gap =>
+        gap.reason === 'global environment _G escapes through a rawset value argument; protected pcall authority cannot be verified')
+      && rawsetValueEscapeProbe.model.file.text === rawsetValueEscapeSource,
+    detail({
+      parsed: rawsetValueEscapeProbe.model.parsed,
+      bodyCalls: rawsetValueEscapeProbe.bodyCalls.map(call => call.name),
+      bodyInvocations: rawsetValueEscapeProbe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: rawsetValueEscapeProbe.model.verificationGaps.map(gap => gap.reason),
+    }));
+
+  const protectedEnvironmentEscapeVariants: readonly { label: string; source: string }[] = [
+    {
+      label: 'direct table constructor environment member write',
+      source: [
+        'local holder = { env = _G }',
+        'holder.env.pcall = function(fn) return false end',
+        'local menu = { name = "DirectTableEnvironment", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'nested aliased table constructor environment member write',
+      source: [
+        'local env = _G',
+        'local holder = { nested = { env = env } }',
+        'local alias = holder.nested',
+        'alias.env.pcall = function(fn) return false end',
+        'local menu = { name = "NestedAliasedTableEnvironment", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'non-identifier environment storage assignment',
+      source: [
+        'local holder = {}',
+        'holder.env = _G',
+        'holder.env.pcall = function(fn) return false end',
+        'local menu = { name = "AssignedTableEnvironment", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedEnvironmentEscapeProbes = protectedEnvironmentEscapeVariants.map((variant, index) => ({
+    ...variant,
+    probe: protectedCallbackProbe(variant.source, `selftest/protected-environment-escape-${index}.lua`),
+  }));
+  check('B119 protected callbacks fail closed for table-constructor and non-identifier environment escapes',
+    protectedEnvironmentEscapeProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.probe.model.verificationGaps.some(gap =>
+        gap.reason.includes('global environment') && gap.reason.includes('escape'))
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedEnvironmentEscapeProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => gap.reason),
+    }))));
+
+  const protectedTableKeyEscapeVariants: readonly {
+    label: string;
+    environment: '_G' | 'env';
+    source: string;
+  }[] = [
+    {
+      label: 'direct global environment table key',
+      environment: '_G',
+      source: [
+        'local carrier = { [_G] = true }',
+        'unknownSink(carrier)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function()',
+        '    frame:addTable(2, {})',
+        '  end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'nested aliased global environment table key',
+      environment: 'env',
+      source: [
+        'local env = _G',
+        'local carrier = { [true] = { [env] = true } }',
+        'unknownSink(carrier)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function()',
+        '    frame:addTable(2, {})',
+        '  end)',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedTableKeyEscapeProbes = protectedTableKeyEscapeVariants.map((variant, index) => {
+    const probe = protectedCallbackProbe(variant.source, `selftest/protected-table-key-escape-${index}.lua`);
+    const authorityGap = probe.model.verificationGaps.find(gap =>
+      gap.reason === `global environment ${variant.environment} escapes through a table constructor; protected pcall authority cannot be verified`);
+    return { ...variant, probe, authorityGap };
+  });
+  check('B119 fail-first: table-constructor environment keys block later protected callback modeling with exact source gaps',
+    protectedTableKeyEscapeProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.authorityGap?.source.file === `selftest/protected-table-key-escape-${protectedTableKeyEscapeProbes.indexOf(candidate)}.lua`
+      && candidate.authorityGap.source.start.offset === candidate.probe.pcallStart
+      && candidate.authorityGap.source.end.offset > candidate.authorityGap.source.start.offset
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedTableKeyEscapeProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      authorityGap: candidate.authorityGap,
+      gaps: candidate.probe.model.verificationGaps.map(gap => gap.reason),
+    }))));
+
+  const protectedAdditionalAuthorityVariants: readonly {
+    label: string;
+    expectedReason: string;
+    source: string;
+  }[] = [
+    {
+      label: 'direct indexed assignment environment key',
+      expectedReason: 'global environment _G escapes through an indexed expression key; protected pcall authority cannot be verified',
+      source: [
+        'local carrier = {}',
+        'carrier[_G] = true',
+        'unknownSink(carrier)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(2, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'aliased indexed assignment environment key',
+      expectedReason: 'global environment env escapes through an indexed expression key; protected pcall authority cannot be verified',
+      source: [
+        'local env = _G',
+        'local carrier = {}',
+        'carrier[env] = true',
+        'unknownSink(carrier)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(2, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'local lexical _ENV binding',
+      expectedReason: '_ENV is locally replaced; global callback authority is unavailable',
+      source: [
+        'local menu = {}',
+        'function menu.display()',
+        '  local _ENV = {}',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(2, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'function-parameter lexical _ENV binding',
+      expectedReason: '_ENV is locally bound as a function parameter; global callback authority is unavailable',
+      source: [
+        'local menu = {}',
+        'function menu.display(_ENV)',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(2, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'numeric-loop lexical _ENV binding',
+      expectedReason: '_ENV is locally bound as a loop variable; global callback authority is unavailable',
+      source: [
+        'local menu = {}',
+        'function menu.display()',
+        '  for _ENV = 1, 1 do',
+        '    local frame = Helper.createFrameHandle(menu, {})',
+        '    pcall(function() frame:addTable(2, {}) end)',
+        '  end',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'generic-loop lexical _ENV binding',
+      expectedReason: '_ENV is locally bound as a loop variable; global callback authority is unavailable',
+      source: [
+        'local menu = {}',
+        'function menu.display()',
+        '  for _ENV in pairs({}) do',
+        '    local frame = Helper.createFrameHandle(menu, {})',
+        '    pcall(function() frame:addTable(2, {}) end)',
+        '  end',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'direct global environment publication',
+      expectedReason: 'global environment _G escapes through nonlocal identifier publishedEnvironment; protected pcall authority cannot be verified',
+      source: [
+        'publishedEnvironment = _G',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(2, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'aliased global environment publication',
+      expectedReason: 'global environment env escapes through nonlocal identifier publishedEnvironment; protected pcall authority cannot be verified',
+      source: [
+        'local env = _G',
+        'publishedEnvironment = env',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(2, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedAdditionalAuthorityProbes = protectedAdditionalAuthorityVariants.map((variant, index) => {
+    const rel = `selftest/protected-additional-authority-${index}.lua`;
+    const probe = protectedCallbackProbe(variant.source, rel);
+    const authorityGap = probe.model.verificationGaps.find(gap => gap.reason === variant.expectedReason);
+    return { ...variant, rel, probe, authorityGap };
+  });
+  check('B119 fail-first: indexed keys, lexical _ENV bindings, and nonlocal environment publication block protected callback modeling',
+    protectedAdditionalAuthorityProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.authorityGap?.source.file === candidate.rel
+      && candidate.authorityGap.source.start.offset === candidate.probe.pcallStart
+      && candidate.authorityGap.source.end.offset > candidate.authorityGap.source.start.offset
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedAdditionalAuthorityProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      authorityGap: candidate.authorityGap,
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({
+        line: gap.source.start.line,
+        startOffset: gap.source.start.offset,
+        reason: gap.reason,
+      })),
+    }))));
+
+  const protectedDeferredAuthorityVariants: readonly {
+    label: string;
+    expectedReason: string;
+    source: string;
+  }[] = [
+    {
+      label: 'deferred local opaque capture',
+      expectedReason: 'global environment env escapes through a call; protected pcall authority cannot be verified',
+      source: [
+        'local env',
+        'local function leak()',
+        '  unknownSink(env)',
+        'end',
+        'env = _G',
+        'leak()',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'deferred local environment rebind',
+      expectedReason: 'env.pcall may rebind global pcall through an aliased global environment; protected pcall authority cannot be verified',
+      source: [
+        'local env',
+        'local function rebind()',
+        '  env.pcall = function(...) return true end',
+        'end',
+        'env = _G',
+        'rebind()',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'logical global environment call argument',
+      expectedReason: 'global environment _G escapes through a call; protected pcall authority cannot be verified',
+      source: [
+        'unknownSink(flag and _G or nil)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'logical global environment returned from local function',
+      expectedReason: 'global environment _G escapes through a return; protected pcall authority cannot be verified',
+      source: [
+        'local function leak()',
+        '  return flag and _G or nil',
+        'end',
+        'unknownSink(leak())',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'logical global environment local alias',
+      expectedReason: 'global environment env escapes through a call; protected pcall authority cannot be verified',
+      source: [
+        'local env = flag and _G or nil',
+        'unknownSink(env)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'logical global environment indexed key',
+      expectedReason: 'global environment _G escapes through an indexed expression key; protected pcall authority cannot be verified',
+      source: [
+        'local carrier = {}',
+        'carrier[flag and _G or nil] = true',
+        'unknownSink(carrier)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'logical global environment table-constructor key',
+      expectedReason: 'global environment _G escapes through a table constructor; protected pcall authority cannot be verified',
+      source: [
+        'local carrier = { [flag and _G or nil] = true }',
+        'unknownSink(carrier)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'canonical global self-reference member and index forms',
+      expectedReason: 'global environment _G escapes through a call; protected pcall authority cannot be verified',
+      source: [
+        'unknownSink(_G._G)',
+        'unknownSink(_G["_G"])',
+        'unknownSink(_ENV._G)',
+        'unknownSink(_ENV["_G"])',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'canonical global self-reference rawget forms',
+      expectedReason: 'global environment _G escapes through a call; protected pcall authority cannot be verified',
+      source: [
+        'unknownSink(rawget(_G, "_G"))',
+        'unknownSink(rawget(_ENV, "_G"))',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(1, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedDeferredAuthorityProbes = protectedDeferredAuthorityVariants.map((variant, index) => {
+    const rel = `selftest/protected-deferred-authority-${index}.lua`;
+    const probe = protectedCallbackProbe(variant.source, rel);
+    const authorityGap = probe.model.verificationGaps.find(gap => gap.reason === variant.expectedReason);
+    return { ...variant, rel, probe, authorityGap };
+  });
+  check('B119 fail-first: deferred captures, logical environment flow, table/index keys, and canonical self-reference block protected callback modeling with exact gaps',
+    protectedDeferredAuthorityProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0
+      && candidate.authorityGap?.source.file === candidate.rel
+      && candidate.authorityGap.source.start.offset === candidate.probe.pcallStart
+      && candidate.authorityGap.source.end.offset > candidate.authorityGap.source.start.offset
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedDeferredAuthorityProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      authorityGap: candidate.authorityGap,
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({
+        line: gap.source.start.line,
+        startOffset: gap.source.start.offset,
+        reason: gap.reason,
+      })),
+    }))));
+
+  const protectedComposedAuthorityBody = [
+    'local menu = {}',
+    'function menu.display()',
+    '  local frame = Helper.createFrameHandle(menu, {})',
+    '  pcall(function() frame:addTable(1, {}) end)',
+    'end',
+  ].join('\n');
+  const protectedComposedAuthorityProbe = (sourceText: string, rel: string) => {
+    const model = buildX4UiCallModel(input(sourceText, rel));
+    const protectedCallExpression = 'pcall(function() frame:addTable(1, {}) end)';
+    const pcallStart = sourceText.lastIndexOf(protectedCallExpression);
+    const pcallEnd = pcallStart + protectedCallExpression.length;
+    const protectedBodyCalls = model.calls.filter(candidate => candidate.context.branchPath.some(segment =>
+      segment.boundary.start.offset === pcallStart));
+    const protectedBodyInvocations = model.localInvocations.filter(candidate => candidate.context.branchPath.some(segment =>
+      segment.boundary.start.offset === pcallStart));
+    const authorityGap = model.verificationGaps.find(gap => gap.source.file === rel
+      && gap.source.start.offset === pcallStart
+      && gap.source.end.offset === pcallEnd
+      && gap.reason.includes('protected pcall authority'));
+    return { model, pcallStart, pcallEnd, protectedBodyCalls, protectedBodyInvocations, authorityGap };
+  };
+
+  const protectedComposedAuthorityVariants: readonly { label: string; prefix: string }[] = [
+    {
+      label: 'reproduced nested member assignment',
+      prefix: '_G._G.pcall = function(...) return true end',
+    },
+    {
+      label: 'reproduced nested index assignment',
+      prefix: '_G["_G"]["pcall"] = function(...) return true end',
+    },
+    {
+      label: 'reproduced lexical environment member assignment',
+      prefix: '_ENV._G.pcall = function(...) return true end',
+    },
+    {
+      label: 'reproduced nested member declaration',
+      prefix: 'function _G._G.pcall(...) return true end',
+    },
+    {
+      label: 'nested member assignment through an environment alias',
+      prefix: [
+        'local env = _G',
+        'env._G.pcall = function(...) return true end',
+      ].join('\n'),
+    },
+    {
+      label: 'nested index assignment through an environment alias',
+      prefix: [
+        'local env = _G',
+        'env["_G"]["pcall"] = function(...) return true end',
+      ].join('\n'),
+    },
+    {
+      label: 'nested rawget assignment',
+      prefix: 'rawget(rawget(_G, "_G"), "_G").pcall = function(...) return true end',
+    },
+    {
+      label: 'logical nested-member assignment receiver',
+      prefix: '(flag and _G._G or _ENV).pcall = function(...) return true end',
+    },
+    {
+      label: 'nested member environment escape',
+      prefix: 'unknownSink(_G._G._G)',
+    },
+    {
+      label: 'nested index environment escape',
+      prefix: 'unknownSink(_G["_G"]["_G"])',
+    },
+    {
+      label: 'nested rawget environment escape',
+      prefix: 'unknownSink(rawget(_G._G, "_G"))',
+    },
+    {
+      label: 'logical nested-member environment escape',
+      prefix: 'unknownSink(flag and _G._G or nil)',
+    },
+    {
+      label: 'aliased nested-member environment escape',
+      prefix: [
+        'local env = _G',
+        'unknownSink(env._G._G)',
+      ].join('\n'),
+    },
+    {
+      label: 'aliased nested-rawget environment escape',
+      prefix: [
+        'local env = _G',
+        'unknownSink(rawget(env._G, "_G"))',
+      ].join('\n'),
+    },
+  ];
+  const protectedComposedAuthorityProbes = protectedComposedAuthorityVariants.map((variant, index) => {
+    const rel = `selftest/protected-composed-authority-${index}.lua`;
+    const source = `${variant.prefix}\n${protectedComposedAuthorityBody}`;
+    const probe = protectedComposedAuthorityProbe(source, rel);
+    const repeated = protectedComposedAuthorityProbe(source, rel).model;
+    return { ...variant, rel, source, probe, repeated };
+  });
+  check('B119 independent composed environment receivers reject assignments, declarations, and escapes with exact protected-call gaps',
+    protectedComposedAuthorityProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.pcallStart >= 0
+      && candidate.probe.pcallEnd === candidate.source.length - '\nend'.length
+      && candidate.probe.protectedBodyCalls.length === 0
+      && candidate.probe.protectedBodyInvocations.length === 0
+      && candidate.probe.authorityGap?.source.file === candidate.rel
+      && candidate.probe.authorityGap.source.sourcePath === `fixture://${candidate.rel}`
+      && candidate.probe.authorityGap.source.start.offset === candidate.probe.pcallStart
+      && candidate.probe.authorityGap.source.end.offset === candidate.probe.pcallEnd
+      && candidate.probe.authorityGap.source.end.offset > candidate.probe.authorityGap.source.start.offset
+      && candidate.probe.model.file.text === candidate.source
+      && JSON.stringify(candidate.probe.model) === JSON.stringify(candidate.repeated)),
+    detail(protectedComposedAuthorityProbes.map(candidate => ({
+      label: candidate.label,
+      rel: candidate.rel,
+      parsed: candidate.probe.model.parsed,
+      pcallStart: candidate.probe.pcallStart,
+      pcallEnd: candidate.probe.pcallEnd,
+      protectedBodyCalls: candidate.probe.protectedBodyCalls.map(call => call.name),
+      protectedBodyInvocations: candidate.probe.protectedBodyInvocations.map(invocation => invocation.calleeExpression),
+      authorityGap: candidate.probe.authorityGap,
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({
+        startOffset: gap.source.start.offset,
+        endOffset: gap.source.end.offset,
+        reason: gap.reason,
+      })),
+    }))));
+
+  const protectedComposedAuthorityControls: readonly { label: string; prefix: string }[] = [
+    {
+      label: 'ordinary member read',
+      prefix: 'unknownSink(_G.Helper)',
+    },
+    {
+      label: 'ordinary indexed read',
+      prefix: 'unknownSink(_ENV["Helper"])',
+    },
+    {
+      label: 'ordinary static rawget read',
+      prefix: 'unknownSink(rawget(_G, "Helper"))',
+    },
+    {
+      label: 'ordinary formatter rawget read',
+      prefix: 'unknownSink(rawget(_G, "ConvertMoneyString"))',
+    },
+  ];
+  const protectedComposedAuthorityControlProbes = protectedComposedAuthorityControls.map((variant, index) => {
+    const rel = `selftest/protected-composed-authority-control-${index}.lua`;
+    const source = `${variant.prefix}\n${protectedComposedAuthorityBody}`;
+    const probe = protectedComposedAuthorityProbe(source, rel);
+    const repeated = protectedComposedAuthorityProbe(source, rel).model;
+    return { ...variant, rel, source, probe, repeated };
+  });
+  check('B119 composed-environment controls admit ordinary fields and static reads without authority overblocking',
+    protectedComposedAuthorityControlProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.pcallStart >= 0
+      && candidate.probe.pcallEnd === candidate.source.length - '\nend'.length
+      && candidate.probe.protectedBodyCalls.map(call => call.name).join(',') === 'addTable'
+      && candidate.probe.protectedBodyInvocations.length === 0
+      && !candidate.probe.model.verificationGaps.some(gap => gap.reason.includes('protected pcall authority'))
+      && candidate.probe.model.file.text === candidate.source
+      && JSON.stringify(candidate.probe.model) === JSON.stringify(candidate.repeated)),
+    detail(protectedComposedAuthorityControlProbes.map(candidate => ({
+      label: candidate.label,
+      rel: candidate.rel,
+      parsed: candidate.probe.model.parsed,
+      protectedBodyCalls: candidate.probe.protectedBodyCalls.map(call => call.name),
+      protectedBodyInvocations: candidate.probe.protectedBodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({
+        startOffset: gap.source.start.offset,
+        endOffset: gap.source.end.offset,
+        reason: gap.reason,
+      })),
+    }))));
+
+  const protectedEnvironmentDepthVariants = [16, 17, 20].flatMap(depth => {
+    const selfReference = `_G${'._G'.repeat(depth)}`;
+    return [
+      {
+        label: `environment escape at depth ${depth}`,
+        prefix: `unknownSink(${selfReference})`,
+      },
+      {
+        label: `assignment receiver at depth ${depth}`,
+        prefix: `${selfReference}.pcall = function(...) return true end`,
+      },
+      {
+        label: `function declaration receiver at depth ${depth}`,
+        prefix: `function ${selfReference}.pcall(...) return true end`,
+      },
+    ];
+  });
+  const protectedEnvironmentDepthProbes = protectedEnvironmentDepthVariants.map((variant, index) => {
+    const rel = `selftest/protected-environment-depth-${index}.lua`;
+    const source = `${variant.prefix}\n${protectedComposedAuthorityBody}`;
+    const probe = protectedComposedAuthorityProbe(source, rel);
+    const repeated = protectedComposedAuthorityProbe(source, rel).model;
+    return { ...variant, rel, source, probe, repeated };
+  });
+  check('B119 bounded environment identity depth fails closed for escape and assignment/declaration receivers at limit, limit+1, and deep inputs',
+    protectedEnvironmentDepthProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.pcallStart >= 0
+      && candidate.probe.pcallEnd === candidate.source.length - '\nend'.length
+      && candidate.probe.protectedBodyCalls.length === 0
+      && candidate.probe.protectedBodyInvocations.length === 0
+      && candidate.probe.authorityGap?.source.file === candidate.rel
+      && candidate.probe.authorityGap.source.sourcePath === `fixture://${candidate.rel}`
+      && candidate.probe.authorityGap.source.start.offset === candidate.probe.pcallStart
+      && candidate.probe.authorityGap.source.end.offset === candidate.probe.pcallEnd
+      && candidate.probe.authorityGap.source.end.offset > candidate.probe.authorityGap.source.start.offset
+      && candidate.probe.model.file.text === candidate.source
+      && JSON.stringify(candidate.probe.model) === JSON.stringify(candidate.repeated)),
+    detail(protectedEnvironmentDepthProbes.map(candidate => ({
+      label: candidate.label,
+      rel: candidate.rel,
+      parsed: candidate.probe.model.parsed,
+      pcallStart: candidate.probe.pcallStart,
+      pcallEnd: candidate.probe.pcallEnd,
+      protectedBodyCalls: candidate.probe.protectedBodyCalls.map(call => call.name),
+      protectedBodyInvocations: candidate.probe.protectedBodyInvocations.map(invocation => invocation.calleeExpression),
+      authorityGap: candidate.probe.authorityGap,
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({
+        startOffset: gap.source.start.offset,
+        endOffset: gap.source.end.offset,
+        reason: gap.reason,
+      })),
+    }))));
+
+  const protectedEnvironmentDepthControls = [
+    {
+      label: 'deep ordinary member read',
+      prefix: `unknownSink(_G${'.Helper'.repeat(20)})`,
+    },
+    {
+      label: 'deep ordinary indexed read',
+      prefix: `unknownSink(_ENV${'["Helper"]'.repeat(20)})`,
+    },
+    {
+      label: 'deep ordinary member assignment receiver',
+      prefix: `_G${'.Helper'.repeat(20)}.pcall = function(...) return true end`,
+    },
+    {
+      label: 'deep ordinary member declaration receiver',
+      prefix: `function _G${'.Helper'.repeat(20)}.pcall(...) return true end`,
+    },
+  ];
+  const protectedEnvironmentDepthControlProbes = protectedEnvironmentDepthControls.map((variant, index) => {
+    const rel = `selftest/protected-environment-depth-control-${index}.lua`;
+    const source = `${variant.prefix}\n${protectedComposedAuthorityBody}`;
+    const probe = protectedComposedAuthorityProbe(source, rel);
+    const repeated = protectedComposedAuthorityProbe(source, rel).model;
+    return { ...variant, rel, source, probe, repeated };
+  });
+  check('B119 deep ordinary fields do not recurse into unsupported properties or poison protected callback authority',
+    protectedEnvironmentDepthControlProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.pcallStart >= 0
+      && candidate.probe.pcallEnd === candidate.source.length - '\nend'.length
+      && candidate.probe.protectedBodyCalls.map(call => call.name).join(',') === 'addTable'
+      && candidate.probe.protectedBodyInvocations.length === 0
+      && !candidate.probe.model.verificationGaps.some(gap => gap.reason.includes('protected pcall authority'))
+      && candidate.probe.model.file.text === candidate.source
+      && JSON.stringify(candidate.probe.model) === JSON.stringify(candidate.repeated)),
+    detail(protectedEnvironmentDepthControlProbes.map(candidate => ({
+      label: candidate.label,
+      rel: candidate.rel,
+      parsed: candidate.probe.model.parsed,
+      protectedBodyCalls: candidate.probe.protectedBodyCalls.map(call => call.name),
+      protectedBodyInvocations: candidate.probe.protectedBodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({
+        startOffset: gap.source.start.offset,
+        endOffset: gap.source.end.offset,
+        reason: gap.reason,
+      })),
+    }))));
+
+  const protectedDeferredAuthorityControls: readonly { label: string; source: string }[] = [
+    {
+      label: 'harmless deferred local',
+      source: [
+        'local env',
+        'local function safe()',
+        '  unknownSink(env)',
+        'end',
+        'safe()',
+        'env = {}',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(2, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'statically non-environment logical expression',
+      source: [
+        'unknownSink(flag and 1 or nil)',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(3, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'ordinary environment field and safe rawget reads',
+      source: [
+        'unknownSink(_G.Helper)',
+        'unknownSink(_ENV.Helper)',
+        'unknownSink(rawget(_G, "Helper"))',
+        'unknownSink(rawget(_G, "ConvertMoneyString"))',
+        'local menu = {}',
+        'function menu.display()',
+        '  local frame = Helper.createFrameHandle(menu, {})',
+        '  pcall(function() frame:addTable(4, {}) end)',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedDeferredAuthorityControlProbes = protectedDeferredAuthorityControls.map((variant, index) => ({
+    ...variant,
+    rel: `selftest/protected-deferred-authority-control-${index}.lua`,
+    probe: protectedCallbackProbe(variant.source, `selftest/protected-deferred-authority-control-${index}.lua`),
+  }));
+  check('B119 controls remain modeled for harmless deferred locals, non-environment logical values, ordinary environment fields, and safe static rawget reads',
+    protectedDeferredAuthorityControlProbes.every(candidate => candidate.probe.model.parsed === true
+      && candidate.probe.bodyCalls.map(call => call.name).join(',') === 'addTable'
+      && candidate.probe.bodyInvocations.length === 0
+      && !candidate.probe.model.verificationGaps.some(gap => gap.reason.includes('protected pcall authority'))
+      && candidate.probe.model.file.text === candidate.source),
+    detail(protectedDeferredAuthorityControlProbes.map(candidate => ({
+      label: candidate.label,
+      parsed: candidate.probe.model.parsed,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => ({ line: gap.source.start.line, reason: gap.reason })),
+    }))));
+
+  const protectedShapeVariants: readonly { label: string; source: string }[] = [
+    {
+      label: 'named callback binding',
+      source: [
+        'local function callback(frame) frame:addTable(1, {}) end',
+        'local menu = { name = "NamedCallback", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(callback, frame)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'parenthesized dynamic callback',
+      source: [
+        'local menu = { name = "DynamicCallback", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall((function() frame:addTable(1, {}) end))',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'callback parameter',
+      source: [
+        'local menu = { name = "CallbackParameter", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function(value) frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'callback varargs',
+      source: [
+        'local menu = { name = "CallbackVarargs", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function(...) frame:addTable(1, {}) end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'forwarded pcall argument',
+      source: [
+        'local menu = { name = "ForwardedArgument", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function() frame:addTable(1, {}) end, frame)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+    {
+      label: 'nested protected callback',
+      source: [
+        'local menu = { name = "NestedCallback", layer = 1 }',
+        'local function display()',
+        '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+        '  pcall(function()',
+        '    pcall(function() frame:addTable(1, {}) end)',
+        '  end)',
+        '  frame:display()',
+        'end',
+      ].join('\n'),
+    },
+  ];
+  const protectedShapeProbes = protectedShapeVariants.map((variant, index) => ({
+    ...variant,
+    probe: protectedCallbackProbe(variant.source, `selftest/protected-shape-${index}.lua`),
+  }));
+  check('B119 protected callbacks reject named/dynamic callbacks, parameters, varargs, forwarded arguments, and nesting',
+    protectedShapeProbes.every(candidate => candidate.probe.bodyCalls.length === 0
+      && candidate.probe.bodyInvocations.length === 0),
+    detail(protectedShapeProbes.map(candidate => ({
+      label: candidate.label,
+      bodyCalls: candidate.probe.bodyCalls.map(call => call.name),
+      bodyInvocations: candidate.probe.bodyInvocations.map(invocation => invocation.calleeExpression),
+      gaps: candidate.probe.model.verificationGaps.map(gap => gap.reason),
+    }))));
+
+  const limitedProtectedCallbackSource = [
+    'local menu = { name = "ProtectedLimit", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    ...Array.from({ length: 33 }, (_, index) => `  pcall(function() frame:addTable(${index + 1}, {}) end)`),
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const limitedProtectedCallbackProbe = protectedCallbackProbe(
+    limitedProtectedCallbackSource,
+    'selftest/protected-callback-limit.lua',
+  );
+  const limitedProtectedCallbackStarts = Array.from(limitedProtectedCallbackSource.matchAll(/pcall\(/g), match => match.index ?? -1);
+  const limitedProtectedBodyCalls = limitedProtectedCallbackProbe.model.calls.filter(candidate => candidate.context.branchPath.some(segment =>
+    limitedProtectedCallbackStarts.includes(segment.boundary.start.offset)));
+  check('B119 protected callback count exhaustion refuses the next body without partial traversal',
+    limitedProtectedBodyCalls.length === 32
+      && limitedProtectedBodyCalls.every(candidate => candidate.context.branchPath.length === 1)
+      && limitedProtectedCallbackProbe.model.verificationGaps.some(gap => gap.reason.includes('max 32'))
+      && limitedProtectedCallbackProbe.model.file.text === limitedProtectedCallbackSource,
+    detail({
+      processedBodyCalls: limitedProtectedBodyCalls.map(candidate => candidate.semantics.count?.value),
+      gaps: limitedProtectedCallbackProbe.model.verificationGaps.map(gap => gap.reason),
+    }));
+
+  const bodyLimitedProtectedCallbackSource = [
+    'local menu = { name = "ProtectedBodyLimit", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function()',
+    ...Array.from({ length: 130 }, (_, index) => `    local value${index} = ${index}`),
+    '    frame:addTable(1, {})',
+    '  end)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const bodyLimitedProtectedCallbackProbe = protectedCallbackProbe(
+    bodyLimitedProtectedCallbackSource,
+    'selftest/protected-callback-body-limit.lua',
+  );
+  check('B119 protected callback body-node exhaustion refuses the body before traversal',
+    bodyLimitedProtectedCallbackProbe.model.parsed
+      && bodyLimitedProtectedCallbackProbe.bodyCalls.length === 0
+      && bodyLimitedProtectedCallbackProbe.bodyInvocations.length === 0
+      && bodyLimitedProtectedCallbackProbe.model.verificationGaps.some(gap =>
+        gap.reason.includes('protected callback body exceeds max node limit 256'))
+      && bodyLimitedProtectedCallbackProbe.model.file.text === bodyLimitedProtectedCallbackSource,
+    detail({
+      bodyCalls: bodyLimitedProtectedCallbackProbe.bodyCalls.map(candidate => candidate.name),
+      bodyInvocations: bodyLimitedProtectedCallbackProbe.bodyInvocations.map(candidate => candidate.calleeExpression),
+      gaps: bodyLimitedProtectedCallbackProbe.model.verificationGaps.map(gap => gap.reason),
+    }));
+
+  const protectedMalformedSource = [
+    'local menu = { name = "ProtectedMalformed", layer = 1 }',
+    'local function display()',
+    '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  pcall(function()',
+    '    frame:addTable(1, {})',
+  ].join('\n');
+  const protectedMalformedProbe = protectedCallbackProbe(
+    protectedMalformedSource,
+    'selftest/protected-callback-malformed.lua',
+  );
+  check('B119 malformed protected-callback source fails closed without body records',
+    !protectedMalformedProbe.model.parsed
+      && protectedMalformedProbe.bodyCalls.length === 0
+      && protectedMalformedProbe.bodyInvocations.length === 0
+      && protectedMalformedProbe.model.verificationGaps.some(gap => gap.category === 'parse')
+      && protectedMalformedProbe.model.file.text === protectedMalformedSource,
+    detail({
+      parsed: protectedMalformedProbe.model.parsed,
+      bodyCalls: protectedMalformedProbe.bodyCalls.map(candidate => candidate.name),
+      bodyInvocations: protectedMalformedProbe.bodyInvocations.map(candidate => candidate.calleeExpression),
+      gaps: protectedMalformedProbe.model.verificationGaps.map(gap => gap.reason),
+    }));
+
+  const protectedCallbackRepeated = buildX4UiCallModel(input(
+    protectedCallbackSource,
+    'selftest/protected-callback.lua',
+  ));
+  check('B119 protected callback evidence remains frozen, serializable, deterministic, and source-pure',
+    JSON.stringify(protectedCallbackModel) === JSON.stringify(protectedCallbackRepeated)
+      && protectedCallbackSource === protectedCallbackModel.file.text
+      && protectedCalls.every(candidate => candidate.context.branchPath.every(segment =>
+        Object.isFrozen(segment)
+          && frozenSourceLocation(segment.boundary)
+          && segment.boundary.start.offset === protectedCallbackStart
+          && segment.boundary.end.offset === protectedCallbackEnd - 1))
+      && protectedBodyInvocations.every(candidate => candidate.context.branchPath.every(segment => Object.isFrozen(segment)))
+      && JSON.parse(JSON.stringify(protectedCallbackModel)).file.text === protectedCallbackSource,
+    detail({
+      callCount: protectedCalls.length,
+      invocationCount: protectedBodyInvocations.length,
+      serialized: JSON.stringify(protectedCallbackModel).length,
+    }));
+
+  const fontWrapperSource = [
+    'local Helper = rawget(_G, "Helper")',
+    'local menu = { name = "FontWrapper", layer = 1 }',
+    'local function font(size)',
+    '  local ok, v = pcall(function() return Helper.scaleFont("Zekton", size) end)',
+    '  if ok and type(v) == "number" and v > 0 then return v end',
+    '  return size',
+    'end',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 100 })',
+    'local row = table:addRow(false, {})',
+    'row[1]:createText("title", { fontsize = font(18) })',
+    'frame:display()',
+  ].join('\n');
+  const fontWrapperModel = buildX4UiCallModel(input(fontWrapperSource, 'selftest/protected-font-wrapper.lua'));
+  check('B119 existing one-return Helper.scaleFont protected wrapper remains excluded from direct callback projection',
+    fontWrapperModel.calls.filter(candidate => candidate.name === 'scaleFont').length === 0
+      && fontWrapperModel.localInvocations.some(candidate => candidate.calleeExpression === 'pcall')
+      && fontWrapperModel.localInvocations.some(candidate => candidate.calleeExpression === 'font'
+        && candidate.status === 'supported')
+      && fontWrapperModel.localFunctions.some(candidate => candidate.name === 'font'),
+    detail({
+      scaleFontCalls: fontWrapperModel.calls.filter(candidate => candidate.name === 'scaleFont'),
+      invocations: fontWrapperModel.localInvocations,
+    }));
+
   const invocationNegativeSource = [
     'local function same(a) return a end',
     'local first = same',
@@ -2562,6 +4744,337 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
       && invalidatedFrame?.receiver?.reference?.path !== 'Helper'
       && invalidatedFrame?.receiver?.reason?.includes('may be reassigned in a control-flow block') === true,
     detail({ aliases: conditionalInvalidation.helperReceiverAliases, frame: invalidatedFrame }));
+
+  const unreachableScalarSource = [
+    'local width = 37',
+    'if false then',
+    '  width = 991',
+    '  width = unknownWidth()',
+    'end',
+    'local menu = { name = "UnreachableScalar", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = width, height = 64 })',
+  ].join('\n');
+  const unreachableScalarModel = buildX4UiCallModel(input(
+    unreachableScalarSource,
+    'selftest/b119-unreachable-scalar.lua',
+  ));
+  const unreachableScalarFrame = call(unreachableScalarModel, 'createFrameHandle');
+  const unreachableScalarWidth = property(unreachableScalarFrame, 'width')?.value;
+  const unreachableScalarLiteral = unreachableScalarWidth?.sourceLiteral;
+  check('B119 unreachable literal and unknown scalar writes preserve the prior exact descriptor',
+    unreachableScalarModel.parsed
+      && unreachableScalarWidth?.status === 'static'
+      && unreachableScalarWidth.type === 'number'
+      && unreachableScalarWidth.value === 37
+      && unreachableScalarWidth.expression === 'width'
+      && exactLocatedText(unreachableScalarSource, {
+        expression: unreachableScalarWidth.expression,
+        source: unreachableScalarWidth.location,
+      }, 'width')
+      && exactLocatedText(unreachableScalarSource, unreachableScalarLiteral
+        ? { expression: '37', source: unreachableScalarLiteral }
+        : undefined, '37')
+      && unreachableScalarModel.file.text === unreachableScalarSource,
+    detail({ width: unreachableScalarWidth, frame: unreachableScalarFrame }));
+
+  const unreachableObjectSource = [
+    'local options = { width = 80, height = 60 }',
+    'local deep = { options = options }',
+    'options.deep = deep',
+    'deep.self = deep',
+    'if false then',
+    '  options.width = 33',
+    '  mutate(deep)',
+    'end',
+    'local menu = { name = "UnreachableObject", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, options)',
+  ].join('\n');
+  const unreachableObjectModel = buildX4UiCallModel(input(
+    unreachableObjectSource,
+    'selftest/b119-unreachable-object.lua',
+  ));
+  const unreachableObjectFrame = call(unreachableObjectModel, 'createFrameHandle');
+  const unreachableObjectWidth = property(unreachableObjectFrame, 'width')?.value;
+  const unreachableObjectHeight = property(unreachableObjectFrame, 'height')?.value;
+  check('B119 unreachable property mutation and deep cyclic object escape preserve later known values',
+    unreachableObjectWidth?.status === 'static'
+      && unreachableObjectWidth.value === 80
+      && unreachableObjectHeight?.status === 'static'
+      && unreachableObjectHeight.value === 60
+      && unreachableObjectModel.file.text === unreachableObjectSource,
+    detail({
+      width: unreachableObjectWidth,
+      height: unreachableObjectHeight,
+      frame: unreachableObjectFrame,
+      properties: unreachableObjectModel.properties,
+    }));
+
+  const unreachableMathSource = [
+    'local wrapper = { math = math }',
+    'wrapper.self = wrapper',
+    'if false then',
+    '  mutate(wrapper)',
+    '  math.floor = customFloor',
+    'end',
+    'local after = math.floor(2.5)',
+    'local menu = { name = "UnreachableMath", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { x = after, width = 80, height = 60 })',
+  ].join('\n');
+  const unreachableMathModel = buildX4UiCallModel(input(
+    unreachableMathSource,
+    'selftest/b119-unreachable-math.lua',
+  ));
+  const unreachableMathFrame = call(unreachableMathModel, 'createFrameHandle');
+  const unreachableMathX = property(unreachableMathFrame, 'x')?.value;
+  const unreachableMathAlias = unreachableMathModel.aliases.find(alias => alias.name === 'after')?.value;
+  check('B119 unreachable math mutation and escape preserve existing numeric math authority',
+    unreachableMathX?.status === 'static'
+      && unreachableMathX.value === 2
+      && unreachableMathX.numericExpression?.kind === 'math-call'
+      && (unreachableMathX.numericExpression as { readonly name?: string }).name === 'floor'
+      && unreachableMathAlias?.numericExpression?.kind === 'math-call'
+      && (unreachableMathAlias.numericExpression as { readonly name?: string }).name === 'floor',
+    detail({ x: unreachableMathX, after: unreachableMathAlias, frame: unreachableMathFrame }));
+
+  const nestedUnreachableSource = [
+    'local width = 41',
+    'local options = { width = 80, height = 60 }',
+    'if true then',
+    '  do',
+    '    if false then',
+    '      width = 991',
+    '      options.width = 33',
+    '    end',
+    '  end',
+    'end',
+    'local menu = { name = "NestedUnreachable", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = options.width, height = options.height, x = width })',
+  ].join('\n');
+  const nestedUnreachableModel = buildX4UiCallModel(input(
+    nestedUnreachableSource,
+    'selftest/b119-nested-unreachable.lua',
+  ));
+  const nestedUnreachableFrame = call(nestedUnreachableModel, 'createFrameHandle');
+  const nestedUnreachableOptionWidth = property(nestedUnreachableFrame, 'width')?.value;
+  const nestedUnreachableHeight = property(nestedUnreachableFrame, 'height')?.value;
+  const nestedUnreachableScalarWidth = property(nestedUnreachableFrame, 'x')?.value;
+  check('B119 nested dead bodies inside do and a statically true outer body cannot poison enclosing state',
+    nestedUnreachableOptionWidth?.status === 'static'
+      && nestedUnreachableOptionWidth.value === 80
+      && nestedUnreachableHeight?.status === 'static'
+      && nestedUnreachableHeight.value === 60
+      && nestedUnreachableScalarWidth?.status === 'static'
+      && nestedUnreachableScalarWidth.value === 41,
+    detail({
+      optionWidth: nestedUnreachableOptionWidth,
+      height: nestedUnreachableHeight,
+      scalarWidth: nestedUnreachableScalarWidth,
+      frame: nestedUnreachableFrame,
+    }));
+
+  const unreachableClauseSource = [
+    'local menu = { name = "UnreachableClauses", layer = 1 }',
+    'local options = { width = 80, height = 60 }',
+    'local width = 42',
+    'if true then',
+    '  Helper.createFrameHandle(menu, { width = 41, height = 61 })',
+    'elseif alternate then',
+    '  local function deadHelper(value) return value end',
+    '  local deadFrame = Helper.createFrameHandle(menu, { width = 91, height = 71 })',
+    '  local deadTable = deadFrame:addTable(1, { width = 91 })',
+    '  local deadRow = deadTable:addRow(false, { height = 13 })',
+    '  deadRow[1]:createText("dead", {})',
+    '  deadHelper(5)',
+    '  width = unknownWidth()',
+    '  options.width = 33',
+    'else',
+    '  local deadElseFrame = Helper.createFrameHandle(menu, { width = 92, height = 72 })',
+    '  deadElseFrame:addTable(2, {})',
+    '  width = 999',
+    '  options.height = 34',
+    'end',
+    'local liveFrame = Helper.createFrameHandle(menu, options)',
+    'local continuation = Helper.createFrameHandle(menu, { width = width, height = options.height })',
+  ].join('\n');
+  const unreachableClauseModel = buildX4UiCallModel(input(
+    unreachableClauseSource,
+    'selftest/b119-unreachable-clauses.lua',
+  ));
+  const unreachableClauseLiveFrame = callAt(
+    unreachableClauseModel,
+    unreachableClauseSource,
+    'Helper.createFrameHandle(menu, options)',
+  );
+  const unreachableClauseContinuation = callAt(
+    unreachableClauseModel,
+    unreachableClauseSource,
+    'Helper.createFrameHandle(menu, { width = width, height = options.height })',
+  );
+  const unreachableClauseDeadCalls = [
+    callContaining(unreachableClauseModel, unreachableClauseSource, 'createFrameHandle', 'width = 91'),
+    callContaining(unreachableClauseModel, unreachableClauseSource, 'addTable', 'width = 91'),
+    callContaining(unreachableClauseModel, unreachableClauseSource, 'addRow', 'height = 13'),
+    callContaining(unreachableClauseModel, unreachableClauseSource, 'createText', '"dead"'),
+    callContaining(unreachableClauseModel, unreachableClauseSource, 'createFrameHandle', 'width = 92'),
+    callContaining(unreachableClauseModel, unreachableClauseSource, 'addTable', 'deadElseFrame:addTable'),
+  ];
+  const expectedDeadCallExpressions = [
+    'Helper.createFrameHandle(menu, { width = 91, height = 71 })',
+    'deadFrame:addTable(1, { width = 91 })',
+    'deadTable:addRow(false, { height = 13 })',
+    'deadRow[1]:createText("dead", {})',
+    'Helper.createFrameHandle(menu, { width = 92, height = 72 })',
+    'deadElseFrame:addTable(2, {})',
+  ];
+  const deadHelper = unreachableClauseModel.localFunctions.find(candidate => candidate.name === 'deadHelper');
+  const deadHelperInvocation = unreachableClauseModel.localInvocations.find(candidate =>
+    candidate.calleeExpression === 'deadHelper');
+  const deadRecordSourceExact = unreachableClauseDeadCalls.every((candidate, index) => {
+    const expected = expectedDeadCallExpressions[index];
+    return Boolean(candidate
+      && expected
+      && candidate.source.start.offset === unreachableClauseSource.indexOf(expected)
+      && candidate.source.end.offset === candidate.source.start.offset + expected.length
+      && unreachableClauseSource.slice(candidate.source.start.offset, candidate.source.end.offset) === expected);
+  });
+  const deadHelperSourceExact = Boolean(deadHelper
+    && unreachableClauseSource.slice(deadHelper.source.start.offset, deadHelper.source.end.offset)
+      === 'local function deadHelper(value) return value end');
+  const deadHelperInvocationSourceExact = Boolean(deadHelperInvocation
+    && unreachableClauseSource.slice(
+      deadHelperInvocation.source.start.offset,
+      deadHelperInvocation.source.end.offset,
+    ) === 'deadHelper(5)');
+  check('B119 selected-clause continuation isolates dead elseif/else effects while retaining exact dead records',
+    unreachableClauseDeadCalls.every(candidate => candidate?.context.reachability === 'unreachable'
+      && candidate.context.branchPath.some(segment => segment.reachability === 'unreachable'))
+      && deadRecordSourceExact
+      && deadHelperSourceExact
+      && deadHelperInvocationSourceExact
+      && deadHelper?.context.reachability === 'unreachable'
+      && deadHelperInvocation?.context.reachability === 'unreachable'
+      && deadHelperInvocation?.status === 'supported'
+      && unreachableClauseLiveFrame?.context.reachability === 'reachable'
+      && unreachableClauseContinuation?.context.reachability === 'reachable'
+      && unreachableClauseContinuation.context.branchPath.length === 0
+      && property(unreachableClauseLiveFrame, 'width')?.value.value === 80
+      && property(unreachableClauseLiveFrame, 'height')?.value.value === 60
+      && unreachableClauseModel.file.text === unreachableClauseSource,
+    detail({
+      deadCalls: unreachableClauseDeadCalls,
+      deadHelper,
+      deadHelperInvocation,
+      liveFrame: unreachableClauseLiveFrame,
+      continuation: unreachableClauseContinuation,
+    }));
+
+  const conditionalControlSource = [
+    'local menu = { name = "ConditionalControl", layer = 1 }',
+    'local width = 80',
+    'local options = { width = 80, height = 60 }',
+    'if runtimeCondition then',
+    '  width = 81',
+    '  options.width = 82',
+    '  mutate(math)',
+    '  Helper.createFrameHandle(menu, { width = width })',
+    'end',
+    'if not runtimeCondition then',
+    '  Helper.createFrameHandle(menu, { width = options.width })',
+    'end',
+    'local frame = Helper.createFrameHandle(menu, { width = width, height = options.width, x = math.floor(2.5) })',
+  ].join('\n');
+  const conditionalControlModel = buildX4UiCallModel(input(
+    conditionalControlSource,
+    'selftest/b119-conditional-controls.lua',
+  ));
+  const conditionalControlFrame = callAt(
+    conditionalControlModel,
+    conditionalControlSource,
+    'Helper.createFrameHandle(menu, { width = width, height = options.width, x = math.floor(2.5) })',
+  );
+  const conditionalControlCalls = conditionalControlModel.calls.filter(candidate =>
+    candidate.source.start.offset < conditionalControlSource.indexOf('local frame'));
+  const conditionalWidth = property(conditionalControlFrame, 'width')?.value;
+  const conditionalHeight = property(conditionalControlFrame, 'height')?.value;
+  const conditionalX = property(conditionalControlFrame, 'x')?.value;
+  check('B119 reachable and runtime-conditional scalar/property/math effects remain conservative and never become dead',
+    conditionalControlCalls.length === 2
+      && conditionalControlCalls.every(candidate => candidate.context.reachability === 'conditional'
+        && candidate.context.branchPath.every(segment => segment.reachability !== 'unreachable'))
+      && conditionalWidth?.status === 'unknown'
+      && conditionalHeight?.status === 'unknown'
+      && conditionalX?.numericExpression === undefined,
+    detail({ calls: conditionalControlCalls, width: conditionalWidth, height: conditionalHeight, x: conditionalX }));
+
+  const shadowedUnreachableSource = [
+    'local width = 80',
+    'local function other() ',
+    '  local width = 7',
+    '  if false then width = 9 end',
+    '  return width',
+    'end',
+    'if false then',
+    '  local width = 11',
+    '  width = 12',
+    'end',
+    'local menu = { name = "ShadowedUnreachable", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = width, height = 60 })',
+  ].join('\n');
+  const shadowedUnreachableModel = buildX4UiCallModel(input(
+    shadowedUnreachableSource,
+    'selftest/b119-shadowed-unreachable.lua',
+  ));
+  const shadowedUnreachableWidth = property(call(shadowedUnreachableModel, 'createFrameHandle'), 'width')?.value;
+  check('B119 shadowed locals and same-name function scopes cannot alter unrelated declaration evidence',
+    shadowedUnreachableWidth?.status === 'static'
+      && shadowedUnreachableWidth.value === 80
+      && shadowedUnreachableModel.localFunctions.some(candidate => candidate.name === 'other'),
+    detail({ width: shadowedUnreachableWidth, functions: shadowedUnreachableModel.localFunctions }));
+
+  const priorReachableThenDeadSource = [
+    'local options = { width = 80 }',
+    'if runtimeCondition then',
+    '  options.width = 81',
+    'end',
+    'if false then',
+    '  options.width = 33',
+    'end',
+    'local menu = { name = "PriorReachableThenDead", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, options)',
+  ].join('\n');
+  const priorReachableThenDeadModel = buildX4UiCallModel(input(
+    priorReachableThenDeadSource,
+    'selftest/b119-prior-reachable-then-dead.lua',
+  ));
+  const priorReachableThenDeadWidth = property(
+    call(priorReachableThenDeadModel, 'createFrameHandle'),
+    'width',
+  )?.value;
+  const priorReachableStart = priorReachableThenDeadSource.indexOf('if runtimeCondition then');
+  check('B119 analyzing a later dead body does not erase a prior reachable mutation state',
+    priorReachableThenDeadWidth?.status === 'unknown'
+      && priorReachableThenDeadWidth.location.start.offset === priorReachableStart,
+    detail({ width: priorReachableThenDeadWidth, priorReachableStart }));
+
+  const deadThenLiveSource = [
+    'local width = 80',
+    'if false then width = 33 end',
+    'width = 99',
+    'local height = 60',
+    'if false then height = 34 end',
+    'height = 61',
+    'local menu = { name = "DeadThenLive", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = width, height = height })',
+  ].join('\n');
+  const deadThenLiveModel = buildX4UiCallModel(input(
+    deadThenLiveSource,
+    'selftest/b119-dead-then-live.lua',
+  ));
+  const deadThenLiveFrame = call(deadThenLiveModel, 'createFrameHandle');
+  check('B119 dead-body isolation does not restore over later reachable writes',
+    property(deadThenLiveFrame, 'width')?.value.value === 99
+      && property(deadThenLiveFrame, 'height')?.value.value === 61,
+    detail({ frame: deadThenLiveFrame, properties: deadThenLiveModel.properties }));
 
   const malformed = buildX4UiCallModel(input('function broken(', 'selftest/malformed.lua'));
   check('malformed Lua is a parse gap', !malformed.parsed && malformed.verificationGaps.some(gap => gap.category === 'parse'), detail(malformed));

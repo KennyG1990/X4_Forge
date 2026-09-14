@@ -1,9 +1,11 @@
+import { createPreviewSourceMapper } from './x4UiPreviewSourceMapping';
+
 /**
  * Pure, source-ordered projection from the accepted X4 UI call model to the
  * accepted Helper layout kernel.
  *
  * This module is intentionally a bridge only. It reparses accepted source only
- * to validate closed numeric-expression structure; it does not interpret Lua,
+ * to validate closed numeric expressions and constructor option keys; it does not interpret Lua,
  * load a file, inspect a browser, or claim that any projected geometry was
  * accepted by a running game.
  */
@@ -189,17 +191,26 @@ export interface X4UiLayoutCanonicalColorValue {
 
 export type X4UiLayoutColorValue = X4UiLayoutSourceLiteralColorValue | X4UiLayoutCanonicalColorValue;
 
+type X4UiLayoutKnownScalarFactBase = {
+  readonly status: 'known';
+  readonly provenance: X4UiLayoutFactProvenance;
+  readonly expression: string;
+  readonly source: X4UiSourceLocation;
+  readonly sourcePin?: X4UiLayoutSourcePin;
+  readonly sampleId?: string;
+};
+
 export type X4UiLayoutDescriptorFact =
-  | {
-    readonly status: 'known';
+  | (X4UiLayoutKnownScalarFactBase & {
     readonly expectedType: X4UiLayoutScalarType;
     readonly value: X4UiLayoutScalar;
-    readonly provenance: X4UiLayoutFactProvenance;
-    readonly expression: string;
-    readonly source: X4UiSourceLocation;
-    readonly sourcePin?: X4UiLayoutSourcePin;
-    readonly sampleId?: string;
-  }
+    readonly sampleIds?: never;
+  })
+  | (X4UiLayoutKnownScalarFactBase & {
+    readonly expectedType: 'number';
+    readonly value: number;
+    readonly sampleIds?: readonly string[];
+  })
   | {
     readonly status: 'known';
     readonly expectedType: 'color-object';
@@ -449,6 +460,9 @@ export interface X4UiLayoutTarget extends X4UiLayoutTargetSelector {
 export interface X4UiLayoutTargetCatalog {
   readonly sourceIdentity: X4UiLayoutModelIdentity;
   readonly targets: readonly X4UiLayoutTarget[];
+  /** Presentation only: exact contexts containing non-dead Helper frame constructors.
+   * Does not certify geometry, editability, or runtime acceptance. */
+  readonly menuTargetIds: readonly string[];
 }
 
 export type X4UiLayoutProjectionStatus = 'projected' | 'partial' | 'refused';
@@ -815,7 +829,9 @@ export interface X4UiLayoutProgram {
 interface X4UiLayoutEvidenceIssuanceRecord {
   readonly evidenceAuthority: X4UiLayoutEvidenceAuthority;
   readonly modelSnapshot: X4UiCallModel | undefined;
+  readonly expandedCallMetadata: ReadonlyMap<X4UiLayoutOperation, X4UiLayoutCallMetadata>;
   readonly colorEvidence?: X4UiCorpusCanonicalColorSuccess;
+  readonly canonicalCorpus?: X4UiCorpusCanonicalSuccess;
 }
 
 const issuedX4UiLayoutEvidenceAuthorities = new WeakMap<
@@ -848,6 +864,17 @@ export const isIssuedX4UiLayoutEvidencePairForModel = (
   } catch {
     return false;
   }
+};
+
+/** Exact input-call metadata retained by the local expansion owner, not supplied by a caller. */
+export const getIssuedX4UiLayoutExpandedCallMetadata = (
+  program: unknown,
+  evidenceAuthority: unknown,
+  operation: unknown,
+): X4UiLayoutCallMetadata | undefined => {
+  if (!isIssuedX4UiLayoutEvidencePair(program, evidenceAuthority)) return undefined;
+  return issuedX4UiLayoutEvidenceAuthorities.get(program as X4UiLayoutProgram)
+    ?.expandedCallMetadata.get(operation as X4UiLayoutOperation);
 };
 
 export type X4UiLayoutProgramResult =
@@ -979,6 +1006,13 @@ const HELPER_DEFAULT_PINS = Object.freeze({
   textHalign: helperPin(3206),
   textColor: helperPin(3207),
   textPropertyColor: helperPin(3422),
+  editBoxTextContent: helperPin(3418),
+  editBoxTextX: helperPin(3419),
+  editBoxTextY: helperPin(3420),
+  editBoxTextHalign: helperPin(3421),
+  editBoxTextFont: helperPin(3424),
+  editBoxTextFontSize: helperPin(3425),
+  editBoxTextScaling: helperPin(3426),
   textFont: helperPin(3210),
   textFontSize: helperPin(3211),
   textWordwrap: helperPin(3212),
@@ -1089,14 +1123,22 @@ const hasOnlyJsonDataProperties = (
       return false;
     }
     if (Object.getOwnPropertySymbols(objectValue).length > 0) return false;
-    const keys = Object.keys(objectValue);
+    const keys = Object.getOwnPropertyNames(objectValue);
+    const arrayKeys = arrayValue ? keys.filter(key => key !== 'length') : keys;
     if (arrayValue
-      && (keys.length !== arrayValue.length || keys.some((key, index) => key !== String(index)))) return false;
+      && (arrayKeys.length !== arrayValue.length || arrayKeys.some((key, index) => key !== String(index)))) return false;
+    if (arrayValue) {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(objectValue, 'length');
+      if (!lengthDescriptor
+        || !Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value')
+        || lengthDescriptor.value !== arrayValue.length) return false;
+    }
     active.add(objectValue);
     for (const key of keys) {
       const descriptor = Object.getOwnPropertyDescriptor(objectValue, key);
+      const isArrayLength = arrayValue !== undefined && key === 'length';
       if (!descriptor
-        || !descriptor.enumerable
+        || (!isArrayLength && !descriptor.enumerable)
         || !Object.prototype.hasOwnProperty.call(descriptor, 'value')
         || !hasOnlyJsonDataProperties(descriptor.value, active, arrayValue === undefined)) {
         active.delete(objectValue);
@@ -1238,6 +1280,22 @@ const isPinnedCanonicalCorpus = (value: unknown): value is X4UiCorpusCanonicalSu
   } catch {
     return false;
   }
+};
+
+/**
+ * Report whether an issued program/evidence pair retained the exact loader-
+ * issued canonical corpus authority.  The corpus itself remains owner-private;
+ * source-edit consumers only need this capability bit for narrowly scoped
+ * mixed-stream scalar admission.
+ */
+export const isIssuedX4UiLayoutEvidencePairWithCanonicalCorpus = (
+  program: unknown,
+  evidenceAuthority: unknown,
+): boolean => {
+  if (!isIssuedX4UiLayoutEvidencePair(program, evidenceAuthority)) return false;
+  const issuance = issuedX4UiLayoutEvidenceAuthorities.get(program as X4UiLayoutProgram);
+  return issuance?.canonicalCorpus !== undefined
+    && isPinnedCanonicalCorpus(issuance.canonicalCorpus);
 };
 
 const sourcePositionKey = (position: X4UiSourceLocation['start']): string =>
@@ -1455,6 +1513,11 @@ export function createX4UiLayoutTargetCatalog(model: X4UiCallModel): X4UiLayoutT
     reachability: 'reachable',
   });
   for (const record of model.records) addContext(record.context);
+  const menuIds = new Set(model.parsed ? model.calls.filter(call =>
+    call.name === 'createFrameHandle'
+    && isHelperReceiver(call)
+    && isReachabilityBlocked(call.context) !== 'unreachable'
+  ).map(call => targetIdFor(identity, call.context, call.context.source || topSource)) : []);
   const targets = [...contexts.values()]
     .sort((left, right) => {
       const leftStart = left.source.start.offset;
@@ -1476,6 +1539,7 @@ export function createX4UiLayoutTargetCatalog(model: X4UiCallModel): X4UiLayoutT
   return freezeDeep({
     sourceIdentity: cloneDeep(identity) as X4UiLayoutModelIdentity,
     targets,
+    menuTargetIds: targets.filter(target => menuIds.has(target.id)).map(target => target.id),
   });
 }
 
@@ -1521,11 +1585,11 @@ const refusalResult = (
 /**
  * Reproject an exact issued layout pair after a source identity change.
  *
- * This owner-only path replays only the exact loader-issued canonical color
- * authority retained for the original program. It deliberately omits preview
- * samples and preview paths; it is not a general optional-input replay API.
- * Programs issued without color evidence retain the original three-argument
- * projection behavior.
+ * This owner-only path replays only the exact loader-issued canonical corpus and
+ * color authorities retained for the original program. Without a source splice
+ * it keeps the original no-preview-input behavior. A byte-proven structural
+ * splice reissues existing inputs against unique fresh source/consumer catalogs;
+ * it never accepts caller-supplied preview values or opaque authority.
  */
 export const reprojectX4UiLayoutProgramWithIssuedColorAuthority = (
   issuedProgram: unknown,
@@ -1533,6 +1597,7 @@ export const reprojectX4UiLayoutProgramWithIssuedColorAuthority = (
   model: X4UiCallModel,
   targetSelector: X4UiLayoutTargetSelector,
   profile: X4UiLayoutProjectionProfile,
+  sourceSplice?: import('./workspaceUndoHistory').WorkspaceSourceSplice,
 ): X4UiLayoutProgramResult => {
   let issuance: X4UiLayoutEvidenceIssuanceRecord | undefined;
   try {
@@ -1556,9 +1621,80 @@ export const reprojectX4UiLayoutProgramWithIssuedColorAuthority = (
         'retained loader-issued canonical color authority no longer passes its loader guard',
       );
     }
-    return issuance.colorEvidence === undefined
-      ? projectX4UiLayoutProgram(model, targetSelector, profile)
-      : projectX4UiLayoutProgram(model, targetSelector, profile, undefined, undefined, issuance.colorEvidence);
+    if (issuance.canonicalCorpus !== undefined && !isPinnedCanonicalCorpus(issuance.canonicalCorpus)) {
+      return refusalResult(
+        'malformed-corpus-evidence',
+        'retained loader-issued canonical corpus authority no longer passes its loader guard',
+      );
+    }
+    const initial = projectX4UiLayoutProgram(
+      model,
+      targetSelector,
+      profile,
+      undefined,
+      undefined,
+      issuance.colorEvidence,
+      issuance.canonicalCorpus,
+    );
+    if (sourceSplice === undefined || initial.status === 'refused') return initial;
+    const before = issuedProgram as X4UiLayoutProgram;
+    const beforeModel = issuance.modelSnapshot;
+    const failTransfer = () => refusalResult('target-mismatch', 'preview inputs could not follow the exact structural source splice', model);
+    if (!beforeModel || !hasOnlyJsonDataProperties(sourceSplice)
+      || (beforeModel.file.sourcePath ?? beforeModel.file.rel) !== sourceSplice.path
+      || (model.file.sourcePath ?? model.file.rel) !== sourceSplice.path) return failTransfer();
+    const mapper = createPreviewSourceMapper(beforeModel.file.text, model.file.text, sourceSplice);
+    if (!mapper || before.target.kind !== initial.program.target.kind
+      || before.target.name !== initial.program.target.name || before.target.handler !== initial.program.target.handler
+      || JSON.stringify(mapper.range(before.target.source, true)) !== JSON.stringify(mapper.range(initial.program.target.source, false))) return failTransfer();
+    let current = initial;
+    const match = <T>(kind: 'path' | 'loop' | 'sample', entry: unknown, entries: readonly T[]): T | undefined => {
+      const matches = entries.filter(candidate => mapper.matches(kind, entry, candidate));
+      return matches.length === 1 ? matches[0] : undefined;
+    };
+    let paths: X4UiLayoutPreviewPathSelectionInput | undefined;
+    if (before.previewPathSelections.length > 0) {
+      const catalog = current.program.previewPathCatalog;
+      const selections: X4UiLayoutPreviewPathSelectionValue[] = [];
+      for (const selected of before.previewPathSelections) {
+        const previous = before.previewPathCatalog.entries.find(entry => entry.id === selected.id);
+        const entry = previous && match('path', previous, catalog.entries);
+        if (!entry || selections.some(value => value.id === entry.id)) return failTransfer();
+        selections.push({ id: entry.id, boundaryId: entry.boundaryId, armId: entry.armId });
+      }
+      paths = { catalogId: catalog.id, source: catalog.sourceIdentity, selections };
+      const replay = projectX4UiLayoutProgram(model, targetSelector, profile, undefined, paths, issuance.colorEvidence, issuance.canonicalCorpus);
+      if (replay.status === 'refused') return replay;
+      current = replay;
+    }
+    let loops: X4UiLayoutPreviewLoopSelectionInput | undefined;
+    if (before.previewLoopSelections.length > 0) {
+      const catalog = current.program.previewLoopCatalog;
+      const selections: X4UiLayoutPreviewLoopSelectionValue[] = [];
+      for (const selected of before.previewLoopSelections) {
+        const previous = before.previewLoopCatalog.entries.find(entry => entry.id === selected.id);
+        const entry = previous && match('loop', previous, catalog.entries);
+        if (!entry || selections.some(value => value.id === entry.id)) return failTransfer();
+        selections.push({ id: entry.id, iterationCount: selected.iterationCount });
+      }
+      loops = { catalogId: catalog.id, source: catalog.sourceIdentity, targetId: catalog.targetId, profileId: catalog.profileId, selections };
+      const replay = projectX4UiLayoutProgram(model, targetSelector, profile, undefined, paths, issuance.colorEvidence, issuance.canonicalCorpus, loops);
+      if (replay.status === 'refused') return replay;
+      current = replay;
+    }
+    if (before.previewSampleBindings.length > 0) {
+      const catalog = current.program.sampleCatalog;
+      const values: X4UiLayoutPreviewSampleValue[] = [];
+      for (const selected of before.previewSampleBindings) {
+        const previous = before.sampleCatalog.entries.find(entry => entry.id === selected.id);
+        const entry = previous && match('sample', previous, catalog.entries);
+        if (!entry || values.some(value => value.id === entry.id)) return failTransfer();
+        values.push({ id: entry.id, value: selected.value });
+      }
+      return projectX4UiLayoutProgram(model, targetSelector, profile, { catalogId: catalog.id, source: catalog.sourceIdentity, values },
+        paths, issuance.colorEvidence, issuance.canonicalCorpus, loops);
+    }
+    return current;
   } catch {
     return refusalResult(
       'malformed-color-evidence',
@@ -1801,6 +1937,25 @@ const optionMode = (call: X4UiCallRecord): 'omitted' | 'known' | 'unresolved' =>
 
 const propertyValue = (call: X4UiCallRecord, name: string): X4UiValue | undefined => property(call, name)?.value;
 
+const editBoxConstructorOptionsGap = (call: X4UiCallRecord, model: X4UiCallModel): X4UiSourceLocation | undefined => {
+  if (optionMode(call) === 'omitted') return undefined;
+  const options = call.semantics.options!;
+  // Constructor metadata omits unsupported fields. Reuse the exact source AST
+  // index to prove every literal key was retained; aliases stay unproven here.
+  const tables = localAstNodeAt(numericExpressionSourceAstIndex(model), options.location, 'TableConstructorExpression');
+  const fields = tables.length === 1 ? localAstNodes(tables[0].fields) : undefined;
+  if (!fields) return options.location;
+  for (const field of fields) {
+    const key = localAstNode(field.key);
+    const name = field.type === 'TableKeyString' && typeof key?.name === 'string'
+      ? key.name : field.type === 'TableKey' ? localAstStringValue(model, key) : undefined;
+    if (name === undefined || !call.semantics.properties?.some(candidate => candidate.name === name)) {
+      return localAstSource(model, field) || options.location;
+    }
+  }
+  return undefined;
+};
+
 const HEADER_ROW_CENTERED_PROPERTIES_EXPRESSION = 'Helper.headerRowCenteredProperties';
 
 const isHeaderRowCenteredProperties = (
@@ -1883,7 +2038,8 @@ const acceptsExpectedNoWrapOverflowForHeight = (layout: ZektonTextLayout): boole
       line.lineBox.metrics.split20,
       line.lineBox.metrics.split24,
     ];
-    const glyphGeometryIsFinite = line.glyphQuads.length > 0 && line.glyphQuads.every(glyph => [
+    // Empty hard-newline paragraphs have a real line box but no glyph quads.
+    const glyphGeometryIsFinite = (line.glyphQuads.length > 0 || line.displayedText.length === 0) && line.glyphQuads.every(glyph => [
       glyph.x,
       glyph.y,
       glyph.width,
@@ -1910,7 +2066,8 @@ const acceptsExpectedNoWrapOverflowForHeight = (layout: ZektonTextLayout): boole
   });
   return layout.profile.wrapMode === 'no-wrap'
     && layout.overflow
-    && layout.lines.every(line => line.overflow)
+    // Helper.getTextHeight passes width=0 for no-wrap text. Expected horizontal
+    // overflow cannot invalidate the height of neighboring short or blank lines.
     && layout.gaps.length > 0
     && layout.gaps.every(gap => gap.reason === 'overflow' && gap.displayed)
     && lineGeometryIsFinite;
@@ -1978,6 +2135,7 @@ interface Resolution<T> {
   readonly provenance?: X4UiLayoutFactProvenance;
   readonly sourcePin?: X4UiLayoutSourcePin;
   readonly sampleId?: string;
+  readonly sampleIds?: T extends number ? readonly string[] : never;
   readonly gap?: {
     readonly category: X4UiLayoutGapCategory;
     readonly status: X4UiLayoutGapStatus;
@@ -2091,16 +2249,36 @@ const NUMERIC_LITERAL_EXPRESSION = /^(?:0[xX][0-9A-Fa-f]+|(?:\d+(?:\.\d*)?|\.\d+
 const NUMERIC_EXPRESSION_OPERATORS = ['+', '-', '*', '/'] as const;
 const NUMERIC_MATH_FUNCTIONS: readonly X4UiNumericMathFunctionName[] = ['floor', 'ceil', 'min', 'max'];
 
+// Derived text coordinates only: changing the source rebuilds this weakly owned
+// index. No descriptor, alias, provenance or validation result is cached here.
+const sourceLineIndexCache = new WeakMap<X4UiCallModel, {
+  readonly text: string;
+  readonly starts: readonly number[];
+}>();
+
 const sourcePositionAtOffset = (
-  text: string,
+  model: X4UiCallModel,
   offset: number,
 ): { readonly line: number; readonly column: number } => {
-  const lastNewline = text.lastIndexOf('\n', offset - 1);
-  let line = 1;
-  for (let index = 0; index < offset; index += 1) {
-    if (text[index] === '\n') line += 1;
+  const text = model.file.text;
+  let index = sourceLineIndexCache.get(model);
+  if (index?.text !== text) {
+    const starts = [0];
+    for (let position = 0; position < text.length; position += 1) {
+      if (text[position] === '\n') starts.push(position + 1);
+    }
+    index = { text, starts };
+    sourceLineIndexCache.set(model, index);
   }
-  return { line, column: offset - (lastNewline + 1) };
+  let low = 0;
+  let high = index.starts.length;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (index.starts[middle] <= offset) low = middle;
+    else high = middle;
+  }
+  const lastNewline = text.lastIndexOf('\n', offset - 1);
+  return { line: low + 1, column: offset - (lastNewline + 1) };
 };
 
 const sourceLocationMatchesModel = (
@@ -2117,8 +2295,8 @@ const sourceLocationMatchesModel = (
     || source.end.offset <= source.start.offset
     || source.end.offset > model.file.text.length
     || model.file.text.slice(source.start.offset, source.end.offset) !== expression) return false;
-  const start = sourcePositionAtOffset(model.file.text, source.start.offset);
-  const end = sourcePositionAtOffset(model.file.text, source.end.offset);
+  const start = sourcePositionAtOffset(model, source.start.offset);
+  const end = sourcePositionAtOffset(model, source.end.offset);
   return source.start.line === start.line
     && source.start.column === start.column
     && source.end.line === end.line
@@ -2230,6 +2408,7 @@ interface NumericExpressionSourceAstNode {
 interface NumericExpressionSourceAstIndex {
   readonly sourceText: string;
   readonly nodesByRange: ReadonlyMap<string, readonly NumericExpressionSourceAstNode[]>;
+  readonly parentByNode: ReadonlyMap<object, NumericExpressionSourceAstNode>;
   readonly error?: string;
 }
 
@@ -2267,7 +2446,12 @@ const numericExpressionSourceAstIndex = (model: X4UiCallModel): NumericExpressio
   const cached = numericExpressionSourceAstCache.get(model);
   if (cached?.sourceText === model.file.text) return cached;
   try {
-    const ast = parse(model.file.text, {
+    // Match SourceBundle's equal-length parser-only BOM sentinel. Raw source
+    // remains the cache identity and all AST offsets still address the raw text.
+    const parserText = model.file.text.startsWith('\uFEFF')
+      ? ` ${model.file.text.slice(1)}`
+      : model.file.text;
+    const ast = parse(parserText, {
       comments: false,
       locations: true,
       ranges: true,
@@ -2275,15 +2459,17 @@ const numericExpressionSourceAstIndex = (model: X4UiCallModel): NumericExpressio
       luaVersion: '5.2',
     }) as unknown as NumericExpressionSourceAstNode;
     const mutableNodes = new Map<string, NumericExpressionSourceAstNode[]>();
+    const mutableParents = new Map<object, NumericExpressionSourceAstNode>();
     const seen = new Set<object>();
-    const visit = (value: unknown): void => {
+    const visit = (value: unknown, parent?: NumericExpressionSourceAstNode): void => {
       if (Array.isArray(value)) {
-        value.forEach(visit);
+        value.forEach(child => visit(child, parent));
         return;
       }
       if (!isObject(value) || seen.has(value)) return;
       seen.add(value);
       const node = value as NumericExpressionSourceAstNode;
+      if (parent) mutableParents.set(node, parent);
       const range = sourceAstRange(node);
       if (typeof node.type === 'string' && range) {
         const key = sourceAstRangeKey(range[0], range[1]);
@@ -2292,13 +2478,14 @@ const numericExpressionSourceAstIndex = (model: X4UiCallModel): NumericExpressio
         mutableNodes.set(key, nodes);
       }
       for (const [key, child] of Object.entries(value)) {
-        if (key !== 'loc' && key !== 'range') visit(child);
+        if (key !== 'loc' && key !== 'range') visit(child, node);
       }
     };
     visit(ast);
     const index: NumericExpressionSourceAstIndex = {
       sourceText: model.file.text,
       nodesByRange: new Map([...mutableNodes].map(([key, nodes]) => [key, Object.freeze([...nodes])])),
+      parentByNode: mutableParents,
     };
     numericExpressionSourceAstCache.set(model, index);
     return index;
@@ -2306,6 +2493,7 @@ const numericExpressionSourceAstIndex = (model: X4UiCallModel): NumericExpressio
     const index: NumericExpressionSourceAstIndex = {
       sourceText: model.file.text,
       nodesByRange: new Map(),
+      parentByNode: new Map(),
       error: 'numeric expression source could not be parsed for structural validation',
     };
     numericExpressionSourceAstCache.set(model, index);
@@ -2325,18 +2513,49 @@ const exactNumericExpressionAliasBinding = (
       && jsonEqual(alias.value.numericExpression, descriptor)
       && (bindingName === undefined || alias.name === bindingName)
       && (useOffset === undefined || alias.source.end.offset <= useOffset))
+    .filter(alias => {
+      const binding = numericExpressionAliasSourceBinding(alias, model);
+      return binding !== undefined
+        && numericExpressionAliasDescriptorHasExactSourceLineage(descriptor, binding, model, useOffset);
+    })
+    .filter(alias => numericExpressionAliasSourceBinding(alias, model) !== undefined)
     .sort((left, right) => left.source.start.offset - right.source.start.offset);
   const binding = candidates[candidates.length - 1];
   if (!binding) return undefined;
+  const sourceBinding = numericExpressionAliasSourceBinding(binding, model);
   const endOffset = useOffset === undefined ? Number.MAX_SAFE_INTEGER : useOffset;
-  return model.aliases.some(candidate => candidate !== binding
-    && candidate.name === binding.name
-    && locationsEqual(candidate.context.source, binding.context.source)
-    && candidate.source.start.offset > binding.source.start.offset
-    && candidate.source.start.offset < endOffset
-    && candidate.context.reachability !== 'unreachable')
+  const sameOwnerLaterBinding = sourceBinding !== undefined && model.aliases.some(candidate => {
+    if (candidate === binding
+      || candidate.name !== binding.name
+      || !locationsEqual(candidate.context.source, binding.context.source)
+      || candidate.source.start.offset <= binding.source.start.offset
+      || candidate.source.start.offset >= endOffset
+      || candidate.context.reachability === 'unreachable') return false;
+    const candidateBinding = numericExpressionAliasSourceBinding(candidate, model);
+    return candidateBinding?.declarationOwner === sourceBinding.declarationOwner;
+  });
+  return sameOwnerLaterBinding
+    || (sourceBinding !== undefined && numericExpressionAliasHasWriteBetween(sourceBinding, model, endOffset))
     ? undefined
     : binding;
+};
+
+const numericExpressionHasExactAlias = (
+  candidate: unknown,
+  model: X4UiCallModel,
+  useOffset: number,
+  visited = new Set<object>(),
+): boolean => {
+  if (!isObject(candidate) || visited.has(candidate)) return false;
+  try {
+    if (exactNumericExpressionAliasBinding(candidate, model, useOffset) !== undefined) return true;
+    visited.add(candidate);
+    const children: unknown[] = [candidate.operand, candidate.left, candidate.right];
+    if (Array.isArray(candidate.arguments)) children.push(...candidate.arguments);
+    return children.some(child => numericExpressionHasExactAlias(child, model, useOffset, visited));
+  } catch {
+    return false;
+  }
 };
 
 const numericExpressionStructureError = (
@@ -2345,9 +2564,7 @@ const numericExpressionStructureError = (
 ): string | undefined => {
   const index = numericExpressionSourceAstIndex(model);
   if (index.error) return index.error;
-  const nodesOfType = (type: string): readonly NumericExpressionSourceAstNode[] => [...index.nodesByRange.values()]
-    .flatMap(nodes => nodes)
-    .filter(node => node.type === type);
+  const nodesOfType = (type: string): readonly NumericExpressionSourceAstNode[] => numericExpressionSourceAstNodes(index, type);
   const rangeEqualsLocation = (
     range: readonly [number, number] | undefined,
     source: X4UiSourceLocation,
@@ -2363,9 +2580,57 @@ const numericExpressionStructureError = (
     const source = range ? localAstSource(model, node) : undefined;
     if (!range || !source || !sourceLocationMatchesModel(model, source, node.name)) return false;
     const binding = exactNumericExpressionAliasBinding(candidate, model, range[0], node.name);
+    const declaration = numericExpressionSourceDeclarationForReference(index, node.name, node);
+    const bindingSource = binding ? numericExpressionAliasSourceBinding(binding, model) : undefined;
     return Boolean(binding
       && binding.name === node.name
+      && declaration !== undefined
+      && bindingSource?.declarationOwner === declaration
       && locationContains(binding.context.source, source));
+  };
+  const exactTableAliasSourceBinding = (
+    baseNode: NumericExpressionSourceAstNode | undefined,
+    tableSource: X4UiSourceLocation,
+    _useOffset: number,
+  ): boolean => {
+    if (!baseNode || baseNode.type !== 'Identifier' || baseNode.isLocal !== true
+      || typeof baseNode.name !== 'string') return false;
+     const visited = new Set<string>();
+    const prove = (
+      name: string,
+      useNode: NumericExpressionSourceAstNode,
+      depth: number,
+    ): boolean => {
+      if (depth >= NUMERIC_EXPRESSION_ALIAS_MAX_HOPS) return false;
+      const useRange = sourceAstRange(useNode);
+      const declaration = numericExpressionSourceDeclarationForReference(index, name, useNode);
+      if (!useRange || !declaration) return false;
+      const visitKey = `${name}|${useRange[0]}|${useRange[1]}`;
+      if (visited.has(visitKey)) return false;
+      visited.add(visitKey);
+      const candidates = model.aliases
+        .filter(alias => alias.name === name && alias.source.end.offset <= useRange[0])
+        .sort((left, right) => right.source.start.offset - left.source.start.offset);
+      for (const candidate of candidates) {
+         const binding = numericExpressionAliasSourceBinding(candidate, model);
+         if (!binding
+           || candidate.context.reachability !== 'reachable'
+           || !numericExpressionSourceScopeContains(
+             numericExpressionSourceLexicalScopes(index, binding.bindingTarget),
+             numericExpressionSourceLexicalScopes(index, useNode),
+           )
+           || binding.declarationOwner !== declaration
+           || numericExpressionAliasHasWriteBetween(binding, model, useRange[0])) continue;
+        if (binding.initializer.type === 'TableConstructorExpression'
+          && rangeEqualsLocation(sourceAstRange(binding.initializer), tableSource)) return true;
+        if (binding.initializer.type === 'Identifier'
+          && binding.initializer.isLocal === true
+          && typeof binding.initializer.name === 'string'
+          && prove(binding.initializer.name, binding.initializer, depth + 1)) return true;
+      }
+      return false;
+    };
+    return prove(baseNode.name, baseNode, 0);
   };
   const writeBeforeTableFieldUse = (candidate: Extract<X4UiNumericExpression, { kind: 'table-field' }>): boolean => {
     const useOffset = candidate.source.start.offset;
@@ -2377,7 +2642,12 @@ const numericExpressionStructureError = (
         if (localAstIdentifier(variable, candidate.base)) return true;
         const target = localAstNode(variable);
         if (!target || (target.type !== 'MemberExpression' && target.type !== 'IndexExpression')) return false;
-        return localAstIdentifier(target.base, candidate.base);
+        return localAstIdentifier(target.base, candidate.base)
+          || exactTableAliasSourceBinding(
+            localAstNode(target.base),
+            candidate.tableSource,
+            useOffset,
+          );
       }));
     });
     if (assignmentWrites) return true;
@@ -2394,7 +2664,9 @@ const numericExpressionStructureError = (
         : undefined;
       const argumentsList = localAstNodes(call.arguments);
       return localAstIdentifier(receiver, candidate.base)
-        || Boolean(argumentsList?.some(argument => localAstIdentifier(argument, candidate.base)));
+        || Boolean(argumentsList?.some(argument =>
+          localAstIdentifier(argument, candidate.base)
+            || exactTableAliasSourceBinding(localAstNode(argument), candidate.tableSource, useOffset)));
     });
   };
   const writeBeforeNumericMathUse = (candidate: Extract<X4UiNumericExpression, { kind: 'math-call' }>): boolean => {
@@ -2447,6 +2719,19 @@ const numericExpressionStructureError = (
     switch (candidate.kind) {
       case 'literal':
         return node.type === 'NumericLiteral' && node.value === candidate.value;
+      case 'preview-input':
+        if (node.type === 'Identifier') {
+          return node.name === candidate.expression
+            && (node.isLocal === true || node.isLocal === false);
+        }
+        {
+          const member = /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(candidate.expression);
+          return Boolean(member
+            && node.type === 'MemberExpression'
+            && node.indexer === '.'
+            && localAstIdentifier(node.base, member[1], false)
+            && localAstIdentifier(node.identifier, member[2]));
+        }
       case 'helper-constant': {
         if (node.type !== 'MemberExpression' || node.indexer !== '.'
           || !isObject(node.base) || !isObject(node.identifier)) return false;
@@ -2496,37 +2781,38 @@ const numericExpressionStructureError = (
               && typeof indexKey.value === 'number'
               && String(indexKey.value) === candidate.property));
         if (!memberMatch && !indexMatch) return false;
-        const tableNodes = index.nodesByRange.get(sourceAstRangeKey(
-          candidate.tableSource.start.offset,
-          candidate.tableSource.end.offset,
+          const tableNodes = index.nodesByRange.get(sourceAstRangeKey(
+            candidate.tableSource.start.offset,
+            candidate.tableSource.end.offset,
         )) || [];
-        if (tableNodes.filter(table => table.type === 'TableConstructorExpression').length !== 1
-          || writeBeforeTableFieldUse(candidate)) return false;
-        const table = tableNodes.find(tableNode => tableNode.type === 'TableConstructorExpression');
-        const fields = table ? localAstNodes(table.fields) : undefined;
-        const matchingFields = fields?.filter(field => {
-          const key = localAstNode(field.key);
-          const value = localAstNode(field.value);
-          const keyMatches = field.type === 'TableKeyString'
-            ? localAstIdentifier(key, candidate.property)
-            : field.type === 'TableKey'
-              && (localAstStringValue(model, key) === candidate.property
-                || (key?.type === 'NumericLiteral'
-                  && typeof key.value === 'number'
-                  && String(key.value) === candidate.property));
-          return keyMatches
-            && rangeEqualsLocation(value ? sourceAstRange(value) : undefined, candidate.value.source)
-            && nodeMatches(candidate.value, value);
+          if (tableNodes.filter(table => table.type === 'TableConstructorExpression').length !== 1
+            || writeBeforeTableFieldUse(candidate)) return false;
+          const table = tableNodes.find(tableNode => tableNode.type === 'TableConstructorExpression');
+          const fields = table ? localAstNodes(table.fields) : undefined;
+          const implicitIndexForField = (field: NumericExpressionSourceAstNode): number | undefined => {
+            let implicitIndex = 1;
+            for (const candidateField of fields || []) {
+              if (candidateField === field) return implicitIndex;
+              if (candidateField.type === 'TableValue') implicitIndex += 1;
+            }
+            return undefined;
+          };
+          const matchingFields = fields?.filter(field => {
+            const key = localAstNode(field.key);
+            const value = localAstNode(field.value);
+            const keyMatches = field.type === 'TableKeyString'
+              ? localAstIdentifier(key, candidate.property)
+              : field.type === 'TableKey'
+                && (localAstStringValue(model, key) === candidate.property
+                  || (key?.type === 'NumericLiteral'
+                    && typeof key.value === 'number'
+                    && String(key.value) === candidate.property))
+                || field.type === 'TableValue'
+                  && String(implicitIndexForField(field)) === candidate.property;
+          return keyMatches && nodeMatches(candidate.value, value);
         }) || [];
         if (matchingFields.length !== 1) return false;
-        return nodesOfType('LocalStatement').some(statement => {
-          const variables = localAstNodes(statement.variables);
-          const initializers = localAstNodes(statement.init);
-          if (!variables || !initializers) return false;
-          return variables.some((variable, variableIndex) =>
-            localAstIdentifier(variable, candidate.base)
-              && rangeEqualsLocation(sourceAstRange(initializers[variableIndex]), candidate.tableSource));
-        });
+        return exactTableAliasSourceBinding(base, candidate.tableSource, candidate.source.start.offset);
       }
       case 'group':
         return node.type === 'ParenthesizedExpression'
@@ -2592,6 +2878,18 @@ const numericExpressionError = (
           }
           return finish();
         }
+        case 'preview-input': {
+          if (!hasExactRecordKeys(candidate, ['kind', 'expression', 'source'])
+            || typeof candidate.expression !== 'string'
+            || !/^(?:[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*)$/.test(candidate.expression)) {
+            return finish('numeric preview-input descriptor is malformed');
+          }
+          const previewInputError = numericExpressionPreviewInputError(
+            candidate as unknown as Extract<X4UiNumericExpression, { kind: 'preview-input' }>,
+            model,
+          );
+          return finish(previewInputError);
+        }
         case 'helper-constant': {
           if (!hasExactRecordKeys(candidate, ['kind', 'name', 'receiver', 'expression', 'source'])
             || !HELPER_CONSTANT_NAMES.includes(candidate.name as X4UiLayoutHelperConstantName)) {
@@ -2650,7 +2948,7 @@ const numericExpressionError = (
           for (const argument of argumentsList) {
             const error = visit(argument);
             if (error) return finish(error);
-            const argumentIsAlias = exactNumericExpressionAliasBinding(argument, model, source.start.offset) !== undefined;
+            const argumentIsAlias = numericExpressionHasExactAlias(argument, model, source.start.offset);
             if (!isObject(argument)
               || (!locationContains(source, argument.source as X4UiSourceLocation) && !argumentIsAlias)
               || ((argument.source as X4UiSourceLocation).start.offset < previousArgumentStart && !argumentIsAlias)) {
@@ -2667,7 +2965,7 @@ const numericExpressionError = (
             || typeof candidate.base !== 'string'
             || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate.base)
             || typeof candidate.property !== 'string'
-            || !/^(?:[A-Za-z_][A-Za-z0-9_]*|\d+)$/.test(candidate.property)
+            || !/^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/.test(candidate.property)
             || !modelSourceLocationIsExact(model, candidate.tableSource)) {
             return finish('numeric table-field descriptor is malformed');
           }
@@ -2675,8 +2973,9 @@ const numericExpressionError = (
           const tableFieldValue = candidate.value as X4UiNumericExpression;
           const valueError = visit(tableFieldValue);
           if (valueError) return finish(valueError);
+          const valueIsAlias = numericExpressionHasExactAlias(tableFieldValue, model, source.start.offset);
           if (!isObject(tableFieldValue)
-            || !locationContains(tableSource, tableFieldValue.source as X4UiSourceLocation)
+            || (!locationContains(tableSource, tableFieldValue.source as X4UiSourceLocation) && !valueIsAlias)
             || tableSource.end.offset > source.start.offset) {
             return finish('numeric table-field value or declaration escapes its source order');
           }
@@ -2686,7 +2985,7 @@ const numericExpressionError = (
           if (!hasExactRecordKeys(candidate, ['kind', 'operand', 'expression', 'source'])) return finish('numeric group descriptor is malformed');
           const error = visit(candidate.operand);
           if (error) return finish(error);
-          const operandIsAlias = exactNumericExpressionAliasBinding(candidate.operand, model, source.start.offset) !== undefined;
+          const operandIsAlias = numericExpressionHasExactAlias(candidate.operand, model, source.start.offset);
           if (!isObject(candidate.operand)
             || (!locationContains(source, candidate.operand.source as X4UiSourceLocation) && !operandIsAlias)) {
             return finish('numeric group operand escapes its source range');
@@ -2698,7 +2997,7 @@ const numericExpressionError = (
             || (candidate.operator !== '+' && candidate.operator !== '-')) return finish('numeric unary descriptor is malformed');
           const error = visit(candidate.operand);
           if (error) return finish(error);
-          const operandIsAlias = exactNumericExpressionAliasBinding(candidate.operand, model, source.start.offset) !== undefined;
+          const operandIsAlias = numericExpressionHasExactAlias(candidate.operand, model, source.start.offset);
           if (!isObject(candidate.operand)
             || (!locationContains(source, candidate.operand.source as X4UiSourceLocation) && !operandIsAlias)) {
             return finish('numeric unary operand escapes its source range');
@@ -2714,8 +3013,8 @@ const numericExpressionError = (
           if (leftError) return finish(leftError);
           const rightError = visit(candidate.right);
           if (rightError) return finish(rightError);
-          const leftIsAlias = exactNumericExpressionAliasBinding(candidate.left, model, source.start.offset) !== undefined;
-          const rightIsAlias = exactNumericExpressionAliasBinding(candidate.right, model, source.start.offset) !== undefined;
+          const leftIsAlias = numericExpressionHasExactAlias(candidate.left, model, source.start.offset);
+          const rightIsAlias = numericExpressionHasExactAlias(candidate.right, model, source.start.offset);
           if (!isObject(candidate.left) || !isObject(candidate.right)
             || (!locationContains(source, candidate.left.source as X4UiSourceLocation) && !leftIsAlias)
             || (!locationContains(source, candidate.right.source as X4UiSourceLocation) && !rightIsAlias)
@@ -2731,8 +3030,8 @@ const numericExpressionError = (
           if (leftError) return finish(leftError);
           const rightError = visit(candidate.right);
           if (rightError) return finish(rightError);
-          const leftIsAlias = exactNumericExpressionAliasBinding(candidate.left, model, source.start.offset) !== undefined;
-          const rightIsAlias = exactNumericExpressionAliasBinding(candidate.right, model, source.start.offset) !== undefined;
+          const leftIsAlias = numericExpressionHasExactAlias(candidate.left, model, source.start.offset);
+          const rightIsAlias = numericExpressionHasExactAlias(candidate.right, model, source.start.offset);
           if (!isObject(candidate.left) || !isObject(candidate.right)
             || (!locationContains(source, candidate.left.source as X4UiSourceLocation) && !leftIsAlias)
             || (!locationContains(source, candidate.right.source as X4UiSourceLocation) && !rightIsAlias)) {
@@ -2752,27 +3051,15 @@ const numericExpressionError = (
     if (root.expression === value.expression && locationsEqual(root.source as X4UiSourceLocation, value.location)) return undefined;
     const aliasName = value.expression.trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(aliasName)) return 'numeric expression root is not bound to the value use';
-    const propertyContext = model.properties.find(candidate => locationsEqual(candidate.value.location, value.location))?.context.source;
-    const bindings = model.aliases
-      .filter(candidate => candidate.name === aliasName
-        && candidate.value.numericExpression !== undefined
-        && jsonEqual(candidate.value.numericExpression, descriptor)
-        && candidate.value.expression === root.expression
-        && locationsEqual(candidate.value.location, root.source as X4UiSourceLocation)
-        && candidate.source.end.offset <= value.location.start.offset
-        && (!propertyContext || locationsEqual(candidate.context.source, propertyContext)))
-      .sort((left, right) => left.source.start.offset - right.source.start.offset);
-    const binding = bindings[bindings.length - 1];
-    if (!binding) return 'numeric expression root has no exact source binding';
-    if (model.aliases.some(candidate => candidate !== binding
-      && candidate.name === aliasName
-      && locationsEqual(candidate.context.source, binding.context.source)
-      && candidate.source.start.offset > binding.source.start.offset
-      && candidate.source.start.offset < value.location.start.offset
-      && candidate.context.reachability !== 'unreachable')) {
-      return 'numeric expression binding was reassigned before use';
-    }
-    return undefined;
+    const rootProof = numericExpressionRootAliasBinding(
+      descriptor as X4UiNumericExpression,
+      value,
+      model,
+    );
+    if (rootProof.status === 'bound') return undefined;
+    if (rootProof.status === 'reassigned') return 'numeric expression binding was reassigned before use';
+    if (descriptor.kind === 'preview-input') return 'numeric preview-input root has no exact source binding';
+    return 'numeric expression root has no exact source binding';
   } catch {
     return 'numeric expression descriptor could not be safely inspected';
   }
@@ -2798,18 +3085,188 @@ const unresolved = <T>(
 const sampleSourceForValue = (value: X4UiValue): X4UiSourceLocation =>
   value.directHelperScaleResult?.callSource || value.localInvocationResult?.source || value.location;
 
-const sampleCatalogSourceForValue = (
-  value: X4UiValue,
-  allowNumericExpressionSamples: boolean,
-): X4UiSourceLocation =>
-  allowNumericExpressionSamples && value.numericExpression?.source
-    ? value.numericExpression.source
-    : sampleSourceForValue(value);
+const sampleCatalogSourceForValue = (value: X4UiValue): X4UiSourceLocation =>
+  value.numericExpression?.kind === 'preview-input'
+    ? sampleSourceForValue(value)
+    : value.numericExpression?.source || sampleSourceForValue(value);
 
 const evidenceExpressionForValue = (value: X4UiValue | undefined): string | undefined =>
   value?.numericExpression?.expression || value?.localInvocationResult?.expression || value?.expression;
 
 const NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR = 'numeric expression root has no exact source binding';
+
+type NumericPreviewInputExpression = Extract<X4UiNumericExpression, { kind: 'preview-input' }>;
+
+interface NumericPreviewInputParameterProof {
+  readonly functionNode: NumericExpressionSourceAstNode;
+  readonly functionSource: X4UiSourceLocation;
+  readonly parameterNode: NumericExpressionSourceAstNode;
+  readonly parameterIndex: number;
+  readonly parameterSource: X4UiSourceLocation;
+}
+
+const sourceParameterProofForPreviewInput = (
+  expression: NumericPreviewInputExpression,
+  model: X4UiCallModel,
+): NumericPreviewInputParameterProof | undefined => {
+  const index = numericExpressionSourceAstIndex(model);
+  if (index.error) return undefined;
+  const useNodes = (index.nodesByRange.get(sourceAstRangeKey(
+    expression.source.start.offset,
+    expression.source.end.offset,
+  )) || []).filter(node => node.type === 'Identifier'
+    && node.name === expression.expression
+    && node.isLocal === true);
+  if (useNodes.length !== 1) return undefined;
+  const useNode = useNodes[0];
+  const functionNode = numericExpressionSourceLexicalScopes(index, useNode)
+    .find(node => node.type === 'FunctionDeclaration'
+      && (node.isLocal === true || node.isLocal === false));
+  const functionSource = functionNode ? localAstSource(model, functionNode) : undefined;
+  const parameters = functionNode ? localAstNodes(functionNode.parameters) : undefined;
+  if (!functionNode || !functionSource || !parameters) return undefined;
+  const parameterIndex = parameters.findIndex(parameter =>
+    localAstIdentifier(parameter, expression.expression, true));
+  if (parameterIndex < 0) return undefined;
+  const parameterNode = parameters[parameterIndex];
+  const parameterSource = localAstSource(model, parameterNode);
+  if (!parameterSource
+    || !sourceLocationMatchesModel(model, parameterSource, expression.expression)) return undefined;
+  const useScope = numericExpressionSourceScope(model, index, expression.source.start.offset);
+  if (!useScope || !locationsEqual(useScope, functionSource)) return undefined;
+  if (numericExpressionSourceDeclarationForReference(index, expression.expression, useNode)) return undefined;
+  const useOffset = expression.source.start.offset;
+  const reassigned = numericExpressionSourceAstNodes(index, 'AssignmentStatement').some(statement => {
+    const range = sourceAstRange(statement);
+    return Boolean(range
+      && range[0] < useOffset
+      && localAstNodes(statement.variables)?.some(target => {
+        const targetRange = sourceAstRange(target);
+        const targetScope = targetRange
+          ? numericExpressionSourceScope(model, index, targetRange[0])
+          : undefined;
+        return targetRange
+          && targetRange[0] > parameterSource.end.offset
+          && targetRange[0] < useOffset
+          && localAstIdentifier(target, expression.expression, true)
+          && targetScope !== undefined
+          && locationsEqual(targetScope, functionSource);
+      }));
+  });
+  return reassigned
+    ? undefined
+    : { functionNode, functionSource, parameterNode, parameterIndex, parameterSource };
+};
+
+const parameterForPreviewInput = (
+  expression: NumericPreviewInputExpression,
+  model: X4UiCallModel,
+): X4UiLocalFunctionParameterIdentity | undefined => {
+  const proof = sourceParameterProofForPreviewInput(expression, model);
+  if (!proof) return undefined;
+  const declaration = model.localFunctions.find(candidate =>
+    locationsEqual(candidate.source, proof.functionSource));
+  if (!declaration) return undefined;
+  const parameter = declaration.parameters.find(candidate => {
+    return candidate.index === proof.parameterIndex
+      && candidate.name === expression.expression
+      && modelSourceLocationIsExact(model, candidate.source)
+      && locationsEqual(candidate.source, proof.parameterSource);
+  });
+  return parameter;
+};
+
+const previewInputDescriptorForValue = (
+  value: X4UiValue | undefined,
+  model: X4UiCallModel | undefined,
+): NumericPreviewInputExpression | undefined => {
+  if (!value || !model
+    || value.status === 'static'
+    || value.type !== 'identifier'
+    || !/^(?:[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*)$/.test(value.expression)) return undefined;
+  const candidate: NumericPreviewInputExpression = {
+    kind: 'preview-input',
+    expression: value.expression,
+    source: cloneLocation(value.location),
+  };
+  return numericExpressionPreviewInputError(candidate, model) === undefined ? candidate : undefined;
+};
+
+interface ResolutionSampleFields {
+  readonly sampleId?: string;
+  readonly sampleIds?: readonly string[];
+}
+
+const resolutionSampleIds = (resolution: ResolutionSampleFields): readonly string[] =>
+  resolution.sampleIds || (resolution.sampleId ? [resolution.sampleId] : []);
+
+const sampleDependencyFields = (
+  ids: readonly string[],
+): { readonly sampleId?: string; readonly sampleIds?: readonly string[]; readonly error?: string } => {
+  const unique = [...new Set(ids)].sort();
+  if (unique.length === 0) return {};
+  if (unique.length === 1) return { sampleId: unique[0] };
+  if (unique.length <= 128) return { sampleIds: Object.freeze(unique) };
+  return { error: 'numeric expression requires more than 128 preview inputs; dependencies were not truncated' };
+};
+
+const mergeResolutionSampleDependencies = (
+  resolutions: readonly ResolutionSampleFields[],
+): { readonly sampleId?: string; readonly sampleIds?: readonly string[]; readonly error?: string } =>
+  sampleDependencyFields(resolutions.flatMap(resolution => resolutionSampleIds(resolution)));
+
+const numericPreviewLeavesForValue = (
+  value: X4UiValue | undefined,
+  model: X4UiCallModel,
+  parameterBindings?: ReadonlyMap<string, X4UiValue>,
+): readonly { readonly descriptor: NumericPreviewInputExpression; readonly value: X4UiValue }[] => {
+  const result: Array<{ readonly descriptor: NumericPreviewInputExpression; readonly value: X4UiValue }> = [];
+  const visited = new Set<object>();
+  const append = (descriptor: X4UiNumericExpression, sourceValue: X4UiValue): void => {
+    if (!isObject(descriptor) || visited.has(descriptor)) return;
+    visited.add(descriptor);
+    switch (descriptor.kind) {
+      case 'preview-input': {
+        const parameter = parameterForPreviewInput(descriptor, model);
+        const boundValue = parameter && parameterBindings?.get(parameter.id);
+        if (boundValue) {
+          const boundDescriptor = boundValue.numericExpression
+            || previewInputDescriptorForValue(boundValue, model);
+          if (boundDescriptor) append(boundDescriptor, boundValue);
+          return;
+        }
+        result.push({ descriptor, value: sourceValue });
+        return;
+      }
+      case 'literal':
+      case 'helper-constant':
+      case 'direct-helper-scale':
+        return;
+      case 'table-field':
+        append(descriptor.value, sourceValue);
+        return;
+      case 'math-call':
+        descriptor.arguments.forEach(argument => append(argument, sourceValue));
+        return;
+      case 'group':
+      case 'unary':
+        append(descriptor.operand, sourceValue);
+        return;
+      case 'binary':
+        append(descriptor.left, sourceValue);
+        append(descriptor.right, sourceValue);
+        return;
+      case 'or':
+        // A numeric left value is always truthy in Lua, including zero.  The
+        // right branch is source-validated but is not a runtime dependency.
+        append(descriptor.left, sourceValue);
+        return;
+    }
+  };
+  const descriptor = value?.numericExpression || previewInputDescriptorForValue(value, model);
+  if (descriptor) append(descriptor, value!);
+  return result;
+};
 
 const resolveNumericExpression = (
   value: X4UiValue,
@@ -2819,23 +3276,74 @@ const resolveNumericExpression = (
   label: string,
   fallbackSource: X4UiSourceLocation,
   directScaleValues: ReadonlyMap<string, DirectScaleValue> | undefined,
+  previewSamples: ReadonlyMap<string, ResolvedPreviewSample> | undefined,
+  consumedSamples: Set<string> | undefined,
   allowedScaleKinds: readonly DirectScaleValue['kind'][],
   instanceScope: string,
   model: X4UiCallModel,
+  previewLoopId: string,
+  parameterBindings?: ReadonlyMap<string, X4UiValue>,
 ): Resolution<number> => {
-  const expressionGap = (expression: X4UiNumericExpression, reason: string): Resolution<number> => ({
-    gap: {
-      category,
-      status: 'unsupported',
-      expression: expression.expression,
-      reason,
-      source: cloneLocation(expression.source || fallbackSource),
-    },
+  const expressionGap = (
+    expression: X4UiNumericExpression,
+    reason: string,
+    cause?: Resolution<number>,
+  ): Resolution<number> => ({
+    gap: cause?.gap
+      ? {
+        ...cause.gap,
+        source: cloneLocation(cause.gap.source),
+      }
+      : {
+        category,
+        status: 'unsupported',
+        expression: expression.expression,
+        reason,
+        source: cloneLocation(expression.source || fallbackSource),
+      },
   });
+  const sampleFor = (source: X4UiSourceLocation): Resolution<number> | undefined => {
+    const sample = previewSamples?.get(rangeAndTypeKey(source, 'number', previewLoopId));
+    if (!sample || typeof sample.value !== 'number') return undefined;
+    consumedSamples?.add(sample.entry.id);
+    return {
+      value: sample.value,
+      source: cloneLocation(sample.entry.source),
+      provenance: 'preview-sample',
+      sampleId: sample.entry.id,
+    };
+  };
+  const derivedProvenance = (resolutions: readonly Resolution<number>[]): X4UiLayoutFactProvenance =>
+    resolutions.some(resolution => resolutionSampleIds(resolution).length > 0)
+      ? 'preview-sample'
+      : 'source-literal';
   const evaluate = (expression: X4UiNumericExpression): Resolution<number> => {
     switch (expression.kind) {
       case 'literal':
         return { value: expression.value, source: cloneLocation(expression.source), provenance: 'source-literal' };
+      case 'preview-input': {
+        const parameter = parameterForPreviewInput(expression, model);
+        const boundValue = parameter && parameterBindings?.get(parameter.id);
+        if (boundValue) {
+          const boundDescriptor = boundValue.numericExpression
+            || previewInputDescriptorForValue(boundValue, model);
+          if (boundDescriptor) return evaluate(boundDescriptor);
+          if (boundValue.status === 'static' && boundValue.type === 'number' && isFiniteNumber(boundValue.value)) {
+            return {
+              value: boundValue.value,
+              source: cloneLocation(boundValue.location),
+              provenance: 'source-literal',
+            };
+          }
+          const boundSample = previewInputDescriptorForValue(boundValue, model)
+            ? sampleFor(boundValue.location)
+            : undefined;
+          if (boundSample) return boundSample;
+          return expressionGap(expression, `${label} parameter binding has no exact numeric preview input`);
+        }
+        const sample = sampleFor(expression.source);
+        return sample || expressionGap(expression, `${label} has no supplied numeric preview input`);
+      }
       case 'helper-constant':
         return {
           value: profile.helper.constants[expression.name].value,
@@ -2860,19 +3368,22 @@ const resolveNumericExpression = (
       case 'table-field': {
         const field = evaluate(expression.value);
         if (field.gap || field.value === undefined) {
-          return expressionGap(expression, `${label} contains an unavailable table field`);
+          return expressionGap(expression, `${label} contains an unavailable table field`, field);
         }
         return {
           value: field.value,
           source: cloneLocation(expression.source),
           provenance: field.provenance || 'source-literal',
           ...(field.sourcePin ? { sourcePin: cloneDeep(field.sourcePin) as X4UiLayoutSourcePin } : {}),
+          ...(field.sampleId ? { sampleId: field.sampleId } : {}),
+          ...(field.sampleIds ? { sampleIds: field.sampleIds } : {}),
         };
       }
       case 'math-call': {
         const argumentsList = expression.arguments.map(argument => evaluate(argument));
-        if (argumentsList.some(argument => argument.gap || argument.value === undefined)) {
-          return expressionGap(expression, `${label} contains an unavailable math argument`);
+        const unavailableArgument = argumentsList.find(argument => argument.gap || argument.value === undefined);
+        if (unavailableArgument) {
+          return expressionGap(expression, `${label} contains an unavailable math argument`, unavailableArgument);
         }
         const values = argumentsList.map(argument => argument.value as number);
         const validArity = expression.name === 'floor' || expression.name === 'ceil'
@@ -2885,28 +3396,52 @@ const resolveNumericExpression = (
           : expression.name === 'ceil' ? Math.ceil(values[0])
             : expression.name === 'min' ? Math.min(...values)
               : Math.max(...values);
-        return Number.isFinite(result)
-          ? { value: result, source: cloneLocation(expression.source), provenance: 'source-literal' }
-          : expressionGap(expression, `${label} math result is not finite`);
+        if (!Number.isFinite(result)) return expressionGap(expression, `${label} math result is not finite`);
+        const dependencies = mergeResolutionSampleDependencies(argumentsList);
+        if (dependencies.error) return expressionGap(expression, `${label} ${dependencies.error}`);
+        return {
+          value: result,
+          source: cloneLocation(expression.source),
+          provenance: derivedProvenance(argumentsList),
+          ...(dependencies.sampleId ? { sampleId: dependencies.sampleId } : {}),
+          ...(dependencies.sampleIds ? { sampleIds: dependencies.sampleIds } : {}),
+        };
       }
       case 'group': {
         const operand = evaluate(expression.operand);
-        if (operand.gap || operand.value === undefined) return expressionGap(expression, `${label} contains an unavailable grouped number`);
-        return { value: operand.value, source: cloneLocation(expression.source), provenance: 'source-literal' };
+        if (operand.gap || operand.value === undefined) return expressionGap(expression, `${label} contains an unavailable grouped number`, operand);
+        return {
+          value: operand.value,
+          source: cloneLocation(expression.source),
+          provenance: derivedProvenance([operand]),
+          ...(operand.sampleId ? { sampleId: operand.sampleId } : {}),
+          ...(operand.sampleIds ? { sampleIds: operand.sampleIds } : {}),
+        };
       }
       case 'unary': {
         const operand = evaluate(expression.operand);
-        if (operand.gap || operand.value === undefined) return expressionGap(expression, `${label} contains an unavailable unary number`);
+        if (operand.gap || operand.value === undefined) return expressionGap(expression, `${label} contains an unavailable unary number`, operand);
         const result = expression.operator === '-' ? -operand.value : operand.value;
         return Number.isFinite(result)
-          ? { value: result, source: cloneLocation(expression.source), provenance: 'source-literal' }
+          ? {
+            value: result,
+            source: cloneLocation(expression.source),
+            provenance: derivedProvenance([operand]),
+            ...(operand.sampleId ? { sampleId: operand.sampleId } : {}),
+            ...(operand.sampleIds ? { sampleIds: operand.sampleIds } : {}),
+          }
           : expressionGap(expression, `${label} unary result is not finite`);
       }
       case 'binary': {
         const left = evaluate(expression.left);
         const right = evaluate(expression.right);
-        if (left.gap || right.gap || left.value === undefined || right.value === undefined) {
-          return expressionGap(expression, `${label} contains an unavailable arithmetic operand`);
+        const unavailableOperand = left.gap || left.value === undefined
+          ? left
+          : right.gap || right.value === undefined
+            ? right
+            : undefined;
+        if (unavailableOperand) {
+          return expressionGap(expression, `${label} contains an unavailable arithmetic operand`, unavailableOperand);
         }
         if (expression.operator === '/' && right.value === 0) {
           return expressionGap(expression, `${label} divides by zero`);
@@ -2915,16 +3450,29 @@ const resolveNumericExpression = (
           : expression.operator === '-' ? left.value - right.value
             : expression.operator === '*' ? left.value * right.value
               : left.value / right.value;
-        return Number.isFinite(result)
-          ? { value: result, source: cloneLocation(expression.source), provenance: 'source-literal' }
-          : expressionGap(expression, `${label} arithmetic result is not finite`);
+        if (!Number.isFinite(result)) return expressionGap(expression, `${label} arithmetic result is not finite`);
+        const dependencies = mergeResolutionSampleDependencies([left, right]);
+        if (dependencies.error) return expressionGap(expression, `${label} ${dependencies.error}`);
+        return {
+          value: result,
+          source: cloneLocation(expression.source),
+          provenance: derivedProvenance([left, right]),
+          ...(dependencies.sampleId ? { sampleId: dependencies.sampleId } : {}),
+          ...(dependencies.sampleIds ? { sampleIds: dependencies.sampleIds } : {}),
+        };
       }
       case 'or': {
         const left = evaluate(expression.left);
-        if (left.gap || left.value === undefined) return expressionGap(expression, `${label} has an unavailable Lua or condition`);
+        if (left.gap || left.value === undefined) return expressionGap(expression, `${label} has an unavailable Lua or condition`, left);
         // A finite Lua number, including zero, is truthy.  The right branch is
         // retained for provenance but is not evaluated when the left wins.
-        return { value: left.value, source: cloneLocation(expression.source), provenance: 'source-literal' };
+        return {
+          value: left.value,
+          source: cloneLocation(expression.source),
+          provenance: derivedProvenance([left]),
+          ...(left.sampleId ? { sampleId: left.sampleId } : {}),
+          ...(left.sampleIds ? { sampleIds: left.sampleIds } : {}),
+        };
       }
       default:
         return expressionGap(expression, `${label} contains an unsupported numeric expression node`);
@@ -2947,11 +3495,14 @@ const resolveNumber = (
   model?: X4UiCallModel,
   localScaleFontWrapperValues?: ReadonlyMap<string, DirectScaleValue>,
   previewLoopId = '',
+  parameterBindings?: ReadonlyMap<string, X4UiValue>,
 ): Resolution<number> => {
-  const descriptorError = value?.numericExpression !== undefined && model !== undefined
-    ? numericExpressionError(value.numericExpression, value, model)
+  const descriptor = value?.numericExpression
+    || previewInputDescriptorForValue(value, model);
+  const descriptorError = descriptor !== undefined && value !== undefined && model !== undefined
+    ? numericExpressionError(descriptor, value, model)
     : undefined;
-  if (value?.numericExpression !== undefined
+  if (descriptor !== undefined
     && model !== undefined
     && descriptorError !== undefined
     && descriptorError !== NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR) {
@@ -2959,16 +3510,16 @@ const resolveNumber = (
       gap: {
         category,
         status: 'unsupported',
-        expression: value.numericExpression.expression,
+        expression: descriptor.expression,
         reason: `${label} numeric expression rejected: ${descriptorError}`,
-        source: cloneLocation(value.numericExpression.source),
+        source: cloneLocation(descriptor.source),
       },
     };
   }
-  const sample = value && (value.numericExpression === undefined || model !== undefined)
+  const sample = value && (descriptor === undefined || descriptorError === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR)
     ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'number', previewLoopId))
-      || (value.numericExpression?.source
-        ? previewSamples?.get(rangeAndTypeKey(value.numericExpression.source, 'number', previewLoopId))
+      || (descriptorError === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR && descriptor
+        ? previewSamples?.get(rangeAndTypeKey(descriptor.source, 'number', previewLoopId))
         : undefined)
     : undefined;
   if (sample && typeof sample.value === 'number') {
@@ -2980,7 +3531,7 @@ const resolveNumber = (
       sampleId: sample.entry.id,
     };
   }
-  if (value?.numericExpression !== undefined) {
+  if (descriptor !== undefined) {
     if (!model) {
       return unresolved(value, category, `${label} numeric expression has no source model`, fallbackSource);
     }
@@ -2989,23 +3540,27 @@ const resolveNumber = (
         gap: {
           category,
           status: 'unsupported',
-          expression: value.numericExpression.expression,
+          expression: descriptor.expression,
           reason: `${label} numeric expression rejected: ${descriptorError}`,
-          source: cloneLocation(value.numericExpression.source),
+          source: cloneLocation(descriptor.source),
         },
       };
     }
     return resolveNumericExpression(
       value,
-      value.numericExpression,
+      descriptor,
       profile,
       category,
       label,
       fallbackSource,
       directScaleValues,
+      previewSamples,
+      consumedSamples,
       allowedScaleKinds,
       instanceScope,
       model,
+      previewLoopId,
+      parameterBindings,
     );
   }
   if (value?.status === 'static' && value.type === 'number' && isFiniteNumber(value.value)) {
@@ -3151,7 +3706,7 @@ const knownDefaultFact = (
   expression,
   source: cloneLocation(source),
   sourcePin: cloneDeep(sourcePin) as X4UiLayoutSourcePin,
-});
+} as X4UiLayoutDescriptorFact);
 
 const knownSourceFact = (
   value: X4UiLayoutScalar,
@@ -3160,6 +3715,7 @@ const knownSourceFact = (
   expression: string,
   provenance: X4UiLayoutFactProvenance = 'source-literal',
   sampleId?: string,
+  sampleIds?: readonly string[],
 ): X4UiLayoutDescriptorFact => ({
   status: 'known',
   expectedType,
@@ -3168,7 +3724,8 @@ const knownSourceFact = (
   expression,
   source: cloneLocation(source),
   ...(sampleId ? { sampleId } : {}),
-});
+  ...(expectedType === 'number' && sampleIds ? { sampleIds } : {}),
+} as X4UiLayoutDescriptorFact);
 
 const factFromResolution = <T extends X4UiLayoutScalar>(
   value: X4UiValue | undefined,
@@ -3187,14 +3744,19 @@ const factFromResolution = <T extends X4UiLayoutScalar>(
       source: cloneLocation(resolution.source),
       ...(resolution.sourcePin ? { sourcePin: cloneDeep(resolution.sourcePin) as X4UiLayoutSourcePin } : {}),
       ...(resolution.sampleId ? { sampleId: resolution.sampleId } : {}),
-    };
+      ...(expectedType === 'number' && resolution.sampleIds ? { sampleIds: resolution.sampleIds } : {}),
+    } as X4UiLayoutDescriptorFact;
   }
   return {
     status: 'unavailable',
     expectedType,
     reason: resolution.gap?.reason || reason,
     ...(evidenceExpressionForValue(value) ? { expression: evidenceExpressionForValue(value) } : {}),
-    source: cloneLocation(resolution.gap?.source || value?.localInvocationResult?.source || value?.location || fallbackSource),
+    source: cloneLocation(value?.numericExpression?.source
+      || resolution.gap?.source
+      || value?.localInvocationResult?.source
+      || value?.location
+      || fallbackSource),
   };
 };
 
@@ -3722,7 +4284,10 @@ const frameTextureLayersFor = (
 const withKnownFactValue = (
   fact: X4UiLayoutDescriptorFact,
   value: X4UiLayoutScalar,
-): X4UiLayoutDescriptorFact => fact.status === 'known' && fact.expectedType !== 'color-object' ? { ...fact, value } : fact;
+): X4UiLayoutDescriptorFact => {
+  if (fact.status !== 'known' || fact.expectedType === 'color-object') return fact;
+  return { ...fact, value } as X4UiLayoutDescriptorFact;
+};
 
 const recordDescriptorFact = (
   operation: MutableOperation,
@@ -3816,6 +4381,8 @@ interface MutableTable extends Mutable<Omit<X4UiLayoutTableNode, 'rowIds' | 'ope
   hadRefusal: boolean;
   tableIdentityKey?: string;
   editBoxDefaultsUnresolved: boolean;
+  editBoxTextDefaultsUnresolved?: X4UiSourceLocation;
+  editBoxDefaultTextUnresolved?: X4UiSourceLocation;
 }
 
 interface MutableRow extends Mutable<Omit<X4UiLayoutRowNode, 'cellIds' | 'operationIds' | 'descriptorFacts' | 'status'>> {
@@ -3922,6 +4489,8 @@ const kernelFailureGap = (
 
 interface ProjectableCall extends X4UiCallRecord {
   readonly previewLoop?: X4UiLayoutPreviewLoopInstance;
+  /** Private callee-parameter identity carried only during local projection. */
+  readonly parameterBindings?: ReadonlyMap<string, X4UiValue>;
   readonly expansionInstance?: {
     readonly invocationId: string;
     readonly ancestry: readonly string[];
@@ -4075,6 +4644,7 @@ const createPreviewSampleCatalog = (
   identity: X4UiLayoutModelIdentity,
   target: X4UiLayoutTarget,
   calls: readonly ProjectableCall[],
+  model: X4UiCallModel,
   resolvedDirectScaleLocations: ReadonlySet<string>,
   resolvedLocalScaleFontInvocationIds: ReadonlySet<string> = new Set(),
   allowLocalInvocationResults = false,
@@ -4096,10 +4666,55 @@ const createPreviewSampleCatalog = (
     value: X4UiValue | undefined,
     expectedType: X4UiLayoutScalarType,
   ): void => {
-    if (!value || !isSampleableValue(value, expectedType, allowLocalInvocationResults, allowNumericExpressionSamples)) return;
+    if (!value) return;
+    const numericExpressionDescriptorError = expectedType === 'number'
+      && value.numericExpression !== undefined
+      ? numericExpressionError(value.numericExpression, value, model)
+      : undefined;
+    const rootNumericFallback = numericExpressionDescriptorError === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR;
+    if (expectedType === 'number') {
+      const leaves = !rootNumericFallback
+        && numericExpressionDescriptorError === undefined
+        && allowNumericExpressionSamples
+        ? numericPreviewLeavesForValue(value, model, call.parameterBindings)
+        : [];
+      for (const leaf of leaves) {
+        const sampleSource = leaf.descriptor.source;
+        if (resolvedDirectScaleLocations.has(locationKey(sampleSource))) continue;
+        const previewLoop = call.previewLoop;
+        const id = sampleIdFor(identity, sampleSource, expectedType, previewLoop?.id);
+        const consumer: X4UiLayoutPreviewSampleConsumer = {
+          operationId: operationIdFor(call),
+          operationKind: call.name,
+          field,
+          source: cloneLocation(value.location),
+          ...(previewLoop ? { previewLoop: cloneDeep(previewLoop) as X4UiLayoutPreviewLoopInstance } : {}),
+        };
+        const existing = entries.get(id);
+        if (existing) {
+          if (!existing.consumers.some(candidate => candidate.operationId === consumer.operationId && candidate.field === consumer.field)) {
+            existing.consumers.push(consumer);
+          }
+          continue;
+        }
+        entries.set(id, {
+          id,
+          expression: leaf.descriptor.expression,
+          expectedType,
+          source: cloneLocation(sampleSource),
+          consumers: [consumer],
+          provenance: 'preview-only',
+          ...(previewLoop ? { previewLoop: cloneDeep(previewLoop) as X4UiLayoutPreviewLoopInstance } : {}),
+        });
+      }
+      if (leaves.length > 0 || (value.numericExpression !== undefined && !rootNumericFallback)) return;
+    }
+    if (!isSampleableValue(value, expectedType, allowLocalInvocationResults, rootNumericFallback)) return;
     if (value.localInvocationResult
       && resolvedLocalScaleFontInvocationIds.has(value.localInvocationResult.invocationId)) return;
-    const sampleSource = sampleCatalogSourceForValue(value, allowNumericExpressionSamples);
+    const sampleSource = rootNumericFallback
+      ? sampleCatalogSourceForValue(value)
+      : sampleSourceForValue(value);
     if (resolvedDirectScaleLocations.has(locationKey(sampleSource))) return;
     const previewLoop = call.previewLoop;
     const id = sampleIdFor(identity, sampleSource, expectedType, previewLoop?.id);
@@ -4119,7 +4734,7 @@ const createPreviewSampleCatalog = (
     }
     entries.set(id, {
       id,
-      expression: value.numericExpression ? value.expression : evidenceExpressionForValue(value) || value.expression,
+      expression: rootNumericFallback ? value.expression : evidenceExpressionForValue(value) || value.expression,
       expectedType,
       source: cloneLocation(sampleSource),
       consumers: [consumer],
@@ -4212,7 +4827,10 @@ const normalizePreviewSamples = (
   const catalogById = new Map(catalog.entries.map(entry => [entry.id, entry]));
   const supplied = new Map<string, X4UiLayoutScalar>();
   for (const candidate of input.values) {
-    if (!isObject(candidate) || typeof candidate.id !== 'string'
+    if (!isObject(candidate)
+      || !hasExactRecordKeys(candidate, ['id', 'value'])
+      || !hasOnlyJsonDataProperties(candidate)
+      || typeof candidate.id !== 'string'
       || !['number', 'string', 'boolean'].includes(typeof candidate.value)
       || (typeof candidate.value === 'number' && !Number.isFinite(candidate.value))) {
       return { ok: false, code: 'malformed-samples', message: 'preview sample values must be finite numbers, strings, or booleans with an ID' };
@@ -4854,7 +5472,7 @@ const targetNeedsNumericExpressionPreviewSamples = (
   selectedPreviewPaths?: ReadonlyMap<string, X4UiLayoutPreviewPathCatalogEntry>,
 ): boolean => {
   const seen = new Set<object>();
-  const visit = (value: unknown): boolean => {
+  const visit = (value: unknown, parameterBindings?: ReadonlyMap<string, X4UiValue>): boolean => {
     if (value === null || typeof value !== 'object') return false;
     const objectValue = value as object;
     if (seen.has(objectValue)) return false;
@@ -4864,15 +5482,16 @@ const targetNeedsNumericExpressionPreviewSamples = (
         && numericExpressionError(value.numericExpression, value, model) === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR) {
         return true;
       }
-      return value.reference?.index ? visit(value.reference.index) : false;
+      if (numericPreviewLeavesForValue(value, model, parameterBindings).length > 0) return true;
+      return value.reference?.index ? visit(value.reference.index, parameterBindings) : false;
     }
-    if (Array.isArray(value)) return value.some(visit);
-    return Object.values(value).some(visit);
+    if (Array.isArray(value)) return value.some(child => visit(child, parameterBindings));
+    return Object.values(value).some(child => visit(child, parameterBindings));
   };
   const result = targetCalls.some(call => {
     if (call.context.loopPath.length > 0 && call.previewLoop === undefined) return false;
     if (isCallReachabilityBlocked(call, selectedPreviewPaths)) return false;
-    return visit(call.semantics);
+    return visit(call.semantics, call.parameterBindings);
   });
   return result;
 };
@@ -5015,14 +5634,652 @@ const localAstSource = (
 ): X4UiSourceLocation | undefined => {
   const range = sourceAstRange(node);
   if (!range || range[1] > model.file.text.length) return undefined;
-  const start = sourcePositionAtOffset(model.file.text, range[0]);
-  const end = sourcePositionAtOffset(model.file.text, range[1]);
+  const start = sourcePositionAtOffset(model, range[0]);
+  const end = sourcePositionAtOffset(model, range[1]);
   return {
     file: model.file.rel,
     ...(model.file.sourcePath ? { sourcePath: model.file.sourcePath } : {}),
     start: { ...start, offset: range[0] },
     end: { ...end, offset: range[1] },
   };
+};
+
+const NUMERIC_PREVIEW_INPUT_BLOCKED_NAMES = new Set([
+  'C',
+  'Color',
+  'Helper',
+  '_ENV',
+  '_G',
+  'ipairs',
+  'math',
+  'pairs',
+  'pcall',
+  'rawget',
+  'rawset',
+  'string',
+  'table',
+  'tonumber',
+  'type',
+]);
+
+const numericExpressionPreviewInputError = (
+  descriptor: Extract<X4UiNumericExpression, { kind: 'preview-input' }>,
+  model: X4UiCallModel,
+): string | undefined => {
+  const identifierMatch = /^[A-Za-z_][A-Za-z0-9_]*$/.test(descriptor.expression);
+  const memberMatch = /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(descriptor.expression);
+  if (!sourceLocationMatchesModel(model, descriptor.source, descriptor.expression)
+    || (!identifierMatch && !memberMatch)) {
+    return 'numeric preview-input is not an eligible source expression';
+  }
+  if (memberMatch && NUMERIC_PREVIEW_INPUT_BLOCKED_NAMES.has(memberMatch[1])) {
+    return 'numeric preview-input member base is not an eligible source global';
+  }
+  if (identifierMatch && NUMERIC_PREVIEW_INPUT_BLOCKED_NAMES.has(descriptor.expression)) {
+    return 'numeric preview-input is not an eligible source identifier';
+  }
+  const index = numericExpressionSourceAstIndex(model);
+  if (index.error) return index.error;
+  const range = sourceAstRangeKey(descriptor.source.start.offset, descriptor.source.end.offset);
+  if (memberMatch) {
+    const [, baseName, propertyName] = memberMatch;
+    const memberNodes = (index.nodesByRange.get(range) || [])
+      .filter(node => node.type === 'MemberExpression'
+        && node.indexer === '.'
+        && localAstIdentifier(node.base, baseName, false)
+        && localAstIdentifier(node.identifier, propertyName));
+    if (memberNodes.length !== 1) return 'numeric preview-input has no unique exact source member binding';
+    const useOffset = descriptor.source.start.offset;
+    const nodesOfType = (type: string): readonly NumericExpressionSourceAstNode[] => numericExpressionSourceAstNodes(index, type);
+    const writesMember = (target: unknown): boolean => {
+      const targetNode = localAstNode(target);
+      if (!targetNode) return false;
+      if (localAstIdentifier(targetNode, baseName, false)) return true;
+      const targetBase = localAstNode(targetNode.base);
+      if (localAstIdentifier(targetBase, '_G', false)) {
+        if (targetNode.type === 'MemberExpression' && targetNode.indexer === '.') {
+          return localAstIdentifier(targetNode.identifier, baseName);
+        }
+        if (targetNode.type === 'IndexExpression') {
+          return localAstStringValue(model, targetNode.index) === baseName;
+        }
+      }
+      if (targetNode.type === 'MemberExpression' && targetNode.indexer === '.') {
+        return localAstIdentifier(targetBase, baseName, false)
+          && localAstIdentifier(targetNode.identifier, propertyName);
+      }
+      if (targetNode.type === 'IndexExpression') {
+        return localAstIdentifier(targetBase, baseName, false)
+          && (localAstStringValue(model, targetNode.index) === propertyName
+            || (localAstNode(targetNode.index)?.type === 'NumericLiteral'
+              && String(localAstNode(targetNode.index)?.value) === propertyName));
+      }
+      return false;
+    };
+    const assigned = nodesOfType('AssignmentStatement').some(statement => {
+      const statementRange = sourceAstRange(statement);
+      return Boolean(statementRange
+        && statementRange[0] < useOffset
+        && localAstNodes(statement.variables)?.some(writesMember));
+    });
+    const declaredFunction = nodesOfType('FunctionDeclaration').some(declaration => {
+      const declarationRange = sourceAstRange(declaration);
+      return Boolean(declarationRange
+        && declarationRange[0] < useOffset
+        && declaration.isLocal === false
+        && writesMember(declaration.identifier));
+    });
+    const rawsetWrite = nodesOfType('CallExpression').some(call => {
+      const callRange = sourceAstRange(call);
+      const argumentsList = localAstNodes(call.arguments);
+      if (!callRange
+        || callRange[0] >= useOffset
+        || !localAstIdentifier(call.base, 'rawset', false)
+        || !argumentsList
+        || argumentsList.length !== 3) return false;
+      const receiver = argumentsList[0];
+      const key = localAstStringValue(model, argumentsList[1]);
+      return (localAstIdentifier(receiver, '_G', false) && key === baseName)
+        || (localAstIdentifier(receiver, baseName, false) && key === propertyName);
+    });
+    return assigned || declaredFunction || rawsetWrite
+      ? 'numeric preview-input member base or field is assigned or declared in source before use'
+      : undefined;
+  }
+  const identifierNodes = (index.nodesByRange.get(range) || [])
+    .filter(node => node.type === 'Identifier'
+      && node.name === descriptor.expression
+      && (node.isLocal === true || node.isLocal === false));
+  if (identifierNodes.length !== 1) return 'numeric preview-input has no unique exact source AST binding';
+  const node = identifierNodes[0];
+  if (node.isLocal === false) {
+    const useOffset = descriptor.source.start.offset;
+    const nodesOfType = (type: string): readonly NumericExpressionSourceAstNode[] => numericExpressionSourceAstNodes(index, type);
+    const writesGlobalName = (target: unknown): boolean => {
+      const targetNode = localAstNode(target);
+      if (!targetNode) return false;
+      if (localAstIdentifier(targetNode, descriptor.expression, false)) return true;
+      const base = localAstNode(targetNode.base);
+      if (!localAstIdentifier(base, '_G', false)) return false;
+      if (targetNode.type === 'MemberExpression' && targetNode.indexer === '.') {
+        return localAstIdentifier(targetNode.identifier, descriptor.expression);
+      }
+      if (targetNode.type === 'IndexExpression') {
+        return localAstStringValue(model, targetNode.index) === descriptor.expression;
+      }
+      return false;
+    };
+    const assigned = nodesOfType('AssignmentStatement').some(statement => {
+      const range = sourceAstRange(statement);
+      return Boolean(range
+        && range[0] < useOffset
+        && localAstNodes(statement.variables)?.some(writesGlobalName));
+    });
+    const declaredFunction = nodesOfType('FunctionDeclaration').some(declaration => {
+      const range = sourceAstRange(declaration);
+      return Boolean(range
+        && range[0] < useOffset
+        && declaration.isLocal === false
+        && writesGlobalName(declaration.identifier));
+    });
+    const rawsetWrite = nodesOfType('CallExpression').some(call => {
+      const range = sourceAstRange(call);
+      const argumentsList = localAstNodes(call.arguments);
+      return Boolean(range
+        && range[0] < useOffset
+        && localAstIdentifier(call.base, 'rawset', false)
+        && argumentsList
+        && argumentsList.length === 3
+        && localAstIdentifier(argumentsList[0], '_G', false)
+        && localAstStringValue(model, argumentsList[1]) === descriptor.expression);
+    });
+    if (assigned || declaredFunction || rawsetWrite) {
+      return 'numeric preview-input global binding is assigned or declared in source before use';
+    }
+    return undefined;
+  }
+
+  const parameter = parameterForPreviewInput(descriptor, model);
+  if (parameter) return undefined;
+  const sourceParameter = sourceParameterProofForPreviewInput(descriptor, model);
+  if (sourceParameter?.functionNode.isLocal === false) return undefined;
+
+  const declaration = numericExpressionSourceDeclarationForReference(index, descriptor.expression, node);
+  if (!declaration) return 'numeric preview-input local binding is not declared at this source use';
+  const declarationSource = localAstSource(model, declaration);
+  const contextSource = numericExpressionSourceScope(model, index, descriptor.source.start.offset);
+  if (!declarationSource || !contextSource) return 'numeric preview-input local binding has no exact lexical scope';
+  const alias = model.aliases.find(candidate => candidate.name === descriptor.expression
+    && locationsEqual(candidate.source, declarationSource)
+    && locationsEqual(candidate.context.source, contextSource));
+  if (!alias || !numericExpressionAliasSourceBinding(alias, model)) {
+    return 'numeric preview-input local binding is not represented by the source model';
+  }
+  if (alias.value.numericExpression !== undefined) {
+    return 'numeric preview-input local binding is already represented by a numeric expression';
+  }
+  return 'numeric preview-input local binding is not a direct source leaf';
+};
+
+interface NumericExpressionAliasSourceBinding {
+  readonly alias: X4UiCallModel['aliases'][number];
+  readonly statement: NumericExpressionSourceAstNode;
+  /** The declaration or assignment target recorded at the alias/capture point. */
+  readonly bindingTarget: NumericExpressionSourceAstNode;
+  /** The exact lexical local declaration that owns the binding target. */
+  readonly declarationOwner: NumericExpressionSourceAstNode;
+  readonly initializer: NumericExpressionSourceAstNode;
+  readonly initializerSource: X4UiSourceLocation;
+  readonly contextSource: X4UiSourceLocation;
+}
+
+interface NumericExpressionSourceDeclaration {
+  readonly statement: NumericExpressionSourceAstNode;
+  readonly target: NumericExpressionSourceAstNode;
+  readonly range: readonly [number, number];
+}
+
+interface NumericExpressionRootAliasProof {
+  readonly status: 'bound' | 'missing' | 'reassigned';
+  readonly binding?: X4UiCallModel['aliases'][number];
+}
+
+const numericExpressionSourceNodeTypeCache = new WeakMap<
+  NumericExpressionSourceAstIndex,
+  ReadonlyMap<string, readonly NumericExpressionSourceAstNode[]>
+>();
+const emptyNumericExpressionSourceNodes: readonly NumericExpressionSourceAstNode[] = Object.freeze([]);
+
+const numericExpressionSourceAstNodes = (
+  index: NumericExpressionSourceAstIndex,
+  type: string,
+): readonly NumericExpressionSourceAstNode[] => {
+  let grouped = numericExpressionSourceNodeTypeCache.get(index);
+  if (!grouped) {
+    const mutable = new Map<string, NumericExpressionSourceAstNode[]>();
+    // Preserve the original range-group/flatten order, including shared ranges.
+    // The existing private AST index already belongs to the exact current text.
+    for (const nodes of index.nodesByRange.values()) {
+      for (const node of nodes) {
+        if (typeof node.type !== 'string') continue;
+        const typed = mutable.get(node.type) || [];
+        typed.push(node);
+        mutable.set(node.type, typed);
+      }
+    }
+    grouped = new Map([...mutable].map(([key, nodes]) => [key, Object.freeze(nodes)]));
+    numericExpressionSourceNodeTypeCache.set(index, grouped);
+  }
+  return grouped.get(type) || emptyNumericExpressionSourceNodes;
+};
+
+const NUMERIC_EXPRESSION_LEXICAL_SCOPE_TYPES = new Set([
+  'Chunk',
+  'FunctionDeclaration',
+  'DoStatement',
+  'IfStatement',
+  'IfClause',
+  'ElseifClause',
+  'ElseClause',
+  'WhileStatement',
+  'RepeatStatement',
+  'ForNumericStatement',
+  'ForGenericStatement',
+]);
+
+const numericExpressionSourceLexicalScopes = (
+  index: NumericExpressionSourceAstIndex,
+  node: NumericExpressionSourceAstNode,
+): readonly NumericExpressionSourceAstNode[] => {
+  const scopes: NumericExpressionSourceAstNode[] = [];
+  const seen = new Set<object>();
+  let current: NumericExpressionSourceAstNode | undefined = node;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (typeof current.type === 'string' && NUMERIC_EXPRESSION_LEXICAL_SCOPE_TYPES.has(current.type)) {
+      scopes.push(current);
+    }
+    current = index.parentByNode.get(current);
+  }
+  return scopes;
+};
+
+const numericExpressionSourceScopeContains = (
+  outer: readonly NumericExpressionSourceAstNode[],
+  inner: readonly NumericExpressionSourceAstNode[],
+): boolean => outer.every(scope => inner.includes(scope));
+
+const numericExpressionSourceDeclarationNodes = (
+  index: NumericExpressionSourceAstIndex,
+): readonly NumericExpressionSourceDeclaration[] => {
+  const declarations: NumericExpressionSourceDeclaration[] = [];
+  const add = (statement: NumericExpressionSourceAstNode, target: unknown): void => {
+    const targetNode = localAstNode(target);
+    const range = sourceAstRange(statement);
+    if (targetNode && range && typeof targetNode.name === 'string') {
+      declarations.push({ statement, target: targetNode, range });
+    }
+  };
+  for (const statement of numericExpressionSourceAstNodes(index, 'LocalStatement')) {
+    for (const target of localAstNodes(statement.variables) || []) add(statement, target);
+  }
+  for (const statement of numericExpressionSourceAstNodes(index, 'ForNumericStatement')) {
+    add(statement, statement.variable);
+  }
+  for (const statement of numericExpressionSourceAstNodes(index, 'ForGenericStatement')) {
+    for (const target of localAstNodes(statement.variables) || []) add(statement, target);
+  }
+  for (const statement of numericExpressionSourceAstNodes(index, 'FunctionDeclaration')) {
+    if (statement.isLocal === true) add(statement, statement.identifier);
+  }
+  return declarations;
+};
+
+const numericExpressionSourceDeclarationVisibleAt = (
+  declaration: NumericExpressionSourceDeclaration,
+  useNode: NumericExpressionSourceAstNode,
+  index: NumericExpressionSourceAstIndex,
+): boolean => {
+  const useRange = sourceAstRange(useNode);
+  const declarationRange = sourceAstRange(declaration.target);
+  if (!useRange || !declarationRange) return false;
+  const declarationScopes = numericExpressionSourceLexicalScopes(index, declaration.target);
+  const useScopes = numericExpressionSourceLexicalScopes(index, useNode);
+  if (!numericExpressionSourceScopeContains(declarationScopes, useScopes)) return false;
+  if (declaration.statement.type === 'ForNumericStatement' || declaration.statement.type === 'ForGenericStatement') {
+    return declaration.range[0] <= useRange[0];
+  }
+  return declaration.range[1] <= useRange[0]
+    && declarationRange[1] <= useRange[0];
+};
+
+const numericExpressionSourceDeclarationForReference = (
+  index: NumericExpressionSourceAstIndex,
+  name: string,
+  useNode: NumericExpressionSourceAstNode,
+): NumericExpressionSourceAstNode | undefined => {
+  const candidates = numericExpressionSourceDeclarationNodes(index)
+    .filter(candidate => candidate.target.name === name
+      && numericExpressionSourceDeclarationVisibleAt(candidate, useNode, index))
+    .sort((left, right) => {
+      const leftScopes = numericExpressionSourceLexicalScopes(index, left.target).length;
+      const rightScopes = numericExpressionSourceLexicalScopes(index, right.target).length;
+      return rightScopes - leftScopes
+        || right.range[0] - left.range[0]
+        || (sourceAstRange(right.target)?.[0] || 0) - (sourceAstRange(left.target)?.[0] || 0);
+    });
+  return candidates[0]?.target;
+};
+
+const numericExpressionSourceNodeAt = (
+  index: NumericExpressionSourceAstIndex,
+  location: X4UiSourceLocation,
+  name: string,
+): NumericExpressionSourceAstNode | undefined => {
+  const nodes = index.nodesByRange.get(sourceAstRangeKey(location.start.offset, location.end.offset)) || [];
+  return nodes.find(node => node.type === 'Identifier'
+    && node.name === name
+    && node.isLocal === true);
+};
+
+const numericExpressionSourceScope = (
+  model: X4UiCallModel,
+  index: NumericExpressionSourceAstIndex,
+  offset: number,
+  excludedFunction?: NumericExpressionSourceAstNode,
+): X4UiSourceLocation | undefined => {
+  if (index.error || !Number.isSafeInteger(offset) || offset < 0 || offset > model.file.text.length) return undefined;
+  const functionCandidates = numericExpressionSourceAstNodes(index, 'FunctionDeclaration')
+    .filter(node => node !== excludedFunction)
+    .map(node => ({ node, range: sourceAstRange(node) }))
+    .filter((candidate): candidate is {
+      readonly node: NumericExpressionSourceAstNode;
+      readonly range: readonly [number, number];
+    } => candidate.range !== undefined
+      && candidate.range[0] <= offset
+      && offset < candidate.range[1])
+    .sort((left, right) => (left.range[1] - left.range[0]) - (right.range[1] - right.range[0]));
+  const functionSource = functionCandidates[0] ? localAstSource(model, functionCandidates[0].node) : undefined;
+  if (functionSource) return functionSource;
+  const end = sourcePositionAtOffset(model, model.file.text.length);
+  return {
+    file: model.file.rel,
+    ...(model.file.sourcePath ? { sourcePath: model.file.sourcePath } : {}),
+    start: { ...sourcePositionAtOffset(model, 0), offset: 0 },
+    end: { ...end, offset: model.file.text.length },
+  };
+};
+
+const numericExpressionAliasSourceBinding = (
+  alias: X4UiCallModel['aliases'][number],
+  model: X4UiCallModel,
+): NumericExpressionAliasSourceBinding | undefined => {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias.name)
+    || !sourceLocationMatchesModel(model, alias.source, alias.name)) return undefined;
+  const index = numericExpressionSourceAstIndex(model);
+  if (index.error) return undefined;
+  const statementType = alias.aliasKind === 'definition' ? 'LocalStatement' : 'AssignmentStatement';
+  const matches: NumericExpressionAliasSourceBinding[] = [];
+  for (const statement of numericExpressionSourceAstNodes(index, statementType)) {
+    const statementRange = sourceAstRange(statement);
+    const variables = localAstNodes(statement.variables);
+    const initializers = localAstNodes(statement.init);
+    if (!statementRange || !variables || !initializers
+      || alias.source.start.offset < statementRange[0]
+      || alias.source.end.offset > statementRange[1]) continue;
+    variables.forEach((variable, variableIndex) => {
+      if (!localAstIdentifier(variable, alias.name, true)) return;
+      const variableSource = localAstSource(model, variable);
+      const initializer = localAstNode(initializers[variableIndex]);
+      const initializerSource = initializer ? localAstSource(model, initializer) : undefined;
+      const declarationOwner = alias.aliasKind === 'definition'
+        ? variable
+        : numericExpressionSourceDeclarationForReference(index, alias.name, variable);
+      const value = alias.value;
+      if (!variableSource
+        || !locationsEqual(variableSource, alias.source)
+        || !declarationOwner
+        || !initializer
+        || !initializerSource
+        || !sourceLocationMatchesModel(model, value.location, value.expression)
+        || !locationsEqual(value.location, initializerSource)
+        || alias.source.end.offset > initializerSource.start.offset) return;
+      const contextSource = numericExpressionSourceScope(model, index, variableSource.start.offset);
+      if (!contextSource || !locationsEqual(alias.context.source, contextSource)) return;
+      matches.push({
+        alias,
+        statement,
+        bindingTarget: variable,
+        declarationOwner,
+        initializer,
+        initializerSource,
+        contextSource,
+      });
+    });
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+const numericExpressionAliasDescriptorHasExactSourceLineage = (
+  descriptor: unknown,
+  binding: NumericExpressionAliasSourceBinding,
+  model: X4UiCallModel,
+  useOffset: number | undefined,
+  depth = 0,
+  visited = new Set<string>(),
+): boolean => {
+  if (depth >= NUMERIC_EXPRESSION_ALIAS_MAX_HOPS) return false;
+  if (!isObject(descriptor)
+    || typeof descriptor.expression !== 'string'
+    || !isObject(descriptor.source)) return false;
+  const descriptorSource = descriptor.source as unknown as X4UiSourceLocation;
+  const initializerRange = sourceAstRange(binding.initializer);
+  if (!initializerRange
+    || !locationsEqual(binding.initializerSource, descriptorSource)
+    || model.file.text.slice(initializerRange[0], initializerRange[1]) !== descriptor.expression) {
+    if (binding.initializer.type !== 'Identifier'
+      || binding.initializer.isLocal !== true
+      || typeof binding.initializer.name !== 'string'
+      || !initializerRange) return false;
+    const visitKey = `${binding.alias.name}|${binding.alias.source.start.offset}|${binding.initializer.name}|${descriptorSource.start.offset}|${descriptorSource.end.offset}`;
+    if (visited.has(visitKey)) return false;
+    visited.add(visitKey);
+    const index = numericExpressionSourceAstIndex(model);
+    if (index.error) return false;
+    const predecessorDeclaration = numericExpressionSourceDeclarationForReference(
+      index,
+      binding.initializer.name,
+      binding.initializer,
+    );
+    if (!predecessorDeclaration) return false;
+    const predecessors = model.aliases
+      .filter(alias => alias !== binding.alias
+        && alias.name === binding.initializer.name
+        && alias.value.numericExpression !== undefined
+        && jsonEqual(alias.value.numericExpression, descriptor)
+        && alias.source.end.offset <= initializerRange[0]
+        && alias.context.reachability === 'reachable')
+      .sort((left, right) => right.source.start.offset - left.source.start.offset);
+    return predecessors.some(predecessor => {
+      const predecessorBinding = numericExpressionAliasSourceBinding(predecessor, model);
+      if (!predecessorBinding
+        || !numericExpressionSourceScopeContains(
+          numericExpressionSourceLexicalScopes(index, predecessorBinding.bindingTarget),
+          numericExpressionSourceLexicalScopes(index, binding.initializer),
+        )
+        || predecessorBinding.declarationOwner !== predecessorDeclaration
+        || numericExpressionAliasHasWriteBetween(predecessorBinding, model, initializerRange[0])) return false;
+      return numericExpressionAliasDescriptorHasExactSourceLineage(
+        descriptor,
+        predecessorBinding,
+        model,
+        initializerRange[0],
+        depth + 1,
+        visited,
+      );
+    });
+  }
+  return useOffset === undefined || binding.alias.source.end.offset <= useOffset;
+};
+
+const numericExpressionSourceLiteralTruth = (
+  node: NumericExpressionSourceAstNode | undefined,
+): boolean | undefined => {
+  if (!node) return undefined;
+  if (node.type === 'BooleanLiteral' && typeof node.value === 'boolean') return node.value;
+  if (node.type === 'NilLiteral') return false;
+  if (node.type === 'NumericLiteral' || node.type === 'StringLiteral') return true;
+  return undefined;
+};
+
+const numericExpressionSourceNodeIsUnreachable = (
+  node: NumericExpressionSourceAstNode,
+  index: NumericExpressionSourceAstIndex,
+): boolean => {
+  let current: NumericExpressionSourceAstNode | undefined = node;
+  const seen = new Set<object>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const parent = index.parentByNode.get(current);
+    if (!parent) return false;
+    if (parent.type === 'IfClause' || parent.type === 'ElseifClause' || parent.type === 'ElseClause') {
+      const ifStatement = index.parentByNode.get(parent);
+      const clauses = ifStatement?.type === 'IfStatement'
+        ? localAstNodes(ifStatement.clauses)
+        : undefined;
+      const clauseIndex = clauses?.indexOf(parent) ?? -1;
+      if (clauses && clauseIndex >= 0) {
+        let priorMayBeSelected = true;
+        for (let indexValue = 0; indexValue < clauseIndex; indexValue += 1) {
+          const priorClause = clauses[indexValue];
+          if (priorClause.type === 'ElseClause') return true;
+          const priorTruth = numericExpressionSourceLiteralTruth(localAstNode(priorClause.condition));
+          if (priorTruth === true) return true;
+          if (priorTruth === undefined) {
+            priorMayBeSelected = false;
+            break;
+          }
+        }
+        if (!priorMayBeSelected) {
+          current = parent;
+          continue;
+        }
+        if (parent.type !== 'ElseClause'
+          && numericExpressionSourceLiteralTruth(localAstNode(parent.condition)) === false) return true;
+      }
+    }
+    current = parent;
+  }
+  return false;
+};
+
+const numericExpressionAliasHasWriteBetween = (
+  binding: NumericExpressionAliasSourceBinding,
+  model: X4UiCallModel,
+  useOffset: number,
+): boolean => {
+  const index = numericExpressionSourceAstIndex(model);
+  if (index.error) return true;
+  const startOffset = binding.alias.source.start.offset;
+  const declarationRange = sourceAstRange(binding.declarationOwner);
+  if (!Number.isSafeInteger(startOffset) || !Number.isSafeInteger(useOffset) || useOffset <= startOffset) return false;
+  if (!declarationRange) return true;
+  const targetWritesName = (target: unknown): boolean => {
+    const targetNode = localAstNode(target);
+    const targetRange = targetNode ? sourceAstRange(targetNode) : undefined;
+    if (!targetNode || !targetRange
+      || targetRange[0] <= startOffset
+      || targetRange[0] >= useOffset
+      || !localAstIdentifier(targetNode, binding.alias.name, true)) return false;
+    const targetContext = numericExpressionSourceScope(model, index, targetRange[0]);
+    if (!targetContext || !locationsEqual(targetContext, binding.alias.context.source)) return false;
+    if (numericExpressionSourceNodeIsUnreachable(targetNode, index)) return false;
+    const declaration = numericExpressionSourceDeclarationForReference(index, binding.alias.name, targetNode);
+    return declaration !== undefined
+      && sourceAstRange(declaration)?.[0] === declarationRange[0]
+      && sourceAstRange(declaration)?.[1] === declarationRange[1];
+  };
+  for (const statement of numericExpressionSourceAstNodes(index, 'AssignmentStatement')) {
+    const variables = localAstNodes(statement.variables);
+    if (variables?.some(targetWritesName)) return true;
+  }
+  return false;
+};
+
+const NUMERIC_EXPRESSION_ALIAS_MAX_HOPS = 32;
+
+const numericExpressionRootAliasBinding = (
+  descriptor: X4UiNumericExpression,
+  value: X4UiValue,
+  model: X4UiCallModel,
+): NumericExpressionRootAliasProof => {
+  if (!sourceLocationMatchesModel(model, value.location, value.expression)) return { status: 'missing' };
+  const aliasName = value.expression.trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(aliasName)) return { status: 'missing' };
+  const index = numericExpressionSourceAstIndex(model);
+  const contextSource = numericExpressionSourceScope(model, index, value.location.start.offset);
+  if (!contextSource) return { status: 'missing' };
+  const propertyContext = model.properties.find(candidate =>
+    locationsEqual(candidate.value.location, value.location))?.context.source;
+  if (propertyContext && !locationsEqual(propertyContext, contextSource)) return { status: 'missing' };
+  const expectedContextSource = propertyContext || contextSource;
+  const useNode = numericExpressionSourceNodeAt(index, value.location, aliasName);
+  if (!useNode) return { status: 'missing' };
+  const visited = new Set<string>();
+  const prove = (
+    name: string,
+    use: NumericExpressionSourceAstNode,
+    depth: number,
+  ): NumericExpressionRootAliasProof => {
+    if (depth >= NUMERIC_EXPRESSION_ALIAS_MAX_HOPS) return { status: 'missing' };
+    const useRange = sourceAstRange(use);
+    const resolvedDeclaration = numericExpressionSourceDeclarationForReference(index, name, use);
+    if (!useRange || !resolvedDeclaration) return { status: 'missing' };
+    let reassigned = false;
+    const candidates = model.aliases
+      .filter(alias => alias.name === name
+        && alias.value.numericExpression !== undefined
+        && jsonEqual(alias.value.numericExpression, descriptor)
+        && alias.source.end.offset <= useRange[0])
+      .sort((left, right) => right.source.start.offset - left.source.start.offset);
+    for (const candidate of candidates) {
+      const binding = numericExpressionAliasSourceBinding(candidate, model);
+      if (!binding
+        || candidate.context.reachability !== 'reachable'
+        || !locationsEqual(binding.contextSource, expectedContextSource)
+        || binding.declarationOwner !== resolvedDeclaration
+        || !numericExpressionAliasDescriptorHasExactSourceLineage(
+          descriptor,
+          binding,
+          model,
+          useRange[0],
+        )) continue;
+      if (numericExpressionAliasHasWriteBetween(binding, model, useRange[0])) {
+        reassigned = true;
+        continue;
+      }
+      const visitKey = `${candidate.name}|${candidate.source.start.offset}|${useRange[0]}`;
+      if (visited.has(visitKey)) continue;
+      visited.add(visitKey);
+      if (locationsEqual(binding.initializerSource, descriptor.source)
+         && model.file.text.slice(
+           binding.initializerSource.start.offset,
+           binding.initializerSource.end.offset,
+         ) === descriptor.expression) return { status: 'bound', binding: candidate };
+      if (binding.initializer.type !== 'Identifier'
+        || typeof binding.initializer.name !== 'string'
+        || binding.initializer.isLocal !== true) continue;
+      const predecessor = prove(
+        binding.initializer.name,
+        binding.initializer,
+        depth + 1,
+      );
+      if (predecessor.status === 'bound') return { status: 'bound', binding: candidate };
+      if (predecessor.status === 'reassigned') reassigned = true;
+    }
+    return reassigned ? { status: 'reassigned' } : { status: 'missing' };
+  };
+  return prove(aliasName, useNode, 0);
 };
 
 const localAstStringValue = (
@@ -5644,6 +6901,7 @@ const instantiateCall = (
     ...transformed,
     ...(call.result ? { result: instantiateReference(call.result, prefix, parameterBindings) } : {}),
     context: mergeExpansionContext(context, call.context),
+    parameterBindings: new Map(parameterBindings),
     expansionInstance: instance
   };
   if (callDataFlowSatisfied(result)) delete result.semantics.dataFlow;
@@ -6406,6 +7664,7 @@ const finishProgram = (
   gapEvents: readonly X4UiLayoutGap[],
   localExpansion?: X4UiLayoutLocalExpansionState,
   colorEvidence?: X4UiCorpusCanonicalColorSuccess,
+  canonicalCorpus?: X4UiCorpusCanonicalSuccess,
 ): X4UiLayoutProgramResult => {
   for (const frame of frames) {
     frame.status = applyNodeStatus(frame.hadGap, frame.hadRefusal, true);
@@ -6553,7 +7812,14 @@ const finishProgram = (
     issuedX4UiLayoutEvidenceAuthorities.set(result.program, Object.freeze({
       evidenceAuthority: result.evidenceAuthority,
       modelSnapshot: snapshotCompleteX4UiCallModel(model),
+      // Preserve the actual instantiated input, independently of the operation's output
+      // metadata. Never reconstruct identity by stripping namespaces in a downstream owner.
+      expandedCallMetadata: new Map(operationEvents.flatMap((event, index) =>
+        event.call.expansionInstance && !event.call.previewLoop
+          ? [[result.program.operations[index], freezeDeep(cloneJsonLike(cloneMetadata(event.call))) as X4UiLayoutCallMetadata] as const]
+          : [])),
       ...(colorEvidence !== undefined ? { colorEvidence } : {}),
+      ...(canonicalCorpus !== undefined ? { canonicalCorpus } : {}),
     }));
   }
   return result;
@@ -6747,14 +8013,14 @@ const closedJsonDomain = (value: unknown, path = 'value', active = new Set<objec
     }
     if (Array.isArray(objectValue)) {
       if (prototype !== Array.prototype) return `${path} has a non-array prototype`;
-      const arrayValue = objectValue as readonly unknown[];
-      if (!Number.isSafeInteger(arrayValue.length) || arrayValue.length < 0) return `${path} has an invalid length`;
-      const keys = Object.keys(objectValue);
-      if (keys.length !== arrayValue.length || keys.some((key, index) => key !== String(index))) {
+      const length = descriptors.length?.value;
+      if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return `${path} has an invalid length`;
+      const keys = Object.keys(descriptors).filter(key => key !== 'length');
+      if (keys.length !== length || keys.some((key, index) => key !== String(index) || !descriptors[key].enumerable)) {
         return `${path} is sparse or has unknown enumerable keys`;
       }
       active.add(objectValue);
-      for (let index = 0; index < arrayValue.length; index += 1) {
+      for (let index = 0; index < length; index += 1) {
         const error = closedJsonDomain(descriptors[String(index)].value, `${path}[${index}]`, active);
         if (error) return error;
       }
@@ -6763,7 +8029,8 @@ const closedJsonDomain = (value: unknown, path = 'value', active = new Set<objec
     }
     if (prototype !== Object.prototype && prototype !== null) return `${path} has a non-record prototype`;
     active.add(objectValue);
-    for (const key of Object.keys(objectValue)) {
+    for (const key of Object.keys(descriptors)) {
+      if (!descriptors[key].enumerable) return `${path} contains non-enumerable record properties`;
       const error = closedJsonDomain(descriptors[key].value, `${path}.${key}`, active);
       if (error) return error;
     }
@@ -6983,11 +8250,45 @@ export const isExactX4UiLayoutColorValue = (
   }
 };
 
+const schemaNumericSampleIds = (value: unknown, path: string): ClosedSchemaError => {
+  const lengthDescriptor = Array.isArray(value) ? Object.getOwnPropertyDescriptor(value, 'length') : undefined;
+  const length = lengthDescriptor && 'value' in lengthDescriptor ? lengthDescriptor.value : undefined;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 2 || length > 128) {
+    return `${path} must be a canonical dense array containing 2 through 128 IDs`;
+  }
+  let ownKeys: PropertyKey[];
+  try {
+    ownKeys = Reflect.ownKeys(value as object);
+  } catch {
+    return `${path} is not safely readable`;
+  }
+  const denseKeys = Array.from({ length }, (_, index) => String(index));
+  if (Object.getPrototypeOf(value) !== Array.prototype
+    || JSON.stringify(ownKeys) !== JSON.stringify([...denseKeys, 'length'])) {
+    return `${path} must be a frozen-safe dense array with no extra own fields`;
+  }
+  const ids: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !('value' in descriptor)
+      || descriptor.enumerable !== true
+      || typeof descriptor.value !== 'string'
+      || descriptor.value.length === 0) {
+      return `${path}[${index}] must be a data-property string ID`;
+    }
+    ids.push(descriptor.value);
+  }
+  if (new Set(ids).size !== ids.length || JSON.stringify([...ids].sort()) !== JSON.stringify(ids)) {
+    return `${path} must contain unique lexically sorted IDs`;
+  }
+  return undefined;
+};
+
 const schemaDescriptorFact = (value: unknown, path: string): ClosedSchemaError => {
   if (!isObject(value)) return `${path} must be a descriptor fact record`;
   const status = value.status;
   if (status === 'known') {
-    const objectError = schemaObject(value, path, ['status', 'expectedType', 'value', 'provenance', 'expression', 'source'], ['sourcePin', 'sampleId']);
+    const objectError = schemaObject(value, path, ['status', 'expectedType', 'value', 'provenance', 'expression', 'source'], ['sourcePin', 'sampleId', 'sampleIds']);
     if (objectError) return objectError;
     const fact = value as Record<string, unknown>;
     if (fact.expectedType === 'color-object') {
@@ -7000,7 +8301,10 @@ const schemaDescriptorFact = (value: unknown, path: string): ClosedSchemaError =
         || schemaString(fact.expression, `${path}.expression`)
         || schemaSource(fact.source, `${path}.source`)
         || schemaOptional(fact, 'sourcePin', schemaSourcePin, path)
-        || schemaOptional(fact, 'sampleId', (child, childPath) => schemaString(child, childPath, true), path);
+        || schemaOptional(fact, 'sampleId', (child, childPath) => schemaString(child, childPath, true), path)
+        || (Object.prototype.hasOwnProperty.call(fact, 'sampleIds')
+          ? `${path}.sampleIds is only valid on known numeric facts`
+          : undefined);
       if (errors) return errors;
       const colorValue = fact.value as Record<string, unknown>;
       const expectedProvenance = colorValue.domain === 'source-literal-percent-alpha'
@@ -7019,7 +8323,16 @@ const schemaDescriptorFact = (value: unknown, path: string): ClosedSchemaError =
       || schemaString(fact.expression, `${path}.expression`)
       || schemaSource(fact.source, `${path}.source`)
       || schemaOptional(fact, 'sourcePin', schemaSourcePin, path)
-      || schemaOptional(fact, 'sampleId', (child, childPath) => schemaString(child, childPath, true), path);
+      || schemaOptional(fact, 'sampleId', (child, childPath) => schemaString(child, childPath, true), path)
+      || (Object.prototype.hasOwnProperty.call(fact, 'sampleId')
+        && Object.prototype.hasOwnProperty.call(fact, 'sampleIds')
+        ? `${path} cannot contain both sampleId and sampleIds`
+        : undefined)
+      || schemaOptional(fact, 'sampleIds', (child, childPath) => {
+        if (fact.expectedType !== 'number') return `${childPath} is only valid for known numeric facts`;
+        if (fact.provenance !== 'preview-sample') return `${childPath} requires preview-sample provenance`;
+        return schemaNumericSampleIds(child, childPath);
+      }, path);
   }
   if (status === 'unavailable') {
     const objectError = schemaObject(value, path, ['status', 'expectedType', 'reason', 'source'], ['expression', 'sourcePin']);
@@ -7134,6 +8447,16 @@ const schemaNumericExpression = (value: unknown, path: string): ClosedSchemaErro
       || schemaString(candidate.expression, `${path}.expression`)
       || schemaSource(candidate.source, `${path}.source`);
   }
+  if (candidate.kind === 'preview-input') {
+    const objectError = schemaObject(value, path, ['kind', 'expression', 'source']);
+    if (objectError) return objectError;
+    return schemaEnum(candidate.kind, `${path}.kind`, ['preview-input'])
+      || (typeof candidate.expression === 'string'
+        && /^(?:[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*)$/.test(candidate.expression)
+        ? undefined
+        : `${path}.expression must be a direct identifier or member`)
+      || schemaSource(candidate.source, `${path}.source`);
+  }
   if (candidate.kind === 'helper-constant') {
     const objectError = schemaObject(value, path, ['kind', 'name', 'receiver', 'expression', 'source']);
     if (objectError) return objectError;
@@ -7198,7 +8521,7 @@ const schemaNumericExpression = (value: unknown, path: string): ClosedSchemaErro
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(candidate.base))) {
       return `${path}.base must be a direct local identifier`;
     }
-    if (!/^(?:[A-Za-z_][A-Za-z0-9_]*|\d+)$/.test(String(candidate.property))) {
+    if (!/^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/.test(String(candidate.property))) {
       return `${path}.property must be a direct table field name`;
     }
     return undefined;
@@ -8972,8 +10295,17 @@ export const validateX4UiLayoutEvidencePair = (
   let programSchemaError: ClosedSchemaError;
   let authoritySchemaError: ClosedSchemaError;
   try {
-    programSchemaError = closedJsonDomain(program, 'program') || schemaProgram(program);
-    authoritySchemaError = closedJsonDomain(authority, 'authority') || schemaAuthority(authority);
+    programSchemaError = closedJsonDomain(program, 'program');
+    authoritySchemaError = closedJsonDomain(authority, 'authority');
+    if (!programSchemaError && !authoritySchemaError) {
+      // Descriptor inspection must precede cloning: cloning ordinary accessors can run
+      // getters. Cloneability then excludes proxies before any schema/JSON property reads.
+      // This is admission only; the original frozen pair remains the evidence authority.
+      structuredClone(program);
+      structuredClone(authority);
+      programSchemaError = schemaProgram(program);
+      authoritySchemaError = schemaAuthority(authority);
+    }
   } catch {
     return fail('program or authority schema could not be inspected');
   }
@@ -10259,6 +11591,9 @@ export function projectX4UiLayoutProgram(
   if (canonicalCorpusInput !== undefined && !isPinnedCanonicalCorpus(canonicalCorpusInput)) {
     return refusalResult('malformed-corpus-evidence', 'corpus evidence is not the exact loader-issued X4 9.00 canonical authority');
   }
+  if (!hasOnlyJsonDataProperties(model)) {
+    return refusalResult('malformed-model', 'call-model contains unsafe or non-JSON data properties');
+  }
   if (!isObject(model) || !isObject(model.file) || typeof model.file.text !== 'string' || typeof model.file.rel !== 'string') {
     return refusalResult('malformed-model', 'call-model input is malformed');
   }
@@ -10408,6 +11743,7 @@ export function projectX4UiLayoutProgram(
     normalizedProfile.value.sourceIdentity,
     target,
     targetCalls,
+    model,
     resolvedDirectScaleLocations,
     resolvedLocalScaleFontInvocationIds,
     Boolean(localExpansionPlan),
@@ -10473,6 +11809,16 @@ export function projectX4UiLayoutProgram(
     .map(gapFromModel);
   gapEvents.push(...gaps.map(gap => cloneDeep(gap) as X4UiLayoutGap));
   const modelGapCount = gaps.length;
+  const resolvedNumericModelGapProofs: Array<{
+    readonly category: X4UiLayoutGapCategory;
+    readonly expression: string;
+    readonly source: X4UiSourceLocation;
+    readonly valueUseExpression: string;
+    readonly valueUseSource: X4UiSourceLocation;
+    readonly consumerSource: X4UiSourceLocation;
+    readonly previewLoopId: string;
+    readonly sampleIds: readonly string[];
+  }> = [];
   if (localExpansionPlan) {
     for (const gap of localExpansionPlan.gaps) {
       const clonedGap = cloneDeep(gap) as X4UiLayoutGap;
@@ -10575,21 +11921,49 @@ export function projectX4UiLayoutProgram(
     label: string,
     source: X4UiSourceLocation,
     allowedScaleKinds: readonly DirectScaleValue['kind'][] = [],
-  ): Resolution<number> => resolveNumber(
-    value,
-    profileValue,
-    category,
-    label,
-    source,
-    directScaleValues,
-    previewSamples.byRangeAndType,
-    consumedSamples,
-    allowedScaleKinds,
-    instanceScopeForCall(activeCall),
-    model,
-    localScaleFontWrapperValues,
-    activeCall?.previewLoop?.id || '',
-  );
+    modelGapCategory: X4UiLayoutGapCategory = category,
+  ): Resolution<number> => {
+    const resolution = resolveNumber(
+      value,
+      profileValue,
+      category,
+      label,
+      source,
+      directScaleValues,
+      previewSamples.byRangeAndType,
+      consumedSamples,
+      allowedScaleKinds,
+      instanceScopeForCall(activeCall),
+      model,
+      localScaleFontWrapperValues,
+      activeCall?.previewLoop?.id || '',
+      activeCall?.parameterBindings,
+    );
+    const descriptor = value?.numericExpression || previewInputDescriptorForValue(value, model);
+    const descriptorError = descriptor && value
+      ? numericExpressionError(descriptor, value, model)
+      : undefined;
+    const sourceValidClosedEvaluation = resolution.value !== undefined
+      && !resolution.gap
+      && (descriptor === undefined
+        ? resolution.provenance === 'preview-sample'
+        : descriptorError === undefined);
+    if (activeCall && value && sourceValidClosedEvaluation) {
+      resolvedNumericModelGapProofs.push({
+        // Source property warnings and kernel failure categories can differ.
+        // Keep the exact consumer's model category separate from failure reporting.
+        category: modelGapCategory,
+        expression: descriptor?.expression || value.expression,
+        source: cloneLocation(descriptor?.source || value.location),
+        valueUseExpression: value.expression,
+        valueUseSource: cloneLocation(value.location),
+        consumerSource: cloneLocation(activeCall.source),
+        previewLoopId: activeCall.previewLoop?.id || '',
+        sampleIds: resolutionSampleIds(resolution),
+      });
+    }
+    return resolution;
+  };
 
   const resolveProjectedBoolean = (
     value: X4UiValue | undefined,
@@ -10792,7 +12166,7 @@ export function projectX4UiLayoutProgram(
       provenance: 'source-pinned-default',
       sourcePin: cloneDeep(profileValue.helper.constants[name === 'width' ? 'viewWidth' : 'viewHeight'].source) as X4UiLayoutSourcePin,
     };
-    const resolved = resolveProjectedNumber(value, 'frame', `frame ${name}`, call.source, name === 'width' ? ['scaleX'] : ['scaleY']);
+    const resolved = resolveProjectedNumber(value, name, `frame ${name}`, call.source, name === 'width' ? ['scaleX'] : ['scaleY']);
     appendGapForResolution(operation, resolved, frameId);
     return resolved;
   };
@@ -11197,13 +12571,13 @@ export function projectX4UiLayoutProgram(
       const backgroundIdValue = propertyValue(call, 'backgroundid');
       const backgroundColorValue = propertyValue(call, 'backgroundcolor');
       const y = yValue
-        ? resolveProjectedNumber(yValue, 'table', 'table y', call.source, ['scaleY'])
+        ? resolveProjectedNumber(yValue, 'table', 'table y', call.source, ['scaleY'], 'property')
         : { value: 0, source: cloneLocation(call.source), provenance: 'source-pinned-default' as const, sourcePin: HELPER_DEFAULT_PINS.widgetY };
       const maxVisibleHeight = maxVisibleHeightValue
         ? resolveProjectedNumber(maxVisibleHeightValue, 'height', 'table maxVisibleHeight', call.source, ['scaleY'])
         : { value: 0, source: cloneLocation(call.source), provenance: 'source-pinned-default' as const, sourcePin: HELPER_DEFAULT_PINS.tableMaxVisibleHeight };
       const tabOrder = tabOrderValue
-        ? resolveProjectedNumber(tabOrderValue, 'table', 'table tabOrder', call.source)
+        ? resolveProjectedNumber(tabOrderValue, 'table', 'table tabOrder', call.source, [], 'property')
         : { value: 0, source: cloneLocation(call.source), provenance: 'source-pinned-default' as const, sourcePin: HELPER_DEFAULT_PINS.tableTabOrder };
       const highlightMode = highlightModeValue
         ? resolveProjectedString(highlightModeValue, 'table', 'table highlightMode', call.source)
@@ -11316,6 +12690,23 @@ export function projectX4UiLayoutProgram(
       appendOperation(operation);
       const hasUnsupportedProperties = addUnsupportedB119PropertyGaps(call, operation, table?.id);
       if (hasUnsupportedProperties) markTableGap(table);
+      // These defaults can alter constructor text without affecting the bounded
+      // height/hotkey kernel. Keep their refusal local to the text descriptor.
+      const defaultCellType = call.semantics.cellType;
+      if (table && blocked !== 'unreachable'
+        && !(defaultCellType?.status === 'static' && defaultCellType.type === 'string' && defaultCellType.value !== 'editbox')) {
+        const defaultPropertyName = call.semantics.propertyName;
+        if (call.name === 'setDefaultComplexCellProperties'
+          && !(defaultPropertyName?.status === 'static' && defaultPropertyName.type === 'string' && defaultPropertyName.value !== 'text')) {
+          table.editBoxTextDefaultsUnresolved = cloneLocation(call.source);
+        }
+        if (call.name === 'setDefaultCellProperties') {
+          for (const unsupported of call.semantics.unsupportedProperties || []) {
+            if (unsupported.normalizedName === 'text') table.editBoxTextDefaultsUnresolved = cloneLocation(unsupported.source);
+            if (unsupported.normalizedName === 'defaulttext') table.editBoxDefaultTextUnresolved = cloneLocation(unsupported.source);
+          }
+        }
+      }
       if (blocked) {
         operation.reason = blocked === 'unreachable'
           ? 'unreachable source operation was recorded but not applied'
@@ -12289,15 +13680,31 @@ export function projectX4UiLayoutProgram(
             : y.provenance === 'direct-helper-scale'
               ? y
               : minRowHeight;
+      const floorSampleDependencies = mergeResolutionSampleDependencies([minRowHeight, y, scaling]);
+      const floorUsesPreviewSamples = resolutionSampleIds(minRowHeight).length > 0
+        || resolutionSampleIds(y).length > 0
+        || resolutionSampleIds(scaling).length > 0;
       const minRowHeightFloor: Resolution<number> = type !== 'text'
         ? { value: undefined }
         : scaledMinRowHeight?.status === 'ok' && scaledY.status === 'ok'
-          ? {
+          ? floorSampleDependencies.error
+            ? {
+              gap: {
+                category: 'height',
+                status: 'unsupported',
+                reason: floorSampleDependencies.error,
+                source: cloneLocation(floorDependency.source || call.source),
+              },
+            }
+            : {
             value: scaledMinRowHeight.value - scaledY.value,
             source: cloneLocation(floorDependency.source || call.source),
-            provenance: floorDependency.provenance || 'source-pinned-default',
+            provenance: floorUsesPreviewSamples
+              ? 'preview-sample'
+              : floorDependency.provenance || 'source-pinned-default',
             sourcePin: HELPER_DEFAULT_PINS.textMinHeightBoundary,
-            ...(floorDependency.sampleId ? { sampleId: floorDependency.sampleId } : {}),
+            ...(floorSampleDependencies.sampleId ? { sampleId: floorSampleDependencies.sampleId } : {}),
+            ...(floorSampleDependencies.sampleIds ? { sampleIds: floorSampleDependencies.sampleIds } : {}),
           }
           : unresolved(
             minRowHeightValue,
@@ -12331,6 +13738,7 @@ export function projectX4UiLayoutProgram(
           source: cloneLocation(minRowHeightFloor.source || call.source),
           sourcePin: HELPER_DEFAULT_PINS.textMinHeightBoundary,
           ...(minRowHeightFloor.sampleId ? { sampleId: minRowHeightFloor.sampleId } : {}),
+          ...(minRowHeightFloor.sampleIds ? { sampleIds: minRowHeightFloor.sampleIds } : {}),
         }
         : unavailableFact(
           'number',
@@ -12386,6 +13794,111 @@ export function projectX4UiLayoutProgram(
           ? `max(${canonicalTextHeightCandidate?.expression || 'Math.ceil(layoutZektonText(...))'}, profile.defaults.minTextHeight, ${minRowHeightFloorExpression})`
           : `max(${canonicalTextHeightCandidate?.expression || 'Math.ceil(layoutZektonText(...))'}, ${minRowHeightFloorExpression})`
         : 'max(profile.defaults.minTextHeight, ' + minRowHeightFloorExpression + ')';
+      const automaticTextMeasurementDependencies: ResolutionSampleFields[] = [];
+      if (canonicalCorpusInput !== undefined && rawTextHeightCandidate !== undefined) {
+        // These values are consumed by the measured C++-text candidate. Keep the
+        // branch control itself in the fact even when width resolves to zero.
+        automaticTextMeasurementDependencies.push(content, font, fontSize, width, wordwrap, scaling);
+        if (width.value === undefined || width.value === 0) {
+          automaticTextMeasurementDependencies.push(x);
+          const spanFact = found.cell.descriptorFacts.span;
+          const span = spanFact?.status === 'known'
+            && spanFact.expectedType === 'number'
+            && typeof spanFact.value === 'number'
+            && Number.isSafeInteger(spanFact.value)
+            ? Math.max(1, spanFact.value)
+            : Math.max(1, found.cell.kernelState?.colspan || 1);
+          const coveredColumns = new Set<number>();
+          for (let offset = 0; offset < span; offset += 1) {
+            const column = found.cell.column + offset;
+            if (column >= 1 && column <= found.table.kernelState.columns.length) coveredColumns.add(column);
+          }
+          const appendFact = (fact: X4UiLayoutDescriptorFact | undefined): void => {
+            if (fact?.status === 'known') automaticTextMeasurementDependencies.push(fact);
+          };
+          const knownNumber = (fact: X4UiLayoutDescriptorFact | undefined): number | undefined => fact?.status === 'known'
+            && fact.expectedType === 'number'
+            && typeof fact.value === 'number'
+            && Number.isFinite(fact.value)
+            ? fact.value
+            : undefined;
+          appendFact(spanFact);
+          const latestWidthSetters = new Map<number, MutableOperation>();
+          for (const operationId of found.table.operationIds) {
+            const tableOperation = operations.find(candidate => candidate.id === operationId);
+            if (!tableOperation
+              || tableOperation.status !== 'applied'
+              || (tableOperation.kind !== 'setColWidth' && tableOperation.kind !== 'setColWidthPercent')) continue;
+            const indexFact = tableOperation.descriptorFacts.columnIndex;
+            const column = indexFact?.status === 'known'
+              && indexFact.expectedType === 'number'
+              && typeof indexFact.value === 'number'
+              && Number.isSafeInteger(indexFact.value)
+              ? indexFact.value
+              : undefined;
+            if (column !== undefined
+              && column >= 1
+              && column <= found.table.kernelState.columns.length) latestWidthSetters.set(column, tableOperation);
+          }
+          const addTableOperation = found.table.operationIds
+            .map(operationId => operations.find(candidate => candidate.id === operationId))
+            .find(candidate => candidate?.kind === 'addTable' && candidate.status === 'applied');
+          const tableRequestedWidth = knownNumber(addTableOperation?.descriptorFacts.requestedWidth);
+          const coveredColumnsHaveVariableWidth = [...coveredColumns].some(column => {
+            const stateColumn = found.table.kernelState.columns[column - 1];
+            return stateColumn !== undefined && stateColumn.min && stateColumn.weight > 0;
+          });
+          const coveredColumnsUseUsableWidth = coveredColumnsHaveVariableWidth
+            || [...coveredColumns].some(column => latestWidthSetters.get(column)?.kind === 'setColWidthPercent');
+          if (addTableOperation) {
+            appendFact(addTableOperation.descriptorFacts.columnCount);
+            if (coveredColumnsUseUsableWidth) {
+              appendFact(addTableOperation.descriptorFacts.requestedWidth);
+              if (coveredColumnsHaveVariableWidth) appendFact(addTableOperation.descriptorFacts.reserveScrollBar);
+              if (tableRequestedWidth === 0) {
+                appendFact(addTableOperation.descriptorFacts.x);
+                const frame = frames.find(candidate => candidate.id === found.table.frameId);
+                appendFact(frame?.descriptorFacts.width);
+              }
+            }
+          }
+          const appendWidthSetter = (setter: MutableOperation | undefined): void => {
+            if (!setter) return;
+            appendFact(setter.descriptorFacts.columnIndex);
+            if (setter.kind === 'setColWidth') {
+              appendFact(setter.descriptorFacts.width);
+              if (setter.metadata.semantics.scaling !== undefined) {
+                appendFact(setter.descriptorFacts.scaling);
+              } else {
+                appendFact(addTableOperation?.descriptorFacts.scaling);
+              }
+            } else {
+              appendFact(setter.descriptorFacts.percentage);
+            }
+          };
+          const settersToAppend = coveredColumnsHaveVariableWidth
+            ? [...latestWidthSetters.values()]
+            : [...coveredColumns].map(column => latestWidthSetters.get(column));
+          for (const setter of settersToAppend) appendWidthSetter(setter);
+        }
+      }
+      const automaticTextDependencyResolutions = [minRowHeightFloor, ...automaticTextMeasurementDependencies];
+      const automaticTextDependencies = mergeResolutionSampleDependencies(automaticTextDependencyResolutions);
+      const automaticTextUsesPreviewSamples = automaticTextDependencyResolutions.some(resolution => resolutionSampleIds(resolution).length > 0);
+      if (type === 'text' && textHeightCandidate !== undefined && automaticTextDependencies.error) {
+        addOperationGap(
+          gaps,
+          operation,
+          'height',
+          'unsupported',
+          automaticTextDependencies.error,
+          call.source,
+          textHeightCandidateExpression,
+          found.cell.id,
+        );
+        found.cell.hadGap = true;
+        found.table.hadGap = true;
+      }
       if (type === 'text' && height.value === 0 && textHeightCandidate === undefined) {
         found.cell.missingHeight = true;
         const reason = canonicalTextHeightCandidate?.reason
@@ -12397,15 +13910,19 @@ export function projectX4UiLayoutProgram(
         found.table.hadGap = true;
       }
       const finalTextHeightFact: X4UiLayoutDescriptorFact = textHeightCandidate !== undefined
+        && automaticTextDependencies.error === undefined
         ? {
           status: 'known',
           expectedType: 'number',
           value: textHeightCandidate,
-          provenance: minRowHeightFloor.provenance || 'source-pinned-default',
+          provenance: automaticTextUsesPreviewSamples
+            ? 'preview-sample'
+            : minRowHeightFloor.provenance || 'source-pinned-default',
           expression: textHeightCandidateExpression,
           source: cloneLocation(minRowHeightFloor.source || call.source),
           sourcePin: HELPER_DEFAULT_PINS.textMinHeightBoundary,
-          ...(minRowHeightFloor.sampleId ? { sampleId: minRowHeightFloor.sampleId } : {}),
+          ...(automaticTextDependencies.sampleId ? { sampleId: automaticTextDependencies.sampleId } : {}),
+          ...(automaticTextDependencies.sampleIds ? { sampleIds: automaticTextDependencies.sampleIds } : {}),
         }
         : unavailableFact(
           'number',
@@ -12485,6 +14002,12 @@ export function projectX4UiLayoutProgram(
           ? cloneDeep(found.table.descriptorFacts.editBoxDefaultDisplayIcon) as X4UiLayoutDescriptorFact
           : knownDefaultFact(false, 'boolean', call.source, HELPER_DEFAULT_PINS.editBoxHotkeyDefaults, 'false')
         : unavailableFact('boolean', `${type} has no edit-box hotkey icon flag`, call.source);
+      const editBoxTextDefaultsSource = type === 'editbox'
+        ? found.table.editBoxTextDefaultsUnresolved || editBoxConstructorOptionsGap(call, model)
+        : undefined;
+      const editBoxDefaultTextSource = type === 'editbox' && !defaultTextValue
+        ? found.table.editBoxDefaultTextUnresolved
+        : undefined;
       const pendingFacts: Record<string, X4UiLayoutDescriptorFact> = {
         contentKind: knownSourceFact(type, 'string', call.source, call.name),
         span: found.cell.descriptorFacts.span,
@@ -12495,15 +14018,17 @@ export function projectX4UiLayoutProgram(
           ? withKnownFactValue(factFromResolution(yValue, y, 'number', call.source, `${type} y`), scaledY.value)
           : unavailableFact('number', scaledY.message, call.source, yValue?.expression),
         outerWidth: unavailableFact('number', 'cell outer width is finalized from explicit width or column span after replay', width.source || call.source, widthValue?.expression),
-        outerHeight: heightValue
-          ? factFromResolution(heightValue, height, 'number', call.source, `${type} height`)
-          : type === 'button' && profileValue.defaults.standardButtonHeight
-            ? knownDefaultFact(buttonHeight!, 'number', call.source, profileValue.defaults.standardButtonHeight.source, 'Helper.standardButtonHeight')
-            : type === 'text'
-              ? finalTextHeightFact
-            : type === 'editbox'
-              ? editBoxBaseHeightFact
-              : knownDefaultFact(0, 'number', call.source, HELPER_DEFAULT_PINS.widgetHeight, '0'),
+        outerHeight: type === 'text' && height.value === 0
+          ? finalTextHeightFact
+          : heightValue
+            ? factFromResolution(heightValue, height, 'number', call.source, `${type} height`)
+            : type === 'button' && profileValue.defaults.standardButtonHeight
+              ? knownDefaultFact(buttonHeight!, 'number', call.source, profileValue.defaults.standardButtonHeight.source, 'Helper.standardButtonHeight')
+              : type === 'text'
+                ? finalTextHeightFact
+                : type === 'editbox'
+                  ? editBoxBaseHeightFact
+                  : knownDefaultFact(0, 'number', call.source, HELPER_DEFAULT_PINS.widgetHeight, '0'),
         ...(type === 'editbox' ? {
           baseHeight: editBoxBaseHeightFact,
           baseScaling: editBoxBaseScalingFact,
@@ -12606,6 +14131,45 @@ export function projectX4UiLayoutProgram(
             : knownDefaultFact(true, 'boolean', call.source, type === 'button' ? HELPER_DEFAULT_PINS.buttonActive : HELPER_DEFAULT_PINS.editBoxActive, 'true'))
           : unavailableFact('boolean', `${type} has no active descriptor flag`, call.source),
       };
+      if (type === 'editbox') {
+        // initTableCell creates textproperty with its own scaling=true before
+        // applying defaults/options (helper.lua:3490-3493,5432-5471). Only a
+        // subsequent setText copies the owning cell's scaling into that table.
+        const initialX = scaleX(5, profileValue.metrics.uiScale, true);
+        const initialY = scaleY(0, profileValue.metrics.uiScale, true);
+        const initialSize = scaleFont('Zekton', 9, profileValue.metrics.uiScale, true);
+        const initialTextFact = (
+          value: string | number | boolean | undefined,
+          expectedType: X4UiLayoutScalarType,
+          sourcePin: X4UiLayoutSourcePin,
+          expression: string,
+        ): X4UiLayoutDescriptorFact => editBoxTextDefaultsSource || value === undefined
+          ? unavailableFact(expectedType, 'edit-box constructor text defaults require supported properties and exact text scaling', editBoxTextDefaultsSource || call.source, expression, sourcePin)
+          : knownDefaultFact(value, expectedType, call.source, sourcePin, expression);
+        Object.assign(pendingFacts, {
+          text: initialTextFact('', 'string', HELPER_DEFAULT_PINS.editBoxTextContent, '""'),
+          textX: initialTextFact(initialX.status === 'ok' ? initialX.value : undefined, 'number', HELPER_DEFAULT_PINS.editBoxTextX, 'Helper.scaleX(Helper.standardTextOffsetx, true)'),
+          textY: initialTextFact(initialY.status === 'ok' ? initialY.value : undefined, 'number', HELPER_DEFAULT_PINS.editBoxTextY, 'Helper.scaleY(Helper.standardTextOffsety, true)'),
+          textFont: initialTextFact('Zekton', 'string', HELPER_DEFAULT_PINS.editBoxTextFont, 'Helper.standardFont'),
+          textFontsize: initialTextFact(initialSize.status === 'ok' ? initialSize.value : undefined, 'number', HELPER_DEFAULT_PINS.editBoxTextFontSize, 'Helper.scaleFont(Helper.standardFont, Helper.standardFontSize, true)'),
+          textHalign: initialTextFact('left', 'string', HELPER_DEFAULT_PINS.editBoxTextHalign, 'Helper.standardHalignment'),
+          textScaling: initialTextFact(true, 'boolean', HELPER_DEFAULT_PINS.editBoxTextScaling, 'true'),
+        });
+        pendingFacts.primaryContent = pendingFacts.text;
+        pendingFacts.font = pendingFacts.textFont;
+        pendingFacts.fontsize = pendingFacts.textFontsize;
+        pendingFacts.halign = pendingFacts.textHalign;
+        if (editBoxTextDefaultsSource) {
+          pendingFacts.color = unavailableFact('color-object', 'unsupported edit-box text properties may override nested color', editBoxTextDefaultsSource, undefined, HELPER_DEFAULT_PINS.textPropertyColor);
+        }
+        if (editBoxDefaultTextSource) {
+          pendingFacts.defaultText = unavailableFact('string', 'unsupported table defaultText prevents empty-default substitution', editBoxDefaultTextSource);
+        }
+        if (editBoxTextDefaultsSource || editBoxDefaultTextSource
+          || initialX.status !== 'ok' || initialY.status !== 'ok' || initialSize.status !== 'ok') {
+          addOperationGap(gaps, operation, 'text', 'unsupported', 'edit-box constructor text defaults could not be projected exactly', editBoxTextDefaultsSource || editBoxDefaultTextSource || call.source, undefined, found.cell.id);
+        }
+      }
       for (const [field, fact] of Object.entries(pendingFacts)) operation.descriptorFacts[field] = fact;
       const colorProperties = ['color', 'cellbgcolor', 'bgcolor', 'highlightcolor', 'bordercolor'] as const;
       const helperColorDefault = (colorName: typeof colorProperties[number]): { readonly id: string; readonly pin: X4UiLayoutSourcePin } | undefined => {
@@ -12688,7 +14252,8 @@ export function projectX4UiLayoutProgram(
           x.gap || width.gap || content.gap || font.gap || fontSize.gap || halign.gap || wordwrap.gap
             || found.cell.missingHeight
             || (type === 'text' && minRowHeight.gap)
-            || (type === 'editbox' && (defaultText.gap || description.gap || maxChars.gap || selectText.gap || active.gap))
+            || (type === 'editbox' && (defaultText.gap || description.gap || maxChars.gap || selectText.gap || active.gap
+              || editBoxDefaultTextSource || pendingFacts.textX.status !== 'known' || pendingFacts.textY.status !== 'known' || pendingFacts.textFontsize.status !== 'known'))
             || (type === 'button' && active.gap)
             || colorDescriptorGap,
         );
@@ -12861,6 +14426,29 @@ export function projectX4UiLayoutProgram(
             ? knownDefaultFact(textScaling.value, 'boolean', call.source, setterPin, 'owning cell.properties.scaling')
             : factFromResolution(undefined, textScaling, 'boolean', call.source, `${call.name} inherited scaling`),
       };
+      let omittedEditBoxTextUnresolved = false;
+      if (cellKind === 'editbox' && call.name === 'setText') {
+        // setText resets current text/scaling, but apply(properties) preserves
+        // other nested fields when omitted. Do not erase constructor uncertainty.
+        for (const [field, value, expectedType] of [
+          ['textX', xValue, 'number'],
+          ['textY', yValue, 'number'],
+          ['textFont', fontValue, 'string'],
+          ['textFontsize', fontSizeValue, 'number'],
+          ['textHalign', halignValue, 'string'],
+        ] as const) {
+          const prior = found.cell.descriptorFacts[field];
+          const unknownFont = field === 'textFontsize' && !fontValue
+            && found.cell.descriptorFacts.textFont?.status === 'unavailable';
+          if ((!value && prior?.status === 'unavailable') || unknownFont) {
+            facts[field] = unavailableFact(expectedType, 'setText omitted an unresolved prior edit-box text property', prior?.source || call.source, prior?.expression, setterPin);
+            omittedEditBoxTextUnresolved = true;
+          }
+        }
+        if (omittedEditBoxTextUnresolved) {
+          addOperationGap(gaps, operation, 'text', 'unknown', 'setText retains omitted unresolved edit-box text properties', call.source, undefined, found.cell.id);
+        }
+      }
       for (const [field, fact] of Object.entries(facts)) {
         operation.descriptorFacts[field] = fact;
         found.cell.descriptorFacts[field] = fact;
@@ -12872,7 +14460,11 @@ export function projectX4UiLayoutProgram(
         found.cell.descriptorFacts.halign = facts.textHalign;
       }
       const colorValue = propertyValue(call, 'color');
-      const colorResolution = colorValue || colorEvidenceInput
+      const priorEditBoxColor = cellKind === 'editbox' && !colorValue
+        && found.cell.descriptorFacts.color?.status === 'unavailable'
+        ? found.cell.descriptorFacts.color
+        : undefined;
+      const colorResolution = !priorEditBoxColor && (colorValue || colorEvidenceInput)
         ? resolveColorFact(
           modelColorExpressions,
           call,
@@ -12888,7 +14480,10 @@ export function projectX4UiLayoutProgram(
           'nested text color cannot be projected as RGBA',
         )
         : undefined;
-      if (colorResolution) {
+      if (priorEditBoxColor) {
+        operation.descriptorFacts.color = priorEditBoxColor;
+        addOperationGap(gaps, operation, 'text', 'unknown', 'setText retains omitted unresolved edit-box text color', priorEditBoxColor.source, priorEditBoxColor.expression, found.cell.id);
+      } else if (colorResolution) {
         operation.descriptorFacts.color = colorResolution.fact;
         found.cell.descriptorFacts.color = colorResolution.fact;
         if (colorResolution.gap) {
@@ -12909,7 +14504,7 @@ export function projectX4UiLayoutProgram(
       }
       const hasGap = Boolean(
         content.gap || font.gap || fontSize.gap || halign.gap || textX.gap || textY.gap || textScaling.gap
-          || colorResolution?.gap || (call.semantics.unsupportedProperties?.length || 0) > 0,
+          || colorResolution?.gap || omittedEditBoxTextUnresolved || priorEditBoxColor || (call.semantics.unsupportedProperties?.length || 0) > 0,
       );
       operation.status = hasGap ? 'unresolved' : 'applied';
       if (hasGap) {
@@ -13233,16 +14828,37 @@ export function projectX4UiLayoutProgram(
     }
   }
 
-  if (consumedSamples.size > 0) {
-    // Boolean/string model gaps do not encode their expected type. Remove only
-    // exact ranges proven consumed, irrespective of the call-model gap category.
-    const consumedRanges = new Set(previewSamples.ordered
-      .filter(sample => consumedSamples.has(sample.entry.id))
-      .map(sample => locationKey(sample.entry.source)));
-    gaps = gaps.filter((gap, index) => index >= modelGapCount || !consumedRanges.has(locationKey(gap.source)));
-    gapEvents.splice(0, gapEvents.length, ...gapEvents
-      .filter((gap, index) => index >= modelGapCount || !consumedRanges.has(locationKey(gap.source))));
-  }
+  const isResolvedInitialModelGap = (gap: X4UiLayoutGap, index: number): boolean => {
+    if (index >= modelGapCount) return false;
+    const exactResolvedNumericRoot = resolvedNumericModelGapProofs.some(proof =>
+      proof.category === gap.category
+        && proof.previewLoopId === (gap.previewLoop?.id || '')
+        && locationContains(proof.consumerSource, gap.source)
+        && locationContains(proof.consumerSource, proof.valueUseSource)
+        && ((proof.expression === gap.expression && locationsEqual(proof.source, gap.source))
+          || (proof.valueUseExpression === gap.expression && locationsEqual(proof.valueUseSource, gap.source)))
+    );
+    if (exactResolvedNumericRoot) return true;
+    const exactResolvedNumericDependency = previewSamples.ordered.some(sample =>
+      sample.entry.expectedType === 'number'
+        && resolvedNumericModelGapProofs.some(proof =>
+          proof.category === gap.category
+            && proof.previewLoopId === (gap.previewLoop?.id || '')
+            && proof.sampleIds.includes(sample.entry.id)
+            && locationContains(proof.consumerSource, gap.source)
+            && sample.entry.expression === gap.expression
+            && locationsEqual(sample.entry.source, gap.source))
+    );
+    if (exactResolvedNumericDependency) return true;
+    return previewSamples.ordered.some(sample =>
+      sample.entry.expectedType !== 'number'
+        && consumedSamples.has(sample.entry.id)
+        && locationsEqual(sample.entry.source, gap.source)
+    );
+  };
+  gaps = gaps.filter((gap, index) => !isResolvedInitialModelGap(gap, index));
+  gapEvents.splice(0, gapEvents.length, ...gapEvents
+    .filter((gap, index) => !isResolvedInitialModelGap(gap, index)));
   for (const sample of previewSamples.ordered) {
     if (consumedSamples.has(sample.entry.id)) continue;
     addGap(gaps, {
@@ -13320,7 +14936,7 @@ export function projectX4UiLayoutProgram(
   }, frames, tables, rows, cells, operations, gaps, sampleCatalog, previewSamples, consumedSamples,
   previewPathCatalog, normalizedPaths.value.ordered,
   previewLoopCatalog, normalizedLoops.value.ordered, model,
-  targetCalls, operationEvents, nodeLedgerEvents, gapEvents, localExpansionState, colorEvidenceInput);
+  targetCalls, operationEvents, nodeLedgerEvents, gapEvents, localExpansionState, colorEvidenceInput, canonicalCorpusInput);
 }
 
 /** Alias matching the construction language used by the surrounding modules. */

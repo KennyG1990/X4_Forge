@@ -7849,3 +7849,500 @@ truth. Overall B119 remains `IN_PROGRESS / PARTIAL`; same-state renderer/source 
 current-game census, arbitrary Lua/Helper/widget coverage, universal C++ acceptance, and the separately write-gated
 real-mod correction remain open. No release, universal parity, universal acceptance, or overall-B119 completion is
 claimed. Planned checkpoint subject: `fix(e2e): select safe Windows Node runtime`.
+
+## 2026-09-10 — B119 ordinary authoring workspace — VERIFIED bounded / full B119 PARTIAL
+
+Compact source File/Menu/New menu toolbar, keyboard Preview settings and immediate property controls
+reclaim the authoring area without changing source-edit, acknowledgement, renderer or camera owners.
+At1280x720, created/import-fixture menus both have a714x322px canvas (64% of editor height) and visible
+Text/Apply at inspector scrollTop0. Parent inspected real screenshots. Native PNG remains in Inspect.
+Selftests, normal TypeScript, exact lint/diff, Vite/server build and isolated two-spec E2E7/7 pass;
+0failed/0flaky, complete report, treeGone:true,14/14 live hashes unchanged,3200/3201 closed.
+First compiler failure is preserved; explicit fixture fields corrected it. All seven protected source
+hashes and five other prior tested files unchanged. One bounded Luna closed after integration.
+Plan/evidence: docs/plans/2026-09-10-b119-authoring-workspace.md and test-results/b119-authoring-workspace-*.
+Next is contextual Add widget through the existing owner. Palette/structure/history/scenarios/save-reopen/
+real imports/recovery/namespacing and all packaged/native obligations remain; no release or installed
+redesign claim. Prior full111/111 is baseline only. No Git/external projection or real game/mod/config write.
+Commit point: `B119 reclaim canvas authoring space and expose immediate property controls`.
+
+## 2026-09-11 — B119 source-bound regression census — VERIFIED test-only / full B119 PARTIAL
+
+Historical producer replay independently explained both stale expectations before updating them:
+Input placeholder contributes14glyphs and removes3missing-text geometry gaps; HUB resolves5former numeric
+samples directly from source at7consumers. Only those count expectations changed. New exact-source
+positive/copy-drift negative predicates preserve all original hash, geometry, Paint/issuer and refusal gates.
+Independent parent Scene192/192, Pipeline124/124, Layout800/800/skips0, SourceEdits164/164,
+EditorSession, whole-project tsc, exact two-file ESLint and git diff --check pass.24inputs stable across
+tests/graph; other22sources/tests and three real menus unchanged. Code graph11379nodes/28740edges;
+Luna completed and closed/not_found. Initial graph option error preserved; documented command passes.
+Plan: docs/plans/2026-09-11-b119-census-reconciliation.md.
+Receipt: test-results/b119-census-reconciliation-parent-stage2-20260911T143357603Z/receipt.json.
+This is automated evidence repair, not new visual/native acceptance. Scenarios/dependencies and all nine
+actual-interface journeys, packaged/installed/native and three-menu/twelve-reference obligations remain.
+No Git mutation, release, protected writes or external issue/wiki updates.
+Commit point: `test(ui): reconcile source-bound Input and HUB regression evidence`.
+
+## 2026-09-11 — B119 explicit-zero automatic text height — VERIFIED source-level / full B119 PARTIAL
+
+Supported text with resolved height0 now uses the existing automatic-height result, matching omitted
+height without rewriting Lua or weakening Scene/metadata/issuer guards. Production delta is confined
+to the existing Layout fact selection; regression coverage extends the Layout and Scene selftests.
+Independent Layout810/810/skips0, Scene193/193, SourceEdits164/164, Pipeline124/124, EditorSession,
+whole-project tsc, strict exact-owner lint and whitespace passed. The final actual-corpus public
+EditorSession probe passed174/174 assertions across6same-source pairs, nonzero12 and2negatives.
+All pairs have4glyphs per side, positive equal Scene/Paint geometry; missing input/corpus never invents
+automatic geometry.15workspace/Lua/ui.xml/raw-metadata preservation checks and independent24source/
+8real-asset comparisons pass. Probe uses actual pinned files, normal cryptographic hashing and loaders.
+Scene/Paint remains explicitly PARTIAL, not a whole-menu/pixel/native acceptance claim. The earlier
+synthetic-font/hash-overridden probe was rejected and preserved, not counted as actual-corpus proof.
+Graph update passed11379nodes/28742edges/347communities;24source inputs stayed stable. HTML output was
+skipped by the existing size guard; no browser opened. Both bounded Luna workers are CLOSED/not_found.
+Plan:docs/plans/2026-09-11-b119-explicit-zero-text-height.md.
+Evidence:test-results/b119-explicit-zero-text-height-parent-20260911T164500483Z/,
+especially real-corpus-parent-run-receipt.json and real-corpus-parent-audit.json.
+Numeric dependencies, scenario-preserving editing/history/recovery and all nine interface journeys,
+packaged/installed/native and three-menu/twelve-reference obligations remain. No Git/release/protected/
+external issue/wiki/config/memory mutation;0.0.78 remains immutable. Full B119 remains ACTIVE/PARTIAL.
+Commit point: `fix(ui): preserve automatic text height for explicit zero` (not committed).
+
+### 2026-09-11 — B119 exact numeric fallback reconciliation — VERIFIED source scope only
+
+One production catalog-label repair retains exact root IDs and per-use sample eligibility. Variation
+sample600 changes only missing frame-x; two source-matched final text cells remain695/540/530 with
+source-literal provenance, unchanged Lua/model and no sample IDs. Separate3use dedup and malformed/
+forged-input controls pass. Final Layout824/824,CallModel139/139,tsc/exact2lint/whitespace0;821old names
+retained+3new controls. Parent reviewed the complete diff and raw results;24input census2changed/22same.
+Initial failed and insufficient green tests remain preserved; final-cell assertions were required before
+acceptance. Newton completed and CLOSED/not_found. Plan/AAR:docs/plans/2026-09-11-b119-numeric-fallback-reconciliation.md.
+Evidence:test-results/b119-numeric-fallback-baseline-20260911T205035041Z/parent-final-review.json.
+Full numeric dependencies/downstream/public pipeline, scenarios/history and all interface/native/fidelity
+obligations remain PARTIAL. No capability-map delta; no Git/release/protected/external writes.
+Commit point: `fix(ui): restore exact numeric fallback inputs without known-value overrides` (not committed).
+
+Post-close code graph refresh:11393nodes/28795edges/356communities,exit0,0LLMtokens. No HTML/browser;
+post-graph24source inputs unchanged from accepted state. Evidence:same baseline directory/parent-graph-close.json.
+
+### 2026-09-11 — B119 original numeric preview-input roots — VERIFIED source scope only
+
+Supported scalar, literal-table/member/index and parameter aliases preserve original preview reads;
+200/260 propagate through arithmetic to88/118 without intermediate overrides. Captured tables survive
+source-variable rebinding. Source-known geometry stays unsampled; stale/forged root and invalid child
+consumer admissions are rejected while useful unavailable diagnostics remain. Existing owners reused.
+Final CallModel148/148(all139old),configured Layout872/872(all824old),post-rename tsc/exact4lint/diff0;
+complete production/ordered test review;24input census4owners changed/20same. All4freeze hashes matched
+after graph refresh. Mencius completed and CLOSED/not_found. Failed runs and oracle corrections retained.
+Plan/AAR:docs/plans/2026-09-11-b119-original-numeric-input-roots.md.
+Evidence:test-results/b119-scalar-root-baseline-20260911T212356911Z/parent-final-review.json.
+Graph:11397nodes/28808edges/371communities,exit0,0LLMtokens;HTML skipped,no browser.
+Source capability delta recorded in the plan; no external issue/map/wiki/config/memory or Git/release write.
+Full numeric downstream/scenario/history/actual-interface/installed/native and three-menu/twelve-reference
+fidelity obligations remain open. Full B119 goal remains ACTIVE/PARTIAL.
+Commit point: `feat(ui): preserve original numeric preview input roots` (not committed).
+
+### 2026-09-12 — B119 workspace File/Menu selection — bounded VERIFIED, full goal PARTIAL
+
+Component-lifetime view selection is keyed by immutable workspace ID; source/catalog authority and
+history remain unchanged. Full mounted21/21 scope matrix, Session/WorkspaceSource, typecheck and strict
+two-file lint passed. Clean unmodified real Lua browser journey1/1,0flakes; all16checkpoints including
+automatic original-workspace selection and exact source/bitmap/hierarchy/profile restoration. Actual
+downloads and returned screenshot independently inspected. Prior ERR_NO_BUFFER_SPACE flaky receipt retained.
+Evidence:test-results/b119-workspace-selection-clean-20260912/receipt.json; plan:
+docs/plans/2026-09-12-b119-workspace-view-selection.md.45inputpins/19persistentguards stable,stackgone,
+Deckwright3100 unchanged. No release/install/native claim; outlined/overlapping preview still needs work.
+Commit point: `fix(ui): retain menu selection per workspace` (not committed; no interim push).
+
+### 2026-09-12 — B119 visible fresh-row Input — bounded VERIFIED, full goal PARTIAL
+
+Palette insertion emits explicit editable height25, grounded in Helper's standard control size.
+Imported heightless source and faithful renderer/kernel rules are unchanged. Actual source-owner
+fail-first Input0/row1 and browser empty-content failure retained; final SourceEdits170/170, full mounted
+SourceEditor,tsc,strict3file lint and six real browser journeys6/6,0flakes pass. Fresh Input and ordinary
+text Apply actually viewed; inner glyph mask573->785pixels, same crop; independent source comparison
+differs only by intended height property. Source/sibling/history/movement inverse checks retained.
+Evidence:test-results/b119-fresh-row-input-20260912/receipt.json; plan:
+docs/plans/2026-09-12-b119-fresh-row-input-height.md.46pins/19guards stable,treeGone,3100untouched.
+No release/install/native/full-goal claim. Numeric, scenarios, all9journeys and3menus/12references remain.
+Commit point: `fix(ui): give newly inserted Inputs a usable height` (not committed; no interim push).
+
+### 2026-09-12 — B119 resolved table-property warnings — bounded VERIFIED, full goal PARTIAL
+
+Exact addTable Y/tabOrder proof categories now match source property warnings without changing kernel
+failure categories. Actual before/current controls preserve every node/operation/sample/binding across
+MENU/HUB/COMM and selected MENU; only5/0/7/5 proven property gaps removed. Missing values, blocked
+owners, other ranges/categories and evidence-ledger negatives retained. Layout fail-first883/886 then
+configured final886/886,0skips; Scene194/194 with all3real menus; whole tsc/strict4owner lint0.
+Real rendered primary-input journey1/1,0flakes: six friendly values Apply/Clear, draft/discard, exact
+source/history/bitmap restoration; unobstructed applied/cleared screenshots actually inspected. This
+uses real corpus bytes with synthetic readiness and is not native/full-builder proof.19guards/46pins/
+3sources/4snapshots stable;owned stackgone,3100untouched. Setup-error unconfigured Layout log retained,
+not accepted; final configured run is green. Plan:docs/plans/2026-09-12-b119-table-property-warnings.md;
+evidence:test-results/b119-table-property-warnings-20260912T1301Z/receipt.json and verified-proof.json.
+No capability-map delta. Numeric six-suite/schema/proxy/replay/scenarios/native/full release gates open.
+Commit point: `fix(ui): clear resolved table-property warnings` (not committed; no interim push).
+
+### 2026-09-12 — B119 placeholder Paint fixture VERIFIED (bounded; full goal PARTIAL)
+
+Corrected two synthetic Input constructors using unsupported affectRowHeight. Production unknown-text
+guards and original tint assertions retained; two counterfactuals preserve0glyphs/known geometry.
+Paint215/215,whole tsc/strictlint/whitespace0,independent proof0. Positive paints3tinted ellipsis glyphs
+within6px; no full-text/native/UI claim. Only Paint selftest changed;47pins/4sources/19guards preserved.
+No capability-map delta or release. Plan:docs/plans/2026-09-12-b119-placeholder-paint.md.
+Evidence:test-results/b119-placeholder-paint-20260913T0005Z/receipt.json and verified-proof.json.
+Commit point:`test(ui): ground placeholder Paint fixture in supported Input options` (not committed).
+
+### 2026-09-12 — B119 proxy-bearing layout evidence rejection VERIFIED (bounded)
+
+Actual validator previously accepted proxy dependency arrays/program/authority after property reads.
+Descriptor-first cloneability admission now rejects0getters/0throws; frozen plain issued data accepted.
+All399old assertion blocks preserved;28new actual-validator checks, fail-first910/914 ->914/914.
+Six configured suites,whole tsc,strictlint pass. Rendered Chromium2/2,0flakes/0skips; four screenshots
+inspected,owned cleanup complete,19state/config guards and4real source hashes unchanged. No native,
+installed/full E2E/precommit/release claim. Original larger numeric/scenario contract and goalPARTIAL.
+No capability-map delta. Plan:docs/plans/2026-09-13-b119-numeric-validator.md;
+evidence:test-results/b119-numeric-validator-20260913T0024Z/. No external issue/wiki/memory writes.
+Commit point:`fix(ui): reject proxy-bearing layout evidence` (not committed; no interim push).
+
+### 2026-09-12 — B119 real-byte public two-scenario probe VERIFIED (bounded)
+
+Actual HUB Y62->90 and declared numeric authoring fixture widths88/120,font8/10 pass public
+EditorSession->Layout->nonemptyScene/Paint, with exact dependency links and matching Paint owners.
+Missing-root/typed-refusal negatives pass. Raw Lua/ui.xml/metadata preserved; independent24code+
+8real corpus assets+9mod file hashes match before/after;47regression inputs/19guards stable.
+No application code change or new browser/native/installed/durable saved-scenario proof. Synthetic
+readiness envelope explicitly retained as limitation. Full numeric/authoring/release goalPARTIAL.
+Plan:docs/plans/2026-09-13-b119-public-scenarios.md; evidence:test-results/b119-public-scenarios-20260913T0058Z/receipt.json.
+No capability-map delta or external issue/wiki/memory write. No commit,push,release or protected write.
+Commit point:`test(ui): verify byte-backed public preview scenarios` (not committed).
+
+### 2026-09-12 — B119 local named scenarios VERIFIED bounded / full scenario program PARTIAL
+
+Preview inputs now supports named Save/Select/Remove and reload on this computer/browser, scoped to
+immutable workspace and exact menu revision. Fresh public path->loop->sample authority, 20-record/
+240Ki-code-unit bound, no-eviction quota refusal, duplicate/read/stale recovery and independent inputs
+verified. Rendered3/3,0flakes, clean owned teardown; actual readable A/B canvas screenshots inspected;
+Lua/workspace/source history unchanged. SourceEditor regression, focused store/replay and static checks
+pass. Protected45other inputs/4real sources/19state/config guards preserved. No Git/protected write.
+Plan:docs/plans/2026-09-13-b119-named-scenarios.md. Evidence:test-results/b119-named-scenarios-20260913/.
+Still required: source-edit/history reissue, long-text recovery (pixel-only apparent pass rejected on
+visual review), all full numeric/authoring/native/package/release gates. This is not an installed release.
+Capability delta recorded in repository plan; external projections deferred. No global memory write.
+Commit point:`feat(ui): add computer-local named preview scenarios` (not committed).
+
+## 2026-09-13 — B119 structural editing retains independent preview samples — VERIFIED bounded
+
+Required row-move rejection repaired at existing LayoutProgram/SourceEdits owners. Shared
+exact-splice scenario mapper reissues preview inputs; full ledger rebases validated sample IDs
+without ignoring them. Derived numeric text height retains its string input identity. Mounted
+row move/insertion plus browser4/4,0flakes and exact source Undo pass. SourceEdits170/170,
+Layout914/914,complete mounted SourceEditor,scenario/history,tsc/lint pass. Actual moved/inserted
+canvas captures inspected.37independent inputs/4real mod sources/19protected files and membership
+unchanged; owned3200/3201 closed. External3100 was alive after E2E, absent at final check;
+not part of owned teardown, cause unknown, no restart/action taken. No Git/release/mod/install writes.
+Plan/AAR:docs/plans/2026-09-13-b119-structural-preview.md. Evidence and final receipt:
+test-results/b119-structural-preview-20260913/. Full B119 goal remains ACTIVE/PARTIAL; no native
+or installed-product claim. Loop-expanded and sampled-row permutations are not covered by this close.
+Commit point:`fix(ui): preserve preview authority through structural source edits` (not committed).
+
+## 2026-09-13 — B119 sampled-row visual authoring — VERIFIED bounded
+
+Moving sampled rows now retains exact source-bound inputs and canonical saved scenario
+order. Actual UI Move/Add row/Add text/3Undo/3Redo passes exact workspace/Lua/history/pixels;
+browser5/5,0fail/flake/skip with complete owned teardown. Full SourceEdits170/170,mounted
+SourceEditor,scenario/history,tsc pass. Repo lint exits0 with600warnings; owned5files have
+zero warnings before/after. Old assertions and37independent inputs/4mod sources/19protected
+files+membership preserved. Screenshots inspected; no native/installed/release claim.
+Plan/AAR:docs/plans/2026-09-13-b119-sampled-row-authoring.md; evidence:
+test-results/b119-sampled-row-authoring-20260913/receipt.json. Full goal ACTIVE/PARTIAL:
+long-text/numeric/all9journeys/3native menus/12references/full release gates retained.
+No Git/external/protected writes. Final Redo clears element selection; full UX review open.
+Commit point:`fix(ui): retain sampled row inputs through visual authoring` (not committed).
+
+## 2026-09-13 — B119 long-text/settings/recovery authoring — VERIFIED bounded
+
+Actual canvas journey: long multiline sample -> Wrapping Apply -> draft-refusal/Discard ->
+1920x1080/user scale1 -> four keep-out contexts/off -> original profile -> Clear/refill.
+Exact Lua/history changes only for explicit Wrapping; sampled table remains measurable and
+rendered. Repaired no-wrap mixed/blank line height, scalar splice reissue, and fresh-profile
+scenario replay at existing owners. Screenshots inspected; no native/installed claim.
+Browser6/6 plus primary-inputs1/1,0flakes; Text13/Layout914/SourceEdits170/Scene194/Paint215/
+Preview125 full suites, mounted editor/scenarios/history,tsc/owned7-file lint pass. Every old
+test line preserved;36independent inputs/4real sources/19protected files+membership unchanged;
+owned server trees gone. Plan/AAR:docs/plans/2026-09-13-b119-long-text-recovery.md. Evidence:
+test-results/b119-long-text-recovery-20260913/receipt.json. Full goal ACTIVE/PARTIAL; imported
+real-menu, numeric, three-native-menu/12reference and full packaged/release gates remain.
+No Git or protected/external writes. Commit point:
+`fix(ui): preserve long-text preview through wrapping and profile changes` (not committed).
+
+## 2026-09-13 — B119 COMM source-lookup responsiveness — VERIFIED bounded
+
+Existing LayoutProgram privately reuses exact-text line starts and private-AST type lists,
+preserving validation, source coordinates, grouping order and every authority guard.
+Original-byte COMM probe10.269s ->6.868s (~33% in one comparison), complete plain/sampled
+program/evidence/catalog hashes identical. Full Layout914,SourceEdits,EditorSession,
+Preview125,mounted SourceEditor,tsc/owned lint pass; corrected new test covers line endings,
+BOM/Unicode, repeated output, reused caller source changes and forged-coordinate refusal.
+Unchanged unprofiled real COMM edit/UndoRedo/export/reopen/pixels/collision1/1,0flakes.
+Edited/reopened PNGs inspected; partial shell/header only, not complete runtime body or native
+proof. Journey1.9m under120s: broader responsiveness/sync reliability remains unproven.
+Profile failures/typecheck initial red retained in plan/AAR; no deadline or oracle weakening.
+Plan:docs/plans/2026-09-13-b119-comm-responsiveness.md. Evidence:matching test-results/receipt.json.
+Independent10owners/36inputs/4real sources/19protected files+membership unchanged; stack gone,
+Deckwright3100 untouched. No capability-map semantic delta; no Git/release/protected writes.
+Full goal ACTIVE/PARTIAL; HUB/original Lua/MENU and all native/full-release obligations remain.
+Commit point:`perf(ui): reuse source lookup indexes during real-menu authoring` (not committed).
+
+## 2026-09-13 — B119 real HUB heading roundtrip — VERIFIED bounded
+
+Unchanged actual HUB journey passes first attempt1.6m,0flakes: friendly heading edit,
+exact source/history,UndoRedo/pixels,untouched/edited exports,independent workspace reopen,
+hierarchy/appearance and collision refusal. Edited/reopened screenshots inspected; both
+downloads independently byte-checked. Partial header projection only, not complete body/native.
+Current performance repair reused; no product or test-body changes in this validation unit.
+Combined batch remains PARTIAL: original full Lua journey fails final restoration at120s
+in both attempts. Repeated6-8s workspace requests now isolated as a separate profiling lead.
+Plan/AAR:docs/plans/2026-09-13-b119-roundtrip-continuation.md; matching test-results/receipt.json.
+16pins/36inputs/4real sources/19protected files+membership and HEAD unchanged; stack gone.
+No semantic capability-map delta or Git/release/protected writes. Full goal ACTIVE/PARTIAL.
+Commit point:test(ui): verify HUB roundtrip and isolate workspace request stalls (not committed).
+
+## 2026-09-13 — B119 full-record manifest query repair — VERIFIED bounded
+
+Repaired only queryReferenceFiles: existing covering index selects ordered path keys,
+then primary-key reads load bounded full records; class-first count. No schema/index,
+cache freshness, validation policy, permission or E2E assertion/deadline changes.
+238 full-record/count regression cases and six actual million-row manifest probes pass;
+original SQL fails the indexed-plan regression. DB/corpus/schema/manifest/API/routing,
+typecheck and exact-file lint pass. Query-only LIKE scanning remains a measured limitation.
+Unchanged complete Lua journey now passes first attempt in 57.6 seconds with all 16
+checkpoints, including restoration. Rendered/API batch 14/14, zero failures/flakes;
+actual screenshot inspected and both exports independently byte-checked. Batch includes
+workspace isolation/conflict/recovery, continuous validation and full-project diagnostics.
+Plan/review/AAR: docs/plans/2026-09-13-b119-reference-query-repair.md.
+Evidence: test-results/b119-reference-query-repair-20260913/receipt.json.
+Owned stack gone; Deckwright 3100 preserved. 29 source pins, 36 older inputs, four real
+sources, 19 protected files plus membership and HEAD stable. No semantic capability-map
+delta or Git/release/protected writes. Full goal ACTIVE/PARTIAL; MENU, selection continuity,
+broader reference/scenario coverage and native/installed/public-release gates remain open.
+Commit point: perf(reference): bound full-record manifest queries (not committed).
+
+## 2026-09-13 — B119 real MENU local-instance editing — VERIFIED bounded
+
+Existing Layout issuance retains exact immutable expanded-call input metadata, privately
+keyed by emitted operation. SourceEdits validates that metadata after complete raw-model
+admission; source/stream/snapshot binding and helper/conditional/structural locks remain.
+No namespace stripping, helper skipping, alternate parser/renderer/history or UI bypass.
+Fail-first local-helper fixture and original MENU reproduce then resolve catalog refusal.
+SourceEdits170/170 plus new instance regression, Layout914/914/no skips, Preview125/125,
+mounted editor, typecheck and owned lint all pass. Original MENU42direct scalar entries;
+exact SEND/TRANSMIT edit and inverse preserve callbacks/siblings, refuse stale/copies.
+Unchanged full rendered MENU journey FIRST attempt1.9m,1passed/0failed/0flaky; selection,
+ink,UndoRedo,export,independent reopen,hierarchy/pixels and filename collision all pass.
+Both downloaded Lua files independently byte-exact; edited file changes only the caption.
+Original/edited/reopened PNGs inspected. Fit menu20.1% remains too small; preview sample
+recovery/full runtime bodies are not a finished UX. Native/install/full-goal gates remain.
+Plan/review/AAR: docs/plans/2026-09-13-b119-menu-instance-authority.md.
+Evidence: test-results/b119-menu-instance-authority-20260913/receipt.json.
+29finalpins/26independentpins/36earlierinputs/four originals/19protected files+membership
+unchanged; stack gone, Deckwright3100 preserved. No new semantic capability-map delta,
+Git/release/mod/game/install/config/external-ledger writes. Full goal ACTIVE/PARTIAL.
+Commit point: fix(ui): retain exact local-instance source edit authority (not committed).
+
+### 2026-09-13 — B119 visible reopening and source-camera navigation — VERIFIED bounded
+
+Existing source-canvas camera now resets to Fit menu at workspace/source/menu navigation;
+same-menu authoring retains working zoom. No source/profile/native geometry/history changes.
+New fail-first real MENU check reproduced a blank view despite equal native pixels:
+100%zoom/scroll0 put the caption beyond the viewport. Final browser2/2first attempts,
+zero flakes (canvas-first14.2s,MENU1.8m,batch2.7m), with every original E2E line retained.
+Reopen caption is visibly inside the viewport before reselect/refocus; a further explicit
+focus displays readable TRANSMIT at100%. Six real screenshots inspected. Full mounted,
+presentation,typecheck,owned lint,whitespace and independent exported Lua checks pass.
+Plan/review/AAR: docs/plans/2026-09-13-b119-reopen-working-view.md.
+Evidence: test-results/b119-reopen-working-view-20260913/receipt.json.
+31currentpins/28independentpins/34olderinputs/four originals/19protectedfiles+membership
+exact; owned stack gone,Deckwright3100 preserved. No semantic capability-map delta or
+Git/release/mod/game/save/install/config/external writes. Missing-input UX and all broader
+menu/census/full/installed/native/release obligations remain; full goal ACTIVE/PARTIAL.
+Commit point: fix(ui): reset source canvas view across menu navigation (not committed).
+
+### 2026-09-13 — B119 explicit stale-preview recovery — VERIFIED bounded
+
+Previous preview now has a prominent not-current notice and existing-input/Inspect recovery
+actions. Renderer retains last-good history unchanged; no new source/selection/export
+authority. Prior0canvas negative contradicted the documented contract and is replaced with
+exact retained object+PNG/native pixels, no selection/Focus/export, source/history equality,
+then fresh current object after explicit sample recovery. Prior failed receipts retained.
+Full mounted/presentation/type/lint/whitespace pass. Standard rendered3/3first-attempt,
+0flakes: canvas-first15.0s,fullrealMENU1.8m,recovery49.0s. Ten actual PNGs inspected; stale
+notice readable at1024x900, recovery restores readable SEND; reopen retains TRANSMIT.
+Independent original90060/edited90064 export bytes differ only SEND->TRANSMIT.31current
+pins/28independentpins/34olderinputs/4realoriginals/19protectedfiles+membership exact.
+Owned stack gone; Deckwright3100 preserved. No Git/release/protected/external writes.
+Plan/review/AAR: docs/plans/2026-09-13-b119-stale-preview-recovery.md.
+Evidence: test-results/b119-stale-preview-recovery-20260913/receipt.json.
+No semantic capability-map delta. Unsupplied caption discovery and broader nine-journey/
+numeric/three-menu12ref/full/installed/native/release requirements stay OPEN;
+full goal ACTIVE/PARTIAL,gameVerified=false. Degradation checkpoint, fresh next unit.
+Commit point: fix(ui): make stale preview recovery explicit (not committed).
+
+### 2026-09-13 — B119 readable unresolved-caption discovery — VERIFIED bounded
+
+Known supported source captions now remain in hierarchy before parent geometry resolves.
+Existing Layout descriptors and Scene identities reused; no invented rects/hits/edit
+authority. Three-line hierarchy styling caps visual indentation and wraps caption labels;
+actual aria-level remains. At1024px realSEND is readable and leads directly to2related
+inputs rather than structuralTable6's36. ExplicitY restores current selection; Clear and
+stale-canvas click retain historical bitmap guards; source reselection/recovery works.
+Final standard browser3/3FIRST attempts,0flakes:15.6s/1.8m/52.0s. Eleven actual PNGs
+inspected. Full mounted154.3s,presentation,typecheck,owned lint,whitespace pass. Independent
+90060original/90064edited exports are exact except SEND->TRANSMIT.31currentpins/
+26independentpins/34olderinputs/4originals/19protectedfiles+membership preserved;
+owned stack gone, Deckwright3100 untouched. All other E2E test bodies unchanged.
+Readability-red and first final-batch failure retained. Reproduced wrong stale-click
+oracle restored to original empty-selection policy and strengthened with historical
+object/pixel/export recheck; no production selection-policy change.
+Plan/review/AAR: docs/plans/2026-09-13-b119-unresolved-caption-discovery.md.
+Evidence: test-results/b119-unresolved-caption-discovery-20260913/receipt.json.
+Capability delta recorded locally: known source-caption discovery without geometry.
+External projection deferred; no Git/release/mod/game/config/install writes. Unknown
+runtime captions/unissued cells/cross-sibling layout dependencies remain limited;
+full authoring/numeric/three-menu12ref/full/installed/native/release gates remain OPEN.
+Full goal ACTIVE/PARTIAL,gameVerified=false. Degradation checkpoint for fresh next unit.
+Commit point: feat(ui): retain readable controls without preview geometry (not committed).
+
+### 2026-09-13 — B119 structural-history editing context — VERIFIED bounded
+
+Exact source-splice/retained-span mapping now restores fresh surviving selections through
+structural Undo/Redo. Deleted elements stay unselected until exact source return through
+a contiguous scoped history chain; explicit selection/navigation/profile/foreign/external
+changes cancel dormant intent. Existing selection/history/source owners reused; no second
+history, source writer, scenario authority, geometry guess or caption identity matching.
+Fail-first real sampled-row journey and mounted check reproduced empty final inspector.
+Final rendered4/4FIRST attempts,0flakes: current-B scalar history, sampled-row move/Add row/
+Add text/3Undo3Redo/direct continued edit, scalar recovery, populated-row movement/history/
+alternate edit. Ten final PNGs individually inspected; selected canvas and inspector agree.
+Full mounted/presentation/workspace-history/typecheck/owned lint/whitespace pass. Exact
+source/input/history/native-pixel checks retained. One old selection-empty assertion now
+requires the exact returning Row2/text; verifier proves all other prior E2E lines unchanged.
+New test locator mistake and initial old-contract failure retained with red evidence/AAR.
+Plan/review/AAR: docs/plans/2026-09-13-b119-structural-history-selection.md.
+Evidence: test-results/b119-structural-history-selection-20260913/receipt.json.
+36currentpins/26independentbaseline/5additionalreadonly/34olderinputs/4realoriginals/
+19protectedfiles+membership intact; five owner backups exact. Owned stack gone, X4 absent,
+Deckwright3100 unchanged. Local capability delta: guarded structural selection continuity;
+external projection deferred. No Git/release/mod/game/save/install/config/external writes.
+Full goal ACTIVE/PARTIAL,gameVerified=false; nine-journey/numeric/three-menu12ref/full/
+packaged/installed/native/public-release obligations remain. Degradation checkpoint.
+Commit point: fix(ui): restore editing context through structural history (not committed).
+
+### 2026-09-14 — B119 frontend CSS source ownership / cold startup — VERIFIED (bounded)
+
+src/index.css registers src plus index.html for Tailwind detection. Existing Vite lifecycle
+selftest adds real-compiler/scanner regression: all315frontendfiles/42,762candidates remain,
+452nonfrontend files excluded, exact frontend CSS unchanged. Prior86MB artifact scan removed
+from stylesheet source ownership; no deletion of artifacts or new cache/renderer.
+Fail-first red retained; lifecycle/port refusal/environment restoration/tsc/lint/production
+build/exact delta review PASS. Fresh3journey browser PASS3/3 first attempt,0flakes; same
+source/history/scenario assertions and60s deadline. First navigation27.827s->1.242s and CSS
+request27.103s->0.493s in measured traces. B-redo/alternate-edit PNGs inspected; styling and
+selection preserved. All410inputs/protected memberships unchanged,ownedstackgone,X4absent.
+Plan/review/AAR: docs/plans/2026-09-14-b119-tailwind-source-scope.md.
+Evidence: test-results/b119-tailwind-scope-20260914/timing-review.json.
+No capability-map delta; no Git/publish/install/game/mod/config/external writes. Full goal
+PARTIAL: synchronous edit latency and remaining authoring/fidelity/full integration/native/
+release obligations are not completed by this startup repair.
+Commit point: perf(ui): scope Tailwind scanning to frontend sources (not committed).
+
+## 2026-09-14 — B119 continuation fallback projection (focused VERIFIED)
+
+Removed one eager caller projection request before successful scenario transfer; current
+validated profile controls now feed capture directly. Ordinary fallback/error projection
+remains. No owner cache, validator, source/history, or public API change.
+Type/lint/owner/scenario/mounted/diff review PASS; mounted current-profile first Undo/Redo
+regression added, all1558previous assertion lines retained. Same3real browser journeys
+PASSfirst/0flake/0skip/0globalerrors; current screenshots inspected, protected guards clean.
+Observed slowest scenario Apply3.334->2.446s and New-menu Apply2.704->1.810s; separate-run
+click timings, not fixed speedup or settled/native performance. Full builder remains PARTIAL.
+Evidence/limits:docs/plans/2026-09-14-b119-continuation-fallback.md and
+test-results/b119-continuation-fallback-20260914/timing-review.json.
+No capability-map delta; no Git/publish/install/game/mod/config/external writes.
+Commit point: perf(ui): defer discarded continuation fallback projection (not committed).
+
+## 2026-09-14 — B119 ordinary Game overlays toolbar (bounded VERIFIED)
+
+Moved existing context/guide controls beside canvas; Inspect keeps provenance and unchanged
+manual calibration. One control owner, canonical labels/geometry, explicit advisory warning.
+Existing long-text browser journey now keeps Inspect closed and proves4contexts, individual
+guide off/on and Off exact bitmap restoration with unchanged Lua/history. All prior assertions
+retained. Type/lint/full mounted/keepouts/exact review PASS;3browser journeys PASSfirst with
+0flakes/0skips/0globalerrors. Popup and4context images visually inspected at1280x720.
+410pins stable during run, protected50artifacts/4Lua/19live memberships unchanged, stackgone.
+Plan/evidence/AAR:docs/plans/2026-09-14-b119-overlay-toolbar.md and
+test-results/b119-overlay-toolbar-20260914/rendered-receipt.json.
+No core capability-map delta or external writes. Full builder remains PARTIAL; no full130,
+installed/native,3menu/12reference or completed ordinary layout-property journey claim.
+Commit point: feat(ui): expose game overlays beside the source canvas (not committed).
+
+## 2026-09-14 — B119 named alignment and existing layout edits (bounded VERIFIED)
+
+Friendly supported text halign uses Left/Center/Right choices, preserving imported unknown
+values, technical raw input, pending disable and original source/CAS handlers. Added full
+workspace/pixel/draft/history browser evidence for existing table width, row padding and text
+alignment with Inspect closed. Last alignment Undo/Redo exact source and pixel restoration.
+Types/lint/full mounted/exact delta review PASS; final2browser cases PASSfirst,0flake/0skip/
+0errors. Visible control/canvas screenshot inspected, protected guards unchanged, stackgone.
+Plan/evidence/AAR:docs/plans/2026-09-14-b119-layout-controls.md and
+test-results/b119-layout-controls-20260914/rendered-final-receipt.json.
+Full goal PARTIAL: inspector scroll reset227->0 reproduced; missing-property insertion absent;
+right-edge glyph clipping hypothesis and full-suite/packaged/native/3menu/12reference remain.
+No core capability-map delta or external/Git writes.
+Commit point: feat(ui): offer named text alignment choices (not committed).
+
+## 2026-09-14 — B119 plain-text row-top clipping repair (bounded VERIFIED)
+
+Missing-property rendered validation exposed unchanged labels clipped when a sibling's
+font grew. Ported native fontstring row-top coordinates in existing Scene; no clip removal,
+font substitution, source rewrite or other-widget anchor changes. Added source-issued
+mixed-height/positive-Y regression and browser unchanged-cell pixel invariance. Reconciled
+two old centered Scene expectations and68plain-text Y entries in two literal Canvas traces;
+exact byte review proves all other Canvas selftest bytes/assertions unchanged.
+Scene195/195,Paint215/215,Canvas172/172,final types/lint/diff/golden review PASS. Real corpus
+probe restores full unchanged14.625px glyph height at neighbor font9/20/24. Four browser
+journeys PASSfirst0flake0skip0errors: property additions/UndoRedo, layout, locked recovery,
+long text/wrapping/scale/keepouts. Before/after/Redo screenshots inspected, stackgone and
+410runpins/50artifacts/4realLua/19live memberships/HEAD preserved. Plan/evidence/AAR:
+docs/plans/2026-09-14-b119-text-top-anchor.md and test-results/b119-text-top-anchor-20260914/.
+No capability-map delta; existing renderer repair. Full B119 PARTIAL; inspector scroll reset,
+right-edge glyph appearance, full integration/installed/native/3menus/12references remain.
+Commit point: fix(ui): anchor plain text to native row tops (not committed; scoped no-Git).
+
+## 2026-09-14 — B119 inspector scroll continuity (bounded VERIFIED)
+
+Apply ordinary scalar or missing-property edits without losing inspector position. Reuses
+existing exact parent acknowledgement/selection transfer; disposable view snapshot only,
+cancelled on navigation/input/rejection. No source/history/renderer authority change.
+Fail-first286->0 preserved; finalAlignment286->286. Missingproperty232->215 legitimate
+newmaximum and229->229. Full mounted suite/10scroll lifecycle cases, fulltypes/scopedlint,
+3browser cases PASSfirst0flake0skip0errors with exact source/history/UndoRedo/sibling pixels.
+Screenshots inspected; isolation/cleanup/410pins and protected external bytes PASS.
+Plan, review, AAR:docs/plans/2026-09-14-b119-inspector-scroll.md.
+Evidence:test-results/b119-inspector-scroll-20260914/. No capability-map delta.
+Full builder PARTIAL: right-edge glyph appearance and full integration/installed/native/
+3menus/12references/9journeys remain. No Git or external writes.
+Commit point: fix(ui): retain inspector position after property edits (not committed).
+
+## 2026-09-14 — B119 native-aligned fontstring bounds (bounded VERIFIED)
+
+Fixed cut-off final glyph: Scene used right-aligned glyphs with left-positioned widget clip.
+Shared native anchor now places declared box and measured lines coherently; unknown alignment
+is unavailable rather than guessed. Font metrics/UVs/glyph coordinates/width budgets/source/
+history/nontext widgets/ancestor intersections unchanged. Actual-corpus six-case comparison
+proves restored8.75px last e vs6.1875px. Scene196/196,Paint215/215,Canvas172/172,types/lint
+PASS; four rendered journeys PASSfirst0flake0skip0errors, screenshots inspected. Legitimate
+ellipsis, unchanged sibling, exactsource/UndoRedo and inspector286->286 preserved.
+Plan/review/AAR:docs/plans/2026-09-14-b119-aligned-text-bounds.md.
+Evidence:test-results/b119-aligned-text-bounds-20260914/. Allguards/cleanup PASS.
+No capability-map delta or Git/external/native writes. Full B119 PARTIAL; full integration,
+packaged/native,3menus/12references/9journeys remain. No Canvas golden changes.
+Commit point: fix(ui): align fontstring bounds with native anchors (not committed).

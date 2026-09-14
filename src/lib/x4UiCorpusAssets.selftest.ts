@@ -1133,6 +1133,40 @@ const tests: readonly [string, () => Promise<void>][] = [
     },
   ],
   [
+    'canonical authority rechecks first, middle, and last bytes without caching prior acceptance',
+    async () => {
+      const canonical = await loadCanonicalSelftestResult();
+      const payloads = [
+        canonical.assets.helper.bytes, canonical.assets.widget.bytes,
+        canonical.assets.regular.descriptor.bytes, canonical.assets.regular.atlas.bytes,
+        canonical.assets.bold.descriptor.bytes, canonical.assets.bold.atlas.bytes,
+        canonical.fonts.regular.atlas.alphaBytes, canonical.fonts.bold.atlas.alphaBytes,
+      ] as Uint8Array[];
+      for (const payload of payloads) {
+        assert(payload.byteLength > 2, 'boundary probe needs distinct first/middle/last bytes');
+        for (const index of [0, Math.floor(payload.byteLength / 2), payload.byteLength - 1]) {
+          assert(isX4UiCorpusCanonicalSuccess(canonical), 'unchanged or restored payload remains accepted');
+          payload[index] ^= 1;
+          assert(!isX4UiCorpusCanonicalSuccess(canonical), `changed byte ${index} must invalidate authority`);
+          payload[index] ^= 1;
+          assert(isX4UiCorpusCanonicalSuccess(canonical), 'restored exact bytes remain accepted');
+        }
+      }
+    },
+  ],
+  [
+    'canonical authority does not delegate byte comparison to caller-replaced array methods',
+    async () => {
+      const canonical = await loadCanonicalSelftestResult();
+      const payload = canonical.assets.helper.bytes as Uint8Array;
+      let calls = 0;
+      Object.defineProperty(payload, 'every', { value: () => { calls += 1; return true; } });
+      payload[payload.byteLength - 1] ^= 1;
+      assert(!isX4UiCorpusCanonicalSuccess(canonical), 'a lying every method cannot hide a changed byte');
+      equal(calls, 0, 'authority comparison does not dispatch caller-controlled every');
+    },
+  ],
+  [
     'canonical colors load fixed evidence, defaults, order, and a closed 224/804 graph',
     async () => {
       const fixture = makeColorFixture();

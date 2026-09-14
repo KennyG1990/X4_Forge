@@ -29,19 +29,36 @@ import { UIWidget, ModWorkspace, generateUILuaScript } from '../types';
 import X4UiSourceEditor, {
   classifyX4UiWorkspaceCommit,
   createX4UiWorkspaceEditPending,
+  type X4UiHistoryRestorationNotice,
+  type X4UiSourceEditorCorpusLoader,
   type X4UiWorkspaceEditAcknowledgement,
   type X4UiWorkspaceEditRequest,
   type X4UiWorkspaceEditSubmission,
 } from './X4UiSourceEditor';
+import type { WorkspaceSourceSplice } from '../lib/workspaceUndoHistory';
+
+export interface UIBuilderSourceHistoryAcknowledgement {
+  readonly scope: string;
+  readonly expectedWorkspace: unknown;
+  readonly workspace: unknown;
+  readonly acknowledgement: X4UiWorkspaceEditAcknowledgement;
+  readonly sourceSplice?: WorkspaceSourceSplice;
+}
 
 interface UIBuilderProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   selectedWidget: UIWidget | null;
   setSelectedWidget: (widget: UIWidget | null) => void;
+  presentationTab?: UIBuilderPresentationTab;
+  onPresentationTabChange?: (tab: UIBuilderPresentationTab) => void;
   x4UiVerification?: X4UiGameVerificationDecision;
   onConfirmX4UiVerification?: () => void;
   onX4UiVerificationSnapshotChange?: (snapshot: X4UiGameVerificationCurrentSnapshot | null) => void;
+  workspaceScope?: string;
+  historyRestoration?: X4UiHistoryRestorationNotice | null;
+  sourceEditorCorpusLoader?: X4UiSourceEditorCorpusLoader;
+  onX4UiSourceEditAcknowledged?: (receipt: UIBuilderSourceHistoryAcknowledgement) => void;
 }
 
 type X4UiWorkspaceEditAcknowledger = (
@@ -52,6 +69,16 @@ type X4UiWorkspaceUpdateScheduler = (
   updater: (currentWorkspace: unknown) => unknown,
   acknowledge: X4UiWorkspaceEditAcknowledger,
 ) => void;
+
+interface PendingX4UiWorkspaceAcknowledgement {
+  readonly acknowledge: X4UiWorkspaceEditAcknowledger;
+  readonly expectedWorkspace: unknown;
+  readonly workspace: unknown;
+  readonly scope: string;
+  readonly sourceSplice?: WorkspaceSourceSplice;
+}
+
+export type UIBuilderPresentationTab = 'source' | 'canvas' | 'lua';
 
 /** Issue queued acknowledgements only after React commits the workspace readback render. */
 export const acknowledgeX4UiWorkspaceCommitBoundary = (
@@ -130,22 +157,49 @@ export default function UIBuilder({
   setWorkspace,
   selectedWidget,
   setSelectedWidget,
+  presentationTab,
+  onPresentationTabChange,
   x4UiVerification,
   onConfirmX4UiVerification,
   onX4UiVerificationSnapshotChange,
+  workspaceScope,
+  historyRestoration,
+  sourceEditorCorpusLoader,
+  onX4UiSourceEditAcknowledged,
 }: UIBuilderProps) {
-  const pendingWorkspaceAcknowledgementsRef = useRef<ReadonlyArray<X4UiWorkspaceEditAcknowledger>>([]);
+  const pendingWorkspaceAcknowledgementsRef = useRef<ReadonlyArray<PendingX4UiWorkspaceAcknowledgement>>([]);
   const [workspaceCommitBoundary, setWorkspaceCommitBoundary] = useState(0);
   useLayoutEffect(() => {
-    const acknowledgements = pendingWorkspaceAcknowledgementsRef.current;
-    if (acknowledgements.length === 0) return;
+    const pendingAcknowledgements = pendingWorkspaceAcknowledgementsRef.current;
+    if (pendingAcknowledgements.length === 0) return;
     pendingWorkspaceAcknowledgementsRef.current = [];
-    acknowledgeX4UiWorkspaceCommitBoundary(acknowledgements, workspace);
-  }, [workspace, workspaceCommitBoundary]);
+    const acknowledgements = acknowledgeX4UiWorkspaceCommitBoundary(
+      pendingAcknowledgements.map(pending => pending.acknowledge),
+      workspace,
+    );
+    if (onX4UiSourceEditAcknowledged) {
+      pendingAcknowledgements.forEach((pending, index) => {
+        const acknowledgement = acknowledgements[index];
+        if (acknowledgement?.status !== 'accepted') return;
+        onX4UiSourceEditAcknowledged({
+          scope: pending.scope,
+          expectedWorkspace: pending.expectedWorkspace,
+          workspace: pending.workspace,
+          acknowledgement,
+          ...(pending.sourceSplice === undefined ? {} : { sourceSplice: pending.sourceSplice }),
+        });
+      });
+    }
+  }, [onX4UiSourceEditAcknowledged, workspace, workspaceCommitBoundary]);
   const [activePresetTheme, setActivePresetTheme] = useState<string>('argon-amber');
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [activeUiSubTab, setActiveUiSubTab] = useState<'source' | 'canvas' | 'lua'>('source');
+  const [localActiveUiSubTab, setLocalActiveUiSubTab] = useState<UIBuilderPresentationTab>('source');
+  const activeUiSubTab = presentationTab ?? localActiveUiSubTab;
+  const setActiveUiSubTab = React.useCallback((nextTab: UIBuilderPresentationTab) => {
+    if (onPresentationTabChange) onPresentationTabChange(nextTab);
+    else setLocalActiveUiSubTab(nextTab);
+  }, [onPresentationTabChange]);
   const [selectedLuaTemplate, setSelectedLuaTemplate] = useState<string>('standard');
   const [runtimeLogText, setRuntimeLogText] = useState<string>('');
   // Pre-fill vetted-snippet placeholders from the active integration contract, if any.
@@ -215,9 +269,16 @@ export default function UIBuilder({
 
   const commitX4UiSourceEditWorkspace = (request: X4UiWorkspaceEditRequest): X4UiWorkspaceEditSubmission => (
     beginX4UiWorkspaceCommit(workspace, request, (updater, acknowledge) => {
+      const pendingAcknowledgement: PendingX4UiWorkspaceAcknowledgement = {
+        acknowledge,
+        expectedWorkspace: request.expectedWorkspace,
+        workspace: request.workspace,
+        scope: workspaceScope || '',
+        ...(request.sourceSplice === undefined ? {} : { sourceSplice: request.sourceSplice }),
+      };
       pendingWorkspaceAcknowledgementsRef.current = [
         ...pendingWorkspaceAcknowledgementsRef.current,
-        acknowledge,
+        pendingAcknowledgement,
       ];
       flushSync(() => {
         setWorkspace(current => updater(current) as ModWorkspace);
@@ -341,7 +402,7 @@ export default function UIBuilder({
   };
 
   return (
-    <div className="flex-1 bg-[#0a0c10] flex flex-col h-full overflow-hidden text-slate-300">
+    <div data-ui-presentation-tab={activeUiSubTab} className="flex-1 bg-[#0a0c10] flex flex-col h-full overflow-hidden text-slate-300">
       {/* Simulation Controls HUD bar */}
       <div className="bg-[#161920]/90 border-b border-white/10 p-3 flex items-center justify-between font-mono text-xs">
         <div className="flex items-center gap-2">
@@ -353,6 +414,9 @@ export default function UIBuilder({
         <div className="flex items-center gap-3">
           <div className="flex items-center bg-black/45 border border-white/10 p-0.5 rounded-md">
             <button
+              type="button"
+              data-testid="ui-builder-subtab-source"
+              aria-pressed={activeUiSubTab === 'source'}
               onClick={() => setActiveUiSubTab('source')}
               className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
                 activeUiSubTab === 'source' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-500 hover:text-slate-300'
@@ -361,6 +425,9 @@ export default function UIBuilder({
               X4 Source Preview
             </button>
             <button
+              type="button"
+              data-testid="ui-builder-subtab-canvas"
+              aria-pressed={activeUiSubTab === 'canvas'}
               onClick={() => setActiveUiSubTab('canvas')}
               className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
                 activeUiSubTab === 'canvas' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-500 hover:text-slate-300'
@@ -369,6 +436,9 @@ export default function UIBuilder({
               Legacy pixel designer
             </button>
             <button
+              type="button"
+              data-testid="ui-builder-subtab-lua"
+              aria-pressed={activeUiSubTab === 'lua'}
               onClick={() => setActiveUiSubTab('lua')}
               className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
                 activeUiSubTab === 'lua' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-500 hover:text-slate-300'
@@ -400,6 +470,8 @@ export default function UIBuilder({
         </div>
       </div>
 
+      <details data-testid="ui-source-inspect" open={activeUiSubTab !== 'source'} className="shrink-0 border-b border-white/10 bg-[#10131a]">
+        <summary data-testid="ui-source-inspect-toggle" className="cursor-pointer px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-wider text-cyan-300">Inspect verification, lint, and legacy geometry diagnostics</summary>
       <div className="border-b border-white/10 bg-[#10131a] p-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2 font-mono text-[10px]">
         <div data-testid="ui-game-verification-status" className={`rounded border p-2 ${externalVerification.status === 'verified' ? 'border-emerald-500/35 bg-emerald-950/15' : 'border-amber-500/25 bg-amber-950/15'}`}>
           <div className="text-[9px] uppercase font-bold tracking-wider text-slate-500">External game verification</div>
@@ -471,9 +543,13 @@ export default function UIBuilder({
           ))}
         </div>
       </div>
+      </details>
 
       {activeUiSubTab === 'source' ? (
         <X4UiSourceEditor workspace={workspace}
+          corpusLoader={sourceEditorCorpusLoader}
+          workspaceScope={workspaceScope}
+          historyRestoration={historyRestoration}
           onWorkspaceEdit={commitX4UiSourceEditWorkspace}
           onVerificationSnapshotChange={onX4UiVerificationSnapshotChange}
         />

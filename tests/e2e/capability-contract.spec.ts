@@ -33,7 +33,7 @@ test('Agent API Bridge renders the live canonical capability contract', async ({
   expect(new Set(contract.capabilities.map((capability: { id: string }) => capability.id)).size).toBe(12);
   await expect(banner).toContainText(contract.contractHash.slice(0, 12));
   await expect(banner).toContainText('LIVE CONTRACT');
-  await page.screenshot({ path: 'test-results/capability-contract-live.png', fullPage: true });
+  await page.screenshot({ path: test.info().outputPath('capability-contract-live.png'), fullPage: true });
 });
 
 test('Agent API Bridge labels old-server discovery as a local catalog with unknown server support', async ({ page }) => {
@@ -75,7 +75,7 @@ test('Agent API Bridge rejects a malformed current contract without claiming liv
   await expect(banner).toHaveAttribute('data-catalog-scope', 'local');
   await expect(banner).toContainText('Server capabilities unknown');
   await expect(banner).toContainText('INVALID CONTRACT');
-  await page.screenshot({ path: 'test-results/capability-contract-invalid.png', fullPage: true });
+  await page.screenshot({ path: test.info().outputPath('capability-contract-invalid.png'), fullPage: true });
 });
 
 test('Agent Keys guides an exact contract-only key and proves its effective subset', async ({ page }) => {
@@ -139,7 +139,7 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
   await expect(page.getByTestId(`agent-key-contract-${label}`)).toContainText('contract-only · 1 cap · 4 effects');
   const healthCard = page.getByTestId('health-card');
   if (await healthCard.isVisible()) await page.getByTestId('health-card-dismiss').click();
-  await page.screenshot({ path: 'test-results/b118-agent-key-custom-authority.png', fullPage: true });
+  await page.screenshot({ path: test.info().outputPath('b118-agent-key-custom-authority.png'), fullPage: true });
 });
 
 test('Agent Keys revokes a mismatched mint instead of exposing a broader key', async ({ page }) => {

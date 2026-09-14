@@ -644,10 +644,16 @@ function wrappedTextSourceFixture(): X4UiWorkspaceSource {
   ]));
 }
 
-function colorSourceFixture(backgroundId: 'solid' | '' | null = 'solid'): X4UiWorkspaceSource {
+type ColorInputOptions = 'supported' | 'affect-row-height' | 'nested-text';
+
+function colorSourceFixture(backgroundId: 'solid' | '' | null = 'solid', inputOptions: ColorInputOptions = 'supported'): X4UiWorkspaceSource {
   const tableBackgroundOptions = backgroundId === null
     ? ', backgroundColor = Color["paint_color_0"]'
     : `, backgroundID = "${backgroundId}", backgroundColor = Color["paint_color_0"]`;
+  // editbox has no affectRowHeight property; Helper spells its background bgColor.
+  // Keep unsupported variants explicit so positive tint coverage cannot hide unknown text defaults.
+  const unsupportedInputOption = inputOptions === 'affect-row-height' ? ', affectRowHeight = false'
+    : inputOptions === 'nested-text' ? ', text = { x = 17 }' : '';
   const lua = [
     'local menu = { name = "ColorCanonical", layer = 1 }',
     'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80, layer = 1 })',
@@ -661,8 +667,8 @@ function colorSourceFixture(backgroundId: 'solid' | '' | null = 'solid'): X4UiWo
     'row[3]:createButton({ height = 0, affectRowHeight = false, bgcolor = { r = 13, g = 23, b = 33, a = 43 }, highlightcolor = { r = 14, g = 24, b = 34, a = 44 }, bordercolor = { r = 15, g = 25, b = 35, a = 45 } }):setText("button", { x = 0, y = 0, color = { r = 16, g = 26, b = 36, a = 46 } }):setText2("bold", { x = 0, y = 0, halign = "right", font = "Zekton Bold", fontsize = 16, color = { r = 17, g = 27, b = 37, a = 47 } })',
     'row[4]:createIcon("solid", { height = 8, affectRowHeight = false, color = { r = 19, g = 29, b = 39, a = 49 } })',
     'local editRow = table:addRow(false, { paddingTop = 1, paddingBottom = 1, borderBelow = false, fixed = false })',
-    'editRow[1]:createEditBox({ height = 8, affectRowHeight = false, defaultText = "PLACEHOLDER", active = false, bgcolor = Color["editbox_background_default"] }):setText("", { x = 5, y = 0 })',
-    'editRow[2]:createEditBox({ height = 8, affectRowHeight = false, defaultText = "SHOULD_NOT_WIN", bgcolor = Color["editbox_background_default"] }):setText("CURRENT", { x = 5, y = 0 })',
+    `editRow[1]:createEditBox({ height = 8${unsupportedInputOption}, defaultText = "PLACEHOLDER", active = false, bgColor = Color["editbox_background_default"] }):setText("", { x = 5, y = 0 })`,
+    `editRow[2]:createEditBox({ height = 8${unsupportedInputOption}, defaultText = "SHOULD_NOT_WIN", bgColor = Color["editbox_background_default"] }):setText("CURRENT", { x = 5, y = 0 })`,
     'local secondaryMenu = { name = "Secondary", layer = 0 }',
     'local secondaryFrame = Helper.createFrameHandle(secondaryMenu, { width = 100, height = 80, layer = 0 })',
     'local secondaryTable = secondaryFrame:addTable(1, { width = 40, reserveScrollBar = false, scaling = false })',
@@ -1142,7 +1148,46 @@ function projectExactAicSheetAuthorityComplete(canonical: X4UiCorpusCanonicalSuc
   });
   const sampleCatalog = loopProjected.sampleCatalog;
   assert(sampleCatalog !== null && loopProjected.sampleBinding !== undefined && loopProjected.sampleCatalogAuthority !== undefined, 'B119 exact aic_sheet must issue its loop-expanded sample authority');
-  assert.equal(sampleCatalog.entries.length, 55, 'B119 exact aic_sheet must issue all 55 scenario samples');
+  // The catalog includes the unselected no-data arm, including font(10) at129.
+  // Saved pre-numeric producers also issue these56 entries. Check the source consumers,
+  // not just a total that could silently substitute one input for another.
+  const expectedSampleGroups: readonly (readonly [number, string, string, string, number?])[] = [
+    [111, 'sheet._tab', 'number', 'addTable:taborder'],
+    [118, 'data and data.tx and ("ref " .. string.upper(ascii(data.tx))) or ""', 'string', 'createText:text'],
+    [124, 'sheet._tab', 'number', 'addTable:taborder'], [124, 'y', 'number', 'addTable:y'],
+    [129, 'font(10)', 'number', 'createText:fontsize'],
+    [136, 'sheet._tab', 'number', 'addTable:taborder'], [136, 'y', 'number', 'addTable:y'],
+    [140, '"Between you and " .. ascii(data.who)\n        .. (data.by and (", entered by " .. ascii(data.by)) or "")\n        .. (data.role and (" (" .. ascii(data.role) .. ")") or "") .. "."', 'string', 'createText:text'],
+    [149, 'sheet._tab', 'number', 'addTable:taborder', 4], [149, 'y', 'number', 'addTable:y', 4],
+    [155, 'ascii(c.n)', 'string', 'createText:text', 4], [156, 'ascii(c.text)', 'string', 'createText:text', 4],
+    [160, 'sheet._tab', 'number', 'addTable:taborder', 4], [160, 'y', 'number', 'addTable:y', 4],
+    [167, 'ascii(c.note)', 'string', 'createText:text', 4],
+    [176, 'sheet._tab', 'number', 'addTable:taborder'], [176, 'y', 'number', 'addTable:y'],
+    [185, 'sheet._tab', 'number', 'addTable:taborder', 4], [185, 'y', 'number', 'addTable:y', 4],
+    [191, 'ascii(d.label)', 'string', 'createText:text', 4], [192, 'ascii(d.value)', 'string', 'createText:text', 4],
+    [201, 'sheet._tab', 'number', 'addTable:taborder'], [201, 'y', 'number', 'addTable:y'],
+  ];
+  const expectedCensus = expectedSampleGroups.flatMap(([line, expression, type, consumer, count]) =>
+    Array.from({ length: count ?? 1 }, (_, index) => [line, expression, type, count === undefined ? undefined : index + 1, consumer]));
+  const sampleCensus = (entries: typeof sampleCatalog.entries) => entries.map(entry => [
+    entry.source.start.line, entry.expression, entry.expectedType, entry.previewLoop?.iteration,
+    entry.consumers.map(consumer => `${consumer.operationKind}:${consumer.field}`).join(','),
+  ]);
+  assert.equal(expectedCensus.length, 56);
+  assert.deepEqual(sampleCensus(sampleCatalog.entries), expectedCensus, 'B119 exact aic_sheet source/loop/consumer census drifted');
+  const sourceText = Buffer.from(B119_AIC_SHEET_SOURCE_BASE64, 'base64').toString('utf8');
+  for (const entry of sampleCatalog.entries) {
+    assert.equal(sourceText.slice(entry.source.start.offset, entry.source.end.offset), entry.expression);
+    assert.equal(entry.source.file, B119_AIC_SHEET_RELATIVE_PATH);
+    assert.deepEqual(entry.consumers[0]?.source, entry.source);
+    assert.equal(entry.consumers[0]?.previewLoop?.iteration, entry.previewLoop?.iteration);
+  }
+  const rejectsCensus = (entries: typeof sampleCatalog.entries) =>
+    assert.throws(() => assert.deepEqual(sampleCensus(entries), expectedCensus));
+  rejectsCensus(sampleCatalog.entries.filter(entry => entry.source.start.line !== 129));
+  rejectsCensus(sampleCatalog.entries.map((entry, index) => index === 4 ? sampleCatalog.entries[0]! : entry));
+  rejectsCensus(sampleCatalog.entries.map((entry, index) => index === 4
+    ? { ...entry, consumers: entry.consumers.map(consumer => ({ ...consumer, field: 'text' as const })) } : entry));
   const values = sampleCatalog.entries.map(entry => ({ id: entry.id, value: aicSheetSampleValue(entry) }));
   const sampleValueAt = (line: number, expression: string, iteration?: number): number => {
     const sampleIndex = sampleCatalog.entries.findIndex(entry =>
@@ -1858,7 +1903,7 @@ async function main(): Promise<void> {
       && sheetPaintGameTruth === NOT_VERIFIED_IN_GAME
       && sheetCausal.paint.verification.gameVerified === false, {
       fixtureReady: sheetScene !== undefined
-        && sheetCausal.sampleCount === 55
+        && sheetCausal.sampleCount === 56
         && sheetCausal.pathSelections.length === 2
         && JSON.stringify(sheetCausal.pathSelections) === JSON.stringify([
           { startLine: 98, endLine: 101, arm: 'then' },
@@ -2631,8 +2676,8 @@ async function main(): Promise<void> {
           return Array.isArray(tints) ? tints.map(asRecord).filter((tint): tint is JsonRecord => tint !== undefined) : [];
         });
     };
-    const projectColorApplicabilityFixture = (backgroundId: 'solid' | '' | null): { readonly scene?: X4UiScene; readonly paint?: X4UiPaintPlanResult } => {
-      const source = colorSourceFixture(backgroundId);
+    const projectColorApplicabilityFixture = (backgroundId: 'solid' | '' | null, inputOptions: ColorInputOptions = 'supported'): { readonly scene?: X4UiScene; readonly paint?: X4UiPaintPlanResult } => {
+      const source = colorSourceFixture(backgroundId, inputOptions);
       const selection = selectionFor(source, 'ui/color.lua');
       const pipeline = projectX4UiPreviewPipeline({
         source,
@@ -2659,6 +2704,29 @@ async function main(): Promise<void> {
       };
     };
     const emptyApplicability = projectColorApplicabilityFixture('');
+    for (const inputOptions of ['affect-row-height', 'nested-text'] as const) {
+      const unsupported = projectColorApplicabilityFixture('solid', inputOptions);
+      const placeholder = unsupported.scene?.texts.find(text => text.contentSelection === 'preview-default');
+      const widget = unsupported.scene?.widgets.find(candidate => candidate.id === placeholder?.widgetId);
+      const commands = unsupported.paint === undefined || unsupported.paint.status === 'refused'
+        ? [] : unsupported.paint.plan.layers.flatMap(layer => layer.commands);
+      const missingFacts = unsupported.scene?.gaps.filter(gap => gap.nodeId === placeholder?.id
+        && gap.category === 'text' && gap.reason === 'setText omitted an unresolved prior edit-box text property');
+      check(`P5 unsupported Input ${inputOptions} preserves unknown text without losing known geometry`,
+        placeholder !== undefined && placeholder.content === '' && placeholder.defaultContent === 'PLACEHOLDER'
+          && placeholder.font === undefined && placeholder.fontSize === undefined && placeholder.alignment === undefined
+          && placeholder.layout === undefined && missingFacts?.length === 3
+          && missingFacts.every(gap => gap.source.start.line === 13 && gap.source.end.line === 13)
+          && unsupported.paint !== undefined && unsupported.paint.status !== 'refused'
+          && !unsupported.scene?.glyphs.some(glyph => glyph.textId === placeholder.id)
+          && !commands.some(command => command.kind === 'glyph-alpha-blit' && command.textId === placeholder.id)
+          && widget?.outerRect !== undefined && colorEditBox?.outerRect !== undefined
+          && JSON.stringify(widget.outerRect) === JSON.stringify(colorEditBox.outerRect),
+        { inputOptions, placeholder: placeholder === undefined ? undefined : {
+          selection: placeholder.contentSelection, font: placeholder.font, fontSize: placeholder.fontSize,
+          alignment: placeholder.alignment, missingFacts: missingFacts?.map(gap => ({ source: gap.source, reason: gap.reason })),
+        }, geometry: widget?.outerRect, expectedGeometry: colorEditBox?.outerRect });
+    }
     const missingApplicability = projectColorApplicabilityFixture(null);
     const emptyApplicabilityTable = emptyApplicability.scene?.tables.find(table => table.colorFacts?.some(fact => fact.slot === 'table-background'));
     const missingApplicabilityTable = missingApplicability.scene?.tables.find(table => table.colorFacts?.some(fact => fact.slot === 'table-background'));
@@ -2834,8 +2902,25 @@ async function main(): Promise<void> {
         selection: (text as unknown as JsonRecord).contentSelection,
         facts: (text as unknown as JsonRecord).colorFacts,
         glyphs: colorPaintCommands.filter(command => command.kind === 'glyph-alpha-blit' && command.textId === text.id).length,
+        geometry: { rect: text.rect, availableWidth: text.availableWidth, offsetX: text.offsetX, offsetY: text.offsetY, font: text.font, fontSize: text.fontSize },
+        layout: text.layout === undefined ? undefined : { originalText: text.layout.originalText, displayedText: text.layout.displayedText, maxWidth: text.layout.maxWidth, gaps: text.layout.gaps },
+        sceneGlyphs: colorScene?.glyphs.filter(glyph => glyph.textId === text.id).map(glyph => ({ id: glyph.id, rect: glyph.rect, codePoint: glyph.codePoint })),
+        gaps: colorScene?.gaps.filter(gap => gap.nodeId === text.id).map(gap => ({ category: gap.category, reason: gap.reason, source: gap.source, expression: gap.expression })),
       })),
     });
+    console.log('B119_PLACEHOLDER_PAINT_RECEIPT ' + JSON.stringify({
+      sourceSha256: colorSelection.sourceIdentity.sha256,
+      syntheticCorpusFixture: true,
+      gameVerified: false,
+      glyphParentCoverage,
+      distinctTextSlots,
+      textCoverage: colorTextNodes.map(text => ({
+        content: text.content, defaultContent: text.defaultContent, selection: text.contentSelection,
+        font: text.font, fontSize: text.fontSize, alignment: text.alignment, availableWidth: text.availableWidth,
+        displayedText: text.layout?.displayedText,
+        glyphCommands: colorPaintCommands.filter(command => command.kind === 'glyph-alpha-blit' && command.textId === text.id).length,
+      })),
+    }));
     const colorTintOwnerBindingsValid = colorPaintCommands.every(command => {
       const tints = (command as unknown as JsonRecord).basePreviewTints;
       if (!Array.isArray(tints)) return true;

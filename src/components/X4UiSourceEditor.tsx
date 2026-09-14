@@ -3,7 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import X4UiPreviewScenarios from './X4UiPreviewScenarios';
+import { capturePreviewScenario, projectPreviewScenario, resolvePreviewScenarioTransitionSelection, transferPreviewScenario, type X4UiPreviewScenarioView } from '../lib/x4UiPreviewScenarios';
+import type { WorkspaceSourceContinuation, WorkspaceSourceSplice } from '../lib/workspaceUndoHistory';
+import {
+  createX4UiWorkspaceMenu,
+  exportX4UiWorkspaceLua,
+  importX4UiWorkspaceLua,
+  X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES,
+  type X4UiWorkspaceSource,
+} from '../lib/x4UiWorkspaceSource';
 import {
   X4_UI_EDITOR_DEFAULT_PROFILE,
   X4_UI_EDITOR_EMPTY_CANVAS_STATE,
@@ -55,14 +65,32 @@ import {
 } from '../lib/x4UiCorpusAssets';
 import {
   applyX4UiSourceEdit,
+  applyX4UiSourceRowMove,
+  applyX4UiSourceRowInsertion,
   applyX4UiSourceStructuralEdit,
+  applyX4UiSourceTextPropertyAddition,
+  applyX4UiSourceWidgetInsertion,
   discoverX4UiSourceEdits,
+  discoverX4UiSourceTextPropertyAdditions,
+  type X4UiSourceTextPropertyAddition,
+  type X4UiSourceTextPropertyAdditionResult,
   type X4UiSourceEditCatalog,
   type X4UiSourceEditCatalogEntry,
+  type X4UiSourceEditEmptyCellEntry,
+  type X4UiSourceEditInsertedRow,
+  type X4UiSourceEditInsertedWidget,
+  type X4UiSourceEditMovedRow,
+  type X4UiSourceEditRowMoveDirection,
+  type X4UiSourceEditRowMoveEntry,
+  type X4UiSourceEditRowInsertionEntry,
   type X4UiSourceEditScalar,
   type X4UiSourceEditInsertBlockEntry,
   type X4UiSourceEditResult,
+  type X4UiSourceEditWidgetKind,
   type X4UiSourceStructuralEditResult,
+  type X4UiSourceRowInsertionResult,
+  type X4UiSourceRowMoveResult,
+  type X4UiSourceWidgetInsertionResult,
 } from '../lib/x4UiSourceEdits';
 import {
   X4_UI_CANVAS_RENDERER_FORMAT,
@@ -74,12 +102,64 @@ import {
   type X4UiCanvasSurface,
   type X4UiCanvasSurfaceFactory,
 } from '../lib/x4UiCanvasRenderer';
-import { KEEP_OUT_PRESETS } from '../lib/x4UiKeepOuts';
+import { getBuiltInKeepOut, KEEP_OUT_PRESETS } from '../lib/x4UiKeepOuts';
 import type { KeepOutCalibrationInput } from '../lib/x4UiKeepOuts';
 import {
   buildX4UiGameVerificationCurrentSnapshot,
   type X4UiGameVerificationCurrentSnapshot,
 } from '../lib/x4UiGameVerification';
+import {
+  buildX4UiBuilderPresentation,
+  buildX4UiBuilderPropertyPresentation,
+  buildX4UiBuilderPreviewInputPresentation,
+  computeX4UiBuilderViewport,
+  computeX4UiBuilderSelectionFocus,
+  describeX4UiBuilderProperty,
+  deriveX4UiBuilderMenuBounds,
+  hitTestX4UiBuilderCanvas,
+  reconcileX4UiBuilderSelection,
+  resolveX4UiBuilderNodeAfterSourceRowMove,
+  resolveX4UiBuilderNodeAfterSourceRowInsertion,
+  resolveX4UiBuilderNodeAfterSourceEdit,
+  resolveX4UiBuilderNodeAfterHistory,
+  resolveX4UiBuilderNodeAfterSourceWidgetInsertion,
+  resolveX4UiBuilderRowForNode,
+  sourceEntriesForX4UiBuilderNode,
+  type X4UiBuilderCanvasViewport,
+  type X4UiBuilderSourceEditSplice,
+  type X4UiBuilderSourceAnchor,
+  type X4UiBuilderNode,
+  type X4UiBuilderPresentation,
+  type X4UiBuilderSelection,
+  type X4UiBuilderSelectionContext,
+  type X4UiBuilderViewportMode,
+} from '../lib/x4UiBuilderPresentation';
+
+const builderNodeDepthFor = (node: X4UiBuilderNode, presentation: X4UiBuilderPresentation): number => {
+  let depth = 0;
+  let parentId = node.parentId;
+  const seen = new Set<string>();
+  while (parentId !== undefined && !seen.has(parentId)) {
+    seen.add(parentId);
+    depth += 1;
+    parentId = presentation.nodes.find(candidate => candidate.id === parentId)?.parentId;
+  }
+  return depth;
+};
+
+export interface X4UiHistoryRestorationNotice {
+  readonly direction: 'undo' | 'redo';
+  readonly scope: string;
+  readonly beforeWorkspace: unknown;
+  readonly afterWorkspace: unknown;
+  readonly sourceSplice?: WorkspaceSourceSplice;
+}
+
+interface X4UiBuilderHistoryIntent {
+  readonly anchor: X4UiBuilderSourceAnchor;
+  readonly catalog: X4UiSourceEditCatalog;
+  readonly profileKey: string | null;
+}
 
 /** The editor deliberately receives the workspace as an opaque session input. */
 export interface X4UiSourceEditorProps {
@@ -87,6 +167,9 @@ export interface X4UiSourceEditorProps {
   readonly corpusLoader?: X4UiSourceEditorCorpusLoader;
   readonly surfaceFactory?: X4UiCanvasSurfaceFactory;
   readonly onWorkspaceEdit?: X4UiWorkspaceEditHandler;
+  /** Exact App-owned source-history restoration metadata; never carries builder or draft state. */
+  readonly workspaceScope?: string;
+  readonly historyRestoration?: X4UiHistoryRestorationNotice | null;
   /** Emits only current plain source/target/profile data; deploy evidence remains parent-owned. */
   readonly onVerificationSnapshotChange?: (snapshot: X4UiGameVerificationCurrentSnapshot | null) => void;
   /** Test/diagnostic observer for deterministic mounted projection-count evidence. */
@@ -96,6 +179,7 @@ export interface X4UiSourceEditorProps {
 export interface X4UiWorkspaceEditRequest {
   readonly expectedWorkspace: unknown;
   readonly workspace: unknown;
+  readonly sourceSplice?: WorkspaceSourceSplice;
 }
 
 export type X4UiWorkspaceEditResult =
@@ -367,6 +451,26 @@ const sourceIdentityKey = (identity: unknown): string => {
   ].join('|');
 };
 
+const builderSourceIdentityKey = (identity: unknown): string | null => {
+  const record = asRecord(identity);
+  if (typeof record?.file !== 'string' || typeof record.sha256 !== 'string') return null;
+  return `${record.file}|${typeof record.sourcePath === 'string' ? record.sourcePath : ''}|${record.sha256}`;
+};
+
+const builderSourceLocationEquals = (
+  left: X4UiBuilderNode['source'] | undefined,
+  right: X4UiBuilderNode['source'] | undefined,
+): boolean => left !== undefined
+  && right !== undefined
+  && left.file === right.file
+  && left.sourcePath === right.sourcePath
+  && left.start.line === right.start.line
+  && left.start.column === right.start.column
+  && left.start.offset === right.start.offset
+  && left.end.line === right.end.line
+  && left.end.column === right.end.column
+  && left.end.offset === right.end.offset;
+
 const sourceKeyFor = (candidate: ValueRecord, index: number): string => (
   [
     index,
@@ -415,6 +519,13 @@ const sourceCandidatesFor = (catalog: SourceCandidateCatalogView): readonly Sour
     };
   })
 );
+
+/** A display subset of the exact catalog, never a new target or write authority. */
+const menuTargetsFor = (source: SourceCandidateView | undefined): readonly TargetCandidateView[] => {
+  if (source === undefined) return [];
+  const ids = new Set(asArray(source.raw.menuTargetIds).filter((id): id is string => typeof id === 'string'));
+  return source.targets.filter(target => typeof target.raw.id === 'string' && ids.has(target.raw.id));
+};
 
 const previewFor = (projection: X4UiEditorSessionProjection): PreviewView => {
   const view = projection as unknown as ProjectionView;
@@ -969,6 +1080,11 @@ const profileScale = (profile: X4UiEditorProfileControls): number | null => (
 const formatNumber = (value: unknown): string => {
   const number = finiteValue(value);
   return number === null ? 'unavailable' : String(number);
+};
+
+const formatCanvasZoomPercent = (value: number): string => {
+  if (!Number.isFinite(value)) return 'unavailable';
+  return String(Math.round(value * 10) / 10);
 };
 
 const findingLocation = (finding: ValueRecord): string | null => {
@@ -1759,11 +1875,11 @@ export const classifyX4UiCanvasExport = (
 
 const setCompletedBitmapStyle = (surface: X4UiCanvasSurface): void => {
   if (!(surface instanceof HTMLElement)) return;
-  surface.style.maxWidth = '100%';
-  surface.style.maxHeight = '100%';
-  surface.style.width = 'auto';
-  surface.style.height = 'auto';
-  surface.style.objectFit = 'contain';
+  surface.style.maxWidth = 'none';
+  surface.style.maxHeight = 'none';
+  surface.style.width = '100%';
+  surface.style.height = '100%';
+  surface.style.objectFit = 'fill';
   surface.style.imageRendering = 'pixelated';
 };
 
@@ -2005,6 +2121,7 @@ export const submitX4UiSourceEditWorkspaceCommit = (
   expectedWorkspace: unknown,
   workspace: unknown,
   onWorkspaceEdit: X4UiWorkspaceEditHandler | undefined,
+  sourceSplice?: WorkspaceSourceSplice,
 ): X4UiWorkspaceEditSubmission => {
   if (onWorkspaceEdit === undefined) {
     return {
@@ -2013,7 +2130,7 @@ export const submitX4UiSourceEditWorkspaceCommit = (
       detail: 'the UIBuilder workspace owner did not provide a commit seam',
     };
   }
-  const submission = onWorkspaceEdit({ expectedWorkspace, workspace });
+  const submission = onWorkspaceEdit({ expectedWorkspace, workspace, ...(sourceSplice === undefined ? {} : { sourceSplice }) });
   if (submission.status === 'refused') return submission;
   if (
     submission.expectedWorkspace !== expectedWorkspace
@@ -2030,6 +2147,1125 @@ export const submitX4UiSourceEditWorkspaceCommit = (
   }
   return submission;
 };
+
+interface X4UiSourceEditSelectionIntent {
+  readonly path: string;
+  readonly targetKind: string;
+  readonly targetName?: string;
+}
+
+export interface X4UiSourceEditSelectionContinuation {
+  readonly node: X4UiBuilderNode;
+  readonly splice: X4UiBuilderSourceEditSplice;
+  /** Accepted widget insertion proof; scalar edits continue by mapped span. */
+  readonly insertedWidget?: X4UiSourceEditInsertedWidget;
+  /** Accepted Add-row proof; the fresh catalog chooses the first eligible cell. */
+  readonly insertedRow?: X4UiSourceEditInsertedRow;
+  /** Accepted row-move proof; the fresh presentation must resolve the moved row. */
+  readonly movedRow?: X4UiSourceEditMovedRow;
+}
+
+export interface X4UiSourceEditSelectionResult {
+  readonly sourceSelector: string;
+  readonly targetSelector: string;
+  /** Fresh selection identity, present only after exact source-span mapping. */
+  readonly builderSelection?: X4UiBuilderSelection;
+}
+
+const resolveSourceEditSelectionIntent = (
+  candidates: readonly SourceCandidateView[],
+  intent: X4UiSourceEditSelectionIntent,
+): { readonly sourceSelector: string; readonly targetSelector: string } | undefined => {
+  const sources = candidates.filter(candidate => candidate.path === intent.path);
+  if (sources.length !== 1) return undefined;
+  const targets = sources[0].targets.filter(target => (
+    target.raw.kind === intent.targetKind && target.raw.name === intent.targetName
+  ));
+  return targets.length === 1 ? { sourceSelector: sources[0].key, targetSelector: targets[0].key } : undefined;
+};
+
+/** Disposable view state only; confirmation comes from the existing selection-transfer owner. */
+export function useX4UiInspectorScrollRetention(input: {
+  readonly workspace: unknown;
+  readonly scope: string;
+  readonly profile: unknown;
+  readonly selectionEpoch: number;
+  readonly nodeId?: string;
+}) {
+  const containerRef = useRef<HTMLElement | null>(null);
+  const pendingRef = useRef<{
+    readonly before: unknown; readonly after: unknown; readonly scope: string;
+    readonly profile: unknown; readonly epoch: number; readonly top: number;
+    nodeId?: string;
+  } | null>(null);
+  const cancel = useCallback((attempt?: unknown): void => {
+    if (attempt === undefined || pendingRef.current === attempt) pendingRef.current = null;
+  }, []);
+  useLayoutEffect(() => () => cancel(), [cancel]);
+  useLayoutEffect(() => {
+    const pending = pendingRef.current;
+    if (pending === null) return;
+    if (input.scope !== pending.scope || input.profile !== pending.profile
+      || input.selectionEpoch !== pending.epoch
+      || (input.workspace !== pending.before && input.workspace !== pending.after)) {
+      cancel(pending); return;
+    }
+    if (input.workspace !== pending.after || pending.nodeId === undefined || input.nodeId !== pending.nodeId) return;
+    const container = containerRef.current;
+    if (container !== null) {
+      container.scrollTop = Math.min(pending.top, Math.max(0, container.scrollHeight - container.clientHeight));
+    }
+    cancel(pending);
+  }, [input.workspace, input.scope, input.profile, input.selectionEpoch, input.nodeId, cancel]);
+  return {
+    containerRef, cancel,
+    begin(after: unknown): unknown {
+      const top = containerRef.current?.scrollTop;
+      if (after === input.workspace || input.nodeId === undefined || top === undefined || !Number.isFinite(top) || top < 0) return undefined;
+      const pending = { before: input.workspace, after, scope: input.scope,
+        profile: input.profile, epoch: input.selectionEpoch, top };
+      pendingRef.current = pending;
+      return pending;
+    },
+    confirm(selection: X4UiBuilderSelection | undefined): void {
+      const pending = pendingRef.current;
+      // A source/target-only acknowledgement is intermediate, not element confirmation.
+      if (pending === null || selection === undefined) return;
+      if (selection.workspace !== pending.after || input.workspace !== pending.after
+        || input.scope !== pending.scope || input.profile !== pending.profile
+        || input.selectionEpoch !== pending.epoch) { cancel(pending); return; }
+      pending.nodeId = selection.nodeId;
+    },
+  };
+}
+
+interface X4UiSourceEditSelectionAttempt {
+  readonly expectedWorkspace: unknown;
+  readonly workspace: unknown;
+  readonly sourceSelector: string;
+  readonly targetSelector: string;
+  readonly profile: X4UiEditorProfileControls;
+  readonly intent: X4UiSourceEditSelectionIntent;
+  readonly continuation?: X4UiSourceEditSelectionContinuation;
+  adoptedSelection?: { readonly sourceSelector: string; readonly targetSelector: string };
+  readbackSeen: boolean;
+  submission?: X4UiWorkspaceEditPending;
+  acknowledgement?: X4UiWorkspaceEditAcknowledgement;
+}
+
+/** Selection intent only: never transfers a draft, receipt, source identity, projection, or paint. */
+export function useX4UiSourceEditSelectionTransfer(input: {
+  readonly workspace: unknown;
+  readonly candidates: readonly SourceCandidateView[];
+  readonly sourceSelector: string;
+  readonly targetSelector: string;
+  readonly profile: X4UiEditorProfileControls;
+  readonly onWorkspaceEdit?: X4UiWorkspaceEditHandler;
+  readonly builderNodes?: readonly X4UiBuilderNode[];
+  readonly sourceEditCatalog?: X4UiSourceEditCatalog;
+  readonly builderProjectionStatus?: X4UiBuilderPresentation['status'];
+  readonly builderProjectionLoading?: boolean;
+  readonly builderSelectionContext?: X4UiBuilderSelectionContext;
+  readonly builderSelectionNodeId?: string;
+  readonly onSelect: (selection: X4UiSourceEditSelectionResult) => void;
+}) {
+  const liveRef = useRef(input);
+  const mountedRef = useRef(false);
+  const ownerWorkspaceRef = useRef(input.workspace);
+  const attemptRef = useRef<X4UiSourceEditSelectionAttempt | null>(null);
+  const cancel = useCallback((): void => { attemptRef.current = null; }, []);
+  const settle = useCallback((): void => {
+    const attempt = attemptRef.current;
+    if (!mountedRef.current || attempt?.submission === undefined || attempt.acknowledgement === undefined) return;
+    const live = liveRef.current;
+    const readback = classifyX4UiWorkspaceEditAcknowledgement(live.workspace, attempt.submission, attempt.acknowledgement);
+    if (readback.status === 'refused'
+      && readback.reason === 'stale-parent-workspace'
+      && attempt.acknowledgement.status === 'accepted'
+      && live.workspace === attempt.expectedWorkspace
+      && !attempt.readbackSeen) return;
+    if (readback.status === 'pending') return;
+    if (readback.status !== 'accepted') {
+      // Terminal refusals, including a rejected acknowledgement promise, must not
+      // monopolize the next edit attempt. Only the explicit accepted-before-readback
+      // branch above is allowed to remain pending.
+      attemptRef.current = null;
+      return;
+    }
+    const selected = resolveSourceEditSelectionIntent(live.candidates, attempt.intent);
+    if (selected === undefined) {
+      // The fresh owner catalog is definitive at this point. Do not retain an
+      // unsupported or ambiguous continuation as an invisible submission lock.
+      attemptRef.current = null;
+      return;
+    }
+    if (attempt.continuation === undefined) {
+      attemptRef.current = null;
+      live.onSelect(selected);
+      return;
+    }
+    if (live.builderSelectionNodeId !== undefined && live.builderSelectionNodeId !== attempt.continuation.node.id) {
+      attemptRef.current = null;
+      return;
+    }
+    const selectedKeysMatch = live.sourceSelector === selected.sourceSelector && live.targetSelector === selected.targetSelector;
+    if (!selectedKeysMatch) {
+      // Parent readback can arrive while the old source/target selectors still
+      // point at the old SHA. Adopt the fresh exact keys first and retain only
+      // this short-lived span intent until the next projection is rendered.
+      attempt.adoptedSelection = selected;
+      live.onSelect(selected);
+      return;
+    }
+    const builderSelectionContext = live.builderSelectionContext;
+    const builderProjectionReady = live.builderProjectionStatus !== 'unavailable'
+      && builderSelectionContext !== undefined
+      && builderSelectionContext.workspace === attempt.workspace
+      && builderSelectionContext.sourceIdentityKey !== null
+      && builderSelectionContext.targetId !== undefined
+      && builderSelectionContext.profileKey !== null;
+    if (!builderProjectionReady) {
+      if (live.builderProjectionLoading === true) {
+        // The owner explicitly reports a live corpus/projection load. Retain
+        // only the exact intent until that owner state changes.
+        attempt.adoptedSelection = selected;
+        return;
+      }
+      // The current exact projection is settled but cannot expose a usable
+      // context. This is unsupported, not an indefinite wait state.
+      attemptRef.current = null;
+      return;
+    }
+    const freshBuilderNode = attempt.continuation.movedRow !== undefined
+      ? resolveX4UiBuilderNodeAfterSourceRowMove(
+        live.builderNodes,
+        builderSelectionContext.sourceIdentityKey,
+        attempt.continuation.movedRow,
+      )
+      : attempt.continuation.insertedRow !== undefined
+      ? resolveX4UiBuilderNodeAfterSourceRowInsertion(
+        live.builderNodes,
+        builderSelectionContext.sourceIdentityKey,
+        attempt.continuation.insertedRow,
+        live.sourceEditCatalog,
+      )
+        : attempt.continuation.insertedWidget === undefined
+          ? resolveX4UiBuilderNodeAfterSourceEdit(live.builderNodes, attempt.continuation.node, attempt.continuation.splice)
+          : resolveX4UiBuilderNodeAfterSourceWidgetInsertion(
+            live.builderNodes,
+            builderSelectionContext.sourceIdentityKey,
+            attempt.continuation.insertedWidget,
+          );
+    if (freshBuilderNode === undefined) {
+      // The current authoritative projection exists, but no uniquely mapped node
+      // survived the exact owner-issued splice. Discard the continuation.
+      attemptRef.current = null;
+      return;
+    }
+    attemptRef.current = null;
+    const builderSelection: X4UiBuilderSelection = {
+      nodeId: freshBuilderNode.id,
+      workspace: builderSelectionContext.workspace,
+      sourceIdentityKey: builderSelectionContext.sourceIdentityKey,
+      targetId: builderSelectionContext.targetId,
+      profileKey: builderSelectionContext.profileKey,
+    };
+    live.onSelect({ ...selected, builderSelection });
+  }, []);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; cancel(); };
+  }, [cancel]);
+  useLayoutEffect(() => {
+    liveRef.current = input;
+    const attempt = attemptRef.current;
+    if (attempt !== null) {
+      const originalSelectorsMatch = input.sourceSelector === attempt.sourceSelector
+        && input.targetSelector === attempt.targetSelector;
+      const adoptedSelectorsMatch = attempt.adoptedSelection !== undefined
+        && input.sourceSelector === attempt.adoptedSelection.sourceSelector
+        && input.targetSelector === attempt.adoptedSelection.targetSelector;
+      if ((!originalSelectorsMatch && !adoptedSelectorsMatch) || input.profile !== attempt.profile) {
+        cancel();
+      } else if (ownerWorkspaceRef.current !== input.workspace) {
+        if (ownerWorkspaceRef.current === attempt.expectedWorkspace
+          && input.workspace === attempt.workspace
+          && !attempt.readbackSeen) {
+          attempt.readbackSeen = true;
+        } else {
+          cancel();
+        }
+      }
+    }
+    ownerWorkspaceRef.current = input.workspace;
+    settle();
+  }, [input, cancel, settle]);
+
+  const submit = useCallback((expectedWorkspace: unknown, replacement: unknown, continuation?: X4UiSourceEditSelectionContinuation, sourceSplice?: WorkspaceSourceSplice): X4UiWorkspaceEditSubmission => {
+    const live = liveRef.current;
+    if (!mountedRef.current || expectedWorkspace !== live.workspace || attemptRef.current !== null) {
+      return { status: 'refused', reason: 'stale-parent-workspace', detail: 'source selection changed or another source edit is awaiting acknowledgement' };
+    }
+    // No-op receipts keep their existing context/settlement behavior, with no selection transfer.
+    if (expectedWorkspace === replacement) return submitX4UiSourceEditWorkspaceCommit(expectedWorkspace, replacement, live.onWorkspaceEdit);
+    const source = live.candidates.find(candidate => candidate.key === live.sourceSelector);
+    const target = source?.targets.find(candidate => candidate.key === live.targetSelector);
+    const intent: X4UiSourceEditSelectionIntent | undefined = source !== undefined && typeof target?.raw.kind === 'string' && target.raw.kind !== ''
+      && (target.raw.name === undefined || typeof target.raw.name === 'string')
+      ? { path: source.path, targetKind: target.raw.kind, targetName: typeof target.raw.name === 'string' ? target.raw.name : undefined }
+      : undefined;
+    const unique = intent === undefined ? undefined : resolveSourceEditSelectionIntent(live.candidates, intent);
+    const attempt: X4UiSourceEditSelectionAttempt | null = intent !== undefined
+      && unique?.sourceSelector === live.sourceSelector && unique.targetSelector === live.targetSelector
+      ? { expectedWorkspace, workspace: replacement, sourceSelector: live.sourceSelector, targetSelector: live.targetSelector,
+        profile: live.profile, intent, continuation, readbackSeen: false }
+      : null;
+    // The real parent may flushSync its replacement before this call returns.
+    attemptRef.current = attempt;
+    let submission: X4UiWorkspaceEditSubmission;
+    try {
+      submission = submitX4UiSourceEditWorkspaceCommit(expectedWorkspace, replacement, live.onWorkspaceEdit, sourceSplice);
+    } catch (error) {
+      if (attemptRef.current === attempt) cancel();
+      throw error;
+    }
+    if (attempt === null || !mountedRef.current || attemptRef.current !== attempt) return submission;
+    if (submission.status === 'refused') {
+      cancel();
+      return submission;
+    }
+    attempt.submission = submission;
+    void submission.acknowledgement.then(acknowledgement => {
+      if (!mountedRef.current || attemptRef.current !== attempt) return;
+      attempt.acknowledgement = acknowledgement;
+      settle();
+    }, () => { if (attemptRef.current === attempt) cancel(); });
+    settle();
+    return submission;
+  }, [cancel, settle]);
+  return { submit, cancel };
+}
+
+interface X4UiNewMenuDraft {
+  readonly open: boolean;
+  readonly name: string;
+  readonly status: 'idle' | 'pending' | 'refused' | 'accepted';
+  readonly detail: string;
+}
+
+interface X4UiNewMenuAttempt {
+  readonly expectedWorkspace: unknown;
+  readonly workspace: unknown;
+  readonly name: string;
+  readonly path: string;
+  readonly targetName: string;
+  readbackSeen: boolean;
+  submission?: X4UiWorkspaceEditPending;
+  acknowledgement?: X4UiWorkspaceEditAcknowledgement;
+}
+
+const EMPTY_NEW_MENU_DRAFT: X4UiNewMenuDraft = { open: false, name: '', status: 'idle', detail: '' };
+
+type X4UiLuaFileActionStatus = 'idle' | 'reading' | 'pending' | 'accepted' | 'refused' | 'cancelled';
+
+interface X4UiLuaFileStatus {
+  readonly status: X4UiLuaFileActionStatus;
+  readonly detail: string;
+  readonly technical?: string;
+}
+
+const EMPTY_X4_UI_LUA_FILE_STATUS: X4UiLuaFileStatus = { status: 'idle', detail: '' };
+
+interface X4UiLuaFileLiveProps {
+  readonly workspace: unknown;
+  readonly scope: string;
+  readonly source: X4UiWorkspaceSource;
+  readonly selectedSourcePath?: string;
+  readonly candidates: readonly SourceCandidateView[];
+  readonly sourceSelector: string;
+  readonly targetSelector: string;
+  readonly onWorkspaceEdit?: X4UiWorkspaceEditHandler;
+  readonly sourceEditStaged: boolean;
+  readonly sourceEditPending: boolean;
+  readonly onSelect: (selection: { readonly sourceSelector: string; readonly targetSelector: string }) => void;
+}
+
+interface X4UiLuaImportAttempt {
+  readonly token: object;
+  readonly expectedWorkspace: unknown;
+  readonly expectedSource: X4UiWorkspaceSource;
+  readonly scope: string;
+  readonly sourceSelector: string;
+  readonly targetSelector: string;
+  readonly path: string;
+  readonly previousCandidateKeys: readonly string[];
+  replacementWorkspace: unknown;
+  replacementSource: X4UiWorkspaceSource;
+  readbackSeen: boolean;
+  invalidated: boolean;
+  phase: 'reading' | 'pending';
+  submission?: X4UiWorkspaceEditPending;
+  acknowledgement?: X4UiWorkspaceEditAcknowledgement;
+}
+
+interface X4UiLuaFileStatusContext {
+  readonly workspace: unknown;
+  readonly scope: string;
+  readonly source: X4UiWorkspaceSource;
+  readonly sourceSelector: string;
+  readonly targetSelector: string;
+}
+
+const x4UiLuaFileStatusContextFor = (live: X4UiLuaFileLiveProps): X4UiLuaFileStatusContext => ({
+  workspace: live.workspace,
+  scope: live.scope,
+  source: live.source,
+  sourceSelector: live.sourceSelector,
+  targetSelector: live.targetSelector,
+});
+
+const x4UiLuaFileNameIsSafe = (name: unknown): name is string => {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 255) return false;
+  if (!name.toLowerCase().endsWith('.lua')) return false;
+  if (name === '.' || name === '..' || [...name].some(character => {
+    const code = character.charCodeAt(0);
+    return character === '\\' || character === '/' || character === ':' || code <= 0x1f || code === 0x7f;
+  }) || /[ .]$/.test(name)) return false;
+  if (/^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) return false;
+  return true;
+};
+
+const x4UiLuaFileRefusalCopy = (reason: string, detail: string): string => {
+  switch (reason) {
+    case 'file-too-large':
+    case 'existing-file-too-large':
+    case 'aggregate-too-large':
+      return 'The Lua file is larger than the supported inline workspace limit. Choose a file under 4 MiB and keep the workspace under its total limit.';
+    case 'binary-content':
+    case 'nul-content':
+    case 'lone-surrogate':
+      return 'The file is not valid UTF-8 Lua text. Save it as UTF-8 text and try again.';
+    case 'wrong-extension':
+    case 'unsafe-traversal-path':
+    case 'unsafe-absolute-path':
+    case 'invalid-path':
+    case 'device-name':
+      return 'Choose one safe .lua file with a simple filename.';
+    case 'path-collision':
+    case 'generated-path-collision':
+      return 'That filename is already used by the workspace. Choose a different filename; existing files are never overwritten.';
+    case 'source-unavailable':
+    case 'source-locked':
+    case 'generated-shadowing-source':
+    case 'workspace-source-mismatch':
+    case 'source-projection-mismatch':
+      return 'The current UI source is unavailable or changed. Keep the current workspace, then retry the file action.';
+    case 'registration-refused':
+    case 'resulting-source-invalid':
+      return 'The Lua file was read, but the workspace could not accept it as a supported UI source. Inspect the details for the source-owner result.';
+    case 'not-registered':
+    case 'ambiguous-source':
+    case 'missing-source':
+    case 'omitted-source':
+      return 'The selected source is not one exact editable UI Lua file. Choose a registered source file and try again.';
+    case 'lint-errors':
+      return 'Error-level Lua diagnostics block export. Fix the source or inspect the diagnostics before exporting.';
+    case 'parent-workspace-owner-unavailable':
+      return 'The workspace owner is not available to apply this imported file.';
+    case 'stale-parent-workspace':
+    case 'invalid-parent-workspace-acknowledgement':
+      return 'The workspace changed before the imported file could be confirmed. Retry from the current workspace.';
+    case 'invalid-input':
+      if (/exactly one/i.test(detail)) return 'Select exactly one .lua file.';
+      return 'The selected Lua file could not be read or used. Choose one readable UTF-8 .lua file and try again.';
+    default:
+      return detail.length > 0 ? 'The Lua file action was refused. Inspect the details for recovery.' : 'The Lua file action was refused.';
+  }
+};
+
+const x4UiLuaFileTechnical = (reason: string, detail: string, extra = ''): string => (
+  `${reason}${detail.length > 0 ? `: ${detail}` : ''}${extra.length > 0 ? `\n${extra}` : ''}`
+);
+
+export type X4UiSourceEditorLuaFilesProps = X4UiLuaFileLiveProps;
+
+/**
+ * File round-trip controls for the current source owner. This component owns
+ * only local file I/O and the existing exact workspace acknowledgement seam;
+ * it never compiles, deploys, materializes, or writes a native file itself.
+ */
+export function X4UiSourceEditorLuaFiles(props: X4UiSourceEditorLuaFilesProps) {
+  const [status, setStatus] = useState<X4UiLuaFileStatus>(EMPTY_X4_UI_LUA_FILE_STATUS);
+  const statusRef = useRef(status);
+  const liveRef = useRef<X4UiLuaFileLiveProps>(props);
+  const mountedRef = useRef(false);
+  const ownerWorkspaceRef = useRef(props.workspace);
+  const importAttemptRef = useRef<X4UiLuaImportAttempt | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const exportInFlightRef = useRef(false);
+  const statusContextRef = useRef<X4UiLuaFileStatusContext>(x4UiLuaFileStatusContextFor(props));
+  const automaticSelectionRef = useRef<{ readonly workspace: unknown; readonly sourceSelector: string; readonly targetSelector: string } | null>(null);
+
+  const publish = useCallback((next: X4UiLuaFileStatus, live: X4UiLuaFileLiveProps = liveRef.current): void => {
+    statusRef.current = next;
+    statusContextRef.current = x4UiLuaFileStatusContextFor(live);
+    setStatus(next);
+  }, []);
+
+  const refuse = useCallback((reason: string, detail: string, extra = ''): void => {
+    importAttemptRef.current = null;
+    publish({
+      status: 'refused',
+      detail: x4UiLuaFileRefusalCopy(reason, detail),
+      technical: x4UiLuaFileTechnical(reason, detail, extra),
+    });
+  }, [publish]);
+
+  const settleImport = useCallback((): void => {
+    const attempt = importAttemptRef.current;
+    if (!mountedRef.current || attempt === null || attempt.submission === undefined || attempt.acknowledgement === undefined) return;
+    const live = liveRef.current;
+    if (live.scope !== attempt.scope) {
+      importAttemptRef.current = null;
+      publish({
+        status: 'cancelled',
+        detail: 'Lua open was cancelled because the workspace scope changed before confirmation.',
+      });
+      return;
+    }
+    const readback = classifyX4UiWorkspaceEditAcknowledgement(live.workspace, attempt.submission, attempt.acknowledgement);
+    if (readback.status === 'refused'
+      && readback.reason === 'stale-parent-workspace'
+      && attempt.acknowledgement.status === 'accepted'
+      && live.workspace === attempt.expectedWorkspace
+      && !attempt.readbackSeen) return;
+    if (readback.status === 'pending') return;
+    if (readback.status === 'refused') {
+      refuse(readback.reason, readback.detail);
+      return;
+    }
+    if (!attempt.readbackSeen || live.workspace !== attempt.replacementWorkspace) return;
+    const selectionInvalidated = attempt.invalidated || live.sourceEditStaged || live.sourceEditPending;
+    const freshSources = live.candidates.filter(candidate => (
+      candidate.path === attempt.path
+      && !attempt.previousCandidateKeys.includes(candidate.key)
+      && asRecord(candidate.sourceIdentity) !== null
+    ));
+    importAttemptRef.current = null;
+    if (selectionInvalidated) {
+      publish({
+        status: 'accepted',
+        detail: `Opened ${attempt.path}; no automatic selection was applied because another source action intervened · ${X4_UI_EDITOR_SESSION_GAME_TRUTH}`,
+        technical: 'The accepted import did not override an intervening staged or pending source action.',
+      });
+      return;
+    }
+    if (freshSources.length !== 1) {
+      publish({
+        status: 'accepted',
+        detail: freshSources.length === 0
+          ? `Opened ${attempt.path}, but its fresh source is not available to select yet. Choose it from File when it appears · ${X4_UI_EDITOR_SESSION_GAME_TRUTH}`
+          : `Opened ${attempt.path}, but more than one fresh source matched it. Choose the source manually · ${X4_UI_EDITOR_SESSION_GAME_TRUTH}`,
+        technical: freshSources.length === 0
+          ? 'The parent accepted the exact workspace, but the current candidate catalog did not expose one fresh issued source.'
+          : 'The current candidate catalog exposed multiple fresh sources for one path; no guessed source was selected.',
+      });
+      return;
+    }
+    const freshSource = freshSources[0];
+    const targets = menuTargetsFor(freshSource);
+    const selectionStillMatches = live.sourceSelector === attempt.sourceSelector
+      && live.targetSelector === attempt.targetSelector;
+    const nextSelection = {
+      sourceSelector: freshSource.key,
+      targetSelector: targets.length === 1 ? targets[0].key : '',
+    };
+    let selectionApplied = false;
+    if (selectionStillMatches && mountedRef.current) {
+      automaticSelectionRef.current = { workspace: live.workspace, ...nextSelection };
+      try {
+        live.onSelect(nextSelection);
+        selectionApplied = true;
+      } catch { /* A parent selection callback cannot turn an accepted import into a source write. */ }
+    }
+    const selectionDetail = targets.length === 1
+      ? selectionApplied
+        ? `Opened ${attempt.path} and selected its menu target`
+        : `Opened ${attempt.path}; the file was accepted but its menu target was not selected. Choose it from Menu`
+      : targets.length > 1
+        ? `Opened ${attempt.path}. Choose a menu target from Menu`
+        : `Opened ${attempt.path}, but no supported menu target was found. The file is open; choose another source or inspect the details`;
+    if (!mountedRef.current) return;
+    publish({
+      status: 'accepted',
+      detail: `${selectionDetail}${selectionStillMatches || selectionApplied ? '' : '; your later selection was kept'} · ${X4_UI_EDITOR_SESSION_GAME_TRUTH}`,
+      technical: targets.length > 1
+        ? 'More than one owner-issued menu target exists; no target was guessed.'
+        : targets.length === 0
+          ? 'The imported source was accepted, but the current owner exposed no supported menu target.'
+          : !selectionApplied
+            ? 'The imported source was accepted, but the current selection callback did not apply the automatic menu selection.'
+            : undefined,
+    });
+  }, [publish, refuse]);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      importAttemptRef.current = null;
+      exportInFlightRef.current = false;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    liveRef.current = props;
+    const attempt = importAttemptRef.current;
+    if (attempt !== null) {
+      if (attempt.phase === 'reading') {
+        const readContextMatches = props.workspace === attempt.expectedWorkspace
+          && props.source === attempt.expectedSource
+          && props.scope === attempt.scope
+          && props.sourceSelector === attempt.sourceSelector
+          && props.targetSelector === attempt.targetSelector
+          && !props.sourceEditStaged
+          && !props.sourceEditPending;
+        if (!readContextMatches) {
+          importAttemptRef.current = null;
+          if (mountedRef.current) publish({
+            status: 'cancelled',
+            detail: 'Lua open was cancelled because the current workspace, source, selection, or draft changed.',
+          });
+        }
+      } else {
+        if (props.workspace === attempt.replacementWorkspace && props.scope === attempt.scope) {
+          attempt.readbackSeen = true;
+        } else if (props.workspace === attempt.replacementWorkspace) {
+          importAttemptRef.current = null;
+          if (mountedRef.current) publish({
+            status: 'cancelled',
+            detail: 'Lua open was cancelled because the workspace scope changed before confirmation.',
+          });
+        } else if (props.workspace === attempt.expectedWorkspace && props.scope === attempt.scope) {
+          if (props.source !== attempt.expectedSource || props.scope !== attempt.scope) importAttemptRef.current = null;
+        } else {
+          importAttemptRef.current = null;
+          if (mountedRef.current) publish({
+            status: 'cancelled',
+            detail: props.workspace === attempt.expectedWorkspace
+              ? 'Lua open was cancelled because the workspace scope changed before confirmation.'
+              : 'Lua open was cancelled because a different workspace became current.',
+          });
+        }
+        if (props.sourceEditStaged || props.sourceEditPending) attempt.invalidated = true;
+      }
+    }
+    const previousStatusContext = statusContextRef.current;
+    const contextChanged = previousStatusContext.workspace !== props.workspace
+      || previousStatusContext.scope !== props.scope
+      || previousStatusContext.source !== props.source
+      || previousStatusContext.sourceSelector !== props.sourceSelector
+      || previousStatusContext.targetSelector !== props.targetSelector;
+    const automaticSelection = automaticSelectionRef.current;
+    const automaticSelectionMatches = automaticSelection !== null
+      && automaticSelection.workspace === props.workspace
+      && automaticSelection.sourceSelector === props.sourceSelector
+      && automaticSelection.targetSelector === props.targetSelector;
+    if (importAttemptRef.current === null && contextChanged && statusRef.current.status !== 'idle' && !automaticSelectionMatches) {
+      statusRef.current = EMPTY_X4_UI_LUA_FILE_STATUS;
+      setStatus(EMPTY_X4_UI_LUA_FILE_STATUS);
+    }
+    if (automaticSelectionMatches) automaticSelectionRef.current = null;
+    statusContextRef.current = x4UiLuaFileStatusContextFor(props);
+    ownerWorkspaceRef.current = props.workspace;
+    settleImport();
+  }, [props, props.candidates, props.onSelect, props.onWorkspaceEdit, props.scope, props.selectedSourcePath, props.source, props.sourceEditPending, props.sourceEditStaged, props.sourceSelector, props.targetSelector, props.workspace, publish, settleImport]);
+
+  const clearFileInput = (input: HTMLInputElement): void => {
+    try { input.value = ''; } catch { /* Some hosts expose a read-only file input value. */ }
+  };
+
+  const blockIfDraftOrBusy = (): boolean => {
+    const live = liveRef.current;
+    if (live.sourceEditStaged || live.sourceEditPending) {
+      publish({
+        status: 'refused',
+        detail: live.sourceEditPending
+          ? 'Apply or Discard the pending source edit before opening or exporting Lua.'
+          : 'Apply or Discard your staged source edit before opening or exporting Lua.',
+        technical: 'File actions do not silently discard staged or pending source edits.',
+      });
+      return true;
+    }
+    if (importAttemptRef.current !== null || exportInFlightRef.current) return true;
+    return false;
+  };
+
+  const cancelOpen = (): void => {
+    const attempt = importAttemptRef.current;
+    if (!mountedRef.current || attempt === null || attempt.phase !== 'reading') return;
+    importAttemptRef.current = null;
+    publish({ status: 'cancelled', detail: 'Lua open was cancelled; no workspace change was submitted.' });
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const input = event.currentTarget;
+    const selectedFiles = input.files === null ? [] : Array.from(input.files);
+    clearFileInput(input);
+    if (!mountedRef.current || blockIfDraftOrBusy()) return;
+    if (selectedFiles.length === 0) {
+      publish({ status: 'cancelled', detail: 'Lua open was cancelled; no workspace change was submitted.' });
+      return;
+    }
+    if (selectedFiles.length !== 1) {
+      refuse('invalid-input', 'Select exactly one .lua file.');
+      return;
+    }
+    const file = selectedFiles[0];
+    let name: unknown;
+    let size: unknown;
+    try {
+      name = file.name;
+      size = file.size;
+    } catch {
+      refuse('invalid-input', 'The selected file could not be inspected.');
+      return;
+    }
+    if (!x4UiLuaFileNameIsSafe(name)) {
+      refuse(typeof name === 'string' && !name.toLowerCase().endsWith('.lua') ? 'wrong-extension' : 'invalid-path', 'The selected file name is not a safe .lua basename.');
+      return;
+    }
+    if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0 || size > X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES) {
+      refuse('file-too-large', `The selected file must be at most ${X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES} bytes.`);
+      return;
+    }
+    if (typeof file.arrayBuffer !== 'function') {
+      refuse('invalid-input', 'The selected file does not provide a readable byte buffer.');
+      return;
+    }
+    const live = liveRef.current;
+    const attempt: X4UiLuaImportAttempt = {
+      token: Object.freeze({}),
+      expectedWorkspace: live.workspace,
+      expectedSource: live.source,
+      scope: live.scope,
+      sourceSelector: live.sourceSelector,
+      targetSelector: live.targetSelector,
+      path: `ui/${name}`,
+      previousCandidateKeys: live.candidates.map(candidate => candidate.key),
+      replacementWorkspace: null,
+      replacementSource: live.source,
+      readbackSeen: false,
+      invalidated: false,
+      phase: 'reading',
+    };
+    importAttemptRef.current = attempt;
+    publish({ status: 'reading', detail: `Reading ${attempt.path}…` }, live);
+    void (async (): Promise<void> => {
+      try {
+        const buffer = await file.arrayBuffer();
+        if (!mountedRef.current || importAttemptRef.current !== attempt) return;
+        const bytes = new Uint8Array(buffer);
+        if (bytes.byteLength > X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES) {
+          refuse('file-too-large', `The selected file decoded to more than ${X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES} bytes.`);
+          return;
+        }
+        const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+        let text: string;
+        try {
+          text = decoder.decode(bytes);
+        } catch {
+          refuse('binary-content', 'The selected file is not valid UTF-8 text.');
+          return;
+        }
+        const encoded = new TextEncoder().encode(text);
+        if (encoded.byteLength > X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES
+          || encoded.byteLength !== bytes.byteLength
+          || encoded.some((value, index) => value !== bytes[index])) {
+          refuse('binary-content', 'The decoded Lua text did not preserve the selected UTF-8 bytes exactly.');
+          return;
+        }
+        const current = liveRef.current;
+        const readContextMatches = current.workspace === attempt.expectedWorkspace
+          && current.source === attempt.expectedSource
+          && current.scope === attempt.scope
+          && current.sourceSelector === attempt.sourceSelector
+          && current.targetSelector === attempt.targetSelector
+          && !current.sourceEditStaged
+          && !current.sourceEditPending;
+        if (!mountedRef.current || importAttemptRef.current !== attempt || !readContextMatches) {
+          if (importAttemptRef.current === attempt) {
+            importAttemptRef.current = null;
+            publish({ status: 'cancelled', detail: 'Lua open was cancelled because the current workspace, source, selection, or draft changed.' });
+          }
+          return;
+        }
+        const result = importX4UiWorkspaceLua(
+          current.workspace as Parameters<typeof importX4UiWorkspaceLua>[0],
+          current.source,
+          { path: attempt.path, text },
+        );
+        if (result.accepted === false) {
+          refuse(result.reason, result.detail);
+          return;
+        }
+        attempt.replacementWorkspace = result.workspace;
+        attempt.replacementSource = result.source;
+        attempt.phase = 'pending';
+        publish({ status: 'pending', detail: `Applying ${result.path}…` });
+        const submission = submitX4UiSourceEditWorkspaceCommit(current.workspace, result.workspace, current.onWorkspaceEdit);
+        if (!mountedRef.current || importAttemptRef.current !== attempt) return;
+        if (submission.status === 'refused') {
+          refuse(submission.reason, submission.detail);
+          return;
+        }
+        attempt.submission = submission;
+        const pendingAttempt = attempt;
+        void submission.acknowledgement.then(acknowledgement => {
+          if (!mountedRef.current || importAttemptRef.current !== pendingAttempt) return;
+          pendingAttempt.acknowledgement = acknowledgement;
+          settleImport();
+        }, () => {
+          if (!mountedRef.current || importAttemptRef.current !== pendingAttempt) return;
+          refuse('invalid-parent-workspace-acknowledgement', 'The parent workspace acknowledgement promise was rejected.');
+        });
+        settleImport();
+      } catch (error) {
+        if (!mountedRef.current || importAttemptRef.current !== attempt) return;
+        const detail = error instanceof Error && error.message.length > 0 ? error.message : 'The selected file could not be read or decoded.';
+        refuse('invalid-input', detail);
+      } finally {
+        clearFileInput(input);
+      }
+    })();
+  };
+
+  const handleExport = (): void => {
+    if (!mountedRef.current || blockIfDraftOrBusy()) return;
+    const live = liveRef.current;
+    const path = live.selectedSourcePath;
+    if (path === undefined || path.length === 0) {
+      refuse('invalid-input', 'Select a source file before exporting Lua.');
+      return;
+    }
+    const expected = {
+      workspace: live.workspace,
+      scope: live.scope,
+      source: live.source,
+      sourceSelector: live.sourceSelector,
+      targetSelector: live.targetSelector,
+      path,
+    };
+    exportInFlightRef.current = true;
+    let objectUrl: string | undefined;
+    let anchor: HTMLAnchorElement | undefined;
+    let downloaded = false;
+    let cleanupFailed = false;
+    let failureDetail = 'The Lua download request could not be handed to the host/browser.';
+    let acceptedResult: Extract<ReturnType<typeof exportX4UiWorkspaceLua>, { readonly accepted: true }> | undefined;
+    try {
+      const result = exportX4UiWorkspaceLua(
+        live.workspace as Parameters<typeof exportX4UiWorkspaceLua>[0],
+        live.source,
+        path,
+      );
+      if (result.accepted === false) {
+        exportInFlightRef.current = false;
+        refuse(result.reason, result.detail, result.lint === null ? '' : `lint: ${result.lint.summary}`);
+        return;
+      }
+      const encoded = new TextEncoder().encode(result.text);
+      if (encoded.byteLength > X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES) {
+        exportInFlightRef.current = false;
+        refuse('file-too-large', `The selected source is larger than ${X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES} UTF-8 bytes.`);
+        return;
+      }
+      const current = liveRef.current;
+      if (!mountedRef.current
+        || current.workspace !== expected.workspace
+        || current.scope !== expected.scope
+        || current.source !== expected.source
+        || current.sourceSelector !== expected.sourceSelector
+        || current.targetSelector !== expected.targetSelector
+        || current.selectedSourcePath !== expected.path
+        || current.sourceEditStaged
+        || current.sourceEditPending) {
+        exportInFlightRef.current = false;
+        refuse('workspace-source-mismatch', 'The current source or selection changed before the download handoff.');
+        return;
+      }
+      if (typeof Blob === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || typeof URL.revokeObjectURL !== 'function') {
+        throw new Error('The host does not provide bounded Blob/object URL download support.');
+      }
+      if (typeof document === 'undefined' || document.body === null) throw new Error('The document download host is unavailable.');
+      const byteBuffer = encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength);
+      const blob = new Blob([byteBuffer], { type: 'text/plain;charset=utf-8' });
+      if (blob.size !== encoded.byteLength) throw new Error('The download Blob did not retain the exact UTF-8 byte length.');
+      objectUrl = URL.createObjectURL(blob);
+      anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = result.path.slice(result.path.lastIndexOf('/') + 1);
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      const handoff = liveRef.current;
+      if (!mountedRef.current
+        || handoff.workspace !== expected.workspace
+        || handoff.scope !== expected.scope
+        || handoff.source !== expected.source
+        || handoff.sourceSelector !== expected.sourceSelector
+        || handoff.targetSelector !== expected.targetSelector
+        || handoff.selectedSourcePath !== expected.path
+        || handoff.sourceEditStaged
+        || handoff.sourceEditPending) {
+        throw new Error('The current source or selection changed before the download click.');
+      }
+      anchor.click();
+      downloaded = true;
+      acceptedResult = result;
+    } catch (error) {
+      failureDetail = error instanceof Error && error.message.length > 0 ? error.message : failureDetail;
+    } finally {
+      if (anchor !== undefined && anchor.parentNode !== null) {
+        try { anchor.parentNode.removeChild(anchor); } catch { cleanupFailed = true; }
+      }
+      if (objectUrl !== undefined) {
+        try { URL.revokeObjectURL(objectUrl); } catch { cleanupFailed = true; }
+      }
+      exportInFlightRef.current = false;
+    }
+    if (!mountedRef.current) return;
+    if (cleanupFailed) {
+      refuse('invalid-input', 'The Lua download was not considered complete because temporary download cleanup failed.', 'cleanup failure');
+      return;
+    }
+    if (!downloaded) {
+      refuse('invalid-input', failureDetail);
+      return;
+    }
+    if (acceptedResult === undefined) {
+      refuse('invalid-input', 'The Lua export did not produce a complete download result.');
+      return;
+    }
+    const warningNote = acceptedResult.lint.warningCount > 0 ? ` ${acceptedResult.lint.warningCount} warning(s) remain truthful.` : '';
+    const gapNote = acceptedResult.lint.verificationGapCount > 0 ? ` ${acceptedResult.lint.verificationGapCount} verification gap(s) remain.` : '';
+    publish({
+      status: 'accepted',
+      detail: `Download requested for ${acceptedResult.path}; final file save is not verified. Lua source only; dependencies are not included.${warningNote}${gapNote} · ${X4_UI_EDITOR_SESSION_GAME_TRUTH}`,
+      technical: acceptedResult.lint.summary,
+    });
+  };
+
+  const busy = status.status === 'reading' || status.status === 'pending';
+  const draftBlocked = props.sourceEditStaged || props.sourceEditPending;
+  return (
+    <section data-testid="x4-ui-lua-files" className="flex min-w-0 shrink-0 flex-wrap items-center gap-1" aria-label="Lua file controls">
+      <button
+        type="button"
+        data-testid="x4-ui-lua-open"
+        aria-label="Open Lua file"
+        disabled={draftBlocked || busy}
+        title={draftBlocked ? 'Apply or Discard the current source edit before opening Lua.' : 'Open one UTF-8 .lua file into the current UI workspace.'}
+        onClick={() => { if (!draftBlocked && !busy) fileInputRef.current?.click(); }}
+        className="rounded border border-cyan-500/40 px-2 py-1 text-xs font-semibold text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+      >Open Lua…</button>
+      <input
+        ref={fileInputRef}
+        data-testid="x4-ui-lua-file-input"
+        aria-label="Select one Lua file to open"
+        type="file"
+        accept=".lua,text/x-lua"
+        disabled={draftBlocked || busy}
+        onChange={handleFileChange}
+        className="sr-only"
+      />
+      <button
+        type="button"
+        data-testid="x4-ui-lua-export"
+        aria-label="Export current Lua file"
+        disabled={draftBlocked || busy || exportInFlightRef.current}
+        title={draftBlocked ? 'Apply or Discard the current source edit before exporting Lua.' : 'Export the current selected whole Lua source file.'}
+        onClick={handleExport}
+        className="rounded border border-cyan-500/40 px-2 py-1 text-xs font-semibold text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+      >Export Lua</button>
+      {props.selectedSourcePath === undefined || props.selectedSourcePath === ''
+        ? <span data-testid="x4-ui-lua-current" className="text-[10px] text-slate-500">Select a source to export</span>
+        : <span data-testid="x4-ui-lua-current" className="max-w-48 truncate text-[10px] text-slate-500" title={props.selectedSourcePath}>{props.selectedSourcePath}</span>}
+      {draftBlocked && <span data-testid="x4-ui-lua-draft-block" className="text-[10px] text-amber-200">Apply or Discard the current source edit before file actions.</span>}
+      {status.detail !== '' && <div data-testid="x4-ui-lua-status" role="status" aria-live="polite" className={`max-w-[min(40rem,calc(100vw-2rem))] whitespace-normal break-words text-[11px] ${status.status === 'accepted' ? 'text-cyan-200' : status.status === 'refused' ? 'text-amber-200' : 'text-slate-300'}`}>{status.detail}</div>}
+      {status.technical !== undefined && <details data-testid="x4-ui-lua-technical" className="basis-full text-[10px] text-slate-500"><summary className="cursor-pointer">Inspect details</summary><pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">{status.technical}</pre></details>}
+      {busy && <button type="button" data-testid="x4-ui-lua-cancel" aria-label="Cancel Lua open" disabled={status.status !== 'reading'} onClick={cancelOpen} className="rounded border border-white/20 px-2 py-1 text-[10px] text-slate-300 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>}
+    </section>
+  );
+}
+
+/** Creation has its own short-lived intent: only its exact replacement may cross the workspace boundary. */
+export function X4UiSourceEditorNewMenu({
+  workspace,
+  source,
+  candidates,
+  onWorkspaceEdit,
+  onSelect,
+}: {
+  readonly workspace: unknown;
+  readonly source: X4UiWorkspaceSource;
+  readonly candidates: readonly SourceCandidateView[];
+  readonly onWorkspaceEdit?: X4UiWorkspaceEditHandler;
+  readonly onSelect: (selection: { readonly sourceSelector: string; readonly targetSelector: string }) => void;
+}) {
+  const [draft, setDraft] = useState<X4UiNewMenuDraft>(EMPTY_NEW_MENU_DRAFT);
+  const draftRef = useRef(draft);
+  const attemptRef = useRef<X4UiNewMenuAttempt | null>(null);
+  const mountedRef = useRef(false);
+  const ownerWorkspaceRef = useRef(workspace);
+  const liveRef = useRef({ workspace, source, candidates, onWorkspaceEdit, onSelect });
+  useLayoutEffect(() => {
+    liveRef.current = { workspace, source, candidates, onWorkspaceEdit, onSelect };
+  }, [workspace, source, candidates, onWorkspaceEdit, onSelect]);
+
+  const publish = useCallback((next: X4UiNewMenuDraft): void => {
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
+
+  const refuse = useCallback((detail: string): void => {
+    attemptRef.current = null;
+    publish({ ...draftRef.current, open: true, status: 'refused', detail });
+  }, [publish]);
+
+  const settle = useCallback((): void => {
+    const attempt = attemptRef.current;
+    if (!mountedRef.current || attempt?.submission === undefined || attempt.acknowledgement === undefined) return;
+    const live = liveRef.current;
+    const readback = classifyX4UiWorkspaceEditAcknowledgement(live.workspace, attempt.submission, attempt.acknowledgement);
+    // The parent may acknowledge before React commits its replacement props. Retain only this
+    // exact pending transition; the classifier still rejects forged/crossed acknowledgements.
+    if (readback.status === 'refused'
+      && readback.reason === 'stale-parent-workspace'
+      && attempt.acknowledgement.status === 'accepted'
+      && live.workspace === attempt.expectedWorkspace
+      && !attempt.readbackSeen) return;
+    if (readback.status === 'pending') return;
+    if (readback.status === 'refused') {
+      refuse('The menu could not be saved. Your name is kept; check the workspace and try again.');
+      return;
+    }
+    const sources = live.candidates.filter(candidate => candidate.path === attempt.path);
+    const targets = sources.length === 1
+      ? sources[0].targets.filter(target => target.raw.name === attempt.targetName)
+      : [];
+    if (sources.length !== 1 || targets.length !== 1) {
+      refuse('The menu was saved, but its preview could not be opened. Inspect the source diagnostics before retrying.');
+      return;
+    }
+    attemptRef.current = null;
+    publish({ open: false, name: '', status: 'accepted', detail: `Created ${attempt.name}.` });
+    live.onSelect({ sourceSelector: sources[0].key, targetSelector: targets[0].key });
+  }, [publish, refuse]);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      attemptRef.current = null;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (ownerWorkspaceRef.current !== workspace) {
+      const attempt = attemptRef.current;
+      if (attempt !== null
+        && ownerWorkspaceRef.current === attempt.expectedWorkspace
+        && workspace === attempt.workspace
+        && !attempt.readbackSeen) {
+        attempt.readbackSeen = true;
+      } else {
+        attemptRef.current = null;
+        publish(EMPTY_NEW_MENU_DRAFT);
+      }
+      ownerWorkspaceRef.current = workspace;
+    }
+    settle();
+  }, [workspace, candidates, publish, settle]);
+
+  const createMenu = (): void => {
+    if (!mountedRef.current || attemptRef.current !== null || draftRef.current.status === 'pending' || !draftRef.current.open) return;
+    const live = liveRef.current;
+    if (ownerWorkspaceRef.current !== live.workspace) return;
+    const name = draftRef.current.name;
+    publish({ open: true, name, status: 'pending', detail: 'Creating menu…' });
+    let attempt: X4UiNewMenuAttempt | null = null;
+    try {
+      const result = createX4UiWorkspaceMenu(
+        live.workspace as Parameters<typeof createX4UiWorkspaceMenu>[0],
+        live.source,
+        name,
+      );
+      if (result.accepted === false) {
+        refuse(result.detail);
+        return;
+      }
+      attempt = {
+        expectedWorkspace: live.workspace,
+        workspace: result.workspace,
+        name: result.menu.name,
+        path: result.menu.path,
+        targetName: result.menu.targetName,
+        readbackSeen: false,
+      };
+      // Install before invoking the parent: a synchronous callback may render, reenter, or unmount.
+      attemptRef.current = attempt;
+      const submission = submitX4UiSourceEditWorkspaceCommit(live.workspace, result.workspace, live.onWorkspaceEdit);
+      if (!mountedRef.current || attemptRef.current !== attempt) return;
+      if (submission.status === 'refused') {
+        refuse('The menu could not be saved. Your name is kept; check the workspace and try again.');
+        return;
+      }
+      attempt.submission = submission;
+      const pendingAttempt = attempt;
+      void submission.acknowledgement.then(acknowledgement => {
+        if (!mountedRef.current || attemptRef.current !== pendingAttempt) return;
+        pendingAttempt.acknowledgement = acknowledgement;
+        settle();
+      }, () => {
+        if (!mountedRef.current || attemptRef.current !== pendingAttempt) return;
+        refuse('Saving the menu failed. Your name is kept; check the workspace and try again.');
+      });
+      settle();
+    } catch {
+      if (!mountedRef.current || (attempt !== null && attemptRef.current !== attempt)
+        || liveRef.current.workspace !== ownerWorkspaceRef.current) return;
+      refuse('Creating the menu failed. Your name is kept; check the workspace and try again.');
+    }
+  };
+
+  const pending = draft.status === 'pending';
+  return (
+    <section data-testid="x4-ui-new-menu" className="flex min-w-0 shrink-0 items-center gap-1">
+      {!draft.open ? (
+        <button type="button" data-testid="x4-ui-new-menu-open" onClick={() => {
+          if (mountedRef.current && attemptRef.current === null && draftRef.current.status !== 'pending') {
+            publish({ open: true, name: '', status: 'idle', detail: '' });
+          }
+        }} className="rounded border border-cyan-500/40 px-2 py-1 text-xs font-semibold text-cyan-200">New menu</button>
+      ) : (
+        <form data-testid="x4-ui-new-menu-form" onSubmit={event => { event.preventDefault(); createMenu(); }} className="flex min-w-0 flex-wrap items-center gap-1">
+          <label className="flex items-center gap-1 text-[11px] text-slate-300">
+            Menu name
+            <input data-testid="x4-ui-new-menu-name" type="text" maxLength={80} value={draft.name} disabled={pending} onChange={event => {
+              if (draftRef.current.status !== 'pending') publish({ open: true, name: event.target.value, status: 'idle', detail: '' });
+            }} className="w-32 rounded border border-white/20 bg-black/30 px-2 py-1 text-xs disabled:opacity-60" />
+          </label>
+          <button type="submit" data-testid="x4-ui-new-menu-create" disabled={pending || draft.name.trim().length === 0} className="rounded border border-cyan-500/40 px-2 py-1 text-xs font-semibold text-cyan-200 disabled:opacity-50">Create</button>
+          <button type="button" data-testid="x4-ui-new-menu-cancel" disabled={pending} onClick={() => {
+            if (draftRef.current.status !== 'pending') publish(EMPTY_NEW_MENU_DRAFT);
+          }} className="rounded border border-white/20 px-2 py-1 text-xs text-slate-300 disabled:opacity-50">Cancel</button>
+        </form>
+      )}
+      {draft.detail !== '' && <div data-testid="x4-ui-new-menu-status" role="status" className={`text-[11px] ${draft.status === 'accepted' ? 'max-w-48 truncate text-cyan-200' : `max-w-[min(30rem,calc(100vw-2rem))] whitespace-normal break-words ${draft.status === 'refused' ? 'text-amber-200' : 'text-cyan-200'}`}`}>{draft.detail}</div>}
+    </section>
+  );
+}
 
 /** Derive the source-edit catalog only from one exact current session projection. */
 export const discoverX4UiSourceEditorCatalog = (
@@ -2098,6 +3334,16 @@ export interface X4UiSourceEditorSourceEditsProps {
   readonly receipt?: X4UiSourceEditUiReceipt;
   readonly onStage: (entryId: string, raw: string) => void;
   readonly onApply: (entryId: string) => void;
+  readonly onDiscard?: () => void;
+  readonly discardTestId?: string;
+  /** Optional exact-operation subset used by the selected-element inspector. */
+  readonly entries?: readonly X4UiSourceEditCatalogEntry[];
+  readonly title?: string;
+  readonly showTechnicalDetails?: boolean;
+  readonly showFrameBlocks?: boolean;
+  /** Scoped route to this editor instance's existing Inspect disclosure. */
+  readonly onOpenInspect?: () => void;
+  readonly inspectTargetId?: string;
 }
 
 const sourceEditLocationLabel = (entry: X4UiSourceEditCatalogEntry): string => {
@@ -2120,6 +3366,60 @@ const sourceEditLiteralLabel = (entry: X4UiSourceEditCatalogEntry): string => {
   return entry.value === undefined ? 'unavailable' : String(entry.value);
 };
 
+const sourceEditFriendlyLabel = (entry: X4UiSourceEditCatalogEntry): string => {
+  return describeX4UiBuilderProperty(entry).label;
+};
+
+/** Open one caller-owned Inspect panel without changing editor state. */
+export const openX4UiSourceEditorInspect = (panel: HTMLDetailsElement | null | undefined): void => {
+  if (panel === null || panel === undefined) return;
+  const details = panel;
+  details.open = true;
+  const summary = details.querySelector('summary');
+  if (summary instanceof HTMLElement) summary.focus({ preventScroll: true });
+};
+
+const SourceEditInspectButton = ({
+  testId,
+  onOpenInspect,
+  inspectTargetId,
+}: {
+  readonly testId: string;
+  readonly onOpenInspect?: () => void;
+  readonly inspectTargetId?: string;
+}) => onOpenInspect === undefined || inspectTargetId === undefined ? null : (
+  <button
+    type="button"
+    data-testid={testId}
+    aria-controls={inspectTargetId}
+    onClick={onOpenInspect}
+    className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300"
+  >
+    Open Inspect
+  </button>
+);
+
+const friendlySourceEditCatalogRecovery = (catalog: X4UiSourceEditCatalog): string => {
+  switch (String(catalog.reason)) {
+    case 'operation-not-applied':
+      return 'The preview could not apply this source operation, so its controls are unavailable here.';
+    case 'stale-range':
+    case 'source-record-drift':
+    case 'provenance-drift':
+      return 'The source or selection changed; refresh it before trying again.';
+    case 'source-locked':
+    case 'source-unavailable':
+    case 'generated-shadowed-source':
+      return 'The source is currently unavailable to this control; inspect the source state before retrying.';
+    case 'unsupported-provenance':
+    case 'unsupported-value':
+    case 'unsupported-string-style':
+      return 'The preview cannot safely expose this source record as a control; inspect the retained record.';
+    default:
+      return 'The preview could not issue a safe source control for this selection; inspect the retained record.';
+  }
+};
+
 const sourceEditInputTestId = (entryId: string): string => `x4-ui-source-edit-input-${entryId}`;
 
 const sourceEditBlockLocationLabel = (entry: X4UiSourceEditInsertBlockEntry): string => (
@@ -2132,115 +3432,756 @@ const sourceEditBlockOwnerLabel = (entry: X4UiSourceEditInsertBlockEntry): strin
   return `${owner.kind} ${owner.ownerId}${owner.frameId === undefined ? '' : ` · frame ${owner.frameId}`}`;
 };
 
+/** Resolve the one owner-issued empty-cell entry for the current exact hierarchy cell. */
+export const resolveX4UiSourceEditorContextualInsertionEntry = (
+  catalog: X4UiSourceEditCatalog | undefined,
+  nodes: readonly X4UiBuilderNode[],
+  selectedNode: X4UiBuilderNode | undefined,
+  presentationSourceIdentityKey: string | null | undefined,
+): X4UiSourceEditEmptyCellEntry | undefined => {
+  if (catalog === undefined
+    || selectedNode?.kind !== 'cell'
+    || presentationSourceIdentityKey === null
+    || presentationSourceIdentityKey === undefined
+    || builderSourceIdentityKey(catalog.sourceIdentity) !== presentationSourceIdentityKey) return undefined;
+  const nodeIds = new Set<string>();
+  for (const node of nodes) {
+    if (nodeIds.has(node.id)) return undefined;
+    nodeIds.add(node.id);
+  }
+  const byId = new Map(nodes.map(node => [node.id, node] as const));
+  if (byId.get(selectedNode.id) !== selectedNode) return undefined;
+  const entries = (catalog.insertEntries ?? []).filter((entry): entry is X4UiSourceEditEmptyCellEntry => (
+    entry.kind === 'insert-widget' && entry.anchor === 'empty-cell'
+  ));
+  const matches = entries.filter(entry => {
+    const cellId = `scene:${entry.cellId}`;
+    const rowId = `scene:${entry.rowId}`;
+    const tableId = `scene:${entry.tableId}`;
+    const frameId = `scene:${entry.frameId}`;
+    const row = byId.get(rowId);
+    const table = byId.get(tableId);
+    const frame = byId.get(frameId);
+    const ownerSourceMatches = [selectedNode, row, table, frame].every(node => (
+      node !== undefined
+      && node.source.file === entry.cellSource.file
+      && node.source.sourcePath === entry.cellSource.sourcePath
+    ));
+    return selectedNode.id === cellId
+      && selectedNode.parentId === rowId
+      && row?.kind === 'row'
+      && row.parentId === tableId
+      && table?.kind === 'table'
+      && table.parentId === frameId
+      && frame?.kind === 'frame'
+      && ownerSourceMatches;
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+/** Check the current row's exact owner-issued child-cell entries for palette eligibility. */
+export const hasX4UiSourceEditorContextualEligibleChildCell = (
+  catalog: X4UiSourceEditCatalog | undefined,
+  nodes: readonly X4UiBuilderNode[],
+  selectedNode: X4UiBuilderNode | undefined,
+  presentationSourceIdentityKey: string | null | undefined,
+): boolean => {
+  const row = resolveX4UiBuilderRowForNode(nodes, selectedNode);
+  if (row === undefined) return false;
+  const byId = new Map(nodes.map(node => [node.id, node] as const));
+  return row.childIds.some(childId => {
+    const cell = byId.get(childId);
+    return cell?.kind === 'cell'
+      && cell.parentId === row.id
+      && resolveX4UiSourceEditorContextualInsertionEntry(
+        catalog,
+        nodes,
+        cell,
+        presentationSourceIdentityKey,
+      ) !== undefined;
+  });
+};
+
+/** Resolve the one owner-issued row-below entry for a selected row or descendant. */
+export const resolveX4UiSourceEditorContextualRowInsertionEntry = (
+  catalog: X4UiSourceEditCatalog | undefined,
+  nodes: readonly X4UiBuilderNode[],
+  selectedNode: X4UiBuilderNode | undefined,
+  presentationSourceIdentityKey: string | null | undefined,
+  presentationTargetId?: string,
+): X4UiSourceEditRowInsertionEntry | undefined => {
+  if (catalog === undefined
+    || selectedNode === undefined
+    || presentationSourceIdentityKey === null
+    || presentationSourceIdentityKey === undefined
+    || builderSourceIdentityKey(catalog.sourceIdentity) !== presentationSourceIdentityKey) return undefined;
+  const row = resolveX4UiBuilderRowForNode(nodes, selectedNode);
+  if (row === undefined) return undefined;
+  const nodeIds = new Set<string>();
+  for (const node of nodes) {
+    if (nodeIds.has(node.id)) return undefined;
+    nodeIds.add(node.id);
+  }
+  const byId = new Map(nodes.map(node => [node.id, node] as const));
+  const table = row.parentId === undefined ? undefined : byId.get(row.parentId);
+  const frame = table?.parentId === undefined ? undefined : byId.get(table.parentId);
+  if (table?.kind !== 'table' || frame?.kind !== 'frame') return undefined;
+  const entries = (catalog.insertEntries ?? []).filter((entry): entry is X4UiSourceEditRowInsertionEntry => (
+    entry.kind === 'insert-row' && entry.anchor === 'row-below'
+  ));
+  const matches = entries.filter(entry => {
+    const rowOwner = entry.provenance.rowOwner;
+    const structuralOwner = entry.provenance.owner;
+    const ownerSourcesMatch = [selectedNode, row, table, frame].every(node => (
+      node.source.file === entry.rowSource.file && node.source.sourcePath === entry.rowSource.sourcePath
+    ));
+    return byId.get(row.id) === row
+      && entry.frameId === frame.id.slice('scene:'.length)
+      && entry.tableId === table.id.slice('scene:'.length)
+      && entry.rowId === row.id.slice('scene:'.length)
+      && builderSourceLocationEquals(entry.rowSource, row.source)
+      && ownerSourcesMatch
+      && builderSourceIdentityKey(entry.provenance.sourceIdentity) === presentationSourceIdentityKey
+      && (presentationTargetId === undefined || entry.provenance.targetId === presentationTargetId)
+      && rowOwner.frameId === entry.frameId
+      && rowOwner.tableId === entry.tableId
+      && rowOwner.rowId === entry.rowId
+      && structuralOwner.kind === 'table'
+      && structuralOwner.ownerId === entry.tableId
+      && structuralOwner.frameId === entry.frameId;
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+export interface X4UiSourceEditorRowMoveContext {
+  readonly row?: X4UiBuilderNode;
+  readonly up?: X4UiSourceEditRowMoveEntry;
+  readonly down?: X4UiSourceEditRowMoveEntry;
+  readonly detail: string;
+  readonly upDetail: string;
+  readonly downDetail: string;
+}
+
+const unavailableRowMoveContext = (detail: string): X4UiSourceEditorRowMoveContext => ({
+  detail,
+  upDetail: detail,
+  downDetail: detail,
+});
+
+const sceneNodeId = (id: string): string | undefined => (
+  id.startsWith('scene:') && id.length > 'scene:'.length ? id.slice('scene:'.length) : undefined
+);
+
+const rowMoveBlockMatchesCurrentRow = (
+  block: X4UiSourceEditRowMoveEntry['upper'] | undefined,
+  row: X4UiBuilderNode,
+  frameId: string,
+  tableId: string,
+): boolean => block !== undefined && block !== null
+  && block.frameId === frameId
+  && block.tableId === tableId
+  && block.rowId === sceneNodeId(row.id)
+  && Number.isSafeInteger(block.rowIndex)
+  && builderSourceLocationEquals(block.rowSource, row.source)
+  && block.creatorCallName === 'addRow'
+  && typeof block.creatorOperationId === 'string'
+  && block.creatorOperationId.length > 0
+  && block.owner?.kind === 'table'
+  && block.owner.ownerId === tableId
+  && block.owner.frameId === frameId
+  && block.rowOwner?.frameId === frameId
+  && block.rowOwner.tableId === tableId
+  && block.rowOwner.rowId === sceneNodeId(row.id);
+
+const rowMoveEntryMatchesCurrentPair = (
+  entry: X4UiSourceEditRowMoveEntry,
+  catalog: X4UiSourceEditCatalog,
+  frame: X4UiBuilderNode,
+  table: X4UiBuilderNode,
+  upper: X4UiBuilderNode,
+  lower: X4UiBuilderNode,
+  selected: X4UiBuilderNode,
+  adjacent: X4UiBuilderNode,
+  direction: X4UiSourceEditRowMoveDirection,
+  presentationSourceIdentityKey: string,
+  presentationTargetId: string | undefined,
+): boolean => {
+  if (entry === undefined || entry === null
+    || entry.kind !== 'move-row'
+    || entry.upper === undefined
+    || entry.lower === undefined
+    || entry.provenance === undefined) return false;
+  const frameId = sceneNodeId(frame.id);
+  const tableId = sceneNodeId(table.id);
+  const upperId = sceneNodeId(upper.id);
+  const lowerId = sceneNodeId(lower.id);
+  const selectedId = sceneNodeId(selected.id);
+  const adjacentId = sceneNodeId(adjacent.id);
+  const selectedBlock = direction === 'down' ? entry.upper : entry.lower;
+  const adjacentBlock = direction === 'down' ? entry.lower : entry.upper;
+  return selectedBlock !== undefined
+    && adjacentBlock !== undefined
+    && frameId !== undefined
+    && tableId !== undefined
+    && upperId !== undefined
+    && lowerId !== undefined
+    && selectedId !== undefined
+    && adjacentId !== undefined
+    && entry.path === catalog.sourceIdentity.file
+    && entry.frameId === frameId
+    && entry.tableId === tableId
+    && entry.rowId === selectedId
+    && entry.adjacentRowId === adjacentId
+    && entry.rowIndex === selectedBlock.rowIndex
+    && entry.adjacentRowIndex === adjacentBlock.rowIndex
+    && entry.upper.rowId === upperId
+    && entry.lower.rowId === lowerId
+    && rowMoveBlockMatchesCurrentRow(entry.upper, upper, frameId, tableId)
+    && rowMoveBlockMatchesCurrentRow(entry.lower, lower, frameId, tableId)
+    && selectedBlock.rowId === selectedId
+    && adjacentBlock.rowId === adjacentId
+    && entry.provenance.targetId === (presentationTargetId ?? entry.provenance.targetId)
+    && builderSourceIdentityKey(entry.provenance.sourceIdentity) === presentationSourceIdentityKey
+    && entry.provenance.owner?.kind === 'table'
+    && entry.provenance.owner.ownerId === tableId
+    && entry.provenance.owner.frameId === frameId
+    && entry.provenance.rowOwner?.frameId === frameId
+    && entry.provenance.rowOwner.tableId === tableId
+    && entry.provenance.rowOwner.rowId === selectedId;
+};
+
+/** Resolve owner-issued adjacent row moves for the selected row or descendant. */
+export const resolveX4UiSourceEditorContextualRowMoveEntries = (
+  catalog: X4UiSourceEditCatalog | undefined,
+  nodes: readonly X4UiBuilderNode[],
+  selectedNode: X4UiBuilderNode | undefined,
+  presentationSourceIdentityKey: string | null | undefined,
+  presentationTargetId?: string,
+): X4UiSourceEditorRowMoveContext => {
+  if (catalog === undefined) return unavailableRowMoveContext('Row controls are unavailable until this menu is ready.');
+  if (presentationSourceIdentityKey === null
+    || presentationSourceIdentityKey === undefined
+    || builderSourceIdentityKey(catalog.sourceIdentity) !== presentationSourceIdentityKey) {
+    return unavailableRowMoveContext('Row controls are updating. Try again when the menu settles.');
+  }
+  if (selectedNode === undefined) return unavailableRowMoveContext('Select a row or an element inside a row that supports reordering.');
+  const row = resolveX4UiBuilderRowForNode(nodes, selectedNode);
+  if (row === undefined) return unavailableRowMoveContext('Select a row or an element inside a row that supports reordering.');
+  const byId = new Map<string, X4UiBuilderNode>();
+  for (const node of nodes) {
+    if (byId.has(node.id)) return unavailableRowMoveContext('Row controls are updating. Try again when the menu settles.');
+    byId.set(node.id, node);
+  }
+  if (byId.get(row.id) !== row) return unavailableRowMoveContext('Row controls are updating. Try again when the menu settles.');
+  const table = row.parentId === undefined ? undefined : byId.get(row.parentId);
+  const frame = table?.parentId === undefined ? undefined : byId.get(table.parentId);
+  if (table?.kind !== 'table' || frame?.kind !== 'frame') {
+    return unavailableRowMoveContext('This row does not support reordering.');
+  }
+  const rowChildren = table.childIds.map(childId => byId.get(childId));
+  const rowIds = new Set(table.childIds);
+  if (rowChildren.some(child => child?.kind !== 'row' || child.parentId !== table.id)
+    || rowIds.size !== table.childIds.length) {
+    return unavailableRowMoveContext('Row controls are updating. Try again when the menu settles.');
+  }
+  const orderedRows = rowChildren as X4UiBuilderNode[];
+  const rowIndex = orderedRows.indexOf(row);
+  if (rowIndex < 0) return unavailableRowMoveContext('This row is not available for reordering right now.');
+  const moveEntries = catalog.moveEntries ?? [];
+  const entriesFor = (
+    direction: X4UiSourceEditRowMoveDirection,
+    upper: X4UiBuilderNode | undefined,
+    lower: X4UiBuilderNode | undefined,
+  ): { readonly entry?: X4UiSourceEditRowMoveEntry; readonly ambiguous: boolean } => {
+    if (upper === undefined || lower === undefined) return { ambiguous: false };
+    const matches = moveEntries.filter(entry => rowMoveEntryMatchesCurrentPair(
+      entry,
+      catalog,
+      frame,
+      table,
+      upper,
+      lower,
+      direction === 'down' ? upper : lower,
+      direction === 'down' ? lower : upper,
+      direction,
+      presentationSourceIdentityKey,
+      presentationTargetId,
+    ));
+    return matches.length === 1
+      ? { entry: matches[0], ambiguous: false }
+      : { ambiguous: matches.length > 1 };
+  };
+  const upResult = entriesFor('up', orderedRows[rowIndex - 1], row);
+  const downResult = entriesFor('down', row, orderedRows[rowIndex + 1]);
+  if (upResult.ambiguous || downResult.ambiguous) {
+    return { row, ...unavailableRowMoveContext('Row controls are updating. Try again when the menu settles.') };
+  }
+  const upDetail = orderedRows[rowIndex - 1] === undefined
+    ? 'This is already the first row.'
+    : upResult.entry === undefined
+      ? 'Move up is not available for this row.'
+      : 'Move up is available.';
+  const downDetail = orderedRows[rowIndex + 1] === undefined
+    ? 'This is already the last row.'
+    : downResult.entry === undefined
+      ? 'Move down is not available for this row.'
+      : 'Move down is available.';
+  return {
+    row,
+    ...(upResult.entry === undefined ? {} : { up: upResult.entry }),
+    ...(downResult.entry === undefined ? {} : { down: downResult.entry }),
+    detail: upResult.entry !== undefined || downResult.entry !== undefined
+      ? 'Use the row controls to move this row one position.'
+      : 'This row cannot be reordered right now.',
+    upDetail,
+    downDetail,
+  };
+};
+
+export interface X4UiSourceEditorRowControlsProps {
+  readonly context: X4UiSourceEditorRowMoveContext;
+  readonly builderStatus: X4UiBuilderPresentation['status'];
+  readonly projectionLoading: boolean;
+  readonly propertyDraftPending: boolean;
+  readonly receipt?: X4UiSourceEditUiReceipt;
+  readonly onMove: (entryId: string, direction: X4UiSourceEditRowMoveDirection) => void;
+}
+
+/** One compact, human-readable row action group; source coordinates stay in Inspect. */
+export function X4UiSourceEditorRowControls({
+  context,
+  builderStatus,
+  projectionLoading,
+  propertyDraftPending,
+  receipt,
+  onMove,
+}: X4UiSourceEditorRowControlsProps) {
+  const transactionPending = receipt?.status === 'pending';
+  const unavailableDetail = projectionLoading
+    ? 'Loading menu…'
+    : builderStatus === 'unavailable'
+      ? 'Row controls are unavailable until this menu is ready.'
+      : context.detail;
+  const statusDetail = propertyDraftPending
+    ? 'Apply or discard your property changes first.'
+    : transactionPending
+      ? 'Saving your change…'
+      : receipt?.status === 'refused'
+        ? 'That row change could not be saved. Open Inspect for details.'
+        : unavailableDetail;
+  const disabled = propertyDraftPending || transactionPending || projectionLoading || builderStatus === 'unavailable';
+  const upDisabled = disabled || context.up === undefined;
+  const downDisabled = disabled || context.down === undefined;
+  return (
+    <section data-testid="x4-ui-row-controls" className="mt-2 rounded border border-cyan-500/30 bg-cyan-950/10 p-2" aria-label="Row controls">
+      <h3 className="text-[10px] font-bold uppercase tracking-wider text-cyan-200">Row controls</h3>
+      <div data-testid="x4-ui-row-controls-status" className="mt-1 break-words text-slate-400" aria-live="polite">{statusDetail}</div>
+      <div className="mt-2 grid grid-cols-2 gap-1">
+        <button
+          type="button"
+          data-testid="x4-ui-row-controls-move-up"
+          disabled={upDisabled}
+          title={context.up === undefined ? context.upDetail : 'Move this row up one position.'}
+          onClick={() => { if (context.up !== undefined) onMove(context.up.id, 'up'); }}
+          className="min-h-[28px] rounded border border-cyan-400/40 px-2 py-1 text-[11px] font-bold text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Move up
+        </button>
+        <button
+          type="button"
+          data-testid="x4-ui-row-controls-move-down"
+          disabled={downDisabled}
+          title={context.down === undefined ? context.downDetail : 'Move this row down one position.'}
+          onClick={() => { if (context.down !== undefined) onMove(context.down.id, 'down'); }}
+          className="min-h-[28px] rounded border border-cyan-400/40 px-2 py-1 text-[11px] font-bold text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Move down
+        </button>
+      </div>
+    </section>
+  );
+}
+
+export interface X4UiSourceEditorContextualPaletteProps {
+  readonly selectedNode?: X4UiBuilderNode;
+  readonly entry?: X4UiSourceEditEmptyCellEntry;
+  readonly rowEntry?: X4UiSourceEditRowInsertionEntry;
+  readonly rowHasEligibleCell: boolean;
+  readonly catalogAvailable: boolean;
+  readonly sourceIdentityMatches: boolean;
+  readonly builderStatus: X4UiBuilderPresentation['status'];
+  readonly projectionLoading: boolean;
+  readonly propertyDraftPending: boolean;
+  readonly receipt?: X4UiSourceEditUiReceipt;
+  readonly onDiscard?: () => void;
+  readonly onInsert: (entryId: string, widget: X4UiSourceEditWidgetKind, text: string) => void;
+  readonly onInsertRow?: (entryId: string) => void;
+}
+
+/** Compact, controlled contextual insert surface; all mutation remains in the existing source transaction. */
+export function X4UiSourceEditorContextualPalette({
+  selectedNode,
+  entry,
+  rowEntry,
+  rowHasEligibleCell,
+  catalogAvailable,
+  sourceIdentityMatches,
+  builderStatus,
+  projectionLoading,
+  propertyDraftPending,
+  receipt,
+  onDiscard,
+  onInsert,
+  onInsertRow,
+}: X4UiSourceEditorContextualPaletteProps) {
+  const [text, setText] = useState('New text');
+  const contextKey = `${selectedNode?.id ?? 'none'}:${entry?.id ?? 'none'}:${rowEntry?.id ?? 'none'}`;
+  useEffect(() => {
+    setText('New text');
+  }, [contextKey]);
+
+  const selectedCell = selectedNode?.kind === 'cell';
+  const selectedRowContext = rowEntry !== undefined;
+  const transactionPending = receipt?.status === 'pending';
+  const unavailableDetail = projectionLoading
+      ? 'Loading menu…'
+      : !catalogAvailable
+      ? 'This menu is not ready for adding content yet.'
+      : !sourceIdentityMatches || builderStatus === 'unavailable'
+        ? 'This menu is still updating. Try again when it settles.'
+        : selectedRowContext
+          ? undefined
+          : !selectedCell
+            ? 'Choose a row or an element inside a row to add a row.'
+            : entry === undefined
+              ? 'This cell is not available for adding a widget.'
+              : undefined;
+  const disabledDetail = propertyDraftPending
+    ? 'Apply or discard your property changes first.'
+    : transactionPending
+      ? 'Saving your change…'
+      : unavailableDetail;
+  const insertionDisabled = disabledDetail !== undefined || text.trim().length === 0;
+  const rowInsertionDisabled = disabledDetail !== undefined;
+
+  return (
+    <section data-testid="x4-ui-contextual-palette" className="mt-2 rounded border border-fuchsia-500/30 bg-fuchsia-950/10 p-2" aria-label="Contextual widget palette">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[10px] font-bold uppercase tracking-wider text-fuchsia-200">Add to selection</h3>
+      </div>
+      <div id="x4-ui-contextual-palette-status" data-testid="x4-ui-contextual-palette-status" className="mt-1 break-words text-slate-400" aria-live="polite">
+        {disabledDetail ?? (selectedRowContext
+          ? entry === undefined
+            ? rowHasEligibleCell
+              ? 'Select an empty cell to add text, button, or input. Add a row below this row.'
+              : 'No eligible cell is available for adding content right now. Add another row below this row.'
+            : 'Choose text, button, or input. Add a row below this row.'
+          : 'Choose text, button, or input.')}
+      </div>
+      {propertyDraftPending && onDiscard !== undefined && (
+        <button
+          type="button"
+          data-testid="x4-ui-contextual-palette-discard"
+          disabled={transactionPending}
+          onClick={onDiscard}
+          className="mt-2 rounded border border-amber-400/40 px-2 py-1 text-[9px] font-bold uppercase text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Discard property changes
+        </button>
+      )}
+      {rowEntry !== undefined && onInsertRow !== undefined && (
+        <button
+          type="button"
+          data-testid="x4-ui-contextual-palette-add-row"
+          disabled={rowInsertionDisabled}
+          onClick={() => onInsertRow(rowEntry.id)}
+          className="mt-2 w-full rounded border border-cyan-400/40 px-2 py-1 text-[9px] font-bold uppercase text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Add row below
+        </button>
+      )}
+      {entry !== undefined && selectedCell && catalogAvailable && sourceIdentityMatches && builderStatus !== 'unavailable' && !projectionLoading && (
+        <>
+          <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-300">
+            Text
+            <input
+              data-testid="x4-ui-contextual-palette-text"
+              type="text"
+              aria-label="New widget text"
+              aria-describedby="x4-ui-contextual-palette-status"
+              value={text}
+              onChange={event => setText(event.target.value)}
+              className="min-w-0 flex-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+            />
+          </label>
+          <div className="mt-2 grid grid-cols-3 gap-1">
+            {(['text', 'button', 'input'] as const).map(widget => (
+              <button
+                key={widget}
+                type="button"
+                data-testid={`x4-ui-contextual-palette-add-${widget}`}
+                disabled={insertionDisabled}
+                onClick={() => onInsert(entry.id, widget, text)}
+                className="rounded border border-fuchsia-400/40 px-2 py-1 text-[9px] font-bold uppercase text-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Add {widget === 'input' ? 'Input' : widget[0].toUpperCase() + widget.slice(1)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {receipt?.status === 'refused' && <div data-testid="x4-ui-contextual-palette-refusal" className="mt-1 break-words text-red-300">That change could not be saved. Open Inspect for details.</div>}
+    </section>
+  );
+}
+
+const textPropertyLabels: Record<X4UiSourceTextPropertyAddition['property'], string> = {
+  halign: 'Alignment', fontsize: 'Font size', wordwrap: 'Word wrap',
+  x: 'Horizontal offset', y: 'Vertical offset', minRowHeight: 'Minimum row height',
+};
+const textPropertyLabel = (item: X4UiSourceTextPropertyAddition): string =>
+  `${item.callName === 'setText2' ? 'Secondary text: ' : ''}${textPropertyLabels[item.property]}`;
+
+/** A local choice and the existing source draft; this surface owns no Lua or history. */
+export function X4UiSourceEditorAddTextProperty({ additions, staged, pending, onStage, onApply }: {
+  additions: readonly X4UiSourceTextPropertyAddition[];
+  staged: Readonly<Record<string, string>>;
+  pending: boolean;
+  onStage: (id: string, value: string) => void;
+  onApply: (id: string) => void;
+}) {
+  const [choice, setChoice] = useState('');
+  const selected = additions.find(item => item.id === choice);
+  const value = selected === undefined ? '' : staged[selected.id] ?? '';
+  const hasOtherDraft = Object.keys(staged).some(id => id !== selected?.id);
+  const disabled = pending || hasOtherDraft;
+  if (additions.length === 0) return null;
+  return <section data-testid="x4-ui-add-text-property" className="mt-2 border-t border-white/10 px-1 pt-2 text-[11px]">
+    <h3 className="font-semibold text-cyan-200">Add text property</h3>
+    <label className="mt-1 block text-slate-300">Property
+      <select value={selected?.id ?? ''} disabled={pending || Object.keys(staged).length > 0}
+        onChange={event => setChoice(event.target.value)} className="mt-1 w-full rounded border border-white/20 bg-slate-900 px-2 py-1">
+        <option value="">Choose a property…</option>
+        {additions.map(item => <option key={item.id} value={item.id}>{textPropertyLabel(item)}</option>)}
+      </select>
+    </label>
+    {selected !== undefined && <label className="mt-2 block text-slate-300">{textPropertyLabel(selected)}
+      {selected.valueType === 'number'
+        ? <input type="number" min={selected.property === 'fontsize' ? undefined : 0} step="any" value={value} disabled={disabled}
+          onChange={event => onStage(selected.id, event.target.value)} className="mt-1 w-full rounded border border-white/20 bg-black/30 px-2 py-1" />
+        : <select value={value} disabled={disabled} onChange={event => onStage(selected.id, event.target.value)}
+          className="mt-1 w-full rounded border border-white/20 bg-slate-900 px-2 py-1">
+          <option value="">Choose a value…</option>
+          {(selected.valueType === 'boolean' ? [['true', 'Yes'], ['false', 'No']] : [['left', 'Left'], ['center', 'Center'], ['right', 'Right']])
+            .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>}
+    </label>}
+    <button type="button" disabled={disabled || selected === undefined || value.trim() === ''}
+      onClick={() => { if (!disabled && selected && value.trim() !== '') onApply(selected.id); }}
+      className="mt-2 rounded border border-cyan-500/40 px-2 py-1 font-semibold text-cyan-200 disabled:opacity-40">Add property</button>
+    {hasOtherDraft && <p className="mt-1 text-amber-200">Apply or discard the current property changes first.</p>}
+  </section>;
+}
+
 export function X4UiSourceEditorSourceEdits({
   catalog,
   staged,
   receipt,
   onStage,
   onApply,
+  onDiscard,
+  discardTestId = 'x4-ui-source-edit-discard',
+  entries,
+  title = 'Source-safe property controls',
+  showTechnicalDetails = true,
+  showFrameBlocks = true,
+  onOpenInspect,
+  inspectTargetId,
 }: X4UiSourceEditorSourceEditsProps) {
   const parentCommitPending = receipt?.status === 'pending';
+  const requestedEntries = entries ?? catalog.entries;
   const frameBlockEntries = (catalog.insertEntries ?? []).filter((entry): entry is X4UiSourceEditInsertBlockEntry => (
     entry.kind === 'insert-block' && entry.anchor === 'frame-display'
   ));
-  return (
-    <section data-testid="x4-ui-source-edits" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source-safe property controls</h2>
-        <span data-testid="x4-ui-source-edit-verification" className="text-[9px] font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
-      </div>
-      <div data-testid="x4-ui-source-edit-catalog-detail" className="mt-1 break-words text-slate-500">{catalog.detail}</div>
-      {receipt !== undefined && (
-        <div
-          data-testid="x4-ui-source-edit-receipt"
-          className={`mt-2 rounded border p-2 ${receipt.status === 'accepted' ? 'border-emerald-500/30 text-emerald-300' : receipt.status === 'pending' ? 'border-amber-500/30 text-amber-300' : 'border-red-500/30 text-red-300'}`}
-        >
-          {receipt.status === 'accepted'
+  const friendly = !showTechnicalDetails;
+  const propertyPresentation = friendly
+    ? buildX4UiBuilderPropertyPresentation(requestedEntries)
+    : undefined;
+  const visibleEntries = friendly
+    ? propertyPresentation?.primary.map(view => view.entry) ?? []
+    : requestedEntries;
+  const propertyViewFor = (entry: X4UiSourceEditCatalogEntry) => propertyPresentation?.primary.find(view => view.entry === entry)
+    ?? propertyPresentation?.technical.find(view => view.entry === entry)
+    ?? describeX4UiBuilderProperty(entry);
+  const renderReceipt = () => {
+    if (receipt === undefined) return null;
+    return (
+      <div
+        data-testid="x4-ui-source-edit-receipt"
+        className={`mt-1 ${friendly ? 'px-1 py-1 text-[10px]' : 'rounded border p-2'} ${receipt.status === 'accepted' ? 'border-emerald-500/30 text-emerald-300' : receipt.status === 'pending' ? 'border-amber-500/30 text-amber-300' : 'border-red-500/30 text-red-300'}`}
+      >
+        {showTechnicalDetails
+          ? receipt.status === 'accepted'
             ? `Accepted${receipt.changed ? ' source change' : ' no-op'}: ${receipt.detail}`
             : receipt.status === 'pending'
               ? `Pending parent workspace acknowledgement: ${receipt.detail}`
-              : `Refused: ${receipt.reason} · ${receipt.detail}`}
+              : `Refused: ${receipt.reason} · ${receipt.detail}`
+          : receipt.status === 'accepted'
+            ? `Saved${receipt.changed ? ' source change' : ' no-op'}: the selected value was accepted.`
+            : receipt.status === 'pending'
+              ? 'Saving the selected value through the source owner…'
+              : `Could not apply this value: ${receipt.detail}`}
+      </div>
+    );
+  };
+  return (
+    <section data-testid="x4-ui-source-edits" className={friendly ? 'mt-1 min-w-0' : 'mt-3 rounded border border-white/10 bg-black/20 p-3'}>
+      <div className={`flex flex-wrap items-center justify-between gap-2 ${friendly ? 'px-1' : ''}`}>
+        <h2 className={friendly ? 'text-[11px] font-semibold text-cyan-200' : 'text-[10px] font-bold uppercase tracking-wider text-cyan-300'}>{title}</h2>
+        {!friendly && <span data-testid="x4-ui-source-edit-verification" className="text-[9px] font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>}
+        {onDiscard !== undefined && Object.keys(staged).length > 0 && (
+          <button
+            type="button"
+            data-testid={discardTestId}
+            disabled={parentCommitPending}
+            onClick={onDiscard}
+            className="rounded border border-amber-400/40 px-2 py-1 text-[9px] font-bold uppercase text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Discard property changes
+          </button>
+        )}
+      </div>
+      {showTechnicalDetails && <div data-testid="x4-ui-source-edit-catalog-detail" className="mt-1 break-words font-mono text-slate-500">{catalog.detail}</div>}
+      {catalog.status === 'locked' && (
+        <div data-testid="x4-ui-source-edit-catalog-locked" role="alert" className="mt-2 rounded border border-amber-500/30 bg-amber-950/20 p-2 text-[11px] text-amber-200">
+          <div className="font-semibold">Property controls are unavailable for this source selection.</div>
+          <div className="mt-1 break-words">{friendly ? friendlySourceEditCatalogRecovery(catalog) : catalog.detail}</div>
+          {friendly && <div className="mt-2"><SourceEditInspectButton testId="x4-ui-builder-open-inspect-catalog" onOpenInspect={onOpenInspect} inspectTargetId={inspectTargetId} /></div>}
         </div>
       )}
-      <div className="mt-2 space-y-2">
-        {catalog.entries.map(entry => {
+      {friendly && propertyPresentation !== undefined && propertyPresentation.notices.length > 0 && (
+        <div data-testid="x4-ui-builder-property-notices" role="status" className="mt-2 rounded border border-white/10 bg-black/20 p-2 text-[10px] text-slate-400">
+          {propertyPresentation.notices.map(notice => <div key={notice}>{notice}</div>)}
+          <div className="mt-2"><SourceEditInspectButton testId="x4-ui-builder-open-inspect-properties" onOpenInspect={onOpenInspect} inspectTargetId={inspectTargetId} /></div>
+        </div>
+      )}
+      {receipt?.status !== 'accepted' && renderReceipt()}
+      <div className={friendly ? 'mt-1 space-y-1' : 'mt-2 space-y-2'}>
+        {visibleEntries.map(entry => {
           const hasStaged = Object.prototype.hasOwnProperty.call(staged, entry.id);
           const stagedValue = hasStaged ? staged[entry.id] : undefined;
+          const propertyView = propertyViewFor(entry);
+          const alignmentChoices = friendly && entry.kind === 'editable' && entry.valueType === 'string'
+            && propertyView.availability === 'supported'
+            && propertyView.fields.includes('semantics.properties.halign')
+            && ['createText', 'setText', 'setText2', 'createEditBox'].includes(entry.provenance.callName);
+          const stringDraftValue = stagedValue ?? (entry.kind === 'editable' && entry.value !== undefined ? String(entry.value) : '');
           return (
-            <article key={entry.id} data-testid={`x4-ui-source-edit-entry-${entry.id}`} className="rounded border border-white/10 bg-black/30 p-2">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="font-bold text-slate-200">{entry.path ?? entry.id} · {entry.id}</div>
-                  <div className="mt-1 break-words text-slate-500">source path/range: <span className="text-slate-300">{sourceEditLocationLabel(entry)}</span></div>
-                  <div className="break-words text-slate-500">call/field: <span className="text-slate-300">{sourceEditIdentityLabel(entry)}</span></div>
-                  <div className="break-words text-slate-500">current literal: <code className="text-slate-200">{sourceEditLiteralLabel(entry)}</code></div>
+            <article key={entry.id} data-testid={`x4-ui-source-edit-entry-${entry.id}`} className={friendly ? 'min-w-0 rounded border border-white/10 bg-black/30 p-1' : 'rounded border border-white/10 bg-black/30 p-2'}>
+              {!friendly && (
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-200">{sourceEditFriendlyLabel(entry)}</div>
+                  </div>
+                  {entry.kind === 'locked' ? (
+                    <span data-testid={`x4-ui-source-edit-locked-${entry.id}`} className="rounded border border-amber-500/30 px-2 py-1 text-[9px] font-bold uppercase text-amber-300">Read-only · {entry.reason}</span>
+                  ) : (
+                    <span className="rounded border border-emerald-500/30 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300">Owner-issued literal</span>
+                  )}
                 </div>
-                {entry.kind === 'locked' ? (
-                  <span data-testid={`x4-ui-source-edit-locked-${entry.id}`} className="rounded border border-amber-500/30 px-2 py-1 text-[9px] font-bold uppercase text-amber-300">Read-only · {entry.reason}</span>
-                ) : (
-                  <span className="rounded border border-emerald-500/30 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300">Owner-issued literal</span>
-                )}
-              </div>
-                {entry.kind === 'locked' ? (
-                  <div data-testid={`x4-ui-source-edit-lock-reason-${entry.id}`} className="mt-2 break-words text-amber-200">owner lock/refusal reason: {entry.reason} · {entry.detail}</div>
-                ) : (
+              )}
+              {entry.kind === 'locked' ? (
+                <div data-testid={`x4-ui-source-edit-lock-reason-${entry.id}`} className={friendly ? 'px-1 py-1 text-[11px] text-amber-200' : 'mt-2 break-words text-amber-200'}>{friendly ? propertyView.recovery ?? `${propertyView.label} cannot be changed with this control; inspect the exact reason.` : `owner lock/refusal reason: ${entry.reason} · ${entry.detail}`}</div>
+              ) : (
                 <>
-                  <div className="mt-2 break-words text-slate-500">owner lock/refusal reason: none · exact owner-issued direct source literal</div>
-                  <div className="mt-2 flex flex-wrap items-end gap-2">
-                  <label className="flex min-w-48 flex-1 flex-col gap-1 text-slate-500">
-                    Stage {entry.valueType} literal
+                  {showTechnicalDetails && <div className="mt-2 break-words font-mono text-slate-500">owner lock/refusal reason: none · exact owner-issued direct source literal</div>}
+                  <div className={friendly ? 'flex min-w-0 items-center gap-2' : 'mt-2 flex flex-wrap items-end gap-2'}>
+                  <label className={friendly ? 'flex min-w-0 flex-1 items-center gap-2 text-[11px] text-slate-300' : 'flex min-w-48 flex-1 flex-col gap-1 text-slate-500'}>
+                    {friendly ? propertyView.label : `Stage ${entry.valueType} literal`}
                     {entry.valueType === 'number' && (
                       <input
                         data-testid={sourceEditInputTestId(entry.id)}
                         type="number"
-                         step="any"
-                         value={stagedValue ?? ''}
-                         disabled={parentCommitPending}
-                         onChange={event => onStage(entry.id, event.target.value)}
-                        className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                        step="any"
+                        aria-label={propertyView.label}
+                        value={stagedValue ?? (entry.value === undefined ? '' : String(entry.value))}
+                        disabled={parentCommitPending}
+                        onChange={event => onStage(entry.id, event.target.value)}
+                        className={friendly ? 'min-w-0 flex-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200' : 'rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200'}
                       />
                     )}
-                    {entry.valueType === 'string' && (
+                    {entry.valueType === 'string' && alignmentChoices && (
+                      <select
+                        data-testid={sourceEditInputTestId(entry.id)}
+                        aria-label={propertyView.label}
+                        value={stringDraftValue}
+                        disabled={parentCommitPending}
+                        onChange={event => onStage(entry.id, event.target.value)}
+                        className="min-w-0 flex-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                      >
+                        {!['left', 'center', 'right'].includes(stringDraftValue) && <option value={stringDraftValue}>Other value: {stringDraftValue}</option>}
+                        <option value="left">Left</option>
+                        <option value="center">Center</option>
+                        <option value="right">Right</option>
+                      </select>
+                    )}
+                    {entry.valueType === 'string' && !alignmentChoices && (
                       <input
                         data-testid={sourceEditInputTestId(entry.id)}
-                         type="text"
-                         value={stagedValue ?? ''}
-                         disabled={parentCommitPending}
-                         onChange={event => onStage(entry.id, event.target.value)}
-                        className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                        type="text"
+                        aria-label={propertyView.label}
+                        value={stagedValue ?? (entry.value === undefined ? '' : String(entry.value))}
+                        disabled={parentCommitPending}
+                        onChange={event => onStage(entry.id, event.target.value)}
+                        className={friendly ? 'min-w-0 flex-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200' : 'rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200'}
                       />
                     )}
                     {entry.valueType === 'boolean' && (
                       <span className="flex items-center gap-2 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
                         <input
                           data-testid={sourceEditInputTestId(entry.id)}
-                           type="checkbox"
-                           checked={stagedValue === undefined ? entry.value === true : stagedValue === 'true'}
-                           disabled={parentCommitPending}
-                           onChange={event => onStage(entry.id, String(event.target.checked))}
+                          type="checkbox"
+                          aria-label={propertyView.label}
+                          checked={stagedValue === undefined ? entry.value === true : stagedValue === 'true'}
+                          disabled={parentCommitPending}
+                          onChange={event => onStage(entry.id, String(event.target.checked))}
                         />
                         <span>{stagedValue === undefined ? String(entry.value) : stagedValue}</span>
                       </span>
                     )}
                   </label>
                   <button
-                     type="button"
-                     data-testid={`x4-ui-source-edit-apply-${entry.id}`}
-                     disabled={!hasStaged || parentCommitPending}
+                    type="button"
+                    data-testid={`x4-ui-source-edit-apply-${entry.id}`}
+                    disabled={!hasStaged || parentCommitPending}
                     onClick={() => onApply(entry.id)}
-                    className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="shrink-0 rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Apply
                   </button>
                   </div>
                 </>
               )}
+              <details data-testid={`x4-ui-source-edit-technical-${entry.id}`} className={friendly ? 'mt-1 px-1 text-[10px] text-slate-500' : 'mt-1 font-mono text-[10px] text-slate-500'}>
+                <summary className="cursor-pointer text-cyan-300">Technical source details</summary>
+                {entry.kind === 'locked' && <div className="mt-1 break-words">owner lock/refusal reason: <span className="text-amber-200">{entry.reason} · {entry.detail}</span></div>}
+                <div className="mt-1 break-words">source path/range: <span className="text-slate-300">{sourceEditLocationLabel(entry)}</span></div>
+                <div className="break-words">call/field: <span className="text-slate-300">{sourceEditIdentityLabel(entry)}</span></div>
+                <div className="break-words">current literal: <code className="text-slate-200">{sourceEditLiteralLabel(entry)}</code></div>
+              </details>
             </article>
           );
         })}
       </div>
-      {catalog.entries.length === 0 && <div className="mt-2 text-slate-500">No owner-issued source properties were exposed for this exact target.</div>}
-      <section data-testid="x4-ui-source-edit-frame-blocks" className="mt-3 rounded border border-violet-500/30 bg-violet-950/10 p-2">
+      {visibleEntries.length === 0 && (
+        <div data-testid="x4-ui-builder-properties-empty-friendly" className="mt-2 text-slate-500">
+          {friendly
+            ? 'No user-facing property controls are available for this selection. Technical source bindings remain under Inspect.'
+            : 'No owner-issued source properties were exposed for this exact selection.'}
+        </div>
+      )}
+      {receipt?.status === 'accepted' && renderReceipt()}
+      {showFrameBlocks && <section data-testid="x4-ui-source-edit-frame-blocks" className="mt-3 rounded border border-violet-500/30 bg-violet-950/10 p-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-[10px] font-bold uppercase tracking-wider text-violet-300">Frame-level direct X4 UI insertion block</h3>
           <span className="text-[9px] font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
@@ -2289,7 +4230,7 @@ export function X4UiSourceEditorSourceEdits({
             })}
           </div>
         )}
-      </section>
+      </section>}
     </section>
   );
 }
@@ -2411,6 +4352,12 @@ export interface X4UiSourceEditorSamplesProps {
   readonly onSampleInput: (entryId: string, raw: string) => void;
   readonly onApply?: () => void;
   readonly onReset?: () => void;
+  readonly onClear?: () => void;
+  readonly primary?: boolean;
+  readonly presentation?: X4UiBuilderPresentation;
+  readonly contextNode?: X4UiBuilderNode;
+  readonly onOpenInspect?: () => void;
+  readonly inspectTargetId?: string;
   readonly error?: string;
 }
 
@@ -2459,40 +4406,54 @@ export function X4UiSourceEditorSamples({
   onSampleInput,
   onApply,
   onReset,
+  onClear,
+  primary = false,
+  presentation,
+  contextNode,
+  onOpenInspect,
+  inspectTargetId,
   error,
 }: X4UiSourceEditorSamplesProps) {
+  const contextual = primary && contextNode !== undefined;
+  const regionId = contextual ? 'x4-ui-context-inputs' : primary ? 'x4-ui-preview-inputs' : 'x4-ui-samples';
+  const controlId = contextual ? 'x4-ui-context-input' : primary ? 'x4-ui-preview-input' : 'x4-ui-sample';
+  const views = buildX4UiBuilderPreviewInputPresentation(catalog, presentation, contextual ? contextNode : undefined);
+  const appliedCount = views.filter(view => sampleValueFor(samples, view.entry.id) !== undefined).length;
   return (
-    <section data-testid="x4-ui-samples-region" className="mt-3 rounded border border-cyan-500/30 bg-cyan-950/10 p-3">
+    <section data-testid={`${regionId}-region`} className="mt-3 rounded border border-cyan-500/30 bg-cyan-950/10 p-3">
       <div className="flex items-start justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Preview-only samples</h2>
-        <span data-testid="x4-ui-samples-preview-only" className="font-bold text-amber-300">Preview only</span>
+        <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">{contextual ? 'Related preview inputs' : primary ? 'Preview inputs' : 'Preview-only samples'}</h2>
+        <span data-testid={`${regionId}-preview-only`} className="font-bold text-amber-300">Preview only</span>
       </div>
-      <div className="mt-2 text-amber-200">Samples affect preview measurement only. They never change source, workspace, export bytes, linter truth, or <span className="font-bold">Not verified in game</span>.</div>
-      <div data-testid="x4-ui-samples-applied" className="mt-2 text-slate-400">currently applied preview values remain active while edits are staged; staged edits take effect only after explicit Apply.</div>
-      <div data-testid="x4-ui-samples-staged" className="mt-1 text-slate-400">{draft === undefined ? 'no staged sample draft' : 'staged sample draft · not applied'}</div>
+      <div className="mt-2 text-amber-200">{primary ? 'Try realistic values without changing your Lua. Empty inputs remain unresolved; preview values do not unlock source editing.' : 'Samples affect preview measurement only. They never change source, workspace, export bytes, linter truth, or Not verified in game.'}</div>
+      {contextual && <div className="mt-2 text-slate-400">Values used by this element, its contents or containers. Other menu values can also affect the layout. Apply and Discard include input edits made in other views.</div>}
+      <div data-testid={`${regionId}-applied`} className="mt-2 text-slate-400">{contextual ? `${appliedCount} of ${views.length} related values applied; ${views.length - appliedCount} not supplied.` : primary ? `${samples?.values.length ?? 0} values applied to preview. Applied values stay active until you apply or clear them.` : 'currently applied preview values remain active while edits are staged; staged edits take effect only after explicit Apply.'}</div>
+      <div data-testid={`${regionId}-staged`} className="mt-1 text-slate-400">{primary ? (draft === undefined ? 'No unapplied edits' : 'Unapplied edits') : (draft === undefined ? 'no staged sample draft' : 'staged sample draft · not applied')}</div>
       {catalog === null ? (
-        <div data-testid="x4-ui-samples-empty" className="mt-2 text-slate-500">Select an exact source and target to expose the selected layout-program sample catalog.</div>
-      ) : catalog.entries.length === 0 ? (
-        <div data-testid="x4-ui-samples-none" className="mt-2 text-slate-500">The selected layout program declares no dynamic preview samples.</div>
+        <div data-testid={`${regionId}-empty`} className="mt-2 text-slate-500">{primary ? 'Choose a menu to see its preview inputs.' : 'Select an exact source and target to expose the selected layout-program sample catalog.'}</div>
+      ) : views.length === 0 ? (
+        <div data-testid={`${regionId}-none`} className="mt-2 text-slate-500">{contextual ? 'No supported preview inputs are linked to this selection. Inspect may explain other unresolved content.' : primary ? 'This menu has no supported preview inputs. Some runtime-driven content may still need game testing.' : 'The selected layout program declares no dynamic preview samples.'}</div>
       ) : (
-        <div className="mt-2 space-y-2">
-          {catalog.entries.map(entry => {
+        <div className={contextual ? 'mt-2 max-h-64 space-y-2 overflow-y-auto' : 'mt-2 space-y-2'}>
+          {views.map(({ entry, label, affectedElements }) => {
             const value = sampleValueFor(samples, entry.id);
             const controlValue = draft !== undefined && Object.prototype.hasOwnProperty.call(draft.values, entry.id)
               ? draft.values[entry.id]!
               : sampleControlValue(entry.expectedType, value);
             return (
-              <label key={entry.id} data-testid={`x4-ui-sample-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
-                <span className="font-bold text-slate-200">{`{${entry.expression}}`} · {entry.expectedType} · {entry.id}</span>
-                <span className="break-all text-slate-500">{sampleSourceLabel(catalog, entry)}</span>
+              <label key={entry.id} data-testid={`${controlId}-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
+                <span className="font-bold text-slate-200">{primary ? label : `{${entry.expression}} · ${entry.expectedType} · ${entry.id}`}</span>
+                <span className="break-words text-slate-500">{primary ? `Used by ${affectedElements.join(', ') || 'menu preview'}` : sampleSourceLabel(catalog, entry)}</span>
                 {entry.expectedType === 'boolean' ? (
-                  <select data-testid={`x4-ui-sample-control-${entry.id}`} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
-                    <option value="">Reset sample</option>
-                    <option value="true">true</option>
-                    <option value="false">false</option>
+                  <select aria-label={primary ? label : undefined} data-testid={`${controlId}-control-${entry.id}`} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
+                    <option value="">{primary ? 'Not supplied' : 'Reset sample'}</option>
+                    <option value="true">{primary ? 'On' : 'true'}</option>
+                    <option value="false">{primary ? 'Off' : 'false'}</option>
                   </select>
+                ) : primary && entry.expectedType === 'string' ? (
+                  <textarea aria-label={label} data-testid={`${controlId}-control-${entry.id}`} rows={3} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} placeholder="Enter preview text" className="min-w-0 resize-y rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
                 ) : (
-                  <input data-testid={`x4-ui-sample-control-${entry.id}`} type={entry.expectedType === 'number' ? 'number' : 'text'} step={entry.expectedType === 'number' ? 'any' : undefined} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} placeholder={`{${entry.expression}}`} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
+                  <input aria-label={primary ? label : undefined} data-testid={`${controlId}-control-${entry.id}`} type={entry.expectedType === 'number' ? 'number' : 'text'} step={entry.expectedType === 'number' ? 'any' : undefined} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} placeholder={primary ? 'Not supplied' : `{${entry.expression}}`} className="min-w-0 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
                 )}
               </label>
             );
@@ -2500,11 +4461,13 @@ export function X4UiSourceEditorSamples({
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" data-testid="x4-ui-samples-apply" onClick={onApply} disabled={draft === undefined || onApply === undefined} className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 disabled:border-white/10 disabled:text-slate-600">Apply staged samples</button>
-        <button type="button" data-testid="x4-ui-samples-reset" onClick={onReset} disabled={draft === undefined || onReset === undefined} className="rounded border border-white/10 px-2 py-1 text-[9px] font-bold uppercase text-slate-300 disabled:border-white/10 disabled:text-slate-600">Reset staged samples</button>
-        <span data-testid="x4-ui-samples-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
+        <button type="button" data-testid={`${regionId}-apply`} onClick={onApply} disabled={draft === undefined || onApply === undefined} className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 disabled:border-white/10 disabled:text-slate-600">{primary ? 'Apply to preview' : 'Apply staged samples'}</button>
+        <button type="button" data-testid={`${regionId}-reset`} onClick={onReset} disabled={draft === undefined || onReset === undefined} className="rounded border border-white/10 px-2 py-1 text-[9px] font-bold uppercase text-slate-300 disabled:border-white/10 disabled:text-slate-600">{primary ? 'Discard edits' : 'Reset staged samples'}</button>
+        {onClear !== undefined && <button type="button" data-testid={`${regionId}-clear`} onClick={onClear} disabled={catalog === null || ((samples?.values.length ?? 0) === 0 && draft === undefined)} className="rounded border border-white/10 px-2 py-1 text-[9px] font-bold uppercase text-slate-300 disabled:text-slate-600">Clear preview values</button>}
+        <span data-testid={`${regionId}-truth`} className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
       </div>
-      {error !== undefined && <div data-testid="x4-ui-samples-error" className="mt-2 text-red-300">{error}</div>}
+      {error !== undefined && <div role="alert" data-testid={`${regionId}-error`} className="mt-2 text-red-300">{primary ? 'Preview values were not applied. Check your inputs, or reselect the menu if it changed.' : error}</div>}
+      {primary && <div className="mt-2"><SourceEditInspectButton testId={`${regionId}-inspect`} onOpenInspect={onOpenInspect} inspectTargetId={inspectTargetId} /></div>}
     </section>
   );
 }
@@ -2678,6 +4641,8 @@ export default function X4UiSourceEditor({
   corpusLoader,
   surfaceFactory,
   onWorkspaceEdit,
+  workspaceScope,
+  historyRestoration,
   onVerificationSnapshotChange,
   onSessionProjection,
 }: X4UiSourceEditorProps) {
@@ -2688,8 +4653,41 @@ export default function X4UiSourceEditor({
   }));
   const [scaleMode, setScaleMode] = useState<X4UiSourceEditorScaleMode>(X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED);
   const [userScale, setUserScale] = useState(X4_UI_SOURCE_EDITOR_DEFAULT_USER_SCALE);
-  const [sourceSelector, setSourceSelector] = useState('');
-  const [targetSelector, setTargetSelector] = useState('');
+  const [profileError, setProfileError] = useState<string | undefined>(undefined);
+  const currentWorkspaceScope = workspaceScope || '';
+  const previewBeforeRef = useRef<{
+    readonly workspace: unknown; readonly scope: string; readonly projection: X4UiEditorSessionProjection;
+    readonly selectionEpoch: number;
+  } | null>(null);
+  type PreviewEditContinuation = WorkspaceSourceContinuation & { readonly beforeProjection: X4UiEditorSessionProjection; readonly selectionEpoch: number };
+  const previewEditTransitionRef = useRef<PreviewEditContinuation | null>(null);
+  const [acceptedPreviewEdit, setAcceptedPreviewEdit] = useState<PreviewEditContinuation | null>(null);
+  // View intent only, scoped to this mounted editor and immutable workspace ID. Catalog
+  // reconciliation below must still resolve these exact keys before issuing any selection.
+  const [workspaceSelections, setWorkspaceSelections] = useState<ReadonlyMap<string, {
+    readonly sourceSelector: string;
+    readonly targetSelector: string;
+  }>>(() => new Map());
+  const sourceSelector = workspaceSelections.get(currentWorkspaceScope)?.sourceSelector ?? '';
+  const targetSelector = workspaceSelections.get(currentWorkspaceScope)?.targetSelector ?? '';
+  const setSourceSelector = useCallback((value: string): void => {
+    setWorkspaceSelections(previous => {
+      const selected = previous.get(currentWorkspaceScope);
+      if ((selected?.sourceSelector ?? '') === value) return previous;
+      return new Map(previous).set(currentWorkspaceScope, {
+        sourceSelector: value, targetSelector: selected?.targetSelector ?? '',
+      });
+    });
+  }, [currentWorkspaceScope]);
+  const setTargetSelector = useCallback((value: string): void => {
+    setWorkspaceSelections(previous => {
+      const selected = previous.get(currentWorkspaceScope);
+      if ((selected?.targetSelector ?? '') === value) return previous;
+      return new Map(previous).set(currentWorkspaceScope, {
+        sourceSelector: selected?.sourceSelector ?? '', targetSelector: value,
+      });
+    });
+  }, [currentWorkspaceScope]);
   const [pathInput, setPathInput] = useState<X4UiEditorPathState>(undefined);
   const [pathBinding, setPathBinding] = useState<X4UiEditorPathBinding | undefined>(undefined);
   const [pathCatalogAuthority, setPathCatalogAuthority] = useState<X4UiEditorPathCatalogAuthority | undefined>(undefined);
@@ -2710,23 +4708,70 @@ export default function X4UiSourceEditor({
   const [corpusGeneration, setCorpusGeneration] = useState(0);
   const [canvasState, setCanvasState] = useState<X4UiEditorCanvasState>(() => X4_UI_EDITOR_EMPTY_CANVAS_STATE);
   const [canvasExportFeedback, setCanvasExportFeedback] = useState<string | undefined>(undefined);
+  const [canvasZoomMode, setCanvasZoomMode] = useState<X4UiBuilderViewportMode>('fit-menu');
+  const [manualCanvasZoomScale, setManualCanvasZoomScale] = useState(1);
+  const [canvasFocusRevision, setCanvasFocusRevision] = useState(0);
+  const [canvasViewportSize, setCanvasViewportSize] = useState({ width: 0, height: 0 });
+  const [builderSelection, setBuilderSelection] = useState<X4UiBuilderSelection | null>(null);
   const [sourceEditDraft, setSourceEditDraft] = useState<X4UiSourceEditDraftState>(() => ({
     context: null,
     staged: {},
   }));
+  const selectionEpochRef = useRef(0);
+  const selectedMenuIntentRef = useRef<{
+    readonly workspace: unknown;
+    readonly scope: string;
+    readonly intent: X4UiSourceEditSelectionIntent;
+    readonly selectionEpoch: number;
+    readonly builder?: X4UiBuilderHistoryIntent;
+  } | null>(null);
+  const historySelectionCarryRef = useRef<{
+    readonly notice: X4UiHistoryRestorationNotice;
+    readonly sourceWorkspace: unknown;
+    readonly scope: string;
+    readonly intent: X4UiSourceEditSelectionIntent;
+    readonly selectionEpoch: number;
+    readonly lastWorkspace: unknown;
+    readonly builder?: X4UiBuilderHistoryIntent;
+  } | null>(null);
+  const lastHistoryRestorationNoticeRef = useRef<X4UiHistoryRestorationNotice | null>(null);
+  const previousWorkspaceRef = useRef(workspace);
   const loopInputRef = useRef<X4UiEditorLoopState>(undefined);
   const loopCatalogRef = useRef<X4UiLayoutPreviewLoopCatalog | null>(null);
   const loopCatalogAuthorityRef = useRef<X4UiEditorLoopCatalogAuthority | undefined>(undefined);
   const sampleDraftRef = useRef<X4UiSourceEditorSampleDraft | undefined>(sampleDraft);
+  const builderSelectionRef = useRef<X4UiBuilderSelection | null>(builderSelection);
   const sourceEditContextRef = useRef<X4UiSourceEditContext | null>(null);
   const sourceEditDraftRef = useRef(sourceEditDraft);
   const canvasStateRef = useRef(canvasState);
+  const canvasWorkspaceScopeRef = useRef(currentWorkspaceScope);
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
+  const canvasScrollRef = useRef<HTMLDivElement | null>(null);
+  const canvasZoomAnchorRef = useRef<{ readonly x: number; readonly y: number } | null>(null);
+  const canvasCameraRef = useRef({ scale: 1, viewportWidth: 0, viewportHeight: 0, scrollLeft: 0, scrollTop: 0 });
+  const canvasViewportKeyRef = useRef<string | null>(null);
   const currentVerificationSnapshotRef = useRef<X4UiGameVerificationCurrentSnapshot | null>(null);
   const canvasExportIdentityRef = useRef<X4UiGameVerificationCurrentSnapshot | null>(null);
   const canvasExportInFlightRef = useRef(false);
   const sessionProjectionObserverRef = useRef(onSessionProjection);
   const [rendererSession] = useState<X4UiCanvasRenderSession>(() => createX4UiCanvasRenderSession());
+  const inspectPanelRef = useRef<HTMLDetailsElement | null>(null);
+  const inspectTargetId = `x4-ui-inspect-panel-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
+  const openInspect = useCallback(() => openX4UiSourceEditorInspect(inspectPanelRef.current), []);
+
+  const resetCanvasView = useCallback((): void => {
+    // A working camera belongs to the menu being viewed, not the next navigation target.
+    canvasZoomAnchorRef.current = null;
+    canvasViewportKeyRef.current = null;
+    canvasCameraRef.current = { scale: 1, viewportWidth: 0, viewportHeight: 0, scrollLeft: 0, scrollTop: 0 };
+    setManualCanvasZoomScale(1);
+    setCanvasZoomMode('fit-menu');
+  }, []);
+
+  const invalidateHistorySelectionCarry = useCallback(() => {
+    selectionEpochRef.current += 1;
+    historySelectionCarryRef.current = null;
+  }, []);
 
   sessionProjectionObserverRef.current = onSessionProjection;
 
@@ -2802,13 +4847,39 @@ export default function X4UiSourceEditor({
     ? corpusState.colorEvidence
     : undefined;
 
+  const committedPreview = previewBeforeRef.current;
+  const previewContinuation = useMemo(() => {
+    // Source edits use the existing exact acknowledgement/selection owner. Only
+    // history has an App-guarded notice on the first replacement render.
+    const edit = acceptedPreviewEdit !== null && acceptedPreviewEdit.afterWorkspace === workspace
+      && acceptedPreviewEdit.scope === currentWorkspaceScope && acceptedPreviewEdit.selectionEpoch === selectionEpochRef.current
+      ? acceptedPreviewEdit : null;
+    const before = edit === null ? committedPreview : {
+      workspace: edit.beforeWorkspace, scope: edit.scope, projection: edit.beforeProjection, selectionEpoch: edit.selectionEpoch,
+    };
+    if (before === null || before.scope !== currentWorkspaceScope || before.selectionEpoch !== selectionEpochRef.current) return undefined;
+    const notice = [historyRestoration, edit].find(item => item !== null && item !== undefined
+      && item.scope === currentWorkspaceScope && item.beforeWorkspace === before.workspace && item.afterWorkspace === workspace);
+    if (notice?.sourceSplice === undefined || before.workspace === workspace) return undefined;
+    const freshSelection = resolvePreviewScenarioTransitionSelection(sessionOwner,
+      { workspace, corpus: canonicalCorpus, profile: profileValue } as X4UiEditorSessionInput, before.projection, notice.sourceSplice);
+    return { before: before.projection, splice: notice.sourceSplice, scope: currentWorkspaceScope, afterWorkspace: workspace, freshSelection };
+  }, [workspace, currentWorkspaceScope, historyRestoration, profileValue, sessionOwner, canonicalCorpus, acceptedPreviewEdit, committedPreview]);
+
   const selection = useMemo(() => {
     const candidates = sourceCandidatesFor(sessionOwner.candidateCatalog);
-    const reconciled = reconcileX4UiEditorSelections({
+    let reconciled = reconcileX4UiEditorSelections({
       sourceSelector,
       targetSelector,
       candidates,
     });
+    if (previewContinuation !== undefined) {
+      const fresh = previewContinuation.freshSelection;
+      const freshSource = fresh === undefined ? undefined : candidates.find(candidate => candidate.path === fresh.path && candidate.index === fresh.sourceIndex);
+      const freshTargetId = asRecord(fresh?.target)?.id;
+      const freshTargets = freshSource?.targets.filter(candidate => candidate.raw.id === freshTargetId) ?? [];
+      if (freshSource !== undefined && freshTargets.length === 1) reconciled = { sourceSelector: freshSource.key, targetSelector: freshTargets[0]!.key };
+    }
     const source = candidates.find(candidate => candidate.key === reconciled.sourceSelector);
     const target = source?.targets.find(candidate => candidate.key === reconciled.targetSelector);
     if (source === undefined || target === undefined || !asRecord(source.sourceIdentity)) {
@@ -2836,6 +4907,7 @@ export default function X4UiSourceEditor({
     sessionOwner,
     sourceSelector,
     targetSelector,
+    previewContinuation,
   ]);
 
   const sessionInput = useMemo(() => ({
@@ -2878,13 +4950,136 @@ export default function X4UiSourceEditor({
     workspace,
   ]);
 
-  const projection = useMemo(
+  useLayoutEffect(() => {
+    const previousWorkspace = previousWorkspaceRef.current;
+    const previousCarry = historySelectionCarryRef.current;
+    const notice = historyRestoration ?? null;
+    const workspaceChanged = previousWorkspace !== workspace;
+    const prior = selectedMenuIntentRef.current;
+    const priorIntentMatches = notice !== null
+      && prior !== null
+      && prior.workspace === notice.beforeWorkspace
+      && prior.scope === notice.scope
+      && prior.selectionEpoch === selectionEpochRef.current;
+    const chainedIntentMatches = notice !== null
+      && previousCarry !== null
+      && previousCarry.scope === notice.scope
+      && previousCarry.lastWorkspace === notice.beforeWorkspace
+      && previousCarry.notice.afterWorkspace === notice.beforeWorkspace
+      && previousCarry.selectionEpoch === selectionEpochRef.current;
+    const sameRestoration = notice !== null && previousCarry !== null
+      && notice.direction === previousCarry.notice.direction && notice.scope === previousCarry.scope
+      && notice.beforeWorkspace === previousCarry.notice.beforeWorkspace
+      && notice.afterWorkspace === previousCarry.notice.afterWorkspace
+      && previousCarry.selectionEpoch === selectionEpochRef.current;
+    const carryingSourceReturn = notice !== null
+      && previousCarry !== null
+      && historyRestoration === previousCarry.notice
+      && previousWorkspace === previousCarry.lastWorkspace
+      && workspace === previousCarry.sourceWorkspace
+      && previousCarry.scope === currentWorkspaceScope
+      && previousCarry.selectionEpoch === selectionEpochRef.current;
+    const exactRestoration = notice !== null
+      && notice.scope === currentWorkspaceScope
+      && notice.afterWorkspace === workspace
+      && (
+        (workspaceChanged && (notice.beforeWorkspace === previousWorkspace || chainedIntentMatches))
+        // App publishes a successful notice in the readback effect, after the target
+        // workspace render. This second-render path is still exact because it must match
+        // the immediately preceding owner-issued menu intent and immutable scope.
+        || (!workspaceChanged && (priorIntentMatches || chainedIntentMatches || sameRestoration))
+      );
+
+    if (workspaceChanged && !exactRestoration && !carryingSourceReturn) historySelectionCarryRef.current = null;
+    if (notice === null) {
+      historySelectionCarryRef.current = null;
+    } else if (lastHistoryRestorationNoticeRef.current !== notice) {
+      lastHistoryRestorationNoticeRef.current = notice;
+      if (!exactRestoration) {
+        historySelectionCarryRef.current = null;
+      } else {
+        if (priorIntentMatches && prior !== null && (prior.builder !== undefined || !chainedIntentMatches)) {
+          historySelectionCarryRef.current = {
+            notice,
+            sourceWorkspace: prior.workspace,
+            scope: prior.scope,
+            intent: prior.intent,
+            selectionEpoch: prior.selectionEpoch,
+            lastWorkspace: workspace,
+            builder: prior.builder,
+          };
+        } else if (sameRestoration && previousCarry !== null) {
+          // App's final receipt can replace its equivalent pending preview notice
+          // before fresh selectors have committed. Keep that exact in-flight intent.
+          historySelectionCarryRef.current = { ...previousCarry, notice };
+        } else if (chainedIntentMatches && previousCarry !== null) {
+          historySelectionCarryRef.current = {
+            notice,
+            sourceWorkspace: previousCarry.sourceWorkspace,
+            scope: previousCarry.scope,
+            intent: previousCarry.intent,
+            selectionEpoch: previousCarry.selectionEpoch,
+            lastWorkspace: workspace,
+            builder: previousCarry.builder,
+          };
+        } else {
+          historySelectionCarryRef.current = null;
+        }
+      }
+    }
+    previousWorkspaceRef.current = workspace;
+  }, [currentWorkspaceScope, historyRestoration, workspace]);
+
+  const projectedPreview = useMemo(
     () => {
-      const next = sessionOwner.project(sessionInput);
-      return next;
+      if (previewContinuation !== undefined) {
+        // These are the current validated controls copied unchanged by the
+        // session profile normalizer. Do not build a preview just to read them.
+        const captured = capturePreviewScenario(previewContinuation.before, {
+          width: profileValue.width, height: profileValue.height, uiScale: profileValue.uiScale, scaleMode, userScale,
+        }, 'current-preview', 'Current preview');
+        if (captured.ok) {
+          const transferred = transferPreviewScenario(sessionOwner, sessionInput, captured.scenario, previewContinuation.before, previewContinuation.splice);
+          if (transferred.ok === true) return { projection: transferred.projection, continuation: previewContinuation };
+          return { projection: sessionOwner.project(sessionInput), error: transferred.message };
+        }
+      }
+      return { projection: sessionOwner.project(sessionInput) };
     },
-    [sessionInput, sessionOwner],
+    [sessionInput, sessionOwner, previewContinuation, profileValue, scaleMode, userScale],
   );
+  const projection = projectedPreview.projection;
+
+  useLayoutEffect(() => {
+    if (projectedPreview.continuation !== undefined) {
+      // Adopt the freshly issued state before a parent acknowledgement can cause its
+      // second render. The first projection itself already contains the retained values.
+      setPathInput(projection.paths);
+      setPathBinding(projection.paths === undefined ? undefined : projection.pathBinding);
+      setPathCatalogAuthority(projection.paths === undefined ? undefined : projection.pathCatalogAuthority);
+      setLoopInput(projection.loops);
+      setLoopBinding(projection.loops === undefined ? undefined : projection.loopBinding);
+      setLoopCatalogAuthority(projection.loops === undefined ? undefined : projection.loopCatalogAuthority);
+      setSampleInput(projection.samples);
+      setSampleBinding(projection.samples === undefined ? undefined : projection.sampleBinding);
+      setSampleCatalogAuthority(projection.samples === undefined ? undefined : projection.sampleCatalogAuthority);
+      setSampleDraft(undefined);
+      setSampleError(undefined);
+      setPathError(undefined);
+      setLoopError(undefined);
+    } else if (projectedPreview.error !== undefined) setSampleError(projectedPreview.error);
+    if (acceptedPreviewEdit !== null) setAcceptedPreviewEdit(null);
+  }, [projectedPreview, projection, acceptedPreviewEdit]);
+
+  // Selection-only commits can advance the user-interruption epoch without changing
+  // the memoized preview. Retain the actual last committed epoch as well as its data.
+  useLayoutEffect(() => {
+    const before = previewBeforeRef.current;
+    if (before === null || before.workspace !== workspace || before.scope !== currentWorkspaceScope || before.projection !== projection
+      || before.selectionEpoch !== selectionEpochRef.current) {
+      previewBeforeRef.current = { workspace, scope: currentWorkspaceScope, projection, selectionEpoch: selectionEpochRef.current };
+    }
+  });
 
   useEffect(() => {
     sessionProjectionObserverRef.current?.(projection);
@@ -2922,13 +5117,166 @@ export default function X4UiSourceEditor({
   const source = projectionView.source;
   const lintInspection = lintInspectionFor(preview);
   const currentProgramResult = projection.preview.program;
+  const currentProgramRefusalMessage = currentProgramResult !== undefined && 'refusal' in currentProgramResult
+    ? currentProgramResult.refusal.message
+    : undefined;
   const currentProgram = currentProgramResult?.status === 'refused' ? undefined : currentProgramResult?.program;
   const currentEvidenceAuthority = currentProgramResult?.status === 'refused' ? undefined : currentProgramResult?.evidenceAuthority;
   const sourceEditCatalog = useMemo(
     () => discoverX4UiSourceEditorCatalog(workspace, projection),
     [projection, workspace],
   );
+  const builderPresentation = useMemo<X4UiBuilderPresentation>(
+    () => buildX4UiBuilderPresentation(projection),
+    [projection],
+  );
+  const builderSelectionContext = useMemo(() => ({
+    workspace,
+    sourceIdentityKey: builderPresentation.sourceIdentityKey,
+    targetId: builderPresentation.targetId,
+    profileKey: builderPresentation.profileKey,
+  }), [builderPresentation.profileKey, builderPresentation.sourceIdentityKey, builderPresentation.targetId, workspace]);
+  const reconciledBuilderSelection = useMemo(
+    () => reconcileX4UiBuilderSelection(builderSelection, builderSelectionContext, builderPresentation.nodes),
+    [builderPresentation.nodes, builderSelection, builderSelectionContext],
+  );
+  const selectedBuilderNode = useMemo(
+    () => reconciledBuilderSelection === undefined
+      ? undefined
+      : builderPresentation.nodes.find(node => node.id === reconciledBuilderSelection.nodeId),
+    [builderPresentation.nodes, reconciledBuilderSelection],
+  );
+  const contextualPreviewInputs = useMemo(
+    () => selectedBuilderNode === undefined ? []
+      : buildX4UiBuilderPreviewInputPresentation(projection.sampleCatalog, builderPresentation, selectedBuilderNode),
+    [builderPresentation, projection.sampleCatalog, selectedBuilderNode],
+  );
+  useLayoutEffect(() => {
+    const carry = historySelectionCarryRef.current;
+    if (carry === null) return;
+    const awaitingSourceReturn = historyRestoration === carry.notice
+      && workspace === carry.sourceWorkspace
+      && workspace !== carry.notice.afterWorkspace
+      && currentWorkspaceScope === carry.scope
+      && selectionEpochRef.current === carry.selectionEpoch;
+    if (
+      (!awaitingSourceReturn && historyRestoration !== carry.notice)
+      || currentWorkspaceScope !== carry.scope
+      || (!awaitingSourceReturn && workspace !== carry.notice.afterWorkspace)
+      || selectionEpochRef.current !== carry.selectionEpoch
+    ) {
+      historySelectionCarryRef.current = null;
+      return;
+    }
+    if (awaitingSourceReturn) return;
+    const selected = resolveSourceEditSelectionIntent(selection.candidates, carry.intent);
+    if (selected === undefined) return;
+    if (sourceSelector !== selected.sourceSelector || targetSelector !== selected.targetSelector) {
+      setSourceSelector(selected.sourceSelector);
+      setTargetSelector(selected.targetSelector);
+      return; // Selection keys must reproject before any element can be resolved.
+    }
+    if (corpusState.status === 'loading') return;
+    const intent = carry.builder;
+    if (intent !== undefined && intent.profileKey !== builderSelectionContext.profileKey) {
+      historySelectionCarryRef.current = null;
+      return;
+    }
+    const fresh = intent !== undefined && intent.profileKey === builderSelectionContext.profileKey
+      && sourceEditCatalog !== undefined
+      ? resolveX4UiBuilderNodeAfterHistory(builderPresentation.nodes, intent.anchor, intent.catalog, sourceEditCatalog, carry.notice.sourceSplice)
+      : undefined;
+    if (fresh !== undefined && builderSelectionContext.sourceIdentityKey !== null
+      && builderSelectionContext.targetId !== undefined && builderSelectionContext.profileKey !== null) {
+      setBuilderSelection({ ...builderSelectionContext, nodeId: fresh.id });
+      historySelectionCarryRef.current = null;
+    }
+    // A removed element has no substitute. Keep only its source anchor through
+    // contiguous scoped history notices, so an exact later return can resolve it.
+    // Explicit selection/navigation or an unrelated workspace change cancels it.
+  }, [
+    builderPresentation.nodes, builderSelectionContext, corpusState.status, currentWorkspaceScope,
+    historyRestoration, selection.candidates, setSourceSelector, setTargetSelector,
+    sourceEditCatalog, sourceSelector, targetSelector, workspace,
+  ]);
+
+  useLayoutEffect(() => {
+    const source = selection.source;
+    const target = selection.target;
+    if (currentWorkspaceScope === '' || source === undefined || target === undefined) return;
+    const targetKind = target.raw.kind;
+    const targetNameValue = target.raw.name;
+    if (typeof targetKind !== 'string' || (targetNameValue !== undefined && typeof targetNameValue !== 'string')) return;
+    const targetName = targetNameValue as string | undefined;
+    selectedMenuIntentRef.current = {
+      workspace,
+      scope: currentWorkspaceScope,
+      intent: { path: source.path, targetKind, ...(targetName === undefined ? {} : { targetName }) },
+      selectionEpoch: selectionEpochRef.current,
+      ...(selectedBuilderNode === undefined || sourceEditCatalog === undefined ? {} : {
+        builder: {
+          anchor: { kind: selectedBuilderNode.kind, source: selectedBuilderNode.source },
+          catalog: sourceEditCatalog,
+          profileKey: builderSelectionContext.profileKey,
+        },
+      }),
+    };
+  }, [builderSelection, builderSelectionContext.profileKey, currentWorkspaceScope, selectedBuilderNode,
+    selection.source, selection.target, sourceEditCatalog, workspace]);
+
+  const selectedBuilderEntries = useMemo(
+    () => sourceEntriesForX4UiBuilderNode(sourceEditCatalog, selectedBuilderNode),
+    [selectedBuilderNode, sourceEditCatalog],
+  );
+  const contextualTextPropertyAdditions = useMemo(() => {
+    if (!sourceEditCatalog || !selectedBuilderNode
+      || !['text', 'widget'].includes(selectedBuilderNode.kind)) return [];
+    return selectedBuilderNode.propertyOperationIds.flatMap(operationId =>
+      discoverX4UiSourceTextPropertyAdditions(sourceEditCatalog, operationId));
+  }, [sourceEditCatalog, selectedBuilderNode]);
+  const contextualInsertionEntry = useMemo(
+    () => resolveX4UiSourceEditorContextualInsertionEntry(
+      sourceEditCatalog,
+      builderPresentation.nodes,
+      selectedBuilderNode,
+      builderPresentation.sourceIdentityKey,
+    ),
+    [builderPresentation.nodes, builderPresentation.sourceIdentityKey, selectedBuilderNode, sourceEditCatalog],
+  );
+  const contextualRowInsertionEntry = useMemo(
+    () => resolveX4UiSourceEditorContextualRowInsertionEntry(
+      sourceEditCatalog,
+      builderPresentation.nodes,
+      selectedBuilderNode,
+      builderPresentation.sourceIdentityKey,
+      builderPresentation.targetId,
+    ),
+    [builderPresentation.nodes, builderPresentation.sourceIdentityKey, builderPresentation.targetId, selectedBuilderNode, sourceEditCatalog],
+  );
+  const contextualRowMove = useMemo(
+    () => resolveX4UiSourceEditorContextualRowMoveEntries(
+      sourceEditCatalog,
+      builderPresentation.nodes,
+      selectedBuilderNode,
+      builderPresentation.sourceIdentityKey,
+      builderPresentation.targetId,
+    ),
+    [builderPresentation.nodes, builderPresentation.sourceIdentityKey, builderPresentation.targetId, selectedBuilderNode, sourceEditCatalog],
+  );
+  const contextualRowHasEligibleCell = useMemo(
+    () => hasX4UiSourceEditorContextualEligibleChildCell(
+      sourceEditCatalog,
+      builderPresentation.nodes,
+      selectedBuilderNode,
+      builderPresentation.sourceIdentityKey,
+    ),
+    [builderPresentation.nodes, builderPresentation.sourceIdentityKey, selectedBuilderNode, sourceEditCatalog],
+  );
+  const sourceEditCatalogIdentityMatches = sourceEditCatalog !== undefined
+    && builderPresentation.sourceIdentityKey !== null
+    && builderSourceIdentityKey(sourceEditCatalog.sourceIdentity) === builderPresentation.sourceIdentityKey;
   const targetOptions = selection.source?.targets ?? [];
+  const menuOptions = menuTargetsFor(selection.source);
   const selectedSourceIdentity = asRecord(selection.source?.sourceIdentity);
   const sourceIdentityForDisplay = selectedSourceIdentity ?? asRecord(X4_UI_EDITOR_UNSELECTED_SOURCE);
   const selectedSourceFile = stringValue(sourceIdentityForDisplay?.file, 'unavailable');
@@ -2958,6 +5306,7 @@ export default function X4UiSourceEditor({
     sourceEditCatalog,
     workspace,
   ]);
+  builderSelectionRef.current = builderSelection;
   sourceEditContextRef.current = sourceEditContext;
   sourceEditDraftRef.current = sourceEditDraft;
   sampleDraftRef.current = sampleDraft;
@@ -2966,10 +5315,44 @@ export default function X4UiSourceEditor({
     && projection.sampleCatalogAuthority === sampleDraft.authority
     && sameX4UiEditorSampleBinding(projection.sampleBinding, sampleDraft.binding);
   const visibleSampleDraft = sampleDraftMatchesProjection ? sampleDraft : undefined;
+  const currentSampleProjectionRef = useRef(projection);
+  currentSampleProjectionRef.current = projection;
+  const previewInputsPanelRef = useRef<HTMLDetailsElement>(null);
   const sourceEditDraftMatches = sourceEditDraft.context !== null
     && !shouldClearX4UiSourceEditState(sourceEditDraft.context, sourceEditContext);
   const visibleSourceEditStaged = sourceEditDraftMatches ? sourceEditDraft.staged : {};
   const visibleSourceEditReceipt = sourceEditDraftMatches ? sourceEditDraft.receipt : undefined;
+
+  const inspectorScroll = useX4UiInspectorScrollRetention({
+    workspace, scope: currentWorkspaceScope, profile: profileValue,
+    selectionEpoch: selectionEpochRef.current, nodeId: selectedBuilderNode?.id,
+  });
+  const { submit: submitSourceEditWithSelectionTransfer, cancel: cancelSourceEditSelectionTransfer } = useX4UiSourceEditSelectionTransfer({
+    workspace,
+    candidates: selection.candidates,
+    sourceSelector,
+    targetSelector,
+    profile: profileValue,
+    builderNodes: builderPresentation.nodes,
+    builderProjectionStatus: builderPresentation.status,
+    builderProjectionLoading: corpusState.status === 'loading',
+    sourceEditCatalog,
+    builderSelectionContext,
+    builderSelectionNodeId: builderSelection?.nodeId,
+    onWorkspaceEdit,
+    onSelect: selected => {
+      inspectorScroll.confirm(selected.builderSelection);
+      const edit = previewEditTransitionRef.current;
+      if (edit !== null && edit.afterWorkspace === workspace && edit.scope === currentWorkspaceScope
+        && edit.selectionEpoch === selectionEpochRef.current) {
+        previewEditTransitionRef.current = null;
+        setAcceptedPreviewEdit(edit);
+      }
+      setSourceSelector(selected.sourceSelector);
+      setTargetSelector(selected.targetSelector);
+      setBuilderSelection(selected.builderSelection ?? null);
+    },
+  });
 
   useEffect(() => {
     setSourceEditDraft(previous => reconcileX4UiSourceEditDraftContext(
@@ -2977,6 +5360,14 @@ export default function X4UiSourceEditor({
       sourceEditContextRef.current ?? sourceEditContext,
     ));
   }, [sourceEditContext]);
+
+  useEffect(() => {
+    setBuilderSelection(previous => {
+      const next = reconcileX4UiBuilderSelection(previous, builderSelectionContext, builderPresentation.nodes);
+      if (next === undefined) return previous === null ? previous : null;
+      return next === previous ? previous : next;
+    });
+  }, [builderPresentation.nodes, builderSelectionContext]);
 
   useEffect(() => {
     if (projection.paths !== pathInput) setPathInput(projection.paths);
@@ -3043,7 +5434,7 @@ export default function X4UiSourceEditor({
         setTargetSelector(selection.reconciled.targetSelector);
       }
     }
-  }, [selection.reconciled.sourceSelector, selection.reconciled.targetSelector, sourceSelector, targetSelector]);
+  }, [selection.reconciled.sourceSelector, selection.reconciled.targetSelector, setSourceSelector, setTargetSelector, sourceSelector, targetSelector]);
 
   useEffect(() => {
     setCanvasExportFeedback(undefined);
@@ -3052,6 +5443,14 @@ export default function X4UiSourceEditor({
   useLayoutEffect(() => {
     let active = true;
     const host = canvasHostRef.current;
+    if (canvasWorkspaceScopeRef.current !== currentWorkspaceScope) {
+      // A stale preview belongs to its workspace, never to the next workspace's refusal.
+      resetCanvasView();
+      host?.replaceChildren();
+      canvasStateRef.current = X4_UI_EDITOR_EMPTY_CANVAS_STATE;
+      canvasExportIdentityRef.current = null;
+      canvasWorkspaceScopeRef.current = currentWorkspaceScope;
+    }
     const reason = stringValue(projectionView.reason, `session status is ${stringValue(projectionView.status, 'unavailable')}`);
     const disposeSurface = (surface: X4UiCanvasSurface): void => {
       if (typeof HTMLElement !== 'undefined' && surface instanceof HTMLElement) surface.remove();
@@ -3091,7 +5490,7 @@ export default function X4UiSourceEditor({
     return () => {
       active = false;
     };
-  }, [canRender, canonicalCorpus, currentVerificationSnapshot, projectionView.paint, projectionView.reason, projectionView.status, rendererSession, resolvedSurfaceFactory]);
+  }, [canRender, canonicalCorpus, currentVerificationSnapshot, currentWorkspaceScope, projectionView.paint, projectionView.reason, projectionView.status, rendererSession, resetCanvasView, resolvedSurfaceFactory]);
 
   useLayoutEffect(() => {
     if (onVerificationSnapshotChange === undefined) return;
@@ -3100,60 +5499,154 @@ export default function X4UiSourceEditor({
     return () => onVerificationSnapshotChange(null);
   }, [canvasCommitMatchesSnapshot, currentVerificationSnapshotKey, onVerificationSnapshotChange]);
 
+  const adoptPreviewScenario = (next: X4UiEditorSessionProjection, view: X4UiPreviewScenarioView): void => {
+    setProfile({ width: view.width, height: view.height, uiScale: view.uiScale });
+    setScaleMode(view.scaleMode);
+    setUserScale(view.userScale);
+    setPathInput(next.paths);
+    setPathBinding(next.pathBinding);
+    setPathCatalogAuthority(next.pathCatalogAuthority);
+    setLoopInput(next.loops);
+    setLoopBinding(next.loopBinding);
+    setLoopCatalogAuthority(next.loopCatalogAuthority);
+    setSampleInput(next.samples);
+    setSampleBinding(next.sampleBinding);
+    setSampleCatalogAuthority(next.sampleCatalogAuthority);
+    setPathError(undefined);
+    setLoopError(undefined);
+    setSampleError(undefined);
+    setSampleDraft(undefined);
+    sampleDraftRef.current = undefined;
+    setProfileError(undefined);
+  };
+
+  const applyProfileView = (view: X4UiPreviewScenarioView): void => {
+    if (currentSampleProjectionRef.current !== projection) return;
+    const draft = sampleDraftRef.current;
+    if (draft !== undefined && draft.catalog === projection.sampleCatalog
+      && draft.authority === projection.sampleCatalogAuthority
+      && sameX4UiEditorSampleBinding(draft.binding, projection.sampleBinding)) {
+      setProfileError('Apply or discard your preview input edits before changing the profile.');
+      return;
+    }
+    const hasInputs = (projection.samples?.values.length ?? 0) > 0
+      || (projection.paths?.selections.length ?? 0) > 0
+      || (projection.loops?.selections.length ?? 0) > 0;
+    if (hasInputs) {
+      // Profile-bound authority must be freshly issued, never carried across profiles.
+      // Replay the same source/menu data before committing any visible profile change.
+      const captured = capturePreviewScenario(projection, view, 'current-preview', 'Current preview');
+      if (captured.ok === false) {
+        setProfileError(`Profile unchanged: ${captured.message}`);
+        return;
+      }
+      const replayed = projectPreviewScenario(sessionOwner, sessionInput, captured.scenario);
+      if (replayed.ok === false) {
+        setProfileError(`Profile unchanged: ${replayed.message}`);
+        return;
+      }
+      cancelSourceEditSelectionTransfer();
+      adoptPreviewScenario(replayed.projection, view);
+      return;
+    }
+    cancelSourceEditSelectionTransfer();
+    setProfile({ width: view.width, height: view.height, uiScale: view.uiScale });
+    setScaleMode(view.scaleMode);
+    setUserScale(view.userScale);
+    setProfileError(undefined);
+  };
+
   const updateProfileDimension = (field: 'width' | 'height' | 'uiScale', raw: string): void => {
     const value = Number(raw);
     if (!Number.isFinite(value) || value <= 0) return;
-    setProfile(previous => {
-      if (field === 'uiScale') {
-        return scaleMode === X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM
-          ? { ...previous, uiScale: value }
-          : previous;
-      }
-      if (field !== 'height' || scaleMode !== X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED) {
-        return {
-          ...previous,
-          [field]: value,
-        };
-      }
+    if (field === 'uiScale' && scaleMode !== X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM) return;
+    const next = { ...profile, [field]: value };
+    if (field === 'height' && scaleMode === X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED) {
       const effectiveScale = deriveX4UiEffectiveScale(userScale, value);
-      if (effectiveScale === null) return previous;
-      return {
-        ...previous,
-        height: value,
-        uiScale: effectiveScale,
-      };
-    });
+      if (effectiveScale === null) return;
+      next.uiScale = effectiveScale;
+    }
+    applyProfileView({ ...next, scaleMode, userScale });
   };
 
   const updateUserScale = (raw: string): void => {
     const value = Number(raw);
     if (!Number.isFinite(value) || value <= 0) return;
-    if (scaleMode === X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED
-      && deriveX4UiEffectiveScale(value, profile.height) === null) return;
-    setUserScale(value);
-    if (scaleMode !== X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED) return;
-    setProfile(previous => {
-      const effectiveScale = deriveX4UiEffectiveScale(value, previous.height);
-      return effectiveScale === null ? previous : { ...previous, uiScale: effectiveScale };
-    });
+    const effectiveScale = scaleMode === X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED
+      ? deriveX4UiEffectiveScale(value, profile.height) : profile.uiScale;
+    if (effectiveScale === null) return;
+    applyProfileView({ ...profile, uiScale: effectiveScale, scaleMode, userScale: value });
   };
 
   const updateScaleMode = (value: string): void => {
     if (value !== X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED && value !== X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM) return;
-    if (value === X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED) {
-      const effectiveScale = deriveX4UiEffectiveScale(userScale, profile.height);
-      if (effectiveScale === null) return;
-      setProfile(previous => {
-        const currentEffectiveScale = deriveX4UiEffectiveScale(userScale, previous.height);
-        return currentEffectiveScale === null ? previous : { ...previous, uiScale: currentEffectiveScale };
-      });
-    }
-    setScaleMode(value);
+    const effectiveScale = value === X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED
+      ? deriveX4UiEffectiveScale(userScale, profile.height) : profile.uiScale;
+    if (effectiveScale === null) return;
+    applyProfileView({ ...profile, uiScale: effectiveScale, scaleMode: value, userScale });
   };
 
   const selectSource = (value: string): void => {
+    cancelSourceEditSelectionTransfer();
+    invalidateHistorySelectionCarry();
+    if (value !== sourceSelector) resetCanvasView();
     setSourceSelector(value);
     setTargetSelector('');
+    setBuilderSelection(null);
+  };
+
+  const selectTarget = (value: string): void => {
+    cancelSourceEditSelectionTransfer();
+    invalidateHistorySelectionCarry();
+    if (value !== targetSelector) resetCanvasView();
+    setTargetSelector(value);
+  };
+
+  const selectBuilderNode = (node: X4UiBuilderNode | undefined): void => {
+    cancelSourceEditSelectionTransfer();
+    invalidateHistorySelectionCarry();
+    if (node === undefined
+      || builderPresentation.sourceIdentityKey === null
+      || builderPresentation.targetId === undefined
+      || builderPresentation.profileKey === null) {
+      setBuilderSelection(null);
+      return;
+    }
+    setBuilderSelection({
+      nodeId: node.id,
+      workspace,
+      sourceIdentityKey: builderPresentation.sourceIdentityKey,
+      targetId: builderPresentation.targetId,
+      profileKey: builderPresentation.profileKey,
+    });
+  };
+
+  const handleBuilderCanvasClick = (event: React.MouseEvent<HTMLDivElement>): void => {
+    invalidateHistorySelectionCarry();
+    const mounted = canvasHostRef.current?.firstElementChild;
+    const canvasConstructor = typeof HTMLCanvasElement === 'undefined' ? null : HTMLCanvasElement;
+    if (canvasConstructor === null || !(mounted instanceof canvasConstructor)) {
+      setBuilderSelection(null);
+      return;
+    }
+    const classification = classifyX4UiCanvasExport({
+      state: canvasStateRef.current,
+      mountedCanvas: mounted,
+      currentIdentity: currentVerificationSnapshotRef.current,
+      committedIdentity: canvasExportIdentityRef.current,
+    });
+    if (classification.status !== 'available') {
+      setBuilderSelection(null);
+      return;
+    }
+    const bounds = mounted.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0 || mounted.width <= 0 || mounted.height <= 0) return;
+    const nativePoint = {
+      x: (event.clientX - bounds.left) * mounted.width / bounds.width,
+      y: (event.clientY - bounds.top) * mounted.height / bounds.height,
+    };
+    const node = hitTestX4UiBuilderCanvas(builderPresentation.nodes, nativePoint);
+    selectBuilderNode(node);
   };
 
   const selectPreset = (value: string | null): void => {
@@ -3301,6 +5794,7 @@ export default function X4UiSourceEditor({
       || binding === undefined
       || authority === undefined
       || !sampleDraftMatchesProjection
+      || currentSampleProjectionRef.current !== projection
     ) {
       setSampleError('staged preview samples were refused because the owner-issued authority or binding drifted');
       return;
@@ -3329,6 +5823,28 @@ export default function X4UiSourceEditor({
     setSampleError(undefined);
   };
 
+  const clearPreviewValues = (): void => {
+    const catalog = projection.sampleCatalog;
+    const binding = projection.sampleBinding;
+    const authority = projection.sampleCatalogAuthority;
+    if (currentSampleProjectionRef.current !== projection || catalog === null || binding === undefined || authority === undefined) {
+      setSampleError('preview values could not be cleared because the selected menu or input authority changed');
+      return;
+    }
+    const values = Object.fromEntries(catalog.entries.map(entry => [entry.id, '']));
+    const result = applyX4UiEditorSampleDraft(sampleInput, catalog, values, authority);
+    if (result.status === 'refused') {
+      setSampleError(result.message);
+      return;
+    }
+    sampleDraftRef.current = undefined;
+    setSampleInput(result.samples);
+    setSampleBinding(result.samples === undefined ? undefined : binding);
+    setSampleCatalogAuthority(result.samples === undefined ? undefined : authority);
+    setSampleDraft(undefined);
+    setSampleError(undefined);
+  };
+
   const stageSourceEdit = (entryId: string, raw: string): void => {
     const executionContext = sourceEditContextRef.current;
     if (executionContext === null || executionContext !== sourceEditContext) return;
@@ -3343,6 +5859,25 @@ export default function X4UiSourceEditor({
     });
   };
 
+  const discardSourceEditDraft = (): void => {
+    const executionContext = sourceEditContextRef.current;
+    const executionDraft = sourceEditDraftRef.current;
+    if (executionContext === null
+      || executionContext !== sourceEditContext
+      || executionDraft !== sourceEditDraft
+      || executionDraft.receipt?.status === 'pending'
+      || !sourceEditDraftMatches
+      || Object.keys(executionDraft.staged).length === 0) return;
+    setSourceEditDraft(previous => {
+      if (sourceEditContextRef.current !== executionContext
+        || sourceEditDraftRef.current !== executionDraft
+        || previous !== executionDraft
+        || previous.receipt?.status === 'pending'
+        || shouldClearX4UiSourceEditState(previous.context, executionContext)) return previous;
+      return { context: executionContext, staged: {} };
+    });
+  };
+
   const refuseSourceEdit = (reason: string, detail: string): void => {
     setSourceEditDraft({
       context: sourceEditContext,
@@ -3351,14 +5886,24 @@ export default function X4UiSourceEditor({
     });
   };
 
-  const applySourceEdit = (entryId: string): void => {
+  const applySourceEdit = (
+    entryId: string,
+    insertionWidget?: X4UiSourceEditWidgetKind,
+    insertionText?: string,
+    insertRow = false,
+    moveDirection?: X4UiSourceEditRowMoveDirection,
+  ): void => {
     const executionContext = sourceEditContextRef.current;
     const executionDraft = sourceEditDraftRef.current;
     if (
       executionContext === null
       || executionContext !== sourceEditContext
       || executionDraft !== sourceEditDraft
+      || builderSelectionRef.current?.nodeId !== selectedBuilderNode?.id
     ) return;
+    const insertionRequested = insertionWidget !== undefined || insertionText !== undefined || insertRow || moveDirection !== undefined;
+    if (insertionRequested
+      && (executionDraft.receipt?.status === 'pending' || Object.keys(executionDraft.staged).length > 0)) return;
     if (!sourceEditDraftMatches) {
       refuseSourceEdit('stale-editor-context', 'source edit staging was cleared because the current session projection changed');
       return;
@@ -3368,11 +5913,134 @@ export default function X4UiSourceEditor({
       refuseSourceEdit('catalog-unavailable', 'the exact current session has no projected source-edit catalog');
       return;
     }
-    if (!Object.prototype.hasOwnProperty.call(executionDraft.staged, entryId)) return;
-    const raw = executionDraft.staged[entryId];
-    let result: X4UiSourceEditResult | X4UiSourceStructuralEditResult;
-    const blockEntry = catalog.insertEntries?.find(candidate => candidate.id === entryId && candidate.kind === 'insert-block');
-    if (blockEntry !== undefined) {
+    const insertionEntry = catalog.insertEntries?.find((candidate): candidate is X4UiSourceEditEmptyCellEntry => (
+      candidate.id === entryId && candidate.kind === 'insert-widget' && candidate.anchor === 'empty-cell'
+    ));
+    const rowInsertionEntry = catalog.insertEntries?.find((candidate): candidate is X4UiSourceEditRowInsertionEntry => (
+      candidate.id === entryId && candidate.kind === 'insert-row' && candidate.anchor === 'row-below'
+    ));
+    const rowMoveMatches = moveDirection === undefined
+      ? []
+      : (catalog.moveEntries ?? []).filter(candidate => candidate.id === entryId && candidate.kind === 'move-row');
+    const rowMoveEntry = rowMoveMatches.length === 1 ? rowMoveMatches[0] : undefined;
+    const hasStaged = Object.prototype.hasOwnProperty.call(executionDraft.staged, entryId);
+    const textProperty = contextualTextPropertyAdditions.find(item => item.id === entryId);
+    if (textProperty !== undefined && (insertionRequested || executionDraft.receipt?.status === 'pending'
+      || Object.keys(executionDraft.staged).some(id => id !== entryId)
+      || !selectedBuilderNode?.propertyOperationIds.includes(textProperty.operationId))) return;
+    if (moveDirection !== undefined
+      && (insertRow || insertionWidget !== undefined || insertionText !== undefined)) {
+      refuseSourceEdit(
+        'move-unavailable',
+        'Row controls are unavailable for this selection.',
+      );
+      return;
+    }
+    if (moveDirection !== undefined) {
+      const contextualMoveEntry = moveDirection === 'up' ? contextualRowMove.up : contextualRowMove.down;
+      if (rowMoveEntry === undefined
+        || rowMoveEntry.direction !== moveDirection
+        || contextualMoveEntry !== rowMoveEntry
+        || contextualRowMove.row === undefined
+        || selectedBuilderNode === undefined
+        || resolveX4UiBuilderRowForNode(builderPresentation.nodes, selectedBuilderNode) !== contextualRowMove.row) {
+        refuseSourceEdit(
+          'move-unavailable',
+          'the selected row is no longer available for movement',
+        );
+        return;
+      }
+    } else if (insertRow) {
+      if (rowInsertionEntry === undefined
+        || insertionWidget !== undefined
+        || insertionText !== undefined
+        || contextualRowInsertionEntry === undefined
+        || contextualRowInsertionEntry.id !== rowInsertionEntry.id
+        || selectedBuilderNode === undefined) {
+        refuseSourceEdit(
+          'insertion-unavailable',
+          'the selected row is no longer available for adding a row below',
+        );
+        return;
+      }
+    } else if (insertionEntry !== undefined) {
+      if (insertionWidget === undefined
+        || insertionText === undefined
+        || insertionText.trim().length === 0
+        || contextualInsertionEntry === undefined
+        || contextualInsertionEntry.id !== insertionEntry.id
+        || selectedBuilderNode?.kind !== 'cell'
+        || selectedBuilderNode.id !== `scene:${insertionEntry.cellId}`
+      ) {
+        refuseSourceEdit(
+          'insertion-unavailable',
+          'the selected cell is no longer available for adding a widget',
+        );
+        return;
+      }
+    } else if (!hasStaged) {
+      return;
+    }
+    const raw = insertionText ?? executionDraft.staged[entryId];
+    let result: X4UiSourceEditResult | X4UiSourceStructuralEditResult | X4UiSourceWidgetInsertionResult | X4UiSourceRowInsertionResult | X4UiSourceRowMoveResult | X4UiSourceTextPropertyAdditionResult;
+    let editedEntry: X4UiSourceEditCatalogEntry | undefined;
+    if (textProperty !== undefined) {
+      const parsed = parseX4UiSourceEditInput(textProperty, raw);
+      if (parsed.accepted === false) { refuseSourceEdit(parsed.reason, parsed.detail); return; }
+      result = applyX4UiSourceTextPropertyAddition(
+        executionContext.workspace as Parameters<typeof applyX4UiSourceTextPropertyAddition>[0], projection.source,
+        catalog, textProperty.operationId, textProperty.property, parsed.value,
+      );
+    } else if (rowMoveEntry !== undefined && moveDirection !== undefined) {
+      result = applyX4UiSourceRowMove(
+        executionContext.workspace as Parameters<typeof applyX4UiSourceRowMove>[0],
+        projection.source,
+        catalog,
+        {
+          entry: rowMoveEntry,
+          expected: {
+            path: rowMoveEntry.path,
+            startOffset: rowMoveEntry.startOffset,
+            endOffset: rowMoveEntry.endOffset,
+            expectedText: rowMoveEntry.expectedText,
+          },
+        },
+      );
+    } else if (rowInsertionEntry !== undefined && insertRow) {
+      result = applyX4UiSourceRowInsertion(
+        executionContext.workspace as Parameters<typeof applyX4UiSourceRowInsertion>[0],
+        projection.source,
+        catalog,
+        {
+          entry: rowInsertionEntry,
+          expected: {
+            path: rowInsertionEntry.path,
+            startOffset: rowInsertionEntry.startOffset,
+            endOffset: rowInsertionEntry.endOffset,
+            expectedText: rowInsertionEntry.expectedText,
+          },
+        },
+      );
+    } else if (insertionEntry !== undefined) {
+      result = applyX4UiSourceWidgetInsertion(
+        executionContext.workspace as Parameters<typeof applyX4UiSourceWidgetInsertion>[0],
+        projection.source,
+        catalog,
+        {
+          entry: insertionEntry,
+          widget: insertionWidget,
+          text: raw,
+          expected: {
+            path: insertionEntry.path,
+            startOffset: insertionEntry.startOffset,
+            endOffset: insertionEntry.endOffset,
+            expectedText: insertionEntry.expectedText,
+          },
+        },
+      );
+    } else {
+      const blockEntry = catalog.insertEntries?.find(candidate => candidate.id === entryId && candidate.kind === 'insert-block');
+      if (blockEntry !== undefined) {
       result = applyX4UiSourceStructuralEdit(
         executionContext.workspace as Parameters<typeof applyX4UiSourceStructuralEdit>[0],
         projection.source,
@@ -3384,43 +6052,84 @@ export default function X4UiSourceEditor({
         blockEntry.endOffset,
         blockEntry.expectedText,
       );
-    } else {
-      const entry = catalog.entries.find(candidate => candidate.id === entryId);
-      if (entry === undefined) {
-        refuseSourceEdit('entry-not-found', 'the selected entry is not in the exact current owner-issued catalog');
-        return;
+      } else {
+        const entry = catalog.entries.find(candidate => candidate.id === entryId);
+        if (entry === undefined) {
+          refuseSourceEdit('entry-not-found', 'the selected entry is not in the exact current owner-issued catalog');
+          return;
+        }
+        if (entry.kind !== 'editable') {
+          refuseSourceEdit(entry.reason, entry.detail);
+          return;
+        }
+        editedEntry = entry;
+        const parsed = parseX4UiSourceEditInput(entry, raw);
+        if (parsed.accepted === false) {
+          refuseSourceEdit(parsed.reason, parsed.detail);
+          return;
+        }
+        result = applyX4UiSourceEdit(
+          executionContext.workspace as Parameters<typeof applyX4UiSourceEdit>[0],
+          projection.source,
+          catalog,
+          entry.id,
+          parsed.value,
+          entry.path,
+          entry.startOffset,
+          entry.endOffset,
+          entry.expectedText,
+        );
       }
-      if (entry.kind !== 'editable') {
-        refuseSourceEdit(entry.reason, entry.detail);
-        return;
-      }
-      const parsed = parseX4UiSourceEditInput(entry, raw);
-      if (parsed.accepted === false) {
-        refuseSourceEdit(parsed.reason, parsed.detail);
-        return;
-      }
-      result = applyX4UiSourceEdit(
-        executionContext.workspace as Parameters<typeof applyX4UiSourceEdit>[0],
-        projection.source,
-        catalog,
-        entry.id,
-        parsed.value,
-        entry.path,
-        entry.startOffset,
-        entry.endOffset,
-        entry.expectedText,
-      );
     }
     if (result.accepted === false) {
       refuseSourceEdit(result.reason, result.detail);
       return;
     }
-    const parentResult = submitX4UiSourceEditWorkspaceCommit(
+    const insertedWidget = 'insertedWidget' in result ? result.insertedWidget : undefined;
+    const insertedRow = 'insertedRow' in result ? result.insertedRow : undefined;
+    const movedRow = 'movedRow' in result ? result.movedRow : undefined;
+    const propertySplice = 'propertySplice' in result ? result.propertySplice : undefined;
+    const effectiveSplice = propertySplice ?? result;
+    const selectionContinuation: X4UiSourceEditSelectionContinuation | undefined = result.changed
+      && (editedEntry?.kind === 'editable' || propertySplice !== undefined || insertedWidget !== undefined || insertedRow !== undefined || movedRow !== undefined)
+      && selectedBuilderNode !== undefined
+      ? {
+        node: selectedBuilderNode,
+        splice: {
+          path: effectiveSplice.path,
+          startOffset: effectiveSplice.startOffset,
+          endOffset: effectiveSplice.endOffset,
+          replacement: effectiveSplice.replacement,
+        },
+        ...(insertedWidget === undefined ? {} : { insertedWidget }),
+        ...(insertedRow === undefined ? {} : { insertedRow }),
+        ...(movedRow === undefined ? {} : { movedRow }),
+      }
+      : undefined;
+    const sourceSplice: WorkspaceSourceSplice | undefined = result.changed ? Object.freeze({
+      path: effectiveSplice.path, startOffset: effectiveSplice.startOffset, endOffset: effectiveSplice.endOffset,
+      expectedText: effectiveSplice.expectedText, replacement: effectiveSplice.replacement,
+      ...(movedRow === undefined || rowMoveEntry === undefined ? {} : { retainedSpans: Object.freeze([
+        Object.freeze({ beforeStart: rowMoveEntry.upper.startOffset, beforeEnd: rowMoveEntry.upper.endOffset,
+          afterStart: result.startOffset + rowMoveEntry.lower.expectedText.length }),
+        Object.freeze({ beforeStart: rowMoveEntry.lower.startOffset, beforeEnd: rowMoveEntry.lower.endOffset, afterStart: result.startOffset }),
+      ]) }),
+    }) : undefined;
+    if (sourceSplice !== undefined) previewEditTransitionRef.current = {
+      direction: 'edit', scope: currentWorkspaceScope, beforeWorkspace: executionContext.workspace,
+      afterWorkspace: result.workspace, sourceSplice, beforeProjection: projection, selectionEpoch: selectionEpochRef.current,
+    };
+    const inspectorAttempt = !insertionRequested && selectionContinuation !== undefined
+      ? inspectorScroll.begin(result.workspace) : undefined;
+    const parentResult = submitSourceEditWithSelectionTransfer(
       executionContext.workspace,
       result.workspace,
-      onWorkspaceEdit,
+      selectionContinuation,
+      sourceSplice,
     );
     if (parentResult.status === 'refused') {
+      if (inspectorAttempt !== undefined) inspectorScroll.cancel(inspectorAttempt);
+      previewEditTransitionRef.current = null;
       refuseSourceEdit(parentResult.reason, parentResult.detail);
       return;
     }
@@ -3452,6 +6161,7 @@ export default function X4UiSourceEditor({
     });
     void parentResult.acknowledgement.then(
       acknowledgement => {
+        if (inspectorAttempt !== undefined && acknowledgement.status !== 'accepted') inspectorScroll.cancel(inspectorAttempt);
         const currentContext = sourceEditContextRef.current;
         if (currentContext === null || currentContext !== pendingContext) return;
         setSourceEditDraft(previous => {
@@ -3478,6 +6188,7 @@ export default function X4UiSourceEditor({
         });
       },
       () => {
+        if (inspectorAttempt !== undefined) inspectorScroll.cancel(inspectorAttempt);
         const currentContext = sourceEditContextRef.current;
         if (currentContext === null || currentContext !== pendingContext) return;
         setSourceEditDraft(previous => {
@@ -3505,7 +6216,9 @@ export default function X4UiSourceEditor({
 
   const selectedTargetIdentity = asRecord(selection.selection?.target);
   const selectedTargetId = stringValue(selectedTargetIdentity?.id, 'unavailable');
-  const selectedTargetName = stringValue(selectedTargetIdentity?.name, selectedTargetId);
+  const selectedTargetName = selectedTargetIdentity?.kind === 'top-level'
+    ? 'Top-level menu'
+    : stringValue(selectedTargetIdentity?.name, selectedTargetId);
   const selectedTargetKind = stringValue(selectedTargetIdentity?.kind, 'unavailable');
   const normalizedProfileRecord = asRecord(projectionView.normalizedProfile);
   const normalizedDrawable = asRecord(normalizedProfileRecord?.drawable);
@@ -3527,6 +6240,194 @@ export default function X4UiSourceEditor({
       : `unavailable · ${canvasExportClassification.detail}`);
   const nativeBitmapWidth = canvasExportReady ? formatNumber(canvasExportClassification.width) : 'unavailable';
   const nativeBitmapHeight = canvasExportReady ? formatNumber(canvasExportClassification.height) : 'unavailable';
+  const width = positiveValue(asRecord(profileValue)?.width);
+  const height = positiveValue(asRecord(profileValue)?.height);
+  const uiScale = profileScale(profileValue);
+  const normalizedProfile = asRecord(projectionView.normalizedProfile);
+  const mountedSurfaceRecord = asRecord(mountedCanvas);
+  const mountedSurfaceWidth = safePositiveInteger(mountedSurfaceRecord?.width);
+  const mountedSurfaceHeight = safePositiveInteger(mountedSurfaceRecord?.height);
+  const canvasSurfaceDimensions = mountedSurfaceWidth !== null && mountedSurfaceHeight !== null
+    ? { width: mountedSurfaceWidth, height: mountedSurfaceHeight }
+    : null;
+  const canvasDrawableWidth = canvasSurfaceDimensions?.width ?? width ?? 1;
+  const canvasDrawableHeight = canvasSurfaceDimensions?.height ?? height ?? 1;
+  const canvasMenuBounds = deriveX4UiBuilderMenuBounds(builderPresentation, canvasDrawableWidth, canvasDrawableHeight);
+  const measuredCanvasViewportWidth = canvasViewportSize.width > 0
+    ? canvasViewportSize.width
+    : canvasScrollRef.current?.clientWidth ?? 0;
+  const measuredCanvasViewportHeight = canvasViewportSize.height > 0
+    ? canvasViewportSize.height
+    : canvasScrollRef.current?.clientHeight ?? 0;
+  const canvasViewport: X4UiBuilderCanvasViewport = computeX4UiBuilderViewport({
+    drawableWidth: canvasDrawableWidth,
+    drawableHeight: canvasDrawableHeight,
+    viewportWidth: measuredCanvasViewportWidth,
+    viewportHeight: measuredCanvasViewportHeight,
+    menuBounds: canvasMenuBounds,
+    mode: canvasZoomMode,
+    manualScale: manualCanvasZoomScale,
+    margin: 16,
+  });
+  const canvasSurfaceStyle = canvasSurfaceDimensions === null ? undefined : {
+    width: `${canvasViewport.stageWidth}px`,
+    height: `${canvasViewport.stageHeight}px`,
+  };
+  const canvasSurfaceFillStyle = canvasSurfaceDimensions === null ? undefined : {
+    width: '100%',
+    height: '100%',
+    maxWidth: 'none',
+    maxHeight: 'none',
+  };
+  const canvasSurfaceIsMounted = canvasSurfaceDimensions !== null;
+
+  useLayoutEffect(() => {
+    const scroll = canvasScrollRef.current;
+    if (scroll === null) return;
+    let active = true;
+    const measure = (): void => {
+      if (!active) return;
+      const next = { width: scroll.clientWidth, height: scroll.clientHeight };
+      if (next.width === canvasViewportSize.width && next.height === canvasViewportSize.height) return;
+      if (canvasZoomAnchorRef.current === null && canvasZoomMode === 'manual' && canvasViewport.scale > 0) {
+        const previousCamera = canvasCameraRef.current;
+        const previousWidth = previousCamera.viewportWidth > 0
+          ? previousCamera.viewportWidth
+          : canvasViewportSize.width > 0 ? canvasViewportSize.width : scroll.clientWidth;
+        const previousHeight = previousCamera.viewportHeight > 0
+          ? previousCamera.viewportHeight
+          : canvasViewportSize.height > 0 ? canvasViewportSize.height : scroll.clientHeight;
+        const previousScale = previousCamera.scale > 0 ? previousCamera.scale : canvasViewport.scale;
+        const previousLeft = previousCamera.viewportWidth > 0 ? previousCamera.scrollLeft : scroll.scrollLeft;
+        const previousTop = previousCamera.viewportHeight > 0 ? previousCamera.scrollTop : scroll.scrollTop;
+        canvasZoomAnchorRef.current = {
+          x: (previousLeft + previousWidth / 2) / previousScale,
+          y: (previousTop + previousHeight / 2) / previousScale,
+        };
+      }
+      setCanvasViewportSize(next);
+    };
+    measure();
+    const resizeObserverConstructor = typeof ResizeObserver === 'undefined' ? undefined : ResizeObserver;
+    const resizeObserver = resizeObserverConstructor === undefined ? undefined : new resizeObserverConstructor(measure);
+    resizeObserver?.observe(scroll);
+    const ownerWindow = scroll.ownerDocument?.defaultView ?? (typeof window === 'undefined' ? undefined : window);
+    ownerWindow?.addEventListener('resize', measure);
+    return () => {
+      active = false;
+      resizeObserver?.disconnect();
+      ownerWindow?.removeEventListener('resize', measure);
+    };
+  }, [canvasViewport.scale, canvasViewportSize.height, canvasViewportSize.width, canvasZoomMode]);
+
+  const canvasViewportKey = [
+    canvasFocusRevision,
+    canvasZoomMode,
+    canvasViewport.mode,
+    canvasViewport.scale,
+    canvasViewport.stageWidth,
+    canvasViewport.stageHeight,
+    canvasViewport.focus.x,
+    canvasViewport.focus.y,
+    measuredCanvasViewportWidth,
+    measuredCanvasViewportHeight,
+  ].join('|');
+  useLayoutEffect(() => {
+    const scroll = canvasScrollRef.current;
+    if (scroll === null) return;
+    const anchor = canvasZoomAnchorRef.current;
+    if (anchor !== null) {
+      const maxLeft = Math.max(0, canvasViewport.stageWidth - scroll.clientWidth);
+      const maxTop = Math.max(0, canvasViewport.stageHeight - scroll.clientHeight);
+      scroll.scrollLeft = Math.min(maxLeft, Math.max(0, anchor.x * canvasViewport.scale - scroll.clientWidth / 2));
+      scroll.scrollTop = Math.min(maxTop, Math.max(0, anchor.y * canvasViewport.scale - scroll.clientHeight / 2));
+      canvasZoomAnchorRef.current = null;
+    } else if (canvasViewportKeyRef.current !== canvasViewportKey) {
+      const maxLeft = Math.max(0, canvasViewport.stageWidth - scroll.clientWidth);
+      const maxTop = Math.max(0, canvasViewport.stageHeight - scroll.clientHeight);
+      scroll.scrollLeft = Math.min(maxLeft, Math.max(0, canvasViewport.scrollLeft));
+      scroll.scrollTop = Math.min(maxTop, Math.max(0, canvasViewport.scrollTop));
+    }
+    canvasViewportKeyRef.current = canvasViewportKey;
+    canvasCameraRef.current = {
+      scale: canvasViewport.scale,
+      viewportWidth: scroll.clientWidth,
+      viewportHeight: scroll.clientHeight,
+      scrollLeft: scroll.scrollLeft,
+      scrollTop: scroll.scrollTop,
+    };
+  }, [canvasViewport.focus.x, canvasViewport.focus.y, canvasViewport.mode, canvasViewport.scale, canvasViewport.scrollLeft, canvasViewport.scrollTop, canvasViewport.stageHeight, canvasViewport.stageWidth, canvasViewportKey]);
+
+  const captureCanvasZoomAnchor = (): void => {
+    const scroll = canvasScrollRef.current;
+    const camera = canvasCameraRef.current;
+    const scale = camera.scale > 0 ? camera.scale : canvasViewport.scale;
+    if (scroll === null || scale <= 0) return;
+    const viewportWidth = camera.viewportWidth > 0 ? camera.viewportWidth : scroll.clientWidth;
+    const viewportHeight = camera.viewportHeight > 0 ? camera.viewportHeight : scroll.clientHeight;
+    const scrollLeft = camera.viewportWidth > 0 ? camera.scrollLeft : scroll.scrollLeft;
+    const scrollTop = camera.viewportHeight > 0 ? camera.scrollTop : scroll.scrollTop;
+    canvasZoomAnchorRef.current = {
+      x: (scrollLeft + viewportWidth / 2) / scale,
+      y: (scrollTop + viewportHeight / 2) / scale,
+    };
+  };
+
+  const updateCanvasZoomMode = (value: string): void => {
+    if (value !== 'fit-menu' && value !== 'fit-screen' && value !== 'one-to-one' && value !== 'manual') return;
+    if (value === 'fit-menu' || value === 'fit-screen') {
+      canvasZoomAnchorRef.current = null;
+      setCanvasZoomMode(value);
+      return;
+    }
+    captureCanvasZoomAnchor();
+    if (value === 'manual') setManualCanvasZoomScale(canvasViewport.scale);
+    setCanvasZoomMode(value);
+  };
+
+  const canvasSelectionFocus = computeX4UiBuilderSelectionFocus({
+    drawableWidth: canvasDrawableWidth,
+    drawableHeight: canvasDrawableHeight,
+    viewportWidth: measuredCanvasViewportWidth,
+    viewportHeight: measuredCanvasViewportHeight,
+    margin: 16,
+  }, selectedBuilderNode);
+  const focusCanvasSelection = (): void => {
+    if (canvasSelectionFocus === undefined
+      || currentSampleProjectionRef.current !== projection
+      || builderSelectionRef.current !== reconciledBuilderSelection) return;
+    const currentCanvas = classifyX4UiCanvasExport({
+      state: canvasStateRef.current,
+      mountedCanvas: canvasHostRef.current?.firstElementChild,
+      currentIdentity: currentVerificationSnapshotRef.current,
+      committedIdentity: canvasExportIdentityRef.current,
+    });
+    if (currentCanvas.status !== 'available') return;
+    canvasZoomAnchorRef.current = canvasSelectionFocus.focus;
+    setManualCanvasZoomScale(canvasSelectionFocus.scale);
+    setCanvasZoomMode('manual');
+    // Refocusing after a user pan must run the existing camera effect even at the same scale.
+    setCanvasFocusRevision(previous => previous + 1);
+  };
+
+  const adjustCanvasZoom = (direction: 1 | -1): void => {
+    captureCanvasZoomAnchor();
+    const nextScale = Math.min(16, Math.max(0.05, canvasViewport.scale * (direction > 0 ? 1.25 : 0.8)));
+    setManualCanvasZoomScale(nextScale);
+    setCanvasZoomMode('manual');
+  };
+
+  const handleCanvasScroll = (): void => {
+    const scroll = canvasScrollRef.current;
+    if (scroll === null) return;
+    canvasCameraRef.current = {
+      scale: canvasViewport.scale,
+      viewportWidth: scroll.clientWidth,
+      viewportHeight: scroll.clientHeight,
+      scrollLeft: scroll.scrollLeft,
+      scrollTop: scroll.scrollTop,
+    };
+  };
 
   const handleCanvasExport = (): void => {
     if (canvasExportInFlightRef.current) return;
@@ -3649,85 +6550,448 @@ export default function X4UiSourceEditor({
     }
   };
 
-  const width = positiveValue(asRecord(profileValue)?.width);
-  const height = positiveValue(asRecord(profileValue)?.height);
-  const uiScale = profileScale(profileValue);
-  const normalizedProfile = asRecord(projectionView.normalizedProfile);
-
   return (
-    <section data-testid="x4-ui-source-editor" className="flex-1 min-h-0 overflow-y-auto bg-[#090c12] p-3 text-slate-300 font-mono text-[11px]">
-      <div className="mb-3 rounded border border-amber-500/30 bg-amber-950/15 p-3">
-        <div data-testid="x4-ui-game-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
-        <div className="mt-1 text-slate-500">Preview is for layout inspection; static analysis is not engine acceptance.</div>
+    <section data-testid="x4-ui-source-editor" className="flex min-w-0 flex-1 min-h-0 flex-col overflow-hidden bg-[#090c12] p-2 text-slate-300 font-sans text-xs">
+      <div data-testid="x4-ui-builder-header" className="mb-1 flex min-h-8 shrink-0 flex-wrap items-center gap-2">
+        <div data-testid="x4-ui-game-truth" className="shrink-0 whitespace-nowrap font-semibold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
+        <details data-testid="x4-ui-preview-settings" className="relative min-w-0 shrink-0">
+          <summary data-testid="x4-ui-preview-settings-toggle" className="cursor-pointer rounded border border-cyan-500/30 bg-cyan-950/20 px-2 py-1 text-[11px] font-semibold text-cyan-200">Preview settings</summary>
+          <div data-testid="x4-ui-profile-region" className="absolute left-0 top-full z-30 mt-1 max-h-[min(60vh,24rem)] w-[min(36rem,calc(100vw-2rem))] overflow-y-auto rounded border border-white/10 bg-[#111722] p-2 shadow-xl">
+            <h2 className="mb-1 text-[10px] font-bold uppercase tracking-wider text-cyan-300">Profile controls</h2>
+            {profileError !== undefined && <div data-testid="x4-ui-profile-error" role="alert" className="mb-2 text-amber-300">{profileError}</div>}
+            <div className="grid grid-cols-2 gap-1">
+              <label className="flex min-w-0 flex-col gap-1 text-[11px] text-slate-500">
+                Drawable width
+                <input data-testid="x4-ui-profile-width" type="number" min="0.000001" step="any" value={width === null ? '' : width} onChange={event => updateProfileDimension('width', event.target.value)} className="min-w-0 rounded border border-white/10 bg-black/40 px-2 py-1 text-xs text-slate-200" />
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 text-[11px] text-slate-500">
+                Drawable height
+                <input data-testid="x4-ui-profile-height" type="number" min="0.000001" step="any" value={height === null ? '' : height} onChange={event => updateProfileDimension('height', event.target.value)} className="min-w-0 rounded border border-white/10 bg-black/40 px-2 py-1 text-xs text-slate-200" />
+              </label>
+            </div>
+            <div className="mt-1 grid grid-cols-3 gap-1">
+              <label className="flex min-w-0 flex-col gap-1 text-[11px] text-slate-500">
+                Preview scale mode
+                <select data-testid="x4-ui-profile-scale-mode" value={scaleMode} onChange={event => updateScaleMode(event.target.value)} className="min-w-0 rounded border border-white/10 bg-black/40 px-2 py-1 text-xs text-slate-200">
+                  <option value={X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED}>Derived from X4 user scale</option>
+                  <option value={X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM}>Custom effective Helper scale</option>
+                </select>
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 text-[11px] text-slate-500">
+                X4 user scale
+                <input data-testid="x4-ui-profile-user-scale" type="number" min="0.000001" step="any" value={userScale} onChange={event => updateUserScale(event.target.value)} className="min-w-0 rounded border border-white/10 bg-black/40 px-2 py-1 text-xs text-slate-200" />
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 text-[11px] text-slate-500">
+                Preview scale
+                <input data-testid="x4-ui-profile-scale" type="number" min="0.000001" step="any" value={uiScale === null ? '' : uiScale} disabled={scaleMode !== X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM} onChange={event => updateProfileDimension('uiScale', event.target.value)} className="min-w-0 rounded border border-white/10 bg-black/40 px-2 py-1 text-xs text-slate-200" />
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <details data-testid="x4-ui-overlay-toolbar" className="relative min-w-0 shrink-0">
+          <summary data-testid="x4-ui-overlay-toggle" className="cursor-pointer rounded border border-cyan-500/30 bg-cyan-950/20 px-2 py-1 text-[11px] font-semibold text-cyan-200">Game overlays · {KEEP_OUT_PRESETS.find(preset => preset.id === activePresetId)?.label ?? 'Off'}</summary>
+          <div data-testid="x4-ui-overlay-panel" className="absolute left-0 top-full z-30 mt-1 max-h-[min(60vh,26rem)] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded border border-white/10 bg-[#111722] p-3 text-xs shadow-xl">
+            <h2 className="font-semibold text-cyan-200">Game overlays</h2>
+            <p className="mt-1 text-slate-400">Show where game UI may occupy the screen while you design. Preview only; your Lua is unchanged.</p>
+            <p data-testid="x4-ui-overlay-truth" className="mt-1 font-semibold text-amber-300">Advisory only · Not verified in game</p>
+            <div className="mt-3 flex flex-wrap gap-1" aria-label="Game context">
+              <button type="button" data-testid="x4-ui-keepout-off" aria-pressed={activePresetId === null} onClick={() => selectPreset(null)} className={`rounded border px-2 py-1 text-[11px] ${activePresetId === null ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-slate-400'}`}>Off</button>
+              {KEEP_OUT_PRESETS.map(preset => <button type="button" key={preset.id} data-testid={`x4-ui-keepout-preset-${preset.id}`} aria-pressed={activePresetId === preset.id} onClick={() => selectPreset(preset.id)} className={`rounded border px-2 py-1 text-[11px] ${activePresetId === preset.id ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-slate-400'}`}>{preset.label}</button>)}
+            </div>
+            {activePresetId === null && <p className="mt-3 text-slate-400">Choose a game context to show its guides.</p>}
+            {KEEP_OUT_PRESETS.filter(preset => preset.id === activePresetId).map(preset => {
+              const sessionPreset = sourceKeepOutPresets.find(value => asRecord(value)?.id === preset.id);
+              return <div key={preset.id} className="mt-3 space-y-2">
+                {preset.members.map(member => {
+                  const sessionMember = keepOutMemberFor(sessionPreset, member.entryId);
+                  const label = stringValue(asRecord(sessionMember?.entry)?.label, getBuiltInKeepOut(member.entryId)?.label ?? 'Unavailable guide');
+                  const applicable = member.applicability === 'applicable';
+                  return <label key={member.entryId} className="flex items-start gap-2 text-slate-300">
+                    <input type="checkbox" data-testid={`x4-ui-overlay-entry-${member.entryId}`} className="mt-0.5"
+                      checked={isX4UiKeepOutEntryChecked(activePresetId, preset.id, enabledEntryIds, member.entryId)}
+                      disabled={!applicable} onChange={() => toggleEntry(preset.id, member.entryId)} />
+                    <span>{label}{!applicable && <span className="block text-slate-500">Not mapped for this context.</span>}</span>
+                  </label>;
+                })}
+              </div>;
+            })}
+            <p className="mt-3 text-slate-500">Guides are not guaranteed safe areas. Capture evidence and manual calibration are available in Inspect.</p>
+          </div>
+        </details>
+
+        <details ref={previewInputsPanelRef} data-testid="x4-ui-preview-inputs-panel" className="relative min-w-0 shrink-0">
+          <summary data-testid="x4-ui-preview-inputs-toggle" className="cursor-pointer rounded border border-cyan-500/30 bg-cyan-950/20 px-2 py-1 text-[11px] font-semibold text-cyan-200">Preview inputs{visibleSampleDraft !== undefined ? ' · unapplied edits' : ''}</summary>
+          <div className="absolute left-0 top-full z-30 mt-1 max-h-[min(60vh,28rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded border border-white/10 bg-[#111722] p-2 text-xs shadow-xl">
+            <X4UiPreviewScenarios
+              scope={currentWorkspaceScope}
+              owner={sessionOwner}
+              input={sessionInput}
+              projection={projection}
+              view={{ width: projection.profile.drawable.width, height: projection.profile.drawable.height,
+                uiScale: projection.profile.uiScale, scaleMode, userScale }}
+              draftPending={visibleSampleDraft !== undefined}
+              transition={projectedPreview.continuation}
+              onApply={adoptPreviewScenario}
+            />
+            <X4UiSourceEditorSamples
+              primary
+              presentation={builderPresentation}
+              catalog={projection.sampleCatalog}
+              samples={projection.samples}
+              draft={visibleSampleDraft}
+              onSampleInput={updateSample}
+              onApply={applySampleDraft}
+              onReset={resetSampleDraft}
+              onClear={clearPreviewValues}
+              error={sampleError}
+              onOpenInspect={() => {
+                if (previewInputsPanelRef.current !== null) previewInputsPanelRef.current.open = false;
+                openInspect();
+              }}
+              inspectTargetId={inspectTargetId}
+            />
+          </div>
+        </details>
+
+        <X4UiSourceEditorNewMenu
+          workspace={workspace}
+          source={projection.source}
+          candidates={selection.candidates}
+          onWorkspaceEdit={onWorkspaceEdit}
+          onSelect={created => {
+            selectSource(created.sourceSelector);
+            setTargetSelector(created.targetSelector);
+          }}
+        />
+        <X4UiSourceEditorLuaFiles
+          workspace={workspace}
+          scope={currentWorkspaceScope}
+          source={projection.source}
+          selectedSourcePath={selection.source?.path}
+          candidates={selection.candidates}
+          sourceSelector={sourceSelector}
+          targetSelector={targetSelector}
+          onWorkspaceEdit={onWorkspaceEdit}
+          sourceEditStaged={Object.keys(visibleSourceEditStaged).length > 0}
+          sourceEditPending={visibleSourceEditReceipt?.status === 'pending'}
+          onSelect={created => {
+            selectSource(created.sourceSelector);
+            setTargetSelector(created.targetSelector);
+          }}
+        />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-        <section data-testid="x4-ui-profile-region" className="rounded border border-white/10 bg-black/20 p-3">
-          <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-cyan-300">Profile controls</h2>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="flex flex-col gap-1 text-slate-500">
-              Drawable width
-              <input data-testid="x4-ui-profile-width" type="number" min="0.000001" step="any" value={width === null ? '' : width} onChange={event => updateProfileDimension('width', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-            <label className="flex flex-col gap-1 text-slate-500">
-              Drawable height
-              <input data-testid="x4-ui-profile-height" type="number" min="0.000001" step="any" value={height === null ? '' : height} onChange={event => updateProfileDimension('height', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-          </div>
-          <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-3">
-            <label className="flex flex-col gap-1 text-slate-500">
-              Source Editor scale mode
-              <select data-testid="x4-ui-profile-scale-mode" value={scaleMode} onChange={event => updateScaleMode(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
-                <option value={X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED}>Derived from X4 user scale</option>
-                <option value={X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM}>Custom effective Helper scale</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-slate-500">
-              X4 user scale factor
-              <input data-testid="x4-ui-profile-user-scale" type="number" min="0.000001" step="any" value={userScale} onChange={event => updateUserScale(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-            <label className="flex flex-col gap-1 text-slate-500">
-              Effective Helper scale
-              <input data-testid="x4-ui-profile-scale" type="number" min="0.000001" step="any" value={uiScale === null ? '' : uiScale} disabled={scaleMode !== X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM} onChange={event => updateProfileDimension('uiScale', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-          </div>
-          <div data-testid="x4-ui-profile-scale-derivation" className="mt-2 text-slate-500">Derived effective Helper scale = X4 user scale × drawable height ÷ 1080. Drawable width does not affect the derived value. Custom mode retains its effective value across height changes.</div>
-          <div className="mt-2 text-slate-500">Truth grade: <span data-testid="x4-ui-profile-truth" className="text-amber-300">{stringValue(normalizedProfile?.truthGrade, 'unverified-default')}</span></div>
-          <div className="text-slate-500">Profile: <span>{stringValue(normalizedProfile?.id, 'x4-ui-editor-default')}</span> · drawable {formatNumber(width)} × {formatNumber(height)} · effective Helper scale {formatNumber(uiScale)} · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
+      <div data-testid="x4-ui-builder-toolbar" className="mb-1 flex min-w-0 shrink-0 items-center gap-2">
+        <section data-testid="x4-ui-source-region" aria-label="Source and target selection" className="flex min-w-0 flex-1 items-center gap-2">
+          <label className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-slate-500">
+            <span className="shrink-0">File</span>
+            <select data-testid="x4-ui-source-selector" value={sourceSelector} onChange={event => selectSource(event.target.value)} className="min-w-0 flex-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-xs text-slate-200">
+              <option value="">Select source…</option>
+              {selection.candidates.map(candidate => <option key={candidate.key} value={candidate.key}>{candidate.path}</option>)}
+            </select>
+          </label>
+          <label className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-slate-500">
+            <span className="shrink-0">Menu</span>
+            <select data-testid="x4-ui-target-selector" value={targetSelector} onChange={event => selectTarget(event.target.value)} className="min-w-0 flex-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-xs text-slate-200">
+              <option value="">Select menu…</option>
+              {targetOptions.some(target => target.key === targetSelector) && !menuOptions.some(target => target.key === targetSelector) && <option value={targetSelector}>Inspect target selected</option>}
+              {menuOptions.map(target => <option key={target.key} value={target.key}>{target.raw.kind === 'top-level' ? 'Top-level menu' : target.label}</option>)}
+            </select>
+          </label>
         </section>
+      </div>
 
-        <section data-testid="x4-ui-corpus-region" className="rounded border border-white/10 bg-black/20 p-3">
+      <div data-testid="x4-ui-builder-workspace" className="mt-1 grid min-h-0 flex-1 grid-cols-[minmax(8rem,0.55fr)_minmax(0,2.4fr)_minmax(18rem,1.2fr)] gap-1 overflow-hidden">
+        <aside data-testid="x4-ui-builder-hierarchy" className="min-h-0 min-w-0 overflow-y-auto rounded border border-white/10 bg-black/20 p-2">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Menu hierarchy</h2>
+              <div data-testid="x4-ui-builder-hierarchy-detail" className="mt-1 text-slate-500">Browse frames, tables, rows, cells, and widgets.</div>
+            </div>
+            <span data-testid="x4-ui-builder-hierarchy-status" className={builderPresentation.status === 'available' ? 'text-emerald-300' : 'text-amber-300'}>{builderPresentation.status}</span>
+          </div>
+          <div data-testid="x4-ui-builder-hierarchy-list" role="tree" className="mt-3 space-y-1">
+            {builderPresentation.nodes.map(node => {
+              const selected = reconciledBuilderSelection?.nodeId === node.id;
+              const depth = builderNodeDepthFor(node, builderPresentation);
+              return (
+                <button
+                  key={node.id}
+                  type="button"
+                  role="treeitem"
+                  aria-level={depth + 1}
+                  aria-pressed={selected}
+                  data-testid={`x4-ui-builder-node-${node.id}`}
+                  onClick={() => selectBuilderNode(node)}
+                  className={`flex w-full items-start justify-between gap-2 rounded border px-2 py-1 text-left ${selected ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-200' : 'border-white/5 text-slate-300 hover:border-cyan-500/30 hover:bg-white/5'}`}
+                  style={{ paddingLeft: `${8 + Math.min(depth, 3) * 6}px` }}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block break-words font-bold">{node.label}</span>
+                    <span className="block truncate text-[9px] text-slate-500">{node.kind} · {node.selectable ? 'geometry issued' : 'geometry unresolved'}</span>
+                  </span>
+                  <span className={node.selectable ? 'text-emerald-300' : 'text-amber-300'} aria-hidden="true">{node.selectable ? '●' : '!'}</span>
+                </button>
+              );
+            })}
+            {builderPresentation.nodes.length === 0 && <div data-testid="x4-ui-builder-hierarchy-empty" className="rounded border border-amber-500/20 bg-amber-950/10 p-2 text-amber-200">{builderPresentation.detail}</div>}
+          </div>
+        </aside>
+
+        <main data-testid="x4-ui-builder-canvas-column" className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+          <section data-testid="x4-ui-preview-region" className="flex min-h-0 flex-1 flex-col rounded border border-white/10 bg-black/20 p-1">
+            <div className="flex min-h-6 shrink-0 items-center justify-between gap-2">
+              <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source canvas</h2>
+              <span data-testid="x4-ui-canvas-status" className={canvasDescription.status === 'current' ? 'text-[10px] text-slate-300' : 'text-[10px] text-amber-300'}>{canvasDescription.label}</span>
+            </div>
+            {canvasDescription.status === 'stale' && (
+              <div data-testid="x4-ui-canvas-stale-notice" role="status" className="mt-1 shrink-0 rounded border border-amber-500/40 bg-amber-950/30 p-2 text-[11px] text-amber-200">
+                <div className="font-semibold">Previous preview — not current</div>
+                <div>The last successful preview is shown for reference only. It cannot be selected or exported.</div>
+                {selection.source === undefined || selection.target === undefined
+                  ? <div>Choose a file and menu above to render a current preview.</div>
+                  : <div>Review the preview inputs or open Inspect to find what prevents a current render.</div>}
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {(projection.sampleCatalog?.entries.length ?? 0) > 0 && (
+                    <button type="button" data-testid="x4-ui-canvas-stale-inputs" onClick={() => {
+                      const panel = previewInputsPanelRef.current;
+                      if (panel !== null) {
+                        panel.open = true;
+                        (panel.firstElementChild as HTMLElement | null)?.focus();
+                      }
+                    }} className="rounded border border-amber-500/40 px-2 py-1 font-semibold">Review preview inputs</button>
+                  )}
+                  <SourceEditInspectButton testId="x4-ui-canvas-stale-inspect" onOpenInspect={openInspect} inspectTargetId={inspectTargetId} />
+                </div>
+              </div>
+            )}
+            {builderPresentation.status === 'partial' && (projection.sampleCatalog?.entries.length ?? 0) > 0 && (
+              <div data-testid="x4-ui-context-inputs-hint" className="shrink-0 text-[10px] text-amber-200">Missing content? Select an element or container in the hierarchy for related preview inputs. The Preview inputs menu shows all values.</div>
+            )}
+            <section data-testid="x4-ui-canvas-export-region" className="mt-1 flex shrink-0 flex-wrap items-center gap-2">
+              <div data-testid="x4-ui-canvas-export-compact" className="text-[10px] text-slate-500">PNG export in Inspect · zoom changes the view only</div>
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
+                <button type="button" data-testid="x4-ui-canvas-focus-selection" title="Center the selected element at 100%; fit larger elements." disabled={!canvasExportReady || canvasSelectionFocus === undefined} onClick={focusCanvasSelection} className="rounded border border-cyan-500/30 px-2 py-1 text-xs text-cyan-200 disabled:cursor-not-allowed disabled:text-slate-600">Focus selection</button>
+                <label className="flex items-center gap-1 text-[10px] text-slate-500">
+                  Preview zoom
+                  <select data-testid="x4-ui-canvas-zoom-mode" aria-label="Preview zoom mode" value={canvasZoomMode} onChange={event => updateCanvasZoomMode(event.target.value)} className="rounded border border-white/10 bg-black/40 px-1 py-1 text-xs text-slate-200">
+                    <option value="fit-menu">Fit menu</option>
+                    <option value="fit-screen">Fit screen</option>
+                    <option value="one-to-one">100%</option>
+                    <option value="manual">Custom</option>
+                  </select>
+                </label>
+                <button type="button" data-testid="x4-ui-canvas-zoom-out" aria-label="Zoom preview out" disabled={!canvasSurfaceIsMounted} onClick={() => adjustCanvasZoom(-1)} className="rounded border border-white/10 px-2 py-1 text-xs text-slate-300 disabled:cursor-not-allowed disabled:text-slate-600">−</button>
+                <span data-testid="x4-ui-canvas-zoom-value" className="min-w-[4rem] text-center text-[10px] text-slate-400">{formatCanvasZoomPercent(canvasViewport.zoomPercent)}% preview</span>
+                <button type="button" data-testid="x4-ui-canvas-zoom-in" aria-label="Zoom preview in" disabled={!canvasSurfaceIsMounted} onClick={() => adjustCanvasZoom(1)} className="rounded border border-white/10 px-2 py-1 text-xs text-slate-300 disabled:cursor-not-allowed disabled:text-slate-600">+</button>
+              </div>
+              <div data-testid="x4-ui-canvas-zoom-detail" className="basis-full text-[10px] text-slate-500">
+                {canvasViewport.fallbackFromMenu ? 'Menu bounds unavailable; showing full screen.' : 'Zoom changes the view, not your menu.'}
+              </div>
+            </section>
+            <div data-testid="x4-ui-canvas-scroll" ref={canvasScrollRef} onScroll={handleCanvasScroll} className="mt-1 min-h-0 flex-1 overflow-auto rounded border border-white/10 bg-black/40">
+              <div data-testid="x4-ui-canvas-stage" className="relative inline-block align-top" style={canvasSurfaceStyle}>
+                <div data-testid="x4-ui-canvas-host" ref={canvasHostRef} className={`flex items-start justify-start overflow-hidden rounded bg-black/40 ${canvasSurfaceIsMounted ? '' : 'min-h-24'}`} style={canvasSurfaceFillStyle} />
+                <div
+                  data-testid="x4-ui-canvas-overlay"
+                  role="presentation"
+                  onClick={handleBuilderCanvasClick}
+                  className="pointer-events-auto absolute inset-0 cursor-crosshair"
+                  style={canvasSurfaceFillStyle}
+                >
+                  {reconciledBuilderSelection !== undefined && selectedBuilderNode?.rect !== undefined && canvasExportReady && (
+                    <div
+                      data-testid="x4-ui-canvas-selection"
+                      aria-label={`Selected ${selectedBuilderNode.label}`}
+                      className="pointer-events-none absolute rounded border-2 border-cyan-300 bg-cyan-300/10 shadow-[0_0_0_1px_rgba(8,145,178,0.5)]"
+                      style={{
+                        left: `${selectedBuilderNode.rect.x / canvasDrawableWidth * 100}%`,
+                        top: `${selectedBuilderNode.rect.y / canvasDrawableHeight * 100}%`,
+                        width: `${selectedBuilderNode.rect.width / canvasDrawableWidth * 100}%`,
+                        height: `${selectedBuilderNode.rect.height / canvasDrawableHeight * 100}%`,
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <aside data-testid="x4-ui-builder-inspector" ref={inspectorScroll.containerRef}
+          onPointerDownCapture={() => inspectorScroll.cancel()} onWheelCapture={() => inspectorScroll.cancel()}
+          onTouchMoveCapture={() => inspectorScroll.cancel()} onKeyDownCapture={() => inspectorScroll.cancel()}
+          className="min-h-0 min-w-0 overflow-y-auto rounded border border-white/10 bg-black/20 p-1">
+          <div className="flex min-h-6 items-center justify-between gap-2">
+            <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Selected element</h2>
+          </div>
+          {selectedBuilderNode === undefined ? (
+            <>
+              <div data-testid="x4-ui-builder-selection-empty" className="mt-2 rounded border border-amber-500/20 bg-amber-950/10 p-1 text-amber-200">Select an element on the canvas or in the hierarchy.</div>
+              <X4UiSourceEditorRowControls
+                context={contextualRowMove}
+                builderStatus={builderPresentation.status}
+                projectionLoading={corpusState.status === 'loading'}
+                propertyDraftPending={Object.keys(visibleSourceEditStaged).length > 0}
+                receipt={visibleSourceEditReceipt}
+                onMove={(entryId, direction) => applySourceEdit(entryId, undefined, undefined, false, direction)}
+              />
+            </>
+          ) : (
+            <div data-testid="x4-ui-builder-selection" className="mt-1 rounded border border-cyan-500/30 bg-cyan-950/10 p-1">
+               <div data-testid="x4-ui-builder-selected-node-label" className="font-bold text-cyan-200">{selectedBuilderNode.label}</div>
+              {contextualPreviewInputs.length > 0 && (
+                <details key={selectedBuilderNode.id} data-testid="x4-ui-context-inputs-panel" open={!selectedBuilderNode.selectable} className="mt-2 text-[11px]">
+                  <summary className="cursor-pointer font-semibold text-cyan-200">Related preview inputs · {contextualPreviewInputs.length}</summary>
+                  <X4UiSourceEditorSamples
+                    primary
+                    contextNode={selectedBuilderNode}
+                    presentation={builderPresentation}
+                    catalog={projection.sampleCatalog}
+                    samples={projection.samples}
+                    draft={visibleSampleDraft}
+                    onSampleInput={updateSample}
+                    onApply={applySampleDraft}
+                    onReset={resetSampleDraft}
+                    error={sampleError}
+                    onOpenInspect={openInspect}
+                    inspectTargetId={inspectTargetId}
+                  />
+                </details>
+              )}
+              <X4UiSourceEditorContextualPalette
+                selectedNode={selectedBuilderNode}
+                entry={contextualInsertionEntry}
+                rowEntry={contextualRowInsertionEntry}
+                rowHasEligibleCell={contextualRowHasEligibleCell}
+                catalogAvailable={sourceEditCatalog !== undefined}
+                sourceIdentityMatches={sourceEditCatalogIdentityMatches}
+                builderStatus={builderPresentation.status}
+                projectionLoading={corpusState.status === 'loading'}
+                propertyDraftPending={Object.keys(visibleSourceEditStaged).length > 0}
+                receipt={visibleSourceEditReceipt}
+                onDiscard={discardSourceEditDraft}
+                onInsert={(entryId, widget, text) => applySourceEdit(entryId, widget, text)}
+                onInsertRow={entryId => applySourceEdit(entryId, undefined, undefined, true)}
+              />
+              <X4UiSourceEditorRowControls
+                context={contextualRowMove}
+                builderStatus={builderPresentation.status}
+                projectionLoading={corpusState.status === 'loading'}
+                propertyDraftPending={Object.keys(visibleSourceEditStaged).length > 0}
+                receipt={visibleSourceEditReceipt}
+                onMove={(entryId, direction) => applySourceEdit(entryId, undefined, undefined, false, direction)}
+              />
+              {selectedBuilderNode.selectable === false && contextualInsertionEntry === undefined && (
+                <div data-testid="x4-ui-builder-selection-unresolved" role="alert" className="mt-2 rounded border border-amber-500/20 bg-amber-950/10 p-1 text-amber-200">
+                  <div>{contextualPreviewInputs.length > 0 ? 'This element’s position is unresolved. Supply related preview values above, or open Inspect for other missing information.' : 'This element’s position is unresolved. You can still select it here; open Inspect to see what’s missing.'}</div>
+                  <div className="mt-1"><SourceEditInspectButton testId="x4-ui-builder-open-inspect-unresolved" onOpenInspect={openInspect} inspectTargetId={inspectTargetId} /></div>
+                </div>
+              )}
+              {sourceEditCatalog === undefined ? (
+                <div data-testid="x4-ui-builder-properties-unavailable" role="alert" className="mt-2 rounded border border-amber-500/20 bg-amber-950/10 p-1 text-amber-200">
+                  <div>This element cannot be edited here. Open Inspect for details.</div>
+                  <div className="mt-1 text-slate-400">
+                    {currentProgramResult?.status === 'refused'
+                      ? 'The current source program could not issue property controls for this selection; open Inspect for the exact reason.'
+                      : 'No current source property catalog was issued for this selection; refresh the source and open Inspect for the exact diagnostics.'}
+                  </div>
+                  <div className="mt-1"><SourceEditInspectButton testId="x4-ui-builder-open-inspect-unavailable" onOpenInspect={openInspect} inspectTargetId={inspectTargetId} /></div>
+                </div>
+              ) : sourceEditCatalog.status === 'locked' && selectedBuilderEntries.length === 0 ? (
+                <div data-testid="x4-ui-builder-properties-unavailable" role="alert" className="mt-2 rounded border border-amber-500/30 bg-amber-950/20 p-1 text-amber-200">
+                  <div>Property controls are unavailable for this source selection. Open Inspect for details.</div>
+                  <div className="mt-1 text-slate-400">The source property catalog is unavailable to this control; inspect the exact source record before retrying.</div>
+                  <div className="mt-1"><SourceEditInspectButton testId="x4-ui-builder-open-inspect-locked-catalog" onOpenInspect={openInspect} inspectTargetId={inspectTargetId} /></div>
+                </div>
+              ) : selectedBuilderEntries.length === 0 ? (
+                contextualInsertionEntry === undefined && (
+                  <div data-testid="x4-ui-builder-properties-empty" role="alert" className="mt-2 rounded border border-amber-500/20 bg-amber-950/10 p-1 text-amber-200">
+                    <div>There are no editable properties for this element here. Open Inspect for details.</div>
+                    <div className="mt-1 text-slate-400">The exact source records may be technical or unavailable for this selection; inspect them before retrying.</div>
+                    <div className="mt-1"><SourceEditInspectButton testId="x4-ui-builder-open-inspect-empty" onOpenInspect={openInspect} inspectTargetId={inspectTargetId} /></div>
+                  </div>
+                )
+              ) : (
+                <X4UiSourceEditorSourceEdits
+                  catalog={sourceEditCatalog}
+                  entries={selectedBuilderEntries}
+                  title="Friendly properties"
+                  showTechnicalDetails={false}
+                  showFrameBlocks={false}
+                  staged={visibleSourceEditStaged}
+                  receipt={visibleSourceEditReceipt}
+                  onStage={stageSourceEdit}
+                  onApply={applySourceEdit}
+                  onDiscard={discardSourceEditDraft}
+                  discardTestId="x4-ui-builder-source-edit-discard"
+                  onOpenInspect={openInspect}
+                  inspectTargetId={inspectTargetId}
+                />
+              )}
+              <X4UiSourceEditorAddTextProperty key={selectedBuilderNode.id}
+                additions={contextualTextPropertyAdditions} staged={visibleSourceEditStaged}
+                pending={visibleSourceEditReceipt?.status === 'pending'} onStage={stageSourceEdit} onApply={applySourceEdit} />
+            </div>
+          )}
+      <details id={inspectTargetId} ref={inspectPanelRef} data-testid="x4-ui-inspect-panel" className="mt-2 min-h-0 shrink-0 overflow-hidden rounded border border-white/10 bg-black/20">
+        <summary data-testid="x4-ui-inspect-toggle" className="cursor-pointer px-2 py-1 font-bold uppercase tracking-wider text-cyan-300">Inspect source authority, diagnostics, scenarios, and exact controls</summary>
+        <div data-testid="x4-ui-inspect-scroll" className="max-h-[34vh] overflow-y-auto px-2 pb-2 font-mono text-[11px]">
+      <label className="mt-3 flex items-center gap-2 text-slate-400">
+        <span>All source targets</span>
+        <select data-testid="x4-ui-inspect-target-selector" value={targetSelector} onChange={event => selectTarget(event.target.value)} className="min-w-0 flex-1 rounded border border-white/10 bg-black/40 px-2 py-1">
+          <option value="">Select target…</option>
+          {targetOptions.map(target => <option key={target.key} value={target.key}>{target.label}</option>)}
+        </select>
+      </label>
+      <p className="mt-1 text-slate-500">Includes helper functions and unsupported targets. Menu lists source-known frame builders; a selection does not verify it in game.</p>
+      {selectedBuilderNode !== undefined && <div data-testid="x4-ui-builder-selected-node-inspect" className="mt-3 break-words text-slate-400">{selectedBuilderNode.detail}</div>}
+
+      <section data-testid="x4-ui-corpus-inspect" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
+        <section data-testid="x4-ui-corpus-region">
           <div className="flex items-start justify-between gap-2">
             <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Configured X4 corpus</h2>
             <button type="button" data-testid="x4-ui-corpus-reload" onClick={() => setCorpusGeneration(value => value + 1)} className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300">Reload</button>
           </div>
           <div className="mt-2 text-slate-400">Status: <span data-testid="x4-ui-corpus-status" className="font-bold text-slate-200">{statusLabel(corpusState.status)}</span></div>
-          <div data-testid="x4-ui-corpus-detail" className="mt-1 break-words text-slate-500">{corpusState.detail}</div>
-          <div className="mt-2 text-slate-400">Canonical-default color: <span data-testid="x4-ui-corpus-color-status" className="font-bold text-slate-200">{statusLabel(corpusState.colorStatus)}</span></div>
-          <div data-testid="x4-ui-corpus-color-detail" className="mt-1 break-words text-slate-500">{corpusState.colorDetail}</div>
-          <div className="mt-1 text-slate-600">Canonical status is accepted only from the configured loader.</div>
+          <div data-testid="x4-ui-corpus-toolbar-note" className="mt-1 text-slate-500">The configured corpus is read-only preview authority; derivation, color, and hash evidence remain available under Inspect.</div>
         </section>
-      </div>
-
-      <section data-testid="x4-ui-source-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
-        <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source and target selection</h2>
-        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-          <label className="flex flex-col gap-1 text-slate-500">
-            Exact source
-            <select data-testid="x4-ui-source-selector" value={sourceSelector} onChange={event => selectSource(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
-              <option value="">Select source…</option>
-              {selection.candidates.map(candidate => <option key={candidate.key} value={candidate.key}>{candidate.path}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-slate-500">
-            Exact target
-            <select data-testid="x4-ui-target-selector" value={targetSelector} onChange={event => setTargetSelector(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
-              <option value="">Select target…</option>
-              {targetOptions.map(target => <option key={target.key} value={target.key}>{target.label}</option>)}
-            </select>
-          </label>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Configured X4 corpus details</h2>
+          <span className="text-[9px] text-slate-500">technical evidence</span>
         </div>
+        <div data-testid="x4-ui-corpus-detail" className="mt-2 break-words text-slate-500">{corpusState.detail}</div>
+        <div className="mt-2 text-slate-400">Canonical-default color: <span data-testid="x4-ui-corpus-color-status" className="font-bold text-slate-200">{statusLabel(corpusState.colorStatus)}</span></div>
+        <div data-testid="x4-ui-corpus-color-detail" className="mt-1 break-words text-slate-500">{corpusState.colorDetail}</div>
+        <div className="mt-1 text-slate-600">Canonical status is accepted only from the configured loader. Source derivation, corpus identity, and hash evidence are not inferred by this surface.</div>
+      </section>
+
+      <section data-testid="x4-ui-profile-inspect" className="mt-3 rounded border border-white/10 p-3">
+        <div className="text-slate-500">Preview is for layout inspection; static analysis is not engine acceptance.</div>
+        <div data-testid="x4-ui-profile-scale-derivation" className="mt-2 text-slate-500">Derived effective Helper scale = X4 user scale × drawable height ÷ 1080. Drawable width does not affect the derived value. Custom mode retains its effective value across height changes.</div>
+        <div className="mt-2 text-slate-500">Truth grade: <span data-testid="x4-ui-profile-truth" className="text-amber-300">{stringValue(normalizedProfile?.truthGrade, 'unverified-default')}</span></div>
+        <div className="text-slate-500">Profile: <span>{stringValue(normalizedProfile?.id, 'x4-ui-editor-default')}</span> · drawable {formatNumber(width)} × {formatNumber(height)} · effective Helper scale {formatNumber(uiScale)} · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
         <div className="mt-2 text-slate-500">Selected source identity: <span data-testid="x4-ui-selected-source-identity" className="break-all text-slate-300">{selectedSourceFile} · {selectedSourceHash}</span></div>
+      </section>
+
+      <section data-testid="x4-ui-canvas-export-inspect" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">PNG export identity</h2>
+          <button type="button" data-testid="x4-ui-canvas-export" disabled={!canvasExportReady || canvasExportInFlightRef.current} onClick={handleCanvasExport} className="rounded border border-emerald-500/40 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-slate-600">Export current PNG</button>
+        </div>
+        <div data-testid="x4-ui-canvas-detail" className="mt-1 text-slate-500">{canvasDescription.detail} · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
+        <div data-testid="x4-ui-canvas-export-status" className="mt-2 break-words text-amber-200">{canvasExportStatusText}</div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[9px] text-slate-500">technical evidence</span>
+        </div>
+        <div data-testid="x4-ui-canvas-export-metadata" className="mt-2 grid grid-cols-1 gap-1 text-slate-400 lg:grid-cols-2">
+          <div data-testid="x4-ui-canvas-export-source">Source file: <span className="break-all text-slate-200">{selectedSourceFile} · sha256 {selectedSourceHash}</span></div>
+          <div data-testid="x4-ui-canvas-export-target">Target: <span className="break-all text-slate-200">{selectedTargetName} · id {selectedTargetId} · kind {selectedTargetKind}</span></div>
+          <div data-testid="x4-ui-canvas-export-profile">Profile: <span className="text-slate-200">{exportProfileId} · drawable {exportProfileWidth} × {exportProfileHeight} · Effective Helper scale {exportEffectiveScale}</span></div>
+          <div data-testid="x4-ui-canvas-export-native-bitmap">Native bitmap: <span data-testid="x4-ui-canvas-export-native-width" className="text-slate-200">{nativeBitmapWidth}</span> × <span data-testid="x4-ui-canvas-export-native-height" className="text-slate-200">{nativeBitmapHeight}</span></div>
+        </div>
+        <div data-testid="x4-ui-canvas-export-boundary" className="mt-2 font-bold text-amber-300">Preview evidence only · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
       </section>
 
       <section data-testid="x4-ui-source-authority" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
@@ -3751,7 +7015,20 @@ export default function X4UiSourceEditor({
             <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source-safe property controls</h2>
             <span data-testid="x4-ui-source-edit-verification" className="text-[9px] font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
           </div>
-          <div className="mt-2 text-slate-500">Select an exact source and target with a projected current session to expose owner-issued scalar literals. No caller-supplied catalog, program, evidence, source, target, or profile is accepted.</div>
+          <div data-testid="x4-ui-source-edit-catalog-unavailable" role="alert" className="mt-2 rounded border border-amber-500/30 bg-amber-950/20 p-2 text-amber-200">
+            <div>Property controls are unavailable for the current source selection.</div>
+            <div className="mt-1 text-slate-400">Select an exact source and target with a projected current session to expose owner-issued scalar literals. No caller-supplied catalog, program, evidence, source, target, or profile is accepted.</div>
+            <div className="mt-1 break-words text-slate-400">
+              {currentProgramRefusalMessage !== undefined
+                ? 'The current source program could not issue property controls for this selection; open Inspect for the exact reason.'
+                : 'The source property catalog was not issued for this selection; refresh the source and inspect the exact diagnostics.'}
+            </div>
+            <div data-testid="x4-ui-source-edit-catalog-technical-detail" className="mt-1 break-words text-slate-500">
+              Exact current program diagnostic: {currentProgramRefusalMessage !== undefined
+                ? currentProgramRefusalMessage
+                : 'no exact current program refusal was issued'}
+            </div>
+          </div>
         </section>
       ) : (
         <X4UiSourceEditorSourceEdits
@@ -3760,6 +7037,10 @@ export default function X4UiSourceEditor({
           receipt={visibleSourceEditReceipt}
           onStage={stageSourceEdit}
           onApply={applySourceEdit}
+          onDiscard={discardSourceEditDraft}
+          discardTestId="x4-ui-source-edit-discard"
+          onOpenInspect={openInspect}
+          inspectTargetId={inspectTargetId}
         />
       )}
 
@@ -3790,16 +7071,14 @@ export default function X4UiSourceEditor({
         onSampleInput={updateSample}
         onApply={applySampleDraft}
         onReset={resetSampleDraft}
+        onClear={clearPreviewValues}
         error={sampleError}
       />
 
       <section data-testid="x4-ui-keepout-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Context keep-outs</h2>
-          <div className="flex flex-wrap gap-1">
-            <button type="button" data-testid="x4-ui-keepout-off" onClick={() => selectPreset(null)} className={`rounded border px-2 py-1 text-[9px] uppercase ${activePresetId === null ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-slate-500'}`}>Off</button>
-            {KEEP_OUT_PRESETS.map(preset => <button type="button" key={preset.id} data-testid={`x4-ui-keepout-preset-${preset.id}`} onClick={() => selectPreset(preset.id)} className={`rounded border px-2 py-1 text-[9px] uppercase ${activePresetId === preset.id ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-slate-500'}`}>{preset.label}</button>)}
-          </div>
+          <p className="text-slate-400">Choose visible guides in Game overlays above the canvas.</p>
         </div>
         <div className="mt-2 grid grid-cols-1 gap-2 xl:grid-cols-2">
           {KEEP_OUT_PRESETS.map(preset => {
@@ -3814,12 +7093,10 @@ export default function X4UiSourceEditor({
                     const entry = asRecord(sessionMemberRecord?.entry);
                     const label = stringValue(entry?.label, member.entryId);
                     const enabled = boolValue(sessionMemberRecord?.enabled);
-                    const presetActive = activePresetId === preset.id;
                     return (
-                      <label key={member.entryId} className="flex items-start gap-2 text-slate-500">
-                        <input type="checkbox" checked={isX4UiKeepOutEntryChecked(activePresetId, preset.id, enabledEntryIds, member.entryId)} disabled={!presetActive || member.applicability !== 'applicable'} onChange={() => toggleEntry(preset.id, member.entryId)} />
+                      <div key={member.entryId} className="text-slate-500">
                         <span><span className="text-slate-300">{label}</span> · {keepOutEvidence(sessionMemberRecord)} · {member.evidenceGrade} · {member.applicabilityEvidence}{enabled ? '' : ' · unavailable in active preset'}</span>
-                      </label>
+                      </div>
                     );
                   })}
                 </div>
@@ -3930,28 +7207,11 @@ export default function X4UiSourceEditor({
         <div className="mt-2 text-slate-600">Measured guides remain advisory: y=0.788, y=0.74, x=0.664. Screenshot-calibrated Mission/MESSAGES ticker and Top HUD strip polygons retain their capture evidence. All keep-outs remain Advisory only · Not verified in game; no INFORMATION rectangle is inferred.</div>
       </section>
 
-      <section data-testid="x4-ui-preview-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source preview canvas</h2>
-          <span data-testid="x4-ui-canvas-status" className={canvasDescription.status === 'current' ? 'text-slate-300' : 'text-amber-300'}>{canvasDescription.label}</span>
         </div>
-        <section data-testid="x4-ui-canvas-export-region" className="mt-2 rounded border border-emerald-500/30 bg-emerald-950/10 p-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-[10px] font-bold uppercase tracking-wider text-emerald-300">Current PNG evidence export</h3>
-            <button type="button" data-testid="x4-ui-canvas-export" disabled={!canvasExportReady || canvasExportInFlightRef.current} onClick={handleCanvasExport} className="rounded border border-emerald-500/40 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-slate-600">Export current PNG</button>
-          </div>
-          <div data-testid="x4-ui-canvas-export-status" className="mt-2 break-words text-amber-200">{canvasExportStatusText}</div>
-          <div data-testid="x4-ui-canvas-export-metadata" className="mt-2 grid grid-cols-1 gap-1 text-slate-400 lg:grid-cols-2">
-            <div data-testid="x4-ui-canvas-export-source">Source file: <span className="break-all text-slate-200">{selectedSourceFile} · sha256 {selectedSourceHash}</span></div>
-            <div data-testid="x4-ui-canvas-export-target">Target: <span className="break-all text-slate-200">{selectedTargetName} · id {selectedTargetId} · kind {selectedTargetKind}</span></div>
-            <div data-testid="x4-ui-canvas-export-profile">Profile: <span className="text-slate-200">{exportProfileId} · drawable {exportProfileWidth} × {exportProfileHeight} · Effective Helper scale {exportEffectiveScale}</span></div>
-            <div data-testid="x4-ui-canvas-export-native-bitmap">Native bitmap: <span data-testid="x4-ui-canvas-export-native-width" className="text-slate-200">{nativeBitmapWidth}</span> × <span data-testid="x4-ui-canvas-export-native-height" className="text-slate-200">{nativeBitmapHeight}</span></div>
-          </div>
-          <div data-testid="x4-ui-canvas-export-boundary" className="mt-2 font-bold text-amber-300">Preview evidence only · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
-        </section>
-        <div data-testid="x4-ui-canvas-host" ref={canvasHostRef} className="mt-2 flex min-h-24 max-h-[70vh] items-start justify-start overflow-auto rounded border border-white/10 bg-black/40 p-2" />
-        <div data-testid="x4-ui-canvas-detail" className="mt-2 text-slate-500">{canvasDescription.detail} · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
-      </section>
+      </details>
+        </aside>
+      </div>
+
     </section>
   );
 }

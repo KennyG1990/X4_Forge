@@ -9,17 +9,30 @@
  */
 
 import type { ModWorkspace, PassthroughFile } from '../types';
+import { escapeXmlAttr, resolveWorkspaceArtifactId } from './modCompiler';
 import {
+  addX4UiSourceBundleRegistration,
   buildX4UiSourceBundle,
+  normalizeX4UiSourcePath,
   projectX4UiSourceBundle,
   spliceX4UiSourceBundle,
   type X4UiSourceBundle,
+  type X4UiSourceBundleRegistrationRefusalReason,
   type X4UiSourceBundleProjection,
   type X4UiSourceSplice,
   type X4UiSourceSpliceRefusalReason
 } from './x4UiSourceBundle';
+import {
+  lintX4UiCallModel,
+  type X4UiLintResult
+} from './x4UiLint';
 
 export const NOT_VERIFIED_IN_GAME = 'Not verified in game' as const;
+
+/** Maximum measured UTF-8 bytes accepted for one inline UI Lua file. */
+export const X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES = 4 * 1024 * 1024;
+/** Maximum measured UTF-8 bytes retained by one inline workspace transaction. */
+export const X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES = 6 * 1024 * 1024;
 
 export type X4UiWorkspaceSourceStatus =
   | 'source-owned'
@@ -75,6 +88,7 @@ export interface X4UiWorkspaceSourceBuildOptions {
 export interface X4UiWorkspaceSourceRecord {
   readonly path: string;
   readonly content?: string;
+  readonly contentEncoding?: PassthroughFile['contentEncoding'];
   readonly reason?: PassthroughFile['reason'];
   readonly omitted?: boolean;
   readonly bytes?: number;
@@ -116,6 +130,8 @@ export interface X4UiWorkspaceSourceCas {
   readonly luaBindings: readonly X4UiWorkspaceSourceLuaBinding[];
   /** Only the caller-supplied additions; the root path is derived from compile state. */
   readonly generatedPathInputs: readonly string[];
+  /** JSON-safe fingerprint of compile inputs guarded by source creation. */
+  readonly compileInputFingerprint: string | null;
 }
 
 export interface X4UiWorkspaceSource {
@@ -153,6 +169,137 @@ export interface X4UiWorkspaceSourceSpliceResult {
   readonly bundle: X4UiSourceBundle | null;
   readonly reason: X4UiWorkspaceSourceCommitReason | null;
 }
+
+export interface X4UiWorkspaceLuaImportInput {
+  readonly path: string;
+  readonly text: string;
+}
+
+export type X4UiWorkspaceLuaImportReason =
+  | 'invalid-input'
+  | 'workspace-source-mismatch'
+  | 'source-unavailable'
+  | 'source-locked'
+  | 'generated-shadowing-source'
+  | 'unsafe-traversal-path'
+  | 'unsafe-absolute-path'
+  | 'invalid-path'
+  | 'wrong-extension'
+  | 'device-name'
+  | 'path-collision'
+  | 'generated-path-collision'
+  | 'file-too-large'
+  | 'existing-file-too-large'
+  | 'aggregate-too-large'
+  | 'nul-content'
+  | 'binary-content'
+  | 'lone-surrogate'
+  | 'registration-refused'
+  | 'resulting-source-invalid'
+  | 'source-projection-mismatch';
+
+export type X4UiWorkspaceLuaImportResult =
+  | {
+    readonly accepted: true;
+    readonly changed: true;
+    readonly workspace: ModWorkspace;
+    readonly source: X4UiWorkspaceSource;
+    readonly verification: typeof NOT_VERIFIED_IN_GAME;
+    readonly path: string;
+  }
+  | {
+    readonly accepted: false;
+    readonly changed: false;
+    readonly workspace: ModWorkspace;
+    readonly source: X4UiWorkspaceSource;
+    readonly verification: typeof NOT_VERIFIED_IN_GAME;
+    readonly reason: X4UiWorkspaceLuaImportReason;
+    readonly detail: string;
+  };
+
+export type X4UiWorkspaceLuaExportReason =
+  | 'invalid-input'
+  | 'workspace-source-mismatch'
+  | 'source-unavailable'
+  | 'source-locked'
+  | 'generated-shadowing-source'
+  | 'unsafe-traversal-path'
+  | 'unsafe-absolute-path'
+  | 'invalid-path'
+  | 'wrong-extension'
+  | 'device-name'
+  | 'not-registered'
+  | 'ambiguous-source'
+  | 'missing-source'
+  | 'omitted-source'
+  | 'file-too-large'
+  | 'existing-file-too-large'
+  | 'aggregate-too-large'
+  | 'nul-content'
+  | 'binary-content'
+  | 'lone-surrogate'
+  | 'lint-errors'
+  | 'source-projection-mismatch';
+
+export type X4UiWorkspaceLuaExportResult =
+  | {
+    readonly accepted: true;
+    readonly changed: false;
+    readonly workspace: ModWorkspace;
+    readonly source: X4UiWorkspaceSource;
+    readonly verification: typeof NOT_VERIFIED_IN_GAME;
+    readonly path: string;
+    readonly text: string;
+    readonly lint: X4UiLintResult;
+  }
+  | {
+    readonly accepted: false;
+    readonly changed: false;
+    readonly workspace: ModWorkspace;
+    readonly source: X4UiWorkspaceSource;
+    readonly verification: typeof NOT_VERIFIED_IN_GAME;
+    readonly reason: X4UiWorkspaceLuaExportReason;
+    readonly detail: string;
+    readonly lint: X4UiLintResult | null;
+  };
+
+export interface X4UiWorkspaceMenuDescriptor {
+  readonly name: string;
+  readonly path: string;
+  readonly menuName: string;
+  readonly targetName: 'menu.createFrame';
+}
+
+export type X4UiWorkspaceMenuCreationReason =
+  | 'invalid-name'
+  | 'workspace-source-mismatch'
+  | 'source-unavailable'
+  | 'source-locked'
+  | 'generated-shadowing-source'
+  | 'path-collision'
+  | 'source-projection-mismatch'
+  | 'registration-refused'
+  | 'resulting-source-invalid'
+  | 'reserved-addon-name';
+
+export type X4UiWorkspaceMenuCreationResult =
+  | {
+    readonly accepted: true;
+    readonly changed: true;
+    readonly workspace: ModWorkspace;
+    readonly source: X4UiWorkspaceSource;
+    readonly verification: typeof NOT_VERIFIED_IN_GAME;
+    readonly menu: X4UiWorkspaceMenuDescriptor;
+  }
+  | {
+    readonly accepted: false;
+    readonly changed: false;
+    readonly workspace: ModWorkspace;
+    readonly source: X4UiWorkspaceSource;
+    readonly verification: typeof NOT_VERIFIED_IN_GAME;
+    readonly reason: X4UiWorkspaceMenuCreationReason;
+    readonly detail: string;
+  };
 
 const issuedWorkspaceBySource = new WeakMap<X4UiWorkspaceSource, ModWorkspace>();
 
@@ -194,7 +341,11 @@ function deepFreeze<T>(value: T, seen: WeakSet<object> = new WeakSet<object>()):
   return Object.freeze(value);
 }
 
-function cloneClosedData<T>(value: T, seen: WeakMap<object, object> = new WeakMap<object, object>()): T {
+function cloneClosedData<T>(
+  value: T,
+  seen: WeakMap<object, object> = new WeakMap<object, object>(),
+  ownReplacement?: { readonly key: PropertyKey; readonly value: unknown }
+): T {
   if (value === null || typeof value !== 'object') return value;
   const objectValue = value as unknown as object;
   if (seen.has(objectValue)) return seen.get(objectValue) as T;
@@ -210,6 +361,8 @@ function cloneClosedData<T>(value: T, seen: WeakMap<object, object> = new WeakMa
       if ('value' in descriptor) descriptor.value = cloneClosedData(descriptor.value, seen);
       Object.defineProperty(clonedArray, key, descriptor);
     }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (lengthDescriptor) Object.defineProperty(clonedArray, 'length', lengthDescriptor);
     return clonedArray;
   }
 
@@ -218,8 +371,16 @@ function cloneClosedData<T>(value: T, seen: WeakMap<object, object> = new WeakMa
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor) continue;
-    if ('value' in descriptor) descriptor.value = cloneClosedData(descriptor.value, seen);
+    if ('value' in descriptor) {
+      // Substitute only at this root, before defining a possibly read-only field.
+      descriptor.value = cloneClosedData(key === ownReplacement?.key ? ownReplacement.value : descriptor.value, seen);
+    }
     Object.defineProperty(clonedObject, key, descriptor);
+  }
+  if (ownReplacement && !Object.prototype.hasOwnProperty.call(value, ownReplacement.key)) {
+    Object.defineProperty(clonedObject, ownReplacement.key, {
+      value: cloneClosedData(ownReplacement.value, seen), enumerable: true, writable: true, configurable: true
+    });
   }
   return clonedObject as T;
 }
@@ -238,9 +399,7 @@ function cloneWorkspaceForSplice(
   workspace: ModWorkspace,
   passthroughFiles: readonly PassthroughFile[]
 ): ModWorkspace {
-  const clonedWorkspace = cloneClosedData(workspace);
-  clonedWorkspace.passthroughFiles = cloneClosedData(passthroughFiles) as PassthroughFile[];
-  return clonedWorkspace;
+  return cloneClosedData(workspace, new WeakMap<object, object>(), { key: 'passthroughFiles', value: passthroughFiles });
 }
 
 function freezeArray<T>(items: readonly T[]): readonly T[] {
@@ -255,6 +414,7 @@ function snapshotRecord(file: PassthroughFile): Omit<X4UiWorkspaceSourceRecord, 
   return deepFreeze({
     path: file.path,
     ...(hasOwn(file, 'content') ? { content: file.content } : {}),
+    ...(hasOwn(file, 'contentEncoding') ? { contentEncoding: file.contentEncoding } : {}),
     ...(hasOwn(file, 'reason') ? { reason: file.reason } : {}),
     ...(hasOwn(file, 'omitted') ? { omitted: file.omitted } : {}),
     ...(hasOwn(file, 'bytes') ? { bytes: file.bytes } : {})
@@ -268,6 +428,7 @@ function sameRecord(
   if (!left || !right) return false;
   return left.path === right.path
     && left.content === right.content
+    && left.contentEncoding === right.contentEncoding
     && left.reason === right.reason
     && left.omitted === right.omitted
     && left.bytes === right.bytes;
@@ -344,6 +505,23 @@ function compileFacts(
     generatedPaths,
     generatedCollisions: freezeArray(generatedCollisions)
   };
+}
+
+function compileInputFingerprint(
+  workspace: ModWorkspace,
+  generatedPathInputs: readonly string[]
+): string | null {
+  try {
+    const fingerprint = JSON.stringify({
+      compileSettings: workspace.compileSettings ?? null,
+      uiWidgets: Array.isArray(workspace.uiWidgets) ? workspace.uiWidgets : null,
+      customLua: workspace.customLua ?? null,
+      generatedPathInputs
+    });
+    return fingerprint === undefined ? null : fingerprint;
+  } catch {
+    return null;
+  }
 }
 
 function findRecordMatches(files: readonly PassthroughFile[], target: PassthroughFile): readonly number[] {
@@ -649,7 +827,8 @@ export function buildX4UiWorkspaceSource(
     passthroughFiles: snapshot,
     rootWorkspaceIndex: state.rootFile?.workspaceIndex ?? null,
     luaBindings: freezeArray(casLuaBindings),
-    generatedPathInputs: state.generatedPathInputs
+    generatedPathInputs: state.generatedPathInputs,
+    compileInputFingerprint: compileInputFingerprint(workspace, state.generatedPathInputs)
   });
 
   const emittedSource: X4UiWorkspaceSource = deepFreeze({
@@ -695,6 +874,1005 @@ function currentCompileShadowed(
   const currentFiles = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : [];
   const facts = compileFacts(workspace, source.cas.generatedPathInputs, currentFiles);
   return facts.generatedRootUiXml || facts.generatedCollisions.length > 0;
+}
+
+const LUA_RESERVED_WORDS = new Set([
+  'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function',
+  'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return',
+  'then', 'true', 'until', 'while'
+]);
+
+const WINDOWS_RESERVED_DEVICE_BASENAMES = /^(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])$/;
+
+interface NewMenuNames {
+  readonly displayName: string;
+  readonly stem: string;
+  readonly path: string;
+  readonly menuName: string;
+}
+
+function deriveNewMenuNames(name: string): NewMenuNames | null {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 80) return null;
+  if (name.trim().length === 0 || [...name].some(character => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  })) return null;
+
+  const normalized = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  let stem = normalized
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  if (stem.length === 0) return null;
+  if (/^\d/.test(stem)
+    || LUA_RESERVED_WORDS.has(stem)
+    || stem.startsWith('ego_')
+    || WINDOWS_RESERVED_DEVICE_BASENAMES.test(stem)) {
+    stem = `menu_${stem}`;
+  }
+  return {
+    displayName: name,
+    stem,
+    path: `ui/${stem}.lua`,
+    menuName: `${stem}_menu`
+  };
+}
+
+function canonicalSourcePathKey(path: string | undefined): string | null {
+  const normalized = normalizeX4UiSourcePath(path);
+  return normalized.kind === 'safe' && normalized.key !== undefined
+    ? normalized.key.toLowerCase()
+    : null;
+}
+
+type UiLuaPathRefusalReason =
+  | 'invalid-input'
+  | 'unsafe-traversal-path'
+  | 'unsafe-absolute-path'
+  | 'invalid-path'
+  | 'wrong-extension'
+  | 'device-name';
+
+interface UiLuaPathValidation {
+  readonly accepted: true;
+  readonly key: string;
+}
+
+interface UiLuaPathRefusal {
+  readonly accepted: false;
+  readonly reason: UiLuaPathRefusalReason;
+  readonly detail: string;
+}
+
+function isWindowsDevicePathSegment(segment: string): boolean {
+  const withoutTrailing = segment.replace(/[ .]+$/g, '');
+  const basename = withoutTrailing.split('.')[0]?.toLowerCase() ?? '';
+  return WINDOWS_RESERVED_DEVICE_BASENAMES.test(basename);
+}
+
+function validateUiLuaPath(value: unknown): UiLuaPathValidation | UiLuaPathRefusal {
+  if (typeof value !== 'string') {
+    return { accepted: false, reason: 'invalid-input', detail: 'The UI Lua path must be a string.' };
+  }
+  if (value.length === 0) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path must not be empty.' };
+  }
+  if (hasLoneSurrogate(value)) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path must not contain lone UTF-16 surrogates.' };
+  }
+  if (value.includes('\u0000')) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path must not contain NUL.' };
+  }
+  if ([...value].some(character => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  })) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path must not contain control characters.' };
+  }
+
+  const normalized = normalizeX4UiSourcePath(value);
+  if (normalized.kind === 'unsafe-traversal') {
+    return { accepted: false, reason: 'unsafe-traversal-path', detail: 'The UI Lua path must not traverse outside the ui/ directory.' };
+  }
+  if (normalized.kind === 'unsafe-absolute') {
+    return { accepted: false, reason: 'unsafe-absolute-path', detail: 'The UI Lua path must be relative to the extension root.' };
+  }
+  if (normalized.kind !== 'safe' || normalized.key === undefined) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path is not a valid contained path.' };
+  }
+
+  const slashPath = value.replace(/\\/g, '/');
+  const segments = slashPath.split('/');
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path must not contain empty or dot segments.' };
+  }
+  if (segments[0]?.toLowerCase() !== 'ui') {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path must be contained by the ui/ directory.' };
+  }
+  if (!/\.lua$/i.test(segments[segments.length - 1] ?? '')) {
+    return { accepted: false, reason: 'wrong-extension', detail: 'The imported or exported source path must end in .lua.' };
+  }
+  if (segments.some(segment => segment !== segment.trimEnd() || /[. ]$/.test(segment))) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path must not contain trailing spaces or dots.' };
+  }
+  if (segments.some(segment => /[:*?"<>|]/.test(segment))) {
+    return { accepted: false, reason: 'invalid-path', detail: 'The UI Lua path contains a Windows-unsafe character.' };
+  }
+  if (segments.slice(1).some(isWindowsDevicePathSegment)) {
+    return { accepted: false, reason: 'device-name', detail: 'The UI Lua path must not use a Windows device name.' };
+  }
+
+  return { accepted: true, key: normalized.key.toLowerCase() };
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return true;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) return true;
+  }
+  return false;
+}
+
+function hasBinaryControl(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) return true;
+    if (code >= 0x7f && code <= 0x9f) return true;
+  }
+  return false;
+}
+
+type LuaTextRefusalReason = 'invalid-input' | 'nul-content' | 'binary-content' | 'lone-surrogate' | 'file-too-large';
+
+interface LuaTextValidation {
+  readonly accepted: true;
+  readonly bytes: number;
+}
+
+interface LuaTextRefusal {
+  readonly accepted: false;
+  readonly reason: LuaTextRefusalReason;
+  readonly detail: string;
+}
+
+function validateLuaText(value: unknown): LuaTextValidation | LuaTextRefusal {
+  if (typeof value !== 'string') {
+    return { accepted: false, reason: 'invalid-input', detail: 'The UI Lua source text must be a string.' };
+  }
+  if (value.length > X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES) {
+    return { accepted: false, reason: 'file-too-large', detail: `The UI Lua source exceeds ${X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES} UTF-8 bytes.` };
+  }
+  if (value.includes('\u0000')) {
+    return { accepted: false, reason: 'nul-content', detail: 'The UI Lua source text must not contain NUL.' };
+  }
+  if (hasLoneSurrogate(value)) {
+    return { accepted: false, reason: 'lone-surrogate', detail: 'The UI Lua source text must not contain lone UTF-16 surrogates.' };
+  }
+  if (hasBinaryControl(value)) {
+    return { accepted: false, reason: 'binary-content', detail: 'The UI Lua source text contains binary control bytes.' };
+  }
+  const bytes = utf8ByteLength(value);
+  if (bytes > X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES) {
+    return { accepted: false, reason: 'file-too-large', detail: `The UI Lua source exceeds ${X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES} UTF-8 bytes.` };
+  }
+  return { accepted: true, bytes };
+}
+
+function isUiInlinePath(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  return normalized === 'ui.xml' || /^ui\/.+\.lua$/i.test(normalized);
+}
+
+type InlineWorkspaceLimitFailure = {
+  readonly accepted: false;
+  readonly reason: 'existing-file-too-large' | 'aggregate-too-large' | 'nul-content' | 'binary-content' | 'lone-surrogate';
+  readonly path?: string;
+  readonly detail: string;
+};
+
+type InlineWorkspaceLimitRefusal =
+  | { readonly accepted: true; readonly bytes: number }
+  | InlineWorkspaceLimitFailure;
+
+function validateWorkspaceInlineLimits(files: readonly PassthroughFile[]): InlineWorkspaceLimitRefusal {
+  let bytes = 0;
+  for (const file of files) {
+    if (typeof file.content !== 'string') continue;
+    if (isUiInlinePath(file.path)) {
+      if (file.content.includes('\u0000')) {
+        return { accepted: false, reason: 'nul-content', path: file.path, detail: `The existing UI source ${file.path} contains NUL.` };
+      }
+      if (hasLoneSurrogate(file.content)) {
+        return { accepted: false, reason: 'lone-surrogate', path: file.path, detail: `The existing UI source ${file.path} contains a lone UTF-16 surrogate.` };
+      }
+      if (hasBinaryControl(file.content)) {
+        return { accepted: false, reason: 'binary-content', path: file.path, detail: `The existing UI source ${file.path} contains binary control bytes.` };
+      }
+    }
+    const fileBytes = utf8ByteLength(file.content);
+    if (isUiInlinePath(file.path) && fileBytes > X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES) {
+      return {
+        accepted: false,
+        reason: 'existing-file-too-large',
+        path: file.path,
+        detail: `The UI source ${file.path} exceeds ${X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES} UTF-8 bytes.`
+      };
+    }
+    bytes += fileBytes;
+    if (bytes > X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES) {
+      return {
+        accepted: false,
+        reason: 'aggregate-too-large',
+        detail: `The inline workspace sources exceed ${X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES} UTF-8 bytes.`
+      };
+    }
+  }
+  return { accepted: true, bytes };
+}
+
+function generatedPathClaims(source: X4UiWorkspaceSource, path: string): boolean {
+  const candidateKey = canonicalSourcePathKey(path);
+  if (candidateKey === null) return false;
+  return source.cas.generatedPathInputs.some(generatedPath => canonicalSourcePathKey(generatedPath) === candidateKey);
+}
+
+function escapeLuaString(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
+function createNewUiXml(workspace: ModWorkspace): string {
+  const addonName = escapeXmlAttr(resolveWorkspaceArtifactId(workspace));
+  return [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    `<addon name="${addonName}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../ui/core/addon.xsd">`,
+    '  <environment type="menus"></environment>',
+    '</addon>',
+    ''
+  ].join('\n');
+}
+
+function createNewMenuLua(displayName: string, menuName: string): string {
+  const label = escapeLuaString(displayName);
+  const escapedMenuName = escapeLuaString(menuName);
+  return [
+    '-- X4 Forge authored standalone menu entry point.',
+    '-- The second table cell remains available for the visual palette.',
+    '',
+    'local Helper = rawget(_G, "Helper")',
+    'local function refreshHelper()',
+    '  if not Helper then Helper = rawget(_G, "Helper") end',
+    '  return Helper',
+    'end',
+    '',
+    'local menu = {',
+    `  name = "${escapedMenuName}",`,
+    '  layer = 4,',
+    '  active = false,',
+    '}',
+    '',
+    'local function log(message)',
+    '  if DebugError then DebugError("[x4_forge_menu] " .. tostring(message)) end',
+    'end',
+    '',
+    'function menu.ensureRegistered()',
+    '  refreshHelper()',
+    '  _G.Menus = _G.Menus or {}',
+    '  local found = false',
+    '  for i, existing in ipairs(_G.Menus) do',
+    '    if existing.name == menu.name then _G.Menus[i] = menu; found = true; break end',
+    '  end',
+    '  if not found then table.insert(_G.Menus, menu) end',
+    '  if Helper and Helper.registerMenu and not menu._registered then',
+    '    local ok = pcall(Helper.registerMenu, menu)',
+    '    menu._registered = ok',
+    '  end',
+    '  return menu._registered == true',
+    'end',
+    '',
+    'function menu.open(context)',
+    '  menu.context = type(context) == "table" and context or {}',
+    '  if not menu.ensureRegistered() then',
+    '    if SetScript then SetScript("onUpdate", menu.retryOpen) end',
+    '    return false',
+    '  end',
+    '  if OpenMenu then OpenMenu(menu.name, nil, nil, true)',
+    '  elseif menu.onShowMenu then menu.onShowMenu() end',
+    '  return true',
+    'end',
+    '',
+    'function menu.retryOpen()',
+    '  if not menu.ensureRegistered() then return end',
+    '  if RemoveScript then RemoveScript("onUpdate", menu.retryOpen) end',
+    '  menu.open(menu.context)',
+    'end',
+    '',
+    'function menu.onShowMenu()',
+    '  refreshHelper()',
+    '  menu.active = true',
+    '  menu.createFrame()',
+    'end',
+    '',
+    'function menu.createFrame()',
+    '  refreshHelper()',
+    '  if not Helper then log("Helper unavailable; frame not built"); return end',
+    '  if menu.frame and Helper.clearDataForRefresh then Helper.clearDataForRefresh(menu, menu.layer) end',
+    '  menu.frame = Helper.createFrameHandle(menu, { x = 20, y = 20, width = 530, height = 180, layer = 4, standardButtons = { close = true } })',
+    '  local ftable = menu.frame:addTable(2, { x = 0, y = 0, width = 530, tabOrder = 1, highlightMode = "off", reserveScrollBar = false })',
+    '  ftable:setColWidthPercent(1, 55)',
+    '  ftable:setColWidthPercent(2, 45)',
+    '  local row = ftable:addRow(false, {})',
+    `  row[1]:createText("${label}", { font = "Zekton", fontsize = 9, y = 2, halign = "center", wordwrap = false })`,
+    '  menu.frame:display()',
+    'end',
+    '',
+    'function menu.cleanup()',
+    '  menu.frame = nil',
+    '  menu.active = false',
+    'end',
+    '',
+    'function menu.onCloseElement(dueToClose)',
+    '  refreshHelper()',
+    '  if Helper and Helper.closeMenu then Helper.closeMenu(menu, dueToClose) end',
+    '  menu.cleanup()',
+    'end',
+    '',
+    'function menu.close()',
+    '  menu.onCloseElement("close")',
+    'end',
+    '',
+    `if RegisterEvent then RegisterEvent("${escapedMenuName}.open", function(_, context) menu.open(context) end) end`,
+    `_G["${escapedMenuName}"] = menu`,
+    '',
+    'return menu',
+    ''
+  ].join('\n');
+}
+
+function newPassthroughFile(path: string, content: string): PassthroughFile {
+  return {
+    path,
+    content,
+    reason: 'partial',
+    bytes: utf8ByteLength(content)
+  };
+}
+
+function sameProjection(
+  left: X4UiSourceBundleProjection | null,
+  right: X4UiSourceBundleProjection | null
+): boolean {
+  if (!left || !right || left.uiXml !== right.uiXml || left.luaFiles.length !== right.luaFiles.length) return false;
+  return left.luaFiles.every((file, index) => {
+    const other = right.luaFiles[index];
+    return other !== undefined
+      && other.path === file.path
+      && other.text === file.text
+      && other.sourcePath === file.sourcePath;
+  });
+}
+
+function samePassthroughMetadata(left: PassthroughFile, right: PassthroughFile): boolean {
+  return left.path === right.path
+    && left.reason === right.reason
+    && left.omitted === right.omitted
+    && left.contentEncoding === right.contentEncoding;
+}
+
+function menuCreationRefusal(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  reason: X4UiWorkspaceMenuCreationReason,
+  detail: string
+): X4UiWorkspaceMenuCreationResult {
+  return freezeObject({
+    accepted: false,
+    changed: false,
+    workspace,
+    source,
+    verification: NOT_VERIFIED_IN_GAME,
+    reason,
+    detail
+  });
+}
+
+function registrationReasonToMenuReason(
+  reason: X4UiSourceBundleRegistrationRefusalReason
+): Exclude<X4UiWorkspaceMenuCreationReason, 'invalid-name'> {
+  return reason === 'reserved-addon-name' ? 'reserved-addon-name' : 'registration-refused';
+}
+
+type WorkspaceSourceRegistrationRefusalReason = Exclude<
+  X4UiWorkspaceMenuCreationReason,
+  'invalid-name'
+>;
+
+type WorkspaceSourceRegistrationResult =
+  | {
+    readonly accepted: true;
+    readonly changed: true;
+    readonly workspace: ModWorkspace;
+    readonly source: X4UiWorkspaceSource;
+    readonly path: string;
+  }
+  | {
+    readonly accepted: false;
+    readonly changed: false;
+    readonly reason: WorkspaceSourceRegistrationRefusalReason;
+    readonly detail: string;
+  };
+
+function workspaceSourceRegistrationRefusal(
+  reason: WorkspaceSourceRegistrationRefusalReason,
+  detail: string
+): WorkspaceSourceRegistrationResult {
+  return { accepted: false, changed: false, reason, detail };
+}
+
+/**
+ * Shared source-preserving registration transaction for New Menu and Lua
+ * Import.  It owns the workspace/source CAS, compile fingerprint, exact
+ * passthrough carry-forward, byte-local SourceBundle registration, and
+ * resulting source rebuild.  Callers decide only the input file and their
+ * public result surface.
+ */
+function registerX4UiWorkspaceSourceFile(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  file: { readonly path: string; readonly text: string },
+  operation: 'menu' | 'lua-import'
+): WorkspaceSourceRegistrationResult {
+  if (!isIssuedX4UiWorkspaceSourcePair(workspace, source)) {
+    return workspaceSourceRegistrationRefusal('workspace-source-mismatch', 'The source projection was not issued for this exact workspace object.');
+  }
+
+  const currentFiles = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : [];
+  if (source.cas.passthroughFiles.length !== currentFiles.length
+    || !source.cas.passthroughFiles.every((record, index) => sameRecord(currentFiles[index], record))) {
+    return workspaceSourceRegistrationRefusal('workspace-source-mismatch', 'The workspace passthrough records changed after source inspection.');
+  }
+  if (currentCompileShadowed(workspace, source)) {
+    return workspaceSourceRegistrationRefusal('generated-shadowing-source', 'Generated UI output currently claims the source workspace.');
+  }
+  const currentFingerprint = compileInputFingerprint(workspace, source.cas.generatedPathInputs);
+  if (source.cas.compileInputFingerprint === null
+    || currentFingerprint === null
+    || currentFingerprint !== source.cas.compileInputFingerprint) {
+    return workspaceSourceRegistrationRefusal('workspace-source-mismatch', 'The workspace compile inputs changed after source inspection.');
+  }
+  if (generatedPathClaims(source, file.path)) {
+    return workspaceSourceRegistrationRefusal('generated-shadowing-source', `Generated output already claims ${file.path}.`);
+  }
+  if (currentFiles.some(currentFile => canonicalSourcePathKey(currentFile.path) === canonicalSourcePathKey(file.path))) {
+    return workspaceSourceRegistrationRefusal('path-collision', `The menu path already exists: ${file.path}`);
+  }
+
+  const sourceLess = source.status === 'unavailable'
+    && source.rootCandidates.length === 0
+    && source.bundle === null
+    && source.luaFiles.length === 0
+    && currentFiles.every(currentFile => !isLuaPassthroughPath(currentFile.path));
+  const emptyRoot = source.status === 'locked'
+    && source.rootCandidates.length === 1
+    && source.rootFile !== null
+    && source.rootFile.omitted !== true
+    && typeof source.rootFile.content === 'string'
+    && source.bundle !== null
+    && source.bundle.xml.parsed
+    && source.bundle.registrations.length === 0
+    && source.luaFiles.length === 0
+    && source.reasons.every(reason => reason === 'no-registered-lua');
+  const existing = source.status === 'source-owned'
+    && source.bundle !== null
+    && source.projection !== null
+    && source.shippable;
+  if (!sourceLess && !emptyRoot && !existing) {
+    return workspaceSourceRegistrationRefusal(
+      source.status === 'unavailable' ? 'source-unavailable' : 'source-locked',
+      source.status === 'unavailable'
+        ? 'The workspace has no eligible source-less or unambiguous UI source.'
+        : operation === 'menu'
+          ? 'The existing UI source is locked and cannot be repaired by menu creation.'
+          : 'The existing UI source is locked and cannot be repaired by registration.'
+    );
+  }
+
+  let baseBundle: X4UiSourceBundle;
+  if (sourceLess) {
+    try {
+      baseBundle = buildX4UiSourceBundle({ uiXml: createNewUiXml(workspace), luaFiles: [] });
+    } catch (error) {
+      return workspaceSourceRegistrationRefusal('resulting-source-invalid', `The new source base could not be built: ${String(error)}`);
+    }
+  } else {
+    baseBundle = source.bundle as X4UiSourceBundle;
+    if (existing && !sameProjection(source.projection, projectX4UiSourceBundle(baseBundle))) {
+      return workspaceSourceRegistrationRefusal('source-projection-mismatch', 'The source projection no longer matches its accepted bundle.');
+    }
+  }
+
+  let baseProjection: X4UiSourceBundleProjection;
+  try {
+    baseProjection = projectX4UiSourceBundle(baseBundle);
+  } catch (error) {
+    return workspaceSourceRegistrationRefusal('source-projection-mismatch', `The source projection could not be read: ${String(error)}`);
+  }
+  const registration = addX4UiSourceBundleRegistration(baseBundle, file);
+  if (!registration.accepted) {
+    // SourceBundle's resulting-source-invalid covers parser failure and
+    // post-rebuild structural checks; preserve that umbrella honestly for
+    // import instead of manufacturing a parser-only diagnosis.
+    return {
+      accepted: false,
+      changed: false,
+      reason: operation === 'lua-import' && registration.reason === 'resulting-source-invalid'
+        ? 'resulting-source-invalid'
+        : registrationReasonToMenuReason(registration.reason),
+      detail: registration.detail
+    };
+  }
+
+  const newLuaText = registration.bundle.sourceFiles.find(sourceFile => sourceFile.path === file.path)?.text;
+  if (newLuaText === undefined) {
+    return workspaceSourceRegistrationRefusal(
+      'registration-refused',
+      operation === 'menu'
+        ? 'The registered menu source was not present at its requested path.'
+        : 'The registered Lua source was not present at its requested path.'
+    );
+  }
+  const newLua = newPassthroughFile(file.path, newLuaText);
+  const nextFiles = [...currentFiles];
+  let rootIndex: number | null = source.rootFile?.workspaceIndex ?? null;
+  if (sourceLess) {
+    rootIndex = nextFiles.length;
+    nextFiles.push(newPassthroughFile('ui.xml', registration.bundle.uiXml));
+  } else if (rootIndex !== null) {
+    const currentRoot = nextFiles[rootIndex];
+    if (!currentRoot || typeof currentRoot.content !== 'string') {
+      return workspaceSourceRegistrationRefusal('workspace-source-mismatch', 'The existing root source record is no longer materialized.');
+    }
+    nextFiles[rootIndex] = splicePassthroughRecord(currentRoot, registration.bundle.uiXml);
+  }
+  nextFiles.push(newLua);
+
+  const nextWorkspace = cloneWorkspaceForSplice(workspace, nextFiles);
+  const nextLuaRecords: PassthroughFile[] = [];
+  for (const sourceFile of source.luaFiles) {
+    if (sourceFile.workspaceIndex === null || !nextFiles[sourceFile.workspaceIndex]) {
+      return workspaceSourceRegistrationRefusal('resulting-source-invalid', 'An existing Lua source record could not be carried into the new source.');
+    }
+    nextLuaRecords.push(nextFiles[sourceFile.workspaceIndex]);
+  }
+  nextLuaRecords.push(newLua);
+
+  let nextSource: X4UiWorkspaceSource;
+  try {
+    nextSource = buildX4UiWorkspaceSource(nextWorkspace, {
+      passthroughLuaFiles: nextLuaRecords,
+      generatedPaths: source.cas.generatedPathInputs
+    });
+  } catch (error) {
+    return workspaceSourceRegistrationRefusal('resulting-source-invalid', `The resulting workspace source could not be built: ${String(error)}`);
+  }
+  if (nextSource.status !== 'source-owned'
+    || !nextSource.shippable
+    || !nextSource.editable
+    || nextSource.bundle === null
+    || nextSource.projection === null) {
+    return workspaceSourceRegistrationRefusal(
+      'resulting-source-invalid',
+      operation === 'menu'
+        ? 'The new menu did not produce a source-owned, shippable projection.'
+        : 'The new source did not produce a source-owned, shippable projection.'
+    );
+  }
+
+  const nextFilesMaterialized = Array.isArray(nextWorkspace.passthroughFiles)
+    ? nextWorkspace.passthroughFiles
+    : [];
+  if (nextFilesMaterialized.length !== currentFiles.length + (sourceLess ? 2 : 1)) {
+    return workspaceSourceRegistrationRefusal(
+      'resulting-source-invalid',
+      operation === 'menu'
+        ? 'The creation transaction changed an unexpected number of passthrough records.'
+        : 'The registration transaction changed an unexpected number of passthrough records.'
+    );
+  }
+  for (let index = 0; index < currentFiles.length; index += 1) {
+    const before = currentFiles[index];
+    const after = nextFilesMaterialized[index];
+    if (!before || !after) {
+      return workspaceSourceRegistrationRefusal(
+        'resulting-source-invalid',
+        operation === 'menu'
+          ? 'An existing passthrough record disappeared during creation.'
+          : 'An existing passthrough record disappeared during registration.'
+      );
+    }
+    if (index === rootIndex && !sourceLess) {
+      if (!samePassthroughMetadata(before, after)
+        || after.content !== registration.bundle.uiXml
+        || (before.bytes === undefined && after.bytes !== undefined)
+        || (before.bytes !== undefined && after.bytes !== utf8ByteLength(registration.bundle.uiXml))) {
+        return workspaceSourceRegistrationRefusal('resulting-source-invalid', 'The existing ui.xml metadata or local content contract changed unexpectedly.');
+      }
+    } else if (!sameRecord(before, after)) {
+      return workspaceSourceRegistrationRefusal(
+        'resulting-source-invalid',
+        `Passthrough record ${index} changed during ${operation === 'menu' ? 'menu creation' : 'registration'}.`
+      );
+    }
+  }
+
+  const nextRegistration = nextSource.bundle.registrations.filter(registrationEntry => (
+    canonicalSourcePathKey(registrationEntry.rawPath) === canonicalSourcePathKey(file.path)
+  ));
+  const nextFile = nextSource.bundle.sourceFiles.find(sourceFile => canonicalSourcePathKey(sourceFile.path) === canonicalSourcePathKey(file.path));
+  if (nextRegistration.length !== 1
+    || nextRegistration[0].resolution !== 'resolved'
+    || !nextFile
+    || !nextFile.registered
+    || nextFile.parseStatus !== 'parsed'
+    || nextFile.editable !== true
+    || nextSource.bundle.registrations.length !== baseBundle.registrations.length + 1
+    || nextSource.bundle.sourceFiles.length !== baseBundle.sourceFiles.length + 1) {
+    return workspaceSourceRegistrationRefusal(
+      'resulting-source-invalid',
+      operation === 'menu'
+        ? 'The new menu source was not uniquely registered and editable after rebuild.'
+        : 'The new source was not uniquely registered and editable after rebuild.'
+    );
+  }
+
+  const nextProjection = projectX4UiSourceBundle(nextSource.bundle);
+  const expectedProjection = projectX4UiSourceBundle(registration.bundle);
+  if (!sameProjection(nextProjection, expectedProjection)) {
+    return workspaceSourceRegistrationRefusal('resulting-source-invalid', 'The workspace source projection diverged from the registered source projection.');
+  }
+  if (!baseProjection.luaFiles.every((projectionFile, index) => (
+    nextProjection.luaFiles[index]?.path === projectionFile.path
+      && nextProjection.luaFiles[index]?.text === projectionFile.text
+      && nextProjection.luaFiles[index]?.sourcePath === projectionFile.sourcePath
+  ))) {
+    return workspaceSourceRegistrationRefusal(
+      'resulting-source-invalid',
+      operation === 'menu'
+        ? 'An existing Lua source changed during menu creation.'
+        : 'An existing Lua source changed during registration.'
+    );
+  }
+
+  return {
+    accepted: true,
+    changed: true,
+    workspace: nextWorkspace,
+    source: nextSource,
+    path: file.path
+  };
+}
+
+/** Create one source-owned, directly callable menu without mutating the workspace. */
+export function createX4UiWorkspaceMenu(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  name: string
+): X4UiWorkspaceMenuCreationResult {
+  const names = deriveNewMenuNames(name);
+  if (!names) {
+    return menuCreationRefusal(workspace, source, 'invalid-name', 'Menu names must be nonempty, single-line, and at most 80 characters.');
+  }
+  const transaction = registerX4UiWorkspaceSourceFile(workspace, source, {
+    path: names.path,
+    text: createNewMenuLua(names.displayName, names.menuName)
+  }, 'menu');
+  if (transaction.accepted === false) {
+    return menuCreationRefusal(workspace, source, transaction.reason, transaction.detail);
+  }
+  return freezeObject({
+    accepted: true,
+    changed: true,
+    workspace: transaction.workspace,
+    source: transaction.source,
+    verification: NOT_VERIFIED_IN_GAME,
+    menu: {
+      name: names.displayName,
+      path: names.path,
+      menuName: names.menuName,
+      targetName: 'menu.createFrame'
+    }
+  });
+}
+
+function luaImportRefusal(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  reason: X4UiWorkspaceLuaImportReason,
+  detail: string
+): X4UiWorkspaceLuaImportResult {
+  return freezeObject({
+    accepted: false,
+    changed: false,
+    workspace,
+    source,
+    verification: NOT_VERIFIED_IN_GAME,
+    reason,
+    detail
+  });
+}
+
+function mapImportRegistrationReason(
+  reason: WorkspaceSourceRegistrationRefusalReason
+): X4UiWorkspaceLuaImportReason {
+  switch (reason) {
+    case 'workspace-source-mismatch':
+      return 'workspace-source-mismatch';
+    case 'source-unavailable':
+      return 'source-unavailable';
+    case 'source-locked':
+      return 'source-locked';
+    case 'generated-shadowing-source':
+      return 'generated-shadowing-source';
+    case 'path-collision':
+      return 'path-collision';
+    case 'source-projection-mismatch':
+      return 'source-projection-mismatch';
+    case 'resulting-source-invalid':
+      return 'resulting-source-invalid';
+    case 'reserved-addon-name':
+    case 'registration-refused':
+      return 'registration-refused';
+  }
+}
+
+function mapInlineLimitReason(
+  refusal: InlineWorkspaceLimitFailure,
+  targetPath?: string
+): 'file-too-large' | 'existing-file-too-large' | 'aggregate-too-large' | 'nul-content' | 'binary-content' | 'lone-surrogate' {
+  if (refusal.reason === 'existing-file-too-large' && refusal.path === targetPath) return 'file-too-large';
+  return refusal.reason;
+}
+
+/** Import one exact, parseable UI Lua file through the existing source owner. */
+export function importX4UiWorkspaceLua(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  input: X4UiWorkspaceLuaImportInput
+): X4UiWorkspaceLuaImportResult {
+  if (input === null || typeof input !== 'object') {
+    return luaImportRefusal(workspace, source, 'invalid-input', 'The Lua import input must be an object.');
+  }
+  const path = (input as { readonly path?: unknown }).path;
+  const text = (input as { readonly text?: unknown }).text;
+  const pathValidation = validateUiLuaPath(path);
+  if (pathValidation.accepted === false) return luaImportRefusal(workspace, source, pathValidation.reason, pathValidation.detail);
+  const textValidation = validateLuaText(text);
+  if (textValidation.accepted === false) return luaImportRefusal(workspace, source, textValidation.reason, textValidation.detail);
+  const safePath = path as string;
+  const safeText = text as string;
+
+  const currentFiles = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : [];
+  const currentLimits = validateWorkspaceInlineLimits(currentFiles);
+  if (currentLimits.accepted === false) {
+    return luaImportRefusal(
+      workspace,
+      source,
+      mapInlineLimitReason(currentLimits, safePath),
+      currentLimits.detail
+    );
+  }
+  if (currentLimits.bytes + textValidation.bytes > X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES) {
+    return luaImportRefusal(
+      workspace,
+      source,
+      'aggregate-too-large',
+      `The inline workspace sources would exceed ${X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES} UTF-8 bytes.`
+    );
+  }
+
+  const transaction = registerX4UiWorkspaceSourceFile(workspace, source, {
+    path: safePath,
+    text: safeText
+  }, 'lua-import');
+  if (transaction.accepted === false) {
+    return luaImportRefusal(
+      workspace,
+      source,
+      mapImportRegistrationReason(transaction.reason),
+      transaction.detail
+    );
+  }
+
+  const nextFiles = Array.isArray(transaction.workspace.passthroughFiles)
+    ? transaction.workspace.passthroughFiles
+    : [];
+  const nextLimits = validateWorkspaceInlineLimits(nextFiles);
+  if (nextLimits.accepted === false) {
+    return luaImportRefusal(
+      workspace,
+      source,
+      mapInlineLimitReason(nextLimits, safePath),
+      nextLimits.detail
+    );
+  }
+  if (nextLimits.bytes > X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES) {
+    return luaImportRefusal(
+      workspace,
+      source,
+      'aggregate-too-large',
+      `The inline workspace sources would exceed ${X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES} UTF-8 bytes.`
+    );
+  }
+
+  return freezeObject({
+    accepted: true,
+    changed: true,
+    workspace: transaction.workspace,
+    source: transaction.source,
+    verification: NOT_VERIFIED_IN_GAME,
+    path: transaction.path
+  });
+}
+
+function luaExportRefusal(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  reason: X4UiWorkspaceLuaExportReason,
+  detail: string,
+  lint: X4UiLintResult | null = null
+): X4UiWorkspaceLuaExportResult {
+  return freezeObject({
+    accepted: false,
+    changed: false,
+    workspace,
+    source,
+    verification: NOT_VERIFIED_IN_GAME,
+    reason,
+    detail,
+    lint
+  });
+}
+
+function mapExportPathRefusal(refusal: UiLuaPathRefusal): X4UiWorkspaceLuaExportReason {
+  return refusal.reason;
+}
+
+/** Export one exact registered source file without changing workspace state. */
+export function exportX4UiWorkspaceLua(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  path: string
+): X4UiWorkspaceLuaExportResult {
+  const pathValidation = validateUiLuaPath(path);
+  if (pathValidation.accepted === false) {
+    return luaExportRefusal(workspace, source, mapExportPathRefusal(pathValidation), pathValidation.detail);
+  }
+  if (!isIssuedX4UiWorkspaceSourcePair(workspace, source)) {
+    return luaExportRefusal(workspace, source, 'workspace-source-mismatch', 'The source projection was not issued for this exact workspace object.');
+  }
+
+  const currentFiles = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : [];
+  if (!sameRecordArray(currentFiles, source.cas.passthroughFiles)) {
+    return luaExportRefusal(workspace, source, 'workspace-source-mismatch', 'The workspace passthrough records changed after source inspection.');
+  }
+  if (currentCompileShadowed(workspace, source)) {
+    return luaExportRefusal(workspace, source, 'generated-shadowing-source', 'Generated UI output currently claims the source workspace.');
+  }
+  const currentFingerprint = compileInputFingerprint(workspace, source.cas.generatedPathInputs);
+  if (source.cas.compileInputFingerprint === null
+    || currentFingerprint === null
+    || currentFingerprint !== source.cas.compileInputFingerprint) {
+    return luaExportRefusal(workspace, source, 'workspace-source-mismatch', 'The workspace compile inputs changed after source inspection.');
+  }
+
+  const currentLimits = validateWorkspaceInlineLimits(currentFiles);
+  if (currentLimits.accepted === false) {
+    return luaExportRefusal(
+      workspace,
+      source,
+      mapInlineLimitReason(currentLimits, path),
+      currentLimits.detail
+    );
+  }
+  if (currentLimits.bytes > X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES) {
+    return luaExportRefusal(
+      workspace,
+      source,
+      'aggregate-too-large',
+      `The inline workspace sources exceed ${X4_UI_WORKSPACE_LUA_MAX_TOTAL_INLINE_BYTES} UTF-8 bytes.`
+    );
+  }
+
+  if (source.status === 'generated-shadowing-source') {
+    return luaExportRefusal(workspace, source, 'generated-shadowing-source', 'Generated UI output currently claims the source workspace.');
+  }
+  if (source.status === 'unavailable') {
+    return luaExportRefusal(workspace, source, 'source-unavailable', 'The workspace has no unambiguous UI source to export.');
+  }
+  if (source.status !== 'source-owned' || source.bundle === null || source.projection === null) {
+    return luaExportRefusal(workspace, source, 'source-locked', 'The existing UI source is locked and cannot be exported.');
+  }
+
+  const selectedKey = pathValidation.key;
+  const registrations = source.bundle.registrations.filter(registration => (
+    canonicalSourcePathKey(registration.rawPath) === selectedKey
+  ));
+  if (registrations.length === 0) {
+    return luaExportRefusal(workspace, source, 'not-registered', `No registered UI Lua source exists at ${path}.`);
+  }
+  if (registrations.length !== 1) {
+    return luaExportRefusal(workspace, source, 'ambiguous-source', `More than one UI registration matches ${path}.`);
+  }
+  const registration = registrations[0];
+  if (registration.resolution !== 'resolved' || registration.sourceIndex === undefined) {
+    return luaExportRefusal(workspace, source, 'not-registered', `The UI registration at ${path} is not resolved to one source file.`);
+  }
+
+  const selectedFiles = source.bundle.sourceFiles.filter(sourceFile => (
+    canonicalSourcePathKey(sourceFile.path) === selectedKey
+  ));
+  if (selectedFiles.length === 0) {
+    return luaExportRefusal(workspace, source, 'missing-source', `The registered UI source ${path} is missing from the source bundle.`);
+  }
+  if (selectedFiles.length !== 1) {
+    return luaExportRefusal(workspace, source, 'ambiguous-source', `More than one source file matches ${path}.`);
+  }
+  const selected = selectedFiles[0];
+  if (!selected.registered || selected.parseStatus !== 'parsed' || selected.editable !== true) {
+    return luaExportRefusal(workspace, source, 'not-registered', `The UI source ${path} is not an editable registered Lua file.`);
+  }
+  if (selected.index !== registration.sourceIndex) {
+    return luaExportRefusal(workspace, source, 'source-projection-mismatch', `The registration and source index for ${path} disagree.`);
+  }
+
+  const projected = source.projection.luaFiles.filter(file => canonicalSourcePathKey(file.path) === selectedKey);
+  if (projected.length !== 1 || projected[0].path !== selected.path || projected[0].text !== selected.text) {
+    return luaExportRefusal(workspace, source, 'source-projection-mismatch', `The source projection for ${path} is not exact.`);
+  }
+  const bindings = source.cas.luaBindings.filter(binding => canonicalSourcePathKey(binding.path) === selectedKey);
+  if (bindings.length !== 1) {
+    return luaExportRefusal(workspace, source, bindings.length === 0 ? 'missing-source' : 'ambiguous-source', `The source CAS does not identify exactly one ${path}.`);
+  }
+  const binding = bindings[0];
+  if (binding.omitted || binding.workspaceIndex === null || binding.expectedText === undefined) {
+    return luaExportRefusal(workspace, source, 'omitted-source', `The selected UI source ${path} is omitted from the workspace.`, null);
+  }
+  const current = currentFiles?.[binding.workspaceIndex];
+  if (!current || current.path !== binding.path || current.content !== binding.expectedText || current.content !== selected.text) {
+    return luaExportRefusal(workspace, source, 'workspace-source-mismatch', `The selected UI source ${path} changed after source inspection.`);
+  }
+
+  const textValidation = validateLuaText(selected.text);
+  if (textValidation.accepted === false) {
+    const reason: X4UiWorkspaceLuaExportReason = textValidation.reason === 'invalid-input'
+      ? 'invalid-input'
+      : textValidation.reason;
+    return luaExportRefusal(workspace, source, reason, textValidation.detail);
+  }
+  const lint = deepFreeze(lintX4UiCallModel(selected.callModel));
+  if (lint.findings.some(finding => finding.severity === 'error')) {
+    return luaExportRefusal(workspace, source, 'lint-errors', `Known error-severity lint findings block export of ${selected.path}.`, lint);
+  }
+
+  return freezeObject({
+    accepted: true,
+    changed: false,
+    workspace,
+    source,
+    verification: NOT_VERIFIED_IN_GAME,
+    path: selected.path,
+    text: selected.text,
+    lint
+  });
 }
 
 /**

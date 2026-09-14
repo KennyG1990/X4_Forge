@@ -9,23 +9,28 @@ import {
   type X4UiPreviewPipelineInput,
   type X4UiPreviewSelection,
 } from './x4UiPreviewPipeline';
+import { createX4UiEditorSessionOwner } from './x4UiEditorSession';
 import {
   canonicalizeX4UiLayoutModel,
   createX4UiLayoutTargetCatalog,
+  getIssuedX4UiLayoutExpandedCallMetadata,
   isExactX4UiLayoutColorValue,
   isIssuedX4UiLayoutEvidencePair,
   isIssuedX4UiLayoutEvidencePairForModel,
   projectX4UiLayoutProgram,
+  reprojectX4UiLayoutProgramWithIssuedColorAuthority,
   validateX4UiLayoutEvidencePair,
   type X4UiLayoutEvidenceAuthority,
   type X4UiLayoutOperation,
   type X4UiLayoutProgram,
   type X4UiLayoutProjectionProfile,
+  type X4UiLayoutTarget,
 } from './x4UiLayoutProgram';
 import {
   HELPER_SOURCE_SHA256,
   WIDGET_SOURCE_SHA256,
   X4_LAYOUT_PROVENANCE,
+  getRowHeight,
 } from './x4UiLayoutKernel';
 import {
   X4_UI_CORPUS_FILE_URL,
@@ -50,11 +55,15 @@ import {
 } from './x4UiFontMetrics';
 import {
   buildX4UiWorkspaceSource,
+  createX4UiWorkspaceMenu,
   type X4UiWorkspaceSource,
 } from './x4UiWorkspaceSource';
 import {
   applyX4UiSourceEdit,
   applyX4UiSourceEditRequest,
+  applyX4UiSourceWidgetInsertion,
+  applyX4UiSourceRowInsertion,
+  applyX4UiSourceRowMove,
   applyX4UiSourceStructuralEdit,
   buildX4UiSourceEditCatalog,
   catalogX4UiSourceEdits,
@@ -64,13 +73,20 @@ import {
   encodeX4UiSourceEditReplacement,
   normalizeX4UiSourceEditLayoutModel,
   type X4UiSourceEditDeleteEntry,
+  type X4UiSourceEditEmptyCellEntry,
+  type X4UiSourceEditRowInsertionEntry,
+  type X4UiSourceEditRowInsertionRequest,
+  type X4UiSourceEditRowMoveEntry,
+  type X4UiSourceEditRowMoveRequest,
   type X4UiSourceEditInsertionEntry,
+  type X4UiSourceEditWidgetInsertionRequest,
   type X4UiSourceEditReplaceEntry,
   type X4UiSourceEditStructuralEntry,
   type X4UiEditableSourceEditEntry,
   type X4UiSourceEditCatalog,
   type X4UiSourceEditResult,
 } from './x4UiSourceEdits';
+import * as sourceEditMoveSurface from './x4UiSourceEdits';
 
 interface Check {
   readonly name: string;
@@ -478,6 +494,31 @@ const exactPipelineXml = [
   '',
 ].join('\n');
 
+const automaticHeightReviewPath = 'ui/review.lua';
+
+const automaticHeightReviewXml = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<addon name="review">',
+  '  <environment type="menus">',
+  `    <file name="${automaticHeightReviewPath}" />`,
+  '  </environment>',
+  '</addon>',
+  '',
+].join('\n');
+
+const automaticHeightReviewLua = [
+  'local menu = { name = "Review", layer = 1 }',
+  'local frame = Helper.createFrameHandle(menu, { width = 400, height = 250 })',
+  'local ftable = frame:addTable(2, { width = 380, scaling = false, reserveScrollBar = false })',
+  'local row = ftable:addRow(false, {})',
+  'row[1]:createText("Review text", { fontsize = 12 })',
+  'row[2]:createButton({}):setText("Button caption")',
+  'local row2 = ftable:addRow(false, {})',
+  'row2[1]:createText("Second row", {})',
+  'frame:display()',
+  '',
+].join('\n');
+
 const selectedFunctionLua = [
   'local menu = { name = "SelectedFunction", layer = 1 }',
   'OpenMenu("unrelated")',
@@ -691,6 +732,152 @@ const exactPipelineContextFor = (corpus?: X4UiCorpusCanonicalSuccess): SourceEdi
   };
 };
 
+const sessionContextFor = (
+  currentWorkspace: ModWorkspace,
+  corpus: X4UiCorpusCanonicalSuccess | undefined,
+  sourcePath: string,
+  targetMatches: (target: X4UiLayoutTarget) => boolean,
+  label: string,
+): SourceEditFixtureContext => {
+  const owner = createX4UiEditorSessionOwner(currentWorkspace);
+  const candidate = owner.candidateCatalog.sourceCandidates.find(sourceCandidate =>
+    sourceCandidate.path === sourcePath
+      && sourceCandidate.sourceIdentity !== undefined
+      && sourceCandidate.targets.some(targetMatches),
+  );
+  const target = candidate?.targets.find(targetMatches);
+  if (!candidate || !candidate.sourceIdentity || !target) {
+    throw new Error(`${label} Session target missing: ${JSON.stringify(owner.candidateCatalog)}`);
+  }
+  const projection = owner.project({
+    workspace: currentWorkspace,
+    corpus,
+    selection: {
+      sourceIndex: candidate.index,
+      path: candidate.path,
+      sourceIdentity: candidate.sourceIdentity,
+      target,
+    },
+    profile: { width: 1920, height: 1080, uiScale: 1 },
+  });
+  const programResult = projection.preview.program;
+  if (!programResult || programResult.status === 'refused') {
+    throw new Error(`${label} Session projection missing program authority: ${JSON.stringify({
+      status: projection.status,
+      previewStatus: projection.preview.status,
+      gaps: projection.preview.gaps,
+    })}`);
+  }
+  return {
+    workspace: currentWorkspace,
+    source: projection.source,
+    program: programResult.program,
+    evidenceAuthority: programResult.evidenceAuthority,
+  };
+};
+
+const automaticHeightSessionContextFor = (
+  currentWorkspace: ModWorkspace,
+  corpus: X4UiCorpusCanonicalSuccess | undefined,
+): SourceEditFixtureContext => sessionContextFor(
+  currentWorkspace,
+  corpus,
+  automaticHeightReviewPath,
+  target => target.kind === 'top-level',
+  'automatic-height review',
+);
+
+const createdMenuSessionContextFor = (
+  corpus: X4UiCorpusCanonicalSuccess | undefined,
+): SourceEditFixtureContext => {
+  const blankWorkspace = workspace('', {
+    id: 'b119-contextual-insertion-source-edits-selftest',
+    name: 'B119 contextual insertion source-edits selftest',
+    passthroughFiles: [],
+  });
+  const blankSource = buildX4UiWorkspaceSource(blankWorkspace);
+  const creation = createX4UiWorkspaceMenu(blankWorkspace, blankSource, 'B119 Contextual Insertion');
+  if (!creation.accepted) {
+    throw new Error(`contextual insertion producer refused: ${JSON.stringify(creation)}`);
+  }
+  return sessionContextFor(
+    creation.workspace,
+    corpus,
+    creation.menu.path,
+    target => target.kind === 'function' && target.name === creation.menu.targetName,
+    'contextual insertion producer',
+  );
+};
+
+const contextualImportPath = 'ui/contextual_import.lua';
+const contextualImportLua = [
+  'local menu = { name = "ContextualImport", layer = 1 }',
+  'function menu.createFrame()',
+  'local frame = Helper.createFrameHandle(menu, { width = 530, height = 180 })',
+  'local ftable = frame:addTable(3, { width = 530, reserveScrollBar = false })',
+  'local row = ftable:addRow(false, {})',
+  'row[1]:setColSpan(2); -- retained span',
+  'frame:display(); -- retained display',
+  'end',
+  '-- trailing bytes',
+  '',
+].join('\n');
+
+const b119PartialScalarMixedLua = contextualImportLua.replace(
+  'row[1]:setColSpan(2); -- retained span\nframe:display(); -- retained display',
+  [
+    'row[1]:createText("AI INFLUENCE", {})',
+    'row[2]:createButton({ active = true }):setText("CLOSE", {})',
+    'if runtimeCondition then frame:display() end',
+  ].join('\n'),
+);
+
+const b119PartialScalarScenarioPath = 'ui/partial_scalar_scenario.lua';
+const b119PartialScalarScenarioLua = [
+  'local menu = { name = "PartialScalarScenario", layer = 1 }',
+  'function menu.display(dynamicText, h)',
+  '  local frame = Helper.createFrameHandle(menu, { width = 90, height = 60 })',
+  '  local table = frame:addTable(3, { width = 90, reserveScrollBar = false })',
+  '  local row = table:addRow(false, {})',
+  '  row[1]:createText("SCENARIO", {})',
+  '  if choice then row[2]:createText(dynamicText, { height = h }) end',
+  '  for i = 1, 2 do row[3]:createText(dynamicText, { height = h }) end',
+  '  local other = {}',
+  '  other:createButton({ height = h })',
+  '  local function localWidth() return 40 end',
+  '  frame:addTable(1, { width = localWidth() })',
+  '  frame:addTable(1, { width = C.GetWidth() })',
+  'end',
+  '',
+].join('\n');
+
+const b119PartialScalarLoopScenarioPath = 'ui/partial_scalar_loop_scenario.lua';
+const b119PartialScalarLoopScenarioLua = [
+  'local menu = { name = "PartialScalarLoopScenario", layer = 1 }',
+  'function menu.createFrame()',
+  '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+  '  local ftable = frame:addTable(1, { width = getWidth(), scaling = false })',
+  '  local row = ftable:addRow(false, {})',
+  '  row[1]:createText("SCENARIO", {})',
+  '  if runtimeCondition then row[1]:createText("BRANCH", {}) end',
+  '  for i = 1, 2 do row[1]:createText("LOOP", {}) end',
+  '  frame:display()',
+  'end',
+  '',
+].join('\n');
+
+const contextualImportContextFor = (
+  corpus: X4UiCorpusCanonicalSuccess | undefined,
+  lua = contextualImportLua,
+): SourceEditFixtureContext => sessionContextFor(workspace(lua, {
+  passthroughFiles: [
+    passthrough('README.md', '# untouched\r\n', { reason: 'unknown_domain' }),
+    passthrough('ui.xml', uiXml.replaceAll('ui/edit.lua', contextualImportPath)),
+    passthrough(contextualImportPath, lua, { reason: 'unparsed', bytes: new TextEncoder().encode(lua).length }),
+    passthrough('ui/sibling.lua', '-- sibling\r\nreturn {}\r\n'),
+  ],
+}), corpus, contextualImportPath, target => target.kind === 'function' && target.name === 'menu.createFrame', 'contextual import');
+
 const selectedFunctionContextFor = (): SourceEditFixtureContext => {
   const currentWorkspace = workspace(selectedFunctionLua, {
     id: 'selected-function-source-edits-selftest',
@@ -773,9 +960,65 @@ const refused = (result: X4UiSourceEditResult): Extract<X4UiSourceEditResult, { 
   throw new Error(`expected refused edit, got ${JSON.stringify(result)}`);
 };
 
+const contextualWidgetEntryFor = (catalog: X4UiSourceEditCatalog, column?: number): X4UiSourceEditEmptyCellEntry => {
+  const entries = (catalog.insertEntries || []).filter((entry): entry is X4UiSourceEditEmptyCellEntry => entry.kind === 'insert-widget'
+    && (column === undefined || entry.column === column));
+  if (entries.length !== 1) throw new Error(`contextual widget entry count ${entries.length}, column ${column}`);
+  return entries[0];
+};
+
+const acceptedWidget = (
+  result: ReturnType<typeof applyX4UiSourceWidgetInsertion>,
+): Extract<ReturnType<typeof applyX4UiSourceWidgetInsertion>, { accepted: true }> => {
+  if (result.accepted === false) throw new Error(`expected accepted widget insertion, got ${JSON.stringify({
+    accepted: result.accepted, changed: result.changed, reason: result.reason, detail: result.detail,
+  })}`);
+  return result;
+};
+
+const rowEntryFor = (catalog: X4UiSourceEditCatalog, rowIndex: number, tableId?: string) => {
+  const entries = catalog.insertEntries?.filter((entry): entry is X4UiSourceEditRowInsertionEntry => entry.kind === 'insert-row'
+    && entry.rowIndex === rowIndex && (tableId === undefined || entry.tableId === tableId)) || [];
+  if (entries.length !== 1) throw new Error(`row-below entry count ${entries.length} for row ${rowIndex}`);
+  return entries[0];
+};
+
+const rowMoveEntryFor = (
+  catalog: X4UiSourceEditCatalog,
+  direction: 'up' | 'down',
+  rowIndex: number,
+  tableId?: string,
+): X4UiSourceEditRowMoveEntry => {
+  const entries = (catalog.moveEntries || []).filter(entry => entry.kind === 'move-row'
+    && entry.direction === direction && entry.rowIndex === rowIndex
+    && (tableId === undefined || entry.tableId === tableId));
+  if (entries.length !== 1) throw new Error(`row move entry count ${entries.length} for ${direction}/${rowIndex}`);
+  return entries[0];
+};
+
+const acceptedRow = (result: ReturnType<typeof applyX4UiSourceRowInsertion>) => {
+  if (result.accepted === false) throw new Error(`expected accepted row insertion: ${JSON.stringify({
+    accepted: result.accepted, changed: result.changed, reason: result.reason, detail: result.detail,
+  })}`);
+  return result;
+};
+
+const acceptedMove = (result: ReturnType<typeof applyX4UiSourceRowMove>) => {
+  if (result.accepted === false) throw new Error(`expected row move: ${JSON.stringify({
+    accepted: result.accepted, changed: result.changed, reason: result.reason, detail: result.detail,
+  })}`);
+  return result;
+};
+
 const sourceText = (context: { readonly source: X4UiWorkspaceSource }): string => {
   const text = context.source.bundle?.sourceFiles.find(file => file.path === 'ui/edit.lua')?.text;
   if (text === undefined) throw new Error('source fixture text missing');
+  return text;
+};
+
+const sourceTextAt = (context: { readonly source: X4UiWorkspaceSource }, path: string): string => {
+  const text = context.source.bundle?.sourceFiles.find(file => file.path === path)?.text;
+  if (text === undefined) throw new Error(`source fixture text missing for ${path}`);
   return text;
 };
 
@@ -1355,8 +1598,398 @@ const normalizationMessage = (model: X4UiCallModel): string => {
   }
 };
 
+const runStructuralPreviewContinuation = (corpus: X4UiCorpusCanonicalSuccess): void => {
+  const lua = [
+    'local menu = { name = "StructuralPreview" }',
+    'function menu.createFrame()',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local t = frame:addTable(1, { width = 80, scaling = false })',
+    'local a = t:addRow(false, {})', 'a[1]:createText("Known A", { height = 10 })',
+    'local b = t:addRow(false, {})', 'b[1]:createText("Known B", { height = 10 })',
+    'local c = t:addRow(false, {})', 'c[1]:createText("Known C", { height = 10 })',
+    'local sampled = frame:addTable(1, { width = 80, scaling = false })',
+    'local d = sampled:addRow(false, {})', 'd[1]:createText(previewText, { height = 10 })',
+    'local e = sampled:addRow(false, {})', 'e[1]:createText(previewText, { height = 10 })',
+    'frame:display()', 'end',
+  ].join('\n');
+  const context = sessionContextFor(workspace(lua), corpus, 'ui/edit.lua', target => target.name === 'menu.createFrame', 'structural preview');
+  const model = normalizeX4UiSourceEditLayoutModel(context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel);
+  const target = createX4UiLayoutTargetCatalog(model).targets.find(item => item.name === 'menu.createFrame')!;
+  const seed = projectX4UiLayoutProgram(model, target, context.program.profile, undefined, undefined, undefined, corpus);
+  assert.notEqual(seed.status, 'refused'); if (seed.status === 'refused') throw new Error('seed projection refused');
+  assert.equal(seed.program.sampleCatalog.entries.length, 2);
+  const samples = { catalogId: seed.program.sampleCatalog.id, source: seed.program.sampleCatalog.sourceIdentity,
+    values: seed.program.sampleCatalog.entries.map((entry, i) => ({ id: entry.id, value: ['Scenario B', 'Independent B'][i]! })) };
+  for (const active of [false, true]) {
+    const projected = projectX4UiLayoutProgram(model, target, context.program.profile,
+      active ? samples : undefined, undefined, undefined, corpus);
+    if (projected.status === 'refused') throw new Error('sample projection refused');
+    const catalog = discoverX4UiSourceEdits(context.workspace, context.source, projected.program, projected.evidenceAuthority);
+    const move = catalog.moveEntries?.find(entry => entry.direction === 'down' && entry.rowIndex === 1);
+    if (!active) {
+      assert.equal(move, undefined, 'unresolved no-input operation stream does not admit the move');
+      console.log('B119_STRUCTURAL_PREVIEW no-input: row move correctly unavailable');
+      continue;
+    }
+    assert.ok(move, `active=${active}: actual owner admits known adjacent rows; ${JSON.stringify({ status: catalog.status, reason: catalog.reason, detail: catalog.detail, moves: catalog.moveEntries?.map(entry => [entry.rowIndex, entry.direction]), gaps: projected.program.gaps.map(gap => gap.reason) })}`);
+    const replacement = move.lower.expectedText + move.upper.expectedText;
+    const nextLua = lua.slice(0, move.startOffset) + replacement + lua.slice(move.endOffset);
+    const nextSource = buildX4UiWorkspaceSource(workspace(nextLua));
+    const nextModel = normalizeX4UiSourceEditLayoutModel(nextSource.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel);
+    const nextTarget = createX4UiLayoutTargetCatalog(nextModel).targets.find(item => item.name === 'menu.createFrame')!;
+    const nextProfile = { ...projected.program.profile, source: nextTarget.sourceIdentity };
+    const splice = { path: move.path, startOffset: move.startOffset, endOffset: move.endOffset, expectedText: move.expectedText, replacement,
+      retainedSpans: [
+        { beforeStart: move.upper.startOffset, beforeEnd: move.upper.endOffset, afterStart: move.startOffset + move.lower.expectedText.length },
+        { beforeStart: move.lower.startOffset, beforeEnd: move.lower.endOffset, afterStart: move.startOffset },
+      ] };
+    const legacy = reprojectX4UiLayoutProgramWithIssuedColorAuthority(projected.program, projected.evidenceAuthority, nextModel, nextTarget, nextProfile);
+    const continued = reprojectX4UiLayoutProgramWithIssuedColorAuthority(projected.program, projected.evidenceAuthority, nextModel, nextTarget, nextProfile, splice);
+    assert.notEqual(continued.status, 'refused');
+    if (continued.status !== 'refused' && legacy.status !== 'refused') {
+      assert.equal(legacy.program.previewSampleBindings.length, 0);
+      assert.deepEqual(continued.program.previewSampleBindings.map(item => item.value), ['Scenario B', 'Independent B']);
+      assert.equal(legacy.program.operations.filter(op => op.status !== 'applied').length, 2);
+      assert.equal(continued.program.operations.filter(op => op.status !== 'applied').length, 0);
+      const ledger = { beforeCalls: context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel.calls,
+        afterCalls: nextSource.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel.calls,
+        beforeRecords: context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel.records,
+        afterRecords: nextSource.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel.records,
+        beforeOperations: projected.program.operations, afterOperations: continued.program.operations,
+        entry: move, beforeText: lua, afterText: nextLua, replacementLength: replacement.length, insertedCallIndex: -1, insertedOperationIndex: -1 };
+      assert.equal(compareX4UiSourceStructuralLedgerCorrespondence(ledger), true, 'whole operation/kernel ledger with exact new sample identities');
+      for (const tamper of ['hash', 'range', 'type', 'value'] as const) {
+        const changed = structuredClone(ledger);
+        const op = changed.afterOperations.find(item => item.descriptorFacts?.text?.status === 'known' && item.descriptorFacts.text.provenance === 'preview-sample')!;
+        const fact = op.descriptorFacts!.text as unknown as { sampleId: string; value: string };
+        if (tamper === 'hash') fact.sampleId = fact.sampleId.replace(/[A-F0-9]{64}/, '0'.repeat(64));
+        if (tamper === 'range') fact.sampleId = fact.sampleId.replace(/\|\d+:/, '|999:');
+        if (tamper === 'type') fact.sampleId = fact.sampleId.replace(/string$/, 'number');
+        if (tamper === 'value') fact.value = 'wrong consumer value';
+        assert.equal(compareX4UiSourceStructuralLedgerCorrespondence(changed), false, `tampered sample ${tamper} cannot pass correspondence`);
+      }
+      for (const invalid of [{ ...splice, expectedText: 'foreign' }, { ...splice, startOffset: splice.startOffset + 1 },
+        { ...splice, retainedSpans: [splice.retainedSpans[0]!, splice.retainedSpans[0]!] }]) {
+        assert.equal(reprojectX4UiLayoutProgramWithIssuedColorAuthority(projected.program, projected.evidenceAuthority, nextModel, nextTarget, nextProfile, invalid).status, 'refused');
+      }
+      assert.equal(reprojectX4UiLayoutProgramWithIssuedColorAuthority(structuredClone(projected.program), projected.evidenceAuthority, nextModel, nextTarget, nextProfile, splice).status, 'refused');
+      console.log('B119_STRUCTURAL_PREVIEW causal: legacy drops 2 samples; fresh reissue keeps both; forged hash/range/type/value, false splice and foreign authority refuse');
+    }
+    const result = applyX4UiSourceRowMove(context.workspace, context.source, catalog, { entry: move });
+    console.log(`B119_STRUCTURAL_PREVIEW ${JSON.stringify({ active, accepted: result.accepted,
+      ...(result.accepted === false ? { reason: result.reason, detail: result.detail } : {}) })}`);
+    assert.equal(result.accepted, true, `active=${active}: move must preserve unrelated sampled consumers`);
+    if (result.accepted) {
+      assert.equal(result.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.text, nextLua);
+      const insertion = result.catalog.insertEntries?.find(entry => entry.kind === 'insert-row' && entry.rowIndex === 1);
+      assert.ok(insertion && insertion.kind === 'insert-row');
+      const inserted = applyX4UiSourceRowInsertion(result.workspace, result.source, result.catalog, { entry: insertion });
+      assert.equal(inserted.accepted, true, `insert row with active samples: ${inserted.accepted === false ? inserted.detail : 'accepted'}`);
+      assert.equal(applyX4UiSourceRowMove(result.workspace, result.source, result.catalog, { entry: move }).accepted, false, 'stale move cannot mutate the new source');
+      console.log('B119_STRUCTURAL_PREVIEW PASS: exact row move, insertion and stale-entry refusal');
+    }
+    const sampledMove = catalog.moveEntries?.find(entry => entry.direction === 'down' && entry.rowIndex === 1
+      && entry.tableId === projected.program.tables[1]!.id);
+    assert.ok(sampledMove, 'actual owner must admit the two rows whose exact text samples are consumed');
+    const reorderedSamples = applyX4UiSourceRowMove(context.workspace, context.source, catalog, { entry: sampledMove });
+    assert.equal(reorderedSamples.accepted, true, `sampled row move: ${reorderedSamples.accepted === false ? reorderedSamples.detail : 'accepted'}`);
+    assert.equal(applyX4UiSourceRowMove(context.workspace, context.source, catalog, { entry: structuredClone(sampledMove) }).accepted, false,
+      'copied sampled-row entry must not acquire owner authority');
+    const partial = projectX4UiLayoutProgram(model, target, context.program.profile,
+      { ...samples, values: samples.values.slice(0, 1) }, undefined, undefined, corpus);
+    assert.notEqual(partial.status, 'refused');
+    if (partial.status !== 'refused') {
+      const partialCatalog = discoverX4UiSourceEdits(context.workspace, context.source, partial.program, partial.evidenceAuthority);
+      assert.equal(partialCatalog.moveEntries?.some(entry => entry.tableId === partial.program.tables[1]!.id), false,
+        'one consumed sample cannot authorize an adjacent row with an unresolved input');
+    }
+    console.log('B119_SAMPLED_ROW_OWNER PASS: consumed in-block inputs admit exact row permutation; copied or incomplete authority refuses');
+  }
+};
+
+const runSampledWrappingEdit = (corpus: X4UiCorpusCanonicalSuccess): void => {
+  const lua = 'local menu = { name = "SampledWrapping" }\nfunction menu.createFrame()\n'
+    + 'local frame = Helper.createFrameHandle(menu, { width = 320, height = 260 })\n'
+    + 'local t = frame:addTable(1, { width = 280, scaling = false })\n'
+    + 'local row = t:addRow(false, {})\nrow[1]:createText(previewText, { wordwrap = false })\nframe:display()\nend';
+  const context = sessionContextFor(workspace(lua), corpus, 'ui/edit.lua', target => target.name === 'menu.createFrame', 'sampled wrapping');
+  const model = normalizeX4UiSourceEditLayoutModel(context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel);
+  const target = createX4UiLayoutTargetCatalog(model).targets.find(item => item.name === 'menu.createFrame')!;
+  const seed = projectX4UiLayoutProgram(model, target, context.program.profile, undefined, undefined, undefined, corpus);
+  assert.notEqual(seed.status, 'refused');
+  const samples = seed.program!.sampleCatalog;
+  assert.equal(samples.entries.length, 1);
+  const projected = projectX4UiLayoutProgram(model, target, context.program.profile,
+    { catalogId: samples.id, source: samples.sourceIdentity, values: [{ id: samples.entries[0]!.id,
+      value: 'The station has approved your docking request. Approach the marked landing area and wait for clearance.\n\nReady' }] },
+    undefined, undefined, corpus);
+  assert.notEqual(projected.status, 'refused');
+  if (projected.status === 'refused') throw new Error('sampled wrapping fixture refused');
+  const catalog = discoverX4UiSourceEdits(context.workspace, context.source, projected.program, projected.evidenceAuthority);
+  const wrappingOffset = lua.indexOf('false', lua.indexOf('wordwrap'));
+  const entry = catalog.editableEntries.find(item => item.startOffset === wrappingOffset && item.valueType === 'boolean');
+  assert.ok(entry, 'literal Wrapping property remains editable');
+  const result = applyX4UiSourceEdit(context.workspace, context.source, catalog, entry.id, true);
+  console.log('B119_SAMPLED_WRAPPING_EDIT', JSON.stringify({ accepted: result.accepted,
+    ...(result.accepted === false ? { reason: result.reason, detail: result.detail } : {}) }));
+  assert.equal(result.accepted, true, 'Wrapping Apply must reissue the text sample needed by the same call');
+  if (result.accepted) {
+    assert.equal(result.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.text, lua.replace('wordwrap = false', 'wordwrap = true'));
+    const next = result.catalog.editableEntries.find(item => item.startOffset === wrappingOffset && item.valueType === 'boolean');
+    assert.ok(next);
+    const inverse = applyX4UiSourceEdit(result.workspace, result.source, result.catalog, next.id, false);
+    assert.equal(inverse.accepted, true);
+    assert.equal(inverse.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.text, lua);
+    assert.equal(applyX4UiSourceEdit(result.workspace, result.source, catalog, entry.id, false).accepted, false, 'stale catalog refuses');
+  }
+  assert.equal(applyX4UiSourceEdit(context.workspace, context.source, structuredClone(catalog), entry.id, true).accepted, false, 'copied catalog refuses');
+  console.log('B119_SAMPLED_WRAPPING_EDIT PASS: exact source scalar/inverse, retained sampled height, stale/copied authority refusal');
+};
+
+const runMixedSampledCaptionEdit = (corpus: X4UiCorpusCanonicalSuccess): void => {
+  const lua = 'local menu = { name = "MixedSampledCaption" }\nfunction menu.createFrame()\n'
+    + 'local frame = Helper.createFrameHandle(menu, { width = 320, height = 260 })\n'
+    + 'local t = frame:addTable(2, { width = 280, scaling = false })\n'
+    + 'local row = t:addRow(false, {})\nrow[1]:createText(previewText, { height = 20 })\n'
+    + 'row[2]:createButton({}):setText("DOSSIER", {})\n'
+    + 'row[2].handlers.onClick = function() open("DOSSIER") end\n'
+    + 'if runtimeExtra then row[1]:createText("HIDDEN", {}) end\nframe:display()\nend\n';
+  const original = workspace(lua);
+  const context = sessionContextFor(original, corpus, 'ui/edit.lua', target => target.name === 'menu.createFrame', 'mixed sampled caption');
+  const model = normalizeX4UiSourceEditLayoutModel(context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel);
+  const sample = context.program.sampleCatalog.entries.find(entry => entry.expression === 'previewText');
+  assert.ok(sample);
+  const projected = projectX4UiLayoutProgram(model, context.program.target, context.program.profile,
+    { catalogId: context.program.sampleCatalog.id, source: context.program.sampleCatalog.sourceIdentity,
+      values: [{ id: sample.id, value: 'COMM CHANNEL    encrypted - sampled sector' }] }, undefined, undefined, corpus);
+  assert.notEqual(projected.status, 'refused');
+  if (projected.status === 'refused') throw new Error('mixed sampled caption projection refused');
+  assert.ok(projected.program.operations.some(operation => operation.status === 'conditional'));
+  assert.equal(projected.program.previewSampleBindings.length, 1);
+  assert.ok(projected.program.previewSampleBindings.every(binding => binding.status === 'consumed'),
+    JSON.stringify(projected.program.previewSampleBindings));
+  const catalog = discoverX4UiSourceEdits(original, context.source, projected.program, projected.evidenceAuthority);
+  const offset = lua.indexOf('"DOSSIER"');
+  const entry = catalog.editableEntries.find(candidate => candidate.startOffset === offset && candidate.value === 'DOSSIER');
+  assert.ok(entry, `mixed sampled caption must expose its direct literal: ${catalog.detail}`);
+  assert.equal(catalog.structuralEntries.length, 0, 'mixed stream must not gain structural authority');
+  assert.equal(catalog.editableEntries.some(candidate => candidate.value === 'HIDDEN'), false, 'conditional source stays locked');
+  assert.equal(catalog.editableEntries.some(candidate => candidate.expression === 'previewText'), false, 'sample is not a source literal');
+  const result = applyX4UiSourceEdit(original, context.source, catalog, entry.id, 'DOSSIER +');
+  assert.equal(result.accepted, true, result.accepted === false ? result.detail : undefined);
+  if (!result.accepted) throw new Error('mixed caption edit refused');
+  const expected = lua.slice(0, offset) + '"DOSSIER +"' + lua.slice(offset + '"DOSSIER"'.length);
+  assert.equal(sourceTextAt(result, 'ui/edit.lua'), expected);
+  assert.ok(expected.includes('open("DOSSIER")'), 'same-word callback must not change');
+  assert.deepEqual(result.workspace.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'),
+    original.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'));
+  const next = result.catalog.editableEntries.find(candidate => candidate.startOffset === offset && candidate.value === 'DOSSIER +');
+  assert.ok(next);
+  const inverse = applyX4UiSourceEdit(result.workspace, result.source, result.catalog, next.id, 'DOSSIER');
+  assert.equal(inverse.accepted, true);
+  assert.equal(sourceTextAt(inverse, 'ui/edit.lua'), lua);
+  assert.equal(sourceTextAt(context, 'ui/edit.lua'), lua);
+  assert.equal(applyX4UiSourceEdit(result.workspace, result.source, catalog, entry.id, 'BAD').accepted, false, 'stale source/catalog refuses');
+  assert.equal(applyX4UiSourceEdit(original, context.source, structuredClone(catalog), entry.id, 'BAD').accepted, false, 'copied catalog refuses');
+  assert.equal(discoverX4UiSourceEdits(original, context.source, structuredClone(projected.program), projected.evidenceAuthority).status, 'locked',
+    'copied program cannot authorize preview-bound scalar edits');
+  console.log('B119_MIXED_SAMPLED_CAPTION PASS: direct literal/callback bytes/inverse retained; conditional/dynamic/stale/copied authority locked');
+};
+
+const runLocalInstanceDirectCaptionEdit = (corpus: X4UiCorpusCanonicalSuccess): void => {
+  const lua = 'local menu = { name = "LocalInstanceCaption" }\nfunction menu.display()\n'
+    + 'local frame = Helper.createFrameHandle(menu, { width = 400, height = 300 })\n'
+    + 'local function railLabel(parent, caption)\n'
+    + 'local t = parent:addTable(1, { width = 100, scaling = false })\n'
+    + 'local r = t:addRow(false, {})\nr[1]:createText(caption, { height = 20 })\nend\n'
+    + 'railLabel(frame, "FIRST")\nrailLabel(frame, "SECOND")\n'
+    + 'local t = frame:addTable(2, { width = 300, scaling = false })\n'
+    + 'local row = t:addRow(false, {})\nrow[1]:createText("SEND", { height = 20 })\n'
+    + 'row[2]:createButton({}):setText("END", {})\n'
+    + 'row[2].handlers.onClick = function() open("SEND") end\n'
+    + 'if runtimeExtra then row[1]:createText("HIDDEN", {}) end\nframe:display()\nend\n';
+  const original = workspace(lua);
+  const context = sessionContextFor(original, corpus, 'ui/edit.lua', target => target.name === 'menu.display', 'local instance caption');
+  const expanded = context.program.operations.filter(operation => operation.localExpansion);
+  assert.equal(expanded.length, 6, 'two complete three-call helper instances must be present');
+  const tables = expanded.filter(operation => operation.kind === 'addTable');
+  assert.equal(tables.length, 2);
+  assert.equal(tables[0].modelOrder, tables[1].modelOrder, 'same raw helper source call');
+  assert.notDeepEqual(tables[0].metadata.result, tables[1].metadata.result, 'distinct per-invocation table identities');
+  assert.notDeepEqual(tables[0].localExpansion, tables[1].localExpansion);
+  for (const operation of expanded) {
+    const retained = getIssuedX4UiLayoutExpandedCallMetadata(context.program, context.evidenceAuthority, operation);
+    assert.ok(retained, 'exact expanded operation has retained input metadata');
+    assert.deepEqual(retained, operation.metadata, `expanded input metadata agrees at ${operation.source.start.line}`);
+    assert.equal(Object.isFrozen(retained), true);
+    assert.equal(Object.isFrozen(retained.semantics), true);
+    assert.equal(getIssuedX4UiLayoutExpandedCallMetadata(context.program, context.evidenceAuthority, structuredClone(operation)), undefined);
+  }
+  const firstMetadata = getIssuedX4UiLayoutExpandedCallMetadata(context.program, context.evidenceAuthority, tables[0]);
+  const secondMetadata = getIssuedX4UiLayoutExpandedCallMetadata(context.program, context.evidenceAuthority, tables[1]);
+  assert.notDeepEqual(firstMetadata, secondMetadata, 'same raw call cannot borrow another invocation metadata');
+  assert.equal(getIssuedX4UiLayoutExpandedCallMetadata(context.program, context.evidenceAuthority, context.program.operations[0]), undefined,
+    'direct operations have no expanded override');
+  assert.equal(getIssuedX4UiLayoutExpandedCallMetadata(structuredClone(context.program), context.evidenceAuthority, tables[0]), undefined);
+  assert.equal(getIssuedX4UiLayoutExpandedCallMetadata(context.program, structuredClone(context.evidenceAuthority), tables[0]), undefined);
+  const foreign = sessionContextFor(original, corpus, 'ui/edit.lua', target => target.name === 'menu.display', 'foreign local instance');
+  assert.equal(getIssuedX4UiLayoutExpandedCallMetadata(foreign.program, foreign.evidenceAuthority, tables[0]), undefined,
+    'even independently issued equal-text operations cannot be exchanged');
+  const model = normalizeX4UiSourceEditLayoutModel(context.source.bundle!.sourceFiles.find(file => file.path === 'ui/edit.lua')!.callModel)!;
+  const rawTamper = structuredClone(model);
+  const rawTable = rawTamper.calls.find(call => call.order === tables[0].modelOrder)!;
+  Object.assign(rawTable.result!, { path: '@local-instance:forged|t' });
+  assert.equal(isIssuedX4UiLayoutEvidencePairForModel(context.program, context.evidenceAuthority, rawTamper), false,
+    'raw-model namespace changes still invalidate the complete issuance');
+  assert.ok(context.program.operations.some(operation => operation.status === 'conditional'), 'fixture retains a mixed stream');
+  const catalog = discoverX4UiSourceEdits(original, context.source, context.program, context.evidenceAuthority);
+  const offset = lua.indexOf('"SEND"');
+  const entry = catalog.editableEntries.find(candidate => candidate.startOffset === offset && candidate.value === 'SEND');
+  assert.ok(entry, `repeated local instances must not lock the unrelated SEND literal: ${catalog.detail}`);
+  assert.equal(catalog.structuralEntries.length, 0, 'mixed expansion does not gain structural authority');
+  assert.equal(catalog.editableEntries.some(candidate => ['FIRST', 'SECOND', 'HIDDEN'].includes(String(candidate.value))), false);
+  assert.equal(catalog.editableEntries.some(candidate => expanded.some(operation =>
+    operation.source.start.offset <= candidate.startOffset && candidate.endOffset <= operation.source.end.offset)), false,
+  'helper bodies stay locked');
+  const result = applyX4UiSourceEdit(original, context.source, catalog, entry.id, 'TRANSMIT');
+  assert.equal(result.accepted, true, result.accepted === false ? result.detail : undefined);
+  if (!result.accepted) throw new Error('local instance caption edit refused');
+  const expected = lua.slice(0, offset) + '"TRANSMIT"' + lua.slice(offset + '"SEND"'.length);
+  assert.equal(sourceTextAt(result, 'ui/edit.lua'), expected);
+  assert.ok(expected.includes('open("SEND")'), 'callback is not the edited caption');
+  assert.deepEqual(result.workspace.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'),
+    original.passthroughFiles?.filter(file => file.path !== 'ui/edit.lua'));
+  const next = result.catalog.editableEntries.find(candidate => candidate.startOffset === offset && candidate.value === 'TRANSMIT');
+  assert.ok(next, 'post-edit reparse must reissue exact authority after target and invocation identities change');
+  const inverse = applyX4UiSourceEdit(result.workspace, result.source, result.catalog, next.id, 'SEND');
+  assert.equal(inverse.accepted, true);
+  assert.equal(sourceTextAt(inverse, 'ui/edit.lua'), lua);
+  assert.equal(sourceTextAt(context, 'ui/edit.lua'), lua);
+  assert.equal(applyX4UiSourceEdit(result.workspace, result.source, catalog, entry.id, 'BAD').accepted, false);
+  assert.equal(applyX4UiSourceEdit(original, context.source, structuredClone(catalog), entry.id, 'BAD').accepted, false);
+  for (const tamper of ['namespace', 'invocation', 'metadata', 'swap'] as const) {
+    const fake = structuredClone(context.program) as unknown as { operations: Record<string, unknown>[] };
+    const index = context.program.operations.indexOf(tables[0]);
+    if (tamper === 'namespace') fake.operations[index].metadata = { ...tables[0].metadata, result: tables[1].metadata.result };
+    if (tamper === 'invocation') fake.operations[index].localExpansion = tables[1].localExpansion;
+    if (tamper === 'metadata') fake.operations[index].metadata = context.program.operations[0].metadata;
+    if (tamper === 'swap') {
+      const secondIndex = context.program.operations.indexOf(tables[1]);
+      [fake.operations[index], fake.operations[secondIndex]] = [fake.operations[secondIndex], fake.operations[index]];
+    }
+    assert.equal(discoverX4UiSourceEdits(original, context.source, fake as unknown as X4UiLayoutProgram, context.evidenceAuthority).status, 'locked', tamper);
+  }
+  assert.equal(discoverX4UiSourceEdits(original, context.source, context.program, structuredClone(context.evidenceAuthority)).status, 'locked');
+  console.log('B119_LOCAL_INSTANCE_CAPTION PASS: repeated instance identity, literal CAS/inverse, helper/conditional locks and stale/copied/tampered authority refusal');
+};
+
 const run = async (): Promise<void> => {
   const canonicalCorpus = await loadCanonicalSourceEditsSelftestCorpus();
+  const discoverProperties = Reflect.get(sourceEditMoveSurface, 'discoverX4UiSourceTextPropertyAdditions') as
+    (catalog: X4UiSourceEditCatalog, operationId: string) => readonly { property: string; operationId: string }[];
+  const addProperty = Reflect.get(sourceEditMoveSurface, 'applyX4UiSourceTextPropertyAddition') as
+    (workspace: ModWorkspace, source: X4UiWorkspaceSource, catalog: X4UiSourceEditCatalog, operationId: string, property: string, value: unknown) => ReturnType<typeof applyX4UiSourceStructuralEdit> & {
+      propertySplice?: { path: string; startOffset: number; endOffset: number; expectedText: string; replacement: string };
+    };
+  assert.equal(typeof discoverProperties, 'function', 'omitted text properties need owner-backed discovery');
+  assert.equal(typeof addProperty, 'function', 'omitted text properties need typed source-owner application');
+  for (const [callName, options] of [['createText', '{}'], ['createText', ''], ['createText', '{ -- retained comment\n fontsize = 12, }'], ['setText', '{}'], ['setText2', '{}']]) {
+    const receiver = callName === 'createText' ? 'row[1]' : 'row[1]:createButton({})';
+    const call = `${receiver}:${callName}("Hello"${options ? `, ${options}` : ''})`;
+    const lua = ['local menu = { name = "PropertyAddition" }', 'function menu.createFrame()',
+      'local frame = Helper.createFrameHandle(menu, { width = 400, height = 180 })',
+      'local t = frame:addTable(1, { width = 300, scaling = false })', 'local row = t:addRow(false, {})',
+      call, 'frame:display()', 'end', '-- unrelated tail'].join('\n');
+    const context = sessionContextFor(workspace(lua), canonicalCorpus, 'ui/edit.lua', target => target.name === 'menu.createFrame', 'missing text property');
+    const catalog = catalogFor(context);
+    const caption = catalog.editableEntries.find(entry => entry.value === 'Hello'); assert.ok(caption);
+    const operationId = caption.provenance.operationId;
+    const available = discoverProperties(catalog, operationId);
+    assert.ok(available.some(entry => entry.property === 'halign'));
+    assert.equal(available.some(entry => entry.property === 'fontsize'), !options.includes('fontsize'));
+    assert.deepEqual(discoverProperties(structuredClone(catalog), operationId), []);
+    for (const [property, value] of [['halign', 'injected()'], ['fontsize', 0], ['fontsize', -1], ['fontsize', Infinity], ['fontsize', '12'], ['wordwrap', 'false'], ['unknown', 1]] as const) {
+      const rejected = addProperty(context.workspace, context.source, catalog, operationId, property, value);
+      assert.equal(rejected.accepted, false, `${property} refuses ${String(value)}`);
+      assert.equal(rejected.workspace, context.workspace);
+    }
+    const result = addProperty(context.workspace, context.source, catalog, operationId, 'halign', 'right');
+    assert.equal(result.accepted, true, JSON.stringify(result.accepted === false ? { reason: result.reason, detail: result.detail } : {}));
+    if (!result.accepted) throw new Error('property addition guard');
+    const expectedCall = `${receiver}:${callName}("Hello", ${options ? `{ halign = "right", ${options.slice(1)}` : '{ halign = "right" }'})`;
+    const expected = lua.replace(call, expectedCall);
+    assert.equal(sourceTextAt(result, 'ui/edit.lua'), expected);
+    assert.equal(sourceTextAt(context, 'ui/edit.lua'), lua);
+    assert.ok(result.propertySplice);
+    const splice = result.propertySplice;
+    assert.equal(splice.startOffset, splice.endOffset);
+    assert.equal(splice.expectedText, '');
+    assert.equal(lua.slice(0, splice.startOffset) + splice.replacement + lua.slice(splice.endOffset), expected);
+    const inserted = result.catalog.editableEntries.find(entry => entry.value === 'right' && entry.provenance.fields.includes('semantics.properties.halign'));
+    assert.ok(inserted, 'new value must immediately have ordinary scalar edit authority');
+    assert.equal(discoverProperties(result.catalog, inserted.provenance.operationId).some(entry => entry.property === 'halign'), false);
+    assert.equal(addProperty(result.workspace, result.source, result.catalog, inserted.provenance.operationId, 'halign', 'left').accepted, false);
+    assert.equal(addProperty(result.workspace, result.source, catalog, operationId, 'fontsize', 14).accepted, false, 'stale catalog refuses');
+    assert.equal(addProperty(context.workspace, context.source, structuredClone(catalog), operationId, 'halign', 'right').accepted, false);
+    const scalar = applyX4UiSourceEdit(result.workspace, result.source, result.catalog, inserted.id, 'left');
+    assert.equal(scalar.accepted, true);
+    assert.equal(sourceTextAt(scalar, 'ui/edit.lua'), expected.replace('halign = "right"', 'halign = "left"'));
+    const wrapped = addProperty(result.workspace, result.source, result.catalog, inserted.provenance.operationId, 'wordwrap', false);
+    assert.equal(wrapped.accepted, callName === 'createText', `${callName}/${options}: wrapping follows the existing per-call contract: ${wrapped.accepted === false ? wrapped.detail : ''}`);
+    assert.equal(sourceTextAt(wrapped, 'ui/edit.lua'), callName === 'createText' ? expected.replace('{ halign =', '{ wordwrap = false,  halign =') : expected);
+    let numericContext = wrapped.accepted === true ? wrapped : result;
+    if (callName !== 'createText') {
+      for (const unsupported of ['wordwrap', 'minRowHeight']) {
+        assert.equal(discoverProperties(result.catalog, inserted.provenance.operationId).some(item => item.property === unsupported), false);
+        assert.equal(addProperty(result.workspace, result.source, result.catalog, inserted.provenance.operationId, unsupported, unsupported === 'wordwrap' ? false : 3).accepted, false);
+      }
+    }
+    for (const property of ['fontsize', 'x', 'y', 'minRowHeight']) {
+      const text = numericContext.catalog.editableEntries.find(entry => entry.value === 'Hello'); assert.ok(text);
+      if (property === 'fontsize' && options.includes('fontsize')) continue;
+      if (property === 'minRowHeight' && callName !== 'createText') continue;
+      assert.ok(discoverProperties(numericContext.catalog, text.provenance.operationId).some(item => item.property === property), `${callName}: missing ${property} must remain discoverable`);
+      const before = sourceTextAt(numericContext, 'ui/edit.lua');
+      const next = addProperty(numericContext.workspace, numericContext.source, numericContext.catalog, text.provenance.operationId, property, property === 'fontsize' ? 16 : 3);
+      assert.equal(next.accepted, true, `${callName} supports ${property}: ${next.accepted === false ? next.detail : ''}`);
+      assert.ok(next.propertySplice, 'numeric property insertion retains its minimal splice');
+      assert.equal(sourceTextAt(next, 'ui/edit.lua'), before.slice(0, next.propertySplice.startOffset) + next.propertySplice.replacement + before.slice(next.propertySplice.endOffset));
+      numericContext = next;
+    }
+    assert.equal(addProperty(structuredClone(context.workspace), context.source, catalog, operationId, 'halign', 'left').accepted, false);
+    if (options.includes('\n')) {
+      const entry = catalog.replaceEntries.find(item => item.callBindings.some(binding => binding.operationId === operationId));
+      assert.ok(entry);
+      const generic = applyX4UiSourceStructuralEdit(context.workspace, context.source, catalog, entry.id, entry.expectedText);
+      assert.equal(generic.accepted, false, 'generic replacement still rejects multiline input');
+    }
+    let reads = 0;
+    Object.defineProperty(context.workspace, 'passthroughFiles', { configurable: true, get: () => { reads += 1; throw new Error('getter must not run'); } });
+    assert.deepEqual(discoverProperties(catalog, operationId), []);
+    assert.equal(addProperty(context.workspace, context.source, catalog, operationId, 'halign', 'left').accepted, false);
+    assert.equal(reads, 0, 'property discovery/apply must reject accessors before reading public authority');
+  }
+  for (const [setup, options] of [['local opts = {}', 'opts'], ['', '{ [runtimeKey] = 12 }']] as const) {
+    const lua = ['local menu = { name = "UnsupportedPropertyAddition" }', 'function menu.createFrame()',
+      'local frame = Helper.createFrameHandle(menu, { width = 400, height = 180 })',
+      'local t = frame:addTable(1, { width = 300, scaling = false })', 'local row = t:addRow(false, {})',
+      setup, `row[1]:createText("Hello", ${options})`, 'frame:display()', 'end'].join('\n');
+    const context = sessionContextFor(workspace(lua), canonicalCorpus, 'ui/edit.lua', target => target.name === 'menu.createFrame', 'unsupported options');
+    const catalog = catalogFor(context);
+    const operation = context.program.operations.find(item => item.kind === 'createText');
+    assert.ok(operation);
+    assert.deepEqual(discoverProperties(catalog, operation.id), [], `no property additions through ${options}`);
+    assert.equal(addProperty(context.workspace, context.source, catalog, operation.id, 'halign', 'right').accepted, false);
+    assert.equal(sourceTextAt(context, 'ui/edit.lua'), lua);
+  }
+  console.log('B119_MISSING_TEXT_PROPERTIES PASS: empty/omitted/commented options, minimal splice, scalar follow-up, duplicate/stale/copied/invalid refusal');
+  runLocalInstanceDirectCaptionEdit(canonicalCorpus);
+  if (process.env.X4_UI_SOURCE_LOCAL_INSTANCE_ONLY === '1') return;
+  runMixedSampledCaptionEdit(canonicalCorpus);
+  runSampledWrappingEdit(canonicalCorpus);
+  if (process.env.X4_UI_SOURCE_LONG_TEXT_ONLY === '1') return;
+  runStructuralPreviewContinuation(canonicalCorpus);
+  if (process.env.X4_UI_SOURCE_PREVIEW_TRANSFER_ONLY === '1') return;
   const initial = contextFor();
   const initialCatalog = catalogFor(initial);
   const selectedFunction = selectedFunctionContextFor();
@@ -1496,6 +2129,1690 @@ const run = async (): Promise<void> => {
       && exactPipelineCatalog.editableEntries.length > 0
       && !exactPipelineCatalog.lockedEntries.some(entry => entry.reason === 'provenance-drift'),
     JSON.stringify(exactPipelineRegression));
+  const spanContext = contextualImportContextFor(canonicalCorpus);
+  const spanCatalog = catalogFor(spanContext);
+  const spanEntries = (spanCatalog.insertEntries || []).filter(entry => entry.kind === 'insert-widget');
+  const spanReceipt = {
+    status: spanContext.program.status,
+    cells: spanContext.program.cells.map(cell => ({ column: cell.column, status: cell.status,
+      type: cell.kernelState?.type, span: cell.kernelState?.colspan,
+      operations: cell.operationIds.map(id => spanContext.program.operations.find(operation => operation.id === id)?.kind),
+      metadata: cell.metadataOperationIds.length })),
+    issuedColumns: spanEntries.map(entry => entry.column),
+  };
+  console.log(`x4UiSourceEdits contextual span: ${JSON.stringify(spanReceipt)}`);
+  check('B119 imported empty span start and cell3 are issued; covered cell2 is not',
+    spanEntries.map(entry => entry.column).join(',') === '1,3', JSON.stringify(spanReceipt));
+  for (const widget of ['text', 'button', 'input'] as const) {
+    const spanEntry = spanEntries.find(entry => entry.column === 1)!;
+    const spanResult = acceptedWidget(applyX4UiSourceWidgetInsertion(spanContext.workspace, spanContext.source,
+      spanCatalog, { entry: spanEntry, widget, text: `spanning ${widget}` }));
+    const after = sessionContextFor(spanResult.workspace, canonicalCorpus, contextualImportPath,
+      target => target.kind === 'function' && target.name === 'menu.createFrame', 'inserted span');
+    check(`B119 unindented imported ${widget} preserves span and covered cell`,
+      spanEntry.indentation === '' && spanResult.replacement.startsWith('row[1]:')
+        && after.program.cells[0].kernelState?.colspan === 2
+        && after.program.cells[1].kernelState?.colspan === 0
+        && (spanResult.catalog.insertEntries || []).some(entry => entry.kind === 'insert-widget' && entry.column === 3)
+        && !(spanResult.catalog.insertEntries || []).some(entry => entry.kind === 'insert-widget' && entry.column === 2));
+  }
+  const mutationCases = [
+    ['unknown invocation', 'mutate(row)'],
+    ['local invocation', 'local function mutate(value) value[2] = {} end\nmutate(row)'],
+    ['row rebind', 'row = {}'],
+    ['numeric cell write', 'row[2] = {}'],
+    ['multi-LHS cell write', 'row[2], other = {}, nil'],
+    ['spaced commented cell write', 'row --[=[ gap ]=]\n [ 2 ] -- gap\n = {}'],
+    ['computed cell write', 'local column = 2\nrow[column] = {}'],
+    ['computed multi-LHS', 'row[1 + 1], other = {}, nil'],
+    ['string indexed cell write', 'row["2"] = {}'],
+    ['long literal indexed write', 'row[ [=[2]=] ] = {}'],
+    ['row local shadow', 'local row = {}'],
+    ['alias escape', 'local escaped = row'],
+    ['property escape', 'menu.escaped = row'],
+    ['nested escape', 'menu.escaped = { row }'],
+    ['conditional mutation', 'if condition then row[2] = {} end'],
+    ['loop mutation', 'for i = 1, 2 do row[i] = {} end'],
+    ['unresolved cell method', 'row[2]:unknownMethod()'],
+  ] as const;
+  const mutationReceipts = mutationCases.map(([name, statement]) => {
+    const context = contextualImportContextFor(canonicalCorpus,
+      contextualImportLua.replace('row[1]:setColSpan(2); -- retained span', statement));
+    const catalog = catalogFor(context);
+    return { name, status: context.program.status,
+      issued: (catalog.insertEntries || []).filter(entry => entry.kind === 'insert-widget').length,
+      unapplied: context.program.operations.filter(operation => operation.status !== 'applied').map(operation => operation.kind) };
+  });
+  console.log(`x4UiSourceEdits contextual mutation negatives: ${JSON.stringify(mutationReceipts)}`);
+  check('B119 contextual mutation/escape source revokes empty-cell authority',
+    mutationReceipts.every(receipt => receipt.issued === 0),
+    JSON.stringify(mutationReceipts.filter(receipt => receipt.issued !== 0)));
+  const formattingCases = [
+    ['spaced receiver', 'row [ 1 ]:setColSpan(2)'],
+    ['commented receiver', 'row --[=[ index ]=]\n [ 1 ]:setColSpan(2)'],
+    ['inert escaped string', String.raw`local inert = "row[2], other = {}, nil; \"quoted\" \\slash"`],
+    ['inert long string', 'local inert = [==[row = {}; row[2], other = {}, nil; mutate(row)]==]'],
+    ['inert comments', '-- row = {}; mutate(row)\n--[==[ row[2], other = {}, nil ]==]'],
+  ] as const;
+  const formattingReceipts = formattingCases.map(([name, statement]) => {
+    const context = contextualImportContextFor(canonicalCorpus,
+      contextualImportLua.replace('row[1]:setColSpan(2); -- retained span', statement));
+    const catalog = catalogFor(context);
+    const entries = (catalog.insertEntries || []).filter(entry => entry.kind === 'insert-widget');
+    const entry = entries.find(candidate => candidate.column === 1);
+    const result = entry ? applyX4UiSourceWidgetInsertion(context.workspace, context.source, catalog,
+      { entry, widget: 'text', text: 'formatted import' }) : undefined;
+    return { name, status: context.program.status, issuedColumns: entries.map(candidate => candidate.column),
+      accepted: result?.accepted, reason: result?.accepted === false ? result.reason : undefined };
+  });
+  console.log(`x4UiSourceEdits contextual formatting controls: ${JSON.stringify(formattingReceipts)}`);
+  check('B119 parsed receiver formatting and inert source text preserve insertion authority',
+    formattingReceipts.every(receipt => receipt.accepted === true),
+    JSON.stringify(formattingReceipts.filter(receipt => receipt.accepted !== true)));
+  const ownerSourceCases = [
+    ['table rebind', contextualImportLua.replace('local row =', 'ftable = {}\nlocal row =')],
+    ['rebound table alias', contextualImportLua.replace('local row = ftable:', 'local alias = ftable\nalias = {}\nlocal row = alias:')],
+    ['row via alias', contextualImportLua.replace('local row = ftable:addRow(false, {})', 'local original = ftable:addRow(false, {})\nlocal row = original')],
+    ['conditional row', contextualImportLua.replace('local row =', 'if condition then\nlocal row =').replace('frame:display()', 'end\nframe:display()')],
+    ['loop row', contextualImportLua.replace('local row =', 'for i = 1, 2 do\nlocal row =').replace('frame:display()', 'end\nframe:display()')],
+    ['frame rebind', contextualImportLua.replace('frame:display()', 'frame = {}\nframe:display()')],
+  ] as const;
+  const ownerSourceReceipts = ownerSourceCases.map(([name, lua]) => {
+    const context = contextualImportContextFor(canonicalCorpus, lua.replace('row[1]:setColSpan(2); -- retained span', '-- no span call'));
+    const catalog = catalogFor(context);
+    return { name, status: context.program.status,
+      issued: (catalog.insertEntries || []).filter(entry => entry.kind === 'insert-widget').length };
+  });
+  console.log(`x4UiSourceEdits contextual owner negatives: ${JSON.stringify(ownerSourceReceipts)}`);
+  check('B119 unproven rebound aliased and control-flow row owners issue no insertion',
+    ownerSourceReceipts.every(receipt => receipt.issued === 0), JSON.stringify(ownerSourceReceipts));
+  const provenAlias = contextualImportContextFor(canonicalCorpus,
+    contextualImportLua.replace('local row = ftable:', 'local alias = ftable\nlocal row = alias:'));
+  const provenAliasCatalog = catalogFor(provenAlias);
+  const provenAliasEntry = contextualWidgetEntryFor(provenAliasCatalog, 1);
+  const provenAliasResult = acceptedWidget(applyX4UiSourceWidgetInsertion(provenAlias.workspace, provenAlias.source,
+    provenAliasCatalog, { entry: provenAliasEntry, widget: 'text', text: 'source-proven alias' }));
+  check('B119 a source-proven table alias retains exact widget placement authority',
+    provenAliasResult.insertedWidget.tableId === provenAlias.program.tables[0].id
+      && provenAliasResult.insertedWidget.rowId === provenAlias.program.rows[0].id
+      && provenAliasResult.insertedWidget.cellId === provenAliasEntry.cellId);
+  const preambleContext = contextualImportContextFor(canonicalCorpus,
+    contextualImportLua.replace('local frame =', 'refreshHelper()\nif not Helper then return end\nlocal frame ='));
+  const preambleCatalog = catalogFor(preambleContext);
+  check('B119 unrelated unsupported preamble before row creation does not revoke proven row authority',
+    applyX4UiSourceWidgetInsertion(preambleContext.workspace, preambleContext.source, preambleCatalog,
+      { entry: contextualWidgetEntryFor(preambleCatalog, 1), widget: 'input', text: 'preamble control' }).accepted);
+
+  const boundaryEntry = contextualWidgetEntryFor(spanCatalog, 1);
+  const boundaryRequest: X4UiSourceEditWidgetInsertionRequest = { entry: boundaryEntry, widget: 'text', text: 'boundary' };
+  const boundaryBefore = JSON.stringify(spanContext.workspace);
+  const invalidRequests: readonly unknown[] = [null, {}, { ...boundaryRequest, widget: 'slider' },
+    { ...boundaryRequest, text: 1 }, { ...boundaryRequest, text: () => 'executable' },
+    { ...boundaryRequest, directCall: 'mutate(row)' }, { ...boundaryRequest, receiver: 'foreign[1]' },
+    { ...boundaryRequest, expected: { path: boundaryEntry.path } },
+    Object.assign(Object.create({ inherited: true }), boundaryRequest)];
+  const invalidResults = invalidRequests.map(request => {
+    const result: ReturnType<typeof applyX4UiSourceWidgetInsertion> = Reflect.apply(applyX4UiSourceWidgetInsertion,
+      undefined, [spanContext.workspace, spanContext.source, spanCatalog, request]);
+    return result.accepted === false && !result.changed && result.reason === 'invalid-request';
+  });
+  check('B119 typed insertion rejects raw executable fields and invalid request data atomically',
+    invalidResults.every(Boolean) && JSON.stringify(spanContext.workspace) === boundaryBefore,
+    JSON.stringify(invalidResults));
+
+  const getterReceipts = ['request', 'expected', 'entry', 'catalog', 'source', 'workspace', 'workspace-file'].map(surface => {
+    const context = contextualImportContextFor(canonicalCorpus);
+    let catalog = catalogFor(context);
+    let source = context.source;
+    let request: X4UiSourceEditWidgetInsertionRequest = {
+      entry: contextualWidgetEntryFor(catalog, 1), widget: 'text', text: 'getter boundary',
+    };
+    let reads = 0;
+    const descriptor = { configurable: true, enumerable: true, get: () => { reads += 1; throw new Error('getter executed'); } };
+    if (surface === 'request') request = Object.defineProperty({ ...request }, 'text', descriptor);
+    if (surface === 'expected') request = { ...request, expected: Object.defineProperty({
+      path: request.entry.path, startOffset: request.entry.startOffset, endOffset: request.entry.endOffset, expectedText: '',
+    }, 'expectedText', descriptor) };
+    if (surface === 'entry') request = { ...request, entry: Object.defineProperty({ ...request.entry }, 'provenance', descriptor) };
+    if (surface === 'catalog') catalog = Object.defineProperty({ ...catalog }, 'insertEntries', descriptor);
+    if (surface === 'source') source = Object.defineProperty({ ...source }, 'bundle', descriptor);
+    if (surface === 'workspace') Object.defineProperty(context.workspace, 'passthroughFiles', descriptor);
+    if (surface === 'workspace-file') Object.defineProperty(context.workspace.passthroughFiles![2], 'content', descriptor);
+    const outcome = invokePublic(() => applyX4UiSourceWidgetInsertion(context.workspace, source, catalog, request));
+    return { surface, reads, threw: outcome.threw, accepted: outcome.value?.accepted,
+      changed: outcome.value?.changed, reason: outcome.value?.accepted === false ? outcome.value.reason : undefined };
+  });
+  console.log(`x4UiSourceEdits contextual accessor negatives: ${JSON.stringify(getterReceipts)}`);
+  check('B119 typed insertion refuses accessor boundaries without executing getters or throwing',
+    getterReceipts.every(receipt => receipt.reads === 0 && !receipt.threw && receipt.accepted === false && receipt.changed === false),
+    JSON.stringify(getterReceipts));
+
+  const contextualForeign = contextualImportContextFor(canonicalCorpus);
+  const contextualForeignCatalog = catalogFor(contextualForeign);
+  const authorityCases = [
+    ['cloned entry', spanContext.workspace, spanContext.source, spanCatalog, { ...boundaryRequest, entry: structuredClone(boundaryEntry) }],
+    ['foreign entry', spanContext.workspace, spanContext.source, spanCatalog, { ...boundaryRequest, entry: contextualWidgetEntryFor(contextualForeignCatalog, 1) }],
+    ['cloned catalog', spanContext.workspace, spanContext.source, structuredClone(spanCatalog), boundaryRequest],
+    ['foreign catalog', spanContext.workspace, spanContext.source, contextualForeignCatalog, boundaryRequest],
+    ['cloned source', spanContext.workspace, structuredClone(spanContext.source), spanCatalog, boundaryRequest],
+    ['cloned workspace', structuredClone(spanContext.workspace), spanContext.source, spanCatalog, boundaryRequest],
+  ] as const;
+  const authorityReceipts = authorityCases.map(([name, currentWorkspace, source, catalog, request]) => {
+    const result = applyX4UiSourceWidgetInsertion(currentWorkspace, source, catalog, request);
+    return { name, accepted: result.accepted, changed: result.changed, reason: result.accepted === false ? result.reason : undefined };
+  });
+  check('B119 typed insertion refuses cloned and foreign authority',
+    authorityReceipts.every(receipt => !receipt.accepted && !receipt.changed)
+      && JSON.stringify(spanContext.workspace) === boundaryBefore, JSON.stringify(authorityReceipts));
+  const forgedPlacementResults = [
+    { ...boundaryEntry, column: 2, cellId: spanContext.program.cells[1].id },
+    { ...boundaryEntry, rowId: 'foreign-row' },
+    { ...boundaryEntry, tableId: 'foreign-table' },
+    { ...boundaryEntry, frameId: 'foreign-frame' },
+  ].map(entry => applyX4UiSourceWidgetInsertion(spanContext.workspace, spanContext.source, spanCatalog,
+    { ...boundaryRequest, entry }));
+  check('B119 covered cells and forged placement never gain authority from caller coordinates or owner IDs',
+    forgedPlacementResults.every(result => result.accepted === false && !result.changed && result.reason === 'foreign-entry'));
+  const expected = { path: boundaryEntry.path, startOffset: boundaryEntry.startOffset,
+    endOffset: boundaryEntry.endOffset, expectedText: '' };
+  const casReceipts = [
+    { ...expected, path: 'ui/foreign.lua' }, { ...expected, startOffset: expected.startOffset - 1 },
+    { ...expected, endOffset: expected.endOffset + 1 }, { ...expected, expectedText: 'stale' },
+  ].map(expectedValue => {
+    const result = applyX4UiSourceWidgetInsertion(spanContext.workspace, spanContext.source, spanCatalog,
+      { ...boundaryRequest, expected: expectedValue });
+    return { accepted: result.accepted, changed: result.changed, reason: result.accepted === false ? result.reason : undefined };
+  });
+  check('B119 typed insertion enforces every caller CAS field and preserves failed input bytes',
+    casReceipts.every(receipt => !receipt.accepted && !receipt.changed)
+      && casReceipts.map(receipt => receipt.reason).join(',') === 'stale-range,stale-range,stale-range,stale-expected-text'
+      && JSON.stringify(spanContext.workspace) === boundaryBefore, JSON.stringify(casReceipts));
+  const contextualStale = contextualImportContextFor(canonicalCorpus);
+  const contextualStaleCatalog = catalogFor(contextualStale);
+  contextualStale.workspace.passthroughFiles![2].content += '-- external change\n';
+  const contextualStaleBefore = JSON.stringify(contextualStale.workspace);
+  const contextualStaleResult = applyX4UiSourceWidgetInsertion(contextualStale.workspace, contextualStale.source, contextualStaleCatalog,
+    { entry: contextualWidgetEntryFor(contextualStaleCatalog, 1), widget: 'button', text: 'stale source' });
+  check('B119 typed insertion refuses post-issuance workspace mutation without overwriting current bytes',
+    contextualStaleResult.accepted === false && !contextualStaleResult.changed && contextualStaleResult.reason === 'workspace-source-mismatch'
+      && JSON.stringify(contextualStale.workspace) === contextualStaleBefore);
+  const noCorpusContext = contextualImportContextFor(undefined);
+  const noCorpusCatalog = catalogFor(noCorpusContext);
+  const noCorpusBefore = JSON.stringify(noCorpusContext.workspace);
+  const noCorpusResult = applyX4UiSourceWidgetInsertion(noCorpusContext.workspace, noCorpusContext.source, noCorpusCatalog,
+    { entry: contextualWidgetEntryFor(noCorpusCatalog, 1), widget: 'text', text: 'requires canonical automatic height' });
+  const noCorpusReceipt = { accepted: noCorpusResult.accepted, changed: noCorpusResult.changed,
+    reason: noCorpusResult.accepted === false ? noCorpusResult.reason : undefined,
+    detail: noCorpusResult.accepted === false ? noCorpusResult.detail : undefined };
+  console.log(`x4UiSourceEdits contextual failed reparse: ${JSON.stringify(noCorpusReceipt)}`);
+  check('B119 failed automatic-height reparse returns unchanged original workspace',
+    noCorpusResult.accepted === false && !noCorpusResult.changed && noCorpusResult.reason === 'reparse-provenance-drift'
+      && noCorpusResult.workspace === noCorpusContext.workspace && noCorpusResult.source === noCorpusContext.source
+      && JSON.stringify(noCorpusContext.workspace) === noCorpusBefore, JSON.stringify(noCorpusReceipt));
+  const contextualByteLua = '\uFEFF' + contextualImportLua.replace('frame:display()', [
+    'local sibling = ftable:addRow(false, {})',
+    'sibling[1]:setColSpan(3)',
+    'sibling[1]:createText("Retained sibling")',
+    '-- insertion anchor comment; row[2], other = {}, nil',
+    'frame:display()',
+  ].join('\n')).replaceAll('\n', '\r\n');
+  const contextualBytes = contextualImportContextFor(canonicalCorpus, contextualByteLua);
+  const contextualByteCatalog = catalogFor(contextualBytes);
+  const contextualByteEntry = contextualWidgetEntryFor(contextualByteCatalog, 1);
+  const contextualByteBefore = JSON.stringify(contextualBytes.workspace);
+  const contextualByteSourceBefore = JSON.stringify(contextualBytes.source);
+  const contextualBomText = acceptedWidget(applyX4UiSourceWidgetInsertion(contextualBytes.workspace, contextualBytes.source,
+    contextualByteCatalog, { entry: contextualByteEntry, widget: 'text', text: 'BOM text "quoted" \\slash\n-- inert' }));
+  check('B119 BOM CRLF Text insertion preserves the exact raw splice and original bytes',
+    sourceTextAt(contextualBomText, contextualImportPath) === contextualByteLua.slice(0, contextualBomText.startOffset)
+      + contextualBomText.replacement + contextualByteLua.slice(contextualBomText.endOffset)
+      && contextualBomText.replacement.endsWith('\r\n')
+      && JSON.stringify(contextualBytes.workspace) === contextualByteBefore
+      && JSON.stringify(contextualBytes.source) === contextualByteSourceBefore);
+  const contextualButtonText = '"quoted" \\slash\n-- row[2] = {}; [==[literal]==]';
+  const contextualFirst = acceptedWidget(applyX4UiSourceWidgetInsertion(contextualBytes.workspace, contextualBytes.source,
+    contextualByteCatalog, { entry: contextualByteEntry, widget: 'button', text: contextualButtonText,
+      expected: { path: contextualByteEntry.path, startOffset: contextualByteEntry.startOffset,
+        endOffset: contextualByteEntry.endOffset, expectedText: '' } }));
+  const contextualFirstText = sourceTextAt(contextualFirst, contextualImportPath);
+  const contextualAfter = sessionContextFor(contextualFirst.workspace, canonicalCorpus, contextualImportPath,
+    target => target.kind === 'function' && target.name === 'menu.createFrame', 'byte-local insertion');
+  const contextualSecondEntry = contextualWidgetEntryFor(contextualFirst.catalog, 3);
+  const contextualInputProbeLua = contextualFirstText.slice(0, contextualSecondEntry.startOffset)
+    + 'row[3]:createEditBox({ defaultText = "second current insertion" })\r\n'
+    + contextualFirstText.slice(contextualSecondEntry.endOffset);
+  const contextualBomProducerReceipt = [true, false].map(bom => {
+    const context = contextualImportContextFor(canonicalCorpus, bom ? contextualInputProbeLua : contextualInputProbeLua.slice(1));
+    return { bom, input: context.program.operations.filter(operation => operation.kind === 'createEditBox')
+      .map(operation => ({ status: operation.status, reason: operation.reason })) };
+  });
+  console.log('x4UiSourceEdits contextual Input BOM prerequisite:', JSON.stringify(contextualBomProducerReceipt));
+  const contextualBomInput = applyX4UiSourceWidgetInsertion(contextualFirst.workspace, contextualFirst.source,
+    contextualFirst.catalog, { entry: contextualSecondEntry, widget: 'input', text: 'second current insertion' });
+  check('B119 BOM CRLF Input insertion accepts fresh catalog authority with exact producer evidence',
+    contextualBomProducerReceipt.every(receipt => receipt.input.length === 1 && receipt.input[0].status === 'applied')
+      && contextualBomInput.accepted && contextualBomInput.changed,
+    JSON.stringify({ producer: contextualBomProducerReceipt, accepted: contextualBomInput.accepted,
+      changed: contextualBomInput.changed, reason: contextualBomInput.accepted === false ? contextualBomInput.reason : undefined }));
+  const contextualSecond = acceptedWidget(contextualBomInput);
+  const contextualSecondText = sourceTextAt(contextualSecond, contextualImportPath);
+  const contextualInputAfter = sessionContextFor(contextualSecond.workspace, canonicalCorpus, contextualImportPath,
+    target => target.kind === 'function' && target.name === 'menu.createFrame', 'BOM Input after insertion');
+  const contextualInputCreator = contextualInputAfter.program.operations.find(operation =>
+    operation.id === contextualSecond.insertedWidget.creatorOperationId);
+  const contextualInputCall = contextualSecond.source.bundle?.sourceFiles.find(file => file.path === contextualImportPath)
+    ?.callModel.calls.find(call => call.order === contextualInputCreator?.modelOrder);
+  check('B119 BOM Input returns the exact reparsed creator owner chain, decoded text and explicit starter height',
+    contextualInputCreator?.status === 'applied' && contextualInputCreator.kind === 'createEditBox'
+      && contextualInputCreator.cellId === contextualSecondEntry.cellId
+      && contextualInputCreator.rowId === contextualSecondEntry.rowId
+      && contextualInputCreator.tableId === contextualSecondEntry.tableId
+      && contextualInputAfter.program.tables.find(table => table.id === contextualInputCreator.tableId)?.frameId
+        === contextualSecond.insertedWidget.frameId
+      && contextualInputCall?.semantics.editBox?.defaultText?.value === 'second current insertion'
+      && contextualInputCall?.semantics.properties?.find(property => property.normalizedName === 'height')?.value.value === 25
+      && JSON.stringify(contextualInputCreator.source) === JSON.stringify(contextualSecond.insertedWidget.creatorSource)
+      && JSON.stringify(contextualInputAfter.program.target.sourceIdentity) === JSON.stringify(contextualSecond.insertedWidget.sourceIdentity));
+  const contextualConsumed = applyX4UiSourceWidgetInsertion(contextualFirst.workspace, contextualFirst.source,
+    contextualFirst.catalog, { entry: contextualByteEntry, widget: 'text', text: 'consumed' });
+  const contextualOccupied = applyX4UiSourceWidgetInsertion(contextualFirst.workspace, contextualFirst.source,
+    contextualFirst.catalog, { entry: { ...contextualSecondEntry, column: 1, cellId: contextualFirst.insertedWidget.cellId },
+      widget: 'text', text: 'occupied' });
+  const contextualOldCatalog = applyX4UiSourceWidgetInsertion(contextualFirst.workspace, contextualFirst.source,
+    contextualByteCatalog, { entry: contextualByteEntry, widget: 'text', text: 'stale catalog' });
+  check('B119 typed insertion preserves BOM CRLF comments semicolons trailing and immutable source bytes',
+    contextualByteEntry.lineEnding === '\r\n' && contextualFirstText.startsWith('\uFEFF')
+      && !/(^|[^\r])\n/.test(contextualFirstText)
+      && contextualFirstText === contextualByteLua.slice(0, contextualFirst.startOffset) + contextualFirst.replacement
+        + contextualByteLua.slice(contextualFirst.endOffset)
+      && contextualSecondText === contextualFirstText.slice(0, contextualSecond.startOffset) + contextualSecond.replacement
+        + contextualFirstText.slice(contextualSecond.endOffset)
+      && JSON.stringify(contextualBytes.workspace) === contextualByteBefore
+      && JSON.stringify(contextualBytes.source) === contextualByteSourceBefore
+      && contextualBytes.workspace.passthroughFiles!.filter(file => file.path !== contextualImportPath).every(file =>
+        JSON.stringify(contextualSecond.workspace.passthroughFiles!.find(after => after.path === file.path)) === JSON.stringify(file))
+      && contextualFirst.workspace !== contextualBytes.workspace && contextualFirst.source !== contextualBytes.source
+      && contextualFirst.catalog !== contextualByteCatalog && Object.isFrozen(contextualFirst.insertedWidget));
+  check('B119 sequential insertion uses the fresh catalog and rejects consumed or old authority',
+    contextualSecondEntry.rowId === contextualByteEntry.rowId && contextualSecondEntry.cellId !== contextualByteEntry.cellId
+      && contextualSecond.insertedWidget.cellId === contextualSecondEntry.cellId
+      && contextualSecond.insertedWidget.creatorOperationId !== contextualFirst.insertedWidget.creatorOperationId
+      && contextualSecond.catalog !== contextualFirst.catalog
+      && !(contextualSecond.catalog.insertEntries || []).some(entry => entry.kind === 'insert-widget')
+      && contextualConsumed.accepted === false && !contextualConsumed.changed && contextualConsumed.reason === 'foreign-entry'
+      && contextualOccupied.accepted === false && !contextualOccupied.changed && contextualOccupied.reason === 'foreign-entry'
+      && contextualOldCatalog.accepted === false && !contextualOldCatalog.changed
+      && JSON.stringify(contextualBytes.workspace) === contextualByteBefore);
+  const contextualNoBom = contextualImportContextFor(canonicalCorpus, contextualByteLua.slice(1));
+  const contextualNoBomCatalog = catalogFor(contextualNoBom);
+  const contextualNoBomFirst = acceptedWidget(applyX4UiSourceWidgetInsertion(contextualNoBom.workspace, contextualNoBom.source,
+    contextualNoBomCatalog, { entry: contextualWidgetEntryFor(contextualNoBomCatalog, 1), widget: 'text', text: 'first current' }));
+  const contextualNoBomNext = contextualWidgetEntryFor(contextualNoBomFirst.catalog, 3);
+  const contextualNoBomSecond = acceptedWidget(applyX4UiSourceWidgetInsertion(contextualNoBomFirst.workspace, contextualNoBomFirst.source,
+    contextualNoBomFirst.catalog, { entry: contextualNoBomNext, widget: 'input', text: 'second current insertion' }));
+  check('B119 Input sequential insertion consumes fresh CRLF imported authority',
+    contextualNoBomSecond.insertedWidget.cellId === contextualNoBomNext.cellId
+      && contextualNoBomSecond.replacement.endsWith('\r\n')
+      && !(contextualNoBomSecond.catalog.insertEntries || []).some(entry => entry.kind === 'insert-widget'));
+
+  const contextualBeforeFile = contextualBytes.source.bundle!.sourceFiles.find(file => file.path === contextualImportPath)!;
+  const contextualAfterFile = contextualFirst.source.bundle!.sourceFiles.find(file => file.path === contextualImportPath)!;
+  const contextualCallIndexes = contextualAfterFile.callModel.calls.map((call, index) => ({ call, index }))
+    .filter(({ call }) => call.source.start.offset >= contextualFirst.startOffset
+      && call.source.end.offset <= contextualFirst.startOffset + contextualFirst.replacement.length).map(({ index }) => index);
+  const contextualOperationIndexes = contextualAfter.program.operations.map((operation, index) => ({ operation, index }))
+    .filter(({ operation }) => operation.source.start.offset >= contextualFirst.startOffset
+      && operation.source.end.offset <= contextualFirst.startOffset + contextualFirst.replacement.length).map(({ index }) => index);
+  const contextualLedger: Parameters<typeof compareX4UiSourceStructuralLedgerCorrespondence>[0] = {
+    beforeCalls: contextualBeforeFile.callModel.calls, afterCalls: contextualAfterFile.callModel.calls,
+    beforeRecords: contextualBeforeFile.callModel.records, afterRecords: contextualAfterFile.callModel.records,
+    beforeOperations: contextualBytes.program.operations, afterOperations: contextualAfter.program.operations,
+    entry: contextualByteEntry, beforeText: contextualByteLua, afterText: contextualFirstText,
+    replacementLength: contextualFirst.replacement.length, insertedCallIndex: -1, insertedOperationIndex: -1,
+    replacementCallIndexes: contextualCallIndexes,
+    replacementCallNames: contextualCallIndexes.map(index => contextualAfterFile.callModel.calls[index].name),
+    replacementCallOrders: contextualCallIndexes.map(index => contextualAfterFile.callModel.calls[index].order),
+    replacementOperationIndexes: contextualOperationIndexes,
+    replacementOperationKinds: contextualOperationIndexes.map(index => contextualAfter.program.operations[index].kind),
+    replacementOperationIds: contextualOperationIndexes.map(index => contextualAfter.program.operations[index].id),
+    replacementOperationModelOrders: contextualOperationIndexes.map(index => contextualAfter.program.operations[index].modelOrder),
+  };
+  type ContextualLedgerInput = typeof contextualLedger;
+  const contextualLedgerMutations: readonly [string, (input: ContextualLedgerInput) => void][] = [
+    ['retained call receiver', input => { asRecord(input.afterCalls[0])!.receiver = { expression: 'foreign' }; }],
+    ['retained record value', input => { asRecord(input.afterRecords[0])!.unexpected = 'foreign'; }],
+    ['retained operation source range', input => {
+      const source = asRecord(asRecord(input.afterOperations[0])!.source)!;
+      asRecord(source.start)!.offset = 1;
+    }],
+    ['retained span owner', input => {
+      asRecord(input.afterOperations.find(operation => asRecord(operation)?.kind === 'setColSpan'))!.cellId = 'foreign-cell';
+    }],
+    ['retained kernel width', input => {
+      const kernel = asRecord(asRecord(input.afterOperations.find(operation => asRecord(operation)?.kind === 'addRow'))!.kernel)!;
+      const properties = asRecord(asRecord(kernel.stateAfter)!.properties)!;
+      properties.width = Number(properties.width) + 1;
+    }],
+    ['inserted button continuation owner', input => {
+      asRecord(input.afterOperations[contextualOperationIndexes[1]])!.cellId = 'foreign-cell';
+    }],
+    ['inserted creator table', input => {
+      asRecord(input.afterOperations[contextualOperationIndexes[0]])!.tableId = 'foreign-table';
+    }],
+    ['inserted continuation unresolved', input => {
+      asRecord(input.afterOperations[contextualOperationIndexes[1]])!.status = 'unresolved';
+    }],
+    ['inserted continuation model order', input => {
+      asRecord(input.afterOperations[contextualOperationIndexes[1]])!.modelOrder = 0;
+    }],
+    ['missing retained record', input => {
+      asRecord(input)!.afterRecords = input.afterRecords.slice(1);
+    }],
+    ['missing atomic continuation', input => {
+      asRecord(input)!.afterOperations = input.afterOperations.filter((_, index) => index !== contextualOperationIndexes[1]);
+    }],
+    ['inserted creator range', input => {
+      const source = asRecord(asRecord(input.afterCalls[contextualCallIndexes[0]])!.source)!;
+      asRecord(source.end)!.offset = contextualFirst.startOffset;
+    }],
+    ['retained sibling operation', input => {
+      asRecord(input.afterOperations.find(operation => asRecord(operation)?.kind === 'createText'))!.rowId = 'foreign-row';
+    }],
+  ];
+  const contextualLedgerReceipts = contextualLedgerMutations.map(([name, mutate]) => {
+    const input = structuredClone(contextualLedger);
+    const before = JSON.stringify(input);
+    mutate(input);
+    return { name, changed: JSON.stringify(input) !== before, accepted: compareX4UiSourceStructuralLedgerCorrespondence(input) };
+  });
+  console.log(`x4UiSourceEdits contextual ledger negatives: ${JSON.stringify(contextualLedgerReceipts)}`);
+  check('B119 insert-widget correspondence retains exact records sources owners and unaffected kernel state',
+    compareX4UiSourceStructuralLedgerCorrespondence(contextualLedger)
+      && contextualCallIndexes.length === 2 && contextualOperationIndexes.length === 2
+      && contextualAfterFile.callModel.calls[contextualCallIndexes[1]].semantics.text?.value === contextualButtonText
+      && contextualLedgerReceipts.every(receipt => receipt.changed && !receipt.accepted), JSON.stringify(contextualLedgerReceipts));
+  const contextualProducer = createdMenuSessionContextFor(canonicalCorpus);
+  const contextualProducerCatalog = catalogFor(contextualProducer);
+  const rowProducerEntries = (contextualProducerCatalog.insertEntries || [])
+    .filter(entry => entry.kind === 'insert-row');
+  check('B119 Add row New-menu producer issues one row-below action', rowProducerEntries.length === 1,
+    JSON.stringify({ status: contextualProducer.program.status,
+      rowCount: contextualProducer.program.rows.length,
+      insertKinds: contextualProducerCatalog.insertEntries?.map(entry => entry.kind) }));
+  const rowProducerResult = applyX4UiSourceRowInsertion(contextualProducer.workspace, contextualProducer.source,
+    contextualProducerCatalog, { entry: rowProducerEntries[0] });
+  check('B119 Add row New-menu producer accepts a new local row', rowProducerResult.accepted,
+    JSON.stringify({ accepted: rowProducerResult.accepted, changed: rowProducerResult.changed,
+      reason: rowProducerResult.accepted === false ? rowProducerResult.reason : undefined,
+      detail: rowProducerResult.accepted === false ? rowProducerResult.detail : undefined }));
+  if (rowProducerResult.accepted === false) throw new Error('New-menu row insertion refused');
+  const emptyChainContext = sessionContextFor(rowProducerResult.workspace, canonicalCorpus, rowProducerResult.path,
+    target => target.kind === 'function' && target.name === 'menu.createFrame', 'B119 consecutive empty-row boundary');
+  const emptyChainRowEntries = (rowProducerResult.catalog.insertEntries || []).filter(entry => entry.kind === 'insert-row');
+  console.log(`x4UiSourceEdits B119 consecutive empty-row boundary: ${JSON.stringify({
+    insertRows: emptyChainRowEntries.map(entry => ({ rowIndex: entry.rowIndex, rowId: entry.rowId, tableId: entry.tableId })),
+    moveRows: (rowProducerResult.catalog.moveEntries || []).map(entry => entry.kind === 'move-row'
+      ? { direction: entry.direction, rowIndex: entry.rowIndex, rowId: entry.rowId, adjacentRowId: entry.adjacentRowId } : undefined),
+    rows: emptyChainContext.program.rows.map(row => ({ rowIndex: row.rowIndex, rowId: row.id, cellIds: row.cellIds.length,
+      cellTypes: row.cellIds.map(cellId => emptyChainContext.program.cells.find(cell => cell.id === cellId)?.kernelState?.type) })),
+    operations: emptyChainContext.program.operations.map(operation => ({ kind: operation.kind, rowId: operation.rowId,
+      status: operation.status, tableId: operation.tableId })),
+  })}`);
+  const emptyRowsLua = '\uFEFF' + contextualImportLua.replace([
+    'local row = ftable:addRow(false, {})',
+    'row[1]:setColSpan(2); -- retained span',
+    'frame:display(); -- retained display',
+  ].join('\n'), [
+    'local first = ftable:addRow(false, {});',
+    '-- first empty row',
+    'local second = ftable:addRow(false, {});',
+    '-- second empty row',
+    'frame:display();',
+  ].join('\n')).replaceAll('\n', '\r\n');
+  const emptyRowContext = contextualImportContextFor(canonicalCorpus, emptyRowsLua);
+  const emptyRowCatalog = catalogFor(emptyRowContext);
+  const emptyMoveEntry = rowMoveEntryFor(emptyRowCatalog, 'down', 1);
+  const emptyMoveBeforeText = sourceTextAt(emptyRowContext, emptyMoveEntry.path);
+  const emptyMoveResult = applyX4UiSourceRowMove(emptyRowContext.workspace, emptyRowContext.source,
+    emptyRowCatalog, { entry: emptyMoveEntry });
+  const emptyMoveInverseEntry = emptyMoveResult.accepted
+    ? (emptyMoveResult.catalog.moveEntries || []).find(entry => entry.kind === 'move-row'
+      && entry.direction === 'up' && entry.rowIndex === 2 && entry.rowId === emptyMoveResult.movedRow.rowId)
+    : undefined;
+  const emptyMoveInverse = emptyMoveInverseEntry
+    ? applyX4UiSourceRowMove(emptyMoveResult.workspace, emptyMoveResult.source, emptyMoveResult.catalog,
+      { entry: emptyMoveInverseEntry })
+    : undefined;
+  const emptyMoveBeforeContext = emptyRowContext;
+  const emptyMoveAfterContext = emptyMoveResult.accepted
+    ? sessionContextFor(emptyMoveResult.workspace, canonicalCorpus, emptyMoveEntry.path,
+      target => target.kind === 'function' && target.name === 'menu.createFrame', 'B119 empty-row move after')
+    : undefined;
+  const emptyRowsAreKernelOnly = (context: SourceEditFixtureContext | undefined): boolean => {
+    if (!context) return false;
+    const rows = context.program.rows.filter(row => row.tableId === emptyMoveEntry.tableId
+      && (row.rowIndex === emptyMoveEntry.rowIndex || row.rowIndex === emptyMoveEntry.rowIndex + 1));
+    const rowIds = new Set(rows.map(row => row.id));
+    return rows.length === 2
+      && rows.every(row => row.cellIds.length > 0 && row.cellIds.every(cellId => {
+        const cell = context.program.cells.find(candidate => candidate.id === cellId);
+        return cell?.rowId === row.id && cell.kernelState?.type === 'cell';
+      }))
+      && !context.program.operations.some(operation => rowIds.has(operation.rowId || '')
+        && ['createText', 'createButton', 'createEditBox', 'createIcon'].includes(operation.kind));
+  };
+  const emptyMoveReceipt = {
+    issued: true,
+    accepted: emptyMoveResult.accepted,
+    inverseAccepted: emptyMoveInverse?.accepted === true,
+    exactSwap: emptyMoveResult.accepted === true
+      && sourceTextAt(emptyMoveResult, emptyMoveEntry.path) === emptyMoveBeforeText.slice(0, emptyMoveEntry.startOffset)
+        + emptyMoveEntry.lower.expectedText + emptyMoveEntry.upper.expectedText
+        + emptyMoveBeforeText.slice(emptyMoveEntry.endOffset),
+    exactRoundTrip: emptyMoveInverse?.accepted === true
+      && sourceTextAt(emptyMoveInverse, emptyMoveEntry.path) === emptyMoveBeforeText,
+    beforeRowsEmpty: emptyRowsAreKernelOnly(emptyMoveBeforeContext),
+    afterRowsEmpty: emptyRowsAreKernelOnly(emptyMoveAfterContext),
+    reason: emptyMoveResult.accepted === false ? emptyMoveResult.reason : undefined,
+  };
+  console.log(`x4UiSourceEdits B119 empty-row move matrix: ${JSON.stringify(emptyMoveReceipt)}`);
+  check('B119 imported empty rows apply and inverse as an exact source permutation',
+    emptyMoveReceipt.accepted && emptyMoveReceipt.inverseAccepted && emptyMoveReceipt.exactSwap
+      && emptyMoveReceipt.exactRoundTrip && emptyMoveReceipt.beforeRowsEmpty && emptyMoveReceipt.afterRowsEmpty,
+    JSON.stringify(emptyMoveReceipt));
+  const newRowCell = rowProducerResult.catalog.insertEntries?.find(entry => entry.kind === 'insert-widget'
+    && entry.rowId === rowProducerResult.insertedRow.rowId);
+  if (!newRowCell || newRowCell.kind !== 'insert-widget') throw new Error('new row has no issued empty cell');
+  const rowWidgetResult = applyX4UiSourceWidgetInsertion(rowProducerResult.workspace, rowProducerResult.source,
+    rowProducerResult.catalog, { entry: newRowCell, widget: 'text', text: 'New-menu new-row text' });
+  check('B119 Add row New-menu fresh cell immediately accepts a typed widget', rowWidgetResult.accepted,
+    JSON.stringify({ accepted: rowWidgetResult.accepted, reason: rowWidgetResult.accepted === false ? rowWidgetResult.reason : undefined }));
+  const rowProducerAfter = sessionContextFor(rowProducerResult.workspace, canonicalCorpus, rowProducerResult.path,
+    target => target.kind === 'function' && target.name === 'menu.createFrame', 'new row result');
+  const rowOwner = rowProducerAfter.program.rows.find(row => row.id === rowProducerResult.insertedRow.rowId)!;
+  const rowCreator = rowProducerAfter.program.operations.find(operation => operation.id === rowProducerResult.insertedRow.creatorOperationId)!;
+  const rowHeight = getRowHeight(rowProducerAfter.program.tables[0].kernelState!, rowOwner.rowIndex!);
+  check('B119 Add row returned creator and complete empty row owner chain retain canonical Helper height',
+    rowCreator.kind === 'addRow' && rowCreator.status === 'applied' && rowCreator.rowId === rowOwner.id
+      && rowCreator.tableId === rowOwner.tableId && rowOwner.rowIndex === 2
+      && rowOwner.tableId === rowProducerResult.insertedRow.tableId
+      && rowProducerAfter.program.tables.find(table => table.id === rowOwner.tableId)?.frameId === rowProducerResult.insertedRow.frameId
+      && JSON.stringify(rowCreator.source) === JSON.stringify(rowProducerResult.insertedRow.creatorSource)
+      && JSON.stringify(rowProducerResult.insertedRow.sourceIdentity) === JSON.stringify(rowProducerAfter.program.target.sourceIdentity)
+      && JSON.stringify(rowOwner.cellIds) === JSON.stringify(rowProducerResult.insertedRow.cellIds)
+      && rowOwner.height?.status === 'known' && rowHeight.status === 'ok' && rowOwner.height.value === rowHeight.value
+      && rowOwner.kernelState?.scaling === rowProducerAfter.program.tables.find(table => table.id === rowOwner.tableId)?.kernelState?.properties.scaling
+      && rowProducerAfter.program.cells.filter(cell => cell.rowId === rowOwner.id).every(cell =>
+        cell.rowIndex === 2 && cell.kernelState?.type === 'cell' && cell.kernelState.colspan === 1)
+      && Object.isFrozen(rowProducerResult.insertedRow) && Object.isFrozen(rowProducerResult.insertedRow.cellIds),
+    JSON.stringify({ height: rowOwner.height, rowIndex: rowOwner.rowIndex, creator: rowCreator.kind }));
+  let rowSequence = acceptedWidget(rowWidgetResult);
+  for (const widget of ['button', 'input'] as const) {
+    const rowResult = acceptedRow(applyX4UiSourceRowInsertion(rowSequence.workspace, rowSequence.source, rowSequence.catalog,
+      { entry: rowEntryFor(rowSequence.catalog, widget === 'button' ? 2 : 3) }));
+    const entry = rowResult.catalog.insertEntries?.find(entry => entry.kind === 'insert-widget'
+      && entry.rowId === rowResult.insertedRow.rowId && entry.column === 1);
+    if (!entry || entry.kind !== 'insert-widget') throw new Error('sequential row missing first empty cell');
+    const text = `sequential row ${widget} "quote" \\ literal\n-- inert`;
+    rowSequence = acceptedWidget(applyX4UiSourceWidgetInsertion(rowResult.workspace, rowResult.source, rowResult.catalog, { entry, widget, text }));
+    const after = sessionContextFor(rowSequence.workspace, canonicalCorpus, rowSequence.path,
+      target => target.kind === 'function' && target.name === 'menu.createFrame', 'sequential new-menu row widget');
+    const operations = after.program.operations.filter(operation => operation.rowId === rowResult.insertedRow.rowId);
+    const calls = rowSequence.source.bundle!.sourceFiles.find(file => file.path === rowSequence.path)!.callModel.calls;
+    const textCall = calls.find(call => call.name === (widget === 'button' ? 'setText' : 'createEditBox')
+      && call.source.start.offset >= rowSequence.startOffset && call.source.end.offset <= rowSequence.startOffset + rowSequence.replacement.length);
+    check(`B119 Add row New-menu sequential fresh ${widget} keeps literal and exact creator ownership`,
+      operations.map(operation => operation.kind).join(',') === (widget === 'button' ? 'addRow,createButton,setText' : 'addRow,createEditBox')
+        && operations.every(operation => operation.status === 'applied' && operation.tableId === entry.tableId
+          && (operation.kind === 'addRow' || operation.cellId === entry.cellId))
+        && (widget === 'input' ? textCall?.semantics.editBox?.defaultText?.value : textCall?.semantics.text?.value) === text
+        && rowSequence.insertedWidget.rowId === rowResult.insertedRow.rowId,
+      JSON.stringify({ widget, kinds: operations.map(operation => operation.kind), text: textCall?.semantics,
+        returnedRow: rowSequence.insertedWidget.rowId === rowResult.insertedRow.rowId }));
+    if (widget === 'input') {
+      const inputCell = after.program.cells.find(cell => cell.id === entry.cellId);
+      const inputRow = after.program.rows.find(row => row.id === entry.rowId);
+      const heightEntry = rowSequence.catalog.editableEntries.find(candidate =>
+        candidate.provenance.callName === 'createEditBox' && candidate.provenance.fields.includes('semantics.properties.height')
+          && candidate.startOffset >= rowSequence.startOffset
+          && candidate.endOffset <= rowSequence.startOffset + rowSequence.replacement.length);
+      const heightReceipt = {
+        cellHeight: inputCell?.height, rowHeight: inputRow?.height,
+        kernelHeight: inputCell?.kernelState?.height,
+        editableHeight: heightEntry?.expectedText,
+      };
+      console.log('B119_FRESH_ROW_INPUT_HEIGHT', JSON.stringify(heightReceipt));
+      check('B119 fresh-row Input gets an explicit editable control height without a sibling',
+        inputCell?.kernelState?.height === 25
+          && inputCell.height?.status === 'known' && inputCell.height.value === 25
+          && inputRow?.height?.status === 'known' && inputRow.height.value === 25
+          && heightEntry?.expectedText === '25', JSON.stringify(heightReceipt));
+
+      // This counterfactual is imported source, not a request to insert a widget.
+      // Omitting height must retain Helper's zero-height editbox semantics.
+      const heightlessSource = sourceTextAt(rowSequence, rowSequence.path).replace(
+        rowSequence.replacement, rowSequence.replacement.replace(', height = 25', ''));
+      const heightlessWorkspace: ModWorkspace = { ...rowSequence.workspace,
+        passthroughFiles: rowSequence.workspace.passthroughFiles!.map(file => file.path === rowSequence.path
+          ? { ...file, content: heightlessSource } : file) };
+      const heightlessBefore = JSON.stringify(heightlessWorkspace);
+      const heightless = sessionContextFor(heightlessWorkspace, canonicalCorpus, rowSequence.path,
+        target => target.kind === 'function' && target.name === 'menu.createFrame', 'imported heightless Input');
+      const heightlessCell = heightless.program.cells.find(cell => cell.rowIndex === 4 && cell.column === 1);
+      const heightlessRow = heightless.program.rows.find(row => row.rowIndex === 4);
+      check('B119 imported heightless Input remains zero-height with a one-unit empty sibling row',
+        heightlessCell?.kernelState?.height === 0
+          && heightlessCell.height?.status === 'known' && heightlessCell.height.value === 0
+          && heightlessRow?.height?.status === 'known' && heightlessRow.height.value === 1
+          && JSON.stringify(heightlessWorkspace) === heightlessBefore
+          && sourceTextAt(heightless, rowSequence.path) === heightlessSource,
+        JSON.stringify({ cell: heightlessCell?.height, row: heightlessRow?.height }));
+    }
+  }
+  const rowMiddleLua = '\uFEFF' + contextualImportLua.replace('local row = ftable:addRow(false, {})', [
+    'local row = ftable:addRow(false, {})', 'row[1]:createText("first", {})',
+    'local second = ftable:addRow(false, {})', 'second[1]:createText("middle", {})',
+    'local third = ftable:addRow(false, {})', 'third[1]:createText("last", {})',
+  ].join('\n')).replace('row[1]:setColSpan(2); -- retained span', '-- retained row block').replaceAll('\n', '\r\n');
+  const rowPlacementCases = [
+    ['middle of three', rowMiddleLua, 2], ['last of three', rowMiddleLua, 3],
+    ['interleaved table', rowMiddleLua.replace('local row =', 'local other = frame:addTable(2, { width = 180 })\r\nlocal row =')
+      .replace('local third =', 'local otherrow = other:addRow(false, {})\r\notherrow[1]:createText("other", {})\r\nlocal third ='), 2],
+    ['unindented spans retained', contextualImportLua, 1],
+    ['canonical empty unscaled', contextualImportLua.replace('reserveScrollBar = false', 'reserveScrollBar = false, scaling = false'), 1],
+    ['all file names reserved', contextualImportLua.replace('function menu.createFrame()', 'local row2 = 2\nfunction menu.createFrame(row3)')
+      .replace('-- trailing bytes', 'local function later(row4)\n local row5 = row4\n return row5, row6\nend\n-- trailing bytes'), 1],
+  ] as const;
+  const rowPlacementReceipts = rowPlacementCases.map(([name, lua, index]) => {
+    const context = contextualImportContextFor(canonicalCorpus, lua);
+    const catalog = catalogFor(context);
+    const tableId = context.program.tables[0].id;
+    const entry = catalog.insertEntries?.find(entry => entry.kind === 'insert-row' && entry.rowIndex === index && entry.tableId === tableId);
+    const before = JSON.stringify(context.workspace);
+    const beforeSource = JSON.stringify(context.source);
+    const result = entry?.kind === 'insert-row'
+      ? applyX4UiSourceRowInsertion(context.workspace, context.source, catalog, { entry }) : undefined;
+    if (result?.accepted !== true) return { name, issued: Boolean(entry), accepted: result?.accepted,
+      reason: result?.accepted === false ? result.reason : undefined, detail: result?.accepted === false ? result.detail : undefined };
+    const after = sessionContextFor(result.workspace, canonicalCorpus, result.path,
+      target => target.kind === 'function' && target.name === 'menu.createFrame', name);
+    const inserted = after.program.rows.find(row => row.id === result.insertedRow.rowId)!;
+    const nextOldRow = context.program.rows.find(row => row.tableId === tableId && row.rowIndex === index + 1);
+    const nextStatementStart = nextOldRow && context.source.bundle!.sourceFiles.find(file => file.path === result.path)!.callModel.calls
+      .find(call => call.name === 'addRow' && call.source.start.offset === nextOldRow.source.start.offset)?.enclosingStatement?.deletionSource.start.offset;
+    const expectedAnchor = nextStatementStart ?? lua.indexOf('frame:display()');
+    const ownerIndices = context.program.rows.every(oldRow => {
+      const offset = oldRow.source.start.offset + (oldRow.source.start.offset >= result.startOffset ? result.replacement.length : 0);
+      const mappedRow = after.program.rows.find(row => row.source.start.offset === offset);
+      return mappedRow?.tableId === oldRow.tableId && mappedRow.rowIndex === oldRow.rowIndex! + (oldRow.tableId === tableId && oldRow.rowIndex! > index ? 1 : 0)
+        && JSON.stringify(mappedRow.kernelState) === JSON.stringify(oldRow.kernelState)
+        && after.program.cells.filter(cell => cell.rowId === mappedRow.id).every(cell => cell.rowIndex === mappedRow.rowIndex);
+    });
+    return { name, issued: true, accepted: true, anchor: result.startOffset === expectedAnchor,
+      ownerIndices, rowIndex: inserted.rowIndex === index + 1,
+      columns: inserted.kernelState?.cells.every((cell, column) => cell.colspan === after.program.tables[0].kernelState?.columns[column].colspan),
+      bytes: sourceTextAt(result, result.path) === lua.slice(0, result.startOffset) + result.replacement + lua.slice(result.endOffset)
+        && JSON.stringify(context.workspace) === before && JSON.stringify(context.source) === beforeSource
+        && context.workspace.passthroughFiles!.filter(file => file.path !== result.path).every(file =>
+          JSON.stringify(result.workspace.passthroughFiles!.find(afterFile => afterFile.path === file.path)) === JSON.stringify(file)),
+      binding: name !== 'all file names reserved' || result.replacement.startsWith('local row7 = ftable:addRow(false, {})'),
+      height: name !== 'canonical empty unscaled' || (inserted.height?.status === 'known' && inserted.height.value === 1
+        && inserted.kernelState?.cells.every(cell => cell.height === 0)),
+    };
+  });
+  console.log(`x4UiSourceEdits row placement controls: ${JSON.stringify(rowPlacementReceipts)}`);
+
+  const rowBeforeFile = contextualProducer.source.bundle!.sourceFiles.find(file => file.path === rowProducerResult.path)!;
+  const rowAfterFile = rowProducerResult.source.bundle!.sourceFiles.find(file => file.path === rowProducerResult.path)!;
+  const rowCallIndex = rowAfterFile.callModel.calls.findIndex(call => call.source.start.offset === rowCreator.source.start.offset);
+  const rowOperationIndex = rowProducerAfter.program.operations.findIndex(operation => operation.id === rowCreator.id);
+  const rowLedger: ContextualLedgerInput = {
+    beforeCalls: rowBeforeFile.callModel.calls, afterCalls: rowAfterFile.callModel.calls,
+    beforeRecords: rowBeforeFile.callModel.records, afterRecords: rowAfterFile.callModel.records,
+    beforeOperations: contextualProducer.program.operations, afterOperations: rowProducerAfter.program.operations,
+    entry: rowProducerEntries[0], beforeText: rowBeforeFile.text, afterText: rowAfterFile.text,
+    replacementLength: rowProducerResult.replacement.length, insertedCallIndex: -1, insertedOperationIndex: -1,
+    replacementCallIndexes: [rowCallIndex], replacementCallNames: ['addRow'], replacementCallOrders: [rowAfterFile.callModel.calls[rowCallIndex].order],
+    replacementOperationIndexes: [rowOperationIndex], replacementOperationKinds: ['addRow'], replacementOperationIds: [rowCreator.id],
+    replacementOperationModelOrders: [rowCreator.modelOrder],
+  };
+  const rowLedgerAttacks: readonly [string, (input: ContextualLedgerInput) => void][] = [
+    ['inserted rowId', input => { asRecord(input.afterOperations[rowOperationIndex])!.rowId = 'foreign-row'; }],
+    ['inserted frameId', input => { asRecord(input.afterOperations[rowOperationIndex])!.frameId = 'foreign-frame'; }],
+    ['inserted tableId', input => { asRecord(input.afterOperations[rowOperationIndex])!.tableId = 'foreign-table'; }],
+    ['inserted modelOrder', input => { asRecord(input.afterOperations[rowOperationIndex])!.modelOrder = 0; }],
+    ['inserted metadata result', input => {
+      asRecord(asRecord(asRecord(input.afterOperations[rowOperationIndex])!.metadata)!.result)!.path = 'foreign-row';
+    }],
+    ['inserted metadata unrelated undefined', input => {
+      asRecord(asRecord(input.afterOperations[rowOperationIndex])!.metadata)!.unexpected = undefined;
+    }],
+    ['inserted source', input => {
+      const source = asRecord(asRecord(input.afterOperations[rowOperationIndex])!.source)!;
+      const end = asRecord(source.end)!; end.offset = Number(end.offset) - 1; end.column = Number(end.column) - 1;
+    }],
+    ['retained owner', input => { asRecord(input.afterOperations.find(operation => asRecord(operation)?.kind === 'createText'))!.rowId = 'foreign-row'; }],
+    ['retained kernel width', input => {
+      const kernel = asRecord(asRecord(input.afterOperations[rowOperationIndex])!.kernel)!;
+      asRecord(asRecord(kernel.stateAfter)!.properties)!.width = 99;
+    }],
+    ['inserted row kernel', input => {
+      const kernel = asRecord(asRecord(input.afterOperations[rowOperationIndex])!.kernel)!;
+      const rows = asRecord(kernel.stateAfter)!.rows as Record<string, unknown>[]; rows[1].paddingTop = 99;
+    }],
+    ['missing retained record', input => { asRecord(input)!.afterRecords = input.afterRecords.slice(1); }],
+  ];
+  const rowLedgerReceipts = rowLedgerAttacks.map(([name, mutate]) => {
+    const input = structuredClone(rowLedger);
+    const snapshot = () => JSON.stringify(input, (_key, value) => value === undefined ? '<undefined>' : value);
+    const before = snapshot(); mutate(input);
+    return { name, changed: snapshot() !== before, accepted: compareX4UiSourceStructuralLedgerCorrespondence(input) };
+  });
+  console.log(`x4UiSourceEdits row ledger negatives: ${JSON.stringify(rowLedgerReceipts)}`);
+  const rowNegativeSourceCases = [
+    ...ownerSourceCases,
+    ...['mutate(ftable)', 'ftable:setDefaultColSpan(1, 2)', 'ftable[2] = {}'].map(statement =>
+      [`before selected row: ${statement}`, contextualImportLua.replace('local row =', `${statement}\nlocal row =`)] as const),
+    ...['mutate(row)', 'row = {}', 'row[2] = {}', 'row[2], other = {}, nil', 'local escaped = row',
+      'mutate(ftable)', 'ftable = {}', 'ftable [ --[[ slot ]] 2 ], other = {}, nil', 'local escaped = ftable\nmutate(escaped)',
+      'local alias = ftable\nalias[2], other = {}, nil',
+      'row [ 1 + 1 ] = {}', 'row --[[ comment ]] [2] = {}'].map(statement =>
+      [statement, contextualImportLua.replace('frame:display()', `${statement}\nframe:display()`)] as const),
+  ];
+  const rowNegativeSourceReceipts = rowNegativeSourceCases.map(([name, lua]) => {
+    const context = contextualImportContextFor(canonicalCorpus, lua.replace('row[1]:setColSpan(2); -- retained span', '-- no span'));
+    const catalog = catalogFor(context);
+    return { name, issued: catalog.insertEntries?.filter(entry => entry.kind === 'insert-row').length || 0 };
+  });
+  console.log(`x4UiSourceEdits row owner negatives: ${JSON.stringify(rowNegativeSourceReceipts)}`);
+  const rowInertSources = [
+    contextualImportLua.replace('frame:display()', 'local inert = "row[2], other = {}, nil; mutate(ftable)"\n-- row = {}; ftable = {}\nframe:display()'),
+    contextualImportLua.replace('local row = ftable:', 'local alias = ftable\nlocal row = alias:'),
+    contextualImportLua.replace('frame:display()', 'local alias = ftable\nframe:display()'),
+    contextualImportLua.replace('frame:display()', 'local inert = [==[ row[2] = {}; mutate(ftable) ]==]\n--[=[ row = {} ]=]\nframe:display()'),
+  ];
+  const rowInertReceipts = rowInertSources.map(lua => {
+    const context = contextualImportContextFor(canonicalCorpus, lua); const catalog = catalogFor(context);
+    const entry = catalog.insertEntries?.find(entry => entry.kind === 'insert-row');
+    return entry?.kind === 'insert-row' && applyX4UiSourceRowInsertion(context.workspace, context.source, catalog, { entry }).accepted;
+  });
+  const rowBoundaryContext = contextualImportContextFor(canonicalCorpus);
+  const rowBoundaryCatalog = catalogFor(rowBoundaryContext);
+  const rowBoundaryEntry = rowEntryFor(rowBoundaryCatalog, 1);
+  const rowRequest: X4UiSourceEditRowInsertionRequest = { entry: rowBoundaryEntry };
+  const rowBoundaryBytes = JSON.stringify(rowBoundaryContext.workspace);
+  const rowForeignContext = contextualImportContextFor(canonicalCorpus);
+  const rowForeignCatalog = catalogFor(rowForeignContext);
+  const rowAuthorityCases = [
+    ['cloned entry', rowBoundaryContext.workspace, rowBoundaryContext.source, rowBoundaryCatalog, { entry: structuredClone(rowBoundaryEntry) }],
+    ['foreign entry', rowBoundaryContext.workspace, rowBoundaryContext.source, rowBoundaryCatalog, { entry: rowEntryFor(rowForeignCatalog, 1) }],
+    ['wrong table', rowBoundaryContext.workspace, rowBoundaryContext.source, rowBoundaryCatalog, { entry: { ...rowBoundaryEntry, tableId: 'foreign' } }],
+    ['wrong row', rowBoundaryContext.workspace, rowBoundaryContext.source, rowBoundaryCatalog, { entry: { ...rowBoundaryEntry, rowId: 'foreign' } }],
+    ['wrong frame', rowBoundaryContext.workspace, rowBoundaryContext.source, rowBoundaryCatalog, { entry: { ...rowBoundaryEntry, frameId: 'foreign' } }],
+    ['cloned catalog', rowBoundaryContext.workspace, rowBoundaryContext.source, structuredClone(rowBoundaryCatalog), rowRequest],
+    ['foreign catalog', rowBoundaryContext.workspace, rowBoundaryContext.source, rowForeignCatalog, rowRequest],
+    ['cloned source', rowBoundaryContext.workspace, structuredClone(rowBoundaryContext.source), rowBoundaryCatalog, rowRequest],
+    ['cloned workspace', structuredClone(rowBoundaryContext.workspace), rowBoundaryContext.source, rowBoundaryCatalog, rowRequest],
+  ] as const;
+  const rowAuthorityReceipts = rowAuthorityCases.map(([name, currentWorkspace, source, catalog, request]) => {
+    const result = applyX4UiSourceRowInsertion(currentWorkspace, source, catalog, request);
+    return { name, accepted: result.accepted, changed: result.changed, reason: result.accepted === false ? result.reason : undefined };
+  });
+  const rowAccessorReceipts = ['request', 'entry', 'expected', 'catalog', 'workspace', 'workspace-file', 'source'].map(surface => {
+    const context = contextualImportContextFor(canonicalCorpus); let catalog = catalogFor(context); let source = context.source;
+    let request: X4UiSourceEditRowInsertionRequest = { entry: rowEntryFor(catalog, 1) };
+    let reads = 0;
+    const descriptor = { enumerable: true, configurable: true, get: () => { reads += 1; throw new Error('row getter executed'); } };
+    if (surface === 'request') request = Object.defineProperty({ ...request }, 'entry', descriptor);
+    if (surface === 'entry') request = { entry: Object.defineProperty({ ...request.entry }, 'provenance', descriptor) };
+    if (surface === 'expected') request = { ...request, expected: Object.defineProperty({ path: request.entry.path,
+      startOffset: request.entry.startOffset, endOffset: request.entry.endOffset, expectedText: '' }, 'path', descriptor) };
+    if (surface === 'catalog') catalog = Object.defineProperty({ ...catalog }, 'insertEntries', descriptor);
+    if (surface === 'source') source = Object.defineProperty({ ...source }, 'bundle', descriptor);
+    if (surface === 'workspace') Object.defineProperty(context.workspace, 'passthroughFiles', descriptor);
+    if (surface === 'workspace-file') Object.defineProperty(context.workspace.passthroughFiles![2], 'content', descriptor);
+    const outcome = invokePublic(() => applyX4UiSourceRowInsertion(context.workspace, source, catalog, request));
+    return { surface, reads, threw: outcome.threw, accepted: outcome.value?.accepted, changed: outcome.value?.changed };
+  });
+  const rowInvalidRequests: readonly unknown[] = [null, {}, { ...rowRequest, directCall: 'ftable:addRow(false, {})' },
+    { ...rowRequest, receiver: 'other' }, { ...rowRequest, binding: 'caller' }, { ...rowRequest, height: 10 },
+    { ...rowRequest, entry: null }, { ...rowRequest, entry: () => rowBoundaryEntry },
+    { ...rowRequest, expected: {} }, Object.assign(Object.create({ inherited: true }), rowRequest)];
+  const rowInvalidResults = rowInvalidRequests.map(request => {
+    const result: ReturnType<typeof applyX4UiSourceRowInsertion> = Reflect.apply(applyX4UiSourceRowInsertion, undefined,
+      [rowBoundaryContext.workspace, rowBoundaryContext.source, rowBoundaryCatalog, request]);
+    return result.accepted === false && !result.changed && result.reason === 'invalid-request';
+  });
+  const rowExpected = { path: rowBoundaryEntry.path, startOffset: rowBoundaryEntry.startOffset, endOffset: rowBoundaryEntry.endOffset, expectedText: '' };
+  const rowCasResults = [{ ...rowExpected, path: 'wrong' }, { ...rowExpected, startOffset: rowExpected.startOffset - 1 },
+    { ...rowExpected, endOffset: rowExpected.endOffset + 1 }, { ...rowExpected, expectedText: 'stale' }].map(expected =>
+    applyX4UiSourceRowInsertion(rowBoundaryContext.workspace, rowBoundaryContext.source, rowBoundaryCatalog, { ...rowRequest, expected }));
+  const rowStaleContext = contextualImportContextFor(canonicalCorpus); const rowStaleCatalog = catalogFor(rowStaleContext);
+  const rowStaleEntry = rowEntryFor(rowStaleCatalog, 1);
+  rowStaleContext.workspace.passthroughFiles![2].content += '-- externally changed';
+  const rowStale = applyX4UiSourceRowInsertion(rowStaleContext.workspace, rowStaleContext.source, rowStaleCatalog, { entry: rowStaleEntry });
+  const rowConsumed = applyX4UiSourceRowInsertion(rowProducerResult.workspace, rowProducerResult.source, rowProducerResult.catalog, { entry: rowProducerEntries[0] });
+  const rowOldCatalog = applyX4UiSourceRowInsertion(rowProducerResult.workspace, rowProducerResult.source, contextualProducerCatalog, { entry: rowProducerEntries[0] });
+  console.log(`x4UiSourceEdits row boundary negatives: ${JSON.stringify({ authority: rowAuthorityReceipts,
+    accessors: rowAccessorReceipts, invalid: rowInvalidResults, cas: rowCasResults.map(result => ({ accepted: result.accepted, changed: result.changed })),
+    stale: rowStale.accepted, consumed: rowConsumed.accepted, oldCatalog: rowOldCatalog.accepted })}`);
+  check('B119 Add row last middle interleaved spans and collision controls preserve exact source and mapped owners',
+    rowPlacementReceipts.every(receipt => receipt.accepted && receipt.anchor && receipt.ownerIndices && receipt.rowIndex
+      && receipt.columns && receipt.bytes && receipt.binding && receipt.height), JSON.stringify(rowPlacementReceipts));
+  check('B119 Add row standalone ledger rejects forged inserted and retained ownership source order and kernel state',
+    compareX4UiSourceStructuralLedgerCorrespondence(rowLedger) && rowLedgerReceipts.every(receipt => receipt.changed && !receipt.accepted),
+    JSON.stringify(rowLedgerReceipts));
+  check('B119 Add row refuses unsafe rebound mutation alias and control-flow owners',
+    rowNegativeSourceReceipts.every(receipt => receipt.issued === 0), JSON.stringify(rowNegativeSourceReceipts));
+  check('B119 Add row preserves inert text comments and proven table aliases', rowInertReceipts.every(Boolean), JSON.stringify(rowInertReceipts));
+  check('B119 Add row rejects cloned foreign wrong-owner and malformed raw-Lua requests without byte mutation',
+    rowAuthorityReceipts.every(receipt => !receipt.accepted && !receipt.changed) && rowInvalidResults.every(Boolean)
+      && JSON.stringify(rowBoundaryContext.workspace) === rowBoundaryBytes, JSON.stringify(rowAuthorityReceipts));
+  check('B119 Add row accessor requests and authority graphs execute zero getters',
+    rowAccessorReceipts.every(receipt => receipt.reads === 0 && !receipt.threw && receipt.accepted === false && receipt.changed === false),
+    JSON.stringify(rowAccessorReceipts));
+  check('B119 Add row expected CAS stale source and consumed catalogs are atomic refusals',
+    rowCasResults.every(result => result.accepted === false && !result.changed)
+      && rowStale.accepted === false && !rowStale.changed && rowConsumed.accepted === false && !rowConsumed.changed
+      && rowOldCatalog.accepted === false && !rowOldCatalog.changed);
+  const testsFirstMoveSurface = sourceEditMoveSurface as unknown as {
+    applyX4UiSourceRowMove?: unknown;
+  };
+  check('B119 tests-first move API is the next source-owned surface',
+    typeof testsFirstMoveSurface.applyX4UiSourceRowMove === 'function',
+    'typed row move API is not implemented yet');
+  const buildFourRowProducer = () => {
+    let producer = createdMenuSessionContextFor(canonicalCorpus);
+    const producerPath = producer.program.target.source.file;
+    for (const widget of ['text', 'button', 'input'] as const) {
+      const catalog = catalogFor(producer);
+      const rowEntry = rowEntryFor(catalog, producer.program.rows.length);
+      const rowResult = acceptedRow(applyX4UiSourceRowInsertion(
+        producer.workspace,
+        producer.source,
+        catalog,
+        { entry: rowEntry },
+      ));
+      const cellEntry = rowResult.catalog.insertEntries?.find(entry => entry.kind === 'insert-widget'
+        && entry.rowId === rowResult.insertedRow.rowId && entry.column === 1);
+      if (!cellEntry || cellEntry.kind !== 'insert-widget') throw new Error(`producer ${widget} row has no first cell authority`);
+      const widgetResult = acceptedWidget(applyX4UiSourceWidgetInsertion(
+        rowResult.workspace,
+        rowResult.source,
+        rowResult.catalog,
+        { entry: cellEntry, widget, text: `producer ${widget} row` },
+      ));
+      producer = sessionContextFor(
+        widgetResult.workspace,
+        canonicalCorpus,
+        producerPath,
+        target => target.kind === 'function' && target.name === 'menu.createFrame',
+        `B119 producer ${widget} row`,
+      );
+    }
+    return producer;
+  };
+  const moveProducer = buildFourRowProducer();
+  const moveProducerPath = moveProducer.program.target.source.file;
+  const producerMoveDirections = [
+    ['row1 down', 'down', 1],
+    ['row2 down', 'down', 2],
+    ['row3 down', 'down', 3],
+    ['row2 up', 'up', 2],
+    ['row3 up', 'up', 3],
+    ['row4 up', 'up', 4],
+  ] as const;
+  const producerDirectionReceipts = producerMoveDirections.map(([name, direction, rowIndex]) => {
+    const producer = buildFourRowProducer();
+    const catalog = catalogFor(producer);
+    const entry = (catalog.moveEntries || []).find(candidate => candidate.kind === 'move-row'
+      && candidate.direction === direction && candidate.rowIndex === rowIndex);
+    if (!entry) return { name, issued: false, accepted: false, inverseAccepted: false, moveEntries: (catalog.moveEntries || []).length };
+    const before = sourceTextAt(producer, moveProducerPath);
+    const result = applyX4UiSourceRowMove(producer.workspace, producer.source, catalog, { entry });
+    if (result.accepted === false) return { name, issued: true, accepted: false, inverseAccepted: false, reason: result.reason, detail: result.detail };
+    const movedIndex = direction === 'down' ? rowIndex + 1 : rowIndex - 1;
+    const inverseEntry = (result.catalog.moveEntries || []).find(candidate => candidate.kind === 'move-row'
+      && candidate.direction !== direction && candidate.rowIndex === movedIndex
+      && candidate.rowId === result.movedRow.rowId);
+    const inverse = inverseEntry
+      ? applyX4UiSourceRowMove(result.workspace, result.source, result.catalog, { entry: inverseEntry })
+      : undefined;
+    const expectedMovedText = before.slice(0, entry.startOffset) + entry.lower.expectedText + entry.upper.expectedText
+      + before.slice(entry.endOffset);
+    return {
+      name,
+      issued: true,
+      accepted: true,
+      inverseAccepted: inverse?.accepted === true,
+      exactSwap: sourceTextAt(result, moveProducerPath) === expectedMovedText,
+      exactRoundTrip: inverse?.accepted === true && sourceTextAt(inverse, moveProducerPath) === before,
+      movedRowIndex: result.movedRow.rowIndex,
+      inverseRowIndex: inverse?.accepted === true ? inverse.movedRow.rowIndex : undefined,
+      freshProof: result.movedRow.rowId !== result.entry.rowId
+        && result.movedRow.creatorOperationId !== (direction === 'down' ? entry.upper : entry.lower).creatorOperationId,
+      movedCellCount: result.movedRow.cellIds.length,
+    };
+  });
+  console.log(`x4UiSourceEdits B119 actual four-row producer all directions: ${JSON.stringify(producerDirectionReceipts)}`);
+  check('B119 actual New-menu Text/Button/Input four-row producer accepts every direction and inverse byte-identically',
+    producerDirectionReceipts.every(receipt => receipt.issued && receipt.accepted && receipt.inverseAccepted
+      && receipt.exactSwap && receipt.exactRoundTrip && receipt.movedRowIndex !== undefined
+      && receipt.inverseRowIndex !== undefined && receipt.movedCellCount > 0 && receipt.freshProof),
+    JSON.stringify(producerDirectionReceipts));
+  const moveProducerCatalog = catalogFor(moveProducer);
+  const moveProducerText = sourceTextAt(moveProducer, moveProducerPath);
+  const moveProducerEntry = (moveProducerCatalog.moveEntries || []).find(entry => entry.kind === 'move-row'
+    && entry.direction === 'down' && entry.rowIndex === 2);
+  const firstProducerMove = moveProducerEntry
+    ? applyX4UiSourceRowMove(moveProducer.workspace, moveProducer.source, moveProducerCatalog, { entry: moveProducerEntry })
+    : undefined;
+  const firstProducerMoveReceipt = {
+    accepted: firstProducerMove?.accepted,
+    changed: firstProducerMove?.changed,
+    reason: firstProducerMove?.accepted === false ? firstProducerMove.reason : undefined,
+    detail: firstProducerMove?.accepted === false ? firstProducerMove.detail : undefined,
+    moveEntries: (moveProducerCatalog.moveEntries || []).length,
+    rowCount: moveProducer.program.rows.length,
+  };
+  console.log(`x4UiSourceEdits B119 first producer move: ${JSON.stringify(firstProducerMoveReceipt)}`);
+  check('B119 New-menu Text/Button/Input producer exposes and accepts a real middle-row move',
+    firstProducerMove?.accepted === true,
+    JSON.stringify(firstProducerMoveReceipt));
+  if (!firstProducerMove || firstProducerMove.accepted === false) throw new Error('producer move did not accept');
+  const movedProducerText = sourceTextAt(firstProducerMove, moveProducerPath);
+  const expectedMovedProducerText = moveProducerText.slice(0, firstProducerMove.startOffset)
+    + firstProducerMove.entry.lower.expectedText + firstProducerMove.entry.upper.expectedText
+    + moveProducerText.slice(firstProducerMove.endOffset);
+  const movedProducerContext = sessionContextFor(
+    firstProducerMove.workspace,
+    canonicalCorpus,
+    moveProducerPath,
+    target => target.kind === 'function' && target.name === 'menu.createFrame',
+    'B119 producer moved row',
+  );
+  const inverseProducerEntry = (firstProducerMove.catalog.moveEntries || []).find(entry => entry.kind === 'move-row'
+    && entry.direction === 'up' && entry.rowIndex === 3 && entry.rowId === firstProducerMove.movedRow.rowId);
+  const inverseProducerMove = inverseProducerEntry
+    ? applyX4UiSourceRowMove(firstProducerMove.workspace, firstProducerMove.source, firstProducerMove.catalog,
+      { entry: inverseProducerEntry })
+    : undefined;
+  const inverseProducerReceipt = {
+    accepted: inverseProducerMove?.accepted,
+    changed: inverseProducerMove?.changed,
+    reason: inverseProducerMove?.accepted === false ? inverseProducerMove.reason : undefined,
+    detail: inverseProducerMove?.accepted === false ? inverseProducerMove.detail : undefined,
+    movedRowIndex: firstProducerMove.movedRow.rowIndex,
+    freshMovedRow: firstProducerMove.movedRow.rowId !== firstProducerMove.entry.rowId,
+  };
+  console.log(`x4UiSourceEdits B119 producer inverse move: ${JSON.stringify(inverseProducerReceipt)}`);
+  check('B119 producer move preserves exact swapped bytes and fresh creator proof for inverse move',
+    movedProducerText === expectedMovedProducerText
+      && firstProducerMove.movedRow.rowIndex === 3
+      && firstProducerMove.movedRow.creatorOperationId !== firstProducerMove.entry.upper.creatorOperationId
+      && firstProducerMove.movedRow.sourceIdentity.sha256 !== firstProducerMove.entry.provenance.sourceIdentity.sha256
+      && inverseProducerMove?.accepted === true
+      && sourceTextAt(inverseProducerMove, moveProducerPath) === moveProducerText
+      && inverseProducerMove.movedRow.rowIndex === 2
+      && movedProducerContext.program.rows.length === moveProducer.program.rows.length,
+    JSON.stringify({ first: firstProducerMoveReceipt, inverse: inverseProducerReceipt }));
+  const moveBeforeFile = moveProducer.source.bundle!.sourceFiles.find(file => file.path === moveProducerPath)!;
+  const moveAfterFile = movedProducerContext.source.bundle!.sourceFiles.find(file => file.path === moveProducerPath)!;
+  const rowMoveLedger: Parameters<typeof compareX4UiSourceStructuralLedgerCorrespondence>[0] = {
+    beforeCalls: moveBeforeFile.callModel.calls,
+    afterCalls: moveAfterFile.callModel.calls,
+    beforeRecords: moveBeforeFile.callModel.records,
+    afterRecords: moveAfterFile.callModel.records,
+    beforeOperations: moveProducer.program.operations,
+    afterOperations: movedProducerContext.program.operations,
+    entry: firstProducerMove.entry,
+    beforeText: moveProducerText,
+    afterText: movedProducerText,
+    replacementLength: firstProducerMove.replacement.length,
+    insertedCallIndex: -1,
+    insertedOperationIndex: -1,
+  };
+  const rowMoveLedgerBaseline = compareX4UiSourceStructuralLedgerCorrespondence(rowMoveLedger);
+  const movedCreatorIndex = movedProducerContext.program.operations.findIndex(operation => operation.id === firstProducerMove.movedRow.creatorOperationId);
+  const retainedRowIndex = movedProducerContext.program.operations.findIndex(operation => operation.kind === 'addRow'
+    && operation.id !== firstProducerMove.movedRow.creatorOperationId);
+  const retainedCellIndex = movedProducerContext.program.operations.findIndex(operation => operation.kind === 'createText'
+    && operation.rowId !== firstProducerMove.movedRow.rowId);
+  const prefixIndex = movedProducerContext.program.operations.findIndex(operation => operation.kind === 'setColWidthPercent');
+  const rowMoveLedgerMutations: readonly [string, (input: typeof rowMoveLedger) => void][] = [
+    ['retained row ownership', input => {
+      asRecord(input.afterOperations[retainedRowIndex])!.rowId = 'foreign-unaffected-row';
+    }],
+    ['retained row kernel state', input => {
+      const kernel = asRecord(asRecord(input.afterOperations[retainedRowIndex])!.kernel)!;
+      const rows = asRecord(kernel.stateAfter)!.rows as Record<string, unknown>[];
+      asRecord(rows[0])!.paddingBottom = Number(asRecord(rows[0])!.paddingBottom) + 1;
+    }],
+    ['moved row ownership', input => {
+      asRecord(input.afterOperations[movedCreatorIndex])!.rowId = 'foreign-moved-row';
+    }],
+    ['moved row kernel state', input => {
+      const kernel = asRecord(asRecord(input.afterOperations[movedCreatorIndex])!.kernel)!;
+      const rows = asRecord(kernel.stateAfter)!.rows as Record<string, unknown>[];
+      asRecord(rows[rows.length - 1])!.paddingTop = Number(asRecord(rows[rows.length - 1])!.paddingTop) + 1;
+    }],
+    ['retained table prefix kernel state', input => {
+      const kernel = asRecord(asRecord(input.afterOperations[prefixIndex])!.kernel)!;
+      const properties = asRecord(asRecord(kernel.stateAfter)!.properties)!;
+      properties.width = Number(properties.width) + 1;
+    }],
+    ['retained cell kernel state', input => {
+      const kernel = asRecord(asRecord(input.afterOperations[retainedCellIndex])!.kernel)!;
+      const rows = asRecord(kernel.stateAfter)!.rows as Record<string, unknown>[];
+      const cells = asRecord(rows[0])!.cells as Record<string, unknown>[];
+      asRecord(cells[0])!.height = Number(asRecord(cells[0])!.height) + 1;
+    }],
+  ];
+  const rowMoveLedgerReceipts = rowMoveLedgerMutations.map(([name, mutate]) => {
+    const input = structuredClone(rowMoveLedger);
+    const before = JSON.stringify(input);
+    mutate(input);
+    return { name, changed: JSON.stringify(input) !== before, accepted: compareX4UiSourceStructuralLedgerCorrespondence(input) };
+  });
+  console.log(`x4UiSourceEdits B119 row move ledger causal matrix: ${JSON.stringify({
+    baseline: rowMoveLedgerBaseline,
+    rows: rowMoveLedgerMutations.length,
+    refused: rowMoveLedgerReceipts.filter(receipt => !receipt.accepted).length,
+  })}`);
+  check('B119 row move correspondence proves retained prefixes, moved own-row state, and exact two-row scope',
+    rowMoveLedgerBaseline && rowMoveLedgerReceipts.every(receipt => receipt.changed && !receipt.accepted),
+    JSON.stringify(rowMoveLedgerReceipts));
+  const terminalPairProducer = buildFourRowProducer();
+  const terminalPairCatalog = catalogFor(terminalPairProducer);
+  const terminalPairEntry = rowMoveEntryFor(terminalPairCatalog, 'down', 3);
+  const terminalPairBeforeText = sourceTextAt(terminalPairProducer, terminalPairEntry.path);
+  const terminalPairResult = acceptedMove(applyX4UiSourceRowMove(terminalPairProducer.workspace,
+    terminalPairProducer.source, terminalPairCatalog, { entry: terminalPairEntry }));
+  const terminalPairAfterContext = sessionContextFor(terminalPairResult.workspace, canonicalCorpus,
+    terminalPairEntry.path, target => target.kind === 'function' && target.name === 'menu.createFrame',
+    'B119 terminal Button/Input moved source');
+  const terminalPairBeforeFile = terminalPairProducer.source.bundle!.sourceFiles.find(file => file.path === terminalPairEntry.path)!;
+  const terminalPairAfterFile = terminalPairAfterContext.source.bundle!.sourceFiles.find(file => file.path === terminalPairEntry.path)!;
+  const terminalPairLedger: Parameters<typeof compareX4UiSourceStructuralLedgerCorrespondence>[0] = {
+    beforeCalls: terminalPairBeforeFile.callModel.calls,
+    afterCalls: terminalPairAfterFile.callModel.calls,
+    beforeRecords: terminalPairBeforeFile.callModel.records,
+    afterRecords: terminalPairAfterFile.callModel.records,
+    beforeOperations: terminalPairProducer.program.operations,
+    afterOperations: terminalPairAfterContext.program.operations,
+    entry: terminalPairResult.entry,
+    beforeText: terminalPairBeforeText,
+    afterText: sourceTextAt(terminalPairResult, terminalPairEntry.path),
+    replacementLength: terminalPairResult.replacement.length,
+    insertedCallIndex: -1,
+    insertedOperationIndex: -1,
+  };
+  const lastKernelIndexFor = (operations: readonly X4UiLayoutOperation[], tableId: string): number => {
+    for (let index = operations.length - 1; index >= 0; index -= 1) {
+      const operation = operations[index];
+      const kernel = asRecord(operation.kernel);
+      if (operation.tableId === tableId && kernel?.stateAfter !== undefined) return index;
+    }
+    return -1;
+  };
+  const terminalBeforeKernelIndex = lastKernelIndexFor(terminalPairProducer.program.operations, terminalPairEntry.tableId);
+  const terminalAfterKernelIndex = lastKernelIndexFor(terminalPairAfterContext.program.operations, terminalPairEntry.tableId);
+  const terminalAfterSetTextIndex = terminalPairAfterContext.program.operations.findIndex((operation, index) =>
+    index > terminalAfterKernelIndex && operation.tableId === terminalPairEntry.tableId && operation.kind === 'setText');
+  if (terminalBeforeKernelIndex < 0 || terminalAfterKernelIndex < 0 || terminalAfterSetTextIndex < 0) {
+    throw new Error('Button/Input terminal kernel transition was not reproduced');
+  }
+  const terminalBeforeKernelOperation = terminalPairProducer.program.operations[terminalBeforeKernelIndex];
+  const terminalAfterKernelOperation = terminalPairAfterContext.program.operations[terminalAfterKernelIndex];
+  const terminalAfterSetTextOperation = terminalPairAfterContext.program.operations[terminalAfterSetTextIndex];
+  const terminalKernelLedgerBaseline = compareX4UiSourceStructuralLedgerCorrespondence(terminalPairLedger);
+  const terminalKernelMutations: readonly [string, (input: typeof terminalPairLedger) => void][] = [
+    ['before terminal stateAfter removed', input => {
+      const operation = asRecord(input.beforeOperations[terminalBeforeKernelIndex])!;
+      delete asRecord(operation.kernel)!.stateAfter;
+    }],
+    ['after terminal stateAfter removed', input => {
+      const operation = asRecord(input.afterOperations[terminalAfterKernelIndex])!;
+      delete asRecord(operation.kernel)!.stateAfter;
+    }],
+    ['after terminal kernel removed', input => {
+      delete asRecord(input.afterOperations[terminalAfterKernelIndex])!.kernel;
+    }],
+  ];
+  const terminalKernelReceipts = terminalKernelMutations.map(([name, mutate]) => {
+    const input = structuredClone(terminalPairLedger);
+    const before = JSON.stringify(input);
+    mutate(input);
+    return { name, changed: JSON.stringify(input) !== before, accepted: compareX4UiSourceStructuralLedgerCorrespondence(input) };
+  });
+  const terminalKernelSummary = {
+    baseline: terminalKernelLedgerBaseline,
+    before: { index: terminalBeforeKernelIndex, kind: terminalBeforeKernelOperation.kind,
+      modelOrder: terminalBeforeKernelOperation.modelOrder, hasStateAfter: asRecord(terminalBeforeKernelOperation.kernel)?.stateAfter !== undefined },
+    after: { index: terminalAfterKernelIndex, kind: terminalAfterKernelOperation.kind,
+      modelOrder: terminalAfterKernelOperation.modelOrder, hasStateAfter: asRecord(terminalAfterKernelOperation.kernel)?.stateAfter !== undefined },
+    metadataAfter: { index: terminalAfterSetTextIndex, kind: terminalAfterSetTextOperation.kind,
+      hasKernel: terminalAfterSetTextOperation.kernel !== undefined, hasStateAfter: asRecord(terminalAfterSetTextOperation.kernel)?.stateAfter !== undefined },
+    cases: terminalKernelMutations.length,
+    refused: terminalKernelReceipts.filter(receipt => !receipt.accepted).length,
+  };
+  console.log(`x4UiSourceEdits B119 terminal Button/Input kernel removal negatives: ${JSON.stringify(terminalKernelSummary)}`);
+  check('B119 terminal Button/Input kernel and stateAfter removals refuse without fallback to an earlier snapshot',
+    terminalKernelLedgerBaseline && terminalBeforeKernelOperation.kind === 'createEditBox'
+      && terminalAfterKernelOperation.kind === 'createButton' && terminalAfterSetTextOperation.kind === 'setText'
+      && terminalAfterSetTextOperation.kernel === undefined && terminalAfterSetTextOperation.kernel?.stateAfter === undefined
+      && terminalKernelReceipts.every(receipt => receipt.changed && !receipt.accepted),
+    JSON.stringify({ summary: terminalKernelSummary, receipts: terminalKernelReceipts }));
+  const rowMoveSemicolonLua = '\uFEFF' + contextualImportLua.replace([
+    'local row = ftable:addRow(false, {})',
+    'row[1]:setColSpan(2); -- retained span',
+    'frame:display(); -- retained display',
+  ].join('\n'), [
+    'local first = ftable:addRow(false, {});',
+    'first[1]:setColSpan(2); -- first span',
+    'first[1]:createText("first", {});',
+    '-- retained between-row comment; first[9] is inert',
+    'local second = ftable:addRow(false, {});',
+    'second[1]:setColSpan(2); -- second span',
+    'second[1]:createText("second", {});',
+    '-- retained second-row comment; second[9] is inert',
+    'local third = ftable:addRow(false, {});',
+    'third[1]:setColSpan(2); -- third span',
+    'third[1]:createText("third", {});',
+    'frame:display();',
+  ].join('\n')).replaceAll('\n', '\r\n');
+  const semicolonMoveCases = [
+    ['first down', 'down', 1],
+    ['middle down', 'down', 2],
+    ['last up', 'up', 3],
+  ] as const;
+  const semicolonMoveReceipts = semicolonMoveCases.map(([name, direction, rowIndex]) => {
+    const context = contextualImportContextFor(canonicalCorpus, rowMoveSemicolonLua);
+    const catalog = catalogFor(context);
+    const entry = (catalog.moveEntries || []).find(candidate => candidate.kind === 'move-row'
+      && candidate.direction === direction && candidate.rowIndex === rowIndex);
+    if (!entry) return { name, issued: false, accepted: false, inverseAccepted: false };
+    const before = sourceTextAt(context, entry.path);
+    const otherFiles = context.workspace.passthroughFiles?.filter(file => file.path !== entry.path) || [];
+    const result = applyX4UiSourceRowMove(context.workspace, context.source, catalog, { entry });
+    if (result.accepted === false) return { name, issued: true, accepted: false, reason: result.reason, detail: result.detail };
+    const movedText = sourceTextAt(result, entry.path);
+    const expectedText = before.slice(0, entry.startOffset) + entry.lower.expectedText + entry.upper.expectedText
+      + before.slice(entry.endOffset);
+    const movedIndex = direction === 'down' ? rowIndex + 1 : rowIndex - 1;
+    const resultOtherFiles = (result.workspace.passthroughFiles || []).filter(file => file.path !== entry.path);
+    const otherFilesUnchanged = resultOtherFiles.length === otherFiles.length
+      && JSON.stringify(resultOtherFiles) === JSON.stringify(otherFiles);
+    const inverseEntry = (result.catalog.moveEntries || []).find(candidate => candidate.kind === 'move-row'
+      && candidate.direction !== direction && candidate.rowIndex === movedIndex
+      && candidate.rowId === result.movedRow.rowId);
+    const inverse = inverseEntry
+      ? applyX4UiSourceRowMove(result.workspace, result.source, result.catalog, { entry: inverseEntry })
+      : undefined;
+    return {
+      name,
+      issued: true,
+      accepted: true,
+      inverseAccepted: inverse?.accepted === true,
+      exactSwap: movedText === expectedText,
+      exactRoundTrip: inverse?.accepted === true && sourceTextAt(inverse, entry.path) === before,
+      freshProof: result.movedRow.rowIndex === movedIndex && result.movedRow.cellIds.length === 3
+        && result.movedRow.rowId !== result.entry.rowId,
+      formatting: movedText.startsWith('\uFEFF') && !movedText.replaceAll('\r\n', '').includes('\n')
+        && otherFilesUnchanged,
+      otherFilesCount: resultOtherFiles.length,
+    };
+  });
+  console.log(`x4UiSourceEdits B119 no-indent semicolon span move matrix: ${JSON.stringify(semicolonMoveReceipts)}`);
+  check('B119 first/middle/last no-indent semicolon span moves preserve BOM CRLF bytes and inverse proof',
+    semicolonMoveReceipts.every(receipt => receipt.issued && receipt.accepted && receipt.inverseAccepted
+      && receipt.exactSwap && receipt.exactRoundTrip && receipt.freshProof && receipt.formatting),
+    JSON.stringify(semicolonMoveReceipts));
+  const firstPhaseContext = contextualImportContextFor(canonicalCorpus, rowMoveSemicolonLua);
+  const firstPhaseCatalog = catalogFor(firstPhaseContext);
+  const firstPhaseEntry = (firstPhaseCatalog.moveEntries || []).find(entry => entry.kind === 'move-row'
+    && entry.direction === 'down' && entry.rowIndex === 1);
+  if (!firstPhaseEntry) throw new Error('first-row phase move authority was not issued');
+  const firstPhaseBeforeText = sourceTextAt(firstPhaseContext, firstPhaseEntry.path);
+  const firstPhaseResult = applyX4UiSourceRowMove(firstPhaseContext.workspace, firstPhaseContext.source,
+    firstPhaseCatalog, { entry: firstPhaseEntry });
+  if (firstPhaseResult.accepted === false) throw new Error('first-row phase move did not accept');
+  const firstPhaseAfterContext = sessionContextFor(
+    firstPhaseResult.workspace,
+    canonicalCorpus,
+    firstPhaseEntry.path,
+    target => target.kind === 'function' && target.name === 'menu.createFrame',
+    'B119 first-row phase moved source',
+  );
+  const firstPhaseBeforeFile = firstPhaseContext.source.bundle!.sourceFiles.find(file => file.path === firstPhaseEntry.path)!;
+  const firstPhaseAfterFile = firstPhaseAfterContext.source.bundle!.sourceFiles.find(file => file.path === firstPhaseEntry.path)!;
+  const firstPhaseLedger: Parameters<typeof compareX4UiSourceStructuralLedgerCorrespondence>[0] = {
+    beforeCalls: firstPhaseBeforeFile.callModel.calls,
+    afterCalls: firstPhaseAfterFile.callModel.calls,
+    beforeRecords: firstPhaseBeforeFile.callModel.records,
+    afterRecords: firstPhaseAfterFile.callModel.records,
+    beforeOperations: firstPhaseContext.program.operations,
+    afterOperations: firstPhaseAfterContext.program.operations,
+    entry: firstPhaseResult.entry,
+    beforeText: firstPhaseBeforeText,
+    afterText: sourceTextAt(firstPhaseResult, firstPhaseEntry.path),
+    replacementLength: firstPhaseResult.replacement.length,
+    insertedCallIndex: -1,
+    insertedOperationIndex: -1,
+  };
+  const firstPhaseBeforeOperationIndex = firstPhaseContext.program.operations.findIndex(operation =>
+    operation.id === firstPhaseEntry.upper.creatorOperationId);
+  const firstPhaseAfterOperationIndex = firstPhaseAfterContext.program.operations.findIndex(operation =>
+    operation.id === firstPhaseResult.movedRow.creatorOperationId);
+  const firstPhaseKernelMutations: readonly [string, (input: typeof firstPhaseLedger) => void][] = [
+    ['before columns', input => {
+      const state = asRecord(asRecord(input.beforeOperations[firstPhaseBeforeOperationIndex])!.kernel)!.stateBefore;
+      const columns = asRecord(state)!.columns as Record<string, unknown>[];
+      columns[0].width = Number(columns[0].width) + 1;
+    }],
+    ['before final flag', input => {
+      const state = asRecord(asRecord(input.beforeOperations[firstPhaseBeforeOperationIndex])!.kernel)!.stateBefore;
+      asRecord(state)!.final = true;
+    }],
+    ['after columns', input => {
+      const state = asRecord(asRecord(input.afterOperations[firstPhaseAfterOperationIndex])!.kernel)!.stateBefore;
+      const columns = asRecord(state)!.columns as Record<string, unknown>[];
+      columns[0].width = Number(columns[0].width) + 1;
+    }],
+    ['after final flag', input => {
+      const state = asRecord(asRecord(input.afterOperations[firstPhaseAfterOperationIndex])!.kernel)!.stateBefore;
+      asRecord(state)!.final = false;
+    }],
+  ];
+  const firstPhaseKernelReceipts = firstPhaseKernelMutations.map(([name, mutate]) => {
+    const input = structuredClone(firstPhaseLedger);
+    const before = JSON.stringify(input);
+    mutate(input);
+    return { name, changed: JSON.stringify(input) !== before, accepted: compareX4UiSourceStructuralLedgerCorrespondence(input) };
+  });
+  const firstPhaseLedgerBaseline = compareX4UiSourceStructuralLedgerCorrespondence(firstPhaseLedger);
+  console.log(`x4UiSourceEdits B119 first-row finalization kernel negatives: ${JSON.stringify({
+    baseline: firstPhaseLedgerBaseline,
+    cases: firstPhaseKernelMutations.length,
+    refused: firstPhaseKernelReceipts.filter(receipt => !receipt.accepted).length,
+  })}`);
+  check('B119 first-row finalization proves helper columns and final flag without normalization',
+    firstPhaseLedgerBaseline && firstPhaseKernelReceipts.every(receipt => receipt.changed && !receipt.accepted),
+    JSON.stringify(firstPhaseKernelReceipts));
+  const unknownMoveLua = rowMoveSemicolonLua.replace(
+    'second[1]:setColSpan(2); -- second span',
+    'mutate(ftable); -- unknown executable side effect inside the row block\nsecond[1]:setColSpan(2); -- second span',
+  );
+  const unknownMoveContext = contextualImportContextFor(canonicalCorpus, unknownMoveLua);
+  const unknownMoveCatalog = catalogFor(unknownMoveContext);
+  const unknownMoveBefore = JSON.stringify(unknownMoveContext.workspace);
+  const unknownMoveReceipt = {
+    moveEntries: (unknownMoveCatalog.moveEntries || []).length,
+    accepted: unknownMoveCatalog.moveEntries?.some(entry => entry.kind === 'move-row') || false,
+    unchanged: JSON.stringify(unknownMoveContext.workspace) === unknownMoveBefore,
+  };
+  console.log(`x4UiSourceEdits B119 unknown executable move boundary: ${JSON.stringify(unknownMoveReceipt)}`);
+  check('B119 unknown executable side effects inside row byte blocks issue no move authority',
+    unknownMoveReceipt.moveEntries === 0 && !unknownMoveReceipt.accepted && unknownMoveReceipt.unchanged,
+    JSON.stringify(unknownMoveReceipt));
+  const moveImportRefusalCases = [
+    ['aliased and rebound table receiver', rowMoveSemicolonLua
+      .replace('local first = ftable:addRow(false, {});',
+        'local alias = ftable;\r\nlocal first = alias:addRow(false, {});')
+      .replace('local second = ftable:addRow(false, {});',
+        'alias = ftable;\r\nlocal second = ftable:addRow(false, {});')],
+    ['rebound table owner', rowMoveSemicolonLua.replace(
+      'local first = ftable:addRow(false, {});',
+      'ftable = ftable;\r\nlocal first = ftable:addRow(false, {});',
+    )],
+    ['cross-row reference after both blocks', rowMoveSemicolonLua.replace(
+      'frame:display();',
+      'first[1] = third[1];\r\nframe:display();',
+    )],
+    ['interleaved executable side effect', unknownMoveLua],
+  ] as const;
+  const moveImportRefusalReceipts = moveImportRefusalCases.map(([name, lua]) => {
+    const context = contextualImportContextFor(canonicalCorpus, lua);
+    const catalog = catalogFor(context);
+    const before = JSON.stringify(context.workspace);
+    const moveEntries = catalog.moveEntries || [];
+    return {
+      name,
+      moveEntries: moveEntries.length,
+      accepted: moveEntries.some(entry => entry.kind === 'move-row'),
+      unchanged: JSON.stringify(context.workspace) === before,
+    };
+  });
+  console.log(`x4UiSourceEdits B119 imported move refusal matrix: ${JSON.stringify(moveImportRefusalReceipts)}`);
+  check('B119 imported alias/rebinding cross-row reference and interleaved execution issue no move authority',
+    moveImportRefusalReceipts.every(receipt => receipt.moveEntries === 0 && !receipt.accepted && receipt.unchanged),
+    JSON.stringify(moveImportRefusalReceipts));
+  const safeStaticAliasLua = rowMoveSemicolonLua.replace(
+    'local first = ftable:addRow(false, {});',
+    'local alias = ftable;\r\nlocal first = alias:addRow(false, {});',
+  );
+  const safeStaticAliasContext = contextualImportContextFor(canonicalCorpus, safeStaticAliasLua);
+  const safeStaticAliasCatalog = catalogFor(safeStaticAliasContext);
+  const safeStaticAliasEntry = rowMoveEntryFor(safeStaticAliasCatalog, 'down', 1);
+  const safeStaticAliasBefore = sourceTextAt(safeStaticAliasContext, safeStaticAliasEntry.path);
+  const safeStaticAliasMove = acceptedMove(applyX4UiSourceRowMove(
+    safeStaticAliasContext.workspace,
+    safeStaticAliasContext.source,
+    safeStaticAliasCatalog,
+    { entry: safeStaticAliasEntry },
+  ));
+  const safeStaticAliasInverseEntry = (safeStaticAliasMove.catalog.moveEntries || []).find(entry => entry.kind === 'move-row'
+    && entry.direction === 'up' && entry.rowIndex === 2 && entry.rowId === safeStaticAliasMove.movedRow.rowId);
+  if (!safeStaticAliasInverseEntry) throw new Error('safe static alias inverse move authority was not issued');
+  const safeStaticAliasInverse = acceptedMove(applyX4UiSourceRowMove(
+    safeStaticAliasMove.workspace,
+    safeStaticAliasMove.source,
+    safeStaticAliasMove.catalog,
+    { entry: safeStaticAliasInverseEntry },
+  ));
+  const safeStaticAliasExpected = safeStaticAliasBefore.slice(0, safeStaticAliasEntry.startOffset)
+    + safeStaticAliasEntry.lower.expectedText + safeStaticAliasEntry.upper.expectedText
+    + safeStaticAliasBefore.slice(safeStaticAliasEntry.endOffset);
+  const safeStaticAliasReceipt = {
+    luaChange: 'local alias = ftable; then local first = alias:addRow(false, {}); with no rebinding',
+    moveEntries: (safeStaticAliasCatalog.moveEntries || []).length,
+    accepted: safeStaticAliasMove.accepted,
+    inverseAccepted: safeStaticAliasInverse.accepted,
+    exactSwap: sourceTextAt(safeStaticAliasMove, safeStaticAliasEntry.path) === safeStaticAliasExpected,
+    exactRoundTrip: sourceTextAt(safeStaticAliasInverse, safeStaticAliasEntry.path) === safeStaticAliasBefore,
+    freshProof: safeStaticAliasMove.movedRow.rowId !== safeStaticAliasEntry.rowId
+      && safeStaticAliasMove.movedRow.rowIndex === 2
+      && safeStaticAliasMove.movedRow.cellIds.length === 3,
+  };
+  console.log(`x4UiSourceEdits B119 imported static alias positive: ${JSON.stringify(safeStaticAliasReceipt)}`);
+  check('B119 imported static table alias retains safe exact row move authority and inverse',
+    safeStaticAliasReceipt.moveEntries === 4 && safeStaticAliasReceipt.accepted
+      && safeStaticAliasReceipt.inverseAccepted && safeStaticAliasReceipt.exactSwap
+      && safeStaticAliasReceipt.exactRoundTrip && safeStaticAliasReceipt.freshProof,
+    JSON.stringify(safeStaticAliasReceipt));
+  const moveBoundaryBefore = JSON.stringify(moveProducer.workspace);
+  const forgedMoveEntry = { ...moveProducerEntry, expectedText: 'forged' };
+  const wrongMoveTarget = { ...moveProducerEntry, path: 'ui/not-the-selected-target.lua' };
+  const moveBoundaryRequests: readonly [string, ModWorkspace, X4UiWorkspaceSource, X4UiSourceEditCatalog, unknown][] = [
+    ['cloned entry', moveProducer.workspace, moveProducer.source, moveProducerCatalog, { entry: structuredClone(moveProducerEntry) }],
+    ['forged entry', moveProducer.workspace, moveProducer.source, moveProducerCatalog, { entry: forgedMoveEntry }],
+    ['wrong target', moveProducer.workspace, moveProducer.source, moveProducerCatalog, { entry: wrongMoveTarget }],
+    ['cloned catalog', moveProducer.workspace, moveProducer.source, structuredClone(moveProducerCatalog), { entry: moveProducerEntry }],
+    ['cloned source', moveProducer.workspace, structuredClone(moveProducer.source), moveProducerCatalog, { entry: moveProducerEntry }],
+    ['cloned workspace', structuredClone(moveProducer.workspace), moveProducer.source, moveProducerCatalog, { entry: moveProducerEntry }],
+    ['stale catalog after move', firstProducerMove.workspace, firstProducerMove.source, moveProducerCatalog, { entry: moveProducerEntry }],
+    ['unknown source entry', moveProducer.workspace, moveProducer.source, moveProducerCatalog, { entry: { ...moveProducerEntry, id: 'unknown-source-entry' } }],
+  ];
+  const moveBoundaryReceipts = moveBoundaryRequests.map(([name, currentWorkspace, source, catalog, request]) => {
+    const result = applyX4UiSourceRowMove(currentWorkspace, source, catalog, request as X4UiSourceEditRowMoveRequest);
+    return { name, accepted: result.accepted, changed: result.changed, reason: result.accepted === false ? result.reason : undefined };
+  });
+  let getterReads = 0;
+  const getterMoveRequest = Object.defineProperty({ entry: moveProducerEntry }, 'entry', {
+    enumerable: true,
+    configurable: true,
+    get: () => { getterReads += 1; throw new Error('move entry getter executed'); },
+  });
+  const getterMoveResult = applyX4UiSourceRowMove(moveProducer.workspace, moveProducer.source, moveProducerCatalog,
+    getterMoveRequest as X4UiSourceEditRowMoveRequest);
+  const staleMoveResult = applyX4UiSourceRowMove(moveProducer.workspace, moveProducer.source, moveProducerCatalog,
+    { entry: moveProducerEntry, expected: {
+      path: moveProducerEntry.path,
+      startOffset: moveProducerEntry.startOffset,
+      endOffset: moveProducerEntry.endOffset,
+      expectedText: 'stale move CAS',
+    } });
+  const rawMoveResult = applyX4UiSourceStructuralEdit(moveProducer.workspace, moveProducer.source, moveProducerCatalog,
+    moveProducerEntry.id);
+  check('B119 move rejects cloned foreign forged stale wrong-target unknown-source and getter boundaries atomically',
+    moveBoundaryReceipts.every(receipt => !receipt.accepted && !receipt.changed)
+      && getterReads === 0 && getterMoveResult.accepted === false && !getterMoveResult.changed
+      && staleMoveResult.accepted === false && !staleMoveResult.changed
+      && rawMoveResult.accepted === false && !rawMoveResult.changed
+      && JSON.stringify(moveProducer.workspace) === moveBoundaryBefore,
+    JSON.stringify({ boundaries: moveBoundaryReceipts, getterReads, getter: getterMoveResult.accepted,
+      stale: staleMoveResult.accepted, raw: rawMoveResult.accepted }));
+  const contextualEmptyCellEntries = (contextualProducerCatalog.insertEntries || [])
+    .filter(entry => entry.kind === 'insert-widget');
+  const contextualProducerReceipt = {
+    path: contextualProducer.program.target.source.file,
+    target: {
+      kind: contextualProducer.program.target.kind,
+      name: contextualProducer.program.target.name,
+    },
+    programStatus: contextualProducer.program.status,
+    allOperationsApplied: contextualProducer.program.operations.every(operation => operation.status === 'applied'),
+    catalogStatus: contextualProducerCatalog.status,
+    catalogReason: contextualProducerCatalog.reason,
+    insertEntryKinds: (contextualProducerCatalog.insertEntries || []).map(entry => entry.kind),
+    contextualEmptyCellEntries: contextualEmptyCellEntries.map(entry => ({
+      column: entry.column, frameId: entry.frameId, tableId: entry.tableId, rowId: entry.rowId, cellId: entry.cellId,
+    })),
+  };
+  console.log(`x4UiSourceEdits B119 contextual insertion producer scaffold: ${JSON.stringify(contextualProducerReceipt)}`);
+  check('B119 contextual insertion producer exposes the exact empty uncovered cell authority',
+    contextualProducer.program.target.kind === 'function'
+      && contextualProducer.program.target.name === 'menu.createFrame'
+      && (contextualProducer.program.status === 'projected' || contextualProducer.program.status === 'partial')
+      && contextualProducer.program.operations.every(operation => operation.status === 'applied')
+      && contextualEmptyCellEntries.length === 1
+      && contextualEmptyCellEntries[0].column === 2,
+    JSON.stringify(contextualProducerReceipt));
+  for (const widget of ['text', 'button', 'input'] as const) {
+    const widgetContext = createdMenuSessionContextFor(canonicalCorpus);
+    const widgetCatalog = catalogFor(widgetContext);
+    const widgetEntry = contextualWidgetEntryFor(widgetCatalog);
+    const widgetText = `${widget} literal "quotes" \\slash\n-- comment-looking [==[text]==]`;
+    const widgetRequest: X4UiSourceEditWidgetInsertionRequest = {
+      entry: widgetEntry,
+      widget,
+      text: widgetText,
+    };
+    const widgetResult = acceptedWidget(applyX4UiSourceWidgetInsertion(
+      widgetContext.workspace,
+      widgetContext.source,
+      widgetCatalog,
+      widgetRequest,
+    ));
+    const widgetAfter = sessionContextFor(
+      widgetResult.workspace,
+      canonicalCorpus,
+      widgetEntry.path,
+      target => target.kind === 'function' && target.name === 'menu.createFrame',
+      `contextual ${widget} insertion`,
+    );
+    const widgetAfterFile = widgetAfter.source.bundle?.sourceFiles.find(file => file.path === widgetEntry.path);
+    const expectedCreatorNames = widget === 'text'
+      ? ['createText']
+      : widget === 'button'
+        ? ['createButton', 'setText']
+        : ['createEditBox'];
+    const insertedOperations = widgetAfter.program.operations
+      .filter(operation => operation.source.file === widgetEntry.path
+        && operation.source.start.offset >= widgetResult.startOffset
+        && operation.source.end.offset <= widgetResult.startOffset + widgetResult.replacement.length)
+      .sort((left, right) => left.source.start.offset - right.source.start.offset);
+    const creatorOperation = widgetAfter.program.operations.find(operation =>
+      operation.id === widgetResult.insertedWidget.creatorOperationId);
+    const insertedCalls = (widgetAfterFile?.callModel.calls || [])
+      .filter(call => call.source.file === widgetEntry.path
+        && call.source.start.offset >= widgetResult.startOffset
+        && call.source.end.offset <= widgetResult.startOffset + widgetResult.replacement.length)
+      .sort((left, right) => left.source.start.offset - right.source.start.offset);
+    const insertedCellStillIssued = (widgetResult.catalog.insertEntries || [])
+      .some(entry => entry.kind === 'insert-widget' && entry.cellId === widgetEntry.cellId);
+    const insertedValue = widget === 'input'
+      ? insertedCalls[0]?.semantics.editBox?.defaultText
+      : insertedCalls[widget === 'button' ? 1 : 0]?.semantics.text;
+    const afterTable = widgetAfter.program.tables.find(table => table.id === creatorOperation?.tableId);
+    const afterRow = widgetAfter.program.rows.find(row => row.id === creatorOperation?.rowId);
+    const afterCell = widgetAfter.program.cells.find(cell => cell.id === creatorOperation?.cellId);
+    const widgetReceipt = {
+      widget,
+      accepted: true,
+      changed: widgetResult.changed,
+      reparsed: widgetResult.reparsed,
+      byteLocal: widgetResult.byteLocal,
+      path: widgetResult.path,
+      startOffset: widgetResult.startOffset,
+      endOffset: widgetResult.endOffset,
+      replacement: widgetResult.replacement,
+      insertedWidget: widgetResult.insertedWidget,
+      insertedOperationKinds: insertedOperations.map(operation => operation.kind),
+      insertedCallNames: insertedCalls.map(call => call.name),
+      creatorOperation: creatorOperation ? {
+        id: creatorOperation.id,
+        kind: creatorOperation.kind,
+        status: creatorOperation.status,
+        tableId: creatorOperation.tableId,
+        rowId: creatorOperation.rowId,
+        cellId: creatorOperation.cellId,
+      } : undefined,
+      freshCatalogCellEntry: insertedCellStillIssued,
+      decodedText: insertedValue?.value,
+    };
+    check(`B119 contextual ${widget} insertion accepts the producer-issued empty cell`,
+      widgetResult.changed
+        && widgetResult.reparsed
+        && widgetResult.provenanceReestablished
+        && widgetResult.path === widgetEntry.path
+        && widgetResult.startOffset === widgetEntry.startOffset
+        && widgetResult.endOffset === widgetEntry.endOffset
+        && widgetResult.expectedText === ''
+        && insertedOperations.map(operation => operation.kind).join('|') === expectedCreatorNames.join('|')
+        && insertedCalls.map(call => call.name).join('|') === expectedCreatorNames.join('|')
+        && creatorOperation?.kind === expectedCreatorNames[0]
+        && creatorOperation.status === 'applied'
+        && creatorOperation.tableId === widgetEntry.tableId
+        && creatorOperation.rowId === widgetEntry.rowId
+        && creatorOperation.cellId === widgetEntry.cellId
+        && afterTable?.frameId === widgetResult.insertedWidget.frameId
+        && afterRow?.tableId === afterTable?.id
+        && afterCell?.rowId === afterRow?.id
+        && afterCell?.column === widgetEntry.column
+        && widgetResult.insertedWidget.widget === widget
+        && widgetResult.insertedWidget.frameId === widgetEntry.frameId
+        && widgetResult.insertedWidget.tableId === widgetEntry.tableId
+        && widgetResult.insertedWidget.rowId === widgetEntry.rowId
+        && widgetResult.insertedWidget.cellId === widgetEntry.cellId
+        && widgetResult.insertedWidget.creatorCallName === expectedCreatorNames[0]
+        && JSON.stringify(widgetResult.insertedWidget.creatorSource) === JSON.stringify(creatorOperation?.source)
+        && JSON.stringify(widgetResult.insertedWidget.sourceIdentity) === JSON.stringify(widgetAfter.program.target.sourceIdentity)
+        && !insertedCellStillIssued,
+      JSON.stringify(widgetReceipt));
+    check(`B119 contextual ${widget} insertion preserves the literal value and exact owner chain`,
+      insertedValue?.status === 'static' && insertedValue.type === 'string' && insertedValue.value === widgetText
+        && insertedOperations.every(operation => operation.status === 'applied' && !operation.localExpansion
+          && operation.tableId === widgetEntry.tableId
+          && operation.rowId === widgetEntry.rowId
+          && operation.cellId === widgetEntry.cellId),
+      JSON.stringify(widgetReceipt));
+  }
+  {
+    const reviewWorkspace = workspace(automaticHeightReviewLua, {
+      id: 'b119-batch-1a-automatic-height-review',
+      name: 'B119 Batch1A automatic-height review selftest',
+      passthroughFiles: [
+        passthrough('README.md', '# unrelated review bytes\n', { reason: 'unknown_domain' }),
+        passthrough('ui.xml', automaticHeightReviewXml, { reason: 'partial', bytes: automaticHeightReviewXml.length }),
+        passthrough(automaticHeightReviewPath, automaticHeightReviewLua, { reason: 'unparsed', bytes: automaticHeightReviewLua.length }),
+      ],
+    });
+    const reviewContext = automaticHeightSessionContextFor(reviewWorkspace, canonicalCorpus);
+    const reviewCatalog = catalogFor(reviewContext);
+    const reviewButton = editableField(reviewCatalog, 'string', 'arguments[0]', '"Button caption"', 'setText');
+    const reviewText = editableField(reviewCatalog, 'string', 'arguments[0]', '"Review text"', 'createText');
+    const reviewSecondText = editableField(reviewCatalog, 'string', 'arguments[0]', '"Second row"', 'createText');
+    const unrelatedBefore = JSON.stringify((reviewWorkspace.passthroughFiles || [])
+      .filter(file => file.path !== automaticHeightReviewPath));
+    const reviewInitialReceipt = {
+      sessionStatus: reviewContext.program.status,
+      operations: reviewContext.program.operations.map(operation => ({ kind: operation.kind, status: operation.status })),
+      catalogStatus: reviewCatalog.status,
+      editableEntries: reviewCatalog.editableEntries.length,
+      button: { id: reviewButton.id, expectedText: reviewButton.expectedText },
+      text: { id: reviewText.id, expectedText: reviewText.expectedText },
+      secondText: { id: reviewSecondText.id, expectedText: reviewSecondText.expectedText },
+    };
+    console.log(`x4UiSourceEdits B119 Batch1A automatic-height initial: ${JSON.stringify(reviewInitialReceipt)}`);
+    check('B119 Batch1A real Session automatic-height fixture is initially actionable',
+      reviewContext.program.status === 'projected'
+        && reviewContext.program.operations.every(operation => operation.status === 'applied')
+        && reviewCatalog.status === 'ready'
+        && reviewCatalog.editableEntries.some(entry => entry.provenance.callName === 'setText' && entry.expectedText === '"Button caption"')
+        && reviewCatalog.editableEntries.some(entry => entry.provenance.callName === 'createText' && entry.expectedText === '"Review text"')
+        && reviewCatalog.editableEntries.some(entry => entry.provenance.callName === 'createText' && entry.expectedText === '"Second row"'),
+      JSON.stringify(reviewInitialReceipt));
+
+    const buttonResult = applyX4UiSourceEdit(
+      reviewContext.workspace,
+      reviewContext.source,
+      reviewCatalog,
+      reviewButton.id,
+      'Changed caption',
+    );
+    const buttonReceipt = buttonResult.accepted === true
+      ? {
+        accepted: true,
+        changed: buttonResult.changed,
+        reparsed: buttonResult.reparsed,
+        provenanceReestablished: buttonResult.provenanceReestablished,
+        catalogStatus: buttonResult.catalog.status,
+        source: sourceTextAt(buttonResult, automaticHeightReviewPath),
+      }
+      : (() => {
+        const refusedButtonResult = refused(buttonResult);
+        return {
+          accepted: false,
+          reason: refusedButtonResult.reason,
+          detail: refusedButtonResult.detail,
+          source: sourceTextAt(refusedButtonResult, automaticHeightReviewPath),
+        };
+      })();
+    console.log(`x4UiSourceEdits B119 Batch1A automatic-height button-edit: ${JSON.stringify(buttonReceipt)}`);
+    check('B119 Batch1A retains canonical corpus through the first automatic-height button reparse',
+      buttonResult.accepted
+        && buttonResult.changed
+        && buttonResult.reparsed
+        && buttonResult.provenanceReestablished
+        && buttonResult.catalog.status === 'ready'
+        && buttonResult.catalog.editableEntries.some(entry => entry.provenance.callName === 'createText' && entry.expectedText === '"Review text"')
+        && sourceTextAt(buttonResult, automaticHeightReviewPath).includes('setText("Changed caption")'),
+      JSON.stringify(buttonReceipt));
+    const firstButtonResult = accepted(buttonResult);
+
+    const freshReviewContext = automaticHeightSessionContextFor(firstButtonResult.workspace, canonicalCorpus);
+    const freshReviewCatalog = catalogFor(freshReviewContext);
+    const freshReviewButton = editableField(freshReviewCatalog, 'string', 'arguments[0]', '"Changed caption"', 'setText');
+    const freshReviewText = editableField(freshReviewCatalog, 'string', 'arguments[0]', '"Review text"', 'createText');
+    const freshReviewTextResult = accepted(applyX4UiSourceEdit(
+      freshReviewContext.workspace,
+      freshReviewContext.source,
+      freshReviewCatalog,
+      freshReviewText.id,
+      'Changed review text',
+    ));
+    const finalReviewButton = editableField(freshReviewTextResult.catalog, 'string', 'arguments[0]', '"Changed caption"', 'setText');
+    const finalReviewResult = accepted(applyX4UiSourceEdit(
+      freshReviewTextResult.workspace,
+      freshReviewTextResult.source,
+      freshReviewTextResult.catalog,
+      finalReviewButton.id,
+      'Final caption',
+    ));
+    const unrelatedAfter = JSON.stringify((finalReviewResult.workspace.passthroughFiles || [])
+      .filter(file => file.path !== automaticHeightReviewPath));
+    const reviewRepeatedReceipt = {
+      freshSession: {
+        status: freshReviewContext.program.status,
+        operations: freshReviewContext.program.operations.map(operation => ({ kind: operation.kind, status: operation.status })),
+        catalogStatus: freshReviewCatalog.status,
+        freshCatalog: freshReviewCatalog !== reviewCatalog,
+        buttonExpectedText: freshReviewButton.expectedText,
+      },
+      textEdit: {
+        changed: freshReviewTextResult.changed,
+        reparsed: freshReviewTextResult.reparsed,
+        catalogStatus: freshReviewTextResult.catalog.status,
+        source: sourceTextAt(freshReviewTextResult, automaticHeightReviewPath),
+      },
+      repeatedButtonEdit: {
+        changed: finalReviewResult.changed,
+        reparsed: finalReviewResult.reparsed,
+        catalogStatus: finalReviewResult.catalog.status,
+        source: sourceTextAt(finalReviewResult, automaticHeightReviewPath),
+      },
+      unrelatedBytesPreserved: unrelatedBefore === unrelatedAfter,
+    };
+    console.log(`x4UiSourceEdits B119 Batch1A automatic-height repeated-edits: ${JSON.stringify(reviewRepeatedReceipt)}`);
+    check('B119 Batch1A fresh Session catalog supports automatic-height text and repeated button/text edits',
+      freshReviewContext.program.status === 'projected'
+        && freshReviewContext.program.operations.every(operation => operation.status === 'applied')
+        && freshReviewCatalog.status === 'ready'
+        && freshReviewCatalog !== reviewCatalog
+        && freshReviewTextResult.changed
+        && freshReviewTextResult.reparsed
+        && finalReviewResult.changed
+        && finalReviewResult.reparsed
+        && finalReviewResult.catalog.status === 'ready'
+        && sourceTextAt(finalReviewResult, automaticHeightReviewPath).includes('createText("Changed review text"')
+        && sourceTextAt(finalReviewResult, automaticHeightReviewPath).includes('setText("Final caption")')
+        && unrelatedBefore === unrelatedAfter,
+      JSON.stringify(reviewRepeatedReceipt));
+
+    const noCorpusReviewContext = automaticHeightSessionContextFor(reviewWorkspace, undefined);
+    const noCorpusReviewCatalog = catalogFor(noCorpusReviewContext);
+    const noCorpusReceipt = {
+      programStatus: noCorpusReviewContext.program.status,
+      unresolved: noCorpusReviewContext.program.operations.filter(operation => operation.status !== 'applied')
+        .map(operation => ({ kind: operation.kind, status: operation.status })),
+      catalogStatus: noCorpusReviewCatalog.status,
+      catalogReason: noCorpusReviewCatalog.reason,
+    };
+    console.log(`x4UiSourceEdits B119 Batch1A automatic-height no-corpus control: ${JSON.stringify(noCorpusReceipt)}`);
+    check('B119 Batch1A no-corpus automatic-height control remains honestly unresolved',
+      noCorpusReviewContext.program.status === 'partial'
+        && noCorpusReceipt.unresolved.length > 0
+        && noCorpusReviewCatalog.status === 'locked'
+        && noCorpusReviewCatalog.reason === 'operation-not-applied',
+      JSON.stringify(noCorpusReceipt));
+
+    const staleReviewWorkspace = structuredClone(reviewContext.workspace) as ModWorkspace;
+    const staleReviewBefore = workspaceBytes(staleReviewWorkspace);
+    const staleReviewResult = refused(applyX4UiSourceEdit(
+      staleReviewWorkspace,
+      reviewContext.source,
+      reviewCatalog,
+      reviewButton.id,
+      'Stale caption',
+    ));
+    const clonedReviewProgram = structuredClone(reviewContext.program) as X4UiLayoutProgram;
+    const clonedReviewEvidence = structuredClone(reviewContext.evidenceAuthority) as X4UiLayoutEvidenceAuthority;
+    const clonedReviewProgramIssued = isIssuedX4UiLayoutEvidencePair(
+      clonedReviewProgram,
+      reviewContext.evidenceAuthority,
+    );
+    const clonedReviewEvidenceIssued = isIssuedX4UiLayoutEvidencePair(
+      reviewContext.program,
+      clonedReviewEvidence,
+    );
+    const clonedReviewCatalog = catalogFor({ ...reviewContext, program: clonedReviewProgram });
+    const clonedReviewResult = refused(applyX4UiSourceEdit(
+      reviewContext.workspace,
+      reviewContext.source,
+      clonedReviewCatalog,
+      reviewButton.id,
+      'Forged caption',
+    ));
+    const negativeReceipt = {
+      staleWorkspace: {
+        accepted: false,
+        reason: staleReviewResult.reason,
+        identityPreserved: staleReviewResult.workspace === staleReviewWorkspace
+          && workspaceBytes(staleReviewWorkspace) === staleReviewBefore,
+      },
+      clonedIssuance: {
+        programIssued: clonedReviewProgramIssued,
+        evidenceIssued: clonedReviewEvidenceIssued,
+        catalogStatus: clonedReviewCatalog.status,
+        accepted: false,
+        reason: clonedReviewResult.reason,
+        sourceUnchanged: sourceTextAt(reviewContext, automaticHeightReviewPath)
+          === automaticHeightReviewLua,
+      },
+    };
+    console.log(`x4UiSourceEdits B119 Batch1A automatic-height negatives: ${JSON.stringify(negativeReceipt)}`);
+    check('B119 Batch1A stale workspace and cloned issuance remain fail-closed',
+      staleReviewResult.reason === 'workspace-source-mismatch'
+        && staleReviewResult.workspace === staleReviewWorkspace
+        && workspaceBytes(staleReviewWorkspace) === staleReviewBefore
+        && !clonedReviewProgramIssued
+        && !clonedReviewEvidenceIssued
+        && clonedReviewCatalog.status === 'locked'
+        && clonedReviewResult.accepted === false
+        && sourceTextAt(reviewContext, automaticHeightReviewPath) === automaticHeightReviewLua,
+      JSON.stringify(negativeReceipt));
+  }
   {
   const aliasWorkspace = workspace(aliasSourceLayoutLua, {
     id: 'b119-alias-source-layout-selftest',
@@ -2608,6 +4925,9 @@ const run = async (): Promise<void> => {
     ? invokePublic(() => catalogFor(namedFunctionContext))
     : { threw: false };
   const namedFunctionCatalog = namedFunctionCatalogOutcome.value;
+  const namedFunctionDeletes = namedFunctionCatalog?.structuralEntries?.filter(entry => entry.kind === 'delete-statement') || [];
+  const namedFunctionRows = namedFunctionCatalog?.structuralEntries?.filter(entry => entry.kind === 'insert-row') || [];
+  const namedFunctionRow = namedFunctionProjection?.program?.rows[0];
   const namedFunctionReceipt = {
     firstCallName: namedFunctionFirstCall?.name,
     firstCallContext: namedFunctionFirstCall ? {
@@ -2659,8 +4979,20 @@ const run = async (): Promise<void> => {
       && namedFunctionCatalog?.status === 'ready'
       && namedFunctionCatalog.editableEntries.some(entry => entry.provenance.callName === 'addTable'
         && entry.provenance.fields.includes('semantics.properties.width'))
-      && (namedFunctionCatalog.structuralEntries || []).length > 0
-      && (namedFunctionCatalog.structuralEntries || []).every(entry => entry.kind === 'delete-statement'),
+      && namedFunctionDeletes.length === 2
+      && namedFunctionDeletes.some(entry => entry.expectedText.includes('row[1]:createText("named partial", {})'))
+      && namedFunctionDeletes.some(entry => entry.expectedText.trim() === 'frame:display()')
+      && namedFunctionRows.length === 1
+      && namedFunctionRow !== undefined
+      && namedFunctionRows[0].rowId === namedFunctionRow.id
+      && namedFunctionRows[0].tableId === namedFunctionRow.tableId
+      && namedFunctionRows[0].rowIndex === namedFunctionRow.rowIndex
+      && namedFunctionRows[0].provenance.rowOwner.rowId === namedFunctionRow.id
+      && namedFunctionRows[0].provenance.owner.ownerId === namedFunctionRow.tableId
+      && namedFunctionRows[0].provenance.owner.frameId === namedFunctionRows[0].frameId
+      && namedFunctionRows[0].startOffset === namedFunctionLua.indexOf('  frame:display()')
+      && namedFunctionRows[0].endOffset === namedFunctionRows[0].startOffset
+      && namedFunctionCatalog.structuralEntries?.length === namedFunctionDeletes.length + namedFunctionRows.length,
     JSON.stringify(namedFunctionReceipt));
 
   const namedFunctionWidth = namedFunctionCatalog?.editableEntries.find(entry => entry.provenance.callName === 'addTable'
@@ -2696,6 +5028,9 @@ const run = async (): Promise<void> => {
   const namedFunctionAfterProjection = namedFunctionAfterModel && namedFunctionAfterTarget
     ? projectX4UiLayoutProgram(namedFunctionAfterModel, namedFunctionAfterTarget, profileFor(namedFunctionAfterModel))
     : undefined;
+  const namedFunctionAfterDeletes = namedFunctionResult?.catalog.deleteEntries || [];
+  const namedFunctionAfterRows = namedFunctionResult?.catalog.insertEntries?.filter(entry => entry.kind === 'insert-row') || [];
+  const namedFunctionAfterRow = namedFunctionAfterProjection?.program?.rows[0];
   check('B119 named-function geometry CAS is byte-local and reissues applied-partial scalar authority',
     namedFunctionNormalization.value === namedFunctionIssuanceModel
       && namedFunctionWidth !== undefined
@@ -2708,8 +5043,20 @@ const run = async (): Promise<void> => {
       && namedFunctionResult.catalog.status === 'ready'
       && namedFunctionResult.catalog.editable
       && namedFunctionResult.catalog.verification === 'Not verified in game'
-      && (namedFunctionResult.catalog.structuralEntries || []).length > 0
-      && (namedFunctionResult.catalog.structuralEntries || []).every(entry => entry.kind === 'delete-statement')
+      && namedFunctionAfterDeletes.length === namedFunctionDeletes.length
+      && namedFunctionAfterDeletes.every((entry, index) => entry.kind === 'delete-statement'
+        && entry.expectedText === namedFunctionDeletes[index].expectedText
+        && entry.startOffset === namedFunctionDeletes[index].startOffset && entry.endOffset === namedFunctionDeletes[index].endOffset)
+      && namedFunctionAfterRows.length === 1 && namedFunctionAfterRow !== undefined
+      && namedFunctionAfterRows[0].rowId === namedFunctionAfterRow.id
+      && namedFunctionAfterRows[0].tableId === namedFunctionAfterRow.tableId
+      && namedFunctionAfterRows[0].rowIndex === namedFunctionAfterRow.rowIndex
+      && namedFunctionAfterRows[0].provenance.rowOwner.rowId === namedFunctionAfterRow.id
+      && namedFunctionAfterRows[0].provenance.owner.ownerId === namedFunctionAfterRow.tableId
+      && namedFunctionAfterRows[0].provenance.owner.frameId === namedFunctionAfterRows[0].frameId
+      && namedFunctionAfterRows[0].startOffset === namedFunctionAfterSource?.indexOf('  frame:display()')
+      && namedFunctionAfterRows[0].endOffset === namedFunctionAfterRows[0].startOffset
+      && namedFunctionResult.catalog.structuralEntries?.length === namedFunctionAfterDeletes.length + namedFunctionAfterRows.length
       && namedFunctionAfterSource === namedFunctionBeforeSource.slice(0, namedFunctionWidth.startOffset)
         + '81'
         + namedFunctionBeforeSource.slice(namedFunctionWidth.endOffset)
@@ -2929,6 +5276,21 @@ const run = async (): Promise<void> => {
   const dynamicHandlerAfterProjection = dynamicHandlerAfterModel && dynamicHandlerAfterTarget
     ? projectX4UiLayoutProgram(dynamicHandlerAfterModel, dynamicHandlerAfterTarget, profileFor(dynamicHandlerAfterModel))
     : undefined;
+  const dynamicHandlerCensus = (catalog: X4UiSourceEditCatalog | undefined, program: X4UiLayoutProgram | undefined,
+    text: string | undefined) => {
+    const deletes = catalog?.deleteEntries || [];
+    const rows = catalog?.insertEntries?.filter(entry => entry.kind === 'insert-row') || [];
+    const row = program?.rows[0];
+    return deletes.length === 2 && deletes.every(entry => entry.kind === 'delete-statement')
+      && deletes.some(entry => entry.expectedText.includes('row[1]:createText("dynamic handler", {})'))
+      && deletes.some(entry => entry.expectedText.trim() === 'frame:display()')
+      && rows.length === 1 && row !== undefined && rows[0].rowId === row.id
+      && rows[0].tableId === row.tableId && rows[0].rowIndex === row.rowIndex
+      && rows[0].provenance.rowOwner.rowId === row.id && rows[0].provenance.owner.ownerId === row.tableId
+      && rows[0].provenance.owner.frameId === rows[0].frameId
+      && rows[0].startOffset === text?.indexOf('  frame:display()') && rows[0].endOffset === rows[0].startOffset
+      && catalog?.structuralEntries?.length === deletes.length + rows.length;
+  };
   check('B119 dynamic-handler named applied-partial geometry remains scalar-actionable through CAS and reparse',
     dynamicHandlerProjection?.status === 'partial'
       && dynamicHandlerProjection.program !== undefined
@@ -2939,8 +5301,7 @@ const run = async (): Promise<void> => {
       && dynamicHandlerCatalog.editable
       && dynamicHandlerWidth !== undefined
       && dynamicHandlerBeforeSource !== undefined
-      && (dynamicHandlerCatalog.structuralEntries || []).length > 0
-      && (dynamicHandlerCatalog.structuralEntries || []).every(entry => entry.kind === 'delete-statement')
+      && dynamicHandlerCensus(dynamicHandlerCatalog, dynamicHandlerProjection.program, dynamicHandlerBeforeSource)
       && dynamicHandlerApplyOutcome.threw === false
       && dynamicHandlerResult !== undefined
       && dynamicHandlerResult.changed
@@ -2949,8 +5310,7 @@ const run = async (): Promise<void> => {
       && dynamicHandlerResult.catalog.status === 'ready'
       && dynamicHandlerResult.catalog.editable
       && dynamicHandlerResult.catalog.verification === 'Not verified in game'
-      && (dynamicHandlerResult.catalog.structuralEntries || []).length > 0
-      && (dynamicHandlerResult.catalog.structuralEntries || []).every(entry => entry.kind === 'delete-statement')
+      && dynamicHandlerCensus(dynamicHandlerResult.catalog, dynamicHandlerAfterProjection?.program, dynamicHandlerAfterSource)
       && dynamicHandlerAfterSource === dynamicHandlerBeforeSource.slice(0, dynamicHandlerWidth.startOffset)
         + '81'
         + dynamicHandlerBeforeSource.slice(dynamicHandlerWidth.endOffset)
@@ -4274,6 +6634,433 @@ const run = async (): Promise<void> => {
       owner: ownerDriftInput ? compareX4UiSourceStructuralLedgerCorrespondence(ownerDriftInput) : undefined,
       kernel: kernelDriftInput ? compareX4UiSourceStructuralLedgerCorrespondence(kernelDriftInput) : undefined,
       dynamic: { status: dynamicReplacementCatalog.status, reason: dynamicReplacementCatalog.reason, replacements: dynamicReplacementCatalog.replaceEntries?.length },
+     }));
+  type NumericCorrespondenceInput = NonNullable<typeof replacementOracleInput>;
+  type NumericCorrespondenceSide = 'before' | 'after';
+  type NumericCorrespondenceVariant = {
+    readonly input: NumericCorrespondenceInput;
+    readonly beforeFact: Record<string, unknown>;
+    readonly afterFact: Record<string, unknown>;
+    readonly beforeMutationApplied: boolean;
+    readonly afterMutationApplied: boolean;
+  };
+  const numericCorrespondenceSlot = replacementOracleInput === undefined ? undefined : (() => {
+    const afterById = new Map(replacementOracleInput.afterOperations.map(operation => [
+      asRecord(operation)?.id,
+      asRecord(operation),
+    ] as const));
+    for (const beforeOperation of replacementOracleInput.beforeOperations) {
+      const beforeRecord = asRecord(beforeOperation);
+      const operationId = beforeRecord?.id;
+      const afterRecord = typeof operationId === 'string' ? afterById.get(operationId) : undefined;
+      const beforeFacts = asRecord(beforeRecord?.descriptorFacts);
+      const afterFacts = asRecord(afterRecord?.descriptorFacts);
+      if (!beforeFacts || !afterFacts) continue;
+      for (const [factKey, afterFact] of Object.entries(afterFacts)) {
+        const beforeFact = beforeFacts[factKey];
+        if (asRecord(beforeFact)?.status === 'known'
+          && asRecord(beforeFact)?.expectedType === 'number'
+          && asRecord(afterFact)?.status === 'known'
+          && asRecord(afterFact)?.expectedType === 'number') {
+          return { operationId, factKey };
+        }
+      }
+    }
+    return undefined;
+  })();
+  const numericCorrespondenceVariant = (
+    mutate: (fact: Record<string, unknown>, side: NumericCorrespondenceSide) => boolean,
+    side: 'both' | NumericCorrespondenceSide = 'both',
+  ): NumericCorrespondenceVariant | undefined => {
+    if (!replacementOracleInput || !numericCorrespondenceSlot) return undefined;
+    const input = structuredClone(replacementOracleInput) as NumericCorrespondenceInput;
+    const beforeOperation = input.beforeOperations.find(operation => asRecord(operation)?.id === numericCorrespondenceSlot.operationId);
+    const afterOperation = input.afterOperations.find(operation => asRecord(operation)?.id === numericCorrespondenceSlot.operationId);
+    const beforeFacts = asRecord(asRecord(beforeOperation)?.descriptorFacts);
+    const afterFacts = asRecord(asRecord(afterOperation)?.descriptorFacts);
+    const beforeFact = asRecord(beforeFacts?.[numericCorrespondenceSlot.factKey]);
+    const afterFact = asRecord(afterFacts?.[numericCorrespondenceSlot.factKey]);
+    if (!beforeFact || !afterFact) return undefined;
+    const beforeMutationApplied = side !== 'after' && mutate(beforeFact, 'before');
+    const afterMutationApplied = side !== 'before' && mutate(afterFact, 'after');
+    return { input, beforeFact, afterFact, beforeMutationApplied, afterMutationApplied };
+  };
+  const numericSampleIds = (count: number): readonly string[] => Object.freeze(
+    Array.from({ length: count }, (_, index) => `b119-source-sample-${index.toString().padStart(3, '0')}`),
+  );
+  const numericFactWithSamples = (
+    fact: Record<string, unknown>,
+    ids: readonly string[],
+  ): void => {
+    delete fact.sampleId;
+    delete fact.sampleIds;
+    if (ids.length === 0) {
+      fact.provenance = 'source-literal';
+    } else if (ids.length === 1) {
+      fact.provenance = 'preview-sample';
+      fact.sampleId = ids[0];
+    } else {
+      fact.provenance = 'preview-sample';
+      fact.sampleIds = Object.freeze([...ids]);
+    }
+  };
+  const numericFactMatchesSamples = (
+    fact: Record<string, unknown>,
+    count: number,
+  ): boolean => {
+    if (fact.status !== 'known'
+      || fact.expectedType !== 'number'
+      || typeof fact.value !== 'number'
+      || !Number.isFinite(fact.value)) return false;
+    if (count === 0) {
+      return fact.provenance === 'source-literal'
+        && !Object.prototype.hasOwnProperty.call(fact, 'sampleId')
+        && !Object.prototype.hasOwnProperty.call(fact, 'sampleIds');
+    }
+    if (fact.provenance !== 'preview-sample') return false;
+    if (count === 1) {
+      return Object.prototype.hasOwnProperty.call(fact, 'sampleId')
+        && fact.sampleId === 'b119-source-sample-000'
+        && !Object.prototype.hasOwnProperty.call(fact, 'sampleIds');
+    }
+    if (!Object.prototype.hasOwnProperty.call(fact, 'sampleIds')
+      || Object.prototype.hasOwnProperty.call(fact, 'sampleId')) return false;
+    const ids = fact.sampleIds;
+    return Array.isArray(ids)
+      && Object.isFrozen(ids)
+      && ids.length === count
+      && ids.every((id, index) => id === `b119-source-sample-${index.toString().padStart(3, '0')}`);
+  };
+  const numericSchemaRows = [0, 1, ...Array.from({ length: 127 }, (_, index) => index + 2)].map(count => {
+    const candidate = numericCorrespondenceVariant(fact => {
+      numericFactWithSamples(fact, numericSampleIds(count));
+      return numericFactMatchesSamples(fact, count);
+    });
+    return {
+      count,
+      accepted: candidate !== undefined
+        && candidate.beforeMutationApplied
+        && candidate.afterMutationApplied
+        && compareX4UiSourceStructuralLedgerCorrespondence(candidate.input),
+    };
+  });
+  const numericSchemaFailures = numericSchemaRows.filter(row => !row.accepted).map(row => row.count);
+  check('B119 SourceEdits numeric fact correspondence accepts exact zero/one/2..128 sample forms',
+    numericCorrespondenceSlot !== undefined
+      && numericSchemaRows.length === 129
+      && numericSchemaFailures.length === 0,
+    JSON.stringify({ slot: numericCorrespondenceSlot, forms: numericSchemaRows.length, failures: numericSchemaFailures }));
+  const numericFrozenRows = [0, 1, 2].map(count => {
+    const candidate = numericCorrespondenceVariant(fact => {
+      numericFactWithSamples(fact, numericSampleIds(count));
+      Object.freeze(fact);
+      return Object.isFrozen(fact) && numericFactMatchesSamples(fact, count);
+    });
+    return {
+      count,
+      accepted: candidate !== undefined
+        && candidate.beforeMutationApplied
+        && candidate.afterMutationApplied
+        && compareX4UiSourceStructuralLedgerCorrespondence(candidate.input),
+    };
+  });
+  check('B119 SourceEdits numeric fact correspondence accepts frozen fact records with valid forms',
+    numericFrozenRows.length === 3 && numericFrozenRows.every(row => row.accepted),
+    JSON.stringify({ slot: numericCorrespondenceSlot, rows: numericFrozenRows }));
+  const typedPositiveRows = [
+    { name: 'string', expectedType: 'string', value: 'b119-string-value' },
+    { name: 'boolean', expectedType: 'boolean', value: true },
+    { name: 'color-object', expectedType: 'color-object', value: cloneSchemaColor(schemaSourceLiteralColor) },
+    { name: 'unavailable-number', expectedType: 'number', value: undefined, unavailable: true },
+  ].map(item => {
+    const candidate = numericCorrespondenceVariant(fact => {
+      delete fact.sampleId;
+      delete fact.sampleIds;
+      if (item.unavailable) {
+        fact.status = 'unavailable';
+        fact.expectedType = item.expectedType;
+        delete fact.value;
+        delete fact.provenance;
+        fact.reason = 'b119-unavailable-control';
+        return fact.status === 'unavailable'
+          && fact.expectedType === item.expectedType
+          && !Object.prototype.hasOwnProperty.call(fact, 'value')
+          && !Object.prototype.hasOwnProperty.call(fact, 'provenance')
+          && fact.reason === 'b119-unavailable-control';
+      }
+      fact.status = 'known';
+      fact.expectedType = item.expectedType;
+      fact.value = item.value;
+      fact.provenance = 'source-literal';
+      return fact.status === 'known'
+        && fact.expectedType === item.expectedType
+        && fact.value === item.value
+        && fact.provenance === 'source-literal'
+        && !Object.prototype.hasOwnProperty.call(fact, 'sampleId')
+        && !Object.prototype.hasOwnProperty.call(fact, 'sampleIds');
+    });
+    return {
+      name: item.name,
+      accepted: candidate !== undefined
+        && candidate.beforeMutationApplied
+        && candidate.afterMutationApplied
+        && compareX4UiSourceStructuralLedgerCorrespondence(candidate.input),
+    };
+  });
+  check('B119 SourceEdits numeric correspondence keeps valid typed and unavailable no-plural controls',
+    typedPositiveRows.length === 4 && typedPositiveRows.every(row => row.accepted),
+    JSON.stringify({ slot: numericCorrespondenceSlot, rows: typedPositiveRows }));
+  const numericNegativeRows: Array<{
+    readonly name: string;
+    readonly accepted: boolean;
+    readonly threw: boolean;
+    readonly mutationApplied: boolean;
+  }> = [];
+  const numericNegative = (
+    name: string,
+    mutate: (fact: Record<string, unknown>) => boolean,
+    side: 'both' | NumericCorrespondenceSide = 'both',
+  ): void => {
+    let candidate: NumericCorrespondenceVariant | undefined;
+    let accepted = false;
+    let threw = false;
+    try {
+      candidate = numericCorrespondenceVariant(mutate, side);
+      const mutationApplied = candidate !== undefined
+        && (side === 'both'
+          ? candidate.beforeMutationApplied && candidate.afterMutationApplied
+          : side === 'before'
+            ? candidate.beforeMutationApplied && !candidate.afterMutationApplied
+            : candidate.afterMutationApplied && !candidate.beforeMutationApplied);
+      accepted = candidate !== undefined
+        && mutationApplied
+        && compareX4UiSourceStructuralLedgerCorrespondence(candidate.input);
+    } catch {
+      threw = true;
+    }
+    const mutationApplied = candidate !== undefined
+      && (side === 'both'
+        ? candidate.beforeMutationApplied && candidate.afterMutationApplied
+        : side === 'before'
+          ? candidate.beforeMutationApplied && !candidate.afterMutationApplied
+          : candidate.afterMutationApplied && !candidate.beforeMutationApplied);
+    numericNegativeRows.push({ name, accepted, threw, mutationApplied });
+  };
+  numericNegative('explicit undefined sampleId', fact => {
+    delete fact.sampleIds;
+    fact.provenance = 'preview-sample';
+    fact.sampleId = undefined;
+    return Object.prototype.hasOwnProperty.call(fact, 'sampleId') && fact.sampleId === undefined;
+  });
+  numericNegative('before-only explicit undefined sampleIds', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = undefined;
+    return Object.prototype.hasOwnProperty.call(fact, 'sampleIds') && fact.sampleIds === undefined;
+  }, 'before');
+  numericNegative('after-only explicit undefined sampleIds', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = undefined;
+    return Object.prototype.hasOwnProperty.call(fact, 'sampleIds') && fact.sampleIds === undefined;
+  }, 'after');
+  numericNegative('both singular and plural forms', fact => {
+    fact.provenance = 'preview-sample';
+    fact.sampleId = 'b119-source-sample-000';
+    fact.sampleIds = Object.freeze(['b119-source-sample-000', 'b119-source-sample-001']);
+    return fact.sampleId === 'b119-source-sample-000'
+      && fact.sampleIds !== undefined
+      && Object.prototype.hasOwnProperty.call(fact, 'sampleId')
+      && Object.prototype.hasOwnProperty.call(fact, 'sampleIds');
+  });
+  const numericTypedPlural = (
+    fact: Record<string, unknown>,
+    expectedType: 'string' | 'boolean',
+    value: string | boolean,
+  ): boolean => {
+    fact.status = 'known';
+    fact.expectedType = expectedType;
+    fact.value = value;
+    fact.provenance = 'preview-sample';
+    delete fact.sampleId;
+    const ids = Object.freeze(['b119-source-sample-000', 'b119-source-sample-001']);
+    fact.sampleIds = ids;
+    return fact.expectedType === expectedType
+      && fact.value === value
+      && fact.sampleIds === ids
+      && !Object.prototype.hasOwnProperty.call(fact, 'sampleId');
+  };
+  numericNegative('string typed plural form', fact => numericTypedPlural(fact, 'string', 'b119-string-value'));
+  numericNegative('boolean typed plural form', fact => numericTypedPlural(fact, 'boolean', true));
+  numericNegative('color-object plural form', fact => {
+    fact.status = 'known';
+    fact.expectedType = 'color-object';
+    fact.value = cloneSchemaColor(schemaSourceLiteralColor);
+    fact.provenance = 'preview-sample';
+    delete fact.sampleId;
+    const ids = Object.freeze(['b119-source-sample-000', 'b119-source-sample-001']);
+    fact.sampleIds = ids;
+    return fact.expectedType === 'color-object' && fact.value !== undefined && fact.sampleIds === ids;
+  });
+  numericNegative('unavailable fact plural form', fact => {
+    fact.status = 'unavailable';
+    fact.expectedType = 'number';
+    delete fact.value;
+    delete fact.provenance;
+    delete fact.sampleId;
+    fact.reason = 'b119-unavailable-control';
+    const ids = Object.freeze(['b119-source-sample-000', 'b119-source-sample-001']);
+    fact.sampleIds = ids;
+    return fact.status === 'unavailable'
+      && !Object.prototype.hasOwnProperty.call(fact, 'value')
+      && !Object.prototype.hasOwnProperty.call(fact, 'provenance')
+      && fact.sampleIds === ids;
+  });
+  numericNegative('empty plural form', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = Object.freeze([]);
+    return fact.sampleIds !== undefined && Array.isArray(fact.sampleIds) && fact.sampleIds.length === 0;
+  });
+  numericNegative('one-item plural form', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    const ids = Object.freeze(['b119-source-sample-000']);
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids;
+  });
+  numericNegative('empty sample ID', fact => {
+    delete fact.sampleIds;
+    fact.provenance = 'preview-sample';
+    fact.sampleId = '';
+    return Object.prototype.hasOwnProperty.call(fact, 'sampleId') && fact.sampleId === '';
+  });
+  numericNegative('unsorted plural form', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = Object.freeze(['b119-source-sample-001', 'b119-source-sample-000']);
+    return fact.sampleIds !== undefined && Array.isArray(fact.sampleIds) && fact.sampleIds[0] === 'b119-source-sample-001';
+  });
+  numericNegative('duplicate plural form', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = Object.freeze(['b119-source-sample-000', 'b119-source-sample-000']);
+    return fact.sampleIds !== undefined && Array.isArray(fact.sampleIds) && fact.sampleIds[0] === fact.sampleIds[1];
+  });
+  numericNegative('empty sample ID in plural form', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    const ids = Object.freeze(['', 'b119-source-sample-001']);
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids;
+  });
+  numericNegative('hole in plural form', fact => {
+    delete fact.sampleId;
+    const ids = new Array<string>(2);
+    ids[0] = 'b119-source-sample-000';
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && !Object.prototype.hasOwnProperty.call(ids, '1');
+  });
+  numericNegative('undefined trailing plural slot', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001', undefined] as unknown as string[];
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && ids[2] === undefined;
+  });
+  numericNegative('extra plural array property', fact => {
+    delete fact.sampleId;
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001'] as string[] & { extra?: string };
+    ids.extra = 'foreign';
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && ids.extra === 'foreign';
+  });
+  numericNegative('symbol on plural array', fact => {
+    delete fact.sampleId;
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001'];
+    const symbol = Symbol('foreign');
+    Object.defineProperty(ids, symbol, { configurable: true, enumerable: true, value: 'foreign' });
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && Object.getOwnPropertySymbols(ids).length === 1;
+  });
+  numericNegative('custom plural array prototype', fact => {
+    delete fact.sampleId;
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001'];
+    Object.setPrototypeOf(ids, { foreign: true });
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && Object.getPrototypeOf(ids) !== Array.prototype;
+  });
+  numericNegative('nonenumerable plural index', fact => {
+    delete fact.sampleId;
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001'];
+    Object.defineProperty(ids, '1', { configurable: true, enumerable: false, value: 'b119-source-sample-001' });
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && Object.getOwnPropertyDescriptor(ids, '1')?.enumerable === false;
+  });
+  let numericAccessorReads = 0;
+  numericNegative('plural index accessor', fact => {
+    delete fact.sampleId;
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001'];
+    Object.defineProperty(ids, '1', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        numericAccessorReads += 1;
+        return 'b119-source-sample-001';
+      },
+    });
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && Object.getOwnPropertyDescriptor(ids, '1')?.get !== undefined;
+  });
+  let numericProxyGetReads = 0;
+  numericNegative('transparent plural array proxy', fact => {
+    delete fact.sampleId;
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001'];
+    const proxy = new Proxy(ids, {
+      get: (target, key, receiver) => {
+        numericProxyGetReads += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = proxy;
+    return fact.sampleIds === proxy;
+  });
+  numericNegative('cyclic plural array', fact => {
+    delete fact.sampleId;
+    const ids = ['b119-source-sample-000', 'b119-source-sample-001'] as unknown as unknown[];
+    ids.push(ids);
+    fact.provenance = 'preview-sample';
+    fact.sampleIds = ids as unknown as string[];
+    return fact.sampleIds === ids && ids[2] === ids;
+  });
+  numericNegative('129-item plural form', fact => {
+    delete fact.sampleId;
+    fact.provenance = 'preview-sample';
+    const ids = numericSampleIds(129);
+    fact.sampleIds = ids;
+    return fact.sampleIds === ids && ids.length === 129;
+  });
+  const numericNegativeFailures = numericNegativeRows.filter(row => row.accepted || row.threw);
+  const numericMutationFailures = numericNegativeRows.filter(row => !row.mutationApplied);
+  check('B119 SourceEdits numeric fact correspondence rejects malformed plural forms independently on both ledgers',
+    numericNegativeRows.length === 24
+      && numericNegativeFailures.length === 0
+      && numericMutationFailures.length === 0
+      && numericAccessorReads === 0
+      && numericProxyGetReads === 0,
+    JSON.stringify({
+      slot: numericCorrespondenceSlot,
+      rows: numericNegativeRows,
+      mutationFailures: numericMutationFailures,
+      numericAccessorReads,
+      numericProxyGetReads,
     }));
   const plainDeleteContext = contextFor();
   const plainDeleteCatalog = catalogFor(plainDeleteContext);
@@ -10322,6 +13109,683 @@ const run = async (): Promise<void> => {
     }));
 
   const roundSevenKernelFailures = roundSevenKernelRows.filter(row => !row.pass);
+
+  const b119PartialScalarStructuralCatalogIsEmpty = (catalog: X4UiSourceEditCatalog): boolean =>
+    (catalog.structuralEntries || []).length === 0
+      && (catalog.deleteEntries || []).length === 0
+      && (catalog.replaceEntries || []).length === 0
+      && (catalog.insertEntries || []).length === 0
+      && (catalog.moveEntries || []).length === 0;
+  const b119PartialScalarProgramIsMixed = (context: SourceEditFixtureContext): boolean =>
+    context.program.status === 'partial'
+      && context.program.operations.length > 0
+      && context.program.operations.some(operation => operation.status === 'applied')
+      && context.program.operations.some(operation => operation.status !== 'applied');
+  const b119PartialScalarHasNoSuppliedInputs = (context: SourceEditFixtureContext): boolean =>
+    (context.program.previewSampleBindings || []).length === 0
+      && (context.program.previewPathSelections || []).length === 0
+      && (context.program.previewLoopSelections || []).length === 0;
+  const b119PartialScalarEntry = (
+    catalog: X4UiSourceEditCatalog,
+    expectedText: string,
+    callName: string,
+  ): X4UiEditableSourceEditEntry | undefined => catalog.editableEntries.filter(entry =>
+    entry.valueType === 'string'
+      && entry.expectedText === expectedText
+      && entry.provenance.callName === callName
+      && entry.provenance.fields.includes('arguments[0]'))[0];
+
+  const b119PartialScalarDiscoveryContext = contextualImportContextFor(canonicalCorpus, b119PartialScalarMixedLua);
+  const b119PartialScalarDiscoveryCatalog = catalogFor(b119PartialScalarDiscoveryContext);
+  const b119PartialScalarDiscoveryTitleEntries = b119PartialScalarDiscoveryCatalog.editableEntries.filter(entry =>
+    entry.valueType === 'string'
+      && entry.expectedText === '"AI INFLUENCE"'
+      && entry.provenance.callName === 'createText'
+      && entry.provenance.fields.includes('arguments[0]'));
+  const b119PartialScalarDiscoveryCloseEntries = b119PartialScalarDiscoveryCatalog.editableEntries.filter(entry =>
+    entry.valueType === 'string'
+      && entry.expectedText === '"CLOSE"'
+      && entry.provenance.callName === 'setText'
+      && entry.provenance.fields.includes('arguments[0]'));
+  const b119PartialScalarDiscoveryRow: Check = {
+    name: 'B119 fail-first mixed-stream loader-corpus discovery exposes only direct AI INFLUENCE and CLOSE scalars',
+    pass: b119PartialScalarProgramIsMixed(b119PartialScalarDiscoveryContext)
+      && b119PartialScalarHasNoSuppliedInputs(b119PartialScalarDiscoveryContext)
+      && b119PartialScalarDiscoveryCatalog.status === 'ready'
+      && b119PartialScalarDiscoveryCatalog.editable
+      && b119PartialScalarDiscoveryTitleEntries.length === 1
+      && b119PartialScalarDiscoveryCloseEntries.length === 1
+      && b119PartialScalarStructuralCatalogIsEmpty(b119PartialScalarDiscoveryCatalog),
+    detail: JSON.stringify({
+      programStatus: b119PartialScalarDiscoveryContext.program.status,
+      operationStatuses: b119PartialScalarDiscoveryContext.program.operations.map(operation => operation.status),
+      catalogStatus: b119PartialScalarDiscoveryCatalog.status,
+      catalogReason: b119PartialScalarDiscoveryCatalog.reason,
+      editableEntries: b119PartialScalarDiscoveryCatalog.editableEntries.length,
+      titleEntries: b119PartialScalarDiscoveryTitleEntries.length,
+      closeEntries: b119PartialScalarDiscoveryCloseEntries.length,
+      structuralEntries: (b119PartialScalarDiscoveryCatalog.structuralEntries || []).length,
+      deleteEntries: (b119PartialScalarDiscoveryCatalog.deleteEntries || []).length,
+      replaceEntries: (b119PartialScalarDiscoveryCatalog.replaceEntries || []).length,
+      insertEntries: (b119PartialScalarDiscoveryCatalog.insertEntries || []).length,
+      moveEntries: (b119PartialScalarDiscoveryCatalog.moveEntries || []).length,
+      suppliedInputs: !b119PartialScalarHasNoSuppliedInputs(b119PartialScalarDiscoveryContext),
+    }),
+  };
+
+  const b119PartialScalarApplyContext = contextualImportContextFor(canonicalCorpus, b119PartialScalarMixedLua);
+  const b119PartialScalarApplyCatalog = catalogFor(b119PartialScalarApplyContext);
+  const b119PartialScalarApplyTitleEntry = b119PartialScalarEntry(b119PartialScalarApplyCatalog, '"AI INFLUENCE"', 'createText');
+  const b119PartialScalarApplyCloseEntry = b119PartialScalarEntry(b119PartialScalarApplyCatalog, '"CLOSE"', 'setText');
+  const b119PartialScalarApplyBefore = sourceTextAt(b119PartialScalarApplyContext, contextualImportPath);
+  const b119PartialScalarApplyTitleOutcome: PublicCallOutcome<X4UiSourceEditResult> = b119PartialScalarApplyTitleEntry === undefined
+    ? { threw: false }
+    : invokePublic(() => applyX4UiSourceEdit(
+      b119PartialScalarApplyContext.workspace,
+      b119PartialScalarApplyContext.source,
+      b119PartialScalarApplyCatalog,
+      b119PartialScalarApplyTitleEntry.id,
+      'AI INFLUENCE updated',
+      b119PartialScalarApplyTitleEntry.path,
+      b119PartialScalarApplyTitleEntry.startOffset,
+      b119PartialScalarApplyTitleEntry.endOffset,
+      b119PartialScalarApplyTitleEntry.expectedText,
+    ));
+  const b119PartialScalarApplyCloseOutcome: PublicCallOutcome<X4UiSourceEditResult> = b119PartialScalarApplyCloseEntry === undefined
+    ? { threw: false }
+    : invokePublic(() => applyX4UiSourceEdit(
+      b119PartialScalarApplyContext.workspace,
+      b119PartialScalarApplyContext.source,
+      b119PartialScalarApplyCatalog,
+      b119PartialScalarApplyCloseEntry.id,
+      'CLOSE NOW',
+      b119PartialScalarApplyCloseEntry.path,
+      b119PartialScalarApplyCloseEntry.startOffset,
+      b119PartialScalarApplyCloseEntry.endOffset,
+      b119PartialScalarApplyCloseEntry.expectedText,
+    ));
+  const b119PartialScalarApplyOutcomePass = (
+    outcome: PublicCallOutcome<X4UiSourceEditResult>,
+    entry: X4UiEditableSourceEditEntry | undefined,
+  ): boolean => {
+    if (entry === undefined || outcome.threw || outcome.value?.accepted !== true) return false;
+    const result = outcome.value;
+    return result.changed
+      && result.reparsed
+      && result.provenanceReestablished
+      && result.catalog.status === 'ready'
+      && result.catalog.editable
+      && b119PartialScalarStructuralCatalogIsEmpty(result.catalog)
+      && sourceTextAt(result, contextualImportPath) === b119PartialScalarApplyBefore.slice(0, entry.startOffset)
+        + result.replacement
+        + b119PartialScalarApplyBefore.slice(entry.endOffset);
+  };
+  const b119PartialScalarApplyOriginalUnchanged = sourceTextAt(
+    b119PartialScalarApplyContext,
+    contextualImportPath,
+  ) === b119PartialScalarApplyBefore;
+  const b119PartialScalarApplyRow: Check = {
+    name: 'B119 fail-first mixed-stream loader-corpus apply accepts direct AI INFLUENCE and CLOSE edits only',
+    pass: b119PartialScalarProgramIsMixed(b119PartialScalarApplyContext)
+      && b119PartialScalarHasNoSuppliedInputs(b119PartialScalarApplyContext)
+      && b119PartialScalarApplyCatalog.status === 'ready'
+      && b119PartialScalarApplyCatalog.editable
+      && b119PartialScalarApplyOutcomePass(b119PartialScalarApplyTitleOutcome, b119PartialScalarApplyTitleEntry)
+      && b119PartialScalarApplyOutcomePass(b119PartialScalarApplyCloseOutcome, b119PartialScalarApplyCloseEntry)
+      && b119PartialScalarApplyOriginalUnchanged,
+    detail: JSON.stringify({
+      programStatus: b119PartialScalarApplyContext.program.status,
+      operationStatuses: b119PartialScalarApplyContext.program.operations.map(operation => operation.status),
+      catalogStatus: b119PartialScalarApplyCatalog.status,
+      catalogReason: b119PartialScalarApplyCatalog.reason,
+      editableEntries: b119PartialScalarApplyCatalog.editableEntries.length,
+      titleEntry: b119PartialScalarApplyTitleEntry?.id,
+      closeEntry: b119PartialScalarApplyCloseEntry?.id,
+      titleApply: {
+        threw: b119PartialScalarApplyTitleOutcome.threw,
+        accepted: b119PartialScalarApplyTitleOutcome.value?.accepted,
+        changed: b119PartialScalarApplyTitleOutcome.value?.changed,
+        reparsed: b119PartialScalarApplyTitleOutcome.value?.accepted === true ? b119PartialScalarApplyTitleOutcome.value.reparsed : undefined,
+        provenanceReestablished: b119PartialScalarApplyTitleOutcome.value?.accepted === true ? b119PartialScalarApplyTitleOutcome.value.provenanceReestablished : undefined,
+        reason: b119PartialScalarApplyTitleOutcome.value?.accepted === false ? b119PartialScalarApplyTitleOutcome.value.reason : undefined,
+      },
+      closeApply: {
+        threw: b119PartialScalarApplyCloseOutcome.threw,
+        accepted: b119PartialScalarApplyCloseOutcome.value?.accepted,
+        changed: b119PartialScalarApplyCloseOutcome.value?.changed,
+        reparsed: b119PartialScalarApplyCloseOutcome.value?.accepted === true ? b119PartialScalarApplyCloseOutcome.value.reparsed : undefined,
+        provenanceReestablished: b119PartialScalarApplyCloseOutcome.value?.accepted === true ? b119PartialScalarApplyCloseOutcome.value.provenanceReestablished : undefined,
+        reason: b119PartialScalarApplyCloseOutcome.value?.accepted === false ? b119PartialScalarApplyCloseOutcome.value.reason : undefined,
+      },
+      structuralEntries: (b119PartialScalarApplyCatalog.structuralEntries || []).length,
+      deleteEntries: (b119PartialScalarApplyCatalog.deleteEntries || []).length,
+      replaceEntries: (b119PartialScalarApplyCatalog.replaceEntries || []).length,
+      insertEntries: (b119PartialScalarApplyCatalog.insertEntries || []).length,
+      moveEntries: (b119PartialScalarApplyCatalog.moveEntries || []).length,
+      originalSourceUnchanged: b119PartialScalarApplyOriginalUnchanged,
+    }),
+  };
+  const b119PartialScalarFailFirstRows = [b119PartialScalarDiscoveryRow, b119PartialScalarApplyRow];
+  checks.push(...b119PartialScalarFailFirstRows);
+  console.log(`x4UiSourceEdits B119 partial-scalar fail-first: ${JSON.stringify(b119PartialScalarFailFirstRows)}`);
+
+  const b119PartialScalarNoCorpusContext = contextualImportContextFor(undefined, b119PartialScalarMixedLua);
+  const b119PartialScalarNoCorpusCatalog = catalogFor(b119PartialScalarNoCorpusContext);
+  const b119PartialScalarNoCorpusBefore = sourceTextAt(b119PartialScalarNoCorpusContext, contextualImportPath);
+  const b119PartialScalarNoCorpusApply = invokePublic(() => applyX4UiSourceEdit(
+    b119PartialScalarNoCorpusContext.workspace,
+    b119PartialScalarNoCorpusContext.source,
+    b119PartialScalarNoCorpusCatalog,
+    'missing-b119-partial-scalar-no-corpus-entry',
+    'NO CORPUS',
+  ));
+  const b119PartialScalarNoCorpusRow: Check = {
+    name: 'B119 mixed-stream scalar remains blanket-refused without loader-issued corpus',
+    pass: b119PartialScalarProgramIsMixed(b119PartialScalarNoCorpusContext)
+      && b119PartialScalarNoCorpusCatalog.status === 'locked'
+      && b119PartialScalarNoCorpusCatalog.reason === 'operation-not-applied'
+      && b119PartialScalarNoCorpusCatalog.editableEntries.length === 0
+      && b119PartialScalarStructuralCatalogIsEmpty(b119PartialScalarNoCorpusCatalog)
+      && b119PartialScalarNoCorpusApply.threw === false
+      && b119PartialScalarNoCorpusApply.value?.accepted === false
+      && b119PartialScalarNoCorpusApply.value.reason === 'unsupported-provenance'
+      && b119PartialScalarNoCorpusApply.value.workspace === b119PartialScalarNoCorpusContext.workspace
+      && b119PartialScalarNoCorpusApply.value.source === b119PartialScalarNoCorpusContext.source
+      && sourceTextAt(b119PartialScalarNoCorpusApply.value, contextualImportPath) === b119PartialScalarNoCorpusBefore,
+    detail: JSON.stringify({
+      programStatus: b119PartialScalarNoCorpusContext.program.status,
+      catalogStatus: b119PartialScalarNoCorpusCatalog.status,
+      catalogReason: b119PartialScalarNoCorpusCatalog.reason,
+      editableEntries: b119PartialScalarNoCorpusCatalog.editableEntries.length,
+      structuralEntries: (b119PartialScalarNoCorpusCatalog.structuralEntries || []).length,
+      apply: {
+        threw: b119PartialScalarNoCorpusApply.threw,
+        accepted: b119PartialScalarNoCorpusApply.value?.accepted,
+        reason: b119PartialScalarNoCorpusApply.value?.accepted === false ? b119PartialScalarNoCorpusApply.value.reason : undefined,
+      },
+      sourceUnchanged: b119PartialScalarNoCorpusApply.value !== undefined
+        && sourceTextAt(b119PartialScalarNoCorpusApply.value, contextualImportPath) === b119PartialScalarNoCorpusBefore,
+    }),
+  };
+  checks.push(b119PartialScalarNoCorpusRow);
+  console.log(`x4UiSourceEdits B119 partial-scalar no-corpus negative: ${JSON.stringify(b119PartialScalarNoCorpusRow)}`);
+
+  const b119PartialScalarScenarioWorkspace = workspace(b119PartialScalarScenarioLua, {
+    id: 'b119-partial-scalar-scenario-source-edits-selftest',
+    name: 'B119 partial scalar scenario source edits selftest',
+    passthroughFiles: [
+      passthrough('README.md', '# scenario bytes remain untouched\r\n', { reason: 'unknown_domain' }),
+      passthrough('ui.xml', uiXml.replaceAll('ui/edit.lua', b119PartialScalarScenarioPath)),
+      passthrough(b119PartialScalarScenarioPath, b119PartialScalarScenarioLua, { reason: 'unparsed', bytes: new TextEncoder().encode(b119PartialScalarScenarioLua).length }),
+      passthrough('ui/scenario-notes.txt', 'scenario sidecar remains untouched\r\n', { reason: 'unparsed' }),
+    ],
+  });
+  const b119PartialScalarScenarioSource = buildX4UiWorkspaceSource(b119PartialScalarScenarioWorkspace);
+  const b119PartialScalarScenarioFile = b119PartialScalarScenarioSource.bundle?.sourceFiles.find(file => file.path === b119PartialScalarScenarioPath);
+  if (!b119PartialScalarScenarioFile) throw new Error('B119 partial scalar scenario source file missing');
+  const b119PartialScalarScenarioModel = normalizeX4UiSourceEditLayoutModel(b119PartialScalarScenarioFile.callModel);
+  const b119PartialScalarScenarioTarget = createX4UiLayoutTargetCatalog(b119PartialScalarScenarioModel).targets.find(target =>
+    target.kind === 'function' && target.name === 'menu.display');
+  if (!b119PartialScalarScenarioTarget) throw new Error('B119 partial scalar scenario target missing');
+  const b119PartialScalarScenarioProfile: X4UiLayoutProjectionProfile = {
+    ...profileFor(b119PartialScalarScenarioModel),
+    localExpansion: { maxDepth: 4, maxInvocations: 16 },
+  };
+  const b119PartialScalarScenarioBaseResult = projectX4UiLayoutProgram(
+    b119PartialScalarScenarioModel,
+    b119PartialScalarScenarioTarget,
+    b119PartialScalarScenarioProfile,
+    undefined,
+    undefined,
+    undefined,
+    canonicalCorpus,
+  );
+  if (b119PartialScalarScenarioBaseResult.status === 'refused' || !b119PartialScalarScenarioBaseResult.program
+    || !b119PartialScalarScenarioBaseResult.evidenceAuthority) {
+    throw new Error(`B119 partial scalar scenario base projection refused: ${b119PartialScalarScenarioBaseResult.status}`);
+  }
+  const b119PartialScalarScenarioBaseProgram = b119PartialScalarScenarioBaseResult.program;
+  const b119PartialScalarScenarioBaseContext: SourceEditFixtureContext = {
+    workspace: b119PartialScalarScenarioWorkspace,
+    source: b119PartialScalarScenarioSource,
+    program: b119PartialScalarScenarioBaseProgram,
+    evidenceAuthority: b119PartialScalarScenarioBaseResult.evidenceAuthority,
+  };
+  const b119PartialScalarScenarioBaseCatalog = catalogFor(b119PartialScalarScenarioBaseContext);
+  const b119PartialScalarScenarioDirectEntry = b119PartialScalarScenarioBaseCatalog.editableEntries.find(entry =>
+    entry.provenance.callName === 'createFrameHandle'
+      && entry.expectedText === '90'
+      && entry.provenance.fields.some(field => field.includes('width')));
+  const b119PartialScalarScenarioReadyBefore = sourceTextAt(
+    b119PartialScalarScenarioBaseContext,
+    b119PartialScalarScenarioPath,
+  );
+  const b119PartialScalarScenarioReadyApply = b119PartialScalarScenarioDirectEntry === undefined
+    ? undefined
+    : invokePublic(() => applyX4UiSourceEdit(
+      b119PartialScalarScenarioWorkspace,
+      b119PartialScalarScenarioSource,
+      b119PartialScalarScenarioBaseCatalog,
+      b119PartialScalarScenarioDirectEntry.id,
+      95,
+      b119PartialScalarScenarioDirectEntry.path,
+      b119PartialScalarScenarioDirectEntry.startOffset,
+      b119PartialScalarScenarioDirectEntry.endOffset,
+      b119PartialScalarScenarioDirectEntry.expectedText,
+    ));
+  const b119PartialScalarScenarioReadyApplyValue = b119PartialScalarScenarioReadyApply?.value;
+  const b119PartialScalarScenarioReadyAfter = b119PartialScalarScenarioReadyApplyValue?.accepted === true
+    ? sourceTextAt(b119PartialScalarScenarioReadyApplyValue, b119PartialScalarScenarioPath)
+    : undefined;
+  const b119PartialScalarScenarioReadyExpected = b119PartialScalarScenarioDirectEntry === undefined
+    ? undefined
+    : b119PartialScalarScenarioReadyBefore.slice(0, b119PartialScalarScenarioDirectEntry.startOffset)
+      + '95'
+      + b119PartialScalarScenarioReadyBefore.slice(b119PartialScalarScenarioDirectEntry.endOffset);
+  const b119PartialScalarScenarioReadyControlRow: Check = {
+    name: 'B119 mixed scenario without preview inputs retains a READY applied direct scalar control',
+    pass: b119PartialScalarProgramIsMixed(b119PartialScalarScenarioBaseContext)
+      && b119PartialScalarHasNoSuppliedInputs(b119PartialScalarScenarioBaseContext)
+      && b119PartialScalarScenarioBaseCatalog.status === 'ready'
+      && b119PartialScalarScenarioBaseCatalog.editable
+      && b119PartialScalarScenarioDirectEntry !== undefined
+      && b119PartialScalarScenarioReadyApply?.threw === false
+      && b119PartialScalarScenarioReadyApplyValue?.accepted === true
+      && b119PartialScalarScenarioReadyApplyValue.changed
+      && b119PartialScalarScenarioReadyApplyValue.reparsed
+      && b119PartialScalarScenarioReadyApplyValue.provenanceReestablished
+      && b119PartialScalarScenarioReadyAfter === b119PartialScalarScenarioReadyExpected
+      && sourceTextAt(b119PartialScalarScenarioBaseContext, b119PartialScalarScenarioPath)
+        === b119PartialScalarScenarioReadyBefore
+      && b119PartialScalarStructuralCatalogIsEmpty(b119PartialScalarScenarioBaseCatalog),
+    detail: JSON.stringify({
+      programStatus: b119PartialScalarScenarioBaseProgram.status,
+      operationStatuses: b119PartialScalarScenarioBaseProgram.operations.map(operation => operation.status),
+      catalogStatus: b119PartialScalarScenarioBaseCatalog.status,
+      catalogReason: b119PartialScalarScenarioBaseCatalog.reason,
+      editableEntries: b119PartialScalarScenarioBaseCatalog.editableEntries.length,
+      directEntry: b119PartialScalarScenarioDirectEntry && {
+        id: b119PartialScalarScenarioDirectEntry.id,
+        callName: b119PartialScalarScenarioDirectEntry.provenance.callName,
+        fields: b119PartialScalarScenarioDirectEntry.provenance.fields,
+        expectedText: b119PartialScalarScenarioDirectEntry.expectedText,
+      },
+      structuralEntries: b119PartialScalarScenarioBaseCatalog.structuralEntries.length,
+      suppliedInputs: !b119PartialScalarHasNoSuppliedInputs(b119PartialScalarScenarioBaseContext),
+      readyApply: {
+        threw: b119PartialScalarScenarioReadyApply?.threw,
+        accepted: b119PartialScalarScenarioReadyApplyValue?.accepted,
+        changed: b119PartialScalarScenarioReadyApplyValue?.accepted === true ? b119PartialScalarScenarioReadyApplyValue.changed : undefined,
+        reparsed: b119PartialScalarScenarioReadyApplyValue?.accepted === true ? b119PartialScalarScenarioReadyApplyValue.reparsed : undefined,
+        provenanceReestablished: b119PartialScalarScenarioReadyApplyValue?.accepted === true ? b119PartialScalarScenarioReadyApplyValue.provenanceReestablished : undefined,
+        exactDetachedSource: b119PartialScalarScenarioReadyAfter === b119PartialScalarScenarioReadyExpected,
+        originalSourceUnchanged: sourceTextAt(b119PartialScalarScenarioBaseContext, b119PartialScalarScenarioPath)
+          === b119PartialScalarScenarioReadyBefore,
+      },
+    }),
+  };
+  checks.push(b119PartialScalarScenarioReadyControlRow);
+  console.log(`x4UiSourceEdits B119 partial-scalar no-input READY control: ${JSON.stringify(b119PartialScalarScenarioReadyControlRow)}`);
+
+  const b119PartialScalarScenarioSampleInput = b119PartialScalarScenarioBaseProgram.sampleCatalog.entries.length === 0
+    ? undefined
+    : {
+      catalogId: b119PartialScalarScenarioBaseProgram.sampleCatalog.id,
+      source: b119PartialScalarScenarioBaseProgram.sampleCatalog.sourceIdentity,
+      values: b119PartialScalarScenarioBaseProgram.sampleCatalog.entries.map(entry => ({
+        id: entry.id,
+        value: entry.expectedType === 'number' ? 9 : entry.expectedType === 'boolean' ? true : 'guarded',
+      })),
+    };
+  const b119PartialScalarScenarioPathEntry = b119PartialScalarScenarioBaseProgram.previewPathCatalog.entries[0];
+  const b119PartialScalarScenarioPathInput = b119PartialScalarScenarioPathEntry === undefined
+    ? undefined
+    : {
+      catalogId: b119PartialScalarScenarioBaseProgram.previewPathCatalog.id,
+      source: b119PartialScalarScenarioBaseProgram.previewPathCatalog.sourceIdentity,
+      selections: [{
+        id: b119PartialScalarScenarioPathEntry.id,
+        boundaryId: b119PartialScalarScenarioPathEntry.boundaryId,
+        armId: b119PartialScalarScenarioPathEntry.armId,
+      }],
+    };
+  const b119PartialScalarScenarioProjectionFor = (input: {
+    readonly sample?: typeof b119PartialScalarScenarioSampleInput;
+    readonly path?: typeof b119PartialScalarScenarioPathInput;
+  }) => projectX4UiLayoutProgram(
+    b119PartialScalarScenarioModel,
+    b119PartialScalarScenarioTarget,
+    b119PartialScalarScenarioProfile,
+    input.sample,
+    input.path,
+    undefined,
+    canonicalCorpus,
+  );
+  const b119PartialScalarScenarioCases = [
+    {
+      id: 'B119 mixed scalar with unconsumed source-bound sample input refuses',
+      inputKind: 'sample',
+      active: (context: SourceEditFixtureContext) => context.program.previewSampleBindings.length > 0,
+      result: b119PartialScalarScenarioProjectionFor({ sample: b119PartialScalarScenarioSampleInput }),
+    },
+    {
+      id: 'B119 mixed scalar with active source-bound path input refuses',
+      inputKind: 'path',
+      active: (context: SourceEditFixtureContext) => context.program.previewPathSelections.length > 0,
+      result: b119PartialScalarScenarioProjectionFor({ path: b119PartialScalarScenarioPathInput }),
+    },
+  ];
+  const b119PartialScalarScenarioRows: Check[] = b119PartialScalarScenarioCases.map(testCase => {
+    const scenarioContext = testCase.result.status === 'refused' || !testCase.result.program || !testCase.result.evidenceAuthority
+      ? undefined
+      : {
+        workspace: b119PartialScalarScenarioWorkspace,
+        source: b119PartialScalarScenarioSource,
+        program: testCase.result.program,
+        evidenceAuthority: testCase.result.evidenceAuthority,
+      };
+    const scenarioCatalog = scenarioContext === undefined ? undefined : catalogFor(scenarioContext);
+    const scenarioLockedEntry = scenarioCatalog?.lockedEntries.find(entry => entry.callName === 'createText'
+      && entry.expectedText === '"SCENARIO"');
+    const scenarioBefore = sourceTextAt(
+      scenarioContext || { source: b119PartialScalarScenarioSource },
+      b119PartialScalarScenarioPath,
+    );
+    const scenarioApply = scenarioCatalog === undefined
+      ? undefined
+      : invokePublic(() => applyX4UiSourceEdit(
+        b119PartialScalarScenarioWorkspace,
+        b119PartialScalarScenarioSource,
+        scenarioCatalog,
+        b119PartialScalarScenarioDirectEntry?.id || `missing-${testCase.inputKind}-scenario-entry`,
+        95,
+        b119PartialScalarScenarioDirectEntry?.path,
+        b119PartialScalarScenarioDirectEntry?.startOffset,
+        b119PartialScalarScenarioDirectEntry?.endOffset,
+        b119PartialScalarScenarioDirectEntry?.expectedText,
+      ));
+    const applyValue = scenarioApply?.value;
+    const expectedScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples and no active path or loop selections; clear unsupported preview inputs and reproject the target';
+    const pass = scenarioContext !== undefined
+      && testCase.active(scenarioContext)
+      && scenarioContext.program.status === 'partial'
+      && scenarioCatalog?.status === 'locked'
+      && scenarioCatalog.reason === 'unsupported-provenance'
+      && scenarioCatalog.detail === expectedScenarioRefusalDetail
+      && scenarioCatalog.editableEntries.length === 0
+      && b119PartialScalarStructuralCatalogIsEmpty(scenarioCatalog)
+      && (testCase.inputKind !== 'sample'
+        || (b119PartialScalarScenarioSampleInput !== undefined
+          && b119PartialScalarScenarioSampleInput.values.length > 0
+          && scenarioContext.program.previewSampleBindings.length === b119PartialScalarScenarioSampleInput.values.length
+          && scenarioContext.program.previewSampleBindings.some(binding => binding.status === 'not-applied')))
+      && scenarioApply?.threw === false
+      && applyValue?.accepted === false
+      && applyValue.reason === 'unsupported-provenance'
+      && applyValue.detail === expectedScenarioRefusalDetail
+      && b119PartialScalarScenarioDirectEntry !== undefined
+      && applyValue.workspace === b119PartialScalarScenarioWorkspace
+      && applyValue.source === b119PartialScalarScenarioSource
+      && sourceTextAt(applyValue, b119PartialScalarScenarioPath) === scenarioBefore;
+    return {
+      name: testCase.id,
+      pass,
+      detail: JSON.stringify({
+        inputKind: testCase.inputKind,
+        projectionStatus: testCase.result.status,
+        refusal: 'refusal' in testCase.result ? testCase.result.refusal : undefined,
+        programStatus: scenarioContext?.program.status,
+        active: scenarioContext === undefined ? false : testCase.active(scenarioContext),
+        sampleBindings: scenarioContext?.program.previewSampleBindings.length,
+        pathSelections: scenarioContext?.program.previewPathSelections.length,
+        loopSelections: scenarioContext?.program.previewLoopSelections.length,
+        sampleBindingStatuses: scenarioContext?.program.previewSampleBindings.map(binding => ({ id: binding.id, status: binding.status })),
+        sampleNotApplied: scenarioContext?.program.previewSampleBindings.filter(binding => binding.status === 'not-applied').length,
+        baseReady: b119PartialScalarScenarioBaseCatalog.status === 'ready'
+          && b119PartialScalarScenarioBaseCatalog.editable,
+        baseDirectEntry: b119PartialScalarScenarioDirectEntry?.id,
+        sampleInputIssued: b119PartialScalarScenarioSampleInput !== undefined
+          && b119PartialScalarScenarioSampleInput.values.length === b119PartialScalarScenarioBaseProgram.sampleCatalog.entries.length,
+        lockedEntry: scenarioLockedEntry?.id,
+        catalogStatus: scenarioCatalog?.status,
+        catalogReason: scenarioCatalog?.reason,
+        catalogDetail: scenarioCatalog?.detail,
+        editableEntries: scenarioCatalog?.editableEntries.length,
+        structuralEntries: scenarioCatalog?.structuralEntries.length,
+        apply: {
+          threw: scenarioApply?.threw,
+          accepted: applyValue?.accepted,
+          reason: applyValue?.accepted === false ? applyValue.reason : undefined,
+          detail: applyValue?.accepted === false ? applyValue.detail : undefined,
+        },
+        sourceUnchanged: applyValue !== undefined
+          && sourceTextAt(applyValue, b119PartialScalarScenarioPath) === scenarioBefore,
+      }),
+    };
+  });
+  checks.push(...b119PartialScalarScenarioRows);
+  console.log(`x4UiSourceEdits B119 partial-scalar active-input negatives: ${JSON.stringify(b119PartialScalarScenarioRows)}`);
+
+  const b119PartialScalarLoopScenarioWorkspace = workspace(b119PartialScalarLoopScenarioLua, {
+    id: 'b119-partial-scalar-loop-scenario-source-edits-selftest',
+    name: 'B119 partial scalar loop scenario source edits selftest',
+    passthroughFiles: [
+      passthrough('README.md', '# loop scenario bytes remain untouched\r\n', { reason: 'unknown_domain' }),
+      passthrough('ui.xml', uiXml.replaceAll('ui/edit.lua', b119PartialScalarLoopScenarioPath)),
+      passthrough(b119PartialScalarLoopScenarioPath, b119PartialScalarLoopScenarioLua, { reason: 'unparsed', bytes: new TextEncoder().encode(b119PartialScalarLoopScenarioLua).length }),
+      passthrough('ui/loop-scenario-notes.txt', 'loop scenario sidecar remains untouched\r\n', { reason: 'unparsed' }),
+    ],
+  });
+  const b119PartialScalarLoopScenarioSource = buildX4UiWorkspaceSource(b119PartialScalarLoopScenarioWorkspace);
+  const b119PartialScalarLoopScenarioFile = b119PartialScalarLoopScenarioSource.bundle?.sourceFiles.find(file => file.path === b119PartialScalarLoopScenarioPath);
+  if (!b119PartialScalarLoopScenarioFile) throw new Error('B119 partial scalar loop scenario source file missing');
+  const b119PartialScalarLoopScenarioModel = normalizeX4UiSourceEditLayoutModel(b119PartialScalarLoopScenarioFile.callModel);
+  const b119PartialScalarLoopScenarioTarget = createX4UiLayoutTargetCatalog(b119PartialScalarLoopScenarioModel).targets.find(target =>
+    target.kind === 'function' && target.name === 'menu.createFrame');
+  if (!b119PartialScalarLoopScenarioTarget) throw new Error('B119 partial scalar loop scenario target missing');
+  const b119PartialScalarLoopScenarioProfile: X4UiLayoutProjectionProfile = {
+    ...profileFor(b119PartialScalarLoopScenarioModel),
+    localExpansion: { maxDepth: 4, maxInvocations: 16 },
+  };
+  const b119PartialScalarLoopScenarioBaseResult = projectX4UiLayoutProgram(
+    b119PartialScalarLoopScenarioModel,
+    b119PartialScalarLoopScenarioTarget,
+    b119PartialScalarLoopScenarioProfile,
+    undefined,
+    undefined,
+    undefined,
+    canonicalCorpus,
+  );
+  if (b119PartialScalarLoopScenarioBaseResult.status === 'refused'
+    || !b119PartialScalarLoopScenarioBaseResult.program
+    || !b119PartialScalarLoopScenarioBaseResult.evidenceAuthority) {
+    throw new Error(`B119 partial scalar loop scenario base projection refused: ${b119PartialScalarLoopScenarioBaseResult.status}`);
+  }
+  const b119PartialScalarLoopScenarioBaseProgram = b119PartialScalarLoopScenarioBaseResult.program;
+  const b119PartialScalarLoopScenarioBaseContext: SourceEditFixtureContext = {
+    workspace: b119PartialScalarLoopScenarioWorkspace,
+    source: b119PartialScalarLoopScenarioSource,
+    program: b119PartialScalarLoopScenarioBaseResult.program,
+    evidenceAuthority: b119PartialScalarLoopScenarioBaseResult.evidenceAuthority,
+  };
+  const b119PartialScalarLoopScenarioBaseCatalog = catalogFor(b119PartialScalarLoopScenarioBaseContext);
+  const b119PartialScalarLoopScenarioDirectEntry = b119PartialScalarLoopScenarioBaseCatalog.editableEntries.find(entry =>
+    entry.provenance.callName === 'createFrameHandle'
+      && entry.expectedText === '100'
+      && entry.provenance.fields.some(field => field.includes('width')));
+  const b119PartialScalarLoopScenarioReadyBefore = sourceTextAt(
+    b119PartialScalarLoopScenarioBaseContext,
+    b119PartialScalarLoopScenarioPath,
+  );
+  const b119PartialScalarLoopScenarioReadyApply = b119PartialScalarLoopScenarioDirectEntry === undefined
+    ? undefined
+    : invokePublic(() => applyX4UiSourceEdit(
+      b119PartialScalarLoopScenarioWorkspace,
+      b119PartialScalarLoopScenarioSource,
+      b119PartialScalarLoopScenarioBaseCatalog,
+      b119PartialScalarLoopScenarioDirectEntry.id,
+      105,
+      b119PartialScalarLoopScenarioDirectEntry.path,
+      b119PartialScalarLoopScenarioDirectEntry.startOffset,
+      b119PartialScalarLoopScenarioDirectEntry.endOffset,
+      b119PartialScalarLoopScenarioDirectEntry.expectedText,
+    ));
+  const b119PartialScalarLoopScenarioReadyApplyValue = b119PartialScalarLoopScenarioReadyApply?.value;
+  const b119PartialScalarLoopScenarioReadyAfter = b119PartialScalarLoopScenarioReadyApplyValue?.accepted === true
+    ? sourceTextAt(b119PartialScalarLoopScenarioReadyApplyValue, b119PartialScalarLoopScenarioPath)
+    : undefined;
+  const b119PartialScalarLoopScenarioReadyExpected = b119PartialScalarLoopScenarioDirectEntry === undefined
+    ? undefined
+    : b119PartialScalarLoopScenarioReadyBefore.slice(0, b119PartialScalarLoopScenarioDirectEntry.startOffset)
+      + '105'
+      + b119PartialScalarLoopScenarioReadyBefore.slice(b119PartialScalarLoopScenarioDirectEntry.endOffset);
+  const b119PartialScalarLoopScenarioReadyControlRow: Check = {
+    name: 'B119 loop scenario without preview inputs retains a READY applied direct scalar control',
+    pass: b119PartialScalarProgramIsMixed(b119PartialScalarLoopScenarioBaseContext)
+      && b119PartialScalarHasNoSuppliedInputs(b119PartialScalarLoopScenarioBaseContext)
+      && b119PartialScalarLoopScenarioBaseCatalog.status === 'ready'
+      && b119PartialScalarLoopScenarioBaseCatalog.editable
+      && b119PartialScalarLoopScenarioDirectEntry !== undefined
+      && b119PartialScalarLoopScenarioReadyApply?.threw === false
+      && b119PartialScalarLoopScenarioReadyApplyValue?.accepted === true
+      && b119PartialScalarLoopScenarioReadyApplyValue.changed
+      && b119PartialScalarLoopScenarioReadyApplyValue.reparsed
+      && b119PartialScalarLoopScenarioReadyApplyValue.provenanceReestablished
+      && b119PartialScalarLoopScenarioReadyAfter === b119PartialScalarLoopScenarioReadyExpected
+      && sourceTextAt(b119PartialScalarLoopScenarioBaseContext, b119PartialScalarLoopScenarioPath)
+        === b119PartialScalarLoopScenarioReadyBefore
+      && b119PartialScalarStructuralCatalogIsEmpty(b119PartialScalarLoopScenarioBaseCatalog),
+    detail: JSON.stringify({
+      programStatus: b119PartialScalarLoopScenarioBaseProgram.status,
+      operationStatuses: b119PartialScalarLoopScenarioBaseProgram.operations.map(operation => operation.status),
+      catalogStatus: b119PartialScalarLoopScenarioBaseCatalog.status,
+      catalogReason: b119PartialScalarLoopScenarioBaseCatalog.reason,
+      editableEntries: b119PartialScalarLoopScenarioBaseCatalog.editableEntries.length,
+      directEntry: b119PartialScalarLoopScenarioDirectEntry && {
+        id: b119PartialScalarLoopScenarioDirectEntry.id,
+        callName: b119PartialScalarLoopScenarioDirectEntry.provenance.callName,
+        fields: b119PartialScalarLoopScenarioDirectEntry.provenance.fields,
+        expectedText: b119PartialScalarLoopScenarioDirectEntry.expectedText,
+      },
+      structuralEntries: b119PartialScalarLoopScenarioBaseCatalog.structuralEntries.length,
+      readyApply: {
+        threw: b119PartialScalarLoopScenarioReadyApply?.threw,
+        accepted: b119PartialScalarLoopScenarioReadyApplyValue?.accepted,
+        changed: b119PartialScalarLoopScenarioReadyApplyValue?.accepted === true ? b119PartialScalarLoopScenarioReadyApplyValue.changed : undefined,
+        reparsed: b119PartialScalarLoopScenarioReadyApplyValue?.accepted === true ? b119PartialScalarLoopScenarioReadyApplyValue.reparsed : undefined,
+        provenanceReestablished: b119PartialScalarLoopScenarioReadyApplyValue?.accepted === true ? b119PartialScalarLoopScenarioReadyApplyValue.provenanceReestablished : undefined,
+        exactDetachedSource: b119PartialScalarLoopScenarioReadyAfter === b119PartialScalarLoopScenarioReadyExpected,
+        originalSourceUnchanged: sourceTextAt(b119PartialScalarLoopScenarioBaseContext, b119PartialScalarLoopScenarioPath)
+          === b119PartialScalarLoopScenarioReadyBefore,
+      },
+    }),
+  };
+  checks.push(b119PartialScalarLoopScenarioReadyControlRow);
+  console.log(`x4UiSourceEdits B119 partial-scalar loop no-input READY control: ${JSON.stringify(b119PartialScalarLoopScenarioReadyControlRow)}`);
+
+  const b119PartialScalarLoopScenarioEntry = b119PartialScalarLoopScenarioBaseProgram.previewLoopCatalog.entries[0];
+  const b119PartialScalarLoopScenarioInput = b119PartialScalarLoopScenarioEntry === undefined
+    ? undefined
+    : {
+      catalogId: b119PartialScalarLoopScenarioBaseProgram.previewLoopCatalog.id,
+      source: b119PartialScalarLoopScenarioBaseProgram.previewLoopCatalog.sourceIdentity,
+      targetId: b119PartialScalarLoopScenarioBaseProgram.target.id,
+      profileId: b119PartialScalarLoopScenarioBaseProgram.previewLoopCatalog.profileId,
+      selections: [{ id: b119PartialScalarLoopScenarioEntry.id, iterationCount: 2 }],
+    };
+  const b119PartialScalarLoopScenarioResult = b119PartialScalarLoopScenarioInput === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      b119PartialScalarLoopScenarioModel,
+      b119PartialScalarLoopScenarioTarget,
+      b119PartialScalarLoopScenarioProfile,
+      undefined,
+      undefined,
+      undefined,
+      canonicalCorpus,
+      b119PartialScalarLoopScenarioInput,
+    );
+  const b119PartialScalarLoopScenarioContext = b119PartialScalarLoopScenarioResult === undefined
+    || b119PartialScalarLoopScenarioResult.status === 'refused'
+    || !b119PartialScalarLoopScenarioResult.program
+    || !b119PartialScalarLoopScenarioResult.evidenceAuthority
+    ? undefined
+    : {
+      workspace: b119PartialScalarLoopScenarioWorkspace,
+      source: b119PartialScalarLoopScenarioSource,
+      program: b119PartialScalarLoopScenarioResult.program,
+      evidenceAuthority: b119PartialScalarLoopScenarioResult.evidenceAuthority,
+    } satisfies SourceEditFixtureContext;
+  const b119PartialScalarLoopScenarioCatalog = b119PartialScalarLoopScenarioContext === undefined
+    ? undefined
+    : catalogFor(b119PartialScalarLoopScenarioContext);
+  const b119PartialScalarLoopScenarioBefore = sourceTextAt(
+    b119PartialScalarLoopScenarioContext || { source: b119PartialScalarLoopScenarioSource },
+    b119PartialScalarLoopScenarioPath,
+  );
+  const b119PartialScalarLoopScenarioApply = b119PartialScalarLoopScenarioCatalog === undefined
+    ? undefined
+    : invokePublic(() => applyX4UiSourceEdit(
+      b119PartialScalarLoopScenarioWorkspace,
+      b119PartialScalarLoopScenarioSource,
+      b119PartialScalarLoopScenarioCatalog,
+      b119PartialScalarLoopScenarioDirectEntry?.id || 'missing-loop-scenario-entry',
+      105,
+      b119PartialScalarLoopScenarioDirectEntry?.path,
+      b119PartialScalarLoopScenarioDirectEntry?.startOffset,
+      b119PartialScalarLoopScenarioDirectEntry?.endOffset,
+      b119PartialScalarLoopScenarioDirectEntry?.expectedText,
+    ));
+  const b119PartialScalarLoopScenarioApplyValue = b119PartialScalarLoopScenarioApply?.value;
+  const b119PartialScalarLoopScenarioRefusalDetail = 'mixed-stream scalar editing requires consumed source-bound samples and no active path or loop selections; clear unsupported preview inputs and reproject the target';
+  const b119PartialScalarLoopScenarioRow: Check = {
+    name: 'B119 mixed scalar with active source-bound loop input refuses',
+    pass: b119PartialScalarLoopScenarioContext !== undefined
+      && b119PartialScalarLoopScenarioResult?.status === 'partial'
+      && b119PartialScalarLoopScenarioContext.program.status === 'partial'
+      && b119PartialScalarLoopScenarioContext.program.previewLoopSelections.length === 1
+      && b119PartialScalarLoopScenarioCatalog?.status === 'locked'
+      && b119PartialScalarLoopScenarioCatalog.reason === 'unsupported-provenance'
+      && b119PartialScalarLoopScenarioCatalog.detail === b119PartialScalarLoopScenarioRefusalDetail
+      && b119PartialScalarLoopScenarioCatalog.editableEntries.length === 0
+      && b119PartialScalarStructuralCatalogIsEmpty(b119PartialScalarLoopScenarioCatalog)
+      && b119PartialScalarLoopScenarioApply?.threw === false
+      && b119PartialScalarLoopScenarioApplyValue?.accepted === false
+      && b119PartialScalarLoopScenarioApplyValue.reason === 'unsupported-provenance'
+      && b119PartialScalarLoopScenarioApplyValue.detail === b119PartialScalarLoopScenarioRefusalDetail
+      && b119PartialScalarLoopScenarioDirectEntry !== undefined
+      && b119PartialScalarLoopScenarioApplyValue.workspace === b119PartialScalarLoopScenarioWorkspace
+      && b119PartialScalarLoopScenarioApplyValue.source === b119PartialScalarLoopScenarioSource
+      && sourceTextAt(b119PartialScalarLoopScenarioApplyValue, b119PartialScalarLoopScenarioPath)
+        === b119PartialScalarLoopScenarioBefore,
+    detail: JSON.stringify({
+      projectionStatus: b119PartialScalarLoopScenarioResult?.status,
+      refusal: b119PartialScalarLoopScenarioResult && 'refusal' in b119PartialScalarLoopScenarioResult
+        ? b119PartialScalarLoopScenarioResult.refusal
+        : undefined,
+      programStatus: b119PartialScalarLoopScenarioContext?.program.status,
+      loopSelections: b119PartialScalarLoopScenarioContext?.program.previewLoopSelections.length,
+      baseReady: b119PartialScalarLoopScenarioBaseCatalog.status === 'ready'
+        && b119PartialScalarLoopScenarioBaseCatalog.editable,
+      baseDirectEntry: b119PartialScalarLoopScenarioDirectEntry?.id,
+      catalogStatus: b119PartialScalarLoopScenarioCatalog?.status,
+      catalogReason: b119PartialScalarLoopScenarioCatalog?.reason,
+      catalogDetail: b119PartialScalarLoopScenarioCatalog?.detail,
+      editableEntries: b119PartialScalarLoopScenarioCatalog?.editableEntries.length,
+      structuralEntries: b119PartialScalarLoopScenarioCatalog?.structuralEntries.length,
+      apply: {
+        threw: b119PartialScalarLoopScenarioApply?.threw,
+        accepted: b119PartialScalarLoopScenarioApplyValue?.accepted,
+        reason: b119PartialScalarLoopScenarioApplyValue?.accepted === false ? b119PartialScalarLoopScenarioApplyValue.reason : undefined,
+        detail: b119PartialScalarLoopScenarioApplyValue?.accepted === false ? b119PartialScalarLoopScenarioApplyValue.detail : undefined,
+      },
+      sourceUnchanged: b119PartialScalarLoopScenarioApplyValue !== undefined
+        && sourceTextAt(b119PartialScalarLoopScenarioApplyValue, b119PartialScalarLoopScenarioPath)
+          === b119PartialScalarLoopScenarioBefore,
+    }),
+  };
+  checks.push(b119PartialScalarLoopScenarioRow);
+  console.log(`x4UiSourceEdits B119 partial-scalar loop active-input negative: ${JSON.stringify(b119PartialScalarLoopScenarioRow)}`);
 
   const aggregateFailures = aggregateRows.filter(row => !row.pass);
   const failedBeforeFinalAssert = checks.filter(item => !item.pass);

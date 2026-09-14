@@ -510,8 +510,15 @@ function registerCanonicalAuthority(value: X4UiCorpusCanonicalSuccess): void {
 }
 
 function authorityPayloadsUnchanged(record: X4UiCorpusAuthorityRecord): boolean {
-  return record.payloads.every(payload => payload.reference.byteLength === payload.snapshot.byteLength
-    && payload.reference.every((byte, index) => byte === payload.snapshot[index]));
+  for (const { reference, snapshot } of record.payloads) {
+    const length = snapshot.byteLength;
+    if (reference.byteLength !== length) return false;
+    // Scan all bytes on every check without a callback per byte or caller-owned array methods.
+    for (let index = 0; index < length; index += 1) {
+      if (reference[index] !== snapshot[index]) return false;
+    }
+  }
+  return true;
 }
 
 /** Accept only an exact, loader-issued canonical result whose mutable bytes remain unchanged. */

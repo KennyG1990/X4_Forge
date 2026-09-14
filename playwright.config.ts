@@ -130,6 +130,9 @@ const ephemeralEnv = {
   // deleted temporary workspace.
   X4_CONFIG_DIR: E2E_STATE_DIR,
   X4_DATA_DIR: path.join(E2E_STATE_DIR, 'data'),
+  // The studio object/extension cache is separate from the reference-manifest DB.
+  // Explicitly isolate it too; openStudioDb's standalone default remains unchanged.
+  X4_STUDIO_CACHE_DIR: path.join(E2E_STATE_DIR, 'studio-cache'),
   ...(E2E_REFERENCE_ROOT ? { X4_REFERENCE_ROOT: E2E_REFERENCE_ROOT } : {}),
   // Deterministic pages: no HMR socket, no watcher-triggered reloads mid-spec.
   DISABLE_HMR: 'true',

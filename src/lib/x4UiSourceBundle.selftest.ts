@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert';
 import {
+  addX4UiSourceBundleRegistration,
   buildX4UiSourceBundle,
   projectX4UiSourceBundle,
   spliceX4UiSourceBundle,
@@ -184,6 +185,240 @@ function run(): void {
     spliceX4UiSourceBundle(editable, { ...edit, expectedText: 'stale' }).reason,
     'identical refusal inputs must produce a deterministic reason'
   );
+
+  const registrationSource = buildX4UiSourceBundle({
+    uiXml: '\uFEFF<addon name="fixture">\r\n  <environment type="menus" data="quoted > token &lt;/environment&gt;">\r\n    <!-- keep </environment> here -->\r\n    <![CDATA[ </environment> ]]><!-- and here -->\r\n    <file name="ui/existing.lua" />\r\n  </environment>\r\n</addon>\r\n',
+    luaFiles: [{ path: 'ui/existing.lua', text: firstLua }]
+  });
+  const registrationAddition = addX4UiSourceBundleRegistration(registrationSource, {
+    path: 'ui/new.lua',
+    text: firstLua.replace('-- first', '-- new')
+  });
+  assert.equal(registrationAddition.accepted, true, 'source-local registration should be accepted');
+  assert.equal(registrationAddition.changed, true);
+  assert.equal(registrationAddition.reason, null);
+  assert.equal(registrationAddition.bundle.uiXml.startsWith('\uFEFF'), true, 'registration must retain the BOM');
+  assert.equal(registrationAddition.bundle.uiXml.includes('quoted > token &lt;/environment&gt;'), true);
+  assert.equal(registrationAddition.bundle.uiXml.includes('<!-- keep </environment> here -->'), true);
+  assert.equal(registrationAddition.bundle.uiXml.includes('<![CDATA[ </environment> ]]>'), true);
+  assert.deepEqual(
+    registrationAddition.bundle.registrations.map(registration => registration.rawPath),
+    ['ui/existing.lua', 'ui/new.lua'],
+    'new registration must append after existing direct menu registrations'
+  );
+  assert.equal(
+    registrationAddition.bundle.sourceFiles.find(file => file.path === 'ui/new.lua')?.registered,
+    true,
+    'the added source must be registered when projected with its Lua text'
+  );
+  assert.equal(
+    registrationAddition.bundle.sourceFiles.find(file => file.path === 'ui/existing.lua')?.text,
+    firstLua,
+    'existing source text must be retained exactly'
+  );
+
+  const multipleEnvironments = buildX4UiSourceBundle({
+    uiXml: '<addon name="fixture"><environment type="menus"><file name="ui/one.lua" /></environment><environment type="menus"></environment></addon>',
+    luaFiles: [{ path: 'ui/one.lua', text: firstLua }]
+  });
+  const multipleEnvironmentAddition = addX4UiSourceBundleRegistration(multipleEnvironments, {
+    path: 'ui/two.lua',
+    text: firstLua.replace('-- first', '-- two')
+  });
+  assert.equal(multipleEnvironmentAddition.accepted, true, 'multiple direct menu environments are legal');
+  assert.equal(
+    multipleEnvironmentAddition.bundle.uiXml,
+    '<addon name="fixture"><environment type="menus"><file name="ui/one.lua" /></environment><environment type="menus"><file name="ui/two.lua" /></environment></addon>',
+    'new registration must target the last direct menus environment'
+  );
+
+  const formattedEnvironment = buildX4UiSourceBundle({
+    uiXml: [
+      '<addon name="fixture">',
+      '  <environment type="menus">',
+      '    <file name="ui/one.lua" />',
+      '  </environment>',
+      '</addon>',
+      ''
+    ].join('\r\n'),
+    luaFiles: [{ path: 'ui/one.lua', text: firstLua }]
+  });
+  const formattedEnvironmentAddition = addX4UiSourceBundleRegistration(formattedEnvironment, {
+    path: 'ui/two.lua',
+    text: firstLua.replace('-- first', '-- two')
+  });
+  assert.equal(formattedEnvironmentAddition.accepted, true);
+  assert.equal(
+    formattedEnvironmentAddition.bundle.uiXml,
+    [
+      '<addon name="fixture">',
+      '  <environment type="menus">',
+      '    <file name="ui/one.lua" />',
+      '    <file name="ui/two.lua" />',
+      '  </environment>',
+      '</addon>',
+      ''
+    ].join('\r\n'),
+    'formatted registration must insert at the closing line start with local indentation'
+  );
+
+  const formattedRoot = buildX4UiSourceBundle({
+    uiXml: [
+      '<addon name="fixture">',
+      '  <!-- preserve this root-level comment -->',
+      '  </addon>'
+    ].join('\r\n'),
+    luaFiles: []
+  });
+  const formattedRootAddition = addX4UiSourceBundleRegistration(formattedRoot, {
+    path: 'ui/root.lua',
+    text: firstLua.replace('-- first', '-- root')
+  });
+  assert.equal(formattedRootAddition.accepted, true);
+  assert.equal(
+    formattedRootAddition.bundle.uiXml,
+    [
+      '<addon name="fixture">',
+      '  <!-- preserve this root-level comment -->',
+      '    <environment type="menus">',
+      '      <file name="ui/root.lua" />',
+      '    </environment>',
+      '  </addon>'
+    ].join('\r\n'),
+    'formatted root registration must preserve the root closing indentation'
+  );
+
+  const metadataEnvironment = buildX4UiSourceBundle({
+    uiXml: [
+      '<addon name="fixture">',
+      '  <environment type="menus">',
+      '    <dependency name="base" />',
+      '    <savedvariable name="fixture_state" storage="savegame" />',
+      '  </environment>',
+      '</addon>'
+    ].join('\n'),
+    luaFiles: []
+  });
+  const metadataAddition = addX4UiSourceBundleRegistration(metadataEnvironment, {
+    path: 'ui/metadata.lua',
+    text: firstLua.replace('-- first', '-- metadata')
+  });
+  assert.equal(metadataAddition.accepted, true);
+  assert.equal(
+    metadataAddition.bundle.uiXml,
+    [
+      '<addon name="fixture">',
+      '  <environment type="menus">',
+      '    <dependency name="base" />',
+      '    <savedvariable name="fixture_state" storage="savegame" />',
+      '    <file name="ui/metadata.lua" />',
+      '  </environment>',
+      '</addon>'
+    ].join('\n'),
+    'registration must preserve dependency and savedvariable metadata and order'
+  );
+
+  const unsupportedTopology = [
+    '<addon name="fixture"><environment type="other"></environment></addon>',
+    '<addon name="fixture"><wrapper><environment type="menus"></environment></wrapper></addon>',
+    '<addon name="fixture" xmlns="urn:not-x4"><environment type="menus"></environment></addon>',
+    '<addon name="fixture"><environment type="menus" xmlns="urn:not-x4"></environment></addon>',
+    '<addon name="fixture"><bogus /></addon>',
+    '<addon name="fixture"><environment type="menus"><wrapper><file name="ui/wrapped.lua" /></wrapper></environment></addon>',
+    '<addon name="fixture"><environment type="menus"><file name="ui/nested.lua"><bogus /></file></environment></addon>',
+    '<addon name="fixture"><environment type="menus"><savedvariable name="fixture_state" /></environment></addon>',
+    '<addon name="fixture"><environment type="menus"><savedvariable name="fixture_state" storage="cloud" /></environment></addon>',
+    '<addon name="fixture"><environment type="menus"><savedvariable storage="savegame" /></environment></addon>',
+    '<Addon name="fixture"><environment type="menus"></environment></Addon>',
+    '<addon name="fixture"><Environment type="menus"></Environment></addon>',
+    '<something name="fixture"><environment type="menus"></environment></something>'
+  ];
+  for (const unsupportedXml of unsupportedTopology) {
+    const unsupportedBundle = buildX4UiSourceBundle({ uiXml: unsupportedXml, luaFiles: [] });
+    const unsupportedResult = addX4UiSourceBundleRegistration(unsupportedBundle, {
+      path: 'ui/unsupported.lua',
+      text: firstLua
+    });
+    assert.equal(unsupportedResult.accepted, false, `unsupported registration topology must refuse: ${unsupportedXml}`);
+    assert.equal(unsupportedResult.changed, false);
+    assert.equal(unsupportedResult.bundle, unsupportedBundle);
+  }
+
+  for (const emptyXml of [
+    '<addon name="fixture"><environment type="menus"/></addon>',
+    '<addon name="fixture"/>'
+  ]) {
+    const emptyBundle = buildX4UiSourceBundle({ uiXml: emptyXml, luaFiles: [] });
+    const emptyAddition = addX4UiSourceBundleRegistration(emptyBundle, {
+      path: 'ui/empty.lua',
+      text: firstLua.replace('-- first', '-- empty')
+    });
+    assert.equal(emptyAddition.accepted, true, `self-closing XML should expand locally: ${emptyXml}`);
+    assert.equal(emptyAddition.bundle.xml.parsed, true);
+    assert.equal(emptyAddition.bundle.registrations[0].resolution, 'resolved');
+    assert.equal(emptyAddition.bundle.sourceFiles[0].registered, true);
+  }
+
+  const dtdRegistration = buildX4UiSourceBundle({
+    uiXml: '<!DOCTYPE addon [<!ENTITY x "y">]><addon name="fixture"><environment type="menus"></environment></addon>',
+    luaFiles: []
+  });
+  const missingNameRegistration = buildX4UiSourceBundle({
+    uiXml: '<addon><environment type="menus"></environment></addon>',
+    luaFiles: []
+  });
+  const literalLessThanRegistration = buildX4UiSourceBundle({
+    uiXml: '<addon name="fixture"><environment type="menus" data="quoted > token </environment>"><file name="ui/existing.lua" /></environment></addon>',
+    luaFiles: [{ path: 'ui/existing.lua', text: firstLua }]
+  });
+  function refusalCase(
+    originalBundle: ReturnType<typeof buildX4UiSourceBundle>,
+    path: string
+  ) {
+    const originalJson = JSON.stringify(originalBundle);
+    const originalProjection = projectX4UiSourceBundle(originalBundle);
+    return {
+      originalBundle,
+      result: addX4UiSourceBundleRegistration(originalBundle, { path, text: firstLua }),
+      originalJson,
+      originalProjection
+    };
+  }
+  const registrationRefusals = [
+    refusalCase(registrationSource, '../escape.lua'),
+    refusalCase(registrationSource, '/absolute.lua'),
+    refusalCase(registrationSource, 'ui/existing.lua'),
+    refusalCase(dtdRegistration, 'ui/dtd.lua'),
+    refusalCase(missingNameRegistration, 'ui/missing-name.lua'),
+    refusalCase(literalLessThanRegistration, 'ui/literal-less-than.lua')
+  ];
+  for (const { originalBundle, result, originalJson, originalProjection } of registrationRefusals) {
+    assert.equal(result.accepted, false);
+    assert.equal(result.changed, false);
+    assert.equal(result.bundle, originalBundle, 'every refusal must return its exact original bundle');
+    assert.equal(JSON.stringify(originalBundle), originalJson, 'refusal must not mutate the original bundle');
+    assert.deepEqual(
+      projectX4UiSourceBundle(originalBundle),
+      originalProjection,
+      'refusal must preserve the original bundle projection'
+    );
+    assert.ok(typeof result.reason === 'string');
+    assert.ok(typeof result.detail === 'string' && result.detail.length > 0);
+  }
+  const malformedRegistration = buildX4UiSourceBundle({
+    uiXml: '<addon name="fixture"><environment type="menus"><file name="ui/existing.lua"></addon>',
+    luaFiles: [{ path: 'ui/existing.lua', text: firstLua }]
+  });
+  const malformedRegistrationJson = JSON.stringify(malformedRegistration);
+  const malformedRegistrationProjection = projectX4UiSourceBundle(malformedRegistration);
+  const malformedAddition = addX4UiSourceBundleRegistration(malformedRegistration, {
+    path: 'ui/malformed.lua',
+    text: firstLua
+  });
+  assert.equal(malformedAddition.accepted, false);
+  assert.equal(malformedAddition.bundle, malformedRegistration, 'malformed registration must return the original bundle');
+  assert.equal(JSON.stringify(malformedRegistration), malformedRegistrationJson, 'malformed refusal must not mutate the original bundle');
+  assert.deepEqual(projectX4UiSourceBundle(malformedRegistration), malformedRegistrationProjection);
 
   console.log('x4UiSourceBundle selftest: PASS');
 }

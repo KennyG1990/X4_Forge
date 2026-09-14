@@ -27,8 +27,12 @@ them is part of the agent's job, enforced like any workflow step:
    (long sessions beat fresh ones) hold precisely because self-authored state transfer beats retrieval;
    the handoff file gives fresh sessions the same advantage without the degradation debt.
 2. **MACHINE-STATE ASK.** Before validation-heavy or e2e work: "Are you in the app? Game running? Machine
-   quiet?" Never assume. If the agent detects him live in a surface mid-session (canvas changed, load
-   spiking), FREEZE state-touching work and say so.
+   quiet?" Never assume. During authorized Computer Use, keep Antigravity visible and foreground; do not
+   minimize it or voluntarily switch away. **Ken override, 2026-09-10:** continue ordinary Computer Use until
+   Ken presses Escape or explicitly asks to stop. A foreground/input guard requesting a fresh observation
+   is a recovery signal, not by itself a new permission gate: refresh window state and use only supported
+   recovery. Always obey an actual tool stop/turn-ended signal, access restriction, or protected write gate.
+   Unexpected app data changes or a changed game/heavy-validation state still require a safety pause.
 3. **DEGRADATION CALL.** When a session runs long and agent errors cluster (2+ mistakes in the last
    stretch, repeated tool freezes), say plainly: "we're in degradation territory — commit point now, fresh
    session for the next unit." Ken may override, but he hears the evidence first, every time.
@@ -494,7 +498,9 @@ limit, and failure behavior before it ships (workflow rule 3.6). External agents
 keys (`x-custom-api-key`); server keys are app-UI-origin-only.
 
 **Git & release ownership:** the workflow's Git Policy applies with this project's specifics — Ken
-DELEGATED git to the agent (2026-07-19): the agent COMMITS AND PUSHES directly with `git` (the KLIO /
+DELEGATED git to the agent (2026-07-19): the agent COMMITS directly with `git` and, per Ken's
+2026-09-12 update, PUSHES ONLY PUBLIC RELEASES. Do not push interim development or internal/test
+checkpoints. Existing release, precommit and explicit per-unit boundaries still apply. (The KLIO /
 Antigravity computer-use commit flow is RETIRED — "get rid of the klio policy"), using a comprehensive
 message and asserting `origin/<branch>` == `HEAD` after every push (banked detached-HEAD hazard). Run
 `npm run precommit:check` first. **Publish-before-commit** holds ONLY for USER-FACING releases (bump →

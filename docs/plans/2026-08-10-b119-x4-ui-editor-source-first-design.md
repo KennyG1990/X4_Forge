@@ -5,6 +5,15 @@ Status: `SPECIFIED`
 Owner: GitHub issue #41
 Governing brief: `FORGE-UI-EDITOR-BRIEF.md`
 
+## Product-direction amendment — 2026-09-10
+
+Ken approved `2026-09-10-b119-canvas-first-builder.md` as the current authoring-experience contract.
+Source-canonical architecture and rendering fidelity below remain authoritative. The implementation must
+now prove visual creation/editing/rearrangement/undo/scenarios/save-reopen, not merely render Lua and expose
+literal catalogs. The primary workspace is a persistent canvas with hierarchy and selected-element inspector;
+technical provenance and diagnostic catalogs move behind explicit inspection. This is an approved sequence
+change, not removal of source integrity, preview honesty, or native-game acceptance.
+
 ## Outcome and decision
 
 The real X4 Lua source is the editor's canonical artifact. The browser derives an ordered, provenance-carrying layout

@@ -291,7 +291,7 @@ const known = (
   provenance: 'source-literal',
   expression,
   source: at,
-});
+} as X4UiLayoutDescriptorFact);
 
 const unavailable = (
   expectedType: 'number' | 'string' | 'boolean' | 'color-object',
@@ -1874,6 +1874,222 @@ test('B119 causal zero-height text keeps the already-scaled Helper candidate at 
   assert(diagnoseX4UiSceneStructureForTest(removedRelationship, projected.result.evidenceAuthority) !== undefined, 'removed creator/cell minTextHeight relationship must fail closed');
 });
 
+test('B119 explicit zero text height matches omitted automatic height through real Scene and Paint', () => {
+  const relativePath = 'ui/b119-explicit-zero-text-height.lua';
+  const uiXml = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<addon name="b119-explicit-zero-text-height">',
+    '  <environment type="menus">',
+    `    <file name="${relativePath}" />`,
+    '  </environment>',
+    '</addon>',
+    '',
+  ].join('\n');
+  const sourceFor = (
+    heightProperty: string,
+    minRowHeight: string,
+    y: string,
+    scaling: string,
+  ): string => [
+    'local menu = { name = "B119ExplicitZeroTextHeight", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    `local row = table:addRow(false, { paddingTop = 0, paddingBottom = 0, borderBelow = false, fixed = false, scaling = ${scaling} })`,
+    `row[1]:createText("zero", { ${heightProperty}minRowHeight = ${minRowHeight}, y = ${y}, scaling = ${scaling} })`,
+    'frame:display()',
+  ].join('\n');
+  const workspaceFor = (sourceText: string) => ({
+    id: 'b119-explicit-zero-text-height-session',
+    name: 'B119 explicit zero text height session',
+    version: '1.0.0',
+    author: 'Forge',
+    description: 'B119 explicit-zero text-height regression',
+    nodes: [],
+    links: [],
+    uiWidgets: [],
+    uiTheme: { backgroundColor: '#000000', borderColor: '#111111', accentColor: '#00ffff', opacity: 1, showIcons: true },
+    compileSettings: { md: false, ui: true, ai: false, library: false, translations: false, patches: false },
+    passthroughFiles: [
+      { path: 'ui.xml', content: uiXml },
+      { path: relativePath, content: sourceText, reason: 'unparsed' as const },
+    ],
+  } as Parameters<typeof projectX4UiEditorSession>[0]['workspace']);
+  const sessionFor = (
+    sourceText: string,
+    uiScale: number,
+    sampleValues?: { readonly minRowHeight: number; readonly y: number },
+  ) => {
+    const workspace = workspaceFor(sourceText);
+    const profile = { width: 100, height: 80, uiScale } as const;
+    const baseline = projectX4UiEditorSession({ workspace, corpus: undefined, profile });
+    const file = baseline.source.bundle?.sourceFiles.find(candidate => candidate.path === relativePath);
+    assert(file !== undefined, 'B119 explicit-zero session must materialize the parsed Lua source');
+    const targetCatalog = createX4UiLayoutTargetCatalog(file.callModel);
+    const target = targetCatalog.targets.find(candidate => candidate.kind === 'top-level');
+    assert(target !== undefined, 'B119 explicit-zero session must issue the top-level target catalog entry');
+    const selection = {
+      sourceIndex: file.index,
+      path: file.path,
+      sourceIdentity: targetCatalog.sourceIdentity,
+      target: { ...target, id: target.id },
+    };
+    const unsampled = projectX4UiEditorSession({ workspace, corpus, profile, selection });
+    if (sampleValues === undefined) return { unsampled, sampled: unsampled };
+    const sampleCatalog = unsampled.sampleCatalog;
+    assert(sampleCatalog !== null && unsampled.sampleBinding !== undefined && unsampled.sampleCatalogAuthority !== undefined, 'B119 dynamic zero-height session must issue a sample catalog and authority');
+    const minRowHeightEntry = sampleCatalog.entries.find(entry => entry.expression === 'runtimeMin');
+    const yEntry = sampleCatalog.entries.find(entry => entry.expression === 'runtimeY');
+    assert(minRowHeightEntry !== undefined && yEntry !== undefined, `B119 dynamic zero-height session must issue independent runtimeMin/runtimeY entries: ${JSON.stringify(sampleCatalog.entries)}`);
+    const samples = {
+      catalogId: sampleCatalog.id,
+      source: sampleCatalog.sourceIdentity,
+      values: [
+        { id: minRowHeightEntry.id, value: sampleValues.minRowHeight },
+        { id: yEntry.id, value: sampleValues.y },
+      ],
+    };
+    const sampled = projectX4UiEditorSession({
+      workspace,
+      corpus,
+      profile,
+      selection,
+      samples,
+      sampleBinding: unsampled.sampleBinding,
+      sampleCatalogAuthority: unsampled.sampleCatalogAuthority,
+    });
+    return { unsampled, sampled };
+  };
+  const semanticScene = (projection: ReturnType<typeof sessionFor>['sampled']) => {
+    const sceneResult = projection.preview.scene;
+    assert(sceneResult !== undefined && sceneResult.status !== 'refused', `B119 explicit-zero Scene must be accepted: ${JSON.stringify({ status: sceneResult?.status, refusal: sceneResult && 'refusal' in sceneResult ? sceneResult.refusal : undefined })}`);
+    const scene = sceneResult.scene;
+    const text = scene.texts.find(candidate => candidate.content === 'zero');
+    assert(text !== undefined, 'B119 explicit-zero Scene must retain the semantic text content');
+    const widget = scene.widgets.find(candidate => candidate.textIds.includes(text.id));
+    assert(widget !== undefined && widget.outerRect !== undefined, 'B119 explicit-zero Scene must retain the semantic text widget geometry');
+    const cell = scene.cells.find(candidate => candidate.id === widget.cellId);
+    const row = cell === undefined ? undefined : scene.rows.find(candidate => candidate.id === cell.rowId);
+    assert(cell !== undefined && row !== undefined, 'B119 explicit-zero Scene must retain the semantic cell/row ancestry');
+    const glyphs = scene.glyphs.filter(candidate => candidate.textId === text.id).map(glyph => ({
+      codePoint: glyph.codePoint,
+      glyphIndex: glyph.glyphIndex,
+      rect: glyph.rect,
+      quad: {
+        x: glyph.quad.x,
+        y: glyph.quad.y,
+        width: glyph.quad.width,
+        height: glyph.quad.height,
+      },
+    }));
+    assert(glyphs.length > 0, 'B119 explicit-zero Scene must retain nonempty glyph geometry');
+    return {
+      status: scene.status,
+      ancestry: [
+        { kind: 'row', rect: row.rect },
+        { kind: 'cell', rect: cell.rect },
+        { kind: 'widget', rect: widget.outerRect },
+      ],
+      text: {
+        content: text.content,
+        rect: text.rect,
+        lines: text.lines.map(line => ({ displayedText: line.displayedText, rect: line.rect, width: line.width, overflow: line.overflow, truncated: line.truncated })),
+      },
+      glyphs,
+    };
+  };
+  const semanticPaint = (projection: ReturnType<typeof sessionFor>['sampled']) => {
+    const paint = projection.paint;
+    assert(paint !== null && paint.status !== 'refused', `B119 explicit-zero Paint must be accepted: ${JSON.stringify({ paint: paint?.status, refusal: paint && 'refusal' in paint ? paint.refusal : undefined })}`);
+    const geometry = paint.plan.layers[0].commands
+      .filter(command => command.kind === 'node-geometry')
+      .map(command => ({ kind: command.kind, geometry: command.geometry, completeness: command.completeness, style: command.style }));
+    const glyphs = paint.plan.layers[1].commands
+      .filter(command => command.kind === 'glyph-alpha-blit')
+      .map(command => ({ codePoint: command.codePoint, glyphIndex: command.glyphIndex, sourceRect: command.sourceRect, destinationRect: command.destinationRect }));
+    assert(glyphs.length > 0, 'B119 explicit-zero Paint must retain nonempty glyph commands');
+    return { status: paint.status, geometry, glyphs };
+  };
+  const comparePair = (
+    label: string,
+    explicitSource: string,
+    omittedSource: string,
+    uiScale: number,
+    sampleValues?: { readonly minRowHeight: number; readonly y: number },
+  ): void => {
+    assert(explicitSource.replace('height = 0, ', '') === omittedSource, `${label} must change only the explicit height property`);
+    const explicit = sessionFor(explicitSource, uiScale, sampleValues).sampled;
+    const omitted = sessionFor(omittedSource, uiScale, sampleValues).sampled;
+    const explicitProgramResult = explicit.preview.program;
+    const omittedProgramResult = omitted.preview.program;
+    assert(explicitProgramResult !== null && explicitProgramResult.status !== 'refused' && explicitProgramResult.program !== undefined, `${label} explicit source must retain a parsed Layout program`);
+    assert(omittedProgramResult !== null && omittedProgramResult.status !== 'refused' && omittedProgramResult.program !== undefined, `${label} omitted source must retain a parsed Layout program`);
+    const explicitProgram = explicitProgramResult.program;
+    const omittedProgram = omittedProgramResult.program;
+    const explicitCreator = explicitProgram.operations.find(operation => operation.kind === 'createText');
+    const omittedCreator = omittedProgram.operations.find(operation => operation.kind === 'createText');
+    const explicitHeight = explicitCreator?.metadata.semantics.properties?.find(property => property.normalizedName === 'height')?.value;
+    const omittedHeight = omittedCreator?.metadata.semantics.properties?.find(property => property.normalizedName === 'height')?.value;
+    assert(explicitCreator !== undefined
+      && explicitHeight?.status === 'static'
+      && explicitHeight.value === 0
+      && explicitHeight.sourceLiteral !== undefined
+      && explicitProgram.tables[0]?.kernelState?.properties.scaling === false
+      && explicitProgram.rows[0]?.kernelState?.scaling === (uiScale === 1.25)
+      && omittedCreator !== undefined
+      && omittedHeight === undefined, `${label} source metadata must preserve explicit zero and omit height when omitted: ${JSON.stringify({ creator: explicitCreator, omittedCreator, height: explicitHeight, omittedHeight })}`);
+    if (sampleValues !== undefined) {
+      assert(explicit.sampleReconciliation.status === 'accepted' && omitted.sampleReconciliation.status === 'accepted', `${label} issued samples must reconcile through the session owner`);
+      assert(explicit.samples?.values.map(value => value.value).join(',') === `${sampleValues.minRowHeight},${sampleValues.y}`
+        && omitted.samples?.values.map(value => value.value).join(',') === `${sampleValues.minRowHeight},${sampleValues.y}`, `${label} samples must remain independently issued and unchanged`);
+    }
+    const omittedScene = semanticScene(omitted);
+    const omittedPaint = semanticPaint(omitted);
+    console.log(`B119 omitted control ${label}: Scene=${omittedScene.status}, Paint=${omittedPaint.status}, glyphs=${omittedScene.glyphs.length}/${omittedPaint.glyphs.length}`);
+    const explicitScene = semanticScene(explicit);
+    const explicitPaint = semanticPaint(explicit);
+    assert(isDeepStrictEqual(explicitScene, omittedScene), `${label} explicit and omitted Scene semantic geometry must match: ${JSON.stringify({ explicit: explicitScene, omitted: omittedScene })}`);
+    assert(isDeepStrictEqual(explicitPaint, omittedPaint), `${label} explicit and omitted Paint semantic geometry must match: ${JSON.stringify({ explicit: explicitPaint, omitted: omittedPaint })}`);
+    assert(explicit.preview.scene?.status !== 'refused'
+      && omitted.preview.scene?.status !== 'refused'
+      && explicit.paint !== null && explicit.paint.status !== 'refused'
+      && omitted.paint !== null && omitted.paint.status !== 'refused', `${label} Scene/Paint status chain must remain accepted`);
+    if (uiScale === 1.25) {
+      assert(explicitProgram.profile.metrics.uiScale === 1.25
+        && explicitProgram.tables[0]?.kernelState?.properties.scaling === false
+        && explicitProgram.rows[0]?.kernelState?.scaling === true
+        && explicitProgram.cells[0]?.kernelState?.scaling === true, `${label} must exercise the enabled 1.25 kernel scale path`);
+    }
+    assert(omittedCreator !== undefined, `${label} omitted source must retain its createText operation`);
+  };
+
+  comparePair(
+    'B119 literal automatic height 40/5',
+    sourceFor('height = 0, ', '40', '5', 'false'),
+    sourceFor('', '40', '5', 'false'),
+    1,
+  );
+  comparePair(
+    'B119 sampled automatic height 40/5',
+    sourceFor('height = 0, ', 'runtimeMin', 'runtimeY', 'false'),
+    sourceFor('', 'runtimeMin', 'runtimeY', 'false'),
+    1,
+    { minRowHeight: 40, y: 5 },
+  );
+  comparePair(
+    'B119 sampled automatic height 50/9',
+    sourceFor('height = 0, ', 'runtimeMin', 'runtimeY', 'false'),
+    sourceFor('', 'runtimeMin', 'runtimeY', 'false'),
+    1,
+    { minRowHeight: 50, y: 9 },
+  );
+  comparePair(
+    'B119 scaled automatic height at uiScale 1.25',
+    sourceFor('height = 0, ', '16', '0', 'true'),
+    sourceFor('', '16', '0', 'true'),
+    1.25,
+  );
+});
+
 const producerAuthority = (result: X4UiLayoutProgramResult): X4UiLayoutEvidenceAuthority => {
   if (!('evidenceAuthority' in result) || result.evidenceAuthority === undefined) throw new Error('successful producer result must expose evidence authority');
   return result.evidenceAuthority;
@@ -1939,6 +2155,246 @@ const synchronizedAuthority = (
   }
   return copy as unknown as X4UiLayoutEvidenceAuthority;
 };
+
+test('B119 numeric Scene facts use exact plural schema and individual sampled links', () => {
+  const sourceText = [
+    'local menu = { name = "B119SceneNumericPlural", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(2, { width = 100, reserveScrollBar = false, scaling = false })',
+    'table:setColWidth(1, 50, false)',
+    'table:setColWidth(2, 50, false)',
+    'local row = table:addRow(false, { paddingTop = 0, paddingBottom = 0, borderBelow = false, fixed = false, scaling = false })',
+    'row[1]:createText("plural", { height = 12, font = "Zekton", fontsize = math.floor((runtimeFontBase + runtimeFontDelta) / 2), wordwrap = false, halign = "left", x = 0, y = 0 })',
+    'row[2]:createEditBox({ height = 12, defaultText = "border", active = false, x = 0, y = 0 })',
+    'frame:display()',
+  ].join('\n');
+  const projected = rawProjectionFor(sourceText, 'selftest/b119-scene-numeric-plural.lua');
+  const unsampledProgram = projected.program;
+  const target = projected.target;
+  const profile = projected.profile;
+  assert(unsampledProgram !== undefined && target !== undefined && profile !== undefined, 'Scene numeric plural fixture must issue an unsampled top-level producer');
+  const expressions = unsampledProgram.sampleCatalog.entries.map(entry => entry.expression);
+  assert(unsampledProgram.sampleCatalog.entries.length === 2
+    && JSON.stringify(expressions) === JSON.stringify(['runtimeFontBase', 'runtimeFontDelta']), `Scene numeric plural catalog must contain exactly the two source expressions: ${JSON.stringify(expressions)}`);
+  const sampleInput = {
+    catalogId: unsampledProgram.sampleCatalog.id,
+    source: unsampledProgram.sampleCatalog.sourceIdentity,
+    values: unsampledProgram.sampleCatalog.entries.map(entry => ({
+      id: entry.id,
+      value: entry.expression === 'runtimeFontBase' ? 16 : entry.expression === 'runtimeFontDelta' ? 2 : 16,
+    })),
+  };
+  const sampledResult = projectX4UiLayoutProgram(projected.model, target, unsampledProgram.profile, sampleInput);
+  assert('program' in sampledResult
+    && sampledResult.program !== undefined
+    && 'evidenceAuthority' in sampledResult
+    && sampledResult.evidenceAuthority !== undefined, 'Scene numeric plural fixture must issue a sampled producer/evidence pair');
+  const sampledProgram = sampledResult.program;
+  const sampledAuthority = sampledResult.evidenceAuthority;
+  const sampledIds = unsampledProgram.sampleCatalog.entries.map(entry => entry.id).sort();
+  const creator = sampledProgram.operations.find(operation => operation.kind === 'createText');
+  const cell = sampledProgram.cells.find(candidate => candidate.id === creator?.cellId);
+  assert(creator !== undefined && cell !== undefined, 'Scene numeric plural fixture must retain its text creator and cell');
+  const creatorSizeFact = creator.descriptorFacts.fontsize;
+  const cellSizeFact = cell.descriptorFacts.fontsize;
+  assert(creatorSizeFact?.status === 'known'
+    && cellSizeFact?.status === 'known'
+    && creatorSizeFact.expectedType === 'number'
+    && cellSizeFact.expectedType === 'number'
+    && creatorSizeFact.provenance === 'preview-sample'
+    && cellSizeFact.provenance === 'preview-sample'
+    && JSON.stringify(creatorSizeFact.sampleIds) === JSON.stringify(sampledIds)
+    && JSON.stringify(cellSizeFact.sampleIds) === JSON.stringify(sampledIds)
+    && creatorSizeFact.sampleId === undefined
+    && cellSizeFact.sampleId === undefined, `Scene numeric plural producer and cell facts must retain the exact two sorted sample IDs and omit singular sampleId: ${JSON.stringify({ expressions, sampledIds, creatorSizeFact, cellSizeFact })}`);
+  const sceneResult = buildX4UiScene(sampledResult as X4UiLayoutProgramResult, corpus, profile);
+  assert(sceneResult.status !== 'refused', `Scene numeric plural fixture must cross the Scene boundary: ${JSON.stringify(sceneResult)}`);
+  const sceneText = sceneResult.scene.texts.find(text => text.content === 'plural');
+  assert(sceneText !== undefined && sceneText.fontSize === 9 && sceneText.lines.length > 0 && sceneText.lines.some(line => line.displayedText.length > 0), 'Scene numeric plural fixture must retain measured nonempty text with the sampled font size');
+  const sizeLinks = sceneText.provenanceLinks.filter(link => link.fact === 'fontsize');
+  assert(sizeLinks.length === sampledIds.length
+    && JSON.stringify(sizeLinks.map(link => link.sampleId)) === JSON.stringify(sampledIds)
+    && sizeLinks.every(link => !Object.prototype.hasOwnProperty.call(link, 'sampleIds')), `Scene numeric fontsize provenance must expand to individual links: ${JSON.stringify(sizeLinks)}`);
+  const borderText = sceneResult.scene.texts.find(text => text.provenanceLinks.some(link => link.fact === 'editboxTextBorder'));
+  const borderLink = borderText?.provenanceLinks.find(link => link.fact === 'editboxTextBorder');
+  assert(borderLink !== undefined && borderLink.sampleId === undefined && !Object.prototype.hasOwnProperty.call(borderLink, 'sampleIds'), `Scene edit-box border provenance must remain a singular existing fact link: ${JSON.stringify(borderLink)}`);
+
+  const factPair = (candidate: X4UiLayoutProgram, factName: string): [Record<string, unknown>, Record<string, unknown>] => {
+    const candidateCreator = candidate.operations.find(operation => operation.kind === 'createText');
+    const candidateCell = candidate.cells.find(item => item.id === candidateCreator?.cellId);
+    const operationFact = candidateCreator?.descriptorFacts[factName];
+    const cellFact = candidateCell?.descriptorFacts[factName];
+    assert(candidateCreator !== undefined && candidateCell !== undefined && operationFact !== undefined && cellFact !== undefined, `Scene numeric diagnostic fixture must retain ${factName} facts on both producer sides`);
+    return [operationFact as unknown as Record<string, unknown>, cellFact as unknown as Record<string, unknown>];
+  };
+  const diagnosticMutation = (
+    label: string,
+    expectedShape: { readonly sampleId: boolean; readonly sampleIds: boolean },
+    mutate: (operationFact: Record<string, unknown>, cellFact: Record<string, unknown>) => void,
+    freeze = false,
+  ): { readonly label: string; readonly mutationApplied: boolean; readonly stage: string | undefined; readonly threw: boolean } => {
+    const candidate = cloneProgram(sampledProgram);
+    const [operationFact, cellFact] = factPair(candidate, 'fontsize');
+    mutate(operationFact, cellFact);
+    const owns = (fact: Record<string, unknown>, key: string): boolean => Object.getOwnPropertyDescriptor(fact, key) !== undefined;
+    const mutationApplied = [operationFact, cellFact].every(fact => owns(fact, 'sampleId') === expectedShape.sampleId && owns(fact, 'sampleIds') === expectedShape.sampleIds);
+    const authority = synchronizedAuthority(sampledAuthority, candidate);
+    if (freeze) {
+      freezeFixtureGraph(candidate);
+      freezeFixtureGraph(authority);
+    }
+    let stage: string | undefined;
+    let threw = false;
+    try {
+      stage = diagnoseX4UiSceneStructureForTest(candidate, authority);
+    } catch {
+      threw = true;
+    }
+    return { label, mutationApplied, stage, threw };
+  };
+  const removeSampleFields = (fact: Record<string, unknown>): void => {
+    delete fact.sampleId;
+    delete fact.sampleIds;
+  };
+  const validRows = [
+    diagnosticMutation('zero sample IDs', { sampleId: false, sampleIds: false }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+    }),
+    diagnosticMutation('one sample ID', { sampleId: true, sampleIds: false }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+      operationFact.sampleId = sampledIds[0];
+      cellFact.sampleId = sampledIds[0];
+    }),
+    diagnosticMutation('two sample IDs', { sampleId: false, sampleIds: true }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+      operationFact.sampleIds = sampledIds.slice();
+      cellFact.sampleIds = sampledIds.slice();
+    }),
+    diagnosticMutation('128 sample IDs', { sampleId: false, sampleIds: true }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+      const ids = Array.from({ length: 128 }, (_, index) => `sample-${String(index).padStart(3, '0')}`);
+      operationFact.sampleIds = ids;
+      cellFact.sampleIds = ids.slice();
+    }),
+    diagnosticMutation('frozen two sample IDs', { sampleId: false, sampleIds: true }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+      operationFact.sampleIds = Object.freeze(sampledIds.slice());
+      cellFact.sampleIds = Object.freeze(sampledIds.slice());
+    }, true),
+  ];
+  assert(validRows.every(row => row.mutationApplied && !row.threw && row.stage === undefined), `Scene numeric diagnostic positives must pass independently of public pair validation: ${JSON.stringify(validRows)}`);
+
+  const invalidRows = [
+    diagnosticMutation('explicit undefined sampleId', { sampleId: true, sampleIds: false }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+      operationFact.sampleId = undefined;
+      cellFact.sampleId = undefined;
+    }),
+    diagnosticMutation('explicit undefined sampleIds', { sampleId: false, sampleIds: true }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+      operationFact.sampleIds = undefined;
+      cellFact.sampleIds = undefined;
+    }),
+    diagnosticMutation('undefined on both sample forms', { sampleId: true, sampleIds: true }, (operationFact, cellFact) => {
+      removeSampleFields(operationFact);
+      removeSampleFields(cellFact);
+      operationFact.sampleId = undefined;
+      operationFact.sampleIds = sampledIds.slice();
+      cellFact.sampleId = sampledIds[0];
+      cellFact.sampleIds = undefined;
+    }),
+  ];
+  assert(invalidRows.every(row => row.mutationApplied && !row.threw && row.stage === 'nodes'), `Scene numeric diagnostic own-field negatives must refuse at fact validation without throwing: ${JSON.stringify(invalidRows)}`);
+
+  const nonnumericCandidate = cloneProgram(sampledProgram);
+  const [operationFontFact, cellFontFact] = factPair(nonnumericCandidate, 'font');
+  const nonnumericAuthority = synchronizedAuthority(sampledAuthority, nonnumericCandidate);
+  operationFontFact.sampleIds = undefined;
+  cellFontFact.sampleIds = undefined;
+  let nonnumericStage: string | undefined;
+  let nonnumericThrew = false;
+  try {
+    nonnumericStage = diagnoseX4UiSceneStructureForTest(nonnumericCandidate, nonnumericAuthority);
+  } catch {
+    nonnumericThrew = true;
+  }
+  assert(!nonnumericThrew && nonnumericStage === 'nodes', `Scene numeric diagnostic must reject explicit undefined plural on a nonnumeric fact at fact validation: ${JSON.stringify({ nonnumericStage, nonnumericThrew, operationOwnsSampleIds: Object.getOwnPropertyDescriptor(operationFontFact, 'sampleIds') !== undefined, cellOwnsSampleIds: Object.getOwnPropertyDescriptor(cellFontFact, 'sampleIds') !== undefined })}`);
+
+  const coercionCandidate = cloneProgram(sampledProgram);
+  const [operationCoercionFact, cellCoercionFact] = factPair(coercionCandidate, 'fontsize');
+  const coercionAuthority = synchronizedAuthority(sampledAuthority, coercionCandidate);
+  let coercions = 0;
+  const coerciveProvenance: Record<string, unknown> = {};
+  Object.defineProperty(coerciveProvenance, 'toString', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      coercions += 1;
+      throw new Error('Scene provenance coercion must not run');
+    },
+  });
+  operationCoercionFact.provenance = coerciveProvenance;
+  cellCoercionFact.provenance = coerciveProvenance;
+  let coercionStage: string | undefined;
+  let coercionThrew = false;
+  try {
+    coercionStage = diagnoseX4UiSceneStructureForTest(coercionCandidate, coercionAuthority);
+  } catch {
+    coercionThrew = true;
+  }
+  assert(!coercionThrew && coercionStage === 'nodes' && coercions === 0, `Scene numeric diagnostic must check primitive provenance before coercion: ${JSON.stringify({ coercionStage, coercionThrew, coercions })}`);
+
+  const accessorCandidate = cloneProgram(sampledProgram);
+  const [operationAccessorFact, cellAccessorFact] = factPair(accessorCandidate, 'fontsize');
+  const accessorAuthority = synchronizedAuthority(sampledAuthority, accessorCandidate);
+  const accessorIds = operationAccessorFact.sampleIds as string[];
+  let getterReads = 0;
+  Object.defineProperty(accessorIds, '0', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      getterReads += 1;
+      throw new Error('Scene sample ID getter must not run');
+    },
+  });
+  cellAccessorFact.sampleIds = accessorIds;
+  let accessorStage: string | undefined;
+  let accessorThrew = false;
+  try {
+    accessorStage = diagnoseX4UiSceneStructureForTest(accessorCandidate, accessorAuthority);
+  } catch {
+    accessorThrew = true;
+  }
+  assert(!accessorThrew && accessorStage === 'nodes' && getterReads === 0, `Scene numeric diagnostic must reject accessor arrays without invoking the getter: ${JSON.stringify({ accessorStage, accessorThrew, getterReads })}`);
+
+  const proxyCandidate = cloneProgram(sampledProgram);
+  const [operationProxyFact, cellProxyFact] = factPair(proxyCandidate, 'fontsize');
+  const proxyAuthority = synchronizedAuthority(sampledAuthority, proxyCandidate);
+  let proxyReads = 0;
+  const proxyIds = new Proxy(sampledIds.slice(), {
+    get: (targetArray, property, receiver) => {
+      proxyReads += 1;
+      return Reflect.get(targetArray, property, receiver);
+    },
+  });
+  operationProxyFact.sampleIds = proxyIds;
+  cellProxyFact.sampleIds = proxyIds;
+  let proxyStage: string | undefined;
+  let proxyThrew = false;
+  try {
+    proxyStage = diagnoseX4UiSceneStructureForTest(proxyCandidate, proxyAuthority);
+  } catch {
+    proxyThrew = true;
+  }
+  assert(!proxyThrew && proxyStage === 'nodes' && proxyReads === 0, `Scene numeric diagnostic must refuse a transparent proxy without invoking proxy getters: ${JSON.stringify({ proxyStage, proxyThrew, proxyReads })}`);
+});
 
 const hostileEditBoxDefaultTransition = (
   projected: ReturnType<typeof rawProjectionFor>,
@@ -3395,6 +3851,46 @@ test('uses one-border cellbackgroundwidth only for button/icon parentwidth paths
   assert(iconText.availableWidth !== undefined && iconText.availableWidth >= iconCell.rect!.width, 'icon text parentwidth must follow the source cell/background path');
 });
 
+test('B119 fontstring declared bounds follow alignment without clipping fitting glyphs', () => {
+  for (const alignment of ['left', 'center', 'right'] as const) for (const explicit of [false, true]) {
+    const scene = sceneFromRaw([
+      'local menu = { name = "AlignedBounds", layer = 1 }',
+      'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+      'local t = frame:addTable(1, { width = 41, reserveScrollBar = false, scaling = false })',
+      't:setColWidth(1, 41, false)',
+      'local row = t:addRow(false, { paddingTop = 1, paddingBottom = 1, borderBelow = false, fixed = false })',
+      `row[1]:createText("AB", { height = 16, x = 2, y = 3, fontsize = 16, scaling = false, halign = "${alignment}"${explicit ? ', width = 20' : ''} })`,
+      'frame:display()',
+    ].join('\n'), 'selftest/aligned-bounds.lua');
+    const cell = scene.cells[0]!.rect!;
+    const widget = scene.widgets[0]!.outerRect!;
+    const text = scene.texts[0]!;
+    const width = explicit ? 20 : 39;
+    // Native parent41/2 + x2/2 =21.5 ->21 (half-pixel correction).
+    const anchor = alignment === 'left' ? cell.x + 2 : alignment === 'right' ? cell.x + 39 : cell.x + 21;
+    const left = alignment === 'left' ? anchor : alignment === 'right' ? anchor - width : anchor - width / 2;
+    assert(widget.x === left && widget.width === width && widget.y === cell.y + 3,
+      `${alignment}/${explicit}: declared fontstring bounds must share native anchor`);
+    assert(text.availableWidth === width, 'alignment must not change truncation budget');
+    assert(scene.glyphs.length > 0, 'fixture must contain issued glyphs');
+    for (const glyph of scene.glyphs) {
+      assert(glyph.clipRect !== undefined && glyph.rect !== undefined, 'glyph and ancestor clip remain present');
+      assert(glyph.clipRect.x >= cell.x && glyph.clipRect.x + glyph.clipRect.width <= cell.x + cell.width,
+        'cell bounds remain authoritative');
+    }
+  }
+  const unknown = sceneFromRaw([
+    'local menu = { name = "UnknownAlignment", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local t = frame:addTable(1, { width = 40, reserveScrollBar = false })',
+    't:setColWidth(1, 40, false)', 'local row = t:addRow(false, {})',
+    'row[1]:createText("AB", { height = 16, width = 20, halign = runtimeAlignment })',
+    'frame:display()',
+  ].join('\n'), 'selftest/unknown-aligned-bounds.lua');
+  assert(unknown.widgets[0]?.outerRect === undefined && unknown.glyphs.length === 0,
+    'unknown alignment cannot acquire invented widget position or glyphs');
+});
+
 test('ports direct fontstring left/center/right anchors and nonzero y without double offsets', () => {
   for (const alignment of ['left', 'center', 'right'] as const) {
     const scene = sceneFromRaw([
@@ -3410,10 +3906,44 @@ test('ports direct fontstring left/center/right anchors and nonzero y without do
     const widget = scene.widgets.find(candidate => candidate.cellId === cellNode.id)!;
     const text = scene.texts.find(candidate => candidate.widgetId === widget.id)!;
     const line = text.lines[0];
-    assert(widget.outerRect?.x === cellNode.rect!.x + 2 && widget.outerRect.y === cellNode.rect!.y + 3, `${alignment} direct text outer offset must be applied once`);
+    const expectedLeft = cellNode.rect!.x + (alignment === 'right' ? 0 : 2);
+    assert(widget.outerRect?.x === expectedLeft && widget.outerRect.y === cellNode.rect!.y + 3, `${alignment} direct text bounds must use the native aligned box and apply Y once`);
     assert(text.availableWidth === 38, `${alignment} direct text width must follow the source cell width minus x`);
     assert(Number.isFinite(line.rect.x) && Number.isFinite(line.rect.y), `${alignment} direct text anchor must remain finite and source-derived`);
   }
+});
+
+test('B119 plain fontstrings stay at row top when a sibling grows', () => {
+  // widget_fullscreen.lua6243 supplies curRowHeight/2 in the centered cell's
+  // Y-up coordinates: the row top, not its center. setUpFontString13145-13146
+  // subtracts the source offset; converting to Y-down must add it to row top.
+  const build = (siblingHeight: number, y: number) => sceneFromRaw([
+    'local menu = { name = "MixedTextHeights", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(2, { width = 100, reserveScrollBar = false, scaling = false })',
+    'table:setColWidth(1, 40, false)',
+    'table:setColWidth(2, 40, false)',
+    'local row = table:addRow(false, { paddingTop = 1, paddingBottom = 1, borderBelow = false, fixed = false })',
+    `row[1]:createText("AB", { height = 16, fontsize = 16, y = ${y}, scaling = false })`,
+    `row[2]:createText("B", { height = ${siblingHeight}, fontsize = 24, scaling = false })`,
+    'frame:display()',
+  ].join('\n'), 'selftest/mixed-text-heights.lua');
+  const ownGeometry = (scene: X4UiScene) => {
+    const text = scene.texts.find(candidate => candidate.content === 'AB')!;
+    const widget = scene.widgets.find(candidate => candidate.id === text.widgetId)!;
+    const cell = scene.cells.find(candidate => candidate.id === widget.cellId)!;
+    const glyphs = scene.glyphs.filter(candidate => candidate.textId === text.id);
+    assert(text.lines.length === 1 && glyphs.length > 0, 'mixed-height text must retain real lines and glyphs');
+    assert(text.lines[0]!.rect.y === cell.rect!.y + text.offsetY!, 'plain-text line must start at the row top plus its own Y offset');
+    assert(glyphs.every(glyph => glyph.clipRect?.height === glyph.rect?.height), 'unchanged sibling glyphs must not be vertically clipped');
+    return { line: text.lines[0]!.rect, glyphs: glyphs.map(glyph => ({ rect: glyph.rect, clip: glyph.clipRect })) };
+  };
+  const before = build(16, 0);
+  const after = build(48, 0);
+  assert(after.rows[0]!.rect!.height > before.rows[0]!.rect!.height, 'fixture must actually grow the containing row');
+  assert(isDeepStrictEqual(ownGeometry(before), ownGeometry(after)), 'sibling height must not move or clip unchanged text');
+  const offset = ownGeometry(build(48, 3));
+  assert(offset.line.y === ownGeometry(after).line.y + 3, 'positive source Y must move plain text down, not up');
 });
 
 test('fail-first: source-shaped 2560 rows keep known direct text inside accepted row clips', () => {
@@ -3598,11 +4128,11 @@ test('B119 fail-first: explicit wrapped-text height reports source-linked Scene 
   const placementLineMaxY = Math.max(...placementText.lines.map(line => line.rect.y + line.rect.height));
   const placementBottomClearance = placementLineMaxY - (placementWidget.outerRect!.y + placementWidget.outerRect!.height);
   assert(placementWidget.outerRect!.y === 300 && placementWidget.outerRect!.height === 114
-    && placementLineMinY === 300.9375
-    && placementLineMaxY === 413.0625
-    && placementBottomClearance === -0.9375, `114px placement fixture must center the issued span inside the widget: ${JSON.stringify({ widget: placementWidget.outerRect, lineMinY: placementLineMinY, lineMaxY: placementLineMaxY, bottomClearance: placementBottomClearance })}`);
+    && placementLineMinY === 300
+    && placementLineMaxY === 412.125
+    && placementBottomClearance === -1.875, `114px placement fixture must start at the native row-top anchor: ${JSON.stringify({ widget: placementWidget.outerRect, lineMinY: placementLineMinY, lineMaxY: placementLineMaxY, bottomClearance: placementBottomClearance })}`);
   const placementGaps = placementScene.gaps.filter(gap => gap.nodeId === placementText.id && gap.category === 'height');
-  assert(placementGaps.length === 0, `114px centered explicit widget placement must not report a false text height overflow: ${JSON.stringify(placementGaps)}`);
+  assert(placementGaps.length === 0, `114px top-anchored explicit widget placement must not report a false text height overflow: ${JSON.stringify(placementGaps)}`);
 
   const controlScene = build(187);
   const controlText = controlScene.texts.find(text => text.content === wrappedText)!;
@@ -3707,7 +4237,7 @@ test('selects the source-proven initial inactive edit-box default branch without
     'local table = frame:addTable(1, { width = 40, reserveScrollBar = false })',
     'table:setColWidth(1, 40, false)',
     'local row = table:addRow(false, {})',
-    'row[1]:createEditBox({ height = 10, text = "", defaultText = "DEFAULT", description = "edit description", active = false }):setText("", { x = 5, y = 0 })',
+    'row[1]:createEditBox({ height = 10, defaultText = "DEFAULT", description = "edit description", active = false }):setText("", { x = 5, y = 0 })',
     'frame:display()',
   ].join('\n'), 'selftest/raw-edit-defaults.lua');
   const widget = scene.widgets.find(candidate => candidate.kind === 'editbox')!;
@@ -4000,21 +4530,117 @@ test('missing colors and hostile black-inset geometry do not flip the source-pro
   assert(scene.gaps.some(gap => gap.nodeId === widget.id && gap.reason.includes('source-scaled black inset')), `hostile inner geometry must remain an explicit gap: ${JSON.stringify(scene.gaps)}`);
 });
 
-test('keeps edit-box width unavailable when the raw text offset is unavailable', () => {
+test('lays out constructor-only edit-box defaultText from source-pinned nested text defaults', () => {
   const scene = sceneFromRaw([
     'local menu = { name = "EditWidth", layer = 1 }',
     'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
-    'local table = frame:addTable(1, { width = 40, reserveScrollBar = false })',
-    'table:setColWidth(1, 40, false)',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false })',
+    'table:setColWidth(1, 100, false)',
     'local row = table:addRow(false, {})',
-    'row[1]:createEditBox({ height = 10, text = "edit", defaultText = "DEFAULT" })',
+    'row[1]:createEditBox({ height = 10, defaultText = "DEFAULT" })',
     'frame:display()',
   ].join('\n'), 'selftest/raw-edit-width.lua');
   const widget = scene.widgets.find(candidate => candidate.kind === 'editbox')!;
   const text = scene.texts.find(candidate => candidate.widgetId === widget.id)!;
-  assert(widget.outerRect !== undefined && widget.diagnosticStyle.geometry === 'source-derived', 'known edit-box geometry must survive unavailable text policy facts');
-  assert(text.availableWidth !== undefined || text.diagnosticLinks.length > 0, 'edit-box width must remain source-linked or explicitly unavailable');
+  assert(widget.outerRect !== undefined && widget.diagnosticStyle.geometry === 'source-derived', 'constructor-only edit-box must retain source geometry');
+  assert(text.content === '' && text.contentSelection === 'preview-default' && text.defaultContent === 'DEFAULT', 'constructor-only edit-box must select the source placeholder');
+  assert(text.offsetX === 5 && text.offsetY === 0 && text.font === 'Zekton' && text.fontSize === 9, 'constructor-only edit-box must use scaled Helper textproperty defaults');
+  assert(text.availableWidth === widget.outerRect.width - 14, 'edit-box text width must subtract both default offsets and fixed text borders');
+  assert(text.layout !== undefined && text.lines[0]?.displayedText === 'DEFAULT'
+    && scene.glyphs.some(glyph => glyph.textId === text.id), 'constructor-only placeholder must produce nonempty source glyph layout');
 });
+
+for (const fixture of [
+  { name: 'scaled nested defaults with cell scaling false', uiScale: 2, placeholder: 'DEFAULT', setter: '', displayed: 'DEFAULT', x: 10, y: 0, font: 'Zekton', size: 18 },
+  { name: 'later explicit setter with inherited cell scaling false', uiScale: 2, placeholder: 'DEFAULT', setter: ':setText("CURRENT", { x = 3, y = 2, font = "Zekton Bold", fontsize = 11 })', displayed: 'CURRENT', x: 3, y: 2, font: 'Zekton Bold', size: 11 },
+  { name: 'later explicit setter scaling true', uiScale: 2, placeholder: 'DEFAULT', setter: ':setText("CURRENT", { x = 3, y = 2, fontsize = 11, scaling = true })', displayed: 'CURRENT', x: 6, y: 4, font: 'Zekton', size: 22 },
+  { name: 'empty constructor default', uiScale: 1, placeholder: '', setter: '', displayed: '', x: 5, y: 0, font: 'Zekton', size: 9 },
+]) {
+  test(`constructor Input producer to Scene: ${fixture.name}`, () => {
+    const scene = sceneFromRawWithColor([
+      'local menu = { name = "ConstructorInput", layer = 1 }',
+      'local frame = Helper.createFrameHandle(menu, { width = 300, height = 80 })',
+      'local table = frame:addTable(1, { width = 300, reserveScrollBar = false, scaling = false })',
+      'table:setDefaultCellProperties("editbox", { height = 30, scaling = false })',
+      'table:setDefaultComplexCellProperties("editbox", "hotkey", { hotkey = "", displayIcon = false })',
+      'local row = table:addRow(false, {})',
+      `row[1]:createEditBox({ defaultText = "${fixture.placeholder}" })${fixture.setter}`,
+      'frame:display()',
+    ].join('\n'), `selftest/constructor-input-${fixture.name}.lua`, profile => ({
+      ...profile, metrics: { ...profile.metrics, uiScale: fixture.uiScale },
+    }));
+    const widget = scene.widgets.find(candidate => candidate.kind === 'editbox');
+    const text = scene.texts.find(candidate => candidate.widgetId === widget?.id);
+    assert(text !== undefined && text.layout !== undefined, 'constructor Input must reach real Scene text layout');
+    assert(text.offsetX === fixture.x && text.offsetY === fixture.y && text.font === fixture.font && text.fontSize === fixture.size, 'constructor and setter must retain their distinct text scaling rules');
+    assert(text.contentSelection === (fixture.setter ? 'current' : 'preview-default'), 'constructor/setter content selection must follow current text');
+    const glyphs = scene.glyphs.filter(glyph => glyph.textId === text.id);
+    if (fixture.displayed === '') {
+      assert(glyphs.length === 0 && text.lines.every(line => line.displayedText === ''), 'empty default must not invent placeholder glyphs');
+    } else {
+      assert(text.lines[0]?.displayedText === fixture.displayed && glyphs.length > 0, 'visible constructor/setter text must produce the expected glyph content');
+    }
+  });
+}
+
+for (const fixture of [
+  { name: 'literal complex text defaults', defaults: 'table:setDefaultComplexCellProperties("editbox", "text", { x = 17 })', options: '{ height = 30, defaultText = "DEFAULT" }' },
+  { name: 'unsupported constructor text option', defaults: '', options: '{ height = 30, defaultText = "DEFAULT", text = { x = 17 } }' },
+  { name: 'unsupported simple defaultText', defaults: 'table:setDefaultCellProperties("editbox", { defaultText = "TABLE DEFAULT" })', options: '{ height = 30 }' },
+  { name: 'dynamic defaultText', defaults: '', options: '{ height = 30, defaultText = getPlaceholder() }' },
+  { name: 'complex text defaults then partial setter', defaults: 'table:setDefaultComplexCellProperties("editbox", "text", { x = 17 })', options: '{ height = 30, defaultText = "DEFAULT" }', setter: ':setText("CURRENT", {})' },
+  { name: 'unsupported constructor text then partial setter', defaults: '', options: '{ height = 30, defaultText = "DEFAULT", text = { x = 17 } }', setter: ':setText("CURRENT", {})' },
+]) {
+  test(`constructor Input producer to Scene refuses fabricated text for ${fixture.name}`, () => {
+    const scene = sceneFromRaw([
+      'local menu = { name = "UnknownInputDefaults", layer = 1 }',
+      'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+      'local table = frame:addTable(1, { width = 100, reserveScrollBar = false })',
+      fixture.defaults,
+      'local row = table:addRow(false, {})',
+      `row[1]:createEditBox(${fixture.options})${fixture.setter || ''}`,
+      'frame:display()',
+    ].join('\n'), `selftest/unknown-input-${fixture.name}.lua`);
+    const widget = scene.widgets.find(candidate => candidate.kind === 'editbox');
+    const text = scene.texts.find(candidate => candidate.widgetId === widget?.id);
+    assert(widget?.outerRect !== undefined && text !== undefined, 'unsupported text defaults must retain independently known widget geometry');
+    assert(text.layout === undefined && !scene.glyphs.some(glyph => glyph.textId === text.id)
+      && text.diagnosticLinks.length > 0, 'unresolved constructor text must have explicit gaps and no fabricated glyph layout');
+  });
+}
+
+for (const fixture of [
+  { name: 'omitted prior unknown text color', current: 'CURRENT', color: '', knownColor: false },
+  { name: 'explicit text color recovery', current: 'CURRENT', color: ', color = { r = 255, g = 0, b = 0, a = 100 }', knownColor: true },
+  { name: 'independent inactive default color', current: '', color: '', knownColor: false },
+]) {
+  test(`constructor Input color uncertainty: ${fixture.name}`, () => {
+    const projected = rawProjectionFor([
+      'local menu = { name = "UnknownInputColor", layer = 1 }',
+      'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+      'local table = frame:addTable(1, { width = 100, reserveScrollBar = false })',
+      'table:setDefaultComplexCellProperties("editbox", "text", { color = getColor() })',
+      'local row = table:addRow(false, {})',
+      'row[1]:createEditBox({ height = 30, defaultText = "DEFAULT" })'
+        + `:setText("${fixture.current}", { x = 5, y = 0, font = "Zekton", fontsize = 9, halign = "left", scaling = false${fixture.color} })`,
+      'frame:display()',
+    ].join('\n'), `selftest/unknown-input-color-${fixture.name}.lua`, undefined, p3ColorAuthority);
+    assert(projected.program !== undefined && projected.result !== undefined && projected.profile !== undefined, 'Input color fixture must produce real evidence');
+    const cell = projected.program.cells.find(candidate => candidate.kernelState?.type === 'editbox');
+    const setter = projected.program.operations.find(candidate => candidate.kind === 'setText');
+    assert(cell?.descriptorFacts.color?.status === (fixture.knownColor ? 'known' : 'unavailable')
+      && setter?.descriptorFacts.color?.status === (fixture.knownColor ? 'known' : 'unavailable'), 'omitting unknown prior color must not invent Color.text_normal');
+    assert(setter.status === (fixture.knownColor ? 'applied' : 'unresolved'), 'only explicitly supplied color completes recovery');
+    assert(cell.descriptorFacts.defaultTextColor?.status === 'known', 'inactive default gray must remain independently source-known');
+    const scene = sceneOf(buildX4UiScene(projected.result, corpus, projected.profile));
+    const text = scene.texts.find(candidate => candidate.slot === 'primary');
+    assert(text?.layout !== undefined && text.lines[0]?.displayedText === (fixture.current || 'DEFAULT'), 'explicit text geometry must retain meaningful current/default layout');
+    const selectedColor = text.colorFacts?.find(fact => fact.slot === 'primary-text');
+    assert(Boolean(selectedColor) === (fixture.knownColor || fixture.current === ''), 'Scene must preserve the selected text color knowledge');
+    if (fixture.current === '') assert(selectedColor?.field === 'defaultTextColor', 'inactive empty current text must use the separately known default gray');
+    if (fixture.knownColor) assert(selectedColor?.provenance === 'source-literal', 'explicit color recovery must use the supplied literal');
+  });
+}
 
 test('subtracts both row-group boundaries for a full-span fixed row', () => {
   const scene = sceneFromRaw([
@@ -4775,7 +5401,7 @@ test('plain createText wordwrap=true enables the supplied provisional wrapping a
   assert(text.provenanceLinks.some(link => link.fact === 'wordwrap' && link.expression === 'true'), 'plain wordwrap=true must remain exact text provenance');
 });
 
-test('fail-first: wrapped plain createText centers the complete issued line-box block', () => {
+test('plain createText anchors single and wrapped line-box blocks at the native row top', () => {
   const scene = rawTextScene('wrapped-block-anchor', 'A A A A A A', 'height = 12, width = 10, wordwrap = true', profile => ({ ...profile, textPolicy: { ...profile.textPolicy, wrapMode: 'word-wrap' } }));
   const widget = scene.widgets.find(candidate => candidate.kind === 'text');
   const text = widget === undefined ? undefined : scene.texts.find(candidate => candidate.widgetId === widget.id);
@@ -4796,19 +5422,17 @@ test('fail-first: wrapped plain createText centers the complete issued line-box 
   };
   const expectedNoWrapGeometry = {
     widget: { x: 5, y: 0, width: 10, height: 12 },
-    text: { x: 5, y: 3.75, width: 24.75, height: 4.5 },
-    lines: [{ x: 5, y: 3.75, width: 24.75, height: 4.5 }],
+    text: { x: 5, y: 0, width: 24.75, height: 4.5 },
+    lines: [{ x: 5, y: 0, width: 24.75, height: 4.5 }],
     glyphs: Array.from({ length: 11 }, (_, index) => ({
-      rect: { x: 5 + index * 2.25, y: 4.59375, width: 2.25, height: 2.8125 },
-      quadY: 4.59375,
-      lineBoxY: 3.75,
+      rect: { x: 5 + index * 2.25, y: 0.84375, width: 2.25, height: 2.8125 },
+      quadY: 0.84375,
+      lineBoxY: 0,
     })),
   };
-  assert(JSON.stringify(noWrapGeometry) === JSON.stringify(expectedNoWrapGeometry), `single-line no-wrap geometry must remain unchanged: ${JSON.stringify({ expected: expectedNoWrapGeometry, actual: noWrapGeometry })}`);
+  assert(JSON.stringify(noWrapGeometry) === JSON.stringify(expectedNoWrapGeometry), `single-line no-wrap geometry must retain exact metrics at the native top anchor: ${JSON.stringify({ expected: expectedNoWrapGeometry, actual: noWrapGeometry })}`);
   const lineMinY = Math.min(...text.lines.map(line => line.rect.y));
   const lineMaxY = Math.max(...text.lines.map(line => line.rect.y + line.rect.height));
-  const widgetCenterY = widget.outerRect.y + widget.outerRect.height / 2;
-  const blockCenterY = (lineMinY + lineMaxY) / 2;
   const lineOrigins = text.lines.map(line => {
     const layoutLine = text.layout!.lines.find(candidate => candidate.lineIndex === line.lineIndex);
     assert(layoutLine !== undefined, `wrapped block line ${line.lineIndex} must retain its issued layout line`);
@@ -4821,7 +5445,7 @@ test('fail-first: wrapped plain createText centers the complete issued line-box 
     return glyph.quad.lineBoxY - layoutLine.lineBox.y;
   });
   assert(glyphOrigins.length > 0 && glyphOrigins.every(origin => origin === lineOrigins[0]), `wrapped block glyphs must share the line origin: ${JSON.stringify({ lineOrigins, glyphOrigins })}`);
-  assert(blockCenterY === widgetCenterY, `wrapped block must center its complete issued line-box span in the widget: ${JSON.stringify({ widget: widget.outerRect, lineMinY, lineMaxY, blockCenterY, widgetCenterY, lines: text.lines.map(line => line.rect) })}`);
+  assert(lineMinY === widget.outerRect.y && lineMaxY === 13.5, `wrapped block must retain its full 13.5px issued span at the native row top: ${JSON.stringify({ widget: widget.outerRect, lineMinY, lineMaxY, lines: text.lines.map(line => line.rect) })}`);
 });
 
 test('plain createText wordwrap=true with no-wrap profile retains a missing-algorithm gap', () => {
@@ -8046,7 +8670,7 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
   console.log(`B119 configured-session receipt constants only: ${JSON.stringify(configuredSessionReceiptConstants)}`);
   const baseProfile = rawProducerProjection.program?.profile;
   assert(baseProfile !== undefined, 'B119 real-shape fixtures require the producer profile');
-  const sampleFor = (program: X4UiLayoutProgram) => ({
+  const sampleFor = (program: X4UiLayoutProgram, numericOverrides: Readonly<Record<string, number>> = {}) => ({
     catalogId: program.sampleCatalog.id,
     source: program.sampleCatalog.sourceIdentity,
     values: program.sampleCatalog.entries.map(entry => ({
@@ -8059,16 +8683,22 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
             ? 1920
             : entry.expression === 'runtimeViewHeight'
               ? 1080
-              : entry.expression === 'runtimeColumns'
-                ? 12
-                : entry.expression === 'runtimeHeight'
-                  ? 10
-                : entry.expression === 'runtimeSpan' || entry.expression === '_readSpan'
-                  ? 6
-                  : 80,
+            : entry.expression === 'runtimeColumns'
+              ? 12
+            : entry.expression === 'runtimeHeight'
+              ? 10
+            : entry.expression === 'runtimeSpan' || entry.expression === '_readSpan'
+              ? 6
+                  : numericOverrides[entry.expression] ?? 80,
     })),
   });
-  const issue = (label: string, sourceText: string, targetName: string, dimensions = { width: 100, height: 80 }) => {
+  const issue = (
+    label: string,
+    sourceText: string,
+    targetName: string,
+    dimensions = { width: 100, height: 80 },
+    numericOverrides: Readonly<Record<string, number>> = {},
+  ) => {
     const model = buildX4UiCallModel({ rel: `selftest/b119-${label.toLowerCase()}.lua`, text: sourceText, sourcePath: `selftest/b119-${label.toLowerCase()}.lua` });
     const target = createX4UiLayoutTargetCatalog(model).targets.find(candidate => candidate.name === targetName);
     assert(target !== undefined, `${label} source must expose ${targetName}`);
@@ -8088,7 +8718,7 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
     } as Parameters<typeof projectX4UiLayoutProgram>[2];
     const unsampled = projectX4UiLayoutProgram(model, target, profile);
     assert('program' in unsampled && unsampled.program !== undefined, `${label} unsampled producer must issue a program: ${JSON.stringify(unsampled)}`);
-    const sampled = projectX4UiLayoutProgram(model, target, profile, sampleFor(unsampled.program));
+    const sampled = projectX4UiLayoutProgram(model, target, profile, sampleFor(unsampled.program, numericOverrides));
     assert('program' in sampled && sampled.program !== undefined && 'evidenceAuthority' in sampled && sampled.evidenceAuthority !== undefined, `${label} sampled producer must issue an authority pair`);
     assert(validateX4UiLayoutEvidencePair(sampled.program, sampled.evidenceAuthority).valid, `${label} sampled producer pair must validate before Scene`);
     const profileForScene: X4UiSceneProfile = Object.freeze({
@@ -8103,7 +8733,7 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
     });
     return { sampled: sampled as X4UiLayoutProgramResult, authority: sampled.evidenceAuthority, program: sampled.program, profile: profileForScene };
   };
-  const menu = issue('MENU', [
+  const menuSource = [
     'local menu = { name = "B119MenuOwner", layer = 1 }',
     'function menu.display(tableWidth, margin, dynamicText)',
     '  local frame = Helper.createFrameHandle(menu, { width = runtimeViewWidth, height = runtimeViewHeight })',
@@ -8122,7 +8752,9 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
     '  end',
     '  row = ct:addRow(false, {})',
     'end',
-  ].join('\n'), 'menu.display');
+  ].join('\n');
+  const menu = issue('MENU', menuSource, 'menu.display', { width: 100, height: 80 }, { tableWidth: 80, margin: 5 });
+  const negativeWidthMenu = issue('MENU-negative-width', menuSource, 'menu.display', { width: 100, height: 80 }, { tableWidth: 80, margin: 80 });
   const hub = issue('HUB', [
     'local menu = { name = "B119HubOwner", layer = 1 }',
     'local TABS = { "one", "two", "three" }',
@@ -8148,6 +8780,21 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
     '  row[11]:setColSpan(2):createButton({ active = true }):setText(dynamicText, {})',
     'end',
   ].join('\n'), 'menu.display');
+  const negativeWidthTable = negativeWidthMenu.program.tables.find(table => table.source.start.line === 11);
+  const negativeWidthOperation = negativeWidthMenu.program.operations.find(operation => operation.source.start.line === 11 && operation.kind === 'addTable');
+  assert(validateX4UiLayoutEvidencePair(negativeWidthMenu.program, negativeWidthMenu.authority).valid
+    && negativeWidthTable?.status === 'refused'
+    && negativeWidthTable.descriptorFacts.requestedWidth?.status === 'known'
+    && negativeWidthTable.descriptorFacts.requestedWidth.value === -80
+    && negativeWidthOperation?.status === 'rejected'
+    && negativeWidthMenu.program.cells.length === 8,
+  `MENU negative-width control must retain the source-derived tableWidth - margin * 2 rejection without downstream cells: ${JSON.stringify({ table: negativeWidthTable, operation: negativeWidthOperation, cells: negativeWidthMenu.program.cells.length })}`);
+  console.log(`B119 portable MENU negative-width control: ${JSON.stringify({
+    inputs: negativeWidthMenu.program.previewSampleBindings.map(binding => ({ expression: negativeWidthMenu.program.sampleCatalog.entries.find(entry => entry.id === binding.id)?.expression, value: binding.value, status: binding.status })),
+    requestedWidth: negativeWidthTable?.descriptorFacts.requestedWidth,
+    operationStatus: negativeWidthOperation?.status,
+    cells: negativeWidthMenu.program.cells.length,
+  })}`);
   const candidates = [menu, hub, comm];
   const expectedShape = {
     MENU: { operations: 12, applied: 7, frames: 1, tables: 3, rows: 4, cells: 32, gaps: 10 },
@@ -8173,6 +8820,29 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
       cells: candidate.program.cells.length,
       gaps: candidate.program.gaps.length,
     };
+    if (label === 'MENU') {
+      const sampleValuesById = new Map(candidate.program.previewSampleBindings.map(binding => [binding.id, binding] as const));
+      const menuTableInputs = candidate.program.sampleCatalog.entries
+        .filter(entry => ['runtimeViewWidth', 'runtimeViewHeight', 'runtimeColumns', 'runtimeWidth', 'runtimeReserve', 'runtimeScaling', 'runtimeHeight', 'dynamicText', 'tableWidth', 'margin'].includes(entry.expression))
+        .map(entry => ({
+        expression: entry.expression,
+        expectedType: entry.expectedType,
+        value: sampleValuesById.get(entry.id)?.value,
+        status: sampleValuesById.get(entry.id)?.status,
+      }));
+      const portableGapReceipt = candidate.program.gaps.map(gap => ({
+        category: gap.category,
+        status: gap.status,
+        expression: gap.expression,
+        sourceLine: gap.source.start.line,
+        reason: gap.reason,
+      }));
+      console.log(`B119 portable MENU width reconciliation evidence: ${JSON.stringify({
+        inputs: menuTableInputs,
+        gapReceipt: portableGapReceipt,
+        observedShape,
+      })}`);
+    }
     assert(JSON.stringify(observedShape) === JSON.stringify(shape), `${label} consumer-aware fixture shape changed: ${JSON.stringify({ expected: shape, observed: observedShape })}`);
     assert(result.status !== 'refused', `${label} consumer-aware owner shape still refused: ${JSON.stringify(result)}`);
     assert(result.scene.gameTruth === 'Not verified in game' && result.scene.verification.gameVerified === false && result.verification.gameVerified === false, `${label} Scene must remain preview-only and not game-verified`);
@@ -8886,9 +9556,9 @@ const b119ConfiguredSourceSpecs = [
       _choiceY: 734,
       _readSpan: 6,
     },
-    expectedLayout: { samples: 29, consumed: 7, notConsumed: 22, operations: 87, applied: 29, frames: 1, tables: 4, rows: 13, cells: 136, gaps: 115 },
-    expectedScene: { frames: 1, tables: 4, rows: 2, cells: 16, widgets: 3, texts: 5, glyphs: 7, gaps: 172, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
-    expectedPaint: { commands: 243, diagnostics: 205 },
+    expectedLayout: { samples: 52, consumed: 7, notConsumed: 45, operations: 95, applied: 31, frames: 1, tables: 6, rows: 15, cells: 136, gaps: 290 },
+    expectedScene: { frames: 1, tables: 6, rows: 2, cells: 16, widgets: 3, texts: 5, glyphs: 27, gaps: 352, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
+    expectedPaint: { commands: 447, diagnostics: 387 },
   },
   {
     label: 'HUB',
@@ -8897,9 +9567,9 @@ const b119ConfiguredSourceSpecs = [
     targetName: 'hub.display',
     sourceSha256: '657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F',
     consumerNumbers: { vw: 1920, vh: 1080, x: 27, my: 27, w: 1866, '#TABS': 2, y: 62, i: 1 },
-    expectedLayout: { samples: 9, consumed: 7, notConsumed: 2, operations: 18, applied: 11, frames: 1, tables: 2, rows: 2, cells: 4, gaps: 12 },
-    expectedScene: { frames: 1, tables: 2, rows: 2, cells: 4, widgets: 2, texts: 3, glyphs: 17, gaps: 30, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
-    expectedPaint: { commands: 70, diagnostics: 39 },
+    expectedLayout: { samples: 6, consumed: 4, notConsumed: 2, operations: 19, applied: 13, frames: 1, tables: 2, rows: 2, cells: 4, gaps: 30 },
+    expectedScene: { frames: 1, tables: 2, rows: 2, cells: 4, widgets: 2, texts: 3, glyphs: 17, gaps: 49, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
+    expectedPaint: { commands: 89, diagnostics: 58 },
   },
   {
     label: 'COMM',
@@ -8908,9 +9578,9 @@ const b119ConfiguredSourceSpecs = [
     targetName: 'comm.display',
     sourceSha256: '5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E',
     consumerNumbers: { vw: 1920, vh: 1080, mx: 27, my: 27, 'vw - mx * 2': 1866 },
-    expectedLayout: { samples: 2, consumed: 2, notConsumed: 0, operations: 14, applied: 12, frames: 1, tables: 1, rows: 1, cells: 3, gaps: 6 },
-    expectedScene: { frames: 1, tables: 1, rows: 1, cells: 3, widgets: 3, texts: 5, glyphs: 52, gaps: 27, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
-    expectedPaint: { commands: 104, diagnostics: 38 },
+    expectedLayout: { samples: 52, consumed: 26, notConsumed: 26, operations: 99, applied: 49, frames: 1, tables: 12, rows: 13, cells: 38, gaps: 342 },
+    expectedScene: { frames: 1, tables: 12, rows: 7, cells: 21, widgets: 11, texts: 14, glyphs: 117, gaps: 431, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
+    expectedPaint: { commands: 671, diagnostics: 488 },
   },
 ] as const;
 
@@ -9039,6 +9709,7 @@ if (b119ConfiguredCensus.status === 'unavailable') {
 } else {
   test('B119 exact configured public-session census is separate from portable fixtures', () => {
     const executed: B119ConfiguredSourceLabel[] = [];
+    const censusMismatches: string[] = [];
     for (const source of b119ConfiguredSourceSpecs) {
       const sourcePath = b119ConfiguredCensus.sourcePaths[source.label];
       const sourceBytesBefore = readFileSync(sourcePath);
@@ -9097,14 +9768,16 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       target: { ...target, id: target.id },
     };
     const unsampled = projectX4UiEditorSession({ workspace, corpus, profile, selection, ...colorEvidenceInput });
-    const sampleCatalog = unsampled.sampleCatalog;
-    assert(sampleCatalog !== null && unsampled.sampleBinding !== undefined && unsampled.sampleCatalogAuthority !== undefined, source.label + ' exact public session must issue catalog, binding, and authority');
-    const selectedEntries = sampleCatalog.entries.filter(entry => source.label === 'HUB'
+    const initialSampleCatalog = unsampled.sampleCatalog;
+    assert(initialSampleCatalog !== null && unsampled.sampleBinding !== undefined && unsampled.sampleCatalogAuthority !== undefined, source.label + ' exact public session must issue catalog, binding, and authority');
+    let sampleProjection = unsampled;
+    let sampleCatalog = initialSampleCatalog;
+    let selectedEntries = sampleCatalog.entries.filter(entry => source.label === 'HUB'
       ? entry.expression !== 'font(18)'
       : source.label === 'COMM'
         ? entry.expression !== 'font(13)'
         : true);
-    const commOpaqueEntries = source.label === 'COMM'
+    let commOpaqueEntries = source.label === 'COMM'
       ? selectedEntries.filter(entry => entry.expectedType === 'string'
         && entry.expression.includes('"COMM CHANNEL    "')
         && entry.expression.includes('ascii("encrypted - "'))
@@ -9112,6 +9785,8 @@ if (b119ConfiguredCensus.status === 'unavailable') {
     const commCallEntries = source.label === 'COMM'
       ? selectedEntries.filter(entry => /[A-Za-z_][A-Za-z0-9_.:]*\s*\(/.test(entry.expression))
       : [];
+    const commProtectedInvocationLines = [531, 537, 538, 540, 541];
+    let commProtectedPathEntryId: string | undefined;
     if (source.label === 'COMM') {
       assert(selectedEntries.length === 2
         && commOpaqueEntries.length === 1
@@ -9119,6 +9794,34 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         && commCallEntries[0]?.id === commOpaqueEntries[0]?.id, 'COMM exact catalog must issue two selected samples including exactly one opaque title entry: ' + JSON.stringify({ selected: selectedEntries.length, opaque: commOpaqueEntries.length, callShaped: commCallEntries.length }));
       const commOpaqueEntry = commOpaqueEntries[0];
       assert(commOpaqueEntry.source.start.line === 505 && commOpaqueEntry.source.end.line === 506, 'COMM opaque title entry must bind source lines 505-506: ' + JSON.stringify(commOpaqueEntry.source));
+      const commUnprovidedProgramResult = unsampled.preview.program;
+      const commUnprovidedProgram = commUnprovidedProgramResult !== null && commUnprovidedProgramResult.status !== 'refused'
+        ? commUnprovidedProgramResult.program
+        : undefined;
+      const commUnprovidedExpansion = commUnprovidedProgram?.localExpansion;
+      assert(commUnprovidedProgram !== undefined
+        && commUnprovidedExpansion !== undefined
+        && isDeepStrictEqual(commUnprovidedExpansion.limits, { maxDepth: 4, maxInvocations: 64 })
+        && commUnprovidedExpansion.previewPathSelections.length === 0
+        && isDeepStrictEqual(
+          commUnprovidedExpansion.invocations
+            .filter(invocation => commProtectedInvocationLines.includes(invocation.source.start.line))
+            .map(invocation => ({
+              sourceLine: invocation.source.start.line,
+              status: invocation.status,
+              resultConsumed: invocation.resultConsumed,
+              operationCount: invocation.operationIds.length,
+            })),
+          [
+            { sourceLine: 531, status: 'conditional', resultConsumed: false, operationCount: 0 },
+            { sourceLine: 537, status: 'conditional', resultConsumed: true, operationCount: 0 },
+            { sourceLine: 538, status: 'conditional', resultConsumed: false, operationCount: 0 },
+            { sourceLine: 540, status: 'conditional', resultConsumed: false, operationCount: 0 },
+            { sourceLine: 541, status: 'conditional', resultConsumed: false, operationCount: 0 },
+          ],
+        )
+        && commUnprovidedProgram.operations.every(operation => operation.localExpansion === undefined),
+      'COMM exact unprovided protected path must retain fixed localExpansion limits and five conditional, unapplied helper invocations');
       const unprovidedSceneResult = unsampled.preview.scene;
       assert(unprovidedSceneResult !== null && unprovidedSceneResult.status !== 'refused', 'COMM exact unprovided session must retain its incomplete Scene projection: ' + JSON.stringify(unsampled.preview));
       const unprovidedScene = unprovidedSceneResult.scene;
@@ -9141,10 +9844,54 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         widgets: 0,
         texts: 0,
         glyphs: 0,
-        gaps: 24,
+        gaps: 56,
         drawable: { x: 0, y: 0, width: 1920, height: 1080 },
       }), 'COMM exact unprovided Scene must retain source-known row/cell structure without drawable content: ' + JSON.stringify(unprovidedSceneGeometry));
       assert(unsampled.preview.status === 'partial' && unprovidedSceneResult.status === 'partial', 'COMM exact unprovided session must remain incomplete before its opaque title is supplied: ' + JSON.stringify({ previewStatus: unsampled.preview.status, sceneStatus: unprovidedSceneResult.status, previewGaps: unsampled.preview.gaps.length, canRender: unsampled.canRender }));
+
+      const commPathCatalog = unsampled.pathCatalog;
+      const commPathBinding = unsampled.pathBinding;
+      const commPathCatalogAuthority = unsampled.pathCatalogAuthority;
+      const commProtectedPathEntries = commPathCatalog?.entries.filter(entry => entry.boundary.start.line === 530 && entry.arm === 'then') ?? [];
+      assert(commPathCatalog !== null
+        && commPathBinding !== undefined
+        && commPathCatalogAuthority !== undefined
+        && commProtectedPathEntries.length === 1,
+      'COMM exact public session must issue exactly one owner path for the protected line-530 pcall then arm: ' + JSON.stringify({ entries: commProtectedPathEntries, catalog: commPathCatalog, binding: commPathBinding }));
+      const commPathEntry = commProtectedPathEntries[0];
+      const commPathUpdate = updateX4UiEditorPathState(
+        undefined,
+        commPathCatalog,
+        commPathEntry.id,
+        commPathCatalogAuthority,
+      );
+      assert(commPathUpdate.status === 'accepted'
+        && commPathUpdate.paths !== undefined
+        && commPathUpdate.paths.selections.length === 1
+        && commPathUpdate.paths.selections[0]?.id === commPathEntry.id, 'COMM exact line-530 owner path must reconcile as the only selected path: ' + JSON.stringify(commPathUpdate));
+      commProtectedPathEntryId = commPathEntry.id;
+      const commPathProjection = projectX4UiEditorSession({
+        workspace,
+        corpus,
+        profile,
+        selection,
+        ...colorEvidenceInput,
+        paths: commPathUpdate.paths,
+        pathBinding: commPathBinding,
+        pathCatalogAuthority: commPathCatalogAuthority,
+      });
+      assert(commPathProjection.pathReconciliation.status === 'accepted'
+        && commPathProjection.sampleCatalog !== null
+        && commPathProjection.sampleBinding !== undefined
+        && commPathProjection.sampleCatalogAuthority !== undefined,
+      'COMM exact line-530 owner path must issue a reconciled sample catalog for the protected body: ' + JSON.stringify({ pathReconciliation: commPathProjection.pathReconciliation, sampleCatalog: commPathProjection.sampleCatalog }));
+      sampleProjection = commPathProjection;
+      sampleCatalog = commPathProjection.sampleCatalog;
+      selectedEntries = sampleCatalog.entries.filter(entry => entry.expression !== 'font(13)');
+      commOpaqueEntries = selectedEntries.filter(entry => entry.expectedType === 'string'
+        && entry.expression.includes('"COMM CHANNEL    "')
+        && entry.expression.includes('ascii("encrypted - "'));
+      assert(commOpaqueEntries.length === 1, 'COMM exact path-selected catalog must retain exactly one opaque title entry: ' + JSON.stringify({ entries: commOpaqueEntries }));
     }
     const values = selectedEntries.map(entry => ({
       id: entry.id,
@@ -9167,8 +9914,11 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         source: sampleCatalog.sourceIdentity,
         values,
       },
-      sampleBinding: unsampled.sampleBinding,
-      sampleCatalogAuthority: unsampled.sampleCatalogAuthority,
+      sampleBinding: sampleProjection.sampleBinding,
+      sampleCatalogAuthority: sampleProjection.sampleCatalogAuthority,
+      paths: sampleProjection.paths,
+      pathBinding: sampleProjection.pathBinding,
+      pathCatalogAuthority: sampleProjection.pathCatalogAuthority,
     });
     const programResult = sampled.preview.program;
     assert(programResult !== null && programResult.status !== 'refused', source.label + ' exact sampled session must retain its Layout program: ' + JSON.stringify(sampled.preview));
@@ -9190,11 +9940,525 @@ if (b119ConfiguredCensus.status === 'unavailable') {
     };
     assert(pair.valid, source.label + ' exact sampled producer authority pair must validate: ' + JSON.stringify(pair));
     assert(stage === undefined, source.label + ' exact sampled program still refuses at Scene structure stage ' + String(stage));
-    assert(JSON.stringify(layoutCounts) === JSON.stringify(source.expectedLayout), source.label + ' exact Layout census changed: ' + JSON.stringify({ expected: source.expectedLayout, actual: layoutCounts }));
+    const localExpansion = program.localExpansion;
+    assert(localExpansion !== undefined
+      && isDeepStrictEqual(localExpansion.limits, { maxDepth: 4, maxInvocations: 64 }), source.label + ' exact sampled Layout census must carry the fixed bounded localExpansion limits');
+    if (source.label === 'MENU') {
+      const menuExpandedInvocationLines = localExpansion?.invocations
+        .filter(invocation => invocation.status === 'expanded')
+        .map(invocation => invocation.source.start.line);
+      const menuExpansionOperationReceipt = program.operations
+        .filter(operation => operation.localExpansion !== undefined)
+        .map(operation => `${operation.source.start.line}:${operation.kind}:${operation.status}`);
+      assert(isDeepStrictEqual(menuExpandedInvocationLines, [316, 317, 366, 410, 487, 487, 892])
+        && isDeepStrictEqual(menuExpansionOperationReceipt, [
+          '353:addTable:unresolved',
+          '355:addRow:unresolved',
+          '355:createText:unresolved',
+          '356:scaleY:applied',
+          '353:addTable:unresolved',
+          '355:addRow:unresolved',
+          '355:createText:unresolved',
+          '356:scaleY:applied',
+        ]), 'MENU exact sampled census must be causally tied to the bounded local-helper invocations and source anchors: ' + JSON.stringify({ limits: localExpansion?.limits, invocations: menuExpandedInvocationLines, operations: menuExpansionOperationReceipt }));
+    }
+    if (source.label === 'HUB') {
+      const hubExpandedInvocationLines = localExpansion?.invocations
+        .filter(invocation => invocation.status === 'expanded')
+        .map(invocation => invocation.source.start.line);
+      const hubExpansionOperationReceipt = program.operations
+        .filter(operation => operation.localExpansion !== undefined)
+        .map(operation => `${operation.source.start.line}:${operation.kind}:${operation.status}`);
+      assert(isDeepStrictEqual(hubExpandedInvocationLines, [654, 674, 679, 682, 686, 708])
+        && isDeepStrictEqual(hubExpansionOperationReceipt, ['107:scaleY:unresolved']), 'HUB exact sampled census must be causally tied to the bounded local-helper invocations and source anchors: ' + JSON.stringify({ limits: localExpansion?.limits, invocations: hubExpandedInvocationLines, operations: hubExpansionOperationReceipt }));
+    }
+    if (source.label === 'COMM') {
+      const commSelectedProtectedInvocations = localExpansion?.invocations
+        .filter(invocation => commProtectedInvocationLines.includes(invocation.source.start.line))
+        .map(invocation => ({
+          sourceLine: invocation.source.start.line,
+          status: invocation.status,
+          resultConsumed: invocation.resultConsumed,
+          operationCount: invocation.operationIds.length,
+          previewPathSelectionIds: invocation.previewPathSelectionIds,
+        }));
+      assert(localExpansion !== undefined
+        && localExpansion.previewPathSelections.length === 1
+        && commProtectedPathEntryId !== undefined
+        && isDeepStrictEqual(localExpansion.previewPathSelections.map(selection => selection.id), [commProtectedPathEntryId])
+        && isDeepStrictEqual(commSelectedProtectedInvocations, [
+          { sourceLine: 531, status: 'expanded', resultConsumed: false, operationCount: 19, previewPathSelectionIds: [commProtectedPathEntryId] },
+          { sourceLine: 537, status: 'expanded', resultConsumed: true, operationCount: 15, previewPathSelectionIds: [commProtectedPathEntryId] },
+          { sourceLine: 538, status: 'expanded', resultConsumed: false, operationCount: 11, previewPathSelectionIds: [commProtectedPathEntryId] },
+          { sourceLine: 540, status: 'expanded', resultConsumed: false, operationCount: 12, previewPathSelectionIds: [commProtectedPathEntryId] },
+          { sourceLine: 541, status: 'expanded', resultConsumed: false, operationCount: 14, previewPathSelectionIds: [commProtectedPathEntryId] },
+        ]), 'COMM exact selected line-530 path must expand all five top-level helper invocations under the fixed bounded limits: ' + JSON.stringify({ limits: localExpansion?.limits, pathSelectionIds: localExpansion?.previewPathSelections.map(selection => selection.id), invocations: commSelectedProtectedInvocations }));
+    }
+    if (source.label === 'MENU') {
+      const menuProtectedGapReceipt = program.gaps
+        .filter(gap => gap.category === 'preview-path' && [389, 391, 418].includes(gap.source.start.line))
+        .map(gap => ({
+          sourceLine: gap.source.start.line,
+          expression: gap.expression,
+          reason: gap.reason,
+          pathAuthority: localExpansion?.previewPathSelections.map(selection => selection.id) ?? [],
+        }));
+      assert(isDeepStrictEqual(menuProtectedGapReceipt, [
+        {
+          sourceLine: 389,
+          expression: 'RailStanding',
+          reason: 'conditional invocation requires preview selection for boundary ui/addons/ai_influence_chat/aic_menu.lua||21023|21395',
+          pathAuthority: [],
+        },
+        {
+          sourceLine: 389,
+          expression: 'pcall',
+          reason: 'conditional invocation requires preview selection for boundary ui/addons/ai_influence_chat/aic_menu.lua||21023|21395',
+          pathAuthority: [],
+        },
+        {
+          sourceLine: 391,
+          expression: 'RailTrust',
+          reason: 'conditional invocation requires preview selection for boundary ui/addons/ai_influence_chat/aic_menu.lua||21023|21395',
+          pathAuthority: [],
+        },
+        {
+          sourceLine: 391,
+          expression: 'pcall',
+          reason: 'conditional invocation requires preview selection for boundary ui/addons/ai_influence_chat/aic_menu.lua||21023|21395',
+          pathAuthority: [],
+        },
+        {
+          sourceLine: 418,
+          expression: 'RailKnows',
+          reason: 'conditional invocation requires preview selection for boundary ui/addons/ai_influence_chat/aic_menu.lua||22670|22840',
+          pathAuthority: [],
+        },
+        {
+          sourceLine: 418,
+          expression: 'pcall',
+          reason: 'conditional invocation requires preview selection for boundary ui/addons/ai_influence_chat/aic_menu.lua||22670|22840',
+          pathAuthority: [],
+        },
+      ]), 'MENU exact six protected-callback gaps must retain source lines, reasons, and unselected path authority: ' + JSON.stringify(menuProtectedGapReceipt));
+      const menuStaticRawgetGapReceipt = file.callModel.verificationGaps
+        .filter(gap => [63, 155, 349, 743].includes(gap.source.start.line))
+        .map(gap => ({ sourceLine: gap.source.start.line, reason: gap.reason }));
+      assert(isDeepStrictEqual(menuStaticRawgetGapReceipt, [
+        { sourceLine: 63, reason: 'Helper receiver rawget key must be the exact static string "Helper"' },
+        { sourceLine: 155, reason: 'Helper receiver rawget key must be the exact static string "Helper"' },
+        { sourceLine: 349, reason: 'Helper receiver rawget key must be the exact static string "Helper"' },
+        { sourceLine: 743, reason: 'Helper receiver rawget key must be the exact static string "Helper"' },
+      ])
+        && !file.callModel.verificationGaps.some(gap => gap.reason.includes('global environment')
+          && gap.reason.includes('protected pcall authority')),
+      'MENU exact static rawget reads must remain non-authority gaps and never poison protected pcall authority: ' + JSON.stringify({ rawget: menuStaticRawgetGapReceipt, gaps: file.callModel.verificationGaps }));
+    }
+    if (source.label === 'MENU') {
+      const bindingById = new Map(program.previewSampleBindings.map(binding => [binding.id, binding] as const));
+      const menuResolvedProperties = [[539, 'tabOrder', 80], [539, 'y', 654], [562, 'tabOrder', 80],
+        [720, 'tabOrder', 80], [720, 'y', 734]] as const;
+      for (const [line, field, expected] of menuResolvedProperties) {
+        const owner = program.operations.find(operation => operation.kind === 'addTable' && operation.source.start.line === line);
+        const fact = owner?.descriptorFacts[field];
+        assert(fact?.status === 'known' && fact.expectedType === 'number' && fact.value === expected
+          && fact.provenance === 'preview-sample' && fact.sampleId !== undefined
+          && bindingById.get(fact.sampleId)?.status === 'consumed',
+        `MENU ${line}:${field} must retain its exact known sampled value`);
+        assert(!program.gaps.some(gap => gap.category === 'property' && gap.expression === fact.expression
+          && isDeepStrictEqual(gap.source, fact.source)),
+        `MENU ${line}:${field} must not keep a resolved source property warning`);
+      }
+      const numericCatalog = selectedEntries
+        .filter(entry => entry.expectedType === 'number')
+        .map(entry => {
+          const supplied = values.find(value => value.id === entry.id);
+          const binding = bindingById.get(entry.id);
+          return {
+            expression: entry.expression,
+            sourceLine: entry.source.start.line,
+            value: supplied?.value,
+            inputResolution: Object.prototype.hasOwnProperty.call(source.consumerNumbers, entry.expression)
+              ? 'configured-source-input'
+              : 'fallback-80-input',
+            binding: binding?.status,
+            consumers: entry.consumers.map(consumer => `${consumer.operationKind}:${consumer.field}@${consumer.source.start.line}`),
+          };
+        });
+      const consumedExpressions = selectedEntries
+        .filter(entry => bindingById.get(entry.id)?.status === 'consumed')
+        .map(entry => entry.expression);
+      const numericGeometryFacts = [
+        ...program.frames,
+        ...program.tables,
+        ...program.rows,
+        ...program.cells,
+        ...program.operations,
+      ].flatMap(owner => Object.entries(owner.descriptorFacts).flatMap(([name, fact]) => {
+        if (fact.status !== 'known'
+          || fact.expectedType !== 'number'
+          || ![333, 439, 440, 539, 562, 720].includes(owner.source.start.line)
+          || !['x', 'y', 'width', 'height', 'requestedWidth', 'finalWidth', 'maxVisibleHeight'].includes(name)) return [];
+        return [{
+          owner: owner.id,
+          sourceLine: owner.source.start.line,
+          name,
+          expression: fact.expression,
+          value: fact.value,
+          provenance: fact.provenance,
+          sampleId: fact.sampleId,
+          sampleIds: fact.sampleIds,
+        }];
+      }));
+      const gapCategories = program.gaps.reduce<Record<string, number>>((counts, gap) => {
+        counts[gap.category] = (counts[gap.category] ?? 0) + 1;
+        return counts;
+      }, {});
+      console.log('B119 MENU exact census reconciliation evidence: ' + JSON.stringify({
+        sourceSha256: source.sourceSha256,
+        historicalExpected: { samples: 57, consumed: 11, notConsumed: 46 },
+        historicalOnlyExpressionsFromPriorReceipt: ['vw', 'vh', 'railX + col * (chipW + chipGap)', 'tw', 'px'],
+        currentCatalog: selectedEntries.map(entry => ({
+          expression: entry.expression,
+          expectedType: entry.expectedType,
+          sourceLine: entry.source.start.line,
+          value: values[selectedEntries.indexOf(entry)]?.value,
+          binding: bindingById.get(entry.id)?.status,
+        })),
+        currentConsumedExpressions: consumedExpressions,
+        numericCatalog,
+        numericGeometryFacts,
+        targeted439to440: {
+          descriptors: program.tables
+            .filter(table => [439, 440].includes(table.source.start.line))
+            .map(table => ({ sourceLine: table.source.start.line, status: table.status, descriptorFacts: table.descriptorFacts })),
+          gaps: program.gaps
+            .filter(gap => [439, 440].includes(gap.source.start.line))
+            .map(gap => ({ category: gap.category, expression: gap.expression, reason: gap.reason })),
+        },
+        geometry: {
+          frames: program.frames.map(frame => ({ sourceLine: frame.source.start.line, width: frame.width, height: frame.height })),
+          tables: program.tables
+            .filter(table => [439, 440, 539, 562, 720].includes(table.source.start.line))
+            .map(table => ({
+            sourceLine: table.source.start.line,
+            requestedWidth: table.requestedWidth,
+            frameWidth: table.frameWidth,
+            properties: table.kernelState?.properties,
+            columns: table.kernelState?.columns.map(column => ({ width: column.width, percent: column.percent, min: column.min, scaling: column.scaling })),
+            rows: table.kernelState?.rows.map(row => ({ height: row.cells.reduce((height, cell) => Math.max(height, cell.height), 0), cells: row.cells.length })),
+          })),
+          cellCount: program.cells.length,
+          materializedCells: program.cells
+            .filter(cell => cell.height?.status === 'known' || cell.spanWidth?.status === 'known')
+            .map(cell => ({ sourceLine: cell.source.start.line, column: cell.column, height: cell.height, spanWidth: cell.spanWidth })),
+        },
+        layout: layoutCounts,
+        scene: sampled.preview.scene === null
+          ? null
+          : sampled.preview.scene.status === 'refused'
+            ? { status: sampled.preview.scene.status }
+            : {
+              status: sampled.preview.scene.status,
+              geometry: {
+                frames: sampled.preview.scene.scene.frames.length,
+                tables: sampled.preview.scene.scene.tables.length,
+                rows: sampled.preview.scene.scene.rows.length,
+                cells: sampled.preview.scene.scene.cells.length,
+                widgets: sampled.preview.scene.scene.widgets.length,
+                texts: sampled.preview.scene.scene.texts.length,
+                glyphs: sampled.preview.scene.scene.glyphs.length,
+                gaps: sampled.preview.scene.scene.gaps.length,
+              },
+            },
+        paint: sampled.paint === null
+          ? null
+          : sampled.paint.status === 'refused'
+            ? { status: sampled.paint.status }
+            : {
+              status: sampled.paint.status,
+              commands: sampled.paint.plan.layers.reduce((count, layer) => count + layer.commands.length, 0),
+              diagnostics: sampled.paint.plan.diagnostics.length,
+            },
+        gapCategories,
+      }));
+      const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+      const sourceLiteralNumericFact = (value: unknown, expected: number): boolean => {
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+        const fact = value as Record<string, unknown>;
+        return fact.status === 'known'
+          && fact.expectedType === 'number'
+          && fact.value === expected
+          && fact.provenance === 'source-literal'
+          && !hasOwn(fact, 'sampleId')
+          && !hasOwn(fact, 'sampleIds');
+      };
+      const menuFrame = program.frames.find(frame => frame.source.start.line === 333);
+      const menuTables = [539, 562, 720].map(line => program.tables.find(table => table.source.start.line === line));
+      const conditionalMenuTable = program.tables.find(table => table.source.start.line === 439);
+      const conditionalMenuXGap = program.gaps.some(gap => gap.source.start.line >= 439
+        && gap.source.start.line <= 440
+        && gap.expression === 'railX + col * (chipW + chipGap)'
+        && (gap.status === 'dynamic' || gap.status === 'unknown'));
+      assert(menuFrame?.width === 1920
+        && menuFrame.height === 1080
+        && sourceLiteralNumericFact(menuFrame.descriptorFacts.width, 1920)
+        && sourceLiteralNumericFact(menuFrame.descriptorFacts.height, 1080),
+      'MENU frame fallback expressions must resolve to source-literal 1920x1080 facts without sampled fields');
+      assert(menuTables.every(table => table !== undefined
+        && sourceLiteralNumericFact(table.descriptorFacts.x, 450)
+        && sourceLiteralNumericFact(table.descriptorFacts.requestedWidth, 787)),
+      'MENU line-539/562/720 table x/requestedWidth facts must remain source-literal 450/787 facts without sampled fields');
+      assert(selectedEntries.length === 52
+        && consumedExpressions.length === 7
+        && selectedEntries.every(entry => !['vw', 'vh', 'railX + col * (chipW + chipGap)', 'tw', 'px'].includes(entry.expression)),
+      'MENU catalog must retain exactly the current 52 source expressions and omit retired intermediate preview inputs: ' + JSON.stringify({
+        catalogCount: selectedEntries.length,
+        consumedExpressions,
+      }));
+      assert(conditionalMenuTable?.status === 'refused'
+        && conditionalMenuTable.kernelState === undefined
+        && conditionalMenuXGap,
+      'MENU conditional line-439/440 table must remain unfinalized and retain its genuine unknown x gap: ' + JSON.stringify({
+        table: conditionalMenuTable,
+        xGap: program.gaps.filter(gap => gap.source.start.line >= 439 && gap.source.start.line <= 440),
+      }));
+    }
+    if (source.label === 'COMM') {
+      const bindingById = new Map(program.previewSampleBindings.map(binding => [binding.id, binding] as const));
+      const retiredInputs = [['vw', 477], ['vh', 478], ['my', 480], ['vw - mx * 2', 498]] as const;
+      assert(retiredInputs.every(([expression, line]) => !sampleCatalog.entries.some(entry =>
+        entry.expression === expression && entry.source.start.line === line)),
+      'COMM source-derived frame and title geometry must not reappear as manual preview inputs');
+      const titleTable = program.tables.find(table => table.source.start.line === 498);
+      const derivedFacts = [
+        [program.frames[0]?.descriptorFacts.width, 1920],
+        [program.frames[0]?.descriptorFacts.height, 1080],
+        [titleTable?.descriptorFacts.y, 27],
+        [titleTable?.descriptorFacts.requestedWidth, 1866],
+      ] as const;
+      assert(derivedFacts.every(([fact, expected]) => fact?.status === 'known'
+        && fact.expectedType === 'number' && fact.value === expected && fact.provenance === 'source-literal'
+        && !Object.hasOwn(fact, 'sampleId') && !Object.hasOwn(fact, 'sampleIds')),
+      'COMM four retired inputs must remain exact source-derived geometry without sampled provenance');
+      const resolvedProperties = [[106, 'comm._tab'], [172, 'comm._tab'], [172, 'y'],
+        [234, 'comm._tab'], [234, 'y'], [331, 'comm._tab'], [331, 'ty']] as const;
+      for (const [line, expression] of resolvedProperties) {
+        const entries = selectedEntries.filter(entry => entry.source.start.line === line && entry.expression === expression);
+        assert(entries.length === 1, `COMM property ${line}:${expression} must keep one exact source-bound input`);
+        const entry = entries[0];
+        const binding = bindingById.get(entry.id);
+        assert(binding?.status === 'consumed' && entry.consumers.length > 0 && entry.consumers.every(consumer => {
+          const owner = program.operations.find(operation => operation.id === consumer.operationId);
+          const fact = owner?.descriptorFacts[consumer.field === 'taborder' ? 'tabOrder' : consumer.field];
+          return fact?.status === 'known' && fact.expectedType === 'number' && fact.value === binding.value
+            && fact.sampleId === entry.id && isDeepStrictEqual(fact.source, entry.source);
+        }), `COMM property ${line}:${expression} must retain every exact consumed numeric fact`);
+        assert(!program.gaps.some(gap => gap.category === 'property' && gap.expression === expression
+          && isDeepStrictEqual(gap.source, entry.source))
+          && !authority.gaps.some(gap => gap.category === 'property' && gap.expression === expression
+            && isDeepStrictEqual(gap.source, entry.source)),
+        `COMM resolved property ${line}:${expression} must not leave stale program/evidence warnings`);
+      }
+      const blockedScaleLines = program.gaps.filter(gap => gap.category === 'scale' && gap.status === 'incomplete')
+        .map(gap => gap.source.start.line).sort((left, right) => left - right);
+      assert(isDeepStrictEqual(blockedScaleLines, [205, 217, 283, 286, 296, 322, 390]),
+        'COMM blocked scale operations must keep all seven genuine warnings');
+      const unused = program.previewSampleBindings.filter(binding => binding.status === 'not-applied');
+      assert(unused.length === 26 && program.gaps.filter(gap => gap.category === 'sample').length === 26
+        && unused.every(binding => program.gaps.some(gap => gap.category === 'sample'
+          && isDeepStrictEqual(gap.source, binding.source))),
+      'COMM all26 unapplied samples must retain their exact recovery gaps');
+      console.log('B119_COMM_NUMERIC_RECOVERY ' + JSON.stringify({ layout: layoutCounts,
+        retiredSourceInputs: retiredInputs.length, resolvedPropertyWarnings: resolvedProperties.length,
+        retainedBlockedScales: blockedScaleLines.length, retainedUnappliedSamples: unused.length }));
+    }
+    if (JSON.stringify(layoutCounts) !== JSON.stringify(source.expectedLayout)) censusMismatches.push(source.label + ' exact Layout census changed: ' + JSON.stringify({ expected: source.expectedLayout, actual: layoutCounts }));
 
     const sceneResult = sampled.preview.scene;
     assert(sceneResult !== null && sceneResult.status !== 'refused', source.label + ' exact sampled session must reach non-refused Scene: ' + JSON.stringify(sceneResult));
     const scene = sceneResult.scene;
+    if (source.label === 'HUB') {
+      const hubLocation = (
+        line: number,
+        column: number,
+        offset: number,
+        endLine: number,
+        endColumn: number,
+        endOffset: number,
+      ): X4UiSceneSourceLocation => ({
+        file: source.relativePath,
+        start: { line, column, offset },
+        end: { line: endLine, column: endColumn, offset: endOffset },
+      });
+      const hubFactSpecs = [
+        {
+          name: 'vw',
+          value: 1920,
+          expression: 'Helper.viewWidth or 1920',
+          source: hubLocation(659, 15, 36656, 659, 39, 36680),
+          consumers: [
+            {
+              operationKind: 'createFrameHandle',
+              consumerField: 'width',
+              factField: 'width',
+              operationSource: hubLocation(667, 16, 37071, 669, 72, 37305),
+              consumerSource: hubLocation(667, 70, 37125, 667, 72, 37127),
+            },
+          ],
+        },
+        {
+          name: 'vh',
+          value: 1080,
+          expression: 'Helper.viewHeight or 1080',
+          source: hubLocation(660, 15, 36697, 660, 40, 36722),
+          consumers: [
+            {
+              operationKind: 'createFrameHandle',
+              consumerField: 'height',
+              factField: 'height',
+              operationSource: hubLocation(667, 16, 37071, 669, 72, 37305),
+              consumerSource: hubLocation(667, 83, 37138, 667, 85, 37140),
+            },
+          ],
+        },
+        {
+          name: 'x',
+          value: 27,
+          expression: 'math.floor(vw * (36 / 2560))',
+          source: hubLocation(664, 15, 36978, 664, 43, 37006),
+          consumers: [
+            {
+              operationKind: 'addTable',
+              consumerField: 'x',
+              factField: 'x',
+              operationSource: hubLocation(674, 15, 37436, 675, 59, 37564),
+              consumerSource: hubLocation(674, 61, 37482, 674, 62, 37483),
+            },
+            {
+              operationKind: 'addTable',
+              consumerField: 'x',
+              factField: 'x',
+              operationSource: hubLocation(686, 15, 38093, 686, 87, 38165),
+              consumerSource: hubLocation(686, 65, 38143, 686, 66, 38144),
+            },
+          ],
+        },
+        {
+          name: 'my',
+          value: 27,
+          expression: 'math.floor(vh * (36 / 1440))',
+          source: hubLocation(665, 15, 37023, 665, 43, 37051),
+          consumers: [
+            {
+              operationKind: 'addTable',
+              consumerField: 'y',
+              factField: 'y',
+              operationSource: hubLocation(674, 15, 37436, 675, 59, 37564),
+              consumerSource: hubLocation(674, 68, 37489, 674, 70, 37491),
+            },
+          ],
+        },
+        {
+          name: 'w',
+          value: 1866,
+          expression: 'vw - mx * 2',
+          source: hubLocation(671, 21, 37357, 671, 32, 37368),
+          consumers: [
+            {
+              operationKind: 'addTable',
+              consumerField: 'width',
+              factField: 'requestedWidth',
+              operationSource: hubLocation(674, 15, 37436, 675, 59, 37564),
+              consumerSource: hubLocation(674, 80, 37501, 674, 81, 37502),
+            },
+            {
+              operationKind: 'addTable',
+              consumerField: 'width',
+              factField: 'requestedWidth',
+              operationSource: hubLocation(686, 15, 38093, 686, 87, 38165),
+              consumerSource: hubLocation(686, 83, 38161, 686, 84, 38162),
+            },
+          ],
+        },
+      ] as const;
+      type B119HubFactSpec = typeof hubFactSpecs[number];
+      type B119HubConsumerSpec = B119HubFactSpec['consumers'][number];
+      const hubOperationFor = (candidate: X4UiLayoutProgram, consumer: B119HubConsumerSpec): X4UiLayoutOperation | undefined => {
+        const matches = candidate.operations.filter(operation => operation.kind === consumer.operationKind
+          && isDeepStrictEqual(operation.source, consumer.operationSource));
+        return matches.length === 1 ? matches[0] : undefined;
+      };
+      const hubConsumerCount = hubFactSpecs.reduce((count, spec) => count + spec.consumers.length, 0);
+      const hubSourceBoundFacts = (candidate: X4UiLayoutProgram): boolean => {
+        for (const spec of hubFactSpecs) {
+          if (sourceText.slice(spec.source.start.offset, spec.source.end.offset) !== spec.expression) return false;
+          for (const consumer of spec.consumers) {
+            if (sourceText.slice(consumer.consumerSource.start.offset, consumer.consumerSource.end.offset) !== spec.name) return false;
+            const operation = hubOperationFor(candidate, consumer);
+            if (operation === undefined) return false;
+            const fact = operation.descriptorFacts[consumer.factField];
+            if (fact === undefined
+              || fact.status !== 'known'
+              || fact.expectedType !== 'number'
+              || fact.value !== spec.value
+              || fact.provenance !== 'source-literal'
+              || fact.sampleId !== undefined
+              || fact.expression !== spec.expression
+              || !isDeepStrictEqual(fact.source, spec.source)) return false;
+          }
+        }
+        return hubConsumerCount === 7;
+      };
+      const hubCopyWithFactMutation = (
+        specIndex: number,
+        consumerIndex: number,
+        mutate: (fact: X4UiLayoutDescriptorFact) => X4UiLayoutDescriptorFact,
+      ): boolean => {
+        const copy = JSON.parse(JSON.stringify(program)) as X4UiLayoutProgram;
+        const spec = hubFactSpecs[specIndex];
+        const consumer = spec?.consumers[consumerIndex];
+        if (consumer === undefined) return false;
+        const operation = hubOperationFor(copy, consumer);
+        const fact = operation?.descriptorFacts[consumer.factField];
+        if (operation === undefined || fact === undefined) return false;
+        const mutated = mutate(fact);
+        if (isDeepStrictEqual(mutated, fact)) return false;
+        (operation.descriptorFacts as Record<string, X4UiLayoutDescriptorFact>)[consumer.factField] = mutated;
+        return !hubSourceBoundFacts(copy);
+      };
+      const hubWrongValueRejected = hubCopyWithFactMutation(0, 0, fact =>
+        fact.status === 'known' && fact.expectedType === 'number' && typeof fact.value === 'number'
+          ? { ...fact, value: fact.value + 1 }
+          : fact);
+      const hubPreviewProvenanceRejected = hubCopyWithFactMutation(0, 0, fact =>
+        fact.status === 'known' && fact.expectedType === 'number'
+          ? { ...fact, provenance: 'preview-sample', sampleId: 'b119-forged-sample' }
+          : fact);
+      const hubWrongSourceRejected = hubCopyWithFactMutation(0, 0, fact =>
+        fact.status === 'known' && fact.expectedType === 'number'
+          ? { ...fact, source: { ...fact.source, file: 'other.lua' } }
+          : fact);
+      const hubWrongSourceSpanRejected = hubCopyWithFactMutation(0, 0, fact =>
+        fact.status === 'known' && fact.expectedType === 'number'
+          ? { ...fact, source: { ...fact.source, start: { ...fact.source.start, offset: fact.source.start.offset + 1 } } }
+          : fact);
+      const hubMissingConsumerFactRejected = (() => {
+        const copy = JSON.parse(JSON.stringify(program)) as X4UiLayoutProgram;
+        const consumer = hubFactSpecs[0]?.consumers[0];
+        const operation = consumer === undefined ? undefined : hubOperationFor(copy, consumer);
+        if (operation === undefined || consumer === undefined || operation.descriptorFacts[consumer.factField] === undefined) return false;
+        delete (operation.descriptorFacts as Record<string, X4UiLayoutDescriptorFact>)[consumer.factField];
+        return !hubSourceBoundFacts(copy);
+      })();
+      assert(hubSourceBoundFacts(program)
+        && hubWrongValueRejected
+        && hubPreviewProvenanceRejected
+        && hubWrongSourceRejected
+        && hubWrongSourceSpanRejected
+        && hubMissingConsumerFactRejected,
+      'HUB exact five source-derived facts and seven consumers must reject copied value, provenance, source, span, and missing-fact drift');
+    }
     if (source.label === 'COMM') {
       const titleWidget = scene.widgets.find(widget => widget.kind === 'text' && widget.primaryContent === B119_COMM_OPAQUE_SAMPLE);
       const buttonGeometry = scene.widgets
@@ -9204,10 +10468,53 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         && isDeepStrictEqual(titleWidget.outerRect, { x: 32, y: 27, width: 1298, height: 16 })
         && scene.texts.some(text => text.content === B119_COMM_OPAQUE_SAMPLE)
         && isDeepStrictEqual(buttonGeometry, [
+          { content: 'SEND', outerRect: { x: 150, y: 80, width: 10, height: 25 } },
           { content: 'DOSSIER', outerRect: { x: 1332, y: 27, width: 279, height: 25 } },
           { content: 'END', outerRect: { x: 1613, y: 27, width: 279, height: 25 } },
         ]), 'COMM exact supplied title and both button geometries must reach canonical Scene: ' + JSON.stringify({ title: titleWidget, buttons: buttonGeometry }));
-      assert(!program.gaps.some(gap => gap.category === 'height'), 'COMM exact supplied title must leave no Layout height gap: ' + JSON.stringify(program.gaps));
+      const commTitleHeightGaps = program.gaps.filter(gap => gap.category === 'height'
+        && gap.source.start.line >= 505
+        && gap.source.start.line <= 507);
+      assert(commTitleHeightGaps.length === 0, 'COMM exact supplied title must leave no title-owned Layout height gap: ' + JSON.stringify(commTitleHeightGaps));
+      const commHelperSourceLines = [109, 175, 368, 370, 438, 450];
+      const commHelperWidgets = scene.widgets.filter(widget => commHelperSourceLines.includes(widget.source.start.line));
+      const commHelperTexts = scene.texts.filter(text => commHelperSourceLines.includes(text.source.start.line));
+      const commHelperTextIds = new Set(commHelperTexts.map(text => text.id));
+      const commHelperPaintCommands = sampled.paint !== null && sampled.paint.status !== 'refused'
+        ? sampled.paint.plan.layers
+          .flatMap(layer => layer.commands)
+          .filter(command => {
+            const record = command as unknown as Record<string, unknown>;
+            return record.kind === 'glyph-alpha-blit'
+              && [record.nodeId, record.textId].some(id => typeof id === 'string' && commHelperTextIds.has(id));
+          })
+        : [];
+      const commUnprovidedSceneForDelta = unsampled.preview.scene;
+      assert(commUnprovidedSceneForDelta !== null && commUnprovidedSceneForDelta.status !== 'refused'
+        && scene.tables.length > commUnprovidedSceneForDelta.scene.tables.length
+        && scene.rows.length > commUnprovidedSceneForDelta.scene.rows.length
+        && scene.cells.length > commUnprovidedSceneForDelta.scene.cells.length
+        && scene.widgets.length > commUnprovidedSceneForDelta.scene.widgets.length
+        && scene.texts.length > commUnprovidedSceneForDelta.scene.texts.length
+        && commHelperWidgets.length === 8
+        && commHelperWidgets.some(widget => widget.kind === 'editbox' && widget.source.start.line === 438)
+        && commHelperWidgets.some(widget => widget.kind === 'button' && widget.source.start.line === 450 && widget.primaryContent === 'SEND')
+        && commHelperTexts.some(text => text.source.start.line === 368 && text.content === 'sampled')
+        && commHelperTexts.some(text => text.source.start.line === 370 && text.content === 'sampled')
+        && commHelperPaintCommands.length > 0,
+      'COMM exact selected line-530 expansion must create a semantic Scene/Paint delta from helper-owned source anchors, not gap inflation: ' + JSON.stringify({
+        unprovided: {
+          tables: commUnprovidedSceneForDelta?.status === 'refused' ? undefined : commUnprovidedSceneForDelta?.scene.tables.length,
+          rows: commUnprovidedSceneForDelta?.status === 'refused' ? undefined : commUnprovidedSceneForDelta?.scene.rows.length,
+          cells: commUnprovidedSceneForDelta?.status === 'refused' ? undefined : commUnprovidedSceneForDelta?.scene.cells.length,
+          widgets: commUnprovidedSceneForDelta?.status === 'refused' ? undefined : commUnprovidedSceneForDelta?.scene.widgets.length,
+          texts: commUnprovidedSceneForDelta?.status === 'refused' ? undefined : commUnprovidedSceneForDelta?.scene.texts.length,
+        },
+        selected: { tables: scene.tables.length, rows: scene.rows.length, cells: scene.cells.length, widgets: scene.widgets.length, texts: scene.texts.length },
+        helperWidgets: commHelperWidgets.map(widget => ({ kind: widget.kind, content: widget.primaryContent, sourceLine: widget.source.start.line })),
+        helperTexts: commHelperTexts.map(text => ({ content: text.content, sourceLine: text.source.start.line })),
+        helperPaintCommands: commHelperPaintCommands.length,
+      }));
     }
     const sceneGeometry = {
       frames: scene.frames.length,
@@ -9220,13 +10527,39 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       gaps: scene.gaps.length,
       drawable: scene.drawableRect,
     };
-    assert(JSON.stringify(sceneGeometry) === JSON.stringify(source.expectedScene), source.label + ' exact Scene geometry changed: ' + JSON.stringify({ expected: source.expectedScene, actual: sceneGeometry }));
+    if (JSON.stringify(sceneGeometry) !== JSON.stringify(source.expectedScene)) censusMismatches.push(source.label + ' exact Scene geometry changed: ' + JSON.stringify({ expected: source.expectedScene, actual: sceneGeometry }));
     assert(sampled.paint !== null && sampled.paint.status !== 'refused', source.label + ' exact sampled session must reach non-refused Paint: ' + JSON.stringify(sampled.paint));
     const paint = {
       commands: sampled.paint.plan.layers.reduce((count, layer) => count + layer.commands.length, 0),
       diagnostics: sampled.paint.plan.diagnostics.length,
     };
-    assert(JSON.stringify(paint) === JSON.stringify(source.expectedPaint), source.label + ' exact Paint census changed: ' + JSON.stringify({ expected: source.expectedPaint, actual: paint }));
+    const constructorInputs = scene.widgets.filter(widget => widget.kind === 'editbox').flatMap(widget => {
+      const creator = program.operations.find(operation => operation.kind === 'createEditBox' && widget.cellId === `scene:${operation.cellId}`);
+      if (!creator || program.operations.some(operation => operation.kind === 'setText' && operation.cellId === creator.cellId)) return [];
+      const text = scene.texts.find(candidate => candidate.widgetId === widget.id && candidate.slot === 'primary');
+      const glyphs = scene.glyphs.filter(glyph => glyph.textId === text?.id);
+      return [{
+        sourceLine: creator.source.start.line,
+        current: text?.content,
+        defaultText: text?.defaultContent,
+        selection: text?.contentSelection,
+        displayed: text?.lines.map(line => line.displayedText).join(''),
+        glyphText: String.fromCodePoint(...glyphs.map(glyph => glyph.codePoint)),
+        glyphs: glyphs.length,
+        paintGlyphs: sampled.paint!.status === 'refused' ? 0 : sampled.paint!.plan.layers.flatMap(layer => layer.commands)
+          .filter(command => command.kind === 'glyph-alpha-blit' && command.textId === text?.id).length,
+        offsets: [text?.offsetX, text?.offsetY],
+        font: [text?.font, text?.fontSize],
+      }];
+    });
+    assert(isDeepStrictEqual(constructorInputs, source.label === 'HUB' ? [] : [{
+      sourceLine: source.label === 'MENU' ? 874 : 438,
+      current: '', defaultText: 'Type your message...', selection: 'preview-default',
+      displayed: 'Type your message...', glyphText: 'Type your message...', glyphs: 20, paintGlyphs: 20,
+      offsets: [5, 0], font: ['Zekton', 9],
+    }]), `${source.label} constructor Input census must remain tied to the exact source placeholder and glyph commands`);
+    console.log(`B119 Input census receipt ${source.label}: ${JSON.stringify({ constructorInputs, scene: sceneGeometry, paint })}`);
+    if (JSON.stringify(paint) !== JSON.stringify(source.expectedPaint)) censusMismatches.push(source.label + ' exact Paint census changed: ' + JSON.stringify({ expected: source.expectedPaint, actual: paint }));
     assert(sampled.status === 'partial' && sampled.preview.status === 'partial' && sceneResult.status === 'partial' && sampled.paint.status === 'partial' && sampled.canRender, source.label + ' exact public session status chain changed');
     assert(sampled.preview.gaps.length === 0, source.label + ' exact public session must not carry a downstream preview refusal gap');
     assert(sampled.gameTruth === 'Not verified in game' && sampled.gameVerified === false && scene.verification.gameVerified === false && sampled.paint.verification.gameVerified === false, source.label + ' exact public session must remain Not verified in game');
@@ -9371,10 +10704,86 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       const conservativePendingContents = conservativePendingOperations
         .map(operation => operation.descriptorFacts.primaryContent?.status === 'known' ? operation.descriptorFacts.primaryContent.value : undefined)
         .filter((value): value is string => typeof value === 'string');
+      const conservativeFrameOperation = conservativeProgram?.operations.find(operation =>
+        operation.kind === 'createFrameHandle' && operation.source.start.line === 333);
+      const conservativeDimensionTables = conservativeProgram?.tables
+        .filter(table => [539, 562, 720].includes(table.source.start.line))
+        .map(table => ({
+          line: table.source.start.line,
+          x: table.descriptorFacts.x?.status === 'known' ? table.descriptorFacts.x.value : undefined,
+          xProvenance: table.descriptorFacts.x?.status === 'known' ? table.descriptorFacts.x.provenance : undefined,
+          requestedWidth: table.descriptorFacts.requestedWidth?.status === 'known' ? table.descriptorFacts.requestedWidth.value : undefined,
+          requestedWidthProvenance: table.descriptorFacts.requestedWidth?.status === 'known' ? table.descriptorFacts.requestedWidth.provenance : undefined,
+          xHasSamples: table.descriptorFacts.x?.status === 'known'
+            && (Object.prototype.hasOwnProperty.call(table.descriptorFacts.x, 'sampleId')
+              || Object.prototype.hasOwnProperty.call(table.descriptorFacts.x, 'sampleIds')),
+          requestedWidthHasSamples: table.descriptorFacts.requestedWidth?.status === 'known'
+            && (Object.prototype.hasOwnProperty.call(table.descriptorFacts.requestedWidth, 'sampleId')
+              || Object.prototype.hasOwnProperty.call(table.descriptorFacts.requestedWidth, 'sampleIds')),
+        })) ?? [];
+      console.log('B119 canonical selected path-only compact reconciliation: ' + JSON.stringify({
+        layout: conservativeLayout,
+        catalogCount: selectedPathSampleCatalog.entries.length,
+        retiredExpressionsPresent: selectedPathSampleCatalog.entries
+          .filter(entry => ['vw', 'vh', 'railX + col * (chipW + chipGap)', 'tw', 'px'].includes(entry.expression))
+          .map(entry => entry.expression),
+        frame: {
+          width: conservativeFrameOperation?.descriptorFacts.width?.status === 'known' ? conservativeFrameOperation.descriptorFacts.width.value : undefined,
+          widthProvenance: conservativeFrameOperation?.descriptorFacts.width?.status === 'known' ? conservativeFrameOperation.descriptorFacts.width.provenance : undefined,
+          height: conservativeFrameOperation?.descriptorFacts.height?.status === 'known' ? conservativeFrameOperation.descriptorFacts.height.value : undefined,
+          heightProvenance: conservativeFrameOperation?.descriptorFacts.height?.status === 'known' ? conservativeFrameOperation.descriptorFacts.height.provenance : undefined,
+          widthHasSamples: conservativeFrameOperation?.descriptorFacts.width?.status === 'known'
+            && (Object.prototype.hasOwnProperty.call(conservativeFrameOperation.descriptorFacts.width, 'sampleId')
+              || Object.prototype.hasOwnProperty.call(conservativeFrameOperation.descriptorFacts.width, 'sampleIds')),
+          heightHasSamples: conservativeFrameOperation?.descriptorFacts.height?.status === 'known'
+            && (Object.prototype.hasOwnProperty.call(conservativeFrameOperation.descriptorFacts.height, 'sampleId')
+              || Object.prototype.hasOwnProperty.call(conservativeFrameOperation.descriptorFacts.height, 'sampleIds')),
+        },
+        tables: conservativeDimensionTables,
+      }));
+      const canonicalPathOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+      const canonicalPathSourceLiteralNumericFact = (value: unknown, expected: number): boolean => {
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+        const fact = value as Record<string, unknown>;
+        return fact.status === 'known'
+          && fact.expectedType === 'number'
+          && fact.value === expected
+          && fact.provenance === 'source-literal'
+          && !canonicalPathOwn(fact, 'sampleId')
+          && !canonicalPathOwn(fact, 'sampleIds');
+      };
+      const canonicalPathFrame = conservativeFrameOperation;
+      const canonicalPathTables = conservativeProgram?.tables.filter(table => [539, 562, 720].includes(table.source.start.line)) ?? [];
+      assert(canonicalPathFrame !== undefined
+        && canonicalPathFrame.source.start.line === 333
+        && canonicalPathSourceLiteralNumericFact(canonicalPathFrame.descriptorFacts.width, 2560)
+        && canonicalPathSourceLiteralNumericFact(canonicalPathFrame.descriptorFacts.height, 1440)
+        && canonicalPathTables.length === 3
+        && isDeepStrictEqual(canonicalPathTables.map(table => table.source.start.line), [539, 562, 720])
+        && canonicalPathTables.every(table => canonicalPathSourceLiteralNumericFact(table.descriptorFacts.x, 600)
+          && canonicalPathSourceLiteralNumericFact(table.descriptorFacts.requestedWidth, 1050))
+        && selectedPathSampleCatalog.entries.length === 39
+        && selectedPathSampleCatalog.entries.every(entry => !['vw', 'vh', 'railX + col * (chipW + chipGap)', 'tw', 'px'].includes(entry.expression)),
+      'MENU canonical path-only case must retain source-literal 2560x1440 frame and line-539/562/720 x=600/requestedWidth=1050 facts without sample fields, plus exactly 39 current catalog entries with retired expressions absent: ' + JSON.stringify({
+        frame: {
+          line: canonicalPathFrame?.source.start.line,
+          width: canonicalPathFrame?.descriptorFacts.width,
+          height: canonicalPathFrame?.descriptorFacts.height,
+        },
+        tables: canonicalPathTables.map(table => ({
+          line: table.source.start.line,
+          x: table.descriptorFacts.x,
+          requestedWidth: table.descriptorFacts.requestedWidth,
+        })),
+        catalogCount: selectedPathSampleCatalog.entries.length,
+        retiredExpressionsPresent: selectedPathSampleCatalog.entries
+          .filter(entry => ['vw', 'vh', 'railX + col * (chipW + chipGap)', 'tw', 'px'].includes(entry.expression))
+          .map(entry => entry.expression),
+      }));
       assert(conservativeProgram !== undefined
         && conservativeEvidenceAuthority !== undefined
         && validateX4UiLayoutEvidencePair(conservativeProgram, conservativeEvidenceAuthority).valid
-        && conservativeLayout.samples === 29
+        && conservativeLayout.samples === 39
         && conservativePendingOperations.length === 13
         && conservativePendingOperations.every(operation => operation.descriptorFacts.color?.status === 'known')
         && [
@@ -9473,23 +10882,6 @@ if (b119ConfiguredCensus.status === 'unavailable') {
           iterationCount: entry.previewLoop.iterationCount,
         },
       });
-      const sampleDiagnosticPartition = (catalog: typeof selectedPathSampleCatalog): unknown => ({
-        catalogId: catalog.id,
-        source: catalog.sourceIdentity,
-        outsideSelectedLoop: catalog.entries.filter(entry => !selectedLoopSourceContains(entry.source, selectedLoopEntry.source)).map(sampleSemanticIdentity),
-        insideSelectedLoop: catalog.entries.filter(entry => selectedLoopSourceContains(entry.source, selectedLoopEntry.source)).map(sampleSemanticIdentity),
-      });
-      console.log('B119 MENU loop sample catalog transition diagnostic receipt: ' + JSON.stringify({
-        selectedLoopEntry: {
-          id: selectedLoopEntry.id,
-          loopId: selectedLoopEntry.loopId,
-          source: selectedLoopEntry.source,
-        },
-        selectedPathSampleCatalog: sampleDiagnosticPartition(selectedPathSampleCatalog),
-        selectedLoopSampleCatalog: sampleDiagnosticPartition(selectedLoopSampleCatalog),
-        sampleBindingCatalogId: selectedLoopUnprojected.sampleBinding.catalogId,
-        sampleCatalogAuthorityKind: selectedLoopUnprojected.sampleCatalogAuthority.kind,
-      }));
       const sampleSemanticKey = (entry: typeof selectedPathSampleCatalog.entries[number]): string => JSON.stringify({
         source: entry.source,
         expectedType: entry.expectedType,
@@ -9536,9 +10928,9 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         expectedType: entry.expectedType,
         value: selectedLoopSampleValues.find(sample => sample.id === entry.id)?.value,
       }));
-      assert(selectedLoopSampleCatalog.entries.length === 31
-        && selectedLoopSampleValues.length === 31
-        && isDeepStrictEqual(selectedLoopSampleReceipt, expectedSelectedLoopSampleReceipt), 'MENU selected canonical sample catalog must retain exactly 31 entries and the three issued action-label loop values: ' + JSON.stringify({ count: selectedLoopSampleCatalog.entries.length, loop: selectedLoopSampleReceipt }));
+      assert(selectedLoopSampleCatalog.entries.length === 41
+        && selectedLoopSampleValues.length === 41
+        && isDeepStrictEqual(selectedLoopSampleReceipt, expectedSelectedLoopSampleReceipt), 'MENU selected canonical sample catalog must retain exactly 41 entries and the three issued action-label loop values: ' + JSON.stringify({ count: selectedLoopSampleCatalog.entries.length, loop: selectedLoopSampleReceipt }));
       const selectedLoopSampleInput = {
         catalogId: selectedLoopSampleCatalog.id,
         source: selectedLoopSampleCatalog.sourceIdentity,
@@ -9575,6 +10967,26 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       const selectedEvidencePair = selectedProgram === undefined || selectedEvidenceAuthority === undefined
         ? undefined
         : validateX4UiLayoutEvidencePair(selectedProgram, selectedEvidenceAuthority);
+      const selectedScene = selected.preview.scene !== null && selected.preview.scene.status !== 'refused'
+        ? selected.preview.scene.scene
+        : undefined;
+      const selectedPaintPlan = selected.paint !== null && selected.paint.status !== 'refused' ? selected.paint.plan : undefined;
+      const selectedSceneCensus = selectedScene === undefined ? undefined : {
+        frames: selectedScene.frames.length,
+        tables: selectedScene.tables.length,
+        rows: selectedScene.rows.length,
+        cells: selectedScene.cells.length,
+        widgets: selectedScene.widgets.length,
+        texts: selectedScene.texts.length,
+        glyphs: selectedScene.glyphs.length,
+        gaps: selectedScene.gaps.length,
+        drawable: selectedScene.drawableRect,
+      };
+      const selectedPaintCensus = selectedPaintPlan === undefined ? undefined : {
+        commands: selectedPaintPlan.layers.reduce((count, layer) => count + layer.commands.length, 0),
+        diagnostics: selectedPaintPlan.diagnostics.length,
+        layers: selectedPaintPlan.layers.length,
+      };
       const selectedLayout = selectedProgram === undefined ? undefined : {
         samples: selectedLoopSampleValues.length,
         consumed: selectedProgram.previewSampleBindings.filter(binding => binding.status === 'consumed').length,
@@ -9587,14 +10999,45 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         cells: selectedProgram.cells.length,
         gaps: selectedProgram.gaps.length,
       };
-      assert(selectedLayout !== undefined
-        && isDeepStrictEqual(selectedLayout, { samples: 31, consumed: 22, notConsumed: 9, operations: 95, applied: 72, frames: 1, tables: 4, rows: 13, cells: 136, gaps: 95 }), 'MENU selected canonical action-loop Layout census must remain the exact 31/22/9, 95/72, 1/4/13/136/95 receipt: ' + JSON.stringify(selectedLayout));
       console.log('B119 canonical selected source receipt: ' + JSON.stringify({
         profile: selectedProfile,
         sourceSha256: selectedPathCatalog.sourceIdentity.sha256,
         pathLines: selectedPathEntries.map(entry => ({ line: entry.boundary.start.line, arm: entry.arm })),
         actionSamples: selectedLoopSampleReceipt,
         layout: selectedLayout,
+        bindings: selectedProgram?.previewSampleBindings.map(binding => {
+          const entry = selectedLoopSampleCatalog.entries.find(candidate => candidate.id === binding.id);
+          return {
+            id: binding.id,
+            expression: entry?.expression,
+            type: binding.expectedType,
+            value: binding.value,
+            source: [binding.source.start.line, binding.source.start.offset, binding.source.end.offset],
+            iteration: binding.previewLoop?.iteration,
+            status: binding.status,
+            reason: binding.reason,
+            consumers: entry?.consumers.map(consumer => ({
+              kind: consumer.operationKind,
+              field: consumer.field,
+              line: consumer.source.start.line,
+              iteration: consumer.previewLoop?.iteration,
+              status: selectedProgram.operations.find(operation => operation.id === consumer.operationId)?.status,
+            })),
+          };
+        }),
+        gapGroups: selectedProgram?.gaps.reduce((groups, gap) => {
+          const key = JSON.stringify([gap.category, gap.status, gap.source.start.line,
+            gap.source.start.offset, gap.source.end.offset, gap.expression, gap.reason]);
+          groups[key] = (groups[key] ?? 0) + 1;
+          return groups;
+        }, {} as Record<string, number>),
+        frameFacts: selectedProgram?.frames.map(frame => ({
+          line: frame.source.start.line,
+          width: frame.descriptorFacts.width,
+          height: frame.descriptorFacts.height,
+        })),
+        scene: selectedSceneCensus,
+        paint: selectedPaintCensus,
         stage: selectedStage,
         pathReconciliation: selected.pathReconciliation.status,
         loopReconciliation: selected.loopReconciliation.status,
@@ -9603,6 +11046,69 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         gameTruth: selected.gameTruth,
         gameVerified: selected.gameVerified,
       }));
+      assert(conservativeProgram !== undefined && selectedProgram !== undefined,
+        'MENU selected input transition requires both issued Layout programs');
+      const externalBindingStates = (catalog: typeof selectedPathSampleCatalog, layout: X4UiLayoutProgram): string[] => catalog.entries
+        .filter(entry => entry.previewLoop === undefined && !selectedLoopSourceContains(entry.source, selectedLoopEntry.source))
+        .map(entry => {
+          const binding = layout.previewSampleBindings.find(candidate => candidate.id === entry.id);
+          assert(binding !== undefined, 'MENU external sample must have its issued binding: ' + entry.expression);
+          return JSON.stringify({ key: sampleSemanticKey(entry), value: binding.value, status: binding.status });
+        })
+        .sort();
+      assert(isDeepStrictEqual(externalBindingStates(selectedPathSampleCatalog, conservativeProgram),
+        externalBindingStates(selectedLoopSampleCatalog, selectedProgram)),
+      'MENU selected loop must preserve every external input value and consumed/not-applied state');
+      assert(conservativeProgram.previewSampleBindings.find(binding => binding.id === selectedPathLoopPlaceholderEntries[0]?.id)?.status === 'not-applied'
+        && selectedProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined).length === 3
+        && selectedProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined).every(binding => binding.status === 'consumed'),
+      'MENU selected loop must replace one unapplied placeholder with exactly three consumed action inputs');
+      const selectedUnusedBindings = selectedProgram.previewSampleBindings.filter(binding => binding.status === 'not-applied');
+      const selectedSampleGaps = selectedProgram.gaps.filter(gap => gap.category === 'sample');
+      assert(selectedUnusedBindings.length === 19 && selectedSampleGaps.length === 19
+        && selectedSampleGaps.every(gap => gap.status === 'incomplete')
+        && isDeepStrictEqual(selectedSampleGaps.map(gap => JSON.stringify([gap.source, gap.expression, gap.previewLoop ?? null])).sort(),
+          selectedUnusedBindings.map(binding => JSON.stringify([binding.source,
+            selectedLoopSampleCatalog.entries.find(entry => entry.id === binding.id)?.expression, binding.previewLoop ?? null])).sort()),
+      'MENU selected unused inputs must retain exactly one source/loop-matched gap per issued binding');
+      const selectedGapCategories = selectedProgram.gaps.reduce((categories, gap) => {
+        categories[gap.category] = (categories[gap.category] ?? 0) + 1;
+        return categories;
+      }, {} as Record<string, number>);
+      if (!isDeepStrictEqual(selectedGapCategories, {
+        'data-flow': 30, property: 14, width: 3, text: 18, fontsize: 18, span: 1,
+        'local-expansion': 402, 'preview-path': 84, analysis: 1, scale: 3, table: 1, cell: 1, sample: 19,
+      })) censusMismatches.push('MENU selected gap categories must preserve unsupported regions and unapplied input diagnostics: ' + JSON.stringify(selectedGapCategories));
+      for (const [line, field, expected] of [[539, 'tabOrder', 80], [539, 'y', 654],
+        [562, 'tabOrder', 80], [720, 'tabOrder', 80], [720, 'y', 734]] as const) {
+        const owner = selectedProgram.operations.find(operation => operation.kind === 'addTable' && operation.source.start.line === line);
+        const fact = owner?.descriptorFacts[field];
+        assert(fact?.status === 'known' && fact.expectedType === 'number' && fact.value === expected
+          && fact.provenance === 'preview-sample' && fact.sampleId !== undefined
+          && selectedProgram.previewSampleBindings.some(binding => binding.id === fact.sampleId && binding.status === 'consumed'),
+        `MENU selected ${line}:${field} must retain its exact known sampled value`);
+        assert(!selectedProgram.gaps.some(gap => gap.category === 'property' && gap.expression === fact.expression
+          && isDeepStrictEqual(gap.source, fact.source)),
+        `MENU selected ${line}:${field} must not keep a resolved source property warning`);
+      }
+      assert(selectedProgram.gaps.some(gap => gap.category === 'property' && gap.status === 'unknown'
+        && gap.source.start.line === 440 && gap.expression === 'railX + col * (chipW + chipGap)')
+        && !selectedSampleGaps.some(gap => gap.expression === 'railX + col * (chipW + chipGap)'),
+      'MENU retired chip-x sample must not erase its conditional source-property gap');
+      const selectedFrameOperation = selectedProgram.operations.find(operation => operation.kind === 'createFrameHandle'
+        && operation.source.start.line === 333);
+      assert(selectedFrameOperation !== undefined && conservativeFrameOperation !== undefined
+        && isDeepStrictEqual(selectedFrameOperation.descriptorFacts.width, conservativeFrameOperation.descriptorFacts.width)
+        && isDeepStrictEqual(selectedFrameOperation.descriptorFacts.height, conservativeFrameOperation.descriptorFacts.height)
+        && [539, 562, 720].every(line => {
+          const before = conservativeProgram.tables.find(table => table.source.start.line === line);
+          const after = selectedProgram.tables.find(table => table.source.start.line === line);
+          return before !== undefined && after !== undefined
+            && isDeepStrictEqual(before.descriptorFacts.x, after.descriptorFacts.x)
+            && isDeepStrictEqual(before.descriptorFacts.requestedWidth, after.descriptorFacts.requestedWidth);
+        }), 'MENU loop selection must preserve the path-only source-known frame and table dimensions');
+      assert(selectedLayout !== undefined, 'MENU selected canonical action-loop Layout census must exist');
+      if (!isDeepStrictEqual(selectedLayout, { samples: 41, consumed: 22, notConsumed: 19, operations: 103, applied: 74, frames: 1, tables: 6, rows: 15, cells: 136, gaps: 595 })) censusMismatches.push('MENU selected canonical action-loop Layout census must include the fixed local-helper expansion receipt: ' + JSON.stringify(selectedLayout));
       assert(selected.pathReconciliation.status === 'accepted'
         && selected.loopReconciliation.status === 'accepted'
         && selected.sampleReconciliation.status === 'accepted', 'MENU selected canonical path/loop/sample authorities must be accepted');
@@ -9624,7 +11130,10 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       assert(selectedProposalOperations.length === 13
         && selectedProposalOperations.every(operation => operation.status === 'applied')
         && selectedProposalOperations.every(operation => operation.descriptorFacts.color?.status === 'known'), 'MENU selected canonical fixed proposal operations must be applied with source-owned colors: ' + JSON.stringify(selectedProposalOperations));
-      assert(selectedProgram?.localExpansion === undefined && selectedProgram.previewPathSelections.length === 7, 'MENU selected canonical projection must forward seven path selections without replaying local invocations');
+      assert(selectedProgram?.localExpansion !== undefined
+        && isDeepStrictEqual(selectedProgram.localExpansion.limits, { maxDepth: 4, maxInvocations: 64 })
+        && selectedProgram.localExpansion.previewPathSelections.length === 7
+        && selectedProgram.previewPathSelections.length === 7, 'MENU selected canonical projection must retain fixed local expansion separately from seven forwarded path selections');
       assert(selectedPendingHeader?.status === 'applied'
         && selectedFactValue(selectedPendingHeader.descriptorFacts.primaryContent) === 'PENDING - MILITARY REQUEST'
         && selectedPendingTx?.status === 'applied'
@@ -9711,26 +11220,6 @@ if (b119ConfiguredCensus.status === 'unavailable') {
           labels: selectedActionReceipt,
           sampleKeys: loopSampleEntries.map(entry => `${entry.source.start.line}:${entry.previewLoop?.iteration}`),
         }));
-      const selectedScene = selected.preview.scene !== null && selected.preview.scene.status !== 'refused'
-        ? selected.preview.scene.scene
-        : undefined;
-      const selectedPaintPlan = selected.paint !== null && selected.paint.status !== 'refused' ? selected.paint.plan : undefined;
-      const selectedSceneCensus = selectedScene === undefined ? undefined : {
-        frames: selectedScene.frames.length,
-        tables: selectedScene.tables.length,
-        rows: selectedScene.rows.length,
-        cells: selectedScene.cells.length,
-        widgets: selectedScene.widgets.length,
-        texts: selectedScene.texts.length,
-        glyphs: selectedScene.glyphs.length,
-        gaps: selectedScene.gaps.length,
-        drawable: selectedScene.drawableRect,
-      };
-      const selectedPaintCensus = selectedPaintPlan === undefined ? undefined : {
-        commands: selectedPaintPlan.layers.reduce((count, layer) => count + layer.commands.length, 0),
-        diagnostics: selectedPaintPlan.diagnostics.length,
-        layers: selectedPaintPlan.layers.length,
-      };
       assert(selectedScene !== undefined && selectedEvidenceAuthority !== undefined, 'MENU selected canonical Scene and evidence authority are required for provenance boundary regressions');
       const selectedSceneLoopBindings = selectedScene.preview.sampleBindings.filter(binding => binding.previewLoop !== undefined);
       const expectedSceneLoopBindings = selectedProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined).map(binding => ({
@@ -9922,6 +11411,7 @@ if (b119ConfiguredCensus.status === 'unavailable') {
     }));
       executed.push(source.label);
     }
+    assert(censusMismatches.length === 0, censusMismatches.join('\n'));
     assert(JSON.stringify(executed) === JSON.stringify(['MENU', 'HUB', 'COMM']), `configured census did not execute every real source: ${JSON.stringify(executed)}`);
     console.log(`B119 configured public-session census EXECUTED 3/3: ${executed.join(',')}`);
   });

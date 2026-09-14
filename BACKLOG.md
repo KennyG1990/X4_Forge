@@ -8,6 +8,999 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 08:15Z: Actual history CPU profile obtained; existing opt-in fixture shared with
+history, no test bodies/assertions/deadlines changed. Types/lint/list anddefaultoff/profile
+1/1firstpasses. Wholeprofile shows Canvas isDenseArray6.004s; source has quadratic names.includes
+insideindexloop. NEXT bounded linear-membership repair retaining every refusal guard. Corpus
+byte checks6.429s separately retained. Plan:docs/plans/2026-09-14-b119-history-cpu.md.
+No product repair yet; fullgate129pass/2fail/1flake and fullgoalPARTIAL. All jobs stopped/guardsPASS.
+
+2026-09-14 07:58Z: Trace localization VERIFIED, repairs pending. History slow inside click
+dispatch (~2s) plus separate API waits; retry still slow with shorter API responses. Lua
+roundtrip abort coincides with workspace identity change, not reload; existing scheduler
+cancels old authority,44/44 cancellation/late-result tests PASS. Need exact runtime reason
+before any scoped oracle correction; do not ignore all aborts. Plan:
+docs/plans/2026-09-14-b119-history-trace-diagnosis.md. Next actual history CPU attribution.
+No product/test edits or new E2E. Full gate remains129passed/2failed/1flaky; goal PARTIAL.
+
+2026-09-14 07:48Z: Complete full integration FAILED:129passed/2failed/1flaky/0skipped,
+132discovered/terminal. History60000ms timeout twice; Lua file journey workspace GET
+ERR_ABORTED twice; MENU corpus-status GET timeout then passing retry. PNG export/row movement
+passed first. All410inputs/protected bytes stable;17artifacts contained; isolated tree gone,
+only Deckwright3100 unchanged.16current captures inspected; no native/full-menu parity claim.
+Plan:docs/plans/2026-09-14-b119-full-integration.md. NEXT: bounded causal trace/request-lifecycle
+diagnosis before repairs or another full run.9journeys/3menus/12references/package/native remain.
+No executable/Git/external/install/game/config writes. Full builder PARTIAL; goal active.
+
+2026-09-14 07:09Z: Right-edge text repair bounded VERIFIED. Native-aligned declared bounds
+restore full glyph without changing glyph coordinates/fonts/widths. Scene196/Paint215/
+Canvas172 allPASS; types/lint and4rendered journeys PASSfirst. Fullsource/UndoRedo/sibling/
+inspector checks retained. Plan:docs/plans/2026-09-14-b119-aligned-text-bounds.md.
+NEXT: reconcile/audit then complete full integration rerun; previous126/130 remains FAILED.
+Full9journey/3menu/12reference/packaged/native obligations remain. No Git/external writes.
+
+2026-09-14 06:58Z: Right-edge clipping diagnosis VERIFIED, repair pending. Exact-font probes
+show Scene clips2.5625px from right-aligned final e even for single-letter caption; glyph
+fits cell and declared width. Glyphs use native rightanchor but widget clip remains left-
+positioned. See docs/plans/2026-09-14-b119-right-edge-text.md for evidence and repair gates.
+No product edits; previous inspector checkpoint remains current. Full builder PARTIAL.
+
+2026-09-14 06:50Z: Inspector Apply scroll continuity bounded VERIFIED; Alignment286->286,
+missing-property position clamped correctly. Full mounted/scroll10negatives+positives,
+finaltypes/lint,3browser journeys PASSfirst, exactsource/history/UndoRedo/sibling pixels.
+Plan:docs/plans/2026-09-14-b119-inspector-scroll.md. Full builder PARTIAL; next unresolved
+right-edge glyph appearance, then remaining fullgoal9journeys/3menus/12references/gates.
+No Git/external/install/native writes; all jobs terminal and isolated stack gone.
+
+2026-09-14 06:30Z: Omitted text properties rendered-tested; neighboring-label clipping
+repair bounded VERIFIED. Plain text now uses source-backed row-top anchor, all clips retained.
+Scene195/195,Paint215/215,Canvas172/172,final types/lint/review and4browser journeys PASSfirst.
+Exact Lua/history/UndoRedo/unchanged-sibling pixels + actual-font geometry evidenced. Plan:
+docs/plans/2026-09-14-b119-text-top-anchor.md. No Git/external/install/native writes.
+Full builder PARTIAL. Next: inspector Apply scroll286->0 and unresolved right-edge glyph
+appearance; full integration/installed/native/3menu/12reference/9journey obligations remain.
+
+2026-09-14 05:51Z: Omitted text-property authoring implemented, PARTIAL. Exact source owner
+and call-specific field matrix full suite PASS; final types/lint PASS. Existing draft/CAS/
+selection/history reused, old bytes/comments preserved. New Add-property UI and actual palette/
+property/UndoRedo browser test are written, NOT rendered-verified. Final mounted rerun and
+browser proof next; do not substitute source tests for UX. Plan/checkpoint/AAR:
+docs/plans/2026-09-14-b119-missing-properties.md. No Git/external writes; full goal unchanged.
+
+2026-09-14 05:00Z: Named alignment selector + existing width/row-padding/alignment editing
+focused VERIFIED; exact Lua/history/Undo/Redo/pixels and locked recovery PASS2/2first,
+static/mounted/review PASS. Whole goal PARTIAL. [REPRODUCED] inspector scroll227->0 on
+Alignment Apply; preserve same-element scroll next. Larger required gap: plain inserted Text
+has no omitted-property authoring; extend existing source/CAS owner. Right-aligned final-glyph
+clipping is a visual hypothesis pending geometry/paint/native investigation. Plan/evidence:
+docs/plans/2026-09-14-b119-layout-controls.md. No Git/external writes; all gates remain open.
+
+2026-09-14 04:40Z: Game overlays accessible beside canvas, outside Inspect; bounded VERIFIED.
+Existing guide owners/geometry preserved, advisory warning visible. Static/mounted/keepouts/
+review PASS,3browser journeys PASSfirst; four contexts, guide toggle and Off exact pixel
+restoration with Lua/history unchanged. Popup/context screenshots inspected. Whole goal PARTIAL;
+next ordinary dimensions/spacing/alignment property authoring. Full130/package/native/3menu/
+12reference remain open. docs/plans/2026-09-14-b119-overlay-toolbar.md. No Git/external writes.
+
+2026-09-14 04:23Z: Caller-only continuation fallback repair focused VERIFIED. Removed eager
+discarded preview request; current profile retained through source Undo/Redo. No cache or
+validator change. Static/owner/scenario/mounted and unchanged3browser journeys PASSfirst.
+Observed clicks lower, still seconds; whole goal PARTIAL. Next ordinary layout/keep-out
+authoring and real-menu proof, not indefinite micro-optimization. Plan:
+docs/plans/2026-09-14-b119-continuation-fallback.md. No Git/external writes.
+
+2026-09-14 04:08Z: Four-entry complete-projection cache candidate REVERTED. Static/owner/
+mounted checks passed but real browser scenario B recognition failed after Undo twice.
+Exact original source/test bytes restored; same3 browser journeys PASSfirst/0flake.
+No net product change or speedup claim. Do not repeat this cache approach without explaining
+the migration/restoration mismatch. docs/plans/2026-09-14-b119-owner-replay-cache.md.
+
+2026-09-14 03:49Z: Instrumented small-menu Apply counts repeated across two attempts:
+14layout projections/32full validations,22session project calls,4scenario replays.
+Diagnostic run FAILED60s timeout; measurement PARTIAL (Undo/Redo/production counts absent).
+Same test with instrumentation off PASS1/1first, original history/source/pixels retained.
+No product changes. Next reconcile repeated work at existing session/scenario owner, without
+weakening validators. docs/plans/2026-09-14-b119-action-counts.md; exact summary/guards retained.
+
+2026-09-14 03:33Z: Read-only realMENU evidence census narrows latency investigation:
+combined shared-reference revisits only4.35percent in unsampled diagnostic pair; each full
+validation279-321ms, projection945ms. No validator cache or product edits. Next count actual
+per-action projections/validations/model checks and distinguish dev/production behavior;
+do not equate low-impact per-graph dedup with solving15-20s interactions. Evidence/limitations:
+docs/plans/2026-09-14-b119-evidence-traversal-census.md. All410inputs/protected guards unchanged.
+
+2026-09-14 03:22Z: Startup repair VERIFIED: Tailwind now scans src+index.html, not artifacts/
+docs. Full315frontend files/42,762candidates and generated CSS preserved;452nonfrontend files
+excluded. Vite lifecycle/typecheck/lint/isolated production/exact review PASS. Cold3journey
+browser PASS3/3 first attempt,0flakes; CSS27.103s->0.493s, navigation27.827s->1.242s observed.
+All410inputs/protected guards unchanged,stackgone. ROADMAP close and
+docs/plans/2026-09-14-b119-tailwind-source-scope.md. Next remaining synchronous authoring
+latency (~3s fixture, prior15-20s realMENU), not more cold-load investigation. Full130/ordinary
+layout/keep-out/recovery UX and whole nine-journey/fidelity/package/native/release goal remain open.
+
+2026-09-14 03:02Z: Two unchanged empty scenario stages skipped; real-owner fail-first
+semantic digest identical before/after, calls4/4/4/4/4 ->2/2/3/3/4. All prior tests retained.
+Scenario/Session/Pipeline125/125/mounted/tsc/lint/exact review PASS. Fivejourney rendered
+gate FAILED4pass/0fail/1flaky/0skip: named scenarios/New-menu/populated rows/realMENU first
+PASS; scenario B history first60s timeout/retry32.1s PASS. All408inputs/protected guards
+unchanged,stackgone,X4absent. MENU Apply19.7s,Undo15.1s,Redo14.7s vs22.4/18.3/18.2s prior:
+measured improvement, still unacceptable latency. Flaky attempt initialNavigate27.8s; cause
+not isolated. Next cold-navigation trace + remaining synchronous validation work; no relaxed
+gates. Full goal remains PARTIAL. Plan/close/AAR:docs/plans/2026-09-14-b119-scenario-empty-stages.md;
+evidence matching test-results root. Prior AST unit preserved as protected nonowner.
+
+2026-09-14 01:58Z: Two-owner history/export repair implemented; typecheck/lint green.
+PNG export full focused journey PASS10.6s; new-menu history old empty-selection mismatch
+reconciled, but first60s timeout/retryPASS56s means overall focused gate FAIL1pass1flaky.
+All source/pixel/history negatives retained, no deadline change. Guards intact,stackgone.
+Plans:2026-09-14-b119-history-export-contract-repair.md and
+2026-09-14-b119-real-menu-performance-profile.md under docs/plans. Existing realMENU CPU
+fixture completed: first120s timeout/retry~1.9min completed, gateFAIL1flaky. Allguards intact,
+ownedtreeGone. Valid firstCPU capture identifies evidence validation21s inclusive and a
+remaining whole-AST type scan3.5s inclusive; retry timing rejected for one negative delta.
+Next proposed repair: reuse existing exact-source numericExpressionSourceAstNodes helper
+in LayoutProgram's remaining numericExpressionStructureError query (new plan/baseline first).
+No optimization implemented yet. Diagnostic close/AAR and terminal handles in handoff.
+No blind green rerun or full-suite/native/release claim; full goal stays PARTIAL.
+
+2026-09-14 00:30Z: Full rendered gate COMPLETED/FAILED:126passed,4failed,0flaky,0skipped,
+all130 terminal. Four cases fail both attempts: New-menu history old selection-empty
+expectation, PNG export raw targetID label, populated-row history60s and realMENU120s
+timeouts. Preserve exact negatives/deadlines; inspect selection timing and multi-second
+interaction stalls before fixing. Full report/trace and12inspected PNGs retained.
+Artifact/cache isolation runtime checks PASS:17per-test artifacts,new per-runstudio cache,
+408inputs/50artifact-cache/4realLua/19protectedfiles+membership unchanged, ownedtreeGone,
+3200/3201 free,Deckwright3100/PID69604 untouched. Plan/AAR:
+docs/plans/2026-09-13-b119-output-isolation-repair.md; full-verification.json in matching
+test-results folder. No code edits during run,Git/publish/install/native proof. B119 PARTIAL.
+Next: bounded history/export/performance reconciliation, then full gate; keep-out ordinary
+controls and dimension/spacing/alignment source-authoring journey remain required.
+
+2026-09-13 23:10Z: User resumed with Qt Designer interaction reference. Six-file artifact/
+cache isolation repair implemented; default/alternate-port selftests,db11checks,tsc/lint
+green with protected bytes intact. Full rendered gate NOT run; machine-state answer pending.
+Plan:docs/plans/2026-09-13-b119-output-isolation-repair.md; matching receipt under test-results.
+Status PARTIAL, not a release/native/full-builder close. Prior repair-approval pause lifted.
+
+2026-09-13 22:41Z: Goal BLOCKED after three resumed approval-boundary turns. Five proposed
+repair files match frozen baseline; test processes/listeners absent. Audit complete within
+its source boundary; explicit artifact/cache repair + full-rerun approval still needed.
+
+2026-09-13 22:36Z: Resumed read-only output audit found fixed capability PNG/B116 JSON
+writers and shared studio-cache wiring in addition to marketing.29TSfiles/25specs/97calls;
+408frozen inputs/membership/HEAD unchanged. No repair/rerun; approval still required.
+Record:docs/plans/2026-09-13-b119-e2e-output-audit.md. Goal ACTIVE/PARTIAL, fresh blocked audit.
+
+2026-09-13 14:07Z: Goal marked BLOCKED after the same screenshot-isolation approval boundary
+recurred for three consecutive goal turns. Implementation remains PARTIAL, not complete.
+Unsafe test unchanged, owned test processes absent,3200/3201 free. Await explicit go for
+output-isolation repair and full rerun; preserve existing images and all acceptance criteria.
+No code/test/image changes during rechecks. Full details in the integration plan/handoff.
+
+2026-09-13 14:02Z: Full integration gate FAILED/safety-paused. Existing untracked marketing
+test wrote10PNGs into a hard-coded external Antigravity task folder and copied10 into repo
+showcase evidence. Agent preflight missed direct writers; no pre-run image backups, no
+deletion/restoration attempted.130tests discovered,86raw ok lines before deliberate stop;
+no completed structured report, builder cases unreached. Owned Playwright stopped with
+identity check; supervisor treeGone,Deckwright preserved.408inputs+membership,34olderinputs/
+4realLua/19protectedfiles+membership unchanged; those guards did not include screenshot paths.
+Plan/AAR: docs/plans/2026-09-13-b119-full-integration-gate.md; matching receipt.json listsimpact.
+Await explicit user direction to repair output isolation/audit remaining writers and rerun;
+do not silently skip showcase or change its behavior checks. No further Git/install/release/
+protected writes. Existing external/repo images left as found after run. Degradation checkpoint.
+Coverage also found keep-out controls only under Inspect and no established selected-layout
+dimension/spacing/alignment rendered journey. Preserve these actual product obligations.
+FullgoalACTIVE/PARTIAL,gameVerified=false; first occurrence of this approval blocker.
+
+2026-09-13 13:44Z: Structural-history editing context bounded VERIFIED (ROADMAP).
+Sampled-row move/Add row/Add text/3Undo3Redo now restores the fresh selected inspector and
+permits direct continued editing. Exact existing source-splice/retained-span mapping;
+absent nodes remain unselected, explicit user/context changes cancel dormant restoration.
+Final rendered4/4first-attempt,0flakes; full-mounted/presentation/history/type/lint, ten
+inspected PNGs,36pins/26independent/34olderinputs/4originals/19protectedfiles+membership pass.
+Plan/AAR: docs/plans/2026-09-13-b119-structural-history-selection.md; matching receipt.json.
+Fail-first and two test-contract/locator failures preserved. No Git/release/protected
+writes; degradation checkpoint. Earlier caption-discovery close remains in ROADMAP.
+NEXT reconcile actual nine-journey and broader gate coverage, then run the next missing
+safe integrated gate; do not substitute further isolated fixture counts for completion.
+OPEN: numeric full0/singular2..128/source-manifest/Scene counterfactual; three-menu12ref,
+full E2E/precommit/build/package/install/independentdeployedbytes/native/release gates.
+Unknown sibling autoheight dependencies still need all-inputs/Inspect; contextual ownership
+is not a complete layout-dependency explanation. FullgoalACTIVE/PARTIAL,gameVerified=false.
+
+2026-09-13 11:17Z: Blank reopened working view RESOLVED; bounded VERIFIED close in ROADMAP.
+Existing camera resets on workspace/source/menu navigation, retains same-menu working zoom.
+Fail-first visible-reopen check reproduced offscreen content; repaired browser2/2first-attempt,
+full mounted/presentation/type/lint and independent source/guard checks pass. Plan/AAR:
+docs/plans/2026-09-13-b119-reopen-working-view.md; matching receipt.json. NEXT OPEN: actionable
+missing-input recovery for actual MENU (Position Y4 among52controls), then retained broader
+selection/numeric/three-menu/twelve-ref/full/native/release obligations. No Git/protected
+writes; full goal ACTIVE/PARTIAL. Previous focus unit's blank-reopen limitation is superseded.
+
+2026-09-13 10:54Z: PARTIAL selected-element working view. Explicit Focus selection now
+shows real SEND/TRANSMIT at100%, preserves source/history/profile/native pixels, and refocuses
+after pan at1280/1024. Full presentation/mounted/type/lint and rendered2/2first-attempt pass.
+BUT [REPRODUCED] real-MENU-reopened.png is blank at100% despite equal native pixels: visible
+reopen UX is NOT complete. Plan/AAR:docs/plans/2026-09-13-b119-selection-focus.md; evidence:
+test-results/b119-selection-focus-20260913/receipt.json (historical PARTIAL). The visible
+reopen issue is resolved by the11:17Z checkpoint above. Contextual missing-input recovery
+(Position Y4 among52controls) stays OPEN. Keep whole-frame fit and all source/pixel gates.
+34olderinputs/26independentpins/4real sources/19protectedfiles+membership unchanged; owned
+stack gone,Deckwright3100 untouched. No Git/release/protected writes. Degradation checkpoint.
+All broader nine-journey/three-menu/twelve-reference/full/native/release obligations remain.
+
+2026-09-13 10:26Z: MENU editing refusal resolved; VERIFIED bounded close moved to ROADMAP.
+Exact Layout-owned per-instance metadata now admits unrelated direct scalar edits while
+retaining helper/conditional/structural/stale/copied/foreign locks. Unchanged full MENU
+browser journey first attempt1.9m,1/1,zero flakes; independent untouched/edited export bytes
+and reopened pixels agree. Plan/AAR: docs/plans/2026-09-13-b119-menu-instance-authority.md;
+matching receipt.json. All required core/type/lint/mounted checks green; protected state
+unchanged, owned stack gone. No Git/release/protected writes; degradation checkpoint made.
+The original tiny20.1%Fit-menu working-view problem is now addressed by explicit focus,
+with the reopen limitation recorded above. Obscure input recovery among52controls remains.
+Existing whole-frame fit behavior is preserved in deriveX4UiBuilderMenuBounds. Do not
+fabricate geometry or weaken source/pixel authority.
+Final-Redo selection continuity, broader numeric/three-menu/twelve-ref/full/native/release
+obligations remain. Full goal ACTIVE/PARTIAL, gameVerified=false.
+
+2026-09-13 09:29Z: VERIFIED bounded reference-query repair supersedes the latency blocker
+below. Existing covering-index path selection plus bounded full-row reads preserves all
+238 parity cases and six million-row manifest probes. Unchanged complete Lua journey
+passes FIRST attempt in 57.6s, all 16 checkpoints including restoration; rendered/API
+batch 14/14, zero flakes, source/export bytes and protected-state cleanup independently
+checked. Plan/AAR: docs/plans/2026-09-13-b119-reference-query-repair.md; matching receipt.json.
+No schema/cache/validation-policy/test-body or Git/release/protected writes. Full goal
+ACTIVE/PARTIAL: next resolve actual MENU _choiceY source/scenario consumer and visibly edit
+the real menu; do not rerun already-green HUB/COMM/Lua merely for activity. Selection
+continuity, broader numeric/reference census and all full/native/release gates remain.
+
+2026-09-13 09:09Z: PARTIAL shared validation latency. Actual save3.65s; ~75%of sampled
+save time in db.ts queryReferenceFiles. Million-row query plans scan generation before
+class filter. Covering-key class-first probe faster with exact narrow-row/count parity,
+but full-field broad variant stalled>90s and was stopped; no production repair made.
+Original Lua retry completes all16checkpoints/restoration, first attempt still120s:
+zero-flake gateRED. Next bounded full-record query experiment in
+docs/plans/2026-09-13-b119-validation-latency.md; matching receipt/AAR.22pins/protectedinputs
+unchanged, owned processes gone. No Git/release/native claims. Degradation checkpoint made.
+
+2026-09-13 08:42Z: PARTIAL roundtrip continuation. HUB now passes first attempt1.6m, exact
+heading/source/UndoRedo/export/independent reopen/pixels/collision; screenshots inspected.
+Full Lua journey still120s both attempts after15completed checkpoints through Discard, failing
+final original-workspace restoration. Traces isolate repeated6-8s workspace HTTP reads; most
+already have equal local/server state. Save and background compile both synchronously run
+full validation; shared API blocking is the next profiling lead, NOT yet diagnosed owner.
+Plan/AAR:docs/plans/2026-09-13-b119-roundtrip-continuation.md; matching test-results receipt.
+16pins/36inputs/4real sources/19protected files+membership unchanged; tree gone, no product/
+test-body/Git/protected writes. MENU _choiceY consumer720 exposes a preview input but remains
+unverified. All full-goal/native/release obligations retained. Degradation checkpoint made.
+
+2026-09-13 08:18Z: VERIFIED bounded COMM source-lookup performance repair. Existing
+LayoutProgram line/type indexes remove measured repeat scans; original-byte probe10.27s ->
+6.87s (~33%, one comparison), complete program/evidence/catalog hashes identical. Full
+core/mounted/type/lint gates pass; unchanged unprofiled real COMM journey1/1,0flakes with
+edited/reopened screenshots inspected. Journey still1.9m under120s; partial shell/header
+only, not complete runtime body or general responsiveness proof. Plan/AAR and verified
+history:docs/plans/2026-09-13-b119-comm-responsiveness.md and ROADMAP. Evidence:matching
+test-results receipt.json. Next: unchanged HUB/original Lua gates, then exact MENU dependency;
+all broader goal/native/release obligations remain. Protected inputs clean, owned stack gone,
+Deckwright3100 untouched. No Git/release/protected writes. Degradation checkpoint made.
+
+2026-09-13 06:16Z: PARTIAL COMM caption repair. Consumed header preview samples no longer
+lock the unrelated direct DOSSIER literal; exact caption/callback/sibling/inverse and authority
+negatives pass. Full SourceEdits170/170+new regression,Layout914/914,mounted,tsc/owned lint pass.
+Actual unchanged COMM journey completes edit/UndoRedo/export/reopen/pixels/collision on retry;
+first attempt120s at reopened workspace equality, so zero-flake gate remains RED (1flaky).
+Trace observes click20s and state reads6-7s; cause not diagnosed. Next: profile actual slow
+journey and exact sync state without raising deadlines. Plan/AAR:docs/plans/2026-09-13-b119-comm-caption-editing.md;
+evidence:test-results/b119-comm-caption-20260913/receipt.json. All4real sources/19protected files,
+independent owners and E2E spec unchanged; owned stack gone. No Git/release/protected writes.
+Full9journeys/3menus/12references/MENU/HUB/original Lua/full release/native gates remain required.
+
+2026-09-13 05:36Z: PARTIAL real-menu visual Lua roundtrip gate. Actual HUB edit/Undo/Redo/
+export/reopen/collision passes only on retry (zero-flake gate RED). COMM renders with one
+explicit preview header sample but literal DOSSIER has locked property controls. MENU remains
+refused on unresolved dynamic layout. Original Lua journey hits120s in both attempts; first
+fails original-workspace restoration sync after staged/discard recovery, not a diagnosed
+rendering failure. Third run1passed/2failed/1flaky; stack/bytes protected and clean. Plan/AAR:
+docs/plans/2026-09-13-b119-real-menu-roundtrip.md; matching test-results receipt. Next: diagnose
+COMM sourceEditCatalog lock, then exact MENU dependency and timing/cleanup failures; preserve
+full goal/native/release gates. No production code or Git/release/protected writes this unit.
+
+2026-09-13 04:44Z: VERIFIED bounded long-text/settings/recovery authoring journey. Repaired
+mixed/blank no-wrap height, sampled Wrapping Apply, and profile changes discarding preview
+inputs. Real browser6/6 plus primary-inputs1/1; all required focused/full source-render suites,
+tsc/owned lint pass. Plan/AAR:docs/plans/2026-09-13-b119-long-text-recovery.md; evidence:
+test-results/b119-long-text-recovery-20260913/receipt.json. Protected bytes/processes clean.
+Full goal ACTIVE/PARTIAL: advance real imported-menu edit/export/reopen; numeric downstream,
+all9journeys/3native menus/12refs/packaged/full E2E/precommit/public release gates remain.
+No Git/release/mod/game/config/install writes. Earlier long-text open status below superseded
+only for this bounded fixture, not a claim that the complete product has been verified.
+
+2026-09-13: VERIFIED bounded sampled-row visual authoring. Move the sampled rows themselves,
+Add row/Add text,3Undo+3Redo preserve exact source/consumer inputs/saved scenario/pixels.
+Actual browser5/5,0flakes; full SourceEdits170/170,mounted SourceEditor,scenario/history,
+tsc pass; full lint0 with600repository warnings, owned5files0warnings before/after.
+Plan:docs/plans/2026-09-13-b119-sampled-row-authoring.md; evidence:
+test-results/b119-sampled-row-authoring-20260913/receipt.json. Existing owner admission
+and canonical scenario-order repair; prior tests/guards preserved. No Git/release/mod writes.
+Full goal PARTIAL: loop structural coverage, long-text recovery, numeric downstream,
+all9journeys/3native menus/12refs/packaged/full-release gates remain. Final Redo clears
+element selection; not a claim of complete selection-continuity UX. Previous independent-
+sample structural checkpoint remains in2026-09-13-b119-structural-preview.md.
+
+Historical checkpoint (structural red resolved by the follow-on above):
+2026-09-13 02:48Z(localSep12): scenario B chosen after scalar edit A now survives Undo/Redo,
+including first mounted history projection and rendered inspector selection. Browser3/3,0flakes;
+storage migration quota preserves prior bytes/current preview. Planned scenario continuation PARTIAL:
+new required row-move-with-active-inputs test remains RED at the exact structural operation ledger;
+insertion continuation not reached. Do not waive it or clear preview inputs to obtain green.
+Plan:docs/plans/2026-09-13-b119-scenario-continuation.md; evidence/receipt:
+test-results/b119-scenario-continuation-20260913/receipt.json. Existing SourceEdits170/170,history,
+scenario,tsc pass; all old SourceEditor regressions pass before new red assertion. Next: reconcile
+reparseStructuralAndProveUnsafe and active preview-input authority, preserving all existing negatives.
+No commits/pushes/releases. Full9journeys/native3menus/12references/long-text/numeric/release gates remain.
+
+2026-09-13(localSep12): computer-local named-scenario Save/Select/Remove/reload VERIFIED bounded;
+full scenario program and goal PARTIAL. Plan:docs/plans/2026-09-13-b119-named-scenarios.md;
+evidence:test-results/b119-named-scenarios-20260913/. Rendered3/3,0flakes, clean owned teardown.
+Two distinct source inputs restore readable pixels; quota/read/duplicate/stale-record recovery and
+fresh public path->loop->sample authority pass. Lua/source history unchanged. Next priority:
+selected scenarioB survives source editA/UndoRedo, including pre-App-ack render. This is NOT done.
+Saved scenarios currently require exact source revision; UI states that limit. Screenshot review found
+long-text table unresolved; its pixel-only apparent pass was rejected, artifacts retained. Long-text
+recovery, numeric matrix/Scene counterfactual, all9journeys/3native menus/12references and release gates
+remain. Prior byte-backed public two-scenario gate stays verified; do not rerun unchanged proof.
+
+2026-09-13 00:48Z(localSep12): actual numeric validator proxy admission repaired/verified; original
+numeric continuation and full builder remainPARTIAL. Plan:docs/plans/2026-09-13-b119-numeric-validator.md;
+evidence:test-results/b119-numeric-validator-20260913T0024Z/. Descriptor-first cloneability admission
+refuses proxies0getters/0throws. Actual fail-first910/914 ->914/914,all old assertions preserved.
+Six configured pure suites exit0; strictlint/tsc0. Chromium2/2,0flakes/0skips,visuals inspected,
+ephemeral stack gone,19guards/4real sources unchanged. Wider0..128/coherent-manifest/replay matrix,
+Scene order counterfactual,real-byte two-scenario probe and all broader product/release/native gates
+remain open. Rendered tests authorized; this computer only; no commit/push/release. See handoff.
+
+2026-09-13 00:16Z(localSep12): placeholder Paint fixture bounded VERIFIED; full goal ACTIVE/PARTIAL.
+Plan:docs/plans/2026-09-12-b119-placeholder-paint.md; proof/receipt:
+test-results/b119-placeholder-paint-20260913T0005Z/. Unsupported affectRowHeight in positive Input
+fixture caused unknown nested text. Fixed fixture,not production; old tint assertions retained and
+two negatives preserve unknown text/known geometry. Paint215/215,tsc/strictlint/whitespace0;47pins,
+4real sources,19guards preserved. Old P5 red below closed. No new rendered/native/release proof.
+Original numeric/scenario/native/authoring gates remain. Latest user reply renews rendered-test
+authorization; isolated3200/3201 only, preserve external3100 and live canvas. No commit/push.
+
+2026-09-12 14:05Z: Paint/Preview reconciliation PARTIAL; full goal ACTIVE/PARTIAL.
+Plan:docs/plans/2026-09-12-b119-paint-pipeline-reconciliation.md;
+evidence:test-results/b119-paint-pipeline-reconciliation-20260912/receipt.json and verified-checkpoint.json.
+Test-only corrections use exact source/consumer proofs: saved/current/public sheet56identities match;
+Pipeline three retired dimension gaps source-bound at both scales,125/125. Paint full suite now212/213,
+remaining P5 placeholder tint/glyph assertion FAILED and retained: PLACEHOLDER preview-default text
+has0glyph commands. Diagnose exact colorSourceFixture; no assumed cause or production fix yet.
+tsc/strict2lint/whitespace0;47pins/4real sources/19guards stable,no new rendered/native/release proof.
+Existing literal test names retained; this progress does not replace six-suite/scenario/native gates.
+Degradation checkpoint called; continue with this one remaining Paint failure,not another builder restart.
+
+2026-09-12 13:40Z: exact table-property warning recovery bounded VERIFIED; full goal ACTIVE/PARTIAL.
+Plan:docs/plans/2026-09-12-b119-table-property-warnings.md; receipt and independent verified-proof:
+test-results/b119-table-property-warnings-20260912T1301Z/. Only addTable Y/tabOrder proof categories
+changed, kernel failures retained. Actual before/current controls preserve all geometry/input facts;
+MENU5/COMM7/selectedMENU5 resolved warnings removed,HUBunchanged. Final configured Layout886/886,
+Scene194/194 all3menus,tsc/strict4lint0,actual rendered6-input apply/clear1/1,0flakes all pass. Actual
+unobstructed screenshots viewed; exact source/history/bitmap inverse.46pins/3sources/19guards stable,
+treeGone,3100unchanged. No release/push/install. Unconfigured Layout rerun failure retained; explicit
+corpus env is mandatory per command. Original six-suite numeric/proxy/replay/scenario/native/release
+obligations remain; next reconcile PaintPlan/Pipeline consumers, not blind count changes.
+
+2026-09-12 12:55Z: COMM numeric diagnostic PARTIAL; combined Scene still FAILED193/194.
+Plan:docs/plans/2026-09-12-b119-numeric-downstream-continuation.md;
+evidence:test-results/b119-comm-reconciliation-20260912/semantic-joins.json and receipt.json.
+Saved/current producer control identifies four retired inputs with preserved source-derived geometry;
+seven additional PROPERTY warnings join exact consumed samples/known facts. Scale warnings unchanged7.
+Likely cleanup category mismatch (table vs property); targeted counterfactual/negative tests needed,
+NOT blind349-gap acceptance. Only28test-diagnostic lines, no production change. Tsc/strictlint0;
+45other inputs/19guards/source hashes stable, no validators/stack/game,3100unchanged. Degradation
+checkpoint after control setup/output errors. Full numeric, authoring, scenario/native gates remain.
+
+2026-09-12 12:25Z: fresh-row Input repair bounded VERIFIED; full goal PARTIAL.
+Plan:docs/plans/2026-09-12-b119-fresh-row-input-height.md;
+receipt:test-results/b119-fresh-row-input-20260912/receipt.json. Existing palette serializer now emits
+explicit editable height25 (starter policy); imported heightless source/kernel/renderer unchanged.
+Actual fail-first row1/Input0 and browser empty-content failure retained. Final SourceEdits170/170,
+full mounted/tsc/strict3lint,real six-case browser6/6,0flakes pass. Actually viewed fresh Input and its
+text update;573->785inner text pixels, exact previous menu Lua plus height only.46pins/19guards stable,
+stackgone,3100untouched. No push/install. Next: mandatory numeric consumer reconciliation and remaining
+real-menu/scenario/native journeys; checkpoint after avoidable lookup/schema errors, no scope expansion.
+
+2026-09-12 12:04Z: six remaining authoring browser cases PASS6/6,0flakes, but unit/goal PARTIAL.
+Plan:docs/plans/2026-09-12-b119-authoring-journey-reconciliation.md;
+receipt:test-results/b119-authoring-journeys-20260912/receipt.json. Three occupied-cell Add-row recoveries,
+14history checkpoints/9exact inverses,11movement checkpoints/8exact inverses proven. Input hierarchy
+default-content label fixed via existing Scene selection; full mapper/mounted/tsc/strict3lint pass.
+Actual screenshot exposes fresh fourth-row Input NOT visibly drawn despite source/property/hierarchy
+success. NEXT: diagnose real row/widget/text geometry vs working populated-row Input, add positive ink/
+height browser assertion, repair existing owner. Cause unknown; do not weaken tests or invent geometry.
+46pins/19guards stable,stackgone,3100unchanged. No push/release/install. All numeric/scenario/native gates remain.
+
+2026-09-12 11:35Z: source-composition diagnostic repair visually confirmed; unit PARTIAL because the
+required PaintPlan regression remains baseline-red10/12 (aic_sheet expected55samples,actual56).
+Original renderer reproduced10 invented glyph-fragment edges; fixed renderer172/172,tsc/strict2lint0.
+Same full Lua browser1/1,0flakes,16checkpoints; actual image now readable without internal red barcode,
+outer diagnostic boundaries retained. Exported Lua bytes/hash identical pre/post.46pins/19guards unchanged.
+Plan:docs/plans/2026-09-12-b119-diagnostic-boundaries.md; evidence:test-results/b119-diagnostic-boundaries-20260912/.
+Next:six remaining authoring journeys and exact numeric consumer reconciliation; scenarios/native fidelity
+still mandatory. No release/push/install; fresh continuation after fixture-error degradation checkpoint.
+
+2026-09-12 11:12Z: clean unchanged Lua journey1/1,0flakes,all16checkpoints; bounded workspace selection
+VERIFIED (ROADMAP entry), full goal PARTIAL. Evidence:test-results/b119-workspace-selection-clean-20260912/receipt.json.
+Prior flaky receipt retained; no source/network/assertion change to rerun.45pins/19guards stable,stackgone.
+NEXT priority: diagnose visibly outlined/overlapping preview text from actual returned screenshot;
+existing remaining six rendered journeys, numeric, scenarios and full native fidelity are still required.
+
+2026-09-12 11:03Z: workspace-scoped File/Menu view selection implemented; overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-workspace-view-selection.md; receipt:test-results/b119-workspace-selection-20260912/receipt.json.
+Only two SourceEditor files changed. Component-lifetime immutable-ID view Map, no persistence/history/source
+writer changes. Full mounted(P7scope21/21),Session,WorkspaceSource,tsc,strict2lint pass; graph refreshed.
+Actual unchanged Lua journey reaches ALL16checkpoints on BOTH attempts including automatic original
+File/Menu/bitmap restoration. First failed one ERR_NO_BUFFER_SPACE request; retry passed cleanly.
+Zero-flake gate remains RED:0passed/0failed/1flaky. Independent roundtrip proof and actual screenshot saved.
+NEXT: fresh continuation, clean isolated rerun; preserve flaky evidence, investigate if it recurs. Then six
+remaining rendered cases/numeric/scenarios/native fidelity.45pins/19guards stable,stackgone,3100untouched.
+No Git/push/release/install/game/config/external ledger writes; degradation checkpoint recorded in handoff.
+
+2026-09-12 10:40Z: source-grounded menu choices/import auto-selection implemented; overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-menu-target-selection.md; receipt:test-results/b119-menu-targets-20260912/receipt.json.
+Primary Menu excludes non-building helpers; Inspect retains full exact catalog. Layout880/880+9new,
+full SourceEditor(P7scope21/21),tsc,strict6lint pass. Full real Lua now proves import/bitmap preservation/
+visual edit/UndoRedo/second export/collision/staged recovery on both attempts. Final return to original
+workspace restores exact ID/bytes but loses File/Menu selection, leaving canvas empty; full test0/1,0flakes.
+Evidence-led aggregate budget amendment60->120s documented; all individual limits/oracles retained.
+NEXT: exact workspace-scoped view selection restoration, preserving blank workspace and stale guards.
+45pins/19guards stable,stackclean,3100untouched. No Git/push/release/live/config writes. All larger duties remain.
+
+2026-09-12 10:08Z: name-only independent creation fixed; real Lua import now succeeds; overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-empty-workspace-import.md; receipt:test-results/b119-empty-workspace-20260912/receipt.json.
+Reused Blank template/stable domain ID; boot demo/explicit workspaces/source guards unchanged.
+Workspace-isolation3/3,0flakes; receipt16/16,registry33/33,templates36/36,full Source/SourceEditor/tsc pass.
+257lint warnings exactly baseline-matched,0errors/new diagnostics. Actual Lua FAILED0/1,0flakes only
+at auto-menu-selection: import accepted and actual server workspace/Lua bytes exact, but6broad targets
+include helpers. Next: source-grounded menu-builder candidates, not name guessing/test relaxation.
+45pins/19guards stable,clean stack,3100unchanged,no Git/release/live writes. All broader duties remain.
+
+2026-09-12 09:49Z: exact Lua import refusal diagnosed; repair SPECIFIED, overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-empty-workspace-import.md; evidence:test-results/b119-lua-import-origin-20260912/result.json.
+Actual failed browser workspace replay returns generated-shadowing-source: name-only new independent
+workspace inherits three enabled Escort demo widgets through server DEFAULT_WORKSPACE fallback.
+Changing only uiWidgets=[] in an isolated replay makes the same Lua import pass; no live data changed.
+Next: genuinely blank name-only creation, preserving bootstrap demo/explicit workspaces/receipt/CAS;
+do not relax correct import guards. No product owner edits this turn. Prior39pins/19guards unchanged,
+no active tests or games,3100unchanged. Original Lua and all remaining full-goal duties stay required.
+
+2026-09-12 09:39Z: workspace-scoped canvas lifetime repaired; overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-workspace-canvas-lifetime.md; receipt:test-results/b119-workspace-canvas-20260912/receipt.json.
+SourceEditor clears old DOM/receipt/export identity on immutable scope change, preserves same-scope
+stale recovery. New mounted scope cases red19/21 on old owner,green21/21 after repair; full SourceEditor,
+Session,tsc,strict2lint pass. Real Lua FAILED0/1,0flakes: both attempts now prove empty independent
+canvas (null/no hierarchy/source/target); inspected native trace screenshot confirms. Next import
+refuses current source unavailable/changed; exact owner cause NOT diagnosed. Later history/collision
+unreached.39pins/19guards stable,clean stack,3100unchanged,no Git/release/live writes. Next: real import
+owner refusal reconciliation; preserve CAS/async guards. Numeric/scenario/native/full-goal duties remain.
+
+2026-09-12 09:12Z: corpus comparison loop optimized after actual CPU profile; overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-authoring-cpu-profile.md; receipt:test-results/b119-authoring-cpu-20260912/receipt.json.
+Unprofiled AddText/Apply now~1.0–1.2s vs~6.1s. Full-byte checks remain; corpus41/41, Session,
+SourceEditor,whole tsc/strict3lint pass. Pipeline123/124 red reproduces identically on exact original
+owner; six-creator deployed-fixture geometry remains required, not weakened. Real Lua stillFAILED0/1,
+0flakes, but both attempts now pass exact save/export/reload and expose independent-workspace stale
+canvas (old8931opaque pixels despite no source). Next: workspace-scoped canvas/receipt reset while
+preserving same-workspace stale recovery.39pins/19guards stable, clean stack, no Git/release/live writes.
+
+2026-09-12 08:48Z: real-corpus readiness and normal startup-popup preparation repaired; overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-real-reference-readiness.md; receipt:test-results/b119-manifest-ready-20260912/receipt.json.
+Third real Lua browser FAILED0/1,0flakes:1,028,384file genuine index ready, New menu/Add text exact
+source/local/server/current-canvas checkpoints pass. Property edit visibly applied; save checkpoint
+unproven as global60s expires. Trace AddText6111ms/Apply6121ms, final6007ms main-thread longtask;
+Apply finishes~55ms before deadline. Not a diagnosed save mismatch. No download/import/history close.
+Only test spec changed; tsc/strict lint/discovery/path negatives pass; exact diff reviewed; graph fresh.
+38input pins/19guards unchanged, no added/deleted guard files,3200/3201gone,3100same30164,HEADsame.
+No active validator, Git, push, release or real mod/config writes. Next: bounded actual CPU profiling
+of authoring stalls; preserve60s UI budget and all source/history oracles. Full goal remains open.
+
+2026-09-12 08:06Z: full SourceEditor suite now PASS0 after repairing a nameless import fixture.
+Async9/9 plus real-owner positive preflights; selection/ack9/9,input6/6,export6/6,New-menu25/25 and
+both history suites pass. SourceBundle negative gate, whole tsc and strict two-test-owner lint PASS0.
+Plan:docs/plans/2026-09-12-b119-import-guard-reconciliation.md; receipt:test-results/b119-import-guards-20260912/receipt.json.
+Actual Lua browser journey remains FAILED0/1,0flakes: corrected mounted empty-state/XML expectations;
+New menu creates/selects, but no canvas. Trace proves real ephemeral reference manifest idle/no generation.
+Earlier contextual fixtures simulate ready metadata; do not substitute that for this real-service gate.
+Screenshot:browser-new-menu-refused.jpeg under receipt directory; no download/import checkpoints reached.
+35input pins/19persistent guards unchanged; owned stack fully gone; no production/Git/release/config writes.
+Next:existing reference manifest build/readiness in owned ephemeral harness, with a new bounded plan.
+All9journeys/3menus/12refs, remaining rendered failures, numeric COMM and computer-local scenarios stay open.
+
+2026-09-12 07:40Z: scalar Undo/Redo selection repair browser PASS1/1,0flakes; overall PARTIAL.
+Plan:docs/plans/2026-09-12-b119-history-element-continuity.md.
+Receipt:test-results/b119-history-selection-20260912/receipt.json.5owners changed; existing exact
+history/source owners retained; fresh node/inspector restored, stale/user-interrupted carries refused.
+Both mounted history regressions,pure,whole tsc,strict5lint passed. Full SourceEditor still FAILED:
+3Lua async import matrix cases fail identically on exact pre-repair baseline(6/9). No assertion removed.
+Final property E2E regenerates later selectors from restored source, retains all recovery checks.
+35pins stable/30protected unchanged/19persistent guards unchanged/clean stack cleanup. Graph refreshed.
+Next:diagnose actual import refusal,status/test-fixture mismatches and~6sauthoring stalls; remaining
+7prior rendered failures not rerun. No release/install/native/Git/push. Full9journeys/3menus/12refs open.
+
+2026-09-12 rendered checkpoint:16targeted cases FAILED8passed/8failed/0flakes,all terminal.
+Receipt:test-results/b119-rendered-20260912T064340Z/final-receipt.json. Clean lifecycle/cleanup,
+35inputs+19persistent guards unchanged;3200/3201closed/Deckwright untouched. Five screenshots inspected.
+Undo loses element selection;3widget cases fail old copy expectations; row-count locator and
+empty/refused fixture mismatch stop2journeys early;2long journeys time out with~6saction stalls.
+No source repair or release. Next:guarded fresh-node history continuation, test reconciliation and
+stall profiling. Plan:docs/plans/2026-09-12-b119-rendered-authoring-validation.md.
+Ken cleared rendered tests, chose computer-local saved scenarios, and allows only public-release pushes.
+
+2026-09-12 06:35Z: direct numeric continuation PARTIAL; MENU selected semantic census repaired,
+with input-state/diagnostic identity/dimension guards and original downstream assertions preserved.
+Actual old frame-category counterfactual878/880; byte-restored Layout880/880; tsc/strict lint0.
+Full Scene remains FAILED193/194: later COMM now expects56/30/26/342gaps but observes52/26/26/349.
+COMM expectations unchanged; its extra gaps need semantic diagnosis before any correction.
+Receipt:test-results/b119-numeric-downstream-direct-20260912T061337Z/final-receipt.json.
+25inputs/no gate drift/only Scene test changed/24protected unchanged; no owned Node remains.
+UI builder remains the priority; Ken wants X4 AiLive mod work next, only after builder completion.
+Machine clearance and local-only scenarios subsequently answered above; no native close.
+
+2026-09-12 06:04Z: direct Astra implementation of primary Preview inputs is frozen PARTIAL.
+Friendly typed/multiline controls and distinct Apply/Discard/Clear use existing sample authority;
+technical details remain in Inspect. Pure/whole-repo tsc/strict5lint passed;25inputs/no drift,
+5expected owner changes/20protected unchanged. Plan:docs/plans/2026-09-12-b119-primary-preview-inputs.md.
+Evidence:test-results/b119-primary-preview-inputs-final-20260912T060133Z/receipt.json.
+Full SourceEditor/16-targeted-browser/real host/installed/native not run. Named scenarios and numeric
+integration remain required. No Luna worker or release/commit/config/game write.
+
+2026-09-12 current checkpoint: Ken ended Luna-only execution; Astra now implements/tests directly.
+No Luna worker remains running. This supersedes older active-worker entries below.
+Property/recovery source checkpoint accepted/frozen PARTIAL: final pure/tsc/strict5lint/diff passed,
+all25 inputs unchanged through final pins and parent05:40:44 recheck. Evidence:
+test-results/b119-property-recovery-20260912T-final-revalidation-3/parent-source-checkpoint.json.
+Browser/rendered/installed/native acceptance remains missing. Next direct unit: primary preview-input
+controls using current sample authority and distinct Apply/Discard/Clear. Named scenario persistence
+choice remains pending and required; numeric integration and all nine journeys/3menus/12references stay open.
+
+2026-09-12 04:40Z: property/recovery UX in progress with sole native Luna/max McClintock
+01a093bb-8303-7de3-be97-55583e58221b,five owners,25input/five-snapshot baseline:
+test-results/b119-property-recovery-baseline-20260912T034536978Z/baseline.json.
+Contract:docs/plans/2026-09-12-b119-property-recovery.md. Russell completed/PARTIAL and CLOSED;
+numeric continuation is deliberately resequenced, all its remaining gates stay required. First mapper
+delta reviewed; correct false unsupported notices and hidden unknown property names before acceptance.
+First pure source-issued mapper gate now passes (gate6 child0,04:31:16Z); controlled unit corpus only.
+SourceEditor wiring/markup tests landed and are under review: scoped Inspect ownership/focus, valid
+aria-target, friendly failure copy and final gates pending. No rendered or native UX pass yet.
+Receipt: release baseline directory/parent-pure-checkpoint.json. Same worker continues; no restart.
+04:54Z: corrected integrated tsc implementation-4 PASSES child0 at04:48:34Z,both raw streams0.
+Parent current complete component review confirms scoped Inspect ref/unique aria-target/preventScroll,
+preserved edit/receipt authority and complete technical records. Same worker corrects old markup
+fixture fields and E2E top-level target selection, then finishes coverage/final frozen static gates.
+Parent25input census:5owned changed/20same/0nonowner. Evidence: release baseline directory/
+parent-integration-review.md. Actual rendered/native acceptance remains pending; no source-authority change.
+05:00Z: pure gate8,tsc implementation-5 and intermediate five-file lint all child0; final lint must
+enforce --max-warnings 0. Markup fixture corrections/negatives and new E2E journey authored. Parent
+requested full declared post-recovery edit/history, Input/row/table/reason, actual hierarchy and
+visible diagnostic/canvas invariance checks before final freeze. Same live worker; browser still gated.
+05:12Z: expanded E2E now authors post-recovery edit/undo/redo and mounted-canvas preservation. Source
+review rejected a second guessed hierarchy locator (Title is also a Widget). Same worker acknowledged
+and is checking the exact fixture through existing producers before final corrections/freeze. Parent
+degradation call made; no further expansion or release claim. Machine/scenario questions reasked05:07Z.
+
+2026-09-12 03:40Z: current Scene rerun193/194 after parent-approved41 catalog correction; next red is
+selected-loop Layout sample/gap census, not the corrected catalog. Preserve semantic/source guards.
+Receipt:test-results/b119-numeric-downstream-refresh-20260912T031227030Z/parent-continuation-checkpoint.json.
+Russell continues same seven-owner integration. Next UX record docs/plans/2026-09-12-b119-property-recovery.md
+is SPECIFIED/not released; friendly properties/recovery, scenarios and full actual-interface gates remain.
+
+2026-09-12 03:21Z: fresh sole Luna/max Russell01a0939c-df48-7cc2-ace9-84050d6b232e confirmed live;
+Beauvoir completed/frozen/closed. Remaining contract:docs/plans/2026-09-12-b119-numeric-downstream-continuation.md.
+Fresh24input/seven-snapshot baseline:test-results/b119-numeric-downstream-refresh-20260912T031227030Z/.
+Accepted focused SourceEdits168/168,Layout880/880; final Scene193/194,selected-profile guards pass,
+selected-loop41vs46 reconciliation remains. Full source/UI/installed/native/fidelity goal stays PARTIAL.
+
+2026-09-12 01:15Z: Layout contributor checkpoint accepted: current-byte877/877,finaltsc/exact2lint/diff0,
+controlled old-selector876/877 missing sibling/table-x IDs;24input census2changed/22same. Receipt:
+test-results/b119-numeric-downstream-baseline-20260912T000856339Z/parent-layout-checkpoint-accepted.json.
+Same Beauvoir now on turn01a0932e-c101-7922-ba7f-5e6415cf68b1 for remaining original seven-owner work:
+independent Scene/SourceEdits schemas, numeric provenance links, full replay/matrix, six pure gates and
+inert real-byte probe (parent review before execution). Full UI/native/fidelity scope stays PARTIAL.
+
+2026-09-12: remaining numeric downstream integration RELEASED to sole native Luna/max Beauvoir
+01a092f4-38f8-7432-a1a9-a549630dddab. Seven-owner contract:
+docs/plans/2026-09-12-b119-numeric-downstream-integration.md. Fresh24input/seven-snapshot baseline:
+test-results/b119-numeric-downstream-baseline-20260912T000856339Z/baseline.json. No new passing result yet.
+Parent reviews scenario/history/recovery integration; all actual-interface/native/fidelity obligations remain.
+
+2026-09-12 00:53Z: first downstream Layout checkpoint876/876 independently parsed, all872prior names
+retained once/green; matching pre-fix872/876 preserved. Still PARTIAL: review found covered-column-only
+dependency selection misses sibling residual-width/usable-width inputs. SAME Beauvoir is correcting within
+Layout before downstream expansion. Receipt: baseline directory/parent-first-green-layout-review.json.
+No new browser/native/full-integration pass; latest handoff records live handle and exact next review.
+
+2026-09-11 final: original numeric-root source unit VERIFIED. CallModel148/148,Layout872/872,all139/824old
+names retained,post-rename tsc/exact4lint/whitespace0. Complete reviewed diff;24input census4owners changed/
+20same;worker CLOSED/not_found;code graph refreshed. Evidence: b119-scalar-root-baseline-20260911T212356911Z/
+parent-final-review.json under test-results. Source-root close moved to ROADMAP; full B119 stays in_progress.
+Next: parent numeric plan's full contributor/downstream/public-corpus checks, then scenarios/history and
+all actual-interface/packaged/native/fidelity gates. No scope narrowing or new UI/native/release claim.
+
+2026-09-11 22:11Z: parent accepted the original-root test-only checkpoint and re-released the SAME
+Mencius for its original four owners. Full test diffs reviewed,24inputs checked(2tests changed/22same),
+tsc and both exact test lints pass. Source-root implementation is NOT yet verified. Latest section in
+docs/plans/2026-09-11-b119-original-numeric-input-roots.md resolves fallback/lexical-shadow/alias-record
+oracles; worker implements then runs serial focused/static gates and freezes. Full product scope remains.
+
+2026-09-11 21:27Z: original numeric-root contract RELEASED to sole native Luna/max Mencius
+01a0925d-e4bb-7de0-bb56-49ee549d5135,CallModel/Layout+2selftests only,sole Node runner,no descendants.
+Plan:docs/plans/2026-09-11-b119-original-numeric-input-roots.md. Fresh24input/4byte-equal snapshots at
+test-results/b119-scalar-root-baseline-20260911T212356911Z/baseline.json. Parent independently reviews
+downstream validation; no implementation result inferred. Full numeric/scenario/history/UI/native scope remains.
+
+2026-09-11 21:18Z: bounded numeric fallback source checkpoint VERIFIED. Configured Layout824/824,
+CallModel139/139,tsc/exact2lint/whitespace0;821old names preserved+3new controls. Parent independently
+reviewed final-cell530/no-override/model-preservation proof, full diff and24input census(2changed/22same).
+Newton CLOSED/not_found. Evidence:test-results/b119-numeric-fallback-baseline-20260911T205035041Z/
+parent-final-review.json. Next: remaining scalar-root/member-index authority, full numeric contributors/
+downstream/public-corpus, then scenarios/history and full actual-interface/native/fidelity gates.
+No new coding batch released; full goal PARTIAL. No Git/release/protected/external writes.
+
+2026-09-11 20:52Z: fallback reconciliation RELEASED to sole native Luna/max Newton
+01a0923e-298d-74e1-96dc-78f163424368, Layout production/selftest only. Compact confirms active.
+Execution contract: docs/plans/2026-09-11-b119-numeric-fallback-reconciliation.md. Fresh24input/2snapshot
+baseline:test-results/b119-numeric-fallback-baseline-20260911T205035041Z/baseline.json, all previous hashes
+match. Parent reviews separate scalar-alias source authority read-only. Full numeric/product gates unchanged.
+
+2026-09-11 20:46Z: recovery checkpoint reviewed; Plato CLOSED/native not_found. Two original recovery
+failures and five new regressions pass. Configured Layout818/821,3legacy fallback failures,0skips;
+CallModel139/139,finaltsc/exactlint/whitespace0. All816old names retained;2owner deltas/22unchanged inputs.
+Receipt: test-results/b119-nested-numeric-inputs-recovery-baseline-20260911T200348387Z/parent-recovery-freeze.json.
+Next: fresh2owner baseline and Luna for the20:09Z specified fallback repair; no release yet. Full numeric,
+scenario/history, actual-interface and native/fidelity acceptance remains PARTIAL. No Git/protected writes.
+
+2026-09-11 20:06Z: fresh full frozen review complete;9owner hashes/15nonowners unchanged. Recovery batch
+released to sole Luna/max Plato01a09213-2425-7920-a7e0-14c9f1279c2e, Layout production/selftest only.
+Fix stale compound warning/missing-leaf recovery, then serial focused/static gates and freeze. Parent
+reconciles old target-wide fallback tests that offered overrides for already-known geometry; no blanket
+override restoration authorized. Plan final20:04Z section and new recovery-baseline200348387Z govern.
+Full source/downstream/scenario/history/UI/native/fidelity requirements remain; no goal completion.
+
+2026-09-11 19:53Z: intermediate numeric freeze recorded; Mendel CLOSED/native not_found. No live worker.
+Last Layout run811/816/ex1 matches prior parsed stdout byte-for-byte;9owner hashes independently match,
+no nonowner drift. Receipt:Stage2 baseline directory/parent-intermediate-freeze.json. Fresh full-diff review
+before next Luna batch. Earlier CallModel139green predates current source. All five failures/full gates remain.
+
+2026-09-11 19:50Z: third Layout feedback811/816/skips0;810original check names retained once. New
+nested/helper and conditional-owner cases progress, but3root-fallback and2recovery checks fail. Actual
+width80still has stale unknown-width warning; missing mx is not named. Assertions remain required.
+Same Mendel collecting intermediate freeze after degradation checkpoint; do not dispatch another worker
+until authoritative stop. Receipt:Stage2 baseline directory/parent-layout-third-feedback.json. Full goal PARTIAL.
+
+2026-09-11 19:38Z: second Layout feedback806/815; parent parsed actual JSON and compared all810original
+names (none missing/duplicated). Four new nested/helper behavior checks pass. Nine existing failures:
+root-fallback regression plus production fixture/selected-function parameter integration. Exact base-input
+fixture migrations authorized in numeric plan19:36Z, all geometry/negative/causal assertions preserved.
+Same Mendel active; receipt:Stage2 baseline directory/parent-layout-second-feedback.json. Full goal PARTIAL.
+
+2026-09-11 19:28Z: first Stage2 Layout run FAILED before summary at original sampled-local-expansion
+source-evidence guard. Same Mendel repairing numeric-catalog fallback; no historical test weakening.
+Parent reviewed full initial diff and stderr;5authorized owner deltas/24inputs, no unexpected changes.
+Evidence:Stage2 baseline directory/parent-layout-first-feedback.json. Numeric/full goal remain PARTIAL.
+
+2026-09-11 19:08Z: first Stage2 CallModel batch has logged139/139green; parent parsed the raw result,
+confirmed all136original check names remain passing, and read complete production/test deltas.
+Numeric or and ordinary table-member control checks pass; the new group-node assumption was reconciled
+to the actual parser's exact precedence tree. Same Mendel remains active and advances into Layout.
+Full numeric slice and all product gates remain PARTIAL; parent receipt:Stage2 baseline directory/
+parent-callmodel-green-feedback.json. No parent Node execution or additional worker.
+
+2026-09-11 18:31Z: nested-input Stage2 RELEASED to fresh native Luna/max Mendel
+01a091bd-22f0-74d3-b5ab-35437cc96a77 (sole Node runner;4production/5test owners; no descendants).
+Source-known local arithmetic and exact helper-caller parameter design reconciled in current nested-input
+plan's final section. Fresh24input/9snapshot baseline:
+test-results/b119-nested-numeric-inputs-stage2-baseline-20260911T183037400Z/baseline.json.
+Parent reviews real-menu compatibility read-only. No completed implementation claimed; all full-goal gates remain.
+18:40Z parent source review records HUB runtime-selected pcall dispatch and MENU tonumber normalization
+as distinct real-menu acceptance boundaries; direct-helper numeric tests do not prove those paths.
+SHEET screen-derived geometry must remain profile-owned. Details and source hashes are in the numeric plan.
+
+2026-09-11 18:10Z: nested numeric Stage1 core fail-first evidence reviewed; production unchanged.
+CallModel136/137 and Layout811/815/skips0 exit1; all946previous green checks retained. Only two intended
+test files differ among24inputs. Nietzsche CLOSED/not_found; no live workers/test handles.
+Plan:docs/plans/2026-09-11-b119-nested-numeric-preview-inputs.md. Receipt under baseline directory:
+test-results/b119-nested-numeric-inputs-baseline-20260911T173225165Z/parent-stage1-frozen-review-20260911T180940Z.json.
+Next: fresh-context review of source-known alias/parameter authority and test coverage limits, then
+bounded native Luna production release. No Stage2 release yet. All interface/native/full-goal gates remain.
+
+2026-09-11 17:18Z current next work: numeric dependency SliceB and scenario-preserving edits/history/
+recovery remain required. The explicit-zero automatic-height repair is now VERIFIED SOURCE-LEVEL and
+recorded in ROADMAP: real-corpus174/174 across9cases,15source/workspace preservation checks,24frozen
+source inputs and8real assets match; seven independent source/static gates and graph refresh pass.
+Evidence:test-results/b119-explicit-zero-text-height-parent-20260911T164500483Z/real-corpus-parent-audit.json.
+Lorentz CLOSED/not_found; no live workers or parent tests. Do not repeat this repair or its green gates.
+Full B119 remains PARTIAL (~45% judgment), including all nine actual-interface journeys and native/
+three-menu/twelve-reference proof. Fresh machine clearance remains unanswered; continue safe source work.
+
+2026-09-11 16:28Z: automatic-height producer fix implemented in the exact3-owner scope. Worker Layout810/810
+and Scene193/193 pass; parent inspected the raw results and production diff, but independent replay remains.
+Evidence:test-results/b119-explicit-zero-text-height-20260911T162430083Z/. Same Aristotle completes remaining
+pure/static gates and frozen public probe, then parent reviews/replays and closes worker. Other21census inputs
+unchanged. Literal alias works through existing canonicalizer; no new parser defect established by raw bypass.
+Full goal remains PARTIAL; all interface/package/native/three-menu/twelve-reference gates remain required.
+
+2026-09-11 15:38Z: numeric-dependency diagnostic independently reproduced, production unchanged.
+Explicit height=0 text controls project Layout but refuse Scene; omitted-height controls produce accepted
+Scene/Paint. Plan:docs/plans/2026-09-11-b119-explicit-zero-text-height.md;3owner snapshots hash-verified.
+Parent receipt:test-results/b119-numeric-dependencies-reconcile-parent-20260911T153700294Z-receipt.json.
+Fresh Luna/max Aristotle01a09122-cf6b-7ae2-8771-68024b1d6208 now owns the exact3file test-first
+automatic-height producer repair. Lagrange CLOSED/native not_found; numeric B/scenario work remains next.
+All actual-interface/package/native/fidelity gates remain. No source-level diagnostic is a product close.
+
+2026-09-11 current state: census test repair is VERIFIED and moved to ROADMAP; full B119 remains PARTIAL.
+Receipt:test-results/b119-census-reconciliation-parent-stage2-20260911T143357603Z/receipt.json.
+Independent Scene192/192, Pipeline124/124, Layout800/800/skips0, SourceEdits164/164,
+EditorSession/typecheck/exact lint/diff pass;24inputs stable. Sole Luna CLOSED/not_found; no running tests.
+Next required source work: numeric dependency SliceB and scenario-preserving edits/history/recovery.
+Prerequisite probes dispatched to sole Luna/max Lagrange01a090f9-3153-7463-9320-197a3bdab074:
+new test-results/b119-numeric-dependencies-reconcile-* only; no production/selftest writes released.
+Next experience gate: full SourceEditor test and actual isolated authoring walkthrough after fresh machine
+clearance. All nine interface journeys, packaged/native and three-menu/twelve-reference obligations remain.
+Do not repeat the completed historical comparisons or rebuild the E2E isolation harness.
+
+2026-09-11 12:50Z final real-menu scalar source checkpoint PARTIAL; Kepler CLOSED/not_found.
+Final receipt:test-results/b119-partial-scalar-parent-reviewed-20260911T1208Z/final-receipt.json.
+Independent HUB24/24, SourceEdits164/164, Layout800/800/skips0, Session/BuilderPresentation/types/lint pass.
+Scene191/192 and Pipeline121/122 remain red with entire logs identical to recorded baseline; not waived.
+24inputs stable after final batch and graph. Four baseline artifacts renamed .ts.snapshot, same bytes;
+whole-project tsc green, tsconfig unchanged. Graph log confirms11377nodes/28738edges/360communities.
+Next: exact historical Scene/Pipeline reconciliation, scenario-preserving edits/recovery and numeric SliceB.
+At12:54Z native Luna/max Anscombe01a09088-4589-7b50-b72a-bc33eeda9044 dispatched STAGE1 probes only:
+docs/plans/2026-09-11-b119-census-reconciliation.md. No source/test-expectation write permission yet.
+All actual-interface/package/native/three-menu/twelve-reference obligations remain. Machine clearance unanswered.
+
+Historical 2026-09-11 partial real-menu scalar contract IN_PROGRESS / PARTIAL:
+docs/plans/2026-09-11-b119-partial-scalar-editing.md. Sole native Luna/max Kepler
+01a09009-100b-7ea3-a995-8fdb7d673cf0 owns SourceEdits/Layout source+selftests; stage2 released10:57Z.
+At12:08Z parent independently passes SourceEdits164/164,24stableinputs; additional tests/refusal order reviewed.
+Receipt:test-results/b119-partial-scalar-parent-reviewed-20260911T1208Z/receipt.json.
+Worker genuine-HUB geometry21/21 reviewed; parent positive-area/equality audit recorded beside receipt.
+Final negative probe correction/coverage, zero-skip/static freeze and independent full-probe run remain.
+Preserve structural all-applied gates and exact corpus/model/ledger authority. No product/visual close claimed.
+Reconciliation correction: localExpansion is copied through program.profile; test replay before adding infrastructure.
+Source-bound scenario edits and friendly recovery remain required subsequent work. No browser/protected/Git authority.
+
+2026-09-11 10:20Z unreachable-body parent close: bounded parser repair independently verified; full goal
+PARTIAL. Gibbs CLOSED. Parser136/136, Layout800/800/skips0/fixtureNotReady0, SourceEdits156/156,
+EditorSession, types/lint/whitespace pass; independent parser16/16 and assignment4/4.24 stable inputs.
+Scene191/192, Pipeline121/122 and HUB title/0editable remain red with exact prior-A4 evidence unchanged.
+Receipt:test-results/b119-unreachable-body-parent-reviewed-20260911T1012Z/receipt.json. Local code graph
+refreshed; no browser/native/release/Git proof. Next: specify real-menu scalar editing from
+docs/plans/2026-09-11-b119-partial-scalar-reconciliation.md; preserve expanded evidence and preview inputs.
+
+2026-09-11 unreachable-body unit DISPATCHED: native Luna/max Gibbs01a08fd6-56b9-7203-995d-e18f6912113c
+owns only CallModel source/selftest plus worker logs under the full plan
+docs/plans/2026-09-11-b119-unreachable-body-isolation.md. Two original snapshots hash-match8C44CB53/8349308D.
+Fail-first then pure CallModel/Layout/static validation; no browser/protected writes or product close.
+Parent read-only reconciliation addresses future partial-menu scalar editing without relaxing structural locks.
+Read docs/plans/2026-09-11-b119-partial-scalar-reconciliation.md: source reproject intentionally omits
+preview samples/paths, and early gate relaxation could expose structural catalogs. No code change there.
+Parent15-case parser acceptance probe is syntax-green but UNRUN until Gibbs freezes.
+
+2026-09-11 A4 parent checkpoint (historical): Gauss CLOSED; no workers or parent commands then remained. Complete bounded
+diff review and independent24-input-stable checks confirm assignment4/4, Layout799/800 (only upstream
+if-false red), CallModel127/127, SourceEdits156/156, EditorSession PASS and tsc/strict lint/whitespace0.
+Receipt:test-results/b119-numeric-alias-parent-a4-reviewed-20260911T092105Z/receipt.json. Full A/goal PARTIAL:
+Scene191/192, Pipeline121/122 and genuine HUB projected-title acceptance remain red; HUB0editable.
+Exact source-bound diagnostic proves Input placeholder14 glyphs plus99 other glyphs at both profiles.
+Session57 versus directPipeline54 warnings have3 identified context/expansion differences, not automatic
+proof of the historical test expectation delta. Preserve tests; see numeric plan final close.
+Next important unit: separately specify parser unreachable-body isolation; dead scalar/property/math
+effects are reproduced and dead-call metadata must remain. B dependencies and real-menu editing stay open.
+
+2026-09-11 08:55Z: numeric A frozen candidate FAILED required gates / full goal PARTIAL (~45% judgment).
+Avicenna closed. Parent CallModel127/127, SourceEdits156/156 and EditorSession pass; Layout797/798,
+Scene191/192, PreviewPipeline121/122 fail; tsc has6 new diagnostic-helper errors.13 stable inputs.
+Real HUB now11 applied operations/9 geometric nodes but0 editable; x27/y27/requestedWidth1866 and
+safety negatives pass, full-table status remains partial because nextTab() is unknown. No UI/native claim.
+Receipt:test-results/b119-numeric-alias-parent-frozen-20260911T0833Z/receipt.json. Parent assignment probe
+reproduces3 unsupported assignment associations. Sole fresh native Luna/max Gauss01a08fa7-4c33-7551-bdf1-be331cc4c296
+owns only LayoutProgram/test for documented A4 corrections; no parent acceptance against moving code.
+Upstream if-false descriptor loss, changed sample/glyph evidence, schema B, partial-menu editing and
+browser/package/native obligations remain required. See numeric plan and concise SESSION-HANDOFF.md.
+
+2026-09-11 07:46Z: numeric A test-first run independently reviewed:791/794, skipped0, all790 prior
+checks green; two chain positives and one hostile aggregate red. Getter invoked4times despite refusal;
+constant modulo fixture was testing existing static folding, now being corrected without removing it.
+Same Luna Avicenna remains ACTIVE, owns only LayoutProgram/test. Production still baseline511CA88F;
+no repair accepted yet. HUB acceptance probe authored/syntax-checked, UNRUN. Evidence/next actions:
+docs/plans/2026-09-11-b119-numeric-alias-dependencies.md and SESSION-HANDOFF.md. Full goal PARTIAL.
+
+2026-09-11 07:23Z: numeric alias/dependency workstream specified in
+docs/plans/2026-09-11-b119-numeric-alias-dependencies.md. Slice A exact transitive alias proof assigned to
+native Luna Avicenna01a08f59-3b7e-75e3-afd7-43594f702bb8, owns only LayoutProgram and its selftest.
+Parent baseline CallModel127/127/Layout790/790, zero skips,13 hashes stable;2 snapshots/receipt under
+test-results/b119-numeric-alias-baseline-20260911T072301Z/. Slice B sample-dependency evidence remains
+required and unimplemented; scalar whole-stream edit lock unchanged. No browser/native/product close.
+
+2026-09-11 07:05Z: C static checkpoint PARTIAL, worker Franklin completed/closed; no workers remain.
+Frozen C9E244B15/BselftestB5588B0A independently reviewed. Parent types/strict lint/whitespace, preservation
+of11 old cases/38 declarations/53 B functions, and list-only discovery12/12 all pass;25 input hashes stable.
+Receipt:test-results/b119-lua-file-roundtrip-browser-parent-reviewed-20260911T070534Z/receipt.json.
+Original discovery failures used root Playwright1.61 with @playwright/test1.63; matched-library CLI passes
+without source/dependency/config changes. Normal run-e2e already uses correct CLI. Actual B selftest/C
+browser, prior red full-browser gate, real-menu editing, packaged/native obligations remain open.
+Next safe unit without clearance: plan guarded transitive numeric alias/sample-dependency support using
+existing owners; keep the separate whole-operation edit lock. No repair implementation started.
+
+2026-09-11 06:50Z: Ohm completed/closed with no writes. Parent source/log check confirms HUB's first
+title-table geometry rejection is transitive x->mx numeric provenance. Correction07:00Z: the exact error
+is eligible for direct sample fallback; the earlier BEFORE-lookup claim was wrong. A guarded alias/dependency extension requires its own next plan;
+no patch or scalar-lock bypass authorized. C complete journey is authored; Franklin reports8 review
+corrections applied and is running allowed static checks. Parent independent frozen review remains.
+Current C9002B44F is in flight, not accepted. Browser/full selftest/package/native hold remains unchanged.
+See active Lua-file plan06:46Z/06:50Z and SESSION-HANDOFF.md. Full goal PARTIAL; no release/Git close.
+
+2026-09-11 06:35Z: viewport-only follow-up proves MENU/HUB samples are consumed and frame dimensions
+resolved, but no additional table geometry or editable elements result. Ohm01a08f28-ca1b-7093-9325-4073eccd4de4
+is a read-only HUB dependency sidecar; Franklin remains sole C writer. No runtime/cache bug claimed.
+Parent C review removed new response mocks and corrected profile/empty-state expectations. Static
+preservation of all11 old cases/all38 prior declarations passes on C5DA3499A; newer C remains in flight.
+Evidence: active Lua-file plan06:29Z and SESSION-HANDOFF.md. No browser/native/product close.
+
+2026-09-11 06:16Z: real-menu readiness diagnostic completed, not a product close. All76 targets across
+genuine MENU/HUB/COMM at1920x1080/uiScale1/default inputs expose0 builder-mapped editable nodes.
+Main displays each have1 geometric/selectable node; their scalar catalogs are locked by the current
+every-operation-applied prerequisite.8 genuine pinned corpus assets accepted;26 input hashes stable;
+corrupt-asset rejection and76 no-corpus/no-geometry checks pass. Evidence and limitations:
+test-results/b119-real-menu-readiness-parent-20260911T0615Z.log, active Lua-file plan close06:16Z.
+After current C, prioritize a source-grounded real-menu scenario and safe independent-edit reconciliation;
+do not bypass the prerequisite or count API import/export as visual authoring. Same Franklin continues
+C and two B test corrections; no product/browser/installed/native acceptance added.
+
+2026-09-11 05:56Z: B UI/static checkpoint PARTIAL; Nash completed/closed. Parent tsc/strict lint/whitespace
+PASS0 with17 inputs stable and3 verified inert snapshots. Receipt:
+test-results/b119-lua-file-roundtrip-ui-static-reviewed-20260911T0550Z/receipt.json.
+ONE Luna Franklin01a08f07-d809-7d90-909a-c92aa84ae3bd now authors C's actual downloaded-file/saved-workspace
+reopen journey plus two narrowly specified B test-assertion improvements; owns only SourceEditor.selftest
+and existing SourceEditor E2E spec. Full component/browser tests remain held for clearance, not waived.
+
+2026-09-11 validation correction: full SourceEditor selftests include isolated headless Chromium
+layout fixtures; earlier blanket browser-free descriptions were inaccurate. No actual live-app E2E
+was run in the Lua-file batch. Further full component selftests and actual E2E are held for fresh
+clearance, not removed from acceptance. Nash is now closed; Franklin owns the scoped test follow-up.
+Full B lifecycle matrix and C download/reopen journey remain unaccepted.
+
+**2026-09-10 product direction approved — SPECIFIED / FULL GOAL IN_PROGRESS:** Ken explicitly rejected
+"Lua scripting with extra steps" and approved a canvas-first real visual builder. Current product plan:
+`docs/plans/2026-09-10-b119-canvas-first-builder.md`. Keep the existing renderer/source-edit/safety owners;
+deliver visual creation, selection, editing, structure changes, undo/redo, scenarios and Lua save/reopen.
+The nine user-journey acceptance requirements supplement, not replace, existing native fidelity obligations.
+Latest02:48Z row-move checkpoint: PARTIAL. Frozen source pair independently passes parent156/156,
+configured Layout790/790zero skips, target repo-options types0, strict exact lint/whitespace0 and stable
+ten-dependency hashes. Curie CLOSED. Receipt: test-results/b119-row-rearrangement-source-parent-reviewed-20260911T0245Z/receipt.json.
+03:05Z UI checkpoint: parent independently passes Newmenu25/25, both original-spanned and portable
+multi-target histories, exact full Lua/workspace Move/Undo/Redo preservation, mapper/callback suites,
+whole-project types and strict six-file lint. Final stable snapshots/receipt:
+test-results/b119-row-rearrangement-ui-parent-reviewed-20260911T0304Z/receipt.json. Both Luna workers CLOSED.
+Historical both-disabled cause remains unproven; canvas remount is not pixel proof. NEXT: BatchC actual
+browser movement/redo-clearing spec and acceptance. Machine clearance still required before execution.
+BatchC03:35Z checkpoint: authored, independently parent-reviewed, BROWSER-UNRUN. Tesla COMPLETED/CLOSED.
+Final spec8F71D085 preserves all ten old tests byte-for-byte; +347 lines adds complete row movement,
+history and continued-edit journey. Parent target types/strict lint/whitespace pass; discovery11 tests
+and module-time independent source-oracle positives/negatives pass. No timeout/retry/oracle weakening.
+Receipt:test-results/b119-row-movement-browser-parent-reviewed-20260911T0333Z/receipt.json.
+Next: fresh machine confirmation, new live-state baseline, actual serial3200/3201 browser and teardown.
+Full goal and row unit remain PARTIAL; no installed/native/release/Git close.
+Lua open/export/reopen now PARTIAL in docs/plans/2026-09-10-b119-lua-file-roundtrip.md. Baseline source
+owner/SourceBundle tests PASS0, six inert snapshots captured, UTF-8 transport preflightPASS0. Native Luna
+Lovelace COMPLETED/CLOSED BatchA at source1AC89061/testFC04BF46. Parent owner/bundle/SourceEdits156/156,
+history/mounted UI/types/lint/whitespace pass; exact three real-menu source API roundtrips and independent
+workspace/XML/device-path probes pass on final hashes. Receipt:
+test-results/b119-lua-file-roundtrip-source-parent-reviewed-20260911T0434Z/receipt.json.
+B UI worker Nash01a08ec4-8ce4-7d62-9837-51e131257cf1 completed/closed with visible Open Lua/Export Lua;
+no UI acceptance yet. C is now test-authoring only under Franklin; browser machine-state check remains
+unanswered. Source API proof is not actual file-picker/download/reopen or native proof.
+C actual file-journey specification is now reconciled in the Lua plan: genuine downloaded disk bytes,
+saved-workspace reload, UI-created independent workspace/import/edit/history, and original-workspace
+restore. Post-switch assertions must read selected immutable workspace authority, not the fixture-bound
+readServerWorkspace helper. Prior failed-trace summary independently read back from original ZIP/verdict:
+test-results/b119-lua-file-roundtrip-parent-prior-browser-trace.json. FAIL9passed/1flaky remains, cause
+unproven; this trace-preparation step ran no browser and grants no gate waiver. B is now static-reviewed;
+next action follow the existing Franklin test worker and independently review its frozen result.
+Details: row-rearrangement plan and SESSION-HANDOFF.md; all nine full-goal obligations remain unchanged.
+Batch 1 now implements persistent canvas, source-derived hierarchy and selected-element property editing,
+plus a canonical-corpus reparse repair. Parent focused checks pass: mapper28/28, SourceEdits100/100,
+Layout751/751 with zero skips, SourceEditor/color19/19 and browser sizing3/3, final type/lint/diff.
+Ken cleared the machine gate. Third isolated SourceEditor browser run passes5/5 with0flaky, clean teardown
+and14/14 live files unchanged. Create -> title edit saves exact Lua and adopts a fresh current canvas;
+parent inspected durable screenshots/source. Plan:2026-09-10-b119-visual-menu-creation.md.
+Current follow-on: `docs/plans/2026-09-10-b119-canvas-viewport-and-selection.md` is IN_PROGRESS / PARTIAL.
+Fit menu/screen,100%/manual zoom and exact selected-element continuation are implemented. Parent focused
+UI/type/lint checks, production build, focused browser7/7 and full repository E2E111/111 pass with0flaky
+and clean live-state isolation. Repeated editing, measured resize-center, Fit recovery, mode isolation
+and native PNG invariance are evidenced. Legacy
+sidebar writer is hidden in source mode without preference/history writes. Do not call the early usable
+slice complete: actual screenshots still show a cramped authoring area and diagnostics competing with
+text; the short100% viewport can show blank frame space until panned. NEXT: reclaim ordinary authoring
+space and contextual insertion, preserving current owners and camera semantics.
+Current bounded pass: `docs/plans/2026-09-10-b119-authoring-workspace.md` — VERIFIED bounded / full goal PARTIAL.
+Parent static/UI/build and isolated browser7/7 pass,0flaky;14/14 live files unchanged, clean teardown.
+At1280x720 the canvas is714x322px (64% of editor height); title Text/Apply are visible without scrolling.
+Preview settings are keyboard-accessible and nonmutating; native PNG remains in Inspect. Worker closed.
+NEXT required unit: contextual Add widget through existing source-owned cell/row authority, not more polish.
+Current insertion plan: `docs/plans/2026-09-10-b119-contextual-insertion.md` — IN_PROGRESS / PARTIAL.
+Source-owner actual New menu Text/Button/Input insertion now passes parent107/107 plus type/lint; exact
+new-widget mapper and mounted UI pass independent tests/lint. Contextual controls and draft discard are
+implemented; actual-browser screenshots now show inserted/edited Text, Button AND Input default text.
+Constructor-only Input repair extends existing Helper-pinned LayoutProgram facts (initial nested text
+scaling, offsets/font), preserving unsupported/default/partial-setter uncertainty. Parent Layout772/772,
+zero skips, Scene192/192 with strict configured MENU/HUB/COMM3/3, regressions/type/lint and builds pass.
+Fixed reproduced New-menu-after-frozen-source-edit clone failure; parent owner/source/UI/type/lint green.
+Original three failed browser runs are preserved. Split per-kind journeys retain every oracle and the60s
+limit. Fourth gate10/10,0flaky; final fifth gate FAILED9passed/1flaky: scale-case assertions pass but a
+background GET /api/agent/workspaces reports ERR_NO_BUFFER_SPACE; retry passes. No flake waiver/filter.
+Fifth Input mask JSON is durable:empty0/inserted488/edited706, equal226x14 crop, changed signature.
+All five runs14/14livefilesunchanged, testportsclosed/treeGone:true. Workers closed; current12file snapshot
+receipt: test-results/b119-contextual-insertion-input-visible-checkpoint/receipt.json. Next: bounded trace/
+network-failure triage, remaining import/span/negative/byte and direct callback/Discard safety, then Add row
+and same-menu multi-widget journey. Screenshot read-only warning noise and3.5-5.1s frame-stall indicators
+remain observed UX issues, not fixed by splitting tests. Input validation still has one undiagnosed warning.
+Palette/history/save-reopen/real-import/native batches remain required; all nine full-goal items stay open.
+Current A completion review: parent SourceEdits128/128 passes; span/mutation/formatting/zero-getter/CAS/
+retained-ledger coverage strengthened. Required BOM Input positive exposed a secondary AST parser gap;
+containment-only success was rejected. Same Luna is correcting LayoutProgram parser-only BOM handling
+without altering source bytes; parent final SourceEdits130/130, Layout790/790 zero skips, normal tsc,
+exact lint/diff all pass independently. Final4file copies/receipt: bom-input-verified-checkpoint under
+the contextual evidence prefix. Add row source owner now frozen after parent143/143 and exact lint0,
+with all four source/LayoutProgram hashes stable; source Luna CLOSED. Focused checkpoint:
+contextual-insertion-row-source-checkpoint/receipt.json. Final UI/mapper/compiler/lint now pass independently.
+Callback fault reproduced and minimally corrected: real stale-cell negative, fresh-cell positive and9/9
+direct callback/Discard cases passed; current full component additionally passes New-menu21/21 and expanded
+callback12/12 with11 stable dependency hashes. Final normal tsc/exact5file lint/diff0 on frozen Add row UI,
+mapper and same-menu E2E spec3740A437. All workers CLOSED. Current5file copies/receipt:
+contextual-insertion-row-ui-reviewed-fourfile/receipt.json. Parent repaired/rechecked E2E source oracle
+against actual generated Lua and rejection cases. Add row is focused-integration green, NOT browser/native
+verified. Machine question unanswered; latest required browser9passed/1flaky remains FAILED.
+Current Batch3 prerequisite: `docs/plans/2026-09-10-b119-source-history.md` — PARTIAL, source checkpoint frozen.
+Accepted source transactions now feed the existing App Undo/Redo owner. Guards preserve exact workspace/
+snapshot/scope/readback identity; restored candidates use the real App sanitizer. Menu intent recovers
+through fresh selectors after guarded history restoration, without reusing old widget/draft/paint state.
+Parent full helper and mounted component suites pass: New-menu22/22, actual UIBuilder title-edit/history
+and delayed selection recovery, refusal controls and prior callback12/12. Parent actual App setter plus
+Undo/Redo/readback22/22 passes with real New-menu Lua, including absent-scope legacy compatibility.
+Normal TypeScript and tracked/untracked whitespace checks pass;12 dependency hashes stayed stable.
+Strict six-file lint remains FAILED: five unchanged App baseline warnings, zero errors; other five paths
+have no warnings. No waiver or unrelated cleanup. Browser/history/Add-row combined acceptance is pending.
+Six inert copies and exact receipt: test-results/b119-source-history-parent-reviewed-20260911T0007Z/receipt.json.
+Poincare01a08d78-e31f-7be0-be69-0a911fa74183 completed and CLOSED; no live workers. Graph refreshed.
+Review corrected a hidden App-normalization bypass, absent-scope regression and false single-select
+mock result; native headless dropdown control established the test defect. Detailed evidence/AAR in plan.
+Row movement, save/reopen and every remaining full-goal journey stay required. No browser/native claim.
+Follow-on00:28Z: row-rearrangement FULL plan SPECIFIED, source implementation assigned to native Luna
+Curie01a08dd8-a957-70b3-8502-39e5be6ffbd5 (SourceEdits pair only); parent fresh baseline143/143 exit0.
+Separate Luna Tesla01a08ddb-1914-7e11-91d1-0321c124343c completed the frozen-history browser spec and
+was CLOSED at01:03Z. Parent scoped TypeScript, strict lint,10-test discovery and whitespace pass; exact
+spec C2A7CB92 copied with receipt under b119-source-history-browser-spec-parent-reviewed-20260911T0104Z.
+Its actual-browser journey is UNRUN; full-project tsc awaits stable row-source work. No desktop execution.
+Plans:docs/plans/2026-09-10-b119-row-rearrangement.md and source-history plan's final follow-on section.
+Curie source path now reaches real generated Text/Button/Input movement/inverse: worker and independent
+parent146/146 pass, six issued directions/four rows. Parent source changed during its run, so PROVISIONAL,
+not frozen acceptance. All six directions, negative/kernel coverage and final stable checks remain open.
+At01:24Z source API explicitly frozen; schedule amendment allows disjoint Luna Schrodinger01a08e0e-8f99-
+7e80-b264-9ceb905b745f to implement mapper/SourceEditor pairs only while Curie hardens SourceEdits pair.
+Both active/inProgress. Four UI baselines under b119-row-rearrangement-ui-baseline verified. Final combined
+validation waits for both writers. No row-move UI or new history browser capability is verified yet.
+Machine question remains unanswered. Save/reopen and all other goal journeys remain required.
+Details/evidence: contextual-insertion plan's BOM/callback appendices and owner-completion-parent-summary.json.
+New addon/runtime names also need workspace/mod namespacing before release/native use.
+Recovery obligation from Batch2A: native-valid but preview-unsupported `Zekton bold` produces an unknown
+text height and whole-scene malformed-structure refusal. Preserve known independent geometry and give
+actionable unsupported-font recovery in the full-goal recovery batch; do not weaken proof guards.
+Installed 0.0.78 remains immutable; the prior rendered-release/native gates are open and deliberately
+deferred behind this approved product correction, not claimed passed. No real mod/game/save/config write.
+
 Port, do not invent: the full program will use X4 9.00's shipped `helper.lua` / `widget_fullscreen.lua`, preserve real
 Lua calls and multi-file source fidelity, add keep-out overlays, and keep game proof authoritative. The first bounded
 unit is the higher-value referee: a source-backed linter for every known silent frame/layout trap, wired through the
@@ -18,6 +1011,40 @@ output says only `No known rule violated` and `Not verified in game`.
 Primary current plan: `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`. Historical source-first records:
 `docs/plans/2026-08-10-b119-x4-ui-editor-linter-first.md` and `docs/plans/2026-08-10-b119-x4-ui-editor-source-first-design.md`.
 Owner: GitHub #41.
+**2026-09-10 authorized stable0.0.78 release — PARTIAL:** Luna's three metadata files and generated changelog are
+reviewed; root/stage/extension builds, staged probe16/16, inspector negatives13/13 and final2102-entry inspection
+pass. Exact0.0.77 rollback is verified. Publication CLI accepted0.0.78 at08:59:02Z after one failed transport and a
+guarded same-byte Node24.19 retry. Never republish0.0.78. Public direct/latest/download parity is still pending;
+no installation, reload, game/mod/save or Git operation yet. Current receipt:
+dev-docs/b119-ai-influence-dogfood/installed-release-20260910/RELEASE-RECEIPT.md. User's release/install approval
+is granted, not pending. Overall B119 and GitHub41 remain PARTIAL; nativePairB is separately gated.
+Later same-turn close: direct/latest0.0.78 and independently downloaded VSIX bytes/hash all matched; Antigravity
+CLI install/reload passed. Installed2100payload files and host manifest match, registry selects one0.0.78,
+managed sidecar42308:55835 replaces old38224, corpus/config/state hashes remain unchanged, installed134/134
+oracles pass. Computer Use detected user input in Forge and UI actions stopped. RenderedMENU/HUB/COMM acceptance
+is pending; no workspace switch/game/mod/save write, rollback, Git or external-record projection occurred.
+09:27Z continuation: Ken switched to x4 AiLive; native screenshot confirms it. Workspace gate is cleared.
+Expert navigation hit a Claude overlay, then activation reported user input; UI actions stopped without a
+successful preview change. Three-menu rendered acceptance still pending; wait for a hands-off foreground
+interval, not another workspace-switch approval. MENU/COMM hashes unchanged; no game/mod/save write.
+**2026-09-10 Astra continuation — composed-environment correction implemented / PARTIAL:** a seven-case in-memory
+parser review reproduced five fail-closed misses involving self-reference assignment/declaration receivers and a
+nested environment escape. Direct-global rejection and harmless-field controls passed. The `0.0.78` release gate
+is paused for the bounded two-file correction in `docs/plans/2026-09-10-b119-composed-environment-authority.md`.
+Native Luna owns source/test edits; no heavy, installed, rendered, game, protected-state, release, Git, or external
+acceptance is claimed. Fresh machine-state confirmation and all existing product gates remain required.
+The two-file correction now passes CallModel `127/127`, exact lint/diff checks, a worker boundary matrix `9/9`, and
+independent parent `12/12`. Review also rejected/corrected a fail-open depth cap. Both workers are closed; broad
+type/cross-layer/Graphify/full gates and installed/native proof remain pending. No current-patch release is claimed.
+**2026-09-10 resumed automated gate close — VERIFIED batch / B119 PARTIAL:** fresh machine authorization cleared
+the validation pause. Full precommit/TypeScript and official lint pass (zero errors/600 existing warnings);
+CallModel 127/127, linter 153/153, Layout 751/751 with zero skips, strict Scene 179/179 with MENU/HUB/COMM 3/3,
+EditorSession 23/23 + 7/7, SourceEdits 95/95 + causal 48/48, full canonical E2E 106/106, route integration
+496/496 with production build, and runtime-index oracles 134/134 all pass. Graph refresh is complete. Independent
+E2E receipt/teardown and final protected/source hashes pass. Evidence is in the correction plan above and
+test-results/b119-20260910-resumed-*. No release metadata, install, game/mod/save or Git mutation occurred.
+Next: stable 0.0.78 package/public/install acceptance with the standing install write gate, then separately gated
+native Pair B. Overall B119 stays Not verified in game; external service projections remain at the release boundary.
 **2026-09-09 bounded call-model verification-gap census — VERIFIED / FULL B119 IN_PROGRESS / PARTIAL:** the existing
 read-only X4 UI corpus census now attaches an always-present bounded `x4UiVerificationGapCensus`, reusing the existing
 manifest/read/analyzeLuaFiles path, `analysis.x4UiResults`, and `x4UiSummary`. It adds no scanner, parser, source
@@ -2224,6 +3251,39 @@ tracking, and direct-remote parity. GitHub #41 comment `5574824809`, Notion owne
 `3b84618e-d15b-8190-821e-c0eb96f43d5a` (`In Progress / Partial`), and Google Current Status tab `t.0` revision
 `ANLCKQk7bLVU_Vby6HAOBLoNf8eSTsrczHzKV7elPqQSuTLrr_eA6c6wXM7xgjupE4NQMQ5pvThRbLr5ty_-XUV991UEYD3Ydye9PjanX2KF`
 were written and read back with the same bounded-verified / overall-partial boundary.
+
+**2026-09-09 protected-callback plus public local-expansion checkpoint — BOUNDED VERIFIED / FULL B119
+IN_PROGRESS / PARTIAL:** exact source -> CallModel -> Layout -> Scene/Paint public-session materialization is green.
+Fail-first rawget-rebinding is 116/117 exit 1 and rawset-rebinding is 118/119 exit 1; CallModel is 119/119,
+EditorSession is 23/23 plus color-owner 7/7, Layout is 750/751 with one intentional skip, and normal/strict Scene
+both exit 0 with MENU/HUB/COMM 3/3. Exact Layout counts are MENU 57/95/31/6/15/136/296, HUB 11/19/13/2/2/4/30,
+and COMM 56/99/49/12/13/38/342 for samples/operations/applied/tables/rows/cells/gaps. COMM Scene is
+12/7/21/11/14/97/434 for tables/rows/cells/widgets/texts/glyphs/gaps; Paint is 654 commands / 491 diagnostics,
+canRender=true, gameVerified=false. Source hashes remain aic_menu.lua
+8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD and aic_comm.lua
+5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E. Full precommit, full E2E, new-patch
+package/install acceptance, same-state Forge/native pixel parity, deploy/C++ acceptance, release, and game proof
+remain open. Do not promote overall B119 beyond IN_PROGRESS / PARTIAL / Not verified in game.
+
+**2026-09-10 fresh-eyes fail-closed authority-flow hardening checkpoint — BOUNDED VERIFIED / FULL B119
+IN_PROGRESS / PARTIAL:** the parent-owned x4UiCallModel implementation and selftest now close nine previously
+escaping protected-callback families: deferred local closure capture after alias assignment; deferred local pcall
+rebind after alias assignment; logical-expression environment flow through call argument, return, and local alias;
+logical environment in index and table-constructor keys; canonical self references `_G._G`, `_G["_G"]`, `_ENV._G`,
+and `_ENV["_G"]`; and `rawget(_G,"_G")` / `rawget(_ENV,"_G")`. The fail-first aggregate was `122/123`,
+`allPassed=false`, exit `1`, with only the new causal matrix failing; the repaired CallModel is `123/123`,
+`allPassed=true`, exit `0`. The repair recognizes identity through logical operands, canonical/rawget self references,
+and replays direct local deferred functions under a copied alias set with recursion protection; it remains conservative,
+fail closed, and does not execute arbitrary Lua.
+
+Parent receipts are EditorSession `23/23` plus color-owner `7/7`, Layout exit `0` with one intentional skip, and Scene
+`179/179` with configured MENU/HUB/COMM census `3/3`. Existing materialization counts and source hashes remain as in
+the preceding checkpoint. The next boundary is the documented stable `0.0.78` release/install acceptance: wait for a
+fresh machine-state response (Antigravity state, X4 state, machine quiet), then run full `npm run precommit:check`; if
+green, follow the exact publish-before-commit package/public-parity/install sequence, with installed `0.0.77`
+rollback preserved and `Pair B` kept as a separate post-install experience gate. Do not republish during propagation
+lag, and keep B119 `IN_PROGRESS / PARTIAL / Not verified in game`; this checkpoint makes no overall-completion or
+universal-parity claim.
 
 ### B115 · Forge Capability Convergence `in_progress` (P0, PRIORITY OVERRIDE)
 

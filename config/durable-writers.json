@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "4793e64410149f3de5762188ba3f0d0168a6c2fc16a1225d2b254329600c5ef2",
+  "sourceFingerprint": "3cd9debeb30b1f13b9bd5e3f71bd7d2df92845194cf5c315267b6ac2cc7be0a0",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -458,11 +458,11 @@
     },
     {
       "file": "src/components/X4UiSourceEditor.tsx",
-      "calls": { "anchorDownload": 1 },
+      "calls": { "anchorDownload": 2 },
       "categories": ["browser-file-output"],
-      "owners": ["native UI preview PNG download"],
-      "rationale": "Downloads the native preview PNG through the browser only after an explicit user action; the PNG is a non-authoritative visual output and does not become source or deployment state.",
-      "failureContract": "Download failure reports no successful export and cannot mutate Lua source, preview state, deployment/game files, or credentials, and cannot falsely claim in-game verification."
+      "owners": ["native UI preview PNG download", "X4UiSourceEditorLuaFiles.handleExport whole-file Lua download"],
+      "rationale": "Explicit user actions download either the current native preview PNG or the selected whole Lua file. Lua export validates the source, caps UTF-8 bytes, rechecks workspace/source/selection identity, and hands a Blob URL to the browser; neither export deploys files or writes back to the workspace.",
+      "failureContract": "Staged/pending edits, stale authority, invalid source, oversized Lua, missing download support, handoff errors, and cleanup failures refuse Lua export. Both paths remove temporary anchors and revoke object URLs; feedback distinguishes browser handoff from verified file completion. Neither path mutates Lua source, deployment/game files, or credentials, or claims in-game verification."
     }
   ],
   "database": {

@@ -15,6 +15,7 @@ import {
   type X4UiVerificationGap,
   type X4UiVerificationGapCategory
 } from './x4UiCallModel';
+import { indexXmlElementSpans, xmlElementSemanticPath, type XmlElementSourceSpan } from './xmlSourceSpans';
 
 export interface X4UiSourceFileInputWithPath {
   readonly path: string;
@@ -197,6 +198,46 @@ export interface X4UiSourceSpliceResult {
   readonly reason: X4UiSourceSpliceRefusalReason | null;
 }
 
+export interface X4UiSourceBundleRegistrationFile {
+  readonly path: string;
+  readonly text: string;
+  readonly sourcePath?: string;
+}
+
+export type X4UiSourceBundleRegistrationRefusalReason =
+  | 'malformed-xml'
+  | 'locked-bundle'
+  | 'invalid-path'
+  | 'unsafe-traversal-path'
+  | 'unsafe-absolute-path'
+  | 'duplicate-registration'
+  | 'invalid-source'
+  | 'unsupported-xml-declaration'
+  | 'missing-addon'
+  | 'missing-addon-name'
+  | 'reserved-addon-name'
+  | 'missing-registration-target'
+  | 'ambiguous-registration-target'
+  | 'registration-span-mismatch'
+  | 'resulting-xml-malformed'
+  | 'resulting-source-invalid';
+
+export type X4UiSourceBundleRegistrationResult =
+  | {
+    readonly accepted: true;
+    readonly changed: true;
+    readonly bundle: X4UiSourceBundle;
+    readonly reason: null;
+    readonly detail: string;
+  }
+  | {
+    readonly accepted: false;
+    readonly changed: false;
+    readonly bundle: X4UiSourceBundle;
+    readonly reason: X4UiSourceBundleRegistrationRefusalReason;
+    readonly detail: string;
+  };
+
 interface XmlNodeLike {
   readonly nodeType?: number;
   readonly nodeName?: string;
@@ -208,6 +249,7 @@ interface XmlNodeLike {
 }
 
 interface XmlElementLike extends XmlNodeLike {
+  readonly namespaceURI?: string | null;
   getAttribute?(name: string): string | null;
   hasAttribute?(name: string): boolean;
 }
@@ -229,6 +271,7 @@ interface RegistrationCandidate {
 interface ParsedUiXml {
   readonly state: X4UiSourceXmlState;
   readonly registrations: readonly RegistrationCandidate[];
+  readonly root: XmlElementLike | null;
 }
 
 interface CanonicalSourceInput {
@@ -327,6 +370,11 @@ function normalizeContainedPath(rawPath: string | undefined): PathNormalization 
   return { kind: 'safe', key: normalizedSegments.join('/') };
 }
 
+/** Reuse the bundle's contained-path authority for creation-time collision checks. */
+export function normalizeX4UiSourcePath(rawPath: string | undefined): PathNormalization {
+  return normalizeContainedPath(rawPath);
+}
+
 function parseUiXml(uiXml: string): ParsedUiXml {
   const issues: X4UiXmlIssue[] = [];
   let document: XmlDocumentLike | undefined;
@@ -385,7 +433,8 @@ function parseUiXml(uiXml: string): ParsedUiXml {
 
   return {
     state,
-    registrations: freezeArray(registrations.map(candidate => freezeObject({ ...candidate })))
+    registrations: freezeArray(registrations.map(candidate => freezeObject({ ...candidate }))),
+    root: root || null
   };
 }
 
@@ -799,6 +848,507 @@ export function projectX4UiSourceBundle(bundle: X4UiSourceBundle): X4UiSourceBun
   return freezeObject({
     uiXml: bundle.uiXml,
     luaFiles: freezeArray(luaFiles)
+  });
+}
+
+interface RawXmlToken {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+interface BoundXmlElement {
+  readonly element: XmlElementLike;
+  readonly span: XmlElementSourceSpan;
+  readonly opening: RawXmlToken;
+  readonly openingTag: string;
+  readonly selfClosing: boolean;
+  readonly closing?: RawXmlToken;
+}
+
+interface XmlInsertion {
+  readonly start: number;
+  readonly end: number;
+  readonly replacement: string;
+}
+
+function xmlTokenAt(xml: string, start: number, limit = xml.length): RawXmlToken | null {
+  if (start < 0 || start >= xml.length || xml[start] !== '<') return null;
+  let quote = '';
+  for (let index = start + 1; index < xml.length && index < limit; index += 1) {
+    const character = xml[index];
+    if (quote) {
+      if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === '\'') {
+      quote = character;
+      continue;
+    }
+    if (character === '>') {
+      return {
+        start,
+        end: index + 1,
+        text: xml.slice(start, index + 1)
+      };
+    }
+  }
+  return null;
+}
+
+function openingXmlToken(xml: string, span: XmlElementSourceSpan): { token: RawXmlToken; tag: string; selfClosing: boolean } | null {
+  const token = xmlTokenAt(xml, span.start, span.end);
+  if (!token || token.end > span.end) return null;
+  const match = token.text.match(/^<\s*([A-Za-z_][\w:.-]*)(?:\s|\/?>)/);
+  if (!match) return null;
+  return {
+    token,
+    tag: match[1],
+    selfClosing: /\/\s*>$/.test(token.text)
+  };
+}
+
+function closingXmlToken(xml: string, span: XmlElementSourceSpan, tag: string): RawXmlToken | null {
+  const start = xml.lastIndexOf('<', span.end - 1);
+  if (start < span.start) return null;
+  const token = xmlTokenAt(xml, start, span.end);
+  if (!token || token.end !== span.end) return null;
+  const match = token.text.match(/^<\s*\/\s*([A-Za-z_][\w:.-]*)\s*>$/);
+  if (!match || match[1] !== tag) return null;
+  return token;
+}
+
+function bindXmlElement(
+  xml: string,
+  element: XmlElementLike,
+  spans: ReadonlyMap<string, XmlElementSourceSpan>
+): BoundXmlElement | null {
+  const semanticPath = xmlElementSemanticPath(element as unknown as Element);
+  const span = spans.get(semanticPath);
+  if (!span) return null;
+  const opening = openingXmlToken(xml, span);
+  if (!opening || opening.tag !== (element.nodeName || opening.tag)) return null;
+  if (opening.selfClosing) {
+    if (span.end !== opening.token.end) return null;
+    return {
+      element,
+      span,
+      opening: opening.token,
+      openingTag: opening.tag,
+      selfClosing: true
+    };
+  }
+  const closing = closingXmlToken(xml, span, opening.tag);
+  if (!closing) return null;
+  return {
+    element,
+    span,
+    opening: opening.token,
+    openingTag: opening.tag,
+    selfClosing: false,
+    closing
+  };
+}
+
+function lineEndingFor(xml: string): string {
+  const match = xml.match(/\r\n|\n|\r/);
+  return match ? match[0] : '\n';
+}
+
+function indentationBefore(xml: string, position: number): string | null {
+  const previousLf = xml.lastIndexOf('\n', position - 1);
+  const previousCr = xml.lastIndexOf('\r', position - 1);
+  const lineStart = Math.max(previousLf, previousCr) + 1;
+  const prefix = xml.slice(lineStart, position);
+  return /^[ \t]*$/.test(prefix) ? prefix : null;
+}
+
+function directElementIndent(
+  xml: string,
+  parent: XmlElementLike,
+  spans: ReadonlyMap<string, XmlElementSourceSpan>
+): string | null {
+  for (const child of childElements(parent)) {
+    const bound = bindXmlElement(xml, child, spans);
+    if (!bound) continue;
+    const indent = indentationBefore(xml, bound.span.start);
+    if (indent !== null) return indent;
+  }
+  return null;
+}
+
+function directFileIndent(
+  xml: string,
+  environment: XmlElementLike,
+  spans: ReadonlyMap<string, XmlElementSourceSpan>
+): string | null {
+  for (const child of childElements(environment)) {
+    if (child.nodeName !== 'file') continue;
+    const bound = bindXmlElement(xml, child, spans);
+    if (!bound) return null;
+    const indent = indentationBefore(xml, bound.span.start);
+    if (indent !== null) return indent;
+  }
+  return null;
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/'/g, '&apos;');
+}
+
+function containsUnsupportedXmlDeclaration(xml: string): boolean {
+  let cursor = 0;
+  while (cursor < xml.length) {
+    const start = xml.indexOf('<', cursor);
+    if (start < 0) return false;
+    if (xml.startsWith('<!--', start)) {
+      const end = xml.indexOf('-->', start + 4);
+      cursor = end < 0 ? xml.length : end + 3;
+      continue;
+    }
+    if (xml.startsWith('<![CDATA[', start)) {
+      const end = xml.indexOf(']]>', start + 9);
+      cursor = end < 0 ? xml.length : end + 3;
+      continue;
+    }
+    if (xml.startsWith('<?', start)) {
+      const end = xml.indexOf('?>', start + 2);
+      cursor = end < 0 ? xml.length : end + 2;
+      continue;
+    }
+    if (xml.startsWith('<!', start)) return true;
+    const token = xmlTokenAt(xml, start);
+    cursor = token ? token.end : xml.length;
+  }
+  return false;
+}
+
+function replaceSelfClosingElement(
+  xml: string,
+  bound: BoundXmlElement,
+  childMarkup: string,
+  lineEnding: string,
+  childIndent: string
+): XmlInsertion {
+  const expandedOpening = bound.opening.text.replace(/\/\s*>$/, '>');
+  const parentIndent = indentationBefore(xml, bound.span.start);
+  if (parentIndent === null) {
+    return {
+      start: bound.span.start,
+      end: bound.span.end,
+      replacement: `${expandedOpening}${childMarkup}</${bound.openingTag}>`
+    };
+  }
+  return {
+    start: bound.span.start,
+    end: bound.span.end,
+    replacement: `${expandedOpening}${lineEnding}${childIndent}${childMarkup}${lineEnding}${parentIndent}</${bound.openingTag}>`
+  };
+}
+
+function appendBeforeClosingElement(
+  xml: string,
+  bound: BoundXmlElement,
+  childMarkup: string,
+  lineEnding: string,
+  childIndent: string
+): XmlInsertion | null {
+  if (!bound.closing) return null;
+  const closingIndent = indentationBefore(xml, bound.closing.start);
+  const closingLineStart = closingIndent === null
+    ? bound.closing.start
+    : bound.closing.start - closingIndent.length;
+  return {
+    start: closingLineStart,
+    end: closingLineStart,
+    replacement: closingIndent === null
+      ? childMarkup
+      : `${childIndent}${childMarkup}${lineEnding}`
+  };
+}
+
+function addRegistrationToXml(
+  uiXml: string,
+  root: XmlElementLike,
+  path: string
+): XmlInsertion | null {
+  const spans = indexXmlElementSpans(uiXml);
+  const rootBinding = bindXmlElement(uiXml, root, spans);
+  if (!rootBinding) return null;
+
+  const fileMarkup = `<file name="${escapeXmlAttribute(path)}" />`;
+  const lineEnding = lineEndingFor(uiXml);
+  const menuEnvironments = childElements(root).filter(element => (
+    element.nodeName === 'environment'
+      && elementAttribute(element, 'type') === 'menus'
+  ));
+  const target = menuEnvironments.length > 0 ? menuEnvironments[menuEnvironments.length - 1] : null;
+
+  if (target) {
+    const targetBinding = bindXmlElement(uiXml, target, spans);
+    if (!targetBinding) return null;
+    if (targetBinding.selfClosing) {
+      const targetIndent = indentationBefore(uiXml, targetBinding.span.start);
+      const childIndent = targetIndent === null
+        ? ''
+        : (directFileIndent(uiXml, target, spans) || `${targetIndent}  `);
+      return replaceSelfClosingElement(uiXml, targetBinding, fileMarkup, lineEnding, childIndent);
+    }
+    const targetIndent = indentationBefore(uiXml, targetBinding.span.start);
+    const closingIndent = targetBinding.closing
+      ? indentationBefore(uiXml, targetBinding.closing.start)
+      : null;
+    const childIndent = directFileIndent(uiXml, target, spans)
+      || `${targetIndent ?? closingIndent ?? ''}  `;
+    return appendBeforeClosingElement(uiXml, targetBinding, fileMarkup, lineEnding, childIndent);
+  }
+
+  if (rootBinding.selfClosing) {
+    const rootIndent = indentationBefore(uiXml, rootBinding.span.start);
+    const environmentIndent = rootIndent === null ? '' : `${rootIndent}  `;
+    const fileIndent = rootIndent === null ? '' : `${environmentIndent}  `;
+    const expandedOpening = rootBinding.opening.text.replace(/\/\s*>$/, '>');
+    const replacement = rootIndent === null
+      ? `${expandedOpening}<environment type="menus">${fileMarkup}</environment></${rootBinding.openingTag}>`
+      : `${expandedOpening}${lineEnding}${environmentIndent}<environment type="menus">${lineEnding}${fileIndent}${fileMarkup}${lineEnding}${environmentIndent}</environment>${lineEnding}${rootIndent}</${rootBinding.openingTag}>`;
+    return {
+      start: rootBinding.span.start,
+      end: rootBinding.span.end,
+      replacement
+    };
+  }
+
+  if (!rootBinding.closing) return null;
+  const rootIndent = indentationBefore(uiXml, rootBinding.closing.start);
+  if (rootIndent === null) {
+    return {
+      start: rootBinding.closing.start,
+      end: rootBinding.closing.start,
+      replacement: `<environment type="menus"><file name="${escapeXmlAttribute(path)}" /></environment>`
+    };
+  }
+  const environmentIndent = directElementIndent(uiXml, root, spans) || `${rootIndent}  `;
+  const fileIndent = `${environmentIndent}  `;
+  return {
+    start: rootBinding.closing.start - rootIndent.length,
+    end: rootBinding.closing.start - rootIndent.length,
+    replacement: `${environmentIndent}<environment type="menus">${lineEnding}${fileIndent}${fileMarkup}${lineEnding}${environmentIndent}</environment>${lineEnding}`
+  };
+}
+
+function hasCaseMismatchedAddonSchemaTag(root: XmlElementLike): boolean {
+  const schemaTags = new Set(['addon', 'environment', 'file', 'dependency', 'savedvariable']);
+  const visit = (element: XmlElementLike): boolean => {
+    const rawName = typeof element.nodeName === 'string' ? element.nodeName : '';
+    const localRawName = rawName.slice(rawName.lastIndexOf(':') + 1);
+    if (schemaTags.has(rawName.toLowerCase()) && !schemaTags.has(rawName)) return true;
+    if (rawName.includes(':') && schemaTags.has(localRawName.toLowerCase())) return true;
+    return childElements(element).some(child => visit(child));
+  };
+  return visit(root);
+}
+
+function hasUnsupportedNamespaceDeclaration(opening: string): boolean {
+  const tag = opening.match(/^<\s*[A-Za-z_][\w:.-]*/);
+  if (!tag) return true;
+  let cursor = tag[0].length;
+  while (cursor < opening.length) {
+    while (cursor < opening.length && /[\s/]/.test(opening[cursor])) cursor += 1;
+    if (opening[cursor] === '>') break;
+    const name = opening.slice(cursor).match(/^[A-Za-z_:][\w:.-]*/);
+    if (!name) {
+      cursor += 1;
+      continue;
+    }
+    const attributeName = name[0];
+    cursor += attributeName.length;
+    while (cursor < opening.length && /\s/.test(opening[cursor])) cursor += 1;
+    if (opening[cursor] !== '=') continue;
+    cursor += 1;
+    while (cursor < opening.length && /\s/.test(opening[cursor])) cursor += 1;
+    const quote = opening[cursor];
+    if (quote === '"' || quote === '\'') {
+      cursor += 1;
+      while (cursor < opening.length && opening[cursor] !== quote) cursor += 1;
+      if (cursor < opening.length) cursor += 1;
+    } else {
+      while (cursor < opening.length && !/[\s>]/.test(opening[cursor])) cursor += 1;
+    }
+    if (attributeName === 'xmlns' || (attributeName.startsWith('xmlns:') && attributeName !== 'xmlns:xsi')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasUnsupportedRegistrationTopology(
+  root: XmlElementLike,
+  uiXml: string,
+  spans: ReadonlyMap<string, XmlElementSourceSpan>
+): boolean {
+  const validateElement = (element: XmlElementLike, expectedName: string): boolean => {
+    if (element.nodeName !== expectedName) return true;
+    if (element.nodeName.includes(':')) return true;
+    if (element.namespaceURI !== undefined
+      && element.namespaceURI !== null
+      && element.namespaceURI !== '') return true;
+    const binding = bindXmlElement(uiXml, element, spans);
+    return binding === null || hasUnsupportedNamespaceDeclaration(binding.opening.text);
+  };
+
+  if (validateElement(root, 'addon')) return true;
+
+  const leafNames = new Set(['file', 'dependency', 'savedvariable']);
+  for (const environment of childElements(root)) {
+    if (validateElement(environment, 'environment')) return true;
+    if (elementAttribute(environment, 'type') !== 'menus') return true;
+
+    for (const leaf of childElements(environment)) {
+      if (!leafNames.has(leaf.nodeName || '')) return true;
+      if (validateElement(leaf, leaf.nodeName || '')) return true;
+      if (childElements(leaf).length > 0) return true;
+      if (leaf.nodeName === 'file') {
+        const fileName = elementAttribute(leaf, 'name');
+        if (!fileName || fileName.length === 0) return true;
+      }
+      if (leaf.nodeName === 'savedvariable') {
+        const variableName = elementAttribute(leaf, 'name');
+        const storage = elementAttribute(leaf, 'storage');
+        if (!variableName || variableName.length === 0 || /^__CORE/.test(variableName)) return true;
+        if (storage !== 'savegame' && storage !== 'userdata') return true;
+      }
+    }
+  }
+  return false;
+}
+
+function registrationRefusal(
+  bundle: X4UiSourceBundle,
+  reason: X4UiSourceBundleRegistrationRefusalReason,
+  detail: string
+): X4UiSourceBundleRegistrationResult {
+  return freezeObject({ accepted: false, changed: false, bundle, reason, detail });
+}
+
+/** Add one parsed Lua source and its exact local ui.xml registration. */
+export function addX4UiSourceBundleRegistration(
+  bundle: X4UiSourceBundle,
+  file: X4UiSourceBundleRegistrationFile
+): X4UiSourceBundleRegistrationResult {
+  if (!bundle.xml.parsed) {
+    return registrationRefusal(bundle, 'malformed-xml', 'The existing ui.xml is malformed and cannot be edited safely.');
+  }
+  if (bundle.locked) {
+    return registrationRefusal(bundle, 'locked-bundle', 'The existing source bundle is locked by a parse or registration guard.');
+  }
+  if (!file || typeof file.path !== 'string') {
+    return registrationRefusal(bundle, 'invalid-path', 'The new menu path must be a contained relative path.');
+  }
+  if (typeof file.text !== 'string') {
+    return registrationRefusal(bundle, 'invalid-source', 'The new menu source must be a Lua string.');
+  }
+
+  const normalized = normalizeContainedPath(file.path);
+  switch (normalized.kind) {
+    case 'invalid':
+      return registrationRefusal(bundle, 'invalid-path', 'The new menu path is empty or contains an invalid character.');
+    case 'unsafe-traversal':
+      return registrationRefusal(bundle, 'unsafe-traversal-path', 'The new menu path attempts to traverse outside the workspace.');
+    case 'unsafe-absolute':
+      return registrationRefusal(bundle, 'unsafe-absolute-path', 'The new menu path is absolute and cannot be shipped.');
+    case 'safe':
+      break;
+  }
+  if (!/[/\\].+\.lua$/i.test(file.path)) {
+    return registrationRefusal(bundle, 'invalid-path', 'The new menu path must include a directory and end in .lua.');
+  }
+  if (bundle.registrations.some(registration => registration.lookupKey === normalized.key)
+    || bundle.sourceFiles.some(source => source.lookupKey === normalized.key)) {
+    return registrationRefusal(bundle, 'duplicate-registration', `The contained menu path already exists: ${file.path}`);
+  }
+  if (containsUnsupportedXmlDeclaration(bundle.uiXml)) {
+    return registrationRefusal(bundle, 'unsupported-xml-declaration', 'DTD and other unsupported XML declarations are not edited or expanded.');
+  }
+
+  const parsed = parseUiXml(bundle.uiXml);
+  const root = parsed.root;
+  if (!root || !parsed.state.parsed) {
+    return registrationRefusal(bundle, 'malformed-xml', 'The existing ui.xml failed the source-preserving XML parse.');
+  }
+  if (root.nodeName !== 'addon') {
+    return registrationRefusal(bundle, 'missing-addon', 'The existing ui.xml root is not an addon manifest.');
+  }
+  if (hasCaseMismatchedAddonSchemaTag(root)) {
+    return registrationRefusal(bundle, 'missing-registration-target', 'The existing ui.xml uses a case-mismatched addon schema element.');
+  }
+  const addonName = elementAttribute(root, 'name');
+  if (!addonName || addonName.trim().length === 0) {
+    return registrationRefusal(bundle, 'missing-addon-name', 'The addon manifest must retain a nonempty name attribute.');
+  }
+  if (/^ego_/i.test(addonName)) {
+    return registrationRefusal(bundle, 'reserved-addon-name', 'The reserved ego_ addon namespace is not owned by this source operation.');
+  }
+
+  const sourceSpans = indexXmlElementSpans(bundle.uiXml);
+  const rootBinding = bindXmlElement(bundle.uiXml, root, sourceSpans);
+  if (!rootBinding) {
+    return registrationRefusal(bundle, 'registration-span-mismatch', 'The addon DOM root could not be bound to its exact source span.');
+  }
+  if (hasUnsupportedRegistrationTopology(root, bundle.uiXml, sourceSpans)) {
+    return registrationRefusal(bundle, 'missing-registration-target', 'The existing ui.xml does not match the supported addon/environment/file registration topology.');
+  }
+
+  const insertion = addRegistrationToXml(bundle.uiXml, root, file.path);
+  if (!insertion) {
+    return registrationRefusal(bundle, 'registration-span-mismatch', 'The DOM registration target could not be bound to an exact source span.');
+  }
+  const nextUiXml = bundle.uiXml.slice(0, insertion.start)
+    + insertion.replacement
+    + bundle.uiXml.slice(insertion.end);
+  const projection = projectX4UiSourceBundle(bundle);
+  const nextLuaFiles = [
+    ...projection.luaFiles,
+    freezeObject({
+      path: file.path,
+      text: file.text,
+      ...(file.sourcePath !== undefined ? { sourcePath: file.sourcePath } : {})
+    })
+  ];
+  let nextBundle: X4UiSourceBundle;
+  try {
+    nextBundle = buildX4UiSourceBundle({
+      uiXml: nextUiXml,
+      luaFiles: freezeArray(nextLuaFiles)
+    });
+  } catch (error) {
+    return registrationRefusal(bundle, 'resulting-source-invalid', `The resulting source bundle could not be built: ${errorMessage(error)}`);
+  }
+  if (!nextBundle.xml.parsed) {
+    return registrationRefusal(bundle, 'resulting-xml-malformed', 'The local registration insertion produced malformed ui.xml.');
+  }
+  const nextRegistration = nextBundle.registrations.filter(registration => registration.lookupKey === normalized.key);
+  const nextSource = nextBundle.sourceFiles.filter(source => source.lookupKey === normalized.key);
+  if (nextRegistration.length !== 1
+    || nextRegistration[0].resolution !== 'resolved'
+    || nextSource.length !== 1
+    || !nextSource[0].registered
+    || nextSource[0].parseStatus !== 'parsed'
+    || nextBundle.registrations.length !== bundle.registrations.length + 1
+    || nextBundle.sourceFiles.length !== bundle.sourceFiles.length + 1) {
+    return registrationRefusal(bundle, 'resulting-source-invalid', 'The new source is not uniquely registered and parsed after projection.');
+  }
+
+  return freezeObject({
+    accepted: true,
+    changed: true,
+    bundle: nextBundle,
+    reason: null,
+    detail: `Registered ${file.path} using a byte-local ui.xml insertion.`
   });
 }
 

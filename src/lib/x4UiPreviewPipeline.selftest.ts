@@ -2907,10 +2907,136 @@ return menu
       && status.kernel.height === 0
       && status.kernel.minTextHeight === expectedStatusMinTextHeight;
   };
+  type ExactPipelineScene = NonNullable<typeof exactPipelineOneScene>;
+  type ExactPipelineProgram = NonNullable<typeof exactPipelineOneProgram>;
+  const exactPipelineInputSource = {
+    file: 'ui/pipeline_test.lua',
+    start: { line: 103, column: 2, offset: 4338 },
+    end: { line: 103, column: 101, offset: 4437 },
+  } as const;
+  const exactPipelineInputGapReasons = new Set([
+    'required descriptor fact textX is missing or has an unexpected type',
+    'required descriptor fact textY is missing or has an unexpected type',
+    'text available width is unavailable',
+  ]);
+  const exactPipelineInputSourceBoundPredicate = (
+    scene: ExactPipelineScene | undefined,
+    program: ExactPipelineProgram | undefined,
+    expectedOffsetX: number,
+    expectedFontSize: number,
+  ): boolean => {
+    if (scene === undefined || program === undefined || program.status !== 'partial') return false;
+    const inputTexts = scene.texts.filter(text => text.slot === 'primary' && sameJson(text.source, exactPipelineInputSource));
+    if (inputTexts.length !== 1) return false;
+    const inputText = inputTexts[0]!;
+    const inputWidget = scene.widgets.find(widget => widget.id === inputText.widgetId);
+    const inputGlyphs = scene.glyphs.filter(glyph => glyph.textId === inputText.id);
+    const expectedGlyphCodePoints = Array.from('Type a note...').map(character => character.codePointAt(0)!);
+    return inputWidget?.kind === 'editbox'
+      && inputText.content === ''
+      && inputText.defaultContent === 'Type a note...'
+      && inputText.contentSelection === 'preview-default'
+      && inputText.lines.length === 1
+      && inputText.lines[0]?.displayedText === 'Type a note...'
+      && inputText.offsetX === expectedOffsetX
+      && inputText.offsetY === 0
+      && inputText.font === 'Zekton'
+      && inputText.fontSize === expectedFontSize
+      && inputGlyphs.length === expectedGlyphCodePoints.length
+      && sameJson(inputGlyphs.map(glyph => glyph.codePoint), expectedGlyphCodePoints)
+      && !scene.gaps.some(gap => gap.nodeId === inputText.id && exactPipelineInputGapReasons.has(gap.reason));
+  };
+  const exactPipelineInputCopiedDiagnosticsReject = (
+    scene: ExactPipelineScene | undefined,
+    program: ExactPipelineProgram | undefined,
+    expectedOffsetX: number,
+    expectedFontSize: number,
+  ): boolean => {
+    if (scene === undefined || program === undefined) return false;
+    const copyScene = (): ExactPipelineScene => JSON.parse(JSON.stringify(scene)) as ExactPipelineScene;
+    const copiedInputText = (candidate: ExactPipelineScene): ExactPipelineScene['texts'][number] | undefined => candidate.texts
+      .find(text => text.slot === 'primary' && sameJson(text.source, exactPipelineInputSource));
+
+    const textDrift = copyScene();
+    const textDriftInput = copiedInputText(textDrift);
+    if (textDriftInput === undefined) return false;
+    (textDriftInput as unknown as { content: string }).content = 'drifted';
+    if (exactPipelineInputSourceBoundPredicate(textDrift, program, expectedOffsetX, expectedFontSize)) return false;
+
+    const codePointDrift = copyScene();
+    const codePointDriftInput = copiedInputText(codePointDrift);
+    const codePointDriftGlyph = codePointDriftInput === undefined
+      ? undefined
+      : codePointDrift.glyphs.find(glyph => glyph.textId === codePointDriftInput.id);
+    if (codePointDriftGlyph === undefined) return false;
+    (codePointDriftGlyph as unknown as { codePoint: number }).codePoint += 1;
+    if (exactPipelineInputSourceBoundPredicate(codePointDrift, program, expectedOffsetX, expectedFontSize)) return false;
+
+    const offsetDrift = copyScene();
+    const offsetDriftInput = copiedInputText(offsetDrift);
+    if (offsetDriftInput === undefined) return false;
+    (offsetDriftInput as unknown as { offsetX: number }).offsetX = expectedOffsetX + 1;
+    if (exactPipelineInputSourceBoundPredicate(offsetDrift, program, expectedOffsetX, expectedFontSize)) return false;
+
+    const reintroducedGap = copyScene();
+    const reintroducedGapInput = copiedInputText(reintroducedGap);
+    const gapTemplate = reintroducedGap.gaps[0];
+    if (reintroducedGapInput === undefined || gapTemplate === undefined) return false;
+    (reintroducedGap.gaps as unknown as Array<ExactPipelineScene['gaps'][number]>).push({
+      ...gapTemplate,
+      id: `${gapTemplate.id}:b119-input-negative`,
+      nodeId: reintroducedGapInput.id,
+      reason: 'required descriptor fact textX is missing or has an unexpected type',
+    });
+    return !exactPipelineInputSourceBoundPredicate(reintroducedGap, program, expectedOffsetX, expectedFontSize);
+  };
   const exactPipelinePaintAuthority = (result: typeof exactPipelineAtOne, scene: typeof exactPipelineOneScene): boolean =>
     scene !== undefined
     && issuedPaintSourceAuthority(result, scene)
     && materializeIssuedPaintScene(result, scene).value !== undefined;
+  const exactPipelineResolvedDimensions = (
+    program: ExactPipelineProgram | undefined, scene: ExactPipelineScene | undefined,
+    width: number, height: number,
+  ): boolean => {
+    if (program === undefined || scene === undefined || program.sampleCatalog.entries.length !== 0) return false;
+    // Exact consumers of the three former model gaps; definition evidence must remain
+    // source-derived at both scales. A reduced warning total alone is not success.
+    return [
+      { kind: 'createFrameHandle', line: 85, key: 'width', value: width, definition: 81, expression: 'width', category: 'width', start: 3181, end: 3186 },
+      { kind: 'createFrameHandle', line: 85, key: 'height', value: height, definition: 82, expression: 'height', category: 'height', start: 3197, end: 3203 },
+      { kind: 'addTable', line: 86, key: 'requestedWidth', value: width, definition: 81, expression: 'width', category: 'width', start: 3327, end: 3332 },
+    ].every(expected => {
+      const operation = program.operations.find(candidate => candidate.kind === expected.kind && candidate.source.start.line === expected.line);
+      const fact = operation?.descriptorFacts?.[expected.key];
+      return fact?.status === 'known' && fact.expectedType === 'number' && fact.value === expected.value
+        && fact.provenance === 'direct-helper-scale' && !('sampleId' in fact)
+        && fact.expression === expected.expression && fact.source.file === 'ui/pipeline_test.lua'
+        && fact.source.start.line === expected.definition && fact.source.end.line === expected.definition
+        && exactPipelineFixtureText.slice(fact.source.start.offset, fact.source.end.offset)
+          === (expected.definition === 81 ? 'Helper.scaleX(530)' : 'Helper.scaleY(436)')
+        && ![...program.gaps, ...scene.gaps].some(gap => gap.category === expected.category
+          && gap.source.file === 'ui/pipeline_test.lua' && gap.source.start.offset === expected.start
+          && gap.source.end.offset === expected.end);
+    });
+  };
+  const exactPipelineDimensionOracleRejectsDrift = (
+    program: ExactPipelineProgram | undefined, scene: ExactPipelineScene | undefined,
+    width: number, height: number,
+  ): boolean => {
+    if (!exactPipelineResolvedDimensions(program, scene, width, height) || program === undefined || scene === undefined) return false;
+    const drifted = JSON.parse(JSON.stringify(program)) as ExactPipelineProgram;
+    const fact = drifted.operations.find(operation => operation.kind === 'createFrameHandle' && operation.source.start.line === 85)?.descriptorFacts?.width;
+    if (fact === undefined) return false;
+    (fact as unknown as { value: number }).value = width + 1;
+    if (exactPipelineResolvedDimensions(drifted, scene, width, height)) return false;
+    const warning = { category: 'width', status: 'unknown', expression: 'width', reason: 'width property is dynamic or unknown',
+      source: { file: 'ui/pipeline_test.lua', start: { line: 85, column: 70, offset: 3181 }, end: { line: 85, column: 75, offset: 3186 } } } as const;
+    return !exactPipelineResolvedDimensions({ ...program, gaps: [...program.gaps, warning] }, scene, width, height)
+      && !exactPipelineResolvedDimensions(program, { ...scene, gaps: [...scene.gaps, { ...warning, id: 'reintroduced-width-warning' }] }, width, height);
+  };
+  check('B119 exact pipeline resolved dimension oracle rejects value drift and warning reintroduction at both profiles',
+    exactPipelineDimensionOracleRejectsDrift(exactPipelineOneProgram, exactPipelineOneScene, 530, 436)
+      && exactPipelineDimensionOracleRejectsDrift(exactPipeline125Program, exactPipeline125Scene, 663, 545));
   check('B119 fail-first exact deployed fixture source-proven geometry reaches six Scene/Paint creators at both profiles',
     exactPipelineSelection.sourceIdentity.sha256
       === 'C1D9CD8580C6175E95C543259A2AB19F8B463282BF48B2229EB6013D6052718E'
@@ -2922,8 +3048,10 @@ return menu
       && exactPipeline125Program?.tables[0]?.height?.value === 202
       && exactPipelineTextEvidenceMatches(exactPipelineOneProgram, 2, 9, 18, 16)
       && exactPipelineTextEvidenceMatches(exactPipeline125Program, 3, 12, 22, 20)
-      && JSON.stringify(exactPipelineSceneGeometry(exactPipelineOneScene)) === JSON.stringify({ frames: 1, tables: 1, rows: 6, cells: 12, widgets: 6, texts: 8, glyphs: 99, gaps: 57 })
-      && JSON.stringify(exactPipelineSceneGeometry(exactPipeline125Scene)) === JSON.stringify({ frames: 1, tables: 1, rows: 6, cells: 12, widgets: 6, texts: 8, glyphs: 99, gaps: 57 })
+      && exactPipelineResolvedDimensions(exactPipelineOneProgram, exactPipelineOneScene, 530, 436)
+      && exactPipelineResolvedDimensions(exactPipeline125Program, exactPipeline125Scene, 663, 545)
+      && JSON.stringify(exactPipelineSceneGeometry(exactPipelineOneScene)) === JSON.stringify({ frames: 1, tables: 1, rows: 6, cells: 12, widgets: 6, texts: 8, glyphs: 113, gaps: 51 })
+      && JSON.stringify(exactPipelineSceneGeometry(exactPipeline125Scene)) === JSON.stringify({ frames: 1, tables: 1, rows: 6, cells: 12, widgets: 6, texts: 8, glyphs: 113, gaps: 51 })
       && exactPipelineSceneFiniteGeometry(exactPipelineOneScene)
       && exactPipelineSceneFiniteGeometry(exactPipeline125Scene)
       && exactPipelinePaintAuthority(exactPipelineAtOne, exactPipelineOneScene)
@@ -2978,7 +3106,44 @@ return menu
         sceneFiniteGeometry: exactPipelineSceneFiniteGeometry(exactPipeline125Scene),
         sceneStatus: exactPipelineAt125?.scene?.status,
         paintAuthority: exactPipelinePaintAuthority(exactPipelineAt125, exactPipeline125Scene),
-      },
+       },
+     });
+  const exactPipelineInputSemanticAtOne = exactPipelineInputSourceBoundPredicate(
+    exactPipelineOneScene,
+    exactPipelineOneProgram,
+    5,
+    9,
+  );
+  const exactPipelineInputSemanticAt125 = exactPipelineInputSourceBoundPredicate(
+    exactPipeline125Scene,
+    exactPipeline125Program,
+    6,
+    12,
+  );
+  check('B119 exact Input primary is source-bound to the accepted default text and fourteen glyphs at both profiles',
+    exactPipelineInputSemanticAtOne && exactPipelineInputSemanticAt125,
+    {
+      atOne: exactPipelineInputSemanticAtOne,
+      at125: exactPipelineInputSemanticAt125,
+      source: exactPipelineInputSource,
+    });
+  const exactPipelineInputDiagnosticsAtOne = exactPipelineInputCopiedDiagnosticsReject(
+    exactPipelineOneScene,
+    exactPipelineOneProgram,
+    5,
+    9,
+  );
+  const exactPipelineInputDiagnosticsAt125 = exactPipelineInputCopiedDiagnosticsReject(
+    exactPipeline125Scene,
+    exactPipeline125Program,
+    6,
+    12,
+  );
+  check('B119 exact Input predicate rejects copied text, codepoint, offset, and missing-gap drift',
+    exactPipelineInputDiagnosticsAtOne && exactPipelineInputDiagnosticsAt125,
+    {
+      atOne: exactPipelineInputDiagnosticsAtOne,
+      at125: exactPipelineInputDiagnosticsAt125,
     });
   const exactPipelineFrameSurface = (scene: typeof exactPipelineOneScene): {
     readonly layers: readonly JsonRecord[];

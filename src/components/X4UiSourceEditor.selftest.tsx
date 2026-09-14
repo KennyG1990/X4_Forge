@@ -11,8 +11,13 @@ import React, { act } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { chromium } from 'playwright';
+import { compile as compileTailwind } from '@tailwindcss/node';
+import { sanitizeWorkspace } from '../types';
+import { retainWorkspaceCandidateIfNormalizedUnchanged } from '../lib/workspaceIdentity';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { buildX4UiCallModel, type X4UiLuaFileInput } from '../lib/x4UiCallModel';
+import { importX4UiWorkspaceLua, X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES } from '../lib/x4UiWorkspaceSource';
 import {
   X4_UI_CORPUS_9_00_COLOR_CONTRACT,
   X4_UI_CORPUS_9_00_CONTRACT,
@@ -37,13 +42,19 @@ import {
   type X4UiCorpusTransport,
 } from '../lib/x4UiCorpusAssets';
 import {
+  X4_UI_EDITOR_DEFAULT_PROFILE,
+  createX4UiEditorSessionOwner,
   projectX4UiEditorSession,
   resetX4UiEditorLoopState,
   updateX4UiEditorLoopState,
   updateX4UiEditorSampleState,
+  type X4UiEditorSessionProjection,
 } from '../lib/x4UiEditorSession';
+import { capturePreviewScenario, transferPreviewScenario } from '../lib/x4UiPreviewScenarios';
 import { KEEP_OUT_IDS, KEEP_OUT_PRESET_IDS, KEEP_OUT_PRESETS } from '../lib/x4UiKeepOuts';
 import { lintX4UiCallModel } from '../lib/x4UiLint';
+import { diagnoseX4UiSceneStructureForTest } from '../lib/x4UiScene';
+import { buildX4UiBuilderPresentation, resolveX4UiBuilderRowForNode } from '../lib/x4UiBuilderPresentation';
 import type {
   X4UiLayoutPreviewLoopCatalog,
   X4UiLayoutPreviewPathCatalog,
@@ -52,13 +63,24 @@ import type {
 } from '../lib/x4UiLayoutProgram';
 import { applyX4UiSourceEdit, type X4UiSourceEditCatalog } from '../lib/x4UiSourceEdits';
 import {
+  prepareX4UiSourceHistoryEntry,
+  transitionWorkspaceHistory,
+  createSourceWorkspaceHistoryEntry,
+  reverseWorkspaceSourceSplice,
+  type WorkspaceHistoryEntry,
+} from '../lib/workspaceUndoHistory';
+import {
   ZEKTON_DDS_HEADER_SIZE,
   ZEKTON_DESCRIPTOR_HEADER_SIZE,
   ZEKTON_DESCRIPTOR_TRAILING_SIZE,
   ZEKTON_RECORD_SIZE,
 } from '../lib/x4UiFontMetrics';
-import UIBuilder, * as UIBuilderApiModule from './UIBuilder';
+import UIBuilder, { type UIBuilderSourceHistoryAcknowledgement } from './UIBuilder';
+import * as UIBuilderApiModule from './UIBuilder';
 import X4UiSourceEditor, {
+  X4UiSourceEditorLuaFiles,
+  X4UiSourceEditorRowControls,
+  X4UiSourceEditorContextualPalette,
   X4UiSourceEditorLinter,
   X4UiSourceEditorPreviewLoops,
   X4UiSourceEditorPreviewGeometry,
@@ -68,6 +90,7 @@ import X4UiSourceEditor, {
   addX4UiManualCalibrationDraft,
   buildX4UiManualCalibrationSessionInput,
   classifyX4UiCanvasCommit,
+  createX4UiWorkspaceEditPending,
   classifyX4UiCanvasState,
   classifyX4UiCorpusLoadResult,
   classifyX4UiLintState,
@@ -75,19 +98,27 @@ import X4UiSourceEditor, {
   createX4UiManualCalibrationState,
   deriveX4UiEffectiveScale,
   deriveX4UiUserScale,
+  discoverX4UiSourceEditorCatalog,
   inspectX4UiLint,
   inspectX4UiPreviewGeometry,
   isBlockingX4UiAddTableFinding,
   isX4UiKeepOutEntryChecked,
   parseX4UiManualCalibrationDraft,
   reconcileX4UiEditorSelections,
+  resolveX4UiSourceEditorContextualRowMoveEntries,
   removeX4UiManualCalibrationPoint,
   removeX4UiManualCalibrationRow,
   setX4UiManualCalibrationRowEnabled,
   toggleX4UiKeepOutEntry,
   toggleX4UiManualCalibrationRow,
+  useX4UiSourceEditSelectionTransfer,
+  useX4UiInspectorScrollRetention,
   type X4UiEditorLintFinding,
+  type X4UiHistoryRestorationNotice,
   type X4UiManualCalibrationDraft,
+  type X4UiSourceEditSelectionResult,
+  type X4UiWorkspaceEditPendingAuthority,
+  type X4UiWorkspaceEditHandler,
   updateX4UiManualCalibrationDraft,
   updateX4UiManualCalibrationPoint,
 } from './X4UiSourceEditor';
@@ -139,6 +170,14 @@ assert.match(sourceMarkup, /Source authority/);
 assert.match(sourceMarkup, /Configured X4 corpus/);
 assert.match(sourceMarkup, /Profile controls/);
 assert.match(sourceMarkup, /Source and target selection/);
+assert.match(sourceMarkup, /Preview settings/);
+assert.match(sourceMarkup, /data-testid="x4-ui-preview-settings-toggle"/);
+assert.match(sourceMarkup, /<section data-testid="x4-ui-source-editor"[^>]*font-sans/);
+const previewSettingsOpenTag = sourceMarkup.match(/<details data-testid="x4-ui-preview-settings"[^>]*>/)?.[0];
+assert.ok(previewSettingsOpenTag !== undefined, 'Preview settings disclosure is missing');
+assert.doesNotMatch(previewSettingsOpenTag, /\bopen(?:=|>)/, 'Preview settings must start closed');
+assert.match(sourceMarkup, />File</);
+assert.match(sourceMarkup, />Menu</);
 assert.match(sourceMarkup, /Imported-source linter/);
 assert.match(sourceMarkup, /Preview geometry diagnostics/);
 assert.match(sourceMarkup, /Layout evidence only · Not verified in game/);
@@ -147,6 +186,84 @@ assert.match(sourceMarkup, /owner-issued preview path catalog/);
 assert.match(sourceMarkup, /Preview Loop Iterations/);
 assert.match(sourceMarkup, /owner-issued preview loop catalog/);
 assert.match(sourceMarkup, /Preview only/);
+assert.match(sourceMarkup, /data-testid="x4-ui-builder-workspace"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-builder-hierarchy"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-builder-canvas-column"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-builder-inspector"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-canvas-overlay"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-inspect-panel"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-canvas-export-inspect"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-new-menu-open"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-lua-files"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-lua-open"/);
+assert.match(sourceMarkup, /data-testid="x4-ui-lua-export"/);
+assert.doesNotMatch(sourceMarkup, /data-testid="x4-ui-new-menu-name"/);
+assert.match(sourceMarkup, /Preview scale mode/);
+const emptySelectionCopy = sourceMarkup.match(/data-testid="x4-ui-builder-selection-empty"[^>]*>([^<]+)</)?.[1];
+assert.ok(emptySelectionCopy?.includes('Select an element on the canvas or in the hierarchy.'));
+assert.doesNotMatch(emptySelectionCopy, /Session|operation identity|authority/);
+const emptyRowMoveContext = resolveX4UiSourceEditorContextualRowMoveEntries(undefined, [], undefined, null);
+assert.match(emptyRowMoveContext.detail, /Row controls are unavailable/);
+const emptySelectionRowMoveContext = resolveX4UiSourceEditorContextualRowMoveEntries(
+  { sourceIdentity: { file: 'ui/row-controls.lua', sha256: 'a'.repeat(64) } } as unknown as X4UiSourceEditCatalog,
+  [],
+  undefined,
+  'ui/row-controls.lua||' + 'a'.repeat(64),
+);
+const emptyRowControlsMarkup = renderToStaticMarkup(
+  <X4UiSourceEditorRowControls
+    context={emptySelectionRowMoveContext}
+    builderStatus="available"
+    projectionLoading={false}
+    propertyDraftPending={false}
+    onMove={() => undefined}
+  />,
+);
+assert.match(emptyRowControlsMarkup, /data-testid="x4-ui-row-controls"/);
+assert.match(emptyRowControlsMarkup, /Row controls/);
+assert.match(emptyRowControlsMarkup, /Select a row or an element inside a row that supports reordering\./);
+assert.match(emptyRowControlsMarkup, /data-testid="x4-ui-row-controls-move-up"[^>]*disabled/);
+assert.match(emptyRowControlsMarkup, /data-testid="x4-ui-row-controls-move-down"[^>]*disabled/);
+assert.match(emptyRowControlsMarkup, /min-h-\[28px\]/, 'row action buttons must retain the compact minimum height');
+assert.match(emptyRowControlsMarkup, /text-\[11px\]/, 'row action buttons must remain readable at the supported narrow viewport');
+const rowControlsSection = emptyRowControlsMarkup.match(/<section data-testid="x4-ui-row-controls"[\s\S]*?<\/section>/)?.[0] ?? '';
+assert.doesNotMatch(rowControlsSection, /bytes|scene:|operation/i, 'ordinary row controls must keep technical IDs and offsets behind Inspect');
+assert.doesNotMatch(rowControlsSection, /source authority|movement authority/i, 'ordinary row controls must not expose compiler terminology');
+
+const fallbackPaletteMarkup = renderToStaticMarkup(
+  <X4UiSourceEditorContextualPalette
+    selectedNode={{ id: 'scene:fallback-row', kind: 'row' } as React.ComponentProps<typeof X4UiSourceEditorContextualPalette>['selectedNode']}
+    rowEntry={{ id: 'row-below-fallback' } as NonNullable<React.ComponentProps<typeof X4UiSourceEditorContextualPalette>['rowEntry']>}
+    rowHasEligibleCell={false}
+    catalogAvailable
+    sourceIdentityMatches
+    builderStatus="available"
+    projectionLoading={false}
+    propertyDraftPending={false}
+    onInsert={() => undefined}
+    onInsertRow={() => undefined}
+  />,
+);
+assert.match(fallbackPaletteMarkup, /No eligible cell is available for adding content right now\. Add another row below this row\./, 'row fallback must explain why widget insertion is unavailable and provide a valid next step');
+assert.match(fallbackPaletteMarkup, /data-testid="x4-ui-contextual-palette-add-row"/);
+assert.doesNotMatch(fallbackPaletteMarkup, /data-testid="x4-ui-contextual-palette-add-(text|button|input)"/, 'row fallback must not imply that a widget can be inserted without an eligible cell');
+
+const rowWithEligibleCellPaletteMarkup = renderToStaticMarkup(
+  <X4UiSourceEditorContextualPalette
+    selectedNode={{ id: 'scene:eligible-row', kind: 'row' } as React.ComponentProps<typeof X4UiSourceEditorContextualPalette>['selectedNode']}
+    rowEntry={{ id: 'row-below-eligible' } as NonNullable<React.ComponentProps<typeof X4UiSourceEditorContextualPalette>['rowEntry']>}
+    rowHasEligibleCell
+    catalogAvailable
+    sourceIdentityMatches
+    builderStatus="available"
+    projectionLoading={false}
+    propertyDraftPending={false}
+    onInsert={() => undefined}
+    onInsertRow={() => undefined}
+  />,
+);
+assert.match(rowWithEligibleCellPaletteMarkup, /Select an empty cell to add text, button, or input. Add a row below this row./, 'a row with an eligible child must direct the user to select that child');
+assert.doesNotMatch(rowWithEligibleCellPaletteMarkup, /No eligible cell is available/, 'a row with an eligible child must not claim that no cell is available');
 
 const canvasExportFailFirstApi = X4UiSourceEditorApiModule as unknown as Record<string, unknown>;
 const canvasExportFailFirstMissing = [
@@ -172,6 +289,12 @@ assert.deepEqual(
 );
 
 assert.match(sourceMarkup, /Context keep-outs/);
+assert.match(sourceMarkup, /data-testid="x4-ui-overlay-toolbar"/, 'everyday overlays belong beside canvas preview controls');
+assert.match(sourceMarkup, /data-testid="x4-ui-inspect-panel"/);
+assert.ok(sourceMarkup.indexOf('data-testid="x4-ui-overlay-toolbar"') < sourceMarkup.indexOf('data-testid="x4-ui-inspect-panel"'),
+  'overlay controls must not require technical Inspect');
+assert.equal((sourceMarkup.match(/data-testid="x4-ui-keepout-off"/g) ?? []).length, 1, 'one ordinary overlay control owner');
+assert.match(sourceMarkup, /Advisory only.*Not verified in game/, 'ordinary guides retain their truth boundary');
 assert.match(sourceMarkup, /x4-ui-manual-calibration-region/);
 assert.match(sourceMarkup, /x4-ui-manual-calibration-stable-id/);
 assert.match(sourceMarkup, /x4-ui-manual-calibration-context/);
@@ -312,6 +435,40 @@ assert.match(sampleMarkup, /type="number"/);
 assert.match(sampleMarkup, /type="text"/);
 assert.match(sampleMarkup, /true/);
 assert.match(sampleMarkup, /false/);
+
+const primarySampleMarkup = renderToStaticMarkup(
+  <X4UiSourceEditorSamples primary catalog={sampleCatalog}
+    samples={{ catalogId: sampleCatalog.id, source: sampleCatalog.sourceIdentity, values: [
+      { id: 'sample-number', value: 120 }, { id: 'sample-string', value: 'Long message\nSecond line' }, { id: 'sample-boolean', value: false },
+    ] }}
+    onSampleInput={() => undefined} onClear={() => undefined} onApply={() => undefined} onReset={() => undefined}
+    onOpenInspect={() => undefined} inspectTargetId="primary-sample-inspect" />,
+);
+assert.match(primarySampleMarkup, /Preview inputs/);
+assert.match(primarySampleMarkup, /aria-label="Width"/);
+assert.match(primarySampleMarkup, /aria-label="Text"/);
+assert.match(primarySampleMarkup, /aria-label="Scale with UI"/);
+assert.match(primarySampleMarkup, /Used by Table/);
+assert.match(primarySampleMarkup, /<textarea[^>]*>Long message\nSecond line<\/textarea>/);
+assert.match(primarySampleMarkup, /3 values applied to preview/);
+assert.match(primarySampleMarkup, /No unapplied edits/);
+assert.match(primarySampleMarkup, /Apply to preview/);
+assert.match(primarySampleMarkup, /Discard edits/);
+const primaryClearButton = primarySampleMarkup.match(/<button[^>]*data-testid="x4-ui-preview-inputs-clear"[^>]*>/)?.[0];
+assert.ok(primaryClearButton);
+assert.doesNotMatch(primaryClearButton, /\sdisabled(?:=|[\s>])/, 'Clear works with applied values and no draft; CSS disabled variants are not a disabled attribute');
+assert.doesNotMatch(primarySampleMarkup, /\{tableWidth\}|\{dynamicText\}|source identity|ui\/samples.lua/);
+assert.match(primarySampleMarkup, /aria-controls="primary-sample-inspect"/);
+assert.match(primarySampleMarkup, /Not verified in game/);
+assert.equal(new Set([...primarySampleMarkup.matchAll(/data-testid="([^"]+)"/g)].map(match => match[1])).size,
+  [...primarySampleMarkup.matchAll(/data-testid="([^"]+)"/g)].length, 'primary inputs have unique test identities');
+const primaryRefusedMarkup = renderToStaticMarkup(
+  <X4UiSourceEditorSamples primary catalog={sampleCatalog} samples={undefined} onSampleInput={() => undefined}
+    error="owner-issued source authority drifted at internal-id" />,
+);
+assert.match(primaryRefusedMarkup, /role="alert"/);
+assert.match(primaryRefusedMarkup, /Preview values were not applied/);
+assert.doesNotMatch(primaryRefusedMarkup, /internal-id|owner-issued|source authority/);
 
 const pathCatalog: X4UiLayoutPreviewPathCatalog = {
   id: 'preview-path-catalog-selftest',
@@ -1468,6 +1625,16 @@ try {
     normalizedProfile: { ...exportIdentity.normalizedProfile, source: { ...exportSourceIdentity, file: 'ui/other.lua' } },
   };
   assert.equal(classifyExport({ currentIdentity: selectionReplacementIdentity }).status, 'refused', 'selection replacement cannot export the prior canvas identity');
+  assert.equal(
+    classifyExport({ state: { ...exportState, status: 'stale', stale: true } }).status,
+    'refused',
+    'canvas click must refuse a stale retained bitmap before hit-testing current builder nodes',
+  );
+  assert.equal(
+    classifyExport({ currentIdentity: selectionReplacementIdentity }).status,
+    'refused',
+    'canvas click must refuse a retained bitmap whose source identity was superseded',
+  );
 } finally {
   if (hadCanvasConstructor) {
     globalFixture.HTMLCanvasElement = previousCanvasConstructor;
@@ -1597,9 +1764,13 @@ const sourceText = readFileSync(new URL('./X4UiSourceEditor.tsx', import.meta.ur
 const selftestText = readFileSync(new URL('./X4UiSourceEditor.selftest.tsx', import.meta.url), 'utf8');
 const uiBuilderText = readFileSync(new URL('./UIBuilder.tsx', import.meta.url), 'utf8');
 const appText = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
-const projectionMemoSource = sourceText.match(/ {2}const projection = useMemo\([\s\S]*?\n {2}\);/)?.[0] ?? '';
+const projectionMemoSource = sourceText.match(/ {2}const projectedPreview = useMemo\([\s\S]*?\n {2}\);/)?.[0] ?? '';
 const projectionObserverContractRows = [
-  ['projection memo computes the session projection', /const next = sessionOwner\.project\(sessionInput\);/.test(projectionMemoSource)],
+  ['projection memo computes the ordinary fallback projection', /projection: sessionOwner\.project\(sessionInput\)/.test(projectionMemoSource)],
+  ['successful continuation precedes ordinary fallback projection', projectionMemoSource.indexOf('transferPreviewScenario(') >= 0
+    && projectionMemoSource.indexOf('transferPreviewScenario(') < projectionMemoSource.indexOf('sessionOwner.project(')],
+  ['continuation captures current profile controls, not an old or discarded projection',
+    /width: profileValue\.width, height: profileValue\.height, uiScale: profileValue\.uiScale/.test(projectionMemoSource)],
   ['projection memo has no render-phase observer callback', !/sessionProjectionObserverRef\.current\?\.\(next\)/.test(projectionMemoSource)],
   ['observer callback is keyed to committed projection in an effect', /useEffect\(\(\) => \{\s*sessionProjectionObserverRef\.current\?\.\(projection\);\s*\}, \[projection\]\);/s.test(sourceText)],
   ['observer ref remains fresh for the latest callback', /sessionProjectionObserverRef\.current = onSessionProjection;/.test(sourceText)],
@@ -1653,6 +1824,46 @@ assert.match(sourceText, /renderX4UiPaintPlanToCanvas\(/);
 assert.match(sourceText, /createX4UiCanvasRenderSession/);
 assert.match(sourceText, /const \[rendererSession\] = useState<X4UiCanvasRenderSession>\(\(\) => createX4UiCanvasRenderSession\(\)\);/);
 assert.match(sourceText, /session:\s*rendererSession/);
+assert.match(sourceText, /className="flex min-w-0 flex-1 min-h-0 flex-col overflow-hidden/);
+assert.match(sourceText, /buildX4UiBuilderPresentation\(projection\)/);
+assert.match(sourceText, /hitTestX4UiBuilderCanvas\(builderPresentation\.nodes, nativePoint\)/);
+assert.match(sourceText, /sourceEntriesForX4UiBuilderNode\(sourceEditCatalog, selectedBuilderNode\)/);
+assert.match(sourceText, /data-testid="x4-ui-canvas-export-compact"/);
+assert.match(sourceText, /data-testid="x4-ui-canvas-export-inspect"/);
+assert.match(sourceText, /computeX4UiBuilderViewport\(/);
+assert.match(sourceText, /deriveX4UiBuilderMenuBounds\(/);
+assert.match(sourceText, /data-testid="x4-ui-canvas-zoom-mode"/);
+assert.match(sourceText, /data-testid="x4-ui-canvas-zoom-in"/);
+assert.match(sourceText, /data-testid="x4-ui-canvas-zoom-out"/);
+assert.match(sourceText, /data-testid="x4-ui-canvas-zoom-value"/);
+assert.match(sourceText, /value=\{stagedValue \?\? \(entry\.value === undefined \? '' : String\(entry\.value\)\)\}/);
+assert.match(sourceText, /width: `\$\{canvasViewport\.stageWidth\}px`/);
+assert.match(sourceText, /height: `\$\{canvasViewport\.stageHeight\}px`/);
+assert.doesNotMatch(sourceText, /width: `min\(100%, calc\(70vh \* \$\{canvasSurfaceDimensions\.width \/ canvasSurfaceDimensions\.height\}\)\)`/);
+assert.match(sourceText, /surface\.style\.maxWidth = 'none';/);
+assert.match(sourceText, /surface\.style\.maxHeight = 'none';/);
+assert.match(sourceText, /surface\.style\.width = '100%';/);
+assert.match(sourceText, /surface\.style\.height = '100%';/);
+assert.match(sourceText, /surface\.style\.objectFit = 'fill';/);
+assert.doesNotMatch(sourceText, /data-testid="x4-ui-canvas-host"[^\n]*min-h-24[^\n]*max-h-\[70vh\]/, 'mounted canvas host must not impose independent min/max geometry');
+const builderCanvasClickSourceStart = sourceText.indexOf('  const handleBuilderCanvasClick = ');
+const builderCanvasClickSourceEnd = sourceText.indexOf('\n\n  const selectPreset', builderCanvasClickSourceStart);
+assert.ok(builderCanvasClickSourceStart >= 0 && builderCanvasClickSourceEnd > builderCanvasClickSourceStart, 'builder canvas click source boundary must remain available');
+const builderCanvasClickSource = sourceText.slice(builderCanvasClickSourceStart, builderCanvasClickSourceEnd);
+const builderCanvasCurrentGateRows = [
+  ['canvas click reuses the current mounted-surface classifier', /classifyX4UiCanvasExport\(\{/.test(builderCanvasClickSource)],
+  ['canvas click reads the current canvas state ref', /state:\s*canvasStateRef\.current/.test(builderCanvasClickSource)],
+  ['canvas click reads the current verification snapshot ref', /currentIdentity:\s*currentVerificationSnapshotRef\.current/.test(builderCanvasClickSource)],
+  ['canvas click compares the committed canvas identity', /committedIdentity:\s*canvasExportIdentityRef\.current/.test(builderCanvasClickSource)],
+  ['canvas click clears selection when the mounted proof is refused', /if \(classification\.status !== 'available'\)[\s\S]*?setBuilderSelection\(null\)/.test(builderCanvasClickSource)],
+] as const;
+const builderCanvasCurrentGateMissing = builderCanvasCurrentGateRows.filter(([, pass]) => !pass).map(([name]) => name);
+assert.deepEqual(
+  builderCanvasCurrentGateMissing,
+  [],
+  `B119 stale mounted canvas click safety fail-first red assertions: ${builderCanvasCurrentGateMissing.join(', ')}`,
+);
+assert.match(sourceText, /selectedBuilderNode\?\.rect !== undefined && canvasExportReady/, 'selection outline must use the exact current mounted-surface proof');
 // Fail-first B119 presentation contract: Source Preview must select source composition explicitly.
 assert.match(sourceText, /presentation:\s*['"]source-composition['"]/);
 assert.match(sourceText, /<X4UiSourceEditorPreviewGeometry scene=\{projection\.preview\.scene\} \/>/);
@@ -1692,7 +1903,12 @@ assert.match(sourceText, /resetX4UiEditorLoopState\(\s*loopInputRef\.current,\s*
 assert.match(sourceText, /onLoopIteration=\{updateLoop\}/);
 assert.match(sourceText, /onReset=\{resetLoops\}/);
 assert.ok(sourceText.indexOf('<X4UiSourceEditorPreviewPaths') < sourceText.indexOf('<X4UiSourceEditorPreviewLoops'));
-assert.ok(sourceText.indexOf('<X4UiSourceEditorPreviewLoops') < sourceText.indexOf('<X4UiSourceEditorSamples'));
+const inspectSampleSource = sourceText.slice(sourceText.indexOf('<details id={inspectTargetId}'));
+assert.ok(inspectSampleSource.indexOf('<X4UiSourceEditorPreviewLoops') >= 0);
+assert.ok(inspectSampleSource.indexOf('<X4UiSourceEditorPreviewLoops') < inspectSampleSource.indexOf('<X4UiSourceEditorSamples'), 'technical Inspect keeps paths then loops then samples');
+assert.ok(sourceText.indexOf('data-testid="x4-ui-preview-inputs-panel"') < sourceText.indexOf('data-testid="x4-ui-builder-workspace"'), 'primary preview inputs are in the toolbar before the canvas workspace');
+assert.match(sourceText, /onClear=\{clearPreviewValues\}/);
+assert.match(sourceText, /currentSampleProjectionRef\.current !== projection/);
 assert.ok(sourceText.indexOf('if (projection.paths !== pathInput)') < sourceText.indexOf('if (projection.loops !== loopInputRef.current)'));
 assert.ok(sourceText.indexOf('if (projection.loops !== loopInputRef.current)') < sourceText.indexOf('if (projection.samples !== sampleInput)'));
 assert.ok(sourceText.indexOf('const updatePath =') < sourceText.indexOf('const updateLoop ='));
@@ -1712,7 +1928,12 @@ assert.match(sourceText, /x4-ui-manual-calibration-enable-\$\{row\.rowId\}/);
 assert.match(sourceText, /x4-ui-manual-calibration-remove-\$\{row\.rowId\}/);
 assert.match(selftestText, /Historical B119 8C\.2 duplicate-admission fail-first receipt from the pre-correction candidate/);
 assert.match(selftestText, /these hashes are evidence for that earlier red run, not current file-hash expectations/);
-assert.match(uiBuilderText, /useState<'source' \| 'canvas' \| 'lua'>\('source'\)/);
+assert.ok(
+  /useState<'source' \| 'canvas' \| 'lua'>\('source'\)/.test(uiBuilderText)
+    || (/presentationTab \?\? localActiveUiSubTab/.test(uiBuilderText)
+      && /useState<UIBuilderPresentationTab>\('source'\)/.test(uiBuilderText)),
+  'UIBuilder must retain the standalone source/canvas/lua fallback while allowing the parent controlled subtab',
+);
 assert.match(uiBuilderText, /<X4UiSourceEditor workspace=\{workspace\}/);
 assert.match(uiBuilderText, /data-testid="ui-game-verification-status"/);
 assert.match(uiBuilderText, /External game verification/);
@@ -2185,6 +2406,7 @@ type SourceEditUiApi = {
     currentContext: unknown,
   ) => WorkspaceCommitSubmission;
   readonly X4UiSourceEditorSourceEdits?: React.ComponentType<Record<string, unknown>>;
+  readonly X4UiSourceEditorAddTextProperty?: React.ComponentType<Record<string, unknown>>;
 };
 
 type WorkspaceUpdater = (current: unknown) => unknown;
@@ -2257,7 +2479,7 @@ const failFirstScalarEntry = {
     callName: 'addTable',
     callSource: { file: 'ui/edit.lua', start: { line: 1, column: 0, offset: 0 }, end: { line: 1, column: 20, offset: 20 } },
     callOrder: 0,
-    fields: ['width'],
+    fields: ['semantics.properties.width'],
   },
 } as const;
 const failFirstLockedEntry = {
@@ -2272,7 +2494,7 @@ const failFirstLockedEntry = {
   endOffset: 42,
   source: { file: 'ui/edit.lua', start: { line: 2, column: 0, offset: 30 }, end: { line: 2, column: 12, offset: 42 } },
   sourceLiteral: { file: 'ui/edit.lua', start: { line: 2, column: 0, offset: 30 }, end: { line: 2, column: 12, offset: 42 } },
-  field: 'width',
+  field: 'semantics.properties.width',
   operationId: 'operation-dynamic',
   callName: 'addTable',
   reason: 'dynamic-value',
@@ -2286,7 +2508,7 @@ const failFirstStringEntry = {
   expression: 'label',
   expectedText: '"old"',
   quoteStyle: 'double' as const,
-  provenance: { ...failFirstScalarEntry.provenance, callName: 'createText' as const, fields: ['text'] as const },
+  provenance: { ...failFirstScalarEntry.provenance, callName: 'createText' as const, fields: ['semantics.text'] as const },
 } as const;
 const failFirstBooleanEntry = {
   ...failFirstScalarEntry,
@@ -2295,7 +2517,7 @@ const failFirstBooleanEntry = {
   value: true,
   expression: 'scaling',
   expectedText: 'true',
-  provenance: { ...failFirstScalarEntry.provenance, fields: ['scaling'] as const },
+  provenance: { ...failFirstScalarEntry.provenance, fields: ['semantics.properties.scaling'] as const },
 } as const;
 const failFirstCatalog = {
   status: 'ready',
@@ -2407,7 +2629,7 @@ const compileRenderedUiBuilderCommit = (): NonNullable<UIBuilderCommitApi['begin
 
 const compileActualSourceEditApply = (
   environment: Readonly<Record<string, unknown>>,
-): ((entryId: string) => void) => {
+): ((entryId: string, insertionWidget?: unknown, insertionText?: string, insertRow?: boolean, moveDirection?: string) => void) => {
   const startMarker = '  const applySourceEdit = ';
   const endMarker = '\n\n  const selectedTargetIdentity = ';
   const startOffset = sourceText.indexOf(startMarker);
@@ -2416,7 +2638,13 @@ const compileActualSourceEditApply = (
   const callbackSource = sourceText.slice(startOffset, endOffset);
   const compiled = transpileModule([
     'export default function createApply(environment) {',
-    'const { sourceEditDraftMatches, refuseSourceEdit, sourceEditCatalog, currentProgram, currentEvidenceAuthority, sourceEditDraft, sourceEditContextRef, sourceEditDraftRef, parseX4UiSourceEditInput, applyX4UiSourceEdit, applyX4UiSourceStructuralEdit, sourceEditContext, projection, onWorkspaceEdit, submitX4UiSourceEditWorkspaceCommit, setSourceEditDraft, settleX4UiSourceEditReceipt, X4_UI_EDITOR_SESSION_GAME_TRUTH } = environment;',
+    'const { sourceEditDraftMatches, refuseSourceEdit, sourceEditCatalog, currentProgram, currentEvidenceAuthority, sourceEditDraft, sourceEditContextRef, sourceEditDraftRef, parseX4UiSourceEditInput, applyX4UiSourceEdit, applyX4UiSourceStructuralEdit, applyX4UiSourceRowMove, applyX4UiSourceRowInsertion, applyX4UiSourceWidgetInsertion, sourceEditContext, projection, selectedBuilderNode, builderPresentation, contextualRowMove, builderSelectionRef: suppliedBuilderSelectionRef, onWorkspaceEdit, submitX4UiSourceEditWorkspaceCommit, setSourceEditDraft, settleX4UiSourceEditReceipt, X4_UI_EDITOR_SESSION_GAME_TRUTH } = environment;',
+    'const builderSelectionRef = suppliedBuilderSelectionRef ?? { current: selectedBuilderNode === undefined ? null : { nodeId: selectedBuilderNode.id } };',
+    'const contextualTextPropertyAdditions = environment.contextualTextPropertyAdditions ?? []; const applyX4UiSourceTextPropertyAddition = environment.applyX4UiSourceTextPropertyAddition;',
+    'const previewEditTransitionRef = { current: null }; const currentWorkspaceScope = "callback-isolation"; const selectionEpochRef = { current: 0 };',
+    'const inspectorScroll = environment.inspectorScroll ?? { begin: () => undefined, cancel: () => {} };',
+    // These causal tests isolate the unchanged draft/receipt path; mounted tests exercise the transfer hook.
+    'const submitSourceEditWithSelectionTransfer = (expected, replacement, continuation, splice) => submitX4UiSourceEditWorkspaceCommit(expected, replacement, onWorkspaceEdit, splice);',
     callbackSource,
     'return applySourceEdit;',
     '}',
@@ -2430,7 +2658,7 @@ const compileActualSourceEditApply = (
   if (typeof createApply !== 'function') throw new Error('could not compile the actual X4UiSourceEditor apply callback');
   const apply = createApply(environment) as unknown;
   if (typeof apply !== 'function') throw new Error('actual X4UiSourceEditor apply callback was not callable');
-  return apply as (entryId: string) => void;
+  return apply as (entryId: string, insertionWidget?: unknown, insertionText?: string, insertRow?: boolean, moveDirection?: string) => void;
 };
 
 const compileActualSourceEditStage = (
@@ -2751,7 +2979,9 @@ const committedBoundarySettlement = classifyNoOp(
 );
 
 const causalNoOpAcknowledgementRows = [
-  ['actual child no-op path uses the unified parent submission protocol', typeof submitSourceEditWorkspaceCommit === 'function' && /const parentResult = submitX4UiSourceEditWorkspaceCommit\(/.test(sourceText)],
+  ['actual child no-op path uses the unified parent submission protocol', typeof submitSourceEditWorkspaceCommit === 'function'
+    && /const parentResult = submitSourceEditWithSelectionTransfer\(/.test(sourceText)
+    && /if \(expectedWorkspace === replacement\) return submitX4UiSourceEditWorkspaceCommit\(expectedWorkspace, replacement, live\.onWorkspaceEdit\)/.test(sourceText)],
   ['actual child receipt settlement protocol is exported and wired', typeof settleSourceEditReceipt === 'function' && /settleX4UiSourceEditReceipt\(/.test(sourceText)],
   ['changed and no-op owner successes share one parent submission branch', !/if \(!result\.changed\)/.test(sourceText)],
   ['owner accepted changed-false calls the actual parent once', noOpChildParentCalls === 1],
@@ -3055,6 +3285,23 @@ const round4PreRenderRows: ReadonlyArray<CausalRow> = [
 ];
 
 const renderSourceEditControls = sourceEditUiApi.X4UiSourceEditorSourceEdits;
+const addTextPropertyControl = sourceEditUiApi.X4UiSourceEditorAddTextProperty;
+assert.equal(typeof addTextPropertyControl, 'function');
+if (!addTextPropertyControl) throw new Error('missing typed property control');
+const propertyChoiceMarkup = (pending: boolean, staged: Record<string, string> = {}) => renderToStaticMarkup(React.createElement(addTextPropertyControl, {
+  additions: [{ id: 'private-operation-halign', operationId: 'private-operation', property: 'halign', valueType: 'string', callName: 'createText' },
+    { id: 'private-operation-fontsize', operationId: 'private-operation', property: 'fontsize', valueType: 'number', callName: 'createText' },
+    { id: 'secondary-halign', operationId: 'secondary', property: 'halign', valueType: 'string', callName: 'setText2' }],
+  staged, pending, onStage: () => undefined, onApply: () => undefined,
+}));
+assert.match(propertyChoiceMarkup(false), /Choose a property/);
+assert.match(propertyChoiceMarkup(false), />Alignment</);
+assert.match(propertyChoiceMarkup(false), />Font size</);
+assert.match(propertyChoiceMarkup(false), />Secondary text: Alignment</);
+assert.match(propertyChoiceMarkup(false), /<button[^>]*disabled=""[^>]*>Add property/);
+assert.match(propertyChoiceMarkup(true), /<select[^>]*disabled=""/);
+assert.match(propertyChoiceMarkup(false, { 'other-entry': 'draft' }), /Apply or discard the current property changes first/);
+assert.match(propertyChoiceMarkup(false, { 'other-entry': 'draft' }), /<select[^>]*disabled=""/);
 if (!renderSourceEditControls) throw new Error('fail-first guard did not establish source-edit controls');
 const sourceEditControlsMarkup = renderToStaticMarkup(React.createElement(renderSourceEditControls, {
   catalog: failFirstCatalog,
@@ -3073,6 +3320,142 @@ assert.match(sourceEditControlsMarkup, /type="text"/);
 assert.match(sourceEditControlsMarkup, /type="checkbox"/);
 assert.doesNotMatch(sourceEditControlsMarkup, /data-testid="x4-ui-source-edit-input-fail-first-locked"/);
 assert.match(sourceEditControlsMarkup, /Not verified in game/);
+const alignmentControlEntry = {
+  ...failFirstStringEntry,
+  id: 'alignment-control',
+  value: 'center',
+  provenance: { ...failFirstStringEntry.provenance, fields: ['semantics.properties.halign'] },
+};
+const renderAlignmentControl = (value: string, technical = false, pending = false) => renderToStaticMarkup(React.createElement(renderSourceEditControls, {
+  catalog: failFirstCatalog,
+  entries: [{ ...alignmentControlEntry, value }],
+  staged: {},
+  showTechnicalDetails: technical,
+  showFrameBlocks: false,
+  receipt: pending ? { status: 'pending', detail: 'Awaiting acknowledgement' } : undefined,
+  onStage: () => undefined,
+  onApply: () => undefined,
+}));
+const alignmentControlMarkup = renderAlignmentControl('center');
+assert.match(alignmentControlMarkup, /<select[^>]*data-testid="x4-ui-source-edit-input-alignment-control"/);
+assert.match(alignmentControlMarkup, /<option value="left">Left<\/option>/);
+assert.match(alignmentControlMarkup, /<option value="center" selected="">Center<\/option>/);
+assert.match(alignmentControlMarkup, /<option value="right">Right<\/option>/);
+assert.doesNotMatch(alignmentControlMarkup, /<input[^>]*aria-label="Alignment"/);
+assert.match(renderAlignmentControl('custom-imported'), /<option value="custom-imported" selected="">Other value: custom-imported<\/option>/);
+assert.match(renderAlignmentControl('center', true), /<input[^>]*aria-label="Alignment"[^>]*value="center"/);
+assert.match(renderAlignmentControl('center', false, true), /<select[^>]*disabled=""/);
+const lockedCatalog = {
+  ...failFirstCatalog,
+  status: 'locked' as const,
+  reason: 'operation-not-applied' as const,
+  detail: 'operation-not-applied: the mixed source stream was not applied',
+};
+const lockedFriendlyMarkup = renderToStaticMarkup(React.createElement(renderSourceEditControls, {
+  catalog: lockedCatalog,
+  entries: [],
+  title: 'Friendly properties',
+  showTechnicalDetails: false,
+  showFrameBlocks: false,
+  staged: {},
+  receipt: undefined,
+  onStage: () => undefined,
+  onApply: () => undefined,
+  onOpenInspect: () => undefined,
+  inspectTargetId: 'x4-ui-inspect-panel-locked-selftest',
+}));
+assert.match(lockedFriendlyMarkup, /Property controls are unavailable for this source selection\./);
+assert.match(lockedFriendlyMarkup, /The preview could not apply this source operation, so its controls are unavailable here\./);
+assert.doesNotMatch(lockedFriendlyMarkup, /operation-not-applied: the mixed source stream was not applied/);
+const lockedTechnicalMarkup = renderToStaticMarkup(React.createElement(renderSourceEditControls, {
+  catalog: lockedCatalog,
+  entries: [],
+  title: 'Technical source controls',
+  showTechnicalDetails: true,
+  showFrameBlocks: false,
+  staged: {},
+  receipt: undefined,
+  onStage: () => undefined,
+  onApply: () => undefined,
+}));
+assert.match(lockedTechnicalMarkup, /operation-not-applied: the mixed source stream was not applied/);
+const friendlyJoinedFontSizeEntry = {
+  ...failFirstLockedEntry,
+  id: 'fail-first-joined-font-size',
+  field: 'semantics.fontsize,semantics.properties.fontsize',
+  callName: 'setText' as const,
+  reason: 'operation-not-applied' as const,
+  detail: 'the selected setText operation was not applied',
+} as const;
+const friendlyUnknownPropertyEntry = {
+  ...failFirstLockedEntry,
+  id: 'fail-first-unknown-property',
+  field: 'semantics.unsupportedProperties.mystery-key',
+  callName: 'setText' as const,
+  reason: 'operation-not-applied' as const,
+  detail: 'the selected setText operation was not applied',
+} as const;
+const friendlyTechnicalBindingEntry = {
+  ...failFirstLockedEntry,
+  id: 'fail-first-technical-binding',
+  field: 'arguments[1], semantics.options',
+  callName: 'setText' as const,
+  reason: 'constant-folded-value' as const,
+  detail: 'the source options record is a constant-folded producer value',
+} as const;
+const friendlySourceEditControlsMarkup = renderToStaticMarkup(React.createElement(renderSourceEditControls, {
+  catalog: failFirstCatalog,
+  entries: [
+    failFirstStringEntry,
+    failFirstScalarEntry,
+    failFirstLockedEntry,
+    friendlyJoinedFontSizeEntry,
+    friendlyUnknownPropertyEntry,
+    friendlyTechnicalBindingEntry,
+  ],
+  title: 'Friendly properties',
+  showTechnicalDetails: false,
+  showFrameBlocks: false,
+  staged: {},
+  receipt: undefined,
+  onStage: () => undefined,
+  onApply: () => undefined,
+  onOpenInspect: () => undefined,
+  inspectTargetId: 'x4-ui-inspect-panel-selftest',
+}));
+assert.match(friendlySourceEditControlsMarkup, /Friendly properties/);
+assert.match(friendlySourceEditControlsMarkup, />Text</);
+assert.match(friendlySourceEditControlsMarkup, />Width</);
+assert.match(friendlySourceEditControlsMarkup, /data-testid="x4-ui-source-edit-input-fail-first-string"[^>]*value="old"/);
+assert.match(friendlySourceEditControlsMarkup, /data-testid="x4-ui-source-edit-apply-fail-first-string"[^>]*disabled/);
+assert.match(friendlySourceEditControlsMarkup, /Technical source details/);
+assert.doesNotMatch(friendlySourceEditControlsMarkup, /Stage string literal|Editable source value|Change this value locally, then Apply/);
+assert.match(friendlySourceEditControlsMarkup, /Width is controlled by menu logic or a runtime value; it cannot be changed with this control\./);
+assert.match(friendlySourceEditControlsMarkup, /Font size belongs to a source operation the preview did not apply; inspect the exact details\./);
+assert.match(friendlySourceEditControlsMarkup, /Source property · mystery-key belongs to a source operation the preview did not apply; inspect the exact details\./);
+assert.match(friendlySourceEditControlsMarkup, /Technical source bindings remain available under Inspect\./);
+assert.match(friendlySourceEditControlsMarkup, /1 source setting is not modeled by the preview; the original record remains under Inspect\./);
+assert.match(friendlySourceEditControlsMarkup, /data-testid="x4-ui-builder-open-inspect-properties"/);
+assert.match(friendlySourceEditControlsMarkup, /aria-controls="x4-ui-inspect-panel-selftest"/);
+assert.doesNotMatch(friendlySourceEditControlsMarkup, /data-testid="x4-ui-source-edit-entry-fail-first-technical-binding"/, 'technical bindings are aggregated out of friendly primary cards');
+const friendlyInputPosition = friendlySourceEditControlsMarkup.indexOf('data-testid="x4-ui-source-edit-input-fail-first-string"');
+const friendlyTechnicalPosition = friendlySourceEditControlsMarkup.indexOf('data-testid="x4-ui-source-edit-technical-fail-first-string"');
+assert.ok(friendlyInputPosition >= 0 && friendlyTechnicalPosition > friendlyInputPosition, 'friendly technical details must follow the immediate property control');
+assert.doesNotMatch(friendlySourceEditControlsMarkup, /Owner-issued literal/);
+assert.match(friendlySourceEditControlsMarkup, /data-testid="x4-ui-source-edit-technical-fail-first-locked"[\s\S]*owner lock\/refusal reason:[\s\S]*dynamic expression is not a direct source literal/);
+const noScopedInspectRouteMarkup = renderToStaticMarkup(React.createElement(renderSourceEditControls, {
+  catalog: failFirstCatalog,
+  entries: [friendlyTechnicalBindingEntry],
+  title: 'Friendly properties',
+  showTechnicalDetails: false,
+  showFrameBlocks: false,
+  staged: {},
+  receipt: undefined,
+  onStage: () => undefined,
+  onApply: () => undefined,
+}));
+assert.match(noScopedInspectRouteMarkup, /Technical source bindings remain available under Inspect\./);
+assert.doesNotMatch(noScopedInspectRouteMarkup, /Open Inspect|aria-controls=/, 'friendly controls must not emit an unscoped Inspect route');
 const failFirstBlockEntry = {
   kind: 'insert-block',
   id: 'fail-first-frame-block',
@@ -4158,12 +4541,75 @@ const round6CausalRows: ReadonlyArray<CausalRow> = [
 const round6CausalFailures = round6CausalRows.filter(([, pass]) => !pass).map(([name]) => name);
 assert.deepEqual(round6CausalFailures, [], `B119 7D Round-6 stale-state red assertions: ${round6CausalFailures.join(', ')}`);
 
+const mixedRowActionContext = stableSourceEditContext;
+const mixedRowActionContextRef: { current: SourceEditContextFixture | null } = { current: mixedRowActionContext };
+const mixedRowActionDraft: SourceEditDraftFixture = { context: mixedRowActionContext, staged: {} };
+const mixedRowActionDraftRef: { current: SourceEditDraftFixture } = { current: mixedRowActionDraft };
+let mixedRowActionRefusal: { readonly reason: string; readonly detail: string } | undefined;
+let mixedRowActionMutations = 0;
+let mixedRowActionParentCalls = 0;
+const applyMixedRowAction = compileActualSourceEditApply({
+  sourceEditDraftMatches: true,
+  refuseSourceEdit: (reason: string, detail: string) => {
+    mixedRowActionRefusal = { reason, detail };
+  },
+  sourceEditCatalog: failFirstCatalog,
+  currentProgram: {},
+  currentEvidenceAuthority: {},
+  sourceEditDraft: mixedRowActionDraft,
+  sourceEditContextRef: mixedRowActionContextRef,
+  sourceEditDraftRef: mixedRowActionDraftRef,
+  parseX4UiSourceEditInput: parseScalar,
+  applyX4UiSourceEdit: () => {
+    mixedRowActionMutations += 1;
+    throw new Error('mixed row action must refuse before a scalar owner call');
+  },
+  applyX4UiSourceStructuralEdit: () => {
+    mixedRowActionMutations += 1;
+    throw new Error('mixed row action must refuse before a structural owner call');
+  },
+  applyX4UiSourceRowMove: () => {
+    mixedRowActionMutations += 1;
+    throw new Error('mixed row action must refuse before a movement owner call');
+  },
+  applyX4UiSourceRowInsertion: () => {
+    mixedRowActionMutations += 1;
+    throw new Error('mixed row action must refuse before a row-insertion owner call');
+  },
+  applyX4UiSourceWidgetInsertion: () => {
+    mixedRowActionMutations += 1;
+    throw new Error('mixed row action must refuse before a widget-insertion owner call');
+  },
+  sourceEditContext: mixedRowActionContext,
+  projection: { source: {} },
+  builderPresentation: { nodes: [] },
+  contextualRowMove: { detail: '', upDetail: '', downDetail: '' },
+  onWorkspaceEdit: () => {
+    mixedRowActionParentCalls += 1;
+    throw new Error('mixed row action must refuse before the parent callback');
+  },
+  submitX4UiSourceEditWorkspaceCommit: () => {
+    mixedRowActionParentCalls += 1;
+    throw new Error('mixed row action must refuse before the parent commit helper');
+  },
+  setSourceEditDraft: () => undefined,
+  settleX4UiSourceEditReceipt: () => undefined,
+  X4_UI_EDITOR_SESSION_GAME_TRUTH: 'Not verified in game',
+});
+applyMixedRowAction('mixed-row-action', 'button', 'Mixed action text', true, 'down');
+assert.deepEqual(mixedRowActionRefusal, {
+  reason: 'move-unavailable',
+  detail: 'Row controls are unavailable for this selection.',
+}, 'the actual apply callback must refuse an ambiguous movement plus insertion request');
+assert.equal(mixedRowActionMutations, 0, 'an ambiguous movement plus insertion request must not reach any source owner');
+assert.equal(mixedRowActionParentCalls, 0, 'an ambiguous movement plus insertion request must not reach the parent commit seam');
+
 const sourceEditIntegrationWorkspace = {
   ...workspace,
   id: 'x4-ui-source-editor-source-edit-integration',
   compileSettings: { ui: true },
   passthroughFiles: [
-    { path: 'ui.xml', content: '<addon><environment type="menus"><file name="ui/edit.lua" /></environment></addon>' },
+    { path: 'ui.xml', content: '<addon name="b119_source_edit_integration"><environment type="menus"><file name="ui/edit.lua" /></environment></addon>' },
     {
       path: 'ui/edit.lua',
       content: [
@@ -4770,23 +5216,99 @@ class MountedDomElement extends MountedDomNode {
   checked = false;
   defaultChecked = false;
   disabled = false;
-  selected = false;
+  private selectedState = false;
   multiple = false;
   min = '';
   max = '';
   step = '';
   htmlFor = '';
+  files: FileList | null = null;
 
   constructor(tagName: string, ownerDocument: MountedDomDocument, namespaceURI = 'http://www.w3.org/1999/xhtml') {
     super(MountedDomNode.ELEMENT_NODE, tagName.toUpperCase(), ownerDocument);
     this.tagName = tagName.toUpperCase();
     this.localName = tagName.toLowerCase();
     this.namespaceURI = namespaceURI;
+    if (this.localName === 'input') {
+      let inputValue = '';
+      Object.defineProperty(this, 'value', {
+        configurable: true,
+        enumerable: true,
+        get: () => inputValue,
+        set: (next: string) => {
+          inputValue = String(next);
+          if (this.type === 'file' && inputValue === '') this.files = null;
+        },
+      });
+    } else if (this.localName === 'textarea') {
+      // React initializes textareas through defaultValue/textContent. Match the
+      // browser's pristine-versus-dirty value behavior instead of a plain field.
+      let textareaValue = '';
+      let dirtyValue = false;
+      Object.defineProperty(this, 'value', {
+        configurable: true,
+        enumerable: true,
+        get: () => textareaValue,
+        set: (next: string) => { textareaValue = String(next); dirtyValue = true; },
+      });
+      Object.defineProperty(this, 'defaultValue', {
+        configurable: true,
+        enumerable: true,
+        get: () => this.textContent,
+        set: (next: string) => {
+          this.textContent = String(next);
+          if (!dirtyValue) textareaValue = String(next);
+        },
+      });
+    } else if (this.localName === 'select') {
+      let selectValue = '';
+      Object.defineProperty(this, 'value', {
+        configurable: true,
+        enumerable: true,
+        get: () => selectValue,
+        set: (next: string) => {
+          selectValue = String(next);
+          const selectedOption = this.options.find(option => option.value === selectValue);
+          for (const option of this.options) option.selectedState = option === selectedOption;
+        },
+      });
+    }
+  }
+
+  get selected(): boolean { return this.selectedState; }
+  set selected(next: boolean) {
+    this.selectedState = next === true;
+    if (!this.selectedState) return;
+    const parent = this.parentNode;
+    if (!(parent instanceof MountedDomElement) || parent.localName !== 'select' || parent.multiple) return;
+    for (const option of parent.options) {
+      if (option !== this) option.selectedState = false;
+    }
   }
 
   get options(): MountedDomElement[] {
     return this.childNodes.filter(child => child instanceof MountedDomElement && child.localName === 'option') as MountedDomElement[];
   }
+  appendChild<T extends MountedDomNode>(child: T): T {
+    const appended = super.appendChild(child);
+    if (this.localName === 'select' && appended instanceof MountedDomElement && appended.localName === 'option' && appended.selected && !this.multiple) {
+      for (const option of this.options) {
+        if (option !== appended) option.selectedState = false;
+      }
+    }
+    return appended;
+  }
+
+  insertBefore<T extends MountedDomNode>(child: T, before: MountedDomNode | null): T {
+    const inserted = super.insertBefore(child, before);
+    if (this.localName === 'select' && inserted instanceof MountedDomElement && inserted.localName === 'option' && inserted.selected && !this.multiple) {
+      for (const option of this.options) {
+        if (option !== inserted) option.selectedState = false;
+      }
+    }
+    return inserted;
+  }
+
   setAttribute(name: string, value: string): void {
     const key = name.toLowerCase();
     this.attributes.set(key, String(value));
@@ -4959,6 +5481,17 @@ function mountedElementByTestIdPrefix(root: MountedDomNode, prefix: string): Mou
   }
   return null;
 }
+
+function mountedReactClickCallback(element: MountedDomElement, detail: string): () => void {
+  const propsKey = Object.getOwnPropertyNames(element).find(key => key.startsWith('__reactProps$'));
+  assert.ok(propsKey !== undefined, `${detail}: mounted React props were not retained on the real DOM node`);
+  const props = (element as unknown as Record<string, unknown>)[propsKey];
+  assert.ok(props !== null && typeof props === 'object' && !Array.isArray(props), `${detail}: mounted React props were malformed`);
+  const callback = (props as Record<string, unknown>).onClick;
+  assert.equal(typeof callback, 'function', `${detail}: the real mounted onClick callback was not retained`);
+  return callback as () => void;
+}
+
 function mountedElementText(root: MountedDomNode, testId: string): string {
   return mountedElementByTestId(root, testId)?.textContent ?? '';
 }
@@ -5033,6 +5566,7 @@ function compileMountedCandidateProjectionHarness(): React.ComponentType<Mounted
     'const useEffect = React.useEffect;',
     'const [mountedTargetSelector, setMountedTargetSelector] = React.useState(requestedTargetSelector);',
     'const targetSelector = mountedTargetSelector;',
+    'const previewContinuation = undefined;',
     ownerSource,
     selectionSource,
     'useEffect(() => {',
@@ -5386,6 +5920,7 @@ type MountedSourceEditorTransitionReceipt = {
 
 async function runMountedSourceEditorTransitionRegression(
   fixture: P7SourceAuthorityFixture,
+  scopeProbe?: 'identical' | 'empty',
 ): Promise<MountedSourceEditorTransitionReceipt> {
   const mountedDocument = new MountedDomDocument();
   const restoreGlobals = installMountedDomGlobals(mountedDocument);
@@ -5408,7 +5943,7 @@ async function runMountedSourceEditorTransitionRegression(
         reason: 'partial',
       },
     ],
-  } as unknown as React.ComponentProps<typeof X4UiSourceEditor>['workspace'];
+  };
   const flush = async (operation: () => void): Promise<void> => {
     await act(async () => {
       operation();
@@ -5427,6 +5962,8 @@ async function runMountedSourceEditorTransitionRegression(
     readonly canvasMounted: boolean;
     readonly exportDisabled: boolean;
   }> = [];
+  let renderedWorkspace = transitionWorkspace;
+  let renderedScope = scopeProbe === undefined ? undefined : 'transition-scope-a';
   let requestParentRender: (() => void) | undefined;
   const MountedSourceEditorParent = (): React.ReactElement => {
     const [parentVerificationSnapshot, setParentVerificationSnapshot] = React.useState<unknown>(null);
@@ -5448,7 +5985,8 @@ async function runMountedSourceEditorTransitionRegression(
           {parentVerificationSnapshot === null ? 'null' : JSON.stringify(parentVerificationSnapshot)}
         </div>
         <X4UiSourceEditor
-          workspace={transitionWorkspace}
+          workspace={renderedWorkspace}
+          workspaceScope={renderedScope}
           corpusLoader={canonicalLoader}
           surfaceFactory={mountedSurfaceFactory}
           onVerificationSnapshotChange={onVerificationSnapshotChange}
@@ -5555,6 +6093,142 @@ async function runMountedSourceEditorTransitionRegression(
     const restoredCanvas = restoredHost?.firstElementChild;
     const restoredExport = mountedElementByTestId(container, 'x4-ui-canvas-export');
     const restoredCanvasStatus = mountedElementText(container, 'x4-ui-canvas-status');
+    if (scopeProbe !== undefined) {
+      const originalWorkspaceBytes = JSON.stringify(transitionWorkspace);
+      // React selects options directly; this fixture's select.value getter only tracks dispatched
+      // input. Read selected options, as the existing history probes do, for render-driven changes.
+      const selectedValue = (id: string): string => (
+        mountedElementByTestId(container, id)?.options.find(option => option.selected)?.value ?? ''
+      );
+      const selectTarget = async (selected: boolean): Promise<void> => {
+        const control = mountedElementByTestId(container, 'x4-ui-target-selector');
+        assert.ok(control, 'scope transition must retain the target selector');
+        const option = selected ? mountedOptionByText(control, 'menu.createFrame') : null;
+        if (selected) assert.ok(option, 'scope transition must expose the original target');
+        await flush(() => {
+          control.value = option?.value ?? '';
+          control.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+      };
+      const mountedCanvas = (): MountedDomElement | null => (
+        mountedElementByTestId(container, 'x4-ui-canvas-host')?.firstElementChild ?? null
+      );
+      await selectTarget(false);
+      await flush(() => {
+        renderedWorkspace = { ...transitionWorkspace };
+        requestParentRender?.();
+      });
+      assert.ok(mountedCanvas() === restoredCanvas, 'same-scope workspace object churn must retain the prior stale canvas');
+      assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'stale');
+      assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-export')?.disabled, true);
+      await selectTarget(true);
+      const beforeSwitch = mountedCanvas();
+      assert.ok(beforeSwitch instanceof MountedCanvasElement, 'scope probe must start from a rendered canvas');
+      if (scopeProbe === 'identical') {
+        let finishOldExport: ((blob: Blob | null) => void) | undefined;
+        beforeSwitch.toBlob = callback => { finishOldExport = callback; };
+        await flush(() => mountedElementByTestId(container, 'x4-ui-canvas-export')?.click());
+        assert.ok(finishOldExport, 'scope probe must start a real pending PNG serialization');
+        await flush(() => {
+          renderedScope = 'transition-scope-identical';
+          requestParentRender?.();
+        });
+        assert.ok(mountedCanvas() === null, 'unseen immutable scope must not inherit selection even with identical source and mod name');
+        assert.equal(selectedValue('x4-ui-source-selector'), '');
+        assert.equal(selectedValue('x4-ui-target-selector'), '');
+        const independentSource = mountedElementByTestId(container, 'x4-ui-source-selector');
+        const independentOption = independentSource && mountedOptionByText(independentSource, 'ui/pipeline_test.lua');
+        assert.ok(independentSource && independentOption);
+        await flush(() => {
+          independentSource.value = independentOption.value;
+          independentSource.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        await selectTarget(true);
+        assert.ok(mountedCanvas() instanceof MountedCanvasElement && mountedCanvas() !== beforeSwitch,
+          'explicit selection in an identical workspace must render a fresh canvas');
+        assert.ok(beforeSwitch.parentNode === null, 'previous scope canvas must be detached');
+        assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current');
+        await flush(() => finishOldExport?.(new Blob(['png'], { type: 'image/png' })));
+        assert.match(mountedElementText(container, 'x4-ui-canvas-export-status'), /changed before serialization completed/);
+      }
+      const beforeEmpty = mountedCanvas();
+      await flush(() => {
+        renderedWorkspace = { ...transitionWorkspace, uiWidgets: [], passthroughFiles: [] };
+        renderedScope = 'transition-scope-empty';
+        requestParentRender?.();
+      });
+      assert.ok(mountedCanvas() === null, 'independent empty workspace must not retain another workspace canvas');
+      assert.ok(beforeEmpty?.parentNode === null, 'empty workspace must detach the prior scope canvas');
+      assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'refused');
+      assert.equal(mountedElementText(container, 'x4-ui-parent-verification-snapshot'), 'null');
+      assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-export')?.disabled, true);
+      await flush(() => {
+        renderedWorkspace = transitionWorkspace;
+        renderedScope = 'transition-scope-a';
+        requestParentRender?.();
+      });
+      const returningSource = mountedElementByTestId(container, 'x4-ui-source-selector');
+      assert.ok(returningSource, 'returning workspace must expose its source selector');
+      const returningOption = mountedOptionByText(returningSource, 'ui/pipeline_test.lua');
+      assert.ok(returningOption, 'returning workspace must retain canonical source');
+      assert.equal(selectedValue('x4-ui-source-selector'), returningOption.value, 'return must restore the original file without a user reselect');
+      assert.equal(selectedValue('x4-ui-target-selector'),
+        mountedOptionByText(mountedElementByTestId(container, 'x4-ui-target-selector')!, 'menu.createFrame')?.value,
+        'return must restore the original menu without a user reselect');
+      assert.ok(mountedCanvas() instanceof MountedCanvasElement && mountedCanvas() !== beforeEmpty
+        && mountedCanvas() !== beforeSwitch, 'returning workspace must render a fresh canvas, never borrow old pixels');
+      assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current');
+      assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-export')?.disabled, false);
+      assert.notEqual(mountedElementText(container, 'x4-ui-parent-verification-snapshot'), 'null');
+
+      const visitEmpty = async (): Promise<void> => flush(() => {
+        renderedWorkspace = { ...transitionWorkspace, uiWidgets: [], passthroughFiles: [] };
+        renderedScope = 'transition-scope-empty';
+        requestParentRender?.();
+      });
+      const returnToOriginal = async (next = transitionWorkspace): Promise<void> => flush(() => {
+        renderedWorkspace = next;
+        renderedScope = 'transition-scope-a';
+        requestParentRender?.();
+      });
+      await selectTarget(false);
+      await visitEmpty();
+      await returnToOriginal();
+      assert.equal(selectedValue('x4-ui-source-selector'), returningOption.value,
+        'explicitly cleared menu must retain its separately selected file');
+      assert.equal(selectedValue('x4-ui-target-selector'), '',
+        'return must preserve a deliberate menu deselection');
+      assert.ok(mountedCanvas() === null, 'deliberate menu deselection must not restore old pixels');
+      await selectTarget(true);
+      await visitEmpty();
+      await returnToOriginal({
+        ...transitionWorkspace,
+        passthroughFiles: transitionWorkspace.passthroughFiles.map(file => file.path === 'ui/pipeline_test.lua'
+          ? { ...file, content: `${file.content}\n-- externally changed while away\n` } : file),
+      });
+      assert.ok(mountedCanvas() === null, 'changed source must reject remembered selection and old canvas');
+      assert.equal(mountedElementText(container, 'x4-ui-parent-verification-snapshot'), 'null');
+      assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-export')?.disabled, true);
+      await visitEmpty();
+      await returnToOriginal({ ...transitionWorkspace, uiWidgets: [], passthroughFiles: [] });
+      assert.ok(mountedCanvas() === null, 'missing source must reject remembered selection');
+      await visitEmpty();
+      await returnToOriginal();
+      assert.ok(mountedCanvas() instanceof MountedCanvasElement,
+        'only the exact original catalog may resolve retained selection again');
+      const clearedSource = mountedElementByTestId(container, 'x4-ui-source-selector');
+      assert.ok(clearedSource);
+      await flush(() => {
+        clearedSource.value = '';
+        clearedSource.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+      });
+      await visitEmpty();
+      await returnToOriginal();
+      assert.equal(selectedValue('x4-ui-source-selector'), '');
+      assert.equal(selectedValue('x4-ui-target-selector'), '');
+      assert.ok(mountedCanvas() === null, 'explicit file deselection must not be replaced by remembered or first source');
+      assert.equal(JSON.stringify(transitionWorkspace), originalWorkspaceBytes, 'scope transitions must not mutate source');
+    }
     return {
       initialCanvasStatus,
       initialCanvasDetail,
@@ -5626,6 +6300,32 @@ const PORTABLE_PIPELINE_TEST_SOURCE = [
   'function menuC.createFrame()',
   '  local frame = Helper.createFrameHandle(menuC, { width = 360, height = 220, layer = menuC.layer })',
   '  frame:addTable(1, { width = 360 })',
+  '  frame:display()',
+  'end',
+  '',
+  'return menuA',
+  '',
+].join('\n');
+
+const HISTORY_ROW_REARRANGEMENT_SOURCE = [
+  'local menuA = { name = "pipeline_test_menu_a", layer = 4 }',
+  'function menuA.createFrame()',
+  '  local frame = Helper.createFrameHandle(menuA, { width = 530, height = 436, layer = menuA.layer })',
+  '  local ftable = frame:addTable(2, { width = 530, reserveScrollBar = false, scaling = false })',
+  '  ftable:setColWidthPercent(1, 55)',
+  '  ftable:setColWidthPercent(2, 45)',
+  '  local first = ftable:addRow(true, {})',
+  '  first[1]:setColSpan(2)',
+  '  first[1]:createText("History Before", {})',
+  '  local second = ftable:addRow(true, {})',
+  '  second[1]:setColSpan(2)',
+  '  second[1]:createButton({ active = true }):setText("History Row 2", {})',
+  '  local third = ftable:addRow(true, {})',
+  '  third[1]:setColSpan(2)',
+  '  third[1]:createText("History Row 3", {})',
+  '  local fourth = ftable:addRow(true, {})',
+  '  fourth[1]:setColSpan(2)',
+  '  fourth[1]:createText("History Row 4", {})',
   '  frame:display()',
   'end',
   '',
@@ -5807,7 +6507,9 @@ async function runMountedExactPipelineTestTransitionRegression(
     const targetMetadata = mountedElementText(container, 'x4-ui-canvas-export-target');
     const targetSceneStatus = mountedElementText(container, 'x4-ui-preview-geometry-scene-status');
 
-    const exactTargetSelect = mountedElementByTestId(container, 'x4-ui-target-selector');
+    const primaryMenuSelect = mountedElementByTestId(container, 'x4-ui-target-selector');
+    assert.deepEqual(primaryMenuSelect?.options.map(option => option.textContent), ['Select menu…', 'menuA.createFrame', 'menuB.createFrame', 'menuC.createFrame'], 'ordinary menu choices must exclude helper and handler targets');
+    const exactTargetSelect = mountedElementByTestId(container, 'x4-ui-inspect-target-selector');
     if (exactTargetSelect === null) throw new Error('exact pipeline_test target selector disappeared after menuA.createFrame');
     const handlerOption = exactTargetSelect.options.find(option => option.textContent.includes('handler'));
     if (handlerOption === undefined) throw new Error(`exact pipeline_test handler target option was not rendered: ${exactTargetSelect.options.map(option => option.textContent).join(', ')}`);
@@ -6493,6 +7195,3878 @@ async function runMountedSampleDraftBatchRegression(
   }
 }
 
+async function runMountedInspectorScrollRetentionRegression(): Promise<void> {
+  type Input = Parameters<typeof useX4UiInspectorScrollRetention>[0];
+  const cases = ['confirmed', 'clamped', 'no-confirmation', 'foreign-workspace', 'scope',
+    'profile', 'selection', 'cancel', 'late-old-refusal', 'unmount'] as const;
+  for (const scenario of cases) {
+    const doc = new MountedDomDocument();
+    const restore = installMountedDomGlobals(doc);
+    const container = doc.createElement('div'); doc.body.appendChild(container);
+    const before = {}, after = {};
+    let state: Input = { workspace: before, scope: 'same-workspace', profile: {}, selectionEpoch: 0, nodeId: 'old-node' };
+    let api!: ReturnType<typeof useX4UiInspectorScrollRetention>;
+    let root: ReturnType<typeof createRoot> | undefined;
+    const Parent = (): React.ReactElement => {
+      api = useX4UiInspectorScrollRetention(state);
+      return <aside data-testid="scroll-test" ref={api.containerRef} />;
+    };
+    const render = (): void => root!.render(<React.StrictMode><Parent /></React.StrictMode>);
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); });
+    };
+    const update = (patch: Partial<Input>): void => { state = { ...state, ...patch }; render(); };
+    try {
+      await flush(() => { root = createRoot(container as unknown as Element); render(); });
+      const panel = mountedElementByTestId(container, 'scroll-test') as unknown as HTMLElement;
+      assert.ok(panel);
+      // Event-only DOM: simulate the browser's clamp. The E2E test proves actual layout.
+      Object.defineProperties(panel, { scrollTop: { value: 137, writable: true },
+        scrollHeight: { value: scenario === 'clamped' ? 150 : 500 }, clientHeight: { value: 100 } });
+      const oldAttempt = api.begin(after);
+      assert.ok(oldAttempt);
+      if (scenario === 'late-old-refusal') {
+        panel.scrollTop = 145;
+        assert.ok(api.begin(after));
+        api.cancel(oldAttempt);
+      }
+      panel.scrollTop = 0;
+      if (scenario === 'unmount') {
+        await flush(() => { root!.unmount(); root = undefined; });
+      } else {
+        if (scenario === 'foreign-workspace') await flush(() => update({ workspace: {} }));
+        if (scenario === 'scope') await flush(() => update({ scope: 'different-workspace' }));
+        if (scenario === 'profile') await flush(() => update({ profile: {} }));
+        if (scenario === 'selection') await flush(() => update({ selectionEpoch: 1 }));
+        if (scenario === 'cancel') api.cancel();
+        await flush(() => update({ workspace: after, nodeId: undefined }));
+        assert.equal(panel.scrollTop, 0, `${scenario}: readback alone must not restore`);
+        api.confirm(undefined);
+        assert.equal(panel.scrollTop, 0, `${scenario}: source-only selection must not restore`);
+      }
+      const freshSelection: Parameters<typeof api.confirm>[0] = {
+        workspace: after, nodeId: 'new-node', sourceIdentityKey: 'fresh-source', targetId: 'fresh-target', profileKey: 'same-profile',
+      };
+      if (scenario !== 'no-confirmation') api.confirm(freshSelection);
+      if (root !== undefined) await flush(() => update({ nodeId: 'new-node' }));
+      const expected = scenario === 'confirmed' ? 137 : scenario === 'clamped' ? 50 : scenario === 'late-old-refusal' ? 145 : 0;
+      assert.equal(panel.scrollTop, expected, `${scenario}: only confirmed uninterrupted view restores`);
+      panel.scrollTop = 23;
+      if (root !== undefined) await flush(render);
+      assert.equal(panel.scrollTop, 23, `${scenario}: consumed or cancelled snapshot must not fight later scrolling`);
+    } finally {
+      if (root !== undefined) await flush(() => root!.unmount());
+      restore();
+    }
+  }
+  console.log(`B119_INSPECTOR_SCROLL_RETENTION ${cases.length}/${cases.length} PASS; view-only lifecycle, not DOM layout proof`);
+}
+
+async function runMountedSourceEditSelectionTransferRegression(): Promise<void> {
+  type Input = Parameters<typeof useX4UiSourceEditSelectionTransfer>[0];
+  type State = Pick<Input, 'workspace' | 'candidates' | 'sourceSelector' | 'targetSelector' | 'profile'>;
+  const scenarios = [
+    'ack-before-readback', 'readback-before-ack', 'sync-readback', 'sync-reentrant', 'no-op',
+    'workspace-switch', 'replacement-clone', 'backward-transition', 'source-change', 'target-change',
+    'profile-change', 'cancel', 'unmount', 'sync-unmount', 'sync-switch', 'callback-throws',
+    'parent-refused', 'ack-refused', 'forged-ack', 'crossed-ack', 'rejected-promise', 'superseded',
+    'missing-source', 'ambiguous-source', 'missing-target', 'ambiguous-target',
+    'old-ambiguous-source', 'old-ambiguous-target',
+    'unnamed-sync-readback', 'unnamed-now-empty', 'empty-now-unnamed', 'ambiguous-unnamed-target',
+  ] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string }[] = [];
+  for (const scenario of scenarios) {
+    const doc = new MountedDomDocument();
+    const restore = installMountedDomGlobals(doc);
+    const container = doc.createElement('div');
+    doc.body.appendChild(container);
+    const original = { revision: 'old' };
+    const replacement = { revision: 'new' };
+    const switched = { revision: 'other-workspace' };
+    // Producer-shaped catalogs isolate UI lifecycle here; the full mounted journey below uses
+    // real Session catalogs, SourceEdits results, App normalization and fresh canvas rendering.
+    const catalog = (revision: string): Input['candidates'] => [{
+      raw: {}, index: 0, path: 'ui/menu.lua', key: `source-${revision}`, sourceIdentity: { sha256: revision },
+      targets: [{ raw: { kind: 'function', name: 'menu.createFrame', id: `target-${revision}` }, key: `target-${revision}`, label: 'menu.createFrame' }],
+    }];
+    let oldCandidates = catalog('old');
+    let newCandidates = catalog('new');
+    if (['unnamed-sync-readback', 'unnamed-now-empty', 'empty-now-unnamed', 'ambiguous-unnamed-target'].includes(scenario)) {
+      const unnamed = (items: Input['candidates'], name?: string): Input['candidates'] => [{ ...items[0], targets: [{
+        ...items[0].targets[0], raw: { kind: 'top-level', ...(name === undefined ? {} : { name }), id: items[0].targets[0].raw.id },
+      }] }];
+      oldCandidates = unnamed(oldCandidates, scenario === 'empty-now-unnamed' ? '' : undefined);
+      newCandidates = unnamed(newCandidates, scenario === 'unnamed-now-empty' ? '' : undefined);
+      if (scenario === 'ambiguous-unnamed-target') newCandidates = [{ ...newCandidates[0], targets: [...newCandidates[0].targets, { ...newCandidates[0].targets[0], key: 'other-unnamed-target' }] }];
+    }
+    if (scenario === 'old-ambiguous-source') oldCandidates = [...oldCandidates, { ...oldCandidates[0], key: 'other-source' }];
+    if (scenario === 'old-ambiguous-target') oldCandidates = [{ ...oldCandidates[0], targets: [...oldCandidates[0].targets, { ...oldCandidates[0].targets[0], key: 'other-target' }] }];
+    if (scenario === 'missing-source') newCandidates = [];
+    if (scenario === 'ambiguous-source') newCandidates = [...newCandidates, { ...newCandidates[0], key: 'other-source' }];
+    if (scenario === 'missing-target') newCandidates = [{ ...newCandidates[0], targets: [] }];
+    if (scenario === 'ambiguous-target') newCandidates = [{ ...newCandidates[0], targets: [...newCandidates[0].targets, { ...newCandidates[0].targets[0], key: 'other-target' }] }];
+    const initial: State = { workspace: original, candidates: oldCandidates, sourceSelector: 'source-old', targetSelector: 'target-old', profile: { width: 800, height: 600, uiScale: 1 } };
+    let liveState = initial;
+    let update: (next: Partial<State>) => void = () => { throw new Error('transfer harness not mounted'); };
+    let api: ReturnType<typeof useX4UiSourceEditSelectionTransfer> | undefined;
+    let root: ReturnType<typeof createRoot> | undefined;
+    let parentCalls = 0;
+    const adoptions: { sourceSelector: string; targetSelector: string }[] = [];
+    const authorities: X4UiWorkspaceEditPendingAuthority[] = [];
+    let rejectNextPromise = scenario === 'rejected-promise';
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); });
+    };
+    const handler: X4UiWorkspaceEditHandler = request => {
+      parentCalls += 1;
+      assert.equal(request.expectedWorkspace, liveState.workspace);
+      if (scenario === 'parent-refused') return { status: 'refused', reason: 'stale-parent-workspace', detail: 'fixture refused' };
+      const authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+      authorities.push(authority);
+      if (scenario === 'callback-throws') throw new Error('fixture throw');
+      if (scenario === 'sync-reentrant') assert.equal(api?.submit(original, replacement).status, 'refused', 'installed intent blocks a reentrant submission');
+      if (['sync-readback', 'sync-reentrant', 'unnamed-sync-readback'].includes(scenario)) {
+        flushSync(() => update({ workspace: request.workspace, candidates: newCandidates }));
+        authority.acknowledge(request.workspace);
+      }
+      if (scenario === 'sync-unmount') flushSync(() => { root?.unmount(); root = undefined; });
+      if (scenario === 'sync-switch') flushSync(() => update({ workspace: switched }));
+      if (scenario === 'forged-ack') return { ...authority.submission, acknowledgement: Promise.resolve({ ...authority.acknowledge(request.workspace) }) };
+      if (scenario === 'crossed-ack') {
+        const crossed = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+        return { ...authority.submission, acknowledgement: Promise.resolve(crossed.acknowledge(request.workspace)) };
+      }
+      if (scenario === 'rejected-promise' && rejectNextPromise) {
+        rejectNextPromise = false;
+        return { ...authority.submission, acknowledgement: Promise.reject(new Error('fixture rejection')) };
+      }
+      return authority.submission;
+    };
+    const Parent = (): React.ReactElement | null => {
+      const [state, setState] = React.useState(initial);
+      liveState = state;
+      update = next => setState(previous => ({ ...previous, ...next }));
+      api = useX4UiSourceEditSelectionTransfer({ ...state, onWorkspaceEdit: handler, onSelect: selected => {
+        const expectedAdoptionWorkspace = scenario === 'superseded' || scenario === 'rejected-promise'
+          ? authorities[1]?.submission.workspace
+          : replacement;
+        assert.equal(state.workspace, expectedAdoptionWorkspace);
+        assert.equal(state.candidates, newCandidates, 'adoption reads the committed NEW catalog');
+        adoptions.push(selected);
+        update(selected);
+      } });
+      return null;
+    };
+    try {
+      await flush(() => { root = createRoot(container as unknown as Element); root.render(<React.StrictMode><Parent /></React.StrictMode>); });
+      assert.ok(api);
+      const submit = (): void => { api?.submit(original, scenario === 'no-op' ? original : replacement); };
+      if (scenario === 'callback-throws') {
+        await flush(() => assert.throws(submit, /fixture throw/));
+        assert.equal(adoptions.length, 0);
+        continue;
+      }
+      await flush(submit);
+      assert.equal(parentCalls, 1);
+      if (scenario === 'rejected-promise') {
+        assert.equal(adoptions.length, 0, 'a rejected acknowledgement cannot adopt selection');
+        const validReplacement = { revision: 'valid-after-rejection' };
+        await flush(() => { api?.submit(original, validReplacement); });
+        assert.equal(parentCalls, 2, 'a terminal rejected acknowledgement must release the next edit attempt');
+        const validAuthority = authorities[1];
+        assert.ok(validAuthority);
+        await flush(() => update({ workspace: validReplacement, candidates: newCandidates }));
+        await flush(() => { validAuthority.acknowledge(validReplacement); });
+        assert.deepEqual(adoptions, [{ sourceSelector: 'source-new', targetSelector: 'target-new' }]);
+        continue;
+      }
+      if (['parent-refused', 'forged-ack', 'crossed-ack', 'sync-unmount', 'sync-switch'].includes(scenario)) {
+        await flush(() => {
+          if (root !== undefined) update({ workspace: replacement, candidates: newCandidates });
+          authorities[0]?.acknowledge(replacement);
+        });
+        assert.equal(adoptions.length, 0);
+        continue;
+      }
+      const authority = authorities[0];
+      assert.ok(authority);
+      if (['sync-readback', 'sync-reentrant', 'unnamed-sync-readback'].includes(scenario)) {
+        assert.deepEqual(adoptions, [{ sourceSelector: 'source-new', targetSelector: 'target-new' }]);
+        continue;
+      }
+      if (scenario === 'no-op' || scenario === 'ack-refused') {
+        await flush(() => { authority.acknowledge(original); });
+        assert.equal(adoptions.length, 0, 'no changed-source transfer or false refusal acceptance');
+        continue;
+      }
+      if (scenario === 'unmount') {
+        await flush(() => { root?.unmount(); root = undefined; });
+        await flush(() => { authority.acknowledge(replacement); });
+        assert.equal(adoptions.length, 0);
+        continue;
+      }
+      if (scenario === 'source-change') await flush(() => update({ sourceSelector: '' }));
+      if (scenario === 'target-change') await flush(() => update({ targetSelector: '' }));
+      if (scenario === 'profile-change') await flush(() => update({ profile: { ...initial.profile, width: 1024 } }));
+      if (scenario === 'workspace-switch') await flush(() => update({ workspace: switched }));
+      if (scenario === 'replacement-clone') await flush(() => update({ workspace: { ...replacement }, candidates: newCandidates }));
+      if (scenario === 'backward-transition') {
+        await flush(() => update({ workspace: replacement, candidates: newCandidates }));
+        await flush(() => update(initial));
+      }
+      if (scenario === 'cancel' || scenario === 'superseded') api.cancel();
+      if (scenario === 'superseded') {
+        const secondReplacement = { revision: 'second' };
+        await flush(() => { api?.submit(original, secondReplacement); });
+        assert.equal(parentCalls, 2);
+        await flush(() => update({ workspace: secondReplacement, candidates: newCandidates }));
+        await flush(() => { authority.acknowledge(replacement); });
+        assert.equal(adoptions.length, 0, 'old acknowledgement cannot adopt over a newer pending edit');
+        await flush(() => { authorities[1].acknowledge(secondReplacement); });
+        assert.deepEqual(adoptions, [{ sourceSelector: 'source-new', targetSelector: 'target-new' }]);
+        continue;
+      }
+      if (scenario === 'ack-before-readback') {
+        await flush(() => { authority.acknowledge(replacement); });
+        assert.equal(adoptions.length, 0, 'ack alone cannot select a source from old props');
+        await flush(() => update({ workspace: replacement, candidates: newCandidates }));
+      } else {
+        await flush(() => update({ workspace: replacement, candidates: newCandidates }));
+        assert.equal(adoptions.length, 0, 'readback alone cannot grant selection');
+        await flush(() => { authority.acknowledge(replacement); });
+      }
+      assert.deepEqual(adoptions, ['ack-before-readback', 'readback-before-ack'].includes(scenario)
+        ? [{ sourceSelector: 'source-new', targetSelector: 'target-new' }] : []);
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (root !== undefined) await flush(() => root?.unmount());
+      restore();
+    }
+  }
+  console.log(`B119_SOURCE_EDIT_SELECTION_TRANSFER_MATRIX ${JSON.stringify({ total: scenarios.length, passed: scenarios.length - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'source edit selection transfer requires exact acknowledgement, live replacement, and unique fresh catalog identities');
+}
+
+async function runMountedSourceEditSelectionTransferInsertionRegression(): Promise<void> {
+  type Input = Parameters<typeof useX4UiSourceEditSelectionTransfer>[0];
+  type State = Pick<Input, 'workspace' | 'candidates' | 'sourceSelector' | 'targetSelector' | 'profile'> & {
+    readonly builderNodes?: Input['builderNodes'];
+    readonly builderProjectionStatus?: Input['builderProjectionStatus'];
+    readonly builderProjectionLoading?: Input['builderProjectionLoading'];
+    readonly builderSelectionContext?: Input['builderSelectionContext'];
+    readonly builderSelectionNodeId?: Input['builderSelectionNodeId'];
+  };
+  const scenarios = [
+    'ack-before-readback', 'readback-before-ack', 'source-identity-drift',
+    'ambiguous-node-id', 'selection-intervention', 'refused-ack',
+  ] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string }[] = [];
+  const sourceIdentityFor = (revision: string) => ({ file: 'ui/menu.lua', sourcePath: 'ui/menu.lua', sha256: revision });
+  const sourceLocationFor = (startOffset: number, endOffset: number) => ({
+    file: 'ui/menu.lua',
+    sourcePath: 'ui/menu.lua',
+    start: { line: 1, column: startOffset, offset: startOffset },
+    end: { line: 1, column: endOffset, offset: endOffset },
+  });
+  const nodesFor = (variant: 'valid' | 'ambiguous'): Input['builderNodes'] => {
+    const ownerSource = sourceLocationFor(0, 60);
+    const creatorSource = sourceLocationFor(10, 30);
+    const descriptorSource = sourceLocationFor(12, 20);
+    const common = {
+      source: ownerSource,
+      sourceOrder: 0,
+      childIds: [],
+      operationIds: [],
+      propertyOperationIds: [],
+      completeness: 'complete',
+      provenance: 'source-derived',
+      selectable: false,
+      detail: 'fixture',
+    };
+    const nodes = [
+      { ...common, id: 'scene:frame-1', kind: 'frame', label: 'Frame 1', childIds: ['scene:table-1'] },
+      { ...common, id: 'scene:table-1', kind: 'table', label: 'Table 1', parentId: 'scene:frame-1', childIds: ['scene:row-1'] },
+      { ...common, id: 'scene:row-1', kind: 'row', label: 'Row 1', parentId: 'scene:table-1', childIds: ['scene:cell-1'] },
+      { ...common, id: 'scene:cell-1', kind: 'cell', label: 'Cell 1', parentId: 'scene:row-1', childIds: ['scene:widget-1'] },
+      { ...common, id: 'scene:widget-1', kind: 'widget', label: 'Text', parentId: 'scene:cell-1', source: creatorSource, childIds: ['scene:text-1'], operationIds: ['creator'], widgetKind: 'text' },
+      { ...common, id: 'scene:text-1', kind: 'text', label: 'Text · inserted', parentId: 'scene:widget-1', source: descriptorSource, operationIds: ['creator'], textSlot: 'primary' },
+    ];
+    return (variant === 'ambiguous' ? [...nodes, { ...nodes[3] }] : nodes) as unknown as Input['builderNodes'];
+  };
+  for (const scenario of scenarios) {
+    const doc = new MountedDomDocument();
+    const restore = installMountedDomGlobals(doc);
+    const container = doc.createElement('div');
+    doc.body.appendChild(container);
+    const original = { revision: 'old' };
+    const replacement = { revision: 'new' };
+    const oldCandidates: Input['candidates'] = [{
+      raw: {}, index: 0, path: 'ui/menu.lua', key: 'source-old', sourceIdentity: sourceIdentityFor('old'),
+      targets: [{ raw: { kind: 'function', name: 'menu.createFrame', id: 'target-old' }, key: 'target-old', label: 'menu.createFrame' }],
+    }];
+    const newCandidates: Input['candidates'] = [{
+      raw: {}, index: 0, path: 'ui/menu.lua', key: 'source-new', sourceIdentity: sourceIdentityFor('new'),
+      targets: [{ raw: { kind: 'function', name: 'menu.createFrame', id: 'target-new' }, key: 'target-new', label: 'menu.createFrame' }],
+    }];
+    const newSourceIdentityKey = 'ui/menu.lua|ui/menu.lua|new';
+    const oldSourceIdentityKey = 'ui/menu.lua|ui/menu.lua|old';
+    const initial: State = {
+      workspace: original,
+      candidates: oldCandidates,
+      sourceSelector: 'source-old',
+      targetSelector: 'target-old',
+      profile: { width: 800, height: 600, uiScale: 1 },
+      builderNodes: nodesFor('valid'),
+      builderProjectionStatus: 'available',
+      builderProjectionLoading: false,
+      builderSelectionContext: { workspace: original, sourceIdentityKey: oldSourceIdentityKey, targetId: 'target-old', profileKey: 'profile' },
+      builderSelectionNodeId: 'scene:cell-1',
+    };
+    let liveState = initial;
+    let update: (next: Partial<State>) => void = () => { throw new Error('insertion transfer harness not mounted'); };
+    let api: ReturnType<typeof useX4UiSourceEditSelectionTransfer> | undefined;
+    let root: ReturnType<typeof createRoot> | undefined;
+    const authorities: X4UiWorkspaceEditPendingAuthority[] = [];
+    const adoptions: X4UiSourceEditSelectionResult[] = [];
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); });
+    };
+    const handler: X4UiWorkspaceEditHandler = request => {
+      assert.equal(request.expectedWorkspace, liveState.workspace, `${scenario}: exact expected workspace`);
+      const authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+      authorities.push(authority);
+      return authority.submission;
+    };
+    const Parent = (): React.ReactElement | null => {
+      const [state, setState] = React.useState(initial);
+      liveState = state;
+      update = next => setState(previous => ({ ...previous, ...next }));
+      api = useX4UiSourceEditSelectionTransfer({
+        ...state,
+        onWorkspaceEdit: handler,
+        onSelect: selected => {
+          assert.equal(state.workspace, replacement, `${scenario}: selection must wait for replacement workspace readback`);
+          assert.equal(state.candidates, newCandidates, `${scenario}: selection must use the fresh catalog`);
+          adoptions.push(selected);
+          update({
+            sourceSelector: selected.sourceSelector,
+            targetSelector: selected.targetSelector,
+            ...(selected.builderSelection === undefined ? {} : { builderSelectionNodeId: selected.builderSelection.nodeId }),
+          });
+        },
+      });
+      return null;
+    };
+    try {
+      await flush(() => { root = createRoot(container as unknown as Element); root.render(<React.StrictMode><Parent /></React.StrictMode>); });
+      assert.ok(api);
+      const proof = {
+        widget: 'text' as const,
+        frameId: 'frame-1',
+        tableId: 'table-1',
+        rowId: 'row-1',
+        cellId: 'cell-1',
+        creatorOperationId: 'creator',
+        creatorCallName: 'createText' as const,
+        creatorSource: sourceLocationFor(10, 30),
+        sourceIdentity: sourceIdentityFor('new'),
+      };
+      const continuation = {
+        node: initial.builderNodes?.find(node => node.id === 'scene:cell-1'),
+        splice: { path: 'ui/menu.lua', startOffset: 30, endOffset: 30, replacement: 'inserted' },
+        insertedWidget: proof,
+      };
+      assert.ok(continuation.node);
+      await flush(() => { api?.submit(original, replacement, continuation); });
+      const authority = authorities[0];
+      assert.ok(authority);
+      if (scenario === 'selection-intervention') {
+        await flush(() => update({ builderSelectionNodeId: 'scene:other' }));
+        await flush(() => { authority.acknowledge(replacement); });
+        assert.equal(adoptions.length, 0, 'user selection intervention must cancel insertion continuation');
+        continue;
+      }
+      if (scenario === 'ack-before-readback') {
+        await flush(() => { authority.acknowledge(replacement); });
+        assert.equal(adoptions.length, 0, 'ack alone cannot select the new widget');
+        await flush(() => update({ workspace: replacement, candidates: newCandidates, builderNodes: nodesFor('valid'), builderSelectionContext: { workspace: replacement, sourceIdentityKey: newSourceIdentityKey, targetId: 'target-new', profileKey: 'profile' } }));
+      } else {
+        await flush(() => update({ workspace: replacement, candidates: newCandidates, builderNodes: nodesFor(scenario === 'ambiguous-node-id' ? 'ambiguous' : 'valid'), builderSelectionContext: { workspace: replacement, sourceIdentityKey: scenario === 'source-identity-drift' ? 'ui/menu.lua|ui/menu.lua|drift' : newSourceIdentityKey, targetId: 'target-new', profileKey: 'profile' } }));
+        assert.equal(adoptions.length, 0, 'readback alone cannot select the new widget');
+        if (scenario === 'refused-ack') {
+          await flush(() => { authority.acknowledge(original); });
+          assert.equal(adoptions.length, 0, 'a refused parent acknowledgement cannot select the new widget');
+          continue;
+        }
+        await flush(() => { authority.acknowledge(replacement); });
+      }
+      if (scenario === 'source-identity-drift' || scenario === 'ambiguous-node-id') {
+        assert.equal(adoptions.length, 1, `${scenario}: fresh source/target adoption may proceed without widget selection`);
+        assert.equal(adoptions[0]?.builderSelection, undefined, `${scenario}: no exact new-widget selection on an ineligible fresh projection`);
+      } else {
+        assert.equal(adoptions.length, 2, `${scenario}: source-key adoption and exact builder continuation must both settle`);
+        assert.equal(adoptions[1]?.builderSelection?.nodeId, 'scene:text-1', `${scenario}: Text must select its exact primary descendant`);
+      }
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (root !== undefined) await flush(() => root?.unmount());
+      restore();
+    }
+  }
+  console.log(`B119_SOURCE_EDIT_INSERTION_TRANSFER_MATRIX ${JSON.stringify({ total: scenarios.length, passed: scenarios.length - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'typed insertion continuation requires delayed acknowledgement, exact fresh proof, and user-intervention cancellation');
+}
+
+async function runMountedUnnamedChunkEditRegression(fixture: P7SourceAuthorityFixture): Promise<void> {
+  const doc = new MountedDomDocument();
+  const restore = installMountedDomGlobals(doc);
+  const container = doc.createElement('div');
+  doc.body.appendChild(container);
+  const path = 'ui/unnamed-chunk.lua';
+  const content = [
+    'local menu = { name = "X4UiSourceEditorP7E2E", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    'local row = table:addRow(false, {})',
+    'row[1]:createText("P7 E2E source")',
+    'frame:display()',
+    'function menu.previewLoop()',
+    '  local loopFrame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    '  for i = 1, 2 do loopFrame:addTable(1, { width = 100 }) end',
+    '  loopFrame:display()',
+    'end',
+    '',
+  ].join('\n');
+  const original = sanitizeWorkspace({ ...workspace, id: 'unnamed-chunk-edit', compileSettings: { ui: false }, passthroughFiles: [
+    { path: 'ui.xml', content: `<addon name="chunk"><environment type="menus"><file name="${path}" /></environment></addon>`, reason: 'partial' },
+    { path, content, reason: 'partial' },
+  ] });
+  const initialBytes = JSON.stringify(original);
+  const candidate = projectX4UiEditorSession({ workspace: original, corpus: fixture.core }).preview.sourceCandidates.find(source => source.path === path);
+  const chunk = candidate?.targets.find(target => target.kind === 'top-level');
+  assert.ok(chunk, 'real Session must issue an unnamed chunk beside the named function');
+  assert.equal(chunk.name, undefined);
+  let currentWorkspace = original;
+  let replacement: typeof original | undefined;
+  let commit: React.Dispatch<React.SetStateAction<typeof original>> = () => { throw new Error('chunk parent not mounted'); };
+  let root: ReturnType<typeof createRoot> | undefined;
+  let submissions = 0;
+  const flush = async (operation: () => void): Promise<void> => {
+    await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); });
+  };
+  const control = (id: string): MountedDomElement => {
+    const element = mountedElementByTestId(container, id);
+    assert.ok(element, `unnamed chunk: missing ${id}`);
+    return element;
+  };
+  const loader = async () => ({ core: fixture.core, color: fixture.color });
+  const surfaceFactory = (width: number, height: number) => new MountedCanvasElement(doc, width, height);
+  const handler: X4UiWorkspaceEditHandler = request => {
+    submissions += 1;
+    assert.equal(request.expectedWorkspace, currentWorkspace);
+    const next = request.workspace as typeof original;
+    assert.equal(Object.isFrozen(next), true, 'actual SourceEdits returns its frozen replacement');
+    const authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, next);
+    flushSync(() => commit(next));
+    assert.equal(currentWorkspace, next, 'real sanitizer helper retains exact frozen owner identity');
+    replacement = next;
+    authority.acknowledge(currentWorkspace);
+    return authority.submission;
+  };
+  const Parent = (): React.ReactElement => {
+    const [live, setLive] = React.useState(original);
+    currentWorkspace = live;
+    commit = update => setLive(previous => {
+      const next = typeof update === 'function' ? update(previous) : update;
+      return retainWorkspaceCandidateIfNormalizedUnchanged(next, sanitizeWorkspace(next));
+    });
+    return <X4UiSourceEditor workspace={live} corpusLoader={loader} surfaceFactory={surfaceFactory} onWorkspaceEdit={handler} />;
+  };
+  try {
+    await flush(() => { root = createRoot(container as unknown as Element); root.render(<React.StrictMode><Parent /></React.StrictMode>); });
+    await flush(() => {
+      const select = control('x4-ui-source-selector');
+      const option = select.options.find(item => item.textContent === path);
+      assert.ok(option);
+      select.value = option.value;
+      select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    await flush(() => {
+      const select = control('x4-ui-target-selector');
+      const option = select.options.find(item => item.value.endsWith(`:${chunk.id}:top-level`));
+      assert.ok(option, 'select exact owner-issued chunk, not a fallback name');
+      select.value = option.value;
+      select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current');
+    const oldCanvas = control('x4-ui-canvas-host').firstElementChild;
+    const oldSourceKey = control('x4-ui-source-selector').options.find(item => item.textContent === path)?.value;
+    const oldTargetKey = control('x4-ui-target-selector').options.find(item => item.value.endsWith(':top-level'))?.value;
+    const title = control('x4-ui-builder-hierarchy-list').querySelectorAll('button').find(item => item.textContent.startsWith('Text · P7 E2E source'));
+    assert.ok(title);
+    await flush(() => title.click());
+    const input = control('x4-ui-builder-selection').querySelectorAll('input').find(item => item.value === 'P7 E2E source');
+    assert.ok(input);
+    const entryId = input.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+    assert.ok(entryId);
+    const firstTitle = 'Edited "unnamed" \\ path';
+    await flush(() => {
+      input.focus();
+      input.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+      input.value = firstTitle;
+      input.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+      input.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    await flush(() => control(`x4-ui-source-edit-apply-${entryId}`).click());
+    assert.equal(submissions, 1);
+    assert.equal(currentWorkspace, replacement);
+    const firstEditedContent = content.replace('"P7 E2E source"', JSON.stringify(firstTitle));
+    assert.equal(currentWorkspace.passthroughFiles.find(file => file.path === path)?.content,
+      firstEditedContent, 'only the selected escaped literal bytes change');
+    assert.ok(firstEditedContent.includes(JSON.stringify(firstTitle)), 'the actual source edit must preserve quote/backslash encoding');
+    assert.deepEqual(currentWorkspace.passthroughFiles.filter(file => file.path !== path), original.passthroughFiles.filter(file => file.path !== path));
+    assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current', 'unnamed chunk edit must adopt a fresh current projection');
+    assert.notEqual(control('x4-ui-canvas-host').firstElementChild, oldCanvas);
+    const newSource = control('x4-ui-source-selector').options.find(item => item.textContent === path);
+    const newTarget = control('x4-ui-target-selector').options.find(item => item.value.endsWith(':top-level'));
+    assert.equal(newSource?.selected, true);
+    assert.equal(newTarget?.selected, true);
+    assert.notEqual(newSource?.value, oldSourceKey);
+    assert.notEqual(newTarget?.value, oldTargetKey);
+    assert.equal(control('x4-ui-canvas-export').disabled, false);
+    assert.ok(control('x4-ui-builder-hierarchy-list').querySelectorAll('button').some(item => item.textContent.startsWith(`Text · ${firstTitle}`)));
+    const retainedSelection = control('x4-ui-builder-selection');
+    const retainedInput = retainedSelection.querySelectorAll('input').find(item => item.value === firstTitle);
+    assert.ok(retainedInput, 'accepted exact title edit must retain the fresh selected element');
+    const secondTitle = 'x';
+    await flush(() => {
+      retainedInput.focus();
+      retainedInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+      retainedInput.value = secondTitle;
+      retainedInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+      retainedInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    const secondEntryId = retainedInput.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+    assert.ok(secondEntryId, 'the fresh owner catalog must issue the second exact entry identity');
+    await flush(() => control(`x4-ui-source-edit-apply-${secondEntryId}`).click());
+    assert.equal(submissions, 2, 'the fresh selection must permit a repeated edit without reselecting');
+    const secondEditedContent = firstEditedContent.replace(JSON.stringify(firstTitle), JSON.stringify(secondTitle));
+    assert.equal(currentWorkspace.passthroughFiles.find(file => file.path === path)?.content, secondEditedContent);
+    assert.ok(control('x4-ui-builder-selection').querySelectorAll('input').some(item => item.value === secondTitle));
+    assert.ok(control('x4-ui-builder-hierarchy-list').querySelectorAll('button').some(item => item.textContent.startsWith('Text · x')));
+    assert.equal(mountedElementText(container, 'x4-ui-game-truth'), 'Not verified in game');
+    console.log('B119 unnamed-chunk actual Session/source-local edit + frozen sanitizer/flushSync acknowledgement + repeated fresh selection/canvas: PASS');
+  } finally {
+    assert.equal(JSON.stringify(original), initialBytes);
+    if (root !== undefined) await flush(() => root?.unmount());
+    restore();
+  }
+}
+
+type MountedLuaTestFile = {
+  readonly name: string;
+  readonly size: number;
+  readonly arrayBuffer: () => Promise<ArrayBuffer>;
+};
+
+const mountedLuaFileList = (files: readonly MountedLuaTestFile[]): FileList => {
+  const list = {
+    length: files.length,
+    item: (index: number): MountedLuaTestFile | null => files[index] ?? null,
+  } as unknown as FileList & Record<string, unknown>;
+  files.forEach((file, index) => { list[String(index)] = file; });
+  return list;
+};
+
+const mountedLuaFile = (name: string, bytes: Uint8Array, arrayBuffer?: () => Promise<ArrayBuffer>): MountedLuaTestFile => {
+  const copy = bytes.slice();
+  const buffer = copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength) as ArrayBuffer;
+  return { name, size: copy.byteLength, arrayBuffer: arrayBuffer ?? (async () => buffer.slice(0)) };
+};
+
+async function runMountedLuaFileRoundtrip(
+  fixture: P7SourceAuthorityFixture,
+  order: 'sync-readback' | 'ack-before-readback' | 'delayed-readback' | 'scope-crossed',
+): Promise<void> {
+  const mountedDocument = new MountedDomDocument();
+  const restoreGlobals = installMountedDomGlobals(mountedDocument);
+  const container = mountedDocument.createElement('div');
+  mountedDocument.body.appendChild(container);
+  const name = order === 'sync-readback'
+    ? 'b119-sync.lua'
+    : order === 'ack-before-readback' ? 'b119-ack-first.lua'
+      : order === 'scope-crossed' ? 'b119-scope.lua' : 'b119-delayed.lua';
+  const path = `ui/${name}`;
+  const importedText = `\uFEFF-- exact Unicode: Café 🚀\r\nlocal menu = { name = "${name}", layer = 1 }\r\nlocal frame = Helper.createFrameHandle(menu, { width = 120, height = 90 })\r\nlocal table = frame:addTable(1, { width = 100, scaling = false })\r\nframe:display()\r\n`;
+  const importedBytes = new TextEncoder().encode(importedText);
+  const originalUiXml = [
+    '<addon name="b119_roundtrip">',
+    '  <environment type="menus">',
+    '    <file name="ui/edit.lua" />',
+    '  </environment>',
+    '</addon>',
+  ].join('\r\n');
+  const expectedUiXml = [
+    '<addon name="b119_roundtrip">',
+    '  <environment type="menus">',
+    '    <file name="ui/edit.lua" />',
+    `    <file name="${path}" />`,
+    '  </environment>',
+    '</addon>',
+  ].join('\r\n');
+  const original = sanitizeWorkspace({
+    ...sourceEditIntegrationWorkspace,
+    id: `x4-ui-lua-roundtrip-${order}`,
+    passthroughFiles: sourceEditIntegrationWorkspace.passthroughFiles.map(file => file.path === 'ui.xml'
+      ? { ...file, content: originalUiXml }
+      : { ...file }),
+  });
+  const originalBytes = JSON.stringify(original);
+  const expectedFiles = original.passthroughFiles.map((file, index) => index === 0
+    ? { ...file, content: expectedUiXml }
+    : { ...file });
+  expectedFiles.push({ path, content: importedText, reason: 'partial', bytes: importedBytes.byteLength });
+  const expectedWorkspace = { ...original, passthroughFiles: expectedFiles };
+  let currentWorkspace: unknown = original;
+  let replaceWorkspace: React.Dispatch<React.SetStateAction<unknown>> = () => { throw new Error('Lua roundtrip parent is not mounted'); };
+  let changeScope: () => void = () => { throw new Error('Lua roundtrip scope parent is not mounted'); };
+  let authority: X4UiWorkspaceEditPendingAuthority | undefined;
+  let submissions = 0;
+  let root: ReturnType<typeof createRoot> | undefined;
+  let createdBlob: Blob | undefined;
+  let downloadedPath = '';
+  const revokedUrls: string[] = [];
+  const urlCreateDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+  const urlRevokeDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+  const originalCreateElement = mountedDocument.createElement;
+  const flush = async (operation: () => void): Promise<void> => {
+    await act(async () => {
+      operation();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+  const control = (testId: string): MountedDomElement => {
+    const element = mountedElementByTestId(container, testId);
+    assert.ok(element, `${order}: missing ${testId}`);
+    return element;
+  };
+  const handler: X4UiWorkspaceEditHandler = request => {
+    submissions += 1;
+    assert.equal(request.expectedWorkspace, currentWorkspace, `${order}: import must use the exact live workspace CAS`);
+    authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+    if (order === 'sync-readback') {
+      flushSync(() => replaceWorkspace(request.workspace));
+      authority.acknowledge(request.workspace);
+    } else if (order === 'ack-before-readback') {
+      authority.acknowledge(request.workspace);
+    }
+    return authority.submission;
+  };
+  const canonicalLoader = async (): Promise<{ readonly core: P7SourceAuthorityFixture['core']; readonly color: P7SourceAuthorityFixture['color'] }> => ({
+    core: fixture.core,
+    color: fixture.color,
+  });
+  const mountedSurfaceFactory = (width: number, height: number): MountedCanvasElement => new MountedCanvasElement(mountedDocument, width, height);
+  const Parent = (): React.ReactElement => {
+    const [liveWorkspace, setLiveWorkspace] = React.useState<unknown>(original);
+    const [scope, setScope] = React.useState(`b119-lua-roundtrip-${order}`);
+    currentWorkspace = liveWorkspace;
+    changeScope = () => setScope('b119-lua-roundtrip-crossed-scope');
+    replaceWorkspace = update => setLiveWorkspace(previous => {
+      const candidate = typeof update === 'function' ? update(previous) : update;
+      const normalized = sanitizeWorkspace(candidate);
+      return retainWorkspaceCandidateIfNormalizedUnchanged(candidate, normalized);
+    });
+    return <X4UiSourceEditor
+      workspace={liveWorkspace}
+      corpusLoader={canonicalLoader}
+      surfaceFactory={mountedSurfaceFactory}
+      onWorkspaceEdit={handler}
+      workspaceScope={scope}
+    />;
+  };
+  const restoreDownloadHooks = (): void => {
+    mountedDocument.createElement = originalCreateElement;
+    if (urlCreateDescriptor === undefined) Reflect.deleteProperty(URL, 'createObjectURL');
+    else Object.defineProperty(URL, 'createObjectURL', urlCreateDescriptor);
+    if (urlRevokeDescriptor === undefined) Reflect.deleteProperty(URL, 'revokeObjectURL');
+    else Object.defineProperty(URL, 'revokeObjectURL', urlRevokeDescriptor);
+  };
+  try {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: (blob: Blob): string => {
+        createdBlob = blob;
+        return `blob:b119-${order}`;
+      },
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      writable: true,
+      value: (url: string): void => { revokedUrls.push(url); },
+    });
+    mountedDocument.createElement = (tagName: string): MountedDomElement => {
+      const element = originalCreateElement.call(mountedDocument, tagName);
+      if (tagName.toLowerCase() === 'a') {
+        (element as unknown as { click: () => void }).click = () => {
+          downloadedPath = String((element as unknown as { readonly download?: unknown }).download ?? '');
+        };
+      }
+      return element;
+    };
+    await flush(() => {
+      root = createRoot(container as unknown as Element);
+      root.render(<React.StrictMode><Parent /></React.StrictMode>);
+    });
+    const input = control('x4-ui-lua-file-input');
+    (input as unknown as { files: FileList | null }).files = mountedLuaFileList([mountedLuaFile(name, importedBytes)]);
+    input.value = `C:\\fakepath\\${name}`;
+    assert.equal(input.files?.length, 1, `${order}: the mounted file input must expose the selected File before reset`);
+    await flush(() => input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+    assert.equal(input.value, '', `${order}: file input must clear for same-file retry`);
+    assert.equal(input.files?.length ?? 0, 0, `${order}: clearing the file input must clear its live FileList after the handler captured the File`);
+    const assertNoEarlyAcceptance = (): void => {
+      assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /Opened /, `${order}: one acknowledgement/readback signal must not report an opened file`);
+      assert.equal(sourceSelectHasImportedSelection(), false, `${order}: one acknowledgement/readback signal must not select the imported source`);
+    };
+    const sourceSelectHasImportedSelection = (): boolean => {
+      const sourceSelect = control('x4-ui-source-selector');
+      return sourceSelect.options.some(option => option.textContent === path && option.selected);
+    };
+    if (order === 'ack-before-readback') {
+      assert.equal(submissions, 1, `${order}: exactly one import is submitted before the delayed parent readback`);
+      assert.equal(currentWorkspace, original, `${order}: acknowledgement alone must not replace the live parent workspace`);
+      assertNoEarlyAcceptance();
+      assert.ok(authority);
+      await flush(() => replaceWorkspace(authority!.submission.workspace));
+    } else if (order === 'delayed-readback') {
+      assert.equal(submissions, 1, `${order}: exactly one import is submitted before delayed readback`);
+      assert.equal(currentWorkspace, original, `${order}: delayed acknowledgement must not guess parent readback`);
+      assert.ok(authority);
+      await flush(() => replaceWorkspace(authority!.submission.workspace));
+      assertNoEarlyAcceptance();
+      await flush(() => authority!.acknowledge(authority!.submission.workspace));
+    }
+    if (order === 'scope-crossed') {
+      assert.ok(authority, `${order}: parent must receive the import before the scope crossing`);
+      await flush(() => replaceWorkspace(authority!.submission.workspace));
+      assert.equal(currentWorkspace, authority!.submission.workspace, `${order}: the replacement object must be the exact parent readback object`);
+      await flush(changeScope);
+      assertNoEarlyAcceptance();
+      assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /Opened |import applied|download requested/i, `${order}: a crossed workspace scope must not report confirmation`);
+      await flush(() => authority!.acknowledge(authority!.submission.workspace));
+      assertNoEarlyAcceptance();
+      assert.equal(submissions, 1, `${order}: the crossed-scope attempt must never retry or create a second submission`);
+      const crossedWorkspace = currentWorkspace as typeof original;
+      assert.deepEqual(crossedWorkspace, expectedWorkspace, `${order}: scope cancellation must not alter the exact accepted workspace`);
+      console.log('B119 Batch B mounted same-object readback plus crossed workspace-scope refusal: PASS');
+      return;
+    }
+    const importedWorkspace = currentWorkspace as typeof original;
+    assert.deepEqual(importedWorkspace, expectedWorkspace, `${order}: accepted import must preserve the complete workspace and only apply the exact registration/file transaction`);
+    const importedFile = importedWorkspace.passthroughFiles.find(file => file.path === path);
+    assert.equal(importedFile?.content, importedText, `${order}: import must preserve full text including BOM, CRLF, Unicode, and comments`);
+    assert.deepEqual(
+      Array.from(new TextEncoder().encode(importedFile?.content ?? '')),
+      Array.from(importedBytes),
+      `${order}: imported UTF-8 bytes must round-trip exactly`,
+    );
+    assert.notEqual(JSON.stringify(importedWorkspace), originalBytes);
+    assert.equal(submissions, 1, `${order}: file import creates exactly one workspace submission`);
+    const sourceSelect = control('x4-ui-source-selector');
+    const importedOption = sourceSelect.options.find(option => option.textContent === path);
+    assert.ok(importedOption, `${order}: imported source must be issued into the current source catalog`);
+    assert.equal(importedOption.selected, true, `${order}: a uniquely fresh imported source must be selected`);
+    const importStatus = mountedElementText(container, 'x4-ui-lua-status');
+    assert.match(importStatus, /opened/i, `${order}: import status must describe the opened file`);
+    assert.doesNotMatch(importStatus, /operation|compiler|source.?op|compile/i, `${order}: ordinary status must not expose source-operation/compiler controls`);
+
+    const workspaceBeforeExport = JSON.stringify(currentWorkspace);
+    await flush(() => mountedReactClickCallback(control('x4-ui-lua-export'), 'Lua roundtrip export')());
+    assert.ok(createdBlob, `${order}: export must hand the exact source bytes to Blob/objectURL`);
+    const exported = new Uint8Array(await createdBlob!.arrayBuffer());
+    assert.deepEqual(Array.from(exported), Array.from(importedBytes), `${order}: exported Blob bytes must equal the imported whole file`);
+    assert.equal(downloadedPath, name, `${order}: export must use the safe source filename for download`);
+    assert.deepEqual(revokedUrls, [`blob:b119-${order}`], `${order}: export must revoke the object URL exactly once`);
+    assert.equal(mountedDocument.body.getElementsByTagName('a').length, 0, `${order}: export must remove its temporary anchor`);
+    assert.equal(JSON.stringify(currentWorkspace), workspaceBeforeExport, `${order}: export must not mutate the workspace or create a parent history submission`);
+    assert.equal(submissions, 1, `${order}: export must not call the workspace commit seam`);
+    const exportStatus = mountedElementText(container, 'x4-ui-lua-status');
+    assert.match(exportStatus, /download requested/i, `${order}: export must report a download request, not a disk save`);
+    assert.match(exportStatus, /final file save is not verified/i, `${order}: export must keep final save verification honest`);
+    assert.match(exportStatus, /Lua source only/i, `${order}: export must state that dependencies are excluded`);
+    assert.match(exportStatus, /Not verified in game/);
+    console.log(`B119 Batch B mounted actual Session/New-menu Lua ${order} + exact Blob/cleanup/no-history: PASS`);
+  } finally {
+    if (root !== undefined) await flush(() => root?.unmount());
+    restoreDownloadHooks();
+    restoreGlobals();
+  }
+}
+
+async function runMountedLuaFileGuardRegression(): Promise<void> {
+  const mountedDocument = new MountedDomDocument();
+  const restoreGlobals = installMountedDomGlobals(mountedDocument);
+  const container = mountedDocument.createElement('div');
+  mountedDocument.body.appendChild(container);
+  const source = integrationProjection.source;
+  const candidate = {
+    raw: integrationSourceCandidate as unknown as Record<string, unknown>,
+    index: integrationSourceCandidate.index,
+    path: integrationSourceCandidate.path,
+    key: 'guard-source',
+    sourceIdentity: integrationSourceCandidate.sourceIdentity,
+    targets: [],
+  } as unknown as React.ComponentProps<typeof X4UiSourceEditorLuaFiles>['candidates'][number];
+  let parentCalls = 0;
+  let root: ReturnType<typeof createRoot> | undefined;
+  const flush = async (operation: () => void): Promise<void> => {
+    await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); });
+  };
+  const control = (testId: string): MountedDomElement => {
+    const element = mountedElementByTestId(container, testId);
+    assert.ok(element, `Lua guard: missing ${testId}`);
+    return element;
+  };
+  const render = async (staged: boolean, pending: boolean): Promise<void> => {
+    await flush(() => {
+      root ??= createRoot(container as unknown as Element);
+      root.render(<X4UiSourceEditorLuaFiles
+        workspace={sourceEditIntegrationWorkspace}
+        scope="b119-lua-guard"
+        source={source}
+        selectedSourcePath="ui/edit.lua"
+        candidates={[candidate]}
+        sourceSelector="guard-source"
+        targetSelector="guard-target"
+        onWorkspaceEdit={() => { parentCalls += 1; return { status: 'refused', reason: 'unexpected', detail: 'guard parent must not be called' }; }}
+        sourceEditStaged={staged}
+        sourceEditPending={pending}
+        onSelect={() => undefined}
+      />);
+    });
+  };
+  try {
+    await render(true, false);
+    const input = control('x4-ui-lua-file-input');
+    const bytes = new TextEncoder().encode('local value = 1');
+    (input as unknown as { files: FileList | null }).files = mountedLuaFileList([mountedLuaFile('guard.lua', bytes)]);
+    await flush(() => input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+    await flush(() => mountedReactClickCallback(control('x4-ui-lua-export'), 'Lua guard export')());
+    assert.match(mountedElementText(container, 'x4-ui-lua-status'), /Apply or Discard/i, 'staged source edits must block both direct file handlers');
+    assert.equal(parentCalls, 0, 'staged source edits must not reach the commit seam');
+    await render(false, true);
+    await flush(() => mountedReactClickCallback(control('x4-ui-lua-export'), 'Lua pending guard export')());
+    assert.match(mountedElementText(container, 'x4-ui-lua-status'), /pending source edit/i, 'pending source edits must block export');
+    assert.equal(parentCalls, 0, 'pending source edits must not reach the commit seam');
+    const pendingInput = control('x4-ui-lua-file-input');
+    (pendingInput as unknown as { files: FileList | null }).files = mountedLuaFileList([mountedLuaFile('pending.lua', bytes)]);
+    pendingInput.value = 'C:\\fakepath\\pending.lua';
+    await flush(() => pendingInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+    assert.match(mountedElementText(container, 'x4-ui-lua-status'), /pending source edit/i, 'pending source edits must block direct Open handling');
+    assert.equal(parentCalls, 0, 'pending direct Open must not reach the commit seam');
+
+    await render(false, false);
+    const invalidInput = control('x4-ui-lua-file-input');
+    let invalidReads = 0;
+    const invalidBytes = new Uint8Array([0xff, 0xfe, 0xfd]);
+    (invalidInput as unknown as { files: FileList | null }).files = mountedLuaFileList([mountedLuaFile(
+      'invalid.lua',
+      invalidBytes,
+      async () => { invalidReads += 1; return invalidBytes.buffer.slice(0); },
+    )]);
+    await flush(() => invalidInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+    assert.equal(invalidReads, 1, 'invalid UTF-8 must be read once before fatal decode refusal');
+    assert.match(mountedElementText(container, 'x4-ui-lua-status'), /UTF-8/i);
+    assert.equal(parentCalls, 0);
+    const oversizedInput = control('x4-ui-lua-file-input');
+    let oversizedReads = 0;
+    (oversizedInput as unknown as { files: FileList | null }).files = mountedLuaFileList([{
+      name: 'oversized.lua',
+      size: X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES + 1,
+      arrayBuffer: async () => { oversizedReads += 1; throw new Error('size guard must run before arrayBuffer'); },
+    }]);
+    await flush(() => oversizedInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+    assert.equal(oversizedReads, 0, 'File.size must be checked before arrayBuffer');
+    assert.match(mountedElementText(container, 'x4-ui-lua-status'), /4 MiB|4,194,304|size/i);
+    assert.equal(parentCalls, 0);
+    console.log('B119 Batch B direct-handler staged/pending/invalid-UTF8/pre-read-size guards: PASS');
+  } finally {
+    if (root !== undefined) await flush(() => root?.unmount());
+    restoreGlobals();
+  }
+}
+
+async function runMountedLuaFileAsyncGuardMatrix(): Promise<void> {
+  const scenarios = [
+    'cancel', 'read-failure', 'double-action', 'superseded', 'workspace-switch',
+    'source-switch', 'selection-switch', 'unmount', 'reentrant',
+  ] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string; status: string; technical: string }[] = [];
+  for (const scenario of scenarios) {
+    const mountedDocument = new MountedDomDocument();
+    const restoreGlobals = installMountedDomGlobals(mountedDocument);
+    const container = mountedDocument.createElement('div');
+    mountedDocument.body.appendChild(container);
+    const original = sourceEditIntegrationWorkspace;
+    const source = integrationProjection.source;
+    const oldCandidate = {
+      raw: {},
+      index: 0,
+      path: 'ui/edit.lua',
+      key: `b119-old-${scenario}`,
+      sourceIdentity: { file: 'ui/edit.lua', sha256: `old-${scenario}` },
+      targets: [{ raw: { name: 'menu.old' }, key: `b119-old-target-${scenario}`, label: 'menu.old' }],
+    } as unknown as React.ComponentProps<typeof X4UiSourceEditorLuaFiles>['candidates'][number];
+    const validBytes = new TextEncoder().encode(`local menu = { name = "${scenario}", layer = 1 }\nlocal frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })\nframe:display()\n`);
+    const validBuffer = validBytes.buffer.slice(validBytes.byteOffset, validBytes.byteOffset + validBytes.byteLength) as ArrayBuffer;
+    let root: ReturnType<typeof createRoot> | undefined;
+    let parentCalls = 0;
+    let secondReads = 0;
+    let currentProps: React.ComponentProps<typeof X4UiSourceEditorLuaFiles>;
+    let resolveRead: ((buffer: ArrayBuffer) => void) | undefined;
+    let authority: X4UiWorkspaceEditPendingAuthority | undefined;
+    let reentrantInputReads = 0;
+    let downloadUrlHandoffs = 0;
+    let anchorClickHandoffs = 0;
+    const urlCreateDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+    const originalCreateElement = mountedDocument.createElement;
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => {
+        operation();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+    const control = (testId: string): MountedDomElement => {
+      const element = mountedElementByTestId(container, testId);
+      assert.ok(element, `${scenario}: missing ${testId}`);
+      return element;
+    };
+    const handler: X4UiWorkspaceEditHandler = request => {
+      parentCalls += 1;
+      assert.equal(request.expectedWorkspace, currentProps.workspace, `${scenario}: parent must receive the exact live workspace`);
+      authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+      if (scenario === 'reentrant') {
+        const input = control('x4-ui-lua-file-input');
+        const reentrantFile = mountedLuaFile('b119-reentrant.lua', validBytes, async () => {
+          reentrantInputReads += 1;
+          return validBuffer.slice(0);
+        });
+        (input as unknown as { files: FileList | null }).files = mountedLuaFileList([reentrantFile]);
+        input.value = 'C:\\fakepath\\b119-reentrant.lua';
+        input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        mountedReactClickCallback(control('x4-ui-lua-export'), `${scenario}: reentrant export callback`)();
+      }
+      return authority.submission;
+    };
+    currentProps = {
+      workspace: original,
+      scope: `b119-lua-async-${scenario}`,
+      source,
+      selectedSourcePath: 'ui/edit.lua',
+      candidates: [oldCandidate],
+      sourceSelector: oldCandidate.key,
+      targetSelector: oldCandidate.targets[0].key,
+      onWorkspaceEdit: handler,
+      sourceEditStaged: false,
+      sourceEditPending: false,
+      onSelect: () => undefined,
+    };
+    const render = (next: Partial<React.ComponentProps<typeof X4UiSourceEditorLuaFiles>> = {}): void => {
+      currentProps = { ...currentProps, ...next };
+      root?.render(<X4UiSourceEditorLuaFiles {...currentProps} />);
+    };
+    const dispatchFile = async (file: MountedLuaTestFile): Promise<void> => {
+      const input = control('x4-ui-lua-file-input');
+      (input as unknown as { files: FileList | null }).files = mountedLuaFileList([file]);
+      input.value = `C:\\fakepath\\${file.name}`;
+      await flush(() => input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+    };
+    const deferredFile = (name: string): MountedLuaTestFile => mountedLuaFile(name, validBytes, () => (
+      new Promise<ArrayBuffer>(resolve => { resolveRead = resolve; })
+    ));
+    try {
+      const originalSnapshot = JSON.stringify(original);
+      const preflight = importX4UiWorkspaceLua(original, source, {
+        path: `ui/b119-preflight-${scenario}.lua`,
+        text: new TextDecoder().decode(validBytes),
+      });
+      assert.equal(preflight.accepted, true, `${scenario}: guard fixture must reach the real import owner: ${JSON.stringify(preflight.accepted ? { accepted: true } : preflight)}`);
+      assert.equal(JSON.stringify(original), originalSnapshot, `${scenario}: import preflight must not mutate the guard fixture`);
+      if (scenario === 'reentrant') {
+        Object.defineProperty(URL, 'createObjectURL', {
+          configurable: true,
+          writable: true,
+          value: (): string => {
+            downloadUrlHandoffs += 1;
+            return 'blob:b119-reentrant-download';
+          },
+        });
+        mountedDocument.createElement = (tagName: string): MountedDomElement => {
+          const element = originalCreateElement.call(mountedDocument, tagName);
+          if (tagName.toLowerCase() === 'a') {
+            (element as unknown as { click: () => void }).click = () => { anchorClickHandoffs += 1; };
+          }
+          return element;
+        };
+      }
+      await flush(() => {
+        root = createRoot(container as unknown as Element);
+        render();
+      });
+      if (scenario === 'read-failure') {
+        await dispatchFile(mountedLuaFile('b119-read-failure.lua', validBytes, async () => {
+          throw new Error('fixture read failure');
+        }));
+        assert.equal(parentCalls, 0, `${scenario}: a failed read must not reach the workspace owner`);
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /could not be read|refused/i);
+        assert.equal(mountedElementText(container, 'x4-ui-lua-technical').includes('fixture read failure'), true,
+          `${scenario}: the technical read failure must remain inspectable`);
+        continue;
+      }
+      if (scenario === 'double-action') {
+        await dispatchFile(deferredFile('b119-first.lua'));
+        const second = mountedLuaFile('b119-second.lua', validBytes, async () => {
+          secondReads += 1;
+          return validBuffer.slice(0);
+        });
+        await dispatchFile(second);
+        assert.equal(secondReads, 0, `${scenario}: a second file action must not start while the first is reading`);
+        assert.equal(parentCalls, 0, `${scenario}: a double action must not submit before the first read settles`);
+        resolveRead?.(validBuffer.slice(0));
+        await flush(() => undefined);
+        assert.equal(parentCalls, 1, `${scenario}: only the first file action may submit`);
+        continue;
+      }
+      if (scenario === 'superseded') {
+        await dispatchFile(deferredFile('b119-superseded-old.lua'));
+        await flush(() => mountedReactClickCallback(control('x4-ui-lua-cancel'), `${scenario}: cancel old read`)());
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /cancelled/i);
+        const second = mountedLuaFile('b119-superseded-new.lua', validBytes);
+        await dispatchFile(second);
+        assert.equal(parentCalls, 1, `${scenario}: the replacement attempt must submit once`);
+        resolveRead?.(validBuffer.slice(0));
+        await flush(() => undefined);
+        assert.equal(parentCalls, 1, `${scenario}: the late old read must not submit or overwrite the replacement attempt`);
+        continue;
+      }
+      if (scenario === 'cancel') {
+        await dispatchFile(deferredFile('b119-cancel.lua'));
+        await flush(() => mountedReactClickCallback(control('x4-ui-lua-cancel'), `${scenario}: direct cancel callback`)());
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /cancelled/i);
+        resolveRead?.(validBuffer.slice(0));
+        await flush(() => undefined);
+        assert.equal(parentCalls, 0, `${scenario}: a cancelled read must not submit after its promise resolves`);
+        continue;
+      }
+      if (scenario === 'unmount') {
+        await dispatchFile(deferredFile('b119-unmount.lua'));
+        await flush(() => { root?.unmount(); root = undefined; });
+        resolveRead?.(validBuffer.slice(0));
+        await flush(() => undefined);
+        assert.equal(parentCalls, 0, `${scenario}: an unmounted read must not reach the workspace owner`);
+        assert.equal(container.childNodes.length, 0, `${scenario}: unmount must leave no mounted file controls`);
+        continue;
+      }
+      if (scenario === 'workspace-switch' || scenario === 'source-switch' || scenario === 'selection-switch') {
+        await dispatchFile(deferredFile(`b119-${scenario}.lua`));
+        const next = scenario === 'workspace-switch'
+          ? { workspace: { ...original, id: `b119-switched-${scenario}` } }
+          : scenario === 'source-switch'
+            ? { source: { ...source } as typeof source }
+            : { sourceSelector: 'b119-deliberate-source', targetSelector: 'b119-deliberate-target' };
+        await flush(() => render(next));
+        resolveRead?.(validBuffer.slice(0));
+        await flush(() => undefined);
+        assert.equal(parentCalls, 0, `${scenario}: a changed live context must cancel the pending read before commit`);
+        assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /Opened /, `${scenario}: a cancelled read must not report opened`);
+        continue;
+      }
+      if (scenario === 'reentrant') {
+        await dispatchFile(deferredFile('b119-reentrant-first.lua'));
+        assert.equal(control('x4-ui-lua-export').disabled, true, `${scenario}: Export must be visibly disabled while Open Lua is reading`);
+        await flush(() => mountedReactClickCallback(control('x4-ui-lua-export'), `${scenario}: direct busy export callback`)());
+        assert.equal(parentCalls, 0, `${scenario}: a direct busy Export callback must not submit or create a download`);
+        assert.equal(downloadUrlHandoffs, 0, `${scenario}: a busy Export callback must not create an object URL while File reading is deferred`);
+        assert.equal(anchorClickHandoffs, 0, `${scenario}: a busy Export callback must not click a download anchor while File reading is deferred`);
+        resolveRead?.(validBuffer.slice(0));
+        await flush(() => undefined);
+        assert.equal(parentCalls, 1, `${scenario}: the outer import must submit exactly once`);
+        assert.equal(reentrantInputReads, 0, `${scenario}: the reentrant file action must be blocked before reading`);
+        assert.equal(control('x4-ui-lua-export').disabled, true, `${scenario}: Export must remain visibly disabled while parent acknowledgement is pending`);
+        await flush(() => mountedReactClickCallback(control('x4-ui-lua-export'), `${scenario}: direct pending export callback`)());
+        assert.equal(parentCalls, 1, `${scenario}: a retained Export callback must be rejected while parent acknowledgement is pending`);
+        assert.equal(downloadUrlHandoffs, 0, `${scenario}: a pending Export callback must not create an object URL`);
+        assert.equal(anchorClickHandoffs, 0, `${scenario}: a pending Export callback must not click a download anchor`);
+        continue;
+      }
+      throw new Error(`${scenario}: unhandled async guard scenario`);
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error),
+        status: mountedElementText(container, 'x4-ui-lua-status'),
+        technical: mountedElementText(container, 'x4-ui-lua-technical') });
+    } finally {
+      if (root !== undefined) await flush(() => root?.unmount());
+      mountedDocument.createElement = originalCreateElement;
+      if (urlCreateDescriptor === undefined) Reflect.deleteProperty(URL, 'createObjectURL');
+      else Object.defineProperty(URL, 'createObjectURL', urlCreateDescriptor);
+      restoreGlobals();
+    }
+  }
+  console.log(`B119_LUA_FILE_ASYNC_GUARD_MATRIX ${JSON.stringify({ total: scenarios.length, passed: scenarios.length - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'Lua file reads must honor cancellation, supersession, live-context guards, unmount, and reentrant-action boundaries');
+}
+
+async function runMountedLuaFileSelectionAndAcknowledgementMatrix(): Promise<void> {
+  const scenarios = ['sole-target', 'multiple-targets', 'no-targets', 'later-selection', 'selection-callback-throws', 'parent-refused', 'forged-ack', 'crossed-ack', 'rejected-ack'] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string }[] = [];
+  for (const scenario of scenarios) {
+    const mountedDocument = new MountedDomDocument();
+    const restoreGlobals = installMountedDomGlobals(mountedDocument);
+    const container = mountedDocument.createElement('div');
+    mountedDocument.body.appendChild(container);
+    const original = sanitizeWorkspace({ ...sourceEditIntegrationWorkspace, id: `b119-lua-selection-${scenario}` });
+    const exactProjection = projectX4UiEditorSession({
+      workspace: original,
+      corpus: undefined,
+      profile: { width: 100, height: 80, uiScale: 1 },
+    });
+    const source = exactProjection.source;
+    const path = `ui/b119-${scenario}.lua`;
+    const bytes = new TextEncoder().encode(`local menu = { name = "${scenario}", layer = 1 }\nlocal frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })\nframe:display()\n`);
+    const oldCandidate = {
+      raw: {}, index: 0, path: 'ui/edit.lua', key: `old-${scenario}`,
+      sourceIdentity: { file: 'ui/edit.lua', sha256: `old-${scenario}` },
+      targets: [{ raw: { name: 'menu.old' }, key: `old-target-${scenario}`, label: 'menu.old' }],
+    } as unknown as React.ComponentProps<typeof X4UiSourceEditorLuaFiles>['candidates'][number];
+    const targetFor = (suffix: string) => ({ raw: { id: `id-${suffix}-${scenario}`, name: `menu.${suffix}` }, key: `target-${suffix}-${scenario}`, label: `menu.${suffix}` });
+    const freshTargets = scenario === 'sole-target' || scenario === 'later-selection' || scenario === 'selection-callback-throws' ? [targetFor('sole')]
+      : scenario === 'multiple-targets' ? [targetFor('first'), targetFor('second')] : [];
+    const freshCandidate = {
+      raw: { menuTargetIds: freshTargets.map(target => target.raw.id) }, index: 1, path, key: `fresh-${scenario}`,
+      sourceIdentity: { file: path, sourcePath: path, sha256: `fresh-${scenario}` },
+      targets: [...freshTargets, targetFor('cleanup')],
+    } as unknown as React.ComponentProps<typeof X4UiSourceEditorLuaFiles>['candidates'][number];
+    let root: ReturnType<typeof createRoot> | undefined;
+    let currentWorkspace: unknown = original;
+    const originalWorkspaceSnapshot = JSON.stringify(original);
+    let currentProps: React.ComponentProps<typeof X4UiSourceEditorLuaFiles>;
+    let parentCalls = 0;
+    let authority: X4UiWorkspaceEditPendingAuthority | undefined;
+    const retryScenarios = new Set<typeof scenarios[number]>(['parent-refused', 'forged-ack', 'crossed-ack', 'rejected-ack']);
+    const selections: { readonly sourceSelector: string; readonly targetSelector: string }[] = [];
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    };
+    const control = (testId: string): MountedDomElement => {
+      const element = mountedElementByTestId(container, testId);
+      assert.ok(element, `${scenario}: missing ${testId}`);
+      return element;
+    };
+    const handler: X4UiWorkspaceEditHandler = request => {
+      parentCalls += 1;
+      assert.equal(request.expectedWorkspace, currentWorkspace, `${scenario}: import must use the exact current workspace`);
+      authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+      if (retryScenarios.has(scenario) && parentCalls === 1 && scenario === 'parent-refused') {
+        return { status: 'refused', reason: 'stale-parent-workspace', detail: 'fixture parent refusal' };
+      }
+      if (retryScenarios.has(scenario) && parentCalls === 1 && scenario === 'forged-ack') {
+        const issued = authority.acknowledge(request.workspace);
+        return { ...authority.submission, acknowledgement: Promise.resolve({ ...issued }) };
+      }
+      if (retryScenarios.has(scenario) && parentCalls === 1 && scenario === 'crossed-ack') {
+        const crossed = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+        return { ...authority.submission, acknowledgement: Promise.resolve(crossed.acknowledge(request.workspace)) };
+      }
+      if (retryScenarios.has(scenario) && parentCalls === 1 && scenario === 'rejected-ack') {
+        return { ...authority.submission, acknowledgement: Promise.reject(new Error('fixture acknowledgement rejection')) };
+      }
+      return authority.submission;
+    };
+    currentProps = {
+      workspace: original,
+      scope: `b119-lua-selection-scope-${scenario}`,
+      source,
+      selectedSourcePath: 'ui/edit.lua',
+      candidates: [oldCandidate],
+      sourceSelector: oldCandidate.key,
+      targetSelector: oldCandidate.targets[0].key,
+      onWorkspaceEdit: handler,
+      sourceEditStaged: false,
+      sourceEditPending: false,
+      onSelect: selection => {
+        if (scenario === 'selection-callback-throws') throw new Error('fixture selection callback failure');
+        selections.push(selection);
+      },
+    };
+    const render = (next: Partial<React.ComponentProps<typeof X4UiSourceEditorLuaFiles>> = {}): void => {
+      currentProps = { ...currentProps, ...next };
+      root?.render(<X4UiSourceEditorLuaFiles {...currentProps} />);
+    };
+    try {
+      await flush(() => {
+        root = createRoot(container as unknown as Element);
+        render();
+      });
+      const input = control('x4-ui-lua-file-input');
+      (input as unknown as { files: FileList | null }).files = mountedLuaFileList([mountedLuaFile(path.slice(3), bytes)]);
+      input.value = `C:\\fakepath\\${path.slice(3)}`;
+      await flush(() => input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+      if (retryScenarios.has(scenario)) {
+        assert.equal(parentCalls, 1, `${scenario}: refusal/forged receipt must be observed exactly once`);
+        assert.equal(currentWorkspace, original, `${scenario}: refusal must preserve the current workspace identity`);
+        assert.equal(JSON.stringify(currentWorkspace), originalWorkspaceSnapshot, `${scenario}: refusal must preserve the detached complete workspace snapshot`);
+        assert.equal(JSON.stringify(original), originalWorkspaceSnapshot, `${scenario}: refusal must not mutate the original workspace object in place`);
+        assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /Opened /, `${scenario}: refusal must not report an opened file`);
+        assert.equal(selections.length, 0, `${scenario}: refusal must not select a source or target`);
+        assert.equal(mountedElementText(container, 'x4-ui-lua-status'), 'The workspace changed before the imported file could be confirmed. Retry from the current workspace.',
+          `${scenario}: refusal must expose the visible retry instruction`);
+        assert.equal(control('x4-ui-lua-open').disabled, false, `${scenario}: Open Lua must be usable after refusal settles`);
+        assert.equal(control('x4-ui-lua-file-input').disabled, false, `${scenario}: file input must be usable after refusal settles`);
+        assert.equal(control('x4-ui-lua-export').disabled, false, `${scenario}: Export must be usable after refusal settles`);
+        assert.equal(mountedDocument.body.getElementsByTagName('a').length, 0, `${scenario}: refusal must not create a download anchor`);
+        const retryInput = control('x4-ui-lua-file-input');
+        (retryInput as unknown as { files: FileList | null }).files = mountedLuaFileList([mountedLuaFile(path.slice(3), bytes)]);
+        retryInput.value = `C:\\fakepath\\${path.slice(3)}`;
+        await flush(() => retryInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+        assert.equal(parentCalls, 2, `${scenario}: a valid retry must reach the parent exactly once after the refusal`);
+        assert.ok(authority, `${scenario}: the valid retry must retain a parent acknowledgement authority`);
+        const retryAuthority = authority;
+        const replacement = retryAuthority.submission.workspace;
+        assert.notEqual(JSON.stringify(replacement), originalWorkspaceSnapshot, `${scenario}: the valid retry must produce a replacement workspace`);
+        currentWorkspace = replacement;
+        assert.equal(JSON.stringify(original), originalWorkspaceSnapshot, `${scenario}: the valid retry must not mutate the detached original workspace object`);
+        await flush(() => render({ workspace: replacement, candidates: [oldCandidate, freshCandidate] }));
+        assert.equal(selections.length, 0, `${scenario}: retry readback alone must not adopt a source before acknowledgement`);
+        await flush(() => retryAuthority.acknowledge(replacement));
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /Opened /, `${scenario}: valid retry must report opened after authentic acknowledgement`);
+        assert.deepEqual(selections, [{ sourceSelector: freshCandidate.key, targetSelector: '' }], `${scenario}: valid retry must select the imported source on readback`);
+        assert.equal(mountedDocument.body.getElementsByTagName('a').length, 0, `${scenario}: retry must not create a download anchor`);
+        continue;
+      }
+      assert.ok(authority, `${scenario}: accepted import must retain the parent acknowledgement authority`);
+      const replacement = authority.submission.workspace;
+      currentWorkspace = replacement;
+      const deliberate = scenario === 'later-selection'
+        ? { sourceSelector: 'deliberate-source', targetSelector: 'deliberate-target' }
+        : {};
+      await flush(() => render({ workspace: replacement, candidates: [oldCandidate, freshCandidate], ...deliberate }));
+      assert.equal(selections.length, 0, `${scenario}: exact readback alone must not adopt a source`);
+      await flush(() => authority!.acknowledge(replacement));
+      assert.equal(parentCalls, 1, `${scenario}: one accepted import must have exactly one parent call`);
+      assert.match(mountedElementText(container, 'x4-ui-lua-status'), /Opened /, `${scenario}: accepted import must report opened`);
+      if (scenario === 'sole-target') {
+        assert.deepEqual(selections, [{ sourceSelector: freshCandidate.key, targetSelector: freshTargets[0].key }], `${scenario}: one target must be selected automatically`);
+      } else if (scenario === 'multiple-targets') {
+        assert.deepEqual(selections, [{ sourceSelector: freshCandidate.key, targetSelector: '' }], `${scenario}: multiple targets must prompt a target choice`);
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /Choose a menu target from Menu/);
+      } else if (scenario === 'no-targets') {
+        assert.deepEqual(selections, [{ sourceSelector: freshCandidate.key, targetSelector: '' }], `${scenario}: a source with no targets must still be selected`);
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /no supported menu target/i);
+        assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /failed|refused/i);
+      } else if (scenario === 'later-selection') {
+        assert.deepEqual(selections, [], `${scenario}: a later deliberate selection must not be overwritten`);
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /later selection was kept/);
+        assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /selected its menu target/);
+      } else {
+        assert.deepEqual(selections, [], `${scenario}: a throwing selection callback must not report an applied target`);
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /not selected|accepted/i);
+        assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /selected its menu target/);
+        assert.match(mountedElementText(container, 'x4-ui-lua-technical'), /selection callback/i);
+      }
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (root !== undefined) await flush(() => root?.unmount());
+      restoreGlobals();
+    }
+  }
+  console.log(`B119_LUA_FILE_SELECTION_ACK_MATRIX ${JSON.stringify({ total: scenarios.length, passed: scenarios.length - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'Lua file acknowledgement and target cardinality must have exact acceptance and selection behavior');
+}
+
+async function runMountedLuaFileInputBoundaryMatrix(): Promise<void> {
+  const scenarios = ['wrong-extension', 'traversal', 'reserved-device', 'collision', 'multiple-files', 'post-read-cap'] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string }[] = [];
+  for (const scenario of scenarios) {
+    const mountedDocument = new MountedDomDocument();
+    const restoreGlobals = installMountedDomGlobals(mountedDocument);
+    const container = mountedDocument.createElement('div');
+    mountedDocument.body.appendChild(container);
+    const original = sourceEditIntegrationWorkspace;
+    const originalBytes = JSON.stringify(original);
+    const source = integrationProjection.source;
+    const candidate = {
+      raw: {}, index: 0, path: 'ui/edit.lua', key: `boundary-source-${scenario}`,
+      sourceIdentity: { file: 'ui/edit.lua', sha256: `boundary-${scenario}` },
+      targets: [{ raw: { name: 'menu.edit' }, key: `boundary-target-${scenario}`, label: 'menu.edit' }],
+    } as unknown as React.ComponentProps<typeof X4UiSourceEditorLuaFiles>['candidates'][number];
+    const validBytes = new TextEncoder().encode('local menu = { name = "Boundary", layer = 1 }\nlocal frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })\nframe:display()\n');
+    const oversizedBytes = new Uint8Array(X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES + 1);
+    let root: ReturnType<typeof createRoot> | undefined;
+    let parentCalls = 0;
+    let reads = 0;
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    };
+    const control = (testId: string): MountedDomElement => {
+      const element = mountedElementByTestId(container, testId);
+      assert.ok(element, `${scenario}: missing ${testId}`);
+      return element;
+    };
+    const props: React.ComponentProps<typeof X4UiSourceEditorLuaFiles> = {
+      workspace: original,
+      scope: `b119-lua-boundary-${scenario}`,
+      source,
+      selectedSourcePath: 'ui/edit.lua',
+      candidates: [candidate],
+      sourceSelector: candidate.key,
+      targetSelector: candidate.targets[0].key,
+      onWorkspaceEdit: () => { parentCalls += 1; return { status: 'refused', reason: 'unexpected', detail: 'boundary must not commit' }; },
+      sourceEditStaged: false,
+      sourceEditPending: false,
+      onSelect: () => undefined,
+    };
+    const fileFor = (): MountedLuaTestFile => {
+      if (scenario === 'wrong-extension') return mountedLuaFile('not-lua.txt', validBytes, async () => { reads += 1; return validBytes.buffer.slice(0); });
+      if (scenario === 'traversal') return mountedLuaFile('../escape.lua', validBytes, async () => { reads += 1; return validBytes.buffer.slice(0); });
+      if (scenario === 'reserved-device') return mountedLuaFile('COM¹.lua', validBytes, async () => { reads += 1; return validBytes.buffer.slice(0); });
+      if (scenario === 'collision') return mountedLuaFile('edit.lua', validBytes, async () => { reads += 1; return validBytes.buffer.slice(0); });
+      if (scenario === 'post-read-cap') return {
+        name: 'post-read-cap.lua', size: X4_UI_WORKSPACE_LUA_MAX_FILE_BYTES,
+        arrayBuffer: async () => { reads += 1; return oversizedBytes.buffer.slice(0) as ArrayBuffer; },
+      };
+      return mountedLuaFile('first.lua', validBytes, async () => { reads += 1; return validBytes.buffer.slice(0); });
+    };
+    try {
+      await flush(() => {
+        root = createRoot(container as unknown as Element);
+        root.render(<X4UiSourceEditorLuaFiles {...props} />);
+      });
+      const input = control('x4-ui-lua-file-input');
+      const first = fileFor();
+      (input as unknown as { files: FileList | null }).files = scenario === 'multiple-files'
+        ? mountedLuaFileList([first, mountedLuaFile('second.lua', validBytes)])
+        : mountedLuaFileList([first]);
+      input.value = `C:\\fakepath\\${first.name}`;
+      await flush(() => input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true })));
+      assert.equal(input.files?.length ?? 0, 0, `${scenario}: the input reset must clear the selected FileList`);
+      assert.equal(parentCalls, 0, `${scenario}: boundary refusal must not reach the workspace owner`);
+      assert.equal(JSON.stringify(original), originalBytes, `${scenario}: boundary refusal must preserve the complete workspace`);
+      if (scenario === 'wrong-extension' || scenario === 'traversal') {
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /safe .lua|simple filename/i);
+        assert.equal(reads, 0, `${scenario}: unsafe names must be refused before reading`);
+      } else if (scenario === 'reserved-device') {
+        assert.match(`${mountedElementText(container, 'x4-ui-lua-status')} ${mountedElementText(container, 'x4-ui-lua-technical')}`, /safe|device|Windows/i);
+        assert.equal(reads, 1, `${scenario}: the source owner may perform the bounded device-name refusal after reading`);
+      } else if (scenario === 'collision') {
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /already used|never overwritten/i);
+        assert.equal(reads, 1);
+      } else if (scenario === 'multiple-files') {
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /exactly one/i);
+        assert.equal(reads, 0, `${scenario}: selecting multiple files must not read either file`);
+      } else {
+        assert.match(mountedElementText(container, 'x4-ui-lua-status'), /4 MiB|4,194,304|larger|size/i);
+        assert.equal(reads, 1, `${scenario}: the post-read size cap must inspect the returned bytes once`);
+      }
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (root !== undefined) await flush(() => root?.unmount());
+      restoreGlobals();
+    }
+  }
+  console.log(`B119_LUA_FILE_INPUT_BOUNDARY_MATRIX ${JSON.stringify({ total: scenarios.length, passed: scenarios.length - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'Lua file input names, collision, cardinality, and post-read cap must refuse without mutation');
+}
+
+async function runMountedLuaFileExportFailureMatrix(): Promise<void> {
+  const scenarios = ['url-create-failure', 'anchor-click-failure', 'anchor-append-failure', 'url-revoke-failure', 'handoff-selection-change'] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string }[] = [];
+  for (const scenario of scenarios) {
+    const mountedDocument = new MountedDomDocument();
+    const restoreGlobals = installMountedDomGlobals(mountedDocument);
+    const container = mountedDocument.createElement('div');
+    mountedDocument.body.appendChild(container);
+    const originalCreateElement = mountedDocument.createElement;
+    const createDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+    const revokeDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+    const original = sourceEditIntegrationWorkspace;
+    const originalBytes = JSON.stringify(original);
+    const source = integrationProjection.source;
+    const candidate = {
+      raw: {}, index: 0, path: 'ui/edit.lua', key: `export-failure-source-${scenario}`,
+      sourceIdentity: { file: 'ui/edit.lua', sha256: `export-failure-${scenario}` },
+      targets: [{ raw: { name: 'menu.edit' }, key: `export-failure-target-${scenario}`, label: 'menu.edit' }],
+    } as unknown as React.ComponentProps<typeof X4UiSourceEditorLuaFiles>['candidates'][number];
+    let root: ReturnType<typeof createRoot> | undefined;
+    let currentProps: React.ComponentProps<typeof X4UiSourceEditorLuaFiles>;
+    let parentCalls = 0;
+    let createCalls = 0;
+    let revokeCalls = 0;
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    };
+    const control = (testId: string): MountedDomElement => {
+      const element = mountedElementByTestId(container, testId);
+      assert.ok(element, `${scenario}: missing ${testId}`);
+      return element;
+    };
+    const handler: X4UiWorkspaceEditHandler = () => {
+      parentCalls += 1;
+      return { status: 'refused', reason: 'unexpected', detail: 'export must not submit' };
+    };
+    currentProps = {
+      workspace: original,
+      scope: `b119-lua-export-failure-${scenario}`,
+      source,
+      selectedSourcePath: 'ui/edit.lua',
+      candidates: [candidate],
+      sourceSelector: candidate.key,
+      targetSelector: candidate.targets[0].key,
+      onWorkspaceEdit: handler,
+      sourceEditStaged: false,
+      sourceEditPending: false,
+      onSelect: () => undefined,
+    };
+    const render = (next: Partial<React.ComponentProps<typeof X4UiSourceEditorLuaFiles>> = {}): void => {
+      currentProps = { ...currentProps, ...next };
+      root?.render(<X4UiSourceEditorLuaFiles {...currentProps} />);
+    };
+    try {
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        writable: true,
+        value: (_blob: Blob): string => {
+          createCalls += 1;
+          if (scenario === 'url-create-failure') throw new Error('fixture URL creation failure');
+          if (scenario === 'handoff-selection-change') flushSync(() => render({ sourceSelector: 'deliberate-export-selection' }));
+          return `blob:b119-export-failure-${scenario}`;
+        },
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        writable: true,
+        value: (_url: string): void => {
+          revokeCalls += 1;
+          if (scenario === 'url-revoke-failure') throw new Error('fixture URL revoke failure');
+        },
+      });
+      mountedDocument.createElement = (tagName: string): MountedDomElement => {
+        const element = originalCreateElement.call(mountedDocument, tagName);
+        if (tagName.toLowerCase() === 'a' && scenario === 'anchor-click-failure') {
+          (element as unknown as { click: () => void }).click = () => { throw new Error('fixture anchor click failure'); };
+        }
+        return element;
+      };
+      if (scenario === 'anchor-append-failure') {
+        const originalAppendChild = mountedDocument.body.appendChild.bind(mountedDocument.body);
+        mountedDocument.body.appendChild = <T extends MountedDomNode>(child: T): T => {
+          if (child instanceof MountedDomElement && child.localName === 'a') throw new Error('fixture anchor append failure');
+          return originalAppendChild(child);
+        };
+      }
+      await flush(() => {
+        root = createRoot(container as unknown as Element);
+        render();
+      });
+      await flush(() => mountedReactClickCallback(control('x4-ui-lua-export'), `${scenario}: retained export callback`)());
+      assert.equal(parentCalls, 0, `${scenario}: export failure must not reach the workspace owner/history seam`);
+      assert.equal(JSON.stringify(original), originalBytes, `${scenario}: export failure must preserve the complete workspace`);
+      assert.equal(mountedDocument.body.getElementsByTagName('a').length, 0, `${scenario}: failed export must not leak a temporary anchor`);
+      assert.doesNotMatch(mountedElementText(container, 'x4-ui-lua-status'), /download requested|saved to disk|written to disk/i,
+        `${scenario}: failure must not claim a disk save or successful download`);
+      if (scenario === 'url-create-failure') {
+        assert.equal(createCalls, 1);
+        assert.equal(revokeCalls, 0);
+      } else {
+        assert.equal(createCalls, 1);
+        assert.equal(revokeCalls, 1, `${scenario}: an object URL must be revoked exactly once after handoff failure`);
+      }
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (root !== undefined) await flush(() => root?.unmount());
+      mountedDocument.createElement = originalCreateElement;
+      if (createDescriptor === undefined) Reflect.deleteProperty(URL, 'createObjectURL');
+      else Object.defineProperty(URL, 'createObjectURL', createDescriptor);
+      if (revokeDescriptor === undefined) Reflect.deleteProperty(URL, 'revokeObjectURL');
+      else Object.defineProperty(URL, 'revokeObjectURL', revokeDescriptor);
+      restoreGlobals();
+    }
+  }
+
+  const fatalWorkspace = sanitizeWorkspace({
+    ...workspace,
+    id: 'b119-lua-fatal24-export',
+    compileSettings: { ui: true },
+    passthroughFiles: [
+      {
+        path: 'ui.xml',
+        content: '<addon name="fatal24"><environment type="menus"><file name="ui/fatal24.lua" /></environment></addon>',
+        reason: 'partial',
+      },
+      {
+        path: 'ui/fatal24.lua',
+        content: [
+          'local menu = { name = "fatal24", layer = 1 }',
+          'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+          'local table = frame:addTable(24, { width = 80 })',
+          'frame:display()',
+          '',
+        ].join('\n'),
+        reason: 'partial',
+      },
+    ],
+  });
+  const fatalProjection = projectX4UiEditorSession({ workspace: fatalWorkspace, corpus: undefined, profile: { width: 100, height: 80, uiScale: 1 } });
+  const fatalCandidate = fatalProjection.preview.sourceCandidates.find(candidate => candidate.path === 'ui/fatal24.lua');
+  assert.ok(fatalCandidate, 'fatal24 fixture must issue the selected source candidate');
+  const fatalMountedCandidate = {
+    raw: {},
+    index: fatalCandidate.index,
+    path: fatalCandidate.path,
+    key: 'fatal24-source',
+    sourceIdentity: fatalCandidate.sourceIdentity,
+    targets: fatalCandidate.targets.map((target, index) => ({
+      raw: target as unknown as Record<string, unknown>,
+      key: `fatal24-target-${index}`,
+      label: target.name ?? target.handler ?? target.kind,
+    })),
+  } as unknown as React.ComponentProps<typeof X4UiSourceEditorLuaFiles>['candidates'][number];
+  const fatalDocument = new MountedDomDocument();
+  const restoreFatalGlobals = installMountedDomGlobals(fatalDocument);
+  const fatalContainer = fatalDocument.createElement('div');
+  fatalDocument.body.appendChild(fatalContainer);
+  const fatalCreateDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+  let fatalCreateCalls = 0;
+  let fatalParentCalls = 0;
+  let fatalRoot: ReturnType<typeof createRoot> | undefined;
+  const fatalFlush = async (operation: () => void): Promise<void> => {
+    await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+  };
+  try {
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: (): string => { fatalCreateCalls += 1; return 'blob:b119-fatal24'; } });
+    await fatalFlush(() => {
+      fatalRoot = createRoot(fatalContainer as unknown as Element);
+      fatalRoot.render(<X4UiSourceEditorLuaFiles
+        workspace={fatalWorkspace}
+        scope="b119-lua-fatal24"
+        source={fatalProjection.source}
+        selectedSourcePath="ui/fatal24.lua"
+        candidates={[fatalMountedCandidate]}
+        sourceSelector={fatalMountedCandidate.key}
+        targetSelector={fatalMountedCandidate.targets[0]?.key ?? ''}
+        onWorkspaceEdit={() => { fatalParentCalls += 1; return { status: 'refused', reason: 'unexpected', detail: 'fatal24 export must not submit' }; }}
+        sourceEditStaged={false}
+        sourceEditPending={false}
+        onSelect={() => undefined}
+      />);
+    });
+    const fatalExport = mountedElementByTestId(fatalContainer, 'x4-ui-lua-export');
+    assert.ok(fatalExport, 'fatal24 fixture must mount the Export Lua control');
+    const fatalBefore = JSON.stringify(fatalWorkspace);
+    await fatalFlush(() => mountedReactClickCallback(fatalExport, 'fatal24 retained export callback')());
+    assert.match(mountedElementText(fatalContainer, 'x4-ui-lua-status'), /error-level|diagnostic|block|fix/i, 'fatal24 must visibly block export with recovery copy');
+    assert.match(mountedElementText(fatalContainer, 'x4-ui-lua-technical'), /lint-errors|addTable|24/i, 'fatal24 source-owner lint refusal must remain inspectable');
+    assert.equal(fatalCreateCalls, 0, 'fatal24 lint refusal must not create a download URL');
+    assert.equal(fatalParentCalls, 0, 'fatal24 lint refusal must not create history or parent writes');
+    assert.equal(JSON.stringify(fatalWorkspace), fatalBefore, 'fatal24 lint refusal must preserve exact workspace bytes');
+  } finally {
+    if (fatalRoot !== undefined) await fatalFlush(() => fatalRoot?.unmount());
+    if (fatalCreateDescriptor === undefined) Reflect.deleteProperty(URL, 'createObjectURL');
+    else Object.defineProperty(URL, 'createObjectURL', fatalCreateDescriptor);
+    restoreFatalGlobals();
+  }
+  console.log(`B119_LUA_FILE_EXPORT_FAILURE_MATRIX ${JSON.stringify({ total: scenarios.length + 1, passed: scenarios.length + 1 - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'Lua export must clean up failed URL/anchor handoffs and block known fatal lint errors without history writes');
+}
+
+async function runMountedNewMenuCreationRegression(fixture: P7SourceAuthorityFixture): Promise<void> {
+  const scenarios = [
+    'ack-before-readback', 'readback-before-ack', 'sync-readback', 'cancel', 'invalid-name',
+    'parent-refused', 'callback-throws', 'double-submit', 'workspace-switch', 'replacement-clone',
+    'backward-transition', 'unmount', 'late-superseded', 'forged-ack', 'rejected-promise', 'duplicate-name',
+    'callback-switch-throws', 'callback-unmount', 'ack-refused', 'second-menu', 'add-row', 'row-rearrangement', 'row-move-refused', 'row-move-superseded', 'history-roundtrip',
+  ] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string }[] = [];
+  for (const scenario of scenarios) {
+    const mountedDocument = new MountedDomDocument();
+    const restoreGlobals = installMountedDomGlobals(mountedDocument);
+    const container = mountedDocument.createElement('div');
+    mountedDocument.body.appendChild(container);
+    const unrelated = { path: 'content.xml', content: '<content id="kept_asset" />\r\n', reason: 'unknown_domain' };
+    const original = sanitizeWorkspace({ ...workspace, id: `new-menu-${scenario}`, passthroughFiles: [unrelated], compileSettings: { ui: false } });
+    const originalBytes = JSON.stringify(original);
+    const switched = { ...original, id: `other-${scenario}` };
+    const historyScope = `new-menu-history-scope-${scenario}`;
+    let currentWorkspace: unknown = original;
+    let replaceWorkspace: React.Dispatch<React.SetStateAction<unknown>> = () => { throw new Error('creation parent is not mounted'); };
+    let publishHistoryRestoration: React.Dispatch<React.SetStateAction<X4UiHistoryRestorationNotice | null>> = () => { throw new Error('history restoration parent is not mounted'); };
+    const authorities: X4UiWorkspaceEditPendingAuthority[] = [];
+    let latestProjection: X4UiEditorSessionProjection | undefined;
+    let submissions = 0;
+    let root: ReturnType<typeof createRoot> | undefined;
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); });
+    };
+    const control = (id: string): MountedDomElement => {
+      const element = mountedElementByTestId(container, id);
+      assert.ok(element, `${scenario}: missing ${id}`);
+      return element;
+    };
+    const submit = (): void => {
+      control('x4-ui-new-menu-form').dispatchEvent(new MountedDomEvent('submit', { bubbles: true, cancelable: true }));
+    };
+    const handler: X4UiWorkspaceEditHandler = request => {
+      submissions += 1;
+      assert.equal(request.expectedWorkspace, currentWorkspace, `${scenario}: exact live expected workspace`);
+      if (scenario === 'parent-refused') return { status: 'refused', reason: 'stale-parent-workspace', detail: 'fixture refusal' };
+      if (scenario === 'callback-throws') throw new Error('fixture synchronous callback exception');
+      const authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+      authorities.push(authority);
+      if (scenario === 'callback-switch-throws') {
+        flushSync(() => replaceWorkspace(switched));
+        throw new Error('fixture callback switched workspace before throwing');
+      }
+      if (scenario === 'callback-unmount') {
+        flushSync(() => { root?.unmount(); root = undefined; });
+        authority.acknowledge(request.workspace);
+      }
+      if (scenario === 'sync-readback') {
+        flushSync(() => replaceWorkspace(request.workspace));
+        authority.acknowledge(request.workspace);
+      }
+      if (scenario === 'double-submit') submit();
+      if (scenario === 'rejected-promise') {
+        return { ...authority.submission, acknowledgement: Promise.reject(new Error('fixture rejection')) };
+      }
+      if (scenario === 'forged-ack') {
+        const acknowledgement = authority.acknowledge(request.workspace);
+        return { ...authority.submission, acknowledgement: Promise.resolve({ ...acknowledgement }) };
+      }
+      return authority.submission;
+    };
+    const canonicalLoader = async () => ({ core: fixture.core, color: fixture.color });
+    const mountedSurfaceFactory = (width: number, height: number) => new MountedCanvasElement(mountedDocument, width, height);
+    const Parent = (): React.ReactElement => {
+      const [liveWorkspace, setLiveWorkspace] = React.useState<unknown>(original);
+      const [historyRestoration, setHistoryRestoration] = React.useState<X4UiHistoryRestorationNotice | null>(null);
+      currentWorkspace = liveWorkspace;
+      publishHistoryRestoration = setHistoryRestoration;
+      replaceWorkspace = update => setLiveWorkspace(previous => {
+        const candidate = typeof update === 'function' ? update(previous) : update;
+        const normalized = sanitizeWorkspace(candidate);
+        return retainWorkspaceCandidateIfNormalizedUnchanged(candidate, normalized);
+      });
+      return <X4UiSourceEditor
+        workspace={liveWorkspace}
+        corpusLoader={canonicalLoader}
+        surfaceFactory={mountedSurfaceFactory}
+        onWorkspaceEdit={handler}
+        workspaceScope={historyScope}
+        historyRestoration={historyRestoration}
+        onSessionProjection={projection => { latestProjection = projection; }}
+      />;
+    };
+    const enterName = async (name: string): Promise<void> => {
+      await flush(() => control('x4-ui-new-menu-open').click());
+      await flush(() => {
+        const input = control('x4-ui-new-menu-name');
+        input.focus();
+        input.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+        input.value = name;
+        input.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+        input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+      });
+    };
+    const assertNoAcceptance = (): void => {
+      assert.doesNotMatch(mountedElementText(container, 'x4-ui-new-menu-status'), /^Created /, `${scenario}: no false success`);
+      for (const kind of ['source', 'target']) {
+        assert.deepEqual(control(`x4-ui-${kind}-selector`).options.filter(option => option.selected && option.value !== ''), [],
+          `${scenario}: no automatic ${kind} adoption`);
+      }
+    };
+    const assertSelectedOption = (id: string, text: string): void => {
+      // React sets option.selected; this lightweight DOM does not reflect that into select.value.
+      // The current canvas and producer-derived hierarchy below independently prove adoption.
+      const option = control(id).options.find(candidate => candidate.textContent === text);
+      assert.ok(option, `${scenario}: ${text} must be in the current catalog`);
+      assert.equal(option.selected, true, `${scenario}: ${text} must be selected`);
+    };
+    try {
+      await flush(() => {
+        root = createRoot(container as unknown as Element);
+        root.render(<React.StrictMode><Parent /></React.StrictMode>);
+      });
+      assert.equal(control('x4-ui-source-selector').value, '');
+      assert.equal(control('x4-ui-target-selector').value, '');
+      const name = scenario === 'invalid-name' ? 'x'.repeat(81) : 'First visual menu';
+      await enterName(name);
+      if (scenario === 'cancel') {
+        await flush(() => control('x4-ui-new-menu-cancel').click());
+        assert.equal(mountedElementByTestId(container, 'x4-ui-new-menu-form'), null);
+        assert.equal(submissions, 0);
+        assert.equal(currentWorkspace, original);
+        assertNoAcceptance();
+        continue;
+      }
+      await flush(submit);
+      if (scenario === 'callback-unmount') {
+        assert.equal(submissions, 1);
+        assert.equal(container.childNodes.length, 0);
+        assert.equal(currentWorkspace, original);
+        continue;
+      }
+      if (scenario === 'callback-switch-throws') {
+        assert.equal(currentWorkspace, switched);
+        assert.equal(mountedElementByTestId(container, 'x4-ui-new-menu-form'), null, 'old callback must not reopen a draft in another workspace');
+        assertNoAcceptance();
+        continue;
+      }
+      if (['invalid-name', 'parent-refused', 'callback-throws', 'forged-ack', 'rejected-promise'].includes(scenario)) {
+        assert.equal(currentWorkspace, original);
+        assert.equal(control('x4-ui-new-menu-name').value, name, `${scenario}: refused draft preserved`);
+        assert.ok(mountedElementText(container, 'x4-ui-new-menu-status').length > 0);
+        assert.equal(control('x4-ui-new-menu-create').disabled, false);
+        assert.equal(submissions, scenario === 'invalid-name' ? 0 : 1);
+        assertNoAcceptance();
+        continue;
+      }
+      const authority = authorities[0];
+      assert.ok(authority, `${scenario}: parent received creation`);
+      const replacement = authority.submission.workspace;
+      assert.equal(submissions, 1, `${scenario}: one submission including reentrant/double submit`);
+      if (scenario === 'ack-refused') {
+        await flush(() => { authority.acknowledge(original); });
+        assertNoAcceptance();
+        assert.equal(currentWorkspace, original);
+        assert.equal(control('x4-ui-new-menu-name').value, name);
+        assert.equal(control('x4-ui-new-menu-create').disabled, false);
+        continue;
+      }
+      if (scenario !== 'sync-readback') {
+        assertNoAcceptance();
+        assert.equal(currentWorkspace, original);
+        assert.equal(control('x4-ui-new-menu-create').disabled, true);
+        assert.equal(control('x4-ui-new-menu-cancel').disabled, true);
+        await flush(submit);
+        assert.equal(submissions, 1, `${scenario}: pending submit cannot create another menu`);
+      }
+      if (scenario === 'unmount') {
+        await flush(() => { root?.unmount(); root = undefined; });
+        await flush(() => { authority.acknowledge(replacement); });
+        assert.equal(container.childNodes.length, 0);
+        assert.equal(currentWorkspace, original);
+        continue;
+      }
+      if (['workspace-switch', 'replacement-clone', 'backward-transition', 'late-superseded'].includes(scenario)) {
+        if (scenario === 'backward-transition') {
+          await flush(() => replaceWorkspace(replacement));
+          await flush(() => replaceWorkspace(original));
+        } else {
+          await flush(() => replaceWorkspace(scenario === 'replacement-clone' ? { ...replacement as object } : switched));
+        }
+        if (scenario === 'late-superseded') {
+          await enterName('Second attempt');
+          await flush(submit);
+          assert.equal(submissions, 2);
+        }
+        await flush(() => { authority.acknowledge(replacement); });
+        assertNoAcceptance();
+        if (scenario === 'late-superseded') {
+          assert.equal(control('x4-ui-new-menu-name').value, 'Second attempt');
+          assert.equal(control('x4-ui-new-menu-create').disabled, true);
+          const currentAuthority = authorities[1];
+          assert.ok(currentAuthority);
+          await flush(() => replaceWorkspace(currentAuthority.submission.workspace));
+          await flush(() => { currentAuthority.acknowledge(currentAuthority.submission.workspace); });
+          assert.match(mountedElementText(container, 'x4-ui-new-menu-status'), /^Created Second attempt/);
+        }
+        continue;
+      }
+      if (scenario === 'ack-before-readback') {
+        await flush(() => { authority.acknowledge(replacement); });
+        assertNoAcceptance();
+        assert.equal(control('x4-ui-new-menu-create').disabled, true);
+        await flush(() => replaceWorkspace(replacement));
+      } else if (scenario !== 'sync-readback') {
+        await flush(() => replaceWorkspace(replacement));
+        assertNoAcceptance();
+        assert.equal(control('x4-ui-new-menu-create').disabled, true, 'exact identity readback alone is not an acknowledgement');
+        await flush(() => { authority.acknowledge(replacement); });
+      }
+      assert.match(mountedElementText(container, 'x4-ui-new-menu-status'), /^Created First visual menu/);
+      assert.equal(currentWorkspace, replacement);
+      const current = replacement as typeof original;
+      assert.deepEqual(current.passthroughFiles.find(file => file.path === 'content.xml'), unrelated);
+      const newFile = current.passthroughFiles.find(file => file.path.endsWith('.lua'));
+      assert.ok(newFile);
+      assert.ok(current.passthroughFiles.some(file => file.path === 'ui.xml'));
+      assertSelectedOption('x4-ui-source-selector', newFile.path);
+      assertSelectedOption('x4-ui-target-selector', 'menu.createFrame');
+      if (scenario === 'history-roundtrip') {
+        const acknowledgement = authority.acknowledge(replacement);
+        const preparedHistory = prepareX4UiSourceHistoryEntry(
+          {
+            scope: historyScope,
+            expectedWorkspace: original,
+            workspace: replacement,
+            acknowledgement,
+          },
+          historyScope,
+          replacement as typeof original,
+          new WeakSet<object>(),
+        );
+        assert.equal(preparedHistory.status, 'recorded', 'the actual New-menu creation ACK must enter guarded source history');
+        if (preparedHistory.status !== 'recorded') throw new Error('history-roundtrip creation was not recorded');
+        const historyPast: WorkspaceHistoryEntry[] = [preparedHistory.entry];
+        const historyFuture: WorkspaceHistoryEntry[] = [];
+        const undo = transitionWorkspaceHistory(
+          'undo',
+          historyPast,
+          historyFuture,
+          replacement as typeof original,
+          historyScope,
+        );
+        assert.equal(undo.status, 'applied', 'the actual created source must accept guarded Undo');
+        if (undo.status !== 'applied') throw new Error('history-roundtrip creation Undo was refused');
+        await flush(() => replaceWorkspace(undo.workspace));
+        assert.equal(currentWorkspace, undo.workspace, 'creation Undo must read back the exact proposed workspace object');
+        assert.equal((undo.workspace as typeof original).passthroughFiles.length, original.passthroughFiles.length);
+        assert.equal((undo.workspace as typeof original).passthroughFiles.some(file => file.path === newFile.path), false);
+        assert.equal((undo.workspace as typeof original).passthroughFiles.some(file => file.path === 'ui.xml'), false);
+        assert.equal((undo.workspace as typeof original).passthroughFiles.find(file => file.path === 'content.xml')?.content, unrelated.content);
+        await flush(() => publishHistoryRestoration({
+          direction: 'undo',
+          scope: historyScope,
+          beforeWorkspace: replacement,
+          afterWorkspace: undo.workspace,
+        }));
+        assert.deepEqual(control('x4-ui-source-selector').options.filter(option => option.selected && option.value !== ''), [],
+          'creation Undo must remove the source selection when its file is absent');
+        assert.deepEqual(control('x4-ui-target-selector').options.filter(option => option.selected && option.value !== ''), [],
+          'creation Undo must remove the target selection when its source is absent');
+
+        const redo = transitionWorkspaceHistory(
+          'redo',
+          undo.past,
+          undo.future,
+          undo.workspace as typeof original,
+          historyScope,
+        );
+        assert.equal(redo.status, 'applied', 'the actual created source must accept guarded Redo');
+        if (redo.status !== 'applied') throw new Error('history-roundtrip creation Redo was refused');
+        await flush(() => replaceWorkspace(redo.workspace));
+        assert.equal(currentWorkspace, redo.workspace, 'creation Redo must read back the exact proposed workspace object');
+        const redone = redo.workspace as typeof original;
+        assert.equal(redone.passthroughFiles.length, current.passthroughFiles.length, 'Redo must restore the created file count');
+        assert.equal(redone.passthroughFiles.find(file => file.path === newFile.path)?.content, newFile.content,
+          'Redo must restore the complete generated Lua bytes');
+        assert.equal(redone.passthroughFiles.find(file => file.path === 'ui.xml')?.content,
+          current.passthroughFiles.find(file => file.path === 'ui.xml')?.content,
+          'Redo must restore the complete registration bytes');
+        assert.equal(redone.passthroughFiles.find(file => file.path === 'content.xml')?.content, unrelated.content,
+          'Redo must preserve the unrelated sibling bytes');
+        await flush(() => publishHistoryRestoration({
+          direction: 'redo',
+          scope: historyScope,
+          beforeWorkspace: undo.workspace,
+          afterWorkspace: redo.workspace,
+        }));
+        assertSelectedOption('x4-ui-source-selector', newFile.path);
+        assertSelectedOption('x4-ui-target-selector', 'menu.createFrame');
+        assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current',
+          'creation Redo must refresh the mounted current canvas');
+        assert.ok(control('x4-ui-canvas-host').firstElementChild instanceof MountedCanvasElement,
+          'creation Redo must mount fresh canvas output');
+        continue;
+      }
+      let sceneStructureFailure: string | undefined;
+      if (mountedElementText(container, 'x4-ui-canvas-status') !== 'rendered/current') {
+        const input = { workspace: current, corpus: fixture.core, colorEvidence: fixture.color, profile: { width: 2560, height: 1440, uiScale: 1.4 } };
+        const available = projectX4UiEditorSession(input);
+        const source = available.preview.sourceCandidates.find(candidate => candidate.path === newFile.path);
+        const target = source?.targets.find(candidate => candidate.name === 'menu.createFrame');
+        if (source !== undefined && target !== undefined) {
+          const selected = projectX4UiEditorSession({ ...input, selection: { sourceIndex: source.index, path: source.path, sourceIdentity: source.sourceIdentity, target } });
+          const program = selected.preview.program;
+          if (program !== undefined && program.status !== 'refused') {
+            sceneStructureFailure = diagnoseX4UiSceneStructureForTest(program.program, program.evidenceAuthority);
+          }
+        }
+      }
+      assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current',
+        `${scenario}: ${mountedElementText(container, 'x4-ui-canvas-detail')}; structure stage: ${sceneStructureFailure ?? 'not refused'}`);
+      assert.ok(control('x4-ui-canvas-host').firstElementChild instanceof MountedCanvasElement);
+      const hierarchy = control('x4-ui-builder-hierarchy-list');
+      const textNode = hierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Text · First visual menu'));
+      assert.ok(textNode, `${scenario}: creation projects known visible text`);
+      await flush(() => textNode.click());
+      const selected = control('x4-ui-builder-selection');
+      const textInput = selected.querySelectorAll('input').find(input => input.value === name);
+      assert.ok(textInput, `${scenario}: new title is an editable literal`);
+      assert.equal(mountedElementText(container, 'x4-ui-game-truth'), 'Not verified in game');
+      if (['row-rearrangement', 'row-move-refused', 'row-move-superseded'].includes(scenario)) {
+        const rowControl = (id: string): MountedDomElement => control(id);
+        const selectNodeByPrefix = async (labelPrefix: string): Promise<MountedDomElement> => {
+          const node = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+            .find(element => element.textContent.startsWith(labelPrefix));
+          assert.ok(node, `${scenario}: hierarchy node ${labelPrefix} was not issued`);
+          await flush(() => node.click());
+          return node;
+        };
+        const selectNodeContaining = async (labelPart: string): Promise<MountedDomElement> => {
+          const node = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+            .find(element => element.textContent.includes(labelPart));
+          assert.ok(node, `${scenario}: hierarchy node containing ${labelPart} was not issued`);
+          await flush(() => node.click());
+          return node;
+        };
+        const setPaletteText = async (textValue: string): Promise<void> => {
+          await flush(() => {
+            const input = rowControl('x4-ui-contextual-palette-text');
+            input.focus();
+            input.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+            input.value = textValue;
+            input.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+            input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+          });
+        };
+        const settleLast = async (): Promise<typeof original> => {
+          const authority = authorities[authorities.length - 1];
+          assert.ok(authority, `${scenario}: the last source action must retain a parent acknowledgement owner`);
+          const replacement = authority.submission.workspace as typeof original;
+          await flush(() => replaceWorkspace(replacement));
+          await flush(() => { authority.acknowledge(replacement); });
+          assert.equal(currentWorkspace, replacement, `${scenario}: accepted source action must read back the exact replacement workspace`);
+          return replacement;
+        };
+        const addRowAndWidget = async (widget: 'text' | 'button' | 'input', textValue: string): Promise<void> => {
+          const addRow = rowControl('x4-ui-contextual-palette-add-row');
+          assert.equal(addRow.disabled, false, `${scenario}: a selected row descendant must expose Add row`);
+          await flush(() => addRow.click());
+          assert.equal(addRow.disabled, true, `${scenario}: pending Add row must disable the old callback`);
+          await settleLast();
+          const selectedFreshCell = rowControl('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+            .find(element => element.getAttribute('aria-pressed') === 'true');
+          assert.ok(selectedFreshCell, `${scenario}: Add row must select a fresh cell before widget insertion`);
+          assert.match(selectedFreshCell.textContent, /^Cell 1/);
+          await setPaletteText(textValue);
+          const addWidget = rowControl(`x4-ui-contextual-palette-add-${widget}`);
+          assert.equal(addWidget.disabled, false, `${scenario}: fresh empty cell must expose Add ${widget}`);
+          await flush(() => addWidget.click());
+          await settleLast();
+          assert.ok(rowControl('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+            .some(element => element.textContent.includes(textValue)), `${scenario}: ${widget} producer must project ${textValue}`);
+        };
+
+        await selectNodeByPrefix('Text · First visual menu');
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, true, `${scenario}: first row Move up must be disabled`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, true, `${scenario}: one-row menu Move down has no adjacent row yet`);
+        await addRowAndWidget('text', 'Second row Text');
+        await selectNodeByPrefix('Text · Second row Text');
+        await addRowAndWidget('button', 'Third row Button');
+        await selectNodeContaining('Third row Button');
+        await flush(() => rowControl('x4-ui-contextual-palette-add-row').click());
+        await settleLast();
+        const emptyFourthCell = rowControl('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .find(element => element.getAttribute('aria-pressed') === 'true');
+        assert.ok(emptyFourthCell, `${scenario}: fourth Add row must select an empty fresh cell`);
+        assert.match(emptyFourthCell.textContent, /^Cell 1/);
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, false, `${scenario}: empty last row may move up`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, true, `${scenario}: empty last row Move down must be disabled`);
+        await setPaletteText('Fourth row Input');
+        await flush(() => rowControl('x4-ui-contextual-palette-add-input').click());
+        await settleLast();
+
+        await selectNodeByPrefix('Row 1');
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, true, `${scenario}: first row Move up must stay disabled`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, false, `${scenario}: first row Move down must be enabled`);
+        await selectNodeByPrefix('Row 4');
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, false, `${scenario}: last row Move up must be enabled`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, true, `${scenario}: last row Move down must stay disabled`);
+        const middleDescendant = await selectNodeByPrefix('Text · Second row Text');
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, false, `${scenario}: middle row Move up must be enabled`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, false, `${scenario}: middle row Move down must be enabled`);
+        const staleMoveDownCallback = mountedReactClickCallback(
+          rowControl('x4-ui-row-controls-move-down'),
+          `${scenario}: middle-row Move down callback must be retained by the mounted control`,
+        );
+        const beforeStaleMoveWorkspace = currentWorkspace;
+        const submissionsBeforeStaleMove = submissions;
+        await selectNodeByPrefix('Row 1');
+        await flush(staleMoveDownCallback);
+        assert.equal(submissions, submissionsBeforeStaleMove, `${scenario}: stale Move down callback must not submit after selection changed`);
+        assert.equal(currentWorkspace, beforeStaleMoveWorkspace, `${scenario}: stale Move down callback must not replace the live workspace`);
+        await selectNodeByPrefix('Text · Second row Text');
+        const draftInput = control('x4-ui-builder-selection').querySelectorAll('input')
+          .find(input => input.value === 'Second row Text');
+        assert.ok(draftInput, `${scenario}: middle row must expose a property input for draft blocking`);
+        await flush(() => {
+          draftInput.focus();
+          draftInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          draftInput.value = 'Draft row text';
+          draftInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          draftInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, true, `${scenario}: staged property changes must disable Move up`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, true, `${scenario}: staged property changes must disable Move down`);
+        assert.match(rowControl('x4-ui-row-controls-status').textContent, /Apply or discard/);
+        const draftMoveDownCallback = mountedReactClickCallback(
+          rowControl('x4-ui-row-controls-move-down'),
+          `${scenario}: disabled Move down must still guard its direct callback`,
+        );
+        const submissionsBeforeDraftMove = submissions;
+        await flush(draftMoveDownCallback);
+        assert.equal(submissions, submissionsBeforeDraftMove, `${scenario}: a direct Move down callback must refuse while a property draft is staged`);
+        await flush(() => control('x4-ui-builder-source-edit-discard').click());
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, false, `${scenario}: discarding the property draft must restore Move up`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, false, `${scenario}: discarding the property draft must restore Move down`);
+        const oldMiddleNodeId = middleDescendant.getAttribute('data-testid');
+        assert.ok(oldMiddleNodeId, `${scenario}: middle descendant must expose an exact builder identity`);
+        const moveProjection = latestProjection;
+        assert.ok(moveProjection, `${scenario}: mounted projection observer must expose the exact current producer projection`);
+        const movePresentation = buildX4UiBuilderPresentation(moveProjection);
+        const moveSelectedNode = movePresentation.nodes.find(node => node.id === oldMiddleNodeId.replace('x4-ui-builder-node-', ''));
+        assert.ok(moveSelectedNode, `${scenario}: current selected descendant must map to the exact presentation node`);
+        const moveRow = resolveX4UiBuilderRowForNode(movePresentation.nodes, moveSelectedNode);
+        assert.ok(moveRow, `${scenario}: current selected descendant must map to its exact row owner`);
+        const moveCatalog = discoverX4UiSourceEditorCatalog(currentWorkspace, moveProjection);
+        assert.ok(moveCatalog, `${scenario}: actual Newmenu/Addrow/Text/Button/Input producer must issue a source catalog`);
+        const moveEntry = moveCatalog.moveEntries?.find(entry => entry.direction === 'down' && entry.rowId === moveRow.id.slice('scene:'.length));
+        assert.ok(moveEntry, `${scenario}: actual producer must issue the middle-row Move down entry`);
+        const beforeMoveSource = (currentWorkspace as typeof original).passthroughFiles.find(file => file.path === newFile.path)?.content;
+        assert.ok(beforeMoveSource, `${scenario}: source bytes must be present before movement`);
+        const expectedDownSource = beforeMoveSource.slice(0, moveEntry.startOffset)
+          + moveEntry.lower.expectedText + moveEntry.upper.expectedText
+          + beforeMoveSource.slice(moveEntry.endOffset);
+        const moveDownCallback = mountedReactClickCallback(
+          rowControl('x4-ui-row-controls-move-down'),
+          `${scenario}: enabled Move down must retain the actual mounted callback`,
+        );
+        const beforeMoveWorkspace = currentWorkspace;
+        await flush(moveDownCallback);
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, true, `${scenario}: a pending move must disable Move up`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, true, `${scenario}: a pending move must disable Move down`);
+        assert.equal(rowControl('x4-ui-row-controls-status').textContent, 'Saving your change…', `${scenario}: a pending move must expose the concise pending reason`);
+        const moveAuthority = authorities[authorities.length - 1];
+        assert.ok(moveAuthority, `${scenario}: Move down must reach the existing parent acknowledgement owner`);
+        const movedWorkspace = moveAuthority.submission.workspace as typeof original;
+        const movedSource = movedWorkspace.passthroughFiles.find(file => file.path === newFile.path)?.content;
+        assert.equal(movedSource, expectedDownSource, `${scenario}: Move down must produce the exact owner-issued source permutation`);
+        if (scenario === 'row-move-refused') {
+          await flush(() => { moveAuthority.acknowledge(beforeMoveWorkspace); });
+          assert.equal(currentWorkspace, beforeMoveWorkspace, `${scenario}: a refused movement acknowledgement must preserve the current source workspace`);
+          assert.equal(rowControl('x4-ui-row-controls-status').textContent, 'That row change could not be saved. Open Inspect for details.', `${scenario}: refused movement must expose the concise refusal status`);
+          const refusedSource = (currentWorkspace as typeof original).passthroughFiles.find(file => file.path === newFile.path)?.content;
+          assert.ok(refusedSource);
+          assert.ok(refusedSource.indexOf('Second row Text') < refusedSource.indexOf('Third row Button'), `${scenario}: refused movement must not permute source rows`);
+          assert.ok(control('x4-ui-builder-selection').textContent.includes('Second row Text'), `${scenario}: refused movement must not lose the selected row context`);
+          continue;
+        }
+        if (scenario === 'row-move-superseded') {
+          const submissionsBeforeSupersededCallback = submissions;
+          await flush(() => replaceWorkspace(switched));
+          assert.equal(currentWorkspace, switched, `${scenario}: intervening source/workspace change must become current before the old acknowledgement`);
+          assert.deepEqual(control('x4-ui-source-selector').options.filter(option => option.selected && option.value !== ''), [], `${scenario}: intervening source change must clear the source selection`);
+          assert.deepEqual(control('x4-ui-target-selector').options.filter(option => option.selected && option.value !== ''), [], `${scenario}: intervening source change must clear the target selection`);
+          await flush(() => { moveAuthority.acknowledge(movedWorkspace); });
+          assert.equal(currentWorkspace, switched, `${scenario}: superseded movement acknowledgement must not replace the intervening workspace`);
+          assert.deepEqual(control('x4-ui-source-selector').options.filter(option => option.selected && option.value !== ''), [], `${scenario}: superseded movement acknowledgement must not restore source selection`);
+          assert.deepEqual(control('x4-ui-target-selector').options.filter(option => option.selected && option.value !== ''), [], `${scenario}: superseded movement acknowledgement must not restore target selection`);
+          await flush(moveDownCallback);
+          assert.equal(submissions, submissionsBeforeSupersededCallback, `${scenario}: stale movement callback must remain inert after the source/workspace change`);
+          continue;
+        }
+        await flush(() => replaceWorkspace(movedWorkspace));
+        assert.equal(rowControl('x4-ui-row-controls-move-up').disabled, true, `${scenario}: readback before ACK must not re-enable Move up`);
+        assert.equal(rowControl('x4-ui-row-controls-move-down').disabled, true, `${scenario}: readback before ACK must not re-enable Move down`);
+        await flush(() => { moveAuthority.acknowledge(movedWorkspace); });
+        const freshMovedSelection = rowControl('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .find(element => element.getAttribute('aria-pressed') === 'true');
+        assert.ok(freshMovedSelection, `${scenario}: accepted Move down must retain a fresh selected node`);
+        assert.match(freshMovedSelection.textContent, /^Row 3/);
+        assert.notEqual(freshMovedSelection.getAttribute('data-testid'), oldMiddleNodeId, `${scenario}: accepted Move down must not retain the old descendant identity`);
+        assert.ok(rowControl('x4-ui-builder-hierarchy-list').querySelectorAll('button').some(element => element.textContent.startsWith('Row 3')),
+          `${scenario}: moved middle row must reproject at its new row position`);
+
+        const inverseProjection = latestProjection;
+        assert.ok(inverseProjection, `${scenario}: inverse movement must observe the fresh projection`);
+        const inversePresentation = buildX4UiBuilderPresentation(inverseProjection);
+        const inverseSelectedId = freshMovedSelection.getAttribute('data-testid')?.replace('x4-ui-builder-node-', '');
+        assert.ok(inverseSelectedId);
+        const inverseSelectedNode = inversePresentation.nodes.find(node => node.id === inverseSelectedId);
+        assert.ok(inverseSelectedNode);
+        const inverseRow = resolveX4UiBuilderRowForNode(inversePresentation.nodes, inverseSelectedNode);
+        assert.ok(inverseRow);
+        const inverseCatalog = discoverX4UiSourceEditorCatalog(currentWorkspace, inverseProjection);
+        assert.ok(inverseCatalog);
+        const inverseEntry = inverseCatalog.moveEntries?.find(entry => entry.direction === 'up' && entry.rowId === inverseRow.id.slice('scene:'.length));
+        assert.ok(inverseEntry, `${scenario}: accepted fresh moved row must issue its exact inverse Move up entry`);
+        const beforeInverseSource = (currentWorkspace as typeof original).passthroughFiles.find(file => file.path === newFile.path)?.content;
+        assert.ok(beforeInverseSource);
+        const expectedInverseSource = beforeInverseSource.slice(0, inverseEntry.startOffset)
+          + inverseEntry.lower.expectedText + inverseEntry.upper.expectedText
+          + beforeInverseSource.slice(inverseEntry.endOffset);
+        await flush(() => rowControl('x4-ui-row-controls-move-up').click());
+        const inverseAuthority = authorities[authorities.length - 1];
+        assert.ok(inverseAuthority);
+        const inverseWorkspace = inverseAuthority.submission.workspace as typeof original;
+        assert.equal(inverseWorkspace.passthroughFiles.find(file => file.path === newFile.path)?.content,
+          expectedInverseSource, `${scenario}: inverse Move up must produce the exact inverse source permutation`);
+        await flush(() => replaceWorkspace(inverseWorkspace));
+        await flush(() => { inverseAuthority.acknowledge(inverseWorkspace); });
+        const freshInverseSelection = rowControl('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .find(element => element.getAttribute('aria-pressed') === 'true');
+        assert.ok(freshInverseSelection);
+        assert.match(freshInverseSelection.textContent, /^Row 2/);
+        assert.notEqual(freshInverseSelection.getAttribute('data-testid'), freshMovedSelection.getAttribute('data-testid'), `${scenario}: inverse must select the newly reprojected row descendant`);
+        assert.equal((currentWorkspace as typeof original).passthroughFiles.find(file => file.path === newFile.path)?.content,
+          beforeMoveSource, `${scenario}: inverse movement must restore the exact original source bytes`);
+
+        await selectNodeContaining('Second row Text');
+        const continuedEditInput = control('x4-ui-builder-selection').querySelectorAll('input').find(input => input.value === 'Second row Text');
+        assert.ok(continuedEditInput, `${scenario}: fresh moved row must expose its ordinary editable widget property`);
+        const continuedEditId = continuedEditInput.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+        assert.ok(continuedEditId);
+        await flush(() => {
+          continuedEditInput.focus();
+          continuedEditInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          continuedEditInput.value = 'Second row Text edited';
+          continuedEditInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          continuedEditInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        await flush(() => control(`x4-ui-source-edit-apply-${continuedEditId}`).click());
+        const continuedEditAuthority = authorities[authorities.length - 1];
+        assert.ok(continuedEditAuthority, `${scenario}: ordinary property edit after movement must use the existing source commit seam`);
+        const continuedEditWorkspace = continuedEditAuthority.submission.workspace as typeof original;
+        assert.match(continuedEditWorkspace.passthroughFiles.find(file => file.path === newFile.path)?.content ?? '', /Second row Text edited/);
+        await flush(() => replaceWorkspace(continuedEditWorkspace));
+        await flush(() => { continuedEditAuthority.acknowledge(continuedEditWorkspace); });
+        assert.ok(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'Second row Text edited'),
+          `${scenario}: continued property editing must retain the fresh selected widget after movement`);
+        assert.equal(currentWorkspace, continuedEditWorkspace);
+        continue;
+      }
+      if (['ack-before-readback', 'readback-before-ack', 'sync-readback'].includes(scenario)) {
+        const oldCanvas = control('x4-ui-canvas-host').firstElementChild;
+        const oldSourceKey = control('x4-ui-source-selector').options.find(option => option.textContent === newFile.path)?.value;
+        const oldTargetKey = control('x4-ui-target-selector').options.find(option => option.textContent === 'menu.createFrame')?.value;
+        const entryId = textInput.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+        assert.ok(entryId);
+        const firstEditedTitle = 'Edited "visual" \\ title';
+        await flush(() => {
+          textInput.focus();
+          textInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          textInput.value = firstEditedTitle;
+          textInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          textInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        await flush(() => control(`x4-ui-source-edit-apply-${entryId}`).click());
+        assert.equal(submissions, 2, `${scenario}: title edit reached the real parent commit seam`);
+        const editAuthority = authorities[1];
+        assert.ok(editAuthority);
+        const edited = editAuthority.submission.workspace as typeof original;
+        assert.equal(edited.passthroughFiles.find(file => file.path === newFile.path)?.content,
+          newFile.content.replace(JSON.stringify(name), JSON.stringify(firstEditedTitle)), 'only the escaped title literal changes');
+        assert.deepEqual(edited.passthroughFiles.filter(file => file.path !== newFile.path),
+          current.passthroughFiles.filter(file => file.path !== newFile.path), 'registration and unrelated assets stay byte-identical');
+        const normalizedEdit = sanitizeWorkspace(edited);
+        assert.equal(retainWorkspaceCandidateIfNormalizedUnchanged(edited, normalizedEdit), edited,
+          `source-edit readback must retain the actual owner result: frozen=${Object.isFrozen(edited)}, normalizedFrozen=${Object.isFrozen(normalizedEdit)}, sameJSON=${JSON.stringify(edited) === JSON.stringify(normalizedEdit)}`);
+        if (scenario === 'ack-before-readback') {
+          await flush(() => { editAuthority.acknowledge(edited); });
+          assert.equal(currentWorkspace, replacement, 'ack alone cannot adopt replacement source identities');
+          assert.equal(control('x4-ui-canvas-host').firstElementChild, oldCanvas);
+          await flush(() => replaceWorkspace(edited));
+        } else if (scenario === 'readback-before-ack') {
+          await flush(() => replaceWorkspace(edited));
+          assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'stale', 'readback alone cannot authorize fresh selection');
+          assert.equal(control('x4-ui-canvas-export').disabled, true, 'old pixels stay unexportable');
+          await flush(() => { editAuthority.acknowledge(edited); });
+        }
+        assert.equal(currentWorkspace, edited);
+        assertSelectedOption('x4-ui-source-selector', newFile.path);
+        assertSelectedOption('x4-ui-target-selector', 'menu.createFrame');
+        assert.notEqual(control('x4-ui-source-selector').options.find(option => option.textContent === newFile.path)?.value, oldSourceKey);
+        assert.notEqual(control('x4-ui-target-selector').options.find(option => option.textContent === 'menu.createFrame')?.value, oldTargetKey);
+        assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current', 'acknowledged edit reprojects a fresh current canvas');
+        assert.notEqual(control('x4-ui-canvas-host').firstElementChild, oldCanvas, 'old mounted paint is replaced');
+        assert.ok(control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .some(element => element.textContent.startsWith(`Text · ${firstEditedTitle}`)), 'fresh hierarchy contains the changed literal');
+        const retainedTitleInput = control('x4-ui-builder-selection').querySelectorAll('input').find(input => input.value === firstEditedTitle);
+        assert.ok(retainedTitleInput, `${scenario}: accepted title edit retains the fresh selected element`);
+        const secondEditedTitle = 'x';
+        const secondEntryId = retainedTitleInput.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+        assert.ok(secondEntryId);
+        await flush(() => {
+          retainedTitleInput.focus();
+          retainedTitleInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          retainedTitleInput.value = secondEditedTitle;
+          retainedTitleInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          retainedTitleInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        await flush(() => control(`x4-ui-source-edit-apply-${secondEntryId}`).click());
+        assert.equal(submissions, 3, `${scenario}: repeated title edit uses the retained selection without a canvas reselect`);
+        const secondEditAuthority = authorities[2];
+        assert.ok(secondEditAuthority);
+        const secondEdited = secondEditAuthority.submission.workspace as typeof original;
+        const firstEditedFile = edited.passthroughFiles.find(file => file.path === newFile.path);
+        assert.ok(firstEditedFile);
+        assert.equal(secondEdited.passthroughFiles.find(file => file.path === newFile.path)?.content,
+          firstEditedFile.content.replace(JSON.stringify(firstEditedTitle), JSON.stringify(secondEditedTitle)));
+        if (scenario === 'ack-before-readback') {
+          await flush(() => { secondEditAuthority.acknowledge(secondEdited); });
+          assert.equal(currentWorkspace, edited, `${scenario}: second ack alone cannot adopt a replacement`);
+          await flush(() => replaceWorkspace(secondEdited));
+        } else if (scenario === 'readback-before-ack') {
+          await flush(() => replaceWorkspace(secondEdited));
+          assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'stale', `${scenario}: second readback alone cannot authorize fresh selection`);
+          await flush(() => { secondEditAuthority.acknowledge(secondEdited); });
+        }
+        assert.equal(currentWorkspace, secondEdited);
+        assert.ok(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === secondEditedTitle), `${scenario}: second edit remains continuously selected`);
+        assert.equal(mountedElementText(container, 'x4-ui-game-truth'), 'Not verified in game');
+      }
+      if (scenario === 'add-row') {
+        const initialCellIds = hierarchy.querySelectorAll('button')
+          .filter(element => element.textContent.startsWith('Cell '))
+          .map(element => element.getAttribute('data-testid'));
+        const firstRow = hierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Row 1'));
+        assert.ok(firstRow, 'actual New-menu producer must expose its first row for Add row');
+        await flush(() => firstRow.click());
+        assert.match(mountedElementText(container, 'x4-ui-contextual-palette-status'), /Select an empty cell to add text, button, or input\. Add a row below this row\./,
+          'a selected row with an eligible child must not claim that no cell is available');
+        assert.doesNotMatch(mountedElementText(container, 'x4-ui-contextual-palette-status'), /No eligible cell is available/);
+        const addRow = control('x4-ui-contextual-palette-add-row');
+        assert.equal(addRow.disabled, false, 'an exact selected actual row must expose enabled Add row');
+        await flush(() => addRow.click());
+        assert.equal(submissions, 2, 'actual New-menu Add row must use the existing parent commit seam');
+        const rowAuthority = authorities[1];
+        assert.ok(rowAuthority, 'Add row must retain the existing acknowledgement owner');
+        const rowReplacement = rowAuthority.submission.workspace as typeof original;
+        const rowSourceBefore = newFile.content;
+        const rowFileAfter = rowReplacement.passthroughFiles.find(file => file.path === newFile.path);
+        assert.ok(rowFileAfter);
+        assert.equal(rowFileAfter.content.split('addRow(false, {})').length, rowSourceBefore.split('addRow(false, {})').length + 1,
+          'Add row must add exactly one canonical default-height row statement');
+        assert.deepEqual(rowReplacement.passthroughFiles.filter(file => file.path !== newFile.path),
+          current.passthroughFiles.filter(file => file.path !== newFile.path),
+          'Add row must preserve ui.xml, unrelated assets, and sibling source files');
+        assert.equal(addRow.disabled, true, 'a pending Add row transaction cannot be submitted twice');
+        await flush(() => replaceWorkspace(rowReplacement));
+        await flush(() => { rowAuthority.acknowledge(rowReplacement); });
+        const freshRow = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .find(element => element.textContent.startsWith('Row 2'));
+        assert.ok(freshRow, 'acknowledged Add row must expose the newly reparsed row');
+        const selectedFreshCell = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .find(element => element.getAttribute('aria-pressed') === 'true');
+        assert.ok(selectedFreshCell, 'acknowledged Add row must retain a fresh selected node');
+        assert.match(selectedFreshCell.textContent, /^Cell 1/);
+        assert.equal(initialCellIds.includes(selectedFreshCell.getAttribute('data-testid')), false,
+          'acknowledged Add row must select a fresh owner-issued cell, not adopt a prior cell identity');
+        const freshPaletteAddText = control('x4-ui-contextual-palette-add-text');
+        assert.equal(freshPaletteAddText.disabled, false, 'the fresh Add row cell must expose the existing widget palette');
+        await flush(() => {
+          const freshPaletteText = control('x4-ui-contextual-palette-text');
+          freshPaletteText.focus();
+          freshPaletteText.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          freshPaletteText.value = 'New-row text';
+          freshPaletteText.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          freshPaletteText.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        await flush(() => control('x4-ui-contextual-palette-add-text').click());
+        assert.equal(submissions, 3, 'the acknowledged fresh Add row cell must submit through the existing widget palette');
+        const widgetAuthority = authorities[2];
+        assert.ok(widgetAuthority);
+        const widgetReplacement = widgetAuthority.submission.workspace as typeof original;
+        const widgetFileAfter = widgetReplacement.passthroughFiles.find(file => file.path === newFile.path);
+        assert.ok(widgetFileAfter);
+        assert.match(widgetFileAfter.content, /New-row text/);
+        assert.equal(widgetReplacement.passthroughFiles.find(file => file.path === newFile.path)?.content.includes('New-row text'), true);
+        await flush(() => replaceWorkspace(widgetReplacement));
+        await flush(() => { widgetAuthority.acknowledge(widgetReplacement); });
+        assert.ok(control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .some(element => element.textContent.startsWith('Text · New-row text')),
+        'the existing palette must project the newly inserted widget after exact acknowledgement');
+        const selectedWidget = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .find(element => element.getAttribute('aria-pressed') === 'true');
+        assert.ok(selectedWidget);
+        const addRowFromDescendant = control('x4-ui-contextual-palette-add-row');
+        assert.equal(addRowFromDescendant.disabled, false, 'a proven widget descendant must expose Add row below its exact owner row');
+        await flush(() => addRowFromDescendant.click());
+        assert.equal(submissions, 4, 'repeated Add row from a fresh widget descendant must use one new parent transaction');
+        const repeatedRowAuthority = authorities[3];
+        assert.ok(repeatedRowAuthority);
+        const repeatedRowReplacement = repeatedRowAuthority.submission.workspace as typeof original;
+        const repeatedRowFile = repeatedRowReplacement.passthroughFiles.find(file => file.path === newFile.path);
+        assert.ok(repeatedRowFile);
+        assert.equal(repeatedRowFile.content.split('addRow(false, {})').length,
+          widgetFileAfter.content.split('addRow(false, {})').length + 1,
+          'repeated Add row must use the fresh catalog and add exactly one more row');
+        assert.deepEqual(repeatedRowReplacement.passthroughFiles.filter(file => file.path !== newFile.path),
+          widgetReplacement.passthroughFiles.filter(file => file.path !== newFile.path),
+          'repeated Add row must preserve ui.xml and all non-target siblings');
+        await flush(() => replaceWorkspace(repeatedRowReplacement));
+        await flush(() => { repeatedRowAuthority.acknowledge(repeatedRowReplacement); });
+        const repeatedFreshSelection = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .find(element => element.getAttribute('aria-pressed') === 'true');
+        assert.ok(repeatedFreshSelection);
+        assert.match(repeatedFreshSelection.textContent, /^Cell 1/);
+        assert.notEqual(repeatedFreshSelection.getAttribute('data-testid'), selectedWidget.getAttribute('data-testid'),
+          'repeated Add row must not retain the prior descendant as a provisional selection');
+        assert.ok(control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .some(element => element.textContent.startsWith('Row 3')),
+        'repeated Add row must expose the next fresh row');
+        assert.equal(currentWorkspace, repeatedRowReplacement);
+        continue;
+      }
+      if (scenario === 'second-menu') {
+        const firstLua = newFile.content;
+        await enterName('Another visual menu');
+        await flush(submit);
+        assert.equal(submissions, 2);
+        const secondAuthority = authorities[1];
+        assert.ok(secondAuthority);
+        assert.equal(secondAuthority.submission.expectedWorkspace, replacement);
+        await flush(() => replaceWorkspace(secondAuthority.submission.workspace));
+        assert.equal(control('x4-ui-new-menu-create').disabled, true);
+        await flush(() => { secondAuthority.acknowledge(secondAuthority.submission.workspace); });
+        assert.match(mountedElementText(container, 'x4-ui-new-menu-status'), /^Created Another visual menu/);
+        const secondWorkspace = secondAuthority.submission.workspace as typeof original;
+        assert.equal(secondWorkspace.passthroughFiles.find(file => file.path === newFile.path)?.content, firstLua);
+        const secondLua = secondWorkspace.passthroughFiles.find(file => file.path.endsWith('.lua') && file.path !== newFile.path);
+        assert.ok(secondLua);
+        assertSelectedOption('x4-ui-source-selector', secondLua.path);
+        assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current');
+        assert.ok(control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+          .some(element => element.textContent.startsWith('Text · Another visual menu')));
+        const secondHierarchy = control('x4-ui-builder-hierarchy-list');
+        const secondTitleNode = secondHierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Text · Another visual menu'));
+        assert.ok(secondTitleNode, 'second actual New-menu fixture must expose its title widget');
+        await flush(() => secondTitleNode.click());
+        const secondTitleInput = control('x4-ui-builder-selection').querySelectorAll('input').find(input => input.value === 'Another visual menu');
+        assert.ok(secondTitleInput, 'second actual New-menu title must expose its ordinary property input');
+        const secondTitleEntryId = secondTitleInput.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+        assert.ok(secondTitleEntryId);
+        await flush(() => {
+          secondTitleInput.focus();
+          secondTitleInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          secondTitleInput.value = 'Unapplied title draft';
+          secondTitleInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          secondTitleInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        assert.equal(control(`x4-ui-source-edit-apply-${secondTitleEntryId}`).disabled, false);
+        const emptyCell = secondHierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Cell 2'));
+        assert.ok(emptyCell, 'second actual New-menu fixture must expose its empty second cell in the hierarchy');
+        await flush(() => emptyCell.click());
+        const palette = control('x4-ui-contextual-palette');
+        assert.equal(mountedElementByTestId(container, 'x4-ui-builder-selection-unresolved'), null, 'an exact eligible empty cell must not show an unresolved-position warning');
+        assert.match(mountedElementText(palette, 'x4-ui-contextual-palette-status'), /Apply or discard your property changes first\./);
+        const pendingAddText = mountedElementByTestId(container, 'x4-ui-contextual-palette-add-text');
+        assert.ok(pendingAddText, 'an unapplied property draft must keep the palette action visible');
+        assert.equal(pendingAddText.disabled, true, 'an unapplied property draft must disable insertion');
+        const discard = control('x4-ui-contextual-palette-discard');
+        assert.equal(discard.disabled, false);
+        await flush(() => discard.click());
+        const postDiscardPalette = control('x4-ui-contextual-palette');
+        assert.match(mountedElementText(postDiscardPalette, 'x4-ui-contextual-palette-status'), /Choose text, button, or input\./);
+        const postDiscardAddText = mountedElementByTestId(container, 'x4-ui-contextual-palette-add-text');
+        assert.ok(postDiscardAddText, 'discarding the local property draft must keep the palette action visible');
+        assert.equal(postDiscardAddText.disabled, false, 'discarding the local property draft must re-enable insertion');
+        assert.equal(currentWorkspace, secondWorkspace, 'discarding a property draft must not submit a workspace change');
+        assert.equal((currentWorkspace as typeof original).passthroughFiles.find(file => file.path === secondLua.path)?.content, secondLua.content, 'discarding a property draft must leave the original Lua unchanged');
+        const paletteText = control('x4-ui-contextual-palette-text');
+        assert.equal(paletteText.value, 'New text');
+        await flush(() => {
+          paletteText.focus();
+          paletteText.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          paletteText.value = 'Inserted widget';
+          paletteText.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          paletteText.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        const addText = mountedElementByTestId(container, 'x4-ui-contextual-palette-add-text');
+        assert.ok(addText, 'the settled empty cell must expose palette actions');
+        assert.equal(addText.disabled, false);
+        await flush(() => addText.click());
+        assert.equal(submissions, 3, 'actual New-menu insertion must use the existing parent commit seam');
+        const insertionAuthority = authorities[2];
+        assert.ok(insertionAuthority);
+        const insertedWorkspace = insertionAuthority.submission.workspace as typeof original;
+        const insertedSecondFile = insertedWorkspace.passthroughFiles.find(file => file.path === secondLua.path);
+        assert.ok(insertedSecondFile);
+        assert.match(insertedSecondFile.content, /Inserted widget/);
+        assert.notEqual(insertedSecondFile.content, secondLua.content, 'the empty cell insertion must change only the selected menu source');
+        assert.equal(insertedWorkspace.passthroughFiles.find(file => file.path === newFile.path)?.content, firstLua);
+        assert.deepEqual(insertedWorkspace.passthroughFiles.find(file => file.path === 'content.xml'), unrelated);
+        assert.equal(control('x4-ui-contextual-palette-add-text').disabled, true, 'a pending insertion cannot be submitted twice');
+        await flush(() => replaceWorkspace(insertedWorkspace));
+        await flush(() => { insertionAuthority.acknowledge(insertedWorkspace); });
+        const insertedHierarchy = control('x4-ui-builder-hierarchy-list');
+        assert.ok(insertedHierarchy.querySelectorAll('button').some(element => element.textContent.startsWith('Text · Inserted widget')), 'acknowledged insertion must project the new Text node');
+        const insertedSelection = control('x4-ui-builder-selection');
+        const insertedInput = insertedSelection.querySelectorAll('input').find(input => input.value === 'Inserted widget');
+        assert.ok(insertedInput, 'acknowledged insertion must select its ordinary editable text property');
+        const insertedEntryId = insertedInput.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+        assert.ok(insertedEntryId);
+        await flush(() => {
+          insertedInput.focus();
+          insertedInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          insertedInput.value = 'Edited inserted widget';
+          insertedInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          insertedInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        await flush(() => control(`x4-ui-source-edit-apply-${insertedEntryId}`).click());
+        assert.equal(submissions, 4, 'the newly selected widget must use the ordinary property Apply path');
+        const insertedEditAuthority = authorities[3];
+        assert.ok(insertedEditAuthority);
+        const editedInsertedWorkspace = insertedEditAuthority.submission.workspace as typeof original;
+        const editedInsertedFile = editedInsertedWorkspace.passthroughFiles.find(file => file.path === secondLua.path);
+        assert.ok(editedInsertedFile);
+        assert.match(editedInsertedFile.content, /Edited inserted widget/);
+        assert.match(editedInsertedFile.content, /Another visual menu/);
+        assert.equal(editedInsertedWorkspace.passthroughFiles.find(file => file.path === newFile.path)?.content, firstLua);
+        await flush(() => replaceWorkspace(editedInsertedWorkspace));
+        await flush(() => { insertedEditAuthority.acknowledge(editedInsertedWorkspace); });
+        assert.ok(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'Edited inserted widget'), 'the ordinary property edit must retain the new widget selection');
+      }
+      if (scenario === 'duplicate-name') {
+        const beforeDuplicate = JSON.stringify(currentWorkspace);
+        await enterName(name);
+        await flush(submit);
+        assert.equal(submissions, 1, 'duplicate creation must refuse before parent submission');
+        assert.equal(JSON.stringify(currentWorkspace), beforeDuplicate);
+        assert.equal(control('x4-ui-new-menu-name').value, name);
+        assert.doesNotMatch(mountedElementText(container, 'x4-ui-new-menu-status'), /^Created /);
+      }
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      assert.equal(JSON.stringify(original), originalBytes, `${scenario}: original workspace must remain immutable`);
+      if (root !== undefined) await flush(() => root?.unmount());
+      restoreGlobals();
+    }
+  }
+  console.log(`B119_NEW_MENU_UI_MATRIX ${JSON.stringify({ total: scenarios.length, passed: scenarios.length - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'New-menu creation, adoption, canvas and lifecycle safety must all pass');
+}
+
+async function runMountedPreviewScenarioHistoryRegression(fixture: P7SourceAuthorityFixture): Promise<void> {
+  const doc = new MountedDomDocument();
+  const restore = installMountedDomGlobals(doc);
+  const container = doc.createElement('div'); doc.body.appendChild(container);
+  const path = 'ui/pipeline_test.lua';
+  const lua = [
+    'local menu = { name = "ScenarioHistory" }', 'function menu.createFrame()',
+    ' local frame = Helper.createFrameHandle(menu, { width = 220, height = 140 })',
+    ' local t = frame:addTable(1, { width = 200, scaling = false })',
+    ' local title = t:addRow(false, {})', ' title[1]:createText("Before", {})',
+    ' local other = t:addRow(false, {})', ' other[1]:createText("Other known row", {})',
+    ' local last = t:addRow(false, {})', ' last[1]:createText("Last known row", {})',
+    ' local sampled = frame:addTable(1, { width = 200, y = 70, scaling = false })',
+    ' local a = sampled:addRow(false, {})', ' a[1]:createText(previewText, {})',
+    ' local b = sampled:addRow(false, {})', ' b[1]:createText(previewText, {})',
+    ' frame:display()', 'end',
+  ].join('\n');
+  const original = sanitizeWorkspace({ ...portablePipelineTestWorkspace().workspace, id: 'scenario-first-render',
+    passthroughFiles: portablePipelineTestWorkspace().workspace.passthroughFiles.map(file => file.path === path ? { ...file, content: lua } : file) });
+  let current = original;
+  let notice: X4UiHistoryRestorationNotice | null = null;
+  let rerender: () => void = () => { throw new Error('not mounted'); };
+  const scope = 'scenario-first-render-scope';
+  const entries: WorkspaceHistoryEntry[] = [];
+  const observations: { workspace: typeof original; values: unknown[];
+    profile: { width: number; height: number; uiScale: number } }[] = [];
+  let projection: X4UiEditorSessionProjection | undefined;
+  const loader = async () => ({ core: fixture.core, color: fixture.color });
+  const surfaceFactory = (width: number, height: number) => new MountedCanvasElement(doc, width, height);
+  const handler: X4UiWorkspaceEditHandler = request => {
+    assert.equal(request.expectedWorkspace, current);
+    const authority = createX4UiWorkspaceEditPending(current, request.workspace);
+    const next = request.workspace as typeof original;
+    assert.ok(projection && request.sourceSplice);
+    const captured = capturePreviewScenario(projection, { width: projection.profile.drawable.width, height: projection.profile.drawable.height,
+      uiScale: projection.profile.uiScale, scaleMode: 'custom-effective-helper-scale', userScale: 1 }, 'mounted', 'Mounted');
+    assert.ok(captured.ok);
+    if (captured.ok) {
+      const transfer = transferPreviewScenario(createX4UiEditorSessionOwner(next), { workspace: next, corpus: fixture.core, colorEvidence: fixture.color }, captured.scenario, projection, request.sourceSplice);
+      assert.ok(transfer.ok, `mounted source-owner splice must transfer independently: ${JSON.stringify(transfer.ok ? null : transfer)}`);
+    }
+    entries.push(createSourceWorkspaceHistoryEntry(scope, current, next, request.sourceSplice));
+    flushSync(() => { current = next; rerender(); });
+    authority.acknowledge(current);
+    return authority.submission;
+  };
+  const Parent = () => {
+    const [, setRevision] = React.useState(0);
+    rerender = () => setRevision(value => value + 1);
+    return <X4UiSourceEditor workspace={current} workspaceScope={scope} historyRestoration={notice}
+      corpusLoader={loader} surfaceFactory={surfaceFactory} onWorkspaceEdit={handler}
+      onSessionProjection={value => { projection = value; observations.push({ workspace: current,
+        values: value.samples?.values.map(item => item.value) ?? [], profile: {
+          width: value.profile.drawable.width, height: value.profile.drawable.height, uiScale: value.profile.uiScale,
+        } }); }} />;
+  };
+  const flush = async (fn: () => void) => { await act(async () => { fn(); await Promise.resolve(); await Promise.resolve(); }); };
+  const control = (id: string) => { const found = mountedElementByTestId(container, id); assert.ok(found, id); return found; };
+  const change = async (element: MountedDomElement, value: string) => flush(() => {
+    element.focus(); element.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+    element.value = value;
+    element.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+    element.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+  });
+  const choose = async (id: string, label: string) => { const el = control(id); const option = mountedOptionByText(el, label); assert.ok(option, label); await change(el, option.value); };
+  const fillPreview = async (values: string[]) => {
+    const region = control('x4-ui-preview-inputs-region');
+    const fields = region.querySelectorAll('textarea');
+    assert.equal(fields.length, 2, 'actual primary sample controls must expose independent consumers');
+    for (let i = 0; i < fields.length; i++) await change(fields[i]!, values[i]!);
+    const apply = region.querySelectorAll('button').find(button => button.textContent === 'Apply to preview');
+    assert.ok(apply); await flush(() => apply.click());
+    assert.deepEqual(projection?.samples?.values.map(item => item.value), values);
+  };
+  let root: ReturnType<typeof createRoot> | undefined;
+  try {
+    await flush(() => { root = createRoot(container as unknown as Element); root.render(<React.StrictMode><Parent /></React.StrictMode>); });
+    await choose('x4-ui-source-selector', path); await choose('x4-ui-target-selector', 'menu.createFrame');
+    await flush(() => control('x4-ui-preview-inputs-toggle').click());
+    await fillPreview(['Scenario A', 'Independent A']);
+    assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-stale-notice'), null, 'current partial preview is not historical');
+    const contextualNode = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .find(button => button.textContent.startsWith('Text · Scenario A'));
+    assert.ok(contextualNode); await flush(() => contextualNode.click());
+    const contextFields = () => control('x4-ui-context-inputs-region').querySelectorAll('textarea');
+    assert.equal(contextFields().length, 1, 'selected read does not expose its equal-expression sibling');
+    assert.equal(contextFields()[0]!.value, 'Scenario A');
+    assert.match(control('x4-ui-context-inputs-region').textContent, /Apply and Discard include input edits made in other views/);
+    assert.equal(mountedElementByTestId(container, 'x4-ui-context-inputs-clear'), null, 'context has no ambiguous clear-all action');
+    const allFields = () => control('x4-ui-preview-inputs-region').querySelectorAll('textarea');
+    await change(contextFields()[0]!, 'Context draft');
+    assert.equal(allFields()[0]!.value, 'Context draft', 'context writes the one shared draft');
+    await change(allFields()[1]!, 'Sibling draft');
+    await flush(() => control('x4-ui-context-inputs-reset').click());
+    assert.deepEqual(allFields().map(field => field.value), ['Scenario A', 'Independent A'], 'context Discard resets edits from both views');
+    await change(contextFields()[0]!, 'Context applied');
+    await change(allFields()[1]!, 'Sibling applied');
+    await flush(() => control('x4-ui-context-inputs-apply').click());
+    assert.deepEqual(projection?.samples?.values.map(item => item.value), ['Context applied', 'Sibling applied'], 'context Apply includes both shared-draft edits');
+    assert.equal(current, original); assert.equal(entries.length, 0, 'preview controls create no source/history changes');
+    await fillPreview(['Scenario A', 'Independent A']);
+    const title = control('x4-ui-builder-hierarchy-list').querySelectorAll('button').find(button => button.textContent.startsWith('Text · Before'));
+    assert.ok(title); await flush(() => title.click());
+    const field = control('x4-ui-builder-selection').querySelectorAll('input').find(input => input.value === 'Before');
+    assert.ok(field); const fieldId = field.getAttribute('data-testid'); assert.ok(fieldId);
+    await change(field, 'After source edit A');
+    await flush(() => control(fieldId.replace('x4-ui-source-edit-input-', 'x4-ui-source-edit-apply-')).click());
+    assert.equal(entries.length, 1);
+    assert.deepEqual(projection?.samples?.values.map(item => item.value), ['Scenario A', 'Independent A'], `forward edit retains active inputs; last committed values=${JSON.stringify(observations.slice(-6).map(item => item.values))}`);
+    await fillPreview(['Scenario B', 'Independent B']);
+    // View changes after the source edit are not source history. Undo/Redo must
+    // use this current profile on its very first committed projection.
+    for (const [id, value] of [['x4-ui-profile-width', '1450'], ['x4-ui-profile-height', '950'],
+      ['x4-ui-profile-user-scale', '1.25']] as const) await change(control(id), value);
+    const retainedProfile = { width: 1450, height: 950, uiScale: deriveX4UiEffectiveScale(1.25, 950) };
+    assert.deepEqual(observations.at(-1)?.profile, retainedProfile);
+    assert.deepEqual(projection?.samples?.values.map(item => item.value), ['Scenario B', 'Independent B']);
+    const edited = current;
+    const historyEntry = entries[0]!;
+    assert.equal(historyEntry.kind, 'source');
+    if (historyEntry.kind !== 'source') throw new Error('source entry expected');
+    assert.ok(historyEntry.sourceSplice);
+    let past = entries; let future: WorkspaceHistoryEntry[] = [];
+    for (const direction of ['undo', 'redo'] as const) {
+      const from = current;
+      const result = transitionWorkspaceHistory(direction, past, future, current, scope);
+      assert.equal(result.status, 'applied'); if (result.status !== 'applied') throw new Error('history refused');
+      const index = observations.length;
+      await flush(() => {
+        current = result.workspace as typeof original;
+        notice = { direction, scope, beforeWorkspace: from, afterWorkspace: current,
+          sourceSplice: direction === 'undo' ? reverseWorkspaceSourceSplice(historyEntry.sourceSplice!) : historyEntry.sourceSplice };
+        rerender();
+      });
+      const firstAndLater = observations.slice(index);
+      assert.ok(firstAndLater.length > 0, `${direction}: real committed projection observer must run`);
+      for (const observed of firstAndLater) {
+        assert.equal(observed.workspace, current);
+        assert.deepEqual(observed.values, ['Scenario B', 'Independent B'], `${direction}: FIRST pre-parent-ack and all subsequent projections retain current B`);
+        assert.deepEqual(observed.profile, retainedProfile, `${direction}: FIRST and subsequent projections retain current view, not the profile at source-edit time`);
+      }
+      assert.equal(JSON.stringify(current), JSON.stringify(direction === 'undo' ? original : edited));
+      past = result.past; future = result.future;
+      const stable = projection;
+      await flush(() => { notice = { ...notice! }; rerender(); });
+      assert.deepEqual(projection?.samples?.values, stable?.samples?.values, 'duplicate notice preserves state');
+    }
+    assert.equal(entries.length, 1, 'scenario choice and history do not create additional source entries');
+    assert.doesNotMatch(JSON.stringify(entries), /Scenario [AB]|Independent [AB]/);
+    const previewLabels = () => control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .filter(button => /^(Text · Scenario B|Text · Independent B)/.test(button.textContent)).map(button => button.textContent.split('text ·')[0].trim());
+    assert.deepEqual(previewLabels(), ['Text · Scenario B', 'Text · Independent B']);
+    const row = control('x4-ui-builder-hierarchy-list').querySelectorAll('button').find(button => button.textContent.startsWith('Row 1'));
+    assert.ok(row); await flush(() => row.click());
+    assert.equal(control('x4-ui-row-controls-move-down').disabled, false, control('x4-ui-row-controls-status').textContent);
+    await flush(() => control('x4-ui-row-controls-move-down').click());
+    assert.equal(entries.length, 2, `actual row permutation uses one source history entry; ${mountedElementText(container, 'x4-ui-source-edit-receipt')}`);
+    assert.deepEqual(previewLabels(), ['Text · Scenario B', 'Text · Independent B'], 'supported row permutation retains the separate sampled table');
+    const move = entries[1]!; assert.equal(move.kind, 'source');
+    if (move.kind === 'source') assert.equal(move.sourceSplice?.retainedSpans?.length, 2, 'actual source owner issues both retained row spans');
+    const firstRow = control('x4-ui-builder-hierarchy-list').querySelectorAll('button').find(button => button.textContent.startsWith('Row 1'));
+    assert.ok(firstRow); await flush(() => firstRow.click());
+    assert.equal(control('x4-ui-contextual-palette-add-row').disabled, false);
+    await flush(() => control('x4-ui-contextual-palette-add-row').click());
+    assert.equal(entries.length, 3);
+    const insertion = entries[2]!; assert.equal(insertion.kind, 'source');
+    if (insertion.kind === 'source') assert.equal(insertion.sourceSplice?.startOffset, insertion.sourceSplice?.endOffset, 'actual insertion is zero-length');
+    assert.deepEqual(previewLabels(), ['Text · Scenario B', 'Text · Independent B'], 'zero-length insertion retains independent samples');
+    console.log('B119_SCENARIO_FIRST_RENDER PASS: mounted real SourceEditor A edit, later B, first Undo/Redo projection, duplicate notice, exact source-only history');
+    await change(control('x4-ui-contextual-palette-text'), 'History inserted text');
+    await flush(() => control('x4-ui-contextual-palette-add-text').click());
+    assert.equal(entries.length, 4);
+    const structuralAuthored = JSON.stringify(current);
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, 'Text · History inserted text');
+    let structuralPast = [...entries]; let structuralFuture: WorkspaceHistoryEntry[] = [];
+    const restoreStructure = async (direction: 'undo' | 'redo') => {
+      const from = current;
+      const result = transitionWorkspaceHistory(direction, structuralPast, structuralFuture, current, scope);
+      assert.equal(result.status, 'applied'); if (result.status !== 'applied') throw new Error('structural history refused');
+      assert.equal(result.entry.kind, 'source'); if (result.entry.kind !== 'source') throw new Error('source history expected');
+      const splice = result.entry.sourceSplice; assert.ok(splice);
+      await flush(() => {
+        current = result.workspace as typeof original;
+        notice = { direction, scope, beforeWorkspace: from, afterWorkspace: current,
+          sourceSplice: direction === 'undo' ? reverseWorkspaceSourceSplice(splice) : splice };
+        rerender();
+      });
+      structuralPast = result.past; structuralFuture = result.future;
+      assert.deepEqual(previewLabels(), ['Text · Scenario B', 'Text · Independent B']);
+      assert.equal(entries.length, 4, 'restoration must not append source history');
+    };
+    for (const direction of ['undo', 'undo', 'undo', 'redo', 'redo', 'redo'] as const) {
+      await restoreStructure(direction);
+      if (JSON.stringify(current) !== structuralAuthored) {
+        assert.equal(mountedElementByTestId(container, 'x4-ui-builder-selected-node-label'), null,
+          'removed element must not select a substitute');
+      }
+    }
+    assert.equal(JSON.stringify(current), structuralAuthored);
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, 'Text · History inserted text',
+      'exact multi-step structural Redo restores the inserted element inspector');
+    await restoreStructure('undo');
+    const interruption = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .find(button => button.textContent.startsWith('Text · Scenario B'));
+    assert.ok(interruption); await flush(() => interruption.click());
+    await restoreStructure('redo');
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, 'Text · Scenario B',
+      'explicit selection while an element is absent cancels dormant restoration');
+    for (const interruptionKind of ['profile', 'foreign-notice', 'external-replacement'] as const) {
+      const inserted = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+        .find(button => button.textContent.startsWith('Text · History inserted text'));
+      assert.ok(inserted); await flush(() => inserted.click());
+      await restoreStructure('undo');
+      const originalWidth = control('x4-ui-profile-width').value;
+      if (interruptionKind === 'profile') await change(control('x4-ui-profile-width'), '1200');
+      else await flush(() => {
+        if (interruptionKind === 'foreign-notice') notice = { ...notice!, scope: 'foreign-history-scope' };
+        else { current = sanitizeWorkspace(JSON.parse(JSON.stringify(current))); notice = null; }
+        rerender();
+      });
+      await restoreStructure('redo');
+      assert.equal(mountedElementByTestId(container, 'x4-ui-builder-selected-node-label'), null,
+        `${interruptionKind} invalidates dormant element intent`);
+      if (interruptionKind === 'profile') await change(control('x4-ui-profile-width'), originalWidth);
+      await flush(() => { notice = { ...notice! }; rerender(); });
+      assert.equal(mountedElementByTestId(container, 'x4-ui-builder-selected-node-label'), null,
+        'duplicate restoration cannot revive cancelled element intent');
+    }
+    console.log('B119_STRUCTURAL_HISTORY_SELECTION PASS: exact multi-step return, no missing-element substitute, explicit interruption, source/input/history preservation');
+    const profileWorkspace = JSON.stringify(current);
+    const profileHistoryCount = entries.length;
+    for (const [id, value] of [['x4-ui-profile-width', '1600'], ['x4-ui-profile-height', '900'], ['x4-ui-profile-user-scale', '1.2'],
+      ['x4-ui-profile-scale-mode', 'custom-effective-helper-scale'], ['x4-ui-profile-scale', '1.4'],
+      ['x4-ui-profile-scale-mode', 'derived-from-x4-user-scale']] as const) {
+      const firstObservation = observations.length;
+      await change(control(id), value);
+      assert.equal(control(id).value, value, `${id} actually applies the requested profile setting`);
+      assert.ok(observations.length > firstObservation, `${id} emits a current projection`);
+      assert.deepEqual(projection?.samples?.values.map(item => item.value), ['Scenario B', 'Independent B'], `${id} retains current inputs`);
+      assert.ok(observations.slice(firstObservation).every(item => JSON.stringify(item.values) === JSON.stringify(['Scenario B', 'Independent B'])), `${id} must not first commit an empty sampled preview`);
+    }
+    const draftField = control('x4-ui-preview-inputs-region').querySelectorAll('textarea')[0]!;
+    await change(draftField, 'Unapplied\nmessage');
+    const oldWidth = control('x4-ui-profile-width').value;
+    await change(control('x4-ui-profile-width'), '1700');
+    assert.equal(control('x4-ui-profile-width').value, oldWidth, 'profile change over unapplied input refuses');
+    assert.equal(draftField.value, 'Unapplied\nmessage');
+    assert.match(control('x4-ui-profile-error').textContent, /Apply or discard/);
+    assert.equal(JSON.stringify(current), profileWorkspace);
+    assert.equal(entries.length, profileHistoryCount);
+    console.log('B119_PROFILE_INPUT_CONTINUITY PASS: width/height/user-scale/custom/derived retain first-render inputs; unapplied draft refuses without source/history change');
+    await flush(() => control('x4-ui-preview-inputs-reset').click());
+    const currentSampledNode = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .find(button => button.textContent.startsWith('Text · Scenario B'));
+    assert.ok(currentSampledNode); await flush(() => currentSampledNode.click());
+    await change(control('x4-ui-context-inputs-region').querySelectorAll('textarea')[0]!, 'Do not apply after navigation');
+    const staleApply = mountedReactClickCallback(control('x4-ui-context-inputs-apply'), 'context sample Apply');
+    await change(control('x4-ui-target-selector'), '');
+    assert.equal(mountedElementByTestId(container, 'x4-ui-context-inputs-region'), null);
+    assert.match(control('x4-ui-canvas-stale-notice').textContent, /Previous preview.*not current/);
+    assert.match(control('x4-ui-canvas-stale-notice').textContent, /Choose a file and menu above/);
+    assert.equal(control('x4-ui-canvas-focus-selection').disabled, true);
+    assert.equal(control('x4-ui-canvas-export').disabled, true);
+    assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-stale-inputs'), null, 'no inputs action when no menu is selected');
+    await flush(staleApply);
+    assert.equal(projection?.samples, undefined, 'retained context Apply cannot cross target selection');
+    await choose('x4-ui-target-selector', 'menu.createFrame');
+    await fillPreview(['Scenario B', 'Independent B']);
+    const returnedNode = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .find(button => button.textContent.startsWith('Text · Scenario B'));
+    assert.ok(returnedNode); await flush(() => returnedNode.click());
+    assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-stale-notice'), null, 'recovered current preview removes historical notice');
+    await change(control('x4-ui-context-inputs-region').querySelectorAll('textarea')[0]!, 'Do not apply after source navigation');
+    const staleSourceApply = mountedReactClickCallback(control('x4-ui-context-inputs-apply'), 'context source sample Apply');
+    await change(control('x4-ui-source-selector'), '');
+    await flush(staleSourceApply);
+    assert.equal(mountedElementByTestId(container, 'x4-ui-context-inputs-region'), null);
+    assert.equal(projection?.samples, undefined, 'retained context Apply cannot cross source selection');
+    assert.equal(JSON.stringify(current), profileWorkspace); assert.equal(entries.length, profileHistoryCount);
+    console.log('B119_CONTEXT_PREVIEW_INPUTS PASS: mounted independent read, shared drafts/Apply/Discard, no source/history mutation, stale target/source handler refusal');
+    const captionSource = lua.replace('y = 70', 'y = previewY')
+      .replace('a[1]:createText(previewText', 'a[1]:createText("Locate me"')
+      .replace('b[1]:createText(previewText, {})', 'b[1]:createText(previewText, { height = 20 })');
+    await flush(() => {
+      current = sanitizeWorkspace({ ...original, passthroughFiles: original.passthroughFiles!.map(file => file.path === path ? { ...file, content: captionSource } : file) });
+      rerender();
+    });
+    await choose('x4-ui-source-selector', path); await choose('x4-ui-target-selector', 'menu.createFrame');
+    // Reuse the event-only Focus fixture's measured viewport. This DOM has no
+    // layout engine; actual sizing and label visibility are browser assertions.
+    Object.defineProperties(control('x4-ui-canvas-scroll'), {
+      clientWidth: { value: 640 }, clientHeight: { value: 320 },
+      scrollLeft: { value: 0, writable: true }, scrollTop: { value: 0, writable: true },
+    });
+    const captionWorkspace = JSON.stringify(current); const captionHistoryCount = entries.length;
+    const captionNode = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .find(button => button.textContent.startsWith('Text · Locate me'));
+    assert.ok(captionNode, 'missing Y does not hide a known caption'); await flush(() => captionNode.click());
+    assert.match(control('x4-ui-builder-selection-unresolved').textContent, /position is unresolved/);
+    assert.equal(control('x4-ui-canvas-focus-selection').disabled, true);
+    assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-selection'), null);
+    const related = control('x4-ui-context-inputs-region');
+    assert.equal(related.querySelectorAll('input').length, 1);
+    assert.equal(related.querySelectorAll('textarea').length, 0, 'unrelated sibling text input is excluded');
+    await change(related.querySelectorAll('input')[0]!, '70');
+    await flush(() => control('x4-ui-context-inputs-apply').click());
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, 'Text · Locate me');
+    assert.equal(control('x4-ui-canvas-focus-selection').disabled, false, JSON.stringify({
+      canvas: control('x4-ui-canvas-status').textContent,
+      samples: projection?.samples?.values.map(value => value.value),
+      gaps: projection?.preview.program && projection.preview.program.status !== 'refused'
+        ? projection.preview.program.program.gaps.filter(gap => gap.source.start.line >= 10)
+          .slice(0, 12).map(gap => ({ line: gap.source.start.line, reason: gap.reason })) : [],
+      node: buildX4UiBuilderPresentation(projection).nodes.filter(node => node.label === 'Text · Locate me')
+        .map(node => ({ selectable: node.selectable, rect: node.rect, detail: node.detail })),
+    }));
+    assert.ok(mountedElementByTestId(container, 'x4-ui-canvas-selection'));
+    await flush(() => control('x4-ui-preview-inputs-clear').click());
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, 'Text · Locate me');
+    assert.equal(control('x4-ui-canvas-focus-selection').disabled, true);
+    assert.equal(mountedElementByTestId(container, 'x4-ui-canvas-selection'), null);
+    assert.equal(JSON.stringify(current), captionWorkspace); assert.equal(entries.length, captionHistoryCount);
+    console.log('B119_MOUNTED_UNRESOLVED_CAPTION PASS: recognizable selected control, related Y, apply and clear retain source/history and exact selection');
+  } finally { if (root) await flush(() => root!.unmount()); restore(); }
+}
+
+type MountedUiBuilderHistoryRun = {
+  readonly name: string;
+  readonly source: string;
+  readonly titleBefore: string;
+  readonly exerciseRowMovement: boolean;
+  readonly preserveMultiTargetRecovery: boolean;
+};
+
+async function runMountedUiBuilderHistoryRestorationRegression(
+  fixture: P7SourceAuthorityFixture,
+  run: MountedUiBuilderHistoryRun,
+): Promise<void> {
+  const portable = portablePipelineTestWorkspace().workspace;
+  const sourcePath = 'ui/pipeline_test.lua';
+  const beforeSource = run.source;
+  const historyBefore = sanitizeWorkspace({
+    ...portable,
+    id: `x4-ui-builder-history-${run.name}`,
+    passthroughFiles: [
+      ...portable.passthroughFiles.map(file => file.path === sourcePath ? { ...file, content: beforeSource } : { ...file }),
+      { path: 'sibling.xml', content: '<sibling>preserve during title history</sibling>', reason: 'partial' },
+    ],
+  });
+  const historyScope = `ui-builder-history-${run.name}-scope`;
+  const mountedDocument = new MountedDomDocument();
+  const restoreGlobals = installMountedDomGlobals(mountedDocument);
+  const canonicalLoader = async (): Promise<{ readonly core: P7SourceAuthorityFixture['core']; readonly color: P7SourceAuthorityFixture['color'] }> => ({
+    core: fixture.core,
+    color: fixture.color,
+  });
+  const container = mountedDocument.createElement('div');
+  mountedDocument.body.appendChild(container);
+  let currentWorkspace: unknown = historyBefore;
+  let replaceWorkspace: React.Dispatch<React.SetStateAction<typeof historyBefore>> = () => { throw new Error('UIBuilder history parent is not mounted'); };
+  let publishHistoryRestoration: React.Dispatch<React.SetStateAction<X4UiHistoryRestorationNotice | null>> = () => { throw new Error('UIBuilder history notice parent is not mounted'); };
+  const receipts: UIBuilderSourceHistoryAcknowledgement[] = [];
+  const entries: WorkspaceHistoryEntry[] = [];
+  const seenAttempts = new WeakSet<object>();
+  const flush = async (operation: () => void): Promise<void> => {
+    await act(async () => {
+      operation();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+  const control = (id: string): MountedDomElement => {
+    const element = mountedElementByTestId(container, id);
+    assert.ok(element, `UIBuilder history: missing ${id}`);
+    return element;
+  };
+  const selectedOptionText = (id: string): string => {
+    const select = control(id);
+    return select.options.find(option => option.selected && option.value !== '')?.textContent ?? '';
+  };
+  const assertNoMenuSelection = (detail: string): void => {
+    assert.equal(selectedOptionText('x4-ui-source-selector'), '', `${detail}: source selection must remain empty`);
+    assert.equal(selectedOptionText('x4-ui-target-selector'), '', `${detail}: target selection must remain empty`);
+  };
+  const selectHistoryMenu = async (): Promise<void> => {
+    const sourceSelect = control('x4-ui-source-selector');
+    const sourceOption = mountedOptionByText(sourceSelect, sourcePath);
+    assert.ok(sourceOption, 'UIBuilder history: the current source catalog must expose the history source');
+    await flush(() => {
+      sourceSelect.value = sourceOption.value;
+      sourceSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const targetSelect = control('x4-ui-target-selector');
+    const targetOption = mountedOptionByText(targetSelect, 'menuA.createFrame');
+    assert.ok(targetOption, 'UIBuilder history: the current source catalog must expose the history target');
+    await flush(() => {
+      targetSelect.value = targetOption.value;
+      targetSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+  };
+  const Parent = (): React.ReactElement => {
+    const [liveWorkspace, setLiveWorkspace] = React.useState<typeof historyBefore>(historyBefore);
+    const [historyRestoration, setHistoryRestoration] = React.useState<X4UiHistoryRestorationNotice | null>(null);
+    const setNormalizedWorkspace = React.useCallback<React.Dispatch<React.SetStateAction<typeof historyBefore>>>(update => {
+      setLiveWorkspace(previous => {
+        const candidate = typeof update === 'function' ? update(previous) : update;
+        return retainWorkspaceCandidateIfNormalizedUnchanged(candidate, sanitizeWorkspace(candidate));
+      });
+    }, []);
+    currentWorkspace = liveWorkspace;
+    replaceWorkspace = setNormalizedWorkspace;
+    publishHistoryRestoration = setHistoryRestoration;
+    const onSourceHistoryAcknowledged = React.useCallback((receipt: UIBuilderSourceHistoryAcknowledgement): void => {
+      receipts.push(receipt);
+      const prepared = prepareX4UiSourceHistoryEntry(
+        receipt,
+        historyScope,
+        currentWorkspace as typeof historyBefore,
+        seenAttempts,
+      );
+      if (prepared.status === 'recorded') entries.push(prepared.entry);
+    }, []);
+    return <UIBuilder
+      workspace={liveWorkspace}
+      setWorkspace={setNormalizedWorkspace}
+      selectedWidget={null}
+      setSelectedWidget={() => undefined}
+      presentationTab="source"
+      workspaceScope={historyScope}
+      historyRestoration={historyRestoration}
+      sourceEditorCorpusLoader={canonicalLoader}
+      onX4UiSourceEditAcknowledged={onSourceHistoryAcknowledged}
+    />;
+  };
+  let root: ReturnType<typeof createRoot> | undefined;
+  try {
+    await flush(() => {
+      root = createRoot(container as unknown as Element);
+      root.render(<Parent />);
+    });
+    const sourceSelect = control('x4-ui-source-selector');
+    const sourceOption = mountedOptionByText(sourceSelect, sourcePath);
+    assert.ok(sourceOption, 'UIBuilder history: the actual SourceEditor source option must be rendered');
+    await flush(() => {
+      sourceSelect.value = sourceOption.value;
+      sourceSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const targetSelect = control('x4-ui-target-selector');
+    const targetOption = mountedOptionByText(targetSelect, 'menuA.createFrame');
+    assert.ok(targetOption, 'UIBuilder history: the actual SourceEditor target option must be rendered');
+    await flush(() => {
+      targetSelect.value = targetOption.value;
+      targetSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const beforeSourceKey = sourceOption.value;
+    const beforeTargetKey = targetOption.value;
+    const hierarchy = control('x4-ui-builder-hierarchy-list');
+    const titleNode = hierarchy.querySelectorAll('button').find(button => button.textContent.startsWith(`Text · ${run.titleBefore}`));
+    assert.ok(titleNode, `UIBuilder history: the actual hierarchy must expose the editable title node; status=${control('x4-ui-builder-hierarchy-status').textContent}; hierarchy=${hierarchy.textContent}; sourceStatus=${control('x4-ui-corpus-status').textContent}; corpusDetail=${control('x4-ui-corpus-detail').textContent}`);
+    await flush(() => titleNode.click());
+    const selection = control('x4-ui-builder-selection');
+    const titleInput = selection.querySelectorAll('input').find(input => input.value === run.titleBefore);
+    assert.ok(titleInput, 'UIBuilder history: the actual selected title must expose its ordinary property input');
+    const entryId = titleInput.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+    assert.ok(entryId, 'UIBuilder history: the title input must expose its owner-issued entry ID');
+    await flush(() => {
+      titleInput.focus();
+      titleInput.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+      titleInput.value = 'History After';
+      titleInput.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+      titleInput.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    await flush(() => control(`x4-ui-source-edit-apply-${entryId}`).click());
+    assert.equal(receipts.length, 1, 'UIBuilder must publish exactly one accepted source history callback');
+    assert.equal(entries.length, 1, 'the accepted UIBuilder callback must record exactly one source history entry');
+    const acceptedReceipt = receipts[0];
+    const historyEntry = entries[0];
+    assert.ok(acceptedReceipt);
+    assert.ok(historyEntry);
+    assert.equal(acceptedReceipt.acknowledgement.expectedWorkspace, historyBefore);
+    assert.equal(acceptedReceipt.acknowledgement.workspace, currentWorkspace);
+    assert.equal(acceptedReceipt.acknowledgement.currentWorkspace, currentWorkspace);
+    const historyAfter = currentWorkspace as typeof historyBefore;
+    assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath, 'the accepted title edit must retain a selected source');
+    assert.equal(selectedOptionText('x4-ui-target-selector'), 'menuA.createFrame', 'the accepted title edit must retain a selected target');
+    const afterSourceKey = control('x4-ui-source-selector').options.find(option => option.textContent === sourcePath && option.selected)?.value;
+    const afterTargetKey = control('x4-ui-target-selector').options.find(option => option.textContent === 'menuA.createFrame')?.value;
+    assert.ok(afterSourceKey, 'the accepted title edit must expose a defined selected fresh source key');
+    assert.ok(afterTargetKey, 'the accepted title edit must expose a defined fresh target key');
+    assert.notEqual(afterSourceKey, beforeSourceKey, 'the accepted title edit must issue a fresh source identity');
+    assert.notEqual(afterTargetKey, beforeTargetKey, 'the accepted title edit must issue a fresh target identity');
+    assert.equal(historyAfter.passthroughFiles.find(file => file.path === 'sibling.xml')?.content,
+      '<sibling>preserve during title history</sibling>');
+    assert.match(historyAfter.passthroughFiles.find(file => file.path === sourcePath)?.content ?? '', /History After/);
+    const editedTitleNode = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .find(button => button.textContent.startsWith('Text · History After'));
+    assert.ok(editedTitleNode, 'the fresh edited title must remain directly selectable before Undo');
+    await flush(() => editedTitleNode.click());
+
+    const undo = transitionWorkspaceHistory('undo', [historyEntry], [], historyAfter, historyScope);
+    assert.equal(undo.status, 'applied', 'UIBuilder title edit must accept guarded Undo');
+    if (undo.status !== 'applied') throw new Error('UIBuilder history Undo was refused');
+    await flush(() => replaceWorkspace(undo.workspace as typeof historyBefore));
+    assert.equal(currentWorkspace, undo.workspace, 'UIBuilder Undo must read back the exact restored workspace object');
+    assertNoMenuSelection('UIBuilder title Undo before delayed notice');
+    const undoNotice: X4UiHistoryRestorationNotice = {
+      direction: 'undo',
+      scope: historyScope,
+      beforeWorkspace: historyAfter,
+      afterWorkspace: undo.workspace,
+    };
+    await flush(() => publishHistoryRestoration(undoNotice));
+    assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath, 'delayed Undo notice must recover the fresh source selector');
+    assert.equal(selectedOptionText('x4-ui-target-selector'), 'menuA.createFrame', 'delayed Undo notice must recover the fresh target selector');
+    assert.equal(control('x4-ui-canvas-status').textContent, 'rendered/current', 'delayed Undo notice must refresh a current canvas');
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, `Text · ${run.titleBefore}`,
+      'scalar Undo must resolve the selected element against the fresh restored source');
+    assert.ok(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === run.titleBefore),
+      'scalar Undo must restore the ordinary editable property inspector, not only the canvas');
+
+    const redo = transitionWorkspaceHistory('redo', undo.past, undo.future, undo.workspace as typeof historyBefore, historyScope);
+    assert.equal(redo.status, 'applied', 'UIBuilder title edit must accept guarded Redo');
+    if (redo.status !== 'applied') throw new Error('UIBuilder history Redo was refused');
+    await flush(() => replaceWorkspace(redo.workspace as typeof historyBefore));
+    assertNoMenuSelection('UIBuilder title Redo before delayed notice');
+    const redoNotice: X4UiHistoryRestorationNotice = {
+      direction: 'redo',
+      scope: historyScope,
+      beforeWorkspace: undo.workspace,
+      afterWorkspace: redo.workspace,
+    };
+    await flush(() => publishHistoryRestoration(redoNotice));
+    assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath, 'delayed Redo notice must recover the fresh source selector');
+    assert.equal(selectedOptionText('x4-ui-target-selector'), 'menuA.createFrame', 'delayed Redo notice must recover the fresh target selector');
+    assert.equal(control('x4-ui-canvas-status').textContent, 'rendered/current', 'delayed Redo notice must refresh a current canvas');
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, 'Text · History After',
+      'scalar Redo must resolve the selected element again from fresh source authority');
+    assert.ok(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'History After'),
+      'scalar Redo must expose the restored property value for continued editing');
+    assert.match((redo.workspace as typeof historyBefore).passthroughFiles.find(file => file.path === sourcePath)?.content ?? '', /History After/);
+    assert.equal((redo.workspace as typeof historyBefore).passthroughFiles.find(file => file.path === 'sibling.xml')?.content,
+      '<sibling>preserve during title history</sibling>');
+    const frameAfterRedo = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+      .find(button => button.textContent.startsWith('Frame 1'));
+    assert.ok(frameAfterRedo, 'history interruption control needs a different selectable element');
+    await flush(() => frameAfterRedo.click());
+    await flush(() => publishHistoryRestoration({ ...redoNotice }));
+    assert.equal(control('x4-ui-builder-selected-node-label').textContent, 'Frame 1',
+      'replayed history metadata must not replace an explicit new element selection');
+
+    if (run.exerciseRowMovement) {
+      const moveHierarchy = control('x4-ui-builder-hierarchy-list');
+      const moveNode = moveHierarchy.querySelectorAll('button').find(button => button.textContent.includes('History Row 2'));
+      assert.ok(moveNode, 'UIBuilder history: the actual hierarchy must expose the populated middle row for movement');
+      await flush(() => moveNode.click());
+      assert.equal(control('x4-ui-row-controls-move-up').disabled, false,
+        `UIBuilder history: a populated middle row must move up; status=${control('x4-ui-row-controls-status').textContent}; title=${control('x4-ui-row-controls-move-up').getAttribute('title')}; hierarchy=${moveHierarchy.textContent}`);
+      assert.equal(control('x4-ui-row-controls-move-down').disabled, false,
+        `UIBuilder history: a populated middle row must move down; status=${control('x4-ui-row-controls-status').textContent}; title=${control('x4-ui-row-controls-move-down').getAttribute('title')}; hierarchy=${moveHierarchy.textContent}`);
+
+      const hierarchyLabels = (): readonly string[] => control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+        .map(button => button.textContent);
+      const rowOrder = (labels: readonly string[], rowText: string): number => labels.findIndex(label => label.includes(rowText));
+      const workspaceWithoutMovedSource = (candidate: typeof historyBefore): string => JSON.stringify({
+        ...candidate,
+        passthroughFiles: candidate.passthroughFiles.map(file => file.path === sourcePath
+          ? { ...file, content: '<source-content-omitted-for-metadata-comparison>' }
+          : { ...file }),
+      });
+      const preMoveWorkspace = currentWorkspace as typeof historyBefore;
+      const preMoveWorkspaceSnapshot = JSON.stringify(preMoveWorkspace);
+      const preMoveSourceContent = preMoveWorkspace.passthroughFiles.find(file => file.path === sourcePath)?.content;
+      assert.ok(preMoveSourceContent, 'UIBuilder history: the pre-move snapshot must retain the complete source');
+      const preMoveHierarchyLabels = hierarchyLabels();
+      assert.ok(rowOrder(preMoveHierarchyLabels, 'History Row 2') < rowOrder(preMoveHierarchyLabels, 'History Row 3'),
+        'UIBuilder history: the mounted hierarchy must expose the original sibling order before movement');
+      const preMoveCanvas = control('x4-ui-canvas-host').firstElementChild;
+      assert.ok(preMoveCanvas instanceof MountedCanvasElement,
+        'UIBuilder history: the mounted pre-move canvas must be available for the movement restoration check');
+
+      const currentProjectionInput = {
+        workspace: preMoveWorkspace,
+        corpus: fixture.core,
+        colorEvidence: fixture.color,
+        profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+      };
+      const currentProjectionWithoutSelection = projectX4UiEditorSession(currentProjectionInput);
+      const currentSourceCandidate = currentProjectionWithoutSelection.preview.sourceCandidates.find(candidate => candidate.path === sourcePath);
+      assert.ok(currentSourceCandidate, 'UIBuilder history: the identical current workspace must issue the history source candidate');
+      const currentTargetCandidate = currentSourceCandidate?.targets.find(candidate => candidate.name === 'menuA.createFrame');
+      assert.ok(currentTargetCandidate, 'UIBuilder history: the identical current workspace must issue the history target candidate');
+      const currentProjection = projectX4UiEditorSession({
+        ...currentProjectionInput,
+        selection: {
+          sourceIndex: currentSourceCandidate.index,
+          path: currentSourceCandidate.path,
+          sourceIdentity: currentSourceCandidate.sourceIdentity,
+          target: currentTargetCandidate,
+        },
+      });
+      const currentPresentation = buildX4UiBuilderPresentation(currentProjection);
+      const currentNodeId = moveNode.getAttribute('data-testid')?.replace('x4-ui-builder-node-', '');
+      assert.ok(currentNodeId, 'UIBuilder history: the mounted selected row must expose its builder identity');
+      const currentNode = currentPresentation.nodes.find(node => node.id === currentNodeId);
+      assert.ok(currentNode, 'UIBuilder history: the identical current projection must expose the mounted selected node');
+      const currentRow = resolveX4UiBuilderRowForNode(currentPresentation.nodes, currentNode);
+      assert.ok(currentRow, 'UIBuilder history: the identical current projection must resolve the selected row');
+      const currentCatalog = discoverX4UiSourceEditorCatalog(preMoveWorkspace, currentProjection);
+      assert.ok(currentCatalog, 'UIBuilder history: the identical current projection must issue a source catalog');
+      const issuedMoveEntry = currentCatalog?.moveEntries?.find(entry => entry.direction === 'down'
+        && entry.path === sourcePath
+        && entry.rowId === currentRow.id.slice('scene:'.length));
+      assert.ok(issuedMoveEntry, 'UIBuilder history: the current issued catalog must contain the selected row Move down entry');
+      assert.equal(currentCatalog?.sourceText, preMoveSourceContent,
+        'UIBuilder history: the issued move catalog must bind to the exact pre-move source bytes');
+      assert.equal(preMoveSourceContent.slice(issuedMoveEntry.startOffset, issuedMoveEntry.endOffset), issuedMoveEntry.expectedText,
+        'UIBuilder history: the issued move range must match its owner-issued expected block text');
+      const expectedMovedSource = preMoveSourceContent.slice(0, issuedMoveEntry.startOffset)
+        + issuedMoveEntry.lower.expectedText + issuedMoveEntry.upper.expectedText
+        + preMoveSourceContent.slice(issuedMoveEntry.endOffset);
+      const expectedMovedWorkspace = sanitizeWorkspace({
+        ...preMoveWorkspace,
+        passthroughFiles: preMoveWorkspace.passthroughFiles.map(file => file.path === sourcePath
+          ? { ...file, content: expectedMovedSource }
+          : { ...file }),
+      });
+
+      await flush(() => control('x4-ui-row-controls-move-down').click());
+      assert.equal(receipts.length, 2, 'UIBuilder must publish the row move acknowledgement through the existing history owner');
+      assert.equal(entries.length, 2, 'the accepted row move must record exactly one additional guarded history entry');
+      const moveHistoryEntry = entries[1];
+      assert.ok(moveHistoryEntry, 'the accepted row move must have a guarded source history entry');
+      const historyMoved = currentWorkspace as typeof historyBefore;
+      const movedSourceContent = historyMoved.passthroughFiles.find(file => file.path === sourcePath)?.content;
+      assert.equal(movedSourceContent, expectedMovedSource,
+        'UIBuilder history: Move down must equal the exact independently derived issued-entry splice');
+      assert.equal(JSON.stringify(historyMoved), JSON.stringify(expectedMovedWorkspace),
+        'UIBuilder history: Move down must preserve the exact full workspace apart from the issued source splice');
+      assert.equal(workspaceWithoutMovedSource(historyMoved), workspaceWithoutMovedSource(preMoveWorkspace),
+        'UIBuilder history: Move down must preserve all non-source files and workspace metadata');
+      const movedHierarchyLabels = hierarchyLabels();
+      assert.notDeepEqual(movedHierarchyLabels, preMoveHierarchyLabels,
+        'UIBuilder history: accepted Move down must reproject a changed hierarchy order');
+      assert.ok(rowOrder(movedHierarchyLabels, 'History Row 3') < rowOrder(movedHierarchyLabels, 'History Row 2'),
+        'UIBuilder history: accepted Move down must swap the mounted sibling order');
+      const movedCanvas = control('x4-ui-canvas-host').firstElementChild;
+      assert.ok(movedCanvas instanceof MountedCanvasElement,
+        'UIBuilder history: accepted Move down must mount a fresh canvas');
+      assert.notEqual(movedCanvas, preMoveCanvas,
+        'UIBuilder history: accepted Move down must change the mounted canvas signature');
+      const movedWorkspaceSnapshot = JSON.stringify(historyMoved);
+      const movedSourceSnapshot = movedSourceContent;
+      const movedSelection = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+        .find(button => button.getAttribute('aria-pressed') === 'true');
+      assert.ok(movedSelection, 'UIBuilder history: accepted Move down must select a fresh row');
+      assert.match(movedSelection.textContent, /^Row 3/);
+
+      const moveUndo = transitionWorkspaceHistory('undo', [moveHistoryEntry], [], historyMoved, historyScope);
+      assert.equal(moveUndo.status, 'applied', 'UIBuilder row move must accept guarded Undo');
+      if (moveUndo.status !== 'applied') throw new Error('UIBuilder row move Undo was refused');
+      assert.equal(JSON.stringify(moveUndo.workspace), preMoveWorkspaceSnapshot,
+        'UIBuilder history: guarded Move Undo must restore the exact full pre-move workspace');
+      assert.equal((moveUndo.workspace as typeof historyBefore).passthroughFiles.find(file => file.path === sourcePath)?.content,
+        preMoveSourceContent, 'UIBuilder history: guarded Move Undo must restore the exact pre-move source bytes');
+      assert.equal(workspaceWithoutMovedSource(moveUndo.workspace as typeof historyBefore), workspaceWithoutMovedSource(preMoveWorkspace),
+        'UIBuilder history: guarded Move Undo must preserve all non-source files and workspace metadata');
+      await flush(() => replaceWorkspace(moveUndo.workspace as typeof historyBefore));
+      assertNoMenuSelection('UIBuilder row move Undo before delayed notice');
+      await flush(() => publishHistoryRestoration({
+        direction: 'undo',
+        scope: historyScope,
+        beforeWorkspace: historyMoved,
+        afterWorkspace: moveUndo.workspace,
+      }));
+      assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath, 'row move Undo must recover the fresh source selector');
+      assert.equal(selectedOptionText('x4-ui-target-selector'), 'menuA.createFrame', 'row move Undo must recover the fresh target selector');
+      assert.equal(control('x4-ui-canvas-status').textContent, 'rendered/current', 'row move Undo must reproject a current canvas');
+      const undoneHierarchyLabels = hierarchyLabels();
+      assert.deepEqual(undoneHierarchyLabels, preMoveHierarchyLabels,
+        'UIBuilder history: Move Undo must restore the exact mounted hierarchy order');
+      const undoneCanvas = control('x4-ui-canvas-host').firstElementChild;
+      assert.ok(undoneCanvas instanceof MountedCanvasElement,
+        'UIBuilder history: Move Undo must mount a restored canvas');
+      assert.notEqual(undoneCanvas, movedCanvas,
+        'UIBuilder history: Move Undo must change the mounted canvas signature');
+
+      const moveRedo = transitionWorkspaceHistory('redo', moveUndo.past, moveUndo.future, moveUndo.workspace as typeof historyBefore, historyScope);
+      assert.equal(moveRedo.status, 'applied', 'UIBuilder row move must accept guarded Redo');
+      if (moveRedo.status !== 'applied') throw new Error('UIBuilder row move Redo was refused');
+      assert.equal(JSON.stringify(moveRedo.workspace), movedWorkspaceSnapshot,
+        'UIBuilder history: guarded Move Redo must restore the exact accepted moved workspace');
+      assert.equal((moveRedo.workspace as typeof historyBefore).passthroughFiles.find(file => file.path === sourcePath)?.content,
+        movedSourceSnapshot, 'UIBuilder history: guarded Move Redo must restore the exact accepted moved source bytes');
+      assert.equal(workspaceWithoutMovedSource(moveRedo.workspace as typeof historyBefore), workspaceWithoutMovedSource(preMoveWorkspace),
+        'UIBuilder history: guarded Move Redo must preserve all non-source files and workspace metadata');
+      await flush(() => replaceWorkspace(moveRedo.workspace as typeof historyBefore));
+      assertNoMenuSelection('UIBuilder row move Redo before delayed notice');
+      await flush(() => publishHistoryRestoration({
+        direction: 'redo',
+        scope: historyScope,
+        beforeWorkspace: moveUndo.workspace,
+        afterWorkspace: moveRedo.workspace,
+      }));
+      assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath, 'row move Redo must recover the fresh source selector');
+      assert.equal(selectedOptionText('x4-ui-target-selector'), 'menuA.createFrame', 'row move Redo must recover the fresh target selector');
+      assert.equal(control('x4-ui-canvas-status').textContent, 'rendered/current', 'row move Redo must reproject a current canvas');
+      const redoneHierarchyLabels = hierarchyLabels();
+      assert.deepEqual(redoneHierarchyLabels, movedHierarchyLabels,
+        'UIBuilder history: Move Redo must restore the exact accepted mounted hierarchy order');
+      const redoneCanvas = control('x4-ui-canvas-host').firstElementChild;
+      assert.ok(redoneCanvas instanceof MountedCanvasElement,
+        'UIBuilder history: Move Redo must mount a restored moved canvas');
+      assert.notEqual(redoneCanvas, undoneCanvas,
+        'UIBuilder history: Move Redo must change the mounted canvas signature');
+      await flush(() => publishHistoryRestoration(null));
+      await flush(() => replaceWorkspace(redo.workspace as typeof historyBefore));
+    }
+
+    if (run.preserveMultiTargetRecovery) {
+    const redoneSourceContent = (redo.workspace as typeof historyBefore).passthroughFiles.find(file => file.path === sourcePath)?.content;
+    assert.ok(redoneSourceContent, 'UIBuilder history: Redo must retain the full source content for negative controls');
+    const workspaceWithSourceContent = (id: string, content: string): typeof historyBefore => sanitizeWorkspace({
+      ...(redo.workspace as typeof historyBefore),
+      id,
+      passthroughFiles: (redo.workspace as typeof historyBefore).passthroughFiles.map(file => file.path === sourcePath
+        ? { ...file, content }
+        : { ...file }),
+    });
+    const externalReplacement = workspaceWithSourceContent('x4-ui-builder-history-external', redoneSourceContent.replace('History After', 'External replacement'));
+    await flush(() => publishHistoryRestoration(null));
+    await flush(() => replaceWorkspace(externalReplacement));
+    assertNoMenuSelection('external replacement before stale restoration notice');
+    await flush(() => publishHistoryRestoration(undoNotice));
+    assertNoMenuSelection('external replacement must reject an old restoration notice');
+    assert.equal(mountedElementByTestId(container, 'x4-ui-builder-selected-node-label'), null,
+      'an external replacement must not reuse the old selected element');
+
+    await flush(() => publishHistoryRestoration(null));
+    await flush(() => replaceWorkspace(redo.workspace as typeof historyBefore));
+    await selectHistoryMenu();
+    await flush(() => replaceWorkspace(undo.workspace as typeof historyBefore));
+    const wrongScopeNotice: X4UiHistoryRestorationNotice = {
+      direction: 'undo',
+      scope: 'different-immutable-history-scope',
+      beforeWorkspace: redo.workspace,
+      afterWorkspace: undo.workspace,
+    };
+    await flush(() => publishHistoryRestoration(wrongScopeNotice));
+    assertNoMenuSelection('scope change must reject an otherwise exact restoration notice');
+
+    await flush(() => publishHistoryRestoration(null));
+    await flush(() => replaceWorkspace(redo.workspace as typeof historyBefore));
+    await selectHistoryMenu();
+    await flush(() => replaceWorkspace(undo.workspace as typeof historyBefore));
+    const undoSourceOption = mountedOptionByText(control('x4-ui-source-selector'), sourcePath);
+    assert.ok(undoSourceOption, 'user-interruption fixture must retain the source path in the restored catalog');
+    await flush(() => {
+      const sourceSelect = control('x4-ui-source-selector');
+      sourceSelect.value = undoSourceOption.value;
+      sourceSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath);
+    assert.equal(selectedOptionText('x4-ui-target-selector'), '', 'user source selection must leave target selection empty');
+    await flush(() => publishHistoryRestoration({
+      direction: 'undo',
+      scope: historyScope,
+      beforeWorkspace: redo.workspace,
+      afterWorkspace: undo.workspace,
+    }));
+    assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath, 'user source selection must not be replaced by history recovery');
+    assert.equal(selectedOptionText('x4-ui-target-selector'), '', 'user selection interruption must not recover the stale target');
+
+    await flush(() => publishHistoryRestoration(null));
+    await flush(() => replaceWorkspace(redo.workspace as typeof historyBefore));
+    await selectHistoryMenu();
+    await flush(() => replaceWorkspace(undo.workspace as typeof historyBefore));
+    const duplicateNotice: X4UiHistoryRestorationNotice = {
+      direction: 'undo',
+      scope: historyScope,
+      beforeWorkspace: redo.workspace,
+      afterWorkspace: undo.workspace,
+    };
+    await flush(() => publishHistoryRestoration(duplicateNotice));
+    assert.equal(selectedOptionText('x4-ui-source-selector'), sourcePath, 'the first restoration notice must recover the fresh source');
+    assert.equal(selectedOptionText('x4-ui-target-selector'), 'menuA.createFrame', 'the first restoration notice must recover the fresh target');
+    await flush(() => {
+      const sourceSelect = control('x4-ui-source-selector');
+      sourceSelect.value = '';
+      sourceSelect.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+    });
+    const clearedSourceSelect = control('x4-ui-source-selector');
+    assert.equal(clearedSourceSelect.value, '', 'single-select clearing must update the mounted select value');
+    assert.deepEqual(
+      clearedSourceSelect.options.filter(option => option.selected).map(option => option.value),
+      [''],
+      'single-select clearing must deselect the previous option in the mounted DOM',
+    );
+    assertNoMenuSelection('user interruption must clear the prior restoration selection before duplicate notice check');
+    await flush(() => replaceWorkspace({ ...(undo.workspace as typeof historyBefore) }));
+    await flush(() => replaceWorkspace(undo.workspace as typeof historyBefore));
+    assertNoMenuSelection('a duplicate restoration notice must not re-adopt an interrupted selection');
+
+    const missingTargetWorkspace = workspaceWithSourceContent(
+      'x4-ui-builder-history-missing-target',
+      redoneSourceContent.replace('function menuA.createFrame()', 'function menuA.notCreateFrame()'),
+    );
+    await flush(() => publishHistoryRestoration(null));
+    await flush(() => replaceWorkspace(redo.workspace as typeof historyBefore));
+    await selectHistoryMenu();
+    await flush(() => replaceWorkspace(missingTargetWorkspace));
+    await flush(() => publishHistoryRestoration({
+      direction: 'undo',
+      scope: historyScope,
+      beforeWorkspace: redo.workspace,
+      afterWorkspace: missingTargetWorkspace,
+    }));
+    assertNoMenuSelection('a missing target must fail closed during history recovery');
+
+    const ambiguousTargetWorkspace = workspaceWithSourceContent(
+      'x4-ui-builder-history-ambiguous-target',
+      `${redoneSourceContent}\nfunction menuA.createFrame()\n  return nil\nend\n`,
+    );
+    await flush(() => publishHistoryRestoration(null));
+    await flush(() => replaceWorkspace(redo.workspace as typeof historyBefore));
+    await selectHistoryMenu();
+    await flush(() => replaceWorkspace(ambiguousTargetWorkspace));
+    await flush(() => publishHistoryRestoration({
+      direction: 'undo',
+      scope: historyScope,
+      beforeWorkspace: redo.workspace,
+      afterWorkspace: ambiguousTargetWorkspace,
+    }));
+    assertNoMenuSelection('an ambiguous target must fail closed during history recovery');
+    }
+    console.log(`B119_UIBUILDER_HISTORY_${run.name.toUpperCase().replaceAll('-', '_')} PASS: actual UIBuilder accepted title edit callback, exact source history Undo/Redo, delayed post-readback notices, fresh menu selectors, canvas refresh, and sibling preservation`);
+  } finally {
+    if (root !== undefined) await flush(() => root?.unmount());
+    restoreGlobals();
+  }
+}
+
+async function runMountedSourceEditorStaleCellCallbackRegression(fixture: P7SourceAuthorityFixture): Promise<void> {
+  const doc = new MountedDomDocument();
+  const restore = installMountedDomGlobals(doc);
+  const container = doc.createElement('div');
+  doc.body.appendChild(container);
+  const path = 'ui/stale-cell-callback.lua';
+  const otherPath = 'ui/stale-cell-other.lua';
+  const content = [
+    'local menu = { name = "X4UiStaleCellCallback", layer = 1 }',
+    'function menu.createFrame()',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(2, { width = 100, reserveScrollBar = false, scaling = false })',
+    'local row = table:addRow(false, {})',
+    'local anchorRow = table:addRow(false, {})',
+    'anchorRow[1]:createText("Anchor")',
+    'frame:display()',
+    'end',
+    'function menu.alternate()',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    'local row = table:addRow(false, {})',
+    'row[1]:createText("Alternate")',
+    'frame:display()',
+    'end',
+    '',
+  ].join('\n');
+  const original = sanitizeWorkspace({ ...workspace, id: 'stale-cell-callback', compileSettings: { ui: true }, passthroughFiles: [
+    { path: 'ui.xml', content: `<addon name="callback"><environment type="menus"><file name="${path}" /><file name="${otherPath}" /></environment></addon>`, reason: 'partial' },
+    { path, content, reason: 'partial' },
+    { path: otherPath, content: content.replace('X4UiStaleCellCallback', 'X4UiOtherCamera'), reason: 'partial' },
+  ] });
+  const originalBytes = JSON.stringify(original);
+  let currentWorkspace = original;
+  const authorities: X4UiWorkspaceEditPendingAuthority[] = [];
+  let submittedWorkspace: typeof original | undefined;
+  let submissions = 0;
+  let root: ReturnType<typeof createRoot> | undefined;
+  const flush = async (operation: () => void): Promise<void> => {
+    await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); });
+  };
+  const control = (id: string): MountedDomElement => {
+    const element = mountedElementByTestId(container, id);
+    assert.ok(element, `stale cell callback: missing ${id}`);
+    return element;
+  };
+  const handler: X4UiWorkspaceEditHandler = request => {
+    submissions += 1;
+    assert.equal(request.expectedWorkspace, currentWorkspace, 'stale cell callback received the exact live workspace identity');
+    submittedWorkspace = request.workspace as typeof original;
+    const authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+    authorities.push(authority);
+    return authority.submission;
+  };
+  const loader = async () => ({ core: fixture.core, color: fixture.color });
+  const surfaceFactory = (width: number, height: number) => new MountedCanvasElement(doc, width, height);
+  let changeViewScope: (value: string) => void = () => { throw new Error('camera parent not mounted'); };
+  const Parent = (): React.ReactElement => {
+    const [liveWorkspace] = React.useState(original);
+    const [scope, setScope] = React.useState('focus-workspace-a');
+    changeViewScope = setScope;
+    currentWorkspace = liveWorkspace;
+    return <X4UiSourceEditor workspace={liveWorkspace} workspaceScope={scope} corpusLoader={loader} surfaceFactory={surfaceFactory} onWorkspaceEdit={handler} />;
+  };
+  try {
+    await flush(() => {
+      root = createRoot(container as unknown as Element);
+      root.render(<React.StrictMode><Parent /></React.StrictMode>);
+    });
+    await flush(() => {
+      const select = control('x4-ui-source-selector');
+      const option = select.options.find(candidate => candidate.textContent === path);
+      assert.ok(option, 'stale cell callback source must be issued by the real owner catalog');
+      select.value = option.value;
+      select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    await flush(() => {
+      const select = control('x4-ui-target-selector');
+      const option = select.options.find(candidate => candidate.textContent === 'menu.createFrame');
+      assert.ok(option, 'stale cell callback target must be issued by the real owner catalog');
+      select.value = option.value;
+      select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current', 'stale cell callback fixture must render a current canvas');
+    const hierarchy = control('x4-ui-builder-hierarchy-list');
+    // This event-only DOM has no layout engine. Supply measured viewport dimensions
+    // for callback tests; real sizing, scrolling and pixels remain browser assertions.
+    Object.defineProperties(control('x4-ui-canvas-scroll'), {
+      clientWidth: { value: 640 }, clientHeight: { value: 320 },
+      scrollLeft: { value: 0, writable: true }, scrollTop: { value: 0, writable: true },
+    });
+    assert.equal(control('x4-ui-canvas-focus-selection').disabled, true, 'no selection cannot focus the viewport');
+    const frameForFocus = hierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Frame 1'));
+    const textForFocus = hierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Text · Anchor'));
+    assert.ok(frameForFocus); assert.ok(textForFocus);
+    await flush(() => frameForFocus.click());
+    assert.equal(control('x4-ui-canvas-focus-selection').disabled, false);
+    const staleFocus = mountedReactClickCallback(control('x4-ui-canvas-focus-selection'), 'retained frame focus');
+    await flush(() => textForFocus.click());
+    const selectedZoomMode = (): string | undefined => control('x4-ui-canvas-zoom-mode').options.find(option => option.selected)?.value;
+    assert.equal(selectedZoomMode(), 'fit-menu', 'ordinary selection never moves the camera');
+    await flush(staleFocus);
+    assert.equal(selectedZoomMode(), 'fit-menu', 'retained focus for another selection is refused');
+    await flush(mountedReactClickCallback(control('x4-ui-canvas-focus-selection'), 'fresh text focus'));
+    assert.equal(selectedZoomMode(), 'manual');
+    assert.equal(mountedElementText(container, 'x4-ui-canvas-zoom-value'), '100% preview');
+    assert.equal(submissions, 0, 'focus must never submit a source transaction');
+    assert.equal(JSON.stringify(original), originalBytes);
+    console.log('B119_MOUNTED_SELECTION_FOCUS PASS: disabled/no automatic pan/fresh focus/stale callback/source preservation');
+    const choose = async (id: string, label: string): Promise<void> => flush(() => {
+      const select = control(id);
+      const option = select.options.find(candidate => candidate.textContent === label);
+      assert.ok(option, `camera navigation option ${label}`);
+      select.value = option.value;
+      select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    const chooseNativeZoom = async (): Promise<void> => flush(() => {
+      const select = control('x4-ui-canvas-zoom-mode');
+      select.value = 'one-to-one';
+      select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+    });
+    await choose('x4-ui-target-selector', 'menu.createFrame');
+    assert.equal(selectedZoomMode(), 'manual', 'same-menu selection keeps the working camera');
+    await choose('x4-ui-target-selector', 'menu.alternate');
+    assert.equal(selectedZoomMode(), 'fit-menu', 'different menu opens in its own overview');
+    await chooseNativeZoom();
+    await choose('x4-ui-inspect-target-selector', 'menu.createFrame');
+    assert.equal(selectedZoomMode(), 'fit-menu', 'Inspect menu navigation uses the same camera reset');
+    await chooseNativeZoom();
+    await choose('x4-ui-source-selector', otherPath);
+    assert.equal(selectedZoomMode(), 'fit-menu', 'different source opens in its own overview');
+    await choose('x4-ui-target-selector', 'menu.createFrame');
+    await choose('x4-ui-source-selector', path);
+    await choose('x4-ui-target-selector', 'menu.createFrame');
+    const freshAnchor = control('x4-ui-builder-hierarchy-list').querySelectorAll('button').find(element => element.textContent.startsWith('Text · Anchor'));
+    assert.ok(freshAnchor);
+    await flush(() => freshAnchor.click());
+    const oldWorkspaceFocus = mountedReactClickCallback(control('x4-ui-canvas-focus-selection'), 'old workspace focus');
+    await flush(oldWorkspaceFocus);
+    assert.equal(selectedZoomMode(), 'manual');
+    await flush(() => changeViewScope('focus-workspace-b'));
+    assert.equal(selectedZoomMode(), 'fit-menu', 'another workspace cannot inherit the old focused camera');
+    await flush(oldWorkspaceFocus);
+    assert.equal(selectedZoomMode(), 'fit-menu', 'retained old-workspace focus remains refused');
+    await flush(() => changeViewScope('focus-workspace-a'));
+    assert.equal(selectedZoomMode(), 'fit-menu', 'returning workspace gets a valid overview, not a stale anchor');
+    assert.equal(submissions, 0, 'view navigation never submits source transactions');
+    assert.equal(JSON.stringify(original), originalBytes);
+    console.log('B119_MOUNTED_CAMERA_NAVIGATION PASS: source/menu/Inspect/workspace overview, same-menu stability and stale focus refusal');
+    const firstCell = hierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Cell 1'));
+    const secondCell = hierarchy.querySelectorAll('button').find(element => element.textContent.startsWith('Cell 2'));
+    assert.ok(firstCell, 'stale cell callback fixture must expose Cell 1');
+    assert.ok(secondCell, 'stale cell callback fixture must expose Cell 2');
+    await flush(() => firstCell.click());
+    const addText = mountedElementByTestId(container, 'x4-ui-contextual-palette-add-text');
+    const selectedAfterFirstClick = hierarchy.querySelectorAll('button').find(element => element.getAttribute('aria-pressed') === 'true');
+    assert.ok(addText, `the current Cell 1 must expose its contextual Add control; hierarchy=${JSON.stringify(hierarchy.querySelectorAll('button').map(element => element.textContent))}; selected=${selectedAfterFirstClick?.getAttribute('data-testid')}`);
+    assert.equal(addText.disabled, false, 'the current Cell 1 palette callback must be enabled');
+    const retainedCallback = mountedReactClickCallback(addText, 'retained Cell 1 palette callback');
+    const beforeWorkspace = currentWorkspace;
+    const beforeBytes = JSON.stringify(currentWorkspace);
+    await flush(() => secondCell.click());
+    const selectedCell = hierarchy.querySelectorAll('button').find(element => element.getAttribute('aria-pressed') === 'true');
+    assert.equal(selectedCell?.getAttribute('data-testid'), secondCell.getAttribute('data-testid'), 'the live selection must move to Cell 2 before invoking the retained callback');
+    await flush(retainedCallback);
+    assert.equal(submissions, 0, `a retained Cell 1 callback must not submit into Cell 1; submissions=${submissions}; authorities=${authorities.length}`);
+    assert.equal(currentWorkspace, beforeWorkspace, 'a retained stale-cell callback must preserve workspace identity');
+    assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'a retained stale-cell callback must preserve exact source bytes');
+    const freshAddText = control('x4-ui-contextual-palette-add-text');
+    assert.equal(freshAddText.disabled, false, 'the freshly rendered Cell 2 palette callback must remain enabled');
+    const freshCallback = mountedReactClickCallback(freshAddText, 'fresh Cell 2 palette callback');
+    await flush(freshCallback);
+    assert.equal(submissions, 1, 'the fresh Cell 2 callback must submit exactly one owner transaction');
+    assert.ok(submittedWorkspace, 'the fresh Cell 2 callback must provide the owner-issued replacement workspace');
+    const submittedSource = submittedWorkspace.passthroughFiles.find(file => file.path === path)?.content;
+    assert.ok(submittedSource, 'the fresh Cell 2 callback must retain the edited source file');
+    assert.notEqual(submittedSource, content, 'the fresh Cell 2 callback must change source bytes');
+    assert.match(submittedSource, /row\[2\].*New text/, 'the fresh Cell 2 callback must insert the widget into Cell 2 source');
+    assert.doesNotMatch(submittedSource, /row\[1\].*New text/, 'the fresh Cell 2 callback must not insert the widget into Cell 1 source');
+    assert.equal(JSON.stringify(original), originalBytes, 'the stale-cell probe must not mutate the original workspace');
+    console.log('B119_SOURCE_EDITOR_STALE_CELL_CALLBACK_PROBE PASS: retained Cell 1 Add callback refused after exact Cell 2 selection; fresh Cell 2 callback submitted one exact source transaction');
+  } finally {
+    if (root !== undefined) await flush(() => root?.unmount());
+    restore();
+  }
+}
+
+async function runMountedSourceEditorCallbackDiscardRegression(fixture: P7SourceAuthorityFixture): Promise<void> {
+  const scenarios = [
+    'exact-current-discard', 'pending-property-draft', 'pending-transaction', 'changed-cell',
+    'changed-source', 'changed-profile', 'changed-workspace', 'stale-discard-newer-draft', 'delayed-ack',
+    'row-refused', 'row-stale-descendant', 'row-delayed-selection',
+  ] as const;
+  const failures: { scenario: typeof scenarios[number]; detail: string }[] = [];
+  const sourcePath = 'ui/callback-safety.lua';
+  const secondarySourcePath = 'ui/callback-secondary.lua';
+  const sourceFor = (menuName: string, first: string, second: string): string => [
+    `local menu = { name = ${JSON.stringify(menuName)}, layer = 1 }`,
+    'function menu.createFrame()',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(2, { width = 100, reserveScrollBar = false, scaling = false })',
+    'local firstRow = table:addRow(false, {})',
+    `firstRow[1]:createText(${JSON.stringify(first)})`,
+    'local secondRow = table:addRow(false, {})',
+    `secondRow[1]:createText(${JSON.stringify(second)})`,
+    'frame:display()',
+    'end',
+    '',
+  ].join('\n');
+
+  for (const scenario of scenarios) {
+    const doc = new MountedDomDocument();
+    const restore = installMountedDomGlobals(doc);
+    const container = doc.createElement('div');
+    doc.body.appendChild(container);
+    const original = sanitizeWorkspace({ ...workspace, id: `callback-discard-${scenario}`, compileSettings: { ui: true }, passthroughFiles: [
+      {
+        path: 'ui.xml',
+        content: `<addon name="callback"><environment type="menus"><file name="${sourcePath}" /><file name="${secondarySourcePath}" /></environment></addon>`,
+        reason: 'partial',
+      },
+      { path: sourcePath, content: sourceFor('X4UiCallbackSafety', 'First', 'Second'), reason: 'partial' },
+      { path: secondarySourcePath, content: sourceFor('X4UiCallbackSecondary', 'Secondary', 'Other'), reason: 'partial' },
+    ] });
+    const originalBytes = JSON.stringify(original);
+    const switched = sanitizeWorkspace({ ...original, id: `callback-discard-switched-${scenario}` });
+    let currentWorkspace: typeof original = original;
+    let replaceWorkspace: React.Dispatch<React.SetStateAction<typeof original>> = () => { throw new Error('callback/Discard parent is not mounted'); };
+    const authorities: X4UiWorkspaceEditPendingAuthority[] = [];
+    let submissions = 0;
+    let root: ReturnType<typeof createRoot> | undefined;
+    const flush = async (operation: () => void): Promise<void> => {
+      await act(async () => { operation(); await Promise.resolve(); await Promise.resolve(); });
+    };
+    const control = (id: string): MountedDomElement => {
+      const element = mountedElementByTestId(container, id);
+      assert.ok(element, `${scenario}: missing ${id}`);
+      return element;
+    };
+    const selectSource = async (path: string): Promise<void> => {
+      await flush(() => {
+        const select = control('x4-ui-source-selector');
+        const option = select.options.find(candidate => candidate.textContent === path);
+        assert.ok(option, `${scenario}: source ${path} was not issued by the current owner catalog`);
+        select.value = option.value;
+        select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+      });
+    };
+    const selectTarget = async (): Promise<void> => {
+      await flush(() => {
+        const select = control('x4-ui-target-selector');
+        const option = select.options.find(candidate => candidate.textContent === 'menu.createFrame');
+        assert.ok(option, `${scenario}: menu.createFrame was not issued by the current owner catalog`);
+        select.value = option.value;
+        select.dispatchEvent(new MountedDomEvent('change', { bubbles: true }));
+      });
+    };
+    const selectNode = async (labelPrefix: string): Promise<MountedDomElement> => {
+      const node = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+        .find(element => element.textContent.startsWith(labelPrefix));
+      assert.ok(node, `${scenario}: hierarchy node ${labelPrefix} was not issued`);
+      await flush(() => node.click());
+      return node;
+    };
+    const selectedNodeId = (): string => {
+      const selected = control('x4-ui-builder-hierarchy-list').querySelectorAll('button')
+        .find(element => element.getAttribute('aria-pressed') === 'true');
+      const id = selected?.getAttribute('data-testid');
+      assert.ok(id, `${scenario}: exact selected builder node was not retained`);
+      return id;
+    };
+    const stageText = async (expected: string, raw: string): Promise<string> => {
+      const input = control('x4-ui-builder-selection').querySelectorAll('input').find(element => element.value === expected);
+      assert.ok(input, `${scenario}: editable Text literal ${expected} was not retained`);
+      const entryId = input.getAttribute('data-testid')?.slice('x4-ui-source-edit-input-'.length);
+      assert.ok(entryId, `${scenario}: staged Text literal did not expose an owner-issued entry id`);
+      await flush(() => {
+        input.focus();
+        input.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+        input.value = raw;
+        input.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+        input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+      });
+      assert.equal(input.value, raw, `${scenario}: staged Text literal was not retained locally`);
+      return entryId;
+    };
+    const applyCallback = (entryId: string, detail: string): (() => void) =>
+      mountedReactClickCallback(control(`x4-ui-source-edit-apply-${entryId}`), detail);
+    const discardCallback = (detail: string): (() => void) =>
+      mountedReactClickCallback(control('x4-ui-builder-source-edit-discard'), detail);
+    const invokeCallback = async (callback: () => void): Promise<void> => { await flush(callback); };
+    const assertNoWrite = (beforeWorkspace: typeof original, beforeBytes: string, beforeSelection: string, detail: string): void => {
+      assert.equal(submissions, 0, `${scenario}: ${detail} submitted an unexpected workspace edit`);
+      assert.equal(currentWorkspace, beforeWorkspace, `${scenario}: ${detail} changed workspace identity`);
+      assert.equal(JSON.stringify(currentWorkspace), beforeBytes, `${scenario}: ${detail} changed exact source bytes`);
+      assert.equal(selectedNodeId(), beforeSelection, `${scenario}: ${detail} changed exact builder selection`);
+    };
+    const handler: X4UiWorkspaceEditHandler = request => {
+      submissions += 1;
+      assert.equal(request.expectedWorkspace, currentWorkspace, `${scenario}: callback received the exact live workspace identity`);
+      if (scenario === 'row-refused') return { status: 'refused', reason: 'stale-parent-workspace', detail: 'row action refused by the existing parent owner' };
+      const authority = createX4UiWorkspaceEditPending(request.expectedWorkspace, request.workspace);
+      authorities.push(authority);
+      return authority.submission;
+    };
+    const loader = async () => ({ core: fixture.core, color: fixture.color });
+    const surfaceFactory = (width: number, height: number) => new MountedCanvasElement(doc, width, height);
+    const Parent = (): React.ReactElement => {
+      const [live, setLive] = React.useState(original);
+      currentWorkspace = live;
+      replaceWorkspace = update => setLive(previous => {
+        const candidate = typeof update === 'function' ? update(previous) : update;
+        return retainWorkspaceCandidateIfNormalizedUnchanged(candidate, sanitizeWorkspace(candidate));
+      });
+      return <X4UiSourceEditor workspace={live} corpusLoader={loader} surfaceFactory={surfaceFactory} onWorkspaceEdit={handler} />;
+    };
+
+    try {
+      await flush(() => {
+        root = createRoot(container as unknown as Element);
+        root.render(<React.StrictMode><Parent /></React.StrictMode>);
+      });
+      await selectSource(sourcePath);
+      await selectTarget();
+      assert.equal(mountedElementText(container, 'x4-ui-canvas-status'), 'rendered/current', `${scenario}: callback fixture must render a current canvas`);
+
+      if (scenario === 'exact-current-discard') {
+        await selectNode('Text · First');
+        const entryId = await stageText('First', 'exact discard draft');
+        const discard = discardCallback('exact current Discard');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(discard);
+        assert.equal(submissions, 0, 'exact current Discard must not submit a workspace edit');
+        assert.equal(currentWorkspace, beforeWorkspace, 'exact current Discard must preserve the live workspace identity');
+        assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'exact current Discard must preserve exact source bytes');
+        assert.equal(selectedNodeId(), beforeSelection, 'exact current Discard must preserve exact builder selection');
+        assert.equal(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'First'), true, 'exact current Discard must clear only the local staged value');
+        assert.equal(control(`x4-ui-source-edit-apply-${entryId}`).disabled, true, 'exact current Discard must leave Apply disabled with no staged value');
+      }
+
+      if (scenario === 'pending-property-draft') {
+        await selectNode('Text · First');
+        await stageText('First', 'pending property draft');
+        await selectNode('Cell 2');
+        const addText = control('x4-ui-contextual-palette-add-text');
+        assert.equal(addText.disabled, true, 'a staged property draft must disable contextual insertion in the real markup');
+        const callback = mountedReactClickCallback(addText, 'pending property draft Add callback');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(callback);
+        assertNoWrite(beforeWorkspace, beforeBytes, beforeSelection, 'property-draft Add callback');
+        await selectNode('Text · First');
+        assert.equal(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'pending property draft'), true, 'direct Add refusal must preserve the staged property draft');
+      }
+
+      if (scenario === 'pending-transaction') {
+        await selectNode('Text · First');
+        const entryId = await stageText('First', 'pending transaction draft');
+        const apply = applyCallback(entryId, 'pending transaction Apply callback');
+        const discard = discardCallback('pending transaction Discard callback');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        await invokeCallback(apply);
+        assert.equal(submissions, 1, 'the first direct Apply callback must submit exactly one transaction');
+        assert.ok(authorities[0], 'the pending direct Apply callback must retain the existing acknowledgement owner');
+        assert.match(mountedElementText(container, 'x4-ui-source-edit-receipt'), /^Saving the selected value through the source owner/);
+        await selectNode('Cell 2');
+        const pendingAddText = control('x4-ui-contextual-palette-add-text');
+        assert.equal(pendingAddText.disabled, true, 'a pending transaction must disable the freshly rendered Cell 2 Add callback');
+        const pendingAddCallback = mountedReactClickCallback(pendingAddText, 'pending transaction fresh Add callback');
+        const pendingCellSelection = selectedNodeId();
+        await invokeCallback(pendingAddCallback);
+        assert.equal(submissions, 1, 'a pending transaction Add callback must not submit a second workspace edit');
+        assert.equal(currentWorkspace, beforeWorkspace, 'a pending transaction Add callback must preserve workspace identity');
+        assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'a pending transaction Add callback must preserve exact source bytes');
+        assert.equal(selectedNodeId(), pendingCellSelection, 'a pending transaction Add callback must preserve the current Cell 2 selection');
+        assert.match(mountedElementText(container, 'x4-ui-contextual-palette-status'), /^Saving your change/, 'a pending transaction Add callback must preserve the pending receipt');
+        const pendingAddRow = control('x4-ui-contextual-palette-add-row');
+        assert.equal(pendingAddRow.disabled, true, 'a pending transaction must disable the freshly rendered Add row callback');
+        const pendingAddRowCallback = mountedReactClickCallback(pendingAddRow, 'pending transaction fresh Add row callback');
+        await invokeCallback(pendingAddRowCallback);
+        assert.equal(submissions, 1, 'a pending transaction Add row callback must not submit a second workspace edit');
+        assert.equal(currentWorkspace, beforeWorkspace, 'a pending transaction Add row callback must preserve workspace identity');
+        assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'a pending transaction Add row callback must preserve exact source bytes');
+        assert.equal(selectedNodeId(), pendingCellSelection, 'a pending transaction Add row callback must preserve the current Cell 2 selection');
+        await invokeCallback(apply);
+        await invokeCallback(discard);
+        assert.equal(submissions, 1, 'pending transaction callbacks must not submit a second workspace edit');
+        assert.equal(currentWorkspace, beforeWorkspace, 'pending transaction callbacks must preserve workspace identity before acknowledgement');
+        assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'pending transaction callbacks must preserve exact source bytes before acknowledgement');
+        assert.equal(selectedNodeId(), pendingCellSelection, 'pending transaction callbacks must preserve the current Cell 2 selection');
+      }
+
+      if (scenario === 'row-refused') {
+        await selectNode('Row 1');
+        const addRow = control('x4-ui-contextual-palette-add-row');
+        assert.equal(addRow.disabled, false, 'an exact current row must expose an enabled Add row callback');
+        const callback = mountedReactClickCallback(addRow, 'refused Add row callback');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(callback);
+        assert.equal(submissions, 1, 'a refused Add row callback must reach the existing parent owner once');
+        assert.equal(currentWorkspace, beforeWorkspace, 'a refused Add row must preserve workspace identity');
+        assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'a refused Add row must preserve exact source bytes');
+        assert.equal(selectedNodeId(), beforeSelection, 'a refused Add row must preserve exact row selection');
+        assert.match(mountedElementText(container, 'x4-ui-contextual-palette-refusal'), /could not be saved/);
+      }
+
+      if (scenario === 'row-stale-descendant') {
+        await selectNode('Row 1');
+        const callback = mountedReactClickCallback(control('x4-ui-contextual-palette-add-row'), 'stale Add row callback after descendant selection');
+        await selectNode('Text · Second');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(callback);
+        assertNoWrite(beforeWorkspace, beforeBytes, beforeSelection, 'stale Add row callback after descendant selection');
+      }
+
+      if (scenario === 'row-delayed-selection') {
+        await selectNode('Row 1');
+        const callback = mountedReactClickCallback(control('x4-ui-contextual-palette-add-row'), 'delayed Add row callback');
+        await invokeCallback(callback);
+        assert.equal(submissions, 1, 'delayed Add row acknowledgement must start one transaction');
+        const authority = authorities[0];
+        assert.ok(authority, 'delayed Add row must retain the existing acknowledgement owner');
+        const replacement = authority.submission.workspace as typeof original;
+        await selectNode('Text · Second');
+        await flush(() => replaceWorkspace(replacement));
+        await selectSource(sourcePath);
+        await selectTarget();
+        await selectNode('Text · Second');
+        const beforeSelection = selectedNodeId();
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        await flush(() => { authority.acknowledge(replacement); });
+        assert.equal(submissions, 1, 'a late Add row acknowledgement must not submit a second workspace edit');
+        assert.equal(currentWorkspace, replacement, 'a late Add row acknowledgement must retain the exact parent replacement');
+        assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'a late Add row acknowledgement must preserve the accepted replacement bytes');
+        assert.equal(selectedNodeId(), beforeSelection, 'a late Add row acknowledgement must preserve the newer descendant selection');
+      }
+
+      if (scenario === 'changed-cell') {
+        await selectNode('Cell 2');
+        const addText = control('x4-ui-contextual-palette-add-text');
+        assert.equal(addText.disabled, false, 'an exact current empty cell must expose an enabled contextual Add callback');
+        const callback = mountedReactClickCallback(addText, 'stale selected-cell Add callback');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        await selectNode('Text · Second');
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(callback);
+        assertNoWrite(beforeWorkspace, beforeBytes, beforeSelection, 'stale selected-cell Add callback');
+      }
+
+      if (scenario === 'changed-source') {
+        await selectNode('Text · First');
+        const oldEntryId = await stageText('First', 'stale source draft');
+        const oldApply = applyCallback(oldEntryId, 'stale source Apply callback');
+        await selectSource(secondarySourcePath);
+        await selectTarget();
+        await selectNode('Text · Secondary');
+        await stageText('Secondary', 'secondary newer draft');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(oldApply);
+        assertNoWrite(beforeWorkspace, beforeBytes, beforeSelection, 'stale source Apply callback');
+        assert.equal(control('x4-ui-source-selector').options.find(option => option.selected && option.textContent === secondarySourcePath)?.selected, true, 'stale source Apply callback must not adopt the old source');
+        assert.equal(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'secondary newer draft'), true, 'stale source Apply callback must preserve the newer draft');
+      }
+
+      if (scenario === 'changed-profile') {
+        await selectNode('Text · First');
+        const oldEntryId = await stageText('First', 'stale profile draft');
+        const oldApply = applyCallback(oldEntryId, 'stale profile Apply callback');
+        await flush(() => {
+          const input = control('x4-ui-profile-width');
+          input.focus();
+          input.dispatchEvent(new MountedDomEvent('focusin', { bubbles: true }));
+          input.value = '1024';
+          input.dispatchEvent(new MountedDomEvent('propertychange', { propertyName: 'value' }));
+          input.dispatchEvent(new MountedDomEvent('change', { bubbles: true, cancelable: true }));
+        });
+        assert.match(mountedElementText(container, 'x4-ui-profile-inspect'), /1024/, 'profile callback fixture must observe the changed profile');
+        await selectNode('Text · First');
+        await stageText('First', 'profile newer draft');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(oldApply);
+        assertNoWrite(beforeWorkspace, beforeBytes, beforeSelection, 'stale profile Apply callback');
+        assert.equal(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'profile newer draft'), true, 'stale profile Apply callback must preserve the newer draft');
+      }
+
+      if (scenario === 'changed-workspace') {
+        await selectNode('Text · First');
+        const oldEntryId = await stageText('First', 'stale workspace draft');
+        const oldApply = applyCallback(oldEntryId, 'stale workspace Apply callback');
+        await flush(() => replaceWorkspace(switched));
+        assert.equal(currentWorkspace, switched, 'workspace callback fixture must adopt the exact replacement identity');
+        await selectSource(sourcePath);
+        await selectTarget();
+        await selectNode('Text · First');
+        await stageText('First', 'workspace newer draft');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(oldApply);
+        assertNoWrite(beforeWorkspace, beforeBytes, beforeSelection, 'stale workspace Apply callback');
+        assert.equal(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'workspace newer draft'), true, 'stale workspace Apply callback must preserve the newer draft');
+      }
+
+      if (scenario === 'stale-discard-newer-draft') {
+        await selectNode('Text · First');
+        await stageText('First', 'old discard draft');
+        const oldDiscard = discardCallback('stale Discard after newer draft');
+        await selectNode('Text · Second');
+        await stageText('Second', 'newer discard draft');
+        const beforeWorkspace = currentWorkspace;
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        const beforeSelection = selectedNodeId();
+        await invokeCallback(oldDiscard);
+        assertNoWrite(beforeWorkspace, beforeBytes, beforeSelection, 'stale Discard callback');
+        assert.equal(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'newer discard draft'), true, 'stale Discard callback must preserve the newer draft');
+      }
+
+      if (scenario === 'delayed-ack') {
+        await selectNode('Text · First');
+        const entryId = await stageText('First', 'delayed accepted value');
+        const oldApply = applyCallback(entryId, 'delayed acknowledgement Apply callback');
+        const oldDiscard = discardCallback('delayed acknowledgement Discard callback');
+        await invokeCallback(oldApply);
+        assert.equal(submissions, 1, 'delayed acknowledgement must start one transaction');
+        const authority = authorities[0];
+        assert.ok(authority, 'delayed acknowledgement must retain the existing acknowledgement owner');
+        const replacement = authority.submission.workspace as typeof original;
+        await flush(() => replaceWorkspace(replacement));
+        await selectSource(sourcePath);
+        await selectTarget();
+        await selectNode('Text · delayed accepted value');
+        await stageText('delayed accepted value', 'newer after delayed ack');
+        const beforeSelection = selectedNodeId();
+        const beforeBytes = JSON.stringify(currentWorkspace);
+        await invokeCallback(oldDiscard);
+        await flush(() => { authority.acknowledge(replacement); });
+        await invokeCallback(oldApply);
+        assert.equal(submissions, 1, 'delayed acknowledgement and stale callbacks must not submit a second transaction');
+        assert.equal(currentWorkspace, replacement, 'delayed acknowledgement must retain the exact parent replacement identity');
+        assert.equal(JSON.stringify(currentWorkspace), beforeBytes, 'delayed acknowledgement must preserve replacement source bytes after the newer draft');
+        assert.equal(selectedNodeId(), beforeSelection, 'delayed acknowledgement must preserve the newer exact selection');
+        assert.equal(control('x4-ui-builder-selection').querySelectorAll('input').some(input => input.value === 'newer after delayed ack'), true, 'delayed acknowledgement must preserve the newer draft');
+      }
+    } catch (error) {
+      failures.push({ scenario, detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      assert.equal(JSON.stringify(original), originalBytes, `${scenario}: original workspace must remain immutable`);
+      if (root !== undefined) await flush(() => root?.unmount());
+      restore();
+    }
+  }
+  console.log(`B119_SOURCE_EDITOR_DIRECT_CALLBACK_DISCARD_MATRIX ${JSON.stringify({ total: scenarios.length, passed: scenarios.length - failures.length, red: failures })}`);
+  assert.deepEqual(failures, [], 'direct SourceEditor callback and Discard safety must preserve current state and exact source bytes');
+}
+
 async function recordP7SourceRow(
   name: string,
   fixtureReady: boolean,
@@ -6522,6 +11096,12 @@ async function runP7SourceEditorCanonicalColorMatrix(): Promise<void> {
   const core = fixture?.core;
   const color = fixture?.color;
   const fixtureReady = fixture !== undefined;
+
+  if (process.env.X4_UI_SOURCE_EDITOR_SCENARIO_ONLY === '1') {
+    if (!fixture) throw new Error(fixtureError ?? 'Scenario fixture unavailable');
+    await runMountedPreviewScenarioHistoryRegression(fixture);
+    return;
+  }
 
   await recordP7SourceRow(
     'B119 mounted delimiter-heavy real target does not reset when owner projection renumbers it',
@@ -6730,7 +11310,7 @@ async function runP7SourceEditorCanonicalColorMatrix(): Promise<void> {
         && receipt.transientTargetOptionValue === ''
         && receipt.transientTargetSelectRawValue === receipt.targetOptionValueBefore
         && receipt.transientTargetSelectValue === ''
-        && receipt.transientTargetSelectText === 'Select target…'
+        && receipt.transientTargetSelectText === 'Select menu…'
         && receipt.transientProjectionRefused === true
         && typeof receipt.targetMetadata === 'string'
         && receipt.targetMetadata.includes('menu.display')
@@ -6805,6 +11385,20 @@ async function runP7SourceEditorCanonicalColorMatrix(): Promise<void> {
         && receipt.restoredExportDisabled === false;
     },
   );
+
+  for (const scopeProbe of ['identical', 'empty'] as const) {
+    await recordP7SourceRow(
+      `B119 mounted SourceEditor workspace scope boundary: ${scopeProbe}`,
+      fixtureReady,
+      'same-scope object churn retains stale recovery; scope changes detach old pixels, reject pending old exports, clear empty workspace evidence and render fresh on return without mutating source',
+      async () => {
+        if (fixture === undefined) throw new Error(fixtureError ?? 'SourceEditor scope canonical fixture unavailable');
+        await runMountedSourceEditorTransitionRegression(fixture, scopeProbe);
+        return { scopeTransitionsVerified: true };
+      },
+      observed => p7SourceRecord(observed)?.scopeTransitionsVerified === true,
+    );
+  }
 
   await recordP7SourceRow(
     'P7 SourceEditor default dual loader overlaps branches and preserves the fulfilled authority when the injected branch rejects',
@@ -7229,10 +11823,268 @@ async function runP7SourceEditorCanonicalColorMatrix(): Promise<void> {
   const failedRows = p7SourceRows.filter(row => !row.pass);
   console.log(`P7_SOURCE_EDITOR_CANONICAL_COLOR_MATRIX ${JSON.stringify({ total: p7SourceRows.length, passed: p7SourceRows.length - failedRows.length, red: failedRows.map(row => ({ ...row, observed: p7SourceReceipt(row.observed) })), fixtureError })}`);
   if (failedRows.length > 0) throw new Error(`${failedRows.length} SourceEditor P7 canonical-color checks failed`);
+  if (fixture === undefined) throw new Error(fixtureError ?? 'New-menu corpus fixture unavailable');
+  if (process.env.X4_UI_SELECTION_FOCUS_ONLY === '1') {
+    await runMountedSourceEditorStaleCellCallbackRegression(fixture);
+    return;
+  }
+  await runMountedInspectorScrollRetentionRegression();
+  await runMountedSourceEditSelectionTransferRegression();
+  await runMountedSourceEditSelectionTransferInsertionRegression();
+  // Keep history observable even when a later, independent import matrix fails.
+  // All import checks below still execute and remain required for a green suite.
+  await runMountedUiBuilderHistoryRestorationRegression(fixture, {
+    name: 'portable-title-history',
+    source: PORTABLE_PIPELINE_TEST_SOURCE,
+    titleBefore: 'Menu A',
+    exerciseRowMovement: false,
+    preserveMultiTargetRecovery: true,
+  });
+  await runMountedUiBuilderHistoryRestorationRegression(fixture, {
+    name: 'original-row-movement-history',
+    source: HISTORY_ROW_REARRANGEMENT_SOURCE,
+    titleBefore: 'History Before',
+    exerciseRowMovement: true,
+    preserveMultiTargetRecovery: false,
+  });
+  await runMountedLuaFileRoundtrip(fixture, 'sync-readback');
+  await runMountedLuaFileRoundtrip(fixture, 'ack-before-readback');
+  await runMountedLuaFileRoundtrip(fixture, 'delayed-readback');
+  await runMountedLuaFileRoundtrip(fixture, 'scope-crossed');
+  await runMountedLuaFileGuardRegression();
+  await runMountedLuaFileAsyncGuardMatrix();
+  await runMountedLuaFileSelectionAndAcknowledgementMatrix();
+  await runMountedLuaFileInputBoundaryMatrix();
+  await runMountedLuaFileExportFailureMatrix();
+  await runMountedNewMenuCreationRegression(fixture);
+  await runMountedSourceEditorStaleCellCallbackRegression(fixture);
+  await runMountedSourceEditorCallbackDiscardRegression(fixture);
+  await runMountedUnnamedChunkEditRegression(fixture);
+  // Run the new structural continuation requirement after the existing regressions;
+  // its failure must remain red, without hiding whether those earlier gates passed.
+  await runMountedPreviewScenarioHistoryRegression(fixture);
 }
 
 void runP7SourceEditorCanonicalColorMatrix().catch(error => {
   console.error('X4UiSourceEditor P7 matrix: FAIL');
+  console.error(error);
+  process.exitCode = 1;
+});
+
+type X4UiCanvasSurfaceLayoutProfile = {
+  readonly name: string;
+  readonly width: number;
+  readonly height: number;
+  readonly expectedWidth: number;
+  readonly expectedHeight: number;
+};
+
+type X4UiCanvasSurfaceLayoutRect = {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly width: number;
+  readonly height: number;
+};
+
+type X4UiCanvasSurfaceLayoutResult = {
+  readonly viewport: { readonly width: number; readonly height: number };
+  readonly scroll: X4UiCanvasSurfaceLayoutRect & {
+    readonly clientWidth: number;
+    readonly clientHeight: number;
+    readonly scrollWidth: number;
+    readonly scrollHeight: number;
+    readonly scrollTop: number;
+  };
+  readonly boxes: Readonly<Record<'stage' | 'host' | 'overlay' | 'canvas' | 'selection', X4UiCanvasSurfaceLayoutRect>>;
+  readonly nativePoint: { readonly x: number; readonly y: number };
+  readonly bitmap: string;
+};
+
+type X4UiBuilderViewportLayoutResult = {
+  readonly canvas: X4UiCanvasSurfaceLayoutRect;
+  readonly scroll: X4UiCanvasSurfaceLayoutRect;
+  readonly editor: X4UiCanvasSurfaceLayoutRect;
+  readonly visibleWidth: number;
+  readonly visibleHeight: number;
+  readonly compactExportVisible: boolean;
+  readonly exportVisible: boolean;
+  readonly exportHit: boolean;
+  readonly inspectorScrollTop: number;
+  readonly bitmap: string;
+};
+
+const runX4UiCanvasSurfaceLayoutSelftest = async (): Promise<void> => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 500, height: 720 } });
+    const profiles: readonly X4UiCanvasSurfaceLayoutProfile[] = [
+      { name: 'normal 16:9', width: 1920, height: 1080, expectedWidth: 500, expectedHeight: 281.25 },
+      { name: 'tall', width: 400, height: 1080, expectedWidth: 504 * 400 / 1080, expectedHeight: 504 },
+      { name: 'short/wide', width: 800, height: 100, expectedWidth: 500, expectedHeight: 62.5 },
+    ];
+    for (const profile of profiles) {
+      const ratio = profile.width / profile.height;
+      await page.setContent(`<!doctype html>
+        <style>
+          html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
+          #canvas-scroll { width: 500px; height: 300px; overflow: auto; font-size: 0; }
+          #canvas-stage { position: relative; display: inline-block; width: min(100%, calc(70vh * ${ratio})); height: auto; aspect-ratio: ${profile.width} / ${profile.height}; }
+          #canvas-host { display: flex; width: 100%; height: 100%; align-items: flex-start; justify-content: flex-start; overflow: hidden; }
+          #canvas { display: block; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: fill; image-rendering: pixelated; }
+          #canvas-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: auto; }
+          #selection { position: absolute; left: 10%; top: 20%; width: 20%; height: 30%; pointer-events: none; }
+        </style>
+        <div id="canvas-scroll">
+          <div id="canvas-stage">
+            <div id="canvas-host"><canvas id="canvas" width="${profile.width}" height="${profile.height}"></canvas></div>
+            <div id="canvas-overlay"><div id="selection"></div></div>
+          </div>
+        </div>`);
+
+      const readLayout = async (): Promise<X4UiCanvasSurfaceLayoutResult> => page.evaluate<X4UiCanvasSurfaceLayoutResult>(`(() => {
+        function element(id) {
+          const candidate = document.getElementById(id);
+          if (!(candidate instanceof HTMLElement)) throw new Error('missing layout element ' + id);
+          return candidate;
+        }
+        function rectFor(id) {
+          const rect = element(id).getBoundingClientRect();
+          return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+        }
+        const canvas = element('canvas');
+        if (!(canvas instanceof HTMLCanvasElement)) throw new Error('layout fixture canvas is not an HTMLCanvasElement');
+        const context = canvas.getContext('2d');
+        if (context === null) throw new Error('layout fixture canvas has no 2d context');
+        context.fillStyle = '#123456';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        const canvasBox = rectFor('canvas');
+        const selectionBox = rectFor('selection');
+        const scroll = element('canvas-scroll');
+        return {
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          scroll: { ...rectFor('canvas-scroll'), clientWidth: scroll.clientWidth, clientHeight: scroll.clientHeight, scrollWidth: scroll.scrollWidth, scrollHeight: scroll.scrollHeight, scrollTop: scroll.scrollTop },
+          boxes: {
+            stage: rectFor('canvas-stage'),
+            host: rectFor('canvas-host'),
+            overlay: rectFor('canvas-overlay'),
+            canvas: canvasBox,
+            selection: selectionBox,
+          },
+          nativePoint: {
+            x: (selectionBox.left + selectionBox.width / 2 - canvasBox.left) * canvas.width / canvasBox.width,
+            y: (selectionBox.top + selectionBox.height / 2 - canvasBox.top) * canvas.height / canvasBox.height,
+          },
+          bitmap: canvas.toDataURL('image/png'),
+        };
+      })()`);
+      const layout = await readLayout();
+      const closeTo = (actual: number, expected: number, label: string): void => {
+        assert.ok(Math.abs(actual - expected) <= 0.5, `${profile.name} ${label}: expected ${expected}, received ${actual}`);
+      };
+      closeTo(layout.boxes.stage.width, profile.expectedWidth, 'stage width');
+      closeTo(layout.boxes.stage.height, profile.expectedHeight, 'stage height');
+      for (const key of ['host', 'overlay', 'canvas'] as const) {
+        closeTo(layout.boxes[key].left, layout.boxes.stage.left, `${key} left edge`);
+        closeTo(layout.boxes[key].top, layout.boxes.stage.top, `${key} top edge`);
+        closeTo(layout.boxes[key].width, layout.boxes.stage.width, `${key} width`);
+        closeTo(layout.boxes[key].height, layout.boxes.stage.height, `${key} height`);
+      }
+      closeTo(layout.nativePoint.x, profile.width * 0.2, 'CSS-to-native x mapping');
+      closeTo(layout.nativePoint.y, profile.height * 0.35, 'CSS-to-native y mapping');
+      assert.ok(layout.bitmap.startsWith('data:image/png'), `${profile.name} must retain native PNG serialization`);
+      assert.ok(layout.boxes.canvas.top < layout.scroll.bottom && layout.boxes.canvas.bottom > layout.scroll.top, `${profile.name} canvas must intersect the scroll viewport`);
+      assert.ok(layout.scroll.clientWidth > 0 && layout.scroll.clientHeight > 0, `${profile.name} scroll viewport must be measurable`);
+      if (profile.name === 'tall') {
+        assert.ok(layout.scroll.scrollHeight > layout.scroll.clientHeight, 'tall profile must remain reachable through the outer scroll container');
+        await page.evaluate("(() => { const scroll = document.getElementById('canvas-scroll'); if (!(scroll instanceof HTMLElement)) throw new Error('layout fixture scroll container disappeared'); scroll.scrollTop = scroll.scrollHeight; })()");
+        const scrolledLayout = await readLayout();
+        assert.ok(scrolledLayout.scroll.scrollTop > 0, 'tall profile must scroll the bounded outer canvas surface');
+        for (const key of ['stage', 'host', 'overlay', 'canvas'] as const) {
+          closeTo(scrolledLayout.boxes[key].width, layout.boxes[key].width, `scrolled ${key} width`);
+          closeTo(scrolledLayout.boxes[key].height, layout.boxes[key].height, `scrolled ${key} height`);
+        }
+        closeTo(scrolledLayout.nativePoint.x, profile.width * 0.2, 'scrolled CSS-to-native x mapping');
+        closeTo(scrolledLayout.nativePoint.y, profile.height * 0.35, 'scrolled CSS-to-native y mapping');
+        assert.equal(scrolledLayout.bitmap, layout.bitmap, 'scrolling and CSS sizing must not alter native PNG bytes');
+        assert.ok(scrolledLayout.boxes.canvas.top < scrolledLayout.scroll.bottom && scrolledLayout.boxes.canvas.bottom > scrolledLayout.scroll.top, 'scrolled tall canvas must remain in the bounded viewport');
+      } else {
+        assert.ok(layout.scroll.scrollHeight <= layout.scroll.clientHeight + 1, `${profile.name} should fit without an unnecessary vertical canvas scroll`);
+      }
+    }
+    // Exercise the actual UIBuilder/SourceEditor markup and generated utility CSS in the
+    // bounded space left by the app chrome. This is layout proof, not source paint authority.
+    const compiler = await compileTailwind('@import "tailwindcss";', { base: process.cwd(), onDependency: () => undefined });
+    const classes = Array.from(uiBuilderMarkup.matchAll(/class="([^"]*)"/g)).flatMap(match => match[1].split(/\s+/));
+    const css = compiler.build(classes);
+    for (const viewport of [{ width: 1280, height: 720, rail: 320 }, { width: 1024, height: 768, rail: 256 }]) {
+      await page.setViewportSize(viewport);
+      await page.setContent(`<!doctype html><style>${css}
+        html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+        #app-content { position: fixed; left: ${viewport.rail}px; right: 0; top: 128px; bottom: 0; display: flex; min-width: 0; min-height: 0; }
+      </style><div id="app-content">${uiBuilderMarkup}</div>`);
+      await page.evaluate(`(() => {
+        const get = id => { const node = document.querySelector('[data-testid="' + id + '"]'); if (!(node instanceof HTMLElement)) throw new Error('missing ' + id); return node; };
+        const stage = get('x4-ui-canvas-stage');
+        Object.assign(stage.style, { width: 'min(100%, calc(70vh * ' + (1920 / 1080) + '))', height: 'auto', aspectRatio: '1920 / 1080' });
+        const host = get('x4-ui-canvas-host');
+        host.classList.remove('min-h-24');
+        Object.assign(host.style, { width: '100%', height: '100%' });
+        Object.assign(get('x4-ui-canvas-overlay').style, { width: '100%', height: '100%' });
+        const canvas = document.createElement('canvas'); canvas.width = 1920; canvas.height = 1080;
+        Object.assign(canvas.style, { display: 'block', width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none', objectFit: 'fill' });
+        const context = canvas.getContext('2d'); if (context === null) throw new Error('missing 2d context');
+        context.fillStyle = '#123456'; context.fillRect(0, 0, canvas.width, canvas.height); host.appendChild(canvas);
+        const hierarchy = get('x4-ui-builder-hierarchy-list');
+        for (let i = 0; i < 30; i++) { const row = document.createElement('button'); row.textContent = 'Text · visible source ' + i; row.style.display = 'block'; hierarchy.appendChild(row); }
+      })()`);
+      const readViewport = (): Promise<X4UiBuilderViewportLayoutResult> => page.evaluate<X4UiBuilderViewportLayoutResult>(`(() => {
+        const get = id => { const node = document.querySelector('[data-testid="' + id + '"]'); if (!(node instanceof HTMLElement)) throw new Error('missing ' + id); return node; };
+        const rect = node => { const r = node.getBoundingClientRect(); return { left:r.left, top:r.top, right:r.right, bottom:r.bottom, width:r.width, height:r.height }; };
+         const canvas = get('x4-ui-canvas-host').firstElementChild; if (!(canvas instanceof HTMLCanvasElement)) throw new Error('missing layout canvas');
+         const c = rect(canvas), s = rect(get('x4-ui-canvas-scroll'));
+         const button = get('x4-ui-canvas-export'), b = rect(button), compactExport = get('x4-ui-canvas-export-compact');
+         const exportVisible = b.width > 0 && b.height > 0 && getComputedStyle(button).visibility !== 'hidden';
+         const hit = exportVisible ? document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2) : null;
+         return { canvas:c, scroll:s, editor:rect(get('x4-ui-source-editor')),
+           visibleWidth:Math.max(0, Math.min(c.right,s.right,innerWidth) - Math.max(c.left,s.left,0)),
+           visibleHeight:Math.max(0, Math.min(c.bottom,s.bottom,innerHeight) - Math.max(c.top,s.top,0)),
+           compactExportVisible:rect(compactExport).width > 0 && rect(compactExport).height > 0,
+           exportVisible,
+           exportHit:hit === button || (hit !== null && button.contains(hit)),
+           inspectorScrollTop:get('x4-ui-builder-inspector').scrollTop, bitmap:canvas.toDataURL('image/png') };
+      })()`);
+      const initial = await readViewport();
+      assert.ok(initial.visibleWidth >= 180 && initial.visibleHeight >= 120,
+        `bounded ${viewport.width}px editor must expose usable canvas pixels: ${initial.visibleWidth} x ${initial.visibleHeight}; scroll ${JSON.stringify(initial.scroll)}`);
+      assert.ok(initial.editor.bottom <= viewport.height + 1, 'editor must remain within app height');
+       assert.ok(initial.compactExportVisible, 'compact PNG export status must remain visible with Inspect closed');
+       await page.evaluate(`(() => {
+         const panel = document.querySelector('[data-testid="x4-ui-inspect-panel"]');
+         const inspector = document.querySelector('[data-testid="x4-ui-builder-inspector"]');
+         const inspectScroll = document.querySelector('[data-testid="x4-ui-inspect-scroll"]');
+         const exportControl = document.querySelector('[data-testid="x4-ui-canvas-export"]');
+         if (!(panel instanceof HTMLDetailsElement) || !(inspector instanceof HTMLElement) || !(inspectScroll instanceof HTMLElement) || !(exportControl instanceof HTMLElement)) throw new Error('missing Inspect panel');
+         panel.open = true; inspectScroll.scrollTop = inspectScroll.scrollHeight; inspector.scrollTop = inspector.scrollHeight;
+         exportControl.scrollIntoView({ block: 'center', inline: 'nearest' });
+       })()`);
+      const inspected = await readViewport();
+       assert.ok(inspected.exportVisible && inspected.exportHit, 'Export must be hit-testable when its Inspect control is open');
+      assert.deepEqual(inspected.scroll, initial.scroll, 'Inspect must not consume the canvas viewport');
+      assert.deepEqual(inspected.canvas, initial.canvas, 'Inspect must preserve the canvas box');
+      assert.equal(inspected.bitmap, initial.bitmap, 'Inspect must not change native PNG bytes');
+      assert.ok(inspected.visibleWidth >= 180 && inspected.visibleHeight >= 120, 'canvas must remain usable while Inspect is open');
+    }
+     console.log('X4UiSourceEditor bounded viewport layout: actual UIBuilder/SourceEditor markup + Tailwind, usable canvas, compact export status, and unobstructed Inspect Export 2/2');
+  } finally {
+    await browser.close();
+  }
+  console.log('X4UiSourceEditor canvas surface layout selftest: normal 16:9, tall, short/wide exact stage/host/overlay/canvas boxes, viewport scroll, CSS-to-native mapping, and PNG byte preservation 3/3');
+};
+
+void runX4UiCanvasSurfaceLayoutSelftest().catch(error => {
+  console.error('X4UiSourceEditor canvas surface layout selftest: FAIL');
   console.error(error);
   process.exitCode = 1;
 });

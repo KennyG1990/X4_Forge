@@ -11,6 +11,9 @@
 import { parse } from 'luaparse';
 
 const MAX_VERIFICATION_GAPS = 128;
+const MAX_PROTECTED_CALLBACKS = 32;
+const MAX_PROTECTED_CALLBACK_BODY_NODES = 256;
+const MAX_PROTECTED_CALLBACK_ENVIRONMENT_ESCAPE_DEPTH = 16;
 
 const RELEVANT_CALL_NAMES = new Set<X4UiRelevantCallName>([
   'createFrameHandle',
@@ -587,6 +590,11 @@ export type X4UiNumericExpression =
     readonly source: X4UiSourceLocation;
   }
   | {
+    readonly kind: 'preview-input';
+    readonly expression: string;
+    readonly source: X4UiSourceLocation;
+  }
+  | {
     readonly kind: 'helper-constant';
     readonly name: X4UiHelperNumericConstantName;
     readonly receiver: X4UiNumericHelperReceiver;
@@ -767,10 +775,35 @@ interface TrackedObject {
   cellKind?: 'text' | 'button' | 'editbox' | 'icon';
 }
 
+interface InternalNumericAliasBinding {
+  readonly name: string;
+  readonly target: LuaNode;
+  readonly context: X4UiFunctionContext;
+  readonly aliasKind: X4UiAliasRecord['aliasKind'];
+  readonly source?: InternalValue;
+}
+
 interface InternalValue {
   publicValue: X4UiValue;
   /** AST node at the exact value use; private source evidence only. */
   sourceNode?: LuaNode;
+  /** Original scalar/member read retained only for deferred numeric provenance. */
+  numericSourceNode?: LuaNode;
+  /** Exact source-owned numeric literal root retained through lexical uses. */
+  sourceLiteralRoot?: X4UiSourceLocation;
+  /** A source-unknown identifier may become a preview-input only at numeric use. */
+  previewInputCandidate?: boolean;
+  /** Private member/index provenance materialized only when the value reaches numeric use. */
+  tableFieldPreviewCandidate?: {
+    readonly base: string;
+    readonly property: string;
+    readonly tableSource: X4UiSourceLocation;
+    readonly field: InternalValue;
+    /** Exact member/index read retained until a numeric descriptor is consumed. */
+    readonly readNode: LuaNode;
+  };
+  /** Private lexical alias chain used only when a numeric preview root is consumed. */
+  deferredNumericAlias?: InternalNumericAliasBinding;
   object?: TrackedObject;
   /** Exact source-visible global authority carried through aliases and literal wrappers. */
   globalAuthority?: InternalGlobalAuthority;
@@ -824,6 +857,12 @@ interface ControlFlowMutationState {
   invalidatedHelperAliases: Set<string>;
 }
 
+interface ControlFlowReachabilityMetadata {
+  readonly parentContext: X4UiFunctionContext;
+  readonly bodies: readonly LuaNode[][];
+  readonly bodyContexts: readonly X4UiFunctionContext[];
+}
+
 interface TrackedObjectStateSnapshot {
   reference: X4UiValueReference;
   known: boolean;
@@ -841,6 +880,11 @@ interface TrackedObjectStateSnapshot {
 interface Binding {
   value: InternalValue;
   source?: X4UiSourceLocation;
+}
+
+interface ProtectedCallbackEnvironmentEscape {
+  readonly name: string;
+  readonly node: LuaNode;
 }
 
 interface CallShape {
@@ -1030,6 +1074,7 @@ const freezeNumericExpression = <T extends X4UiNumericExpression>(value: T): T =
 class X4UiCallModelBuilder {
   private readonly input: X4UiLuaFileInput;
   private readonly bindings = new Map<string, Binding>();
+  private readonly materializedNumericAliasBindings = new Set<string>();
   private readonly pendingRecords: PendingRecord[] = [];
   private readonly gaps: X4UiVerificationGap[] = [];
   private readonly gapKeys = new Set<string>();
@@ -1045,16 +1090,21 @@ class X4UiCallModelBuilder {
   private readonly helperReceiverAliases: X4UiHelperReceiverAliasFact[] = [];
   private readonly colorExpressions: X4UiCallColorExpression[] = [];
   private readonly controlFlowMutationStates: ControlFlowMutationState[] = [];
+  private readonly controlFlowReachability = new WeakMap<LuaNode, ControlFlowReachabilityMetadata[]>();
+  private readonly processedProtectedCallbacks = new Set<string>();
   private nextObjectId = 1;
   private nextRecordTie = 1;
   private gapsTruncated = false;
   private verificationGapSuppressionDepth = 0;
   private functionAnalysisDepth = 0;
+  private protectedCallbackAnalysisDepth = 0;
+  private protectedCallbackCount = 0;
   private numericMathAuthorityAvailable = true;
   private currentStatement: LuaNode | undefined;
   private currentStandaloneCallStatementRoot: LuaNode | undefined;
   private readonly fullLocation: X4UiSourceLocation;
   private readonly topContext: X4UiFunctionContext;
+  private protectedCallbackAuthorityHazard: { source: X4UiSourceLocation; reason: string } | undefined;
 
   public constructor(input: X4UiLuaFileInput) {
     this.input = input;
@@ -1090,6 +1140,7 @@ class X4UiCallModelBuilder {
       return this.finish(false);
     }
 
+    this.scanProtectedCallbackAuthorityHazards(ast);
     this.processStatements(nodeArray(ast, 'body'), new Map(this.bindings), this.topContext);
     return this.finish(true);
   }
@@ -1455,6 +1506,12 @@ class X4UiCallModelBuilder {
     }
     return {
       publicValue,
+      sourceNode: node,
+      numericSourceNode: source.numericSourceNode || source.sourceNode || node,
+      sourceLiteralRoot: source.sourceLiteralRoot,
+      previewInputCandidate: source.previewInputCandidate,
+      tableFieldPreviewCandidate: source.tableFieldPreviewCandidate,
+      deferredNumericAlias: source.deferredNumericAlias,
       object: source.object,
       globalAuthority: source.globalAuthority,
       functionNode: source.functionNode,
@@ -1465,19 +1522,105 @@ class X4UiCallModelBuilder {
     };
   }
 
-  private numericLiteralExpression(value: X4UiValue): X4UiNumericExpression | undefined {
+  private numericLiteralExpression(
+    value: X4UiValue,
+    sourceLiteralRoot = value.sourceLiteral,
+  ): X4UiNumericExpression | undefined {
     if (value.status !== 'static' || value.type !== 'number' || typeof value.value !== 'number'
-      || !value.sourceLiteral || this.locationIdentity(value.sourceLiteral) !== this.locationIdentity(value.location)) return undefined;
+      || !sourceLiteralRoot
+      || sourceLiteralRoot.file !== this.input.rel
+      || sourceLiteralRoot.sourcePath !== this.input.sourcePath
+      || sourceLiteralRoot.start.offset < 0
+      || sourceLiteralRoot.end.offset <= sourceLiteralRoot.start.offset
+      || sourceLiteralRoot.end.offset > this.input.text.length) return undefined;
+    const expression = this.input.text.slice(sourceLiteralRoot.start.offset, sourceLiteralRoot.end.offset);
+    if (expression.length === 0) return undefined;
     return freezeNumericExpression({
       kind: 'literal',
       value: value.value,
-      expression: value.expression,
-      source: value.location,
+      expression,
+      source: sourceLiteralRoot,
     });
   }
 
-  private numericExpressionForValue(value: InternalValue): X4UiNumericExpression | undefined {
-    return value.publicValue.numericExpression || this.numericLiteralExpression(value.publicValue);
+  private materializeNumericAliasChain(
+    value: InternalValue,
+    descriptor: X4UiNumericExpression,
+  ): void {
+    const visited = new Set<InternalValue>();
+    const visit = (candidate: InternalValue | undefined): void => {
+      if (!candidate || visited.has(candidate)) return;
+      visited.add(candidate);
+      const binding = candidate.deferredNumericAlias;
+      if (!binding) return;
+      const targetSource = this.location(binding.target);
+      const key = `${binding.name}|${this.locationIdentity(targetSource)}|${this.locationIdentity(binding.context.source)}|${binding.aliasKind}`;
+      if (!this.materializedNumericAliasBindings.has(key)) {
+        this.materializedNumericAliasBindings.add(key);
+        this.addPending({
+          recordType: 'alias',
+          name: binding.name,
+          source: targetSource,
+          sourceOrder: this.sourceOffset(binding.target),
+          order: -1,
+          value: {
+            ...(binding.source?.publicValue || candidate.publicValue),
+            numericExpression: descriptor,
+          },
+          aliasKind: binding.aliasKind,
+          context: binding.context,
+        }, binding.target);
+      }
+      visit(binding.source);
+    };
+    visit(value);
+  }
+
+  private numericExpressionForValue(
+    value: InternalValue,
+    allowPreviewInputCandidate = true,
+  ): X4UiNumericExpression | undefined {
+    const existing = value.publicValue.numericExpression
+      || this.numericLiteralExpression(value.publicValue, value.sourceLiteralRoot);
+    if (existing) {
+      if (existing.kind === 'literal') this.materializeNumericAliasChain(value, existing);
+      return existing;
+    }
+    if (allowPreviewInputCandidate && value.tableFieldPreviewCandidate) {
+      const candidate = value.tableFieldPreviewCandidate;
+      const fieldExpression = this.numericExpressionForValue(candidate.field);
+      if (fieldExpression?.kind === 'preview-input') {
+        const descriptor = freezeNumericExpression({
+          kind: 'table-field',
+          base: candidate.base,
+          property: candidate.property,
+          tableSource: candidate.tableSource,
+          value: fieldExpression,
+          expression: this.textOf(candidate.readNode),
+          source: this.location(candidate.readNode),
+        });
+        this.materializeNumericAliasChain(value, descriptor);
+        return descriptor;
+      }
+    }
+    if (!allowPreviewInputCandidate
+      || !value.previewInputCandidate
+      || value.publicValue.status === 'static'
+      || value.publicValue.type !== 'identifier') return undefined;
+    const sourceNode = value.numericSourceNode;
+    const expression = sourceNode ? this.textOf(sourceNode) : '';
+    const isIdentifier = sourceNode?.type === 'Identifier'
+      && /^[A-Za-z_][A-Za-z0-9_]*$/.test(expression);
+    const isMember = sourceNode?.type === 'MemberExpression'
+      && /^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$/.test(expression);
+    if (!isIdentifier && !isMember) return undefined;
+    const descriptor = freezeNumericExpression({
+      kind: 'preview-input',
+      expression,
+      source: this.location(sourceNode),
+    });
+    this.materializeNumericAliasChain(value, descriptor);
+    return descriptor;
   }
 
   private invalidateEscapedAuthorities(
@@ -1485,6 +1628,15 @@ class X4UiCallModelBuilder {
     invalidateNumericTables = true,
   ): void {
     const visited = new Set<TrackedObject>();
+    const potentialNumericValue = (value: InternalValue, seen = new Set<InternalValue>()): boolean => {
+      if (seen.has(value)) return false;
+      seen.add(value);
+      return Boolean(
+        this.numericExpressionForValue(value, false)
+          || value.previewInputCandidate
+          || value.tableFieldPreviewCandidate && potentialNumericValue(value.tableFieldPreviewCandidate.field, seen)
+      );
+    };
     const visitValue = (value: InternalValue | undefined): void => {
       if (!value) return;
       if (value.globalAuthority) this.numericMathAuthorityAvailable = false;
@@ -1496,7 +1648,7 @@ class X4UiCallModelBuilder {
 
       if (invalidateNumericTables
         && object.reference.origin === 'literal'
-        && [...object.fields.values()].some(field => this.numericExpressionForValue(field) !== undefined)) {
+        && [...object.fields.values(), ...object.indexedValues.values()].some(field => potentialNumericValue(field))) {
         object.escaped = true;
         this.markObjectMutation(object);
       }
@@ -1676,27 +1828,44 @@ class X4UiCallModelBuilder {
   ): InternalValue {
     const result = this.valueAtUse(field, node);
     const baseName = baseNode.type === 'Identifier' ? nodeField<string>(baseNode, 'name') : undefined;
-    const numericExpression = this.numericExpressionForValue(field);
+    const numericExpression = this.numericExpressionForValue(field, false);
     const normalizedProperty = normalizePropertyName(property);
     const sourceTableUnavailable = Boolean(base.object
       && (base.object.escaped
         || base.object.mutatedProperties.has(normalizedProperty)
         || (base.object.mutated && base.object.mutatedProperties.size === 0)));
-    if (sourceTableUnavailable && numericExpression) {
+    const hasPotentialNumericValue = Boolean(
+      numericExpression
+        || field.previewInputCandidate
+        || field.tableFieldPreviewCandidate
+    );
+    const canTrackTableField = Boolean(baseName
+      && base.object
+      && base.object.known
+      && !base.object.mutated
+      && base.object.declarationNode
+      && base.object.aliases.has(baseName));
+    if (sourceTableUnavailable && hasPotentialNumericValue) {
       return this.unknown(
         node,
         result.publicValue.type,
         `property "${property}" belongs to a mutated or escaped source table`,
       );
     }
-    if (!numericExpression
-      || !baseName
-      || !base.object
-      || !base.object.known
-      || base.object.mutated
-      || !base.object.declarationNode
-      || base.object.reference.path !== baseName) {
+    if (!numericExpression || !canTrackTableField) {
       delete result.publicValue.numericExpression;
+      if (!sourceTableUnavailable && canTrackTableField && baseName && base.object?.declarationNode) {
+        const previewInput = this.numericExpressionForValue(field);
+        if (previewInput?.kind === 'preview-input') {
+          result.tableFieldPreviewCandidate = {
+            base: baseName,
+            property,
+            tableSource: this.location(base.object.declarationNode),
+            field,
+            readNode: node,
+          };
+        }
+      }
       return result;
     }
     result.publicValue.numericExpression = freezeNumericExpression({
@@ -1712,7 +1881,15 @@ class X4UiCallModelBuilder {
   }
 
   private unknown(node: LuaNode | undefined, type: X4UiValueType, reason: string, symbol?: string): InternalValue {
-    return { publicValue: this.value(node, 'unknown', type, undefined, undefined, reason, symbol) };
+    const previewInputCandidate = node?.type === 'Identifier'
+      && (type === 'identifier' || type === 'number' || type === 'unknown')
+      && typeof nodeField<string>(node, 'name') === 'string'
+      && !KNOWN_X4_GLOBALS.has(nodeField<string>(node, 'name') || '')
+      && !['C', 'Color', 'math', 'rawget', 'rawset'].includes(nodeField<string>(node, 'name') || '');
+    return {
+      publicValue: this.value(node, 'unknown', type, undefined, undefined, reason, symbol),
+      ...(previewInputCandidate ? { previewInputCandidate: true } : {}),
+    };
   }
 
   private dynamic(node: LuaNode | undefined, type: X4UiValueType, reason: string): InternalValue {
@@ -1859,6 +2036,7 @@ class X4UiCallModelBuilder {
     if (!node) return this.unknown(undefined, 'unknown', 'missing expression');
 
     const result = this.evaluateNode(node, context, resultConsumed);
+    if (!result.numericSourceNode) result.numericSourceNode = result.sourceNode || node;
     result.sourceNode = node;
     return result;
   }
@@ -1888,7 +2066,8 @@ class X4UiCallModelBuilder {
             publicValue: {
               ...this.value(node, 'static', 'number', number),
               sourceLiteral: this.location(node),
-            }
+            },
+            sourceLiteralRoot: this.location(node),
           };
       }
       case 'BooleanLiteral': {
@@ -1923,8 +2102,7 @@ class X4UiCallModelBuilder {
         return this.evaluateBinary(node, context);
       case 'ParenthesizedExpression': {
         const expression = this.evaluate(nodeField<LuaNode>(node, 'expression'), context);
-        const operand = expression.publicValue.numericExpression
-          || this.numericLiteralExpression(expression.publicValue);
+        const operand = this.numericExpressionForValue(expression);
         if (!operand) return expression;
         const numericExpression = freezeNumericExpression({
           kind: 'group',
@@ -2059,7 +2237,16 @@ class X4UiCallModelBuilder {
       if (field) return this.tableFieldValueAtUse(baseNode, base, property, field, node);
       return this.unknown(node, 'identifier', `property "${property}" is not statically defined`);
     }
-    return this.unknown(node, 'identifier', `base value for property "${property}" is unresolved`);
+    const result = this.unknown(node, 'identifier', `base value for property "${property}" is unresolved`);
+    const baseName = baseNode?.type === 'Identifier' ? nodeField<string>(baseNode, 'name') : undefined;
+    if (baseName
+      && nodeField<boolean>(baseNode, 'isLocal') === false
+      && !KNOWN_X4_GLOBALS.has(baseName)
+      && !['C', 'Color', '_G', 'math', 'rawget', 'rawset'].includes(baseName)
+      && !base.globalAuthority) {
+      result.previewInputCandidate = true;
+    }
+    return result;
   }
 
   private evaluateIndex(node: LuaNode, context: X4UiFunctionContext): InternalValue {
@@ -2086,7 +2273,7 @@ class X4UiCallModelBuilder {
       const indexedValue = index.publicValue.type === 'number'
         ? base.object.indexedValues.get(key)
         : undefined;
-      if (indexedValue) return this.valueAtUse(indexedValue, node);
+      if (indexedValue) return this.tableFieldValueAtUse(baseNode, base, key, indexedValue, node);
       const field = this.findField(base.object, [key]);
       if (field) return this.tableFieldValueAtUse(baseNode, base, key, field, node);
       if (base.object.reference.kind === 'row' || base.object.reference.kind === 'table') {
@@ -2124,8 +2311,7 @@ class X4UiCallModelBuilder {
   private evaluateUnary(node: LuaNode, context: X4UiFunctionContext): InternalValue {
     const argument = this.evaluate(nodeField<LuaNode>(node, 'argument'), context);
     const operator = nodeField<string>(node, 'operator');
-    const numericArgument = argument.publicValue.numericExpression
-      || this.numericLiteralExpression(argument.publicValue);
+    const numericArgument = this.numericExpressionForValue(argument);
     if ((operator === '-' || operator === '+') && numericArgument) {
       const argumentValue = argument.publicValue.value;
       const result = argument.publicValue.status === 'static'
@@ -2166,17 +2352,15 @@ class X4UiCallModelBuilder {
     const left = this.evaluate(nodeField<LuaNode>(node, 'left'), context);
     const right = this.evaluate(nodeField<LuaNode>(node, 'right'), context);
     const operator = nodeField<string>(node, 'operator') || '';
-    const leftNumericExpression = left.publicValue.numericExpression
-      || this.numericLiteralExpression(left.publicValue);
-    const rightNumericExpression = right.publicValue.numericExpression
-      || this.numericLiteralExpression(right.publicValue);
+    const leftNumericExpression = this.numericExpressionForValue(left);
+    const rightNumericExpression = this.numericExpressionForValue(right);
     if ((operator === 'and' || operator === 'or')
       && luaTruthy(left.publicValue) === undefined
       && (this.mayReferenceMathAuthority(left) || this.mayReferenceMathAuthority(right))) {
       return this.possibleMathAuthorityValue(node, `logical ${operator} may select a global math authority value`);
     }
     if (operator === 'or' && leftNumericExpression) {
-      const leftTruth = luaTruthy(left.publicValue);
+      const leftTruth = luaTruthy(left.publicValue) ?? true;
       if (leftTruth === undefined || !rightNumericExpression) {
         return this.dynamic(node, 'number', 'logical or has an unsupported or undecidable numeric branch');
       }
@@ -2330,6 +2514,643 @@ class X4UiCallModelBuilder {
       };
     }
     return { method: 'unknown', calleeNode: base, args };
+  }
+
+  private isGlobalEnvironmentIdentifier(node: LuaNode | undefined): boolean {
+    return node?.type === 'Identifier'
+      && (nodeField<string>(node, 'name') === '_G' || nodeField<string>(node, 'name') === '_ENV')
+      && nodeField<boolean>(node, 'isLocal') === false;
+  }
+
+  private protectedCallbackEnvironmentAliasName(
+    node: LuaNode | undefined,
+    environmentAliases: ReadonlySet<string>,
+  ): string | undefined {
+    if (node?.type !== 'Identifier') return undefined;
+    const name = nodeField<string>(node, 'name');
+    if (!name) return undefined;
+    if (this.isGlobalEnvironmentIdentifier(node) || environmentAliases.has(name)) return name;
+    return undefined;
+  }
+
+  private protectedCallbackEnvironmentEscape(
+    node: LuaNode | undefined,
+    environmentAliases: ReadonlySet<string>,
+    visited = new Set<LuaNode>(),
+    depth = 0,
+  ): ProtectedCallbackEnvironmentEscape | undefined {
+    let candidate = node;
+    while (candidate?.type === 'ParenthesizedExpression') {
+      candidate = nodeField<LuaNode>(candidate, 'expression');
+    }
+    if (!candidate || visited.has(candidate)) return undefined;
+    if (depth > MAX_PROTECTED_CALLBACK_ENVIRONMENT_ESCAPE_DEPTH) {
+      this.noteProtectedCallbackAuthorityHazard(
+        candidate,
+        `protected callback environment identity exceeded max recursion depth ${MAX_PROTECTED_CALLBACK_ENVIRONMENT_ESCAPE_DEPTH}; protected pcall authority cannot be verified`,
+      );
+      return undefined;
+    }
+    visited.add(candidate);
+
+    const directName = this.protectedCallbackEnvironmentAliasName(candidate, environmentAliases);
+    if (directName) return { name: directName, node: candidate };
+
+    if (candidate.type === 'LogicalExpression' || candidate.type === 'BinaryExpression') {
+      const operator = nodeField<string>(candidate, 'operator');
+      if (operator === 'and' || operator === 'or') {
+        return this.protectedCallbackEnvironmentEscape(
+          nodeField<LuaNode>(candidate, 'left'),
+          environmentAliases,
+          visited,
+          depth + 1,
+        ) || this.protectedCallbackEnvironmentEscape(
+          nodeField<LuaNode>(candidate, 'right'),
+          environmentAliases,
+          visited,
+          depth + 1,
+        );
+      }
+    }
+
+    if (candidate.type === 'MemberExpression') {
+      const base = nodeField<LuaNode>(candidate, 'base');
+      const property = luaNodeName(nodeField<LuaNode>(candidate, 'identifier'));
+      if (property !== '_G') return undefined;
+      const baseEscape = this.protectedCallbackEnvironmentEscape(base, environmentAliases, visited, depth + 1);
+      if (baseEscape) return { name: baseEscape.name, node: base! };
+    }
+
+    if (candidate.type === 'IndexExpression') {
+      const base = nodeField<LuaNode>(candidate, 'base');
+      if (staticString(nodeField<LuaNode>(candidate, 'index')) !== '_G') return undefined;
+      const baseEscape = this.protectedCallbackEnvironmentEscape(base, environmentAliases, visited, depth + 1);
+      if (baseEscape) {
+        return { name: baseEscape.name, node: base! };
+      }
+    }
+
+    if (
+      candidate.type === 'CallExpression'
+      || candidate.type === 'StringCallExpression'
+      || candidate.type === 'TableCallExpression'
+    ) {
+      const shape = this.callShape(candidate);
+      if (
+        shape.name === 'rawget'
+        && shape.method === 'direct'
+        && shape.calleeNode.type === 'Identifier'
+        && nodeField<boolean>(shape.calleeNode, 'isLocal') === false
+        && shape.args.length === 2
+        && staticString(shape.args[1]) === '_G'
+      ) {
+        const base = shape.args[0];
+        const baseEscape = this.protectedCallbackEnvironmentEscape(base, environmentAliases, visited, depth + 1);
+        if (baseEscape) return { name: baseEscape.name, node: base };
+      }
+    }
+
+    return undefined;
+  }
+
+  private protectedCallbackEnvironmentEscapeName(
+    node: LuaNode | undefined,
+    environmentAliases: ReadonlySet<string>,
+  ): string | undefined {
+    return this.protectedCallbackEnvironmentEscape(node, environmentAliases)?.name;
+  }
+
+  private protectedCallbackTableEnvironmentEscape(
+    node: LuaNode | undefined,
+    environmentAliases: ReadonlySet<string>,
+  ): LuaNode | undefined {
+    let candidate = node;
+    while (candidate?.type === 'ParenthesizedExpression') {
+      candidate = nodeField<LuaNode>(candidate, 'expression');
+    }
+    const escape = this.protectedCallbackEnvironmentEscape(candidate, environmentAliases);
+    if (escape) return escape.node;
+    if (candidate?.type !== 'TableConstructorExpression') return undefined;
+    for (const field of nodeArray(candidate, 'fields')) {
+      const key = nodeField<LuaNode>(field, 'key');
+      const escapedKey = this.protectedCallbackTableEnvironmentEscape(key, environmentAliases);
+      if (escapedKey) return escapedKey;
+      const value = nodeField<LuaNode>(field, 'value');
+      const escaped = this.protectedCallbackTableEnvironmentEscape(value, environmentAliases);
+      if (escaped) return escaped;
+    }
+    return undefined;
+  }
+
+  private protectedCallbackAssignmentHazard(
+    target: LuaNode,
+    environmentAliases: ReadonlySet<string>,
+  ): string | undefined {
+    if (target.type === 'Identifier') {
+      const name = nodeField<string>(target, 'name');
+      if (name === 'pcall' && nodeField<boolean>(target, 'isLocal') !== true) {
+        return 'global pcall is rebound by an assignment';
+      }
+      if (name === 'rawget' && nodeField<boolean>(target, 'isLocal') !== true) {
+        return 'global rawget is rebound by an assignment; protected pcall authority cannot be verified';
+      }
+      if (name === 'rawset' && nodeField<boolean>(target, 'isLocal') !== true) {
+        return 'global rawset is rebound by an assignment; protected pcall authority cannot be verified';
+      }
+      if (name === '_G' || name === '_ENV') {
+        return `${name} is replaced by an assignment; global callback authority is unavailable`;
+      }
+      return undefined;
+    }
+
+    const base = target.type === 'MemberExpression' || target.type === 'IndexExpression'
+      ? nodeField<LuaNode>(target, 'base')
+      : undefined;
+    if (!this.protectedCallbackEnvironmentEscape(base, environmentAliases)) return undefined;
+    const isAliasedEnvironment = !this.isGlobalEnvironmentIdentifier(base);
+
+    if (target.type === 'MemberExpression') {
+      const name = luaNodeName(nodeField<LuaNode>(target, 'identifier'));
+      if (name === 'pcall') {
+        return isAliasedEnvironment
+          ? `${this.textOf(base)}.pcall may rebind global pcall through an aliased global environment; protected pcall authority cannot be verified`
+          : `${this.textOf(base)}.pcall rebinds global pcall`;
+      }
+      if (name === 'rawget') {
+        return isAliasedEnvironment
+          ? `${this.textOf(base)}.rawget may rebind global rawget through an aliased global environment; protected pcall authority cannot be verified`
+          : `${this.textOf(base)}.rawget rebinds global rawget; protected pcall authority cannot be verified`;
+      }
+      if (name === 'rawset') {
+        return isAliasedEnvironment
+          ? `${this.textOf(base)}.rawset may rebind global rawset through an aliased global environment; protected pcall authority cannot be verified`
+          : `${this.textOf(base)}.rawset rebinds global rawset; protected pcall authority cannot be verified`;
+      }
+      return undefined;
+    }
+
+    const index = nodeField<LuaNode>(target, 'index');
+    const staticKey = staticString(index);
+    if (staticKey === 'pcall') {
+      return isAliasedEnvironment
+        ? `${this.textOf(base)}["pcall"] may rebind global pcall through an aliased global environment; protected pcall authority cannot be verified`
+        : `${this.textOf(base)}["pcall"] rebinds global pcall`;
+    }
+    if (staticKey === 'rawget') {
+      return isAliasedEnvironment
+        ? `${this.textOf(base)}["rawget"] may rebind global rawget through an aliased global environment; protected pcall authority cannot be verified`
+        : `${this.textOf(base)}["rawget"] rebinds global rawget; protected pcall authority cannot be verified`;
+    }
+    if (staticKey === 'rawset') {
+      return isAliasedEnvironment
+        ? `${this.textOf(base)}["rawset"] may rebind global rawset through an aliased global environment; protected pcall authority cannot be verified`
+        : `${this.textOf(base)}["rawset"] rebinds global rawset; protected pcall authority cannot be verified`;
+    }
+    if (staticKey === undefined && staticNumber(index) === undefined) {
+      return isAliasedEnvironment
+        ? `${this.textOf(base)} indexed assignment has a dynamic key that may rebind global pcall or global rawget or global rawset through an aliased global environment; protected pcall authority cannot be verified`
+        : `${this.textOf(base)} indexed assignment has a dynamic key that may rebind global pcall or global rawget or global rawset`;
+    }
+    return undefined;
+  }
+
+  private noteProtectedCallbackAuthorityHazard(node: LuaNode, reason: string): void {
+    if (this.protectedCallbackAuthorityHazard) return;
+    this.protectedCallbackAuthorityHazard = { source: this.location(node), reason };
+  }
+
+  private scanProtectedCallbackAuthorityHazards(ast: LuaNode): void {
+    const environmentAliases = new Set<string>();
+    const localFunctions = new Map<string, LuaNode>();
+    const activeDeferredFunctions = new Set<LuaNode>();
+    const visit = (candidate: LuaNode, aliases: Set<string> = environmentAliases): void => {
+      if (this.protectedCallbackAuthorityHazard) return;
+
+      if (candidate.type === 'AssignmentStatement') {
+        const variables = nodeArray(candidate, 'variables');
+        const initializers = nodeArray(candidate, 'init');
+        for (const target of variables) {
+          const reason = this.protectedCallbackAssignmentHazard(target, aliases);
+          if (reason) {
+            this.noteProtectedCallbackAuthorityHazard(target, reason);
+            return;
+          }
+        }
+        for (const [index, target] of variables.entries()) {
+          const initializer = this.protectedCallbackEnvironmentEscapeName(initializers[index], aliases);
+          if (target.type === 'Identifier') {
+            if (initializer && nodeField<boolean>(target, 'isLocal') !== true) {
+              this.noteProtectedCallbackAuthorityHazard(
+                target,
+                `global environment ${initializer} escapes through nonlocal identifier ${this.textOf(target)}; protected pcall authority cannot be verified`,
+              );
+              return;
+            }
+            continue;
+          }
+          if (initializer) {
+            this.noteProtectedCallbackAuthorityHazard(
+              target,
+              `global environment ${initializer} escapes through a non-identifier assignment target; protected pcall authority cannot be verified`,
+            );
+            return;
+          }
+        }
+        variables.forEach((variable, index) => {
+          const name = nodeField<string>(variable, 'name');
+          const initializer = initializers[index];
+          if (variable.type === 'Identifier'
+            && name
+            && this.protectedCallbackEnvironmentEscapeName(initializer, aliases)) {
+            aliases.add(name);
+          }
+        });
+      } else if (candidate.type === 'LocalStatement') {
+        const variables = nodeArray(candidate, 'variables');
+        const initializers = nodeArray(candidate, 'init');
+        for (const [index, variable] of variables.entries()) {
+          const name = nodeField<string>(variable, 'name');
+          if (name === '_G' || name === '_ENV') {
+            this.noteProtectedCallbackAuthorityHazard(
+              variable,
+              `${name} is locally replaced; global callback authority is unavailable`,
+            );
+            return;
+          }
+          if (variable.type === 'Identifier'
+            && name
+            && this.protectedCallbackEnvironmentEscapeName(initializers[index], aliases)) {
+            aliases.add(name);
+          }
+        }
+      } else if (candidate.type === 'TableConstructorExpression') {
+        const initializer = this.protectedCallbackTableEnvironmentEscape(candidate, aliases);
+        if (initializer) {
+          this.noteProtectedCallbackAuthorityHazard(
+            candidate,
+            `global environment ${this.textOf(initializer)} escapes through a table constructor; protected pcall authority cannot be verified`,
+          );
+          return;
+        }
+      } else if (candidate.type === 'IndexExpression') {
+        const index = nodeField<LuaNode>(candidate, 'index');
+        const escaped = this.protectedCallbackTableEnvironmentEscape(index, aliases);
+        if (escaped) {
+          this.noteProtectedCallbackAuthorityHazard(
+            candidate,
+            `global environment ${this.textOf(escaped)} escapes through an indexed expression key; protected pcall authority cannot be verified`,
+          );
+          return;
+        }
+      } else if (candidate.type === 'FunctionDeclaration') {
+        const identifier = nodeField<LuaNode>(candidate, 'identifier');
+        const name = identifier?.type === 'Identifier' ? nodeField<string>(identifier, 'name') : undefined;
+        const isLocal = nodeField<boolean>(candidate, 'isLocal') || nodeField<boolean>(identifier, 'isLocal');
+        if (isLocal && name && identifier?.type === 'Identifier') localFunctions.set(name, candidate);
+        const environmentParameter = nodeArray(candidate, 'parameters').find(parameter =>
+          nodeField<string>(parameter, 'name') === '_ENV');
+        if (environmentParameter) {
+          this.noteProtectedCallbackAuthorityHazard(
+            environmentParameter,
+            '_ENV is locally bound as a function parameter; global callback authority is unavailable',
+          );
+          return;
+        }
+        if (name === 'pcall' && !isLocal) {
+          this.noteProtectedCallbackAuthorityHazard(identifier || candidate, 'global pcall is rebound by a function declaration');
+          return;
+        }
+        if (name === 'rawget' && !isLocal) {
+          this.noteProtectedCallbackAuthorityHazard(
+            identifier || candidate,
+            'global rawget is rebound by a function declaration; protected pcall authority cannot be verified',
+          );
+          return;
+        }
+        if (name === 'rawset' && !isLocal) {
+          this.noteProtectedCallbackAuthorityHazard(
+            identifier || candidate,
+            'global rawset is rebound by a function declaration; protected pcall authority cannot be verified',
+          );
+          return;
+        }
+        if (identifier) {
+          const reason = this.protectedCallbackAssignmentHazard(identifier, aliases);
+          if (reason) {
+            this.noteProtectedCallbackAuthorityHazard(identifier, reason);
+            return;
+          }
+        }
+      } else if (candidate.type === 'ForNumericStatement' || candidate.type === 'ForGenericStatement') {
+        const variables = candidate.type === 'ForNumericStatement'
+          ? [nodeField<LuaNode>(candidate, 'variable')].filter(
+            (variable): variable is LuaNode => Boolean(variable),
+          )
+          : nodeArray(candidate, 'variables');
+        const environmentVariable = variables.find(variable => nodeField<string>(variable, 'name') === '_ENV');
+        if (environmentVariable) {
+          this.noteProtectedCallbackAuthorityHazard(
+            environmentVariable,
+            '_ENV is locally bound as a loop variable; global callback authority is unavailable',
+          );
+          return;
+        }
+      } else if (
+        candidate.type === 'CallExpression'
+        || candidate.type === 'StringCallExpression'
+        || candidate.type === 'TableCallExpression'
+      ) {
+        const shape = this.callShape(candidate);
+        const rawArguments = nodeField<unknown>(candidate, 'arguments');
+        const args = Array.isArray(rawArguments) ? rawArguments.filter(isLuaNode) : [];
+        const directLocalFunction = shape.method === 'direct' && shape.name
+          ? localFunctions.get(shape.name)
+          : undefined;
+        if (directLocalFunction && !activeDeferredFunctions.has(directLocalFunction)) {
+          const deferredAliases = new Set(aliases);
+          activeDeferredFunctions.add(directLocalFunction);
+          try {
+            for (const statement of nodeArray(directLocalFunction, 'body')) visit(statement, deferredAliases);
+          } finally {
+            activeDeferredFunctions.delete(directLocalFunction);
+          }
+          if (this.protectedCallbackAuthorityHazard) return;
+        }
+        const isUnshadowedRawset = shape.name === 'rawset'
+          && shape.method === 'direct'
+          && shape.calleeNode.type === 'Identifier'
+          && nodeField<boolean>(shape.calleeNode, 'isLocal') === false
+          && args.length === 3;
+        let environmentArgument: LuaNode | undefined;
+        let rawsetValueEnvironmentArgument: LuaNode | undefined;
+        if (isUnshadowedRawset) {
+          for (let index = 1; index < args.length; index += 1) {
+            const argument = args[index];
+            const escape = this.protectedCallbackEnvironmentEscape(argument, aliases);
+            if (escape) {
+              rawsetValueEnvironmentArgument = escape.node;
+              break;
+            }
+          }
+          if (rawsetValueEnvironmentArgument) {
+            this.noteProtectedCallbackAuthorityHazard(
+              candidate,
+              `global environment ${this.textOf(rawsetValueEnvironmentArgument)} escapes through a rawset value argument; protected pcall authority cannot be verified`,
+            );
+            return;
+          }
+          environmentArgument = this.protectedCallbackEnvironmentEscape(args[0], aliases)?.node;
+        } else {
+          for (const argument of args) {
+            const escape = this.protectedCallbackEnvironmentEscape(argument, aliases);
+            if (escape) {
+              environmentArgument = escape.node;
+              break;
+            }
+          }
+        }
+        if (isUnshadowedRawset && environmentArgument) {
+          const staticKey = staticString(args[1]);
+          if (staticKey === 'pcall'
+            || staticKey === 'rawget'
+            || staticKey === 'rawset'
+            || (staticKey === undefined && staticNumber(args[1]) === undefined)) {
+            const isAliasedEnvironment = !this.isGlobalEnvironmentIdentifier(environmentArgument);
+            this.noteProtectedCallbackAuthorityHazard(
+              candidate,
+              isAliasedEnvironment
+                ? staticKey === 'pcall'
+                  ? `rawset through ${this.textOf(environmentArgument)} may rebind global pcall through an aliased global environment; protected pcall authority cannot be verified`
+                  : staticKey === 'rawget'
+                    ? `rawset through ${this.textOf(environmentArgument)} may rebind global rawget through an aliased global environment; protected pcall authority cannot be verified`
+                    : staticKey === 'rawset'
+                      ? `rawset through ${this.textOf(environmentArgument)} may rebind global rawset through an aliased global environment; protected pcall authority cannot be verified`
+                      : `rawset through ${this.textOf(environmentArgument)} has a dynamic key that may rebind global pcall or global rawget or global rawset through an aliased global environment; protected pcall authority cannot be verified`
+                : staticKey === 'pcall'
+                  ? 'rawset through the global environment rebinds global pcall'
+                  : staticKey === 'rawget'
+                    ? 'rawset through the global environment rebinds global rawget; protected pcall authority cannot be verified'
+                    : staticKey === 'rawset'
+                      ? 'rawset through the global environment rebinds global rawset; protected pcall authority cannot be verified'
+                      : 'rawset through the global environment has a dynamic key that may rebind global pcall or global rawget or global rawset; protected pcall authority cannot be verified',
+            );
+            return;
+          }
+        }
+        const isExactHelperRawget = shape.name === 'rawget'
+          && shape.method === 'direct'
+          && shape.calleeNode.type === 'Identifier'
+          && nodeField<boolean>(shape.calleeNode, 'isLocal') === false
+          && args.length === 2
+          && this.isGlobalEnvironmentIdentifier(args[0])
+          && staticString(args[1]) === 'Helper';
+        const isStaticUnshadowedRawgetRead = shape.name === 'rawget'
+          && shape.method === 'direct'
+          && shape.calleeNode.type === 'Identifier'
+          && nodeField<boolean>(shape.calleeNode, 'isLocal') === false
+          && args.length === 2
+          && (staticString(args[1]) !== undefined || staticNumber(args[1]) !== undefined);
+        if (!isUnshadowedRawset
+          && !isExactHelperRawget
+          && !isStaticUnshadowedRawgetRead
+          && environmentArgument) {
+          this.noteProtectedCallbackAuthorityHazard(
+            candidate,
+            `global environment ${this.textOf(environmentArgument)} escapes through a call; protected pcall authority cannot be verified`,
+          );
+          return;
+        }
+      } else if (candidate.type === 'ReturnStatement') {
+        const escapedArgument = nodeArray(candidate, 'arguments')
+          .map(argument => this.protectedCallbackEnvironmentEscape(argument, aliases))
+          .find((escape): escape is ProtectedCallbackEnvironmentEscape => Boolean(escape));
+        if (escapedArgument) {
+          this.noteProtectedCallbackAuthorityHazard(
+            candidate,
+            `global environment ${this.textOf(escapedArgument.node)} escapes through a return; protected pcall authority cannot be verified`,
+          );
+          return;
+        }
+      }
+
+      for (const [key, child] of Object.entries(candidate)) {
+        if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+        if (Array.isArray(child)) child.filter(isLuaNode).forEach(childNode => visit(childNode, aliases));
+        else if (isLuaNode(child)) visit(child, aliases);
+        if (this.protectedCallbackAuthorityHazard) return;
+      }
+    };
+    visit(ast);
+  }
+
+  private hasExactAstLocation(node: LuaNode): boolean {
+    const range = nodeRange(node);
+    const loc = nodeField<LuaLocationLike>(node, 'loc');
+    return typeof node.type === 'string'
+      && Boolean(range)
+      && Number.isInteger(range?.[0])
+      && Number.isInteger(range?.[1])
+      && range![0] >= 0
+      && range![1] >= range![0]
+      && range![1] <= this.input.text.length
+      && typeof loc?.start?.line === 'number'
+      && typeof loc.start.column === 'number'
+      && typeof loc.end?.line === 'number'
+      && typeof loc.end.column === 'number';
+  }
+
+  private protectedCallbackBodyPreflight(callback: LuaNode): { body: LuaNode[]; reason?: string } {
+    const bodyValue = nodeField<unknown>(callback, 'body');
+    if (!Array.isArray(bodyValue) || !bodyValue.every(isLuaNode)) {
+      return { body: [], reason: 'protected callback body is malformed or unavailable' };
+    }
+
+    let nodeCount = 0;
+    let nestedProtectedCallback = false;
+    let reason: string | undefined;
+    const visit = (candidate: LuaNode): void => {
+      if (reason) return;
+      nodeCount += 1;
+      if (nodeCount > MAX_PROTECTED_CALLBACK_BODY_NODES) {
+        reason = `protected callback body exceeds max node limit ${MAX_PROTECTED_CALLBACK_BODY_NODES}`;
+        return;
+      }
+      if (!this.hasExactAstLocation(candidate)) {
+        reason = 'protected callback body contains a malformed or unlocatable AST node';
+        return;
+      }
+      if (
+        (candidate.type === 'CallExpression'
+          || candidate.type === 'StringCallExpression'
+          || candidate.type === 'TableCallExpression')
+        && nodeField<LuaNode>(candidate, 'base')?.type === 'Identifier'
+        && nodeField<string>(nodeField<LuaNode>(candidate, 'base'), 'name') === 'pcall'
+      ) {
+        nestedProtectedCallback = true;
+      }
+      for (const [key, child] of Object.entries(candidate)) {
+        if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
+        if (Array.isArray(child)) child.filter(isLuaNode).forEach(visit);
+        else if (isLuaNode(child)) visit(child);
+      }
+    };
+    bodyValue.forEach(visit);
+    if (reason) return { body: [], reason };
+    if (nestedProtectedCallback) return { body: [], reason: 'nested protected callbacks are outside the bounded callback model' };
+    return { body: bodyValue };
+  }
+
+  private legacyScaleFontProtectedCallback(callback: LuaNode): boolean {
+    const body = nodeArray(callback, 'body');
+    if (body.length !== 1 || body[0]?.type !== 'ReturnStatement') return false;
+    const argumentsValue = nodeField<unknown>(body[0], 'arguments');
+    if (!Array.isArray(argumentsValue) || argumentsValue.length !== 1 || !isLuaNode(argumentsValue[0])) return false;
+    const shape = this.callShape(argumentsValue[0]);
+    const receiver = shape.receiver;
+    if (shape.name !== 'scaleFont'
+      || shape.method !== '.'
+      || receiver?.type !== 'Identifier'
+      || nodeField<string>(receiver, 'name') !== 'Helper') return false;
+    if (nodeField<boolean>(receiver, 'isLocal') === false) return true;
+    return this.bindings.get('Helper')?.value.publicValue.reference?.kind === 'global'
+      && this.bindings.get('Helper')?.value.publicValue.reference?.path === 'Helper';
+  }
+
+  private exactGlobalPcallFailureReason(shape: CallShape): string | undefined {
+    if (shape.method !== 'direct'
+      || shape.calleeNode.type !== 'Identifier'
+      || shape.name !== 'pcall') return 'protected callback requires the direct pcall call shape';
+    if (nodeField<boolean>(shape.calleeNode, 'isLocal') !== false) {
+      return 'shadowed or locally bound pcall cannot establish global protected-callback identity';
+    }
+    if (this.bindings.has('pcall')) return 'pcall has a local or global binding at the call site';
+    if (this.protectedCallbackAuthorityHazard) return this.protectedCallbackAuthorityHazard.reason;
+    return undefined;
+  }
+
+  private isImmediateProtectedCallbackArgument(shape: CallShape, callback: LuaNode): boolean {
+    const calleeRange = nodeRange(shape.calleeNode);
+    const callbackRange = nodeRange(callback);
+    if (!calleeRange || !callbackRange || callbackRange[0] < calleeRange[1]) return false;
+    const sourceBetweenCalleeAndCallback = this.input.text.slice(calleeRange[1], callbackRange[0]);
+    return /^\(\s*$/.test(sourceBetweenCalleeAndCallback);
+  }
+
+  private processProtectedCallbackIfPresent(
+    node: LuaNode,
+    shape: CallShape,
+    context: X4UiFunctionContext,
+  ): void {
+    if (shape.name !== 'pcall' || shape.method !== 'direct') return;
+    const rawArguments = nodeField<unknown>(node, 'arguments');
+    if (!Array.isArray(rawArguments)) return;
+    const callback = rawArguments[0];
+    if (!isLuaNode(callback) || callback.type !== 'FunctionDeclaration') return;
+
+    let reason = this.exactGlobalPcallFailureReason(shape);
+    if (!reason && rawArguments.length !== 1) reason = 'protected pcall must receive exactly one callback argument';
+    if (!reason && nodeField<unknown>(callback, 'identifier') !== null) {
+      reason = 'protected callback must be an anonymous FunctionDeclaration';
+    }
+    if (!reason && !this.isImmediateProtectedCallbackArgument(shape, callback)) {
+      reason = 'protected callback must be the immediate unparenthesized FunctionDeclaration argument';
+    }
+    if (!reason && nodeField<boolean>(callback, 'isLocal') !== false) {
+      reason = 'protected callback FunctionDeclaration must be parser-proven anonymous source';
+    }
+    const parameters = nodeField<unknown>(callback, 'parameters');
+    if (!reason && (!Array.isArray(parameters) || !parameters.every(isLuaNode) || parameters.length !== 0)) {
+      reason = 'protected callback must have zero parameters and no varargs';
+    }
+
+    const preflight = this.protectedCallbackBodyPreflight(callback);
+    if (!reason && preflight.reason) reason = preflight.reason;
+    if (reason) {
+      this.addGap('unsupported', 'unsupported', this.location(node), reason);
+      return;
+    }
+    if (this.legacyScaleFontProtectedCallback(callback)) return;
+
+    const callbackSource = this.location(node);
+    const callbackKey = this.locationIdentity(callbackSource);
+    if (this.processedProtectedCallbacks.has(callbackKey)) {
+      this.addGap('unsupported', 'unsupported', callbackSource, 'protected callback was already processed; duplicate body traversal was refused');
+      return;
+    }
+    if (this.protectedCallbackAnalysisDepth > 0) {
+      this.addGap('unsupported', 'unsupported', callbackSource, 'nested protected callback traversal was refused');
+      return;
+    }
+    if (this.protectedCallbackCount >= MAX_PROTECTED_CALLBACKS) {
+      this.addGap('count', 'unsupported', callbackSource, `protected callback count exceeds max ${MAX_PROTECTED_CALLBACKS}`);
+      return;
+    }
+
+    this.processedProtectedCallbacks.add(callbackKey);
+    this.protectedCallbackCount += 1;
+    const callbackContext = this.protectedCallbackContext(context, node);
+    const objectState = this.snapshotTrackedObjectState(this.bindings);
+    const numericMathAuthorityAvailable = this.numericMathAuthorityAvailable;
+    const localBindings = new Map(this.bindings);
+    this.protectedCallbackAnalysisDepth += 1;
+    this.functionAnalysisDepth += 1;
+    try {
+      this.processStatements(preflight.body, localBindings, callbackContext);
+    } finally {
+      this.functionAnalysisDepth -= 1;
+      this.protectedCallbackAnalysisDepth -= 1;
+      this.restoreTrackedObjectState(objectState);
+      this.numericMathAuthorityAvailable = numericMathAuthorityAvailable;
+    }
+  }
+
+  private protectedCallbackContext(parent: X4UiFunctionContext, node: LuaNode): X4UiFunctionContext {
+    const boundary = this.location(node);
+    Object.freeze(boundary.start);
+    Object.freeze(boundary.end);
+    Object.freeze(boundary);
+    const boundaryId = `${boundary.file}|${boundary.sourcePath || ''}|${boundary.start.offset}|${boundary.end.offset}`;
+    return this.branchContext(parent, boundary, boundaryId, 'then', 0, 'conditional');
   }
 
   private sourceProvenButtonHotkeyChain(node: LuaNode): LuaNode | undefined {
@@ -2607,6 +3428,7 @@ class X4UiCallModelBuilder {
     if (rawgetAuthority) return rawgetAuthority;
     const helperAliasCandidate = this.rawgetHelperAliasCandidate(node, shape);
     if (helperAliasCandidate) return helperAliasCandidate;
+    this.processProtectedCallbackIfPresent(node, shape, context);
 
     if (shape.method === ':'
       && shape.name
@@ -3923,6 +4745,16 @@ class X4UiCallModelBuilder {
     }
 
     boundValue = this.bindDirectHelperScaleResult(name, boundValue, target);
+    boundValue = {
+      ...boundValue,
+      deferredNumericAlias: {
+        name,
+        target,
+        context,
+        aliasKind,
+        source: value,
+      },
+    };
 
     this.bindings.set(name, { value: boundValue, source: this.location(target) });
     if (boundValue.object) {
@@ -4022,6 +4854,8 @@ class X4UiCallModelBuilder {
         } else {
           object.indexedValues.set(property, value);
           if (value.object) object.indexed.set(property, value.object);
+          this.markObjectMutation(object, property);
+          this.recordControlFlowPropertyMutation(object, property);
         }
       }
       return;
@@ -4188,10 +5022,12 @@ class X4UiCallModelBuilder {
 
   private processStatements(statements: LuaNode[], bindings: Map<string, Binding>, context: X4UiFunctionContext): Map<string, Binding> {
     const previousBindings = this.replaceBindings(bindings);
-    for (const statement of statements) this.processStatement(statement, bindings, context);
-    const result = new Map(this.bindings);
-    this.restoreBindings(previousBindings);
-    return result;
+    try {
+      for (const statement of statements) this.processStatement(statement, bindings, context);
+      return new Map(this.bindings);
+    } finally {
+      this.restoreBindings(previousBindings);
+    }
   }
 
   private replaceBindings(bindings: Map<string, Binding>): Map<string, Binding> {
@@ -4214,12 +5050,36 @@ class X4UiCallModelBuilder {
     return true;
   }
 
+  private rememberControlFlowReachability(
+    boundary: LuaNode,
+    bodies: readonly LuaNode[][],
+    context: X4UiFunctionContext,
+    bodyContexts?: readonly X4UiFunctionContext[]
+  ): void {
+    const metadata = this.controlFlowReachability.get(boundary) || [];
+    metadata.push({
+      parentContext: context,
+      bodies: bodies.map(body => [...body]),
+      bodyContexts: bodies.map((_, index) => bodyContexts?.[index] || context)
+    });
+    this.controlFlowReachability.set(boundary, metadata);
+  }
+
+  private controlFlowReachabilityFor(
+    boundary: LuaNode,
+    context: X4UiFunctionContext
+  ): ControlFlowReachabilityMetadata | undefined {
+    return this.controlFlowReachability.get(boundary)?.find(candidate => candidate.parentContext === context);
+  }
+
   private collectControlFlowReassignments(
     statements: LuaNode[],
     trackedNames: Set<string>,
     localNames: Set<string>,
-    reassignments: Set<string>
+    reassignments: Set<string>,
+    context: X4UiFunctionContext
   ): void {
+    if (context.reachability === 'unreachable') return;
     const visibleLocals = new Set(localNames);
     for (const statement of statements) {
       switch (statement.type) {
@@ -4248,43 +5108,59 @@ class X4UiCallModelBuilder {
           if (name && trackedNames.has(name) && !visibleLocals.has(name)) reassignments.add(name);
           break;
         }
-        case 'IfStatement':
-          for (const clause of nodeArray(statement, 'clauses')) {
+        case 'IfStatement': {
+          const metadata = this.controlFlowReachabilityFor(statement, context);
+          const fallbackBodies = [
+            ...nodeArray(statement, 'clauses').map(clause => nodeArray(clause, 'body')),
+            nodeArray(statement, 'elseBody')
+          ];
+          const nestedBodies = metadata?.bodies || fallbackBodies;
+          const nestedContexts = metadata?.bodyContexts || nestedBodies.map(() => context);
+          for (const [bodyIndex, body] of nestedBodies.entries()) {
             this.collectControlFlowReassignments(
-              nodeArray(clause, 'body'),
+              body,
               trackedNames,
               new Set(visibleLocals),
-              reassignments
+              reassignments,
+              nestedContexts[bodyIndex] || context
             );
           }
-          this.collectControlFlowReassignments(
-            nodeArray(statement, 'elseBody'),
-            trackedNames,
-            new Set(visibleLocals),
-            reassignments
-          );
           break;
+        }
         case 'WhileStatement':
         case 'RepeatStatement':
-        case 'DoStatement':
-          this.collectControlFlowReassignments(
-            nodeArray(statement, 'body'),
-            trackedNames,
-            new Set(visibleLocals),
-            reassignments
-          );
+        case 'DoStatement': {
+          const metadata = this.controlFlowReachabilityFor(statement, context);
+          const nestedBodies = metadata?.bodies || [nodeArray(statement, 'body')];
+          const nestedContexts = metadata?.bodyContexts || nestedBodies.map(() => context);
+          for (const [bodyIndex, body] of nestedBodies.entries()) {
+            this.collectControlFlowReassignments(
+              body,
+              trackedNames,
+              new Set(visibleLocals),
+              reassignments,
+              nestedContexts[bodyIndex] || context
+            );
+          }
           break;
+        }
         case 'ForNumericStatement': {
           const loopLocals = new Set(visibleLocals);
           const variable = nodeField<LuaNode>(statement, 'variable');
           const name = nodeField<string>(variable, 'name');
           if (name) loopLocals.add(name);
-          this.collectControlFlowReassignments(
-            nodeArray(statement, 'body'),
-            trackedNames,
-            loopLocals,
-            reassignments
-          );
+          const metadata = this.controlFlowReachabilityFor(statement, context);
+          const nestedBodies = metadata?.bodies || [nodeArray(statement, 'body')];
+          const nestedContexts = metadata?.bodyContexts || nestedBodies.map(() => context);
+          for (const [bodyIndex, body] of nestedBodies.entries()) {
+            this.collectControlFlowReassignments(
+              body,
+              trackedNames,
+              loopLocals,
+              reassignments,
+              nestedContexts[bodyIndex] || context
+            );
+          }
           break;
         }
         case 'ForGenericStatement': {
@@ -4293,12 +5169,18 @@ class X4UiCallModelBuilder {
             const name = nodeField<string>(variable, 'name');
             if (name) loopLocals.add(name);
           }
-          this.collectControlFlowReassignments(
-            nodeArray(statement, 'body'),
-            trackedNames,
-            loopLocals,
-            reassignments
-          );
+          const metadata = this.controlFlowReachabilityFor(statement, context);
+          const nestedBodies = metadata?.bodies || [nodeArray(statement, 'body')];
+          const nestedContexts = metadata?.bodyContexts || nestedBodies.map(() => context);
+          for (const [bodyIndex, body] of nestedBodies.entries()) {
+            this.collectControlFlowReassignments(
+              body,
+              trackedNames,
+              loopLocals,
+              reassignments,
+              nestedContexts[bodyIndex] || context
+            );
+          }
           break;
         }
         default:
@@ -4309,7 +5191,8 @@ class X4UiCallModelBuilder {
 
   private controlFlowReassignments(
     statements: LuaNode[],
-    preBodyBindings: Map<string, Binding>
+    preBodyBindings: Map<string, Binding>,
+    context: X4UiFunctionContext
   ): Set<string> {
     const trackedNames = new Set(
       [...preBodyBindings]
@@ -4317,7 +5200,13 @@ class X4UiCallModelBuilder {
         .map(([name]) => name)
     );
     const reassignments = new Set<string>();
-    this.collectControlFlowReassignments(statements, trackedNames, new Set<string>(), reassignments);
+    this.collectControlFlowReassignments(
+      statements,
+      trackedNames,
+      new Set<string>(),
+      reassignments,
+      context,
+    );
     return reassignments;
   }
 
@@ -4454,6 +5343,20 @@ class X4UiCallModelBuilder {
     return bodyBindings;
   }
 
+  private isolateSameDepthControlFlowMutationStates(): ControlFlowMutationState[] {
+    const savedStates = [...this.controlFlowMutationStates];
+    this.controlFlowMutationStates.splice(
+      0,
+      this.controlFlowMutationStates.length,
+      ...savedStates.filter(state => state.functionAnalysisDepth !== this.functionAnalysisDepth)
+    );
+    return savedStates;
+  }
+
+  private restoreControlFlowMutationStates(states: readonly ControlFlowMutationState[]): void {
+    this.controlFlowMutationStates.splice(0, this.controlFlowMutationStates.length, ...states);
+  }
+
   private processControlFlowBodies(
     bodies: LuaNode[][],
     context: X4UiFunctionContext,
@@ -4472,13 +5375,34 @@ class X4UiCallModelBuilder {
       preservedHelperAliases: new Set(),
       invalidatedHelperAliases: new Set()
     };
+    this.rememberControlFlowReachability(boundary, bodies, context, bodyContexts);
     for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex += 1) {
       const body = bodies[bodyIndex];
-      for (const name of this.controlFlowReassignments(body, preBodyBindings)) reassignments.add(name);
+      const bodyContext = bodyContexts?.[bodyIndex] || context;
       const bodyBindings = loopStatement ? this.loopBodyBindings(preBodyBindings, loopStatement) : new Map(preBodyBindings);
+      if (bodyContext.reachability === 'unreachable') {
+        const savedBindings = new Map(this.bindings);
+        const objectState = this.snapshotTrackedObjectState(this.bindings);
+        const numericMathAuthorityAvailable = this.numericMathAuthorityAvailable;
+        const savedMutationStates = this.isolateSameDepthControlFlowMutationStates();
+        try {
+          this.processStatements(body, bodyBindings, bodyContext);
+        } finally {
+          this.restoreBindings(savedBindings);
+          this.restoreTrackedObjectState(objectState);
+          this.numericMathAuthorityAvailable = numericMathAuthorityAvailable;
+          this.restoreControlFlowMutationStates(savedMutationStates);
+        }
+        continue;
+      }
+
       this.controlFlowMutationStates.push(mutationState);
       try {
-        bodyResults.push(this.processStatements(body, bodyBindings, bodyContexts?.[bodyIndex] || context));
+        const result = this.processStatements(body, bodyBindings, bodyContext);
+        bodyResults.push(result);
+        for (const name of this.controlFlowReassignments(body, preBodyBindings, bodyContext)) {
+          reassignments.add(name);
+        }
       } finally {
         this.controlFlowMutationStates.pop();
       }

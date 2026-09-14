@@ -2121,11 +2121,14 @@ const buildOperations = (
               return;
             }
             if (item.sourceComposition === 'diagnostic-only') return;
+            if (geometry === undefined) return;
             api.setStrokeStyle(color);
             for (const fragment of sourceCompositionDiagnosticFragments(item, preserveCoverage)) {
-              withClip(api, clip, () => {
+              // Coverage masks the original boundary; cut edges are not new
+              // uncertain geometry and must not outline each excluded glyph.
+              withClip(api, fragment, () => {
                 api.beginPath();
-                api.rect(fragment.x, fragment.y, fragment.width, fragment.height);
+                api.rect(geometry.x, geometry.y, geometry.width, geometry.height);
                 api.stroke();
               });
             }

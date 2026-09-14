@@ -311,6 +311,8 @@ export const X4_UI_EDITOR_DEFAULT_PROFILE: X4UiEditorProfile = Object.freeze({
   uiScale: 1.4,
 });
 
+const X4_UI_EDITOR_LOCAL_EXPANSION = Object.freeze({ maxDepth: 4, maxInvocations: 64 });
+
 export type X4UiEditorProfileInput = X4UiEditorProfile | X4UiEditorProfileControls;
 
 export type X4UiEditorProfileControls = {
@@ -2782,6 +2784,7 @@ function previewFor(
       drawable: { width: profile.drawable.width, height: profile.drawable.height },
       uiScale: profile.uiScale,
       ...(profile.minTextHeight === undefined ? {} : { minTextHeight: profile.minTextHeight }),
+      localExpansion: X4_UI_EDITOR_LOCAL_EXPANSION,
     },
     ...(colorEvidence === undefined ? {} : { colorEvidence }),
     ...(selection === undefined ? {} : { selection }),
@@ -2802,6 +2805,7 @@ function previewFor(
         source: copySource(UNSELECTED_SOURCE),
         drawable: { ...X4_UI_EDITOR_DEFAULT_PROFILE.drawable },
         uiScale: X4_UI_EDITOR_DEFAULT_PROFILE.uiScale,
+        localExpansion: X4_UI_EDITOR_LOCAL_EXPANSION,
       },
       samples: undefined,
       paths: undefined,

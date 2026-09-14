@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
+import { buildTemplateWorkspace } from './modTemplates';
 import type { ModWorkspace, PassthroughFile } from '../types';
 import {
   buildX4UiCallModel,
@@ -12,6 +14,7 @@ import {
   X4_LAYOUT_PROVENANCE,
 } from './x4UiLayoutKernel';
 import {
+  canonicalizeX4UiLayoutModel,
   createX4UiLayoutTargetCatalog,
   projectX4UiLayoutProgram,
   validateX4UiLayoutEvidencePair,
@@ -50,9 +53,11 @@ import {
   X4_UI_CORPUS_MANIFEST_URL,
   X4_UI_CORPUS_STATUS_URL,
   isX4UiCorpusCanonicalColorSuccess,
+  loadCanonicalX4UiCorpusAssets,
   loadCanonicalX4UiCorpusColorEvidence,
   type X4UiCorpusCanonicalColorLoadOptions,
   type X4UiCorpusCanonicalColorSuccess,
+  type X4UiCorpusCanonicalSuccess,
   type X4UiCorpusFetchResponse,
 } from './x4UiCorpusAssets';
 
@@ -96,6 +101,69 @@ const input = (text: string, rel = 'selftest/b119-layout-program.lua') => ({
   text,
   sourcePath: `fixture://${rel}`,
 });
+
+const loadB119ActualCanonicalCorpus = async (): Promise<X4UiCorpusCanonicalSuccess> => {
+  const root = process.env.X4_REFERENCE_ROOT?.trim();
+  if (!root) throw new Error('X4_REFERENCE_ROOT is required for the source-backed canonical text-height regression');
+  const contract = X4_UI_CORPUS_9_00_CONTRACT;
+  const files = [
+    contract.helper,
+    contract.widget,
+    contract.regular.descriptor,
+    contract.regular.atlas,
+    contract.bold.descriptor,
+    contract.bold.atlas,
+  ];
+  const bytes = new Map(files.map(file => [
+    file.relativePath,
+    new Uint8Array(readFileSync(resolvePath(root, ...file.relativePath.split('/')))),
+  ]));
+  const generation = 'b119-layout-actual-byte-selftest';
+  const generatedAt = '2026-09-12T00:00:00.000Z';
+  const status = {
+    available: true,
+    root,
+    generatedAt,
+    manifestGeneration: generation,
+    manifest: { available: true, state: 'ready', root, current: { generation, root, generatedAt } },
+  };
+  const transport = async (url: string): Promise<X4UiCorpusFetchResponse> => {
+    if (url === X4_UI_CORPUS_STATUS_URL) {
+      return { status: 200, headers: { get: () => 'application/json; charset=utf-8' }, json: async () => status };
+    }
+    if (url.startsWith(`${X4_UI_CORPUS_MANIFEST_URL}?`)) {
+      const query = new URL(url, 'http://b119-layout-actual-byte-selftest.invalid').searchParams.get('q');
+      const value = query === null ? undefined : bytes.get(query);
+      if (value === undefined) throw new Error(`unknown canonical manifest path ${query}`);
+      return {
+        status: 200,
+        headers: { get: () => 'application/json; charset=utf-8' },
+        json: async () => ({
+          status: { available: true, state: 'ready', root, current: { generation, root, generatedAt } },
+          generation,
+          total: 1,
+          limit: 500,
+          offset: 0,
+          files: [{ path: query, bytes: value.byteLength }],
+        }),
+      };
+    }
+    if (url.startsWith(`${X4_UI_CORPUS_FILE_URL}?`)) {
+      const query = new URL(url, 'http://b119-layout-actual-byte-selftest.invalid').searchParams.get('path');
+      const value = query === null ? undefined : bytes.get(query);
+      if (value === undefined) throw new Error(`unknown canonical file path ${query}`);
+      return {
+        status: 200,
+        headers: { get: () => query.endsWith('.lua') ? 'text/plain' : 'application/octet-stream' },
+        arrayBuffer: async () => value.slice().buffer,
+      };
+    }
+    throw new Error(`unexpected canonical selftest URL ${url}`);
+  };
+  const result = await loadCanonicalX4UiCorpusAssets({ transport });
+  if (result.ok === false) throw new Error(`actual-byte canonical loader failed: ${result.error.code}: ${result.error.message}`);
+  return result;
+};
 
 const detail = (value: unknown): string => JSON.stringify(value);
 
@@ -628,6 +696,17 @@ const factValue = (programFact: X4UiLayoutProgram['frames'][number]['descriptorF
 const factProvenance = (programFact: X4UiLayoutProgram['frames'][number]['descriptorFacts'][string] | undefined) =>
   programFact?.status === 'known' ? programFact.provenance : undefined;
 
+const numericAliasFactDetail = (
+  programFact: X4UiLayoutProgram['frames'][number]['descriptorFacts'][string] | undefined,
+) => programFact === undefined
+  ? undefined
+  : {
+    status: programFact.status,
+    value: factValue(programFact),
+    expression: programFact.expression,
+    reason: programFact.status === 'unavailable' ? programFact.reason : undefined,
+  };
+
 const positiveSource = [
   'local menu = { name = "B119", layer = 1 }',
   'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
@@ -1132,13 +1211,147 @@ const b119LocalScaleFontWrapperAuthorityAttackVariants: readonly B119LocalScaleF
   })),
 ];
 
-const run = (): {
+const runB119LongTextRecovery = (corpus: X4UiCorpusCanonicalSuccess): void => {
+  const long = 'The station has approved your docking request. Approach the marked landing area and wait for clearance. ';
+  const cases = [
+    { name: 'short', text: 'Ready', wrap: false, known: true },
+    { name: 'long-line', text: long, wrap: false, known: true },
+    { name: 'long-then-short', text: long + '\nReady', wrap: false, known: true },
+    { name: 'short-then-long', text: 'Ready\n' + long, wrap: false, known: true },
+    { name: 'blank-between', text: long + '\n\nReady', wrap: false, known: true },
+    { name: 'wrapped', text: long, wrap: true, known: true },
+    { name: 'missing-glyph', text: long + '\u{1f6f8}', wrap: false, known: false },
+  ];
+  const rows = cases.map(test => {
+    const source = [
+      'local menu = { name = "LongTextRecovery" }',
+      'local frame = Helper.createFrameHandle(menu, { width = 300, height = 240 })',
+      'local t = frame:addTable(1, { width = 280, scaling = false })',
+      'local row = t:addRow(false, {})',
+      `row[1]:createText(previewText, { wordwrap = ${test.wrap} })`,
+      'frame:display()',
+    ].join('\n');
+    const model = buildX4UiCallModel(input(source, `selftest/long-text-${test.name}.lua`));
+    const profile = profileFor(model); // no caller-supplied minimum substitutes for measured height
+    const target = topTarget(model);
+    const seed = projectX4UiLayoutProgram(model, target, profile, undefined, undefined, undefined, corpus);
+    assert.notEqual(seed.status, 'refused');
+    assert.equal(seed.program!.sampleCatalog.entries.length, 1);
+    const catalog = seed.program!.sampleCatalog;
+    const result = projectX4UiLayoutProgram(model, target, profile, {
+      catalogId: catalog.id, source: catalog.sourceIdentity,
+      values: [{ id: catalog.entries[0]!.id, value: test.text }],
+    }, undefined, undefined, corpus);
+    assert.notEqual(result.status, 'refused');
+    const program = result.program!;
+    const height = program.cells[0]!.descriptorFacts.outerHeight;
+    return { name: test.name, expectedKnown: test.known, measured: height.status === 'known',
+      height: factValue(height), table: program.tables[0]!.status,
+      gaps: program.gaps.map(gap => ({ category: gap.category, reason: gap.reason })) };
+  });
+  console.log('B119_LONG_TEXT_RECOVERY', JSON.stringify(rows));
+  assert.ok(rows.every(row => row.measured === row.expectedKnown), 'ordinary long/short/blank lines retain measured height; unknown glyph does not');
+  assert.ok(rows.filter(row => row.expectedKnown).every(row => row.table === 'projected'));
+  assert.equal(rows[0]!.height, rows[1]!.height, 'no-wrap width overflow does not add text lines');
+  assert.equal(rows[2]!.height, rows[3]!.height, 'line order cannot change mixed no-wrap height');
+  assert.ok(Number(rows[4]!.height) > Number(rows[2]!.height), 'blank line retains its real line box');
+  assert.ok(Number(rows[5]!.height) > Number(rows[1]!.height), 'word wrapping grows automatic height');
+  console.log('B119_LONG_TEXT_RECOVERY PASS: measured mixed/blank/wrapped lines and missing-glyph refusal');
+};
+
+const runB119SourceLookupContinuity = (): void => {
+  const body = [
+    'local menu = { name = "SourceLookup" }',
+    'function menu.display()',
+    'local vw = Helper.viewWidth',
+    'local px = math.floor(vw * 0.5)',
+    '  local frame = Helper.createFrameHandle(menu, { x = px, width = 80, height = 80 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const sourceModel = (text: string): X4UiCallModel => {
+    const source = buildX4UiWorkspaceSource({ ...buildTemplateWorkspace('blank'), passthroughFiles: [
+      { path: 'ui.xml', content: '<addon name="lookup"><environment type="menus"><file name="ui/lookup.lua" /></environment></addon>', reason: 'partial' },
+      { path: 'ui/lookup.lua', content: text, reason: 'partial' },
+    ] });
+    const file = source.bundle?.sourceFiles.find(candidate => candidate.path === 'ui/lookup.lua');
+    assert.ok(file && file.parseStatus === 'parsed');
+    return normalizeX4UiSourceEditLayoutModel(file.callModel);
+  };
+  const project = (model: X4UiCallModel): X4UiLayoutProgram | undefined => resultProgram(
+    projectX4UiLayoutProgram(model, namedTarget(model, 'menu.display'), profileFor(model)),
+  );
+  const projectedX = (program: X4UiLayoutProgram | undefined) => {
+    const fact = program?.frames[0]?.descriptorFacts.x;
+    return fact?.status === 'known' ? fact.value : undefined;
+  };
+  for (const [label, source] of [
+    ['LF', body],
+    ['CRLF', body.replaceAll('\n', '\r\n')],
+    ['BOM', `\uFEFF${body}`],
+    ['Unicode comment', `-- offset \u{1f680}\n${body}`],
+  ]) {
+    const model = sourceModel(source);
+    const original = JSON.stringify(model);
+    const first = project(model);
+    const again = project(model);
+    assert.equal(projectedX(first), 50, `${label}: source-derived x`);
+    assert.deepEqual(again, first, `${label}: repeated projection must be byte-equivalent`);
+    assert.equal(JSON.stringify(model), original, `${label}: source model remains untouched`);
+    const forged = structuredClone(model);
+    assert.equal(projectedX(project(forged)), 50, `${label}: positive projection before tampering`);
+    const numeric = forged.aliases.find(alias => alias.name === 'px')?.value.numericExpression;
+    assert.ok(numeric);
+    (numeric.source.start as { line: number }).line += 1;
+    assert.notEqual(projectedX(project(forged)), 50,
+      `${label}: warmed lookup cannot authorize forged source coordinates`);
+    const reused = structuredClone(model);
+    assert.equal(projectedX(project(reused)), 50);
+    const changed = sourceModel(source.replace('0.5', '0.25'));
+    Object.assign(reused, changed);
+    assert.equal(projectedX(project(reused)), 25,
+      `${label}: changed source on the same caller model must invalidate derived lookups`);
+    assert.deepEqual(project(reused), project(changed));
+  }
+  console.log('B119_SOURCE_LOOKUP_CONTINUITY PASS: LF/CRLF/BOM/Unicode, repeated output, source replacement and forged-coordinate refusal');
+};
+
+const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
   readonly allPassed: boolean;
   readonly passed: number;
   readonly skipped: number;
   readonly total: number;
   readonly checks: readonly Check[];
 } => {
+  const menuTargetCases: readonly [string, string, readonly string[]][] = [
+    ['renamed builder and helpers', `local menu = { name = "Demo" }
+      local function refreshHelper() menu.dirty = true end
+      function menu.paintAnything() local f = Helper.createFrameHandle(menu, {}) end
+      function menu.cleanup() menu.frame = nil end`, ['menu.paintAnything']],
+    ['top-level builder', 'local f = Helper.createFrameHandle({}, {})', ['top-level']],
+    ['two builders', `function one() local f = Helper.createFrameHandle({}, {}) end
+      function two() local f = Helper.createFrameHandle({}, {}) end`, ['one', 'two']],
+    ['helpers only', 'function menu.createFrame() local x = 1 end', []],
+    ['foreign receiver', 'function draw() local f = Other.createFrameHandle({}, {}) end', []],
+    ['shadowed Helper', 'local Helper = {}; function draw() local f = Helper.createFrameHandle({}, {}) end', []],
+    ['dead constructor', 'function draw() if false then local f = Helper.createFrameHandle({}, {}) end end', []],
+    ['dynamic constructor', 'function draw() if visible then local f = Helper.createFrameHandle({}, options) end end', ['draw']],
+    ['nested context is not its parent', `function outer()
+      local function inner() local f = Helper.createFrameHandle({}, {}) end
+      local x = 1 end`, ['inner']],
+  ];
+  for (const [label, text, expected] of menuTargetCases) {
+    const sourceModel = buildX4UiCallModel(input(text));
+    const before = JSON.stringify(sourceModel);
+    const targetCatalog = createX4UiLayoutTargetCatalog(sourceModel);
+    const ids = (targetCatalog as unknown as { menuTargetIds?: readonly string[] }).menuTargetIds;
+    assert.ok(ids, `${label}: catalog must issue a menu subset`);
+    assert.deepEqual(targetCatalog.targets.filter(target => ids.includes(target.id)).map(target => target.name ?? target.kind), expected, label);
+    assert.equal(JSON.stringify(sourceModel), before, `${label}: classification cannot mutate source`);
+    assert.ok(Object.isFrozen(ids), `${label}: menu subset is immutable`);
+    assert.ok(targetCatalog.targets.some(target => target.kind === 'top-level'), `${label}: full technical catalog retained`);
+  }
+  console.log(`B119 menu target source classification: PASS ${menuTargetCases.length}/${menuTargetCases.length}`);
   const model = buildX4UiCallModel(input(positiveSource));
   const catalog = createX4UiLayoutTargetCatalog(model);
   const profile = profileFor(model, { minTextHeight: 7 });
@@ -5472,6 +5685,7 @@ const run = (): {
     'selftest/b119-numeric-preview-fallback.lua',
   ));
   const numericPreviewFallbackTarget = namedTarget(numericPreviewFallbackModel, 'menu.display');
+  const numericPreviewFallbackModelSnapshot = JSON.stringify(numericPreviewFallbackModel);
   const numericPreviewFallbackBaseProfile = profileFor(numericPreviewFallbackModel);
   const numericPreviewFallbackProfile: X4UiLayoutProjectionProfile = {
     ...numericPreviewFallbackBaseProfile,
@@ -5514,6 +5728,7 @@ const run = (): {
     && numericPreviewFallbackFrameXContextStart?.offset === numericPreviewFallbackFrameXContextOffsetBefore + 1
     && numericPreviewFallbackFrameXContextEnd?.offset === numericPreviewFallbackFrameXContextEndOffsetBefore + 1;
   const numericPreviewFallbackModelWithoutRootBinding = freezeClone(numericPreviewFallbackModelRecord) as unknown as X4UiCallModel;
+  const numericPreviewFallbackModelWithoutRootBindingSnapshot = JSON.stringify(numericPreviewFallbackModelWithoutRootBinding);
   const numericPreviewFallbackTargetWithoutRootBinding = namedTarget(
     numericPreviewFallbackModelWithoutRootBinding,
     'menu.display',
@@ -5524,7 +5739,7 @@ const run = (): {
     numericPreviewFallbackProfile,
   );
   const numericPreviewFallbackUnsampledProgram = resultProgram(numericPreviewFallbackUnsampledResult);
-  const numericPreviewFallbackNumericNames = new Set(['vw', 'vh', 'x', 'my', 'w']);
+  const numericPreviewFallbackNumericNames = new Set(['x']);
   const numericPreviewFallbackEntries = numericPreviewFallbackUnsampledProgram?.sampleCatalog.entries.filter(entry =>
     entry.expectedType === 'number' && numericPreviewFallbackNumericNames.has(entry.expression)) || [];
   const numericPreviewFallbackXEntry = numericPreviewFallbackEntries.find(entry => entry.expression === 'x');
@@ -5556,6 +5771,52 @@ const run = (): {
   const numericPreviewFallbackSampledProgram = numericPreviewFallbackSampledResult
     ? resultProgram(numericPreviewFallbackSampledResult)
     : undefined;
+  const numericPreviewFallbackChangedXSamples = numericPreviewFallbackSamples
+    ? {
+      ...numericPreviewFallbackSamples,
+      values: numericPreviewFallbackSamples.values.map(candidate => ({ ...candidate, value: 600 })),
+    }
+    : undefined;
+  const numericPreviewFallbackChangedXResult = numericPreviewFallbackChangedXSamples
+    ? projectX4UiLayoutProgram(
+      numericPreviewFallbackModelWithoutRootBinding,
+      numericPreviewFallbackTargetWithoutRootBinding,
+      numericPreviewFallbackProfile,
+      numericPreviewFallbackChangedXSamples,
+    )
+    : undefined;
+  const numericPreviewFallbackChangedXProgram = numericPreviewFallbackChangedXResult
+    ? resultProgram(numericPreviewFallbackChangedXResult)
+    : undefined;
+  const numericPreviewFallbackTextOperations = (program: X4UiLayoutProgram | undefined) =>
+    program?.operations.filter(candidate => candidate.kind === 'createText') || [];
+  const numericPreviewFallbackTextCellsFor = (program: X4UiLayoutProgram | undefined) => {
+    if (program === undefined) return [];
+    const textCellIds = new Set(
+      numericPreviewFallbackTextOperations(program)
+        .map(operationValue => operationValue.cellId)
+        .filter((cellId): cellId is string => cellId !== undefined),
+    );
+    return program.cells.filter(cell => cell.kernelState?.type === 'text' && textCellIds.has(cell.id));
+  };
+  const numericPreviewFallbackTextCellSignature = (
+    cells: readonly X4UiLayoutProgram['cells'][number][],
+  ) => cells.map(cell => ({
+    source: JSON.stringify(cell.source),
+    column: cell.column,
+    outerX: factValue(cell.descriptorFacts.outerX),
+    outerY: factValue(cell.descriptorFacts.outerY),
+    outerWidth: factValue(cell.descriptorFacts.outerWidth),
+    outerXProvenance: factProvenance(cell.descriptorFacts.outerX),
+    outerYProvenance: factProvenance(cell.descriptorFacts.outerY),
+    outerWidthProvenance: factProvenance(cell.descriptorFacts.outerWidth),
+  })).sort((left, right) => left.source.localeCompare(right.source));
+  const numericPreviewFallbackNonSampledFact = (
+    fact: X4UiLayoutProgram['frames'][number]['descriptorFacts'][string] | undefined,
+  ) => fact?.status === 'known'
+    && fact.provenance !== 'preview-sample'
+    && !('sampleId' in fact)
+    && !('sampleIds' in fact);
   const numericPreviewFallbackSampledAuthority = numericPreviewFallbackSampledResult
     ? evidenceAuthorityOf(numericPreviewFallbackSampledResult)
     : undefined;
@@ -5575,11 +5836,13 @@ const run = (): {
       && numericPreviewFallbackBaseProgram.sampleCatalog.entries.length === 0
       && factProvenance(numericPreviewFallbackBaseFrame?.descriptorFacts.x) === 'source-literal'
       && numericPreviewFallbackUnsampledProgram !== undefined
-      && numericPreviewFallbackEntries.map(entry => entry.expression).join(',') === 'vw,vh,x,my,w'
+      && numericPreviewFallbackEntries.map(entry => entry.expression).join(',') === 'x'
       && numericPreviewFallbackXEntry !== undefined
       && numericPreviewFallbackXEntry.source.start.line === 6
-      && numericPreviewFallbackXEntry.consumers.length === 3
+      && numericPreviewFallbackXEntry.consumers.length === 1
       && numericPreviewFallbackXEntry.consumers.every(consumer => consumer.field === 'x')
+      && numericPreviewFallbackSamples?.values.length === 1
+      && numericPreviewFallbackSamples.values[0].id === numericPreviewFallbackXEntry.id
       && factValue(numericPreviewFallbackUnsampledFrame?.descriptorFacts.x) === undefined
       && numericPreviewFallbackUnsampledFrame?.descriptorFacts.x.status === 'unavailable'
       && numericPreviewFallbackUnsampledFrame.descriptorFacts.x.reason.includes('numeric expression root has no exact source binding')
@@ -5590,7 +5853,7 @@ const run = (): {
       && factValue(numericPreviewFallbackSampledFrame.descriptorFacts.width) === 1920
       && factValue(numericPreviewFallbackSampledFrame.descriptorFacts.height) === 1080
       && numericPreviewFallbackSampledProgram.cells.length === 4
-      && numericPreviewFallbackSampledProgram.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 5
+      && numericPreviewFallbackSampledProgram.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 1
       && numericPreviewFallbackSampledSchema.threw === false
       && numericPreviewFallbackSampledSchema.valid === true,
     detail({
@@ -5624,6 +5887,190 @@ const run = (): {
           status: binding.status,
         })),
         schema: numericPreviewFallbackSampledSchema,
+      },
+    }));
+  const numericPreviewFallbackChangedXTextOperations = numericPreviewFallbackTextOperations(numericPreviewFallbackChangedXProgram);
+  const numericPreviewFallbackBaseTextCells = numericPreviewFallbackTextCellsFor(numericPreviewFallbackBaseProgram);
+  const numericPreviewFallbackUnsampledTextCells = numericPreviewFallbackTextCellsFor(numericPreviewFallbackUnsampledProgram);
+  const numericPreviewFallbackChangedXTextCells = numericPreviewFallbackTextCellsFor(numericPreviewFallbackChangedXProgram);
+  const numericPreviewFallbackChangedXTable = numericPreviewFallbackChangedXProgram?.tables[0];
+  check('B119 single lost frame-x binding exposes only x and never overrides known geometry or bound text-x uses',
+    numericPreviewFallbackChangedXResult?.status !== 'refused'
+      && numericPreviewFallbackChangedXProgram !== undefined
+      && numericPreviewFallbackChangedXProgram.sampleCatalog.entries.length === 1
+      && numericPreviewFallbackChangedXProgram.sampleCatalog.entries[0]?.expression === 'x'
+      && numericPreviewFallbackChangedXProgram.previewSampleBindings.length === 1
+      && numericPreviewFallbackChangedXProgram.previewSampleBindings[0]?.status === 'consumed'
+      && numericPreviewFallbackChangedXProgram.previewSampleBindings[0]?.value === 600
+      && numericPreviewFallbackChangedXProgram.frames[0]?.descriptorFacts.x.status === 'known'
+      && factValue(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.x) === 600
+      && factProvenance(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.x) === 'preview-sample'
+      && factValue(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.y) === 540
+      && factProvenance(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.y) === 'source-literal'
+      && factValue(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.width) === 1920
+      && factProvenance(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.width) === 'source-literal'
+      && factValue(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.height) === 1080
+      && factProvenance(numericPreviewFallbackChangedXProgram.frames[0].descriptorFacts.height) === 'source-literal'
+      && factValue(numericPreviewFallbackChangedXTable?.descriptorFacts.requestedWidth) === 530
+      && factProvenance(numericPreviewFallbackChangedXTable?.descriptorFacts.requestedWidth) === 'source-literal'
+      && numericPreviewFallbackChangedXTextOperations.length === 2
+      && numericPreviewFallbackChangedXTextOperations.every(operationValue =>
+        factValue(operationValue.descriptorFacts.outerX) === 695
+          && factProvenance(operationValue.descriptorFacts.outerX) === 'source-literal'
+          && factValue(operationValue.descriptorFacts.outerY) === 540
+          && factProvenance(operationValue.descriptorFacts.outerY) === 'source-literal')
+      && numericPreviewFallbackChangedXTextCells.length === 2
+      && numericPreviewFallbackChangedXTextCells.every(cell =>
+        factValue(cell.descriptorFacts.outerX) === 695
+          && factValue(cell.descriptorFacts.outerY) === 540
+          && factValue(cell.descriptorFacts.outerWidth) === 530
+          && numericPreviewFallbackNonSampledFact(cell.descriptorFacts.outerX)
+          && numericPreviewFallbackNonSampledFact(cell.descriptorFacts.outerY)
+          && numericPreviewFallbackNonSampledFact(cell.descriptorFacts.outerWidth))
+      && JSON.stringify(numericPreviewFallbackTextCellSignature(numericPreviewFallbackChangedXTextCells))
+        === JSON.stringify(numericPreviewFallbackTextCellSignature(numericPreviewFallbackUnsampledTextCells))
+      && JSON.stringify(numericPreviewFallbackTextCellSignature(numericPreviewFallbackChangedXTextCells))
+        === JSON.stringify(numericPreviewFallbackTextCellSignature(numericPreviewFallbackBaseTextCells))
+      && JSON.stringify(numericPreviewFallbackModel) === numericPreviewFallbackModelSnapshot
+      && JSON.stringify(numericPreviewFallbackModelWithoutRootBinding) === numericPreviewFallbackModelWithoutRootBindingSnapshot
+      && numericPreviewFallbackChangedXProgram.previewSampleBindings.every(binding =>
+        binding.id === numericPreviewFallbackXEntry?.id),
+    detail({
+      status: numericPreviewFallbackChangedXResult?.status,
+      catalog: numericPreviewFallbackChangedXProgram?.sampleCatalog.entries,
+      frame: numericPreviewFallbackChangedXProgram?.frames[0]?.descriptorFacts,
+      table: numericPreviewFallbackChangedXTable?.descriptorFacts,
+      textCells: numericPreviewFallbackChangedXTextCells.map(cell => cell.descriptorFacts),
+      textCellSignatures: {
+        base: numericPreviewFallbackTextCellSignature(numericPreviewFallbackBaseTextCells),
+        unsampled: numericPreviewFallbackTextCellSignature(numericPreviewFallbackUnsampledTextCells),
+        changed: numericPreviewFallbackTextCellSignature(numericPreviewFallbackChangedXTextCells),
+      },
+      modelImmutable: {
+        original: JSON.stringify(numericPreviewFallbackModel) === numericPreviewFallbackModelSnapshot,
+        fallback: JSON.stringify(numericPreviewFallbackModelWithoutRootBinding) === numericPreviewFallbackModelWithoutRootBindingSnapshot,
+      },
+      textOperations: numericPreviewFallbackChangedXTextOperations.map(operationValue => operationValue.descriptorFacts),
+      bindings: numericPreviewFallbackChangedXProgram?.previewSampleBindings,
+    }));
+  const numericPreviewFallbackAllXModelRecord = jsonClone(numericPreviewFallbackModel) as unknown as ValueRecord;
+  const numericPreviewFallbackAllXProperties = (numericPreviewFallbackAllXModelRecord.properties as ValueRecord[]).filter(property =>
+    property.name === 'x'
+      && (property.value as ValueRecord | undefined)?.expression === 'x');
+  let numericPreviewFallbackAllXContextMutations = 0;
+  for (const property of numericPreviewFallbackAllXProperties) {
+    const context = property.context as ValueRecord | undefined;
+    const source = context?.source as ValueRecord | undefined;
+    const start = source?.start as ValueRecord | undefined;
+    const end = source?.end as ValueRecord | undefined;
+    if (typeof start?.offset !== 'number' || typeof end?.offset !== 'number') continue;
+    start.offset += 1;
+    end.offset += 1;
+    numericPreviewFallbackAllXContextMutations += 1;
+  }
+  const numericPreviewFallbackAllXModel = freezeClone(
+    numericPreviewFallbackAllXModelRecord,
+  ) as unknown as X4UiCallModel;
+  const numericPreviewFallbackAllXModelSnapshot = JSON.stringify(numericPreviewFallbackAllXModel);
+  const numericPreviewFallbackAllXTarget = namedTarget(numericPreviewFallbackAllXModel, 'menu.display');
+  const numericPreviewFallbackAllXUnsampledResult = projectX4UiLayoutProgram(
+    numericPreviewFallbackAllXModel,
+    numericPreviewFallbackAllXTarget,
+    numericPreviewFallbackProfile,
+  );
+  const numericPreviewFallbackAllXUnsampledProgram = resultProgram(numericPreviewFallbackAllXUnsampledResult);
+  const numericPreviewFallbackAllXEntries = numericPreviewFallbackAllXUnsampledProgram?.sampleCatalog.entries.filter(entry =>
+    entry.expectedType === 'number') || [];
+  const numericPreviewFallbackAllXEntry = numericPreviewFallbackAllXEntries.find(entry => entry.expression === 'x');
+  const numericPreviewFallbackAllXSamples = numericPreviewFallbackAllXUnsampledProgram && numericPreviewFallbackAllXEntry
+    ? {
+      catalogId: numericPreviewFallbackAllXUnsampledProgram.sampleCatalog.id,
+      source: numericPreviewFallbackAllXUnsampledProgram.sampleCatalog.sourceIdentity,
+      values: [{ id: numericPreviewFallbackAllXEntry.id, value: 695 }],
+    }
+    : undefined;
+  const numericPreviewFallbackAllXSampledResult = numericPreviewFallbackAllXSamples
+    ? projectX4UiLayoutProgram(
+      numericPreviewFallbackAllXModel,
+      numericPreviewFallbackAllXTarget,
+      numericPreviewFallbackProfile,
+      numericPreviewFallbackAllXSamples,
+    )
+    : undefined;
+  const numericPreviewFallbackAllXSampledProgram = numericPreviewFallbackAllXSampledResult
+    ? resultProgram(numericPreviewFallbackAllXSampledResult)
+    : undefined;
+  const numericPreviewFallbackAllXSampledAuthority = numericPreviewFallbackAllXSampledResult
+    ? evidenceAuthorityOf(numericPreviewFallbackAllXSampledResult)
+    : undefined;
+  const numericPreviewFallbackAllXSampledSchema = numericPreviewFallbackAllXSampledProgram && numericPreviewFallbackAllXSampledAuthority
+    ? safeSchemaPairValidation(numericPreviewFallbackAllXSampledProgram, numericPreviewFallbackAllXSampledAuthority)
+    : { threw: false, valid: false, reason: 'all-x numeric preview fallback sample pair missing' };
+  const numericPreviewFallbackAllXOperationIds = numericPreviewFallbackAllXSampledProgram?.operations
+    .filter(operationValue => operationValue.kind === 'createFrameHandle' || operationValue.kind === 'createText')
+    .map(operationValue => operationValue.id) || [];
+  const numericPreviewFallbackAllXConsumerOperationIds = numericPreviewFallbackAllXEntry?.consumers
+    .map(consumer => consumer.operationId) || [];
+  const numericPreviewFallbackAllXPropertySources = numericPreviewFallbackAllXProperties.map(property =>
+    JSON.stringify((property.value as ValueRecord | undefined)?.location));
+  const numericPreviewFallbackAllXConsumerSources = numericPreviewFallbackAllXEntry?.consumers
+    .map(consumer => JSON.stringify(consumer.source)) || [];
+  const numericPreviewFallbackAllXSampledFacts = numericPreviewFallbackAllXSampledProgram
+    ? [
+      ...numericPreviewFallbackAllXSampledProgram.operations
+        .filter(operationValue => operationValue.kind === 'createFrameHandle')
+        .map(operationValue => operationValue.descriptorFacts.x),
+      ...numericPreviewFallbackAllXSampledProgram.operations
+        .filter(operationValue => operationValue.kind === 'createText')
+        .map(operationValue => operationValue.descriptorFacts.outerX),
+    ]
+    : [];
+  check('B119 separate all-unbound-x fixture preserves one root ID and three exact consumers',
+    numericPreviewFallbackAllXModel.file.text === numericPreviewFallbackModel.file.text
+      && numericPreviewFallbackAllXProperties.length === 3
+      && numericPreviewFallbackAllXContextMutations === numericPreviewFallbackAllXProperties.length
+      && numericPreviewFallbackAllXUnsampledResult.status !== 'refused'
+      && numericPreviewFallbackAllXUnsampledProgram !== undefined
+      && numericPreviewFallbackAllXEntries.length === 1
+      && numericPreviewFallbackAllXEntry !== undefined
+      && numericPreviewFallbackAllXEntry.source.start.line === 6
+      && numericPreviewFallbackAllXEntry.consumers.length === numericPreviewFallbackAllXProperties.length
+      && JSON.stringify([...numericPreviewFallbackAllXConsumerOperationIds].sort())
+        === JSON.stringify([...numericPreviewFallbackAllXOperationIds].sort())
+      && JSON.stringify([...numericPreviewFallbackAllXConsumerSources].sort())
+        === JSON.stringify([...numericPreviewFallbackAllXPropertySources].sort())
+      && numericPreviewFallbackAllXEntry.consumers.every(consumer => consumer.field === 'x')
+      && numericPreviewFallbackAllXSamples?.values[0]?.id === numericPreviewFallbackAllXEntry.id
+      && numericPreviewFallbackAllXSampledResult?.status !== 'refused'
+      && numericPreviewFallbackAllXSampledProgram !== undefined
+      && numericPreviewFallbackAllXSampledFacts.length === numericPreviewFallbackAllXProperties.length
+      && numericPreviewFallbackAllXSampledFacts.every(fact =>
+        fact.status === 'known' && fact.value === 695 && fact.provenance === 'preview-sample')
+      && numericPreviewFallbackAllXSampledProgram.previewSampleBindings.length === 1
+      && numericPreviewFallbackAllXSampledProgram.previewSampleBindings[0]?.status === 'consumed'
+      && numericPreviewFallbackAllXSampledProgram.previewSampleBindings[0]?.value === 695
+      && numericPreviewFallbackAllXSampledSchema.threw === false
+      && numericPreviewFallbackAllXSampledSchema.valid === true
+      && JSON.stringify(numericPreviewFallbackAllXModel) === numericPreviewFallbackAllXModelSnapshot
+      && JSON.stringify(numericPreviewFallbackModel) === numericPreviewFallbackModelSnapshot,
+    detail({
+      sourcePreserved: numericPreviewFallbackAllXModel.file.text === numericPreviewFallbackModel.file.text,
+      propertyCount: numericPreviewFallbackAllXProperties.length,
+      contextMutations: numericPreviewFallbackAllXContextMutations,
+      unsampled: {
+        status: numericPreviewFallbackAllXUnsampledResult.status,
+        entries: numericPreviewFallbackAllXEntries,
+      },
+      sampled: {
+        status: numericPreviewFallbackAllXSampledResult?.status,
+        entry: numericPreviewFallbackAllXEntry,
+        facts: numericPreviewFallbackAllXSampledFacts,
+        bindings: numericPreviewFallbackAllXSampledProgram?.previewSampleBindings,
+        schema: numericPreviewFallbackAllXSampledSchema,
+        modelImmutable: {
+          original: JSON.stringify(numericPreviewFallbackModel) === numericPreviewFallbackModelSnapshot,
+          allX: JSON.stringify(numericPreviewFallbackAllXModel) === numericPreviewFallbackAllXModelSnapshot,
+        },
       },
     }));
   const numericPreviewFallbackHostileModelRecord = jsonClone(
@@ -5678,9 +6125,11 @@ const run = (): {
     numericPreviewFallbackHostileMyCopies > 1
       && numericPreviewFallbackHostileResult?.status !== 'refused'
       && numericPreviewFallbackHostileProgram !== undefined
+      && numericPreviewFallbackSamples?.values.length === 1
       && numericPreviewFallbackHostileFrame?.descriptorFacts.y.status === 'unavailable'
       && numericPreviewFallbackHostileFrame.descriptorFacts.y.reason.includes('numeric expression operator or node kind is unsupported')
-      && numericPreviewFallbackHostileMyBinding?.status === 'not-applied'
+      && numericPreviewFallbackHostileMyEntry === undefined
+      && numericPreviewFallbackHostileMyBinding === undefined
       && numericPreviewFallbackHostileXBinding?.status === 'consumed',
     detail({
       mutatedCopies: numericPreviewFallbackHostileMyCopies,
@@ -5688,6 +6137,287 @@ const run = (): {
       y: numericPreviewFallbackHostileFrame?.descriptorFacts.y,
       myBinding: numericPreviewFallbackHostileMyBinding,
       xBinding: numericPreviewFallbackHostileXBinding,
+    }));
+  const numericPreviewFallbackForgedMySamples = numericPreviewFallbackSamples
+    ? {
+      ...numericPreviewFallbackSamples,
+      values: [
+        ...numericPreviewFallbackSamples.values,
+        { id: 'preview-sample:forged-my-id', value: 540 },
+      ],
+    }
+    : undefined;
+  const numericPreviewFallbackForgedMyResult = numericPreviewFallbackForgedMySamples
+    ? projectX4UiLayoutProgram(
+      numericPreviewFallbackHostileModel,
+      numericPreviewFallbackHostileTarget,
+      numericPreviewFallbackProfile,
+      numericPreviewFallbackForgedMySamples,
+    )
+    : undefined;
+  check('B119 forged or stale malformed-my sample ID refuses the whole input before geometry',
+    numericPreviewFallbackForgedMySamples !== undefined
+      && numericPreviewFallbackForgedMyResult?.status === 'refused'
+      && refusalCode(numericPreviewFallbackForgedMyResult) === 'invalid-samples'
+      && numericPreviewFallbackForgedMyResult.program === undefined,
+    detail({
+      status: numericPreviewFallbackForgedMyResult?.status,
+      refusal: numericPreviewFallbackForgedMyResult && refusalCode(numericPreviewFallbackForgedMyResult),
+      program: numericPreviewFallbackForgedMyResult?.program,
+      values: numericPreviewFallbackForgedMySamples?.values,
+    }));
+
+  const nestedNumericSampleInputFor = (
+    candidateProgram: X4UiLayoutProgram | undefined,
+    valuesByExpression: Readonly<Record<string, number>>,
+  ): X4UiLayoutPreviewSampleInput | undefined => {
+    if (candidateProgram === undefined) return undefined;
+    const entries = candidateProgram.sampleCatalog.entries.filter(entry => entry.expectedType === 'number');
+    const expectedExpressions = Object.keys(valuesByExpression).sort();
+    const actualExpressions = entries.map(entry => entry.expression).sort();
+    if (JSON.stringify(actualExpressions) !== JSON.stringify(expectedExpressions)) return undefined;
+    const values = entries.map(entry => {
+      const value = valuesByExpression[entry.expression];
+      return value === undefined ? undefined : { id: entry.id, value };
+    });
+    if (values.some(value => value === undefined)) return undefined;
+    return {
+      catalogId: candidateProgram.sampleCatalog.id,
+      source: candidateProgram.sampleCatalog.sourceIdentity,
+      values: values as Array<{ readonly id: string; readonly value: number }>,
+    };
+  };
+  const nestedNumericFactRecord = (fact: unknown): ValueRecord | undefined =>
+    fact !== null && typeof fact === 'object' && !Array.isArray(fact)
+      ? fact as ValueRecord
+      : undefined;
+  const canonicalNumericSampleIds = (value: unknown): value is readonly string[] => {
+    if (!Array.isArray(value) || value.length < 2 || value.length > 128) return false;
+    const keys = Reflect.ownKeys(value);
+    const denseKeys = Array.from({ length: value.length }, (_, index) => String(index));
+    if (Object.getPrototypeOf(value) !== Array.prototype
+      || JSON.stringify(keys) !== JSON.stringify([...denseKeys, 'length'])) return false;
+    const ids: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined
+        || !('value' in descriptor)
+        || descriptor.enumerable !== true
+        || typeof descriptor.value !== 'string'
+        || descriptor.value.length === 0) return false;
+      ids.push(descriptor.value);
+    }
+    return new Set(ids).size === ids.length
+      && JSON.stringify([...ids].sort()) === JSON.stringify(ids);
+  };
+  const nestedNumericSampleIdShapeControls = (() => {
+    const frozenDense = Object.freeze(['sample-a', 'sample-b']);
+    const trailingHole = ['sample-a', 'sample-b'];
+    delete trailingHole[1];
+    let accessorReads = 0;
+    const accessor = ['sample-a', 'sample-b'];
+    Object.defineProperty(accessor, '1', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        throw new Error('accessor-backed sample ID must not be read');
+      },
+    });
+    const extraOwnField = ['sample-a', 'sample-b'];
+    Object.defineProperty(extraOwnField, 'extra', {
+      configurable: true,
+      enumerable: false,
+      value: true,
+    });
+    return {
+      frozenDenseAccepted: canonicalNumericSampleIds(frozenDense),
+      trailingHoleAccepted: canonicalNumericSampleIds(trailingHole),
+      accessorAccepted: canonicalNumericSampleIds(accessor),
+      extraOwnFieldAccepted: canonicalNumericSampleIds(extraOwnField),
+      accessorReads,
+    };
+  })();
+  check('B119 fail-first numeric dependency arrays reject trailing holes and accessors without executing getters',
+      nestedNumericSampleIdShapeControls.frozenDenseAccepted === true
+      && nestedNumericSampleIdShapeControls.trailingHoleAccepted === false
+      && nestedNumericSampleIdShapeControls.accessorAccepted === false
+      && nestedNumericSampleIdShapeControls.extraOwnFieldAccepted === false
+      && nestedNumericSampleIdShapeControls.accessorReads === 0,
+    detail(nestedNumericSampleIdShapeControls));
+
+  const nestedNumericSingleSource = [
+    'local menu = { name = "NestedNumericSingle", layer = 4 }',
+    'function menu.display()',
+    '  local width = math.floor((runtimeWidth - 24) / 2)',
+    '  local widthAlias = width',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 160 })',
+    '  local table = frame:addTable(2, { width = 240, reserveScrollBar = false, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  table:setColWidth(2, widthAlias, false)',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText("nested", { height = 12, minRowHeight = 10 })',
+    '  row[2]:createText("alias", { height = 12, minRowHeight = 10 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const nestedNumericSingleModel = buildX4UiCallModel(input(
+    nestedNumericSingleSource,
+    'selftest/b119-nested-numeric-single.lua',
+  ));
+  const nestedNumericSingleModelBefore = JSON.stringify(nestedNumericSingleModel);
+  const nestedNumericSingleTarget = createX4UiLayoutTargetCatalog(nestedNumericSingleModel).targets.find(candidate =>
+    candidate.kind === 'function' && candidate.name === 'menu.display');
+  const nestedNumericSingleProfile = profileFor(nestedNumericSingleModel);
+  const nestedNumericSingleUnsampledResult = nestedNumericSingleTarget === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(nestedNumericSingleModel, nestedNumericSingleTarget, nestedNumericSingleProfile);
+  const nestedNumericSingleUnsampledProgram = nestedNumericSingleUnsampledResult === undefined
+    ? undefined
+    : resultProgram(nestedNumericSingleUnsampledResult);
+  const nestedNumericSingleSamples200 = nestedNumericSampleInputFor(nestedNumericSingleUnsampledProgram, { runtimeWidth: 200 });
+  const nestedNumericSingleSamples260 = nestedNumericSampleInputFor(nestedNumericSingleUnsampledProgram, { runtimeWidth: 260 });
+  const nestedNumericSingleSampled200Result = nestedNumericSingleTarget === undefined || nestedNumericSingleSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      nestedNumericSingleModel,
+      nestedNumericSingleTarget,
+      nestedNumericSingleProfile,
+      nestedNumericSingleSamples200,
+    );
+  const nestedNumericSingleSampled260Result = nestedNumericSingleTarget === undefined || nestedNumericSingleSamples260 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      nestedNumericSingleModel,
+      nestedNumericSingleTarget,
+      nestedNumericSingleProfile,
+      nestedNumericSingleSamples260,
+    );
+  const nestedNumericSingleSampled200Program = nestedNumericSingleSampled200Result === undefined
+    ? undefined
+    : resultProgram(nestedNumericSingleSampled200Result);
+  const nestedNumericSingleSampled260Program = nestedNumericSingleSampled260Result === undefined
+    ? undefined
+    : resultProgram(nestedNumericSingleSampled260Result);
+  const nestedNumericSingleWidthFacts = (candidateProgram: X4UiLayoutProgram | undefined) =>
+    candidateProgram?.operations
+      .filter(operationValue => operationValue.kind === 'setColWidth')
+      .map(operationValue => nestedNumericFactRecord(operationValue.descriptorFacts.width));
+  check('B119 fail-first nested numeric catalog exposes only runtimeWidth and evaluates 200/260 to 88/118',
+    nestedNumericSingleUnsampledProgram !== undefined
+      && nestedNumericSingleUnsampledProgram.sampleCatalog.entries.map(entry => entry.expression).join(',') === 'runtimeWidth'
+      && nestedNumericSingleSamples200 !== undefined
+      && nestedNumericSingleSamples260 !== undefined
+      && nestedNumericSingleSampled200Result?.status !== 'refused'
+      && nestedNumericSingleSampled260Result?.status !== 'refused'
+      && nestedNumericSingleWidthFacts(nestedNumericSingleSampled200Program)?.map(fact => fact?.value).join(',') === '88,88'
+      && nestedNumericSingleWidthFacts(nestedNumericSingleSampled260Program)?.map(fact => fact?.value).join(',') === '118,118'
+      && nestedNumericSingleWidthFacts(nestedNumericSingleSampled200Program)?.every(fact =>
+        fact?.status === 'known' && fact.provenance === 'preview-sample') === true
+      && nestedNumericSingleWidthFacts(nestedNumericSingleSampled260Program)?.every(fact =>
+        fact?.status === 'known' && fact.provenance === 'preview-sample') === true
+      && nestedNumericSingleSampled200Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 1
+      && nestedNumericSingleSampled260Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 1
+      && JSON.stringify(nestedNumericSingleModel) === nestedNumericSingleModelBefore,
+    detail({
+      unsampled: nestedNumericSingleUnsampledResult,
+      catalog: nestedNumericSingleUnsampledProgram?.sampleCatalog,
+      sampled200: nestedNumericSingleSampled200Program,
+      sampled260: nestedNumericSingleSampled260Program,
+    }));
+  const nestedNumericSingleSampleId = nestedNumericSingleUnsampledProgram?.sampleCatalog.entries[0]?.id;
+  const nestedNumericSingleIdShape = [
+    nestedNumericSingleSampled200Program,
+    nestedNumericSingleSampled260Program,
+  ].map(candidateProgram => {
+    const fact = nestedNumericSingleWidthFacts(candidateProgram)?.[0];
+    return {
+      sampleId: fact?.sampleId,
+      sampleIds: fact?.sampleIds,
+      expected: nestedNumericSingleSampleId,
+    };
+  });
+  check('B119 fail-first one-input numeric facts keep the singular sampleId form and omit sampleIds',
+    nestedNumericSingleSampleId !== undefined
+      && nestedNumericSingleIdShape.every(candidate =>
+        candidate.sampleId === candidate.expected && candidate.sampleIds === undefined),
+    detail(nestedNumericSingleIdShape));
+
+  const nestedNumericUnionSource = [
+    'local menu = { name = "NestedNumericUnion", layer = 4 }',
+    'function menu.display()',
+    '  local width = math.floor((runtimeWidth - runtimePadding) / 2)',
+    '  local widthAlias = width',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 160 })',
+    '  local table = frame:addTable(2, { width = 240, reserveScrollBar = false, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  table:setColWidth(2, widthAlias, false)',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText("union", { height = 12, minRowHeight = 10 })',
+    '  row[2]:createText("dedup", { height = 12, minRowHeight = 10 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const nestedNumericUnionModel = buildX4UiCallModel(input(
+    nestedNumericUnionSource,
+    'selftest/b119-nested-numeric-union.lua',
+  ));
+  const nestedNumericUnionModelBefore = JSON.stringify(nestedNumericUnionModel);
+  const nestedNumericUnionTarget = createX4UiLayoutTargetCatalog(nestedNumericUnionModel).targets.find(candidate =>
+    candidate.kind === 'function' && candidate.name === 'menu.display');
+  const nestedNumericUnionProfile = profileFor(nestedNumericUnionModel);
+  const nestedNumericUnionUnsampledResult = nestedNumericUnionTarget === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(nestedNumericUnionModel, nestedNumericUnionTarget, nestedNumericUnionProfile);
+  const nestedNumericUnionUnsampledProgram = nestedNumericUnionUnsampledResult === undefined
+    ? undefined
+    : resultProgram(nestedNumericUnionUnsampledResult);
+  const nestedNumericUnionSampleInputs = [
+    { runtimeWidth: 200, runtimePadding: 24 },
+    { runtimeWidth: 260, runtimePadding: 24 },
+    { runtimeWidth: 200, runtimePadding: 20 },
+  ].map(values => nestedNumericSampleInputFor(nestedNumericUnionUnsampledProgram, values));
+  const nestedNumericUnionSampledResults = nestedNumericUnionTarget === undefined
+    ? []
+    : nestedNumericUnionSampleInputs.map(samples => samples === undefined
+      ? undefined
+      : projectX4UiLayoutProgram(nestedNumericUnionModel, nestedNumericUnionTarget, nestedNumericUnionProfile, samples));
+  const nestedNumericUnionPrograms = nestedNumericUnionSampledResults.map(resultValue =>
+    resultValue === undefined ? undefined : resultProgram(resultValue));
+  const nestedNumericUnionFacts = nestedNumericUnionPrograms.map(candidateProgram =>
+    candidateProgram?.operations
+      .filter(operationValue => operationValue.kind === 'setColWidth')
+      .map(operationValue => nestedNumericFactRecord(operationValue.descriptorFacts.width)) || []);
+  const nestedNumericUnionExpectedIds = nestedNumericUnionUnsampledProgram?.sampleCatalog.entries
+    .filter(entry => entry.expectedType === 'number')
+    .map(entry => entry.id)
+    .sort();
+  const nestedNumericUnionDependencyShape = nestedNumericUnionFacts.flatMap(facts => facts).map(fact => ({
+    sampleId: fact?.sampleId,
+    sampleIds: fact?.sampleIds,
+    value: fact?.value,
+    canonical: canonicalNumericSampleIds(fact?.sampleIds),
+  }));
+  check('B119 fail-first nested numeric facts union two independent base inputs, deduplicate the shared root, and preserve 88/118/90 variation',
+    nestedNumericUnionUnsampledProgram !== undefined
+      && nestedNumericUnionUnsampledProgram.sampleCatalog.entries.map(entry => entry.expression).sort().join(',') === 'runtimePadding,runtimeWidth'
+      && nestedNumericUnionSampleInputs.every(samples => samples !== undefined)
+      && nestedNumericUnionSampledResults.every(resultValue => resultValue?.status !== 'refused')
+      && nestedNumericUnionFacts.every(facts => facts.length === 2 && facts.every(fact =>
+        fact?.status === 'known' && fact.provenance === 'preview-sample'))
+      && nestedNumericUnionFacts.map(facts => facts.map(fact => fact?.value).join(',')).join('|') === '88,88|118,118|90,90'
+      && nestedNumericUnionDependencyShape.every(candidate =>
+        candidate.sampleId === undefined
+          && candidate.canonical
+          && JSON.stringify(candidate.sampleIds) === JSON.stringify(nestedNumericUnionExpectedIds))
+      && nestedNumericUnionPrograms.every(candidateProgram =>
+        candidateProgram?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 2)
+      && JSON.stringify(nestedNumericUnionModel) === nestedNumericUnionModelBefore,
+    detail({
+      unsampled: nestedNumericUnionUnsampledResult,
+      catalog: nestedNumericUnionUnsampledProgram?.sampleCatalog,
+      sampled: nestedNumericUnionPrograms,
+      dependencies: nestedNumericUnionDependencyShape,
     }));
   check('B119 exact pipeline local scale results project one frame/table, six rows, and twelve owned base cells',
     pipelineAtOneResult.status !== 'refused'
@@ -6487,6 +7217,852 @@ const run = (): {
       aliases: copiedAliasModel.aliases.filter(alias => alias.name === 'vw' || alias.name === 'copied'),
     }));
 
+  const projectNumericAliasChain = (source: string, rel: string) => {
+    const model = buildX4UiCallModel(input(source, rel));
+    const result = projectX4UiLayoutProgram(model, namedTarget(model, 'menu.display'), profileFor(model));
+    return { model, result, program: resultProgram(result) };
+  };
+  const numericAliasTwoHopSource = [
+    'local menu = { name = "NumericAliasTwoHop", layer = 4 }',
+    'function menu.display()',
+    '  local vw = Helper.viewWidth',
+    '  local mx = math.floor(vw * (36 / 2560))',
+    '  local x = mx',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const numericAliasTwoHop = projectNumericAliasChain(
+    numericAliasTwoHopSource,
+    'selftest/b119-numeric-alias-two-hop.lua',
+  );
+  const numericAliasTwoHopFrame = numericAliasTwoHop.program?.frames[0];
+  check('B119 transitive numeric alias proof admits an exact two-hop math root',
+    numericAliasTwoHop.result.status !== 'refused'
+      && numericAliasTwoHopFrame?.descriptorFacts.x.status === 'known'
+      && factValue(numericAliasTwoHopFrame.descriptorFacts.x) === 1
+      && numericAliasTwoHop.model.aliases.some(alias => alias.name === 'mx' && alias.value.numericExpression?.kind === 'math-call')
+      && numericAliasTwoHop.model.aliases.some(alias => alias.name === 'x' && alias.value.numericExpression?.kind === 'math-call'),
+    detail({
+      status: numericAliasTwoHop.result.status,
+      frameX: numericAliasFactDetail(numericAliasTwoHopFrame?.descriptorFacts.x),
+      aliasNames: numericAliasTwoHop.model.aliases
+        .filter(alias => alias.name === 'mx' || alias.name === 'x')
+        .map(alias => alias.name),
+    }));
+
+  const numericAliasAssignmentFormula = 'math.floor(Helper.viewWidth * (36 / 2560))';
+  const projectNumericAliasAssignmentFixture = (body: readonly string[], rel: string) => {
+    const source = [
+      'local menu = { name = "NumericAliasAssignment", layer = 4 }',
+      'function menu.display()',
+      ...body.map(line => `  ${line}`),
+      '  local frame = Helper.createFrameHandle(menu, { x = x, width = 80, height = 80, layer = 4 })',
+      '  frame:display()',
+      'end',
+    ].join('\n');
+    const model = buildX4UiCallModel(input(source, rel));
+    const result = projectX4UiLayoutProgram(model, namedTarget(model, 'menu.display'), profileFor(model));
+    return { model, result, program: resultProgram(result) };
+  };
+  const numericAliasAssignmentPositiveCases = [
+    {
+      name: 'direct-local-control',
+      body: [`local x = ${numericAliasAssignmentFormula}`],
+    },
+    {
+      name: 'assignment-after-empty-declaration',
+      body: ['local x', `x = ${numericAliasAssignmentFormula}`],
+    },
+    {
+      name: 'assignment-after-literal-declaration',
+      body: ['local x = 0', `x = ${numericAliasAssignmentFormula}`],
+    },
+    {
+      name: 'transitive-assignment-root',
+      body: ['local mx', `mx = ${numericAliasAssignmentFormula}`, 'local x = mx'],
+    },
+  ] as const;
+  const numericAliasAssignmentPositiveResults = numericAliasAssignmentPositiveCases.map(candidate => ({
+    ...candidate,
+    projection: projectNumericAliasAssignmentFixture(
+      candidate.body,
+      `selftest/b119-numeric-alias-${candidate.name}.lua`,
+    ),
+  }));
+  const numericAliasAssignmentNegativeCases = [
+    {
+      name: 'reachable-later-write',
+      body: ['local x', `x = ${numericAliasAssignmentFormula}`, 'x = getWidth()'],
+      expectedKnown: false,
+    },
+    {
+      name: 'shadowed-local-assignment',
+      body: [
+        'local x',
+        'do',
+        `  local x`,
+        `  x = ${numericAliasAssignmentFormula}`,
+        'end',
+      ],
+      expectedKnown: false,
+    },
+    {
+      name: 'wrong-scope-assignment',
+      body: [
+        'local x',
+        'local function other()',
+        `  local x`,
+        `  x = ${numericAliasAssignmentFormula}`,
+        'end',
+        'other()',
+      ],
+      expectedKnown: false,
+    },
+    {
+      name: 'capture-before-later-write',
+      body: [`local mx = ${numericAliasAssignmentFormula}`, 'local x = mx', 'mx = getWidth()'],
+      expectedKnown: true,
+    },
+    {
+      name: 'unsafe-capture-replacement',
+      body: [`local mx = ${numericAliasAssignmentFormula}`, 'local x = mx', 'x = getWidth()'],
+      expectedKnown: false,
+    },
+  ] as const;
+  const numericAliasAssignmentNegativeResults = numericAliasAssignmentNegativeCases.map(candidate => ({
+    ...candidate,
+    projection: projectNumericAliasAssignmentFixture(
+      candidate.body,
+      `selftest/b119-numeric-alias-${candidate.name}.lua`,
+    ),
+  }));
+  const numericAliasAssignmentSummary = (projection: {
+    readonly model: X4UiCallModel;
+    readonly result: ReturnType<typeof projectX4UiLayoutProgram>;
+    readonly program?: X4UiLayoutProgram;
+  }) => ({
+    status: projection.result.status,
+    frameX: numericAliasFactDetail(projection.program?.frames[0]?.descriptorFacts.x),
+    aliases: projection.model.aliases
+      .filter(alias => alias.name === 'x' || alias.name === 'mx')
+      .map(alias => ({ name: alias.name, kind: alias.aliasKind, sourceLine: alias.source.start.line })),
+  });
+  check('B119 assigned-local numeric aliases accept the direct control and all three assignment forms (4/4)',
+    numericAliasAssignmentPositiveResults.every(candidate =>
+      candidate.projection.result.status !== 'refused'
+        && candidate.projection.program?.frames[0]?.descriptorFacts.x.status === 'known'
+        && factValue(candidate.projection.program.frames[0].descriptorFacts.x) === 1),
+    detail({
+      passed: numericAliasAssignmentPositiveResults.filter(candidate =>
+        candidate.projection.result.status !== 'refused'
+          && candidate.projection.program?.frames[0]?.descriptorFacts.x.status === 'known'
+          && factValue(candidate.projection.program.frames[0].descriptorFacts.x) === 1).length,
+      total: numericAliasAssignmentPositiveResults.length,
+      cases: numericAliasAssignmentPositiveResults.map(candidate => ({
+        name: candidate.name,
+        ...numericAliasAssignmentSummary(candidate.projection),
+      })),
+    }));
+  check('B119 assigned-local numeric alias proof preserves capture ordering and rejects same-owner writes and wrong scopes',
+    numericAliasAssignmentNegativeResults.every(candidate => {
+      const fact = candidate.projection.program?.frames[0]?.descriptorFacts.x;
+      return candidate.expectedKnown
+        ? candidate.projection.result.status !== 'refused' && fact?.status === 'known' && factValue(fact) === 1
+        : candidate.projection.result.status === 'refused' || fact?.status !== 'known';
+    }),
+    detail(numericAliasAssignmentNegativeResults.map(candidate => ({
+      name: candidate.name,
+      expectedKnown: candidate.expectedKnown,
+      ...numericAliasAssignmentSummary(candidate.projection),
+    }))));
+
+  const numericAliasMultiHopSource = [
+    'local menu = { name = "NumericAliasMultiHop", layer = 4 }',
+    'function menu.display()',
+    '  local vw = Helper.viewWidth',
+    '  local ratio = 36 / 2560',
+    '  local mx = math.floor(vw * ratio)',
+    '  local xAlias = mx',
+    '  local x = xAlias',
+    '  local yRoot = math.ceil(vw * (500 / 2560))',
+    '  local yAlias = yRoot',
+    '  local y = yAlias',
+    '  xAlias = getWidth()',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, y = y, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const numericAliasMultiHop = projectNumericAliasChain(
+    numericAliasMultiHopSource,
+    'selftest/b119-numeric-alias-multi-hop.lua',
+  );
+  const numericAliasMultiHopFrame = numericAliasMultiHop.program?.frames[0];
+  const numericAliasMultiHopNames = new Set(['vw', 'ratio', 'mx', 'xAlias', 'x', 'yRoot', 'yAlias', 'y']);
+  const numericAliasMultiHopRecords = numericAliasMultiHop.model.aliases.filter(alias => numericAliasMultiHopNames.has(alias.name));
+  check('B119 transitive numeric alias proof follows longer arithmetic/math chains at the capture point',
+    numericAliasMultiHop.result.status !== 'refused'
+      && numericAliasMultiHopFrame?.descriptorFacts.x.status === 'known'
+      && factValue(numericAliasMultiHopFrame.descriptorFacts.x) === 1
+      && numericAliasMultiHopFrame.descriptorFacts.y.status === 'known'
+      && factValue(numericAliasMultiHopFrame.descriptorFacts.y) === 20
+      && numericAliasMultiHopRecords.filter(alias => ['mx', 'xAlias', 'x', 'yRoot', 'yAlias', 'y'].includes(alias.name))
+        .every(alias => alias.value.numericExpression !== undefined),
+    detail({
+      status: numericAliasMultiHop.result.status,
+      frame: {
+        x: numericAliasFactDetail(numericAliasMultiHopFrame?.descriptorFacts.x),
+        y: numericAliasFactDetail(numericAliasMultiHopFrame?.descriptorFacts.y),
+      },
+      aliasNames: numericAliasMultiHopRecords.map(alias => alias.name),
+    }));
+
+  const projectNumericAliasDisplayFixture = (
+    prefix: readonly string[],
+    body: readonly string[],
+    rel: string,
+  ) => projectNumericAliasChain([
+    'local menu = { name = "NumericAliasNegative", layer = 4 }',
+    ...prefix,
+    'function menu.display()',
+    ...body.map(line => `  ${line}`),
+    '  local frame = Helper.createFrameHandle(menu, { x = x, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n'), rel);
+  const numericAliasNegativeCases = [
+    {
+      name: 'reassigned alias',
+      prefix: [],
+      body: [
+        'local vw = Helper.viewWidth',
+        'local mx = math.floor(vw * (36 / 2560))',
+        'local x = mx',
+        'x = getWidth()',
+      ],
+    },
+    {
+      name: 'reachable conditional reassignment',
+      prefix: [],
+      body: [
+        'local vw = Helper.viewWidth',
+        'local mx = math.floor(vw * (36 / 2560))',
+        'local x = mx',
+        'if pending then x = getWidth() end',
+      ],
+    },
+    {
+      name: 'same-name alias in another function',
+      prefix: [
+        'local function other()',
+        '  local vw = Helper.viewWidth',
+        '  local mx = math.floor(vw * (36 / 2560))',
+        '  return mx',
+        'end',
+      ],
+      body: ['local x = mx'],
+    },
+    {
+      name: 'shadowed same-name alias',
+      prefix: [],
+      body: [
+        'local vw = Helper.viewWidth',
+        'local mx = math.floor(vw * (36 / 2560))',
+        'local mx = getWidth()',
+        'local x = mx',
+      ],
+    },
+    {
+      name: 'do-block alias out of scope',
+      prefix: [],
+      body: [
+        'local vw = Helper.viewWidth',
+        'local mx = math.floor(vw * (36 / 2560))',
+        'do',
+        '  local x = mx',
+        'end',
+      ],
+    },
+    {
+      name: 'elseif and else aliases out of scope',
+      prefix: [],
+      body: [
+        'local vw = Helper.viewWidth',
+        'local mx = math.floor(vw * (36 / 2560))',
+        'if pending then',
+        '  local x = mx',
+        'elseif otherPending then',
+        '  local x = mx',
+        'else',
+        '  local x = mx',
+        'end',
+      ],
+    },
+    {
+      name: 'future binding',
+      prefix: [],
+      body: [
+        'local x = mx',
+        'local vw = Helper.viewWidth',
+        'local mx = math.floor(vw * (36 / 2560))',
+      ],
+    },
+  ].map(candidate => ({
+    ...candidate,
+    projection: projectNumericAliasDisplayFixture(
+      candidate.prefix,
+      candidate.body,
+      `selftest/b119-numeric-alias-${candidate.name.replaceAll(' ', '-')}.lua`,
+    ),
+  }));
+  check('B119 transitive numeric aliases refuse reassignment, conditional reachability, shadowing, and future bindings',
+    numericAliasNegativeCases.every(candidate => {
+      const frameX = candidate.projection.program?.frames[0]?.descriptorFacts.x;
+      return candidate.projection.result.status === 'refused' || frameX?.status !== 'known';
+    }),
+    detail(numericAliasNegativeCases.map(candidate => ({
+      name: candidate.name,
+      status: candidate.projection.result.status,
+      frameX: numericAliasFactDetail(candidate.projection.program?.frames[0]?.descriptorFacts.x),
+      aliasNames: candidate.projection.model.aliases
+        .filter(alias => alias.name === 'x' || alias.name === 'mx')
+        .map(alias => alias.name),
+    }))));
+
+  const numericAliasSimultaneousInitializer = projectNumericAliasChain([
+    'local menu = { name = "NumericAliasSimultaneousInitializer", layer = 4 }',
+    'function menu.display()',
+    '  local vw = Helper.viewWidth',
+    '  local mx = math.floor(vw * (36 / 2560))',
+    '  local x, y = mx, x',
+    '  local frame = Helper.createFrameHandle(menu, { x = y, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-alias-simultaneous-initializer.lua');
+  check('B119 simultaneous local initializers do not self-capture a same-name numeric alias',
+    numericAliasSimultaneousInitializer.result.status !== 'refused'
+      && numericAliasSimultaneousInitializer.program?.frames[0]?.descriptorFacts.x.status !== 'known',
+    detail({
+      status: numericAliasSimultaneousInitializer.result.status,
+      frameX: numericAliasFactDetail(numericAliasSimultaneousInitializer.program?.frames[0]?.descriptorFacts.x),
+      aliasNames: numericAliasSimultaneousInitializer.model.aliases
+        .filter(alias => alias.name === 'x' || alias.name === 'y' || alias.name === 'mx')
+        .map(alias => alias.name),
+    }));
+
+  const numericAliasUnreachableReassignment = projectNumericAliasChain([
+    'local menu = { name = "NumericAliasUnreachableReassignment", layer = 4 }',
+    'function menu.display()',
+    '  local vw = Helper.viewWidth',
+    '  local mx = math.floor(vw * (36 / 2560))',
+    '  local x = mx',
+    '  if false then x = getWidth() end',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-alias-unreachable-reassignment.lua');
+  const numericAliasUnreachableXValue = numericAliasUnreachableReassignment.model.calls
+    .find(call => call.name === 'createFrameHandle')
+    ?.semantics.properties
+    ?.find(property => property.normalizedName === 'x')
+    ?.value;
+  check('B119 proven-unreachable alias writes do not invalidate a captured numeric root',
+    numericAliasUnreachableReassignment.result.status !== 'refused'
+      && numericAliasUnreachableReassignment.program?.frames[0]?.descriptorFacts.x.status === 'known'
+      && factValue(numericAliasUnreachableReassignment.program.frames[0].descriptorFacts.x) === 1,
+    detail({
+      status: numericAliasUnreachableReassignment.result.status,
+      parser: numericAliasUnreachableXValue
+        ? {
+          status: numericAliasUnreachableXValue.status,
+          type: numericAliasUnreachableXValue.type,
+          expression: numericAliasUnreachableXValue.expression,
+          hasNumericExpression: numericAliasUnreachableXValue.numericExpression !== undefined,
+        }
+        : undefined,
+      frameX: numericAliasFactDetail(numericAliasUnreachableReassignment.program?.frames[0]?.descriptorFacts.x),
+    }));
+
+  const numericAliasRootExpression = 'math.floor(vw * ratio)';
+  const projectNumericAliasMutation = (
+    record: ValueRecord,
+    freeze = true,
+    targetModel: X4UiCallModel = numericAliasMultiHop.model,
+  ): {
+    readonly threw: boolean;
+    readonly result?: ReturnType<typeof projectX4UiLayoutProgram>;
+    readonly program?: X4UiLayoutProgram;
+    readonly error?: string;
+  } => {
+    try {
+      const model = (freeze ? freezeClone(record) : record) as unknown as X4UiCallModel;
+      const result = projectX4UiLayoutProgram(model, namedTarget(targetModel, 'menu.display'), profileFor(targetModel));
+      return { threw: false, result, program: resultProgram(result) };
+    } catch (error) {
+      return { threw: true, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  type NumericAliasDiagnosticProjection = {
+    readonly threw?: boolean;
+    readonly result?: ReturnType<typeof projectX4UiLayoutProgram>;
+    readonly program?: X4UiLayoutProgram;
+    readonly error?: string;
+  };
+  const numericAliasDiagnostic = (projection: NumericAliasDiagnosticProjection) => {
+    const frame = projection.program?.frames[0];
+    const fact = frame?.descriptorFacts.x;
+    const result = projection.result;
+    const refusal = result && 'refusal' in result ? result.refusal : undefined;
+    return {
+      status: result?.status ?? (projection.threw === true ? 'threw' : 'missing'),
+      x: fact ? { status: fact.status, value: factValue(fact), expression: fact.expression } : undefined,
+      reason: projection.error
+        ?? refusal?.message
+        ?? (fact?.status === 'unavailable' ? fact.reason : undefined),
+    };
+  };
+
+  check('B119 exact root fallback remains sample-eligible while source-bound geometry stays nonfallback',
+    numericPreviewFallbackUnsampledFrame?.descriptorFacts.x.status === 'unavailable'
+      && numericPreviewFallbackUnsampledFrame.descriptorFacts.x.reason.includes('numeric expression root has no exact source binding')
+      && numericPreviewFallbackSamples !== undefined
+      && numericPreviewFallbackSampledResult?.status !== 'refused'
+      && numericPreviewFallbackSampledFrame?.descriptorFacts.x.status === 'known'
+      && factProvenance(numericPreviewFallbackSampledFrame.descriptorFacts.x) === 'preview-sample'
+      && factValue(numericPreviewFallbackSampledFrame.descriptorFacts.x) === 695,
+    detail({
+      unsampled: {
+        status: numericPreviewFallbackUnsampledResult.status,
+        x: numericAliasFactDetail(numericPreviewFallbackUnsampledFrame?.descriptorFacts.x),
+      },
+      attemptedSample: numericPreviewFallbackSamples !== undefined,
+      sampled: {
+        status: numericPreviewFallbackSampledResult?.status,
+        x: numericAliasFactDetail(numericPreviewFallbackSampledFrame?.descriptorFacts.x),
+      },
+    }));
+
+  const numericAliasSampleClassificationSource = [
+    'local menu = { name = "NumericAliasSampleClassification", layer = 4 }',
+    'function menu.display()',
+    '  local vw = Helper.viewWidth',
+    '  local root = math.floor(vw * (36 / 2560))',
+    '  local x = root',
+    '  x = getWidth()',
+    '  local yRoot = math.floor(vw * (500 / 2560))',
+    '  local y = yRoot',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, y = y, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const numericAliasSampleClassificationModel = buildX4UiCallModel(input(
+    numericAliasSampleClassificationSource,
+    'selftest/b119-numeric-alias-sample-classification.lua',
+  ));
+  const numericAliasSampleClassificationRecord = jsonClone(numericAliasSampleClassificationModel) as unknown as ValueRecord;
+  const numericAliasSampleClassificationXDescriptor = numericAliasSampleClassificationModel.aliases
+    .find(alias => alias.name === 'x')
+    ?.value.numericExpression;
+  let numericAliasSampleClassificationXCopies = 0;
+  let numericAliasSampleClassificationYContexts = 0;
+  const mutateNumericAliasSampleClassification = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(mutateNumericAliasSampleClassification);
+      return;
+    }
+    if (value === null || typeof value !== 'object') return;
+    const record = value as ValueRecord;
+    const candidateValue = record.value;
+    if ((record.recordType === 'property' || record.normalizedName === 'x')
+      && (record.name === 'x' || record.normalizedName === 'x')
+      && candidateValue !== null
+      && typeof candidateValue === 'object'
+      && (candidateValue as ValueRecord).expression === 'x'
+      && numericAliasSampleClassificationXDescriptor !== undefined) {
+      (candidateValue as ValueRecord).numericExpression = jsonClone(numericAliasSampleClassificationXDescriptor);
+      numericAliasSampleClassificationXCopies += 1;
+    }
+    if (record.recordType === 'property' && record.name === 'y') {
+      const context = record.context as ValueRecord | undefined;
+      const source = context?.source as ValueRecord | undefined;
+      const start = source?.start as ValueRecord | undefined;
+      const end = source?.end as ValueRecord | undefined;
+      if (typeof start?.offset === 'number' && typeof end?.offset === 'number') {
+        start.offset += 1;
+        end.offset += 1;
+        numericAliasSampleClassificationYContexts += 1;
+      }
+    }
+    Object.values(record).forEach(mutateNumericAliasSampleClassification);
+  };
+  mutateNumericAliasSampleClassification(numericAliasSampleClassificationRecord);
+  const numericAliasSampleClassificationModelWithoutSamples = numericAliasSampleClassificationRecord as unknown as X4UiCallModel;
+  const numericAliasSampleClassificationTarget = namedTarget(numericAliasSampleClassificationModelWithoutSamples, 'menu.display');
+  const numericAliasSampleClassificationProfile = profileFor(numericAliasSampleClassificationModelWithoutSamples);
+  const numericAliasSampleClassificationXValue = numericAliasSampleClassificationModelWithoutSamples.calls
+    .find(call => call.name === 'createFrameHandle')
+    ?.semantics.properties
+    ?.find(property => property.normalizedName === 'x')
+    ?.value;
+  const numericAliasSampleClassificationUnsampledResult = projectX4UiLayoutProgram(
+    numericAliasSampleClassificationModelWithoutSamples,
+    numericAliasSampleClassificationTarget,
+    numericAliasSampleClassificationProfile,
+  );
+  const numericAliasSampleClassificationUnsampledProgram = resultProgram(numericAliasSampleClassificationUnsampledResult);
+  const numericAliasSampleClassificationSamples: X4UiLayoutPreviewSampleInput | undefined = numericAliasSampleClassificationUnsampledProgram
+    ? {
+      catalogId: numericAliasSampleClassificationUnsampledProgram.sampleCatalog.id,
+      source: numericAliasSampleClassificationUnsampledProgram.sampleCatalog.sourceIdentity,
+      values: numericAliasSampleClassificationUnsampledProgram.sampleCatalog.entries.map(entry => ({
+        id: entry.id,
+        value: entry.expectedType === 'number' ? (entry.expression === 'x' ? 777 : 888)
+          : entry.expectedType === 'boolean' ? true : 'sample',
+      })),
+    }
+    : undefined;
+  const numericAliasSampleClassificationSampledResult = numericAliasSampleClassificationSamples
+    ? projectX4UiLayoutProgram(
+      numericAliasSampleClassificationModelWithoutSamples,
+      numericAliasSampleClassificationTarget,
+      numericAliasSampleClassificationProfile,
+      numericAliasSampleClassificationSamples,
+    )
+    : undefined;
+  const numericAliasSampleClassificationSampledProgram = numericAliasSampleClassificationSampledResult
+    ? resultProgram(numericAliasSampleClassificationSampledResult)
+    : undefined;
+  check('B119 nonfallback reassignment rejects an attempted numeric sample while an exact fallback sample still applies',
+    numericAliasSampleClassificationXCopies > 0
+      && numericAliasSampleClassificationYContexts > 0
+      && numericAliasSampleClassificationUnsampledProgram !== undefined
+      && numericAliasSampleClassificationUnsampledProgram.frames[0]?.descriptorFacts.x.status === 'unavailable'
+      && numericAliasSampleClassificationUnsampledProgram.frames[0].descriptorFacts.x.reason
+        .includes('numeric expression binding was reassigned before use')
+      && numericAliasSampleClassificationSamples !== undefined
+      && numericAliasSampleClassificationSampledResult?.status !== 'refused'
+      && numericAliasSampleClassificationSampledProgram?.frames[0]?.descriptorFacts.x.status === 'unavailable'
+      && numericAliasSampleClassificationSampledProgram.frames[0].descriptorFacts.x.reason
+        .includes('numeric expression binding was reassigned before use')
+      && numericAliasSampleClassificationSampledProgram.frames[0].descriptorFacts.y.status === 'known'
+      && factProvenance(numericAliasSampleClassificationSampledProgram.frames[0].descriptorFacts.y) === 'preview-sample',
+    detail({
+      mutation: {
+        xCopies: numericAliasSampleClassificationXCopies,
+        yContexts: numericAliasSampleClassificationYContexts,
+      },
+      parser: numericAliasSampleClassificationXValue
+        ? {
+          status: numericAliasSampleClassificationXValue.status,
+          type: numericAliasSampleClassificationXValue.type,
+          expression: numericAliasSampleClassificationXValue.expression,
+          hasNumericExpression: numericAliasSampleClassificationXValue.numericExpression !== undefined,
+        }
+        : undefined,
+      unsampled: {
+        status: numericAliasSampleClassificationUnsampledResult.status,
+        x: numericAliasFactDetail(numericAliasSampleClassificationUnsampledProgram?.frames[0]?.descriptorFacts.x),
+        y: numericAliasFactDetail(numericAliasSampleClassificationUnsampledProgram?.frames[0]?.descriptorFacts.y),
+      },
+      attemptedSample: numericAliasSampleClassificationSamples !== undefined,
+      sampled: {
+        status: numericAliasSampleClassificationSampledResult?.status,
+        x: numericAliasFactDetail(numericAliasSampleClassificationSampledProgram?.frames[0]?.descriptorFacts.x),
+        y: numericAliasFactDetail(numericAliasSampleClassificationSampledProgram?.frames[0]?.descriptorFacts.y),
+      },
+    }));
+
+  const numericAliasForeignRootRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasForeignRootMutation = mutateAllNumericDescriptorCopies(
+    numericAliasForeignRootRecord,
+    numericAliasRootExpression,
+    descriptor => {
+      const source = descriptor.source as ValueRecord | undefined;
+      if (!source) return 0;
+      source.file = 'selftest/foreign-numeric-alias.lua';
+      return 1;
+    },
+  );
+  const numericAliasForeignRoot = projectNumericAliasMutation(numericAliasForeignRootRecord);
+
+  const numericAliasForgedAliasRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasForgedAliases = numericAliasForgedAliasRecord.aliases as ValueRecord[];
+  const numericAliasForgedXAlias = numericAliasForgedAliases.find(candidate => candidate.name === 'x');
+  const numericAliasRootAlias = numericAliasForgedAliases.find(candidate => candidate.name === 'mx');
+  let numericAliasForgedAliasMutationApplied = false;
+  if (numericAliasForgedXAlias && numericAliasRootAlias) {
+    numericAliasForgedXAlias.source = jsonClone(numericAliasRootAlias.source);
+    const forgedSource = numericAliasForgedXAlias.source as ValueRecord;
+    const rootSource = numericAliasRootAlias.source as ValueRecord;
+    const forgedStart = forgedSource.start as ValueRecord;
+    const forgedEnd = forgedSource.end as ValueRecord;
+    const rootStart = rootSource.start as ValueRecord;
+    const rootEnd = rootSource.end as ValueRecord;
+    numericAliasForgedAliasMutationApplied = forgedSource.file === rootSource.file
+      && forgedStart.offset === rootStart.offset
+      && forgedEnd.offset === rootEnd.offset;
+  }
+  const numericAliasForgedAlias = projectNumericAliasMutation(numericAliasForgedAliasRecord);
+
+  const numericAliasForeignAliasRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasForeignXAlias = (numericAliasForeignAliasRecord.aliases as ValueRecord[]).find(candidate => candidate.name === 'x');
+  let numericAliasForeignAliasMutationApplied = false;
+  if (numericAliasForeignXAlias) {
+    const value = numericAliasForeignXAlias.value as ValueRecord;
+    const location = value.location as ValueRecord;
+    location.file = 'selftest/foreign-alias.lua';
+    numericAliasForeignAliasMutationApplied = location.file === 'selftest/foreign-alias.lua';
+  }
+  const numericAliasForeignAlias = projectNumericAliasMutation(numericAliasForeignAliasRecord);
+
+  const numericAliasMalformedRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasMalformedMutation = mutateAllNumericDescriptorCopies(
+    numericAliasMalformedRecord,
+    numericAliasRootExpression,
+    descriptor => {
+      descriptor.kind = 'forged-numeric-node';
+      return 1;
+    },
+  );
+  const numericAliasMalformed = projectNumericAliasMutation(numericAliasMalformedRecord);
+
+  const numericAliasCyclicRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasCyclicDescriptor = (() => {
+    let found: ValueRecord | undefined;
+    const visit = (value: unknown): void => {
+      if (found || value === null || typeof value !== 'object') return;
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      const record = value as ValueRecord;
+      const descriptor = record.numericExpression;
+      if (descriptor !== null
+        && typeof descriptor === 'object'
+        && !Array.isArray(descriptor)
+        && (descriptor as ValueRecord).expression === numericAliasRootExpression) {
+        found = descriptor as ValueRecord;
+        return;
+      }
+      Object.values(record).forEach(visit);
+    };
+    visit(numericAliasCyclicRecord);
+    return found;
+  })();
+  let numericAliasCyclicMutationApplied = false;
+  if (numericAliasCyclicDescriptor) {
+    const argumentsList = numericAliasCyclicDescriptor.arguments as unknown[] | undefined;
+    if (argumentsList && argumentsList.length > 0) {
+      argumentsList[0] = numericAliasCyclicDescriptor;
+      numericAliasCyclicMutationApplied = argumentsList[0] === numericAliasCyclicDescriptor;
+    }
+  }
+  const numericAliasCyclic = projectNumericAliasMutation(numericAliasCyclicRecord, false);
+
+  const numericAliasAccessorRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasAccessor = (numericAliasAccessorRecord.aliases as ValueRecord[]).find(candidate => candidate.name === 'x');
+  let numericAliasAccessorMutationApplied = false;
+  let numericAliasAccessorInvocationCount = 0;
+  if (numericAliasAccessor) {
+    Object.defineProperty(numericAliasAccessor, 'value', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        numericAliasAccessorInvocationCount += 1;
+        throw new Error('numeric alias accessor must not be invoked');
+      },
+      set: () => {
+        numericAliasAccessorInvocationCount += 1;
+        throw new Error('numeric alias accessor must not be assigned');
+      },
+    });
+    numericAliasAccessorMutationApplied = Object.getOwnPropertyDescriptor(numericAliasAccessor, 'value')?.get !== undefined;
+  }
+  const numericAliasAccessorResult = projectNumericAliasMutation(numericAliasAccessorRecord, false);
+
+  const numericAliasNonEnumerableValueRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasNonEnumerableValueAlias = (numericAliasNonEnumerableValueRecord.aliases as ValueRecord[]).find(candidate => candidate.name === 'x');
+  let numericAliasNonEnumerableValueMutationApplied = false;
+  let numericAliasNonEnumerableValueInvocationCount = 0;
+  if (numericAliasNonEnumerableValueAlias) {
+    Object.defineProperty(numericAliasNonEnumerableValueAlias, 'value', {
+      configurable: true,
+      enumerable: false,
+      get: () => {
+        numericAliasNonEnumerableValueInvocationCount += 1;
+        throw new Error('non-enumerable numeric alias value accessor must not be invoked');
+      },
+      set: () => {
+        numericAliasNonEnumerableValueInvocationCount += 1;
+        throw new Error('non-enumerable numeric alias value accessor must not be assigned');
+      },
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(numericAliasNonEnumerableValueAlias, 'value');
+    numericAliasNonEnumerableValueMutationApplied = descriptor?.enumerable === false && descriptor.get !== undefined;
+  }
+  const numericAliasNonEnumerableValueResult = projectNumericAliasMutation(
+    numericAliasNonEnumerableValueRecord,
+    false,
+  );
+
+  const numericAliasNonEnumerableAliasesRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  let numericAliasNonEnumerableAliasesMutationApplied = false;
+  let numericAliasNonEnumerableAliasesInvocationCount = 0;
+  Object.defineProperty(numericAliasNonEnumerableAliasesRecord, 'aliases', {
+    configurable: true,
+    enumerable: false,
+    get: () => {
+      numericAliasNonEnumerableAliasesInvocationCount += 1;
+      throw new Error('non-enumerable aliases accessor must not be invoked');
+    },
+    set: () => {
+      numericAliasNonEnumerableAliasesInvocationCount += 1;
+      throw new Error('non-enumerable aliases accessor must not be assigned');
+    },
+  });
+  const numericAliasNonEnumerableAliasesDescriptor = Object.getOwnPropertyDescriptor(
+    numericAliasNonEnumerableAliasesRecord,
+    'aliases',
+  );
+  numericAliasNonEnumerableAliasesMutationApplied = numericAliasNonEnumerableAliasesDescriptor?.enumerable === false
+    && numericAliasNonEnumerableAliasesDescriptor.get !== undefined;
+  const numericAliasNonEnumerableAliasesResult = projectNumericAliasMutation(
+    numericAliasNonEnumerableAliasesRecord,
+    false,
+  );
+
+  const numericAliasUnsafeRecord = jsonClone(numericAliasMultiHop.model) as unknown as ValueRecord;
+  const numericAliasUnsafe = (numericAliasUnsafeRecord.aliases as ValueRecord[]).find(candidate => candidate.name === 'x');
+  let numericAliasUnsafeMutationApplied = false;
+  if (numericAliasUnsafe) {
+    const value = numericAliasUnsafe.value;
+    if (value !== null && typeof value === 'object') {
+      Object.setPrototypeOf(value, { forged: true });
+      numericAliasUnsafeMutationApplied = Object.getPrototypeOf(value)?.forged === true;
+    }
+  }
+  const numericAliasUnsafeResult = projectNumericAliasMutation(numericAliasUnsafeRecord, false);
+
+  const numericAliasNonFinite = projectNumericAliasChain([
+    'local menu = { name = "NumericAliasNonFinite", layer = 4 }',
+    'function menu.display()',
+    '  local root = math.floor(1e308 * 1e308)',
+    '  local x = root',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-alias-nonfinite.lua');
+  const numericAliasDivideByZero = projectNumericAliasChain([
+    'local menu = { name = "NumericAliasDivideByZero", layer = 4 }',
+    'function menu.display()',
+    '  local root = math.floor(100 / 0)',
+    '  local x = root',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-alias-divide-by-zero.lua');
+  const numericAliasUnsupported = projectNumericAliasChain([
+    'local menu = { name = "NumericAliasUnsupported", layer = 4 }',
+    'function menu.display()',
+    '  local root = Helper.viewWidth % 3',
+    '  local x = root',
+    '  local frame = Helper.createFrameHandle(menu, { x = x, width = 80, height = 80, layer = 4 })',
+    '  frame:display()',
+    'end',
+  ].join('\n'), 'selftest/b119-numeric-alias-unsupported.lua');
+  const numericAliasUnsupportedRoot = numericAliasUnsupported.model.aliases.find(alias => alias.name === 'root');
+  const numericAliasUnsupportedX = numericAliasUnsupported.model.aliases.find(alias => alias.name === 'x');
+  const numericAliasUnsupportedXValue = numericAliasUnsupported.model.calls
+    .find(call => call.name === 'createFrameHandle')
+    ?.semantics.properties
+    ?.find(property => property.normalizedName === 'x')
+    ?.value;
+  const numericAliasUnsupportedExercisesNoDescriptorAuthority = numericAliasUnsupported.model.parsed
+    && numericAliasUnsupportedRoot === undefined
+    && numericAliasUnsupportedX === undefined
+    && numericAliasUnsupportedXValue?.status === 'unknown'
+    && numericAliasUnsupportedXValue.type === 'expression'
+    && numericAliasUnsupportedXValue.expression === 'x'
+    && numericAliasUnsupportedXValue.numericExpression === undefined;
+  check('B119 transitive alias evidence refuses forged range/file/alias data, malformed or cyclic nodes, unsafe accessors, and invalid arithmetic',
+    numericAliasForeignRootMutation.matchedCopies > 0
+      && numericAliasForeignRootMutation.mutatedNodes === numericAliasForeignRootMutation.matchedCopies
+      && numericAliasForeignRoot.threw === false
+      && (numericAliasForeignRoot.result?.status === 'refused'
+        || numericAliasForeignRoot.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasForgedAliasMutationApplied
+      && numericAliasForgedAlias.threw === false
+      && (numericAliasForgedAlias.result?.status === 'refused'
+        || numericAliasForgedAlias.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasForeignAliasMutationApplied
+      && numericAliasForeignAlias.threw === false
+      && (numericAliasForeignAlias.result?.status === 'refused'
+        || numericAliasForeignAlias.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasMalformedMutation.matchedCopies > 0
+      && numericAliasMalformed.threw === false
+      && (numericAliasMalformed.result?.status === 'refused'
+        || numericAliasMalformed.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasCyclicMutationApplied
+      && numericAliasCyclic.threw === false
+      && (numericAliasCyclic.result?.status === 'refused'
+        || numericAliasCyclic.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasAccessorMutationApplied
+      && numericAliasAccessorInvocationCount === 0
+      && numericAliasAccessorResult.threw === false
+      && (numericAliasAccessorResult.result?.status === 'refused'
+        || numericAliasAccessorResult.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasNonEnumerableValueMutationApplied
+      && numericAliasNonEnumerableValueInvocationCount === 0
+      && numericAliasNonEnumerableValueResult.threw === false
+      && (numericAliasNonEnumerableValueResult.result?.status === 'refused'
+        || numericAliasNonEnumerableValueResult.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasNonEnumerableAliasesMutationApplied
+      && numericAliasNonEnumerableAliasesInvocationCount === 0
+      && numericAliasNonEnumerableAliasesResult.threw === false
+      && (numericAliasNonEnumerableAliasesResult.result?.status === 'refused'
+        || numericAliasNonEnumerableAliasesResult.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasUnsafeMutationApplied
+      && numericAliasUnsafeResult.threw === false
+      && (numericAliasUnsafeResult.result?.status === 'refused'
+        || numericAliasUnsafeResult.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && (numericAliasNonFinite.result.status === 'refused'
+        || numericAliasNonFinite.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && (numericAliasDivideByZero.result.status === 'refused'
+        || numericAliasDivideByZero.program?.frames[0]?.descriptorFacts.x.status !== 'known')
+      && numericAliasUnsupportedExercisesNoDescriptorAuthority
+      && (numericAliasUnsupported.result.status === 'refused'
+        || numericAliasUnsupported.program?.frames[0]?.descriptorFacts.x.status !== 'known'),
+    detail({
+      foreignRoot: { mutation: numericAliasForeignRootMutation, result: numericAliasDiagnostic(numericAliasForeignRoot) },
+      forgedAlias: { applied: numericAliasForgedAliasMutationApplied, result: numericAliasDiagnostic(numericAliasForgedAlias) },
+      foreignAlias: { applied: numericAliasForeignAliasMutationApplied, result: numericAliasDiagnostic(numericAliasForeignAlias) },
+      malformed: { mutation: numericAliasMalformedMutation, result: numericAliasDiagnostic(numericAliasMalformed) },
+      cyclic: { applied: numericAliasCyclicMutationApplied, result: numericAliasDiagnostic(numericAliasCyclic) },
+      accessor: { applied: numericAliasAccessorMutationApplied, invocations: numericAliasAccessorInvocationCount, result: numericAliasDiagnostic(numericAliasAccessorResult) },
+      nonEnumerableValue: { applied: numericAliasNonEnumerableValueMutationApplied, invocations: numericAliasNonEnumerableValueInvocationCount, result: numericAliasDiagnostic(numericAliasNonEnumerableValueResult) },
+      nonEnumerableAliases: { applied: numericAliasNonEnumerableAliasesMutationApplied, invocations: numericAliasNonEnumerableAliasesInvocationCount, result: numericAliasDiagnostic(numericAliasNonEnumerableAliasesResult) },
+      unsafe: { applied: numericAliasUnsafeMutationApplied, result: numericAliasDiagnostic(numericAliasUnsafeResult) },
+      nonFinite: numericAliasDiagnostic(numericAliasNonFinite),
+      divideByZero: numericAliasDiagnostic(numericAliasDivideByZero),
+      unsupported: {
+        noDescriptorAuthority: numericAliasUnsupportedExercisesNoDescriptorAuthority,
+        parser: {
+          parsed: numericAliasUnsupported.model.parsed,
+          rootAlias: numericAliasUnsupportedRoot?.value.status,
+          xAlias: numericAliasUnsupportedX?.value.status,
+          xValue: numericAliasUnsupportedXValue
+            ? {
+              status: numericAliasUnsupportedXValue.status,
+              type: numericAliasUnsupportedXValue.type,
+              expression: numericAliasUnsupportedXValue.expression,
+              hasNumericExpression: numericAliasUnsupportedXValue.numericExpression !== undefined,
+            }
+            : undefined,
+        },
+        result: numericAliasDiagnostic(numericAliasUnsupported),
+      },
+    }));
+
   const spacedMathCall = projectNumericMathNegative(
     'math  .  floor(1.5)',
     'selftest/b119-numeric-math-spaced-callee.lua',
@@ -6787,23 +8363,33 @@ const run = (): {
   const sampledProfile = profileFor(sampledModel, { minTextHeight: 7 });
   const unsampledResult = projectX4UiLayoutProgram(sampledModel, sampledTarget, sampledProfile);
   const unsampledProgram = programOf(unsampledResult);
-  const numberSample = unsampledProgram.sampleCatalog.entries.find(candidate => candidate.expectedType === 'number');
+  const numberSamples = unsampledProgram.sampleCatalog.entries.filter(candidate => candidate.expectedType === 'number');
+  const numericWidthSample = numberSamples.find(candidate => candidate.expression === 'tw');
+  const marginSample = numberSamples.find(candidate => candidate.expression === 'mx');
   const textSamples = unsampledProgram.sampleCatalog.entries.filter(candidate => candidate.expectedType === 'string');
   check('unsampled runtime width/text stay unresolved while exact same expressions retain separate range IDs',
     unsampledProgram.tables[0]?.kernelState === undefined
-      && numberSample?.expression === 'tw - mx * 2'
+      && numberSamples.length === 2
+      && numericWidthSample !== undefined
+      && marginSample !== undefined
+      && numericWidthSample.source.start.offset < marginSample.source.start.offset
       && textSamples.length === 2
       && textSamples.every(candidate => candidate.expression === 'dynamicText')
       && textSamples[0].id !== textSamples[1].id
       && textSamples[0].source.start.offset !== textSamples[1].source.start.offset
       && unsampledProgram.sampleCatalog.entries.every(candidate => candidate.id.includes(unsampledProgram.sampleCatalog.sourceIdentity.sha256)),
     detail({ catalog: unsampledProgram.sampleCatalog, tables: unsampledProgram.tables, gaps: unsampledProgram.gaps }));
-  if (!numberSample || textSamples.length !== 2) throw new Error(`sample fixture catalog incomplete: ${detail(unsampledProgram.sampleCatalog)}`);
+  if (!numericWidthSample || !marginSample || textSamples.length !== 2) {
+    throw new Error(`sample fixture catalog incomplete: ${detail(unsampledProgram.sampleCatalog)}`);
+  }
+  const sampledRootModelGap = sampledModel.verificationGaps.find(candidate => candidate.expression === 'tw - mx * 2');
+  if (!sampledRootModelGap) throw new Error('sampled fixture root verification gap missing');
   const validSamples: X4UiLayoutPreviewSampleInput = {
     catalogId: unsampledProgram.sampleCatalog.id,
     source: unsampledProgram.sampleCatalog.sourceIdentity,
     values: [
-      { id: numberSample.id, value: 80 },
+      { id: numericWidthSample.id, value: 100 },
+      { id: marginSample.id, value: 10 },
       { id: textSamples[0].id, value: 'First' },
       { id: textSamples[1].id, value: 'Second' },
     ],
@@ -6820,8 +8406,217 @@ const run = (): {
       && factProvenance(sampledProgram.tables[0].descriptorFacts.requestedWidth) === 'preview-sample'
       && sampledCells.every(candidate => factProvenance(candidate.descriptorFacts.primaryContent) === 'preview-sample')
       && sampledProgram.previewSampleBindings.every(candidate => candidate.status === 'consumed' && candidate.provenance === 'preview-only')
-      && !sampledProgram.gaps.some(gap => ['tw - mx * 2', 'dynamicText'].includes(gap.expression || '')),
+      && !sampledProgram.gaps.some(gap => ['tw - mx * 2', 'tw', 'mx', 'dynamicText'].includes(gap.expression || '')),
     detail({ table: sampledProgram.tables[0], cells: sampledCells, bindings: sampledProgram.previewSampleBindings, gaps: sampledProgram.gaps }));
+  const missingMarginSamples: X4UiLayoutPreviewSampleInput = {
+    ...validSamples,
+    values: validSamples.values.filter(candidate => candidate.id !== marginSample.id),
+  };
+  const missingMarginResult = projectX4UiLayoutProgram(sampledModel, sampledTarget, sampledProfile, missingMarginSamples);
+  const missingMarginProgram = resultProgram(missingMarginResult);
+  check('missing numeric base input stays unavailable without fabricating computed geometry',
+    missingMarginResult.status !== 'refused'
+      && missingMarginProgram?.tables[0]?.requestedWidth === undefined
+      && missingMarginProgram?.tables[0]?.kernelState === undefined
+      && missingMarginProgram?.gaps.some(gap => gap.expression === 'mx'),
+    detail({ status: missingMarginResult.status, table: missingMarginProgram?.tables[0], gaps: missingMarginProgram?.gaps }));
+  const missingWidthFact = missingMarginProgram?.tables[0]?.descriptorFacts.requestedWidth;
+  const missingLeafGap = missingMarginProgram?.gaps.find(gap =>
+    gap.category === 'width'
+      && gap.expression === marginSample.expression
+      && locationsSameForTest(gap.source, marginSample.source)
+      && gap.operationId !== undefined);
+  check('nested missing numeric input reports the leaf gap while retaining root fact authority',
+    missingWidthFact?.status === 'unavailable'
+      && missingWidthFact.expression === 'tw - mx * 2'
+      && locationsSameForTest(missingWidthFact.source, sampledRootModelGap.source)
+      && missingLeafGap?.status === 'unsupported'
+      && missingMarginProgram?.tables[0]?.kernelState === undefined,
+    detail({ fact: missingWidthFact, leafGap: missingLeafGap, rootModelGap: sampledRootModelGap }));
+  const unrelatedGapModelRecord = jsonClone(sampledModel) as unknown as ValueRecord;
+  const unrelatedModelGaps = unrelatedGapModelRecord.verificationGaps as ValueRecord[];
+  const rootGapRecord = jsonClone(sampledRootModelGap) as unknown as ValueRecord;
+  unrelatedModelGaps.push({
+    ...rootGapRecord,
+    source: jsonClone(numericWidthSample.source),
+  });
+  unrelatedModelGaps.push({
+    ...rootGapRecord,
+    category: 'text',
+  });
+  const unrelatedGapModel = freezeClone(unrelatedGapModelRecord) as unknown as X4UiCallModel;
+  const unrelatedGapProgram = programOf(projectX4UiLayoutProgram(
+    unrelatedGapModel,
+    namedTarget(unrelatedGapModel, 'menu.display'),
+    profileFor(unrelatedGapModel, { minTextHeight: 7 }),
+    validSamples,
+  ));
+  const preservedDifferentRangeGap = unrelatedGapProgram.gaps.find(gap =>
+    gap.category === 'width'
+      && gap.expression === sampledRootModelGap.expression
+      && locationsSameForTest(gap.source, numericWidthSample.source));
+  const preservedWrongCategoryGap = unrelatedGapProgram.gaps.find(gap =>
+    gap.category === 'text'
+      && gap.expression === sampledRootModelGap.expression
+      && locationsSameForTest(gap.source, sampledRootModelGap.source));
+  check('numeric model cleanup preserves same-expression different-range and category gaps',
+    preservedDifferentRangeGap !== undefined
+      && preservedWrongCategoryGap !== undefined
+      && !unrelatedGapProgram.gaps.some(gap =>
+        gap.category === sampledRootModelGap.category
+          && gap.expression === sampledRootModelGap.expression
+          && locationsSameForTest(gap.source, sampledRootModelGap.source)),
+    detail({ differentRange: preservedDifferentRangeGap, wrongCategory: preservedWrongCategoryGap, gaps: unrelatedGapProgram.gaps }));
+  const sampledAuthority = evidenceAuthorityOf(sampledResult);
+  check('resolved numeric model gap cleanup keeps program and evidence gap ledgers aligned',
+    sampledAuthority !== undefined
+      && validateX4UiLayoutEvidencePair(sampledProgram, sampledAuthority).valid
+      && !sampledProgram.gaps.some(gap =>
+        gap.category === sampledRootModelGap.category
+          && gap.expression === sampledRootModelGap.expression
+          && locationsSameForTest(gap.source, sampledRootModelGap.source))
+      && !sampledAuthority.gaps.some(gap =>
+        gap.category === sampledRootModelGap.category
+          && gap.expression === sampledRootModelGap.expression
+          && locationsSameForTest(gap.source, sampledRootModelGap.source)),
+    detail({ pair: sampledAuthority === undefined ? undefined : validateX4UiLayoutEvidencePair(sampledProgram, sampledAuthority), programGaps: sampledProgram.gaps, evidenceGaps: sampledAuthority?.gaps }));
+  const sampledAliasSource = [
+    'local menu = { name = "SampledAlias", layer = 1 }',
+    'function menu.display(runtimeWidth)',
+    '  local width = math.floor((runtimeWidth - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 80 })',
+    '  local table = frame:addTable(2, { width = width, reserveScrollBar = false, scaling = false })',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText("Alias", { height = 10 })',
+    '  row[2]:createText("Alias", { height = 10 })',
+    'end',
+  ].join('\n');
+  const sampledAliasModel = buildX4UiCallModel(input(sampledAliasSource, 'selftest/production-shaped-samples-alias.lua'));
+  const sampledAliasTarget = namedTarget(sampledAliasModel, 'menu.display');
+  const sampledAliasTableCall = sampledAliasModel.calls.find(candidate => candidate.name === 'addTable');
+  const sampledAliasWidthValue = sampledAliasTableCall?.semantics.width;
+  const sampledAliasUseGap = sampledAliasModel.verificationGaps.find(candidate =>
+    candidate.category === 'width' && candidate.expression === 'width');
+  const sampledAliasUnsampledProgram = programOf(projectX4UiLayoutProgram(
+    sampledAliasModel,
+    sampledAliasTarget,
+    profileFor(sampledAliasModel),
+  ));
+  const sampledAliasWidthSample = sampledAliasUnsampledProgram.sampleCatalog.entries.find(candidate =>
+    candidate.expectedType === 'number' && candidate.expression === 'runtimeWidth');
+  const sampledAliasResult = sampledAliasWidthSample === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      sampledAliasModel,
+      sampledAliasTarget,
+      profileFor(sampledAliasModel),
+      {
+        catalogId: sampledAliasUnsampledProgram.sampleCatalog.id,
+        source: sampledAliasUnsampledProgram.sampleCatalog.sourceIdentity,
+        values: [{ id: sampledAliasWidthSample.id, value: 200 }],
+      },
+    );
+  const sampledAliasProgram = sampledAliasResult === undefined ? undefined : programOf(sampledAliasResult);
+  const sampledAliasAuthority = sampledAliasResult === undefined ? undefined : evidenceAuthorityOf(sampledAliasResult);
+  check('source-parsed supported numeric alias clears the exact value-use warning after closed evaluation',
+    sampledAliasWidthValue?.expression === 'width'
+      && sampledAliasWidthValue.numericExpression?.kind === 'math-call'
+      && sampledAliasWidthValue.numericExpression.source.start.offset < sampledAliasWidthValue.location.start.offset
+      && sampledAliasUseGap !== undefined
+      && sampledAliasWidthSample !== undefined
+      && sampledAliasResult?.status !== 'refused'
+      && sampledAliasProgram?.tables[0]?.requestedWidth === 88
+      && sampledAliasProgram !== undefined
+      && !sampledAliasProgram.gaps.some(gap =>
+        gap.category === sampledAliasUseGap.category
+          && gap.expression === sampledAliasUseGap.expression
+          && locationsSameForTest(gap.source, sampledAliasUseGap.source))
+      && sampledAliasAuthority !== undefined
+      && validateX4UiLayoutEvidencePair(sampledAliasProgram, sampledAliasAuthority).valid,
+    detail({
+      modelGap: sampledAliasUseGap,
+      widthValue: sampledAliasWidthValue,
+      sample: sampledAliasWidthSample,
+      result: sampledAliasResult,
+      program: sampledAliasProgram,
+      pair: sampledAliasProgram === undefined || sampledAliasAuthority === undefined
+        ? undefined
+        : validateX4UiLayoutEvidencePair(sampledAliasProgram, sampledAliasAuthority),
+    }));
+  const sampledMemberSource = [
+    'local menu = { name = "SampledMember", layer = 1 }',
+    'function menu.display(runtimeWidth)',
+    '  local runtimeState = { width = runtimeWidth }',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 80 })',
+    '  local table = frame:addTable(2, { width = runtimeState.width, reserveScrollBar = false, scaling = false })',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText("Member", { height = 10 })',
+    '  row[2]:createText("Member", { height = 10 })',
+    'end',
+  ].join('\n');
+  const sampledMemberModel = buildX4UiCallModel(input(sampledMemberSource, 'selftest/production-shaped-samples-member.lua'));
+  const sampledMemberTarget = namedTarget(sampledMemberModel, 'menu.display');
+  const sampledMemberTableCall = sampledMemberModel.calls.find(candidate => candidate.name === 'addTable');
+  const sampledMemberWidthValue = sampledMemberTableCall?.semantics.width;
+  const sampledMemberUseGap = sampledMemberModel.verificationGaps.find(candidate =>
+    candidate.category === 'width' && candidate.expression === 'runtimeState.width');
+  const sampledMemberUnsampledProgram = programOf(projectX4UiLayoutProgram(
+    sampledMemberModel,
+    sampledMemberTarget,
+    profileFor(sampledMemberModel),
+  ));
+  const sampledMemberWidthSample = sampledMemberUnsampledProgram.sampleCatalog.entries.find(candidate =>
+    candidate.expectedType === 'number' && candidate.expression === 'runtimeState.width');
+  const sampledMemberResult = sampledMemberWidthSample === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      sampledMemberModel,
+      sampledMemberTarget,
+      profileFor(sampledMemberModel),
+      {
+        catalogId: sampledMemberUnsampledProgram.sampleCatalog.id,
+        source: sampledMemberUnsampledProgram.sampleCatalog.sourceIdentity,
+        values: [{ id: sampledMemberWidthSample.id, value: 200 }],
+      },
+    );
+  const sampledMemberProgram = sampledMemberResult === undefined ? undefined : programOf(sampledMemberResult);
+  const sampledMemberAuthority = sampledMemberResult === undefined ? undefined : evidenceAuthorityOf(sampledMemberResult);
+  check('source-parsed non-descriptor numeric member catalogs and clears its exact consumed warning',
+    sampledMemberWidthValue?.numericExpression === undefined
+      && sampledMemberWidthValue?.expression === 'runtimeState.width'
+      && sampledMemberUseGap !== undefined
+      && sampledMemberWidthSample?.expression === 'runtimeState.width'
+      && sampledMemberResult?.status !== 'refused'
+      && sampledMemberProgram?.tables[0]?.requestedWidth === 200
+      && sampledMemberProgram !== undefined
+      && !sampledMemberProgram.gaps.some(gap =>
+        gap.category === sampledMemberUseGap.category
+          && gap.expression === sampledMemberUseGap.expression
+          && locationsSameForTest(gap.source, sampledMemberUseGap.source))
+      && sampledMemberAuthority !== undefined
+      && !sampledMemberAuthority.gaps.some(gap =>
+        gap.category === sampledMemberUseGap.category
+          && gap.expression === sampledMemberUseGap.expression
+          && locationsSameForTest(gap.source, sampledMemberUseGap.source))
+      && validateX4UiLayoutEvidencePair(sampledMemberProgram, sampledMemberAuthority).valid,
+    detail({
+      widthValue: sampledMemberWidthValue && {
+        status: sampledMemberWidthValue.status,
+        type: sampledMemberWidthValue.type,
+        expression: sampledMemberWidthValue.expression,
+        numericExpression: sampledMemberWidthValue.numericExpression,
+      },
+      modelGap: sampledMemberUseGap,
+      sample: sampledMemberWidthSample,
+      result: sampledMemberResult && {
+        status: sampledMemberResult.status,
+        requestedWidth: sampledMemberProgram?.tables[0]?.requestedWidth,
+        gaps: sampledMemberProgram?.gaps,
+      },
+      pair: sampledMemberProgram === undefined || sampledMemberAuthority === undefined
+        ? undefined
+        : validateX4UiLayoutEvidencePair(sampledMemberProgram, sampledMemberAuthority),
+    }));
   const sparseSampleBindingsProgram = mutateProgramJson(sampledProgram, candidate => {
     const bindings = candidate.previewSampleBindings as unknown[];
     delete bindings[0];
@@ -6831,7 +8626,7 @@ const run = (): {
     detail({ validation: safeSchemaPairValidation(sparseSampleBindingsProgram, evidenceAuthorityOf(sampledResult)) }));
   const changedSamples: X4UiLayoutPreviewSampleInput = {
     ...validSamples,
-    values: validSamples.values.map(candidate => candidate.id === numberSample.id ? { ...candidate, value: 90 } : candidate),
+    values: validSamples.values.map(candidate => candidate.id === numericWidthSample.id ? { ...candidate, value: 110 } : candidate),
   };
   const changedSampleProgram = programOf(projectX4UiLayoutProgram(sampledModel, sampledTarget, sampledProfile, changedSamples));
   check('changing one valid sample changes only its dependent kernel/facts and never mutates source inputs',
@@ -6903,11 +8698,11 @@ const run = (): {
   };
   const wrongTypeSamples: X4UiLayoutPreviewSampleInput = {
     ...validSamples,
-    values: validSamples.values.map(candidate => candidate.id === numberSample.id ? { ...candidate, value: 'wrong' } : candidate),
+    values: validSamples.values.map(candidate => candidate.id === numericWidthSample.id ? { ...candidate, value: 'wrong' } : candidate),
   };
   const nonFiniteSamples: X4UiLayoutPreviewSampleInput = {
     ...validSamples,
-    values: validSamples.values.map(candidate => candidate.id === numberSample.id ? { ...candidate, value: Number.POSITIVE_INFINITY } : candidate),
+    values: validSamples.values.map(candidate => candidate.id === numericWidthSample.id ? { ...candidate, value: Number.POSITIVE_INFINITY } : candidate),
   };
   check('stale source/catalog and duplicate/extra/static sample IDs refuse before kernel replay',
     projectX4UiLayoutProgram(sampledModel, sampledTarget, sampledProfile, staleSamples).status === 'refused'
@@ -6983,6 +8778,999 @@ const run = (): {
       && missingTextCell.descriptorFacts.outerHeight.status === 'unavailable'
       && missingTextProgram.gaps.some(gap => gap.reason.includes('C++ text-height candidate')),
     detail({ cell: missingTextCell, gaps: missingTextProgram.gaps }));
+
+  const b119AutomaticTextSource = (
+    heightProperty: string,
+    minRowHeight: string,
+    y: string,
+    scaling: string,
+    alias: 'direct-scale' | 'literal' | false = false,
+  ): string => [
+    'local menu = { name = "B119ExplicitZeroTextHeight", layer = 1 }',
+    ...(alias === 'direct-scale' ? ['local zeroHeight = Helper.scaleY(0)'] : alias === 'literal' ? ['local zeroHeight = 0'] : []),
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    'local row = table:addRow(false, { paddingTop = 0, paddingBottom = 0, borderBelow = false, fixed = false, scaling = false })',
+    `row[1]:createText("zero", { ${heightProperty}minRowHeight = ${minRowHeight}, y = ${y}, scaling = ${scaling} })`,
+    'frame:display()',
+  ].join('\n');
+
+  const b119AutomaticTextProjection = (
+    sourceText: string,
+    sourcePath: string,
+    uiScale = 1,
+    sample?: X4UiLayoutPreviewSampleInput,
+    canonicalizeModel = false,
+    canonicalCorpus?: X4UiCorpusCanonicalSuccess,
+  ): {
+    readonly sourceText: string;
+    readonly model: X4UiCallModel;
+    readonly result: ReturnType<typeof projectX4UiLayoutProgram>;
+    readonly program: X4UiLayoutProgram | undefined;
+  } => {
+    const rawModel = buildX4UiCallModel(input(sourceText, sourcePath));
+    const model = canonicalizeModel ? canonicalizeX4UiLayoutModel(rawModel) || rawModel : rawModel;
+    const result = projectX4UiLayoutProgram(
+      model,
+      topTarget(model),
+      profileFor(model, { minTextHeight: 10, uiScale }),
+      sample,
+      undefined,
+      undefined,
+      canonicalCorpus,
+    );
+    return { sourceText, model, result, program: resultProgram(result) };
+  };
+
+  const b119AutomaticTextSample = (
+    program: X4UiLayoutProgram | undefined,
+    minRowHeight: number,
+    y: number,
+  ): X4UiLayoutPreviewSampleInput | undefined => {
+    if (program === undefined) return undefined;
+    const minRowHeightEntry = program.sampleCatalog.entries.find(entry => entry.expression === 'runtimeMin');
+    const yEntry = program.sampleCatalog.entries.find(entry => entry.expression === 'runtimeY');
+    if (minRowHeightEntry === undefined || yEntry === undefined) return undefined;
+    return {
+      catalogId: program.sampleCatalog.id,
+      source: program.sampleCatalog.sourceIdentity,
+      values: [
+        { id: minRowHeightEntry.id, value: minRowHeight },
+        { id: yEntry.id, value: y },
+      ],
+    };
+  };
+
+  const b119AutomaticTextSampleForValues = (
+    projection: ReturnType<typeof b119AutomaticTextProjection>,
+    valuesByExpression: Readonly<Record<string, string | number | boolean>>,
+  ): X4UiLayoutPreviewSampleInput | undefined => {
+    const program = projection.program;
+    if (program === undefined) return undefined;
+    const values: Array<{ readonly id: string; readonly value: string | number | boolean }> = [];
+    for (const entry of program.sampleCatalog.entries) {
+      if (!Object.prototype.hasOwnProperty.call(valuesByExpression, entry.expression)) return undefined;
+      const value = valuesByExpression[entry.expression];
+      if (value === undefined) return undefined;
+      values.push({ id: entry.id, value });
+    }
+    return {
+      catalogId: program.sampleCatalog.id,
+      source: program.sampleCatalog.sourceIdentity,
+      values,
+    };
+  };
+
+  const b119AutomaticTextFactSummary = (
+    projection: ReturnType<typeof b119AutomaticTextProjection>,
+  ) => {
+    const program = projection.program;
+    const creator = program === undefined ? undefined : operation(program, 'createText');
+    const cell = program === undefined ? undefined : program.cells.find(candidate => candidate.id === creator?.cellId);
+    const row = cell === undefined || program === undefined ? undefined : program.rows.find(candidate => candidate.id === cell.rowId);
+    const heightProperty = creator?.metadata.semantics.properties?.find(property => property.normalizedName === 'height')?.value;
+    return {
+      status: projection.result.status,
+      resultRefusal: refusalCode(projection.result),
+      creator: {
+        status: creator?.status,
+        outerHeight: creator?.descriptorFacts.outerHeight,
+        metadataHeight: heightProperty,
+      },
+      cell: {
+        height: cell?.height,
+        minTextHeight: cell?.descriptorFacts.minTextHeight,
+        minRowHeightFloor: cell?.descriptorFacts.minRowHeightFloor,
+        outerHeight: cell?.descriptorFacts.outerHeight,
+        kernel: cell?.kernelState === undefined ? undefined : {
+          height: cell.kernelState.height,
+          minTextHeight: cell.kernelState.minTextHeight,
+          scaling: cell.kernelState.scaling,
+          y: cell.kernelState.y,
+        },
+      },
+      rowHeight: row?.height,
+      gaps: program?.gaps.filter(gap => gap.nodeId === cell?.id || gap.operationId === creator?.id),
+    };
+  };
+
+  const b119AutomaticTextCases = [
+    {
+      label: 'literal-40-5',
+      heightProperty: 'height = 0, ',
+      minRowHeight: '40',
+      y: '5',
+      expectedFloor: 35,
+      uiScale: 1,
+      scaling: 'false',
+      sampleValues: undefined,
+      alias: false,
+    },
+    {
+      label: 'sample-40-5',
+      heightProperty: 'height = 0, ',
+      minRowHeight: 'runtimeMin',
+      y: 'runtimeY',
+      expectedFloor: 35,
+      uiScale: 1,
+      scaling: 'false',
+      sampleValues: { minRowHeight: 40, y: 5 },
+      alias: false,
+    },
+    {
+      label: 'sample-50-9',
+      heightProperty: 'height = 0, ',
+      minRowHeight: 'runtimeMin',
+      y: 'runtimeY',
+      expectedFloor: 41,
+      uiScale: 1,
+      scaling: 'false',
+      sampleValues: { minRowHeight: 50, y: 9 },
+      alias: false,
+    },
+    {
+      label: 'literal-scaled-1.25',
+      heightProperty: 'height = 0, ',
+      minRowHeight: '16',
+      y: '0',
+      expectedFloor: 20,
+      uiScale: 1.25,
+      scaling: 'true',
+      sampleValues: undefined,
+      alias: false,
+    },
+    {
+      label: 'known-zero-alias',
+      heightProperty: 'height = zeroHeight, ',
+      minRowHeight: '40',
+      y: '5',
+      expectedFloor: 35,
+      uiScale: 1,
+      scaling: 'false',
+      sampleValues: undefined,
+      alias: 'direct-scale',
+    },
+    {
+      label: 'known-zero-literal-alias-via-canonicalizer',
+      heightProperty: 'height = zeroHeight, ',
+      minRowHeight: '40',
+      y: '5',
+      expectedFloor: 35,
+      uiScale: 1,
+      scaling: 'false',
+      sampleValues: undefined,
+      alias: 'literal',
+    },
+  ] as const;
+
+  for (const candidate of b119AutomaticTextCases) {
+    const explicitSource = b119AutomaticTextSource(
+      candidate.heightProperty,
+      candidate.minRowHeight,
+      candidate.y,
+      candidate.scaling,
+      candidate.alias,
+    );
+    const omittedSource = b119AutomaticTextSource(
+      '',
+      candidate.minRowHeight,
+      candidate.y,
+      candidate.scaling,
+      candidate.alias,
+    );
+    const sourcePath = `selftest/b119-automatic-text-height-${candidate.label}.lua`;
+    const canonicalizeAlias = candidate.alias === 'literal';
+    const explicit = b119AutomaticTextProjection(explicitSource, sourcePath, candidate.uiScale, undefined, canonicalizeAlias);
+    const omitted = b119AutomaticTextProjection(omittedSource, sourcePath, candidate.uiScale, undefined, canonicalizeAlias);
+    const explicitSample = candidate.sampleValues === undefined
+      ? undefined
+      : b119AutomaticTextSample(explicit.program, candidate.sampleValues.minRowHeight, candidate.sampleValues.y);
+    const omittedSample = candidate.sampleValues === undefined
+      ? undefined
+      : b119AutomaticTextSample(omitted.program, candidate.sampleValues.minRowHeight, candidate.sampleValues.y);
+    const explicitFinal = explicitSample === undefined
+      ? explicit
+      : b119AutomaticTextProjection(explicitSource, sourcePath, candidate.uiScale, explicitSample, canonicalizeAlias);
+    const omittedFinal = omittedSample === undefined
+      ? omitted
+      : b119AutomaticTextProjection(omittedSource, sourcePath, candidate.uiScale, omittedSample, canonicalizeAlias);
+    const factSummary = (projection: typeof explicitFinal, expectsExplicitHeight: boolean) => {
+      const summary = b119AutomaticTextFactSummary(projection);
+      const creator = projection.program === undefined ? undefined : operation(projection.program, 'createText');
+      const cell = projection.program === undefined ? undefined : projection.program.cells.find(candidateCell => candidateCell.id === creator?.cellId);
+      const finalHeight = factValue(cell?.descriptorFacts.minTextHeight);
+      const metadataHeight = creator?.metadata.semantics.properties?.find(property => property.normalizedName === 'height')?.value;
+      const metadataHeightMatchesSource = expectsExplicitHeight
+        ? candidate.alias
+          ? candidate.alias === 'literal'
+            ? metadataHeight?.status === 'static'
+              && metadataHeight.value === 0
+              && metadataHeight.sourceLiteral === undefined
+            : metadataHeight?.status === 'dynamic'
+              && metadataHeight.expression === 'zeroHeight'
+              && metadataHeight.directHelperScaleResult?.callName === 'scaleY'
+              && metadataHeight.directHelperScaleResult.callExpression === 'Helper.scaleY(0)'
+          : metadataHeight?.status === 'static' && metadataHeight.value === 0 && metadataHeight.sourceLiteral !== undefined
+        : metadataHeight === undefined;
+      return {
+        valid: projection.result.status !== 'refused'
+          && projection.program !== undefined
+          && creator?.status === 'applied'
+          && cell?.kernelState?.type === 'text'
+          && cell.kernelState.height === 0
+          && cell.kernelState.minTextHeight === finalHeight
+          && finalHeight === candidate.expectedFloor
+          && factValue(creator.descriptorFacts.outerHeight) === finalHeight
+          && factValue(cell.descriptorFacts.outerHeight) === finalHeight
+          && metadataHeightMatchesSource,
+        summary,
+      };
+    };
+    const explicitFactSummary = factSummary(explicitFinal, true);
+    const omittedFactSummary = factSummary(omittedFinal, false);
+    check(`B119 explicit zero text height uses the final automatic fact (${candidate.label})`,
+      explicitFactSummary.valid && omittedFactSummary.valid,
+      detail({ explicit: explicitFactSummary, omitted: omittedFactSummary }));
+    if (candidate.sampleValues !== undefined) {
+      check(`B119 independently issued minRowHeight/y samples finalize explicit zero (${candidate.label})`,
+        explicitSample !== undefined
+          && omittedSample !== undefined
+          && explicitFinal.program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 2
+          && omittedFinal.program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 2
+          && explicitFinal.program?.previewSampleBindings.every(binding => binding.status === 'consumed') === true
+          && omittedFinal.program?.previewSampleBindings.every(binding => binding.status === 'consumed') === true,
+        detail({
+          values: candidate.sampleValues,
+          explicit: { sample: explicitSample, summary: explicitFactSummary.summary },
+          omitted: { sample: omittedSample, summary: omittedFactSummary.summary },
+        }));
+    }
+  }
+
+  const b119SampleIdsForFact = (
+    fact: X4UiLayoutProgram['cells'][number]['descriptorFacts'][string] | undefined,
+  ): readonly string[] => fact?.status === 'known' && fact.expectedType === 'number'
+    ? fact.sampleIds || (fact.sampleId ? [fact.sampleId] : [])
+    : [];
+  const b119ExactCatalog = (
+    program: X4UiLayoutProgram | undefined,
+    expectedExpressions: readonly string[],
+  ): boolean => {
+    const actualExpressions = program?.sampleCatalog.entries.map(entry => entry.expression).sort() || [];
+    return actualExpressions.length === expectedExpressions.length
+      && JSON.stringify(actualExpressions) === JSON.stringify([...expectedExpressions].sort());
+  };
+  const b119IdsForExpressions = (
+    program: X4UiLayoutProgram | undefined,
+    expressions: readonly string[],
+  ): readonly string[] => {
+    if (program === undefined) return [];
+    const entries = expressions.map(expression => program.sampleCatalog.entries.find(entry => entry.expression === expression));
+    return entries.every(entry => entry !== undefined) ? entries.map(entry => entry!.id).sort() : [];
+  };
+
+  const b119FloorScalingSource = b119AutomaticTextSource('height = 0, ', 'runtimeMin', 'runtimeY', 'runtimeScaling');
+  const b119FloorScalingUnsampled = b119AutomaticTextProjection(
+    b119FloorScalingSource,
+    'selftest/b119-automatic-text-floor-scaling.lua',
+    1.25,
+  );
+  const b119FloorScalingExpressions = ['runtimeMin', 'runtimeY', 'runtimeScaling'];
+  const b119FloorScalingExpectedIds = b119IdsForExpressions(b119FloorScalingUnsampled.program, b119FloorScalingExpressions);
+  const b119FloorScalingCase = (scaling: boolean) => {
+    const sample = b119AutomaticTextSampleForValues(
+      b119FloorScalingUnsampled,
+      { runtimeMin: 16, runtimeY: 0, runtimeScaling: scaling },
+    );
+    const final = sample === undefined
+      ? b119FloorScalingUnsampled
+      : b119AutomaticTextProjection(
+        b119FloorScalingSource,
+        'selftest/b119-automatic-text-floor-scaling.lua',
+        1.25,
+        sample,
+      );
+    const creator = final.program === undefined ? undefined : operation(final.program, 'createText');
+    const cell = final.program === undefined
+      ? undefined
+      : final.program.cells.find(candidate => candidate.id === creator?.cellId);
+    return { scaling, sample, final, fact: cell?.descriptorFacts.minRowHeightFloor };
+  };
+  const b119FloorScalingTrue = b119FloorScalingCase(true);
+  const b119FloorScalingFalse = b119FloorScalingCase(false);
+  check('B119 source-parsed minRowHeight floor retains scaling and changes at uiScale 1.25',
+    b119ExactCatalog(b119FloorScalingUnsampled.program, b119FloorScalingExpressions)
+      && b119FloorScalingExpectedIds.length === b119FloorScalingExpressions.length
+      && b119FloorScalingTrue.sample !== undefined
+      && b119FloorScalingFalse.sample !== undefined
+      && b119FloorScalingTrue.final.result.status !== 'refused'
+      && b119FloorScalingFalse.final.result.status !== 'refused'
+      && factValue(b119FloorScalingTrue.fact) === 20
+      && factValue(b119FloorScalingFalse.fact) === 16
+      && b119SampleIdsForFact(b119FloorScalingTrue.fact).length === b119FloorScalingExpectedIds.length
+      && JSON.stringify(b119SampleIdsForFact(b119FloorScalingTrue.fact)) === JSON.stringify(b119FloorScalingExpectedIds)
+      && JSON.stringify(b119SampleIdsForFact(b119FloorScalingFalse.fact)) === JSON.stringify(b119FloorScalingExpectedIds),
+    detail({
+      catalogExpressions: b119FloorScalingUnsampled.program?.sampleCatalog.entries.map(entry => entry.expression),
+      expectedExpressions: b119FloorScalingExpressions,
+      expectedIds: b119FloorScalingExpectedIds,
+      scalingTrue: { value: factValue(b119FloorScalingTrue.fact), ids: b119SampleIdsForFact(b119FloorScalingTrue.fact) },
+      scalingFalse: { value: factValue(b119FloorScalingFalse.fact), ids: b119SampleIdsForFact(b119FloorScalingFalse.fact) },
+    }));
+
+  const b119FrameDimensionSource = [
+    'local menu = { name = "B119FrameDimensionCategories", layer = 1 }',
+    'function menu.display(runtimeViewWidth, runtimeViewHeight, runtimeOtherWidth)',
+    '  local frame = Helper.createFrameHandle(menu, { width = runtimeViewWidth, height = runtimeViewHeight })',
+    '  local table = frame:addTable(1, { width = runtimeOtherWidth, reserveScrollBar = false })',
+    '  table:addRow(false, {})',
+    '  frame:display() ',
+    'end',
+  ].join('\n');
+  const b119FrameDimensionModel = buildX4UiCallModel(input(
+    b119FrameDimensionSource,
+    'selftest/b119-frame-dimension-categories.lua',
+  ));
+  const b119FrameDimensionTarget = namedTarget(b119FrameDimensionModel, 'menu.display');
+  const b119FrameDimensionUnsampled = programOf(projectX4UiLayoutProgram(
+    b119FrameDimensionModel,
+    b119FrameDimensionTarget,
+    profileFor(b119FrameDimensionModel),
+  ));
+  const b119FrameDimensionExpressions = ['runtimeViewWidth', 'runtimeViewHeight', 'runtimeOtherWidth'];
+  const b119FrameDimensionIds = b119IdsForExpressions(
+    b119FrameDimensionUnsampled,
+    b119FrameDimensionExpressions,
+  );
+  const b119FrameDimensionValue = (
+    values: Readonly<Record<string, string | number | boolean>>,
+  ): X4UiLayoutPreviewSampleInput => ({
+    catalogId: b119FrameDimensionUnsampled.sampleCatalog.id,
+    source: b119FrameDimensionUnsampled.sampleCatalog.sourceIdentity,
+    values: b119FrameDimensionUnsampled.sampleCatalog.entries.map(entry => ({
+      id: entry.id,
+      value: values[entry.expression],
+    })),
+  });
+  const b119FrameDimensionSample = b119FrameDimensionValue({
+    runtimeViewWidth: 220,
+    runtimeViewHeight: 120,
+    runtimeOtherWidth: 50,
+  });
+  const b119FrameDimensionSampledResult = projectX4UiLayoutProgram(
+    b119FrameDimensionModel,
+    b119FrameDimensionTarget,
+    profileFor(b119FrameDimensionModel),
+    b119FrameDimensionSample,
+  );
+  const b119FrameDimensionSampled = resultProgram(b119FrameDimensionSampledResult);
+  const b119FrameDimensionCreate = b119FrameDimensionSampled === undefined
+    ? undefined
+    : operation(b119FrameDimensionSampled, 'createFrameHandle');
+  const b119FrameDimensionFrame = b119FrameDimensionSampled?.frames[0];
+  const b119FrameWidthModelGap = b119FrameDimensionModel.verificationGaps.find(candidate =>
+    candidate.expression === 'runtimeViewWidth');
+  const b119FrameHeightModelGap = b119FrameDimensionModel.verificationGaps.find(candidate =>
+    candidate.expression === 'runtimeViewHeight');
+  const b119FrameDimensionGapPresent = (
+    program: X4UiLayoutProgram | undefined,
+    expression: string,
+    modelGap: typeof b119FrameWidthModelGap,
+  ): boolean => Boolean(program?.gaps.some(gap => gap.expression === expression
+    && (modelGap === undefined || locationsSameForTest(gap.source, modelGap.source))));
+  const b119FrameDimensionHeightId = b119FrameDimensionUnsampled.sampleCatalog.entries.find(entry =>
+    entry.expression === 'runtimeViewHeight')?.id;
+  const b119FrameDimensionMissingHeightSample = {
+    ...b119FrameDimensionSample,
+    values: b119FrameDimensionHeightId === undefined
+      ? b119FrameDimensionSample.values
+      : b119FrameDimensionSample.values.filter(value => value.id !== b119FrameDimensionHeightId),
+  };
+  const b119FrameDimensionMissingHeightResult = projectX4UiLayoutProgram(
+    b119FrameDimensionModel,
+    b119FrameDimensionTarget,
+    profileFor(b119FrameDimensionModel),
+    b119FrameDimensionMissingHeightSample,
+  );
+  const b119FrameDimensionMissingHeight = resultProgram(b119FrameDimensionMissingHeightResult);
+  const b119FrameDimensionMissingHeightFrame = b119FrameDimensionMissingHeight?.frames[0];
+  const b119FrameDimensionWrongCategoryRecord = jsonClone(b119FrameDimensionModel) as unknown as ValueRecord;
+  const b119FrameDimensionWrongCategoryGaps = b119FrameDimensionWrongCategoryRecord.verificationGaps as ValueRecord[];
+  if (b119FrameWidthModelGap) {
+    b119FrameDimensionWrongCategoryGaps.push({
+      ...jsonClone(b119FrameWidthModelGap),
+      category: 'frame',
+      reason: 'B119 wrong-category other-consumer control',
+    });
+  }
+  const b119FrameDimensionWrongCategoryModel = freezeClone(b119FrameDimensionWrongCategoryRecord) as unknown as X4UiCallModel;
+  const b119FrameDimensionWrongCategoryResult = projectX4UiLayoutProgram(
+    b119FrameDimensionWrongCategoryModel,
+    namedTarget(b119FrameDimensionWrongCategoryModel, 'menu.display'),
+    profileFor(b119FrameDimensionWrongCategoryModel),
+    b119FrameDimensionSample,
+  );
+  const b119FrameDimensionWrongCategory = resultProgram(b119FrameDimensionWrongCategoryResult);
+  check('B119 frame width/height roots use exact dimension categories and clear only matched sampled gaps',
+    b119ExactCatalog(b119FrameDimensionUnsampled, b119FrameDimensionExpressions)
+      && b119FrameDimensionIds.length === b119FrameDimensionExpressions.length
+      && b119FrameWidthModelGap?.category === 'width'
+      && b119FrameHeightModelGap?.category === 'height'
+      && b119FrameDimensionSampledResult.status !== 'refused'
+      && b119FrameDimensionFrame?.width === 220
+      && b119FrameDimensionFrame?.height === 120
+      && factValue(b119FrameDimensionCreate?.descriptorFacts.width) === 220
+      && factValue(b119FrameDimensionCreate?.descriptorFacts.height) === 120
+      && !b119FrameDimensionGapPresent(b119FrameDimensionSampled, 'runtimeViewWidth', b119FrameWidthModelGap)
+      && !b119FrameDimensionGapPresent(b119FrameDimensionSampled, 'runtimeViewHeight', b119FrameHeightModelGap),
+    detail({
+      catalogExpressions: b119FrameDimensionUnsampled.sampleCatalog.entries.map(entry => entry.expression),
+      expectedExpressions: b119FrameDimensionExpressions,
+      widthGap: b119FrameWidthModelGap?.category,
+      heightGap: b119FrameHeightModelGap?.category,
+      frame: { width: b119FrameDimensionFrame?.width, height: b119FrameDimensionFrame?.height },
+    }));
+  check('B119 unresolved frame dimension keeps the exact missing height gap and does not invent geometry',
+    b119FrameDimensionMissingHeightResult.status !== 'refused'
+      && b119FrameDimensionMissingHeightFrame?.width === 220
+      && b119FrameDimensionMissingHeightFrame?.height === undefined
+      && b119FrameDimensionMissingHeight?.frames[0]?.descriptorFacts.height.status === 'unavailable'
+      && b119FrameDimensionGapPresent(b119FrameDimensionMissingHeight, 'runtimeViewHeight', b119FrameHeightModelGap),
+    detail({
+      status: b119FrameDimensionMissingHeightResult.status,
+      frame: { width: b119FrameDimensionMissingHeightFrame?.width, height: b119FrameDimensionMissingHeightFrame?.height },
+      heightFact: b119FrameDimensionMissingHeight?.frames[0]?.descriptorFacts.height.status,
+      heightGap: b119FrameDimensionHeightId === undefined ? 'missing sample id' : 'retained',
+    }));
+  const b119FrameDimensionWrongCategoryGapPresent = b119FrameDimensionGapPresent(
+    b119FrameDimensionWrongCategory,
+    'runtimeViewWidth',
+    b119FrameWidthModelGap,
+  ) && b119FrameDimensionWrongCategory?.gaps.some(gap => gap.category === 'frame'
+    && gap.reason === 'B119 wrong-category other-consumer control') === true;
+  check('B119 frame dimension cleanup preserves an explicitly different consumer category',
+    b119FrameWidthModelGap !== undefined
+      && b119FrameDimensionWrongCategoryResult.status !== 'refused'
+      && b119FrameDimensionWrongCategoryGapPresent,
+    detail({
+      status: b119FrameDimensionWrongCategoryResult.status,
+      preserved: b119FrameDimensionWrongCategoryGapPresent,
+    }));
+
+  const b119TablePropertySource = [
+    'local menu = { name = "B119TablePropertyCategories" }',
+    'function menu.display(runtimeY, runtimeTab, blockedY)',
+    '  local frame = Helper.createFrameHandle(menu, { width = 200, height = 120 })',
+    '  local table = frame:addTable(1, { width = 100, y = runtimeY, tabOrder = runtimeTab, scaling = false })',
+    '  table:addRow(false, {})',
+    '  if runtimeFlag then',
+    '    local blocked = frame:addTable(1, { width = 80, y = blockedY })',
+    '    blocked:addRow(false, {})',
+    '  end',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const b119TablePropertyModel = buildX4UiCallModel(input(b119TablePropertySource, 'selftest/b119-table-property-categories.lua'));
+  const b119TablePropertyProfile = profileFor(b119TablePropertyModel);
+  const b119TablePropertyTarget = namedTarget(b119TablePropertyModel, 'menu.display');
+  const b119TablePropertyUnsampled = programOf(projectX4UiLayoutProgram(
+    b119TablePropertyModel, b119TablePropertyTarget, b119TablePropertyProfile,
+  ));
+  const b119TablePropertyValues: Readonly<Record<string, number>> = { runtimeY: 27, runtimeTab: 80, blockedY: 90 };
+  const b119TablePropertySamples: X4UiLayoutPreviewSampleInput = {
+    catalogId: b119TablePropertyUnsampled.sampleCatalog.id,
+    source: b119TablePropertyUnsampled.sampleCatalog.sourceIdentity,
+    values: b119TablePropertyUnsampled.sampleCatalog.entries.map(entry => ({ id: entry.id, value: b119TablePropertyValues[entry.expression] })),
+  };
+  const b119TablePropertyResult = projectX4UiLayoutProgram(
+    b119TablePropertyModel, b119TablePropertyTarget, b119TablePropertyProfile, b119TablePropertySamples,
+  );
+  const b119TablePropertyProgram = programOf(b119TablePropertyResult);
+  const b119TablePropertyGaps = b119TablePropertyModel.verificationGaps.filter(gap =>
+    gap.category === 'property' && ['runtimeY', 'runtimeTab'].includes(gap.expression || ''));
+  const b119TablePropertyGapPresent = (program: X4UiLayoutProgram, gap: typeof b119TablePropertyGaps[number]): boolean =>
+    program.gaps.some(candidate => candidate.category === gap.category && candidate.expression === gap.expression
+      && locationsSameForTest(candidate.source, gap.source));
+  check('B119 sampled table y and tabOrder clear exact property-model warnings while retaining known geometry',
+    b119TablePropertyGaps.length === 2
+      && factValue(b119TablePropertyProgram.tables[0]?.descriptorFacts.y) === 27
+      && factValue(b119TablePropertyProgram.tables[0]?.descriptorFacts.tabOrder) === 80
+      && b119TablePropertyProgram.tables[0]?.requestedWidth === 100
+      && b119TablePropertyGaps.every(gap => !b119TablePropertyGapPresent(b119TablePropertyProgram, gap)),
+    detail({ modelGaps: b119TablePropertyGaps, gaps: b119TablePropertyProgram.gaps }));
+  for (const [expression, field] of [['runtimeY', 'y'], ['runtimeTab', 'tabOrder']] as const) {
+    const entry = b119TablePropertyUnsampled.sampleCatalog.entries.find(candidate => candidate.expression === expression);
+    const missing = programOf(projectX4UiLayoutProgram(
+      b119TablePropertyModel, b119TablePropertyTarget, b119TablePropertyProfile,
+      { ...b119TablePropertySamples, values: b119TablePropertySamples.values.filter(value => value.id !== entry?.id) },
+    ));
+    const gap = b119TablePropertyGaps.find(candidate => candidate.expression === expression);
+    check(`B119 missing table ${field} retains its source warning and existing table failure category`,
+      entry !== undefined && gap !== undefined && b119TablePropertyGapPresent(missing, gap)
+        && missing.tables[0]?.descriptorFacts[field].status === 'unavailable'
+        && missing.gaps.some(candidate => candidate.category === 'table' && candidate.operationId !== undefined
+          && candidate.expression === expression),
+      detail({ field, fact: missing.tables[0]?.descriptorFacts[field], gaps: missing.gaps }));
+  }
+  const b119BlockedPropertyEntry = b119TablePropertyUnsampled.sampleCatalog.entries.find(entry => entry.expression === 'blockedY');
+  check('B119 table property cleanup preserves sampled but unapplied conditional owners',
+    b119BlockedPropertyEntry !== undefined
+      && b119TablePropertyProgram.previewSampleBindings.some(binding => binding.id === b119BlockedPropertyEntry.id && binding.status === 'not-applied')
+      && b119TablePropertyProgram.gaps.some(gap => gap.category === 'property' && gap.expression === 'blockedY')
+      && b119TablePropertyProgram.gaps.some(gap => gap.category === 'sample' && gap.expression === 'blockedY'),
+    detail({ bindings: b119TablePropertyProgram.previewSampleBindings, gaps: b119TablePropertyProgram.gaps }));
+  const b119TablePropertyWrongModel = jsonClone(b119TablePropertyModel) as unknown as ValueRecord;
+  const b119TablePropertyWrongGaps = b119TablePropertyWrongModel.verificationGaps as ValueRecord[];
+  const b119TableYModelGap = b119TablePropertyGaps.find(gap => gap.expression === 'runtimeY');
+  const b119TableOrderModelGap = b119TablePropertyGaps.find(gap => gap.expression === 'runtimeTab');
+  if (b119TableYModelGap && b119TableOrderModelGap) {
+    b119TablePropertyWrongGaps.push({ ...jsonClone(b119TableYModelGap), category: 'table', reason: 'B119 distinct table category control' });
+    b119TablePropertyWrongGaps.push({ ...jsonClone(b119TableYModelGap), source: jsonClone(b119TableOrderModelGap.source), reason: 'B119 distinct property range control' });
+  }
+  const b119TablePropertyWrongResult = projectX4UiLayoutProgram(
+    freezeClone(b119TablePropertyWrongModel) as unknown as X4UiCallModel,
+    b119TablePropertyTarget, b119TablePropertyProfile, b119TablePropertySamples,
+  );
+  const b119TablePropertyWrongProgram = programOf(b119TablePropertyWrongResult);
+  check('B119 table property cleanup preserves same-range other categories and same-expression other ranges',
+    b119TablePropertyWrongProgram.gaps.some(gap => gap.category === 'table' && gap.reason === 'B119 distinct table category control')
+      && b119TablePropertyWrongProgram.gaps.some(gap => gap.category === 'property' && gap.reason === 'B119 distinct property range control')
+      && b119TablePropertyGaps.every(gap => !b119TablePropertyGapPresent(b119TablePropertyWrongProgram, gap)),
+    detail(b119TablePropertyWrongProgram.gaps));
+  const b119TablePropertyAuthority = evidenceAuthorityOf(b119TablePropertyResult);
+  check('B119 resolved table property warning removal is mirrored in the issued evidence ledger',
+    b119TablePropertyAuthority !== undefined
+      && validateX4UiLayoutEvidencePair(b119TablePropertyProgram, b119TablePropertyAuthority).valid
+      && b119TablePropertyGaps.every(gap => !b119TablePropertyAuthority.gaps.some(candidate =>
+        candidate.category === gap.category && candidate.expression === gap.expression
+          && locationsSameForTest(candidate.source, gap.source))),
+    detail({ gaps: b119TablePropertyAuthority?.gaps }));
+
+  const b119AutomaticContributorFallbackSource = [
+    'local menu = { name = "B119AutomaticContributorFallback", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    'local row = table:addRow(false, { paddingTop = 0, paddingBottom = 0, borderBelow = false, fixed = false, scaling = false })',
+    'row[1]:createText(runtimeContent, { height = 0, minRowHeight = runtimeMin, y = runtimeY, x = 2, width = 0, font = runtimeFont, fontsize = runtimeFontSize, wordwrap = runtimeWrap, scaling = runtimeScaling })',
+    'frame:display()',
+  ].join('\n');
+  const b119AutomaticContributorFallbackUnsampled = b119AutomaticTextProjection(
+    b119AutomaticContributorFallbackSource,
+    'selftest/b119-automatic-text-contributor-fallback.lua',
+    1.25,
+  );
+  const b119AutomaticContributorFallbackExpressions = [
+    'runtimeContent', 'runtimeFont', 'runtimeFontSize', 'runtimeWrap', 'runtimeMin', 'runtimeY', 'runtimeScaling',
+  ];
+  const b119AutomaticContributorFallbackIds = b119IdsForExpressions(
+    b119AutomaticContributorFallbackUnsampled.program,
+    b119AutomaticContributorFallbackExpressions,
+  );
+  const b119AutomaticContributorFallbackSample = b119AutomaticTextSampleForValues(
+    b119AutomaticContributorFallbackUnsampled,
+    {
+      runtimeContent: 'MMMMMMMMMMMMMMMMMMMM',
+      runtimeFont: 'Zekton',
+      runtimeFontSize: 11,
+      runtimeWrap: true,
+      runtimeMin: 16,
+      runtimeY: 1,
+      runtimeScaling: true,
+    },
+  );
+  const b119AutomaticContributorFallbackFinal = b119AutomaticContributorFallbackSample === undefined
+    ? b119AutomaticContributorFallbackUnsampled
+    : b119AutomaticTextProjection(
+      b119AutomaticContributorFallbackSource,
+      'selftest/b119-automatic-text-contributor-fallback.lua',
+      1.25,
+      b119AutomaticContributorFallbackSample,
+    );
+  const b119AutomaticContributorFallbackCreator = b119AutomaticContributorFallbackFinal.program === undefined
+    ? undefined
+    : operation(b119AutomaticContributorFallbackFinal.program, 'createText');
+  const b119AutomaticContributorFallbackCell = b119AutomaticContributorFallbackFinal.program === undefined
+    ? undefined
+    : b119AutomaticContributorFallbackFinal.program.cells.find(candidate => candidate.id === b119AutomaticContributorFallbackCreator?.cellId);
+  const b119AutomaticContributorFallbackFact = b119AutomaticContributorFallbackCell?.descriptorFacts.outerHeight;
+  const b119AutomaticContributorFallbackFloorIds = b119IdsForExpressions(
+    b119AutomaticContributorFallbackUnsampled.program,
+    ['runtimeMin', 'runtimeY', 'runtimeScaling'],
+  );
+  const b119AutomaticContributorFallbackMeasuredIds = b119IdsForExpressions(
+    b119AutomaticContributorFallbackUnsampled.program,
+    ['runtimeContent', 'runtimeFont', 'runtimeFontSize', 'runtimeWrap'],
+  );
+  check('B119 profile-fallback automatic text height ignores unmeasured font/text inputs',
+    b119ExactCatalog(b119AutomaticContributorFallbackUnsampled.program, b119AutomaticContributorFallbackExpressions)
+      && b119AutomaticContributorFallbackIds.length === b119AutomaticContributorFallbackExpressions.length
+      && b119AutomaticContributorFallbackSample !== undefined
+      && b119AutomaticContributorFallbackFinal.result.status !== 'refused'
+      && factValue(b119AutomaticContributorFallbackFact) === 19
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorFallbackFact)) === JSON.stringify(b119AutomaticContributorFallbackFloorIds)
+      && b119AutomaticContributorFallbackMeasuredIds.every(id => !b119SampleIdsForFact(b119AutomaticContributorFallbackFact).includes(id))
+      && b119AutomaticContributorFallbackFact?.expression.includes('profile.defaults.minTextHeight') === true,
+    detail({
+      catalogExpressions: b119AutomaticContributorFallbackUnsampled.program?.sampleCatalog.entries.map(entry => entry.expression),
+      expectedExpressions: b119AutomaticContributorFallbackExpressions,
+      fallback: b119AutomaticContributorFallbackFact,
+      floorIds: b119AutomaticContributorFallbackFloorIds,
+    }));
+
+  const b119AutomaticContributorExplicitSource = [
+    'local menu = { name = "B119AutomaticContributorExplicit", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 100, reserveScrollBar = false, scaling = false })',
+    'local row = table:addRow(false, { paddingTop = 0, paddingBottom = 0, borderBelow = false, fixed = false, scaling = false })',
+    'row[1]:createText(runtimeContent, { height = 0, minRowHeight = runtimeMin, y = runtimeY, x = 2, width = runtimeWidth, font = runtimeFont, fontsize = runtimeFontSize, wordwrap = runtimeWrap, scaling = runtimeScaling })',
+    'frame:display()',
+  ].join('\n');
+  const b119AutomaticContributorExplicitUnsampled = b119AutomaticTextProjection(
+    b119AutomaticContributorExplicitSource,
+    'selftest/b119-automatic-text-contributor-explicit.lua',
+    1.25,
+  );
+  const b119AutomaticContributorExplicitExpressions = [
+    'runtimeContent', 'runtimeFont', 'runtimeFontSize', 'runtimeWrap', 'runtimeWidth', 'runtimeMin', 'runtimeY', 'runtimeScaling',
+  ];
+  const b119AutomaticContributorExplicitSample = b119AutomaticTextSampleForValues(
+    b119AutomaticContributorExplicitUnsampled,
+    {
+      runtimeContent: 'MMMMMMMMMMMMMMMMMMMM',
+      runtimeFont: 'Zekton',
+      runtimeFontSize: 11,
+      runtimeWrap: true,
+      runtimeWidth: 36,
+      runtimeMin: 16,
+      runtimeY: 1,
+      runtimeScaling: true,
+    },
+  );
+  const b119AutomaticContributorExplicitFinal = b119AutomaticContributorExplicitSample === undefined
+    ? b119AutomaticContributorExplicitUnsampled
+    : b119AutomaticTextProjection(
+      b119AutomaticContributorExplicitSource,
+      'selftest/b119-automatic-text-contributor-explicit.lua',
+      1.25,
+      b119AutomaticContributorExplicitSample,
+      false,
+      b119CanonicalCorpus,
+    );
+  const b119AutomaticContributorExplicitCreator = b119AutomaticContributorExplicitFinal.program === undefined
+    ? undefined
+    : operation(b119AutomaticContributorExplicitFinal.program, 'createText');
+  const b119AutomaticContributorExplicitCell = b119AutomaticContributorExplicitFinal.program === undefined
+    ? undefined
+    : b119AutomaticContributorExplicitFinal.program.cells.find(candidate => candidate.id === b119AutomaticContributorExplicitCreator?.cellId);
+  const b119AutomaticContributorExplicitFact = b119AutomaticContributorExplicitCell?.descriptorFacts.outerHeight;
+  const b119AutomaticContributorExplicitIds = b119IdsForExpressions(
+    b119AutomaticContributorExplicitUnsampled.program,
+    b119AutomaticContributorExplicitExpressions,
+  );
+  check('B119 canonical automatic text height retains only applicable explicit-width measured contributors',
+    b119ExactCatalog(b119AutomaticContributorExplicitUnsampled.program, b119AutomaticContributorExplicitExpressions)
+      && b119AutomaticContributorExplicitIds.length === b119AutomaticContributorExplicitExpressions.length
+      && b119AutomaticContributorExplicitSample !== undefined
+      && b119CanonicalCorpus !== undefined
+      && b119AutomaticContributorExplicitFinal.result.status !== 'refused'
+      && b119AutomaticContributorExplicitFact?.status === 'known'
+      && factValue(b119AutomaticContributorExplicitFact) === 228
+      && b119SampleIdsForFact(b119AutomaticContributorExplicitFact).length === b119AutomaticContributorExplicitIds.length
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorExplicitFact)) === JSON.stringify(b119AutomaticContributorExplicitIds)
+      && b119AutomaticContributorExplicitFact.expression.includes('layoutZektonText'),
+    detail({
+      catalogExpressions: b119AutomaticContributorExplicitUnsampled.program?.sampleCatalog.entries.map(entry => entry.expression),
+      expectedExpressions: b119AutomaticContributorExplicitExpressions,
+      corpusLoaded: b119CanonicalCorpus !== undefined,
+      fact: b119AutomaticContributorExplicitFact,
+    }));
+
+  const b119AutomaticContributorSpanSource = [
+    'local menu = { name = "B119AutomaticContributorSpan", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(2, { width = runtimeTableWidth, reserveScrollBar = runtimeReserveScrollBar, scaling = false })',
+    'table:setColWidthPercent(1, runtimeOverwrittenPercent)',
+    'table:setColWidthPercent(1, runtimeColumnPercent)',
+    'local row = table:addRow(false, { paddingTop = 0, paddingBottom = 0, borderBelow = false, fixed = false, scaling = false })',
+    'row[1]:setColSpan(runtimeSpan):createText(runtimeContent, { height = 0, minRowHeight = runtimeMin, y = runtimeY, x = runtimeX, width = runtimeWidth, font = runtimeFont, fontsize = runtimeFontSize, wordwrap = runtimeWrap, scaling = runtimeScaling })',
+    'table:setColWidthPercent(1, runtimeIgnoredPercent)',
+    'frame:display()',
+  ].join('\n');
+  const b119AutomaticContributorSpanUnsampled = b119AutomaticTextProjection(
+    b119AutomaticContributorSpanSource,
+    'selftest/b119-automatic-text-contributor-span.lua',
+    1.25,
+  );
+  const b119AutomaticContributorSpanExpressions = [
+    'runtimeTableWidth', 'runtimeOverwrittenPercent', 'runtimeColumnPercent', 'runtimeSpan', 'runtimeContent', 'runtimeMin', 'runtimeY', 'runtimeX',
+    'runtimeWidth', 'runtimeScaling', 'runtimeFont', 'runtimeFontSize', 'runtimeWrap', 'runtimeIgnoredPercent', 'runtimeReserveScrollBar',
+  ];
+  const b119AutomaticContributorSpanSample = b119AutomaticTextSampleForValues(
+    b119AutomaticContributorSpanUnsampled,
+    {
+      runtimeTableWidth: 60,
+      runtimeOverwrittenPercent: 25,
+      runtimeColumnPercent: 100,
+      runtimeSpan: 1,
+      runtimeContent: 'MMMMMMMMMMMMMMMMMMMM',
+      runtimeMin: 16,
+      runtimeY: 1,
+      runtimeX: 2,
+      runtimeWidth: 0,
+      runtimeScaling: true,
+      runtimeFont: 'Zekton',
+      runtimeFontSize: 11,
+      runtimeWrap: true,
+      runtimeIgnoredPercent: 50,
+      runtimeReserveScrollBar: false,
+    },
+  );
+  const b119AutomaticContributorSpanAt = (tableWidth: number, textWidth = 0, reserveScrollBar = false) => {
+    const sample = b119AutomaticContributorSpanSample === undefined
+      ? undefined
+      : {
+        ...b119AutomaticContributorSpanSample,
+        values: b119AutomaticContributorSpanSample.values.map(value => {
+          const expression = b119AutomaticContributorSpanUnsampled.program?.sampleCatalog.entries.find(entry => entry.id === value.id)?.expression;
+          return expression === 'runtimeTableWidth'
+            ? { ...value, value: tableWidth }
+            : expression === 'runtimeWidth'
+              ? { ...value, value: textWidth }
+              : expression === 'runtimeReserveScrollBar'
+                ? { ...value, value: reserveScrollBar }
+              : value;
+        }),
+      };
+    const final = sample === undefined
+      ? b119AutomaticContributorSpanUnsampled
+      : b119AutomaticTextProjection(
+        b119AutomaticContributorSpanSource,
+        'selftest/b119-automatic-text-contributor-span.lua',
+        1.25,
+        sample,
+        false,
+        b119CanonicalCorpus,
+      );
+    const creator = final.program === undefined ? undefined : operation(final.program, 'createText');
+    const cell = final.program === undefined
+      ? undefined
+      : final.program.cells.find(candidate => candidate.id === creator?.cellId);
+    const ignored = final.program?.operations.find(candidate => candidate.kind === 'setColWidthPercent' && candidate.modelOrder > (creator?.modelOrder || 0));
+    const overwritten = final.program?.operations.find(candidate => candidate.kind === 'setColWidthPercent'
+      && candidate.descriptorFacts.percentage?.expression === 'runtimeOverwrittenPercent');
+    const reserve = final.program?.operations.find(candidate => candidate.kind === 'addTable');
+    return { tableWidth, textWidth, reserveScrollBar, sample, final, fact: cell?.descriptorFacts.outerHeight, ignored, overwritten, reserve };
+  };
+  const b119AutomaticContributorSpanNarrow = b119AutomaticContributorSpanAt(60);
+  const b119AutomaticContributorSpanWide = b119AutomaticContributorSpanAt(100);
+  const b119AutomaticContributorSpanExplicit = b119AutomaticContributorSpanAt(60, 36);
+  const b119AutomaticContributorSpanReserve = b119AutomaticContributorSpanAt(60, 0, true);
+  const b119AutomaticContributorSpanIds = b119IdsForExpressions(
+    b119AutomaticContributorSpanUnsampled.program,
+    b119AutomaticContributorSpanExpressions.filter(expression => expression !== 'runtimeIgnoredPercent'
+      && expression !== 'runtimeOverwrittenPercent'
+      && expression !== 'runtimeReserveScrollBar'),
+  );
+  const b119AutomaticContributorSpanExplicitIds = b119IdsForExpressions(
+    b119AutomaticContributorSpanUnsampled.program,
+    ['runtimeContent', 'runtimeFont', 'runtimeFontSize', 'runtimeWrap', 'runtimeWidth', 'runtimeMin', 'runtimeY', 'runtimeScaling'],
+  );
+  check('B119 canonical span-derived width retains finalized table/column contributors and ignores post-row width mutation',
+    b119ExactCatalog(b119AutomaticContributorSpanUnsampled.program, b119AutomaticContributorSpanExpressions)
+      && b119AutomaticContributorSpanSample !== undefined
+      && b119CanonicalCorpus !== undefined
+      && b119AutomaticContributorSpanNarrow.final.result.status !== 'refused'
+      && b119AutomaticContributorSpanWide.final.result.status !== 'refused'
+      && b119AutomaticContributorSpanExplicit.final.result.status !== 'refused'
+      && b119AutomaticContributorSpanReserve.final.result.status !== 'refused'
+      && b119AutomaticContributorSpanNarrow.fact?.status === 'known'
+      && b119AutomaticContributorSpanWide.fact?.status === 'known'
+      && b119AutomaticContributorSpanExplicit.fact?.status === 'known'
+      && b119AutomaticContributorSpanReserve.fact?.status === 'known'
+      && factValue(b119AutomaticContributorSpanNarrow.fact) === 160
+      && factValue(b119AutomaticContributorSpanWide.fact) === 91
+      && factValue(b119AutomaticContributorSpanExplicit.fact) === 228
+      && factValue(b119AutomaticContributorSpanNarrow.fact) !== factValue(b119AutomaticContributorSpanWide.fact)
+      && b119SampleIdsForFact(b119AutomaticContributorSpanNarrow.fact).length === b119AutomaticContributorSpanIds.length
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorSpanNarrow.fact)) === JSON.stringify(b119AutomaticContributorSpanIds)
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorSpanWide.fact)) === JSON.stringify(b119AutomaticContributorSpanIds)
+      && b119SampleIdsForFact(b119AutomaticContributorSpanExplicit.fact).length === b119AutomaticContributorSpanExplicitIds.length
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorSpanExplicit.fact)) === JSON.stringify(b119AutomaticContributorSpanExplicitIds)
+      && factValue(b119AutomaticContributorSpanReserve.fact) === factValue(b119AutomaticContributorSpanNarrow.fact)
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorSpanReserve.fact)) === JSON.stringify(b119AutomaticContributorSpanIds)
+      && !b119SampleIdsForFact(b119AutomaticContributorSpanNarrow.fact).some(id =>
+        b119AutomaticContributorSpanUnsampled.program?.sampleCatalog.entries.find(entry => entry.id === id)?.expression === 'runtimeIgnoredPercent')
+      && !b119SampleIdsForFact(b119AutomaticContributorSpanNarrow.fact).some(id =>
+        b119AutomaticContributorSpanUnsampled.program?.sampleCatalog.entries.find(entry => entry.id === id)?.expression === 'runtimeOverwrittenPercent')
+      && b119AutomaticContributorSpanNarrow.fact.expression.includes('layoutZektonText')
+      && b119AutomaticContributorSpanWide.fact.expression.includes('layoutZektonText')
+      && b119AutomaticContributorSpanExplicit.fact.expression.includes('layoutZektonText')
+      && b119AutomaticContributorSpanReserve.reserve?.status === 'applied'
+      && !b119SampleIdsForFact(b119AutomaticContributorSpanReserve.fact).some(id =>
+        b119AutomaticContributorSpanUnsampled.program?.sampleCatalog.entries.find(entry => entry.id === id)?.expression === 'runtimeReserveScrollBar')
+      && b119AutomaticContributorSpanNarrow.overwritten?.status === 'applied'
+      && b119AutomaticContributorSpanWide.overwritten?.status === 'applied'
+      && b119AutomaticContributorSpanNarrow.ignored?.status === 'rejected'
+      && b119AutomaticContributorSpanWide.ignored?.status === 'rejected'
+      && b119AutomaticContributorSpanExplicit.ignored?.status === 'rejected',
+    detail({
+      catalogExpressions: b119AutomaticContributorSpanUnsampled.program?.sampleCatalog.entries.map(entry => entry.expression),
+      expectedExpressions: b119AutomaticContributorSpanExpressions,
+      expectedIds: b119AutomaticContributorSpanIds,
+      explicitIds: b119AutomaticContributorSpanExplicitIds,
+      narrow: { value: factValue(b119AutomaticContributorSpanNarrow.fact), ids: b119SampleIdsForFact(b119AutomaticContributorSpanNarrow.fact), ignored: b119AutomaticContributorSpanNarrow.ignored?.status, overwritten: b119AutomaticContributorSpanNarrow.overwritten?.status },
+      wide: { value: factValue(b119AutomaticContributorSpanWide.fact), ids: b119SampleIdsForFact(b119AutomaticContributorSpanWide.fact), ignored: b119AutomaticContributorSpanWide.ignored?.status, overwritten: b119AutomaticContributorSpanWide.overwritten?.status },
+      explicit: { value: factValue(b119AutomaticContributorSpanExplicit.fact), ids: b119SampleIdsForFact(b119AutomaticContributorSpanExplicit.fact), ignored: b119AutomaticContributorSpanExplicit.ignored?.status },
+      reserve: { value: factValue(b119AutomaticContributorSpanReserve.fact), ids: b119SampleIdsForFact(b119AutomaticContributorSpanReserve.fact), operation: b119AutomaticContributorSpanReserve.reserve?.status },
+    }));
+
+  const b119AutomaticContributorAutoSource = [
+    'local menu = { name = "B119AutomaticContributorAuto", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(2, { width = runtimeTableWidth, x = runtimeTableX, reserveScrollBar = false, scaling = runtimeTableScaling })',
+    'table:setColWidth(2, runtimeSiblingWidth)',
+    'local row = table:addRow(false, { paddingTop = 0, paddingBottom = 0, borderBelow = false, fixed = false, scaling = false })',
+    'row[1]:createText(runtimeContent, { height = 0, minRowHeight = runtimeMin, y = runtimeY, x = runtimeX, width = runtimeWidth, font = runtimeFont, fontsize = runtimeFontSize, wordwrap = runtimeWrap, scaling = true })',
+    'frame:display()',
+  ].join('\n');
+  const b119AutomaticContributorAutoUnsampled = b119AutomaticTextProjection(
+    b119AutomaticContributorAutoSource,
+    'selftest/b119-automatic-text-contributor-auto-sibling.lua',
+    1.25,
+  );
+  const b119AutomaticContributorAutoExpressions = [
+    'runtimeTableWidth', 'runtimeTableX', 'runtimeTableScaling', 'runtimeSiblingWidth',
+    'runtimeContent', 'runtimeMin', 'runtimeY', 'runtimeX', 'runtimeWidth', 'runtimeFont', 'runtimeFontSize', 'runtimeWrap',
+  ];
+  const b119AutomaticContributorAutoSample = b119AutomaticTextSampleForValues(
+    b119AutomaticContributorAutoUnsampled,
+    {
+      runtimeTableWidth: 0,
+      runtimeTableX: 4,
+      runtimeTableScaling: true,
+      runtimeSiblingWidth: 48,
+      runtimeContent: 'MMMMMMMMMMMMMMMMMMMM',
+      runtimeMin: 16,
+      runtimeY: 1,
+      runtimeX: 2,
+      runtimeWidth: 0,
+      runtimeFont: 'Zekton',
+      runtimeFontSize: 11,
+      runtimeWrap: true,
+    },
+  );
+  const b119AutomaticContributorAutoAt = (siblingWidth: number, tableScaling: boolean) => {
+    const sample = b119AutomaticContributorAutoSample === undefined
+      ? undefined
+      : {
+        ...b119AutomaticContributorAutoSample,
+        values: b119AutomaticContributorAutoSample.values.map(value => {
+          const expression = b119AutomaticContributorAutoUnsampled.program?.sampleCatalog.entries.find(entry => entry.id === value.id)?.expression;
+          return expression === 'runtimeSiblingWidth'
+            ? { ...value, value: siblingWidth }
+            : expression === 'runtimeTableScaling'
+              ? { ...value, value: tableScaling }
+              : value;
+        }),
+      };
+    const final = sample === undefined
+      ? b119AutomaticContributorAutoUnsampled
+      : b119AutomaticTextProjection(
+        b119AutomaticContributorAutoSource,
+        'selftest/b119-automatic-text-contributor-auto-sibling.lua',
+        1.25,
+        sample,
+        false,
+        b119CanonicalCorpus,
+      );
+    const creator = final.program === undefined ? undefined : operation(final.program, 'createText');
+    const cell = final.program === undefined
+      ? undefined
+      : final.program.cells.find(candidate => candidate.id === creator?.cellId);
+    const sibling = final.program?.operations.find(candidate => candidate.kind === 'setColWidth');
+    return { siblingWidth, tableScaling, sample, final, fact: cell?.descriptorFacts.outerHeight, sibling };
+  };
+  const b119AutomaticContributorAutoBase = b119AutomaticContributorAutoAt(50, true);
+  const b119AutomaticContributorAutoWideSibling = b119AutomaticContributorAutoAt(20, true);
+  const b119AutomaticContributorAutoInheritedOff = b119AutomaticContributorAutoAt(50, false);
+  const b119AutomaticContributorAutoExpectedIds = b119IdsForExpressions(
+    b119AutomaticContributorAutoUnsampled.program,
+    b119AutomaticContributorAutoExpressions,
+  );
+  check('B119 canonical width-zero auto column retains sampled sibling and inherited table-scaling contributors',
+    b119ExactCatalog(b119AutomaticContributorAutoUnsampled.program, b119AutomaticContributorAutoExpressions)
+      && b119AutomaticContributorAutoSample !== undefined
+      && b119CanonicalCorpus !== undefined
+      && b119AutomaticContributorAutoBase.final.result.status !== 'refused'
+      && b119AutomaticContributorAutoWideSibling.final.result.status !== 'refused'
+      && b119AutomaticContributorAutoInheritedOff.final.result.status !== 'refused'
+      && b119AutomaticContributorAutoBase.fact?.status === 'known'
+      && b119AutomaticContributorAutoWideSibling.fact?.status === 'known'
+      && b119AutomaticContributorAutoInheritedOff.fact?.status === 'known'
+      && factValue(b119AutomaticContributorAutoBase.fact) === 455
+      && factValue(b119AutomaticContributorAutoWideSibling.fact) === 114
+      && factValue(b119AutomaticContributorAutoInheritedOff.fact) === 228
+      && factValue(b119AutomaticContributorAutoBase.fact) !== factValue(b119AutomaticContributorAutoWideSibling.fact)
+      && factValue(b119AutomaticContributorAutoBase.fact) !== factValue(b119AutomaticContributorAutoInheritedOff.fact)
+      && b119SampleIdsForFact(b119AutomaticContributorAutoBase.fact).length === b119AutomaticContributorAutoExpectedIds.length
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorAutoBase.fact)) === JSON.stringify(b119AutomaticContributorAutoExpectedIds)
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorAutoWideSibling.fact)) === JSON.stringify(b119AutomaticContributorAutoExpectedIds)
+      && JSON.stringify(b119SampleIdsForFact(b119AutomaticContributorAutoInheritedOff.fact)) === JSON.stringify(b119AutomaticContributorAutoExpectedIds)
+      && b119AutomaticContributorAutoBase.sibling?.status === 'applied',
+    detail({
+      catalogExpressions: b119AutomaticContributorAutoUnsampled.program?.sampleCatalog.entries.map(entry => entry.expression),
+      expectedExpressions: b119AutomaticContributorAutoExpressions,
+      expectedIds: b119AutomaticContributorAutoExpectedIds,
+      base: { value: factValue(b119AutomaticContributorAutoBase.fact), ids: b119SampleIdsForFact(b119AutomaticContributorAutoBase.fact), sibling: b119AutomaticContributorAutoBase.sibling?.status },
+      wideSibling: { value: factValue(b119AutomaticContributorAutoWideSibling.fact), ids: b119SampleIdsForFact(b119AutomaticContributorAutoWideSibling.fact) },
+      inheritedScalingOff: { value: factValue(b119AutomaticContributorAutoInheritedOff.fact), ids: b119SampleIdsForFact(b119AutomaticContributorAutoInheritedOff.fact) },
+    }));
+
+  const b119NonzeroSource = b119AutomaticTextSource('height = 12, ', '40', '5', 'false');
+  const b119NonzeroModel = buildX4UiCallModel(input(b119NonzeroSource, 'selftest/b119-nonzero-text-height-control.lua'));
+  const b119NonzeroResult = projectX4UiLayoutProgram(
+    b119NonzeroModel,
+    topTarget(b119NonzeroModel),
+    profileFor(b119NonzeroModel, { minTextHeight: 10 }),
+  );
+  const b119NonzeroProgram = resultProgram(b119NonzeroResult);
+  const b119NonzeroCreator = b119NonzeroProgram === undefined ? undefined : operation(b119NonzeroProgram, 'createText');
+  const b119NonzeroCell = b119NonzeroProgram?.cells.find(candidate => candidate.id === b119NonzeroCreator?.cellId);
+  const b119NonzeroHeight = b119NonzeroCreator?.metadata.semantics.properties?.find(property => property.normalizedName === 'height')?.value;
+  check('B119 nonzero text height remains an explicit-height control',
+    b119NonzeroResult.status !== 'refused'
+      && b119NonzeroCreator?.status === 'applied'
+      && b119NonzeroHeight?.status === 'static'
+      && b119NonzeroHeight.value === 12
+      && b119NonzeroHeight.sourceLiteral !== undefined
+      && factValue(b119NonzeroCreator.descriptorFacts.outerHeight) === 12
+      && factValue(b119NonzeroCell?.descriptorFacts.outerHeight) === 12
+      && b119NonzeroCell?.kernelState?.height === 12,
+    detail({ status: b119NonzeroResult.status, creator: b119NonzeroCreator, cell: b119NonzeroCell }));
+
+  const b119UnavailableSource = b119AutomaticTextSource('height = 0, ', '40', '5', 'false');
+  const b119UnavailableModel = buildX4UiCallModel(input(b119UnavailableSource, 'selftest/b119-unavailable-zero-text-height.lua'));
+  const b119UnavailableResult = projectX4UiLayoutProgram(
+    b119UnavailableModel,
+    topTarget(b119UnavailableModel),
+    profileFor(b119UnavailableModel),
+  );
+  const b119UnavailableProgram = resultProgram(b119UnavailableResult);
+  const b119UnavailableCreator = b119UnavailableProgram === undefined ? undefined : operation(b119UnavailableProgram, 'createText');
+  const b119UnavailableCell = b119UnavailableProgram?.cells.find(candidate => candidate.id === b119UnavailableCreator?.cellId);
+  const b119UnavailableRow = b119UnavailableCell === undefined
+    ? undefined
+    : b119UnavailableProgram?.rows.find(candidate => candidate.id === b119UnavailableCell.rowId);
+  check('B119 unavailable text metric/input does not invent explicit-zero geometry',
+    b119UnavailableResult.status !== 'refused'
+      && b119UnavailableCreator?.status === 'unresolved'
+      && b119UnavailableCell?.kernelState?.type === 'text'
+      && b119UnavailableCell.kernelState.minTextHeight === undefined
+      && b119UnavailableCreator.descriptorFacts.outerHeight.status === 'unavailable'
+      && b119UnavailableCell.descriptorFacts.outerHeight.status === 'unavailable'
+      && b119UnavailableRow?.height?.status === 'unavailable'
+      && b119UnavailableProgram?.gaps.some(gap => gap.reason.includes('C++ text-height candidate')) === true,
+    detail({ status: b119UnavailableResult.status, creator: b119UnavailableCreator, cell: b119UnavailableCell, row: b119UnavailableRow, gaps: b119UnavailableProgram?.gaps }));
 
   const textMinimumSource = [
     'local menu = { name = "TextMinimum", layer = 1 }',
@@ -7072,6 +9860,129 @@ const run = (): {
       && operation(textMinimumSampled, 'createText', 3)?.status === 'applied'
       && textMinimumSampled.previewSampleBindings[0]?.status === 'consumed',
     detail({ cell: sampledMinimumCell, row: textMinimumSampled.rows[3], bindings: textMinimumSampled.previewSampleBindings }));
+
+  const constructorInputProgram = (
+    uiScale: number,
+    options = '{ height = 30, scaling = false, defaultText = "DEFAULT" }',
+    defaults: readonly string[] = [],
+    setter = '',
+  ): X4UiLayoutProgram => {
+    const model = buildX4UiCallModel(input([
+      'local menu = { name = "ConstructorInput", layer = 1 }',
+      'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+      'local table = frame:addTable(1, { width = 100, reserveScrollBar = false })',
+      ...defaults,
+      'local row = table:addRow(false, {})',
+      `row[1]:createEditBox(${options})${setter}`,
+      'frame:display()',
+    ].join('\n'), 'selftest/constructor-input-defaults.lua'));
+    return programOf(projectX4UiLayoutProgram(model, topTarget(model), profileFor(model, { uiScale })));
+  };
+  for (const uiScale of [1, 2]) {
+    const program = constructorInputProgram(uiScale);
+    const create = operation(program, 'createEditBox');
+    const facts = create?.descriptorFacts;
+    check(`constructor-only Input source defaults scale nested text independently of cell scaling at ${uiScale}`,
+      create?.status === 'applied'
+        && factValue(facts?.scaling) === false
+        && factValue(facts?.textScaling) === true
+        && factValue(facts?.text) === ''
+        && factValue(facts?.defaultText) === 'DEFAULT'
+        && factValue(facts?.textX) === 5 * uiScale
+        && factValue(facts?.textY) === 0
+        && factValue(facts?.textFont) === 'Zekton'
+        && factValue(facts?.textFontsize) === 9 * uiScale
+        && factValue(facts?.fontsize) === 9 * uiScale
+        && factProvenance(facts?.textX) === 'source-pinned-default'
+        && facts?.textX.sourcePin?.lineStart === 3419
+        && facts?.textY.sourcePin?.lineStart === 3420
+        && facts?.textFontsize.sourcePin?.lineStart === 3425
+        && facts?.textScaling.sourcePin?.lineStart === 3426,
+      detail({ status: create?.status, x: factValue(facts?.textX), size: factValue(facts?.fontsize) }));
+  }
+  const constructorSetterProgram = constructorInputProgram(2, undefined, [],
+    ':setText("CURRENT", { x = 3, y = 2, font = "Zekton Bold", fontsize = 11, halign = "right" })');
+  const constructorSetterCell = constructorSetterProgram.cells.find(cell => cell.kernelState?.type === 'editbox');
+  check('later Input setText replaces constructor defaults and inherits owning-cell scaling false',
+    factValue(operation(constructorSetterProgram, 'createEditBox')?.descriptorFacts.textX) === 10
+      && factValue(constructorSetterCell?.descriptorFacts.text) === 'CURRENT'
+      && factValue(constructorSetterCell?.descriptorFacts.textScaling) === false
+      && factValue(constructorSetterCell?.descriptorFacts.textX) === 3
+      && factValue(constructorSetterCell?.descriptorFacts.textY) === 2
+      && factValue(constructorSetterCell?.descriptorFacts.font) === 'Zekton Bold'
+      && factValue(constructorSetterCell?.descriptorFacts.fontsize) === 11
+      && factValue(constructorSetterCell?.descriptorFacts.halign) === 'right');
+  const constructorKnownDefaults = constructorInputProgram(2, '{ defaultText = "DEFAULT" }', [
+    'table:setDefaultCellProperties("editbox", { height = 30, scaling = false })',
+    'table:setDefaultComplexCellProperties("editbox", "hotkey", { hotkey = "KEY", displayIcon = true })',
+  ]);
+  const constructorKnownCell = constructorKnownDefaults.cells.find(cell => cell.kernelState?.type === 'editbox');
+  check('known Input height scaling and hotkey table defaults preserve independent initial nested scaling',
+    constructorKnownCell?.kernelState?.height === 30
+      && constructorKnownCell.kernelState.scaling === false
+      && constructorKnownCell.kernelState.hotkey === 'KEY'
+      && factValue(constructorKnownCell.descriptorFacts.textX) === 10
+      && factValue(constructorKnownCell.descriptorFacts.fontsize) === 18);
+  const constructorEmpty = constructorInputProgram(1, '{ defaultText = "" }');
+  check('constructor-only Input preserves an explicitly empty default',
+    factValue(operation(constructorEmpty, 'createEditBox')?.descriptorFacts.defaultText) === ''
+      && factValue(operation(constructorEmpty, 'createEditBox')?.descriptorFacts.textX) === 5);
+  for (const fixture of [
+    { name: 'dynamic options', options: 'getOptions()', defaults: [] },
+    { name: 'unsupported nested constructor option', options: '{ text = { x = 17 }, defaultText = "DEFAULT" }', defaults: [] },
+    { name: 'unsupported constructor font option', options: '{ fontsize = 17, defaultText = "DEFAULT" }', defaults: [] },
+    { name: 'literal complex text default', defaults: ['table:setDefaultComplexCellProperties("editbox", "text", { x = 17 })'] },
+    { name: 'dynamic complex text default', defaults: ['table:setDefaultComplexCellProperties("editbox", "text", getTextOptions())'] },
+    { name: 'unknown complex property name', defaults: ['table:setDefaultComplexCellProperties("editbox", getPropertyName(), { x = 17 })'] },
+    { name: 'unsupported simple nested text default', defaults: ['table:setDefaultCellProperties("editbox", { text = { x = 17 } })'] },
+    { name: 'dynamic simple defaults', defaults: ['table:setDefaultCellProperties("editbox", getDefaults())'] },
+  ]) {
+    const program = constructorInputProgram(1, fixture.options, fixture.defaults);
+    const create = operation(program, 'createEditBox');
+    check(`constructor Input refuses new nested defaults for ${fixture.name}`,
+      create?.status === 'unresolved'
+        && create.descriptorFacts.textX?.status !== 'known'
+        && create.descriptorFacts.textY?.status !== 'known'
+        && create.descriptorFacts.textFontsize?.status !== 'known'
+        && program.gaps.length > 0,
+      detail({ status: create?.status, x: factValue(create?.descriptorFacts.textX) }));
+    if (fixture.name === 'literal complex text default') {
+      check('unsupported Input text defaults retain independently known editbox geometry',
+        program.cells.some(cell => cell.kernelState?.type === 'editbox' && cell.kernelState.height === 30));
+    }
+  }
+  for (const options of ['{ defaultText = getPlaceholder() }', '{}']) {
+    const program = constructorInputProgram(1, options, options === '{}' ? [
+      'table:setDefaultCellProperties("editbox", { defaultText = "TABLE DEFAULT" })',
+    ] : []);
+    check(`constructor Input does not replace unresolved defaultText with empty default: ${options}`,
+      operation(program, 'createEditBox')?.descriptorFacts.defaultText?.status !== 'known');
+  }
+
+  for (const fixture of [
+    { name: 'complex text default', options: undefined, defaults: ['table:setDefaultComplexCellProperties("editbox", "text", { x = 17 })'] },
+    { name: 'unsupported constructor text', options: '{ height = 30, scaling = false, text = { x = 17 } }', defaults: [] },
+  ]) {
+    const partial = constructorInputProgram(1, fixture.options, fixture.defaults, ':setText("CURRENT", {})');
+    const cell = partial.cells.find(candidate => candidate.kernelState?.type === 'editbox');
+    check(`partial Input setter preserves omitted uncertain text facts after ${fixture.name}`,
+      factValue(cell?.descriptorFacts.text) === 'CURRENT'
+        && factValue(cell?.descriptorFacts.textScaling) === false
+        && cell?.descriptorFacts.textX?.status === 'unavailable'
+        && cell.descriptorFacts.textY?.status === 'unavailable'
+        && cell.descriptorFacts.font?.status === 'unavailable'
+        && cell.descriptorFacts.fontsize?.status === 'unavailable'
+        && cell.descriptorFacts.halign?.status === 'unavailable'
+        && operation(partial, 'setText')?.status === 'unresolved');
+    const explicit = constructorInputProgram(1, fixture.options, fixture.defaults,
+      ':setText("CURRENT", { x = 3, y = 2, font = "Zekton Bold", fontsize = 11, halign = "right", scaling = false })');
+    const explicitCell = explicit.cells.find(candidate => candidate.kernelState?.type === 'editbox');
+    check(`geometry-explicit Input setter replaces uncertain geometry after ${fixture.name}`,
+      factValue(explicitCell?.descriptorFacts.textX) === 3
+        && factValue(explicitCell?.descriptorFacts.textY) === 2
+        && factValue(explicitCell?.descriptorFacts.font) === 'Zekton Bold'
+        && factValue(explicitCell?.descriptorFacts.fontsize) === 11);
+  }
 
   const nestedTextSource = [
     'local menu = { name = "NestedText", layer = 1 }',
@@ -7844,6 +10755,1533 @@ const run = (): {
       invocations: localExpansionProgram.localExpansion?.invocations,
       operations: localExpansionProgram.operations,
     }));
+
+  const nestedNumericParameterSource = [
+    'local function panel(frame, widthArg)',
+    '  local width = math.floor((widthArg - 24) / 2)',
+    '  local table = frame:addTable(1, { width = 240, reserveScrollBar = false, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText("parameter", { height = 12 })',
+    'end',
+    'local function display(runtimeWidth, runtimeOther)',
+    '  local menu = { name = "NestedNumericParameter", layer = 4 }',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 180 })',
+    '  panel(frame, 200)',
+    '  panel(frame, runtimeWidth)',
+    '  panel(frame, runtimeOther)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const nestedNumericParameterModel = buildX4UiCallModel(input(
+    nestedNumericParameterSource,
+    'selftest/b119-nested-numeric-parameter.lua',
+  ));
+  const nestedNumericParameterModelBefore = JSON.stringify(nestedNumericParameterModel);
+  const nestedNumericParameterTarget = namedTarget(nestedNumericParameterModel, 'display');
+  const nestedNumericParameterProfile = profileFor(nestedNumericParameterModel, {
+    localExpansion: { maxDepth: 2, maxInvocations: 8 },
+  });
+  const nestedNumericParameterUnsampledResult = projectX4UiLayoutProgram(
+    nestedNumericParameterModel,
+    nestedNumericParameterTarget,
+    nestedNumericParameterProfile,
+  );
+  const nestedNumericParameterUnsampledProgram = resultProgram(nestedNumericParameterUnsampledResult);
+  const nestedNumericParameterSamples200 = nestedNumericSampleInputFor(
+    nestedNumericParameterUnsampledProgram,
+    { runtimeOther: 200, runtimeWidth: 200 },
+  );
+  const nestedNumericParameterSamples260 = nestedNumericSampleInputFor(
+    nestedNumericParameterUnsampledProgram,
+    { runtimeOther: 200, runtimeWidth: 260 },
+  );
+  const nestedNumericParameterSampled200Result = nestedNumericParameterSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      nestedNumericParameterModel,
+      nestedNumericParameterTarget,
+      nestedNumericParameterProfile,
+      nestedNumericParameterSamples200,
+    );
+  const nestedNumericParameterSampled260Result = nestedNumericParameterSamples260 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      nestedNumericParameterModel,
+      nestedNumericParameterTarget,
+      nestedNumericParameterProfile,
+      nestedNumericParameterSamples260,
+    );
+  const nestedNumericParameterSampled200Program = nestedNumericParameterSampled200Result === undefined
+    ? undefined
+    : resultProgram(nestedNumericParameterSampled200Result);
+  const nestedNumericParameterSampled260Program = nestedNumericParameterSampled260Result === undefined
+    ? undefined
+    : resultProgram(nestedNumericParameterSampled260Result);
+  const nestedNumericParameterEntries = nestedNumericParameterUnsampledProgram?.sampleCatalog.entries
+    .filter(entry => entry.expectedType === 'number') || [];
+  const nestedNumericParameterEntryFor = (expression: string) =>
+    nestedNumericParameterEntries.find(entry => entry.expression === expression);
+  const nestedNumericParameterCallerSourceMatches = (expression: string): boolean => {
+    const entry = nestedNumericParameterEntryFor(expression);
+    const marker = `panel(frame, ${expression})`;
+    const markerOffset = nestedNumericParameterSource.indexOf(marker);
+    if (entry === undefined || markerOffset < 0) return false;
+    const expressionOffset = markerOffset + marker.indexOf(expression);
+    return entry.source.start.offset === expressionOffset
+      && entry.source.end.offset === expressionOffset + expression.length;
+  };
+  const nestedNumericParameterWidthOperations = (candidateProgram: X4UiLayoutProgram | undefined) =>
+    candidateProgram?.operations.filter(operationValue => operationValue.kind === 'setColWidth'
+      && operationValue.localExpansion !== undefined) || [];
+  const nestedNumericParameterWidthFacts = (candidateProgram: X4UiLayoutProgram | undefined) =>
+    nestedNumericParameterWidthOperations(candidateProgram)
+      .map(operationValue => nestedNumericFactRecord(operationValue.descriptorFacts.width));
+  const nestedNumericParameterUnsampledFacts = nestedNumericParameterWidthFacts(nestedNumericParameterUnsampledProgram);
+  const nestedNumericParameterSampled200Facts = nestedNumericParameterWidthFacts(nestedNumericParameterSampled200Program);
+  const nestedNumericParameterSampled260Facts = nestedNumericParameterWidthFacts(nestedNumericParameterSampled260Program);
+  const nestedNumericParameterWidthFactDetail = (facts: readonly (ValueRecord | undefined)[]) => facts.map(fact => ({
+    status: fact?.status,
+    value: fact?.value,
+    provenance: fact?.provenance,
+    expression: fact?.expression,
+    sampleId: fact?.sampleId,
+    sampleIds: fact?.sampleIds,
+  }));
+  const nestedNumericParameterForgedSamples = nestedNumericParameterSamples200 === undefined
+    ? undefined
+    : {
+      ...nestedNumericParameterSamples200,
+      values: [
+        ...nestedNumericParameterSamples200.values,
+        { id: 'b119-forged-widthArg-binding', value: 200 },
+      ],
+    };
+  const nestedNumericParameterForgedResult = nestedNumericParameterForgedSamples === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      nestedNumericParameterModel,
+      nestedNumericParameterTarget,
+      nestedNumericParameterProfile,
+      nestedNumericParameterForgedSamples,
+    );
+  check('B119 fail-first local-helper numeric parameters use exact caller bindings and keep known literals out of preview samples',
+    nestedNumericParameterUnsampledProgram !== undefined
+      && nestedNumericParameterEntries.map(entry => entry.expression).sort().join(',') === 'runtimeOther,runtimeWidth'
+      && !nestedNumericParameterEntries.some(entry => entry.expression === 'widthArg')
+      && nestedNumericParameterCallerSourceMatches('runtimeWidth')
+      && nestedNumericParameterCallerSourceMatches('runtimeOther')
+      && nestedNumericParameterUnsampledProgram.previewSampleBindings.length === 0
+      && nestedNumericParameterUnsampledFacts.length === 3
+      && nestedNumericParameterUnsampledFacts[0]?.status === 'known'
+      && nestedNumericParameterUnsampledFacts[0]?.value === 88
+      && nestedNumericParameterUnsampledFacts[0]?.provenance === 'source-literal'
+      && nestedNumericParameterUnsampledFacts[0]?.sampleId === undefined
+      && nestedNumericParameterUnsampledFacts[0]?.sampleIds === undefined
+      && nestedNumericParameterSamples200 !== undefined
+      && nestedNumericParameterSamples260 !== undefined
+      && nestedNumericParameterSampled200Result?.status !== 'refused'
+      && nestedNumericParameterSampled260Result?.status !== 'refused'
+      && nestedNumericParameterSampled200Facts.map(fact => fact?.value).join(',') === '88,88,88'
+      && nestedNumericParameterSampled260Facts.map(fact => fact?.value).join(',') === '88,118,88'
+      && nestedNumericParameterSampled200Facts[0]?.provenance === 'source-literal'
+      && nestedNumericParameterSampled260Facts[0]?.provenance === 'source-literal'
+      && nestedNumericParameterSampled200Facts[1]?.provenance === 'preview-sample'
+      && nestedNumericParameterSampled260Facts[1]?.provenance === 'preview-sample'
+      && nestedNumericParameterSampled200Facts[2]?.provenance === 'preview-sample'
+      && nestedNumericParameterSampled260Facts[2]?.provenance === 'preview-sample'
+      && nestedNumericParameterSampled200Facts[1]?.sampleId === nestedNumericParameterEntryFor('runtimeWidth')?.id
+      && nestedNumericParameterSampled260Facts[1]?.sampleId === nestedNumericParameterEntryFor('runtimeWidth')?.id
+      && nestedNumericParameterSampled200Facts[2]?.sampleId === nestedNumericParameterEntryFor('runtimeOther')?.id
+      && nestedNumericParameterSampled260Facts[2]?.sampleId === nestedNumericParameterEntryFor('runtimeOther')?.id
+      && nestedNumericParameterSampled200Facts[1]?.sampleId !== nestedNumericParameterSampled200Facts[2]?.sampleId
+      && nestedNumericParameterSampled260Facts[1]?.sampleId !== nestedNumericParameterSampled260Facts[2]?.sampleId
+      && nestedNumericParameterSampled200Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 2
+      && nestedNumericParameterSampled260Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 2
+      && nestedNumericParameterForgedResult?.status === 'refused'
+      && JSON.stringify(nestedNumericParameterModel) === nestedNumericParameterModelBefore,
+    detail({
+      unsampled: nestedNumericParameterUnsampledResult,
+      catalog: nestedNumericParameterEntries,
+      callerSources: ['runtimeWidth', 'runtimeOther'].map(expression => ({
+        expression,
+        matches: nestedNumericParameterCallerSourceMatches(expression),
+        entry: nestedNumericParameterEntryFor(expression),
+      })),
+      unsampledFacts: nestedNumericParameterWidthFactDetail(nestedNumericParameterUnsampledFacts),
+      sampled200Facts: nestedNumericParameterWidthFactDetail(nestedNumericParameterSampled200Facts),
+      sampled260Facts: nestedNumericParameterWidthFactDetail(nestedNumericParameterSampled260Facts),
+      sampled200Bindings: nestedNumericParameterSampled200Program?.previewSampleBindings,
+      sampled260Bindings: nestedNumericParameterSampled260Program?.previewSampleBindings,
+      forgedStatus: nestedNumericParameterForgedResult?.status,
+    }));
+
+  const originalNumericRootLayoutSource = [
+    'local menu = { name = "OriginalNumericRootLayout", layer = 4 }',
+    'function menu.display()',
+    '  local input = runtimeWidth',
+    '  local alias = input',
+    '  local width = math.floor((alias - 24) / 2)',
+    '  local widthAlias = width',
+    '  local knownInput = 200',
+    '  local knownAlias = knownInput',
+    '  local knownWidth = math.floor((knownAlias - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 160 })',
+    '  local table = frame:addTable(3, { width = 240, reserveScrollBar = false, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  table:setColWidth(2, widthAlias, false)',
+    '  table:setColWidth(3, knownWidth, false)',
+    '  frame:display()',
+    'end',
+    'function menu.secondary()',
+    '  local input = runtimeWidth',
+    '  local alias = input',
+    '  local width = math.floor((alias - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = width, height = 60 })',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericRootLayoutModel = buildX4UiCallModel(input(
+    originalNumericRootLayoutSource,
+    'selftest/b119-original-numeric-root-layout.lua',
+  ));
+  const originalNumericRootLayoutBefore = JSON.stringify(originalNumericRootLayoutModel);
+  const originalNumericRootLayoutTarget = namedTarget(originalNumericRootLayoutModel, 'menu.display');
+  const originalNumericRootLayoutProfile = profileFor(originalNumericRootLayoutModel);
+  const originalNumericRootLayoutUnsampledResult = projectX4UiLayoutProgram(
+    originalNumericRootLayoutModel,
+    originalNumericRootLayoutTarget,
+    originalNumericRootLayoutProfile,
+  );
+  const originalNumericRootLayoutUnsampledProgram = resultProgram(originalNumericRootLayoutUnsampledResult);
+  const originalNumericRootLayoutSamples200 = nestedNumericSampleInputFor(
+    originalNumericRootLayoutUnsampledProgram,
+    { runtimeWidth: 200 },
+  );
+  const originalNumericRootLayoutSamples260 = nestedNumericSampleInputFor(
+    originalNumericRootLayoutUnsampledProgram,
+    { runtimeWidth: 260 },
+  );
+  const originalNumericRootLayoutSampled200Result = originalNumericRootLayoutSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericRootLayoutModel,
+      originalNumericRootLayoutTarget,
+      originalNumericRootLayoutProfile,
+      originalNumericRootLayoutSamples200,
+    );
+  const originalNumericRootLayoutSampled260Result = originalNumericRootLayoutSamples260 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericRootLayoutModel,
+      originalNumericRootLayoutTarget,
+      originalNumericRootLayoutProfile,
+      originalNumericRootLayoutSamples260,
+    );
+  const originalNumericRootLayoutSampled200Program = resultProgram(originalNumericRootLayoutSampled200Result || {} as ReturnType<typeof projectX4UiLayoutProgram>);
+  const originalNumericRootLayoutSampled260Program = resultProgram(originalNumericRootLayoutSampled260Result || {} as ReturnType<typeof projectX4UiLayoutProgram>);
+  const originalNumericRootLayoutWidthFacts = (candidateProgram: X4UiLayoutProgram | undefined) =>
+    candidateProgram?.operations
+      .filter(operationValue => operationValue.kind === 'setColWidth')
+      .map(operationValue => nestedNumericFactRecord(operationValue.descriptorFacts.width));
+  const originalNumericRootLayoutEntry = originalNumericRootLayoutUnsampledProgram?.sampleCatalog.entries.find(entry =>
+    entry.expectedType === 'number' && entry.expression === 'runtimeWidth');
+  const originalNumericRootLayoutWidthOperations = originalNumericRootLayoutUnsampledProgram?.operations.filter(operationValue =>
+    operationValue.kind === 'setColWidth') || [];
+  check('B119 Layout scalar alias root emits one exact runtime input with two consumer bindings',
+    originalNumericRootLayoutUnsampledProgram !== undefined
+      && originalNumericRootLayoutUnsampledProgram.sampleCatalog.entries.filter(entry => entry.expectedType === 'number')
+        .map(entry => entry.expression).join(',') === 'runtimeWidth'
+      && originalNumericRootLayoutEntry?.consumers.length === 2
+      && originalNumericRootLayoutWidthOperations.slice(0, 2).every(operationValue =>
+        originalNumericRootLayoutEntry?.consumers.some(consumer => consumer.operationId === operationValue.id))
+      && originalNumericRootLayoutWidthOperations[2] !== undefined
+      && !originalNumericRootLayoutEntry?.consumers.some(consumer => consumer.operationId === originalNumericRootLayoutWidthOperations[2].id)
+      && originalNumericRootLayoutUnsampledProgram.previewSampleBindings.length === 0,
+    detail({
+      catalog: originalNumericRootLayoutUnsampledProgram?.sampleCatalog,
+      widthOperations: originalNumericRootLayoutWidthOperations.map(operationValue => operationValue.id),
+    }));
+  check('B119 Layout scalar alias root samples 200 and 260 as 88 and 118 without model mutation',
+    originalNumericRootLayoutSamples200 !== undefined
+      && originalNumericRootLayoutSamples260 !== undefined
+      && originalNumericRootLayoutSampled200Result?.status !== 'refused'
+      && originalNumericRootLayoutSampled260Result?.status !== 'refused'
+      && originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled200Program)?.map(fact => fact?.value).join(',') === '88,88,88'
+      && originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled260Program)?.map(fact => fact?.value).join(',') === '118,118,88'
+      && originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled200Program)?.[0]?.provenance === 'preview-sample'
+      && originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled200Program)?.[1]?.provenance === 'preview-sample'
+      && originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled200Program)?.[2]?.provenance === 'source-literal'
+      && originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled260Program)?.[0]?.sampleId === originalNumericRootLayoutEntry?.id
+      && originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled260Program)?.[1]?.sampleId === originalNumericRootLayoutEntry?.id
+      && originalNumericRootLayoutSampled200Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 1
+      && originalNumericRootLayoutSampled260Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 1
+      && JSON.stringify(originalNumericRootLayoutModel) === originalNumericRootLayoutBefore,
+    detail({
+      sampled200: originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled200Program),
+      sampled260: originalNumericRootLayoutWidthFacts(originalNumericRootLayoutSampled260Program),
+      entry: originalNumericRootLayoutEntry,
+    }));
+
+  const originalNumericRootLayoutSecondaryTarget = namedTarget(originalNumericRootLayoutModel, 'menu.secondary');
+  const originalNumericRootLayoutSecondaryResult = projectX4UiLayoutProgram(
+    originalNumericRootLayoutModel,
+    originalNumericRootLayoutSecondaryTarget,
+    originalNumericRootLayoutProfile,
+  );
+  const originalNumericRootLayoutSecondaryProgram = resultProgram(originalNumericRootLayoutSecondaryResult);
+  const originalNumericRootLayoutPrimaryEntryOffset = originalNumericRootLayoutEntry?.source.start.offset;
+  const originalNumericRootLayoutSecondaryEntry = originalNumericRootLayoutSecondaryProgram?.sampleCatalog.entries.find(entry =>
+    entry.expectedType === 'number' && entry.expression === 'runtimeWidth');
+  check('B119 Layout identical scalar spellings retain distinct source ranges across target scopes',
+    originalNumericRootLayoutEntry !== undefined
+      && originalNumericRootLayoutSecondaryEntry !== undefined
+      && originalNumericRootLayoutPrimaryEntryOffset !== originalNumericRootLayoutSecondaryEntry.source.start.offset
+      && originalNumericRootLayoutSecondaryProgram.sampleCatalog.entries.filter(entry => entry.expectedType === 'number').length === 1
+      && JSON.stringify(originalNumericRootLayoutModel) === originalNumericRootLayoutBefore,
+    detail({ primary: originalNumericRootLayoutEntry, secondary: originalNumericRootLayoutSecondaryEntry }));
+
+  const originalNumericTableLayoutSource = [
+    'local menu = { name = "OriginalNumericTableLayout", layer = 4 }',
+    'function menu.display()',
+    '  local input = runtimeWidth',
+    '  local alias = input',
+    '  local source = { member = alias, ["string-key"] = alias, [3] = alias, alias, known = 200 }',
+    '  local tableAlias = source',
+    '  local tableCopy = tableAlias',
+    '  local memberInput = tableCopy.member',
+    '  local stringInput = tableCopy["string-key"]',
+    '  local numericInput = tableCopy[3]',
+    '  local positionalInput = tableCopy[1]',
+    '  local knownInput = tableCopy.known',
+    '  local memberWidth = math.floor((memberInput - 24) / 2)',
+    '  local stringWidth = math.floor((stringInput - 24) / 2)',
+    '  local numericWidth = math.floor((numericInput - 24) / 2)',
+    '  local positionalWidth = math.floor((positionalInput - 24) / 2)',
+    '  local knownWidth = math.floor((knownInput - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 160 })',
+    '  local table = frame:addTable(5, { width = 240, reserveScrollBar = false, scaling = false })',
+    '  table:setColWidth(1, memberWidth, false)',
+    '  table:setColWidth(2, stringWidth, false)',
+    '  table:setColWidth(3, numericWidth, false)',
+    '  table:setColWidth(4, positionalWidth, false)',
+    '  table:setColWidth(5, knownWidth, false)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericTableLayoutModel = buildX4UiCallModel(input(
+    originalNumericTableLayoutSource,
+    'selftest/b119-original-numeric-table-layout.lua',
+  ));
+  const originalNumericTableLayoutBefore = JSON.stringify(originalNumericTableLayoutModel);
+  const originalNumericTableLayoutTarget = namedTarget(originalNumericTableLayoutModel, 'menu.display');
+  const originalNumericTableLayoutProfile = profileFor(originalNumericTableLayoutModel);
+  const originalNumericTableLayoutUnsampledResult = projectX4UiLayoutProgram(
+    originalNumericTableLayoutModel,
+    originalNumericTableLayoutTarget,
+    originalNumericTableLayoutProfile,
+  );
+  const originalNumericTableLayoutUnsampledProgram = resultProgram(originalNumericTableLayoutUnsampledResult);
+  const originalNumericTableLayoutSamples200 = nestedNumericSampleInputFor(
+    originalNumericTableLayoutUnsampledProgram,
+    { runtimeWidth: 200 },
+  );
+  const originalNumericTableLayoutSamples260 = nestedNumericSampleInputFor(
+    originalNumericTableLayoutUnsampledProgram,
+    { runtimeWidth: 260 },
+  );
+  const originalNumericTableLayoutSampled200Result = originalNumericTableLayoutSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericTableLayoutModel,
+      originalNumericTableLayoutTarget,
+      originalNumericTableLayoutProfile,
+      originalNumericTableLayoutSamples200,
+    );
+  const originalNumericTableLayoutSampled260Result = originalNumericTableLayoutSamples260 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericTableLayoutModel,
+      originalNumericTableLayoutTarget,
+      originalNumericTableLayoutProfile,
+      originalNumericTableLayoutSamples260,
+    );
+  const originalNumericTableLayoutSampled200Program = originalNumericTableLayoutSampled200Result
+    ? resultProgram(originalNumericTableLayoutSampled200Result)
+    : undefined;
+  const originalNumericTableLayoutSampled260Program = originalNumericTableLayoutSampled260Result
+    ? resultProgram(originalNumericTableLayoutSampled260Result)
+    : undefined;
+  const originalNumericTableLayoutWidthFacts = (candidateProgram: X4UiLayoutProgram | undefined) =>
+    candidateProgram?.operations
+      .filter(operationValue => operationValue.kind === 'setColWidth')
+      .map(operationValue => nestedNumericFactRecord(operationValue.descriptorFacts.width));
+  const originalNumericTableLayoutEntry = originalNumericTableLayoutUnsampledProgram?.sampleCatalog.entries.find(entry =>
+    entry.expectedType === 'number' && entry.expression === 'runtimeWidth');
+  const originalNumericTableLayoutWidthOperations = originalNumericTableLayoutUnsampledProgram?.operations.filter(operationValue =>
+    operationValue.kind === 'setColWidth') || [];
+  const originalNumericTableLayoutFormNames = ['member', 'string-index', 'numeric-index', 'implicit-index'] as const;
+  originalNumericTableLayoutFormNames.forEach((form, index) => {
+    const operation = originalNumericTableLayoutWidthOperations[index];
+    check(`B119 Layout table ${form} index resolves from the original scalar read`,
+      originalNumericTableLayoutEntry !== undefined
+        && operation !== undefined
+        && originalNumericTableLayoutEntry.consumers.some(consumer => consumer.operationId === operation.id)
+        && originalNumericTableLayoutSamples200 !== undefined
+        && originalNumericTableLayoutSamples260 !== undefined
+        && originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled200Program)?.[index]?.value === 88
+        && originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled260Program)?.[index]?.value === 118
+        && originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled200Program)?.[index]?.provenance === 'preview-sample',
+      detail({ form, operation, entry: originalNumericTableLayoutEntry, facts200: originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled200Program), facts260: originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled260Program) }));
+  });
+  check('B119 Layout known table field stays source-literal with no preview dependency',
+    originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled200Program)?.[4]?.value === 88
+      && originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled200Program)?.[4]?.provenance === 'source-literal'
+      && originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled200Program)?.[4]?.sampleId === undefined
+      && originalNumericTableLayoutEntry?.consumers.length === 4
+      && JSON.stringify(originalNumericTableLayoutModel) === originalNumericTableLayoutBefore,
+    detail({ entry: originalNumericTableLayoutEntry, facts: originalNumericTableLayoutWidthFacts(originalNumericTableLayoutSampled200Program) }));
+
+  const originalNumericCapturedTableLayoutSource = [
+    'local menu = { name = "OriginalNumericCapturedTableLayout", layer = 4 }',
+    'function menu.display()',
+    '  local input = runtimeWidth',
+    '  local source = { width = input }',
+    '  local captured = source',
+    '  source = { width = otherWidth }',
+    '  local width = math.floor((captured.width - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = 200, height = 80 })',
+    '  local table = frame:addTable(1, { width = 100, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericCapturedTableLayoutModel = buildX4UiCallModel(input(
+    originalNumericCapturedTableLayoutSource,
+    'selftest/b119-original-numeric-captured-table-layout.lua',
+  ));
+  const originalNumericCapturedTableLayoutBefore = JSON.stringify(originalNumericCapturedTableLayoutModel);
+  const originalNumericCapturedTableLayoutTarget = namedTarget(originalNumericCapturedTableLayoutModel, 'menu.display');
+  const originalNumericCapturedTableLayoutProfile = profileFor(originalNumericCapturedTableLayoutModel);
+  const originalNumericCapturedTableLayoutUnsampledResult = projectX4UiLayoutProgram(
+    originalNumericCapturedTableLayoutModel,
+    originalNumericCapturedTableLayoutTarget,
+    originalNumericCapturedTableLayoutProfile,
+  );
+  const originalNumericCapturedTableLayoutUnsampledProgram = resultProgram(originalNumericCapturedTableLayoutUnsampledResult);
+  const originalNumericCapturedTableLayoutSamples200 = nestedNumericSampleInputFor(
+    originalNumericCapturedTableLayoutUnsampledProgram,
+    { runtimeWidth: 200 },
+  );
+  const originalNumericCapturedTableLayoutSampled200Result = originalNumericCapturedTableLayoutSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericCapturedTableLayoutModel,
+      originalNumericCapturedTableLayoutTarget,
+      originalNumericCapturedTableLayoutProfile,
+      originalNumericCapturedTableLayoutSamples200,
+    );
+  const originalNumericCapturedTableLayoutSampled200Program = originalNumericCapturedTableLayoutSampled200Result === undefined
+    ? undefined
+    : resultProgram(originalNumericCapturedTableLayoutSampled200Result);
+  const originalNumericCapturedTableLayoutEntry = originalNumericCapturedTableLayoutUnsampledProgram?.sampleCatalog.entries.find(entry =>
+    entry.expectedType === 'number' && entry.expression === 'runtimeWidth');
+  const originalNumericCapturedTableLayoutWidthOperation = originalNumericCapturedTableLayoutUnsampledProgram?.operations.find(operationValue =>
+    operationValue.kind === 'setColWidth');
+  const originalNumericCapturedTableLayoutWidthFact = originalNumericCapturedTableLayoutSampled200Program?.operations.find(operationValue =>
+    operationValue.kind === 'setColWidth')?.descriptorFacts.width;
+  check('B119 captured table aliases retain the original table across a later source rebinding',
+    originalNumericCapturedTableLayoutUnsampledProgram !== undefined
+      && originalNumericCapturedTableLayoutUnsampledProgram.sampleCatalog.entries.filter(entry => entry.expectedType === 'number').length === 1
+      && originalNumericCapturedTableLayoutEntry !== undefined
+      && originalNumericCapturedTableLayoutEntry.consumers.length === 1
+      && originalNumericCapturedTableLayoutEntry.consumers[0]?.operationId === originalNumericCapturedTableLayoutWidthOperation?.id
+      && originalNumericCapturedTableLayoutSamples200 !== undefined
+      && originalNumericCapturedTableLayoutSampled200Result?.status !== 'refused'
+      && originalNumericCapturedTableLayoutWidthFact?.status === 'known'
+      && originalNumericCapturedTableLayoutWidthFact.value === 88
+      && originalNumericCapturedTableLayoutWidthFact.provenance === 'preview-sample'
+      && originalNumericCapturedTableLayoutWidthFact.sampleId === originalNumericCapturedTableLayoutEntry?.id
+      && JSON.stringify(originalNumericCapturedTableLayoutModel) === originalNumericCapturedTableLayoutBefore,
+    detail({
+      catalog: originalNumericCapturedTableLayoutUnsampledProgram?.sampleCatalog,
+      operation: originalNumericCapturedTableLayoutWidthOperation?.id,
+      fact: originalNumericCapturedTableLayoutWidthFact,
+    }));
+
+  const originalNumericMemberLayoutSource = [
+    'local menu = { name = "OriginalNumericMemberLayout", layer = 4 }',
+    'function menu.display()',
+    '  local width = math.floor((runtimeState.width - 24) / 2)',
+    '  local widthAlias = width',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 100 })',
+    '  local table = frame:addTable(2, { width = 200, reserveScrollBar = false, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  table:setColWidth(2, widthAlias, false)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericMemberLayoutModel = buildX4UiCallModel(input(
+    originalNumericMemberLayoutSource,
+    'selftest/b119-original-numeric-member-layout.lua',
+  ));
+  const originalNumericMemberLayoutBefore = JSON.stringify(originalNumericMemberLayoutModel);
+  const originalNumericMemberLayoutTarget = namedTarget(originalNumericMemberLayoutModel, 'menu.display');
+  const originalNumericMemberLayoutProfile = profileFor(originalNumericMemberLayoutModel);
+  const originalNumericMemberLayoutUnsampledResult = projectX4UiLayoutProgram(
+    originalNumericMemberLayoutModel,
+    originalNumericMemberLayoutTarget,
+    originalNumericMemberLayoutProfile,
+  );
+  const originalNumericMemberLayoutUnsampledProgram = resultProgram(originalNumericMemberLayoutUnsampledResult);
+  const originalNumericMemberLayoutSamples200 = nestedNumericSampleInputFor(
+    originalNumericMemberLayoutUnsampledProgram,
+    { 'runtimeState.width': 200 },
+  );
+  const originalNumericMemberLayoutSamples260 = nestedNumericSampleInputFor(
+    originalNumericMemberLayoutUnsampledProgram,
+    { 'runtimeState.width': 260 },
+  );
+  const originalNumericMemberLayoutSampled200Result = originalNumericMemberLayoutSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericMemberLayoutModel,
+      originalNumericMemberLayoutTarget,
+      originalNumericMemberLayoutProfile,
+      originalNumericMemberLayoutSamples200,
+    );
+  const originalNumericMemberLayoutSampled260Result = originalNumericMemberLayoutSamples260 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericMemberLayoutModel,
+      originalNumericMemberLayoutTarget,
+      originalNumericMemberLayoutProfile,
+      originalNumericMemberLayoutSamples260,
+    );
+  const originalNumericMemberLayoutSampled200Program = originalNumericMemberLayoutSampled200Result
+    ? resultProgram(originalNumericMemberLayoutSampled200Result)
+    : undefined;
+  const originalNumericMemberLayoutSampled260Program = originalNumericMemberLayoutSampled260Result
+    ? resultProgram(originalNumericMemberLayoutSampled260Result)
+    : undefined;
+  const originalNumericMemberLayoutWidthFacts = (candidateProgram: X4UiLayoutProgram | undefined) =>
+    candidateProgram?.operations
+      .filter(operationValue => operationValue.kind === 'setColWidth')
+      .map(operationValue => nestedNumericFactRecord(operationValue.descriptorFacts.width));
+  check('B119 Layout eligible runtimeState.width arithmetic uses one member-root sample for both consumers',
+    originalNumericMemberLayoutUnsampledProgram !== undefined
+      && originalNumericMemberLayoutUnsampledProgram.sampleCatalog.entries.map(entry => entry.expression).join(',') === 'runtimeState.width'
+      && originalNumericMemberLayoutSamples200 !== undefined
+      && originalNumericMemberLayoutSamples260 !== undefined
+      && originalNumericMemberLayoutSampled200Result?.status !== 'refused'
+      && originalNumericMemberLayoutSampled260Result?.status !== 'refused'
+      && originalNumericMemberLayoutWidthFacts(originalNumericMemberLayoutSampled200Program)?.map(fact => fact?.value).join(',') === '88,88'
+      && originalNumericMemberLayoutWidthFacts(originalNumericMemberLayoutSampled260Program)?.map(fact => fact?.value).join(',') === '118,118'
+      && originalNumericMemberLayoutSampled200Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 1
+      && originalNumericMemberLayoutSampled260Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 1
+      && JSON.stringify(originalNumericMemberLayoutModel) === originalNumericMemberLayoutBefore,
+    detail({
+      catalog: originalNumericMemberLayoutUnsampledProgram?.sampleCatalog,
+      sampled200: originalNumericMemberLayoutWidthFacts(originalNumericMemberLayoutSampled200Program),
+      sampled260: originalNumericMemberLayoutWidthFacts(originalNumericMemberLayoutSampled260Program),
+    }));
+
+  const originalNumericParameterAliasSource = [
+    'local function panel(frame, widthArg)',
+    '  local input = widthArg',
+    '  local alias = input',
+    '  local width = math.floor((alias - 24) / 2)',
+    '  local widthAlias = width',
+    '  local table = frame:addTable(2, { width = 240, reserveScrollBar = false, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  table:setColWidth(2, widthAlias, false)',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText("parameter", { height = 12 })',
+    'end',
+    'local function display(runtimeWidth, runtimeOther)',
+    '  local menu = { name = "OriginalNumericParameterAlias", layer = 4 }',
+    '  local frame = Helper.createFrameHandle(menu, { width = 300, height = 180 })',
+    '  panel(frame, 200)',
+    '  panel(frame, runtimeWidth)',
+    '  panel(frame, runtimeOther)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericParameterAliasModel = buildX4UiCallModel(input(
+    originalNumericParameterAliasSource,
+    'selftest/b119-original-numeric-parameter-alias.lua',
+  ));
+  const originalNumericParameterAliasBefore = JSON.stringify(originalNumericParameterAliasModel);
+  const originalNumericParameterAliasTarget = namedTarget(originalNumericParameterAliasModel, 'display');
+  const originalNumericParameterAliasProfile = profileFor(originalNumericParameterAliasModel, {
+    localExpansion: { maxDepth: 2, maxInvocations: 8 },
+  });
+  const originalNumericParameterAliasUnsampledResult = projectX4UiLayoutProgram(
+    originalNumericParameterAliasModel,
+    originalNumericParameterAliasTarget,
+    originalNumericParameterAliasProfile,
+  );
+  const originalNumericParameterAliasUnsampledProgram = resultProgram(originalNumericParameterAliasUnsampledResult);
+  const originalNumericParameterAliasEntries = originalNumericParameterAliasUnsampledProgram?.sampleCatalog.entries
+    .filter(entry => entry.expectedType === 'number') || [];
+  const originalNumericParameterAliasSamples200 = nestedNumericSampleInputFor(
+    originalNumericParameterAliasUnsampledProgram,
+    { runtimeOther: 200, runtimeWidth: 200 },
+  );
+  const originalNumericParameterAliasSamples260 = nestedNumericSampleInputFor(
+    originalNumericParameterAliasUnsampledProgram,
+    { runtimeOther: 200, runtimeWidth: 260 },
+  );
+  const originalNumericParameterAliasSampled200Result = originalNumericParameterAliasSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericParameterAliasModel,
+      originalNumericParameterAliasTarget,
+      originalNumericParameterAliasProfile,
+      originalNumericParameterAliasSamples200,
+    );
+  const originalNumericParameterAliasSampled260Result = originalNumericParameterAliasSamples260 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericParameterAliasModel,
+      originalNumericParameterAliasTarget,
+      originalNumericParameterAliasProfile,
+      originalNumericParameterAliasSamples260,
+    );
+  const originalNumericParameterAliasSampled200Program = originalNumericParameterAliasSampled200Result
+    ? resultProgram(originalNumericParameterAliasSampled200Result)
+    : undefined;
+  const originalNumericParameterAliasSampled260Program = originalNumericParameterAliasSampled260Result
+    ? resultProgram(originalNumericParameterAliasSampled260Result)
+    : undefined;
+  const originalNumericParameterAliasWidthFacts = (candidateProgram: X4UiLayoutProgram | undefined) =>
+    candidateProgram?.operations
+      .filter(operationValue => operationValue.kind === 'setColWidth' && operationValue.localExpansion !== undefined)
+      .map(operationValue => nestedNumericFactRecord(operationValue.descriptorFacts.width));
+  const originalNumericParameterAliasCallerSourceMatches = (expression: string): boolean => {
+    const entry = originalNumericParameterAliasEntries.find(candidate => candidate.expression === expression);
+    const marker = `panel(frame, ${expression})`;
+    const markerOffset = originalNumericParameterAliasSource.indexOf(marker);
+    if (!entry || markerOffset < 0) return false;
+    const expressionOffset = markerOffset + marker.indexOf(expression);
+    return entry.source.start.offset === expressionOffset
+      && entry.source.end.offset === expressionOffset + expression.length;
+  };
+  const originalNumericParameterAliasConsumerIds = (expression: string): readonly string[] =>
+    originalNumericParameterAliasEntries.find(entry => entry.expression === expression)?.consumers
+      .map(consumer => consumer.operationId) || [];
+  const originalNumericParameterAliasOperationIds = (candidateProgram: X4UiLayoutProgram | undefined): readonly string[] =>
+    candidateProgram?.operations
+      .filter(operationValue => operationValue.kind === 'setColWidth' && operationValue.localExpansion !== undefined)
+      .map(operationValue => operationValue.id) || [];
+  check('B119 Layout parameter scalar aliases keep caller samples separate from widthArg declaration and bind both consumers',
+    originalNumericParameterAliasUnsampledProgram !== undefined
+      && originalNumericParameterAliasEntries.map(entry => entry.expression).sort().join(',') === 'runtimeOther,runtimeWidth'
+      && originalNumericParameterAliasCallerSourceMatches('runtimeWidth')
+      && originalNumericParameterAliasCallerSourceMatches('runtimeOther')
+      && originalNumericParameterAliasConsumerIds('runtimeWidth').length === 2
+      && originalNumericParameterAliasConsumerIds('runtimeOther').length === 2
+      && originalNumericParameterAliasEntries.every(entry => !['widthArg', 'input', 'alias'].includes(entry.expression)),
+    detail({ entries: originalNumericParameterAliasEntries }));
+  check('B119 Layout parameter scalar aliases preserve literal and runtime geometry across distinct invocations',
+    originalNumericParameterAliasSamples200 !== undefined
+      && originalNumericParameterAliasSamples260 !== undefined
+      && originalNumericParameterAliasSampled200Result?.status !== 'refused'
+      && originalNumericParameterAliasSampled260Result?.status !== 'refused'
+      && originalNumericParameterAliasWidthFacts(originalNumericParameterAliasSampled200Program)?.map(fact => fact?.value).join(',') === '88,88,88,88,88,88'
+      && originalNumericParameterAliasWidthFacts(originalNumericParameterAliasSampled260Program)?.map(fact => fact?.value).join(',') === '88,88,118,118,88,88'
+      && originalNumericParameterAliasWidthFacts(originalNumericParameterAliasSampled200Program)?.slice(0, 2).every(fact => fact?.provenance === 'source-literal')
+      && originalNumericParameterAliasWidthFacts(originalNumericParameterAliasSampled260Program)?.slice(2, 4).every(fact => fact?.provenance === 'preview-sample')
+      && originalNumericParameterAliasWidthFacts(originalNumericParameterAliasSampled260Program)?.slice(4, 6).every(fact => fact?.provenance === 'preview-sample')
+      && new Set(originalNumericParameterAliasOperationIds(originalNumericParameterAliasSampled260Program)).size === 6
+      && originalNumericParameterAliasSampled200Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 2
+      && originalNumericParameterAliasSampled260Program?.previewSampleBindings.filter(binding => binding.status === 'consumed').length === 2
+      && JSON.stringify(originalNumericParameterAliasModel) === originalNumericParameterAliasBefore,
+    detail({
+      sampled200: originalNumericParameterAliasWidthFacts(originalNumericParameterAliasSampled200Program),
+      sampled260: originalNumericParameterAliasWidthFacts(originalNumericParameterAliasSampled260Program),
+      operations: originalNumericParameterAliasOperationIds(originalNumericParameterAliasSampled260Program),
+    }));
+
+  const originalNumericEvidencePairValid = (candidate: ReturnType<typeof projectX4UiLayoutProgram>): boolean => {
+    const candidateProgram = resultProgram(candidate);
+    const candidateAuthority = evidenceAuthorityOf(candidate);
+    return candidateProgram !== undefined
+      && candidateAuthority !== undefined
+      && validateX4UiLayoutEvidencePair(candidateProgram, candidateAuthority).valid;
+  };
+  const originalNumericEvidencePairs: readonly (readonly [
+    string,
+    ReturnType<typeof projectX4UiLayoutProgram> | undefined,
+  ])[] = [
+    ['scalar unsampled', originalNumericRootLayoutUnsampledResult],
+    ['scalar sampled 200', originalNumericRootLayoutSampled200Result],
+    ['scalar sampled 260', originalNumericRootLayoutSampled260Result],
+    ['scalar secondary', originalNumericRootLayoutSecondaryResult],
+    ['table unsampled', originalNumericTableLayoutUnsampledResult],
+    ['table sampled 200', originalNumericTableLayoutSampled200Result],
+    ['table sampled 260', originalNumericTableLayoutSampled260Result],
+    ['captured table unsampled', originalNumericCapturedTableLayoutUnsampledResult],
+    ['captured table sampled 200', originalNumericCapturedTableLayoutSampled200Result],
+    ['member unsampled', originalNumericMemberLayoutUnsampledResult],
+    ['member sampled 200', originalNumericMemberLayoutSampled200Result],
+    ['member sampled 260', originalNumericMemberLayoutSampled260Result],
+    ['parameter unsampled', originalNumericParameterAliasUnsampledResult],
+    ['parameter sampled 200', originalNumericParameterAliasSampled200Result],
+    ['parameter sampled 260', originalNumericParameterAliasSampled260Result],
+  ];
+  originalNumericEvidencePairs.forEach(([name, candidate]) => {
+    check(`B119 ${name} program/evidence pair is valid`,
+      candidate !== undefined && originalNumericEvidencePairValid(candidate),
+      detail({
+        name,
+        status: candidate?.status,
+        pair: candidate === undefined
+          ? undefined
+          : (() => {
+            const candidateProgram = resultProgram(candidate);
+            const candidateAuthority = evidenceAuthorityOf(candidate);
+            return candidateProgram === undefined || candidateAuthority === undefined
+              ? undefined
+              : validateX4UiLayoutEvidencePair(candidateProgram, candidateAuthority);
+          })(),
+      }));
+  });
+
+  const originalNumericKnownScalarSource = [
+    'local menu = { name = "OriginalNumericKnownScalar", layer = 4 }',
+    'function menu.display()',
+    '  local input = 200',
+    '  local alias = input',
+    '  local width = math.floor((alias - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = 200, height = 80 })',
+    '  local table = frame:addTable(1, { width = 100, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericKnownScalarModel = buildX4UiCallModel(input(
+    originalNumericKnownScalarSource,
+    'selftest/b119-original-numeric-known-scalar.lua',
+  ));
+  const originalNumericKnownScalarResult = projectX4UiLayoutProgram(
+    originalNumericKnownScalarModel,
+    namedTarget(originalNumericKnownScalarModel, 'menu.display'),
+    profileFor(originalNumericKnownScalarModel),
+  );
+  const originalNumericKnownScalarProgram = resultProgram(originalNumericKnownScalarResult);
+  const originalNumericKnownScalarFact = originalNumericKnownScalarProgram?.operations
+    .find(operationValue => operationValue.kind === 'setColWidth')?.descriptorFacts.width;
+  check('B119 known-only scalar aliases produce an empty sample catalog',
+    originalNumericKnownScalarResult.status !== 'refused'
+      && originalNumericKnownScalarProgram !== undefined
+      && originalNumericKnownScalarProgram.sampleCatalog.entries.length === 0
+      && originalNumericKnownScalarFact?.status === 'known'
+      && factValue(originalNumericKnownScalarFact) === 88,
+    detail({
+      status: originalNumericKnownScalarResult.status,
+      catalog: originalNumericKnownScalarProgram?.sampleCatalog,
+      fact: originalNumericKnownScalarFact,
+    }));
+  check('B119 known-only scalar facts omit both sampleId and sampleIds',
+    originalNumericKnownScalarFact !== undefined
+      && originalNumericKnownScalarFact.status === 'known'
+      && !('sampleId' in originalNumericKnownScalarFact && originalNumericKnownScalarFact.sampleId !== undefined)
+      && !('sampleIds' in originalNumericKnownScalarFact && originalNumericKnownScalarFact.sampleIds !== undefined)
+      && originalNumericEvidencePairValid(originalNumericKnownScalarResult),
+    detail({ fact: originalNumericKnownScalarFact }));
+
+  const originalNumericKnownTableSource = [
+    'local menu = { name = "OriginalNumericKnownTable", layer = 4 }',
+    'function menu.display()',
+    '  local source = { known = 200 }',
+    '  local tableAlias = source',
+    '  local knownInput = tableAlias.known',
+    '  local width = math.floor((knownInput - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = 200, height = 80 })',
+    '  local table = frame:addTable(1, { width = 100, scaling = false })',
+    '  table:setColWidth(1, width, false)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericKnownTableModel = buildX4UiCallModel(input(
+    originalNumericKnownTableSource,
+    'selftest/b119-original-numeric-known-table.lua',
+  ));
+  const originalNumericKnownTableResult = projectX4UiLayoutProgram(
+    originalNumericKnownTableModel,
+    namedTarget(originalNumericKnownTableModel, 'menu.display'),
+    profileFor(originalNumericKnownTableModel),
+  );
+  const originalNumericKnownTableProgram = resultProgram(originalNumericKnownTableResult);
+  const originalNumericKnownTableFact = originalNumericKnownTableProgram?.operations
+    .find(operationValue => operationValue.kind === 'setColWidth')?.descriptorFacts.width;
+  check('B119 known-only table aliases produce an empty sample catalog',
+    originalNumericKnownTableResult.status !== 'refused'
+      && originalNumericKnownTableProgram !== undefined
+      && originalNumericKnownTableProgram.sampleCatalog.entries.length === 0
+      && originalNumericKnownTableFact?.status === 'known'
+      && factValue(originalNumericKnownTableFact) === 88,
+    detail({
+      status: originalNumericKnownTableResult.status,
+      catalog: originalNumericKnownTableProgram?.sampleCatalog,
+      fact: originalNumericKnownTableFact,
+    }));
+  check('B119 known-only table facts omit both sampleId and sampleIds',
+    originalNumericKnownTableFact !== undefined
+      && originalNumericKnownTableFact.status === 'known'
+      && !('sampleId' in originalNumericKnownTableFact && originalNumericKnownTableFact.sampleId !== undefined)
+      && !('sampleIds' in originalNumericKnownTableFact && originalNumericKnownTableFact.sampleIds !== undefined)
+      && originalNumericEvidencePairValid(originalNumericKnownTableResult),
+    detail({ fact: originalNumericKnownTableFact }));
+
+  const originalNumericKnownChildForgerySource = [
+    'local menu = { name = "OriginalNumericKnownChildForgery", layer = 4 }',
+    'function menu.display()',
+    '  local knownInput = 200',
+    '  local knownAlias = knownInput',
+    '  local runtimeInput = runtimeWidth',
+    '  local runtimeAlias = runtimeInput',
+    '  local runtimeWidthUse = math.floor((runtimeAlias - 24) / 2)',
+    '  local knownWidth = math.floor((knownAlias - 24) / 2)',
+    '  local frame = Helper.createFrameHandle(menu, { width = runtimeWidthUse, height = 80 })',
+    '  local table = frame:addTable(1, { width = 100, scaling = false })',
+    '  table:setColWidth(1, knownWidth, false)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const originalNumericKnownChildBaselineModel = buildX4UiCallModel(input(
+    originalNumericKnownChildForgerySource,
+    'selftest/b119-original-numeric-known-child-forgery.lua',
+  ));
+  const originalNumericKnownChildBaselineTarget = namedTarget(originalNumericKnownChildBaselineModel, 'menu.display');
+  const originalNumericKnownChildBaselineProfile = profileFor(originalNumericKnownChildBaselineModel);
+  const originalNumericKnownChildForgeryUnsampledResult = projectX4UiLayoutProgram(
+    originalNumericKnownChildBaselineModel,
+    originalNumericKnownChildBaselineTarget,
+    originalNumericKnownChildBaselineProfile,
+  );
+  const originalNumericKnownChildForgeryUnsampledProgram = resultProgram(originalNumericKnownChildForgeryUnsampledResult);
+  const originalNumericKnownChildForgerySamples200 = nestedNumericSampleInputFor(
+    originalNumericKnownChildForgeryUnsampledProgram,
+    { runtimeWidth: 200 },
+  );
+  const originalNumericKnownChildForgerySampledResult = originalNumericKnownChildForgerySamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericKnownChildBaselineModel,
+      originalNumericKnownChildBaselineTarget,
+      originalNumericKnownChildBaselineProfile,
+      originalNumericKnownChildForgerySamples200,
+    );
+  const originalNumericKnownChildForgerySampledProgram = originalNumericKnownChildForgerySampledResult === undefined
+    ? undefined
+    : resultProgram(originalNumericKnownChildForgerySampledResult);
+  const originalNumericKnownChildForgeryBaselineOperation = originalNumericKnownChildForgeryUnsampledProgram?.operations.find(operationValue =>
+    operationValue.kind === 'setColWidth');
+  const originalNumericKnownChildForgeryBaselineFact = originalNumericKnownChildForgerySampledProgram?.operations.find(operationValue =>
+    operationValue.kind === 'setColWidth')?.descriptorFacts.width;
+  const originalNumericKnownChildForgeryBaselineEntry = originalNumericKnownChildForgeryUnsampledProgram?.sampleCatalog.entries.find(entry =>
+    entry.expression === 'runtimeWidth' && entry.expectedType === 'number');
+  check('B119 known scalar child-forgery control starts from a valid sampled source-literal positive',
+    originalNumericKnownChildForgeryUnsampledProgram !== undefined
+      && originalNumericKnownChildForgeryBaselineEntry !== undefined
+      && originalNumericKnownChildForgerySamples200 !== undefined
+      && originalNumericKnownChildForgerySampledResult?.status !== 'refused'
+      && originalNumericKnownChildForgeryBaselineFact?.status === 'known'
+      && originalNumericKnownChildForgeryBaselineFact.value === 88
+      && originalNumericKnownChildForgeryBaselineFact.provenance === 'source-literal'
+      && originalNumericKnownChildForgeryBaselineFact.sampleId === undefined
+      && !('sampleIds' in originalNumericKnownChildForgeryBaselineFact
+        && originalNumericKnownChildForgeryBaselineFact.sampleIds !== undefined)
+      && originalNumericKnownChildForgeryBaselineOperation !== undefined,
+    detail({
+      status: originalNumericKnownChildForgerySampledResult?.status,
+      entry: originalNumericKnownChildForgeryBaselineEntry,
+      fact: originalNumericKnownChildForgeryBaselineFact,
+    }));
+  const originalNumericKnownChildRuntimeDescriptor = (() => {
+    let found: ValueRecord | undefined;
+    const visit = (candidate: unknown): void => {
+      if (found || candidate === null || typeof candidate !== 'object') return;
+      if (Array.isArray(candidate)) {
+        candidate.forEach(visit);
+        return;
+      }
+      const record = candidate as ValueRecord;
+      if (record.kind === 'preview-input' && record.expression === 'runtimeWidth') {
+        found = record;
+        return;
+      }
+      Object.values(record).forEach(visit);
+    };
+    visit(originalNumericKnownChildBaselineModel);
+    return found;
+  })();
+  const originalNumericKnownChildKnownLiteralStart = originalNumericKnownChildForgerySource.indexOf('local knownInput = 200')
+    + 'local knownInput = '.length;
+  const originalNumericKnownChildKnownLiteralEnd = originalNumericKnownChildKnownLiteralStart + '200'.length;
+  const originalNumericKnownChildForgeryRecord = jsonClone(originalNumericKnownChildBaselineModel) as unknown as ValueRecord;
+  let originalNumericKnownChildForgeryMutations = 0;
+  const replaceOriginalNumericKnownChild = (candidate: unknown): void => {
+    if (candidate === null || typeof candidate !== 'object') return;
+    if (Array.isArray(candidate)) {
+      candidate.forEach(replaceOriginalNumericKnownChild);
+      return;
+    }
+    const record = candidate as ValueRecord;
+    const source = record.source as ValueRecord | undefined;
+    if (record.kind === 'literal'
+      && record.value === 200
+      && record.expression === '200'
+      && source?.start && typeof source.start === 'object'
+      && (source.start as ValueRecord).offset === originalNumericKnownChildKnownLiteralStart
+      && source.end && typeof source.end === 'object'
+      && (source.end as ValueRecord).offset === originalNumericKnownChildKnownLiteralEnd
+      && originalNumericKnownChildRuntimeDescriptor !== undefined) {
+      for (const key of Object.keys(record)) delete record[key];
+      Object.assign(record, jsonClone(originalNumericKnownChildRuntimeDescriptor));
+      originalNumericKnownChildForgeryMutations += 1;
+      return;
+    }
+    Object.values(record).forEach(replaceOriginalNumericKnownChild);
+  };
+  replaceOriginalNumericKnownChild(originalNumericKnownChildForgeryRecord);
+  const originalNumericKnownChildForgeryModel = freezeClone(originalNumericKnownChildForgeryRecord) as unknown as X4UiCallModel;
+  const originalNumericKnownChildForgeryForgedTarget = namedTarget(originalNumericKnownChildForgeryModel, 'menu.display');
+  const originalNumericKnownChildForgery = projectX4UiLayoutProgram(
+    originalNumericKnownChildForgeryModel,
+    originalNumericKnownChildForgeryForgedTarget,
+    profileFor(originalNumericKnownChildForgeryModel),
+  );
+  const originalNumericKnownChildForgeryProgram = resultProgram(originalNumericKnownChildForgery);
+  const originalNumericKnownChildForgerySamples = nestedNumericSampleInputFor(
+    originalNumericKnownChildForgeryProgram,
+    { runtimeWidth: 200 },
+  );
+  const originalNumericKnownChildForgerySampled = originalNumericKnownChildForgerySamples === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericKnownChildForgeryModel,
+      originalNumericKnownChildForgeryForgedTarget,
+      profileFor(originalNumericKnownChildForgeryModel),
+      originalNumericKnownChildForgerySamples,
+    );
+  const originalNumericKnownChildForgeryForgedSampledProgram = originalNumericKnownChildForgerySampled === undefined
+    ? undefined
+    : resultProgram(originalNumericKnownChildForgerySampled);
+  const originalNumericKnownChildForgeryOperation = originalNumericKnownChildForgeryProgram?.operations.find(operationValue =>
+    operationValue.kind === 'setColWidth');
+  const originalNumericKnownChildForgeryFact = originalNumericKnownChildForgeryForgedSampledProgram?.operations.find(operationValue =>
+    operationValue.kind === 'setColWidth')?.descriptorFacts.width;
+  const originalNumericKnownChildForgeryDoesNotSampleKnown = originalNumericKnownChildForgery.status === 'refused'
+    || originalNumericKnownChildForgeryFact?.status === 'unavailable'
+    || (originalNumericKnownChildForgeryFact?.status === 'known'
+      && originalNumericKnownChildForgeryFact.value === 88
+      && originalNumericKnownChildForgeryFact.provenance === 'source-literal'
+      && originalNumericKnownChildForgeryFact.sampleId === undefined
+      && !('sampleIds' in originalNumericKnownChildForgeryFact
+        && originalNumericKnownChildForgeryFact.sampleIds !== undefined));
+  check('B119 known scalar child descriptors cannot be forged to a same-file runtime root',
+    originalNumericKnownChildForgeryBaselineOperation !== undefined
+      && originalNumericKnownChildRuntimeDescriptor !== undefined
+      && originalNumericKnownChildForgeryMutations > 0
+      && originalNumericKnownChildForgeryDoesNotSampleKnown
+      && (originalNumericKnownChildForgeryProgram === undefined
+        || !originalNumericKnownChildForgeryProgram.sampleCatalog.entries.some(entry =>
+          entry.expression === 'runtimeWidth'
+            && entry.consumers.some(consumer => consumer.operationId === originalNumericKnownChildForgeryOperation?.id)))
+      && (originalNumericKnownChildForgery.status === 'refused'
+        || originalNumericKnownChildForgerySamples === undefined
+        || JSON.stringify(originalNumericKnownChildForgerySamples.source)
+          === JSON.stringify(originalNumericKnownChildForgeryProgram?.sampleCatalog.sourceIdentity)),
+    detail({
+      mutations: originalNumericKnownChildForgeryMutations,
+      status: originalNumericKnownChildForgery.status,
+      refusal: refusalCode(originalNumericKnownChildForgery),
+      fact: originalNumericKnownChildForgeryFact,
+      catalog: originalNumericKnownChildForgeryProgram?.sampleCatalog,
+    }));
+
+  const originalNumericRootNegativeProjection = (body: readonly string[], rel: string) => {
+    const source = [
+      'local menu = { name = "OriginalNumericRootNegative", layer = 4 }',
+      'function menu.display()',
+      ...body.map(line => `  ${line}`),
+      '  local frame = Helper.createFrameHandle(menu, { width = 200, height = 80 })',
+      '  local table = frame:addTable(1, { width = 100, scaling = false })',
+      '  table:setColWidth(1, width, false)',
+      '  frame:display()',
+      'end',
+    ].join('\n');
+    const model = buildX4UiCallModel(input(source, rel));
+    const target = namedTarget(model, 'menu.display');
+    const profile = profileFor(model);
+    const result = projectX4UiLayoutProgram(model, target, profile);
+    const staleRootSamplesResult = originalNumericRootLayoutSamples200 === undefined
+      ? undefined
+      : projectX4UiLayoutProgram(model, target, profile, originalNumericRootLayoutSamples200);
+    const program = resultProgram(result);
+    const widthFact = program?.operations.find(operationValue => operationValue.kind === 'setColWidth')?.descriptorFacts.width;
+    return { source, model, result, program, widthFact, staleRootSamplesResult };
+  };
+  type OriginalNumericLayoutFact = X4UiLayoutProgram['frames'][number]['descriptorFacts'][string];
+  const originalNumericProgramHasExpression = (candidate: unknown, expression: string): boolean => {
+    if (candidate === null || typeof candidate !== 'object') return false;
+    if (Array.isArray(candidate)) return candidate.some(value => originalNumericProgramHasExpression(value, expression));
+    const record = candidate as Record<string, unknown>;
+    return record.expression === expression
+      || Object.values(record).some(value => originalNumericProgramHasExpression(value, expression));
+  };
+  const originalNumericFinalUseFallbackIsSafe = (candidate: {
+    readonly program: X4UiLayoutProgram | undefined;
+    readonly widthFact: OriginalNumericLayoutFact | undefined;
+  }, expectedExpression: string): boolean => {
+    const program = candidate.program;
+    const widthFact = candidate.widthFact;
+    const widthOperation = program?.operations.find(operationValue => operationValue.kind === 'setColWidth');
+    const widthUseSource = widthOperation?.metadata.arguments[1]?.location;
+    const entries = program?.sampleCatalog.entries || [];
+    return program !== undefined
+      && widthOperation !== undefined
+      && widthUseSource !== undefined
+      && widthFact !== undefined
+      && widthFact.status === 'unavailable'
+      && widthFact.expression === expectedExpression
+      && !originalNumericProgramHasExpression(program, 'runtimeWidth')
+      && entries.length === 1
+      && entries.every(entry => entry.expression === expectedExpression
+        && entry.expectedType === 'number'
+        && entry.provenance === 'preview-only'
+        && locationsSameForTest(entry.source, widthFact.source)
+        && entry.consumers.length === 1
+        && entry.consumers.every(consumer => consumer.operationId === widthOperation.id
+          && consumer.operationKind === 'setColWidth'
+          && consumer.field === 'width'
+        && locationsSameForTest(consumer.source, widthUseSource)));
+   };
+  const originalNumericCurrentIdentityMutationProjection = (
+    candidate: ReturnType<typeof originalNumericRootNegativeProjection>,
+  ) => {
+    const samples = nestedNumericSampleInputFor(candidate.program, { width: 200 });
+    const sampledResult = samples === undefined
+      ? undefined
+      : projectX4UiLayoutProgram(
+        candidate.model,
+        namedTarget(candidate.model, 'menu.display'),
+        profileFor(candidate.model),
+        samples,
+      );
+    const sampledProgram = sampledResult === undefined ? undefined : resultProgram(sampledResult);
+    const widthOperation = candidate.program?.operations.find(operationValue => operationValue.kind === 'setColWidth');
+    const widthEntry = candidate.program?.sampleCatalog.entries.find(entry =>
+      entry.expectedType === 'number' && entry.expression === 'width');
+    const unsampledWidthFact = candidate.program?.operations.find(operationValue => operationValue.kind === 'setColWidth')
+      ?.descriptorFacts.width;
+    const widthFact = sampledProgram?.operations.find(operationValue => operationValue.kind === 'setColWidth')
+      ?.descriptorFacts.width;
+    return { samples, sampledResult, sampledProgram, widthOperation, widthEntry, unsampledWidthFact, widthFact };
+  };
+  const originalNumericSourceLocationForSpan = (
+    model: X4UiCallModel,
+    startOffset: number,
+    endOffset: number,
+  ) => {
+    const positionAt = (offset: number) => {
+      const prefix = model.file.text.slice(0, offset);
+      const lineText = prefix.split('\n').at(-1) || '';
+      return { line: prefix.split('\n').length, column: lineText.length, offset };
+    };
+    return {
+      file: model.file.rel,
+      ...(model.file.sourcePath ? { sourcePath: model.file.sourcePath } : {}),
+      start: positionAt(startOffset),
+      end: positionAt(endOffset),
+    };
+  };
+  const originalNumericCurrentIdentityStaleRootProjection = (
+    candidate: ReturnType<typeof originalNumericRootNegativeProjection>,
+  ) => {
+    const record = jsonClone(candidate.model) as unknown as ValueRecord;
+    const rootStart = candidate.source.indexOf('runtimeWidth');
+    const rootEnd = rootStart < 0 ? -1 : rootStart + 'runtimeWidth'.length;
+    const widthMarker = 'table:setColWidth(1, width, false)';
+    const widthMarkerStart = candidate.source.indexOf(widthMarker);
+    const widthUseStart = widthMarkerStart < 0 ? -1 : widthMarkerStart + 'table:setColWidth(1, '.length;
+    const widthUseEnd = widthUseStart < 0 ? -1 : widthUseStart + 'width'.length;
+    const staleDescriptor = rootStart < 0 || rootEnd < 0
+      ? undefined
+      : {
+        kind: 'preview-input',
+        expression: 'runtimeWidth',
+        source: originalNumericSourceLocationForSpan(candidate.model, rootStart, rootEnd),
+      };
+    let mutations = 0;
+    const visit = (value: unknown): void => {
+      if (value === null || typeof value !== 'object') return;
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      const valueRecord = value as ValueRecord;
+      const location = valueRecord.location as ValueRecord | undefined;
+      const start = location?.start as ValueRecord | undefined;
+      const end = location?.end as ValueRecord | undefined;
+      if (staleDescriptor !== undefined
+        && valueRecord.expression === 'width'
+        && start?.offset === widthUseStart
+        && end?.offset === widthUseEnd) {
+        valueRecord.numericExpression = jsonClone(staleDescriptor);
+        mutations += 1;
+      }
+      Object.values(valueRecord).forEach(visit);
+    };
+    visit(record);
+    const model = freezeClone(record) as unknown as X4UiCallModel;
+    const target = namedTarget(model, 'menu.display');
+    const result = projectX4UiLayoutProgram(model, target, profileFor(model));
+    const program = resultProgram(result);
+    const valuesByExpression = Object.fromEntries(
+      (program?.sampleCatalog.entries || [])
+        .filter(entry => entry.expectedType === 'number')
+        .map(entry => [entry.expression, 200]),
+    );
+    const samples = nestedNumericSampleInputFor(program, valuesByExpression);
+    const sampledResult = samples === undefined
+      ? undefined
+      : projectX4UiLayoutProgram(model, target, profileFor(model), samples);
+    const sampledProgram = sampledResult === undefined ? undefined : resultProgram(sampledResult);
+    const unsampledWidthFact = program?.operations.find(operationValue => operationValue.kind === 'setColWidth')
+      ?.descriptorFacts.width;
+    const widthFact = sampledProgram?.operations.find(operationValue => operationValue.kind === 'setColWidth')
+      ?.descriptorFacts.width;
+    const widthOperation = program?.operations.find(operationValue => operationValue.kind === 'setColWidth');
+    const staleEntry = program?.sampleCatalog.entries.find(entry =>
+      entry.source.start.offset === rootStart && entry.source.end.offset === rootEnd);
+    return {
+      mutations,
+      staleDescriptor,
+      result,
+      program,
+      samples,
+      sampledResult,
+      sampledProgram,
+      unsampledWidthFact,
+      widthFact,
+      widthOperation,
+      staleEntry,
+    };
+  };
+  const originalNumericReassignedFreshFallbackIsSafe = (candidate: {
+    readonly program: X4UiLayoutProgram | undefined;
+    readonly widthFact: OriginalNumericLayoutFact | undefined;
+  }): boolean => {
+    const program = candidate.program;
+    const widthFact = candidate.widthFact;
+    const widthOperation = program?.operations.find(operationValue => operationValue.kind === 'setColWidth');
+    const widthUseSource = widthOperation?.metadata.arguments[1]?.location;
+    const entries = program?.sampleCatalog.entries || [];
+    return program !== undefined
+      && widthOperation !== undefined
+      && widthUseSource !== undefined
+      && widthFact !== undefined
+      && widthFact.status === 'unavailable'
+      && !originalNumericProgramHasExpression(program, 'runtimeWidth')
+      && entries.length === 1
+      && entries[0].expression === 'otherWidth'
+      && entries[0].expectedType === 'number'
+      && entries[0].provenance === 'preview-only'
+      && entries[0].source.file === widthFact.source.file
+      && entries[0].source.sourcePath === widthFact.source.sourcePath
+      && entries[0].source.end.offset <= widthFact.source.start.offset
+      && entries[0].consumers.length === 1
+      && entries[0].consumers.every(consumer => consumer.operationId === widthOperation.id
+        && consumer.operationKind === 'setColWidth'
+        && consumer.field === 'width'
+        && locationsSameForTest(consumer.source, widthUseSource));
+  };
+  const originalNumericReassignedRoot = originalNumericRootNegativeProjection([
+    'local input = runtimeWidth',
+    'local alias = input',
+    'alias = otherWidth',
+    'local width = math.floor((alias - 24) / 2)',
+  ], 'selftest/b119-original-numeric-reassigned-root.lua');
+  const originalNumericReassignedRootSamples200 = nestedNumericSampleInputFor(
+    originalNumericReassignedRoot.program,
+    { otherWidth: 200 },
+  );
+  const originalNumericReassignedRootSampledResult = originalNumericReassignedRootSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericReassignedRoot.model,
+      namedTarget(originalNumericReassignedRoot.model, 'menu.display'),
+      profileFor(originalNumericReassignedRoot.model),
+      originalNumericReassignedRootSamples200,
+    );
+  const originalNumericReassignedRootSampledProgram = originalNumericReassignedRootSampledResult === undefined
+    ? undefined
+    : resultProgram(originalNumericReassignedRootSampledResult);
+  const originalNumericReassignedRootSampledWidthFact = originalNumericReassignedRootSampledProgram?.operations
+    .find(operationValue => operationValue.kind === 'setColWidth')?.descriptorFacts.width;
+  const originalNumericReassignedRootFreshEntry = originalNumericReassignedRoot.program?.sampleCatalog.entries
+    .find(entry => entry.expression === 'otherWidth');
+  check('B119 scalar reassignment does not retain the stale original runtime root',
+    originalNumericReassignedRoot.program !== undefined
+      && originalNumericReassignedRoot.widthFact !== undefined
+      && originalNumericReassignedFreshFallbackIsSafe(originalNumericReassignedRoot)
+      && originalNumericReassignedRootSamples200 !== undefined
+      && originalNumericReassignedRootSampledResult?.status !== 'refused'
+      && originalNumericReassignedRootSampledWidthFact?.status === 'known'
+      && originalNumericReassignedRootSampledWidthFact.value === 88
+      && originalNumericReassignedRootSampledWidthFact.provenance === 'preview-sample'
+      && originalNumericReassignedRootSampledWidthFact.sampleId === originalNumericReassignedRootFreshEntry?.id
+      && originalNumericReassignedRoot.result.status !== 'refused',
+    detail({
+      catalog: originalNumericReassignedRoot.program?.sampleCatalog,
+      fact: originalNumericReassignedRoot.widthFact,
+      sampled: {
+        status: originalNumericReassignedRootSampledResult?.status,
+        fact: originalNumericReassignedRootSampledWidthFact,
+      },
+    }));
+  const originalNumericShadowedRoot = originalNumericRootNegativeProjection([
+    'local input = runtimeWidth',
+    'local alias = input',
+    'do',
+    '  local input = otherWidth',
+    '  local alias = input',
+    '  local shadowWidth = math.floor((alias - 24) / 2)',
+    'end',
+    'local width = math.floor((alias - 24) / 2)',
+  ], 'selftest/b119-original-numeric-shadowed-root.lua');
+  const originalNumericShadowedRootSamples200 = nestedNumericSampleInputFor(
+    originalNumericShadowedRoot.program,
+    { runtimeWidth: 200 },
+  );
+  const originalNumericShadowedRootSampledResult = originalNumericShadowedRootSamples200 === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      originalNumericShadowedRoot.model,
+      namedTarget(originalNumericShadowedRoot.model, 'menu.display'),
+      profileFor(originalNumericShadowedRoot.model),
+      originalNumericShadowedRootSamples200,
+    );
+  const originalNumericShadowedRootSampledProgram = originalNumericShadowedRootSampledResult === undefined
+    ? undefined
+    : resultProgram(originalNumericShadowedRootSampledResult);
+  const originalNumericShadowedRootSampledWidthFact = originalNumericRootLayoutWidthFacts(
+    originalNumericShadowedRootSampledProgram,
+  )?.[0];
+  const originalNumericShadowedRootHasNoInnerRoot = originalNumericShadowedRoot.program !== undefined
+    && !originalNumericProgramHasExpression(originalNumericShadowedRoot.program, 'otherWidth')
+    && !originalNumericShadowedRoot.program.sampleCatalog.entries.some(entry => entry.expression === 'otherWidth');
+  const originalNumericShadowedRootAcceptsOuterRoot = originalNumericShadowedRootSamples200 !== undefined
+    && originalNumericShadowedRootSampledResult?.status !== 'refused'
+    && originalNumericShadowedRootSampledWidthFact?.status === 'known'
+    && originalNumericShadowedRootSampledWidthFact.value === 88
+    && originalNumericShadowedRootSampledWidthFact.provenance === 'preview-sample'
+    && originalNumericShadowedRoot.program?.sampleCatalog.entries.filter(entry => entry.expression === 'runtimeWidth').length === 1;
+  check('B119 shadowed scalar aliases do not replace the selected scope root',
+    originalNumericShadowedRoot.program !== undefined
+      && originalNumericShadowedRoot.widthFact !== undefined
+      && originalNumericShadowedRootHasNoInnerRoot
+      && (originalNumericShadowedRootAcceptsOuterRoot
+        || originalNumericFinalUseFallbackIsSafe(originalNumericShadowedRoot, 'alias'))
+      && originalNumericShadowedRoot.result.status !== 'refused',
+    detail({
+      catalog: originalNumericShadowedRoot.program?.sampleCatalog,
+      fact: originalNumericShadowedRoot.widthFact,
+      sampled: {
+        status: originalNumericShadowedRootSampledResult?.status,
+        fact: originalNumericShadowedRootSampledWidthFact,
+      },
+      noInnerRoot: originalNumericShadowedRootHasNoInnerRoot,
+    }));
+  const originalNumericFieldOverwrite = originalNumericRootNegativeProjection([
+    'local input = runtimeWidth',
+    'local source = { width = input }',
+    'source.width = otherWidth',
+    'local width = math.floor((source.width - 24) / 2)',
+  ], 'selftest/b119-original-numeric-field-overwrite.lua');
+  check('B119 overwritten table fields reject the stale original numeric root',
+    originalNumericFieldOverwrite.program !== undefined
+      && originalNumericFieldOverwrite.widthFact !== undefined
+      && originalNumericFinalUseFallbackIsSafe(originalNumericFieldOverwrite, 'width')
+      && originalNumericFieldOverwrite.result.status !== 'refused',
+    detail({
+      catalog: originalNumericFieldOverwrite.program?.sampleCatalog,
+      fact: originalNumericFieldOverwrite.widthFact,
+    }));
+  const originalNumericIndexMutation = originalNumericRootNegativeProjection([
+    'local input = runtimeWidth',
+    'local source = { [3] = input }',
+    'local tableAlias = source',
+    'tableAlias[3] = otherWidth',
+    'local width = math.floor((tableAlias[3] - 24) / 2)',
+  ], 'selftest/b119-original-numeric-index-mutation.lua');
+  check('B119 numeric-index mutation rejects the stale original field root',
+    originalNumericIndexMutation.program !== undefined
+      && originalNumericIndexMutation.widthFact !== undefined
+      && originalNumericFinalUseFallbackIsSafe(originalNumericIndexMutation, 'width')
+      && originalNumericIndexMutation.result.status !== 'refused',
+    detail({
+      catalog: originalNumericIndexMutation.program?.sampleCatalog,
+      fact: originalNumericIndexMutation.widthFact,
+    }));
+  check('B119 overwritten table fields reject the valid original-root sample input',
+    originalNumericRootLayoutSamples200 !== undefined
+      && originalNumericFieldOverwrite.staleRootSamplesResult?.status === 'refused'
+      && refusalCode(originalNumericFieldOverwrite.staleRootSamplesResult) !== undefined
+      && originalNumericFieldOverwrite.staleRootSamplesResult.program === undefined,
+    detail({
+      samples: originalNumericRootLayoutSamples200,
+      status: originalNumericFieldOverwrite.staleRootSamplesResult?.status,
+      refusal: originalNumericFieldOverwrite.staleRootSamplesResult,
+    }));
+  check('B119 numeric-index mutation rejects the valid original-root sample input',
+    originalNumericRootLayoutSamples200 !== undefined
+      && originalNumericIndexMutation.staleRootSamplesResult?.status === 'refused'
+      && refusalCode(originalNumericIndexMutation.staleRootSamplesResult) !== undefined
+      && originalNumericIndexMutation.staleRootSamplesResult.program === undefined,
+    detail({
+      samples: originalNumericRootLayoutSamples200,
+      status: originalNumericIndexMutation.staleRootSamplesResult?.status,
+      refusal: originalNumericIndexMutation.staleRootSamplesResult,
+    }));
+
+  const originalNumericFieldOverwriteCurrentIdentity = originalNumericCurrentIdentityMutationProjection(
+    originalNumericFieldOverwrite,
+  );
+  const originalNumericIndexMutationCurrentIdentity = originalNumericCurrentIdentityMutationProjection(
+    originalNumericIndexMutation,
+  );
+  const originalNumericCurrentIdentityPositive = (
+    candidate: ReturnType<typeof originalNumericRootNegativeProjection>,
+    projection: ReturnType<typeof originalNumericCurrentIdentityMutationProjection>,
+  ): boolean => {
+    const sampledOperation = projection.sampledProgram?.operations.find(operationValue => operationValue.kind === 'setColWidth');
+    const sampledFact = sampledOperation?.descriptorFacts.width;
+    const freshEntry = projection.widthEntry;
+    return candidate.program !== undefined
+      && candidate.widthFact !== undefined
+      && candidate.widthFact.status === 'unavailable'
+      && originalNumericFinalUseFallbackIsSafe(candidate, 'width')
+      && projection.samples !== undefined
+      && projection.samples.catalogId === candidate.program.sampleCatalog.id
+      && JSON.stringify(projection.samples.source) === JSON.stringify(candidate.program.sampleCatalog.sourceIdentity)
+      && projection.sampledResult?.status !== 'refused'
+      && sampledOperation !== undefined
+      && sampledFact?.status === 'known'
+      && sampledFact.value === 200
+      && sampledFact.provenance === 'preview-sample'
+      && sampledFact.sampleId === freshEntry?.id
+      && freshEntry?.provenance === 'preview-only'
+      && freshEntry.consumers.length === 1
+      && freshEntry.consumers[0]?.operationId === sampledOperation.id
+      && freshEntry.consumers[0]?.operationKind === 'setColWidth'
+      && freshEntry.consumers[0]?.field === 'width';
+  };
+  const originalNumericCurrentIdentityStaleRootRejected = (
+    projection: ReturnType<typeof originalNumericCurrentIdentityStaleRootProjection>,
+  ): boolean => {
+    const staleDescriptor = projection.staleDescriptor;
+    const hasStalePreviewEntry = (program: X4UiLayoutProgram | undefined): boolean =>
+      program?.sampleCatalog.entries.some(entry =>
+        (staleDescriptor !== undefined
+          && locationsSameForTest(entry.source, staleDescriptor.source))
+          || entry.expression === 'runtimeWidth') === true;
+    const factHasNoSampleIds = (fact: unknown): boolean => {
+      if (fact === null || typeof fact !== 'object' || Array.isArray(fact)) return false;
+      const record = fact as Record<string, unknown>;
+      return record.sampleId === undefined && record.sampleIds === undefined;
+    };
+    const sampledWidthFact = projection.sampledProgram?.operations.find(operationValue => operationValue.kind === 'setColWidth')
+      ?.descriptorFacts.width;
+    return projection.mutations > 0
+      && staleDescriptor !== undefined
+      && (projection.result.status === 'refused'
+        || (projection.unsampledWidthFact?.status === 'unavailable'
+          && factHasNoSampleIds(projection.unsampledWidthFact)))
+      && projection.staleEntry === undefined
+      && !hasStalePreviewEntry(projection.program)
+      && !hasStalePreviewEntry(projection.sampledProgram)
+      && (projection.result.status === 'refused'
+        || projection.sampledResult?.status === 'refused'
+        || projection.sampledProgram === undefined
+        || sampledWidthFact?.status === 'unavailable')
+      && (projection.samples === undefined
+        || projection.program === undefined
+        || (projection.samples.catalogId === projection.program.sampleCatalog.id
+          && JSON.stringify(projection.samples.source) === JSON.stringify(projection.program.sampleCatalog.sourceIdentity)));
+  };
+  const originalNumericFieldOverwriteCurrentIdentityStaleRoot =
+    originalNumericCurrentIdentityStaleRootProjection(originalNumericFieldOverwrite);
+  check('B119 overwritten table fields accept only the current fresh-use preview sample',
+    originalNumericCurrentIdentityPositive(
+      originalNumericFieldOverwrite,
+      originalNumericFieldOverwriteCurrentIdentity,
+    ),
+    detail({
+      catalog: originalNumericFieldOverwrite.program?.sampleCatalog,
+      fact: originalNumericFieldOverwrite.widthFact,
+      sampled: originalNumericFieldOverwriteCurrentIdentity.sampledResult,
+      sampledFact: originalNumericFieldOverwriteCurrentIdentity.widthFact,
+    }));
+  check('B119 overwritten table fields reject a current-identity stale original-root sample',
+    originalNumericCurrentIdentityStaleRootRejected(originalNumericFieldOverwriteCurrentIdentityStaleRoot),
+    detail({
+      mutations: originalNumericFieldOverwriteCurrentIdentityStaleRoot.mutations,
+      staleDescriptor: originalNumericFieldOverwriteCurrentIdentityStaleRoot.staleDescriptor,
+      status: originalNumericFieldOverwriteCurrentIdentityStaleRoot.result.status,
+      unsampledWidthFact: originalNumericFieldOverwriteCurrentIdentityStaleRoot.unsampledWidthFact,
+      widthFact: originalNumericFieldOverwriteCurrentIdentityStaleRoot.widthFact,
+      catalog: originalNumericFieldOverwriteCurrentIdentityStaleRoot.program?.sampleCatalog,
+    }));
+  const originalNumericIndexMutationCurrentIdentityStaleRoot =
+    originalNumericCurrentIdentityStaleRootProjection(originalNumericIndexMutation);
+  check('B119 numeric-index mutation accepts only the current fresh-use preview sample',
+    originalNumericCurrentIdentityPositive(
+      originalNumericIndexMutation,
+      originalNumericIndexMutationCurrentIdentity,
+    ),
+    detail({
+      catalog: originalNumericIndexMutation.program?.sampleCatalog,
+      fact: originalNumericIndexMutation.widthFact,
+      sampled: originalNumericIndexMutationCurrentIdentity.sampledResult,
+      sampledFact: originalNumericIndexMutationCurrentIdentity.widthFact,
+    }));
+  check('B119 numeric-index mutation rejects a current-identity stale original-root sample',
+    originalNumericCurrentIdentityStaleRootRejected(originalNumericIndexMutationCurrentIdentityStaleRoot),
+    detail({
+      mutations: originalNumericIndexMutationCurrentIdentityStaleRoot.mutations,
+      staleDescriptor: originalNumericIndexMutationCurrentIdentityStaleRoot.staleDescriptor,
+      status: originalNumericIndexMutationCurrentIdentityStaleRoot.result.status,
+      unsampledWidthFact: originalNumericIndexMutationCurrentIdentityStaleRoot.unsampledWidthFact,
+      widthFact: originalNumericIndexMutationCurrentIdentityStaleRoot.widthFact,
+      catalog: originalNumericIndexMutationCurrentIdentityStaleRoot.program?.sampleCatalog,
+    }));
+
+  const originalNumericRootDescriptorExpression = 'math.floor((alias - 24) / 2)';
+  const projectOriginalNumericRootForgery = (record: ValueRecord): {
+    readonly result: ReturnType<typeof projectX4UiLayoutProgram>;
+    readonly fact: ValueRecord | undefined;
+  } => {
+    const model = freezeClone(record) as unknown as X4UiCallModel;
+    const result = projectX4UiLayoutProgram(
+      model,
+      namedTarget(model, 'menu.display'),
+      profileFor(model),
+      originalNumericRootLayoutSamples200,
+    );
+    const fact = resultProgram(result)?.operations.find(operationValue => operationValue.kind === 'setColWidth')
+      ?.descriptorFacts.width as unknown as ValueRecord | undefined;
+    return { result, fact };
+  };
+  const originalNumericRootSampledBaselineFact = originalNumericRootLayoutWidthFacts(
+    originalNumericRootLayoutSampled200Program,
+  )?.[0];
+  check('B119 forged scalar-root controls start from a valid sampled positive',
+    originalNumericRootLayoutSamples200 !== undefined
+      && originalNumericRootLayoutSampled200Result?.status !== 'refused'
+      && originalNumericRootSampledBaselineFact?.status === 'known'
+      && originalNumericRootSampledBaselineFact.value === 88
+      && originalNumericRootSampledBaselineFact.sampleId === originalNumericRootLayoutEntry?.id,
+    detail({
+      samples: originalNumericRootLayoutSamples200,
+      resultStatus: originalNumericRootLayoutSampled200Result?.status,
+      fact: originalNumericRootSampledBaselineFact,
+    }));
+  const originalNumericForeignRootRecord = jsonClone(originalNumericRootLayoutModel) as unknown as ValueRecord;
+  const originalNumericForeignRootMutation = mutateAllNumericDescriptorCopies(
+    originalNumericForeignRootRecord,
+    originalNumericRootDescriptorExpression,
+    descriptor => {
+      const source = descriptor.source as ValueRecord | undefined;
+      if (!source) return 0;
+      source.file = 'selftest/foreign-original-numeric-root.lua';
+      return 1;
+    },
+  );
+  const originalNumericForeignRootForgery = projectOriginalNumericRootForgery(originalNumericForeignRootRecord);
+  check('B119 forged scalar root source rejects every descriptor copy',
+    originalNumericForeignRootMutation.matchedCopies > 1
+      && originalNumericForeignRootMutation.mutatedNodes === originalNumericForeignRootMutation.matchedCopies
+      && (originalNumericForeignRootForgery.result.status === 'refused'
+        || originalNumericForeignRootForgery.fact?.status === 'unavailable'),
+    detail({ mutation: originalNumericForeignRootMutation, fact: originalNumericForeignRootForgery.fact, status: originalNumericForeignRootForgery.result.status }));
+
+  const originalNumericForgedOperandRecord = jsonClone(originalNumericRootLayoutModel) as unknown as ValueRecord;
+  const originalNumericForgedOperandMutation = mutateAllNumericDescriptorCopies(
+    originalNumericForgedOperandRecord,
+    originalNumericRootDescriptorExpression,
+    descriptor => {
+      const argumentsList = descriptor.arguments as ValueRecord[] | undefined;
+      const binary = argumentsList?.[0];
+      if (!binary || binary.kind !== 'binary') return 0;
+      const left = binary.left;
+      binary.left = binary.right;
+      binary.right = left;
+      return 1;
+    },
+  );
+  const originalNumericForgedOperand = projectOriginalNumericRootForgery(originalNumericForgedOperandRecord);
+  check('B119 forged scalar operand ordering rejects every descriptor copy',
+    originalNumericForgedOperandMutation.matchedCopies > 1
+      && originalNumericForgedOperandMutation.mutatedNodes === originalNumericForgedOperandMutation.matchedCopies
+      && (originalNumericForgedOperand.result.status === 'refused'
+        || originalNumericForgedOperand.fact?.status === 'unavailable'),
+    detail({ mutation: originalNumericForgedOperandMutation, fact: originalNumericForgedOperand.fact, status: originalNumericForgedOperand.result.status }));
+
+  const originalNumericForgedLeafSourceRecord = jsonClone(originalNumericRootLayoutModel) as unknown as ValueRecord;
+  const originalNumericForgedLeafSourceMutation = mutateAllNumericDescriptorCopies(
+    originalNumericForgedLeafSourceRecord,
+    originalNumericRootDescriptorExpression,
+    descriptor => {
+      let mutations = 0;
+      const visit = (candidate: unknown): void => {
+        if (candidate === null || typeof candidate !== 'object') return;
+        if (Array.isArray(candidate)) {
+          candidate.forEach(visit);
+          return;
+        }
+        const record = candidate as ValueRecord;
+        if (record.kind === 'preview-input'
+          && record.expression === 'runtimeWidth'
+          && record.source !== null
+          && typeof record.source === 'object'
+          && !Array.isArray(record.source)) {
+          (record.source as ValueRecord).file = 'selftest/foreign-original-numeric-leaf.lua';
+          mutations += 1;
+        }
+        Object.values(record).forEach(visit);
+      };
+      visit(descriptor);
+      return mutations;
+    },
+  );
+  const originalNumericForgedLeafSource = projectOriginalNumericRootForgery(originalNumericForgedLeafSourceRecord);
+  check('B119 forged original preview-leaf source rejects every scalar-root descriptor copy',
+    originalNumericForgedLeafSourceMutation.matchedCopies > 1
+      && originalNumericForgedLeafSourceMutation.mutatedNodes >= originalNumericForgedLeafSourceMutation.matchedCopies
+      && (originalNumericForgedLeafSource.result.status === 'refused'
+        || originalNumericForgedLeafSource.fact?.status === 'unavailable'),
+    detail({ mutation: originalNumericForgedLeafSourceMutation, fact: originalNumericForgedLeafSource.fact, status: originalNumericForgedLeafSource.result.status }));
+
+  const originalNumericForgedBindingRecord = jsonClone(originalNumericRootLayoutModel) as unknown as ValueRecord;
+  let originalNumericForgedBindingMutation = 0;
+  for (const alias of (originalNumericForgedBindingRecord.aliases as ValueRecord[])) {
+    if (alias.name !== 'width' && alias.name !== 'widthAlias') continue;
+    const value = alias.value;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
+    (value as ValueRecord).expression = 'alias';
+    originalNumericForgedBindingMutation += 1;
+  }
+  const originalNumericForgedBinding = projectOriginalNumericRootForgery(originalNumericForgedBindingRecord);
+  check('B119 forged scalar alias binding rejects the otherwise valid root',
+    originalNumericForgedBindingMutation >= 2
+      && (originalNumericForgedBinding.result.status === 'refused'
+        || originalNumericForgedBinding.fact?.status === 'unavailable'),
+    detail({ mutation: originalNumericForgedBindingMutation, fact: originalNumericForgedBinding.fact, status: originalNumericForgedBinding.result.status }));
 
   const parameterIdentitySource = [
     'local function panel(frame, width)',
@@ -11263,7 +15701,8 @@ const run = (): {
     'local Helper = rawget(_G, "Helper")',
     'local function panel(frame, width)',
     '  local table = frame:addTable(1, { width = width })',
-    '  table:addRow(false, {})',
+    '  local row = table:addRow(false, {})',
+    '  row[1]:createText("protected", { height = 16 })',
     '  return table',
     'end',
     'local function variadic(frame, ...)',
@@ -11321,6 +15760,104 @@ const run = (): {
       tables: invocationRefusalProgram.tables.map(candidate => ({ width: candidate.requestedWidth, rows: candidate.kernelState?.rows.length })),
       operations: invocationRefusalProgram.operations.map(candidate => ({ kind: candidate.kind, status: candidate.status, line: candidate.source.start.line })),
       samples: invocationRefusalProgram.sampleCatalog.entries,
+    }));
+
+  const invocationRefusalPcallStart = invocationRefusalSource.indexOf('pcall(function()');
+  const invocationRefusalPathEntry = invocationRefusalProgram.previewPathCatalog.entries.find(entry =>
+    entry.boundary.start.offset === invocationRefusalPcallStart
+      && entry.arm === 'then'
+      && entry.reachability === 'conditional');
+  const invocationRefusalPathInput = invocationRefusalPathEntry === undefined
+    ? undefined
+    : {
+      catalogId: invocationRefusalProgram.previewPathCatalog.id,
+      source: invocationRefusalProgram.previewPathCatalog.sourceIdentity,
+      selections: [{
+        id: invocationRefusalPathEntry.id,
+        boundaryId: invocationRefusalPathEntry.boundaryId,
+        armId: invocationRefusalPathEntry.armId,
+      }],
+    } satisfies X4UiLayoutPreviewPathSelectionInput;
+  const invocationRefusalPathInputBefore = invocationRefusalPathInput === undefined
+    ? undefined
+    : JSON.stringify(invocationRefusalPathInput);
+  const invocationRefusalSelectedResult = invocationRefusalPathInput === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      invocationRefusalModel,
+      invocationRefusalTarget,
+      profileFor(invocationRefusalModel, { localExpansion: { maxDepth: 3, maxInvocations: 8 } }),
+      undefined,
+      invocationRefusalPathInput,
+    );
+  const invocationRefusalSelectedProgram = invocationRefusalSelectedResult === undefined
+    || invocationRefusalSelectedResult.status === 'refused'
+    ? undefined
+    : invocationRefusalSelectedResult.program;
+  const invocationRefusalStalePathInput = invocationRefusalPathInput === undefined
+    ? undefined
+    : {
+      ...invocationRefusalPathInput,
+      catalogId: `${invocationRefusalPathInput.catalogId}:stale`,
+    };
+  const invocationRefusalStaleResult = invocationRefusalStalePathInput === undefined
+    ? undefined
+    : projectX4UiLayoutProgram(
+      invocationRefusalModel,
+      invocationRefusalTarget,
+      profileFor(invocationRefusalModel, { localExpansion: { maxDepth: 3, maxInvocations: 8 } }),
+      undefined,
+      invocationRefusalStalePathInput,
+    );
+  check('B119 exact protected callback stays conditional until its owner-issued path is selected, then expands the local body',
+    invocationRefusalPathEntry !== undefined
+      && invocationRefusalPathInput !== undefined
+      && invocationRefusalPathInputBefore !== undefined
+      && JSON.stringify(invocationRefusalPathInput) === invocationRefusalPathInputBefore
+      && invocationRefusalProgram.tables.some(candidate => !candidate.kernelState && candidate.requestedWidth === undefined)
+      && refusalLedger.some(candidate => candidate.status === 'conditional'
+        && candidate.source.start.offset === invocationRefusalSource.indexOf('panel(frame, 25)', invocationRefusalPcallStart))
+      && invocationRefusalSelectedProgram !== undefined
+      && invocationRefusalSelectedResult?.status === 'partial'
+      && invocationRefusalSelectedProgram.tables.some(candidate => candidate.kernelState?.rows.length === 1
+        && candidate.requestedWidth === 25)
+      && invocationRefusalSelectedProgram.cells.some(candidate => factValue(candidate.descriptorFacts.primaryContent) === 'protected')
+      && invocationRefusalSelectedProgram.localExpansion?.invocations.some(candidate =>
+        candidate.status === 'expanded'
+          && candidate.source.start.offset === invocationRefusalSource.indexOf('panel(frame, 25)', invocationRefusalPcallStart))
+      && invocationRefusalSelectedProgram.localExpansion?.previewPathSelections.length === 1
+      && invocationRefusalSelectedProgram.localExpansion.previewPathSelections[0].provenance === 'preview-only'
+      && invocationRefusalSelectedProgram.verification.game === X4_UI_LAYOUT_GAME_TRUTH
+      && invocationRefusalStaleResult?.status === 'refused',
+    detail({
+      pcallStart: invocationRefusalPcallStart,
+      pathEntry: invocationRefusalPathEntry,
+      modelCalls: invocationRefusalModel.calls.map(candidate => ({ name: candidate.name, start: candidate.source.start.offset, context: candidate.context.name, branch: candidate.context.branchPath.map(segment => segment.boundary.start.offset) })),
+      unselectedTables: invocationRefusalProgram.tables.map(candidate => ({ width: candidate.requestedWidth, kernel: candidate.kernelState !== undefined })),
+      selectedStatus: invocationRefusalSelectedResult?.status,
+      selectedTables: invocationRefusalSelectedProgram?.tables.map(candidate => ({ width: candidate.requestedWidth, rows: candidate.kernelState?.rows.length })),
+      selectedCells: invocationRefusalSelectedProgram?.cells.map(candidate => candidate.descriptorFacts),
+      selectedInvocations: invocationRefusalSelectedProgram?.localExpansion?.invocations.map(candidate => ({ status: candidate.status, start: candidate.source.start.offset })),
+      conditionState: {
+        path: invocationRefusalPathEntry !== undefined,
+        input: invocationRefusalPathInput !== undefined,
+        inputUnchanged: invocationRefusalPathInput !== undefined && invocationRefusalPathInputBefore !== undefined
+          && JSON.stringify(invocationRefusalPathInput) === invocationRefusalPathInputBefore,
+        unselectedConditionalTable: invocationRefusalProgram.tables.some(candidate => !candidate.kernelState && candidate.requestedWidth === undefined),
+        unselectedInvocation: refusalLedger.some(candidate => candidate.status === 'conditional'
+          && candidate.source.start.offset === invocationRefusalSource.indexOf('panel(frame, 25)', invocationRefusalPcallStart)),
+        selectedPartial: invocationRefusalSelectedResult?.status === 'partial',
+        selectedTable: invocationRefusalSelectedProgram?.tables.some(candidate => candidate.kernelState?.rows.length === 1
+          && candidate.requestedWidth === 25),
+        selectedCell: invocationRefusalSelectedProgram?.cells.some(candidate => factValue(candidate.descriptorFacts.primaryContent) === 'protected'),
+        selectedInvocation: invocationRefusalSelectedProgram?.localExpansion?.invocations.some(candidate =>
+          candidate.status === 'expanded'
+            && candidate.source.start.offset === invocationRefusalSource.indexOf('panel(frame, 25)', invocationRefusalPcallStart)),
+        selectedPreview: invocationRefusalSelectedProgram?.localExpansion?.previewPathSelections.length === 1,
+        selectedGameTruth: invocationRefusalSelectedProgram?.verification.game === X4_UI_LAYOUT_GAME_TRUTH,
+        staleRefused: invocationRefusalStaleResult?.status === 'refused',
+      },
+      staleStatus: invocationRefusalStaleResult?.status,
     }));
 
   const exactDeclarationSource = [
@@ -15206,7 +19743,8 @@ const run = (): {
     .filter(entry => entry.expression === 'runtimeViewWidth'
       || entry.expression === 'runtimeViewHeight'
       || entry.expression === 'runtimeColumns'
-      || entry.expression === 'tableWidth - margin * 2'
+      || entry.expression === 'tableWidth'
+      || entry.expression === 'margin'
       || entry.expression === 'runtimeReserve'
       || entry.expression === 'runtimeScaling'
       || entry.expression === 'runtimeHeight'
@@ -15226,8 +19764,12 @@ const run = (): {
               ? 1920
             : entry.expression === 'runtimeViewHeight'
               ? 1080
-              : entry.expression === 'runtimeColumns'
+            : entry.expression === 'runtimeColumns'
                 ? 12
+              : entry.expression === 'tableWidth'
+                ? 100
+              : entry.expression === 'margin'
+                ? 10
               : entry.expression === 'runtimeHeight'
                   ? 10
                   : 80,
@@ -15439,11 +19981,15 @@ const run = (): {
             ? 'sampled'
             : entry.expression === 'runtimeViewWidth'
               ? 1920
-              : entry.expression === 'runtimeViewHeight'
-                ? 1080
-                : entry.expression === 'runtimeHeight'
+      : entry.expression === 'runtimeViewHeight'
+              ? 1080
+            : entry.expression === 'runtimeHeight'
                   ? 10
-                  : 80,
+              : entry.expression === 'tableWidth'
+                ? 100
+              : entry.expression === 'margin'
+                ? 10
+              : 80,
       })),
     }
     : undefined;
@@ -16736,6 +21282,93 @@ const run = (): {
     visit(value);
     return value;
   };
+  // Exercise the exported validator, not canonicalNumericSampleIds above: a valid issued
+  // program/authority pair anchors every mutation and retains the real source-owned IDs.
+  const numericBoundaryResult = nestedNumericUnionSampledResults[0];
+  const numericBoundaryPair = numericBoundaryResult && numericBoundaryResult.status !== 'refused'
+    ? numericBoundaryResult
+    : undefined;
+  const numericBoundaryCases: Array<{
+    name: string;
+    change: (fact: Record<string, unknown>, read: () => never) => void;
+    reason: RegExp;
+  }> = [
+    { name: 'both singular and plural forms', change: fact => { fact.sampleId = (fact.sampleIds as string[])[0]; }, reason: /schema/ },
+    { name: 'explicit undefined singular', change: fact => { fact.sampleId = undefined; }, reason: /schema/ },
+    { name: 'explicit undefined plural', change: fact => { fact.sampleIds = undefined; }, reason: /schema/ },
+    { name: 'empty plural', change: fact => { fact.sampleIds = []; }, reason: /schema/ },
+    { name: 'one-ID plural', change: fact => { fact.sampleIds = (fact.sampleIds as string[]).slice(0, 1); }, reason: /schema/ },
+    { name: '129-ID plural', change: fact => { fact.sampleIds = Array.from({ length: 129 }, (_, index) => `id-${String(index).padStart(3, '0')}`); }, reason: /schema/ },
+    { name: 'duplicate IDs', change: fact => { fact.sampleIds = [(fact.sampleIds as string[])[0], (fact.sampleIds as string[])[0]]; }, reason: /schema/ },
+    { name: 'unsorted IDs', change: fact => { (fact.sampleIds as string[]).reverse(); }, reason: /schema/ },
+    { name: 'empty ID', change: fact => { (fact.sampleIds as string[])[0] = ''; }, reason: /schema/ },
+    { name: 'interior hole', change: fact => { delete (fact.sampleIds as string[])[0]; }, reason: /schema/ },
+    { name: 'trailing hole', change: fact => { (fact.sampleIds as string[]).length += 1; }, reason: /schema/ },
+    { name: 'symbol field', change: fact => { Object.defineProperty(fact.sampleIds, Symbol('extra'), { value: true }); }, reason: /schema/ },
+    { name: 'extra enumerable field', change: fact => { Object.defineProperty(fact.sampleIds, 'extra', { value: true, enumerable: true }); }, reason: /schema/ },
+    { name: 'extra nonenumerable field', change: fact => { Object.defineProperty(fact.sampleIds, 'extra', { value: true }); }, reason: /schema/ },
+    { name: 'cycle', change: fact => { (fact.sampleIds as unknown[])[0] = fact.sampleIds; }, reason: /schema/ },
+    { name: 'index accessor', change: (fact, read) => { Object.defineProperty(fact.sampleIds, '0', { configurable: true, enumerable: true, get: read }); }, reason: /schema/ },
+    { name: 'plural field accessor', change: (fact, read) => { Object.defineProperty(fact, 'sampleIds', { configurable: true, enumerable: true, get: read }); }, reason: /schema/ },
+    { name: 'get proxy', change: (fact, read) => { fact.sampleIds = new Proxy(fact.sampleIds as string[], { get(target, key, receiver) { try { read(); } catch { /* Count without throwing. */ } return Reflect.get(target, key, receiver); } }); }, reason: /schema/ },
+    { name: 'throwing length proxy', change: (fact, read) => { fact.sampleIds = new Proxy(fact.sampleIds as string[], { get(target, key, receiver) { return key === 'length' ? read() : Reflect.get(target, key, receiver); } }); }, reason: /schema/ },
+  ];
+  check('B119 production numeric validator accepts issued and frozen plain-data copies',
+    numericBoundaryPair !== undefined
+      && validateX4UiLayoutEvidencePair(numericBoundaryPair.program, numericBoundaryPair.evidenceAuthority).valid
+      && validateX4UiLayoutEvidencePair(
+        freezeDataOnly(jsonClone(numericBoundaryPair.program)),
+        freezeDataOnly(jsonClone(numericBoundaryPair.evidenceAuthority)),
+      ).valid,
+    detail({ issued: numericBoundaryPair !== undefined }));
+  for (const boundaryCase of numericBoundaryCases) {
+    let getterReads = 0;
+    let threw = false;
+    let applied = false;
+    let validation: ReturnType<typeof validateX4UiLayoutEvidencePair> | undefined;
+    if (numericBoundaryPair) {
+      const candidate = jsonClone(numericBoundaryPair.program);
+      const operation = candidate.operations.find(item => item.kind === 'setColWidth');
+      const fact = operation?.descriptorFacts.width as unknown as Record<string, unknown> | undefined;
+      if (fact) {
+        boundaryCase.change(fact, () => { getterReads += 1; throw new Error('numeric boundary getter must not execute'); });
+        applied = true;
+        freezeDataOnly(candidate);
+        try { validation = validateX4UiLayoutEvidencePair(candidate, numericBoundaryPair.evidenceAuthority); } catch { threw = true; }
+      }
+    }
+    check(`B119 production numeric validator rejects ${boundaryCase.name} without getter reads or throws`,
+      applied && !threw && getterReads === 0 && validation?.valid === false
+        && boundaryCase.reason.test(validation.reason || ''),
+      detail({ applied, getterReads, threw, validation }));
+  }
+  for (const owner of ['program', 'authority'] as const) {
+    for (const attack of ['get proxy', 'throwing metadata proxy', 'revoked proxy', 'root accessor'] as const) {
+      let getterReads = 0;
+      let threw = false;
+      let validation: ReturnType<typeof validateX4UiLayoutEvidencePair> | undefined;
+      if (numericBoundaryPair) {
+        const plain = jsonClone(owner === 'program' ? numericBoundaryPair.program : numericBoundaryPair.evidenceAuthority);
+        if (attack === 'root accessor') {
+          Object.defineProperty(plain, 'version', { configurable: true, enumerable: true, get() { getterReads += 1; throw new Error('root getter'); } });
+        }
+        freezeDataOnly(plain);
+        let candidate: typeof plain = plain;
+        if (attack === 'get proxy') candidate = new Proxy(plain, { get(target, key, receiver) { getterReads += 1; return Reflect.get(target, key, receiver); } });
+        if (attack === 'throwing metadata proxy') candidate = new Proxy(plain, { getPrototypeOf() { throw new Error('metadata trap'); } });
+        if (attack === 'revoked proxy') { const revocable = Proxy.revocable(plain, {}); candidate = revocable.proxy; revocable.revoke(); }
+        try {
+          validation = validateX4UiLayoutEvidencePair(
+            owner === 'program' ? candidate as X4UiLayoutProgram : numericBoundaryPair.program,
+            owner === 'authority' ? candidate as X4UiLayoutEvidenceAuthority : numericBoundaryPair.evidenceAuthority,
+          );
+        } catch { threw = true; }
+      }
+      check(`B119 production numeric validator rejects ${owner} ${attack} without getter reads or throws`,
+        numericBoundaryPair !== undefined && !threw && getterReads === 0 && validation?.valid === false,
+        detail({ getterReads, threw, validation }));
+    }
+  }
   let loopAccessorReads = 0;
   const accessorLoopAuthority = loopGapAuthority
     ? jsonClone(loopGapAuthority) as unknown as Record<string, unknown>
@@ -17704,6 +22337,98 @@ const runP3ColorChecks = async (): Promise<Check[]> => {
     ],
   };
   const publicCasSource = buildX4UiWorkspaceSource(publicCasWorkspace);
+  const bomConstructorLines = [
+    'local menu = { name = "BOM Input", layer = 1 }',
+    'local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    'local table = frame:addTable(1, { width = 80, reserveScrollBar = false })',
+    'local row = table:addRow(false, {})',
+    'row[1]:createEditBox({ defaultText = "BOM value" })',
+    'frame:display()',
+  ];
+  const bomConstructorProjection = (text: string) => {
+    const workspace: ModWorkspace = { ...publicCasWorkspace, passthroughFiles: [
+      publicCasPassthrough('ui.xml', publicCasUiXml, 'partial'),
+      { ...publicCasPassthrough('ui/p3-edit.lua', text, 'partial'), bytes: new TextEncoder().encode(text).length },
+    ] };
+    const before = JSON.stringify(workspace);
+    const source = buildX4UiWorkspaceSource(workspace);
+    const file = source.bundle?.sourceFiles.find(candidate => candidate.path === 'ui/p3-edit.lua');
+    if (!file || file.parseStatus !== 'parsed') return { workspace, before, source, file };
+    const model = normalizeX4UiSourceEditLayoutModel(file.callModel);
+    const result = projectWithColorEvidence(model, topTarget(model), profileFor(model), undefined, undefined, authority);
+    return { workspace, before, source, file, model, result, program: resultProgram(result) };
+  };
+  for (const bom of [false, true]) {
+    for (const separator of ['\n', '\r\n', '; ']) {
+      const text = (bom ? '\uFEFF' : '') + bomConstructorLines.join(separator);
+      const projected = bomConstructorProjection(text);
+      const inputOperation = projected.program?.operations.find(candidate => candidate.kind === 'createEditBox');
+      const inputCall = projected.file?.callModel.calls.find(candidate => candidate.name === 'createEditBox');
+      const optionsSource = inputCall?.semantics.options?.location;
+      const firstCall = projected.file?.callModel.calls[0];
+      const callStart = text.indexOf('row[1]:createEditBox');
+      const expectedLine = separator === '; ' ? 1 : 5;
+      const expectedColumn = separator === '; ' ? callStart : 0;
+      const firstCallStart = text.indexOf('Helper.createFrameHandle');
+      const expectedFirstColumn = separator === '; ' ? firstCallStart : 'local frame = '.length;
+      p3Check(`B119 bundle Input AST retains ${bom ? 'BOM' : 'no-BOM'} ${JSON.stringify(separator)} raw bytes and exact offsets`,
+        inputOperation?.status === 'applied'
+          && inputCall?.source.start.offset === callStart
+          && inputCall.source.start.line === expectedLine && inputCall.source.start.column === expectedColumn
+          && firstCall?.source.start.offset === firstCallStart
+          && firstCall.source.start.line === (separator === '; ' ? 1 : 2)
+          && firstCall.source.start.column === expectedFirstColumn
+          && optionsSource !== undefined
+          && text.slice(optionsSource.start.offset, optionsSource.end.offset) === '{ defaultText = "BOM value" }'
+          && locationsSameForTest(inputCall.source, inputOperation.source)
+          && inputCall.semantics.editBox?.defaultText?.value === 'BOM value'
+          && inputOperation.descriptorFacts.text.status === 'known'
+          && projected.file?.text === text && projected.model?.file.text === text
+          && projected.program?.target.sourceIdentity.sha256 === createHash('sha256').update(text).digest('hex').toUpperCase()
+          && JSON.stringify(projected.workspace) === projected.before,
+        { bom, separator, status: inputOperation?.status, reason: inputOperation?.reason,
+          callSource: inputCall?.source, optionsSource, rawTextRetained: projected.model?.file.text === text });
+      const unsupportedText = text.replace('{ defaultText = "BOM value" }', '{ defaultText = "BOM value", unsupported = true }');
+      const unsupported = bomConstructorProjection(unsupportedText);
+      const unsupportedOperation = unsupported.program?.operations.find(candidate => candidate.kind === 'createEditBox');
+      p3Check(`B119 bundle Input ${bom ? 'BOM' : 'no-BOM'} ${JSON.stringify(separator)} unsupported constructor keys remain unavailable`,
+        unsupported.file?.parseStatus === 'parsed' && unsupportedOperation?.status === 'unresolved'
+          && unsupportedOperation.descriptorFacts.text.status === 'unavailable'
+          && unsupported.file.text === unsupportedText && unsupported.model?.file.text === unsupportedText
+          && JSON.stringify(unsupported.workspace) === unsupported.before,
+        { bom, separator, status: unsupportedOperation?.status, reason: unsupportedOperation?.reason });
+      const malformedText = text.replace('defaultText = "BOM value"', 'defaultText = (');
+      const malformed = bomConstructorProjection(malformedText);
+      p3Check(`B119 bundle Input ${bom ? 'BOM' : 'no-BOM'} ${JSON.stringify(separator)} malformed source stays locked`,
+        malformed.file?.parseStatus === 'locked' && malformed.program === undefined
+          && malformed.file.text === malformedText && JSON.stringify(malformed.workspace) === malformed.before,
+        { bom, separator, parseStatus: malformed.file?.parseStatus, program: malformed.program?.status });
+    }
+  }
+  const constructorEditWorkspace: ModWorkspace = {
+    ...publicCasWorkspace,
+    passthroughFiles: [
+      publicCasPassthrough('ui.xml', publicCasUiXml, 'partial'),
+      publicCasPassthrough('ui/p3-edit.lua', publicCasLua.replace('frame:display()',
+        'row[1]:createEditBox({ height = 30, defaultText = "DEFAULT" })\nframe:display()'), 'partial'),
+    ],
+  };
+  const constructorEditSource = buildX4UiWorkspaceSource(constructorEditWorkspace);
+  const constructorEditFile = constructorEditSource.bundle?.sourceFiles.find(file => file.path === 'ui/p3-edit.lua');
+  if (!constructorEditFile) throw new Error('constructor Input source-edit fixture missing');
+  const constructorEditModel = normalizeX4UiSourceEditLayoutModel(constructorEditFile.callModel);
+  const constructorEditResult = projectWithColorEvidence(constructorEditModel, topTarget(constructorEditModel), profileFor(constructorEditModel), undefined, undefined, authority);
+  const constructorEditProgram = programOf(constructorEditResult);
+  const constructorEditAuthority = evidenceAuthorityOf(constructorEditResult);
+  if (!constructorEditAuthority) throw new Error('constructor Input source-edit authority missing');
+  const constructorEditCatalog = discoverX4UiSourceEdits(constructorEditWorkspace, constructorEditSource, constructorEditProgram, constructorEditAuthority);
+  const constructorEditEntries = constructorEditCatalog.editableEntries.filter(entry => entry.provenance.callName === 'createEditBox');
+  p3Check('constructor Input source-pinned text defaults do not authorize scalar edits to omitted properties',
+    factValue(operation(constructorEditProgram, 'createEditBox')?.descriptorFacts.textX) === 5
+      && constructorEditEntries.some(entry => entry.expectedText === '"DEFAULT"')
+      && constructorEditEntries.every(entry => ['30', '"DEFAULT"'].includes(entry.expectedText)
+        && constructorEditFile.text.slice(entry.startOffset, entry.endOffset) === entry.expectedText),
+    { status: constructorEditCatalog.status, entries: constructorEditEntries.map(entry => ({ text: entry.expectedText, fields: entry.provenance.fields })) });
   const publicCasFile = publicCasSource.bundle?.sourceFiles.find(file => file.path === 'ui/p3-edit.lua');
   const publicCasModel = publicCasFile ? normalizeX4UiSourceEditLayoutModel(publicCasFile.callModel) : undefined;
   const publicCasTarget = publicCasModel ? topTarget(publicCasModel) : undefined;
@@ -19634,7 +24359,18 @@ const runP3ColorChecks = async (): Promise<Check[]> => {
   return p3Checks;
 };
 
-const baseResult = run();
+let b119CanonicalCorpus: X4UiCorpusCanonicalSuccess | undefined;
+try {
+  b119CanonicalCorpus = await loadB119ActualCanonicalCorpus();
+} catch (error) {
+  console.error(`B119 actual-byte canonical corpus unavailable: ${String(error)}`);
+}
+if (b119CanonicalCorpus) runB119LongTextRecovery(b119CanonicalCorpus);
+else if (process.env.X4_UI_LONG_TEXT_ONLY === '1') throw new Error('Long-text check requires configured canonical corpus');
+if (process.env.X4_UI_LONG_TEXT_ONLY === '1') process.exit(0);
+runB119SourceLookupContinuity();
+if (process.env.X4_UI_SOURCE_LOOKUP_ONLY === '1') process.exit(0);
+const baseResult = run(b119CanonicalCorpus);
 const p3Result = await runP3ColorChecks();
 const result = {
   ...baseResult,

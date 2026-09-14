@@ -550,6 +550,39 @@ function sourceFixture(includeImported = true, extra: Partial<ModWorkspace> = {}
   return workspace(files, extra);
 }
 
+const callbackLua = [
+  'local function decorate(cell)',
+  '  cell:createText("CALLBACK_HELPER", { height = 10 })',
+  'end',
+  'local menu = { name = "Callback", layer = 1 }',
+  'function menu.display()',
+  '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+  '  pcall(function()',
+  '    local table = frame:addTable(2, { width = 80 })',
+  '    local row = table:addRow(false, {})',
+  '    row[1]:createText("CALLBACK_DIRECT", { height = 10 })',
+  '    decorate(row[2])',
+  '  end)',
+  '  frame:display()',
+  'end',
+  '',
+].join('\n');
+
+function callbackWorkspace(): ModWorkspace {
+  return workspace([
+    passthrough('ui.xml', [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<addon name="editor-session-callback">',
+      '  <environment type="menus">',
+      '    <file name="ui/callback.lua" />',
+      '  </environment>',
+      '</addon>',
+      '',
+    ].join('\n')),
+    passthrough('ui/callback.lua', callbackLua, { reason: 'unparsed' }),
+  ], { id: 'batch-7a-editor-session-callback' });
+}
+
 function sampleWorkspace(): ModWorkspace {
   return workspace([
     passthrough('ui.xml', [
@@ -1655,6 +1688,119 @@ async function run(): Promise<void> {
   const originalWorkspace = sourceFixture();
   const originalWorkspaceJson = JSON.stringify(originalWorkspace);
   const canonical = await loadCanonicalFixture();
+  const callbackWorkspaceValue = callbackWorkspace();
+  const callbackSeed = projectX4UiEditorSession({
+    workspace: callbackWorkspaceValue,
+    corpus: undefined,
+    profile: { width: 100, height: 80, uiScale: 1 },
+  });
+  const callbackFile = callbackSeed.source.bundle?.sourceFiles.find(candidate => candidate.path === 'ui/callback.lua');
+  assert.ok(callbackFile, 'B119 callback fixture must materialize its source file');
+  const callbackTargetCatalog = createX4UiLayoutTargetCatalog(callbackFile.callModel);
+  const callbackTarget = callbackTargetCatalog.targets.find(candidate => candidate.kind === 'function' && candidate.name === 'menu.display');
+  assert.ok(callbackTarget, 'B119 callback fixture must issue the exact menu.display target');
+  const callbackSelection = {
+    sourceIndex: callbackFile.index,
+    path: callbackFile.path,
+    sourceIdentity: callbackTargetCatalog.sourceIdentity,
+    target: { ...callbackTarget, id: callbackTarget.id },
+  };
+  const callbackSelected = projectX4UiEditorSession({
+    workspace: callbackWorkspaceValue,
+    corpus: canonical,
+    profile: { width: 100, height: 80, uiScale: 1 },
+    selection: callbackSelection,
+  });
+  const callbackProgramResult = callbackSelected.preview.program;
+  assert.ok(callbackProgramResult && callbackProgramResult.status !== 'refused', 'B119 fail-first callback fixture must issue a selected Layout program');
+  assert.deepEqual(
+    callbackProgramResult.program.profile.localExpansion,
+    { maxDepth: 4, maxInvocations: 64 },
+    'B119 fail-first causal red: public callback profile.localExpansion is absent, so the selected callback helper is not expanded',
+  );
+  const callbackUnselectedProgram = callbackProgramResult.program;
+  const callbackUnselectedInvocation = callbackUnselectedProgram.localExpansion?.invocations.find(invocation => invocation.source.start.line === 11);
+  assert.equal(callbackUnselectedInvocation?.status, 'conditional', 'B119 callback helper must remain conditional until its exact owner-issued callback path is selected');
+  assert.equal(callbackUnselectedProgram.operations.some(operation => operation.source.start.line === 2), false, 'B119 unselected callback must not materialize the protected helper operation');
+  assert.equal(callbackSelected.pathCatalog?.entries.length, 1, 'B119 callback fixture must issue exactly one protected callback path entry');
+  const callbackPathEntry = callbackSelected.pathCatalog?.entries[0];
+  assert.ok(callbackPathEntry, 'B119 callback fixture must issue its protected callback path entry');
+  const callbackPathUpdate = updateX4UiEditorPathState(
+    undefined,
+    callbackSelected.pathCatalog,
+    callbackPathEntry.id,
+    callbackSelected.pathCatalogAuthority,
+  );
+  assert.equal(callbackPathUpdate.status, 'accepted', 'B119 callback owner-issued protected path must reconcile');
+  const callbackExpanded = projectX4UiEditorSession({
+    workspace: callbackWorkspaceValue,
+    corpus: canonical,
+    profile: { width: 100, height: 80, uiScale: 1 },
+    selection: callbackSelection,
+    paths: callbackPathUpdate.paths,
+    pathBinding: callbackSelected.pathBinding,
+    pathCatalogAuthority: callbackSelected.pathCatalogAuthority,
+  });
+  const callbackExpandedProgramResult = callbackExpanded.preview.program;
+  assert.ok(callbackExpandedProgramResult && callbackExpandedProgramResult.status !== 'refused', 'B119 selected callback fixture must retain its Layout program');
+  const callbackExpandedProgram = callbackExpandedProgramResult.program;
+  const callbackExpandedInvocation = callbackExpandedProgram.localExpansion?.invocations.find(invocation => invocation.source.start.line === 11);
+  const callbackHelperOperation = callbackExpandedProgram.operations.find(operation => operation.source.start.line === 2);
+  assert.equal(callbackExpandedInvocation?.status, 'expanded', 'B119 selected callback helper must be expanded through the owner-issued path');
+  assert.equal(callbackExpandedInvocation?.previewPathSelectionIds.length, 1, 'B119 selected callback helper must retain one exact path selection');
+  assert.equal(callbackHelperOperation?.status, 'applied', 'B119 selected callback helper operation must be applied');
+  assert.equal(callbackHelperOperation?.localExpansion?.invocationId, callbackExpandedInvocation?.id, 'B119 helper operation must retain its expansion invocation provenance');
+  assert.deepEqual(callbackExpandedProgram.profile.localExpansion, { maxDepth: 4, maxInvocations: 64 });
+  assertFrozenGraph(callbackExpandedProgram.profile.localExpansion);
+  const callbackSceneResult = callbackExpanded.preview.scene;
+  assert.ok(callbackSceneResult && callbackSceneResult.status !== 'refused', 'B119 selected callback fixture must reach Scene output');
+  const callbackScene = callbackSceneResult.scene;
+  const callbackHelperText = callbackScene.texts.find(text => text.content === 'CALLBACK_HELPER');
+  const callbackDirectText = callbackScene.texts.find(text => text.content === 'CALLBACK_DIRECT');
+  assert.ok(callbackHelperText && callbackDirectText, 'B119 selected callback Scene must expose direct and helper text anchors');
+  assert.equal(callbackHelperText.source.start.line, 2, 'B119 helper Scene text must retain helper source provenance');
+  assert.equal(callbackScene.widgets.some(widget => widget.primaryContent === 'CALLBACK_HELPER'), true, 'B119 selected callback Scene must expose the helper widget');
+  assert.ok(callbackExpanded.paint && callbackExpanded.paint.status !== 'refused', 'B119 selected callback fixture must reach Paint output');
+  const callbackPaintCommands = callbackExpanded.paint.plan.layers.flatMap(layer => layer.commands);
+  assert.equal(callbackPaintCommands.some(command => command.kind === 'glyph-alpha-blit' && command.textId === callbackHelperText.id), true, 'B119 selected callback Paint must emit a helper glyph command');
+  assert.equal(callbackScene.texts.length > (callbackSelected.preview.scene && callbackSelected.preview.scene.status !== 'refused' ? callbackSelected.preview.scene.scene.texts.length : 0), true, 'B119 helper expansion must materially increase visible Scene text');
+  assert.equal(callbackPaintCommands.length > 0, true, 'B119 helper expansion must materially emit Paint commands');
+  const callbackCallerOverride = projectX4UiEditorSession({
+    workspace: callbackWorkspaceValue,
+    corpus: canonical,
+    profile: { width: 100, height: 80, uiScale: 1, localExpansion: { maxDepth: 1, maxInvocations: 1 } } as unknown as X4UiEditorSessionInput['profile'],
+    selection: callbackSelection,
+    paths: callbackPathUpdate.paths,
+    pathBinding: callbackSelected.pathBinding,
+    pathCatalogAuthority: callbackSelected.pathCatalogAuthority,
+  });
+  const callbackOverrideProgram = callbackCallerOverride.preview.program;
+  assert.ok(callbackOverrideProgram && callbackOverrideProgram.status !== 'refused', 'B119 caller override fixture must retain its Layout program');
+  assert.deepEqual(callbackOverrideProgram.program.profile.localExpansion, { maxDepth: 4, maxInvocations: 64 }, 'B119 caller localExpansion data must not override fixed public limits');
+  assert.equal(hasOwn(callbackCallerOverride.normalizedProfile, 'localExpansion'), false, 'B119 caller localExpansion data must not enter the normalized public profile');
+  const revokedFailSafeError = Proxy.revocable({}, {});
+  revokedFailSafeError.revoke();
+  let hostileFailSafeCorpusReads = 0;
+  const hostileFailSafeCorpus = new Proxy({}, {
+    get: () => {
+      hostileFailSafeCorpusReads += 1;
+      throw revokedFailSafeError.proxy;
+    },
+  });
+  const hostileFailSafeInput = {
+    workspace: callbackWorkspaceValue,
+    profile: { width: 100, height: 80, uiScale: 1 },
+    selection: callbackSelection,
+    corpus: hostileFailSafeCorpus,
+  } as Record<string, unknown>;
+  const failSafeSession = projectX4UiEditorSession(hostileFailSafeInput as unknown as X4UiEditorSessionInput);
+  assert.equal(hostileFailSafeCorpusReads > 0, true, 'B119 fail-safe fixture must make the first preview pipeline call touch the bounded hostile corpus proxy');
+  assert.equal(failSafeSession.status, 'needs-selection', 'B119 hostile preview input must enter the public fail-safe session projection without leaking the failed selection');
+  assert.equal(failSafeSession.preview.selection.status, 'needs-selection', 'B119 preview catch fallback must refuse the hostile selected call and return the safe unselected projection');
+  assert.deepEqual(failSafeSession.preview.profile.layout.localExpansion, { maxDepth: 4, maxInvocations: 64 }, 'B119 fail-safe preview layout profile must retain the fixed localExpansion limits');
+  assertFrozenGraph(failSafeSession.preview.profile.layout.localExpansion);
+  assert.equal(failSafeSession.gameTruth, X4_UI_EDITOR_SESSION_GAME_TRUTH);
+  assert.equal(failSafeSession.gameVerified, false);
   const noSelectionInput: X4UiEditorSessionInput = { workspace: originalWorkspace, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE };
   const noSelection = projectX4UiEditorSession(noSelectionInput);
   assert.equal(noSelection.gameTruth, X4_UI_EDITOR_SESSION_GAME_TRUTH);

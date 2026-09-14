@@ -4287,3 +4287,884 @@ Lane: `FULL`
 
 - **Triggered parent-side tooling AAR:** two trusted-read loader attempts failed locally because `atob` and then `TextEncoder` were unavailable; a Windows `ReadAllText` exact-character-count loader succeeded before any Google write. A metadata-fields probe including an unsupported raw Docs `url` returned `400` and was corrected by omitting `url`. A read-only PowerShell Git probe initially parsed `@{upstream}` as a hash literal and succeeded after quoting. These are tooling events, not product/runtime evidence.
 - **Suggested commit title:** `docs(b119): close same-state parity specification readbacks`.
+
+## 2026-09-09 CONTINUATION — SPECIFIED exact protected UI callback analysis
+
+Status: `SPECIFIED` (overall B119 remains `IN_PROGRESS / PARTIAL`)
+
+Task: Specify the later implementation and test work for the reproduced immediate protected-callback analysis gap in the exact AI Influence communication surface. This append changes no production or test code.
+
+Lane: `FULL`
+
+### PLAN
+
+- **Bounded unit:** later extend the existing call-model -> Layout -> Scene/Paint projection so one narrowly admitted protected callback can be replayed as a conditional preview path under its owning `comm.display` target.
+- **Observed versus intended:** the reproduced facts are recorded in BASELINE and RECONCILE. The callback-path rules and acceptance contract below are intended design, not current behavior or runtime proof.
+- **In scope:** the exact global `pcall(function() ... end)` form, its source-bound preview-path authority, causal call-model/Layout/Scene/Paint tests, the exact configured `aic_comm` `comm.display` regression, deterministic rejection cases, and preservation of `Not verified in game`.
+- **Out of scope:** any new callback/scenario engine; arbitrary Lua execution; source, mod, game, deploy, release, runtime, permission, or external-record changes; loop replay beyond the admitted callback body; and claims of runtime callback success or in-game verification.
+- **Risks and authorization boundary:** permissive callback admission could leak sibling paths, misrepresent protected execution, or create false visual confidence. This specification grants no runtime or game permission and authorizes no protected-state mutation.
+- **Rollback/checkpoint:** if later validation fails, revert only the later owned implementation/test patch and preserve the current projection; do not alter the supplied source or normalize unrelated work.
+- **Acceptance contract:** a fail-first portable callback fixture must first demonstrate the missing body, then a causal call-model + Layout + Scene/Paint proof must pass. The exact configured `aic_comm` `comm.display` must expose its previously absent `drawCorrespondent`, `drawTerms`, `drawTranscript`, `drawInput`, and `drawLeverage` body/local invocations and materially increase sample/loop/operation evidence. Post-repair exact counts must be frozen by the regression test from observed output, never invented in this plan. The authority must be deterministic, deep-frozen, serializable, source/target-bound, mutually exclusive, and free of sibling-path leakage. Unsupported forms fail closed. Source remains unmutated and preview state remains `Not verified in game`.
+- **Required validation and evidence:** run the fail-first fixture, causal call-model/Layout/Scene/Paint tests, exact `aic_comm` regression, negative-path and authority-integrity tests, and the record-level checks listed in VALIDATE. Later implementation evidence must record the observed post-repair counts; this specification creates no evidence artifact.
+
+### BASELINE
+
+- **Revision:** repository `HEAD` is `93c9af111d63ca77c99dee11f21882c4073bcda6`; unrelated modified/untracked files remain outside this append's ownership.
+- **Reproduced source:** `F:\DEV_ENV\projects\Mods\X4Mods\x4_ai_influence\ui\addons\ai_influence_chat\aic_comm.lua`, SHA-256 `5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E`.
+- **[REPRODUCED] source shape:** `comm.display` calls `drawCorrespondent`, `drawTerms`, `drawTranscript`, `drawInput`, and `drawLeverage` inside the exact `pcall(function() ... end)` body.
+- **[REPRODUCED] current projection:** the call model treats anonymous `FunctionDeclaration` arguments as static function values and does not traverse their bodies. The exact configured projection exposes only the title shell: `14` operations, `4` path entries, `0` loop entries, and `2` samples.
+- **Current authority:** `x4UiLayoutProgram` already has source-bound mutually-exclusive preview-path catalogs/selections and a separate narrow exact `pcall` wrapper matcher for local `scaleFont`; these are the existing mechanisms to preserve and extend.
+
+### RECONCILE
+
+- **Causal gap:** the missing evidence begins at callback-body analysis, so Layout cannot consume the absent body calls and Scene/Paint cannot prove their downstream causal materialization. This is a projection gap, not evidence that the protected callback succeeds at runtime.
+- **Existing capability reused:** reuse the existing preview-path authority and its source/target/profile identity, mutual exclusion, stale-clearing, and preview-only semantics. Do not create a parallel scenario or callback system. Preserve the existing local font-wrapper semantics.
+- **Intended admission rule:** only an exact, direct, unshadowed global `pcall(function() ... end)` with one anonymous zero-parameter, non-vararg callback and no forwarded arguments may expose the callback body as a conditional preview path under the owning target. That path means protected-body normal/success preview only; it never proves runtime success.
+- **Fail-closed boundary:** unsupported or shadowed/rebound/global-environment-mutated `pcall`; named or dynamic callbacks; callback parameters or varargs; forwarded arguments; malformed AST; nested or recursive unsupported forms; and limit exhaustion must all refuse or omit the body without false success. An unselected arm must not apply, and no sibling target/path may receive the callback's operations, samples, or loops.
+- **Plan delta:** this is a new SPECIFIED subunit only. No capability-map, source, game, mod, deploy, release, or runtime delta is claimed.
+
+### IMPLEMENT (PENDING)
+
+- No implementation has begun. The later worker must change only the explicitly assigned implementation/test scope, keep the current source projection available on failure, and add no callback/scenario engine.
+
+### VALIDATE (PENDING)
+
+- First run the portable fixture in fail-first form and retain the red assertion showing the callback body is absent; then implement and rerun it through call model, Layout, Scene, and Paint with a causal proof.
+- Run the exact configured `aic_comm` `comm.display` regression. Assert presence of the five previously absent body/local invocations and material increases in evidence, but freeze exact post-repair counts from the test's observed result.
+- Run negative checks for every fail-closed form named in RECONCILE, including no sibling path leakage, plus deterministic/deep-frozen/serializable authority checks and preservation of local `scaleFont` wrapper behavior.
+- Assert source non-mutation against the supplied source identity and retain `Not verified in game`; no runtime, game, mod, deploy, release, or external validation is applicable to this records-only append.
+- Run `git diff --check -- docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`; run `git diff --name-only` and confirm only the owned plan path is shown for this work; read back this file with `rg`/targeted reads for `SPECIFIED`, `pcall(function() ... end)`, `Not verified in game`, `fail-first`, and `IN_PROGRESS / PARTIAL`.
+
+### REVIEW (PENDING)
+
+- Re-read the supplied work order and this append against every observed/intended distinction, exact admission rule, fail-closed case, authority invariant, rollback boundary, no-mutation constraint, and acceptance test. Confirm no post-repair counts were pre-invented, no runtime permission was implied, and the historical plan remains unchanged except for this append.
+
+### CLOSE (PENDING)
+
+- **Status:** `SPECIFIED`; no implementation, test, runtime, or completion claim. Overall B119 remains `IN_PROGRESS / PARTIAL`.
+- **Remaining concerns:** the causal repair, exact post-repair counts, negative-path coverage, and real rendered/in-game behavior remain unvalidated. The protected preview body must not be reported as runtime success, and `Not verified in game` remains required.
+- **Suggested later commit title:** `feat(b119): model exact protected UI callbacks`.
+
+### AAR
+
+- **Outcome:** specification-only; implementation and task-level validation are pending, so no new runtime or product lesson is banked.
+- **Sustain:** keep preview-path authority source-bound, immutable, mutually exclusive, and separate from game truth.
+- **Improve work/approach:** make the fail-first fixture and causal proof part of the same later patch so a green downstream render cannot hide an absent call-model body.
+- **Improve tools:** freeze observed counts in the regression oracle and retain bounded rejection evidence for every unsupported callback form.
+- **Highest-risk evidenced weakness:** the current title-shell projection can look structurally valid while silently omitting all protected-body evidence; the later causal and negative tests must prevent that false-success state.
+- **Boundary:** no source, test, mod, game, deploy, release, runtime, external record, or Git state was changed by this append.
+
+## 2026-09-09 COMPLETED — protected-callback analysis close
+
+Status: `PARTIAL / BLOCKED-ON-NEXT-UNIT` (overall B119 remains `IN_PROGRESS / PARTIAL`)
+
+Task: Close the bounded protected-callback analysis unit and record the exact integration seam that prevents the
+public X4 UI editor session from consuming its existing local-helper expansion.
+
+Lane: `FULL`
+
+### IMPLEMENT
+
+- **Retained candidate changes:** only `src/lib/x4UiCallModel.ts`, `src/lib/x4UiCallModel.selftest.ts`, and
+  `src/lib/x4UiLayoutProgram.selftest.ts` remain changed for this unit. `src/lib/x4UiScene.selftest.ts` was
+  restored clean and is not part of the retained change set.
+- The call model now records all five protected-body local invocations — `drawCorrespondent`, `drawTerms`,
+  `drawTranscript`, `drawInput`, and `drawLeverage` — under the exact line-530 source-bound conditional path.
+- No arbitrary Lua is executed. No source, mod, game, deploy, release, external record, or runtime state was
+  changed, and no commit has been made.
+
+### VALIDATE
+
+- **Fail-first:** `103/104`, as expected; the callback body was absent before the retained repair.
+- **Call model selftest:** `111/111` passed.
+- **Layout selftest:** `750/751` with one intentional skip passed; the skip is retained as intentional, not a
+  product-green signal.
+- **Scene selftests:** normal and strict both reported `178/179`; both fail the unchanged exact COMM-unprovided
+  oracle, with `30` observed gaps versus `24` expected. This failed oracle is accepted blocker evidence, not a
+  product green or runtime-success claim.
+- **Static checks:** typecheck passed; exact ESLint passed; diff-check passed.
+- **Protected source identity:** exact `aic_comm.lua` SHA-256 remained
+  `5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E`.
+- **Runtime boundary:** no game or runtime validation was performed. Preview remains `Not verified in game`.
+- **Git boundary:** no commit was made. Unrelated dirty files remain outside this unit's ownership.
+
+### REVIEW
+
+- The callback-body analysis requirement is implemented and evidenced at the call-model layer, while the required
+  downstream public Scene/Paint result is not green.
+- **[REPRODUCED] downstream seam:** `src/lib/x4UiEditorSession.ts` `previewFor` constructs the preview profile
+  without `localExpansion`; `buildX4UiPreviewProfile` in `x4UiPreviewPipeline.ts` includes `localExpansion` only
+  when supplied. Therefore the mounted/public editor cannot expand the five helpers even though the call model
+  records them under the selected conditional path.
+- The retained checks preserve the source-bound conditional authority and do not execute arbitrary Lua. The exact
+  unchanged COMM oracle failure prevents a `VERIFIED` close.
+
+### CLOSE
+
+- **Status:** `PARTIAL / BLOCKED-ON-NEXT-UNIT`; the protected-callback analysis is closed at its current layer, but
+  the public editor integration remains blocked on the next specified unit. Overall B119 remains
+  `IN_PROGRESS / PARTIAL`.
+- **Exact changed files:** `src/lib/x4UiCallModel.ts`, `src/lib/x4UiCallModel.selftest.ts`, and
+  `src/lib/x4UiLayoutProgram.selftest.ts` only; `src/lib/x4UiScene.selftest.ts` is clean.
+- **Deliberately not changed:** editor-session wiring, preview-pipeline behavior, unrelated production/tests,
+  arbitrary-Lua execution, source/mod/game/config/deploy/release/runtime state, external records, and Git state.
+- **Rollback:** if the next unit is red, roll back only that unit's owned implementation/test changes; preserve this
+  analysis and its blocker evidence.
+- **Remaining concerns:** public mounted preview still drops `localExpansion`; exact post-integration operation,
+  path, sample, loop, and visible Scene/Paint counts are not yet observed; and no game truth is established.
+
+### AAR
+
+- **Triggers:** the exploratory normal and strict Scene attempts failed their unchanged exact COMM-unprovided oracle;
+  the analysis also exposed the downstream `previewFor` to `buildX4UiPreviewProfile` `localExpansion` drop. These
+  are non-clean events and are retained as evidence.
+- **Sustain:** keep the callback admission source-bound and conditional, reuse the existing expansion authorities,
+  and separate preview evidence from game truth.
+- **Improve work / approach:** make the next TDD fail-first begin at public `projectX4UiEditorSession`, so a green
+  call-model result cannot conceal a dropped integration field. Freeze only observed post-repair counts after the
+  public path and required source-issued authorities are exercised.
+- **Improve tools:** treat both normal and strict Scene oracle output as a required blocker signal and trace profile
+  construction through the public session before interpreting downstream counts. Do not bank an unverified
+  exploratory procedure as a skill.
+- **Highest-risk evidenced weakness:** a callback can be represented in the call model while the mounted editor
+  silently omits its bounded local expansion, producing a structurally plausible but incomplete preview.
+- **Global/project lessons banked:** none outside this durable plan; no unverified procedure is promoted to a skill.
+
+## 2026-09-09 CONTINUATION — SPECIFIED public X4 UI editor local-helper expansion
+
+Status: `SPECIFIED` (overall B119 remains `IN_PROGRESS / PARTIAL`)
+
+Task: Wire the existing bounded local-helper expansion into both normal and fail-safe public
+`projectX4UiEditorSession` preview construction so the already-admitted exact protected callback can materialize
+its five source-bound helper calls downstream.
+
+Lane: `FULL`
+
+### PLAN
+
+- **Bounded unit:** change the public editor session's preview-profile construction to pass the fixed,
+  source-owned `localExpansion` `{maxDepth:4,maxInvocations:64}` through both normal and fail-safe construction
+  paths. The limits are not caller-controlled in this unit.
+- **Likely write scope:** production is likely `src/lib/x4UiEditorSession.ts` only. Tests are likely
+  `src/lib/x4UiEditorSession.selftest.ts` and `src/lib/x4UiScene.selftest.ts`; touch
+  `src/lib/x4UiPreviewPipeline.selftest.ts` only if an existing contract requires coverage. Do not prescribe
+  unrelated changes or modify the retained callback/model/layout implementation for convenience.
+- **Assumptions and unresolved facts:** `x4UiPreviewPipeline` already conditionally consumes `localExpansion`,
+  and `x4UiLayoutProgram` already owns the bounded expansion and preview-path/sample/loop authorities. Exact
+  post-repair operation, path, sample, loop, and visible Scene/Paint counts are unknown and must be frozen only
+  from observed test output.
+- **Authoritative references:** this plan's protected-callback close and current retained selftests; the accepted P3
+  evidence in `docs/plans/2026-08-10-b119-x4-ui-editor-linter-first.md` using `maxDepth=4` and
+  `maxInvocations=64` against exact real sources; the existing `X4UiPreviewPipeline` and `X4UiLayoutProgram`
+  contracts; and the unchanged exact `aic_comm.lua` source identity recorded above.
+- **In scope:** public normal/fail-safe preview wiring, causal editor-session/Scene/Paint coverage, fixed-limit and
+  authority-integrity negatives, deterministic output checks, and preservation of `Not verified in game`.
+- **Out of scope:** a caller-exposed expansion control; a new expansion/callback engine; arbitrary Lua execution;
+  weakened oracles; source/mod/game/config/deploy/release/runtime/external-record changes; or any game-truth,
+  universal-fidelity, or in-game completion claim.
+- **Risks and authorization boundaries:** profile construction can lose limits or stale/conflicting authorities,
+  leak a sibling path, or create false visual confidence. This specification authorizes only the bounded future
+  implementation/test scope above; it authorizes no external or protected-state mutation.
+- **Rollback/checkpoint:** if any required test or oracle is red, roll back only the next unit's owned production and
+  test changes. Preserve unrelated dirty files and preserve the current callback/model/layout result.
+- **Acceptance criteria:**
+  - TDD starts from public `projectX4UiEditorSession`; fail-first proves that the exact callback body remains
+    unselected/conditional and that the public session currently lacks the downstream local expansion.
+  - After repair, exact owner-issued line-530 path selection exposes all five helpers and, after the required
+    source-issued paths, samples, and loops are selected, materially increases operations and visible Scene/Paint
+    output. Freeze exact counts only from observed post-repair output.
+  - Both normal and fail-safe public preview construction carry the fixed source-owned limits; callers cannot
+    override or inject different limits.
+  - Existing `X4UiPreviewPipeline`/`X4UiLayoutProgram` expansion, preview-path/sample/loop authorities, cache
+    signatures, stale clearing, and source/target/profile binding remain the authorities and continue to behave
+    deterministically.
+  - No arbitrary Lua executes, no sibling path receives leaked evidence, malformed/conflicting authority fails
+    closed, output is deterministic/frozen/serializable, the exact source remains unchanged, and preview remains
+    `Not verified in game`.
+- **Required validation and negative path:** run the serial checks in VALIDATE, including fixed-limit presence on
+  normal and fallback paths, caller override/injection rejection, stale/conflicting/malformed path/sample/loop
+  authority rejection, no sibling leakage, deterministic/frozen/serializable output, unchanged source, and the
+  unchanged Scene oracle boundary. No weakened oracle or pre-invented count is acceptable.
+- **Evidence locations:** this durable plan, the owned implementation/test diff, and the exact command output from
+  the required selftests and static/oracle checks. No external record or new evidence path is part of this
+  specification.
+
+### BASELINE
+
+- **Revision:** repository `HEAD` is `93c9af111d63ca77c99dee11f21882c4073bcda6`; unrelated dirty files exist.
+- **Current retained state:** call model `111/111`; Layout `750/751` with one intentional skip; normal and strict
+  Scene `178/179`, each blocked by the unchanged exact COMM-unprovided oracle at `30` observed gaps versus `24`
+  expected; typecheck, exact ESLint, and diff-check passed.
+- **Current protected source:** exact `aic_comm.lua` SHA-256 is
+  `5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E`.
+- **Current causal state:** `x4UiEditorSession.ts` `previewFor` omits `localExpansion`; `buildX4UiPreviewProfile`
+  includes it only when supplied, so the public/mounted editor cannot expand the five helpers. No game or runtime
+  validation exists, no commit has been made, and preview remains `Not verified in game`.
+
+### RECONCILE
+
+- **Resources and readers/writers searched:** the public `projectX4UiEditorSession` preview construction and its
+  normal/fail-safe profile paths; `buildX4UiPreviewProfile`; existing `X4UiLayoutProgram` local expansion;
+  preview-path/sample/loop authorities; cache signatures; stale clearing; source/target/profile binding; and the
+  exact line-530 source-bound conditional path.
+- **Existing capability reused:** the accepted P3 bounded expansion authority (`maxDepth=4`, `maxInvocations=64`)
+  and the existing X4 UI preview/layout pipeline. No parallel engine or caller-facing control is introduced.
+- **Couplings checked:** both profile-construction paths must carry the same fixed limits; cache signatures and stale
+  clearing must not retain conflicting authority; source/target/profile identity must remain bound; selected path,
+  sample, and loop evidence must not cross sibling targets.
+- **Capability-map delta:** none; this records-only append changes no capability map or other project state.
+- **Plan changes:** the failed Scene oracle is retained as the callback unit's blocker, and the next unit is narrowed
+  to the existing `localExpansion` handoff in the public editor session rather than changing the expansion engine.
+
+### IMPLEMENT (PENDING)
+
+- No implementation has begun for this specified unit. The eventual worker must limit writes to the likely
+  editor-session production/test scope above and add `x4UiPreviewPipeline.selftest.ts` only when an existing
+  contract demonstrably requires it.
+
+### VALIDATE (PENDING)
+
+- Run serially: callback/model selftests and Layout selftests; `x4UiEditorSession.selftest.ts`; and
+  `x4UiPreviewPipeline.selftest.ts` only if affected or required by an existing contract; then normal and strict
+  Scene selftests; typecheck; exact ESLint; diff-check; exact `aic_comm.lua` source hash; `graphify update .` after
+  code changes; and `npm run precommit:check` before any future commit. This specification itself makes no code,
+  graph, or commit change.
+- The editor-session tests must start fail-first from public `projectX4UiEditorSession`, assert the unselected/
+  conditional callback and the dropped local expansion, then assert fixed-limit normal/fallback wiring, no caller
+  override/injection, required source-issued path/sample/loop selection, all five helper invocations, material
+  operation and visible Scene/Paint increases, deterministic/frozen/serializable output, and no sibling leakage.
+- Preserve the exact source hash and `Not verified in game`; the unchanged COMM-unprovided Scene oracle remains
+  blocker evidence if it still fails. No game/runtime validation is claimed by this specification.
+
+### REVIEW (PENDING)
+
+- Re-read this work order and the prior callback close against every owned-path, fixed-limit, normal/fallback,
+  authority, cache, stale-clearing, binding, TDD, negative-path, source-identity, no-arbitrary-Lua, no-game-truth,
+  rollback, and serial-validation requirement.
+- Confirm no post-repair counts were invented, no caller control or sibling leakage was introduced, no oracle was
+  weakened, no unrelated file was prescribed, and the public integration is not described as in-game verified.
+
+### CLOSE (PENDING)
+
+- **Status:** `SPECIFIED`; no implementation or completion claim. Overall B119 remains `IN_PROGRESS / PARTIAL`.
+- **Remaining concerns:** the public normal/fail-safe handoff, fixed-limit integrity, exact observed post-repair
+  counts, downstream Scene/Paint materialization, and the unchanged Scene oracle all remain pending. Game truth is
+  not verified.
+- **Suggested later commit title:** `feat(b119): wire bounded local helper expansion into X4 UI editor session`.
+
+### AAR
+
+- **Outcome:** specification-only continuation; implementation and task-level validation are pending. The triggered
+  callback-analysis AAR above remains the authoritative record for the failed exploratory Scene attempts and the
+  discovered dropped-`localExpansion` seam.
+- **Record-level validation trigger:** the first targeted marker readback used regex syntax for the literal fixed-limit
+  braces and exited `1`; a fixed-string retry exited `0`. No file or project state changed because of the failed
+  probe.
+- **Sustain:** pass one fixed source-owned expansion authority through every public preview construction path and
+  keep preview/layout evidence separate from game truth.
+- **Improve work / approach:** make public-session fail-first causal, then exercise source-issued path/sample/loop
+  selections before freezing any counts.
+- **Improve tools:** retain normal/strict oracle output, source hash, deterministic serialization/freeze checks, and
+  exact diff evidence as separate gates; do not bank an unverified procedure as a skill.
+- **Highest-risk evidenced weakness:** a fail-safe profile path can silently diverge from the normal path and omit the
+  bounded expansion, leaving the mounted editor incomplete while lower-layer tests remain green.
+- **Global/project lessons banked:** none outside this plan; no external/project state writes are authorized by this
+  specification.
+
+## 2026-09-09 COMPLETED — protected-callback plus public local-expansion close
+
+Status: VERIFIED for this bounded unit only. Overall B119 remains IN_PROGRESS / PARTIAL / Not verified in game.
+
+Task: Close the exact protected-callback authority repair and the public X4 UI editor local-expansion handoff that
+were just validated. This record close changes no production or test code.
+
+Lane: FULL
+
+### IMPLEMENT
+
+- The exact direct global pcall(function() ... end) callback path is now a conditional preview path under its owning
+  source/target authority. The call model bounds analysis at 32 callbacks and 256 callback-body AST nodes, preserves
+  the exact one-return Helper.scaleFont exclusion, protects pcall/rawget/rawset identities, and admits only the exact
+  direct unshadowed two-argument static-key rawget form as a read-only callback-authority read.
+- The public x4UiEditorSession preview profile now carries the fixed source-owned localExpansion
+  {maxDepth:4,maxInvocations:64} through both normal and catch/fail-safe construction paths. Callers cannot override
+  or inject different limits.
+- The whole-AST false-poisoning defect is repaired: static rawget(_G, staticKey) reads at exact aic_menu.lua lines
+  63, 155, 349, and 743 no longer reject the safe callback analysis. The repair restores six MENU records with
+  source lines/reasons, including RailStanding+pcall at line 389, RailTrust+pcall at line 391, and RailKnows+pcall at
+  line 418, while preserving empty and unselected path authority.
+- No arbitrary Lua execution, source/mod/game/config/save/deploy/release mutation, or Git state mutation occurred.
+  The current implementation/test unit and this documentation close remain uncommitted; unrelated dirty files remain
+  outside this worker's ownership.
+
+### VALIDATE
+
+- Fail-first rawget-rebinding matrix: 116/117, exit 1. Fail-first rawset-rebinding matrix: 118/119, exit 1. These
+  intentional red-first assertions prove fail-closed behavior for assignments, function declarations, _G
+  member/index rebinding, aliased environments, rawset static/dynamic writes, and shadowed locals.
+- Independent parent CallModel selftest: 119/119, exit 0.
+- Independent parent EditorSession selftest: 23/23, exit 0. Color-owner matrix: 7/7.
+- Independent parent Layout selftest: 750/751, exit 0, with one intentional historical skip. Its PTY emitted
+  approximately 67,606,656 bytes / 17,163,808 tokens before truncation; this is recorded as a tooling/AAR problem,
+  not a product failure.
+- Independent parent Scene selftest: normal exit 0 and strict exit 0. The configured public-session census executed
+  MENU/HUB/COMM 3/3 in both modes.
+- Exact post-repair Layout counts: MENU 57 samples, 95 operations, 31 applied, 6 tables, 15 rows, 136 cells, and
+  296 gaps; HUB 11 samples, 19 operations, 13 applied, 2 tables, 2 rows, 4 cells, and 30 gaps; COMM 56 samples,
+  99 operations, 49 applied, 12 tables, 13 rows, 38 cells, and 342 gaps.
+- Exact COMM public-session Scene/Paint materialization: Scene 12 tables, 7 rows, 21 cells, 11 widgets, 14 texts,
+  97 glyphs, and 434 gaps; Paint 654 commands and 491 diagnostics; canRender=true; gameVerified=false. This is the
+  green exact source -> CallModel -> Layout -> Scene/Paint public-session chain, not game proof.
+- Static and source checks: parent typecheck exit 0; exact six-file ESLint exit 0; exact owned seven-path diff-check
+  exit 0 with only the plan's LF-to-CRLF warning; aic_menu.lua SHA-256
+  8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD; aic_comm.lua SHA-256
+  5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E.
+- Graphify update . exited 0. No tracked graphify delta exists; the refreshed queryable graph is 10,753 nodes,
+  27,112 links, and 345 communities. The initial count probe's missing edges field was corrected to links and is
+  recorded in the global workflow AAR, not treated as a product failure.
+- Not run in this bounded close: full precommit, full E2E, production build/package/install acceptance for this new
+  patch, rendered installed-host acceptance, deploy/C++ acceptance, same-state Forge/native pixel comparison, game,
+  release, or external record updates.
+
+### REVIEW
+
+Current subunit classification:
+
+- Done and evidenced: exact direct unshadowed protected pcall callback admission; 32-callback and 256-body-node
+  limits; one-return Helper.scaleFont exclusion; protected pcall/rawget/rawset identities; exact static-key rawget
+  read admission; fail-closed rawget/rawset rebinding and shadow matrices; and no arbitrary Lua execution.
+- Done and evidenced: restoration of the six source-owned MENU records, with safe rawget source lines 63/155/349/743
+  and callback records at 389/391/418 retained in the causal analysis.
+- Done and evidenced: fixed {maxDepth:4,maxInvocations:64} localExpansion through normal and fail-safe public session
+  preview construction, with no caller override or injection.
+- Done and evidenced: exact real-source public-session materialization through CallModel, Layout, Scene, and Paint;
+  the counts and canRender/gameVerified boundary above are frozen from observed output.
+- Done and evidenced: deterministic focused tests, negative-path rejection, source identity, graph refresh, and record
+  hygiene at the stated proof level.
+- Remaining: same-state Forge/native pixel comparison, installed-package acceptance for this new patch, full
+  precommit/full E2E/production build gates, deploy and universal C++ acceptance, twelve-reference/current-game
+  experience proof, and release acceptance.
+- Deliberately not claimed: overall B119 completion, arbitrary-Lua support, universal Helper/widget/C++ parity, or
+  in-game success. Preview remains Not verified in game.
+
+Fresh-eyes review found no required implementation correction after the supplied parent validation. The main
+remaining risk is proof-surface drift: a green public materialization can still differ from the native X4 frame until
+the same-state pair is captured and compared.
+
+### CLOSE
+
+- Status: VERIFIED for the protected-callback plus public local-expansion unit; overall B119 remains
+  IN_PROGRESS / PARTIAL / Not verified in game.
+- Changed implementation scope held by the parent: src/lib/x4UiCallModel.ts and src/lib/x4UiEditorSession.ts, with
+  their focused owner selftests; this worker changed only the seven named record paths.
+- Deliberately not changed: source mod files, corpus, game, config, saves, production/test implementation, graphify
+  output, package/release files, Git index/refs, GitHub, Notion, Google Drive, deploy state, and runtime state.
+- Rollback: the parent may revert only the current uncommitted implementation/test unit and these record additions;
+  unrelated dirty files and the exact source hashes above must be preserved.
+- Evidence boundary: exact source -> CallModel -> Layout -> Scene/Paint public-session materialization is green;
+  same-state Forge/native pixel comparison, installed acceptance for this patch, full gates, deploy/C++ acceptance,
+  and release remain open. No game proof follows.
+- Suggested commit title: feat(b119): wire protected callbacks through the X4 UI editor
+
+### AAR
+
+- Outcome and triggers: VERIFIED bounded close with a giant Layout diagnostic emission that required producer-side
+  filtering; the output truncation is a tooling problem, not a product failure. The first repo record diff-check also
+  found one extra blank line at the overwritten handoff EOF; it was removed and the check passed on rerun. No rollback
+  or protected-state write was needed.
+- Sustain: keep callback authority source-bound and conditional, keep trusted-builtin identity checks ahead of
+  authority admission, pass one fixed expansion authority through every public profile path, and carry semantic gap
+  receipts from source through CallModel, Layout, Scene, and Paint.
+- Improve work / approach: do not classify a whole file as poisoned because a static rawget read touches _G; first
+  distinguish the exact safe read form from rebinding, writes, escapes, aliases, and shadowing. Freeze counts only
+  from the complete public-session output that caused the downstream materialization.
+- Improve tools: filter huge diagnostics at the producer boundary and preserve a compact receipt with exact totals,
+  rather than allowing a PTY to emit approximately 67,606,656 bytes / 17,163,808 tokens before truncation. Readback
+  marker probes must normalize or match stored capitalization; two case-sensitive probes missed capitalization and
+  were corrected without any file or product-state mutation.
+- Highest-risk evidenced weakness: public preview is now causally complete at its bounded source-analysis layer but
+  remains a preview authority, so same-state native comparison is still required before any visual or engine claim.
+- Global/project lessons banked: the causal false-poisoning, trusted-builtin identity, and semantic-gap-receipt
+  lessons are appended to the project AAR; producer filtering, command-payload quoting, and graph schema-key
+  verification are appended to the global workflow AAR. One next-numbered UI gotcha is appended separately.
+
+## 2026-09-10 COMPLETED — fresh-eyes fail-closed authority-flow hardening follow-up
+
+Status: VERIFIED for this bounded records close and the supplied authority-flow hardening checkpoint. Overall B119
+remains IN_PROGRESS / PARTIAL / Not verified in game.
+
+Task: Record the fresh-eyes follow-up that closed nine previously escaping protected-callback authority-flow families
+in the parent-owned CallModel implementation and selftest. This worker changed only the seven named durable record
+paths; it did not read or edit production source/test paths.
+
+Lane: FULL
+
+### PLAN
+
+- **Bounded unit:** update the existing B119 protected-callback/public-local-expansion close with the new causal
+  authority-flow reproduction, bounded repair, receipts, unchanged materialization counts, and remaining proof gates.
+- **Assumptions:** HEAD remains `93c9af111d63ca77c99dee11f21882c4073bcda6`; the parent-owned implementation/test paths are
+  uncommitted; the exact MENU and COMM source identities remain the supplied hashes; and overall B119 remains
+  `IN_PROGRESS / PARTIAL / Not verified in game`.
+- **In scope:** the seven owned plan, backlog, handoff, capability-map, project-AAR, global-AAR, and UI-gotcha records.
+- **Out of scope:** production or test edits by this worker, source/mod/corpus/game/config/save/deploy/package/release
+  files, graphify output, Git index/refs, GitHub, Notion, Drive, runtime state, protected state, and external mutation.
+- **Risks and authorization boundaries:** documentation must preserve prior historical claims, distinguish supplied
+  implementation evidence from this worker's record checks, and retain the preview/game truth boundary. No protected
+  or external write is authorized.
+- **Rollback/checkpoint:** revert only this uncommitted seven-record delta if required; preserve unrelated dirty files,
+  the parent implementation/test unit, the prior record history, and both exact source hashes.
+- **Acceptance criteria:** all nine escaping families, the `122/123` fail-first and `123/123` green receipts, bounded
+  repair behavior, unchanged materialization counts, focused parent receipts, tooling AAR events, open-gate boundary,
+  capability-map strengthening, gotcha `#66`, and current handoff are recorded without an overall-completion or
+  universal-parity claim.
+- **Required validation and negative path:** exact-path diff checks for all seven owned paths, targeted marker readback,
+  and exact touched-path reconciliation. The supplied red-first causal matrix and green repair receipts are retained as
+  the negative/positive evidence; no product gate is rerun in this records-only worker.
+- **Evidence locations:** this plan, the current session handoff, the existing B119 capability delta, the two AAR logs,
+  and the UI gotcha quick reference.
+
+### BASELINE
+
+- **Revision/version:** `93c9af111d63ca77c99dee11f21882c4073bcda6`.
+- **Existing changes/failures/runtime state:** the seven record paths already contain the prior protected-callback /
+  public-local-expansion close at CallModel `119/119`; the three repository records and parent implementation/test
+  changes are uncommitted. The exact source hashes remain MENU
+  `8390F0B0D5D51F95F7A4005D5F8A023A2A5F3646E9C578DE8A98D6719A62C8BD` and COMM
+  `5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E`.
+
+### RECONCILE
+
+- **Resources and readers/writers searched:** the existing B119 plan close, B119 backlog item, current handoff, the
+  2026-09-09 capability-map delta, both AAR ledgers, and the numbered UI gotcha cards. The parent-owned source/test
+  paths were not read; their exact supplied receipts are recorded as dependencies.
+- **Existing capability reused:** the existing exact protected-callback authority and public local-expansion path;
+  no parallel analyzer, callback, or preview system is introduced.
+- **Couplings checked:** CallModel authority admission, the parent selftest, public-session Layout/Scene/Paint counts,
+  source identity, preview truth, handoff instructions, capability evidence, and AAR/gotcha numbering.
+- **Capability-map delta:** strengthen the existing 2026-09-09 exact protected-callback section in place; no new
+  capability-map section or separate delta.
+- **Plan changes:** the current close is extended from the prior 119-assertion checkpoint to the fresh-eyes nine-family
+  authority-flow follow-up, while all broader B119 gates remain open.
+
+### IMPLEMENT
+
+- **Actual bounded changes:** documented that the parent repair recognizes environment identity through logical
+  operands, canonical self references, and rawget self references, and replays direct local deferred functions under
+  a copied alias set with recursion protection. The repair remains conservative/fail closed and never executes
+  arbitrary Lua.
+- **Causal families reproduced:** deferred local closure capture after alias assignment; deferred local `pcall` rebind
+  after alias assignment; logical-expression environment flow through a call argument, return, and local alias; logical
+  environment in an index key and table-constructor key; canonical self references `_G._G`, `_G["_G"]`, `_ENV._G`,
+  and `_ENV["_G"]`; and `rawget(_G,"_G")` / `rawget(_ENV,"_G")` self references.
+- **Scope changes and reasons:** none. The production repair is bounded to the parent-owned
+  `x4UiCallModel.ts` and its selftest; this worker changed only the seven durable record paths.
+
+### VALIDATE
+
+- **Fail-first aggregate -> result -> evidence:** the new causal matrix first produced `122/123`, `allPassed=false`,
+  exit `1`; only the new causal matrix failed while prior tests and harmless controls remained green.
+- **Green aggregate -> result -> evidence:** after the bounded repair, CallModel produced `123/123`,
+  `allPassed=true`, exit `0`. Worker typecheck, exact two-file ESLint, exact two-file diff-check, narrow diff review,
+  and the supplied MENU/COMM source-hash checks passed.
+- **Parent focused receipts -> result -> evidence:** EditorSession `23/23` plus color-owner `7/7`; Layout exit `0`
+  with its one intentional skip; Scene `179/179` with configured MENU/HUB/COMM census `3/3`.
+- **Unchanged materialization -> result -> evidence:** Layout remains MENU `57/95/31/6/15/136/296`, HUB
+  `11/19/13/2/2/4/30`, and COMM `56/99/49/12/13/38/342` for samples/operations/applied/tables/rows/cells/gaps.
+  COMM Scene remains `12` tables, `7` rows, `21` cells, `11` widgets, `14` texts, `97` glyphs, and `434` gaps; Paint
+  remains `654/491`; `canRender=true`; `gameVerified=false`.
+- **Negative/rollback result:** the red-first causal matrix rejected the escaping forms before the green repair; no
+  arbitrary Lua executed and no rollback or protected-state write was needed.
+- **Tooling/AAR evidence:** a resumed prior Luna had three `apply_patch` attempts blocked by the PreToolUse hook,
+  `only observed gpt-5.6-luna may write implementation/source/test paths.` The child had lost observed Luna identity
+  after an app transition, changed nothing, and was closed. A fresh exact native Luna accepted writes and completed;
+  this is a triggered tooling AAR, not product evidence. A read-only worker `rg` for hash strings in owned files exited
+  `1` because those hashes were absent there; this was a search miss, not a hash failure. The parent repeated the known
+  unfiltered Layout-output mistake: test exit was `0`, but tool metadata reported about `15,090,281` output tokens
+  before truncation. Producer-side filtering remains required; this was not a product failure.
+- **Unavailable validation:** no heavy full precommit/E2E/build, install/package, runtime, game, protected-state,
+  same-state Forge/native Pair B, deploy/C++ acceptance, twelve-reference/current-game experience proof, or external
+  projection ran for this hardening follow-up.
+
+### REVIEW
+
+- **Requirement -> classification:** the nine escaping families, fail-first/green CallModel receipts, bounded repair,
+  unchanged counts, source hashes, focused parent receipts, and fail-closed/no-arbitrary-Lua boundary are done and
+  evidenced by the supplied checkpoint. The exact seven-path record checks are done by this worker.
+- **Open boundary:** same-state Forge/native Pair B, installed package acceptance for this patch, full precommit/E2E/
+  build, deploy/C++ acceptance, twelve-reference/current-game experience proof, and release acceptance remain open.
+- **Not claimed:** overall B119 completion, 1:1 or universal parity, arbitrary Lua support, game success, or any runtime
+  conclusion from the tooling events.
+- **Fresh-eyes finding:** parent review found no required implementation correction. The hardening is a bounded static
+  authority repair; preview remains `Not verified in game`.
+
+### CLOSE
+
+- **Status:** `VERIFIED` for this bounded documentation and supplied hardening checkpoint; overall B119 remains
+  `IN_PROGRESS / PARTIAL / Not verified in game`.
+- **Changed files:** the seven named durable record paths only; parent-owned source/test changes remain uncommitted and
+  unrelated dirty files are preserved.
+- **Deliberately not changed:** source, tests, mod, corpus, game, config, saves, deploy/runtime/install/package/release
+  state, graphify output, Git index/refs, GitHub, Notion, Google Drive, and any external projection.
+- **Evidence boundary:** exact source -> CallModel -> Layout -> Scene/Paint focused materialization is green at the
+  stated bounded level. Same-state, installed, full-gate, deploy/C++, twelve-reference/current-game, and release proof
+  remain open.
+- **Suggested commit title:** `feat(b119): wire protected callbacks through the X4 UI editor`
+
+### AAR
+
+- **Clean outcome or triggers:** triggered AAR. The resumed Luna identity loss, the hash-string search miss, and the
+  repeated unfiltered Layout emission required explicit recording; none is product-failure evidence.
+- **Sustain:** keep causal red-first matrices, copied alias sets with recursion protection, exact source identity, the
+  bounded CallModel -> Layout -> Scene/Paint receipt chain, and the `Not verified in game` boundary.
+- **Improve work/approach:** test authority escapes through aliases, logical operands, keys, self references, and
+  deferred locals as causal families; retain harmless controls and reject unsupported or rebinding forms at the owning
+  `pcall`.
+- **Improve tools:** preserve observed native worker identity across app transitions; keep producer-side diagnostic
+  filtering; distinguish a search miss from a failed hash assertion; keep exact-path record checks separate from
+  product gates; and correct wrapper syntax before treating a validation command as authoritative. The first combined
+  exact-path wrapper had a PowerShell status-label typo, was non-mutating, and was corrected before the passing rerun.
+- **Highest-risk evidenced weakness:** a static preview can remain causally complete while still differing from native X4
+  behavior; only the same-state Pair B and later experience gates can close that proof gap.
+- **Global/project lessons banked:** the project and global AAR entries and UI gotcha `#66` record the tooling and
+  authority-flow lessons; the capability map is strengthened in place with no new section/delta.
+
+## 2026-09-10 authorized execution checkpoint — stable 0.0.78
+
+Lane: FULL. Status: SPECIFIED for the next release execution batch; full B119 remains PARTIAL.
+Ken explicitly authorized the quoted stable-0.0.78 publish, exact installed-0.0.77 backup, installation and
+Forge reload write gate. The previous machine-state response remains Forge open, X4 stopped, YouTube ongoing;
+current process inspection confirms Antigravity open and X4 absent. No game/mod/save or workspace-switch approval.
+
+The bounded unit and ten-part acceptance contract immediately below are reused unchanged. Next batch:
+Luna edits only vscode-extension/package.json, release-notes.json and generated CHANGELOG.md; Astra independently
+reviews metadata, rebuilds/packages/probes/inspects, preserves and verifies exact installed rollback bytes,
+publishes once with an in-memory environment PAT, proves public byte parity, then installs/reloads and verifies.
+Publication collision or any red acceptance gate stops promotion. No pre-release and no republish.
+
+Baseline: HEAD 93c9af111d63ca77c99dee11f21882c4073bcda6; all six source hashes match
+test-results/b119-20260910-resumed-baseline.json. The three release owners are clean at 0.0.77; unrelated dirty
+paths and the empty Git index are preserved. Current automated gate receipts remain applicable to unchanged
+source. Existing package scripts/inspector and the primary plan supersede stale examples in PUBLISHING.md
+(historical counts, clean-tree assumption and token-on-argv sample). No new publisher or inspector is introduced.
+
+Evidence: test-results/b119-20260910-release-* command logs and
+dev-docs/b119-ai-influence-dogfood/installed-release-20260910/ for package/public/install and rollback receipts.
+Installed backup is recoverable and hash-verified before publish/install; failure restores 0.0.77 per contract.
+Native Pair B remains separately gated. Final commit/push and GitHub/Notion/Drive readbacks follow installed
+acceptance; issue 41 stays open. No capability-map delta at authorization. AAR will record the failed initial
+skill-path read and bounded output truncation as tooling events, not product failures.
+
+Publication transport reconciliation: the first CLI process crashed with 0xC0000409 and no success output;
+two direct public readbacks remained 404/latest0.0.77 and no publisher process remained. The already-installed
+Node24.19/libuv1.52.1 passed a read-only ovsx metadata control. The release receipt records one bounded same-byte
+retry using that runtime, guarded by an immediate absent-version check. Never retry a published/burned version;
+do not alter version/package bytes or acceptance gates. A second transport failure stops the sequence.
+
+### Rendered continuation checkpoint — 2026-09-10T09:27Z
+
+PARTIAL / desktop-input BLOCKED. Ken said "I switched the workspace, carry on". Fresh native host screenshot
+confirms x4 AiLive selected, x4_ai_influence open and build1.0.521; process census confirms installed0.0.78
+sidecar42308/supervisor35784 and no X4.exe. Source MENU/COMM hashes match prior receipt. Existing project1error
+and deployed drift are baseline, not new release findings. The existing three-menu contract was documented
+as resumed in RELEASE-RECEIPT.md before preview input; no new implementation scope or weakened gate.
+First Expert click was rejected because claude.exe covered Forge. One activation recovery reported user input;
+Astra stopped UI input. Workspace selection is done, but real Source Editor MENU/HUB/COMM evidence is still
+pending. No successful preview edit, source/mod/save write, rollback, Git or external projection. Leave Ken's
+selected workspace intact. No capability-map delta. AAR: desktop observation can become occluded before input;
+the cross-window guard prevented an unintended click. Need an uninterrupted Forge foreground interval, not
+repeated workspace permission. Detailed exact messages and source hashes are in the release receipt.
+
+### Authorized release execution close — 2026-09-10T09:09Z
+
+Status: PARTIAL acceptance / full B119 IN_PROGRESS, Not verified in game. Package/public/install/payload/runtime
+layers are VERIFIED; renderedMENU/HUB/COMM acceptance remains PENDING after Computer Use detected user input in
+Forge and Astra froze UI actions. No workspace switch/game/mod/save write or rollback occurred.
+
+Actual changes: native Luna changed only the three release metadata owners, then closed. Parent generated
+release/backup evidence and updated this plan, BACKLOG, SESSION-HANDOFF, release receipt and project AAR.
+Root build1848modules, stage-app, extension build, staged real-corpus probe16/16, inspector negatives13/13 and
+final2102-entry inspection pass. Package26380294bytes; SHA256E93F42D5DE7BF8D7340054FBBD59AAB96844B83531748244E1CF66CDC16AE844.
+Exact0.0.77 rollback2126files/72126013bytes verified before publication and installation. Independent public
+download matched bytes/hash; base/latest/direct routes converged0.0.78 by09:05:14Z. Never publish0.0.78 again.
+
+Antigravity CLI install and reload passed. One registry Forge0.0.78 entry; all2100payload files match publicVSIX;
+expected host __metadata and independently matched .vsixmanifest only. Managed newsidecar42308:55835 replaces
+old38224; corpus/config unchanged. Installed runtime-index oracles134/134green, exit0. Final09:09:42Z six installed
+config/state hashes and six source hashes unchanged; Git index empty. Current host accessibility showed
+build1.0.521 and Player_Elite_Escort, but occluded screenshots are NOT rendered acceptance.
+
+Review: metadata/build/security/negative/rollback/public/payload/runtime requirements done and evidenced;
+renderedMENU/HUB/COMM partial; nativePairB separate and not authorized; commit/push/remote parity and then
+GitHub41/Notion/Drive readbacks deferred to the existing post-rendered boundary. No capability-map delta.
+Suggested commit point remains feat(b119): wire protected callbacks through the X4 UI editor (not committed).
+
+Evidence: dev-docs/b119-ai-influence-dogfood/installed-release-20260910/RELEASE-RECEIPT.md and
+test-results/b119-20260910-release-*. AAR triggered by path probes, large read output, worker redirection,
+null aggregate/live DB hash gaps, first publication crash, registry latency and rejected multi-operation handoff
+patch. Sustain independent authority checks and exact scopes. Improve bounded reads/direct Luna instructions.
+Highest evidenced risk: treating CLI publication or backend success as public/visual truth; the separate gates
+prevented that false close. Project AAR banked at F:/StarForge/wiki/x4-forge/aar-log.md; no skill or Codex-memory
+mutation. Degradation checkpoint saved; fresh session for rendered/native acceptance unless Ken overrides.
+
+## 2026-09-10 SPECIFIED — stable `0.0.78` release/install acceptance for the current B119 patch
+
+Status: `SPECIFIED` for this documentation-only release-plan append. Overall B119 remains
+`IN_PROGRESS / PARTIAL / Not verified in game`.
+
+Task: Document the bounded stable `0.0.78` release/install acceptance sequence for the current
+protected-callback/public-local-expansion/authority-flow patch before any release-file mutation.
+This section authorizes no package, build, install, publish, runtime, game, external-record, or Git
+mutation in this documentation-only unit.
+
+Lane: `FULL`
+
+### PLAN
+
+- **Bounded unit:** after a fresh machine-state response and green broad gates, accept exactly one stable
+  `0.0.78` package containing the current reviewed B119 patch; prove local package integrity, public
+  OpenVSX parity, installed Antigravity parity, and rendered Source Editor MENU/HUB/COMM acceptance;
+  keep the native X4 `Pair B` proof as a separate post-install experience step.
+- **Assumptions and authoritative baseline:** the supplied current facts are authoritative for this
+  specification: repository `HEAD`, configured upstream, and direct `origin/main` are all
+  `93c9af111d63ca77c99dee11f21882c4073bcda6`; the current patch and records are uncommitted;
+  release owners remain clean at `0.0.77`; the installed Antigravity root is
+  `C:\Users\Moshi\.antigravity-ide\extensions\x4forge.x4-forge-studio-0.0.77` with manifest
+  `0.0.77`; and the retained local historical `0.0.77` VSIX is `26,321,722` bytes with SHA-256
+  `D1349AC2A3D43FEFD07CAA64BF262FFF4D4F10DEE6E38F453DC0EDAC737486F6`. No `0.0.78` count or
+  hash is known at specification time.
+- **Release reconciliation:** the next stable version is `0.0.78`; `0.0.77` must never be republished
+  and `--pre-release` must never be used. `ovsx` is not a global command; use the established `npx`
+  flow and load `OVSX_PAT` programmatically from the ignored root `.env.local` into memory without
+  printing it.
+- **In scope:** the release/install acceptance contract for the current protected callback, bounded
+  same-file helper expansion, and authority-flow patch; the three established release metadata owners;
+  root and extension gates; staged-app/package inspection; public OpenVSX exactly-once publication and
+  parity; recoverable installed `0.0.77` backup; public-parity `0.0.78` installation; installed
+  sidecar/oracle/corpus/parity checks; and real rendered Source Editor acceptance for current MENU/HUB/COMM.
+- **Out of scope:** new feature implementation; changes to production or test code in this plan append;
+  X4 launch or same-state game proof; Forge-workspace switching; `/seedworld`; saves, mod, game, corpus,
+  config, install, or runtime mutation during this plan append; universal parity claims; and external
+  projections before the later publish-before-commit boundary.
+- **Risks and authorization boundaries:** release metadata, package publication, credentials, installed
+  roots, and visible host state are mutation surfaces. A red required gate stops the sequence at its
+  boundary and is recorded as `FAILED` or `PARTIAL`; no oracle, timeout, count, hash, or truth label may
+  be weakened. The PAT must remain in memory and never appear in a command argument, title, log, or record.
+  This append performs no such mutation.
+- **Rollback/checkpoint for this documentation unit:** revert only the three owned documentation hunks
+  if this specification is rejected. Preserve all prior B119 sections, unrelated dirty files, and the
+  supplied `0.0.77` baseline. The later release rollback is the exact installed `0.0.77` backup described
+  in the acceptance contract below.
+
+- **Acceptance contract:**
+  1. **Machine-state prerequisite.** First require a fresh response for Antigravity state, X4 state,
+     and whether the machine is quiet. No validation-heavy, build, package, install, runtime, or game
+     step begins until all three are answered and recorded.
+  2. **Broad gates.** Run full `npm run precommit:check`. Separately confirm the verdict-parsed full E2E
+     gate, the production root build, and every project-adapter gate not already authoritatively covered
+     by precommit. A red required gate is `FAILED`/`PARTIAL`; never weaken an oracle, substitute a
+     narrower green batch, or treat an unreliable raw process exit as the structured verdict.
+  3. **Release-owner mutation only after green gates.** Change only the established release owners:
+     `vscode-extension/package.json` to `0.0.78`, add concise user-facing `0.0.78` release-notes
+     bullets, and regenerate `CHANGELOG.md` with the supported generator. The bullets must state:
+     - exact protected `pcall(function() ... end)` bodies and bounded same-file helper calls can now
+       materialize in the Source Editor preview;
+     - `_G`/`_ENV` rebinding/escape/alias/logical/self-reference forms fail closed;
+     - no arbitrary Lua; and
+     - preview stays `Not verified in game`.
+     4. **Package acceptance.** Run root `npm run build`. In `vscode-extension`, run `npm run changelog`,
+     `npm run stage-app`, and `npm run build`; package a stable VSIX without `--pre-release`; run the
+     exact supported VSIX inspect invocation with its required final-VSIX argument, using the established
+     repository/PUBLISHING.md form rather than the known omitted-argument form; and pass staged-app
+     probe, secret/machine-path, native-binding, archive/package-integrity, and related established
+     checks. Freeze actual file counts and hashes only from those command outputs; do not invent or carry
+     forward `0.0.78` counts or hashes.
+     5. **Public publication and parity.** Before installation, preserve an exact recoverable manifest and
+     backup of the installed `0.0.77` root. Publish `0.0.78` exactly once using `npx ovsx` with the PAT
+     loaded in memory, never printing the token. A successful publish alone does not prove public
+     availability: read back the latest and direct version routes, independently download the public
+     VSIX, and require exact local/public byte and SHA-256 parity. If OpenVSX propagation lags, poll
+     read-only routes and do not republish. A read-only tooling fallback must be labeled as such, not as
+     product evidence.
+     6. **Installed Antigravity acceptance.** Only after the backup and public parity pass, install the
+     public-parity `0.0.78` through the established Antigravity CLI. Restart/reload as required and
+     require one correct installed root, manifest `0.0.78`, package-to-install payload parity with only
+     established host additions, managed sidecar ownership, corpus binding to
+     `F:\Downskies\x4unpackersuiteV1\X4 unpacked 9.00`, installed oracles, and real rendered Source
+     Editor acceptance of the current MENU/HUB/COMM surfaces. Keep the preview label `Not verified in
+     game`.
+     7. **Separate Pair B boundary.** The same-state `Pair B` X4 proof remains a separate required
+     experience step after installed acceptance. This release-plan append does not launch X4, switch the
+     Forge workspace, modify saves/mod/game/config state, or execute `/seedworld`.
+     8. **Publish-before-commit.** Only after package, public-parity, and installed acceptance, exact-path
+     stage the current B119 code/tests/docs, the three release metadata owners, and applicable
+     evidence/records. Run precommit again if final metadata or records changed. The commit title remains
+     `feat(b119): wire protected callbacks through the X4 UI editor` unless the final diff warrants a
+     release suffix. Push `main` and assert `HEAD == tracking == direct origin/main`. Then update and
+     read back GitHub #41, the Notion owner, and Google Drive Current Status. GitHub #41 remains open
+     unless the full B119 actual goal is proved.
+     9. **Rollback.** If installation or runtime acceptance fails, restore the exact installed `0.0.77`
+     backup and verify restoration. A published `0.0.78` is immutable/burned and must never be
+     overwritten. Any source-patch rollback is an exact reversal of explicitly owned source/test paths
+     only; no unrelated dirty file may be touched.
+     10. **Explicit nonclaims.** This unit does not claim universal arbitrary Lua execution, universal
+     Helper/widget parity, universal C++ frame acceptance, overall 1:1 parity, overall B119 goal
+     completion, the twelve-reference experience close, the same-state X4 proof, or GitHub issue closure.
+- **Required validation and negative path:** the future release task must prove the machine-state
+  prerequisite, full precommit, separately parsed E2E/build/adapter gates, exact release-owner diff,
+  supported inspect invocation, staged-app and package security/integrity negatives, exactly-once public
+  publication, latest/direct-route readback, independent download parity, exact `0.0.77` rollback
+  restoration on install/runtime failure, installed payload/sidecar/corpus/oracle parity, rendered
+  MENU/HUB/COMM acceptance, the separate `Pair B` boundary, and final exact-path publish-before-commit
+  reconciliation. Propagation lag, missing PAT, version collision, package mismatch, unexplained install
+  delta, red gate, or failed rendered acceptance stops the sequence without republish or weakened proof.
+- **Evidence locations:** this plan, `BACKLOG.md`, and `SESSION-HANDOFF.md` for the specified contract and
+  next boundary; later command outputs, package/public parity receipts, exact installed backup manifest,
+  installed payload/oracle records, and rendered-host evidence in the established B119 evidence/records
+  locations. Actual `0.0.78` file counts, byte sizes, and hashes are recorded only after authoritative
+  outputs exist.
+
+### BASELINE
+
+- **Revision/version:** `HEAD`, configured upstream, and direct `origin/main` are
+  `93c9af111d63ca77c99dee11f21882c4073bcda6`; current B119 patch and records are uncommitted.
+- **Release owners:** `vscode-extension/package.json`, `release-notes.json`, and `CHANGELOG.md` are
+  clean at `0.0.77`; they are forbidden from mutation in this documentation-only task.
+- **Installed baseline:** Antigravity root
+  `C:\Users\Moshi\.antigravity-ide\extensions\x4forge.x4-forge-studio-0.0.77` exists and its
+  manifest reports `0.0.77`.
+- **Package baseline:** the current local historical `0.0.77` VSIX is `26,321,722` bytes with SHA-256
+  `D1349AC2A3D43FEFD07CAA64BF262FFF4D4F10DEE6E38F453DC0EDAC737486F6`.
+- **Public read-only baseline:** the OpenVSX API read returned namespace `x4forge`, name
+  `x4-forge-studio`, version `0.0.77`, timestamp `2026-09-08T10:28:42.54605Z`. The web browsing
+  surface refused the raw API URL; read-only PowerShell `Invoke-RestMethod` succeeded. That fallback
+  is tooling evidence only, not product evidence.
+- **Execution baseline:** `ovsx` is not global; the established flow uses `npx` and programmatically
+  reads `OVSX_PAT` from the ignored root `.env.local` without printing it. The machine-state question has
+  not been answered, so no heavy gate/build/package/install/runtime/game operation ran in this continuation.
+
+### RECONCILE
+
+- **Resources and readers/writers searched:** the existing B119 release/install history and open boundary
+  in this plan, the current B119 checkpoint and next-boundary text in `BACKLOG.md`, the current handoff,
+  and the supplied release/install facts. Forbidden product, release-owner, evidence, Git-state,
+  installed-state, game/mod/config/save, and external-record paths were not read or mutated.
+- **Existing capability reused:** the established release-owner files, supported changelog/stage/build/
+  package/inspect/install procedures, OpenVSX public-parity checks, managed sidecar/oracle checks, and
+  current B119 Source Editor acceptance surface. No alternate publisher, package inspector, installer,
+  parity oracle, or runtime path is introduced.
+- **Couplings checked:** machine state gates the heavy commands; precommit/E2E/build gates precede release
+  metadata; metadata precedes package bytes; package bytes precede exactly-once publication; public parity
+  precedes installation; the installed root, sidecar, corpus, oracles, and rendered Source Editor precede
+  the separate `Pair B` proof; and publish-before-commit precedes external projections.
+- **Capability-map delta:** no capability-map delta; this append touches only the three owned repository
+  records and does not strengthen a runtime capability claim.
+- **Plan changes:** the open release boundary is narrowed to stable `0.0.78` for the current patch, with
+  fresh machine state first, public parity before install, exact `0.0.77` rollback, and `Pair B` kept
+  separate. No release-file mutation is part of this specified unit.
+
+### IMPLEMENT (PENDING)
+
+- **Actual bounded changes:** append this `SPECIFIED` release/install acceptance section and update only
+  the existing B119 next-boundary text in `BACKLOG.md` and `SESSION-HANDOFF.md`. No production/test,
+  release, generated, evidence, Git, game, mod, config, save, install, runtime, or external file is
+  changed by this unit.
+- **Scope changes and reasons:** none.
+
+### VALIDATE
+
+- **Three-path `git diff --check` -> PASS:** the command restricted to
+  `docs/plans/2026-09-05-b119-ai-influence-visual-dogfood.md`, `BACKLOG.md`, and
+  `SESSION-HANDOFF.md` exited `0`. Git emitted only the known LF-to-CRLF working-copy warnings.
+- **Marker readback -> PASS:** all requested markers were found across the three owned paths:
+  `SPECIFIED`, `0.0.78`, `publish-before-commit`, `Not verified in game`, public parity, installed
+  `0.0.77` rollback, `Pair B`, GitHub, Notion, and Google Drive.
+- **Exact-path reconciliation -> PASS:** all three owned paths exist and were the only paths read by this
+  validation. No product command or mutation ran; no forbidden path was read by validation. These results
+  are documentation evidence only, not release/package/install/runtime/game evidence.
+
+### REVIEW
+
+- **Done and evidenced:** the section is `SPECIFIED`; overall status remains `IN_PROGRESS / PARTIAL /
+  Not verified in game`; all ten acceptance requirements, the exact `0.0.78`/no-republish boundary,
+  rollback, Pair B separation, and explicit nonclaims are present.
+- **Done and evidenced:** `BACKLOG.md` and `SESSION-HANDOFF.md` contain only the intended existing B119
+  next-boundary/next-action updates; prior historical sections and unrelated dirty files remain outside
+  this unit.
+- **Done and evidenced:** the raw web refusal, PowerShell read-only fallback, failed first delegation
+  payload parse, and no-invented-release-counts/hashes AAR are recorded without turning tooling events
+  into product evidence. The future release gates remain pending.
+
+### CLOSE
+
+- **Status:** `SPECIFIED`; overall B119 remains `IN_PROGRESS / PARTIAL / Not verified in game`.
+- **What changed:** this plan now contains the bounded stable `0.0.78` release/install acceptance contract;
+  the existing B119 backlog and handoff next boundary point to fresh machine state, precommit, public
+  parity, installed rollback, and the separate `Pair B` step.
+- **What was not changed:** no release metadata, production/test code, generated package, evidence,
+  Git state, game/mod/config/save/install/runtime state, or external projection.
+- **Capability-map delta:** no capability-map delta.
+- **Remaining concerns:** fresh machine state, all heavy gates, release metadata/package/public parity,
+  installed acceptance, rendered MENU/HUB/COMM acceptance, `Pair B`, and final publish-before-commit/
+  projection steps remain pending. No `0.0.78` release count or hash is claimed.
+- **Suggested commit title:** `feat(b119): wire protected callbacks through the X4 UI editor`.
+
+### AAR
+
+- **Clean outcome or triggers:** triggered AAR. The raw OpenVSX web API URL was refused by the browsing
+  surface; read-only PowerShell `Invoke-RestMethod` succeeded and is recorded as a tooling fallback only,
+  not product evidence. The first delegation payload parse failed before the bounded work order was
+  accepted; it caused no file, product, release, or external mutation.
+- **Sustain:** keep release versioning monotonic at `0.0.78`, require public/local byte and SHA-256 parity
+  before install, preserve an exact installed rollback, and keep preview `Not verified in game` separate
+  from native X4 truth.
+- **Improve work / approach:** prevalidate the delegation payload shape and resolve the full acceptance
+  boundary before any release-owner mutation; treat a successful publish as incomplete until latest/direct
+  route readback and an independent public download converge.
+- **Improve tools:** use the established `npx`/in-memory-PAT flow, the exact supported argument-bearing
+  inspector invocation, and read-only PowerShell only as a labeled fallback when the web surface refuses
+  the raw API. Keep actual file counts and hashes frozen only from command outputs.
+- **Highest-risk evidenced weakness:** release metadata, public availability, installed parity, and a
+  rendered preview can each appear successful while the next authority boundary is still unproven; the
+  sequence therefore requires exact parity, installed acceptance, and separate `Pair B` evidence before
+  publish-before-commit and external projection.
+- **Global/project lessons banked:** this AAR is recorded in this appended plan only; no external or global
+  ledger update is authorized by this documentation-only unit.
+
+## 2026-09-10 Astra continuation — composed environment authority correction
+
+Status: IN_PROGRESS / PARTIAL. The stable `0.0.78` sequence above is paused, not cancelled or weakened.
+
+**Later same-day resumed gate close:** Ken confirmed Forge open, X4 stopped, YouTube playback ongoing and
+authorized continued validation. The corrected current patch now passes full precommit/TypeScript, official lint
+(0 errors/600 warnings), CallModel 127/127, linter 153/153, Layout 751/751 with zero skips, EditorSession 23/23
+and 7/7, strict Scene 179/179 with real MENU/HUB/COMM 3/3, SourceEdits 95/95 + causal 48/48, full canonical E2E
+106/106 with complete structured verdict and teardown, route integration 496/496 including production build,
+runtime-discovered oracles 134/134, and deterministic graph refresh (10755 nodes/27123 edges/347 communities).
+Final protected/source hash census is unchanged. Exact commands, times, receipts, review and AAR are in
+`docs/plans/2026-09-10-b119-composed-environment-authority.md`, resumed batch close; artifacts are
+`test-results/b119-20260910-resumed-*`. This advances automated validation only. Stable 0.0.78 has not been
+packaged, published or installed; no game/mod/save/config/Git mutation occurred. Package/install and native
+Pair B remain required, and GitHub/Notion/Drive projection remains at the established release/commit boundary.
+The below earlier pause/focused-only notes are historical, not the current broad-gate status.
+
+Fresh parent review reproduced five independent protected-callback authority misses: self-reference member/index
+assignments, an `_ENV._G` assignment, a self-reference function declaration, and a nested `_G` escape. All five
+synthetic sources parsed but still emitted a protected `addTable` with no authority gap; direct-global rejection and
+harmless-field controls passed. Seven-case in-memory parser check: five failures, exit 1, Node `v24.15.0`.
+
+The bounded correction and acceptance contract are in
+`docs/plans/2026-09-10-b119-composed-environment-authority.md`. Native Luna owns only the incremental CallModel and
+CallModel-selftest changes; Astra owns review and records. No heavy gate, app/game run, protected write, release,
+commit, push, or external projection is implied. Existing historical gate results do not verify this corrected patch.
+Overall B119 remains `IN_PROGRESS / PARTIAL / Not verified in game`.
+
+The correction is now implemented with focused evidence: CallModel `127/127`, exact two-file ESLint/diff hygiene,
+worker reproduction `7/7`, boundary matrix `9/9`, and independent parent matrix `12/12` all pass. Parent review
+first rejected a fail-open recursion-limit candidate; exhaustion now emits an explicit authority rejection, with
+independent 16/17/20-depth and harmless deep-field controls. Final CallModel SHA-256 is
+`8C44CB538BDCF6AD8C97BA537D8A29D1B0CBECC1BB9B730907D7F8CAFAD7A0F7`; selftest is
+`8349308DD5246552A2122184AF736FB81E68991E71E7DF92F4F395719AD8FE2F`. Both native workers are closed.
+Status remains `PARTIAL`: fresh machine state, whole-repo/cross-layer/Graphify/full gates, release/install/rendered
+acceptance and separate native Pair B proof are still required. No current terminal result for old session `51744`
+was recovered; the stored `106/106` E2E receipt is historical and cannot cover this patch.

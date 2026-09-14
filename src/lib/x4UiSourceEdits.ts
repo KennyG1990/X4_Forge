@@ -8,10 +8,17 @@
 
 import type { ModWorkspace } from '../types';
 import {
+  addRow as addHelperRow,
+  finalizeHelperTable,
+  type HelperTableState,
+} from './x4UiLayoutKernel';
+import {
   canonicalizeX4UiLayoutModel,
   createX4UiLayoutTargetCatalog,
+  getIssuedX4UiLayoutExpandedCallMetadata,
   isExactX4UiLayoutColorValue,
   isIssuedX4UiLayoutEvidencePair,
+  isIssuedX4UiLayoutEvidencePairWithCanonicalCorpus,
   isIssuedX4UiLayoutEvidencePairForModel,
   reprojectX4UiLayoutProgramWithIssuedColorAuthority,
   validateX4UiLayoutEvidencePair,
@@ -19,6 +26,7 @@ import {
   type X4UiLayoutEvidenceCall,
   type X4UiLayoutEvidenceOperation,
   type X4UiLayoutEvidenceSourceBinding,
+  type X4UiLayoutCallMetadata,
   type X4UiLayoutModelIdentity,
   type X4UiLayoutOperation,
   type X4UiLayoutProgram,
@@ -201,7 +209,7 @@ export interface X4UiSourceEditReplaceEntry {
   };
 }
 
-export type X4UiSourceEditInsertionAnchor = 'first-row' | 'fallback-display' | 'frame-display';
+export type X4UiSourceEditInsertionAnchor = 'first-row' | 'fallback-display' | 'frame-display' | 'empty-cell' | 'row-below';
 
 export interface X4UiSourceEditInsertEntry {
   readonly kind: 'insert-call';
@@ -231,12 +239,108 @@ export interface X4UiSourceEditInsertBlockEntry {
   readonly provenance: X4UiSourceEditStructuralProvenance;
 }
 
-export type X4UiSourceEditInsertionEntry = X4UiSourceEditInsertEntry | X4UiSourceEditInsertBlockEntry;
+export type X4UiSourceEditWidgetKind = 'text' | 'button' | 'input';
+
+export interface X4UiSourceEditEmptyCellEntry {
+  readonly kind: 'insert-widget';
+  readonly id: string;
+  readonly path: string;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly expectedText: '';
+  readonly anchor: 'empty-cell';
+  readonly anchorSource: X4UiSourceLocation;
+  readonly indentation: string;
+  readonly lineEnding: '\n' | '\r\n';
+  readonly column: number;
+  readonly frameId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly cellId: string;
+  readonly rowSource: X4UiSourceLocation;
+  readonly cellSource: X4UiSourceLocation;
+  readonly provenance: X4UiSourceEditStructuralProvenance & {
+    readonly owner: X4UiSourceEditStructuralOwner;
+    readonly rowOwner: X4UiSourceEditStructuralRowOwner;
+  };
+}
+
+export type X4UiSourceEditInsertionEntry =
+  | X4UiSourceEditInsertEntry
+  | X4UiSourceEditInsertBlockEntry
+  | X4UiSourceEditEmptyCellEntry
+  | X4UiSourceEditRowInsertionEntry;
+
+export interface X4UiSourceEditRowInsertionEntry {
+  readonly kind: 'insert-row';
+  readonly id: string;
+  readonly path: string;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly expectedText: '';
+  readonly anchor: 'row-below';
+  readonly anchorSource: X4UiSourceLocation;
+  readonly indentation: string;
+  readonly lineEnding: '\n' | '\r\n';
+  readonly frameId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly rowIndex: number;
+  readonly rowSource: X4UiSourceLocation;
+  readonly provenance: X4UiSourceEditStructuralProvenance & {
+    readonly owner: X4UiSourceEditStructuralOwner;
+    readonly rowOwner: X4UiSourceEditStructuralRowOwner;
+  };
+}
+
+export type X4UiSourceEditRowMoveDirection = 'up' | 'down';
+
+/** One source-owned row block participating in an adjacent permutation. */
+export interface X4UiSourceEditRowMoveBlock {
+  readonly frameId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly rowIndex: number;
+  readonly rowSource: X4UiSourceLocation;
+  readonly statementSource: X4UiSourceLocation;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly expectedText: string;
+  readonly creatorOperationId: string;
+  readonly creatorCallName: 'addRow';
+  readonly creatorSource: X4UiSourceLocation;
+  readonly callBindings: readonly X4UiSourceEditStructuralCallBinding[];
+  readonly owner: X4UiSourceEditStructuralOwner;
+  readonly rowOwner: X4UiSourceEditStructuralRowOwner;
+}
+
+export interface X4UiSourceEditRowMoveEntry {
+  readonly kind: 'move-row';
+  readonly id: string;
+  readonly path: string;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly expectedText: string;
+  readonly direction: X4UiSourceEditRowMoveDirection;
+  readonly frameId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly rowIndex: number;
+  readonly adjacentRowId: string;
+  readonly adjacentRowIndex: number;
+  readonly upper: X4UiSourceEditRowMoveBlock;
+  readonly lower: X4UiSourceEditRowMoveBlock;
+  readonly provenance: X4UiSourceEditStructuralProvenance & {
+    readonly owner: X4UiSourceEditStructuralOwner;
+    readonly rowOwner: X4UiSourceEditStructuralRowOwner;
+  };
+}
 
 export type X4UiSourceEditStructuralEntry =
   | X4UiSourceEditDeleteEntry
   | X4UiSourceEditReplaceEntry
-  | X4UiSourceEditInsertionEntry;
+  | X4UiSourceEditInsertionEntry
+  | X4UiSourceEditRowMoveEntry;
 
 export interface X4UiSourceEditCatalog {
   readonly status: 'ready' | 'locked';
@@ -251,6 +355,7 @@ export interface X4UiSourceEditCatalog {
   readonly deleteEntries?: readonly X4UiSourceEditDeleteEntry[];
   readonly replaceEntries?: readonly X4UiSourceEditReplaceEntry[];
   readonly insertEntries?: readonly X4UiSourceEditInsertionEntry[];
+  readonly moveEntries?: readonly X4UiSourceEditRowMoveEntry[];
   readonly editable: boolean;
   readonly reason?: X4UiSourceEditLockReason;
   readonly detail: string;
@@ -270,6 +375,55 @@ export interface X4UiSourceEditExpectedRange {
   readonly endOffset: number;
   readonly expectedText: string;
 }
+
+export interface X4UiSourceEditWidgetInsertionRequest {
+  readonly entry: X4UiSourceEditEmptyCellEntry;
+  readonly widget: X4UiSourceEditWidgetKind;
+  readonly text: string;
+  readonly expected?: X4UiSourceEditExpectedRange;
+}
+
+export interface X4UiSourceEditRowInsertionRequest {
+  readonly entry: X4UiSourceEditRowInsertionEntry;
+  readonly expected?: X4UiSourceEditExpectedRange;
+}
+
+export interface X4UiSourceEditRowMoveRequest {
+  readonly entry: X4UiSourceEditRowMoveEntry;
+  readonly expected?: X4UiSourceEditExpectedRange;
+}
+
+export interface X4UiSourceEditInsertedRow {
+  readonly frameId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly rowIndex: number;
+  readonly cellIds: readonly string[];
+  readonly creatorOperationId: string;
+  readonly creatorCallName: 'addRow';
+  readonly creatorSource: X4UiSourceLocation;
+  readonly sourceIdentity: X4UiLayoutModelIdentity;
+}
+
+export interface X4UiAcceptedSourceRowInsertionResult extends X4UiAcceptedSourceStructuralEditResult {
+  readonly entry: X4UiSourceEditRowInsertionEntry;
+  readonly insertedRow: X4UiSourceEditInsertedRow;
+}
+
+export type X4UiSourceRowInsertionResult = X4UiAcceptedSourceRowInsertionResult | X4UiRefusedSourceStructuralEditResult;
+
+export interface X4UiSourceEditMovedRow extends X4UiSourceEditInsertedRow {
+  readonly movedFromRowId: string;
+  readonly movedFromRowIndex: number;
+  readonly direction: X4UiSourceEditRowMoveDirection;
+}
+
+export interface X4UiAcceptedSourceRowMoveResult extends X4UiAcceptedSourceStructuralEditResult {
+  readonly entry: X4UiSourceEditRowMoveEntry;
+  readonly movedRow: X4UiSourceEditMovedRow;
+}
+
+export type X4UiSourceRowMoveResult = X4UiAcceptedSourceRowMoveResult | X4UiRefusedSourceStructuralEditResult;
 
 export type X4UiSourceEditEncodedReplacement =
   | { readonly ok: true; readonly replacement: string }
@@ -338,6 +492,53 @@ export interface X4UiRefusedSourceStructuralEditResult {
 export type X4UiSourceStructuralEditResult =
   | X4UiAcceptedSourceStructuralEditResult
   | X4UiRefusedSourceStructuralEditResult;
+
+export type X4UiSourceEditWidgetCreatorCallName = 'createText' | 'createButton' | 'createEditBox';
+
+export interface X4UiSourceEditInsertedWidget {
+  readonly widget: X4UiSourceEditWidgetKind;
+  readonly frameId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly cellId: string;
+  readonly creatorOperationId: string;
+  readonly creatorCallName: X4UiSourceEditWidgetCreatorCallName;
+  readonly creatorSource: X4UiSourceLocation;
+  readonly sourceIdentity: X4UiLayoutModelIdentity;
+}
+
+export interface X4UiAcceptedSourceWidgetInsertionResult {
+  readonly accepted: true;
+  readonly changed: true;
+  readonly workspace: ModWorkspace;
+  readonly source: X4UiWorkspaceSource;
+  readonly catalog: X4UiSourceEditCatalog;
+  readonly entry: X4UiSourceEditEmptyCellEntry;
+  readonly path: string;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly expectedText: '';
+  readonly replacement: string;
+  readonly byteLocal: true;
+  readonly reparsed: true;
+  readonly provenanceReestablished: true;
+  readonly insertedWidget: X4UiSourceEditInsertedWidget;
+}
+
+export interface X4UiRefusedSourceWidgetInsertionResult {
+  readonly accepted: false;
+  readonly changed: false;
+  readonly workspace: ModWorkspace;
+  readonly source: X4UiWorkspaceSource;
+  readonly catalog: X4UiSourceEditCatalog;
+  readonly reason: X4UiSourceEditRefusalReason;
+  readonly detail: string;
+  readonly entry?: X4UiSourceEditEmptyCellEntry;
+}
+
+export type X4UiSourceWidgetInsertionResult =
+  | X4UiAcceptedSourceWidgetInsertionResult
+  | X4UiRefusedSourceWidgetInsertionResult;
 
 type WorkspacePassthroughFile = NonNullable<ModWorkspace['passthroughFiles']>[number];
 
@@ -849,7 +1050,12 @@ const isClosedPlainOwnData = (
     nextAncestors.add(objectValue);
     if (Array.isArray(value)) {
       if (Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return false;
-      const arrayLength = value.length;
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+      if (!lengthDescriptor
+        || !('value' in lengthDescriptor)
+        || !Number.isSafeInteger(lengthDescriptor.value)
+        || lengthDescriptor.value < 0) return false;
+      const arrayLength = lengthDescriptor.value;
       for (const key of Object.getOwnPropertyNames(value)) {
         if (key === 'length') continue;
         if (!/^(0|[1-9][0-9]*)$/.test(key)) return false;
@@ -1192,6 +1398,7 @@ const callMatchesEvidenceBinding = (
   evidenceOperation: X4UiLayoutEvidenceOperation | undefined,
   binding: X4UiLayoutEvidenceSourceBinding | undefined,
   index: number,
+  issuedExpandedMetadata?: X4UiLayoutCallMetadata,
 ): boolean => {
   if (!evidenceCall
     || !evidenceOperation
@@ -1220,7 +1427,7 @@ const callMatchesEvidenceBinding = (
     || binding.reachability !== evidenceCall.reachability
     || !sameLocation(binding.source, call.source)
     || !sameClosedData(evidenceOperation.snapshot, operation)) return false;
-  const metadata = {
+  const metadata = issuedExpandedMetadata ?? {
     arguments: call.arguments,
     ...(call.receiver !== undefined ? { receiver: call.receiver } : {}),
     ...(call.result !== undefined ? { result: call.result } : {}),
@@ -1280,6 +1487,44 @@ const modelMatchesEvidenceAuthority = (
         index,
       )) return false;
     previousCallIndex = indexedCall.index;
+  }
+  return true;
+};
+
+/**
+ * Validate the complete issued model/evidence pair without requiring the raw
+ * call indexes to remain monotonic across an owner-issued local expansion.
+ * The layout owner has already validated the expanded execution ledger; this
+ * source-edit route still binds every emitted operation to its exact call,
+ * identity, source and evidence snapshot. Raw-model equality is checked by the
+ * caller; expanded metadata comes only from that same layout owner's private
+ * issuance record. Expanded helper bodies remain ineligible edit candidates.
+ */
+const modelMatchesDirectScalarEvidenceAuthority = (
+  model: X4UiCallModel,
+  program: X4UiLayoutProgram,
+  authority: X4UiLayoutEvidenceAuthority,
+): boolean => {
+  if (program.operations.length !== authority.calls.length
+    || program.operations.length !== authority.operations.length
+    || program.operations.length !== authority.sourceBindings.length) return false;
+  const ledger = orderedCallLedger(model);
+  if (!ledger) return false;
+  for (let index = 0; index < program.operations.length; index += 1) {
+    const operation = program.operations[index];
+    const indexedCall = ledger.byModelOrder.get(operation.modelOrder);
+    if (!indexedCall
+      || indexedCall.call.name !== operation.kind
+      || !sameLocation(indexedCall.call.source, operation.source)
+      || !callMatchesEvidenceBinding(
+        indexedCall.call,
+        operation,
+        authority.calls[index],
+        authority.operations[index],
+        authority.sourceBindings[index],
+        index,
+        getIssuedX4UiLayoutExpandedCallMetadata(program, authority, operation),
+      )) return false;
   }
   return true;
 };
@@ -1463,6 +1708,7 @@ const catalogFromEntries = (
     deleteEntries: freezeArray([]),
     replaceEntries: freezeArray([]),
     insertEntries: freezeArray([]),
+    moveEntries: freezeArray([]),
     editable: status === 'ready' && editableEntries.length > 0,
     ...(reason ? { reason } : {}),
     detail,
@@ -1490,6 +1736,31 @@ const scalarProgramIsActionable = (program: X4UiLayoutProgram): boolean =>
   (program.status === 'projected' || program.status === 'partial')
   && program.operations.length > 0
   && program.operations.every(operation => operation.status === 'applied');
+
+const scalarProgramHasDirectAppliedOperation = (program: X4UiLayoutProgram): boolean =>
+  program.operations.some(operation => operation.status === 'applied' && operation.localExpansion === undefined);
+
+// Consumed samples already belong to the validated owner-issued source/consumer
+// ledger. Scalar reparse transfers them through the exact CAS splice and must
+// rediscover an editable entry. Unconsumed inputs and mixed path/loop choices
+// still have no supported scalar continuation proof.
+const scalarProgramHasUnsupportedPreviewInputs = (program: X4UiLayoutProgram): boolean =>
+  program.previewSampleBindings.some(binding => binding.status !== 'consumed')
+    || program.previewPathSelections.length > 0
+    || program.previewLoopSelections.length > 0;
+
+const scalarProgramIsEditable = (
+  program: X4UiLayoutProgram,
+  hasCanonicalCorpus: boolean,
+): boolean => scalarProgramIsActionable(program)
+  || (hasCanonicalCorpus
+    && program.status === 'partial'
+    && program.operations.length > 0
+    && scalarProgramHasDirectAppliedOperation(program));
+
+const directScalarEvidenceDetail = 'mixed-stream scalar editing requires exact loader-issued canonical corpus, complete issued model/evidence authority, and at least one direct applied operation';
+
+const activePreviewInputDetail = 'mixed-stream scalar editing requires consumed source-bound samples and no active path or loop selections; clear unsupported preview inputs and reproject the target';
 
 const lockedBoundaryCatalog = (
   detail: string,
@@ -1715,6 +1986,214 @@ const hasExecutableLuaShapeOutsideLiterals = (expression: string): boolean => {
   return false;
 };
 
+const maskedLuaSourceForBoundedMutationCheck = (
+  text: string,
+  startOffset: number,
+  endOffset: number,
+): string | undefined => {
+  if (!validOffset(startOffset)
+    || !validOffset(endOffset)
+    || startOffset > endOffset
+    || endOffset > text.length
+    || endOffset - startOffset > 65_536) return undefined;
+  const source = text.slice(startOffset, endOffset);
+  const masked = source.split('');
+  const blank = (start: number, end: number): void => {
+    for (let index = start; index < end; index += 1) {
+      if (masked[index] !== '\n' && masked[index] !== '\r') masked[index] = ' ';
+    }
+  };
+  let index = 0;
+  while (index < source.length) {
+    const current = source[index];
+    if (current === "'" || current === '"') {
+      const quote = current;
+      const literalStart = index;
+      index += 1;
+      let closed = false;
+      while (index < source.length) {
+        if (source[index] === '\\') {
+          index += 2;
+        } else if (source[index] === quote) {
+          index += 1;
+          closed = true;
+          break;
+        } else {
+          index += 1;
+        }
+      }
+      if (!closed) return undefined;
+      blank(literalStart, index);
+      continue;
+    }
+    if (source.startsWith('--', index)) {
+      const comment = luaLongBracketSpan(source, index + 2);
+      if (comment) {
+        blank(index, comment.end);
+        if (!comment.closed) return undefined;
+        index = comment.end;
+      } else {
+        const commentStart = index;
+        while (index < source.length && source[index] !== '\r' && source[index] !== '\n') index += 1;
+        blank(commentStart, index);
+      }
+      continue;
+    }
+    const longBracket = luaLongBracketSpan(source, index);
+    if (longBracket) {
+      blank(index, longBracket.end);
+      if (!longBracket.closed) return undefined;
+      index = longBracket.end;
+      continue;
+    }
+    index += 1;
+  }
+  return masked.join('');
+};
+
+const sourceHasAssignmentToIdentifier = (
+  text: string,
+  startOffset: number,
+  endOffset: number,
+  identifier: string,
+): boolean => {
+  const masked = maskedLuaSourceForBoundedMutationCheck(text, startOffset, endOffset);
+  if (masked === undefined || !identifierExpression(identifier)) return true;
+  const isWordBoundary = (value: string | undefined): boolean => !isLuaIdentifierPart(value);
+  let searchStart = 0;
+  while (searchStart < masked.length) {
+    const index = masked.indexOf(identifier, searchStart);
+    if (index < 0) return false;
+    if (!isLuaIdentifierPart(masked[index - 1]) && isWordBoundary(masked[index + identifier.length])) {
+      let cursor = index + identifier.length;
+      const skipWhitespace = (): void => {
+        while (cursor < masked.length && /\s/.test(masked[cursor])) cursor += 1;
+      };
+      const assignmentFollows = (): boolean => {
+        skipWhitespace();
+        // A comma can continue a multi-LHS assignment.  This only revokes
+        // uncertain authority; it does not attempt to parse the remaining LHS.
+        return masked[cursor] === ',' || (masked[cursor] === '=' && masked[cursor + 1] !== '=');
+      };
+      skipWhitespace();
+      while (masked[cursor] === '.' || masked[cursor] === '[') {
+        if (masked[cursor] === '.') {
+          cursor += 1;
+          skipWhitespace();
+          if (!isLuaIdentifierStart(masked[cursor])) break;
+          cursor += 1;
+          while (isLuaIdentifierPart(masked[cursor])) cursor += 1;
+          continue;
+        }
+        let depth = 0;
+        let closed = false;
+        while (cursor < masked.length) {
+          if (masked[cursor] === '[') depth += 1;
+          else if (masked[cursor] === ']') {
+            depth -= 1;
+            if (depth === 0) {
+              cursor += 1;
+              closed = true;
+              break;
+            }
+          }
+          cursor += 1;
+        }
+        if (!closed) return true;
+        skipWhitespace();
+      }
+      if (assignmentFollows()) return true;
+    }
+    searchStart = index + identifier.length;
+  }
+  return false;
+};
+
+const valueReferencesIdentifier = (value: unknown, identifier: string): boolean => {
+  if (!isRecord(value)) return false;
+  const reference = ownData(value, 'reference');
+  if (!isRecord(reference)) return false;
+  const path = ownData(reference, 'path');
+  return typeof path === 'string'
+    && (path === identifier || path.startsWith(`${identifier}.`) || path.startsWith(`${identifier}[`));
+};
+
+const tableAliasRecordsForInsertion = (model: X4UiCallModel, program: X4UiLayoutProgram, tableId: string) => {
+  const table = program.tables.find(candidate => candidate.id === tableId);
+  if (!table) return [];
+  return model.records.flatMap(record => {
+    if (record.recordType !== 'alias' || record.aliasKind !== 'definition' || !identifierExpression(record.name)
+      || record.value.status !== 'static' || !identifierExpression(record.value.expression)
+      || record.value.reference?.kind !== 'table' || record.value.reference.path !== table.identity?.path
+      || !sameLocation(record.value.reference.source, table.source)
+      || record.context.kind !== 'function' || record.context.reachability !== 'reachable'
+      || record.context.branchPath.length !== 0 || record.context.loopPath.length !== 0
+      || !sameLocation(record.context.source, program.target.source)) return [];
+    return [record];
+  });
+};
+
+const rowContinuityIsProven = (
+  model: X4UiCallModel,
+  program: X4UiLayoutProgram,
+  rowId: string,
+  text: string,
+  rowName: string,
+  startOffset: number,
+  endOffset: number,
+  ownerKind: 'row' | 'table' = 'row',
+): boolean => {
+  const masked = maskedLuaSourceForBoundedMutationCheck(text, startOffset, endOffset);
+  if (masked === undefined || sourceHasAssignmentToIdentifier(text, startOffset, endOffset, rowName)) return false;
+  // The parser may omit indexed writes and nested alias escapes. Reject any
+  // remaining use of the row token outside an already-proven cell receiver.
+  // Literal/comment masking supplies no receiver or emptiness authority.
+  const receiverOffsets = new Set(model.calls.filter(call => call.method === ':'
+    && call.receiver?.reference?.kind === (ownerKind === 'row' ? 'cell' : 'table')
+    && call.source.start.offset >= startOffset && call.source.end.offset <= endOffset
+    && program.operations.some(operation => operation.modelOrder === call.order
+      && sameLocation(operation.source, call.source)
+      && (ownerKind === 'row' ? operation.rowId === rowId && operation.cellId !== undefined : operation.tableId === rowId)
+      && operation.status === 'applied' && !operation.localExpansion))
+    .map(call => call.source.start.offset - startOffset));
+  const tableAliases = ownerKind === 'table' ? tableAliasRecordsForInsertion(model, program, rowId) : [];
+  for (const alias of tableAliases) {
+    if (alias.value.expression === rowName && alias.value.location.start.offset >= startOffset
+      && alias.value.location.end.offset <= endOffset) receiverOffsets.add(alias.value.location.start.offset - startOffset);
+  }
+  for (let index = 0; index < masked.length;) {
+    if (!isLuaIdentifierStart(masked[index])) { index += 1; continue; }
+    const tokenStart = index++;
+    while (isLuaIdentifierPart(masked[index])) index += 1;
+    if (masked.slice(tokenStart, index) === rowName && !receiverOffsets.has(tokenStart)) return false;
+  }
+  const rawInvocations = ownData(model as unknown as object, 'localInvocations');
+  if (!Array.isArray(rawInvocations)) return false;
+  for (const rawInvocation of rawInvocations) {
+    if (!isRecord(rawInvocation)) return false;
+    const bounds = structuralLocationBounds(ownData(rawInvocation, 'source'));
+    if (!bounds || bounds.start < startOffset || bounds.end > endOffset) continue;
+    if (ownData(rawInvocation, 'status') !== 'supported') return false;
+    const argumentsValue = ownData(rawInvocation, 'arguments');
+    if (!Array.isArray(argumentsValue) || argumentsValue.some(argument => valueReferencesIdentifier(argument, rowName))) return false;
+  }
+  for (const rawRecord of model.records) {
+    if (!isRecord(rawRecord)) return false;
+    const bounds = structuralLocationBounds(ownData(rawRecord, 'source'));
+    if (!bounds || bounds.start < startOffset || bounds.end > endOffset) continue;
+    const recordType = ownData(rawRecord, 'recordType');
+    const name = ownData(rawRecord, 'name');
+    const path = ownData(rawRecord, 'path');
+    const value = ownData(rawRecord, 'value');
+    if ((recordType === 'alias' && !tableAliases.some(alias => Object.is(alias, rawRecord))
+        && (name === rowName || valueReferencesIdentifier(value, rowName)))
+      || (recordType === 'property'
+        && typeof path === 'string'
+        && (path === rowName || path.startsWith(`${rowName}.`) || path.startsWith(`${rowName}[`)))) return false;
+  }
+  return true;
+};
+
 const hasUnprovenExecutableWithin = (
   model: X4UiCallModel,
   statement: EnclosingStatementFacts,
@@ -1803,7 +2282,8 @@ const structuralOwnerLedger = (
       for (const name of assignedNamesOf(call)) frameBindings.set(name, frameId);
     }
     if (operation.kind === 'addTable' && tableId) {
-      const parentFrameId = frameBindings.get(call.receiver?.expression || '');
+      const parentFrameId = frameBindings.get(call.receiver?.expression || '')
+        || program.tables.find(table => table.id === tableId)?.frameId;
       tableFrames.set(tableId, parentFrameId);
     }
     if (tableId) {
@@ -2023,6 +2503,15 @@ const structuralInsertId = (
   offset: number,
 ): string => `x4-ui-source-insert:${target.id}:${anchor}:${offset}`;
 
+const structuralWidgetInsertId = (
+  target: X4UiLayoutTarget,
+  frameId: string,
+  tableId: string,
+  rowId: string,
+  cellId: string,
+  offset: number,
+): string => `x4-ui-source-insert-widget:${target.id}:${frameId}:${tableId}:${rowId}:${cellId}:${offset}`;
+
 const structuralReplaceId = (
   target: X4UiLayoutTarget,
   statement: EnclosingStatementFacts,
@@ -2060,6 +2549,636 @@ const rowOwnerForStructuralCandidate = (
       || rowOwner.rowId !== candidateOwner.rowId) return undefined;
   }
   return rowOwner ? freezeDeep(rowOwner) : undefined;
+};
+
+const identifierExpression = (value: string | undefined): value is string =>
+  value !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+
+const reachableTargetCall = (
+  call: X4UiCallRecord,
+  target: X4UiLayoutTarget,
+): boolean => {
+  const context = ownData(call as unknown as object, 'context');
+  if (!isRecord(context)
+    || ownData(context, 'kind') !== 'function'
+    || ownData(context, 'reachability') !== 'reachable'
+    || !Array.isArray(ownData(context, 'branchPath'))
+    || !Array.isArray(ownData(context, 'loopPath'))
+    || (ownData(context, 'branchPath') as readonly unknown[]).length !== 0
+    || (ownData(context, 'loopPath') as readonly unknown[]).length !== 0) return false;
+  const contextSource = ownData(context, 'source');
+  return isLocationRecord(contextSource) && sameLocation(contextSource, target.source);
+};
+
+interface EmptyCellInsertionCandidate {
+  readonly rowReceiver: string;
+  readonly rowCall: X4UiCallRecord;
+  readonly rowOperation: X4UiLayoutOperation;
+  readonly rowOwner: X4UiSourceEditStructuralRowOwner;
+  readonly displayCandidate: CompleteStructuralStatement;
+  readonly displayOwner: X4UiSourceEditStructuralOwner;
+  readonly style: {
+    readonly anchorOffset: number;
+    readonly indentation: string;
+    readonly lineEnding: '\n' | '\r\n';
+  };
+}
+
+const localRowOwnerForInsertion = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  row: X4UiLayoutProgram['rows'][number],
+  table: X4UiLayoutProgram['tables'][number],
+  owners: ReadonlyMap<string, X4UiSourceEditStructuralOwner>,
+) => {
+  const calls = file.callModel.calls.filter(call => call.name === 'addRow'
+    && sameLocation(call.source, row.source) && locationWithin(target.source, call.source)
+    && reachableTargetCall(call, target));
+  if (calls.length !== 1) return undefined;
+  const rowCall = calls[0];
+  if (rowCall.method !== ':' || !identifierExpression(rowCall.receiver?.reference?.path)
+    || rowCall.receiver?.reference?.kind !== 'table'
+    || rowCall.result?.kind !== 'row' || rowCall.result.origin !== 'call') return undefined;
+  const assignedNames = assignedNamesOf(rowCall);
+  if (assignedNames.length !== 1 || !identifierExpression(assignedNames[0])
+    || rowCall.result.path !== assignedNames[0]) return undefined;
+  const rowStatement = enclosingStatementOf(rowCall);
+  if (!rowStatement || rowStatement.kind !== 'local' || rowStatement.isStandaloneCallStatementRoot
+    || !locationWithin(target.source, rowStatement.source) || !locationWithin(target.source, rowStatement.deletionSource)
+    || !deletionSourceIsBounded(file.text, rowStatement, target.sourceIdentity)
+    || hasUnprovenExecutableWithin(file.callModel, rowStatement, file.text)) return undefined;
+  const operations = program.operations.filter(operation => operation.kind === 'addRow'
+    && operation.status === 'applied' && !operation.localExpansion && operation.rowId === row.id
+    && operation.tableId === table.id && sameLocation(operation.source, rowCall.source));
+  if (operations.length !== 1) return undefined;
+  const rowOperation = operations[0];
+  const rowOwner = owners.get(rowOperation.id);
+  if (!rowOwner || rowOwner.kind !== 'table' || rowOwner.ownerId !== table.id
+    || rowOwner.frameId !== table.frameId) return undefined;
+  return { rowCall, rowStatement, rowOperation, rowName: assignedNames[0],
+    rowOwnerProof: { frameId: table.frameId, tableId: table.id, rowId: row.id } };
+};
+
+const emptyCellInsertionCandidateFor = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+  statements: readonly CompleteStructuralStatement[],
+  owners: ReadonlyMap<string, X4UiSourceEditStructuralOwner>,
+  row: X4UiLayoutProgram['rows'][number],
+  table: X4UiLayoutProgram['tables'][number],
+  cell: X4UiLayoutProgram['cells'][number],
+): EmptyCellInsertionCandidate | undefined => {
+  if (table.frameId === undefined
+    || table.frameId.length === 0
+    || table.numColumns === undefined
+    || !Number.isSafeInteger(table.numColumns)
+    || table.numColumns < 1
+    || row.tableId !== table.id
+    || cell.tableId !== table.id
+    || cell.rowId !== row.id
+    || cell.rowIndex === undefined
+    || row.rowIndex === undefined
+    || cell.rowIndex !== row.rowIndex
+    || cell.column < 1
+    || cell.column > table.numColumns
+    || row.cellIds.filter(cellId => cellId === cell.id).length !== 1
+    || cell.metadataOperationIds.length !== 0
+    || cell.status !== 'projected'
+    || row.status !== 'projected'
+    || table.status !== 'projected'
+    || cell.kernelState === undefined
+    || cell.kernelState.type !== 'cell'
+    || !Number.isSafeInteger(cell.kernelState.colspan)
+    || cell.kernelState.colspan < 1
+    || cell.column + cell.kernelState.colspan - 1 > table.numColumns
+    || cell.kernelState.bgcolspan !== 1
+    || row.kernelState === undefined
+    || table.kernelState === undefined
+    || table.kernelState.columns.length !== table.numColumns
+    || table.kernelState.rows[row.rowIndex - 1] === undefined
+    || !sameClosedData(table.kernelState.rows[row.rowIndex - 1], row.kernelState)
+    || !sameClosedData(table.kernelState.rows[row.rowIndex - 1].cells[cell.column - 1], cell.kernelState)) return undefined;
+
+  const localOwner = localRowOwnerForInsertion(file, target, program, row, table, owners);
+  if (!localOwner) return undefined;
+  const { rowCall, rowStatement, rowOperation, rowName, rowOwnerProof } = localOwner;
+
+  const displayCandidates = statements.filter(candidate => {
+    const displayCall = candidate.calls.find(call => call.name === 'display');
+    const displayOwner = ownerForStructuralCandidate(candidate, 'display', program, owners);
+    return displayCall !== undefined
+      && displayOwner?.kind === 'frame'
+      && displayOwner.ownerId === table.frameId
+      && displayCall.source.start.offset > rowCall.source.end.offset
+      && displayCall.source.start.offset > rowStatement.source.end.offset;
+  });
+  if (displayCandidates.length !== 1) return undefined;
+  const displayCandidate = displayCandidates[0];
+  const displayOwner = ownerForStructuralCandidate(displayCandidate, 'display', program, owners);
+  if (!displayOwner) return undefined;
+  const style = localInsertionStyle(file.text, displayCandidate.statement.deletionSource);
+  if (!style
+    || style.anchorOffset <= rowStatement.deletionSource.end.offset
+    || style.anchorOffset < rowCall.source.end.offset) return undefined;
+
+  // Empty cells may already own an applied setColSpan.  Every retained call
+  // still participates in the full correspondence ledger after insertion.
+  for (const id of cell.operationIds) {
+    const operation = program.operations.find(candidate => candidate.id === id);
+    if (!operation || operation.kind !== 'setColSpan' || operation.status !== 'applied'
+      || operation.localExpansion || operation.tableId !== table.id
+      || operation.rowId !== row.id || operation.cellId !== cell.id) return undefined;
+    const call = file.callModel.calls.find(candidate => candidate.order === operation.modelOrder
+      && sameLocation(candidate.source, operation.source));
+    const owner = owners.get(operation.id);
+    if (!call || !reachableTargetCall(call, target)
+      || call.receiver?.reference?.kind !== 'cell'
+      || call.receiver.reference.origin !== 'index'
+      || call.receiver.reference.parentPath !== rowName
+      || call.receiver.reference.index?.status !== 'static'
+      || call.receiver.reference.index.type !== 'number'
+      || call.receiver.reference.index.value !== cell.column
+      || structuralOperationForCall(call, program, target, evidenceAuthority)?.id !== id
+      || !statements.some(statement => statement.bindings.length === 1 && statement.bindings[0].operationId === id)
+      || operation.source.start.offset <= rowCall.source.end.offset
+      || operation.source.end.offset > style.anchorOffset
+      || owner?.kind !== 'table' || owner.ownerId !== table.id || owner.frameId !== table.frameId) return undefined;
+  }
+  const continuityStart = Math.max(rowCall.source.end.offset, rowStatement.deletionSource.end.offset);
+  if (!rowContinuityIsProven(file.callModel, program, row.id, file.text, rowName, continuityStart, style.anchorOffset)) return undefined;
+  const rebindsBeforeAnchor = file.callModel.calls.some(call => call !== rowCall
+    && assignedNamesOf(call).includes(rowName)
+    && call.source.start.offset >= rowCall.source.end.offset
+    && call.source.start.offset < style.anchorOffset)
+    || file.callModel.records.some(record => {
+      if (!isRecord(record)) return false;
+      const recordType = ownData(record, 'recordType');
+      const name = ownData(record, 'name');
+      const path = ownData(record, 'path');
+      const source = ownData(record, 'source');
+      const bounds = structuralLocationBounds(source);
+      return ((recordType === 'alias' && name === rowName) || (recordType === 'property' && path === rowName))
+        && bounds !== undefined
+        && bounds.start >= rowCall.source.end.offset
+        && bounds.start < style.anchorOffset;
+    });
+  if (rebindsBeforeAnchor) return undefined;
+  if (rowCall.receiver.reference?.path !== table.identity?.path) return undefined;
+  return {
+    rowReceiver: rowName,
+    rowCall,
+    rowOperation,
+    rowOwner: freezeDeep(rowOwnerProof),
+    displayCandidate,
+    displayOwner,
+    style,
+  };
+};
+
+const rowInsertionCandidateFor = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+  row: X4UiLayoutProgram['rows'][number],
+) => {
+  const table = program.tables.find(candidate => candidate.id === row.tableId);
+  if (!table || table.status !== 'projected' || row.status !== 'projected'
+    || !row.kernelState || !table.kernelState
+    || !sameClosedData(table.kernelState.rows[row.rowIndex - 1], row.kernelState)) return undefined;
+  const owners = structuralOwnerLedger(file.callModel, program);
+  const localOwner = localRowOwnerForInsertion(file, target, program, row, table, owners);
+  if (!localOwner) return undefined;
+  const receiver = localOwner.rowCall.receiver?.expression.trim();
+  if (!identifierExpression(receiver) || localOwner.rowCall.receiver?.reference?.path !== table.identity?.path) return undefined;
+  const statements = structuralStatements(file, program, evidenceAuthority, target);
+  const displays = statements.filter(candidate => {
+    const owner = ownerForStructuralCandidate(candidate, 'display', program, owners);
+    return owner?.kind === 'frame' && owner.ownerId === table.frameId
+      && candidate.statement.source.start.offset > localOwner.rowCall.source.end.offset;
+  });
+  if (displays.length !== 1) return undefined;
+  const nextRows = program.rows.filter(candidate => candidate.tableId === table.id && candidate.rowIndex === row.rowIndex + 1);
+  if (nextRows.length > 1) return undefined;
+  const nextOwner = nextRows.length === 1 ? localRowOwnerForInsertion(file, target, program, nextRows[0], table, owners) : undefined;
+  if (nextRows.length === 1 && !nextOwner) return undefined;
+  const anchorStatement = nextOwner?.rowStatement || displays[0].statement;
+  const style = localInsertionStyle(file.text, anchorStatement.deletionSource);
+  const displayStyle = localInsertionStyle(file.text, displays[0].statement.deletionSource);
+  const start = Math.max(localOwner.rowCall.source.end.offset, localOwner.rowStatement.deletionSource.end.offset);
+  const tableCalls = file.callModel.calls.filter(call => call.name === 'addTable' && sameLocation(call.source, table.source)
+    && reachableTargetCall(call, target) && program.operations.some(operation => operation.kind === 'addTable'
+      && operation.tableId === table.id && operation.status === 'applied' && !operation.localExpansion
+      && operation.modelOrder === call.order && sameLocation(operation.source, call.source)));
+  const tableStatement = tableCalls.length === 1 ? enclosingStatementOf(tableCalls[0]) : undefined;
+  if (!tableStatement || !identifierExpression(table.identity?.path)) return undefined;
+  const tableStart = Math.max(table.source.end.offset, tableStatement.deletionSource.end.offset);
+  const tableBindings = [{ name: table.identity.path, start: tableStart },
+    ...tableAliasRecordsForInsertion(file.callModel, program, table.id).filter(alias => alias.source.start.offset >= tableStart)
+      .map(alias => ({ name: alias.name, start: Math.max(alias.source.end.offset, alias.value.location.end.offset) }))];
+  if (!style || !displayStyle || style.anchorOffset <= start || style.anchorOffset > displayStyle.anchorOffset
+    || !rowContinuityIsProven(file.callModel, program, row.id, file.text, localOwner.rowName, start, style.anchorOffset)
+    || !tableBindings.filter(binding => binding.start < displayStyle.anchorOffset).every(binding =>
+      rowContinuityIsProven(file.callModel, program, table.id, file.text, binding.name, binding.start, displayStyle.anchorOffset, 'table'))) return undefined;
+  const binding = nextOwner ? { operationId: nextOwner.rowOperation.id, callName: nextOwner.rowCall.name,
+    callOrder: nextOwner.rowCall.order, callSource: nextOwner.rowCall.source } : displays[0].bindings[0];
+  return { table, localOwner, receiver, style, anchorStatement, binding };
+};
+
+const rowInsertionsFor = (
+  file: X4UiSourceFile, target: X4UiLayoutTarget, program: X4UiLayoutProgram, evidenceAuthority: X4UiLayoutEvidenceAuthority,
+): readonly X4UiSourceEditRowInsertionEntry[] => program.rows.flatMap(row => {
+  const candidate = rowInsertionCandidateFor(file, target, program, evidenceAuthority, row);
+  if (!candidate) return [];
+  const { table, style, anchorStatement, binding, localOwner } = candidate;
+  return [freezeDeep({ kind: 'insert-row' as const,
+    id: `${structuralInsertId(target, 'row-below', style.anchorOffset)}:${row.id}`,
+    path: file.path, startOffset: style.anchorOffset, endOffset: style.anchorOffset, expectedText: '' as const,
+    anchor: 'row-below' as const, anchorSource: pointLocation(anchorStatement.deletionSource, style.anchorOffset),
+    indentation: style.indentation, lineEnding: style.lineEnding,
+    frameId: table.frameId, tableId: table.id, rowId: row.id, rowIndex: row.rowIndex, rowSource: row.source,
+    provenance: { sourceIdentity: target.sourceIdentity, targetId: target.id, targetSource: target.source,
+      statementSource: anchorStatement.source, callBindings: [binding],
+      owner: { kind: 'table' as const, ownerId: table.id, frameId: table.frameId }, rowOwner: localOwner.rowOwnerProof },
+  })];
+});
+
+type LocalRowOwner = NonNullable<ReturnType<typeof localRowOwnerForInsertion>>;
+
+interface RowMoveCandidate {
+  readonly table: X4UiLayoutProgram['tables'][number];
+  readonly upper: LocalRowOwner & { readonly row: X4UiLayoutProgram['rows'][number] };
+  readonly lower: LocalRowOwner & { readonly row: X4UiLayoutProgram['rows'][number] };
+  readonly upperBlock: X4UiSourceEditRowMoveBlock;
+  readonly lowerBlock: X4UiSourceEditRowMoveBlock;
+}
+
+const ROW_MOVE_TABLE_PREPARATION_CALLS = new Set<X4UiRelevantCallName>([
+  'setColWidth',
+  'setColWidthPercent',
+  'setDefaultCellProperties',
+  'setDefaultComplexCellProperties',
+]);
+
+const rowMoveBlockFor = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+  row: X4UiLayoutProgram['rows'][number],
+  localOwner: LocalRowOwner,
+  statements: readonly CompleteStructuralStatement[],
+  owners: ReadonlyMap<string, X4UiSourceEditStructuralOwner>,
+  startOffset: number,
+  endOffset: number,
+): X4UiSourceEditRowMoveBlock | undefined => {
+  if (!validOffset(startOffset) || !validOffset(endOffset) || startOffset >= endOffset
+    || endOffset > file.text.length || localOwner.rowStatement.deletionSource.start.offset !== startOffset
+    || !locationWithin(target.source, localOwner.rowStatement.source)
+    || !locationWithin(target.source, localOwner.rowStatement.deletionSource)
+    || !deletionSourceIsBounded(file.text, localOwner.rowStatement, target.sourceIdentity)) return undefined;
+  const calls = file.callModel.calls.filter(call => {
+    const bounds = structuralLocationBounds(call.source);
+    return bounds !== undefined && bounds.start >= startOffset && bounds.end <= endOffset;
+  });
+  if (calls.length === 0 || !calls.includes(localOwner.rowCall)) return undefined;
+  const bindings: X4UiSourceEditStructuralCallBinding[] = [];
+  const operationIds = new Set<string>();
+  for (const call of calls) {
+    if (!reachableTargetCall(call, target)) return undefined;
+    const operation = structuralOperationForCall(call, program, target, evidenceAuthority);
+    if (!operation || operation.status !== 'applied' || operation.localExpansion
+      || operation.tableId !== row.tableId || operation.rowId !== row.id
+      || operationIds.has(operation.id)) return undefined;
+    operationIds.add(operation.id);
+    bindings.push({ operationId: operation.id, callName: call.name, callOrder: call.order, callSource: call.source });
+  }
+  const completeStatements = statements.filter(candidate => {
+    const bounds = structuralLocationBounds(candidate.statement.deletionSource);
+    return bounds !== undefined && bounds.start >= startOffset && bounds.end <= endOffset;
+  });
+  for (const statement of completeStatements) {
+    if (statement.bindings.length === 0 || statement.bindings.some(binding => !operationIds.has(binding.operationId))) return undefined;
+    for (const binding of statement.bindings) {
+      const operation = program.operations.find(candidate => candidate.id === binding.operationId);
+      const owner = operation ? owners.get(operation.id) : undefined;
+      if (!operation || operation.status !== 'applied' || operation.localExpansion
+        || operation.tableId !== row.tableId || operation.rowId !== row.id
+        || (operation.kind !== 'addRow' && operation.cellId === undefined)
+        || owner?.kind !== 'table' || owner.ownerId !== row.tableId
+        || owner.frameId !== localOwner.rowOwnerProof.frameId) return undefined;
+    }
+  }
+  const rawInvocations = ownData(file.callModel as unknown as object, 'localInvocations');
+  if (!Array.isArray(rawInvocations)) return undefined;
+  if (rawInvocations.some(invocation => {
+    if (!isRecord(invocation)) return true;
+    const bounds = structuralLocationBounds(ownData(invocation, 'source'));
+    return bounds !== undefined && bounds.start >= startOffset && bounds.end <= endOffset;
+  })) return undefined;
+  const rawGaps = ownData(file.callModel as unknown as object, 'verificationGaps');
+  if (!Array.isArray(rawGaps)) return undefined;
+  if (rawGaps.some(gap => {
+    if (!isRecord(gap)) return true;
+    const source = ownData(gap, 'source');
+    const bounds = structuralLocationBounds(source);
+    if (bounds === undefined || bounds.start < startOffset || bounds.end > endOffset) return false;
+    // A parser gap is not an unresolved layout gap when the issued layout owner
+    // consumed its exact input on these same proven row operations. Keep every
+    // other raw gap blocking; samples never authorize unknown statements/effects.
+    if (!isLocationRecord(source) || !['dynamic', 'unknown'].includes(String(ownData(gap, 'status')))) return true;
+    const gapSource = source as unknown as X4UiSourceLocation;
+    const entries = program.sampleCatalog.entries.filter(entry => entry.previewLoop === undefined
+      && entry.expression === ownData(gap, 'expression') && sameLocation(entry.source, gapSource));
+    if (entries.length !== 1 || program.gaps.some(remaining => sameLocation(remaining.source, gapSource))) return true;
+    const entry = entries[0];
+    const samples = program.previewSampleBindings.filter(sample => sample.id === entry.id && sample.status === 'consumed'
+      && sample.previewLoop === undefined && sample.expectedType === entry.expectedType && sameLocation(sample.source, entry.source));
+    return samples.length !== 1 || entry.consumers.length === 0 || !entry.consumers.every(consumer => {
+      const operation = program.operations.find(candidate => candidate.id === consumer.operationId);
+      return consumer.previewLoop === undefined && operationIds.has(consumer.operationId) && operation !== undefined
+        && operation.kind === consumer.operationKind && sameLocation(entry.source, consumer.source)
+        && locationWithin(operation.source, consumer.source);
+    });
+  })) return undefined;
+  const offendingRecord = file.callModel.records.find(record => {
+    if (!isRecord(record)) return true;
+    const bounds = structuralLocationBounds(ownData(record, 'source'));
+    if (bounds === undefined || bounds.start < startOffset || bounds.end > endOffset) return false;
+    const recordType = ownData(record, 'recordType');
+    if (recordType === 'call') return false;
+    if (recordType === 'alias') {
+      const source = ownData(record, 'source');
+      const statementBounds = structuralLocationBounds(localOwner.rowStatement.source);
+      const deletionBounds = structuralLocationBounds(localOwner.rowStatement.deletionSource);
+      return ownData(record, 'name') !== localOwner.rowName
+        || (statementBounds === undefined && deletionBounds === undefined)
+        || ((statementBounds === undefined || bounds.start < statementBounds.start || bounds.end > statementBounds.end)
+          && (deletionBounds === undefined || bounds.start < deletionBounds.start || bounds.end > deletionBounds.end))
+        || source === undefined;
+    }
+    if ((recordType === 'property' || recordType === 'handler')
+      && completeStatements.some(statement => {
+        const statementBounds = structuralLocationBounds(statement.statement.deletionSource);
+        return statementBounds !== undefined && bounds.start >= statementBounds.start && bounds.end <= statementBounds.end;
+      })) return false;
+    const path = ownData(record, 'path');
+    return typeof path !== 'string'
+      || !(path === localOwner.rowName || path.startsWith(`${localOwner.rowName}[`)
+        || path.startsWith(`${localOwner.rowName}.`));
+  });
+  if (offendingRecord) return undefined;
+  const maskedBlock = maskedLuaSourceForBoundedMutationCheck(file.text, startOffset, endOffset);
+  if (maskedBlock === undefined) return undefined;
+  const provenRanges = [
+    localOwner.rowStatement.deletionSource,
+    ...completeStatements.map(statement => statement.statement.deletionSource),
+  ].map(source => structuralLocationBounds(source));
+  if (provenRanges.some(bounds => bounds === undefined
+    || bounds.start < startOffset || bounds.end > endOffset)) return undefined;
+  const executableRemainder = maskedBlock.split('');
+  for (const bounds of provenRanges) {
+    if (!bounds) return undefined;
+    for (let index = bounds.start - startOffset; index < bounds.end - startOffset; index += 1) {
+      if (executableRemainder[index] !== '\n' && executableRemainder[index] !== '\r') executableRemainder[index] = ' ';
+    }
+  }
+  // Every non-comment, non-literal token in a movable block must be covered by
+  // an owner-proven structural statement.  Parser call membership alone is not
+  // authority for an unknown side effect interleaved inside the byte block.
+  if (executableRemainder.some(character => !/\s/.test(character))) return undefined;
+  const rowOwner = freezeDeep({
+    frameId: localOwner.rowOwnerProof.frameId,
+    tableId: localOwner.rowOwnerProof.tableId,
+    rowId: localOwner.rowOwnerProof.rowId,
+  });
+  return freezeDeep({
+    frameId: localOwner.rowOwnerProof.frameId,
+    tableId: localOwner.rowOwnerProof.tableId,
+    rowId: localOwner.rowOwnerProof.rowId,
+    rowIndex: row.rowIndex!,
+    rowSource: row.source,
+    statementSource: localOwner.rowStatement.source,
+    startOffset,
+    endOffset,
+    expectedText: file.text.slice(startOffset, endOffset),
+    creatorOperationId: localOwner.rowOperation.id,
+    creatorCallName: 'addRow' as const,
+    creatorSource: localOwner.rowCall.source,
+    callBindings: freezeArray(bindings.sort((left, right) => left.callOrder - right.callOrder)),
+    owner: freezeDeep({ kind: 'table' as const, ownerId: row.tableId!, frameId: localOwner.rowOwnerProof.frameId }),
+    rowOwner,
+  });
+};
+
+const rowMoveCandidateFor = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+  upperRow: X4UiLayoutProgram['rows'][number],
+  lowerRow: X4UiLayoutProgram['rows'][number],
+): RowMoveCandidate | undefined => {
+  const table = program.tables.find(candidate => candidate.id === upperRow.tableId);
+  if (!table || table.status !== 'projected' || upperRow.status !== 'projected' || lowerRow.status !== 'projected'
+    || upperRow.tableId !== table.id || lowerRow.tableId !== table.id
+    || upperRow.rowIndex === undefined || lowerRow.rowIndex !== upperRow.rowIndex + 1
+    || table.frameId === undefined || table.frameId.length === 0
+    || !table.kernelState || !upperRow.kernelState || !lowerRow.kernelState
+    || !sameClosedData(table.kernelState.rows[upperRow.rowIndex - 1], upperRow.kernelState)
+    || !sameClosedData(table.kernelState.rows[lowerRow.rowIndex - 1], lowerRow.kernelState)) return undefined;
+  const owners = structuralOwnerLedger(file.callModel, program);
+  const upperOwner = localRowOwnerForInsertion(file, target, program, upperRow, table, owners);
+  const lowerOwner = localRowOwnerForInsertion(file, target, program, lowerRow, table, owners);
+  if (!upperOwner || !lowerOwner || upperOwner.rowStatement.deletionSource.start.offset >= lowerOwner.rowStatement.deletionSource.start.offset
+    || upperOwner.rowCall.source.start.offset >= lowerOwner.rowCall.source.start.offset
+    || !sameIdentity(target.sourceIdentity, program.target.sourceIdentity)) return undefined;
+  const statements = structuralStatements(file, program, evidenceAuthority, target);
+  const displayCandidates = statements.filter(candidate => {
+    const display = candidate.calls.find(call => call.name === 'display');
+    const owner = ownerForStructuralCandidate(candidate, 'display', program, owners);
+    return display !== undefined && owner?.kind === 'frame' && owner.ownerId === table.frameId
+      && display.source.start.offset > lowerOwner.rowCall.source.end.offset
+      && display.source.start.offset > lowerOwner.rowStatement.source.end.offset;
+  });
+  if (displayCandidates.length !== 1) return undefined;
+  const displayCandidate = displayCandidates[0];
+  const displayCall = displayCandidate.calls.find(call => call.name === 'display');
+  if (!displayCall) return undefined;
+  const rows = program.rows.filter(row => row.tableId === table.id)
+    .sort((left, right) => (left.rowIndex || 0) - (right.rowIndex || 0));
+  const lowerPosition = rows.findIndex(row => row.id === lowerRow.id);
+  const nextRow = lowerPosition >= 0 ? rows[lowerPosition + 1] : undefined;
+  if (nextRow && nextRow.rowIndex !== lowerRow.rowIndex! + 1) return undefined;
+  const nextOwner = nextRow ? localRowOwnerForInsertion(file, target, program, nextRow, table, owners) : undefined;
+  if (nextRow && !nextOwner) return undefined;
+  const lowerEnd = nextOwner?.rowStatement.deletionSource.start.offset
+    ?? displayCandidate.statement.deletionSource.start.offset;
+  if (!validOffset(lowerEnd) || lowerEnd <= lowerOwner.rowStatement.deletionSource.start.offset
+    || lowerEnd > displayCandidate.statement.deletionSource.start.offset) return undefined;
+  const upperStart = upperOwner.rowStatement.deletionSource.start.offset;
+  const upperEnd = lowerOwner.rowStatement.deletionSource.start.offset;
+  if (upperEnd <= upperStart || lowerEnd <= upperEnd) return undefined;
+  const upperBlock = rowMoveBlockFor(file, target, program, evidenceAuthority, upperRow, upperOwner,
+    statements, owners, upperStart, upperEnd);
+  const lowerBlock = rowMoveBlockFor(file, target, program, evidenceAuthority, lowerRow, lowerOwner,
+    statements, owners, upperEnd, lowerEnd);
+  if (!upperBlock || !lowerBlock) return undefined;
+  const tableCalls = file.callModel.calls.filter(call => call.name === 'addTable'
+    && sameLocation(call.source, table.source) && reachableTargetCall(call, target)
+    && program.operations.some(operation => operation.kind === 'addTable' && operation.tableId === table.id
+      && operation.status === 'applied' && !operation.localExpansion && operation.modelOrder === call.order
+      && sameLocation(operation.source, call.source)));
+  const tableStatement = tableCalls.length === 1 ? enclosingStatementOf(tableCalls[0]) : undefined;
+  if (!tableStatement || !identifierExpression(table.identity?.path)) return undefined;
+  const tableStart = Math.max(table.source.end.offset, tableStatement.deletionSource.end.offset);
+  const tableBindings = [{ name: table.identity.path, start: tableStart },
+    ...tableAliasRecordsForInsertion(file.callModel, program, table.id).filter(alias => alias.source.start.offset >= tableStart)
+      .map(alias => ({ name: alias.name, start: Math.max(alias.source.end.offset, alias.value.location.end.offset) }))];
+  if (!tableBindings.every(binding => rowContinuityIsProven(
+    file.callModel, program, table.id, file.text, binding.name, binding.start, target.source.end.offset, 'table'))) return undefined;
+  const rowContinuityStart = (owner: LocalRowOwner): number =>
+    Math.max(owner.rowCall.source.end.offset, owner.rowStatement.deletionSource.end.offset);
+  if (!rowContinuityIsProven(file.callModel, program, upperRow.id, file.text, upperOwner.rowName,
+    rowContinuityStart(upperOwner), target.source.end.offset)
+    || !rowContinuityIsProven(file.callModel, program, lowerRow.id, file.text, lowerOwner.rowName,
+      rowContinuityStart(lowerOwner), target.source.end.offset)) return undefined;
+  const tablePreparationAfterFirstRow = program.operations.some(operation => {
+    const sourceStart = operation.source.start.offset;
+    return operation.status === 'applied' && !operation.localExpansion && operation.tableId === table.id
+      && sourceStart >= upperStart && sourceStart < displayCall.source.start.offset
+      && (ROW_MOVE_TABLE_PREPARATION_CALLS.has(operation.kind) || operation.rowId === undefined);
+  });
+  if (tablePreparationAfterFirstRow) return undefined;
+  return {
+    table,
+    upper: { ...upperOwner, row: upperRow },
+    lower: { ...lowerOwner, row: lowerRow },
+    upperBlock,
+    lowerBlock,
+  };
+};
+
+const rowMoveEntriesFor = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+): readonly X4UiSourceEditRowMoveEntry[] => {
+  const entries: X4UiSourceEditRowMoveEntry[] = [];
+  const tableIds = [...new Set(program.rows.map(row => row.tableId).filter((id): id is string => id !== undefined))];
+  for (const tableId of tableIds) {
+    const rows = program.rows.filter(row => row.tableId === tableId)
+      .sort((left, right) => (left.rowIndex || 0) - (right.rowIndex || 0));
+    for (let index = 0; index + 1 < rows.length; index += 1) {
+      const upperRow = rows[index];
+      const lowerRow = rows[index + 1];
+      const candidate = rowMoveCandidateFor(file, target, program, evidenceAuthority, upperRow, lowerRow);
+      if (!candidate) continue;
+      const pairBindings = freezeArray([...candidate.upperBlock.callBindings, ...candidate.lowerBlock.callBindings]);
+      const makeEntry = (direction: X4UiSourceEditRowMoveDirection, row: X4UiSourceEditRowMoveBlock, adjacent: X4UiSourceEditRowMoveBlock) =>
+        freezeDeep({
+          kind: 'move-row' as const,
+          id: `x4-ui-source-move-row:${target.id}:${candidate.table.id}:${upperRow.id}:${lowerRow.id}:${direction}:${candidate.upperBlock.startOffset}:${candidate.lowerBlock.endOffset}`,
+          path: file.path,
+          startOffset: candidate.upperBlock.startOffset,
+          endOffset: candidate.lowerBlock.endOffset,
+          expectedText: file.text.slice(candidate.upperBlock.startOffset, candidate.lowerBlock.endOffset),
+          direction,
+          frameId: candidate.table.frameId!,
+          tableId: candidate.table.id,
+          rowId: row.rowId,
+          rowIndex: row.rowIndex,
+          adjacentRowId: adjacent.rowId,
+          adjacentRowIndex: adjacent.rowIndex,
+          upper: candidate.upperBlock,
+          lower: candidate.lowerBlock,
+          provenance: {
+            sourceIdentity: target.sourceIdentity,
+            targetId: target.id,
+            targetSource: target.source,
+            statementSource: row.statementSource,
+            callBindings: pairBindings,
+            owner: row.owner,
+            rowOwner: row.rowOwner,
+          },
+        });
+      entries.push(makeEntry('down', candidate.upperBlock, candidate.lowerBlock));
+      entries.push(makeEntry('up', candidate.lowerBlock, candidate.upperBlock));
+    }
+  }
+  return freezeArray(entries.sort((left, right) => left.startOffset - right.startOffset || left.direction.localeCompare(right.direction)));
+};
+
+const emptyCellInsertionsFor = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+): readonly X4UiSourceEditEmptyCellEntry[] => {
+  const statements = structuralStatements(file, program, evidenceAuthority, target);
+  const owners = structuralOwnerLedger(file.callModel, program);
+  const tablesById = new Map(program.tables.map(table => [table.id, table]));
+  const rowsById = new Map(program.rows.map(row => [row.id, row]));
+  const entries: X4UiSourceEditEmptyCellEntry[] = [];
+  for (const cell of program.cells) {
+    if (cell.tableId === undefined || cell.rowId === undefined) continue;
+    const table = tablesById.get(cell.tableId);
+    const row = rowsById.get(cell.rowId);
+    if (!table || !row) continue;
+    const candidate = emptyCellInsertionCandidateFor(
+      file,
+      target,
+      program,
+      evidenceAuthority,
+      statements,
+      owners,
+      row,
+      table,
+      cell,
+    );
+    if (!candidate) continue;
+    const anchorSource = pointLocation(candidate.displayCandidate.statement.deletionSource, candidate.style.anchorOffset);
+    entries.push(freezeDeep({
+      kind: 'insert-widget',
+      id: structuralWidgetInsertId(
+        target,
+        candidate.rowOwner.frameId,
+        candidate.rowOwner.tableId,
+        candidate.rowOwner.rowId,
+        cell.id,
+        candidate.style.anchorOffset,
+      ),
+      path: file.path,
+      startOffset: candidate.style.anchorOffset,
+      endOffset: candidate.style.anchorOffset,
+      expectedText: '',
+      anchor: 'empty-cell',
+      anchorSource,
+      indentation: candidate.style.indentation,
+      lineEnding: candidate.style.lineEnding,
+      column: cell.column,
+      frameId: candidate.rowOwner.frameId,
+      tableId: candidate.rowOwner.tableId,
+      rowId: candidate.rowOwner.rowId,
+      cellId: cell.id,
+      rowSource: candidate.rowCall.source,
+      cellSource: cell.source,
+      provenance: freezeDeep({
+        ...structuralEntryProvenance(
+          target.sourceIdentity,
+          target,
+          candidate.displayCandidate,
+        ),
+        owner: candidate.displayOwner,
+        rowOwner: candidate.rowOwner,
+      }),
+    }));
+  }
+  return freezeArray(entries.sort((left, right) => left.startOffset - right.startOffset || left.column - right.column));
 };
 
 const structuralEntriesFor = (
@@ -2192,7 +3311,10 @@ const structuralEntriesFor = (
       }));
     }
   }
-  return freezeArray([...deletions, ...replacements, ...insertions]);
+  const widgetInsertions = emptyCellInsertionsFor(file, target, program, evidenceAuthority);
+  const rowMoves = rowMoveEntriesFor(file, target, program, evidenceAuthority);
+  return freezeArray([...deletions, ...replacements, ...insertions, ...widgetInsertions,
+    ...rowInsertionsFor(file, target, program, evidenceAuthority), ...rowMoves]);
 };
 
 const structuralIgnoredKeys = new Set<string>();
@@ -2403,6 +3525,18 @@ const structuralSchemaOwnsField = (
   return schema === 'parser-property' && key === 'sourceOrder';
 };
 
+interface StructuralRowPermutation {
+  readonly upperStart: number;
+  readonly upperEnd: number;
+  readonly lowerStart: number;
+  readonly lowerEnd: number;
+  readonly nodeIdMap: ReadonlyMap<string, string>;
+  readonly operationIdMap: ReadonlyMap<string, string>;
+  readonly callOrderMap: ReadonlyMap<number, number>;
+  readonly recordOrderMap: ReadonlyMap<number, number>;
+  readonly operationModelOrderMap: ReadonlyMap<number, number>;
+}
+
 interface StructuralSplice {
   readonly beforeText: string;
   readonly afterText: string;
@@ -2411,6 +3545,7 @@ interface StructuralSplice {
   readonly replacementLength: number;
   readonly orderShift: number;
   readonly side: 'before' | 'after';
+  readonly rowPermutation?: StructuralRowPermutation;
 }
 
 interface StructuralInvariantState {
@@ -2425,6 +3560,12 @@ const structuralInvariant = (
   state: StructuralInvariantState = { valid: true },
   schema: StructuralRecordSchema = 'exact',
 ): unknown => {
+  if (typeof value === 'string' && splice?.rowPermutation && splice.side === 'before') {
+    if (schema === 'operation' && key === 'id') return splice.rowPermutation.operationIdMap.get(value) || '<unmapped-operation-id>';
+    if (schema === 'operation' && ['frameId', 'tableId', 'rowId', 'cellId'].includes(key)) {
+      return splice.rowPermutation.nodeIdMap.get(value) || '<unmapped-node-id>';
+    }
+  }
   if (typeof value === 'string' && splice
     && ((schema === 'operation' && structuralOperationSourceDerivedKeys.has(key))
       || (schema === 'parser-reference' && structuralParserReferenceSourceDerivedKeys.has(key))
@@ -2443,17 +3584,20 @@ const structuralInvariant = (
   if (typeof value === 'number' && splice && splice.side === 'before'
     && (((schema === 'call' || isStructuralCompleteRecordSchema(schema)) && key === 'order')
       || (schema === 'operation' && structuralOperationOrderKeys.has(key)))) {
+    if (splice.rowPermutation) {
+      const mappedOrder = schema === 'operation'
+        ? splice.rowPermutation.operationModelOrderMap.get(value)
+        : schema === 'call'
+          ? splice.rowPermutation.callOrderMap.get(value)
+          : splice.rowPermutation.recordOrderMap.get(value);
+      return mappedOrder === undefined ? '<unmapped-order>' : mappedOrder;
+    }
     return value + splice.orderShift;
   }
   if (typeof value === 'number' && splice && splice.side === 'before' && key === 'sourceOrder'
     && (schema === 'call' || isStructuralCompleteRecordSchema(schema)
       || schema === 'operation' || schema === 'parser-property')) {
-    const mapped = mapStructuralOffset(
-      value,
-      splice.startOffset,
-      splice.endOffset,
-      splice.replacementLength,
-    );
+    const mapped = mapStructuralOffsetThroughSplice(value, splice);
     return mapped === undefined ? '<invalid-splice-offset>' : mapped;
   }
   if (schema !== 'exact'
@@ -2486,6 +3630,14 @@ const structuralInvariant = (
     if (ignoredKeys.has(childKey)) continue;
     if (child === undefined) {
       result[childKey] = child;
+      continue;
+    }
+    if (splice && schema === 'descriptor-fact' && (childKey === 'sampleId' || childKey === 'sampleIds')) {
+      const ids = childKey === 'sampleId' ? [child] : child;
+      if (!Array.isArray(ids)) { state.valid = false; continue; }
+      const mapped = ids.map(id => remapStructuralSampleIdentity(id, splice));
+      if (mapped.some(id => id === undefined)) state.valid = false;
+      result[childKey] = childKey === 'sampleId' ? mapped[0] : mapped;
       continue;
     }
     if (splice
@@ -2569,6 +3721,72 @@ const mapStructuralRangeOffsets = (
     : { start: mappedStart, end: mappedEnd };
 };
 
+const mapRowMovePoint = (
+  offset: number,
+  permutation: StructuralRowPermutation,
+  endpoint: 'start' | 'end' = 'start',
+): number | undefined => {
+  if (offset < permutation.upperStart || offset > permutation.lowerEnd) return offset;
+  const lowerLength = permutation.lowerEnd - permutation.lowerStart;
+  if (offset === permutation.lowerEnd) {
+    // At the pair's end, a range ending with the lower block lands at the
+    // relocated lower end; a source-order start for following content stays
+    // at the unchanged pair boundary.
+    return endpoint === 'end' ? permutation.upperStart + lowerLength : offset;
+  }
+  if (offset === permutation.upperStart) {
+    return endpoint === 'end' ? permutation.upperStart : permutation.upperStart + lowerLength;
+  }
+  if (offset === permutation.upperEnd) {
+    // The seam has two legitimate affinities: the lower block starts at the
+    // pair's new start, while the upper block ends at the pair's new end.
+    return endpoint === 'end' ? permutation.lowerEnd : permutation.upperStart;
+  }
+  if (offset < permutation.upperEnd) return permutation.upperStart + lowerLength + (offset - permutation.upperStart);
+  return permutation.upperStart + (offset - permutation.lowerStart);
+};
+
+const mapRowMoveRange = (
+  start: number,
+  end: number,
+  permutation: StructuralRowPermutation,
+): { readonly start: number; readonly end: number } | undefined => {
+  if (start > end) return undefined;
+  if (end <= permutation.upperStart || start >= permutation.lowerEnd
+    || (start <= permutation.upperStart && end >= permutation.lowerEnd)) return { start, end };
+  if (start >= permutation.upperStart && end <= permutation.upperEnd) {
+    const lowerLength = permutation.lowerEnd - permutation.lowerStart;
+    return {
+      start: permutation.upperStart + lowerLength + (start - permutation.upperStart),
+      end: permutation.upperStart + lowerLength + (end - permutation.upperStart),
+    };
+  }
+  if (start >= permutation.lowerStart && end <= permutation.lowerEnd) {
+    return {
+      start: permutation.upperStart + (start - permutation.lowerStart),
+      end: permutation.upperStart + (end - permutation.lowerStart),
+    };
+  }
+  return undefined;
+};
+
+const mapStructuralOffsetThroughSplice = (
+  offset: number,
+  splice: StructuralSplice,
+  endpoint: 'start' | 'end' = 'start',
+): number | undefined => splice.side === 'before' && splice.rowPermutation
+  ? mapRowMovePoint(offset, splice.rowPermutation, endpoint)
+  : mapStructuralOffset(offset, splice.startOffset, splice.endOffset, splice.replacementLength, endpoint);
+
+const mapStructuralRangeOffsetsThroughSplice = (
+  start: number,
+  end: number,
+  splice: StructuralSplice,
+): { readonly start: number; readonly end: number } | undefined => {
+  if (splice.side === 'before' && splice.rowPermutation) return mapRowMoveRange(start, end, splice.rowPermutation);
+  return mapStructuralRangeOffsets(start, end, splice.startOffset, splice.endOffset, splice.replacementLength);
+};
+
 const hasClosedStructuralKeys = (
   value: unknown,
   required: ReadonlySet<string>,
@@ -2644,6 +3862,37 @@ const structuralEnum = (value: unknown, values: readonly string[]): value is str
 
 const structuralStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(candidate => structuralString(candidate, true));
+
+const structuralNumericSampleIdsAreValid = (value: unknown): value is readonly string[] => {
+  try {
+    if (!Array.isArray(value)) return false;
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (lengthDescriptor === undefined
+      || !('value' in lengthDescriptor)
+      || lengthDescriptor.enumerable
+      || !Number.isSafeInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 2
+      || lengthDescriptor.value > 128) return false;
+    const length = lengthDescriptor.value;
+    const ownKeys = Reflect.ownKeys(value);
+    const denseKeys = Array.from({ length }, (_, index) => String(index));
+    if (Object.getPrototypeOf(value) !== Array.prototype
+      || ownKeys.length !== denseKeys.length + 1
+      || ownKeys.some((key, index) => key !== (index < denseKeys.length ? denseKeys[index] : 'length'))) return false;
+    const ids: string[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !('value' in descriptor)
+        || descriptor.enumerable !== true
+        || typeof descriptor.value !== 'string'
+        || descriptor.value.length === 0) return false;
+      ids.push(descriptor.value);
+    }
+    return new Set(ids).size === ids.length && JSON.stringify([...ids].sort()) === JSON.stringify(ids);
+  } catch {
+    return false;
+  }
+};
 
 const structuralLocationForText = (
   value: unknown,
@@ -2790,7 +4039,7 @@ const structuralDescriptorFactIsValid = (
     if (!structuralRecordKeys(
       value,
       ['status', 'expectedType', 'value', 'provenance', 'expression', 'source'],
-      ['sourcePin', 'sampleId'],
+      ['sourcePin', 'sampleId', 'sampleIds'],
     )) return false;
     const expectedType = ownData(value, 'expectedType');
     const literal = ownData(value, 'value');
@@ -2806,13 +4055,22 @@ const structuralDescriptorFactIsValid = (
       : structuralEnum(ownData(value, 'provenance'), [
         'source-literal', 'source-pinned-default', 'direct-helper-scale', 'preview-sample',
       ]);
+    const hasSampleId = Object.prototype.hasOwnProperty.call(value, 'sampleId');
+    const hasSampleIds = Object.prototype.hasOwnProperty.call(value, 'sampleIds');
+    const sampleIdValid = !hasSampleId || structuralString(ownData(value, 'sampleId'), true);
+    const sampleIdsValid = !hasSampleIds
+      || (expectedType === 'number'
+        && ownData(value, 'provenance') === 'preview-sample'
+        && structuralNumericSampleIdsAreValid(ownData(value, 'sampleIds')));
     return (expectedType === 'color-object' || structuralEnum(expectedType, ['number', 'string', 'boolean']))
       && literalValid
       && provenanceValid
       && structuralString(ownData(value, 'expression'))
       && structuralLocationForText(ownData(value, 'source'), text)
       && structuralOptionalData(value, 'sourcePin', structuralSourcePinIsValid)
-      && structuralOptionalData(value, 'sampleId', candidate => structuralString(candidate, true));
+      && !((expectedType === 'color-object' && hasSampleIds) || (hasSampleId && hasSampleIds))
+      && sampleIdValid
+      && sampleIdsValid;
   }
   if (status !== 'unavailable'
     || !structuralRecordKeys(
@@ -3356,13 +4614,7 @@ const structuralLocationInvariant = (
       end,
     };
   }
-  const mapped = mapStructuralRangeOffsets(
-    start.offset,
-    end.offset,
-    splice.startOffset,
-    splice.endOffset,
-    splice.replacementLength,
-  );
+  const mapped = mapStructuralRangeOffsetsThroughSplice(start.offset, end.offset, splice);
   if (!mapped) return undefined;
   const mappedStartPosition = lineColumnAt(splice.afterText, mapped.start);
   const mappedEndPosition = lineColumnAt(splice.afterText, mapped.end);
@@ -3390,13 +4642,7 @@ const remapStructuralLedgerIdentity = (value: string, splice: StructuralSplice):
     _beforeColumnEnd: string,
     rawEnd: string,
   ) => {
-    const mapped = mapStructuralRangeOffsets(
-      Number(rawStart),
-      Number(rawEnd),
-      splice.startOffset,
-      splice.endOffset,
-      splice.replacementLength,
-    );
+    const mapped = mapStructuralRangeOffsetsThroughSplice(Number(rawStart), Number(rawEnd), splice);
     if (!mapped) return '||<invalid-splice-location>|<invalid-splice-location>';
     const start = lineColumnAt(splice.afterText, mapped.start);
     const end = lineColumnAt(splice.afterText, mapped.end);
@@ -3422,7 +4668,11 @@ const structuralOrderShift = (
     const bounds = structuralLocationBounds(source);
     return bounds?.end;
   };
-  const insertedBefore = (entry.kind === 'insert-call' || entry.kind === 'insert-block' || entry.kind === 'replace-statement') && beforeOffset >= entry.startOffset
+  const insertedBefore = (entry.kind === 'insert-call'
+    || entry.kind === 'insert-block'
+    || entry.kind === 'insert-widget'
+    || entry.kind === 'insert-row'
+    || entry.kind === 'replace-statement') && beforeOffset >= entry.startOffset
     ? afterRecords.filter(record => {
       const start = completeRecordSourceStart(record);
       const end = completeRecordSourceEnd(record);
@@ -3446,30 +4696,37 @@ const structuralOrderShift = (
   return insertedBefore - removedBefore;
 };
 
+/** Validate the complete source-derived sample identity before rebasing it. Never ignore sample IDs. */
+const remapStructuralSampleIdentity = (value: unknown, splice: StructuralSplice): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  // Existing opaque schema-fixture IDs retain exact comparison. Only the owner
+  // source-derived format is eligible for rebasing; this does not issue authority.
+  if (!value.startsWith('preview-sample:')) return value;
+  const match = /^preview-sample:([A-F0-9]{64})\|(\d+):(\d+):(\d+)-(\d+):(\d+):(\d+)\|(string|number|boolean)$/.exec(value);
+  // A derived numeric height may depend on a string sample. Preserve the input
+  // type in the exact ID; do not conflate it with the descriptor's output type.
+  if (!match) return undefined;
+  const text = splice.side === 'before' ? splice.beforeText : splice.afterText;
+  const start = Number(match[4]); const end = Number(match[7]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > text.length
+    || match[1] !== sha256(text)) return undefined;
+  const startPosition = lineColumnAt(text, start); const endPosition = lineColumnAt(text, end);
+  if (startPosition.line !== Number(match[2]) || startPosition.column !== Number(match[3])
+    || endPosition.line !== Number(match[5]) || endPosition.column !== Number(match[6])) return undefined;
+  if (splice.side === 'after') return value;
+  const mapped = mapStructuralRangeOffsetsThroughSplice(start, end, splice);
+  if (!mapped) return undefined;
+  const nextStart = lineColumnAt(splice.afterText, mapped.start); const nextEnd = lineColumnAt(splice.afterText, mapped.end);
+  return `preview-sample:${sha256(splice.afterText)}|${nextStart.line}:${nextStart.column}:${mapped.start}-${nextEnd.line}:${nextEnd.column}:${mapped.end}|${match[8]}`;
+};
+
 const remapSourceDerivedIdentity = (value: string, splice: StructuralSplice): string => {
   if (splice.side === 'after') return value;
-  const mappedOffset = (raw: string): number | undefined => mapStructuralOffset(
-    Number(raw),
-    splice.startOffset,
-    splice.endOffset,
-    splice.replacementLength,
-  );
+  const mappedOffset = (raw: string): number | undefined => mapStructuralOffsetThroughSplice(Number(raw), splice);
   const parameterMatch = /^(local-parameter:local-function:[^|]*\|[^|]*\|)(\d+)\|(\d+)(\|\d+\|)(\d+)\|(\d+)$/.exec(value);
   if (parameterMatch) {
-    const declaration = mapStructuralRangeOffsets(
-      Number(parameterMatch[2]),
-      Number(parameterMatch[3]),
-      splice.startOffset,
-      splice.endOffset,
-      splice.replacementLength,
-    );
-    const parameter = mapStructuralRangeOffsets(
-      Number(parameterMatch[5]),
-      Number(parameterMatch[6]),
-      splice.startOffset,
-      splice.endOffset,
-      splice.replacementLength,
-    );
+    const declaration = mapStructuralRangeOffsetsThroughSplice(Number(parameterMatch[2]), Number(parameterMatch[3]), splice);
+    const parameter = mapStructuralRangeOffsetsThroughSplice(Number(parameterMatch[5]), Number(parameterMatch[6]), splice);
     return declaration && parameter
       ? `${parameterMatch[1]}${declaration.start}|${declaration.end}${parameterMatch[4]}${parameter.start}|${parameter.end}`
       : `${parameterMatch[1]}<invalid-splice-offset>|<invalid-splice-offset>${parameterMatch[4]}<invalid-splice-offset>|<invalid-splice-offset>`;
@@ -3488,13 +4745,7 @@ const remapSourceDerivedIdentity = (value: string, splice: StructuralSplice): st
     rawStart: string,
     rawEnd: string,
   ) => {
-    const mapped = mapStructuralRangeOffsets(
-      Number(rawStart),
-      Number(rawEnd),
-      splice.startOffset,
-      splice.endOffset,
-      splice.replacementLength,
-    );
+    const mapped = mapStructuralRangeOffsetsThroughSplice(Number(rawStart), Number(rawEnd), splice);
     return !mapped
       ? `${prefix}<invalid-splice-offset>|<invalid-splice-offset>`
       : `${prefix}${mapped.start}|${mapped.end}`;
@@ -3510,13 +4761,7 @@ const remapSourceDerivedIdentity = (value: string, splice: StructuralSplice): st
       _beforeColumnEnd: string,
       rawEnd: string,
     ) => {
-      const mapped = mapStructuralRangeOffsets(
-        Number(rawStart),
-        Number(rawEnd),
-        splice.startOffset,
-        splice.endOffset,
-        splice.replacementLength,
-      );
+      const mapped = mapStructuralRangeOffsetsThroughSplice(Number(rawStart), Number(rawEnd), splice);
       if (!mapped) {
         return `${prefix}<invalid-splice-location>|<invalid-splice-location>`;
       }
@@ -3532,13 +4777,7 @@ const remapStructuralBranchIdentity = (value: string, splice: StructuralSplice):
   if (splice.side === 'after') return value;
   const match = /^([^|]*\|[^|]*\|)(\d+)\|(\d+)(:arm:\d+)?$/.exec(value);
   if (!match) return value;
-  const mapped = mapStructuralRangeOffsets(
-    Number(match[2]),
-    Number(match[3]),
-    splice.startOffset,
-    splice.endOffset,
-    splice.replacementLength,
-  );
+  const mapped = mapStructuralRangeOffsetsThroughSplice(Number(match[2]), Number(match[3]), splice);
   return mapped
     ? `${match[1]}${mapped.start}|${mapped.end}${match[4] || ''}`
     : `${match[1]}<invalid-splice-offset>|<invalid-splice-offset>${match[4] || ''}`;
@@ -3960,11 +5199,23 @@ const structuralKernelLedgerStatesCorrespond = (
   insertedOperationIndex: number | ReadonlySet<number>,
   splice: StructuralSplice,
   allowInsertedTransitionDrift = false,
+  rowInsertion?: X4UiSourceEditRowInsertionEntry,
 ): boolean => {
   const insertedOperationIndexes = typeof insertedOperationIndex === 'number'
     ? new Set([insertedOperationIndex])
     : insertedOperationIndex;
   const tableStates = new Map<string, unknown>();
+  let insertedRowState: unknown;
+  let rowDiagnosticIndex = 0;
+  let insertedRowDiagnostics: readonly unknown[] = [];
+  const mapRowState = (state: unknown): unknown => {
+    if (!rowInsertion || insertedRowState === undefined) return state;
+    if (!isRecord(state) || !Array.isArray(state.rows) || !Array.isArray(state.diagnostics)
+      || state.rows.length < rowInsertion.rowIndex) return STRUCTURAL_STATE_UNMAPPABLE;
+    return { ...state,
+      rows: [...state.rows.slice(0, rowInsertion.rowIndex), insertedRowState, ...state.rows.slice(rowInsertion.rowIndex)],
+      diagnostics: [...state.diagnostics.slice(0, rowDiagnosticIndex), ...insertedRowDiagnostics, ...state.diagnostics.slice(rowDiagnosticIndex)] };
+  };
   const beforeTableId = (operation: X4UiLayoutOperation): string | undefined => {
     const tableId = recordString(operation as unknown as Record<string, unknown>, 'tableId');
     return tableId ? remapStructuralLedgerIdentity(tableId, splice) : undefined;
@@ -3994,6 +5245,12 @@ const structuralKernelLedgerStatesCorrespond = (
     const mappedTableId = beforeTableId(before);
     const tableId = afterTableId(after);
     if (!mappedTableId || !tableId || mappedTableId !== tableId) return false;
+    if (rowInsertion && insertedRowState !== undefined && tableId === rowInsertion.tableId) {
+      if (!sameClosedData(mapRowState(beforeStates.stateBefore), afterStates.stateBefore)
+        || !sameClosedData(mapRowState(beforeStates.stateAfter), afterStates.stateAfter)) return false;
+      tableStates.set(tableId, afterStates.stateAfter);
+      return true;
+    }
     let current = tableStates.get(tableId);
     if (beforeStates.hasStateBefore) {
       if (!tableStates.has(tableId)) {
@@ -4026,6 +5283,22 @@ const structuralKernelLedgerStatesCorrespond = (
     }
     if (!tableId || !states.hasStateBefore || !states.hasStateAfter || !tableStates.has(tableId)
       || !sameClosedData(tableStates.get(tableId), states.stateBefore)) return false;
+    if (rowInsertion) {
+      if (insertedRowState !== undefined || operation.kind !== 'addRow' || tableId !== rowInsertion.tableId
+        || !isRecord(states.stateBefore) || !Array.isArray(states.stateBefore.rows)
+        || states.stateBefore.rows.length !== rowInsertion.rowIndex) return false;
+      const expected = addHelperRow(states.stateBefore as unknown as HelperTableState, {});
+      if (expected.status !== 'ok') return false;
+      // LayoutProgram issues JSON-like snapshots of the trusted kernel result,
+      // omitting undefined optional fields. Do not normalize the caller's ledger.
+      const expectedState: HelperTableState = JSON.parse(JSON.stringify(expected.value));
+      if (!sameClosedData(expectedState, states.stateAfter)) return false;
+      insertedRowState = expectedState.rows[rowInsertion.rowIndex];
+      rowDiagnosticIndex = (states.stateBefore as unknown as HelperTableState).diagnostics.length;
+      insertedRowDiagnostics = expectedState.diagnostics.slice(rowDiagnosticIndex);
+      tableStates.set(tableId, states.stateAfter);
+      return true;
+    }
     if (allowInsertedTransitionDrift) {
       const authoritativeEnvelope = beforeOperations
         .filter(before => {
@@ -4180,6 +5453,506 @@ const structuralProducerRecordIsValid = (
   return state.valid;
 };
 
+const structuralRecordSchemaFor = (recordType: unknown): StructuralRecordSchema | undefined =>
+  recordType === 'call' ? 'call'
+    : recordType === 'property' ? 'property-record'
+      : recordType === 'handler' ? 'handler-record'
+        : recordType === 'alias' ? 'alias-record'
+          : undefined;
+
+const rowMoveMappedSource = (
+  source: unknown,
+  splice: StructuralSplice,
+): X4UiSourceLocation | undefined => {
+  if (!isLocationRecord(source)) return undefined;
+  const mapped = structuralLocationInvariant(source, splice);
+  return isLocationRecord(mapped) ? mapped : undefined;
+};
+
+const rowMoveSourceBytesCorrespond = (
+  beforeSource: unknown,
+  afterSource: unknown,
+  beforeText: string,
+  afterText: string,
+  splice: StructuralSplice,
+): boolean => {
+  const beforeBounds = structuralLocationBounds(beforeSource);
+  const afterBounds = structuralLocationBounds(afterSource);
+  const mapped = rowMoveMappedSource(beforeSource, splice);
+  if (!beforeBounds || !afterBounds || !mapped || !isLocationRecord(afterSource)
+    || !sameLocation(mapped, afterSource)) return false;
+  const mappedBounds = { start: mapped.start.offset, end: mapped.end.offset };
+  const crossesPair = beforeBounds.start < splice.startOffset && beforeBounds.end > splice.startOffset
+    || beforeBounds.start < splice.endOffset && beforeBounds.end > splice.endOffset;
+  if (crossesPair) return beforeBounds.start <= splice.startOffset && beforeBounds.end >= splice.endOffset;
+  return beforeText.slice(beforeBounds.start, beforeBounds.end)
+    === afterText.slice(mappedBounds.start, mappedBounds.end);
+};
+
+interface RowMoveOperationStateTokens {
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+}
+
+const rowMoveOperationStateTokens = (
+  operations: readonly X4UiLayoutOperation[],
+): ReadonlyMap<X4UiLayoutOperation, RowMoveOperationStateTokens> => {
+  const rowsByTable = new Map<string, string[]>();
+  const result = new Map<X4UiLayoutOperation, RowMoveOperationStateTokens>();
+  for (const operation of operations) {
+    const tableId = recordString(operation as unknown as object, 'tableId');
+    const current = tableId ? (rowsByTable.get(tableId) || []) : [];
+    const before = [...current];
+    const after = [...current];
+    const rowId = recordString(operation as unknown as object, 'rowId');
+    if (operation.kind === 'addRow' && rowId) after.push(rowId);
+    result.set(operation, { before, after });
+    if (tableId) rowsByTable.set(tableId, after);
+  }
+  return result;
+};
+
+const rowMoveKernelRowStateMap = (
+  state: unknown,
+  tokens: readonly string[],
+): ReadonlyMap<string, unknown> | undefined => {
+  if (!isRecord(state) || !Array.isArray(ownData(state, 'rows'))) return undefined;
+  const rows = ownData(state, 'rows') as readonly unknown[];
+  if (rows.length !== tokens.length || new Set(tokens).size !== tokens.length) return undefined;
+  return new Map(tokens.map((token, index) => [token, rows[index]] as const));
+};
+
+const rowMoveFirstRowFinalizationEquivalent = (
+  beforeState: unknown,
+  afterState: unknown,
+  beforeTokens: readonly string[],
+  afterTokens: readonly string[],
+  rowIdMap: ReadonlyMap<string, string>,
+  movedRowIds: readonly string[],
+): boolean => {
+  if (!isRecord(beforeState) || !isRecord(afterState)
+    || !Array.isArray(ownData(beforeState, 'rows')) || !Array.isArray(ownData(afterState, 'rows'))
+    || beforeTokens.length !== (ownData(beforeState, 'rows') as readonly unknown[]).length
+    || afterTokens.length !== (ownData(afterState, 'rows') as readonly unknown[]).length
+    || movedRowIds.length !== 2) return false;
+  const mapAfterToken = (token: string): string | undefined => {
+    for (const [beforeId, afterId] of rowIdMap.entries()) if (afterId === token) return beforeId;
+    return undefined;
+  };
+  const stripRows = (state: Record<string, unknown>): Record<string, unknown> => ({ ...state, rows: [] });
+  if (beforeTokens.length === 0 && afterTokens.length === 1
+    && ownData(beforeState, 'final') === false && ownData(afterState, 'final') === true
+    && movedRowIds.includes(mapAfterToken(afterTokens[0]) || '')) {
+    const finalized = finalizeHelperTable(beforeState as unknown as HelperTableState);
+    return finalized.status === 'ok'
+      && sameClosedData(stripRows(finalized.value as unknown as Record<string, unknown>), stripRows(afterState));
+  }
+  if (beforeTokens.length === 1 && afterTokens.length === 0
+    && ownData(beforeState, 'final') === true && ownData(afterState, 'final') === false
+    && movedRowIds.includes(beforeTokens[0]) && rowIdMap.has(beforeTokens[0])) {
+    const finalized = finalizeHelperTable(afterState as unknown as HelperTableState);
+    return finalized.status === 'ok'
+      && sameClosedData(stripRows(beforeState), stripRows(finalized.value as unknown as Record<string, unknown>));
+  }
+  return false;
+};
+
+const rowMoveKernelStateEquivalent = (
+  beforeState: unknown,
+  afterState: unknown,
+  beforeTokens: readonly string[],
+  afterTokens: readonly string[],
+  rowIdMap: ReadonlyMap<string, string>,
+  movedRowIds: readonly string[],
+  canonicalBeforeRows: ReadonlyMap<string, unknown>,
+  canonicalAfterRows: ReadonlyMap<string, unknown>,
+  allowFirstRowFinalization = false,
+): boolean => {
+  if (beforeState === undefined || afterState === undefined) {
+    return beforeState === afterState;
+  }
+  if (!isRecord(beforeState) || !isRecord(afterState)
+    || !Array.isArray(ownData(beforeState, 'rows')) || !Array.isArray(ownData(afterState, 'rows'))) return false;
+  const beforeRows = ownData(beforeState, 'rows') as readonly unknown[];
+  const afterRows = ownData(afterState, 'rows') as readonly unknown[];
+  if (beforeRows.length !== beforeTokens.length || afterRows.length !== afterTokens.length
+    || new Set(beforeTokens).size !== beforeTokens.length || new Set(afterTokens).size !== afterTokens.length) return false;
+  const mappedAfterTokens = afterTokens.map(token => {
+    for (const [beforeId, afterId] of rowIdMap.entries()) if (afterId === token) return beforeId;
+    return undefined;
+  });
+  if (mappedAfterTokens.some(token => token === undefined)) return false;
+  const beforeSet = new Set(beforeTokens);
+  const afterSet = new Set(mappedAfterTokens as string[]);
+  if (afterSet.size !== mappedAfterTokens.length) return false;
+  const differing = [...new Set([...beforeSet, ...afterSet])].filter(token => beforeSet.has(token) !== afterSet.has(token));
+  if (differing.some(token => !movedRowIds.includes(token) || !rowIdMap.has(token))) return false;
+  const commonTokens = beforeTokens.filter(token => afterSet.has(token));
+  const commonAfterTokens = mappedAfterTokens.filter((token): token is string => token !== undefined && beforeSet.has(token));
+  const expectedCommonAfterTokens = commonTokens.map(token => {
+    if (movedRowIds.length === 2 && movedRowIds.every(candidate => commonTokens.includes(candidate))) {
+      const movedIndex = movedRowIds.indexOf(token);
+      return movedIndex >= 0 ? movedRowIds[movedRowIds.length - 1 - movedIndex] : token;
+    }
+    return token;
+  });
+  if (!sameClosedData(expectedCommonAfterTokens, commonAfterTokens)) return false;
+  const afterIndexByBeforeToken = new Map<string, number>();
+  mappedAfterTokens.forEach((token, index) => {
+    if (token !== undefined) afterIndexByBeforeToken.set(token, index);
+  });
+  const projectedBeforeRows = commonTokens.map(token => beforeRows[beforeTokens.indexOf(token)]);
+  const projectedAfterRows = commonTokens.map(token => afterRows[afterIndexByBeforeToken.get(token)!]);
+  const withoutRows = (state: Record<string, unknown>, rows: readonly unknown[]): Record<string, unknown> => ({
+    ...state,
+    rows,
+  });
+  const beforeWithoutRows = withoutRows(beforeState, projectedBeforeRows);
+  const afterWithoutRows = withoutRows(afterState, projectedAfterRows);
+  if (!sameClosedData(beforeWithoutRows, afterWithoutRows)) {
+    if (allowFirstRowFinalization && rowMoveFirstRowFinalizationEquivalent(
+      beforeState,
+      afterState,
+      beforeTokens,
+      afterTokens,
+      rowIdMap,
+      movedRowIds,
+    )) return true;
+    return false;
+  }
+  const beforeOnly = [...beforeSet].filter(token => !afterSet.has(token));
+  const afterOnly = [...afterSet].filter(token => !beforeSet.has(token));
+  for (const token of beforeOnly) {
+    const rowIndex = beforeTokens.indexOf(token);
+    if (!canonicalBeforeRows.has(token) || rowIndex < 0
+      || !sameClosedData(beforeRows[rowIndex], canonicalBeforeRows.get(token))) return false;
+  }
+  for (let index = 0; index < mappedAfterTokens.length; index += 1) {
+    const mappedToken = mappedAfterTokens[index];
+    if (mappedToken !== undefined && afterOnly.includes(mappedToken)
+      && (!canonicalAfterRows.has(afterTokens[index])
+        || !sameClosedData(afterRows[index], canonicalAfterRows.get(afterTokens[index])))) return false;
+  }
+  return differing.length === 0
+    || (beforeOnly.length <= 1 && afterOnly.length <= 1
+      && beforeOnly.length + afterOnly.length > 0);
+};
+
+const compareX4UiSourceRowMoveLedgerCorrespondence = (
+  beforeCalls: readonly unknown[],
+  afterCalls: readonly unknown[],
+  beforeRecords: readonly unknown[],
+  afterRecords: readonly unknown[],
+  beforeOperations: readonly X4UiLayoutOperation[],
+  afterOperations: readonly X4UiLayoutOperation[],
+  entry: X4UiSourceEditRowMoveEntry,
+  beforeText: string,
+  afterText: string,
+  replacementLength: number,
+): boolean => {
+  if (!isRowMoveEntryData(entry) || entry.expectedText !== beforeText.slice(entry.startOffset, entry.endOffset)
+    || entry.upper.expectedText !== beforeText.slice(entry.upper.startOffset, entry.upper.endOffset)
+    || entry.lower.expectedText !== beforeText.slice(entry.lower.startOffset, entry.lower.endOffset)
+    || entry.upper.endOffset !== entry.lower.startOffset
+    || entry.startOffset !== entry.upper.startOffset
+    || entry.endOffset !== entry.lower.endOffset
+    || entry.expectedText !== `${entry.upper.expectedText}${entry.lower.expectedText}`
+    || replacementLength !== entry.expectedText.length || afterText.length !== beforeText.length
+    || afterText.slice(entry.startOffset, entry.endOffset) !== `${entry.lower.expectedText}${entry.upper.expectedText}`) return false;
+  if (beforeCalls.length !== afterCalls.length || beforeRecords.length !== afterRecords.length
+    || beforeOperations.length !== afterOperations.length) return false;
+  if (![...beforeCalls, ...afterCalls].every(isStructuralCorrespondenceCall)
+    || ![...beforeOperations, ...afterOperations].every(isStructuralCorrespondenceOperation)
+    || !beforeRecords.every(value => structuralCompleteRecordIsValid(value, beforeText))
+    || !afterRecords.every(value => structuralCompleteRecordIsValid(value, afterText))
+    || !structuralKernelTransitionsAreContinuous(beforeOperations)
+    || !structuralKernelTransitionsAreContinuous(afterOperations)) return false;
+  const splice: StructuralSplice = {
+    beforeText,
+    afterText,
+    startOffset: entry.startOffset,
+    endOffset: entry.endOffset,
+    replacementLength,
+    orderShift: 0,
+    side: 'before',
+    rowPermutation: {
+      upperStart: entry.upper.startOffset,
+      upperEnd: entry.upper.endOffset,
+      lowerStart: entry.lower.startOffset,
+      lowerEnd: entry.lower.endOffset,
+      nodeIdMap: new Map(),
+      operationIdMap: new Map(),
+      callOrderMap: new Map(),
+      recordOrderMap: new Map(),
+      operationModelOrderMap: new Map(),
+    },
+  };
+  const mappedCallIndexes = new Map<number, number>();
+  const usedCallIndexes = new Set<number>();
+  for (const beforeCallValue of beforeCalls) {
+    if (!isRecord(beforeCallValue)) return false;
+    const beforeSource = ownData(beforeCallValue, 'source');
+    const mappedSource = rowMoveMappedSource(beforeSource, splice);
+    if (!mappedSource || !rowMoveSourceBytesCorrespond(beforeSource, mappedSource, beforeText, afterText, splice)) return false;
+    const candidates = afterCalls.map((value, index) => ({ value, index })).filter(candidate => {
+      if (usedCallIndexes.has(candidate.index) || !isRecord(candidate.value)) return false;
+      return ownData(candidate.value, 'name') === ownData(beforeCallValue, 'name')
+        && rowMoveSourceBytesCorrespond(beforeSource, ownData(candidate.value, 'source'), beforeText, afterText, splice)
+        && sameLocation(mappedSource, ownData(candidate.value, 'source') as X4UiSourceLocation);
+    });
+    if (candidates.length !== 1) return false;
+    const beforeOrder = ownData(beforeCallValue, 'order');
+    const afterOrder = isRecord(candidates[0].value) ? ownData(candidates[0].value, 'order') : undefined;
+    if (typeof beforeOrder !== 'number' || typeof afterOrder !== 'number') return false;
+    mappedCallIndexes.set(beforeCalls.indexOf(beforeCallValue), candidates[0].index);
+    usedCallIndexes.add(candidates[0].index);
+    (splice.rowPermutation!.callOrderMap as Map<number, number>).set(beforeOrder, afterOrder);
+  }
+  if (usedCallIndexes.size !== afterCalls.length) return false;
+  const recordPairs: Array<readonly [Record<string, unknown>, Record<string, unknown>]> = [];
+  const usedRecordIndexes = new Set<number>();
+  for (const beforeRecordValue of beforeRecords) {
+    if (!isRecord(beforeRecordValue)) return false;
+    const beforeType = ownData(beforeRecordValue, 'recordType');
+    const beforeSource = ownData(beforeRecordValue, 'source');
+    const mappedSource = rowMoveMappedSource(beforeSource, splice);
+    if (!mappedSource) return false;
+    const beforeName = ownData(beforeRecordValue, 'name');
+    const beforePath = ownData(beforeRecordValue, 'path');
+    const mappedPath = typeof beforePath === 'string' ? remapSourceDerivedIdentity(beforePath, splice) : beforePath;
+    const candidates = afterRecords.map((value, index) => ({ value, index })).filter(candidate => {
+      if (usedRecordIndexes.has(candidate.index) || !isRecord(candidate.value)) return false;
+      return ownData(candidate.value, 'recordType') === beforeType
+        && ownData(candidate.value, 'name') === beforeName
+        && (typeof mappedPath !== 'string' || ownData(candidate.value, 'path') === mappedPath)
+        && sameLocation(mappedSource, ownData(candidate.value, 'source') as X4UiSourceLocation);
+    });
+    if (candidates.length !== 1) return false;
+    const afterRecord = candidates[0].value as Record<string, unknown>;
+    const beforeOrder = ownData(beforeRecordValue, 'order');
+    const afterOrder = ownData(afterRecord, 'order');
+    if (typeof beforeOrder !== 'number' || typeof afterOrder !== 'number') return false;
+    (splice.rowPermutation!.recordOrderMap as Map<number, number>).set(beforeOrder, afterOrder);
+    recordPairs.push([beforeRecordValue, afterRecord]);
+    usedRecordIndexes.add(candidates[0].index);
+  }
+  if (usedRecordIndexes.size !== afterRecords.length) return false;
+  const operationPairs: Array<readonly [X4UiLayoutOperation, X4UiLayoutOperation]> = [];
+  const usedOperationIndexes = new Set<number>();
+  for (const beforeOperation of beforeOperations) {
+    const mappedSource = rowMoveMappedSource(beforeOperation.source, splice);
+    if (!mappedSource || !rowMoveSourceBytesCorrespond(beforeOperation.source, mappedSource, beforeText, afterText, splice)) return false;
+    const candidates = afterOperations.map((operation, index) => ({ operation, index })).filter(candidate =>
+      !usedOperationIndexes.has(candidate.index)
+      && candidate.operation.kind === beforeOperation.kind
+      && candidate.operation.status === beforeOperation.status
+      && sameLocation(mappedSource, candidate.operation.source));
+    if (candidates.length !== 1) return false;
+    const afterOperation = candidates[0].operation;
+    (splice.rowPermutation!.operationIdMap as Map<string, string>).set(beforeOperation.id, afterOperation.id);
+    (splice.rowPermutation!.operationModelOrderMap as Map<number, number>)
+      .set(beforeOperation.modelOrder, afterOperation.modelOrder);
+    for (const key of ['frameId', 'tableId', 'rowId', 'cellId'] as const) {
+      const beforeId = beforeOperation[key];
+      const afterId = afterOperation[key];
+      if (beforeId !== undefined || afterId !== undefined) {
+        if (beforeId === undefined || afterId === undefined) return false;
+        const prior = splice.rowPermutation!.nodeIdMap.get(beforeId);
+        const reverse = [...splice.rowPermutation!.nodeIdMap.entries()].find(([, value]) => value === afterId)?.[0];
+        if ((prior !== undefined && prior !== afterId) || (reverse !== undefined && reverse !== beforeId)) return false;
+        (splice.rowPermutation!.nodeIdMap as Map<string, string>).set(beforeId, afterId);
+      }
+    }
+    operationPairs.push([beforeOperation, afterOperation]);
+    usedOperationIndexes.add(candidates[0].index);
+  }
+  if (usedOperationIndexes.size !== afterOperations.length) return false;
+  const permutationSplice = splice;
+  for (const [beforeCall, afterCall] of beforeCalls.map((value, index) => [value, afterCalls[mappedCallIndexes.get(index)!]] as const)) {
+    if (!sameStructuralFactAfterSplice(beforeCall, afterCall, permutationSplice, 'call')) return false;
+  }
+  for (const [beforeRecord, afterRecord] of recordPairs) {
+    const schema = structuralRecordSchemaFor(ownData(beforeRecord, 'recordType'));
+    if (!schema || !sameStructuralFactAfterSplice(beforeRecord, afterRecord, permutationSplice, schema)) return false;
+  }
+  for (const [beforeOperation, afterOperation] of operationPairs) {
+    if (!sameStructuralOperationFactAfterSplice(beforeOperation, afterOperation, permutationSplice)
+      || !sameStructuralFactAfterSplice(structuralKernelEnvelope(beforeOperation), structuralKernelEnvelope(afterOperation), permutationSplice)) return false;
+  }
+  const beforeTokens = rowMoveOperationStateTokens(beforeOperations);
+  const afterTokens = rowMoveOperationStateTokens(afterOperations);
+  const tableIdMap = new Map<string, string>();
+  type FinalKernelCandidate = {
+    readonly index: number;
+    readonly operation: X4UiLayoutOperation;
+  };
+  const finalBeforeOperationByTable = new Map<string, FinalKernelCandidate>();
+  const finalAfterOperationByTable = new Map<string, FinalKernelCandidate>();
+  const finalBeforeKernelByTable = new Map<string, {
+    readonly modelOrder: number;
+    readonly operation: X4UiLayoutOperation;
+    readonly state: unknown;
+    readonly tokens: readonly string[];
+  }>();
+  const finalAfterKernelByTable = new Map<string, {
+    readonly modelOrder: number;
+    readonly operation: X4UiLayoutOperation;
+    readonly state: unknown;
+    readonly tokens: readonly string[];
+  }>();
+  for (const [beforeOperation, afterOperation] of operationPairs) {
+    const beforeTableId = recordString(beforeOperation as unknown as object, 'tableId');
+    const afterTableId = recordString(afterOperation as unknown as object, 'tableId');
+    if (beforeTableId && afterTableId) {
+      const priorAfterTableId = tableIdMap.get(beforeTableId);
+      const reverseBeforeTableId = [...tableIdMap.entries()].find(([, mappedTableId]) => mappedTableId === afterTableId)?.[0];
+      if ((priorAfterTableId !== undefined && priorAfterTableId !== afterTableId)
+        || (reverseBeforeTableId !== undefined && reverseBeforeTableId !== beforeTableId)) return false;
+      tableIdMap.set(beforeTableId, afterTableId);
+      const beforeIndex = beforeOperations.indexOf(beforeOperation);
+      const afterIndex = afterOperations.indexOf(afterOperation);
+      if (beforeIndex < 0 || afterIndex < 0) return false;
+      const beforeKernel = ownData(beforeOperation as unknown as object, 'kernel');
+      const afterKernel = ownData(afterOperation as unknown as object, 'kernel');
+      const priorBeforeOperation = finalBeforeOperationByTable.get(beforeTableId);
+      if (beforeKernel !== undefined && (!priorBeforeOperation || beforeIndex > priorBeforeOperation.index)) {
+        finalBeforeOperationByTable.set(beforeTableId, { index: beforeIndex, operation: beforeOperation });
+      }
+      const priorAfterOperation = finalAfterOperationByTable.get(afterTableId);
+      if (afterKernel !== undefined && (!priorAfterOperation || afterIndex > priorAfterOperation.index)) {
+        finalAfterOperationByTable.set(afterTableId, { index: afterIndex, operation: afterOperation });
+      }
+    }
+  }
+  for (const [beforeTableId, finalBeforeCandidate] of finalBeforeOperationByTable.entries()) {
+    const afterTableId = tableIdMap.get(beforeTableId);
+    const finalAfterCandidate = afterTableId ? finalAfterOperationByTable.get(afterTableId) : undefined;
+    if (!afterTableId || !finalAfterCandidate) return false;
+    const finalBeforeOperation = finalBeforeCandidate.operation;
+    const finalAfterOperation = finalAfterCandidate.operation;
+    const beforeKernel = ownData(finalBeforeOperation as unknown as object, 'kernel');
+    const afterKernel = ownData(finalAfterOperation as unknown as object, 'kernel');
+    const beforeState = isRecord(beforeKernel) ? ownData(beforeKernel, 'stateAfter') : undefined;
+    const afterState = isRecord(afterKernel) ? ownData(afterKernel, 'stateAfter') : undefined;
+    const beforeTokenPair = beforeTokens.get(finalBeforeOperation);
+    const afterTokenPair = afterTokens.get(finalAfterOperation);
+    if (beforeState === undefined || afterState === undefined || !beforeTokenPair || !afterTokenPair
+      || !rowMoveKernelRowStateMap(beforeState, beforeTokenPair.after)
+      || !rowMoveKernelRowStateMap(afterState, afterTokenPair.after)) return false;
+    finalBeforeKernelByTable.set(beforeTableId, {
+      modelOrder: finalBeforeOperation.modelOrder,
+      operation: finalBeforeOperation,
+      state: beforeState,
+      tokens: beforeTokenPair.after,
+    });
+    finalAfterKernelByTable.set(afterTableId, {
+      modelOrder: finalAfterOperation.modelOrder,
+      operation: finalAfterOperation,
+      state: afterState,
+      tokens: afterTokenPair.after,
+    });
+  }
+  const canonicalBeforeRows = new Map<string, unknown>();
+  const canonicalAfterRows = new Map<string, unknown>();
+  for (const [beforeTableId, finalBefore] of finalBeforeKernelByTable.entries()) {
+    const afterTableId = tableIdMap.get(beforeTableId);
+    const finalAfter = afterTableId ? finalAfterKernelByTable.get(afterTableId) : undefined;
+    if (!finalAfter) return false;
+    const beforeRowStates = rowMoveKernelRowStateMap(finalBefore.state, finalBefore.tokens);
+    const afterRowStates = rowMoveKernelRowStateMap(finalAfter.state, finalAfter.tokens);
+    if (!beforeRowStates || !afterRowStates) return false;
+    for (const [rowId, rowState] of beforeRowStates) canonicalBeforeRows.set(rowId, rowState);
+    for (const [rowId, rowState] of afterRowStates) canonicalAfterRows.set(rowId, rowState);
+    const mappedAfterTokens = finalAfter.tokens.map(token => {
+      for (const [beforeId, afterId] of permutationSplice.rowPermutation!.nodeIdMap.entries()) {
+        if (afterId === token) return beforeId;
+      }
+      return undefined;
+    });
+    if (mappedAfterTokens.some(token => token === undefined)) return false;
+    const expectedAfterTokens = finalBefore.tokens.map(token => token === entry.upper.rowId
+      ? entry.lower.rowId
+      : token === entry.lower.rowId ? entry.upper.rowId : token);
+    const finalTokenOrderMatches = sameClosedData(expectedAfterTokens, mappedAfterTokens);
+    const finalStateMatches = rowMoveKernelStateEquivalent(
+      finalBefore.state,
+      finalAfter.state,
+      finalBefore.tokens,
+      finalAfter.tokens,
+      permutationSplice.rowPermutation!.nodeIdMap,
+      [entry.upper.rowId, entry.lower.rowId],
+      canonicalBeforeRows,
+      canonicalAfterRows,
+      false,
+    );
+    if (!finalTokenOrderMatches || !finalStateMatches) return false;
+  }
+  if (finalBeforeKernelByTable.size === 0 || finalAfterKernelByTable.size === 0
+    || finalBeforeKernelByTable.size !== finalAfterKernelByTable.size
+    || [...finalBeforeKernelByTable.keys()].some(beforeTableId => {
+      const afterTableId = tableIdMap.get(beforeTableId);
+      return afterTableId === undefined || !finalAfterKernelByTable.has(afterTableId);
+    })) return false;
+  for (const [beforeOperation, afterOperation] of operationPairs) {
+    const beforeKernel = ownData(beforeOperation as unknown as object, 'kernel');
+    const afterKernel = ownData(afterOperation as unknown as object, 'kernel');
+    if (!structuralKernelStateKeysMatch(beforeOperation, afterOperation)) return false;
+    if (!isRecord(beforeKernel) || !isRecord(afterKernel)) {
+      if (beforeKernel !== afterKernel) return false;
+      continue;
+    }
+    for (const key of ['stateBefore', 'stateAfter'] as const) {
+      const beforeState = ownData(beforeKernel, key);
+      const afterState = ownData(afterKernel, key);
+      const tokenPair = beforeTokens.get(beforeOperation);
+      const afterTokenPair = afterTokens.get(afterOperation);
+      if (!tokenPair || !afterTokenPair || !rowMoveKernelStateEquivalent(
+        beforeState,
+        afterState,
+        key === 'stateBefore' ? tokenPair.before : tokenPair.after,
+        key === 'stateBefore' ? afterTokenPair.before : afterTokenPair.after,
+        permutationSplice.rowPermutation!.nodeIdMap,
+        [entry.upper.rowId, entry.lower.rowId],
+        canonicalBeforeRows,
+        canonicalAfterRows,
+        beforeOperation.kind === 'addRow' && afterOperation.kind === 'addRow',
+      )) return false;
+    }
+  }
+  for (const [beforeOperation, afterOperation] of operationPairs) {
+    const beforeTableId = recordString(beforeOperation as unknown as object, 'tableId');
+    if (!beforeTableId) continue;
+    const afterTableId = tableIdMap.get(beforeTableId);
+    if (!afterTableId) return false;
+    const beforeKernel = ownData(beforeOperation as unknown as object, 'kernel');
+    const afterKernel = ownData(afterOperation as unknown as object, 'kernel');
+    if (!isRecord(beforeKernel) || !isRecord(afterKernel)) continue;
+    const beforeAfterState = ownData(beforeKernel, 'stateAfter');
+    const afterAfterState = ownData(afterKernel, 'stateAfter');
+    if (beforeAfterState === undefined || afterAfterState === undefined) continue;
+    const beforePair = beforeTokens.get(beforeOperation);
+    const afterPair = afterTokens.get(afterOperation);
+    if (!beforePair || !afterPair || !rowMoveKernelStateEquivalent(
+      beforeAfterState,
+      afterAfterState,
+      beforePair.after,
+      afterPair.after,
+      permutationSplice.rowPermutation!.nodeIdMap,
+      [entry.upper.rowId, entry.lower.rowId],
+      canonicalBeforeRows,
+      canonicalAfterRows,
+      false,
+    )) return false;
+  }
+  const selectedBlock = entry.direction === 'down' ? entry.upper : entry.lower;
+  const adjacentBlock = entry.direction === 'down' ? entry.lower : entry.upper;
+  const selectedBindingIds = new Set(selectedBlock.callBindings.map(binding => binding.operationId));
+  const adjacentBindingIds = new Set(adjacentBlock.callBindings.map(binding => binding.operationId));
+  return selectedBindingIds.size > 0 && adjacentBindingIds.size > 0
+    && selectedBindingIds.size + adjacentBindingIds.size === entry.upper.callBindings.length + entry.lower.callBindings.length
+    && entry.provenance.callBindings.length === entry.upper.callBindings.length + entry.lower.callBindings.length;
+};
+
 export const compareX4UiSourceStructuralLedgerCorrespondence = (
   input: X4UiSourceStructuralLedgerCorrespondenceInput,
 ): boolean => {
@@ -4217,7 +5990,9 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
       || (entryKind !== 'delete-statement'
         && entryKind !== 'replace-statement'
         && entryKind !== 'insert-call'
-        && entryKind !== 'insert-block')
+        && entryKind !== 'insert-block'
+        && entryKind !== 'insert-widget' && entryKind !== 'insert-row'
+        && entryKind !== 'move-row')
       || typeof beforeText !== 'string'
       || typeof afterText !== 'string'
       || typeof replacementLength !== 'number'
@@ -4235,8 +6010,8 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
       replacementOperationIdsValue,
       replacementOperationModelOrdersValue,
     ];
-    if (entryKind !== 'replace-statement' && replacementFields.some(value => value !== undefined)) return false;
-    if (entryKind === 'replace-statement'
+    if (entryKind !== 'replace-statement' && entryKind !== 'insert-widget' && entryKind !== 'insert-row' && replacementFields.some(value => value !== undefined)) return false;
+    if ((entryKind === 'replace-statement' || entryKind === 'insert-widget' || entryKind === 'insert-row')
       && (!Array.isArray(replacementCallIndexesValue)
         || !Array.isArray(replacementCallNamesValue)
         || !Array.isArray(replacementCallOrdersValue)
@@ -4268,6 +6043,20 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
       || !beforeRecordCalls.every((value, index) => sameClosedData(value, beforeCalls[index]))
       || !afterRecordCalls.every((value, index) => sameClosedData(value, afterCalls[index]))) return false;
     const entry = entryValue as unknown as X4UiSourceEditStructuralEntry;
+    if (entry.kind === 'move-row') {
+      return compareX4UiSourceRowMoveLedgerCorrespondence(
+        beforeCalls,
+        afterCalls,
+        beforeRecords,
+        afterRecords,
+        beforeOperations as readonly X4UiLayoutOperation[],
+        afterOperations as readonly X4UiLayoutOperation[],
+        entry,
+        beforeText,
+        afterText,
+        replacementLength,
+      );
+    }
     const startOffset = ownData(entryValue, 'startOffset');
     const endOffset = ownData(entryValue, 'endOffset');
     if (typeof startOffset !== 'number'
@@ -4358,7 +6147,7 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
         || insertedOperationIndexes.size === 0
         || afterCalls.length !== expectedCalls.length + insertedCallIndexes.size
         || afterOperations.length !== expectedOperations.length + insertedOperationIndexes.size) return false;
-    } else if (entry.kind === 'replace-statement') {
+    } else if (entry.kind === 'replace-statement' || entry.kind === 'insert-widget' || entry.kind === 'insert-row') {
       if (insertedCallIndex !== -1
         || insertedOperationIndex !== -1
         || !Array.isArray(replacementCallIndexesValue)
@@ -4368,7 +6157,9 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
         || !Array.isArray(replacementOperationKindsValue)
         || !Array.isArray(replacementOperationIdsValue)
         || !Array.isArray(replacementOperationModelOrdersValue)) return false;
-      const replacementStart = startOffset;
+      const replacementStart = entry.kind === 'insert-widget' || entry.kind === 'insert-row'
+        ? startOffset + entry.indentation.length
+        : startOffset;
       const replacementEnd = startOffset + replacementLength;
       const addCallIndexes = replacementCallIndexesValue as readonly unknown[];
       const addCallNames = replacementCallNamesValue as readonly unknown[];
@@ -4391,6 +6182,60 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
       };
       if (!validIndexList(addCallIndexes, afterCalls.length)
         || !validIndexList(addOperationIndexes, afterOperations.length)) return false;
+      if (entry.kind === 'insert-widget') {
+        const names = addCallNames.join(',');
+        if ((names !== 'createText' && names !== 'createButton,setText' && names !== 'createEditBox')
+          || addCallIndexes.length !== addOperationIndexes.length) return false;
+        for (let index = 0; index < addOperationIndexes.length; index += 1) {
+          const call = afterCalls[addCallIndexes[index] as number];
+          const operation = afterOperations[addOperationIndexes[index] as number];
+          if (!isRecord(call) || !isRecord(operation)) return false;
+          const callSource = ownData(call, 'source');
+          const operationSource = ownData(operation, 'source');
+          if (ownData(operation, 'status') !== 'applied'
+            || ownData(operation, 'localExpansion') !== undefined
+            || ownData(operation, 'tableId') !== entry.tableId
+            || ownData(operation, 'rowId') !== entry.rowId
+            || ownData(operation, 'cellId') !== entry.cellId
+            || ownData(operation, 'kind') !== ownData(call, 'name')
+            || ownData(operation, 'modelOrder') !== ownData(call, 'order')
+            || !isLocationRecord(callSource) || !isLocationRecord(operationSource)
+            || !sameLocation(operationSource, callSource)) return false;
+        }
+      }
+      if (entry.kind === 'insert-row') {
+        const call = afterCalls[addCallIndexes[0] as number];
+        const operation = afterOperations[addOperationIndexes[0] as number];
+        if (addCallIndexes.length !== 1 || addOperationIndexes.length !== 1 || addCallNames[0] !== 'addRow'
+          || !isRecord(call) || !isRecord(operation) || ownData(operation, 'kind') !== 'addRow'
+          || ownData(operation, 'status') !== 'applied' || ownData(operation, 'localExpansion') !== undefined
+          || ownData(operation, 'tableId') !== entry.tableId
+          || ownData(operation, 'modelOrder') !== ownData(call, 'order')) return false;
+        const callSource = ownData(call, 'source');
+        const operationSource = ownData(operation, 'source');
+        const result = ownData(call, 'result');
+        const metadata = ownData(operation, 'metadata');
+        const assignedTo = ownData(call, 'assignedTo');
+        // The existing own-data/schema gates above admit only the established
+        // parser-owned optional undefined fields. Match LayoutProgram's JSON-like
+        // snapshot of those parsed fields; never normalize the candidate operation.
+        const expectedMetadata = JSON.parse(JSON.stringify(withoutCallModelNumericExpressions({
+          arguments: ownData(call, 'arguments'), semantics: ownData(call, 'semantics'), receiver: ownData(call, 'receiver'), result,
+        })));
+        if (!isLocationRecord(callSource) || !isLocationRecord(operationSource) || !sameLocation(callSource, operationSource)
+          || !isRecord(result) || !isRecord(metadata) || ownData(result, 'kind') !== 'row' || ownData(result, 'origin') !== 'call'
+          || ownData(result, 'index') !== undefined || !identifierExpression(ownData(result, 'path') as string | undefined)
+          || !Array.isArray(assignedTo) || assignedTo.length !== 1 || assignedTo[0] !== ownData(result, 'path')
+          || !sameClosedData(ownData(result, 'source'), callSource)
+          || !sameClosedData(expectedMetadata, metadata)) return false;
+        // Match LayoutProgram's existing direct, non-indexed row reference key.
+        // This checks the reparsed creator identity; it never issues caller identities.
+        const position = (value: X4UiSourceLocation['start']): string => `${value.line}:${value.column}:${value.offset}`;
+        const rowKey = ['row', ownData(result, 'path'), 'call', callSource.file, callSource.sourcePath || '',
+          position(callSource.start), position(callSource.end), ownData(result, 'parentPath') || '',
+          ownData(result, 'relatedPath') || '', ''].join('|');
+        if (ownData(operation, 'rowId') !== `row:${rowKey}`) return false;
+      }
       for (let index = 0; index < addCallIndexes.length; index += 1) {
         const afterCall = afterCalls[addCallIndexes[index] as number];
         if (!isRecord(afterCall)
@@ -4429,11 +6274,11 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
       || comparableAfterOperations.length !== expectedOperations.length) return false;
     const insertedStart = entry.kind === 'replace-statement'
       ? startOffset
-      : entry.kind === 'insert-call' || entry.kind === 'insert-block'
+      : entry.kind === 'insert-call' || entry.kind === 'insert-block' || entry.kind === 'insert-widget' || entry.kind === 'insert-row'
         ? startOffset + entry.indentation.length
       : -1;
     const insertedEnd = entry.kind === 'replace-statement'
-      || entry.kind === 'insert-call' || entry.kind === 'insert-block'
+      || entry.kind === 'insert-call' || entry.kind === 'insert-block' || entry.kind === 'insert-widget' || entry.kind === 'insert-row'
       ? startOffset + replacementLength
       : -1;
     const isRemovedRecord = (record: unknown): boolean => {
@@ -4444,7 +6289,11 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
         && bounds.end <= endOffset;
     };
     const isInsertedRecord = (record: unknown): boolean => {
-      if ((entry.kind !== 'insert-call' && entry.kind !== 'insert-block' && entry.kind !== 'replace-statement') || !isRecord(record)) return false;
+      if ((entry.kind !== 'insert-call'
+        && entry.kind !== 'insert-block'
+        && entry.kind !== 'insert-widget'
+        && entry.kind !== 'insert-row'
+        && entry.kind !== 'replace-statement') || !isRecord(record)) return false;
       const bounds = structuralLocationBounds(ownData(record, 'source'));
       return bounds !== undefined
         && bounds.start >= insertedStart
@@ -4453,7 +6302,11 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
     const expectedRecords = beforeRecords.filter(record => !isRemovedRecord(record));
     const comparableAfterRecords = afterRecords.filter(record => !isInsertedRecord(record));
     const insertedRecords = afterRecords.filter(isInsertedRecord);
-    if ((entry.kind === 'insert-call' || entry.kind === 'insert-block' || entry.kind === 'replace-statement') && insertedRecords.length === 0) return false;
+    if ((entry.kind === 'insert-call'
+      || entry.kind === 'insert-block'
+      || entry.kind === 'insert-widget'
+      || entry.kind === 'insert-row'
+      || entry.kind === 'replace-statement') && insertedRecords.length === 0) return false;
     if (comparableAfterRecords.length !== expectedRecords.length) return false;
     const splice: StructuralSplice = {
       beforeText,
@@ -4516,11 +6369,12 @@ export const compareX4UiSourceStructuralLedgerCorrespondence = (
       beforeTypedOperations,
       afterTypedOperations,
       removedOperationIds,
-      entry.kind === 'insert-block' || entry.kind === 'replace-statement'
+      entry.kind === 'insert-block' || entry.kind === 'insert-widget' || entry.kind === 'insert-row' || entry.kind === 'replace-statement'
         ? insertedOperationIndexes
         : insertedOperationIndex,
       splice,
-      entry.kind === 'replace-statement',
+      entry.kind === 'replace-statement' || entry.kind === 'insert-widget',
+      entry.kind === 'insert-row' ? entry : undefined,
     );
     if (!beforeTransitions || !afterTransitions || !ledgerStates) return false;
     for (let index = 0; index < expectedOperations.length; index += 1) {
@@ -4615,9 +6469,10 @@ type DirectStructuralPayload = DirectCallPayloadProof | DirectBlockPayloadProof 
 const directStatementReplacementPayload = (
   path: string,
   payload: string,
+  preservedTextPropertyInsertion = false,
 ): DirectStatementReplacementPayloadProof | { readonly reason: X4UiSourceEditRefusalReason; readonly detail: string } => {
   const trimmed = payload.replace(/^[ \t]+|[ \t]+$/g, '');
-  if (!trimmed || trimmed.length > 32768 || /[\r\n]/.test(trimmed)) {
+  if (!trimmed || trimmed.length > 32768 || (!preservedTextPropertyInsertion && /[\r\n]/.test(trimmed))) {
     return { reason: 'invalid-request', detail: 'statement replacement must be one non-empty single-line Lua source statement at most 32768 characters' };
   }
   let model: X4UiCallModel;
@@ -4697,6 +6552,7 @@ const directStatementReplacementPayload = (
 const directCallPayload = (
   path: string,
   payload: string,
+  localRowBinding?: string,
 ): DirectCallPayloadProof | { readonly reason: X4UiSourceEditRefusalReason; readonly detail: string } => {
   const trimmed = payload.replace(/^[ \t]+|[ \t]+$/g, '');
   if (!trimmed || /[\r\n]/.test(trimmed)) {
@@ -4715,8 +6571,10 @@ const directCallPayload = (
   const call = model.calls[0];
   const statement = enclosingStatementOf(call);
   if (!statement
-    || statement.kind !== 'call'
-    || !statement.isStandaloneCallStatementRoot
+    || (localRowBinding === undefined
+      ? statement.kind !== 'call' || !statement.isStandaloneCallStatementRoot
+      : statement.kind !== 'local' || call.name !== 'addRow' || assignedNamesOf(call).length !== 1
+        || assignedNamesOf(call)[0] !== localRowBinding)
     || statement.deletionSource.start.offset !== 0
     || statement.deletionSource.end.offset > trimmed.length
     || trimmed.slice(statement.deletionSource.end.offset).trim() !== '') {
@@ -5026,11 +6884,13 @@ interface ReplacementLedgerProof {
 const replacementLedgerFor = (
   file: X4UiSourceFile,
   program: X4UiLayoutProgram,
-  entry: X4UiSourceEditReplaceEntry,
+  entry: X4UiSourceEditReplaceEntry | X4UiSourceEditEmptyCellEntry | X4UiSourceEditRowInsertionEntry,
   replacement: string,
   payload: DirectStatementReplacementPayloadProof,
 ): ReplacementLedgerProof | undefined => {
-  const replacementStart = entry.startOffset;
+  const replacementStart = entry.kind === 'insert-widget' || entry.kind === 'insert-row'
+    ? entry.startOffset + entry.indentation.length
+    : entry.startOffset;
   const replacementEnd = entry.startOffset + replacement.length;
   const callIndexes: number[] = [];
   const usedCallIndexes = new Set<number>();
@@ -5087,6 +6947,75 @@ const replacementLedgerFor = (
     || boundedOperationIndexes.some(index => program.operations[index].status !== 'applied'
       || program.operations[index].localExpansion)) return undefined;
   return { callIndexes, operationIndexes, operations };
+};
+
+const widgetCreatorCallNameFor = (widget: X4UiSourceEditWidgetKind): X4UiSourceEditWidgetCreatorCallName =>
+  widget === 'text' ? 'createText' : widget === 'button' ? 'createButton' : 'createEditBox';
+
+const widgetInsertedIdentityFor = (
+  file: X4UiSourceFile,
+  program: X4UiLayoutProgram,
+  identity: X4UiLayoutModelIdentity,
+  entry: X4UiSourceEditEmptyCellEntry,
+  payload: WidgetInsertionPayloadProof,
+  ledger: ReplacementLedgerProof,
+): X4UiSourceEditInsertedWidget | undefined => {
+  const expectedNames: readonly X4UiRelevantCallName[] = payload.widget === 'text'
+    ? ['createText']
+    : payload.widget === 'button'
+      ? ['createButton', 'setText']
+      : ['createEditBox'];
+  if (ledger.operations.length !== expectedNames.length
+    || ledger.callIndexes.length !== expectedNames.length
+    || ledger.operations.some((operation, index) => operation.kind !== expectedNames[index]
+      || operation.status !== 'applied'
+      || operation.localExpansion !== undefined)) return undefined;
+  const owners = structuralOwnerLedger(file.callModel, program);
+  for (const operation of ledger.operations) {
+    const owner = owners.get(operation.id);
+    if (owner?.kind !== 'table'
+      || owner.ownerId !== entry.tableId
+      || owner.frameId !== entry.frameId
+      || operation.tableId !== entry.tableId
+      || operation.rowId !== entry.rowId
+      || operation.cellId !== entry.cellId) return undefined;
+  }
+  const creatorCallName = widgetCreatorCallNameFor(payload.widget);
+  const creatorIndex = expectedNames.indexOf(creatorCallName);
+  if (creatorIndex < 0) return undefined;
+  const creatorOperation = ledger.operations[creatorIndex];
+  const creatorCall = file.callModel.calls[ledger.callIndexes[creatorIndex]];
+  if (!creatorOperation || !creatorCall
+    || creatorCall.name !== creatorCallName
+    || !sameLocation(creatorOperation.source, creatorCall.source)) return undefined;
+  const valueCall = payload.widget === 'button'
+    ? file.callModel.calls[ledger.callIndexes[1]]
+    : creatorCall;
+  const value = payload.widget === 'input'
+    ? valueCall?.semantics.editBox?.defaultText
+    : valueCall?.semantics.text;
+  if (scalarValueOf(value) !== payload.text) return undefined;
+  const tableId = recordString(creatorOperation, 'tableId');
+  const rowId = recordString(creatorOperation, 'rowId');
+  const cellId = recordString(creatorOperation, 'cellId');
+  const table = program.tables.find(candidate => candidate.id === tableId);
+  const row = program.rows.find(candidate => candidate.id === rowId);
+  const cell = program.cells.find(candidate => candidate.id === cellId);
+  const frame = program.frames.find(candidate => candidate.id === table?.frameId);
+  if (!table || !row || !cell || !frame || !tableId || !rowId || !cellId
+    || row.tableId !== tableId || cell.rowId !== rowId || cell.tableId !== tableId
+    || cell.column !== entry.column || frame.id !== entry.frameId) return undefined;
+  return freezeDeep({
+    widget: payload.widget,
+    frameId: frame.id,
+    tableId,
+    rowId,
+    cellId,
+    creatorOperationId: creatorOperation.id,
+    creatorCallName,
+    creatorSource: creatorOperation.source,
+    sourceIdentity: identity,
+  });
 };
 
 const replacementRowOwnerMatches = (
@@ -5208,7 +7137,7 @@ const structuralLedgerDelta = (
       .filter(({ call }) => call.source.start.offset >= bounds.start
         && call.source.end.offset <= bounds.end)
       .map(({ index }) => index);
-  } else if (entry.kind === 'replace-statement') {
+  } else if (entry.kind === 'replace-statement' || entry.kind === 'insert-widget' || entry.kind === 'insert-row') {
     if (!directPayload || !('calls' in directPayload) || !('statement' in directPayload)) return undefined;
     replacementLedger = replacementLedgerFor(
       afterFile,
@@ -5241,7 +7170,7 @@ const structuralLedgerDelta = (
         && operation.status === 'applied'
         && !operation.localExpansion)
       .map(({ index }) => index);
-  } else if (entry.kind === 'replace-statement') {
+  } else if (entry.kind === 'replace-statement' || entry.kind === 'insert-widget' || entry.kind === 'insert-row') {
     if (!replacementLedger) return undefined;
     insertedOperationIndexes = replacementLedger.operationIndexes;
   }
@@ -5258,7 +7187,7 @@ const structuralLedgerDelta = (
     replacementLength: replacement.length,
     insertedCallIndex: insertedIndex,
     insertedOperationIndex,
-    ...(entry.kind === 'replace-statement' && replacementLedger ? {
+    ...((entry.kind === 'replace-statement' || entry.kind === 'insert-widget' || entry.kind === 'insert-row') && replacementLedger ? {
       replacementCallIndexes: replacementLedger.callIndexes,
       replacementCallNames: replacementLedger.callIndexes.map(index => afterCalls[index].name),
       replacementCallOrders: replacementLedger.callIndexes.map(index => afterCalls[index].order),
@@ -5288,10 +7217,15 @@ const discoverX4UiSourceEditsUnsafe = (context: X4UiSourceEditTrustedContext): X
         detail: 'layout evidence pair was not issued for the canonical complete source call model',
       }));
     }
-    if (!scalarProgramIsActionable(context.program)) {
+    const legacyScalarActionable = scalarProgramIsActionable(context.program);
+    const canonicalCorpusIssued = isIssuedX4UiLayoutEvidencePairWithCanonicalCorpus(
+      context.program,
+      context.evidenceAuthority,
+    );
+    if (!scalarProgramIsEditable(context.program, canonicalCorpusIssued)) {
       return issueCatalog(context, prerequisiteCatalog(context, {
         reason: 'operation-not-applied',
-        detail: `layout program status ${context.program.status} or operation stream is non-actionable; scalar action requires a nonempty projected/partial stream with every operation applied`,
+        detail: legacyScalarActionable ? directScalarEvidenceDetail : `layout program status ${context.program.status} or operation stream is non-actionable; ${directScalarEvidenceDetail}`,
       }));
     }
     const evidenceFailure = validateIssuedEvidencePair(context.program, context.evidenceAuthority);
@@ -5301,7 +7235,18 @@ const discoverX4UiSourceEditsUnsafe = (context: X4UiSourceEditTrustedContext): X
         detail: evidenceFailure,
       }));
     }
-    if (!modelMatchesEvidenceAuthority(normalizedModel, context.program, context.evidenceAuthority)) {
+    if (!legacyScalarActionable && scalarProgramHasUnsupportedPreviewInputs(context.program)) {
+      return issueCatalog(context, prerequisiteCatalog(context, {
+        reason: 'unsupported-provenance',
+        detail: activePreviewInputDetail,
+      }));
+    }
+    const strictModelMatches = legacyScalarActionable
+      && modelMatchesEvidenceAuthority(normalizedModel, context.program, context.evidenceAuthority);
+    const scalarModelMatches = legacyScalarActionable
+      ? strictModelMatches
+      : modelMatchesDirectScalarEvidenceAuthority(normalizedModel, context.program, context.evidenceAuthority);
+    if (!scalarModelMatches) {
       return issueCatalog(context, prerequisiteCatalog(context, {
         reason: 'provenance-drift',
         detail: 'call-model operation metadata does not exactly match the owner-issued layout evidence binding',
@@ -5340,22 +7285,30 @@ const discoverX4UiSourceEditsUnsafe = (context: X4UiSourceEditTrustedContext): X
         ? 'direct source literals are available for bounded CAS editing'
         : 'selected source is valid but no direct editable scalar literal was proven',
     );
-    const structuralEntries = context.program.status === 'projected'
-      ? structuralEntriesFor(file, target, context.program, context.evidenceAuthority)
-      : context.program.status === 'partial'
+    const structuralEntries = strictModelMatches && legacyScalarActionable
+      ? context.program.status === 'projected'
         ? structuralEntriesFor(file, target, context.program, context.evidenceAuthority)
-          .filter(entry => entry.kind === 'insert-block'
-            || (entry.kind === 'delete-statement' && entry.provenance.owner !== undefined))
-        : [];
+        : context.program.status === 'partial'
+          ? structuralEntriesFor(file, target, context.program, context.evidenceAuthority)
+              .filter(entry => entry.kind === 'insert-block'
+                || entry.kind === 'insert-widget'
+                || entry.kind === 'insert-row'
+                || entry.kind === 'move-row'
+                || (entry.kind === 'delete-statement' && entry.provenance.owner !== undefined))
+          : []
+      : [];
     const deleteEntries = structuralEntries.filter((entry): entry is X4UiSourceEditDeleteEntry => entry.kind === 'delete-statement');
     const replaceEntries = structuralEntries.filter((entry): entry is X4UiSourceEditReplaceEntry => entry.kind === 'replace-statement');
-    const insertEntries = structuralEntries.filter((entry): entry is X4UiSourceEditInsertionEntry => entry.kind === 'insert-call' || entry.kind === 'insert-block');
+    const insertEntries = structuralEntries.filter((entry): entry is X4UiSourceEditInsertionEntry =>
+      entry.kind === 'insert-call' || entry.kind === 'insert-block' || entry.kind === 'insert-widget' || entry.kind === 'insert-row');
+    const moveEntries = structuralEntries.filter((entry): entry is X4UiSourceEditRowMoveEntry => entry.kind === 'move-row');
     return issueCatalog(context, freezeDeep({
       ...catalog,
       structuralEntries,
       deleteEntries: freezeArray(deleteEntries),
       replaceEntries: freezeArray(replaceEntries),
       insertEntries: freezeArray(insertEntries),
+      moveEntries: freezeArray(moveEntries),
     }));
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'source edit discovery failed with an unknown model error';
@@ -5408,6 +7361,111 @@ const encodeLuaString = (value: string, quote: "'" | '"'): string => {
     else output += char;
   }
   return `${output}${quote}`;
+};
+
+interface WidgetInsertionPayloadProof {
+  readonly direct: DirectStatementReplacementPayloadProof;
+  readonly widget: X4UiSourceEditWidgetKind;
+  readonly text: string;
+  readonly rowReceiver: string;
+}
+
+const rowInsertionPayloadFor = (
+  file: X4UiSourceFile, program: X4UiLayoutProgram, evidenceAuthority: X4UiLayoutEvidenceAuthority,
+  entry: X4UiSourceEditRowInsertionEntry,
+): DirectStatementReplacementPayloadProof | { readonly reason: X4UiSourceEditRefusalReason; readonly detail: string } => {
+  const row = program.rows.find(candidate => candidate.id === entry.rowId);
+  const candidate = row && rowInsertionCandidateFor(file, program.target, program, evidenceAuthority, row);
+  if (!candidate || candidate.style.anchorOffset !== entry.startOffset || entry.endOffset !== entry.startOffset
+    || candidate.table.id !== entry.tableId || candidate.table.frameId !== entry.frameId || row.rowIndex !== entry.rowIndex) {
+    return { reason: 'provenance-drift', detail: 'row-below anchor no longer has exact selected-row/table ownership' };
+  }
+  // Reserve tokens only. This scanner never grants scope, receiver, or layout authority.
+  const names = new Set<string>();
+  for (let index = 0; index < file.text.length;) {
+    if (!isLuaIdentifierStart(file.text[index])) { index += 1; continue; }
+    const start = index++;
+    while (isLuaIdentifierPart(file.text[index])) index += 1;
+    names.add(file.text.slice(start, index));
+  }
+  let binding = 'row';
+  for (let suffix = 2; names.has(binding); suffix += 1) binding = `row${suffix}`;
+  const parsed = directCallPayload(entry.path, `local ${binding} = ${candidate.receiver}:addRow(false, {})`, binding);
+  if ('reason' in parsed) return parsed;
+  return { source: parsed.source, model: parsed.model, calls: [parsed.call], statement: parsed.statement };
+};
+
+const widgetInsertionPayloadFor = (
+  file: X4UiSourceFile,
+  target: X4UiLayoutTarget,
+  program: X4UiLayoutProgram,
+  evidenceAuthority: X4UiLayoutEvidenceAuthority,
+  entry: X4UiSourceEditEmptyCellEntry,
+  widget: X4UiSourceEditWidgetKind,
+  text: string,
+): WidgetInsertionPayloadProof | { readonly reason: X4UiSourceEditRefusalReason; readonly detail: string } => {
+  const table = program.tables.find(candidate => candidate.id === entry.tableId);
+  const row = program.rows.find(candidate => candidate.id === entry.rowId);
+  const cell = program.cells.find(candidate => candidate.id === entry.cellId);
+  if (!table || !row || !cell) {
+    return { reason: 'provenance-drift', detail: 'issued empty-cell entry no longer resolves to its exact table, row, and cell records' };
+  }
+  const statements = structuralStatements(file, program, evidenceAuthority, target);
+  const owners = structuralOwnerLedger(file.callModel, program);
+  const candidate = emptyCellInsertionCandidateFor(
+    file,
+    target,
+    program,
+    evidenceAuthority,
+    statements,
+    owners,
+    row,
+    table,
+    cell,
+  );
+  if (!candidate
+    || entry.path !== file.path
+    || entry.startOffset !== candidate.style.anchorOffset
+    || entry.endOffset !== entry.startOffset
+    || entry.column !== cell.column
+    || entry.frameId !== candidate.rowOwner.frameId
+    || entry.tableId !== candidate.rowOwner.tableId
+    || entry.rowId !== candidate.rowOwner.rowId
+    || entry.cellId !== cell.id
+    || entry.indentation !== candidate.style.indentation
+    || entry.lineEnding !== candidate.style.lineEnding
+    || !sameLocation(entry.rowSource, candidate.rowCall.source)
+    || !sameLocation(entry.cellSource, cell.source)
+    || !sameIdentity(entry.provenance.sourceIdentity, target.sourceIdentity)) {
+    return { reason: 'provenance-drift', detail: 'empty-cell entry no longer matches the owner-proven row/display/cell insertion anchor' };
+  }
+  const cellReceiver = `${candidate.rowReceiver}[${entry.column}]`;
+  const encodedText = encodeLuaString(text, '"');
+  // Starter authoring size, not an engine default: heightless editboxes do not
+  // size their row. helper.lua:522/10814 uses the 25-unit standard control height.
+  // Keep this literal editable and independent of the imported menu's Helper alias.
+  const inputStarterHeight = 25;
+  const payloadSource = widget === 'text'
+    ? `${cellReceiver}:createText(${encodedText}, {})`
+    : widget === 'button'
+      ? `${cellReceiver}:createButton({}):setText(${encodedText}, {})`
+      : `${cellReceiver}:createEditBox({ defaultText = ${encodedText}, height = ${inputStarterHeight} })`;
+  const parsed = directStatementReplacementPayload(entry.path, payloadSource);
+  if ('reason' in parsed) return parsed;
+  const expectedNames: readonly X4UiRelevantCallName[] = widget === 'text'
+    ? ['createText']
+    : widget === 'button'
+      ? ['createButton', 'setText']
+      : ['createEditBox'];
+  if (parsed.calls.length !== expectedNames.length
+    || parsed.calls.some((call, index) => call.name !== expectedNames[index])) {
+    return { reason: 'replacement-parse-failure', detail: 'generated widget source did not produce the exact creator call chain' };
+  }
+  const firstReceiver = recordString(parsed.calls[0].receiver, 'expression');
+  if (firstReceiver !== cellReceiver) {
+    return { reason: 'replacement-parse-failure', detail: 'generated widget creator receiver is not the proven empty cell expression' };
+  }
+  return freezeDeep({ direct: parsed, widget, text, rowReceiver: candidate.rowReceiver });
 };
 
 /** Pure field-aware Lua replacement encoding; it performs no source mutation or parsing. */
@@ -5642,6 +7700,7 @@ const reparseAndProveUnsafe = (
     nextModel,
     targetSelector(nextTarget),
     nextProfile,
+    { path: entry.path, startOffset, endOffset: entry.endOffset, expectedText: entry.expectedText, replacement },
   );
   if (nextProgramResult.status === 'refused' || !nextProgramResult.program) {
     return { reason: 'reparse-provenance-drift', detail: 'layout program refused the reparsed source or lost selected provenance' };
@@ -5705,10 +7764,29 @@ const reparseAndProve = (
   }
 };
 
+const rowMoveMappedRangeForEntry = (
+  entry: X4UiSourceEditRowMoveEntry,
+  start: number,
+  end: number,
+): { readonly start: number; readonly end: number } | undefined => mapRowMoveRange(start, end, {
+  upperStart: entry.upper.startOffset,
+  upperEnd: entry.upper.endOffset,
+  lowerStart: entry.lower.startOffset,
+  lowerEnd: entry.lower.endOffset,
+  nodeIdMap: new Map(),
+  operationIdMap: new Map(),
+  callOrderMap: new Map(),
+  recordOrderMap: new Map(),
+  operationModelOrderMap: new Map(),
+});
+
 interface StructuralReparseProof {
   readonly workspace: ModWorkspace;
   readonly source: X4UiWorkspaceSource;
   readonly catalog: X4UiSourceEditCatalog;
+  readonly insertedWidget?: X4UiSourceEditInsertedWidget;
+  readonly insertedRow?: X4UiSourceEditInsertedRow;
+  readonly movedRow?: X4UiSourceEditMovedRow;
 }
 
 const reparseStructuralAndProveUnsafe = (
@@ -5719,6 +7797,7 @@ const reparseStructuralAndProveUnsafe = (
   nextWorkspace: ModWorkspace,
   nextSource: X4UiWorkspaceSource,
   directPayload: DirectStructuralPayload | undefined,
+  widgetPayload?: WidgetInsertionPayloadProof,
 ): StructuralReparseProof | ReparseFailure => {
   if (nextSource.status !== 'source-owned' || !nextSource.bundle || !nextSource.projection) {
     return { reason: 'reparse-failure', detail: 'complete source reparse no longer produces source-owned UI authority' };
@@ -5736,7 +7815,7 @@ const reparseStructuralAndProveUnsafe = (
     ...(nextModel.file.sourcePath !== undefined ? { sourcePath: nextModel.file.sourcePath } : {}),
     sha256: sha256(nextFile.text),
   };
-  const retainedOffset = entry.kind === 'insert-call' || entry.kind === 'replace-statement'
+  const retainedOffset = entry.kind === 'insert-call' || entry.kind === 'replace-statement' || entry.kind === 'insert-widget' || entry.kind === 'insert-row'
     ? entry.startOffset + replacement.length
     : entry.startOffset;
   const nextTarget = nextTargetFor(
@@ -5755,6 +7834,13 @@ const reparseStructuralAndProveUnsafe = (
     nextModel,
     targetSelector(nextTarget),
     nextProfile,
+    { path: entry.path, startOffset: entry.startOffset, endOffset: entry.endOffset,
+      expectedText: entry.expectedText, replacement,
+      ...(entry.kind === 'move-row' ? { retainedSpans: [
+        { beforeStart: entry.upper.startOffset, beforeEnd: entry.upper.endOffset, afterStart: entry.startOffset + entry.lower.expectedText.length },
+        { beforeStart: entry.lower.startOffset, beforeEnd: entry.lower.endOffset, afterStart: entry.startOffset },
+      ] } : {}),
+    },
   );
   if (nextProgramResult.status === 'refused' || !nextProgramResult.program) {
     return { reason: 'reparse-provenance-drift', detail: 'layout program refused the structurally reparsed source' };
@@ -5762,6 +7848,9 @@ const reparseStructuralAndProveUnsafe = (
   if (!modelMatchesEvidenceAuthority(nextModel, nextProgramResult.program, nextProgramResult.evidenceAuthority)) {
     return { reason: 'reparse-provenance-drift', detail: 'reparsed structural source lost exact call/evidence authority' };
   }
+  let insertedWidget: X4UiSourceEditInsertedWidget | undefined;
+  let insertedRow: X4UiSourceEditInsertedRow | undefined;
+  let movedRow: X4UiSourceEditMovedRow | undefined;
   if (entry.kind === 'insert-call') {
     if (!directPayload || !('call' in directPayload)) {
       return { reason: 'reparse-provenance-drift', detail: 'inserted structural call lost its direct payload proof' };
@@ -5791,6 +7880,90 @@ const reparseStructuralAndProveUnsafe = (
       || !replacementRowOwnerMatches(entry, replacementLedger.operations, nextOwners)) {
       return { reason: 'reparse-provenance-drift', detail: 'replacement calls are not all applied on the issued row/table/frame owner chain' };
     }
+  } else if (entry.kind === 'insert-widget') {
+    if (!directPayload || !('calls' in directPayload) || !('statement' in directPayload) || !widgetPayload) {
+      return { reason: 'reparse-provenance-drift', detail: 'inserted widget lost its generated direct payload proof' };
+    }
+    const replacementLedger = replacementLedgerFor(nextFile, nextProgramResult.program, entry, replacement, directPayload);
+    if (!replacementLedger) {
+      return { reason: 'reparse-provenance-drift', detail: 'inserted widget did not retain an exact creator call and operation ledger' };
+    }
+    insertedWidget = widgetInsertedIdentityFor(
+      nextFile,
+      nextProgramResult.program,
+      nextIdentity,
+      entry,
+      widgetPayload,
+      replacementLedger,
+    );
+    if (!insertedWidget) {
+      return { reason: 'reparse-provenance-drift', detail: 'inserted widget creator chain is not fully owned by the issued target cell' };
+    }
+  }
+  if (entry.kind === 'insert-row') {
+    if (!directPayload || !('calls' in directPayload) || !('statement' in directPayload)) {
+      return { reason: 'reparse-provenance-drift', detail: 'row insertion lost its generated local statement payload' };
+    }
+    const ledger = replacementLedgerFor(nextFile, nextProgramResult.program, entry, replacement, directPayload);
+    const operation = ledger?.operations[0];
+    const row = nextProgramResult.program.rows.find(candidate => candidate.id === operation?.rowId);
+    const table = nextProgramResult.program.tables.find(candidate => candidate.id === row?.tableId);
+    const cells = nextProgramResult.program.cells.filter(candidate => candidate.rowId === row?.id);
+    if (!ledger || ledger.operations.length !== 1 || !operation || operation.kind !== 'addRow' || !row || !table
+      || table.id !== entry.tableId || table.frameId !== entry.frameId || row.rowIndex !== entry.rowIndex + 1
+      || row.status !== 'projected' || cells.length !== table.numColumns
+      || cells.some(cell => cell.tableId !== table.id || cell.kernelState?.type !== 'cell')) {
+      return { reason: 'reparse-provenance-drift', detail: 'new row creator and complete cell/table/frame chain are not exact' };
+    }
+    insertedRow = freezeDeep({ frameId: table.frameId, tableId: table.id, rowId: row.id, rowIndex: row.rowIndex,
+      cellIds: cells.sort((left, right) => left.column - right.column).map(cell => cell.id),
+      creatorOperationId: operation.id, creatorCallName: 'addRow', creatorSource: operation.source, sourceIdentity: nextIdentity });
+  } else if (entry.kind === 'move-row') {
+    if (directPayload !== undefined || entry.upper.endOffset !== entry.lower.startOffset) {
+      return { reason: 'reparse-provenance-drift', detail: 'row movement did not retain its closed two-block permutation proof' };
+    }
+    const selected = entry.direction === 'down' ? entry.upper : entry.lower;
+    const mappedCreator = rowMoveMappedRangeForEntry(entry, selected.creatorSource.start.offset, selected.creatorSource.end.offset);
+    if (!mappedCreator) {
+      return { reason: 'reparse-provenance-drift', detail: 'moved row creator source could not be mapped through the declared permutation' };
+    }
+    const creatorOperations = nextProgramResult.program.operations.filter(operation => operation.kind === 'addRow'
+      && operation.status === 'applied' && operation.localExpansion === undefined
+      && operation.tableId === entry.tableId
+      && operation.source.start.offset === mappedCreator.start
+      && operation.source.end.offset === mappedCreator.end);
+    if (creatorOperations.length !== 1) {
+      return { reason: 'reparse-provenance-drift', detail: 'fresh moved row creator operation was not unique at the permuted source location' };
+    }
+    const creatorOperation = creatorOperations[0];
+    const movedRowNode = nextProgramResult.program.rows.find(row => row.id === creatorOperation.rowId);
+    const table = nextProgramResult.program.tables.find(tableNode => tableNode.id === creatorOperation.tableId);
+    const cells = movedRowNode ? nextProgramResult.program.cells.filter(cell => cell.rowId === movedRowNode.id) : [];
+    const expectedIndex = selected.rowIndex + (entry.direction === 'down' ? 1 : -1);
+    if (!movedRowNode || !table || !creatorOperation.rowId || !movedRowNode.tableId
+      || table.id !== entry.tableId || table.frameId !== entry.frameId || movedRowNode.tableId !== table.id
+      || movedRowNode.source.start.offset !== creatorOperation.source.start.offset
+      || movedRowNode.source.end.offset !== creatorOperation.source.end.offset
+      || movedRowNode.rowIndex !== expectedIndex || movedRowNode.status !== 'projected'
+      || cells.length !== table.numColumns || cells.some(cell => cell.tableId !== table.id
+        || cell.rowId !== movedRowNode.id || cell.rowIndex !== expectedIndex
+        || cell.kernelState === undefined)) {
+      return { reason: 'reparse-provenance-drift', detail: 'fresh moved row lacks the complete table/frame/cell creator ownership chain' };
+    }
+    movedRow = freezeDeep({
+      frameId: table.frameId,
+      tableId: table.id,
+      rowId: movedRowNode.id,
+      rowIndex: movedRowNode.rowIndex,
+      cellIds: cells.sort((left, right) => left.column - right.column).map(cell => cell.id),
+      creatorOperationId: creatorOperation.id,
+      creatorCallName: 'addRow',
+      creatorSource: creatorOperation.source,
+      sourceIdentity: nextIdentity,
+      movedFromRowId: selected.rowId,
+      movedFromRowIndex: selected.rowIndex,
+      direction: entry.direction,
+    });
   }
   const ledgerDelta = structuralLedgerDelta(
     selection.file,
@@ -5862,8 +8035,33 @@ const reparseStructuralAndProveUnsafe = (
       || reissuedReplacement.provenance.sourceIdentity.sha256 === entry.provenance.sourceIdentity.sha256) {
       return { reason: 'reparse-provenance-drift', detail: 'replacement source did not reissue the selected row/table/frame authority' };
     }
+  } else if (entry.kind === 'insert-widget') {
+    const retainedCellEntry = nextCatalog.insertEntries?.find(candidate => candidate.kind === 'insert-widget'
+      && candidate.frameId === entry.frameId
+      && candidate.tableId === entry.tableId
+      && candidate.rowId === entry.rowId
+      && candidate.cellId === entry.cellId);
+    if (retainedCellEntry) {
+      return { reason: 'reparse-provenance-drift', detail: 'fresh catalog retained insertion authority for the cell that was just filled' };
+    }
+  } else if (entry.kind === 'move-row') {
+    const expectedDirection: X4UiSourceEditRowMoveDirection = entry.direction === 'down' ? 'up' : 'down';
+    const reissuedMove = nextCatalog.moveEntries?.find(candidate => candidate.kind === 'move-row'
+      && candidate.path === entry.path
+      && candidate.startOffset === entry.startOffset
+      && candidate.endOffset === entry.endOffset
+      && candidate.direction === expectedDirection
+      && candidate.rowId === movedRow?.rowId
+      && candidate.tableId === entry.tableId
+      && candidate.frameId === entry.frameId);
+    if (!movedRow || !reissuedMove || reissuedMove.expectedText !== replacement
+      || reissuedMove.provenance.sourceIdentity.sha256 === entry.provenance.sourceIdentity.sha256) {
+      return { reason: 'reparse-provenance-drift', detail: 'fresh moved-row creator proof or inverse move catalog entry was not reissued' };
+    }
   }
-  return { workspace: nextWorkspace, source: nextSource, catalog: nextCatalog };
+  return { workspace: nextWorkspace, source: nextSource, catalog: nextCatalog,
+    ...(insertedWidget ? { insertedWidget } : {}), ...(insertedRow ? { insertedRow } : {}),
+    ...(movedRow ? { movedRow } : {}) };
 };
 
 const reparseStructuralAndProve = (
@@ -5874,6 +8072,7 @@ const reparseStructuralAndProve = (
   nextWorkspace: ModWorkspace,
   nextSource: X4UiWorkspaceSource,
   directPayload: DirectStructuralPayload | undefined,
+  widgetPayload?: WidgetInsertionPayloadProof,
 ): StructuralReparseProof | ReparseFailure => {
   try {
     return reparseStructuralAndProveUnsafe(
@@ -5884,6 +8083,7 @@ const reparseStructuralAndProve = (
       nextWorkspace,
       nextSource,
       directPayload,
+      widgetPayload,
     );
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'complete structural source reparse failed with an unknown layout error';
@@ -5936,7 +8136,45 @@ const applyX4UiSourceEditUnsafe = (
         'catalog layout authority does not match the canonical complete source call model',
       );
     }
-    if (!modelMatchesEvidenceAuthority(normalizedModel, authority.program, authority.evidenceAuthority)) {
+    const legacyScalarActionable = scalarProgramIsActionable(authority.program);
+    const canonicalCorpusIssued = isIssuedX4UiLayoutEvidencePairWithCanonicalCorpus(
+      authority.program,
+      authority.evidenceAuthority,
+    );
+    if (!scalarProgramIsEditable(authority.program, canonicalCorpusIssued)) {
+      return refusal(
+        authority.workspace,
+        authority.source,
+        catalog,
+        'unsupported-provenance',
+        directScalarEvidenceDetail,
+      );
+    }
+    const evidenceFailure = validateIssuedEvidencePair(authority.program, authority.evidenceAuthority);
+    if (evidenceFailure) {
+      return refusal(
+        authority.workspace,
+        authority.source,
+        catalog,
+        'unsupported-provenance',
+        evidenceFailure,
+      );
+    }
+    if (!legacyScalarActionable && scalarProgramHasUnsupportedPreviewInputs(authority.program)) {
+      return refusal(
+        authority.workspace,
+        authority.source,
+        catalog,
+        'unsupported-provenance',
+        activePreviewInputDetail,
+      );
+    }
+    const strictModelMatches = legacyScalarActionable
+      && modelMatchesEvidenceAuthority(normalizedModel, authority.program, authority.evidenceAuthority);
+    const scalarModelMatches = legacyScalarActionable
+      ? strictModelMatches
+      : modelMatchesDirectScalarEvidenceAuthority(normalizedModel, authority.program, authority.evidenceAuthority);
+    if (!scalarModelMatches) {
       return refusal(
         authority.workspace,
         authority.source,
@@ -6146,7 +8384,13 @@ export function applyX4UiSourceEdit(
     return refusal(workspace, source, catalog, 'unsupported-provenance', 'source edit catalog belongs to a different issued workspace/source pair');
   }
   if (!isIssuedX4UiLayoutEvidencePair(catalogAuthority.program, catalogAuthority.evidenceAuthority)
-    || !scalarProgramIsActionable(catalogAuthority.program)) {
+    || !scalarProgramIsEditable(
+      catalogAuthority.program,
+      isIssuedX4UiLayoutEvidencePairWithCanonicalCorpus(
+        catalogAuthority.program,
+        catalogAuthority.evidenceAuthority,
+      ),
+    )) {
     return refusal(workspace, source, catalog, 'unsupported-provenance', 'catalog layout authority is no longer an issued scalar-actionable projected/partial pair');
   }
   if (typeof entryIdValue !== 'string'
@@ -6195,14 +8439,30 @@ const structuralSequenceMatches = (
   authority: X4UiSourceEditAuthority,
 ): boolean => {
   const structuralEntries = catalog.structuralEntries;
+  const issuedDeleteEntries = authority.structuralSequence.filter((entry): entry is X4UiSourceEditDeleteEntry => entry.kind === 'delete-statement');
   const issuedReplaceEntries = authority.structuralSequence.filter((entry): entry is X4UiSourceEditReplaceEntry => entry.kind === 'replace-statement');
+  const issuedInsertEntries = authority.structuralSequence.filter((entry): entry is X4UiSourceEditInsertionEntry =>
+    entry.kind === 'insert-call' || entry.kind === 'insert-block' || entry.kind === 'insert-widget' || entry.kind === 'insert-row');
+  const issuedMoveEntries = authority.structuralSequence.filter((entry): entry is X4UiSourceEditRowMoveEntry => entry.kind === 'move-row');
+  const deleteEntries = catalog.deleteEntries;
   const replaceEntries = catalog.replaceEntries;
+  const insertEntries = catalog.insertEntries;
+  const moveEntries = catalog.moveEntries;
   return Array.isArray(structuralEntries)
     && structuralEntries.length === authority.structuralSequence.length
     && structuralEntries.every((entry, index) => entry === authority.structuralSequence[index])
+    && Array.isArray(deleteEntries)
+    && deleteEntries.length === issuedDeleteEntries.length
+    && deleteEntries.every((entry, index) => entry === issuedDeleteEntries[index])
     && Array.isArray(replaceEntries)
     && replaceEntries.length === issuedReplaceEntries.length
-    && replaceEntries.every((entry, index) => entry === issuedReplaceEntries[index]);
+    && replaceEntries.every((entry, index) => entry === issuedReplaceEntries[index])
+    && Array.isArray(insertEntries)
+    && insertEntries.length === issuedInsertEntries.length
+    && insertEntries.every((entry, index) => entry === issuedInsertEntries[index])
+    && Array.isArray(moveEntries)
+    && moveEntries.length === issuedMoveEntries.length
+    && moveEntries.every((entry, index) => entry === issuedMoveEntries[index]);
 };
 
 const applyX4UiSourceStructuralEditUnsafe = (
@@ -6214,7 +8474,10 @@ const applyX4UiSourceStructuralEditUnsafe = (
   expectedStartOffset?: number,
   expectedEndOffset?: number,
   expectedText?: string,
-): X4UiSourceStructuralEditResult => {
+  widgetPayload?: WidgetInsertionPayloadProof,
+  rowPayload?: DirectStatementReplacementPayloadProof,
+  textPropertyPayload?: DirectStatementReplacementPayloadProof,
+): X4UiSourceStructuralEditResult | X4UiAcceptedSourceWidgetInsertionResult | X4UiAcceptedSourceRowInsertionResult => {
   try {
     if (hasUnsafeAuthorityGraph(
       authority.workspace,
@@ -6299,7 +8562,12 @@ const applyX4UiSourceStructuralEditUnsafe = (
       if (!entry.provenance.owner || !entry.provenance.rowOwner) {
         return structuralRefusal(authority.workspace, authority.source, catalog, 'provenance-drift', 'statement replacement has no exact issued row/table/frame owner proof', entry);
       }
-      const parsedPayload = directStatementReplacementPayload(entry.path, directCall);
+      // Only typed property insertion can supply this private, already parsed proof.
+      // Arbitrary replacement callers retain the single-line payload restriction.
+      if (textPropertyPayload && textPropertyPayload.source !== directCall) {
+        return structuralRefusal(authority.workspace, authority.source, catalog, 'invalid-request', 'text property payload does not match its private proof', entry);
+      }
+      const parsedPayload = textPropertyPayload ?? directStatementReplacementPayload(entry.path, directCall);
       if ('reason' in parsedPayload) {
         return structuralRefusal(authority.workspace, authority.source, catalog, parsedPayload.reason, parsedPayload.detail, entry);
       }
@@ -6315,7 +8583,7 @@ const applyX4UiSourceStructuralEditUnsafe = (
       }
       directPayload = parsedPayload;
       replacement = `${entry.indentation}${parsedPayload.source}${entry.lineEnding}`;
-    } else {
+    } else if (entry.kind === 'insert-block') {
       if (directCall === undefined) {
         return structuralRefusal(authority.workspace, authority.source, catalog, 'invalid-request', 'frame block insertion requires a Lua source payload', entry);
       }
@@ -6335,6 +8603,28 @@ const applyX4UiSourceStructuralEditUnsafe = (
       }
       directPayload = parsedPayload;
       replacement = `${entry.indentation}${parsedPayload.formattedSource}${entry.lineEnding}`;
+    } else if (entry.kind === 'insert-row') {
+      if (directCall !== undefined || !rowPayload) {
+        return structuralRefusal(authority.workspace, authority.source, catalog, 'invalid-request', 'row insertion accepts only the typed owner-generated row request', entry);
+      }
+      directPayload = rowPayload;
+      replacement = `${entry.indentation}${rowPayload.source}${entry.lineEnding}`;
+    } else if (entry.kind === 'move-row') {
+      if (directCall !== undefined) {
+        return structuralRefusal(authority.workspace, authority.source, catalog, 'invalid-request', 'row movement accepts only the typed owner-issued permutation request', entry);
+      }
+      if (entry.upper.endOffset !== entry.lower.startOffset
+        || selection.file.text.slice(entry.upper.startOffset, entry.upper.endOffset) !== entry.upper.expectedText
+        || selection.file.text.slice(entry.lower.startOffset, entry.lower.endOffset) !== entry.lower.expectedText) {
+        return structuralRefusal(authority.workspace, authority.source, catalog, 'stale-expected-text', 'row movement block bytes no longer match the issued source permutation', entry);
+      }
+      replacement = `${entry.lower.expectedText}${entry.upper.expectedText}`;
+    } else {
+      if (directCall !== undefined || !widgetPayload) {
+        return structuralRefusal(authority.workspace, authority.source, catalog, 'invalid-request', 'widget insertion accepts only the typed widget request payload', entry);
+      }
+      directPayload = widgetPayload.direct;
+      replacement = `${entry.indentation}${widgetPayload.direct.source}${entry.lineEnding}`;
     }
     const splice = spliceX4UiWorkspaceSource(
       spliceInputBoundary(authority.workspace),
@@ -6375,6 +8665,7 @@ const applyX4UiSourceStructuralEditUnsafe = (
       splice.workspace,
       splice.source,
       directPayload,
+      widgetPayload,
     );
     if ('reason' in proof) return structuralRefusal(authority.workspace, authority.source, catalog, proof.reason, proof.detail, entry);
     if (hasUnsafeAuthorityGraph(proof.workspace, proof.source, proof.catalog, entry)) {
@@ -6387,7 +8678,7 @@ const applyX4UiSourceStructuralEditUnsafe = (
         entry,
       );
     }
-    return freezeDeep({
+    const accepted: X4UiAcceptedSourceStructuralEditResult = freezeDeep({
       accepted: true,
       changed: true,
       workspace: proof.workspace,
@@ -6403,6 +8694,11 @@ const applyX4UiSourceStructuralEditUnsafe = (
       reparsed: true,
       provenanceReestablished: true,
     });
+    if (proof.insertedRow && entry.kind === 'insert-row') return freezeDeep({ ...accepted, entry: cloneDataGraph(entry), insertedRow: proof.insertedRow });
+    if (proof.movedRow && entry.kind === 'move-row') return freezeDeep({ ...accepted, entry: cloneDataGraph(entry), movedRow: proof.movedRow });
+    return proof.insertedWidget
+      ? freezeDeep({ ...accepted, insertedWidget: proof.insertedWidget }) as X4UiAcceptedSourceWidgetInsertionResult
+      : accepted;
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'structural source edit failed with an unknown model or layout error';
     return structuralRefusal(authority.workspace, authority.source, catalog, 'unsupported-provenance', `structural source edit refusal was contained: ${detail}`);
@@ -6440,6 +8736,12 @@ export function applyX4UiSourceStructuralEdit(
   const requestedStructuralEntry = typeof actionId === 'string'
     ? catalogAuthority.structuralEntries.get(actionId)
     : undefined;
+  if (requestedStructuralEntry?.kind === 'insert-widget' || requestedStructuralEntry?.kind === 'insert-row') {
+    return structuralRefusal(workspace, source, catalog, 'invalid-request', 'contextual widget or row insertion requires its typed insertion API', requestedStructuralEntry);
+  }
+  if (requestedStructuralEntry?.kind === 'move-row') {
+    return structuralRefusal(workspace, source, catalog, 'invalid-request', 'row movement requires the typed row move API', requestedStructuralEntry);
+  }
   const partialStructuralActionable = catalogAuthority.program.status === 'partial'
     && (requestedStructuralEntry?.kind === 'delete-statement'
       || requestedStructuralEntry?.kind === 'insert-block');
@@ -6464,8 +8766,541 @@ export function applyX4UiSourceStructuralEdit(
     expectedStartOffset,
     expectedEndOffset,
     expectedText,
-  );
+  ) as X4UiSourceStructuralEditResult;
 }
 
 export const applyX4UiSourceStructuralEditRequest = applyX4UiSourceStructuralEdit;
 export const commitX4UiSourceStructuralEdit = applyX4UiSourceStructuralEdit;
+
+export type X4UiSourceTextPropertyName = 'halign' | 'fontsize' | 'wordwrap' | 'x' | 'y' | 'minRowHeight';
+
+/** Disposable choices, not replacement authority. Apply re-derives the exact current site. */
+export interface X4UiSourceTextPropertyAddition {
+  readonly id: string;
+  readonly operationId: string;
+  readonly callName: 'createText' | 'setText' | 'setText2';
+  readonly property: X4UiSourceTextPropertyName;
+  readonly valueType: X4UiSourceEditScalarType;
+}
+
+const textPropertyTypes: Readonly<Record<X4UiSourceTextPropertyName, X4UiSourceEditScalarType>> = Object.freeze({
+  halign: 'string', fontsize: 'number', wordwrap: 'boolean', x: 'number', y: 'number', minRowHeight: 'number',
+});
+const textPropertyCalls = new Set<string>(['createText', 'setText', 'setText2']);
+// The existing call-model contract excludes wrapping/row sizing from button/icon text setters.
+const textPropertyAppliesToCall = (callName: string, property: string): boolean =>
+  callName === 'createText' || (property !== 'wordwrap' && property !== 'minRowHeight');
+
+interface TextPropertySite {
+  readonly entry: X4UiSourceEditReplaceEntry;
+  readonly call: X4UiCallRecord;
+  readonly insertionOffset: number;
+  readonly omittedOptions: boolean;
+  readonly existing: ReadonlySet<string>;
+}
+
+const textPropertySite = (catalog: X4UiSourceEditCatalog, operationId: string): TextPropertySite | undefined => {
+  const authority = catalog !== null && typeof catalog === 'object' ? catalogAuthorities.get(catalog) : undefined;
+  if (!authority || typeof operationId !== 'string') return undefined;
+  if (hasUnsafeAuthorityGraph(authority.workspace, authority.source, catalog, authority.program, authority.evidenceAuthority)
+    || authority.program.status !== 'projected') return undefined;
+  const matches = authority.structuralSequence.filter((entry): entry is X4UiSourceEditReplaceEntry =>
+    entry.kind === 'replace-statement' && entry.callBindings.some(binding => binding.operationId === operationId));
+  if (matches.length !== 1) return undefined;
+  const entry = matches[0];
+  if (entryAuthorities.get(entry) !== authority) return undefined;
+  const selection = selectSource(authority);
+  if ('reason' in selection) return undefined;
+  const binding = entry.callBindings.find(candidate => candidate.operationId === operationId);
+  if (!binding || !textPropertyCalls.has(binding.callName)) return undefined;
+  const calls = layoutModel(selection.file.callModel).calls.filter(call => call.name === binding.callName && sameLocation(call.source, binding.callSource));
+  if (calls.length !== 1) return undefined;
+  const call = calls[0];
+  if (call.arguments.length < 1 || call.arguments.length > 2) return undefined;
+  const options = call.arguments[1];
+  const omittedOptions = options === undefined;
+  let insertionOffset: number;
+  let existing: ReadonlySet<string>;
+  if (omittedOptions) {
+    insertionOffset = call.source.end.offset - 1;
+    if (selection.file.text[insertionOffset] !== ')') return undefined;
+    existing = new Set();
+  } else {
+    // The parser must have proven a direct, fully known literal option table.
+    // Its reference source differing from the use range identifies an alias.
+    const start = options.location.start.offset, end = options.location.end.offset;
+    if (options.status !== 'static' || options.type !== 'reference' || options.reference?.kind !== 'object'
+      || options.reference.origin !== 'literal' || !sameLocation(options.location, options.reference.source)
+      || selection.file.text.slice(start, end) !== options.expression
+      || selection.file.text[start] !== '{' || selection.file.text[end - 1] !== '}'
+      || !Array.isArray(call.semantics.properties)) return undefined;
+    insertionOffset = start + 1;
+    existing = new Set([...call.semantics.properties, ...(call.semantics.unsupportedProperties ?? [])].map(property => property.name.toLowerCase()));
+  }
+  if (!Number.isSafeInteger(insertionOffset) || insertionOffset <= entry.startOffset || insertionOffset >= entry.endOffset
+    || selection.file.text.slice(entry.startOffset, entry.endOffset) !== entry.expectedText) return undefined;
+  return { entry, call, insertionOffset, omittedOptions, existing };
+};
+
+/** Expose only absent properties of a proven direct text call on its current row owner. */
+export function discoverX4UiSourceTextPropertyAdditions(catalog: X4UiSourceEditCatalog, operationId: string): readonly X4UiSourceTextPropertyAddition[] {
+  try {
+    const site = textPropertySite(catalog, operationId);
+    if (!site) return Object.freeze([]);
+    return Object.freeze((Object.keys(textPropertyTypes) as X4UiSourceTextPropertyName[])
+      .filter(property => textPropertyAppliesToCall(site.call.name, property) && !site.existing.has(property.toLowerCase()))
+      .map(property => Object.freeze({ id: `text-property:${operationId}:${property}`, operationId,
+        callName: site.call.name as X4UiSourceTextPropertyAddition['callName'], property, valueType: textPropertyTypes[property] })));
+  } catch { return Object.freeze([]); }
+}
+
+export interface X4UiSourceTextPropertySplice {
+  readonly path: string;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly expectedText: '';
+  readonly replacement: string;
+}
+
+export type X4UiSourceTextPropertyAdditionResult = X4UiRefusedSourceStructuralEditResult
+  | (X4UiAcceptedSourceStructuralEditResult & { readonly propertySplice: X4UiSourceTextPropertySplice });
+
+/** Typed property authoring through the existing statement/CAS/reparse owner. */
+export function applyX4UiSourceTextPropertyAddition(
+  workspace: ModWorkspace, source: X4UiWorkspaceSource, catalog: X4UiSourceEditCatalog,
+  operationId: string, property: string, value: unknown,
+): X4UiSourceTextPropertyAdditionResult {
+  const refuse = (detail: string): X4UiRefusedSourceStructuralEditResult => structuralRefusal(
+    safeRefusalWorkspace(workspace), safeRefusalSource(source), safeRefusalCatalog(catalog), 'invalid-request', detail);
+  try {
+    const authority = catalog !== null && typeof catalog === 'object' ? catalogAuthorities.get(catalog) : undefined;
+    if (!authority || authority.workspace !== workspace || authority.source !== source
+      || !isIssuedX4UiWorkspaceSourcePair(workspace, source)
+      || typeof operationId !== 'string' || typeof property !== 'string'
+      || !Object.prototype.hasOwnProperty.call(textPropertyTypes, property)) return refuse('Text property selection is stale or unavailable.');
+    const site = textPropertySite(catalog, operationId);
+    if (!site || !textPropertyAppliesToCall(site.call.name, property) || site.existing.has(property.toLowerCase())) return refuse('This property already exists or cannot be added safely to the selected text.');
+    const type = textPropertyTypes[property as X4UiSourceTextPropertyName];
+    if (typeof value !== type
+      || (type === 'string' && !['left', 'center', 'right'].includes(value as string))
+      || (type === 'number' && (!Number.isFinite(value) || (value as number) < 0 || (property === 'fontsize' && value === 0)))) {
+      return refuse('Choose an alignment, a wrapping value, or a non-negative finite number (font size must be positive).');
+    }
+    const encoded = typeof value === 'string' ? encodeLuaString(value, '"') : String(Object.is(value, -0) ? 0 : value);
+    const insertion = site.omittedOptions ? `, { ${property} = ${encoded} }` : ` ${property} = ${encoded}, `;
+    const localOffset = site.insertionOffset - site.entry.startOffset;
+    const payload = site.entry.expectedText.slice(0, localOffset) + insertion + site.entry.expectedText.slice(localOffset);
+    const proof = directStatementReplacementPayload(site.entry.path, payload, true);
+    if ('reason' in proof || proof.source !== payload) return refuse('The added property is not one byte-preserving direct text statement.');
+    const result = applyX4UiSourceStructuralEditUnsafe(authority, catalog, site.entry.id, payload,
+      site.entry.path, site.entry.startOffset, site.entry.endOffset, site.entry.expectedText, undefined, undefined, proof);
+    if (result.accepted === false) return result;
+    const inserted = result.catalog.editableEntries.filter(entry => entry.provenance.callName === site.call.name
+      && entry.provenance.callSource.start.offset === site.call.source.start.offset
+      && entry.provenance.fields.some(field => field.toLowerCase() === `semantics.properties.${property.toLowerCase()}`)
+      && entry.startOffset >= site.insertionOffset && entry.endOffset <= site.insertionOffset + insertion.length
+      && entry.value === value);
+    if (!result.changed || result.replacement !== payload || inserted.length !== 1) {
+      return refuse('The added property did not retain exact editable source authority after reparse.');
+    }
+    return freezeDeep({ ...result, propertySplice: {
+      path: site.entry.path, startOffset: site.insertionOffset, endOffset: site.insertionOffset,
+      expectedText: '' as const, replacement: insertion,
+    } });
+  } catch { return refuse('The text property could not be added safely; no workspace change was submitted.'); }
+}
+
+const widgetInsertionRequestRequiredKeys = new Set(['entry', 'widget', 'text']);
+const rowInsertionRequestKeys = new Set(['entry']);
+const rowMoveRequestKeys = new Set(['entry']);
+const rowInsertionEntryKeys = new Set([
+  'kind', 'id', 'path', 'startOffset', 'endOffset', 'expectedText', 'anchor', 'anchorSource',
+  'indentation', 'lineEnding', 'frameId', 'tableId', 'rowId', 'rowIndex', 'rowSource', 'provenance',
+]);
+const rowMoveEntryKeys = new Set([
+  'kind', 'id', 'path', 'startOffset', 'endOffset', 'expectedText', 'direction', 'frameId', 'tableId', 'rowId',
+  'rowIndex', 'adjacentRowId', 'adjacentRowIndex', 'upper', 'lower', 'provenance',
+]);
+const rowMoveBlockKeys = new Set([
+  'frameId', 'tableId', 'rowId', 'rowIndex', 'rowSource', 'statementSource', 'startOffset', 'endOffset',
+  'expectedText', 'creatorOperationId', 'creatorCallName', 'creatorSource', 'callBindings', 'owner', 'rowOwner',
+]);
+const widgetInsertionRequestOptionalKeys = new Set(['expected']);
+const widgetInsertionEntryKeys = new Set([
+  'kind', 'id', 'path', 'startOffset', 'endOffset', 'expectedText', 'anchor', 'anchorSource',
+  'indentation', 'lineEnding', 'column', 'frameId', 'tableId', 'rowId', 'cellId', 'rowSource',
+  'cellSource', 'provenance',
+]);
+const widgetInsertionExpectedKeys = new Set(['path', 'startOffset', 'endOffset', 'expectedText']);
+
+const isRowInsertionEntryData = (entry: unknown): entry is X4UiSourceEditRowInsertionEntry => {
+  if (!hasClosedStructuralKeys(entry, rowInsertionEntryKeys) || !isClosedPlainOwnData(entry) || !isRecord(entry)) return false;
+  const provenance = ownData(entry, 'provenance');
+  return entry.kind === 'insert-row' && entry.anchor === 'row-below' && entry.expectedText === ''
+    && ['id', 'path', 'frameId', 'tableId', 'rowId'].every(key => typeof entry[key] === 'string' && entry[key].length > 0)
+    && typeof entry.indentation === 'string' && (entry.lineEnding === '\n' || entry.lineEnding === '\r\n')
+    && typeof entry.startOffset === 'number' && validOffset(entry.startOffset) && entry.endOffset === entry.startOffset
+    && typeof entry.rowIndex === 'number' && Number.isSafeInteger(entry.rowIndex) && entry.rowIndex >= 1
+    && isLocationRecord(entry.anchorSource) && isLocationRecord(entry.rowSource)
+    && isRecord(provenance) && isRecord(ownData(provenance, 'sourceIdentity'))
+    && isRecord(ownData(provenance, 'owner')) && isRecord(ownData(provenance, 'rowOwner'));
+};
+
+const isRowMoveBlockData = (value: unknown): value is X4UiSourceEditRowMoveBlock => {
+  if (!hasClosedStructuralKeys(value, rowMoveBlockKeys) || !isClosedPlainOwnData(value) || !isRecord(value)) return false;
+  const block = value as Record<string, unknown>;
+  const owner = ownData(block, 'owner');
+  const rowOwner = ownData(block, 'rowOwner');
+  const bindings = ownData(block, 'callBindings');
+  const stringFields = ['frameId', 'tableId', 'rowId', 'creatorOperationId'];
+  return stringFields.every(field => typeof ownData(block, field) === 'string' && (ownData(block, field) as string).length > 0)
+    && ownData(block, 'creatorCallName') === 'addRow'
+    && typeof ownData(block, 'rowIndex') === 'number' && Number.isSafeInteger(ownData(block, 'rowIndex'))
+    && (ownData(block, 'rowIndex') as number) >= 1
+    && typeof ownData(block, 'startOffset') === 'number' && validOffset(ownData(block, 'startOffset') as number)
+    && typeof ownData(block, 'endOffset') === 'number' && validOffset(ownData(block, 'endOffset') as number)
+    && (ownData(block, 'startOffset') as number) < (ownData(block, 'endOffset') as number)
+    && typeof ownData(block, 'expectedText') === 'string'
+    && isLocationRecord(ownData(block, 'rowSource'))
+    && isLocationRecord(ownData(block, 'statementSource'))
+    && isLocationRecord(ownData(block, 'creatorSource'))
+    && Array.isArray(bindings) && bindings.length > 0
+    && bindings.every(binding => isRecord(binding)
+      && typeof ownData(binding, 'operationId') === 'string'
+      && typeof ownData(binding, 'callName') === 'string'
+      && typeof ownData(binding, 'callOrder') === 'number'
+      && isLocationRecord(ownData(binding, 'callSource')))
+    && isRecord(owner) && ownData(owner, 'kind') === 'table'
+    && typeof ownData(owner, 'ownerId') === 'string' && typeof ownData(owner, 'frameId') === 'string'
+    && isRecord(rowOwner) && typeof ownData(rowOwner, 'frameId') === 'string'
+    && typeof ownData(rowOwner, 'tableId') === 'string' && typeof ownData(rowOwner, 'rowId') === 'string';
+};
+
+const isRowMoveEntryData = (value: unknown): value is X4UiSourceEditRowMoveEntry => {
+  if (!hasClosedStructuralKeys(value, rowMoveEntryKeys) || !isClosedPlainOwnData(value) || !isRecord(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const upper = ownData(entry, 'upper');
+  const lower = ownData(entry, 'lower');
+  const provenance = ownData(entry, 'provenance');
+  const strings = ['id', 'path', 'frameId', 'tableId', 'rowId', 'adjacentRowId'];
+  if (ownData(entry, 'kind') !== 'move-row'
+    || (ownData(entry, 'direction') !== 'up' && ownData(entry, 'direction') !== 'down')
+    || strings.some(field => typeof ownData(entry, field) !== 'string' || (ownData(entry, field) as string).length === 0)
+    || typeof ownData(entry, 'expectedText') !== 'string'
+    || typeof ownData(entry, 'startOffset') !== 'number' || !validOffset(ownData(entry, 'startOffset') as number)
+    || typeof ownData(entry, 'endOffset') !== 'number' || !validOffset(ownData(entry, 'endOffset') as number)
+    || (ownData(entry, 'startOffset') as number) >= (ownData(entry, 'endOffset') as number)
+    || typeof ownData(entry, 'rowIndex') !== 'number' || !Number.isSafeInteger(ownData(entry, 'rowIndex'))
+    || typeof ownData(entry, 'adjacentRowIndex') !== 'number' || !Number.isSafeInteger(ownData(entry, 'adjacentRowIndex'))
+    || !isRowMoveBlockData(upper) || !isRowMoveBlockData(lower)
+    || (upper as X4UiSourceEditRowMoveBlock).endOffset !== (lower as X4UiSourceEditRowMoveBlock).startOffset
+    || (upper as X4UiSourceEditRowMoveBlock).startOffset !== ownData(entry, 'startOffset')
+    || (lower as X4UiSourceEditRowMoveBlock).endOffset !== ownData(entry, 'endOffset')
+    || (ownData(entry, 'rowIndex') !== (ownData(entry, 'direction') === 'down'
+      ? (upper as X4UiSourceEditRowMoveBlock).rowIndex : (lower as X4UiSourceEditRowMoveBlock).rowIndex))
+    || (ownData(entry, 'adjacentRowIndex') !== (ownData(entry, 'direction') === 'down'
+      ? (lower as X4UiSourceEditRowMoveBlock).rowIndex : (upper as X4UiSourceEditRowMoveBlock).rowIndex))
+    || ownData(entry, 'rowId') !== (ownData(entry, 'direction') === 'down'
+      ? (upper as X4UiSourceEditRowMoveBlock).rowId : (lower as X4UiSourceEditRowMoveBlock).rowId)
+    || ownData(entry, 'adjacentRowId') !== (ownData(entry, 'direction') === 'down'
+      ? (lower as X4UiSourceEditRowMoveBlock).rowId : (upper as X4UiSourceEditRowMoveBlock).rowId)
+    || ownData(entry, 'expectedText') !== `${(upper as X4UiSourceEditRowMoveBlock).expectedText}${(lower as X4UiSourceEditRowMoveBlock).expectedText}`
+    || !isRecord(provenance) || !isRecord(ownData(provenance, 'sourceIdentity'))
+    || !isRecord(ownData(provenance, 'owner')) || !isRecord(ownData(provenance, 'rowOwner'))
+    || ownData(provenance, 'owner') !== (ownData(entry, 'direction') === 'down'
+      ? (upper as X4UiSourceEditRowMoveBlock).owner : (lower as X4UiSourceEditRowMoveBlock).owner)) return false;
+  return true;
+};
+
+const isRowMoveRequestData = (value: unknown): value is X4UiSourceEditRowMoveRequest => {
+  if (!hasClosedStructuralKeys(value, rowMoveRequestKeys, widgetInsertionRequestOptionalKeys)
+    || !isClosedPlainOwnData(value) || !isRecord(value)) return false;
+  const request = value as Record<string, unknown>;
+  const expected = ownData(request, 'expected');
+  return isRowMoveEntryData(ownData(request, 'entry'))
+    && (expected === undefined || isWidgetInsertionExpectedData(expected));
+};
+
+const isWidgetInsertionEntryData = (value: unknown): value is X4UiSourceEditEmptyCellEntry => {
+  if (!hasClosedStructuralKeys(value, widgetInsertionEntryKeys)
+    || !isClosedPlainOwnData(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const provenance = ownData(entry, 'provenance');
+  const stringFields = ['id', 'path', 'frameId', 'tableId', 'rowId', 'cellId'];
+  return ownData(entry, 'kind') === 'insert-widget'
+    && ownData(entry, 'expectedText') === ''
+    && ownData(entry, 'anchor') === 'empty-cell'
+    && (ownData(entry, 'lineEnding') === '\n' || ownData(entry, 'lineEnding') === '\r\n')
+    && stringFields.every(field => typeof ownData(entry, field) === 'string' && (ownData(entry, field) as string).length > 0)
+    && typeof ownData(entry, 'indentation') === 'string'
+    && typeof ownData(entry, 'startOffset') === 'number'
+    && validOffset(ownData(entry, 'startOffset') as number)
+    && typeof ownData(entry, 'endOffset') === 'number'
+    && validOffset(ownData(entry, 'endOffset') as number)
+    && ownData(entry, 'startOffset') === ownData(entry, 'endOffset')
+    && typeof ownData(entry, 'column') === 'number'
+    && Number.isSafeInteger(ownData(entry, 'column'))
+    && (ownData(entry, 'column') as number) >= 1
+    && isLocationRecord(ownData(entry, 'anchorSource'))
+    && isLocationRecord(ownData(entry, 'rowSource'))
+    && isLocationRecord(ownData(entry, 'cellSource'))
+    && isRecord(provenance)
+    && isRecord(ownData(provenance, 'sourceIdentity'))
+    && isRecord(ownData(provenance, 'owner'))
+    && isRecord(ownData(provenance, 'rowOwner'));
+};
+
+const isWidgetInsertionExpectedData = (value: unknown): value is X4UiSourceEditExpectedRange => {
+  if (!hasClosedStructuralKeys(value, widgetInsertionExpectedKeys)
+    || !isClosedPlainOwnData(value)) return false;
+  const expected = value as Record<string, unknown>;
+  return typeof ownData(expected, 'path') === 'string'
+    && typeof ownData(expected, 'startOffset') === 'number'
+    && validOffset(ownData(expected, 'startOffset') as number)
+    && typeof ownData(expected, 'endOffset') === 'number'
+    && validOffset(ownData(expected, 'endOffset') as number)
+    && (ownData(expected, 'startOffset') as number) <= (ownData(expected, 'endOffset') as number)
+    && typeof ownData(expected, 'expectedText') === 'string';
+};
+
+const isWidgetInsertionRequestData = (value: unknown): value is X4UiSourceEditWidgetInsertionRequest => {
+  if (!hasClosedStructuralKeys(value, widgetInsertionRequestRequiredKeys, widgetInsertionRequestOptionalKeys)
+    || !isClosedPlainOwnData(value)) return false;
+  const request = value as Record<string, unknown>;
+  const entry = ownData(request, 'entry');
+  const widget = ownData(request, 'widget');
+  const text = ownData(request, 'text');
+  const expected = ownData(request, 'expected');
+  return isWidgetInsertionEntryData(entry)
+    && (widget === 'text' || widget === 'button' || widget === 'input')
+    && typeof text === 'string'
+    && (expected === undefined || isWidgetInsertionExpectedData(expected));
+};
+
+/** Insert one source-owned local row below the exact catalog-issued row. */
+export function applyX4UiSourceRowInsertion(
+  workspace: ModWorkspace, source: X4UiWorkspaceSource, catalog: X4UiSourceEditCatalog,
+  request: X4UiSourceEditRowInsertionRequest,
+): X4UiSourceRowInsertionResult {
+  const refuse = (reason: X4UiSourceEditRefusalReason, detail: string) => structuralRefusal(
+    safeRefusalWorkspace(workspace), safeRefusalSource(source), safeRefusalCatalog(catalog), reason, detail);
+  try {
+    if (!hasClosedStructuralKeys(request, rowInsertionRequestKeys, widgetInsertionRequestOptionalKeys)
+      || !isClosedPlainOwnData(request)) return refuse('invalid-request', 'row request must contain only issued entry and optional expected CAS');
+    const entry = ownData(request, 'entry');
+    const expected = ownData(request, 'expected');
+    if (!isRowInsertionEntryData(entry)
+      || (expected !== undefined && !isWidgetInsertionExpectedData(expected))) return refuse('invalid-request', 'row entry or CAS is not the exact typed own-data shape');
+    const authority = catalogAuthorities.get(catalog);
+    if (!authority || hasUnsafeAuthorityGraph(workspace, source, catalog, authority.workspace, authority.source, authority.program, authority.evidenceAuthority)) {
+      return refuse('unsupported-provenance', 'row insertion requires a safe owner-issued authority graph');
+    }
+    if (!isIssuedX4UiWorkspaceSourcePair(workspace, source)) return refuse('workspace-source-mismatch', 'workspace/source pair is not owner-issued');
+    if (authority.workspace !== workspace || authority.source !== source) return refuse('unsupported-provenance', 'row catalog belongs to another workspace/source');
+    if (authority.structuralEntries.get(entry.id) !== entry || entryAuthorities.get(entry) !== authority) {
+      return refuse('foreign-entry', 'row entry is not the exact current owner-issued object');
+    }
+    const selection = selectSource(authority);
+    if ('reason' in selection) return refuse(selection.reason, selection.detail);
+    const payload = rowInsertionPayloadFor(selection.file, authority.program, authority.evidenceAuthority, request.entry);
+    if ('reason' in payload) return refuse(payload.reason, payload.detail);
+    const result = applyX4UiSourceStructuralEditUnsafe(authority, catalog, request.entry.id, undefined,
+      request.expected?.path, request.expected?.startOffset, request.expected?.endOffset, request.expected?.expectedText,
+      undefined, payload);
+    if (result.accepted === false) return result;
+    if (!('insertedRow' in result)) return refuse('reparse-provenance-drift', 'row insertion did not produce exact fresh creator proof');
+    return result;
+  } catch (error) {
+    return refuse('unsupported-provenance', `row insertion boundary refused safely: ${error instanceof Error ? error.message : 'unreadable input'}`);
+  }
+}
+
+const rowMoveEntryMatchesCandidate = (
+  entry: X4UiSourceEditRowMoveEntry,
+  candidate: RowMoveCandidate,
+  identity: X4UiLayoutModelIdentity,
+): boolean => {
+  const selected = entry.direction === 'down' ? candidate.upperBlock : candidate.lowerBlock;
+  const adjacent = entry.direction === 'down' ? candidate.lowerBlock : candidate.upperBlock;
+  return entry.path === identity.file
+    && entry.frameId === candidate.table.frameId
+    && entry.tableId === candidate.table.id
+    && entry.rowId === selected.rowId
+    && entry.rowIndex === selected.rowIndex
+    && entry.adjacentRowId === adjacent.rowId
+    && entry.adjacentRowIndex === adjacent.rowIndex
+    && entry.startOffset === candidate.upperBlock.startOffset
+    && entry.endOffset === candidate.lowerBlock.endOffset
+    && entry.expectedText === `${candidate.upperBlock.expectedText}${candidate.lowerBlock.expectedText}`
+    && sameClosedData(entry.upper, candidate.upperBlock)
+    && sameClosedData(entry.lower, candidate.lowerBlock)
+    && sameIdentity(entry.provenance.sourceIdentity, identity)
+    && sameClosedData(entry.provenance.callBindings, [...candidate.upperBlock.callBindings, ...candidate.lowerBlock.callBindings])
+    && sameClosedData(entry.provenance.rowOwner, selected.rowOwner)
+    && sameClosedData(entry.provenance.owner, selected.owner);
+};
+
+/** Move one owner-issued local row across exactly one adjacent proven row block. */
+export function applyX4UiSourceRowMove(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  catalog: X4UiSourceEditCatalog,
+  request: X4UiSourceEditRowMoveRequest,
+): X4UiSourceRowMoveResult {
+  const refuse = (reason: X4UiSourceEditRefusalReason, detail: string) => structuralRefusal(
+    safeRefusalWorkspace(workspace), safeRefusalSource(source), safeRefusalCatalog(catalog), reason, detail);
+  try {
+    if (!isRowMoveRequestData(request)) return refuse('invalid-request', 'row move request must contain only an issued move entry and optional expected CAS');
+    const entry = request.entry;
+    const authority = catalogAuthorities.get(catalog);
+    if (!authority || hasUnsafeAuthorityGraph(workspace, source, catalog, authority.workspace, authority.source,
+      authority.program, authority.evidenceAuthority)) {
+      return refuse('unsupported-provenance', 'row movement requires a safe owner-issued authority graph');
+    }
+    if (!isIssuedX4UiWorkspaceSourcePair(workspace, source)) return refuse('workspace-source-mismatch', 'workspace/source pair is not owner-issued');
+    if (authority.workspace !== workspace || authority.source !== source) return refuse('unsupported-provenance', 'row move catalog belongs to another workspace/source');
+    if (authority.structuralEntries.get(entry.id) !== entry || entryAuthorities.get(entry) !== authority
+      || authority.structuralEntries.get(entry.id)?.kind !== 'move-row') {
+      return refuse('foreign-entry', 'row move entry is not the exact current owner-issued object');
+    }
+    const selection = selectSource(authority);
+    if ('reason' in selection) return refuse(selection.reason, selection.detail);
+    const normalizedModel = layoutModel(selection.file.callModel);
+    if (!isIssuedX4UiLayoutEvidencePair(authority.program, authority.evidenceAuthority)
+      || !isIssuedX4UiLayoutEvidencePairForModel(authority.program, authority.evidenceAuthority, normalizedModel)
+      || !modelMatchesEvidenceAuthority(normalizedModel, authority.program, authority.evidenceAuthority)
+      || !scalarProgramIsActionable(authority.program)) {
+      return refuse('unsupported-provenance', 'row movement requires an issued projected/partial source layout with exact operation evidence');
+    }
+    const upperRow = authority.program.rows.find(row => row.id === entry.upper.rowId);
+    const lowerRow = authority.program.rows.find(row => row.id === entry.lower.rowId);
+    const candidate = upperRow && lowerRow
+      ? rowMoveCandidateFor(selection.file, authority.program.target, authority.program, authority.evidenceAuthority, upperRow, lowerRow)
+      : undefined;
+    if (!candidate || !rowMoveEntryMatchesCandidate(entry, candidate, authority.program.target.sourceIdentity)) {
+      return refuse('provenance-drift', 'row move entry no longer matches the exact adjacent source-owned row pair');
+    }
+    const expected = request.expected;
+    const result = applyX4UiSourceStructuralEditUnsafe(
+      authority,
+      catalog,
+      entry.id,
+      undefined,
+      expected?.path,
+      expected?.startOffset,
+      expected?.endOffset,
+      expected?.expectedText,
+    );
+    if (result.accepted === false) return result;
+    if (!('movedRow' in result)) return refuse('reparse-provenance-drift', 'row movement completed without an exact fresh moved-row creator proof');
+    return freezeDeep({ ...result, entry: cloneDataGraph(entry), movedRow: result.movedRow }) as X4UiAcceptedSourceRowMoveResult;
+  } catch (error) {
+    return refuse('unsupported-provenance', `row movement boundary refused safely: ${error instanceof Error ? error.message : 'unreadable input'}`);
+  }
+}
+
+const widgetRefusal = (
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  catalog: X4UiSourceEditCatalog,
+  reason: X4UiSourceEditRefusalReason,
+  detail: string,
+  entry?: X4UiSourceEditEmptyCellEntry,
+): X4UiRefusedSourceWidgetInsertionResult => Object.freeze({
+  accepted: false,
+  changed: false,
+  workspace,
+  source,
+  catalog,
+  reason,
+  detail,
+  ...(entry ? { entry } : {}),
+});
+
+/** Apply one typed Text, Button, or Input widget to an owner-issued empty cell. */
+export function applyX4UiSourceWidgetInsertion(
+  workspace: ModWorkspace,
+  source: X4UiWorkspaceSource,
+  catalog: X4UiSourceEditCatalog,
+  request: X4UiSourceEditWidgetInsertionRequest,
+): X4UiSourceWidgetInsertionResult {
+  const refusalWorkspace = safeRefusalWorkspace(workspace);
+  const refusalSource = safeRefusalSource(source);
+  const refusalCatalog = safeRefusalCatalog(catalog);
+  if (!isWidgetInsertionRequestData(request)) {
+    return widgetRefusal(refusalWorkspace, refusalSource, refusalCatalog, 'invalid-request', 'widget insertion request and entry must be closed plain own data with the exact typed shape');
+  }
+  const requestRecord = request as unknown as Record<string, unknown>;
+  const entry = ownData(requestRecord, 'entry') as X4UiSourceEditEmptyCellEntry;
+  const widget = ownData(requestRecord, 'widget') as X4UiSourceEditWidgetKind;
+  const text = ownData(requestRecord, 'text') as string;
+  const expected = ownData(requestRecord, 'expected');
+  const expectedRecord = expected === undefined ? undefined : expected as Record<string, unknown>;
+  const catalogAuthority = catalog !== null && (typeof catalog === 'object' || typeof catalog === 'function')
+    ? catalogAuthorities.get(catalog)
+    : undefined;
+  if (!catalogAuthority) {
+    return widgetRefusal(refusalWorkspace, refusalSource, refusalCatalog, 'unsupported-provenance', 'source edit catalog was not issued by structural source-edit discovery', entry);
+  }
+  if (hasUnsafeAuthorityGraph(
+    workspace,
+    source,
+    catalog,
+    catalogAuthority.workspace,
+    catalogAuthority.source,
+    catalogAuthority.program,
+    catalogAuthority.evidenceAuthority,
+  )) {
+    return widgetRefusal(refusalWorkspace, refusalSource, refusalCatalog, 'unsupported-provenance', 'widget insertion authority contains an accessor or unsupported own data surface', entry);
+  }
+  const workspacePairIssued = isIssuedX4UiWorkspaceSourcePair(workspace, source);
+  if (!workspacePairIssued) {
+    return widgetRefusal(refusalWorkspace, refusalSource, refusalCatalog, 'workspace-source-mismatch', 'workspace/source pair was not issued by the workspace source owner', entry);
+  }
+  if (catalogAuthority.workspace !== workspace || catalogAuthority.source !== source) {
+    return widgetRefusal(workspace, source, catalog, 'unsupported-provenance', 'source edit catalog belongs to a different issued workspace/source pair', entry);
+  }
+  const authorityEntry = catalogAuthority.structuralEntries.get(entry.id);
+  if (authorityEntry !== entry || entryAuthorities.get(entry) !== catalogAuthority || authorityEntry?.kind !== 'insert-widget') {
+    return widgetRefusal(workspace, source, catalog, 'foreign-entry', 'selected empty-cell entry is not the exact owner-issued entry', entry);
+  }
+  const selection = selectSource(catalogAuthority);
+  if ('reason' in selection) return widgetRefusal(workspace, source, catalog, selection.reason, selection.detail, entry);
+  const normalizedModel = layoutModel(selection.file.callModel);
+  if (!isIssuedX4UiLayoutEvidencePair(catalogAuthority.program, catalogAuthority.evidenceAuthority)
+    || !isIssuedX4UiLayoutEvidencePairForModel(catalogAuthority.program, catalogAuthority.evidenceAuthority, normalizedModel)
+    || !modelMatchesEvidenceAuthority(normalizedModel, catalogAuthority.program, catalogAuthority.evidenceAuthority)
+    || !scalarProgramIsActionable(catalogAuthority.program)) {
+    return widgetRefusal(workspace, source, catalog, 'unsupported-provenance', 'widget insertion requires an issued projected/partial source layout with exact operation evidence', entry);
+  }
+  const payload = widgetInsertionPayloadFor(
+    selection.file,
+    catalogAuthority.program.target,
+    catalogAuthority.program,
+    catalogAuthority.evidenceAuthority,
+    entry,
+    widget,
+    text,
+  );
+  if ('reason' in payload) return widgetRefusal(workspace, source, catalog, payload.reason, payload.detail, entry);
+  const result = applyX4UiSourceStructuralEditUnsafe(
+    catalogAuthority,
+    catalog,
+    entry.id,
+    undefined,
+    expectedRecord ? ownData(expectedRecord, 'path') as string : undefined,
+    expectedRecord ? ownData(expectedRecord, 'startOffset') as number : undefined,
+    expectedRecord ? ownData(expectedRecord, 'endOffset') as number : undefined,
+    expectedRecord ? ownData(expectedRecord, 'expectedText') as string : undefined,
+    payload,
+  );
+  if (result.accepted === false) return widgetRefusal(result.workspace, result.source, result.catalog, result.reason, result.detail, entry);
+  if (!('insertedWidget' in result)) {
+    return widgetRefusal(workspace, source, catalog, 'reparse-provenance-drift', 'typed widget insertion completed without an exact reparsed creator identity', entry);
+  }
+  return freezeDeep({
+    ...result,
+    entry: cloneDataGraph(entry),
+    insertedWidget: result.insertedWidget,
+  });
+}

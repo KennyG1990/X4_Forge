@@ -90,7 +90,7 @@ import { buildReadinessStages, runReadinessSelftest } from "./src/lib/readiness"
 import { isSha256Fingerprint } from "./src/lib/x4UiGameVerification";
 import { runExperienceModeSelftest } from "./src/lib/experienceMode";
 import { runCompileSelftest } from "./src/lib/mdCompileSelftest";
-import { runModTemplatesSelftest } from "./src/lib/modTemplates";
+import { buildTemplateWorkspace, runModTemplatesSelftest } from "./src/lib/modTemplates";
 import { runCompositeBlocksSelftest } from "./src/lib/compositeBlocks";
 import { runAutoLayoutSelftest } from "./src/lib/mdAutoLayout"; // port-semantics layer (50th pass)
 import { validateNodesAgainstSchema, summarizeByNode, runNodeDiagnosticsSelftest, type NodeSchemaView } from "./src/lib/nodeDiagnostics";
@@ -5767,7 +5767,12 @@ app.post('/api/agent/workspaces', async (req, res) => {
   try {
     requestedWorkspace = sanitizeWorkspace(
       req.body?.workspace
-      || { ...DEFAULT_WORKSPACE, name: String(req.body?.name || 'Untitled_Workspace') },
+      || {
+        ...buildTemplateWorkspace('blank'),
+        // Keep domain metadata stable for receipt retries; the registry owns the unique workspaceId.
+        id: 'workspace_default',
+        name: String(req.body?.name || 'Untitled_Workspace'),
+      },
     );
   } catch {
     return respondFailure(

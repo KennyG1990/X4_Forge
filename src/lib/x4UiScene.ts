@@ -770,6 +770,19 @@ const factProvenanceLink = (
   ...(fact.sampleId ? { sampleId: fact.sampleId } : {}),
 });
 
+const factProvenanceLinks = (
+  factName: string,
+  fact: Extract<X4UiLayoutDescriptorFact, { readonly status: 'known' }>,
+  operationId?: string,
+): X4UiSceneProvenanceLink[] => {
+  const sampleIds = fact.expectedType === 'number'
+    ? fact.sampleIds || (fact.sampleId ? [fact.sampleId] : [])
+    : [];
+  return sampleIds.length > 0
+    ? sampleIds.map(sampleId => ({ ...factProvenanceLink(factName, fact, operationId), sampleId }))
+    : [factProvenanceLink(factName, fact, operationId)];
+};
+
 const sceneColorFact = (
   field: string,
   slot: X4UiSceneColorSlot,
@@ -1124,7 +1137,7 @@ const factLinks = (
   operationId?: string,
 ): X4UiSceneProvenanceLink[] => names.flatMap(name => {
   const fact = facts[name];
-  return fact?.status === 'known' ? [factProvenanceLink(name, fact, operationId)] : [];
+  return fact?.status === 'known' ? factProvenanceLinks(name, fact, operationId) : [];
 });
 
 const statusIsComplete = (status: string): boolean => status === 'projected' || status === 'applied';
@@ -1650,11 +1663,11 @@ const frameTextureSurfaceFor = (
   const blurFact = frame.blurBackground || frame.descriptorFacts.blurBackground;
   const backdrop = frame.frameTextureLayers === undefined && blurFact === undefined
     ? undefined
-    : (() => {
+      : (() => {
       const knownBlur = knownValue(blurFact, 'boolean');
       const blurBackground = knownBlur?.value as boolean | undefined;
       const provenanceLinks = [
-        ...(blurFact && blurFact.status === 'known' ? [factProvenanceLink('blurBackground', blurFact)] : []),
+        ...(blurFact && blurFact.status === 'known' ? factProvenanceLinks('blurBackground', blurFact) : []),
       ];
       const diagnosticLinks = [...frameLinks];
       const unavailable = blurBackground !== false;
@@ -2243,9 +2256,20 @@ interface TextBuildResult {
   readonly glyphs: readonly X4UiSceneGlyphNode[];
 }
 
+// Native setUpFontString13140-13173: one anchor for both boxwidth and each line.
+const plainTextX = (
+  parent: X4UiSceneRect, x: number, alignment: 'left' | 'center' | 'right', width: number,
+): number => {
+  if (alignment === 'left') return parent.x + x;
+  if (alignment === 'right') return parent.x + parent.width - x - width;
+  let anchor = parent.x + parent.width / 2 + x / 2;
+  if (anchor % 1 !== 0) anchor -= 0.5;
+  return anchor - width / 2;
+};
+
 const widgetOuterRect = (
   cellRect: X4UiSceneRect,
-  widgetType: 'text' | 'button' | 'editbox' | 'icon',
+  widgetType: 'button' | 'editbox' | 'icon',
   outerX: number,
   outerY: number,
   outerWidth: number,
@@ -2578,31 +2602,27 @@ const buildTextNode = (
         textGapIds.push(policyGap);
         links.push(policyGap);
       }
-      const yAnchor = widgetType === 'text'
-        ? parentRect.y + parentRect.height / 2 - (offsetY.value as number)
-        : widgetType === 'icon'
+      const yAnchor = widgetType === 'icon'
           ? parentRect.y + parentRect.height / 2 - widgetRect.height / 2 + (offsetY.value as number)
           : widgetRect.y + widgetRect.height / 2 - (offsetY.value as number);
       const lineBoxMinY = Math.min(...layout.lines.map(line => line.lineBox.y));
       const lineBoxMaxY = Math.max(...layout.lines.map(line => line.lineBox.y + line.lineBox.height));
-      const yBase = layout.lines.length === 1
-        ? yAnchor - layout.lines[0]!.lineBox.height / 2
-        : yAnchor - (lineBoxMinY + lineBoxMaxY) / 2;
+      // widget_fullscreen.lua6243 supplies the cell's TOP in native Y-up
+      // coordinates (curRowHeight/2 relative to its center). setUpFontString
+      // 13145-13146 subtracts the text offset from that top. In Y-down this is
+      // top + y, independent of a sibling's height or the wrapped block's span.
+      const yBase = widgetType === 'text'
+        ? parentRect.y + (offsetY.value as number) - lineBoxMinY
+        : layout.lines.length === 1
+          ? yAnchor - layout.lines[0]!.lineBox.height / 2
+          : yAnchor - (lineBoxMinY + lineBoxMaxY) / 2;
       for (const line of layout.lines) {
         const xValue = offsetX.value as number;
         let xAnchor: number;
         let subtractLineWidth = false;
         let subtractHalfLineWidth = false;
         if (widgetType === 'text') {
-          if (alignment === 'left') xAnchor = parentRect.x + xValue;
-          else if (alignment === 'right') {
-            xAnchor = parentRect.x + parentRect.width - xValue;
-            subtractLineWidth = true;
-          } else {
-            xAnchor = parentRect.x + parentRect.width / 2 + xValue / 2;
-            if (xAnchor % 1 !== 0) xAnchor -= 0.5;
-            subtractHalfLineWidth = true;
-          }
+          xAnchor = plainTextX(parentRect, xValue, alignment, line.width);
         } else if (widgetType === 'icon') {
           if (alignment === 'left') xAnchor = parentRect.x + xValue;
           else if (alignment === 'right') {
@@ -2748,14 +2768,14 @@ const buildTextNode = (
       provenance: previewDefaultSelection ? 'preview-only' : 'font-metrics',
       ...(textColorFact ? { colorFacts: [textColorFact] } : {}),
       provenanceLinks: [
-        ...(wordwrapFact?.status === 'known' ? [factProvenanceLink('wordwrap', wordwrapFact)] : []),
+        ...(wordwrapFact?.status === 'known' ? factProvenanceLinks('wordwrap', wordwrapFact) : []),
         ...nestedNoWrapLinks,
-        ...(fontFact?.status === 'known' ? [factProvenanceLink(fontName, fontFact)] : []),
-        ...(sizeFact?.status === 'known' ? [factProvenanceLink(sizeName, sizeFact)] : []),
-        ...(alignFact?.status === 'known' ? [factProvenanceLink(alignName, alignFact)] : []),
-        ...(editBoxTextBorderFact?.status === 'known' ? [factProvenanceLink('editboxTextBorder', editBoxTextBorderFact)] : []),
-        ...(editBoxInitialInputActiveFact?.status === 'known' ? [factProvenanceLink('editboxInitialInputActive', editBoxInitialInputActiveFact)] : []),
-        ...(previewDefaultSelection && defaultFact?.status === 'known' ? [factProvenanceLink('defaultText', defaultFact)] : []),
+        ...(fontFact?.status === 'known' ? factProvenanceLinks(fontName, fontFact) : []),
+        ...(sizeFact?.status === 'known' ? factProvenanceLinks(sizeName, sizeFact) : []),
+        ...(alignFact?.status === 'known' ? factProvenanceLinks(alignName, alignFact) : []),
+        ...(editBoxTextBorderFact?.status === 'known' ? factProvenanceLinks('editboxTextBorder', editBoxTextBorderFact) : []),
+        ...(editBoxInitialInputActiveFact?.status === 'known' ? factProvenanceLinks('editboxInitialInputActive', editBoxInitialInputActiveFact) : []),
+        ...(previewDefaultSelection && defaultFact?.status === 'known' ? factProvenanceLinks('defaultText', defaultFact) : []),
         ...(previewSourceLink ? [previewSourceLink] : []),
         makeSourceLink('font-metrics', source),
         makeSourceLink(
@@ -2818,11 +2838,11 @@ const buildTextNode = (
     provenance: previewDefaultSelection ? 'preview-only' : 'unavailable',
     ...(textColorFact ? { colorFacts: [textColorFact] } : {}),
     provenanceLinks: [
-      ...(wordwrapFact?.status === 'known' ? [factProvenanceLink('wordwrap', wordwrapFact)] : []),
+      ...(wordwrapFact?.status === 'known' ? factProvenanceLinks('wordwrap', wordwrapFact) : []),
       ...nestedNoWrapLinks,
-      ...(editBoxTextBorderFact?.status === 'known' ? [factProvenanceLink('editboxTextBorder', editBoxTextBorderFact)] : []),
-      ...(editBoxInitialInputActiveFact?.status === 'known' ? [factProvenanceLink('editboxInitialInputActive', editBoxInitialInputActiveFact)] : []),
-      ...(previewDefaultSelection && defaultFact?.status === 'known' ? [factProvenanceLink('defaultText', defaultFact)] : []),
+      ...(editBoxTextBorderFact?.status === 'known' ? factProvenanceLinks('editboxTextBorder', editBoxTextBorderFact) : []),
+      ...(editBoxInitialInputActiveFact?.status === 'known' ? factProvenanceLinks('editboxInitialInputActive', editBoxInitialInputActiveFact) : []),
+      ...(previewDefaultSelection && defaultFact?.status === 'known' ? factProvenanceLinks('defaultText', defaultFact) : []),
       ...(previewSourceLink ? [previewSourceLink] : []),
       makeSourceLink('descriptor-fact', source),
     ],
@@ -3047,9 +3067,18 @@ const buildRowAndCellNodes = (
                 widgetColorFacts.push(innerColorFact);
               }
             }
+            const alignmentFact = cell.descriptorFacts.halign;
+            const textAlignment = alignmentFact?.status === 'known' && alignmentFact.expectedType === 'string'
+              && (alignmentFact.value === 'left' || alignmentFact.value === 'center' || alignmentFact.value === 'right')
+              ? alignmentFact.value : undefined;
+            if (widgetType === 'text' && textAlignment === undefined) {
+              gapForMissingFact(context, 'geometry', widgetNodeId, cell.source, 'halign', alignmentFact, cellLinks);
+            }
             const unavailableWidgetLinks = [...new Set([...baseWidgetLinks, ...cellLinks])];
-            if (sourceWidthValid) {
-              const widgetRect = widgetOuterRect(cellRect, widgetType, outerX, outerY, width, height);
+            if (sourceWidthValid && (widgetType !== 'text' || textAlignment !== undefined)) {
+              const widgetRect = widgetType === 'text'
+                ? rect(plainTextX(cellRect, outerX, textAlignment!, width), cellRect.y + outerY, width, height)
+                : widgetOuterRect(cellRect, widgetType, outerX, outerY, width, height);
               const cellClip = rowClip ? clipRectFor(cellRect, rowClip) : undefined;
               const widgetClip = cellClip ? clipRectFor(widgetRect, cellClip) : undefined;
               const textNodes: TextBuildResult[] = [];
@@ -3229,6 +3258,42 @@ const closedSourceIsValid = (value: unknown): value is X4UiSceneSourceLocation =
 const closedSourcePinIsValid = (value: unknown): value is X4UiLayoutSourcePin =>
   closedDataRecord(value, ['sourcePath', 'lineStart', 'lineEnd']) && sourcePinIsValid(value);
 
+const sceneNumericSampleIdsAreValid = (value: unknown): value is readonly string[] => {
+  try {
+    if (!Array.isArray(value)) return false;
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (lengthDescriptor === undefined
+      || !('value' in lengthDescriptor)
+      || lengthDescriptor.enumerable
+      || !Number.isSafeInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 2
+      || lengthDescriptor.value > 128) return false;
+    const length = lengthDescriptor.value;
+    const ownKeys = Reflect.ownKeys(value);
+    const denseKeys = Array.from({ length }, (_, index) => String(index));
+    if (Object.getPrototypeOf(value) !== Array.prototype
+      || ownKeys.length !== denseKeys.length + 1
+      || ownKeys.some((key, index) => key !== (index < denseKeys.length ? denseKeys[index] : 'length'))) return false;
+    const ids: string[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !('value' in descriptor)
+        || descriptor.enumerable !== true
+        || typeof descriptor.value !== 'string'
+        || descriptor.value.length === 0) return false;
+      ids.push(descriptor.value);
+    }
+    // Structured cloning is a bounded proxy/host-object rejection after every
+    // index has been proven to be an own primitive-string data property.  It
+    // preserves frozen plain arrays while keeping transparent proxies outside
+    // the diagnostic data boundary without invoking an accessor.
+    structuredClone(value);
+    return new Set(ids).size === ids.length && JSON.stringify([...ids].sort()) === JSON.stringify(ids);
+  } catch {
+    return false;
+  }
+};
+
 const finiteColorChannel = (value: unknown, minimum: number, maximum: number, integer = false): value is number =>
   typeof value === 'number'
   && Number.isFinite(value)
@@ -3335,8 +3400,10 @@ const validateKnownColorFact = (fact: Record<string, unknown>): boolean => {
     || typeof fact.expression !== 'string'
     || fact.expression.length === 0
     || !closedSourceIsValid(fact.source)) return false;
-  return (fact.sourcePin === undefined || closedSourcePinIsValid(fact.sourcePin))
-    && (fact.sampleId === undefined || (typeof fact.sampleId === 'string' && fact.sampleId.length > 0));
+  const hasSourcePin = Object.getOwnPropertyDescriptor(fact, 'sourcePin') !== undefined;
+  const hasSampleId = Object.getOwnPropertyDescriptor(fact, 'sampleId') !== undefined;
+  return (!hasSourcePin || closedSourcePinIsValid(fact.sourcePin))
+    && (!hasSampleId || (typeof fact.sampleId === 'string' && fact.sampleId.length > 0));
 };
 
 const ownDataValue = (value: Record<string, unknown>, key: string): unknown => {
@@ -3345,33 +3412,58 @@ const ownDataValue = (value: Record<string, unknown>, key: string): unknown => {
 };
 
 const validateFact = (fact: unknown): boolean => {
-  if (!isRecord(fact) || Array.isArray(fact)) return false;
-  const status = ownDataValue(fact, 'status');
-  const expectedType = ownDataValue(fact, 'expectedType');
-  if (status === 'known' && expectedType === 'color-object') return validateKnownColorFact(fact);
-  const source = ownDataValue(fact, 'source');
-  if ((status !== 'known' && status !== 'unavailable') || !sourceIsValid(source)) return false;
-  const sourcePin = ownDataValue(fact, 'sourcePin');
-  if (sourcePin !== undefined && !sourcePinIsValid(sourcePin)) return false;
-  const value = ownDataValue(fact, 'value');
-  const expression = ownDataValue(fact, 'expression');
-  if (status === 'known') {
-    if (expectedType !== 'number' && expectedType !== 'string' && expectedType !== 'boolean') return false;
-    if (typeof value !== expectedType) return false;
-    if (typeof value === 'number' && !isFiniteSafe(value)) return false;
-    if (!['source-literal', 'source-pinned-default', 'direct-helper-scale', 'preview-sample'].includes(String(ownDataValue(fact, 'provenance'))) || typeof expression !== 'string' || (ownDataValue(fact, 'sampleId') !== undefined && typeof ownDataValue(fact, 'sampleId') !== 'string')) return false;
-  } else if ((expectedType !== 'number' && expectedType !== 'string' && expectedType !== 'boolean' && expectedType !== 'color-object') || typeof ownDataValue(fact, 'reason') !== 'string' || (expression !== undefined && typeof expression !== 'string')) return false;
-  return true;
+  try {
+    if (!isRecord(fact) || Array.isArray(fact)) return false;
+    const status = ownDataValue(fact, 'status');
+    const expectedType = ownDataValue(fact, 'expectedType');
+    if (status === 'known' && expectedType === 'color-object') return validateKnownColorFact(fact);
+    const source = ownDataValue(fact, 'source');
+    if (status !== 'known' && status !== 'unavailable') return false;
+    if (status === 'known') {
+      if (!closedDataRecord(fact, ['status', 'expectedType', 'value', 'provenance', 'expression', 'source'], ['sourcePin', 'sampleId', 'sampleIds'])
+        || !closedSourceIsValid(source)
+        || (expectedType !== 'number' && expectedType !== 'string' && expectedType !== 'boolean')) return false;
+      const value = ownDataValue(fact, 'value');
+      const expression = ownDataValue(fact, 'expression');
+      const provenance = ownDataValue(fact, 'provenance');
+      const sourcePin = ownDataValue(fact, 'sourcePin');
+      const sampleId = ownDataValue(fact, 'sampleId');
+      const sampleIds = ownDataValue(fact, 'sampleIds');
+      const hasSampleId = Object.getOwnPropertyDescriptor(fact, 'sampleId') !== undefined;
+      const hasSampleIds = Object.getOwnPropertyDescriptor(fact, 'sampleIds') !== undefined;
+      if (typeof value !== expectedType || (typeof value === 'number' && !isFiniteSafe(value))
+        || typeof provenance !== 'string'
+        || !['source-literal', 'source-pinned-default', 'direct-helper-scale', 'preview-sample'].includes(provenance)
+        || typeof expression !== 'string'
+        || (sourcePin !== undefined && !closedSourcePinIsValid(sourcePin))
+        || (hasSampleId && (typeof sampleId !== 'string' || sampleId.length === 0))
+        || (hasSampleIds && (expectedType !== 'number' || provenance !== 'preview-sample' || !sceneNumericSampleIdsAreValid(sampleIds)))
+        || (hasSampleId && hasSampleIds)) return false;
+      return true;
+    }
+    return closedDataRecord(fact, ['status', 'expectedType', 'reason', 'source'], ['expression', 'sourcePin'])
+      && (expectedType === 'number' || expectedType === 'string' || expectedType === 'boolean' || expectedType === 'color-object')
+      && typeof ownDataValue(fact, 'reason') === 'string'
+      && (ownDataValue(fact, 'expression') === undefined || typeof ownDataValue(fact, 'expression') === 'string')
+      && closedSourceIsValid(source)
+      && (ownDataValue(fact, 'sourcePin') === undefined || closedSourcePinIsValid(ownDataValue(fact, 'sourcePin')));
+  } catch {
+    return false;
+  }
 };
 
 const validateFacts = (facts: unknown): boolean => {
-  if (!isRecord(facts) || Array.isArray(facts)) return false;
-  const keys = Reflect.ownKeys(facts);
-  if (keys.some(key => typeof key !== 'string')) return false;
-  return keys.every(key => {
-    const descriptor = Object.getOwnPropertyDescriptor(facts, key);
-    return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable === true && validateFact(descriptor.value);
-  });
+  try {
+    if (!isRecord(facts) || Array.isArray(facts)) return false;
+    const keys = Reflect.ownKeys(facts);
+    if (keys.some(key => typeof key !== 'string')) return false;
+    return keys.every(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(facts, key);
+      return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable === true && validateFact(descriptor.value);
+    });
+  } catch {
+    return false;
+  }
 };
 
 const validateFactDomain = (
@@ -5966,7 +6058,11 @@ export const diagnoseX4UiSceneStructureForTest = (
   evidenceAuthority: X4UiLayoutEvidenceAuthority,
 ): string | undefined => {
   const diagnostic: { stage?: string } = {};
-  if (validateProgramStructure(program, evidenceAuthority, diagnostic)) return undefined;
+  try {
+    if (validateProgramStructure(program, evidenceAuthority, diagnostic)) return undefined;
+  } catch {
+    return 'unknown';
+  }
   return diagnostic.stage ?? 'unknown';
 };
 

@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { workspaceContentHash, workspaceSnapshotHash } from '../../src/lib/workspaceIdentity';
 import { sanitizeWorkspace } from '../../src/types';
@@ -183,10 +182,8 @@ async function pointerCloseMeasurement(page: import('@playwright/test').Page): P
 }
 
 async function attachMeasurement(testInfo: import('@playwright/test').TestInfo, name: string, value: unknown): Promise<void> {
-  const evidenceDir = path.resolve(process.cwd(), 'test-results', 'b116');
-  const evidencePath = path.join(evidenceDir, `${name}.json`);
+  const evidencePath = testInfo.outputPath(`${name}.json`);
   const body = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await fs.mkdir(evidenceDir, { recursive: true });
   await fs.writeFile(evidencePath, body);
   await testInfo.attach(`${name}.json`, {
     path: evidencePath,

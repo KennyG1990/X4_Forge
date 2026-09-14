@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { compile } from '@tailwindcss/node';
+import { Scanner } from '@tailwindcss/oxide';
 import { startE2EViteServer } from '../tests/e2e/e2e-vite-server';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -81,7 +85,43 @@ async function getText(port: number): Promise<string> {
   });
 }
 
+async function assertFrontendStyleSources(): Promise<void> {
+  const cssPath = path.join(ROOT, 'src', 'index.css');
+  const css = readFileSync(cssPath, 'utf8');
+  const options = { base: path.dirname(cssPath), onDependency: () => undefined };
+  const compiler = await compile(css, options);
+  // Match the installed Vite plugin's source resolution, not a test-only glob.
+  const sources = (compiler.root === 'none' ? [] : compiler.root === null
+    ? [{ base: ROOT, pattern: '**/*', negated: false }]
+    : [{ ...compiler.root, negated: false }]).concat(compiler.sources);
+  const started = performance.now();
+  const actual = new Scanner({ sources });
+  const actualCandidates = actual.scan();
+  const scanMs = performance.now() - started;
+  const frontend = new Scanner({ sources: [
+    { base: path.join(ROOT, 'src'), pattern: '**/*', negated: false },
+    { base: ROOT, pattern: 'index.html', negated: false },
+  ] });
+  const expectedCandidates = frontend.scan();
+  const fileKeys = (files: string[]) => files.map(file => path.resolve(file).toLowerCase()).sort();
+  const expectedFiles = new Set(fileKeys(frontend.files));
+  const outside = actual.files.filter(file => !expectedFiles.has(path.resolve(file).toLowerCase()));
+  // Counterfactual retains the exact stylesheet/custom rules, changing detection only.
+  const unrestricted = await compile(css.replace(' source("./")', '').replace('@source "../index.html";', ''), options);
+  assert.equal(unrestricted.root, null, 'Old implicit source root is the negative control');
+  const actualCss = compiler.build(expectedCandidates);
+  assert.equal(actualCss, unrestricted.build(expectedCandidates), 'All frontend utility and custom CSS is unchanged');
+  console.log(JSON.stringify({ frontendStyleSources: { scanMs, scannedFiles: actual.files.length,
+    expectedFiles: frontend.files.length, candidates: actualCandidates.length,
+    expectedCandidates: expectedCandidates.length, outsideFiles: outside.length,
+    frontendCssSha256: createHash('sha256').update(actualCss).digest('hex') } }));
+  assert.equal(outside.length, 0, `Non-frontend files must not affect stylesheet generation: ${outside.slice(0, 3).map(file => path.relative(ROOT, file)).join(', ')}`);
+  assert.deepEqual(fileKeys(actual.files), fileKeys(frontend.files), 'Every frontend file remains scanned');
+  assert.deepEqual(actualCandidates, expectedCandidates, 'Exact frontend candidate coverage, no documentation or evidence candidates');
+}
+
 async function main(): Promise<void> {
+  await assertFrontendStyleSources();
   const originalEnvironment = snapshotEnvironment();
   setEnvironment(SENTINEL_ENV);
   let successfulPort: number | undefined;

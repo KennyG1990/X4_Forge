@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   Trash,
   Cpu,
@@ -25,7 +25,8 @@ import DialogHost, { confirmDialog, promptDialog, toast } from './lib/uiDialogs'
 import SyncModal from './components/SyncModal';
 import WorkspaceConflictDialog, { type WorkspaceConflictDetail } from './components/WorkspaceConflictDialog';
 import Canvas from './components/Canvas';
-import UIBuilder from './components/UIBuilder';
+import UIBuilder, { type UIBuilderPresentationTab, type UIBuilderSourceHistoryAcknowledgement } from './components/UIBuilder';
+import type { X4UiHistoryRestorationNotice } from './components/X4UiSourceEditor';
 import NativeProjectFiles from './components/NativeProjectFiles';
 import { notifyNativeWorkspaceAuthority, openInNativeEditor, openNativeNodeSelection, postNativeNodeSelectionResult, type NativeNodeApplyRequest } from './lib/nativeEditor';
 import AIHelper from './components/AIHelper';
@@ -47,7 +48,22 @@ import WikiBrowser from './components/WikiBrowser';
 import GlobalSearch from './components/GlobalSearch';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
-import { workspaceContentHash, workspaceSnapshotHash } from './lib/workspaceIdentity';
+import {
+  retainWorkspaceCandidateIfNormalizedUnchanged,
+  workspaceContentHash,
+  workspaceSnapshotHash,
+} from './lib/workspaceIdentity';
+import {
+  appendWorkspaceHistoryEntry,
+  createLegacyWorkspaceHistoryEntry,
+  prepareX4UiSourceHistoryEntry,
+  previewWorkspaceHistoryContinuation,
+  reverseWorkspaceSourceSplice,
+  scheduleWorkspaceHistoryTransition,
+  settleWorkspaceHistoryTransition,
+  type WorkspaceHistoryEntry,
+  type PendingWorkspaceHistoryTransition,
+} from './lib/workspaceUndoHistory';
 import {
   invalidateWorkspacePollingHead,
   pollWorkspaceSnapshot,
@@ -375,7 +391,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     setRawWorkspace(prev => {
       const next = typeof value === 'function' ? (value as (p: ModWorkspace) => ModWorkspace)(prev) : value;
       workspaceRevisionRef.current += 1;
-      return sanitizeWorkspace(next);
+      const normalized = sanitizeWorkspace(next);
+      return retainWorkspaceCandidateIfNormalizedUnchanged(next, normalized);
     });
   }, []);
 
@@ -406,7 +423,17 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     })();
   }, [loadSchemaLibrary]);
 
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('blueprint');
+  const [workspaceView, setWorkspaceViewState] = useState<WorkspaceView>('blueprint');
+  const [uiPresentationTab, setUiPresentationTab] = useState<UIBuilderPresentationTab>('source');
+  const workspaceViewRef = useRef<WorkspaceView>('blueprint');
+  const setWorkspaceView = React.useCallback((nextView: WorkspaceView) => {
+    const previousView = workspaceViewRef.current;
+    workspaceViewRef.current = nextView;
+    if (nextView === 'ui-designer' && previousView !== 'ui-designer') {
+      setUiPresentationTab('source');
+    }
+    setWorkspaceViewState(nextView);
+  }, []);
   const [layoutPreferences, setLayoutPreferences] = useState<StudioLayoutPreferences>(() =>
     parseStudioLayoutPreferences(localStorage.getItem(STUDIO_LAYOUT_KEY))
   );
@@ -558,7 +585,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     if (!import.meta.env.DEV) return;
     (window as ForgeE2EWindow).__X4_E2E__ = {
       getWorkspace: () => workspace,
-      setWorkspace: (next: ModWorkspace) => setWorkspace(sanitizeWorkspace(next)),
+      setWorkspace: (next: ModWorkspace) => setWorkspace(next),
       getMdCode: () => mdCode,
       getWorkspaceHash: () => workspaceContentHash(sanitizeWorkspace(workspace)),
       resetPerfCounters: resetE2EPerfCounters,
@@ -693,7 +720,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       return;
     }
     setActiveSidebarTab('playtest');
-  }, [experienceMode]);
+  }, [experienceMode, setWorkspaceView]);
 
   const confirmCurrentExperience = React.useCallback(() => {
     const deploy = readinessWatcher.lastDeploy;
@@ -772,13 +799,13 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     if (mode === 'beginner') {
       setWorkspaceView(beginnerStep === 'idea' ? 'blueprint' : beginnerEditorForWorkspace(workspace, beginnerSelectionKind()));
     }
-  }, [beginnerStep, workspace, beginnerSelectionKind]);
+  }, [beginnerStep, workspace, beginnerSelectionKind, setWorkspaceView]);
 
   const changeBeginnerStep = React.useCallback((step: BeginnerStep) => {
     setBeginnerStep(step);
     if (step === 'idea') setWorkspaceView('blueprint');
     if (step === 'customize') setWorkspaceView(beginnerEditorForWorkspace(workspace, beginnerSelectionKind()));
-  }, [workspace, beginnerSelectionKind]);
+  }, [workspace, beginnerSelectionKind, setWorkspaceView]);
 
   // Selection hygiene: undo/redo (or any workspace replacement) can remove the
   // entity a panel has selected; clear dangling selections so inspectors and
@@ -853,6 +880,9 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   // B1 sync-trust: persistent canvas↔server content divergence gets a visible badge.
   const [syncDiverged, setSyncDiverged] = useState<boolean>(false);
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string>(() => selectedWorkspaceId());
+  const workspaceHistoryScopeRef = useRef<string | null>(currentWorkspaceId || selectedWorkspaceId() || null);
+  workspaceHistoryScopeRef.current = currentWorkspaceId || selectedWorkspaceId() || null;
+  const [x4UiHistoryRestoration, setX4UiHistoryRestoration] = useState<X4UiHistoryRestorationNotice | null>(null);
   useEffect(() => { notifyNativeWorkspaceAuthority(currentWorkspaceId); }, [currentWorkspaceId]);
   useEffect(() => {
     const pending = pendingAgentWorkspaceRef.current;
@@ -980,7 +1010,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     const toolTabs = visibleSidebarTabs(layoutPreferences, aiEnabled);
     if (!toolTabs.includes(activeSidebarTab)) setActiveSidebarTab(toolTabs[0] ?? 'script');
 
-  }, [layoutPreferences, workspaceView, activeSidebarTab, aiEnabled]);
+  }, [layoutPreferences, workspaceView, activeSidebarTab, aiEnabled, setWorkspaceView]);
 
   // A4.7 — cancelable AI generation. The Builder runs several model passes (slow);
   // this lets the user abort instead of waiting out an uncancelable request.
@@ -1280,7 +1310,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     };
     window.addEventListener('navigate-to-source', handleNavigateToSource);
     return () => window.removeEventListener('navigate-to-source', handleNavigateToSource);
-  }, [workspace]);
+  }, [workspace, setWorkspaceView]);
 
   // B13b2: override-map → Diff→Patch pre-target. The Doctor dispatches; App switches the
   // view; XMLPatchSystem (same event) sets the target file + difftool tab.
@@ -1288,7 +1318,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     const handlePretarget = () => { setWorkspaceView('xmlpatch'); setActiveSidebarTab('config'); };
     window.addEventListener('xmlpatch-pretarget', handlePretarget);
     return () => window.removeEventListener('xmlpatch-pretarget', handlePretarget);
-  }, []);
+  }, [setWorkspaceView]);
 
   useEffect(() => {
     const updateAIState = () => {
@@ -1305,16 +1335,59 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     };
   }, []);
 
-  // Undo/Redo historical state stacks
-  const [pastStates, setPastStates] = useState<ModWorkspace[]>([]);
-  const [futureStates, setFutureStates] = useState<ModWorkspace[]>([]);
+  // Undo/Redo historical state stacks. Source entries carry exact before/after guards, while
+  // legacy callers continue to contribute ordinary unguarded checkpoints to these same stacks.
+  const [pastStates, setPastStates] = useState<WorkspaceHistoryEntry[]>([]);
+  const [futureStates, setFutureStates] = useState<WorkspaceHistoryEntry[]>([]);
+  const [workspaceHistoryCommitBoundary, setWorkspaceHistoryCommitBoundary] = useState(0);
+  const pastStatesRef = useRef<WorkspaceHistoryEntry[]>([]);
+  const futureStatesRef = useRef<WorkspaceHistoryEntry[]>([]);
+  const seenX4UiSourceAttemptsRef = useRef(new WeakSet<object>());
+  const pendingWorkspaceHistoryTransitionRef = useRef<PendingWorkspaceHistoryTransition | null>(null);
+  const commitHistoryState = React.useCallback((nextPast: WorkspaceHistoryEntry[], nextFuture: WorkspaceHistoryEntry[]) => {
+    pastStatesRef.current = nextPast;
+    futureStatesRef.current = nextFuture;
+    setPastStates(nextPast);
+    setFutureStates(nextFuture);
+  }, []);
+  const resetHistory = React.useCallback(() => {
+    pendingWorkspaceHistoryTransitionRef.current = null;
+    commitHistoryState([], []);
+    setX4UiHistoryRestoration(null);
+  }, [commitHistoryState]);
 
-  // Function to capture a manual undoable snapshot checkpoint
+  // Function to capture a manual undoable snapshot checkpoint. This is the compatibility seam
+  // for existing callers; source authoring uses the guarded callback below instead.
   const saveCheckpoint = React.useCallback((customTarget?: ModWorkspace) => {
     const target = customTarget || workspaceRef.current;
-    setPastStates(prev => [...prev.slice(-39), JSON.parse(JSON.stringify(target))]);
-    setFutureStates([]);
-  }, []);
+    commitHistoryState(
+      appendWorkspaceHistoryEntry(pastStatesRef.current, createLegacyWorkspaceHistoryEntry(target)),
+      [],
+    );
+  }, [commitHistoryState]);
+
+  const handleX4UiSourceEditAcknowledged = React.useCallback((receipt: UIBuilderSourceHistoryAcknowledgement) => {
+    const prepared = prepareX4UiSourceHistoryEntry(
+      {
+        scope: receipt.scope,
+        expectedWorkspace: receipt.expectedWorkspace,
+        workspace: receipt.workspace,
+        acknowledgement: receipt.acknowledgement,
+        ...(receipt.sourceSplice === undefined ? {} : { sourceSplice: receipt.sourceSplice }),
+      },
+      workspaceHistoryScopeRef.current || '',
+      workspaceRef.current,
+      seenX4UiSourceAttemptsRef.current,
+    );
+    if (prepared.status !== 'recorded') return;
+    // The parent readback has already been accepted by UIBuilder's layout-effect boundary.
+    // Recording directly from refs keeps duplicate queued acknowledgements from racing a
+    // replayable React updater and clears redo only for this accepted, non-no-op edit.
+    commitHistoryState(
+      appendWorkspaceHistoryEntry(pastStatesRef.current, prepared.entry),
+      [],
+    );
+  }, [commitHistoryState]);
 
   const handleActiveMdScriptChange = React.useCallback((script: string | null) => {
     setActiveMdScript(script);
@@ -1424,24 +1497,85 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   }, []);
 
   const handleUndo = React.useCallback(() => {
-    if (pastStates.length === 0) return;
-    const previous = pastStates[pastStates.length - 1];
-    const newPast = pastStates.slice(0, pastStates.length - 1);
-
-    setFutureStates(prev => [JSON.parse(JSON.stringify(workspace)), ...prev]);
-    setPastStates(newPast);
-    setWorkspace(previous);
-  }, [pastStates, workspace, setWorkspace]);
+    if (pendingWorkspaceHistoryTransitionRef.current !== null) {
+      toast('Undo is still waiting for the previous workspace readback.', 'warning');
+      return;
+    }
+    const expectedPast = pastStatesRef.current;
+    const expectedFuture = futureStatesRef.current;
+    const result = scheduleWorkspaceHistoryTransition(
+      'undo',
+      expectedPast,
+      expectedFuture,
+      workspaceRef.current,
+      workspaceHistoryScopeRef.current || '',
+      updater => setWorkspace(updater),
+      () => workspaceHistoryScopeRef.current || '',
+      () => pastStatesRef.current,
+      () => futureStatesRef.current,
+      pending => { pendingWorkspaceHistoryTransitionRef.current = pending; },
+      () => setWorkspaceHistoryCommitBoundary(boundary => boundary + 1),
+    );
+    if (result.status === 'refused') {
+      toast(result.detail, 'warning');
+    }
+  }, [setWorkspace]);
 
   const handleRedo = React.useCallback(() => {
-    if (futureStates.length === 0) return;
-    const next = futureStates[0];
-    const newFuture = futureStates.slice(1);
+    if (pendingWorkspaceHistoryTransitionRef.current !== null) {
+      toast('Redo is still waiting for the previous workspace readback.', 'warning');
+      return;
+    }
+    const expectedPast = pastStatesRef.current;
+    const expectedFuture = futureStatesRef.current;
+    const result = scheduleWorkspaceHistoryTransition(
+      'redo',
+      expectedPast,
+      expectedFuture,
+      workspaceRef.current,
+      workspaceHistoryScopeRef.current || '',
+      updater => setWorkspace(updater),
+      () => workspaceHistoryScopeRef.current || '',
+      () => pastStatesRef.current,
+      () => futureStatesRef.current,
+      pending => { pendingWorkspaceHistoryTransitionRef.current = pending; },
+      () => setWorkspaceHistoryCommitBoundary(boundary => boundary + 1),
+    );
+    if (result.status === 'refused') {
+      toast(result.detail, 'warning');
+    }
+  }, [setWorkspace]);
 
-    setPastStates(prev => [...prev, JSON.parse(JSON.stringify(workspace))]);
-    setFutureStates(newFuture);
-    setWorkspace(next);
-  }, [futureStates, workspace, setWorkspace]);
+  useLayoutEffect(() => {
+    const pending = pendingWorkspaceHistoryTransitionRef.current;
+    if (pending === null) return;
+    const settlement = settleWorkspaceHistoryTransition(
+      pending,
+      workspaceRef.current,
+      workspaceHistoryScopeRef.current || '',
+      pastStatesRef.current,
+      futureStatesRef.current,
+    );
+    if (settlement.status === 'pending') return;
+    pendingWorkspaceHistoryTransitionRef.current = null;
+    if (settlement.status === 'refused') {
+      setX4UiHistoryRestoration(null);
+      toast(settlement.detail, 'warning');
+      return;
+    }
+    commitHistoryState(settlement.result.past, settlement.result.future);
+    setX4UiHistoryRestoration(settlement.result.entry.kind === 'source'
+      ? {
+          direction: pending.transition,
+          scope: settlement.result.entry.workspaceScope,
+          beforeWorkspace: pending.expectedWorkspace,
+          afterWorkspace: settlement.result.workspace,
+          ...(settlement.result.entry.sourceSplice === undefined ? {} : {
+            sourceSplice: pending.transition === 'undo' ? reverseWorkspaceSourceSplice(settlement.result.entry.sourceSplice) : settlement.result.entry.sourceSplice,
+          }),
+        }
+      : null);
+  }, [commitHistoryState, currentWorkspaceId, futureStates, pastStates, workspace, workspaceHistoryCommitBoundary]);
 
   // Setup keyboard modifiers for general OS accessibility (Ctrl+Z and Ctrl+Y)
   useEffect(() => {
@@ -2146,9 +2280,9 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           workspaceSyncRetryTimerRef.current = null;
         }
         workspaceSyncRetryCountRef.current = 0;
-        setPastStates([]);
-        setFutureStates([]);
+        resetHistory();
         window.__X4_WORKSPACE_CONTEXT__?.selectWorkspace(targetId);
+        workspaceHistoryScopeRef.current = targetId || null;
         setCurrentWorkspaceId(targetId);
         if (retainedTarget) {
           const retainedHash = workspaceContentHash(retainedTarget);
@@ -2212,10 +2346,11 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       const data = await response.json();
       if (!response.ok || !data?.workspaceId || !data?.workspace) throw new Error(data?.error || `Workspace creation failed (${response.status}).`);
       syncAuthorityEpochRef.current += 1;
-      setPastStates([]);
-      setFutureStates([]);
-      window.__X4_WORKSPACE_CONTEXT__?.selectWorkspace(String(data.workspaceId));
-      setCurrentWorkspaceId(String(data.workspaceId));
+      resetHistory();
+      const createdWorkspaceId = String(data.workspaceId);
+      window.__X4_WORKSPACE_CONTEXT__?.selectWorkspace(createdWorkspaceId);
+      workspaceHistoryScopeRef.current = createdWorkspaceId || null;
+      setCurrentWorkspaceId(createdWorkspaceId);
       setWorkspace(data.workspace);
       localWorkspaceDirtyRef.current = false;
       setLocalVersion(Number(data.version || Date.now()));
@@ -2389,7 +2524,11 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       // let the blueprint view mount/lay out before centering on the node
       setTimeout(() => window.dispatchEvent(new CustomEvent('forge-focus-node', { detail: { nodeId: firstFlaggedNodeId } })), 80);
     }
-  }, [firstFlaggedNodeId]);
+  }, [firstFlaggedNodeId, setWorkspaceView]);
+
+  const isUiSourceBuilderView = experienceMode === 'expert'
+    && workspaceView === 'ui-designer'
+    && uiPresentationTab === 'source';
 
   return (
     <div className="w-full h-screen max-w-full overflow-hidden flex flex-col bg-[#0F1115] text-slate-300 font-sans">
@@ -2720,7 +2859,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       <div className="flex flex-1 overflow-hidden">
         
         {/* Left Side: Drag control panel, property editor inspector */}
-        {experienceMode === 'expert' && layoutPreferences.sidePanelCollapsed ? (
+        {isUiSourceBuilderView ? null : experienceMode === 'expert' && layoutPreferences.sidePanelCollapsed ? (
           <button
             type="button"
             data-testid="side-panel-restore"
@@ -2835,7 +2974,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         )}
 
         {/* Left Resizer Handle */}
-        {(experienceMode !== 'expert' || !layoutPreferences.sidePanelCollapsed) && <div
+        {!isUiSourceBuilderView && (experienceMode !== 'expert' || !layoutPreferences.sidePanelCollapsed) && <div
           data-testid="side-panel-resizer"
           className={`${layoutPreferences.toolDock === 'right' && experienceMode === 'expert' ? 'order-1' : 'order-0'} w-1 cursor-col-resize hover:bg-cyan-500/50 hover:w-1.5 transition-all bg-white/5 h-full relative z-40 select-none shrink-0 ${
             isResizingLeft ? 'bg-cyan-500 w-1.5' : ''
@@ -2874,9 +3013,15 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               setWorkspace={setWorkspace}
               selectedWidget={selectedWidget}
               setSelectedWidget={setSelectedWidget}
+              presentationTab={uiPresentationTab}
+              onPresentationTabChange={setUiPresentationTab}
               x4UiVerification={x4UiVerification}
               onConfirmX4UiVerification={confirmCurrentX4UiExperience}
               onX4UiVerificationSnapshotChange={setX4UiVerificationSnapshot}
+              workspaceScope={workspaceHistoryScopeRef.current ?? undefined}
+              historyRestoration={previewWorkspaceHistoryContinuation(pendingWorkspaceHistoryTransitionRef.current,
+                workspace, workspaceHistoryScopeRef.current, pastStatesRef.current, futureStatesRef.current) ?? x4UiHistoryRestoration}
+              onX4UiSourceEditAcknowledged={handleX4UiSourceEditAcknowledged}
             />
           ) : workspaceView === 'aiscripts' ? (
             <AIScriptEditor

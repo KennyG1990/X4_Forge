@@ -94,6 +94,137 @@ export function workspaceSnapshotHash(ws: ModWorkspace | null | undefined): stri
   return fnvHash(canonicalWorkspaceSnapshotString(ws));
 }
 
+const MAX_EXACT_DATA_COMPARISON_DEPTH = 64;
+const MAX_EXACT_DATA_COMPARISON_VISITS = 100000;
+const MAX_EXACT_DATA_COMPARISON_OWN_KEYS = 500000;
+
+interface ExactDataComparisonContext {
+  readonly leftActive: WeakSet<object>;
+  readonly rightActive: WeakSet<object>;
+  readonly completedPairs: WeakMap<object, WeakSet<object>>;
+  visits: number;
+  ownKeys: number;
+}
+
+function hasCompletedPair(
+  context: ExactDataComparisonContext,
+  left: object,
+  right: object,
+): boolean {
+  return context.completedPairs.get(left)?.has(right) === true;
+}
+
+function rememberCompletedPair(
+  context: ExactDataComparisonContext,
+  left: object,
+  right: object,
+): void {
+  let rights = context.completedPairs.get(left);
+  if (!rights) {
+    rights = new WeakSet<object>();
+    context.completedPairs.set(left, rights);
+  }
+  rights.add(right);
+}
+
+/**
+ * Compare ordinary data without invoking accessors or relying on a lossy/hash comparison.
+ * A false result deliberately means "use the normalized value" at the App boundary.
+ */
+function exactPlainDataEqual(
+  left: unknown,
+  right: unknown,
+  context: ExactDataComparisonContext,
+  depth: number,
+): boolean {
+  if (left === null || right === null) return left === right;
+
+  const leftType = typeof left;
+  const rightType = typeof right;
+  if (leftType !== rightType) return false;
+  if (leftType === 'undefined' || leftType === 'string' || leftType === 'number' || leftType === 'boolean') {
+    return Object.is(left, right);
+  }
+  if (leftType !== 'object') return false;
+
+  const leftObject = left as object;
+  const rightObject = right as object;
+  if (depth > MAX_EXACT_DATA_COMPARISON_DEPTH || context.visits >= MAX_EXACT_DATA_COMPARISON_VISITS) return false;
+  let leftIsArray: boolean;
+  let rightIsArray: boolean;
+  try {
+    leftIsArray = Array.isArray(leftObject);
+    rightIsArray = Array.isArray(rightObject);
+    if (leftIsArray !== rightIsArray) return false;
+
+    const leftPrototype = Object.getPrototypeOf(leftObject);
+    const rightPrototype = Object.getPrototypeOf(rightObject);
+    const supportedLeftPrototype = leftIsArray
+      ? leftPrototype === Array.prototype
+      : leftPrototype === Object.prototype || leftPrototype === null;
+    const supportedRightPrototype = leftIsArray
+      ? rightPrototype === Array.prototype
+      : rightPrototype === Object.prototype || rightPrototype === null;
+    if (!supportedLeftPrototype || !supportedRightPrototype || leftPrototype !== rightPrototype) return false;
+    if (context.leftActive.has(leftObject) || context.rightActive.has(rightObject)) return false;
+    if (hasCompletedPair(context, leftObject, rightObject)) return true;
+
+    context.visits += 1;
+    context.leftActive.add(leftObject);
+    context.rightActive.add(rightObject);
+    const leftKeys = Reflect.ownKeys(leftObject);
+    const rightKeys = Reflect.ownKeys(rightObject);
+    if (leftKeys.length !== rightKeys.length) return false;
+    if (context.ownKeys + leftKeys.length > MAX_EXACT_DATA_COMPARISON_OWN_KEYS) return false;
+    context.ownKeys += leftKeys.length;
+    for (let index = 0; index < leftKeys.length; index += 1) {
+      const leftKey = leftKeys[index]!;
+      const rightKey = rightKeys[index]!;
+      if (leftKey !== rightKey) return false;
+
+      const leftDescriptor = Object.getOwnPropertyDescriptor(leftObject, leftKey);
+      const rightDescriptor = Object.getOwnPropertyDescriptor(rightObject, rightKey);
+      if (!leftDescriptor || !rightDescriptor || !('value' in leftDescriptor) || !('value' in rightDescriptor)) {
+        return false;
+      }
+      // SourceEdits freezes its accepted data; sanitizer clones may be mutable.
+      // Those flags do not change data, but enumerability and every own value do.
+      if (
+        leftDescriptor.enumerable !== rightDescriptor.enumerable
+        || !exactPlainDataEqual(leftDescriptor.value, rightDescriptor.value, context, depth + 1)
+      ) return false;
+    }
+    rememberCompletedPair(context, leftObject, rightObject);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    context.leftActive.delete(leftObject);
+    context.rightActive.delete(rightObject);
+  }
+}
+
+/**
+ * Retain the caller's workspace object only when normalization made no exact, safe data change.
+ * Freezing or sealing the candidate does not change its data, keys or enumerability.
+ * Unsupported graphs and descriptor shapes always fall back to the sanitizer's result.
+ */
+export function retainWorkspaceCandidateIfNormalizedUnchanged<T>(candidate: T, normalized: T): T {
+  try {
+    return exactPlainDataEqual(candidate, normalized, {
+      leftActive: new WeakSet<object>(),
+      rightActive: new WeakSet<object>(),
+      completedPairs: new WeakMap<object, WeakSet<object>>(),
+      visits: 0,
+      ownKeys: 0,
+    }, 0)
+      ? candidate
+      : normalized;
+  } catch {
+    return normalized;
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Oracle
  * ------------------------------------------------------------------ */
@@ -114,6 +245,279 @@ export function runWorkspaceIdentitySelftest(): {
   // Compatibility fixtures captured before canonical payload extraction.
   ok('legacy_content_fixture_unchanged', workspaceContentHash(base) === 'c616589ddd4fd2a7');
   ok('legacy_snapshot_fixture_unchanged', workspaceSnapshotHash(base) === 'c616589ddd4fd2a7');
+
+  const validCandidate = {
+    id: 'workspace_identity_fixture',
+    name: 'Identity Fixture',
+    version: '1.0.0',
+    author: 'Forge',
+    description: 'identity helper fixture',
+    nodes: [{
+      id: 'node', type: 'cue', xmlTag: 'cue', label: 'Cue', x: 10, y: 20,
+      properties: { name: 'Start' }, propertiesSchema: [], inputs: [], outputs: [], includeInBuild: true,
+    }],
+    links: [{ sourceNodeId: 'node', targetNodeId: 'node' }],
+    uiWidgets: [{ id: 'widget', type: 'label', x: 10, y: 10, w: 100, h: 20, label: 'Ready', properties: {}, includeInBuild: true }],
+    uiTheme: { backgroundColor: '#000', borderColor: '#111', accentColor: '#222', opacity: 1, showIcons: true },
+    passthroughFiles: [
+      { path: 'ui.xml', content: '<addon/>', reason: 'partial', bytes: 8 },
+      { path: 'ui/menu.lua', content: 'return {}', reason: 'partial', bytes: 10 },
+    ],
+    compileSettings: { md: false, ui: true, ai: false, library: false, translations: false, patches: false },
+    customLua: 'return {}',
+  } as unknown as ModWorkspace;
+  const validNormalized = JSON.parse(JSON.stringify(validCandidate)) as ModWorkspace;
+  ok(
+    'safe_exact_valid_nonempty_candidate_retains_identity',
+    retainWorkspaceCandidateIfNormalizedUnchanged(validCandidate, validNormalized) === validCandidate,
+  );
+  const editedCandidate = {
+    ...validCandidate,
+    nodes: [...validCandidate.nodes, { ...validCandidate.nodes[0]!, id: 'node2' }],
+  } as ModWorkspace;
+  const editedNormalized = JSON.parse(JSON.stringify(editedCandidate)) as ModWorkspace;
+  ok(
+    'safe_exact_valid_edit_retains_identity',
+    retainWorkspaceCandidateIfNormalizedUnchanged(editedCandidate, editedNormalized) === editedCandidate,
+  );
+
+  // Match SourceEdits' accepted-result freeze: every nested own data value is frozen,
+  // including source records and arrays, without reading accessor properties.
+  const freezeSourceEditFixture = <T>(value: T, seen = new WeakSet<object>()): T => {
+    if (value === null || typeof value !== 'object' || seen.has(value)) return value;
+    seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor && 'value' in descriptor) freezeSourceEditFixture(descriptor.value, seen);
+    }
+    return Object.freeze(value);
+  };
+  const frozenEditCandidate = JSON.parse(JSON.stringify(validCandidate)) as ModWorkspace;
+  const editedLua = 'row[1]:createText("Edited title", { font = "Zekton", fontsize = 9 })';
+  frozenEditCandidate.passthroughFiles![1] = {
+    ...frozenEditCandidate.passthroughFiles![1]!,
+    content: editedLua,
+    bytes: editedLua.length,
+  };
+  const mutableEditNormalized = JSON.parse(JSON.stringify(frozenEditCandidate)) as ModWorkspace;
+  freezeSourceEditFixture(frozenEditCandidate);
+  ok(
+    'source_edit_fixture_is_deep_frozen_and_normalized_clone_mutable',
+    Object.isFrozen(frozenEditCandidate)
+      && Object.isFrozen(frozenEditCandidate.nodes)
+      && Object.isFrozen(frozenEditCandidate.nodes[0]!.properties)
+      && Object.isFrozen(frozenEditCandidate.passthroughFiles)
+      && Object.isFrozen(frozenEditCandidate.passthroughFiles![1])
+      && !Object.isFrozen(mutableEditNormalized)
+      && !Object.isFrozen(mutableEditNormalized.passthroughFiles![1]),
+  );
+  ok(
+    'deep_frozen_source_edit_retains_identity_when_data_unchanged',
+    retainWorkspaceCandidateIfNormalizedUnchanged(frozenEditCandidate, mutableEditNormalized) === frozenEditCandidate,
+  );
+  const correctedFrozenEdit = JSON.parse(JSON.stringify(mutableEditNormalized)) as ModWorkspace;
+  correctedFrozenEdit.passthroughFiles![1]!.content = editedLua.replace('Edited title', 'Corrected title');
+  ok(
+    'deep_frozen_source_edit_changed_data_uses_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged(frozenEditCandidate, correctedFrozenEdit) === correctedFrozenEdit,
+  );
+  const correctedFrozenMetadata = JSON.parse(JSON.stringify(mutableEditNormalized)) as ModWorkspace;
+  correctedFrozenMetadata.passthroughFiles![1]!.bytes = editedLua.length + 1;
+  ok(
+    'deep_frozen_source_edit_changed_metadata_uses_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged(frozenEditCandidate, correctedFrozenMetadata) === correctedFrozenMetadata,
+  );
+  const changedFrozenEnumerability = JSON.parse(JSON.stringify(mutableEditNormalized)) as ModWorkspace;
+  Object.defineProperty(changedFrozenEnumerability.passthroughFiles![1], 'content', { enumerable: false });
+  ok(
+    'deep_frozen_source_edit_changed_enumerability_uses_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged(frozenEditCandidate, changedFrozenEnumerability) === changedFrozenEnumerability,
+  );
+  const frozenAccessorCandidate = JSON.parse(JSON.stringify(mutableEditNormalized)) as ModWorkspace;
+  let frozenAccessorRead = false;
+  Object.defineProperty(frozenAccessorCandidate.passthroughFiles![1], 'content', {
+    enumerable: true,
+    configurable: true,
+    get: () => {
+      frozenAccessorRead = true;
+      return editedLua;
+    },
+  });
+  freezeSourceEditFixture(frozenAccessorCandidate);
+  ok(
+    'deep_frozen_source_edit_accessor_falls_back_without_reading',
+    retainWorkspaceCandidateIfNormalizedUnchanged(frozenAccessorCandidate, mutableEditNormalized) === mutableEditNormalized
+      && !frozenAccessorRead,
+  );
+
+  const malformedCandidate = { name: 'M' } as unknown as ModWorkspace;
+  const defaultNormalized = { name: 'M', nodes: [], links: [] } as unknown as ModWorkspace;
+  ok(
+    'normalization_default_change_uses_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged(malformedCandidate, defaultNormalized) === defaultNormalized,
+  );
+  const metadataCandidate = {
+    passthroughFiles: [{ path: 'ui.xml', content: '<addon/>', reason: 'partial', bytes: 8 }],
+  } as unknown as ModWorkspace;
+  const metadataNormalized = {
+    passthroughFiles: [{ path: 'ui.xml', content: '<addon/>', reason: 'partial', bytes: 9 }],
+  } as unknown as ModWorkspace;
+  ok(
+    'normalization_metadata_change_uses_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged(metadataCandidate, metadataNormalized) === metadataNormalized,
+  );
+  const orderCandidate = { records: [{ id: 'a' }, { id: 'b' }] } as unknown as ModWorkspace;
+  const orderNormalized = { records: [{ id: 'b' }, { id: 'a' }] } as unknown as ModWorkspace;
+  ok(
+    'normalization_array_order_change_uses_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged(orderCandidate, orderNormalized) === orderNormalized,
+  );
+  const keyOrderCandidate = { a: 1, b: 2 } as unknown as ModWorkspace;
+  const keyOrderNormalized = { b: 2, a: 1 } as unknown as ModWorkspace;
+  ok(
+    'normalization_object_order_change_uses_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged(keyOrderCandidate, keyOrderNormalized) === keyOrderNormalized,
+  );
+
+  let accessorRead = false;
+  const accessorCandidate: Record<string, unknown> = {};
+  Object.defineProperty(accessorCandidate, 'name', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      accessorRead = true;
+      return 'M';
+    },
+  });
+  const accessorNormalized = { name: 'M' } as unknown as ModWorkspace;
+  ok(
+    'accessor_falls_back_without_reading',
+    retainWorkspaceCandidateIfNormalizedUnchanged<unknown>(accessorCandidate, accessorNormalized) === accessorNormalized
+      && !accessorRead,
+  );
+  const cyclicCandidate: Record<string, unknown> = { name: 'M' };
+  cyclicCandidate.self = cyclicCandidate;
+  const cyclicNormalized = { name: 'M' } as unknown as ModWorkspace;
+  ok(
+    'cycle_falls_back_to_normalized',
+    retainWorkspaceCandidateIfNormalizedUnchanged<unknown>(cyclicCandidate, cyclicNormalized) === cyclicNormalized,
+  );
+  const sharedCandidate = { value: { label: 'shared' } } as Record<string, unknown>;
+  const sharedNormalized = { value: { label: 'shared' } } as Record<string, unknown>;
+  sharedCandidate.left = sharedCandidate.value;
+  sharedCandidate.right = sharedCandidate.value;
+  sharedNormalized.left = sharedNormalized.value;
+  sharedNormalized.right = sharedNormalized.value;
+  ok(
+    'shared_dag_pair_memo_retains',
+    retainWorkspaceCandidateIfNormalizedUnchanged(sharedCandidate, sharedNormalized) === sharedCandidate,
+  );
+
+  const representativeNodes = Array.from({ length: 3000 }, (_, index) => ({
+    id: `node_${index}`,
+    type: 'cue',
+    xmlTag: 'cue',
+    label: `Node ${index}`,
+    x: index % 800,
+    y: Math.floor(index / 800) * 20,
+    properties: { name: `Node ${index}`, index },
+    propertiesSchema: Array.from({ length: 8 }, (_, schemaIndex) => ({
+      key: `field_${schemaIndex}`,
+      label: `Field ${schemaIndex}`,
+      type: 'text',
+    })),
+    inputs: Array.from({ length: 4 }, (_, inputIndex) => ({
+      name: `input_${inputIndex}`,
+      type: 'event',
+    })),
+    outputs: Array.from({ length: 4 }, (_, outputIndex) => ({
+      name: `output_${outputIndex}`,
+      type: 'event',
+    })),
+    includeInBuild: true,
+  }));
+  const representativeLinks = Array.from({ length: 2999 }, (_, index) => ({
+    sourceNodeId: `node_${index}`,
+    targetNodeId: `node_${index + 1}`,
+  }));
+  const representativeSourceFiles = Array.from({ length: 109 }, (_, index) => ({
+    path: index === 0 ? 'content.xml' : index === 1 ? 'ui.xml' : `assets/source_${index}.dat`,
+    content: `source-${index}`,
+    reason: 'partial',
+    bytes: 9,
+  }));
+  const representativeCandidate = {
+    ...validCandidate,
+    nodes: representativeNodes,
+    links: representativeLinks,
+    passthroughFiles: representativeSourceFiles,
+  } as unknown as ModWorkspace;
+  const representativeNormalized = JSON.parse(JSON.stringify(representativeCandidate)) as ModWorkspace;
+  ok(
+    'representative_workspace_retains_with_calibrated_budget',
+    retainWorkspaceCandidateIfNormalizedUnchanged(representativeCandidate, representativeNormalized) === representativeCandidate,
+  );
+
+  let deepCandidate: Record<string, unknown> = { value: 'leaf' };
+  let deepNormalized: Record<string, unknown> = { value: 'leaf' };
+  for (let depth = 0; depth <= MAX_EXACT_DATA_COMPARISON_DEPTH; depth += 1) {
+    deepCandidate = { next: deepCandidate };
+    deepNormalized = { next: deepNormalized };
+  }
+  ok(
+    'comparison_depth_budget_falls_back',
+    retainWorkspaceCandidateIfNormalizedUnchanged(deepCandidate, deepNormalized) === deepNormalized,
+  );
+
+  const wideCandidateItems = Array.from(
+    { length: MAX_EXACT_DATA_COMPARISON_VISITS + 2 },
+    (_, index) => ({ index }),
+  ) as Record<string, unknown>[];
+  const wideNormalizedItems = wideCandidateItems.map(item => ({ ...item }));
+  let budgetGetterRead = false;
+  Object.defineProperty(wideCandidateItems[wideCandidateItems.length - 1]!, 'danger', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      budgetGetterRead = true;
+      return 'must not run';
+    },
+  });
+  const wideCandidate = { items: wideCandidateItems } as unknown as ModWorkspace;
+  const wideNormalized = { items: wideNormalizedItems } as unknown as ModWorkspace;
+  ok(
+    'comparison_visit_budget_falls_back_without_getter',
+    retainWorkspaceCandidateIfNormalizedUnchanged(wideCandidate, wideNormalized) === wideNormalized
+      && !budgetGetterRead,
+  );
+  const wideKeyCandidate: Record<string, unknown> = {};
+  const wideKeyNormalized: Record<string, unknown> = {};
+  for (let index = 0; index <= MAX_EXACT_DATA_COMPARISON_OWN_KEYS; index += 1) {
+    const key = `key_${index}`;
+    wideKeyCandidate[key] = index;
+    wideKeyNormalized[key] = index;
+  }
+  let wideKeyGetterRead = false;
+  Object.defineProperty(wideKeyCandidate, 'late', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      wideKeyGetterRead = true;
+      return 'must not run';
+    },
+  });
+  wideKeyNormalized.late = 'safe fallback';
+  ok(
+    'comparison_key_budget_falls_back_without_getter',
+    retainWorkspaceCandidateIfNormalizedUnchanged(wideKeyCandidate, wideKeyNormalized) === wideKeyNormalized
+      && !wideKeyGetterRead,
+  );
+  const nonPlainCandidate = { stamp: new Date(0) } as unknown as ModWorkspace;
+  const nonPlainNormalized = { stamp: '1970-01-01T00:00:00.000Z' } as unknown as ModWorkspace;
+  ok(
+    'unsupported_non_plain_value_falls_back',
+    retainWorkspaceCandidateIfNormalizedUnchanged(nonPlainCandidate, nonPlainNormalized) === nonPlainNormalized,
+  );
 
   // key order must not matter
   const reordered = {

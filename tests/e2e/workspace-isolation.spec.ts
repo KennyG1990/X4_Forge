@@ -24,6 +24,82 @@ async function serverWorkspace(page: Page): Promise<any> {
   });
 }
 
+test('name-only independent workspace creation is blank, replayable, and preserves explicit projects', async ({ page }) => {
+  const explicitWorkspace = sanitizeWorkspace({
+    ...buildTemplateWorkspace('welcome'),
+    id: 'b119_explicit_project',
+    name: 'B119 explicit project preservation',
+    customLua: '-- Explicit project content must survive creation.\nreturn {}\n',
+  });
+  await page.goto('/');
+  await page.waitForFunction(() => Boolean((window as unknown as { __X4_E2E__?: unknown }).__X4_E2E__));
+  const proof = await page.evaluate(async explicit => {
+    const context = (window as unknown as {
+      __X4_WORKSPACE_CONTEXT__: { clientId: string; getWorkspaceId(): string };
+    }).__X4_WORKSPACE_CONTEXT__;
+    const read = async (path: string) => {
+      const response = await fetch(path);
+      if (!response.ok) throw new Error(`${path}: ${response.status}`);
+      return response.json();
+    };
+    const create = async (body: Record<string, unknown>, operationId: string) => {
+      const response = await fetch('/api/agent/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-forge-operation-id': operationId },
+        body: JSON.stringify({ clientId: context.clientId, ...body }),
+      });
+      return { status: response.status, data: await response.json() };
+    };
+    const initial = await read('/api/agent/workspace');
+    const initialSelection = context.getWorkspaceId();
+    const before = await read('/api/agent/workspaces');
+    const operationId = `forge_op_b119_blank_${crypto.randomUUID().replaceAll('-', '')}`;
+    const body = { name: initial.workspace.name };
+    const created = await create(body, operationId);
+    const afterCreate = await read('/api/agent/workspaces');
+    const replayed = await create(body, operationId);
+    const afterReplay = await read('/api/agent/workspaces');
+    const changed = await create({ name: `${body.name} changed` }, operationId);
+    const malformed = await create(body, 'forge/op/invalid');
+    const afterRejected = await read('/api/agent/workspaces');
+    const supplied = await create({ workspace: explicit }, `${operationId}_explicit`);
+    const afterExplicit = await read('/api/agent/workspaces');
+    const final = await read('/api/agent/workspace');
+    return {
+      initial, initialSelection, created, replayed, changed, malformed, supplied, final,
+      finalSelection: context.getWorkspaceId(),
+      counts: [before, afterCreate, afterReplay, afterRejected, afterExplicit].map(row => row.workspaces.length),
+    };
+  }, explicitWorkspace);
+  await test.info().attach('b119-name-only-workspace-creation', {
+    body: Buffer.from(JSON.stringify(proof, null, 2)), contentType: 'application/json',
+  });
+  expect(proof.created.status).toBe(201);
+  expect(proof.created.data.receipt.status).toBe('committed');
+  expect(proof.created.data.workspaceId).toMatch(/^ws_[a-f0-9]{24}$/);
+  expect(proof.created.data.workspaceId).not.toBe(proof.initial.workspaceId);
+  expect(proof.created.data.workspace.name).toBe(proof.initial.workspace.name);
+  for (const field of ['nodes', 'links', 'uiWidgets', 'originalFiles', 'passthroughFiles', 'aiScripts', 'wares', 'jobs', 'xmlPatches', 'tFiles', 'templates']) {
+    expect(proof.created.data.workspace[field], `name-only workspace ${field} must be empty`).toEqual([]);
+  }
+  expect(proof.created.data.workspace.customLua).toBeUndefined();
+  expect(proof.created.data.workspace.sourceFolder).toBeUndefined();
+  expect(proof.created.data.workspace.contentOriginal).toBeUndefined();
+  expect(proof.replayed.status).toBe(200);
+  expect(proof.replayed.data.replayed).toBe(true);
+  expect(proof.replayed.data.workspaceId).toBe(proof.created.data.workspaceId);
+  expect(proof.replayed.data.workspace).toEqual(proof.created.data.workspace);
+  expect(proof.replayed.data.receipt).toEqual(proof.created.data.receipt);
+  expect(proof.changed.status).toBe(409);
+  expect(proof.malformed.status).toBe(400);
+  expect(proof.malformed.data.code).toBe('ACTION_RECEIPT_OPERATION_ID_INVALID');
+  expect(proof.supplied.status).toBe(201);
+  expect(proof.supplied.data.workspace).toEqual(explicitWorkspace);
+  expect(proof.counts).toEqual([proof.counts[0], proof.counts[0] + 1, proof.counts[0] + 1, proof.counts[0] + 1, proof.counts[0] + 2]);
+  expect(proof.final).toEqual(proof.initial);
+  expect(proof.finalSelection).toBe(proof.initialSelection);
+});
+
 test('two Studio tabs keep duplicate-name workspaces isolated and switch by immutable id', async ({ context, page }) => {
   test.setTimeout(120_000);
   const initial = buildTemplateWorkspace('welcome');

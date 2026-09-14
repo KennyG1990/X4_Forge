@@ -117,6 +117,20 @@ export interface StudioDb {
   path: string;
 }
 
+/** Explicit callers keep their directory; only no-argument cache opens use the override. */
+export function resolveStudioCacheDirectory(
+  cacheDir?: string,
+  env: Readonly<Record<string, unknown>> = process.env,
+): string {
+  if (cacheDir) return cacheDir;
+  const override = env.X4_STUDIO_CACHE_DIR;
+  if (override === undefined) return path.join(os.tmpdir(), 'x4-studio-cache');
+  if (typeof override !== 'string' || !override.trim() || override.includes('\0') || !path.isAbsolute(override.trim())) {
+    throw new Error('Invalid X4_STUDIO_CACHE_DIR: expected a non-empty absolute directory path.');
+  }
+  return path.resolve(override.trim());
+}
+
 /**
  * Open (creating/migrating as needed) the studio cache DB. Returns null when the
  * driver is unavailable or the file can't be opened — callers must treat null as
@@ -125,7 +139,7 @@ export interface StudioDb {
 export function openStudioDb(cacheDir?: string): StudioDb | null {
   if (!loadDriver()) return null;
   try {
-    const dir = cacheDir || path.join(os.tmpdir(), 'x4-studio-cache');
+    const dir = resolveStudioCacheDirectory(cacheDir);
     fs.mkdirSync(dir, { recursive: true });
     const dbPath = path.join(dir, 'index.db');
     const raw = new BetterSqlite3(dbPath);
@@ -485,20 +499,29 @@ export function queryReferenceFiles(
   if (filters.q) { clauses.push('f.rel_path LIKE ?'); params.push(`%${filters.q}%`); }
   const where = clauses.join(' AND ');
   const total = Number(db.raw.prepare(
-    `SELECT COUNT(*) AS n FROM reference_files f
-     JOIN reference_classes c ON c.class_id = f.class_id WHERE ${where}`,
+    `SELECT COUNT(*) AS n FROM reference_classes c
+     CROSS JOIN reference_files f ON c.class_id = f.class_id WHERE ${where}`,
   ).get(...params).n);
   const requestedLimit = Number.isFinite(filters.limit) ? Number(filters.limit) : 100;
   const requestedOffset = Number.isFinite(filters.offset) ? Number(filters.offset) : 0;
   const limit = Math.max(1, Math.min(requestedLimit, 500));
   const offset = Math.max(0, Math.min(requestedOffset, 5_000_000));
+  // Class-first seeks use the existing (generation_seq, class_id) covering index.
+  // Select only bounded path keys there: reading full records before LIMIT turns
+  // broad filters into expensive random I/O across the million-file manifest.
   const files = db.raw.prepare(
     `SELECT ? AS generation_id, f.rel_path, c.extension, c.source, c.domain, c.role,
             c.authority, c.consumer, NULLIF(c.schema_role, '') AS schema_role,
             f.bytes, f.mtime_ms, f.sha256
-     FROM reference_files f JOIN reference_classes c ON c.class_id = f.class_id
-     WHERE ${where} ORDER BY f.rel_path LIMIT ? OFFSET ?`,
-  ).all(generationId, ...params, limit, offset) as DbReferenceFile[];
+     FROM (
+       SELECT f.rel_path FROM reference_classes c
+       CROSS JOIN reference_files f ON c.class_id = f.class_id
+       WHERE ${where} ORDER BY f.rel_path LIMIT ? OFFSET ?
+     ) page
+     CROSS JOIN reference_files f ON f.generation_seq = ? AND f.rel_path = page.rel_path
+     JOIN reference_classes c ON c.class_id = f.class_id
+     ORDER BY f.rel_path`,
+  ).all(generationId, ...params, limit, offset, generation.seq) as DbReferenceFile[];
   return { total, files };
 }
 

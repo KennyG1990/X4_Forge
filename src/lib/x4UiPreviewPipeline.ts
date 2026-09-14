@@ -207,6 +207,7 @@ export interface X4UiPreviewSourceCandidate {
   readonly verificationStatus?: string;
   readonly targetCount: number;
   readonly targets: readonly X4UiLayoutTarget[];
+  readonly menuTargetIds?: readonly string[];
   readonly catalogError?: string;
 }
 
@@ -772,6 +773,7 @@ const sourceCandidateFor = (file: {
       verificationStatus: file.verificationStatus,
       targetCount: catalog.targets.length,
       targets: cloneJson(catalog.targets) as readonly X4UiLayoutTarget[],
+      menuTargetIds: [...catalog.menuTargetIds],
     });
   } catch (error) {
     return freezeDeep({
@@ -787,6 +789,7 @@ const sourceCandidateFor = (file: {
       verificationStatus: file.verificationStatus,
       targetCount: 0,
       targets: [],
+      menuTargetIds: [],
       catalogError: error instanceof Error ? error.message : 'target catalog could not be built',
     });
   }
