@@ -2564,6 +2564,7 @@ const numericExpressionStructureError = (
 ): string | undefined => {
   const index = numericExpressionSourceAstIndex(model);
   if (index.error) return index.error;
+  let sequenceRequiresPreview = false;
   const nodesOfType = (type: string): readonly NumericExpressionSourceAstNode[] => numericExpressionSourceAstNodes(index, type);
   const rangeEqualsLocation = (
     range: readonly [number, number] | undefined,
@@ -2765,6 +2766,88 @@ const numericExpressionStructureError = (
           || argumentsList.length !== candidate.arguments.length) return false;
         return candidate.arguments.every((argument, argumentIndex) => nodeMatches(argument, argumentsList[argumentIndex]));
       }
+      case 'table-length': {
+        const base = localAstNode(node.argument);
+        if (node.type !== 'UnaryExpression' || node.operator !== '#'
+          || !localAstIdentifier(base, candidate.base, true)
+          || !exactTableAliasSourceBinding(base, candidate.tableSource, candidate.source.start.offset)) return false;
+        const tables = (index.nodesByRange.get(sourceAstRangeKey(
+          candidate.tableSource.start.offset, candidate.tableSource.end.offset,
+        )) || []).filter(table => table.type === 'TableConstructorExpression');
+        const fields = tables.length === 1 ? localAstNodes(tables[0].fields) : undefined;
+        if (!fields || fields.length !== candidate.value || !fields.every(field => {
+          const value = localAstNode(field.value);
+          return field.type === 'TableValue' && value !== undefined
+            && typeof value.type === 'string'
+            && ['StringLiteral', 'NumericLiteral', 'BooleanLiteral'].includes(value.type);
+        })) return false;
+        // The declaration is a constant sequence only while every alias is used read-only.
+        // Inspect the whole source, including callbacks after this use, not just earlier writes.
+        const identifiers = nodesOfType('Identifier');
+        const reflectiveLoaders = ['getfenv', 'setfenv', 'debug', 'load', 'loadfile', 'loadstring', 'dofile'];
+        const reflectiveGlobals = ['_G', 'ipairs', 'rawget', 'rawset', ...reflectiveLoaders];
+        const ipairsAvailable = !identifiers.some(identifier => ['ipairs', 'rawget'].includes(String(identifier.name))
+          && (identifier.isLocal === true
+            || index.parentByNode.get(identifier)?.type === 'AssignmentStatement'
+            || index.parentByNode.get(identifier)?.type === 'FunctionDeclaration'))
+          && !nodesOfType('AssignmentStatement').some(statement => localAstNodes(statement.variables)?.some(variable => {
+            const key = localAstNode(variable.identifier) || localAstNode(variable.index);
+            return (variable.type === 'MemberExpression' || variable.type === 'IndexExpression')
+              && (localAstIdentifier(key, 'ipairs') || localAstStringValue(model, key) === 'ipairs'
+                || localAstIdentifier(key, 'rawget') || localAstStringValue(model, key) === 'rawget');
+          }))
+          && identifiers.every(identifier => {
+            // A copied/returned environment or reflective loader defeats the builtin identity.
+            if (reflectiveLoaders.includes(String(identifier.name))) return false;
+            if (identifier.name !== '_G') return true;
+            const parent = index.parentByNode.get(identifier);
+            if (identifier.isLocal !== false) return false;
+            // A named sibling field is not the global environment itself. Dynamic keys,
+            // reflective fields and method calls (which pass _G as self) still escape it.
+            if (parent?.base === identifier) {
+              const key = parent.type === 'MemberExpression' && parent.indexer === '.'
+                ? localAstNode(parent.identifier)?.name
+                : parent.type === 'IndexExpression' ? localAstStringValue(model, parent.index) : undefined;
+              if (typeof key === 'string' && !reflectiveGlobals.includes(key)) return true;
+            }
+            const args = parent?.type === 'CallExpression' ? localAstNodes(parent.arguments) : undefined;
+            const key = args?.[1] ? localAstStringValue(model, args[1]) : undefined;
+            return parent?.type === 'CallExpression'
+              && localAstIdentifier(localAstNode(parent.base), 'rawget', false)
+              && args?.length === 2 && args[0] === identifier && key !== undefined && !reflectiveGlobals.includes(key);
+          })
+          && !nodesOfType('CallExpression').some(call => {
+            const callee = localAstNode(call.base);
+            const args = localAstNodes(call.arguments) || [];
+            return localAstIdentifier(callee, 'rawset')
+              || args.some(argument => localAstIdentifier(argument, '_G'))
+                && !(localAstIdentifier(callee, 'rawget', false)
+                  && args.length === 2 && localAstStringValue(model, args[1]) !== undefined);
+          });
+        const readOnly = identifiers.every(identifier => {
+          const range = sourceAstRange(identifier);
+          if (!range || !exactTableAliasSourceBinding(identifier, candidate.tableSource, range[0])) return true;
+          const parent = index.parentByNode.get(identifier);
+          if (parent?.type === 'UnaryExpression' && parent.operator === '#' && parent.argument === identifier) return true;
+          if (parent?.type === 'LocalStatement') {
+            const init = localAstNodes(parent.init), variables = localAstNodes(parent.variables);
+            return init?.length === 1 && init[0] === identifier && variables?.length === 1
+              && variables[0].type === 'Identifier' && variables[0].isLocal === true;
+          }
+          if (parent?.type === 'CallExpression' && ipairsAvailable) {
+            const args = localAstNodes(parent.arguments);
+            const loop = index.parentByNode.get(parent);
+            const iterators = loop?.type === 'ForGenericStatement' ? localAstNodes(loop.iterators) : undefined;
+            // Outside a direct for-in, ipairs can expose its table-valued iterator state.
+            return localAstIdentifier(localAstNode(parent.base), 'ipairs', false)
+              && args?.length === 1 && args[0] === identifier
+              && iterators?.length === 1 && iterators[0] === parent;
+          }
+          return false;
+        });
+        if (!readOnly) sequenceRequiresPreview = true;
+        return true;
+      }
       case 'table-field': {
         const base = localAstNode(node.base);
         const identifier = localAstNode(node.identifier);
@@ -2838,7 +2921,7 @@ const numericExpressionStructureError = (
     descriptor.source.end.offset,
   )) || [];
   return rootNodes.some(node => nodeMatches(descriptor, node))
-    ? undefined
+    ? sequenceRequiresPreview ? NUMERIC_SEQUENCE_PREVIEW_FALLBACK_ERROR : undefined
     : 'numeric expression structure does not match the exact source AST';
 };
 
@@ -2958,6 +3041,16 @@ const numericExpressionError = (
           }
           return finish();
         }
+        case 'table-length': {
+          if (!hasExactRecordKeys(candidate, ['kind', 'base', 'tableSource', 'value', 'expression', 'source'])
+            || typeof candidate.base !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate.base)
+            || !Number.isInteger(candidate.value) || (candidate.value as number) < 0 || (candidate.value as number) > 256
+            || !modelSourceLocationIsExact(model, candidate.tableSource)
+            || (candidate.tableSource as X4UiSourceLocation).end.offset > source.start.offset) {
+            return finish('numeric table-length descriptor is malformed');
+          }
+          return finish();
+        }
         case 'table-field': {
           if (!hasExactRecordKeys(candidate, [
             'kind', 'base', 'property', 'tableSource', 'value', 'expression', 'source',
@@ -3046,9 +3139,9 @@ const numericExpressionError = (
     const rootError = visit(descriptor);
     if (rootError) return rootError;
     const structureError = numericExpressionStructureError(descriptor as X4UiNumericExpression, model);
-    if (structureError) return structureError;
+    if (structureError && structureError !== NUMERIC_SEQUENCE_PREVIEW_FALLBACK_ERROR) return structureError;
     const root = descriptor as Record<string, unknown>;
-    if (root.expression === value.expression && locationsEqual(root.source as X4UiSourceLocation, value.location)) return undefined;
+    if (root.expression === value.expression && locationsEqual(root.source as X4UiSourceLocation, value.location)) return structureError;
     const aliasName = value.expression.trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(aliasName)) return 'numeric expression root is not bound to the value use';
     const rootProof = numericExpressionRootAliasBinding(
@@ -3056,7 +3149,7 @@ const numericExpressionError = (
       value,
       model,
     );
-    if (rootProof.status === 'bound') return undefined;
+    if (rootProof.status === 'bound') return structureError;
     if (rootProof.status === 'reassigned') return 'numeric expression binding was reassigned before use';
     if (descriptor.kind === 'preview-input') return 'numeric preview-input root has no exact source binding';
     return 'numeric expression root has no exact source binding';
@@ -3094,6 +3187,9 @@ const evidenceExpressionForValue = (value: X4UiValue | undefined): string | unde
   value?.numericExpression?.expression || value?.localInvocationResult?.expression || value?.expression;
 
 const NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR = 'numeric expression root has no exact source binding';
+const NUMERIC_SEQUENCE_PREVIEW_FALLBACK_ERROR = 'sequence may change or escape; provide a preview-only numeric input';
+const isNumericExpressionPreviewFallback = (error: string | undefined): boolean =>
+  error === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR || error === NUMERIC_SEQUENCE_PREVIEW_FALLBACK_ERROR;
 
 type NumericPreviewInputExpression = Extract<X4UiNumericExpression, { kind: 'preview-input' }>;
 
@@ -3241,6 +3337,7 @@ const numericPreviewLeavesForValue = (
       case 'literal':
       case 'helper-constant':
       case 'direct-helper-scale':
+      case 'table-length':
         return;
       case 'table-field':
         append(descriptor.value, sourceValue);
@@ -3365,6 +3462,8 @@ const resolveNumericExpression = (
         }
         return { value: directScale.value, source: cloneLocation(directScale.source), provenance: 'direct-helper-scale' };
       }
+      case 'table-length':
+        return { value: expression.value, source: cloneLocation(expression.source), provenance: 'source-literal' };
       case 'table-field': {
         const field = evaluate(expression.value);
         if (field.gap || field.value === undefined) {
@@ -3505,7 +3604,7 @@ const resolveNumber = (
   if (descriptor !== undefined
     && model !== undefined
     && descriptorError !== undefined
-    && descriptorError !== NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR) {
+    && !isNumericExpressionPreviewFallback(descriptorError)) {
     return {
       gap: {
         category,
@@ -3516,9 +3615,9 @@ const resolveNumber = (
       },
     };
   }
-  const sample = value && (descriptor === undefined || descriptorError === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR)
+  const sample = value && (descriptor === undefined || isNumericExpressionPreviewFallback(descriptorError))
     ? previewSamples?.get(rangeAndTypeKey(sampleSourceForValue(value), 'number', previewLoopId))
-      || (descriptorError === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR && descriptor
+      || (isNumericExpressionPreviewFallback(descriptorError) && descriptor
         ? previewSamples?.get(rangeAndTypeKey(descriptor.source, 'number', previewLoopId))
         : undefined)
     : undefined;
@@ -4671,7 +4770,7 @@ const createPreviewSampleCatalog = (
       && value.numericExpression !== undefined
       ? numericExpressionError(value.numericExpression, value, model)
       : undefined;
-    const rootNumericFallback = numericExpressionDescriptorError === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR;
+    const rootNumericFallback = isNumericExpressionPreviewFallback(numericExpressionDescriptorError);
     if (expectedType === 'number') {
       const leaves = !rootNumericFallback
         && numericExpressionDescriptorError === undefined
@@ -5479,7 +5578,7 @@ const targetNeedsNumericExpressionPreviewSamples = (
     seen.add(objectValue);
     if (isValueShape(value)) {
       if (value.numericExpression !== undefined
-        && numericExpressionError(value.numericExpression, value, model) === NUMERIC_EXPRESSION_PREVIEW_FALLBACK_ERROR) {
+        && isNumericExpressionPreviewFallback(numericExpressionError(value.numericExpression, value, model))) {
         return true;
       }
       if (numericPreviewLeavesForValue(value, model, parameterBindings).length > 0) return true;
@@ -8502,6 +8601,20 @@ const schemaNumericExpression = (value: unknown, path: string): ClosedSchemaErro
     for (let index = 0; index < argumentsList.length; index += 1) {
       const error = schemaNumericExpression(argumentsList[index], `${path}.arguments[${index}]`);
       if (error) return error;
+    }
+    return undefined;
+  }
+  if (candidate.kind === 'table-length') {
+    const objectError = schemaObject(value, path, ['kind', 'base', 'tableSource', 'value', 'expression', 'source']);
+    if (objectError) return objectError;
+    const errors = schemaString(candidate.base, `${path}.base`, true)
+      || schemaSource(candidate.tableSource, `${path}.tableSource`)
+      || schemaString(candidate.expression, `${path}.expression`)
+      || schemaSource(candidate.source, `${path}.source`);
+    if (errors) return errors;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(candidate.base))
+      || !Number.isInteger(candidate.value) || (candidate.value as number) < 0 || (candidate.value as number) > 256) {
+      return `${path} has invalid sequence length or local base`;
     }
     return undefined;
   }

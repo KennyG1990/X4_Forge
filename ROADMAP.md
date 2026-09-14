@@ -8388,3 +8388,15 @@ parity/installed/native proof remains OPEN and full B119 PARTIAL. No new product
 commit/push/release/install or capability-map delta in this validation unit.
 Plan/review/AAR:docs/plans/2026-09-14-b119-full-integration-post-repair.md.
 Commit point: test(ui): verify full B119 integration after renderer repair (not committed).
+
+### 2026-09-14 — B119 immutable local sequence length: bounded source analysis VERIFIED
+
+Existing CallModel/LayoutProgram now prove dense literal local sequence lengths against exact
+source/declaration/consumer and alias-use authority. Unsafe sequences retain preview-only numeric
+recovery; malformed evidence and escaped iterator state fail closed. Parser149/149, layout965/965,
+types/exact lint PASS. Real unchanged HUB resolves6 columns at both profiles; no #TABS sample.
+No full-menu, rendered, installed or native close; tab bindings/y/body dispatch remain PARTIAL.
+Prior132/132 integration predates this source change. Plan/review/AAR and evidence:
+docs/plans/2026-09-14-b119-sequence-length.md; test-results/b119-sequence-length-20260914/.
+Commit point: feat(ui): prove immutable source sequence lengths for imported menus.
+Normal-hook checkpoint result: checkpoint-retry/post-commit.json in that evidence directory.

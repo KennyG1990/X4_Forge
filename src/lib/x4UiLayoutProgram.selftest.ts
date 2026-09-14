@@ -1352,6 +1352,98 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     assert.ok(targetCatalog.targets.some(target => target.kind === 'top-level'), `${label}: full technical catalog retained`);
   }
   console.log(`B119 menu target source classification: PASS ${menuTargetCases.length}/${menuTargetCases.length}`);
+  const sequenceSource = (declaration: string, before = '', count = '#TABS', after = '') => [
+    `local TABS = ${declaration}`, before,
+    'local frame = Helper.createFrameHandle({}, { width = 100, height = 80, layer = 2 })',
+    `local tabs = frame:addTable(${count}, { width = 100, scaling = false })`, after,
+  ].join('\n');
+  const tabSequence = '{ "DOSSIER", "INFLUENCE", "INTEL", "NEWS", "FLEET", "SETTINGS" }';
+  const sequenceCases: readonly [string, string, number | undefined][] = [
+    ['literal tab sequence', sequenceSource(tabSequence), 6],
+    ['arithmetic count', sequenceSource(tabSequence, '', '#TABS / 2'), 3],
+    ['local alias', sequenceSource(tabSequence, 'local names = TABS', '#names'), 6],
+    ['read-only iteration', sequenceSource(tabSequence, '', '#TABS', 'for i, name in ipairs(TABS) do local copy = name end'), 6],
+    ['scalar non-nil sequence', sequenceSource('{ false, 0, "" }'), 3],
+    ['empty sequence remains invalid table count', sequenceSource('{}'), undefined],
+    ['nil hole', sequenceSource('{ "A", nil, "C" }'), undefined],
+    ['call tail can return nil or multiple values', sequenceSource('{ "A", values() }'), undefined],
+    ['keyed sequence', sequenceSource('{ [1] = "A", [2] = "B" }'), undefined],
+    ['mixed fields', sequenceSource('{ "A", name = "B" }'), undefined],
+    ['earlier mutation', sequenceSource(tabSequence, 'TABS[1] = nil'), undefined],
+    ['later callback mutation', sequenceSource(tabSequence, '', '#TABS', 'local function mutate() TABS[1] = nil end'), undefined],
+    ['later rebind', sequenceSource(tabSequence, '', '#TABS', 'TABS = {}'), undefined],
+    ['direct escape', sequenceSource(tabSequence, 'touch(TABS)'), undefined],
+    ['alias escape', sequenceSource(tabSequence, 'local names = TABS\ntouch(names)'), undefined],
+    ['nested escape', sequenceSource(tabSequence, 'local box = { TABS }\ntouch(box)'), undefined],
+    ['later escape', sequenceSource(tabSequence, '', '#TABS', 'touch(TABS)'), undefined],
+    ['shadowed iterator', sequenceSource(tabSequence, 'local ipairs = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['replaced iterator', sequenceSource(tabSequence, 'ipairs = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['reflected iterator mutation', sequenceSource(tabSequence, '_G.ipairs = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['environment alias dynamic write', sequenceSource(tabSequence, 'local env = _G\nenv[key] = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['nested environment escape', sequenceSource(tabSequence, 'local box = { _G }\ntouch(box)', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['reflective environment write', sequenceSource(tabSequence, 'getfenv(0)[key] = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['rawget substitution', sequenceSource(tabSequence, 'rawget = external\nlocal value = rawget(_G, "Helper")', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['literal rawget remains read-only', sequenceSource(tabSequence, 'local value = rawget(_G, "Helper")', '#TABS', 'for i, name in ipairs(TABS) do end'), 6],
+    ['unrelated global registration', sequenceSource(tabSequence, '_G.Registry = _G.Registry or {}', '#TABS', 'for i, name in ipairs(TABS) do end\ntable.insert(_G.Registry, {})'), 6],
+    ['literal indexed global registration', sequenceSource(tabSequence, '_G["Registry"] = _G["Registry"] or {}', '#TABS', 'for i, name in ipairs(TABS) do end'), 6],
+    ['dynamic global write', sequenceSource(tabSequence, '_G[key] = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['indexed iterator replacement', sequenceSource(tabSequence, '_G["ipairs"] = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['global environment field escape', sequenceSource(tabSequence, 'local env = _G._G\nenv[key] = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['global method passes environment', sequenceSource(tabSequence, '_G:touch()', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['rawget reflection escape', sequenceSource(tabSequence, 'local get = rawget(_G, "getfenv")\nget(0)[key] = external', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['file loader can replace iterator', sequenceSource(tabSequence, 'loadfile(runtimePath)()', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['reflected file loader', sequenceSource(tabSequence, 'rawget(_G, "loadfile")(runtimePath)()', '#TABS', 'for i, name in ipairs(TABS) do end'), undefined],
+    ['iterator state escape', sequenceSource(tabSequence, '', '#TABS', 'local iter, state = ipairs(TABS)\nstate[1] = nil'), undefined],
+    ['returned iterator state', sequenceSource(tabSequence, '', '#TABS', 'local function expose() return ipairs(TABS) end'), undefined],
+    ['nested iterator escape', sequenceSource(tabSequence, '', '#TABS', 'touch(ipairs(TABS))'), undefined],
+    ['loop with extra iterator expression', sequenceSource(tabSequence, '', '#TABS', 'for i, name in ipairs(TABS), external do end'), undefined],
+  ];
+  for (const [label, source, expected] of sequenceCases) {
+    const sequenceModel = buildX4UiCallModel(input(source, `selftest/b119-sequence-${label.replaceAll(' ', '-')}.lua`));
+    const sequenceBefore = JSON.stringify(sequenceModel);
+    const sequenceResult = projectX4UiLayoutProgram(sequenceModel, topTarget(sequenceModel), profileFor(sequenceModel));
+    const actual = sequenceResult.program?.tables.find(candidate => candidate.identity?.path === 'tabs')?.numColumns;
+    const sequenceAuthority = evidenceAuthorityOf(sequenceResult);
+    check(`B119 sequence length: ${label}`, (expected === undefined ? actual === undefined || actual === 0 : actual === expected)
+      && JSON.stringify(sequenceModel) === sequenceBefore
+      && sequenceResult.program !== undefined && sequenceAuthority !== undefined
+      && validateX4UiLayoutEvidencePair(sequenceResult.program, sequenceAuthority).valid,
+      detail({ expected, actual, gaps: sequenceResult.program?.gaps.filter(gap => gap.category === 'count') }));
+  }
+  for (const count of ['#TABS', '#TABS / 2']) {
+    const sequenceModel = buildX4UiCallModel(input(sequenceSource(tabSequence, '', count, 'touch(TABS)')));
+    const target = topTarget(sequenceModel), profile = profileFor(sequenceModel);
+    const unsampled = projectX4UiLayoutProgram(sequenceModel, target, profile);
+    const sampleCatalog = unsampled.program?.sampleCatalog;
+    const entry = sampleCatalog?.entries.find(candidate => candidate.expression === count && candidate.expectedType === 'number');
+    const sampled = sampleCatalog && entry ? projectX4UiLayoutProgram(sequenceModel, target, profile, {
+      catalogId: sampleCatalog.id, source: sampleCatalog.sourceIdentity, values: [{ id: entry.id, value: 4 }],
+    }) : undefined;
+    const table = sampled?.program?.tables.find(candidate => candidate.identity?.path === 'tabs');
+    const authority = sampled && evidenceAuthorityOf(sampled);
+    const columnCount = sampled?.program?.operations.find(operation => operation.kind === 'addTable')?.descriptorFacts.columnCount;
+    const validation = sampled?.program && authority && validateX4UiLayoutEvidencePair(sampled.program, authority);
+    check(`B119 unproven sequence preserves preview-only recovery: ${count}`,
+      unsampled.program?.tables.find(candidate => candidate.identity?.path === 'tabs')?.numColumns === undefined
+        && entry !== undefined && table?.numColumns === 4
+        && columnCount?.status === 'known' && columnCount.provenance === 'preview-sample'
+        && validation?.valid === true,
+      detail({ entry: entry?.expression, columns: table?.numColumns, columnCount, validation }));
+  }
+  for (const tamper of ['value', 'base', 'source', 'tableSource'] as const) {
+    const sequenceModel = buildX4UiCallModel(input(sequenceSource(tabSequence)));
+    const sequenceCall = sequenceModel.calls.find(candidate => candidate.name === 'addTable')!;
+    const numeric = sequenceCall.arguments[0].numericExpression;
+    const altered = jsonClone(numeric) as unknown as Record<string, unknown>;
+    if (tamper === 'value') altered.value = 5;
+    else if (tamper === 'base') altered.base = 'other';
+    else altered[tamper] = sequenceCall.source;
+    sequenceCall.arguments[0].numericExpression = altered as unknown as NonNullable<typeof numeric>;
+    const sequenceResult = projectX4UiLayoutProgram(sequenceModel, topTarget(sequenceModel), profileFor(sequenceModel));
+    check(`B119 sequence length rejects tampered ${tamper}`, !sequenceResult.program?.tables.some(candidate => candidate.numColumns === 5 || candidate.numColumns === 6)
+      && !sequenceResult.program?.sampleCatalog.entries.some(entry => entry.expression === '#TABS'),
+      detail(sequenceResult.program?.gaps.filter(gap => gap.category === 'count')));
+  }
   const model = buildX4UiCallModel(input(positiveSource));
   const catalog = createX4UiLayoutTargetCatalog(model);
   const profile = profileFor(model, { minTextHeight: 7 });
@@ -6799,6 +6891,45 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     visit(candidate);
     return { matchedCopies, mutatedNodes };
   };
+  const sequenceSchemaModel = buildX4UiCallModel(input(sequenceSource(tabSequence)));
+  const sequenceSchemaResult = projectX4UiLayoutProgram(sequenceSchemaModel, topTarget(sequenceSchemaModel), profileFor(sequenceSchemaModel));
+  const sequenceSchemaProgram = programOf(sequenceSchemaResult);
+  const sequenceSchemaAuthority = evidenceAuthorityOf(sequenceSchemaResult);
+  // Normal metadata drops numeric descriptors. Exercise the optional external evidence
+  // shape by adding the exact source-model descriptor consistently to each count value.
+  const sequenceSchemaPair = jsonClone({ program: sequenceSchemaProgram, authority: sequenceSchemaAuthority });
+  const sequenceSchemaDescriptor = sequenceSchemaModel.calls.find(call => call.name === 'addTable')?.arguments[0].numericExpression;
+  const attachSequenceDescriptor = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(attachSequenceDescriptor); return; }
+    if (value === null || typeof value !== 'object') return;
+    const record = value as ValueRecord;
+    if (record.expression === '#TABS' && record.type === 'number' && record.status === 'dynamic' && record.location) {
+      record.numericExpression = jsonClone(sequenceSchemaDescriptor);
+    }
+    Object.values(record).forEach(attachSequenceDescriptor);
+  };
+  attachSequenceDescriptor(sequenceSchemaPair);
+  const sequenceIntactSchema = safeSchemaPairValidation(freezeClone(sequenceSchemaPair.program), freezeClone(sequenceSchemaPair.authority));
+  check('B119 exact sequence descriptor is accepted in optional evidence metadata', sequenceIntactSchema.valid === true,
+    detail(sequenceIntactSchema));
+  for (const attack of ['negative length', 'over budget', 'fractional length', 'invalid base', 'missing source', 'extra field']) {
+    const pair = jsonClone(sequenceSchemaPair);
+    const mutated = mutateAllNumericDescriptorCopies(pair as unknown as ValueRecord, '#TABS', descriptor => {
+      if (descriptor.kind !== 'table-length') return 0;
+      if (attack === 'negative length') descriptor.value = -1;
+      else if (attack === 'over budget') descriptor.value = 257;
+      else if (attack === 'fractional length') descriptor.value = 1.5;
+      else if (attack === 'invalid base') descriptor.base = 'TABS[1]';
+      else if (attack === 'missing source') delete descriptor.tableSource;
+      else descriptor.untrusted = true;
+      return 1;
+    });
+    const validation = safeSchemaPairValidation(freezeClone(pair.program), freezeClone(pair.authority));
+    check(`B119 sequence evidence schema rejects consistent paired tampering: ${attack}`,
+      mutated.matchedCopies > 1 && mutated.mutatedNodes === mutated.matchedCopies
+        && validation.threw === false && validation.valid === false,
+      detail({ mutated, validation }));
+  }
   const projectNumericMathNegative = (
     expression: string,
     rel: string,

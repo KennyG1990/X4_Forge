@@ -234,6 +234,17 @@ function detail(value: unknown): string {
 }
 
 function run(): { allPassed: boolean; pass: boolean; passed: number; total: number; checks: Check[] } {
+  const sequenceModel = buildX4UiCallModel(input([
+    'local TABS = { "DOSSIER", "INFLUENCE", "INTEL", "NEWS", "FLEET", "SETTINGS" }',
+    'local frame = Helper.createFrameHandle({}, { width = 100, height = 80 })',
+    'local tabs = frame:addTable(#TABS, { width = 100 })',
+  ].join('\n')));
+  const sequenceCount = call(sequenceModel, 'addTable')?.arguments[0];
+  check('B119 source sequence count retains a deferred exact descriptor',
+    (sequenceCount?.numericExpression as { kind?: string; value?: number } | undefined)?.kind === 'table-length'
+      && (sequenceCount?.numericExpression as { value?: number } | undefined)?.value === 6
+      && sequenceCount?.status !== 'static'
+      && sequenceCount?.numericExpression?.expression === '#TABS', detail(sequenceCount));
   const source = [
     'local menu = { name = "B119", layer = 2 }',
     'local frame = Helper.createFrameHandle(menu, { x = 1, y = 2, width = 100, height = 200, layer = 2, standardButtons = {}, backgroundID = "frame", backgroundColor = "red", blurBackground = true, autoFrameHeight = false })',

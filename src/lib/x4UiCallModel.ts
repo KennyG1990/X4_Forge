@@ -584,6 +584,14 @@ export type X4UiNumericMathFunctionName = 'floor' | 'ceil' | 'min' | 'max';
 
 export type X4UiNumericExpression =
   | {
+    readonly kind: 'table-length';
+    readonly base: string;
+    readonly tableSource: X4UiSourceLocation;
+    readonly value: number;
+    readonly expression: string;
+    readonly source: X4UiSourceLocation;
+  }
+  | {
     readonly kind: 'literal';
     readonly value: number;
     readonly expression: string;
@@ -2311,6 +2319,26 @@ class X4UiCallModelBuilder {
   private evaluateUnary(node: LuaNode, context: X4UiFunctionContext): InternalValue {
     const argument = this.evaluate(nodeField<LuaNode>(node, 'argument'), context);
     const operator = nodeField<string>(node, 'operator');
+    const argumentNode = nodeField<LuaNode>(node, 'argument');
+    const sequence = argument.object;
+    const baseName = argumentNode?.type === 'Identifier' && nodeField<boolean>(argumentNode, 'isLocal') === true
+      ? nodeField<string>(argumentNode, 'name') : undefined;
+    const sequenceFields = sequence?.declarationNode ? nodeArray(sequence.declarationNode, 'fields') : undefined;
+    if (operator === '#' && baseName && sequence?.known && !sequence.mutated && !sequence.escaped
+      && sequence.declarationNode && sequence.aliases.has(baseName) && sequenceFields
+      && sequenceFields.length <= 256 && sequenceFields.every(field => {
+        const value = nodeField<LuaNode>(field, 'value');
+        return field.type === 'TableValue' && value !== undefined
+          && ['StringLiteral', 'NumericLiteral', 'BooleanLiteral'].includes(value.type);
+      })) {
+      const publicValue = this.value(node, 'dynamic', 'number', undefined, undefined,
+        'sequence length requires source-bound layout validation');
+      publicValue.numericExpression = freezeNumericExpression({
+        kind: 'table-length', base: baseName, tableSource: this.location(sequence.declarationNode),
+        value: sequenceFields.length, expression: this.textOf(node), source: this.location(node),
+      });
+      return { publicValue };
+    }
     const numericArgument = this.numericExpressionForValue(argument);
     if ((operator === '-' || operator === '+') && numericArgument) {
       const argumentValue = argument.publicValue.value;

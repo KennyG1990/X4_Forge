@@ -8,6 +8,21 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 13:40Z: Immutable source sequence counts bounded VERIFIED: parser149/149,
+layout965/965,types/lint PASS. Original HUB resolves6 columns at both profiles without
+#TABS sample; unsafe sequences retain explicit preview-only recovery. Full B119 PARTIAL;
+tab loops/y/body still incomplete. NEXT source-bound numeric-loop replay, then helper/generic
+iteration/dispatch; rendered/native obligations retained. Local checkpoint gate receipt:
+test-results/b119-sequence-length-20260914/checkpoint-retry/post-commit.json (verify existence).
+Plan/review/AAR:docs/plans/2026-09-14-b119-sequence-length.md. Prior132/132 predates changes.
+
+2026-09-14: Local checkpoint8ceffa6 VERIFIED; full132/132 retained, precommit passed
+second attempt with original Vite timeout preserved. Current real-HUB projection diagnosis
+finds refused tab table (#TABS/y), unbound tab loops and unsupported pcall body dispatch at
+both profiles; no renderer/zoom repair claimed. NEXT existing source-analysis sequence/loop
+provenance, then scalar-helper/generic-iteration/dispatch recovery. Full B119 PARTIAL.
+Plan/evidence:docs/plans/2026-09-14-b119-imported-hub-recovery.md.
+
 2026-09-14 12:35Z: Full current integration VERIFIED132/132,0failed/flaky/skipped/errors.
 History/MENU/HUB/COMM/Lua-file journeys first-pass;412pins/guards/17artifacts/cleanupPASS.
 Source bytes unchanged during run. Rendered captures reviewed; imported bodies remain partial.
