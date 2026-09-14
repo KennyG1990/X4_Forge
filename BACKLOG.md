@@ -8,6 +8,15 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 15:13Z: Automatic/manual loop feedback and per-loop clearing browser VERIFIED.
+Focused1/1 first-pass; complete component/EditorSession/types/lint PASS; actual screenshots
+inspected, workspace unchanged, isolated stack cleaned. Initial clear-input failure retained
+and repaired in existing owner. Full B119 PARTIAL; NEXT generic ipairs tab labels, rowH/y,
+body dispatch and full real-menu/installed/native evidence, not more count-control polish.
+Plan/AAR:docs/plans/2026-09-14-b119-loop-feedback.md.
+Evidence:test-results/b119-loop-feedback-20260914/{RESULTS.md,verification.json}.
+Normal-hook local commit authority:checkpoint/post-commit.json in that directory.
+
 2026-09-14 14:29Z: Source numeric-loop replay implemented and headless VERIFIED:
 layout984/984,pipeline126/126,EditorSession/types/lint PASS. Unchanged original HUB applies
 six tab widths (columns1..6,16percent) at both profiles without manual loop/index input.

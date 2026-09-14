@@ -4563,6 +4563,7 @@ export function X4UiSourceEditorPreviewPaths({
 export interface X4UiSourceEditorPreviewLoopsProps {
   readonly catalog: X4UiLayoutPreviewLoopCatalog | null;
   readonly loops: X4UiEditorLoopState;
+  readonly effectiveSelections?: X4UiEditorSessionProjection['previewLoopSelections'];
   readonly onLoopIteration: (entryId: string, raw: string) => void;
   readonly onReset: () => void;
   readonly error?: string;
@@ -4586,6 +4587,7 @@ const loopSourceLabel = (entry: X4UiLayoutPreviewLoopCatalog['entries'][number])
 export function X4UiSourceEditorPreviewLoops({
   catalog,
   loops,
+  effectiveSelections = [],
   onLoopIteration,
   onReset,
   error,
@@ -4604,27 +4606,42 @@ export function X4UiSourceEditorPreviewLoops({
         <div data-testid="x4-ui-preview-loops-none" className="mt-2 text-slate-500">The selected layout program declares no selectable direct preview loops.</div>
       ) : (
         <div className="mt-2 space-y-2">
-          {catalog.entries.map(entry => (
-            <label key={entry.id} data-testid={`x4-ui-preview-loop-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
-              <span className="font-bold text-slate-200">Loop {entry.id}</span>
-              <span data-testid={`x4-ui-preview-loop-source-${entry.id}`} className="break-all">Source range: {loopSourceLabel(entry)}</span>
-              <span data-testid={`x4-ui-preview-loop-metadata-${entry.id}`} className="break-all">Kind: {entry.kind} · multiplicity: {entry.multiplicity} · ID: {entry.id} · depth: {entry.depth} · provenance: {entry.provenance}</span>
-              <span className="flex flex-col gap-1 text-slate-500">
-                Preview only · iterations (1–16)
-                <input
-                  data-testid={`x4-ui-preview-loop-control-${entry.id}`}
-                  type="number"
-                  min={1}
-                  max={16}
-                  step={1}
-                  value={loopControlValue(loops, entry.id)}
-                  onChange={event => onLoopIteration(entry.id, event.target.value)}
-                  placeholder=""
-                  className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
-                />
-              </span>
-            </label>
-          ))}
+          {catalog.entries.map((entry, index) => {
+            const manualCount = loopIterationFor(loops, entry.id);
+            const effectiveCount = effectiveSelections.find(selection => selection.id === entry.id)?.iterationCount;
+            const automaticCount = manualCount === undefined ? effectiveCount : undefined;
+            return (
+              <div key={entry.id} data-testid={`x4-ui-preview-loop-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
+                <span className="font-bold text-slate-200">Loop {index + 1}</span>
+                <span data-testid={`x4-ui-preview-loop-status-${entry.id}`} className="text-slate-200" aria-live="polite">
+                  {manualCount !== undefined ? `Manual preview: ${manualCount} iteration${manualCount === 1 ? '' : 's'}`
+                    : automaticCount !== undefined ? `Automatic from source: ${automaticCount} iteration${automaticCount === 1 ? '' : 's'}`
+                      : 'Count unavailable: enter a preview override'}
+                </span>
+                <label className="flex flex-col gap-1 text-slate-400">
+                  Preview override · iterations (1–16, optional when automatic)
+                  <input
+                    data-testid={`x4-ui-preview-loop-control-${entry.id}`}
+                    aria-label={`Loop ${index + 1} preview override`}
+                    type="number"
+                    min={1}
+                    max={16}
+                    step={1}
+                    value={loopControlValue(loops, entry.id)}
+                    onChange={event => onLoopIteration(entry.id, event.target.value)}
+                    placeholder={automaticCount === undefined ? '' : `Automatic: ${automaticCount}`}
+                    className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                  />
+                </label>
+                {automaticCount !== undefined && <span className="text-slate-400">Leave the override empty to use the source count.</span>}
+                <details data-testid={`x4-ui-preview-loop-details-${entry.id}`} className="mt-1 text-slate-500">
+                  <summary className="cursor-pointer">Source details</summary>
+                  <div data-testid={`x4-ui-preview-loop-source-${entry.id}`} className="break-all">Source range: {loopSourceLabel(entry)}</div>
+                  <div data-testid={`x4-ui-preview-loop-metadata-${entry.id}`} className="break-all">Kind: {entry.kind} · multiplicity: {entry.multiplicity} · ID: {entry.id} · depth: {entry.depth} · provenance: {entry.provenance}</div>
+                </details>
+              </div>
+            );
+          })}
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -7059,6 +7076,7 @@ export default function X4UiSourceEditor({
       <X4UiSourceEditorPreviewLoops
         catalog={projection.loopCatalog}
         loops={projection.loops}
+        effectiveSelections={projection.previewLoopSelections}
         onLoopIteration={updateLoop}
         onReset={resetLoops}
         error={loopError}

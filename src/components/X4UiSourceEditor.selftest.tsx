@@ -586,16 +586,37 @@ assert.match(loopMarkup, /data-testid="x4-ui-preview-loops-reset"/);
 assert.match(loopMarkup, /Reset preview loop iterations/);
 assert.match(loopMarkup, /Not verified in game/);
 assert.doesNotMatch(loopMarkup, /programKey|profileKey|selectionKey/);
+assert.match(loopMarkup, /Count unavailable: enter a preview override/);
+assert.doesNotMatch(loopMarkup, /Automatic from source/);
+
+const automaticLoopSelections = [{ ...loopCatalog.entries[0]!, iterationCount: 2 }];
+const automaticLoopMarkup = renderToStaticMarkup(
+  <X4UiSourceEditorPreviewLoops catalog={loopCatalog} loops={undefined}
+    effectiveSelections={automaticLoopSelections}
+    onLoopIteration={() => { renderedLoopUpdates += 1; }} onReset={() => { renderedLoopUpdates += 1; }} />,
+);
+assert.match(automaticLoopMarkup, /Automatic from source: 2 iterations/);
+assert.match(automaticLoopMarkup, /placeholder="Automatic: 2"/);
+assert.match(automaticLoopMarkup, />Loop 1</);
+assert.match(automaticLoopMarkup, /aria-label="Loop 1 preview override"/);
+assert.match(automaticLoopMarkup, /<summary[^>]*>Source details</);
+assert.doesNotMatch(automaticLoopMarkup, /<details[^>]*\sopen/);
+assert.match(automaticLoopMarkup, /data-testid="x4-ui-preview-loop-control-loop-direct"[^>]*value=""/);
+assert.match(automaticLoopMarkup, /data-testid="x4-ui-preview-loops-reset"[^>]*disabled/);
+assert.equal(renderedLoopUpdates, 0, 'automatic display must not become manual state during render');
 
 const selectedLoopMarkup = renderToStaticMarkup(
   <X4UiSourceEditorPreviewLoops
     catalog={loopCatalog}
     loops={loopState}
+    effectiveSelections={automaticLoopSelections}
     onLoopIteration={() => undefined}
     onReset={() => undefined}
   />,
 );
 assert.match(selectedLoopMarkup, /data-testid="x4-ui-preview-loop-control-loop-direct"[^>]*value="4"/);
+assert.match(selectedLoopMarkup, /Manual preview: 4 iterations/);
+assert.doesNotMatch(selectedLoopMarkup, /Automatic from source/);
 
 const nullLoopMarkup = renderToStaticMarkup(
   <X4UiSourceEditorPreviewLoops catalog={null} loops={undefined} onLoopIteration={() => undefined} onReset={() => undefined} />,
@@ -677,8 +698,10 @@ const loopSampleEntry = loopProjection.sampleCatalog.entries[0];
 if (loopEntry === undefined || loopSampleEntry === undefined) throw new Error('loop projection fixture issued no loop or sample entry');
 assert.equal(loopProjection.pathCatalog.entries.length, 2, 'branch projection must retain both owner-issued path arms');
 assert.equal(loopProjection.loopCatalog.entries.length, 1, 'loop projection must retain one owner-issued direct loop');
-assert.equal(loopProjection.sampleCatalog.entries.length, 1, 'loop projection must retain the loop-dependent sample catalog');
-assert.equal(loopProjection.loops, undefined, 'unselected loop projection must not invent an iteration count');
+assert.equal(loopProjection.sampleCatalog.entries.length, 2, 'source-proven replay must issue one sample for each actual iteration');
+assert.deepEqual(loopProjection.sampleCatalog.entries.map(entry => entry.previewLoop?.iteration), [1, 2]);
+assert.equal(new Set(loopProjection.sampleCatalog.entries.map(entry => entry.id)).size, 2);
+assert.equal(loopProjection.loops, undefined, 'automatic replay must not manufacture manual loop state');
 const acceptedLoopUpdate = updateX4UiEditorLoopState(
   loopProjection.loops,
   loopProjection.loopCatalog,
@@ -724,8 +747,9 @@ const emptyLoopUpdate = updateX4UiEditorLoopState(
   '',
   loopProjection.loopCatalogAuthority,
 );
-assert.equal(emptyLoopUpdate.status, 'refused', 'empty loop input must remain an explicit refusal; reset has its own action');
-assert.match(emptyLoopUpdate.message, /number or numeric control value/);
+assert.equal(emptyLoopUpdate.status, 'accepted', 'empty override must return this loop to automatic behavior');
+assert.equal(emptyLoopUpdate.loops, undefined);
+assert.equal(emptyLoopUpdate.changed, true);
 const resetLoopUpdate = resetX4UiEditorLoopState(
   acceptedLoopUpdate.loops,
   loopProjection.loopCatalog,
@@ -6922,6 +6946,8 @@ async function runMountedPreviewLoopStateRegression(
       throw new Error(`mounted loop SourceEditor did not expose its owner-issued loop control; target=${targetSelect.value}; options=${targetSelect.options.map(option => option.textContent).join('|')}; loops=${mountedElementText(container, 'x4-ui-preview-loops-region')}`);
     }
     const initialLoopValue = initialControl.value;
+    assert.equal(mountedElementByTestIdPrefix(container, 'x4-ui-preview-loop-status-')?.textContent,
+      'Automatic from source: 2 iterations');
     initialControl.value = '4';
     const immediateLoopValue = initialControl.value;
     await flush(() => {
@@ -6934,6 +6960,8 @@ async function runMountedPreviewLoopStateRegression(
     const settledControl = mountedElementByTestIdPrefix(container, loopControlTestIdPrefix);
     if (settledControl === null) throw new Error('mounted loop control disappeared after accepted input');
     const settledLoopValue = settledControl.value;
+    assert.equal(mountedElementByTestIdPrefix(container, 'x4-ui-preview-loop-status-')?.textContent,
+      'Manual preview: 4 iterations');
     const acceptedLoopIterationCount = numericValue(settledLoopValue);
     await flush(() => {
       settledControl.value = '0';
@@ -6951,6 +6979,8 @@ async function runMountedPreviewLoopStateRegression(
     const resetControl = mountedElementByTestIdPrefix(container, loopControlTestIdPrefix);
     if (resetControl === null) throw new Error('mounted loop control disappeared after reset');
     const resetLoopValue = resetControl.value;
+    assert.equal(mountedElementByTestIdPrefix(container, 'x4-ui-preview-loop-status-')?.textContent,
+      'Automatic from source: 2 iterations');
     return {
       initialLoopValue,
       immediateLoopValue,

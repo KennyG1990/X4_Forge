@@ -2519,7 +2519,9 @@ export function updateX4UiEditorLoopState(
       message: `unknown preview loop ID: ${entryId}`,
     };
   }
-  const parsed = parseLoopIterationCount(raw);
+  // Empty control text removes this override; it is not a zero-iteration count.
+  // Authority and entry checks above still apply to clearing.
+  const parsed = raw === '' ? { status: 'clear' as const } : parseLoopIterationCount(raw);
   if (parsed.status === 'refused') {
     return {
       status: 'refused',
@@ -2530,8 +2532,8 @@ export function updateX4UiEditorLoopState(
     };
   }
   const selections = (reconciled.loops?.selections ?? [])
-    .filter(selection => selection.id !== entry.id)
-    .concat([{ id: entry.id, iterationCount: parsed.value } as X4UiPreviewLoopSelectionInput]);
+    .filter(selection => selection.id !== entry.id);
+  if (parsed.status === 'accepted') selections.push({ id: entry.id, iterationCount: parsed.value });
   const updated = reconcileX4UiEditorLoopState({
     catalogId: catalogResult.catalog.id,
     source: catalogResult.catalog.sourceIdentity,

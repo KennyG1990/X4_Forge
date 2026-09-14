@@ -607,7 +607,7 @@ function sampleWorkspace(): ModWorkspace {
   ]);
 }
 
-function loopWorkspace(bound = '3'): ModWorkspace {
+function loopWorkspace(bound = '3', secondLoop = false): ModWorkspace {
   return workspace([
     passthrough('ui.xml', [
       '<?xml version="1.0" encoding="utf-8"?>',
@@ -627,6 +627,12 @@ function loopWorkspace(bound = '3'): ModWorkspace {
       '    local row = table:addRow(false, {})',
       '    row[1]:createText(dynamicText, { height = 10 })',
       '  end',
+      ...(secondLoop ? [
+        '  for j = 1, 2 do',
+        '    local row = table:addRow(false, {})',
+        '    row[1]:createText("second", { height = 10 })',
+        '  end',
+      ] : []),
       '  frame:display()',
       'end',
       '',
@@ -3016,6 +3022,43 @@ async function run(): Promise<void> {
   const loopCountThree = updateX4UiEditorLoopState(undefined, loopCatalog, loopEntry.id, 3, loopCatalogAuthority);
   assert.equal(loopCountThree.status, 'accepted');
   assert.ok(loopCountThree.loops);
+  const clearedLoop = updateX4UiEditorLoopState(loopCountThree.loops, loopCatalog, loopEntry.id, '', loopCatalogAuthority);
+  assert.equal(clearedLoop.status, 'accepted');
+  assert.equal(clearedLoop.loops, undefined);
+  assert.equal(clearedLoop.changed, true);
+  const blankSpaceLoop = updateX4UiEditorLoopState(loopCountThree.loops, loopCatalog, loopEntry.id, ' ', loopCatalogAuthority);
+  assert.equal(blankSpaceLoop.status, 'refused', 'whitespace is not the explicit empty-control clear action');
+  assert.equal(blankSpaceLoop.loops, loopCountThree.loops);
+  const twoLoopWorkspace = loopWorkspace('3', true);
+  const twoLoopSeed = projectX4UiEditorSession({ workspace: twoLoopWorkspace, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE });
+  const twoLoopSelection = selectionFor(twoLoopSeed.source, 'ui/loops.lua', 'function');
+  const twoLoopProjection = projectX4UiEditorSession({ workspace: twoLoopWorkspace, corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE, selection: twoLoopSelection });
+  assert.equal(twoLoopProjection.loopCatalog?.entries.length, 2);
+  const [firstLoop, secondLoop] = twoLoopProjection.loopCatalog!.entries;
+  assert.ok(firstLoop && secondLoop);
+  const firstOverride = updateX4UiEditorLoopState(undefined, twoLoopProjection.loopCatalog, firstLoop.id, 4, twoLoopProjection.loopCatalogAuthority);
+  const bothOverrides = updateX4UiEditorLoopState(firstOverride.loops, twoLoopProjection.loopCatalog, secondLoop.id, 5, twoLoopProjection.loopCatalogAuthority);
+  assert.equal(bothOverrides.status, 'accepted');
+  assert.equal(bothOverrides.loops?.selections.length, 2);
+  const firstCleared = updateX4UiEditorLoopState(bothOverrides.loops, twoLoopProjection.loopCatalog, firstLoop.id, '', twoLoopProjection.loopCatalogAuthority);
+  assert.equal(firstCleared.status, 'accepted');
+  assert.deepEqual(firstCleared.loops?.selections, [{ id: secondLoop.id, iterationCount: 5 }]);
+  const clearAgain = updateX4UiEditorLoopState(firstCleared.loops, twoLoopProjection.loopCatalog, firstLoop.id, '', twoLoopProjection.loopCatalogAuthority);
+  assert.equal(clearAgain.status, 'accepted');
+  assert.equal(clearAgain.changed, false);
+  const afterPerLoopClear = projectX4UiEditorSession({ workspace: twoLoopWorkspace, corpus: undefined,
+    profile: X4_UI_EDITOR_DEFAULT_PROFILE, selection: twoLoopSelection, loops: firstCleared.loops,
+    loopBinding: twoLoopProjection.loopBinding, loopCatalogAuthority: twoLoopProjection.loopCatalogAuthority });
+  assert.deepEqual(afterPerLoopClear.previewLoopSelections.map(entry => entry.iterationCount), [3, 5]);
+  const unknownClear = updateX4UiEditorLoopState(firstCleared.loops, twoLoopProjection.loopCatalog, 'unknown-loop', '', twoLoopProjection.loopCatalogAuthority);
+  assert.equal(unknownClear.status, 'refused');
+  assert.equal(unknownClear.loops, firstCleared.loops);
+  const forgedClear = updateX4UiEditorLoopState(firstCleared.loops, twoLoopProjection.loopCatalog, secondLoop.id, '',
+    JSON.parse(JSON.stringify(twoLoopProjection.loopCatalogAuthority)));
+  assert.equal(forgedClear.status, 'refused');
+  const staleClear = updateX4UiEditorLoopState(firstCleared.loops, twoLoopProjection.loopCatalog, secondLoop.id, '', loopCatalogAuthority);
+  assert.equal(staleClear.status, 'refused', 'another catalog authority cannot clear this loop');
   const loopSelected = projectX4UiEditorSession({
     workspace: loopWorkspaceValue,
     corpus: undefined,

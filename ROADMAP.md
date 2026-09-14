@@ -8414,3 +8414,18 @@ Evidence:test-results/b119-source-loop-20260914/RESULTS.md; checkpoint-retry/pos
 in the same directory is the authority for successful normal-hook local checkpoint.
 Commit point: feat(ui): recover source-proven numeric layout loops automatically.
 No push/publication/install/real-mod writes. Full B119 remains PARTIAL.
+
+### 2026-09-14 — B119 automatic/manual loop feedback: focused browser VERIFIED
+
+Recovered counts are explicitly automatic; optional overrides are manual, with readable
+ordinal headings and expandable source details. Clearing removes only the chosen override
+through the existing session authority; other overrides survive and invalid authority refuses.
+Complete component/EditorSession/types/lint PASS; existing PNG-export browser journey1/1
+first-pass with automatic/manual/clear/reset, source disclosure, workspace equality and
+stale/export negatives. Actual screenshots inspected;413inputs and protected/live bytes
+unchanged, owned stack stopped. The diagnostic fixture's canvas is visibly stale; no full-menu,
+installed or native rendering claim. Earlier full132/132 predates these changes.
+Plan/review/AAR:docs/plans/2026-09-14-b119-loop-feedback.md.
+Evidence:test-results/b119-loop-feedback-20260914/verification.json and RESULTS.md.
+Commit point: fix(ui): make automatic loop counts and override clearing usable.
+Actual normal-hook commit result:checkpoint/post-commit.json in that evidence directory.
