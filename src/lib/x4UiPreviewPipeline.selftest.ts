@@ -1800,6 +1800,22 @@ check('source-proven numeric loop issues effective replay without supplied loop 
   && sourceDerivedLoopProjection.previewLoopInput.selections[0]?.id === sourceDerivedLoopProjection.previewLoopCatalog?.entries[0]?.id
   && sourceDerivedLoopProjection.verification.gameVerified === false);
 
+const literalLabelSource = sourceFor([
+  passthrough('ui.xml', previewLoopXml),
+  passthrough('ui/loop.lua', previewLoopLua.replace('local menu =', 'local labels = { "One", "Two", "Three" }\nlocal menu =')
+    .replace('for i = 1, runtimeCount do', 'for i, caption in ipairs(labels) do')
+    .replace('createText(dynamicText,', 'createText(caption,'), {reason:'unparsed'}),
+]);
+const literalLabelBefore = JSON.stringify(literalLabelSource);
+const literalLabelProjection = pipeline(literalLabelSource, selectionFor(literalLabelSource, 'ui/loop.lua', 'function', 'menu.display'));
+const literalLabelProgram = literalLabelProjection.program?.status !== 'refused' ? literalLabelProjection.program?.program : undefined;
+check('source ipairs labels reach the public preview pipeline without samples',
+  literalLabelProjection.previewLoopSelections[0]?.iterationCount === 3
+  && JSON.stringify(literalLabelProgram?.operations.filter(op => op.kind === 'createText').map(op =>
+    op.descriptorFacts.text?.status === 'known' ? op.descriptorFacts.text.value : undefined)) === JSON.stringify(['One','Two','Three'])
+  && literalLabelProjection.verification.gameVerified === false
+  && JSON.stringify(literalLabelSource) === literalLabelBefore);
+
 const previewLoopSource = sourceFor([
   passthrough('ui.xml', previewLoopXml),
   passthrough('ui/loop.lua', previewLoopLua, { reason: 'unparsed' }),

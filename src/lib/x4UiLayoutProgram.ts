@@ -1222,12 +1222,29 @@ const cloneMetadataValue = (value: unknown): unknown => {
 const cloneReference = (reference: X4UiValueReference | undefined): X4UiValueReference | undefined =>
   reference ? cloneMetadataValue(reference) as X4UiValueReference : undefined;
 
-const cloneMetadata = (call: X4UiCallRecord): X4UiLayoutCallMetadata => ({
+const cloneMetadata = (call: X4UiCallRecord, canonicalCell?: X4UiValueReference): X4UiLayoutCallMetadata => {
+  const references = [call.receiver?.reference, call.semantics.cell?.reference, call.result].filter(
+    (reference): reference is X4UiValueReference => reference !== undefined,
+  );
+  // findCell has already resolved the exact causal row and column. Preserve the
+  // first cell identity across source aliases; keep each call's own expressions,
+  // locations and descriptor facts. Contradictory source references still fail.
+  const normalize = canonicalCell !== undefined && references.length > 0
+    && references.every(reference => reference.kind === 'cell' && jsonEqual(reference, references[0]));
+  const value = (input: X4UiValue): X4UiValue => ({
+    ...cloneMetadataValue(input) as X4UiValue,
+    ...(normalize && input.reference ? {reference: cloneReference(canonicalCell)} : {}),
+  });
+  return {
   arguments: cloneMetadataValue(call.arguments) as X4UiValue[],
-  ...(call.receiver ? { receiver: cloneMetadataValue(call.receiver) as X4UiValue } : {}),
-  ...(call.result ? { result: cloneMetadataValue(call.result) as X4UiValueReference } : {}),
-  semantics: cloneMetadataValue(call.semantics) as X4UiCallRecord['semantics'],
-});
+  ...(call.receiver ? { receiver: value(call.receiver) } : {}),
+  ...(call.result ? { result: cloneReference(normalize ? canonicalCell : call.result) } : {}),
+  semantics: {
+    ...cloneMetadataValue(call.semantics) as X4UiCallRecord['semantics'],
+    ...(call.semantics.cell ? {cell: value(call.semantics.cell)} : {}),
+  },
+  };
+};
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -2420,9 +2437,11 @@ const numericExpressionSourceAstCache = new WeakMap<X4UiCallModel, NumericExpres
  * this evidence is recomputed from the exact current model source.
  */
 interface NumericForBindingProof {
+  readonly kind: 'numeric-for' | 'generic-for';
   readonly source: X4UiSourceLocation;
   readonly variableName: string;
   readonly values: readonly number[];
+  readonly item?: { readonly name: string; readonly values: readonly (string | number | boolean)[] };
 }
 
 const numericForBindingProofCache = new WeakMap<
@@ -2558,6 +2577,124 @@ const numericExpressionHasExactAlias = (
   }
 };
 
+const exactTableSequenceAliasSourceBinding = (
+  model: X4UiCallModel,
+  baseNode: NumericExpressionSourceAstNode | undefined,
+  tableSource: X4UiSourceLocation,
+  _useOffset: number,
+): boolean => {
+  const index = numericExpressionSourceAstIndex(model);
+  if (!baseNode || baseNode.type !== 'Identifier' || baseNode.isLocal !== true
+    || typeof baseNode.name !== 'string') return false;
+   const visited = new Set<string>();
+  const prove = (
+    name: string,
+    useNode: NumericExpressionSourceAstNode,
+    depth: number,
+  ): boolean => {
+    if (depth >= NUMERIC_EXPRESSION_ALIAS_MAX_HOPS) return false;
+    const useRange = sourceAstRange(useNode);
+    const declaration = numericExpressionSourceDeclarationForReference(index, name, useNode);
+    if (!useRange || !declaration) return false;
+    const visitKey = `${name}|${useRange[0]}|${useRange[1]}`;
+    if (visited.has(visitKey)) return false;
+    visited.add(visitKey);
+    const candidates = model.aliases
+      .filter(alias => alias.name === name && alias.source.end.offset <= useRange[0])
+      .sort((left, right) => right.source.start.offset - left.source.start.offset);
+    for (const candidate of candidates) {
+       const binding = numericExpressionAliasSourceBinding(candidate, model);
+       if (!binding
+         || candidate.context.reachability !== 'reachable'
+         || !numericExpressionSourceScopeContains(
+           numericExpressionSourceLexicalScopes(index, binding.bindingTarget),
+           numericExpressionSourceLexicalScopes(index, useNode),
+         )
+         || binding.declarationOwner !== declaration
+         || numericExpressionAliasHasWriteBetween(binding, model, useRange[0])) continue;
+      if (binding.initializer.type === 'TableConstructorExpression'
+        && sourceAstRange(binding.initializer)?.[0] === tableSource.start.offset
+        && sourceAstRange(binding.initializer)?.[1] === tableSource.end.offset) return true;
+      if (binding.initializer.type === 'Identifier'
+        && binding.initializer.isLocal === true
+        && typeof binding.initializer.name === 'string'
+        && prove(binding.initializer.name, binding.initializer, depth + 1)) return true;
+    }
+    return false;
+  };
+  return prove(baseNode.name, baseNode, 0);
+};
+
+const immutableSequenceIsReadOnly = (model: X4UiCallModel, tableSource: X4UiSourceLocation): boolean => {
+  const index = numericExpressionSourceAstIndex(model);
+  const nodesOfType = (type: string) => numericExpressionSourceAstNodes(index, type);
+  // The declaration is a constant sequence only while every alias is used read-only.
+  // Inspect the whole source, including callbacks after this use, not just earlier writes.
+  const identifiers = nodesOfType('Identifier');
+  const reflectiveLoaders = ['getfenv', 'setfenv', 'debug', 'load', 'loadfile', 'loadstring', 'dofile'];
+  const reflectiveGlobals = ['_G', 'ipairs', 'rawget', 'rawset', ...reflectiveLoaders];
+  const ipairsAvailable = !identifiers.some(identifier => ['ipairs', 'rawget'].includes(String(identifier.name))
+    && (identifier.isLocal === true
+      || index.parentByNode.get(identifier)?.type === 'AssignmentStatement'
+      || index.parentByNode.get(identifier)?.type === 'FunctionDeclaration'))
+    && !nodesOfType('AssignmentStatement').some(statement => localAstNodes(statement.variables)?.some(variable => {
+      const key = localAstNode(variable.identifier) || localAstNode(variable.index);
+      return (variable.type === 'MemberExpression' || variable.type === 'IndexExpression')
+        && (localAstIdentifier(key, 'ipairs') || localAstStringValue(model, key) === 'ipairs'
+          || localAstIdentifier(key, 'rawget') || localAstStringValue(model, key) === 'rawget');
+    }))
+    && identifiers.every(identifier => {
+      // A copied/returned environment or reflective loader defeats the builtin identity.
+      if (identifier.name === '_ENV' || reflectiveLoaders.includes(String(identifier.name))) return false;
+      if (identifier.name !== '_G') return true;
+      const parent = index.parentByNode.get(identifier);
+      if (identifier.isLocal !== false) return false;
+      // A named sibling field is not the global environment itself. Dynamic keys,
+      // reflective fields and method calls (which pass _G as self) still escape it.
+      if (parent?.base === identifier) {
+        const key = parent.type === 'MemberExpression' && parent.indexer === '.'
+          ? localAstNode(parent.identifier)?.name
+          : parent.type === 'IndexExpression' ? localAstStringValue(model, parent.index) : undefined;
+        if (typeof key === 'string' && !reflectiveGlobals.includes(key)) return true;
+      }
+      const args = parent?.type === 'CallExpression' ? localAstNodes(parent.arguments) : undefined;
+      const key = args?.[1] ? localAstStringValue(model, args[1]) : undefined;
+      return parent?.type === 'CallExpression'
+        && localAstIdentifier(localAstNode(parent.base), 'rawget', false)
+        && args?.length === 2 && args[0] === identifier && key !== undefined && !reflectiveGlobals.includes(key);
+    })
+    && !nodesOfType('CallExpression').some(call => {
+      const callee = localAstNode(call.base);
+      const args = localAstNodes(call.arguments) || [];
+      return localAstIdentifier(callee, 'rawset')
+        || args.some(argument => localAstIdentifier(argument, '_G'))
+          && !(localAstIdentifier(callee, 'rawget', false)
+            && args.length === 2 && localAstStringValue(model, args[1]) !== undefined);
+    });
+  const readOnly = identifiers.every(identifier => {
+    const range = sourceAstRange(identifier);
+    if (!range || !exactTableSequenceAliasSourceBinding(model, identifier, tableSource, range[0])) return true;
+    const parent = index.parentByNode.get(identifier);
+    if (parent?.type === 'UnaryExpression' && parent.operator === '#' && parent.argument === identifier) return true;
+    if (parent?.type === 'LocalStatement') {
+      const init = localAstNodes(parent.init), variables = localAstNodes(parent.variables);
+      return init?.length === 1 && init[0] === identifier && variables?.length === 1
+        && variables[0].type === 'Identifier' && variables[0].isLocal === true;
+    }
+    if (parent?.type === 'CallExpression' && ipairsAvailable) {
+      const args = localAstNodes(parent.arguments);
+      const loop = index.parentByNode.get(parent);
+      const iterators = loop?.type === 'ForGenericStatement' ? localAstNodes(loop.iterators) : undefined;
+      // Outside a direct for-in, ipairs can expose its table-valued iterator state.
+      return localAstIdentifier(localAstNode(parent.base), 'ipairs', false)
+        && args?.length === 1 && args[0] === identifier
+        && iterators?.length === 1 && iterators[0] === parent;
+    }
+    return false;
+  });
+  return readOnly;
+};
+
 const numericExpressionStructureError = (
   descriptor: X4UiNumericExpression,
   model: X4UiCallModel,
@@ -2592,47 +2729,8 @@ const numericExpressionStructureError = (
   const exactTableAliasSourceBinding = (
     baseNode: NumericExpressionSourceAstNode | undefined,
     tableSource: X4UiSourceLocation,
-    _useOffset: number,
-  ): boolean => {
-    if (!baseNode || baseNode.type !== 'Identifier' || baseNode.isLocal !== true
-      || typeof baseNode.name !== 'string') return false;
-     const visited = new Set<string>();
-    const prove = (
-      name: string,
-      useNode: NumericExpressionSourceAstNode,
-      depth: number,
-    ): boolean => {
-      if (depth >= NUMERIC_EXPRESSION_ALIAS_MAX_HOPS) return false;
-      const useRange = sourceAstRange(useNode);
-      const declaration = numericExpressionSourceDeclarationForReference(index, name, useNode);
-      if (!useRange || !declaration) return false;
-      const visitKey = `${name}|${useRange[0]}|${useRange[1]}`;
-      if (visited.has(visitKey)) return false;
-      visited.add(visitKey);
-      const candidates = model.aliases
-        .filter(alias => alias.name === name && alias.source.end.offset <= useRange[0])
-        .sort((left, right) => right.source.start.offset - left.source.start.offset);
-      for (const candidate of candidates) {
-         const binding = numericExpressionAliasSourceBinding(candidate, model);
-         if (!binding
-           || candidate.context.reachability !== 'reachable'
-           || !numericExpressionSourceScopeContains(
-             numericExpressionSourceLexicalScopes(index, binding.bindingTarget),
-             numericExpressionSourceLexicalScopes(index, useNode),
-           )
-           || binding.declarationOwner !== declaration
-           || numericExpressionAliasHasWriteBetween(binding, model, useRange[0])) continue;
-        if (binding.initializer.type === 'TableConstructorExpression'
-          && rangeEqualsLocation(sourceAstRange(binding.initializer), tableSource)) return true;
-        if (binding.initializer.type === 'Identifier'
-          && binding.initializer.isLocal === true
-          && typeof binding.initializer.name === 'string'
-          && prove(binding.initializer.name, binding.initializer, depth + 1)) return true;
-      }
-      return false;
-    };
-    return prove(baseNode.name, baseNode, 0);
-  };
+    useOffset: number,
+  ): boolean => exactTableSequenceAliasSourceBinding(model, baseNode, tableSource, useOffset);
   const writeBeforeTableFieldUse = (candidate: Extract<X4UiNumericExpression, { kind: 'table-field' }>): boolean => {
     const useOffset = candidate.source.start.offset;
     const assignmentWrites = nodesOfType('AssignmentStatement').some(statement => {
@@ -2781,71 +2879,7 @@ const numericExpressionStructureError = (
             && typeof value.type === 'string'
             && ['StringLiteral', 'NumericLiteral', 'BooleanLiteral'].includes(value.type);
         })) return false;
-        // The declaration is a constant sequence only while every alias is used read-only.
-        // Inspect the whole source, including callbacks after this use, not just earlier writes.
-        const identifiers = nodesOfType('Identifier');
-        const reflectiveLoaders = ['getfenv', 'setfenv', 'debug', 'load', 'loadfile', 'loadstring', 'dofile'];
-        const reflectiveGlobals = ['_G', 'ipairs', 'rawget', 'rawset', ...reflectiveLoaders];
-        const ipairsAvailable = !identifiers.some(identifier => ['ipairs', 'rawget'].includes(String(identifier.name))
-          && (identifier.isLocal === true
-            || index.parentByNode.get(identifier)?.type === 'AssignmentStatement'
-            || index.parentByNode.get(identifier)?.type === 'FunctionDeclaration'))
-          && !nodesOfType('AssignmentStatement').some(statement => localAstNodes(statement.variables)?.some(variable => {
-            const key = localAstNode(variable.identifier) || localAstNode(variable.index);
-            return (variable.type === 'MemberExpression' || variable.type === 'IndexExpression')
-              && (localAstIdentifier(key, 'ipairs') || localAstStringValue(model, key) === 'ipairs'
-                || localAstIdentifier(key, 'rawget') || localAstStringValue(model, key) === 'rawget');
-          }))
-          && identifiers.every(identifier => {
-            // A copied/returned environment or reflective loader defeats the builtin identity.
-            if (reflectiveLoaders.includes(String(identifier.name))) return false;
-            if (identifier.name !== '_G') return true;
-            const parent = index.parentByNode.get(identifier);
-            if (identifier.isLocal !== false) return false;
-            // A named sibling field is not the global environment itself. Dynamic keys,
-            // reflective fields and method calls (which pass _G as self) still escape it.
-            if (parent?.base === identifier) {
-              const key = parent.type === 'MemberExpression' && parent.indexer === '.'
-                ? localAstNode(parent.identifier)?.name
-                : parent.type === 'IndexExpression' ? localAstStringValue(model, parent.index) : undefined;
-              if (typeof key === 'string' && !reflectiveGlobals.includes(key)) return true;
-            }
-            const args = parent?.type === 'CallExpression' ? localAstNodes(parent.arguments) : undefined;
-            const key = args?.[1] ? localAstStringValue(model, args[1]) : undefined;
-            return parent?.type === 'CallExpression'
-              && localAstIdentifier(localAstNode(parent.base), 'rawget', false)
-              && args?.length === 2 && args[0] === identifier && key !== undefined && !reflectiveGlobals.includes(key);
-          })
-          && !nodesOfType('CallExpression').some(call => {
-            const callee = localAstNode(call.base);
-            const args = localAstNodes(call.arguments) || [];
-            return localAstIdentifier(callee, 'rawset')
-              || args.some(argument => localAstIdentifier(argument, '_G'))
-                && !(localAstIdentifier(callee, 'rawget', false)
-                  && args.length === 2 && localAstStringValue(model, args[1]) !== undefined);
-          });
-        const readOnly = identifiers.every(identifier => {
-          const range = sourceAstRange(identifier);
-          if (!range || !exactTableAliasSourceBinding(identifier, candidate.tableSource, range[0])) return true;
-          const parent = index.parentByNode.get(identifier);
-          if (parent?.type === 'UnaryExpression' && parent.operator === '#' && parent.argument === identifier) return true;
-          if (parent?.type === 'LocalStatement') {
-            const init = localAstNodes(parent.init), variables = localAstNodes(parent.variables);
-            return init?.length === 1 && init[0] === identifier && variables?.length === 1
-              && variables[0].type === 'Identifier' && variables[0].isLocal === true;
-          }
-          if (parent?.type === 'CallExpression' && ipairsAvailable) {
-            const args = localAstNodes(parent.arguments);
-            const loop = index.parentByNode.get(parent);
-            const iterators = loop?.type === 'ForGenericStatement' ? localAstNodes(loop.iterators) : undefined;
-            // Outside a direct for-in, ipairs can expose its table-valued iterator state.
-            return localAstIdentifier(localAstNode(parent.base), 'ipairs', false)
-              && args?.length === 1 && args[0] === identifier
-              && iterators?.length === 1 && iterators[0] === parent;
-          }
-          return false;
-        });
-        if (!readOnly) sequenceRequiresPreview = true;
+        if (!immutableSequenceIsReadOnly(model, candidate.tableSource)) sequenceRequiresPreview = true;
         return true;
       }
       case 'table-field': {
@@ -5311,8 +5345,8 @@ const normalizePreviewLoops = (
   // Proven finite source loops need no manual count. Explicit preview choices
   // are never overwritten, including a deliberately mismatched count.
   for (const entry of catalog.entries) {
-    if (entry.kind !== 'numeric-for' || selectedIds.has(entry.id)) continue;
-    const proof = numericForBindingProofFor(model, entry.source);
+    if (selectedIds.has(entry.id)) continue;
+    const proof = sourceLoopBindingProofFor(model, entry.source, entry.kind);
     if (proof) select(entry, proof.values.length);
   }
   const ordered = catalog.entries
@@ -5400,10 +5434,10 @@ const instantiatePreviewLoopValue = (
     ? numericForBinding.values[instance.iteration - 1] : undefined;
   const scalar = !result.reference && numericForBinding && iterationValue !== undefined
     && sourceLocationMatchesModel(model, value.location, value.expression)
-    ? numericForIndexValueFor(model, value, numericForBinding, iterationValue) : undefined;
+    ? sourceLoopScalarValueFor(model, value, numericForBinding, instance.iteration) : undefined;
   if (scalar !== undefined) {
     result.status = 'static';
-    result.type = 'number';
+    result.type = typeof scalar as 'number' | 'string' | 'boolean';
     result.value = scalar;
     delete result.reason;
     delete result.symbol;
@@ -5538,9 +5572,7 @@ const expandPreviewLoops = (
         && selectedCallIds.has(previewLoopCallIdFor(identity, candidate)))
       .sort((left, right) => left.order - right.order);
     const ownedPaths = previewLoopOwnedReferencePaths(bodyCalls, selection.source);
-    const numericForProof = selection.kind === 'numeric-for'
-      ? numericForBindingProofFor(model, selection.source)
-      : undefined;
+    const numericForProof = sourceLoopBindingProofFor(model, selection.source, selection.kind);
     // A source proof describes the complete finite Lua loop. Never partially
     // specialize a user-selected prefix or suffix of that loop; mismatched
     // counts stay on the existing unresolved/deferred path.
@@ -6539,7 +6571,20 @@ const localAstNumericForBoundValue = (
 const numericForBodyHasAmbiguousBinding = (
   value: unknown,
   variableName: string,
+  allowReadOnlyCapture = false,
 ): boolean => {
+  const capturedBindingMayChange = (candidate: unknown): boolean => {
+    if (Array.isArray(candidate)) return candidate.some(capturedBindingMayChange);
+    const node = localAstNode(candidate);
+    if (!node) return false;
+    if (['AssignmentStatement', 'LocalStatement'].includes(String(node.type))
+      && localAstNodes(node.variables)?.some(variable => localAstIdentifier(variable, variableName))) return true;
+    if (node.type === 'FunctionDeclaration'
+      && (localAstIdentifier(node.identifier, variableName)
+        || localAstNodes(node.parameters)?.some(parameter => localAstIdentifier(parameter, variableName)))) return true;
+    return Object.entries(node).some(([key, child]) => !['loc', 'range', 'comments', 'tokens', 'globals'].includes(key)
+      && capturedBindingMayChange(child));
+  };
   const containsInductionIdentifier = (candidate: unknown): boolean => {
     if (Array.isArray(candidate)) return candidate.some(containsInductionIdentifier);
     const node = localAstNode(candidate);
@@ -6555,7 +6600,8 @@ const numericForBodyHasAmbiguousBinding = (
     if (Array.isArray(candidate)) return candidate.some(visit);
     const node = localAstNode(candidate);
     if (!node) return false;
-    if (node.type === 'FunctionDeclaration') return containsInductionIdentifier(node);
+    if (node.type === 'FunctionDeclaration') return allowReadOnlyCapture
+      ? capturedBindingMayChange(node) : containsInductionIdentifier(node);
     if (['ForNumericStatement', 'ForGenericStatement', 'WhileStatement', 'RepeatStatement',
       'BreakStatement', 'ReturnStatement', 'GotoStatement'].includes(String(node.type))) return true;
     if (node.type === 'LocalStatement'
@@ -6677,10 +6723,86 @@ const numericForBindingProofFor = (
   const body = localAstNodes(loop.body);
   if (!body || numericForBodyHasAmbiguousBinding(body, variable.name)) return finish(undefined);
   return finish({
+    kind: 'numeric-for',
     source: cloneLocation(source),
     variableName: variable.name,
     values: Object.freeze(values),
   });
+};
+
+const ipairsBindingProofCache = new WeakMap<X4UiCallModel, Map<string, NumericForBindingProof | undefined>>();
+
+const ipairsBindingProofFor = (
+  model: X4UiCallModel,
+  source: X4UiSourceLocation,
+): NumericForBindingProof | undefined => {
+  const key = locationKey(source);
+  const entries = ipairsBindingProofCache.get(model) ?? new Map<string, NumericForBindingProof | undefined>();
+  if (entries.has(key)) return entries.get(key);
+  const finish = (proof?: NumericForBindingProof): NumericForBindingProof | undefined => {
+    entries.set(key, proof); ipairsBindingProofCache.set(model, entries); return proof;
+  };
+  if (!modelSourceLocationIsExact(model, source)) return finish();
+  const index = numericExpressionSourceAstIndex(model);
+  if (index.error) return finish();
+  const loops = localAstNodeAt(index, source, 'ForGenericStatement');
+  if (loops.length !== 1) return finish();
+  const loop = loops[0], iterators = localAstNodes(loop.iterators), variables = localAstNodes(loop.variables);
+  if (!iterators || iterators.length !== 1 || !variables || variables.length < 1 || variables.length > 2
+    || !variables.every(variable => variable.type === 'Identifier' && variable.isLocal === true
+      && typeof variable.name === 'string')
+    || new Set(variables.map(variable => variable.name)).size !== variables.length) return finish();
+  const call = iterators[0], args = localAstNodes(call.arguments);
+  if (call.type !== 'CallExpression' || !localAstIdentifier(call.base, 'ipairs', false)
+    || !args || args.length !== 1 || args[0].type !== 'Identifier' || args[0].isLocal !== true) return finish();
+  const body = localAstNodes(loop.body);
+  if (!body || variables.some(variable => numericForBodyHasAmbiguousBinding(body, variable.name as string, true))) return finish();
+  for (const table of numericExpressionSourceAstNodes(index, 'TableConstructorExpression')) {
+    const tableSource = localAstSource(model, table), fields = localAstNodes(table.fields);
+    if (!tableSource || !fields || fields.length < 1 || fields.length > 16
+      || !exactTableSequenceAliasSourceBinding(model, args[0], tableSource, source.start.offset)
+      || !immutableSequenceIsReadOnly(model, tableSource)) continue;
+    const values: (string | number | boolean)[] = [];
+    for (const field of fields) {
+      const node = localAstNode(field.value);
+      if (field.type !== 'TableValue' || !node) break;
+      const value = node.type === 'StringLiteral' ? localAstStringValue(model, node)
+        : node.type === 'NumericLiteral' ? localAstNumericLiteralValue(model, node)
+          : node.type === 'BooleanLiteral' && typeof node.value === 'boolean' ? node.value : undefined;
+      if (value === undefined) break;
+      values.push(value);
+    }
+    if (values.length !== fields.length) continue;
+    return finish({ kind: 'generic-for', source: cloneLocation(source), variableName: variables[0].name as string,
+      values: Object.freeze(values.map((_, i) => i + 1)),
+      ...(variables[1] ? {item: {name: variables[1].name as string, values: Object.freeze(values)}} : {}),
+    });
+  }
+  return finish();
+};
+
+const sourceLoopBindingProofFor = (
+  model: X4UiCallModel, source: X4UiSourceLocation, kind: string,
+): NumericForBindingProof | undefined => kind === 'numeric-for' ? numericForBindingProofFor(model, source)
+  : kind === 'generic-for' ? ipairsBindingProofFor(model, source) : undefined;
+
+const sourceLoopScalarValueFor = (
+  model: X4UiCallModel, value: X4UiValue, binding: NumericForBindingProof, iteration: number,
+): string | number | boolean | undefined => {
+  if (binding.item && modelSourceLocationIsExact(model, value.location)
+    && locationContains(binding.source, value.location)) {
+    const index = numericExpressionSourceAstIndex(model);
+    const nodes = localAstNodeAt(index, value.location, 'Identifier');
+    const node = nodes.length === 1 ? nodes[0] : undefined;
+    const scopes = node ? numericExpressionSourceLexicalScopes(index, node) : [];
+    // A callback is not executed as part of the loop's current preview iteration.
+    const scope = scopes.find(candidate => ['FunctionDeclaration', 'ForGenericStatement'].includes(String(candidate.type)));
+    if (node && localAstIdentifier(node, binding.item.name, true)
+      && scope?.type === 'ForGenericStatement' && locationsEqual(localAstSource(model, scope)!, binding.source)) {
+      return binding.item.values[iteration - 1];
+    }
+  }
+  return numericForIndexValueFor(model, value, binding, binding.values[iteration - 1]);
 };
 
 const numericForIndexValueFor = (
@@ -6704,6 +6826,12 @@ const numericForIndexValueFor = (
     'BinaryExpression',
   ].includes(node.type as string));
   if (candidates.length !== 1) return undefined;
+  if (binding.kind === 'generic-for') {
+    const scope = numericExpressionSourceLexicalScopes(index, candidates[0]).find(node =>
+      ['FunctionDeclaration', 'ForGenericStatement'].includes(String(node.type)));
+    if (scope?.type !== 'ForGenericStatement'
+      || !locationsEqual(localAstSource(model, scope)!, binding.source)) return undefined;
+  }
   const resolved = numericForExpressionValue(model, candidates[0], binding.variableName, iterationValue);
   if (!resolved?.usesVariable || !Number.isSafeInteger(resolved.value) || resolved.value < 1) return undefined;
   return resolved.value;
@@ -7334,14 +7462,14 @@ const buildLocalExpansionPlan = (
   return { calls, invocations: invocationLedger, gaps, contextSources: [...contextSources.values()] };
 };
 
-const makeOperation = (call: ProjectableCall, status: X4UiLayoutOperationStatus, reason?: string): MutableOperation => ({
+const makeOperation = (call: ProjectableCall, status: X4UiLayoutOperationStatus, reason?: string, canonicalCell?: X4UiValueReference): MutableOperation => ({
   id: operationIdFor(call),
   kind: call.name,
   source: cloneLocation(call.source),
   sourceOrder: call.source.start.offset,
   modelOrder: call.order,
   status,
-  metadata: cloneMetadata(call),
+  metadata: cloneMetadata(call, canonicalCell),
   descriptorFacts: {},
   ...(call.previewLoop
     ? { previewLoop: cloneDeep(call.previewLoop) as X4UiLayoutPreviewLoopInstance }
@@ -12306,9 +12434,11 @@ export function projectX4UiLayoutProgram(
     const rowCells = cellsByRow.get(candidateRow.id) || [];
     const cell = rowCells.find(item => item.column === index);
     if (!cell) return { table: candidateTable, row: candidateRow };
-    cell.identity = cloneReference(reference);
-    cell.cellIdentityKey = key;
-    cell.source = cloneLocation(reference.source);
+    if (!cell.identity) {
+      cell.identity = cloneReference(reference);
+      cell.cellIdentityKey = key;
+      cell.source = cloneLocation(reference.source);
+    }
     if (key) cellByReference.set(key, cell);
     return { cell, row: candidateRow, table: candidateTable };
   };
@@ -13358,7 +13488,7 @@ export function projectX4UiLayoutProgram(
 
     if (call.name === 'setColSpan') {
       const found = findCell(call);
-      const operation = makeOperation(call, blocked || 'unresolved');
+      const operation = makeOperation(call, blocked || 'unresolved', undefined, found.cell?.identity);
       const deferredOwner = blocked === 'conditional'
         && found.table !== undefined
         && found.table.kernelState !== undefined
@@ -13425,7 +13555,7 @@ export function projectX4UiLayoutProgram(
 
     if (call.name === 'setHotkey') {
       const found = findCell(call);
-      const operation = makeOperation(call, blocked || 'unresolved');
+      const operation = makeOperation(call, blocked || 'unresolved', undefined, found.cell?.identity);
       const deferredOwner = blocked === 'conditional'
         && found.table !== undefined
         && found.table.kernelState !== undefined
@@ -13581,7 +13711,7 @@ export function projectX4UiLayoutProgram(
 
     if (call.name === 'createText' || call.name === 'createButton' || call.name === 'createEditBox' || call.name === 'createIcon') {
       const found = findCell(call);
-      const operation = makeOperation(call, blocked || 'unresolved');
+      const operation = makeOperation(call, blocked || 'unresolved', undefined, found.cell?.identity);
       const deferredOwner = blocked === 'conditional'
         && found.table !== undefined
         && found.table.kernelState !== undefined
@@ -14443,7 +14573,7 @@ export function projectX4UiLayoutProgram(
 
     if (call.name === 'setText' || call.name === 'setText2') {
       const found = findCell(call);
-      const operation = makeOperation(call, blocked || 'unresolved');
+      const operation = makeOperation(call, blocked || 'unresolved', undefined, found.cell?.identity);
       const deferredOwner = blocked === 'conditional'
         && found.table !== undefined
         && found.table.kernelState !== undefined

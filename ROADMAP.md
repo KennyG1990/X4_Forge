@@ -8429,3 +8429,14 @@ Plan/review/AAR:docs/plans/2026-09-14-b119-loop-feedback.md.
 Evidence:test-results/b119-loop-feedback-20260914/verification.json and RESULTS.md.
 Commit point: fix(ui): make automatic loop counts and override clearing usable.
 Actual normal-hook commit result:checkpoint/post-commit.json in that evidence directory.
+# 2026-09-14 — B119 immutable ipairs labels (headless VERIFIED; full goal PARTIAL)
+
+Existing source AST/sequence proof and loop replay recover dense literal-list indexes/labels,
+without Lua execution or manual counts. Read-only callback captures supported; mutable/runtime/
+escaped lists, replaced iterators and ambiguous bindings remain unresolved. Existing cell owner
+retains first identity across source aliases; duplicate creators still rejected, strict validators
+unchanged. Layout1007/1007,pipeline127/127,session/typecheck/lint PASS; independent verifier and
+unchanged real HUB probe at2profiles prove6labels/indices/widths. No new rendered/installed/native
+or full-E2E proof. Plan/AAR:docs/plans/2026-09-14-b119-ipairs-labels.md.
+Evidence:test-results/b119-ipairs-labels-20260914/verification.json.
+Commit outcome:test-results/b119-ipairs-labels-20260914/checkpoint/post-commit.json.

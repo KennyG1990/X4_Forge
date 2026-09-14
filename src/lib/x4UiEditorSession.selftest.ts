@@ -2988,6 +2988,21 @@ async function run(): Promise<void> {
   const missingSampleValue = { id: sampleValue.id };
   expectSampleRefusal('sample value missing scalar', reconcileX4UiEditorSampleState({ ...sampleState, values: [missingSampleValue, ...sampleState.values.slice(1)] }, sampleCatalog, sampleCatalogAuthority));
 
+  const literalLabelWorkspace = loopWorkspace();
+  const literalLabelFile = literalLabelWorkspace.passthroughFiles!.find(file => file.path === 'ui/loops.lua')!;
+  literalLabelFile.content = literalLabelFile.content.replace('local menu =', 'local labels = { "One", "Two", "Three" }\nlocal menu =')
+    .replace('for i = 1, 3 do', 'for i, caption in ipairs(labels) do')
+    .replace('createText(dynamicText,', 'createText(caption,');
+  const literalLabelBefore = JSON.stringify(literalLabelWorkspace);
+  const literalLabelSeed = projectX4UiEditorSession({workspace:literalLabelWorkspace, corpus:undefined, profile:X4_UI_EDITOR_DEFAULT_PROFILE});
+  const literalLabelProjection = projectX4UiEditorSession({workspace:literalLabelWorkspace, corpus:undefined,
+    profile:X4_UI_EDITOR_DEFAULT_PROFILE, selection:selectionFor(literalLabelSeed.source, 'ui/loops.lua', 'function')});
+  assert.equal(literalLabelProjection.loops, undefined, 'derived labels do not manufacture manual state');
+  assert.equal(literalLabelProjection.previewLoopSelections[0]?.iterationCount, 3);
+  assert.equal(literalLabelProjection.sampleCatalog?.entries.some(entry => entry.expression === 'caption'), false,
+    'known source labels must not ask modders for manual samples');
+  assert.equal(JSON.stringify(literalLabelWorkspace), literalLabelBefore);
+
   const loopWorkspaceValue = loopWorkspace();
   const loopWorkspaceJson = JSON.stringify(loopWorkspaceValue);
   const loopSeed = projectX4UiEditorSession({ workspace: loopWorkspaceValue, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE });

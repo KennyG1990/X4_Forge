@@ -8,6 +8,14 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 15:50Z: Source-bound ipairs labels headless VERIFIED; unit/full goal PARTIAL.
+Unchanged HUB resolves6labels/indexes/widths at2profiles without manual input. Layout1007/1007,
+pipeline127/127,session/types/lint PASS; strict evidence ownership repair preserves duplicate
+rejection and runtime deferred owners. No new rendered/native/full-integration claim.
+NEXT rendered real tabs, rowH/y and body dispatch; all9journeys/3menus/12references remain.
+Plan/AAR:docs/plans/2026-09-14-b119-ipairs-labels.md. Evidence:
+test-results/b119-ipairs-labels-20260914/{RESULTS.md,verification.json,checkpoint/post-commit.json}.
+
 2026-09-14 15:13Z: Automatic/manual loop feedback and per-loop clearing browser VERIFIED.
 Focused1/1 first-pass; complete component/EditorSession/types/lint PASS; actual screenshots
 inspected, workspace unchanged, isolated stack cleaned. Initial clear-input failure retained

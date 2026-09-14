@@ -1488,6 +1488,71 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
       detail({ expected, indexes, selections: result.program?.previewLoopSelections.length,
         samples: result.program?.sampleCatalog.entries.map(entry => entry.expression) }));
   }
+  const ipairsFixture = (before = '', body = '', list = tabSequence, iterator = 'ipairs(TABS)') => [
+    `local TABS = ${list}`, before,
+    'local frame = Helper.createFrameHandle({}, { width = 600, height = 80 })',
+    'local tabs = frame:addTable(6, { width = 600 })',
+    'local row = tabs:addRow(false, {})',
+    `for i, name in ${iterator} do`,
+    '  row[i]:createButton({ active = true }):setText(name, {})', body, 'end',
+  ].join('\n');
+  const ipairsCases: readonly [string, string, boolean][] = [
+    ['literal list', ipairsFixture(), true],
+    ['alias list', ipairsFixture('local labels = TABS', '', tabSequence, 'ipairs(labels)'), true],
+    ['renamed variables', ipairsFixture().replaceAll('TABS', 'labels').replaceAll('name', 'caption').replaceAll('row[i]', 'row[column]').replace('for i,', 'for column,'), true],
+    ['read-only callback capture', ipairsFixture('', 'row[i].handlers.onClick = function() choose(name) end'), true],
+    ['mutation', ipairsFixture('TABS[1] = "changed"'), false],
+    ['escape', ipairsFixture('touch(TABS)'), false],
+    ['late mutation', ipairsFixture() + '\nfunction later() TABS[1] = "changed" end', false],
+    ['runtime list', ipairsFixture('', '', 'runtimeTabs'), false],
+    ['sparse list', ipairsFixture('', '', '{ "a", nil, "b" }'), false],
+    ['oversize list', ipairsFixture('', '', `{ ${Array.from({length:17}, () => '"x"').join(', ')} }`), false],
+    ['shadowed iterator', ipairsFixture('local ipairs = other'), false],
+    ['replaced iterator', ipairsFixture('ipairs = other'), false],
+    ['environment replacement', ipairsFixture('local _ENV = other'), false],
+    ['pairs unordered', ipairsFixture('', '', tabSequence, 'pairs(TABS)'), false],
+    ['break', ipairsFixture('', 'break'), false],
+    ['conditional return', ipairsFixture('', 'if runtimeFlag then return end'), false],
+    ['index reassignment', ipairsFixture('', 'i = 1'), false],
+    ['label reassignment', ipairsFixture('', 'name = "wrong"'), false],
+    ['callback changes label', ipairsFixture('', 'row[i].handlers.onClick = function() name = "wrong" end'), false],
+  ];
+  for (const [label, source, expected] of ipairsCases) {
+    const loopModel = buildX4UiCallModel(input(source, `selftest/ipairs-${label.replaceAll(' ', '-')}.lua`));
+    const before = JSON.stringify(loopModel);
+    const result = projectX4UiLayoutProgram(loopModel, topTarget(loopModel), profileFor(loopModel));
+    const buttons = result.program?.operations.filter(op => op.kind === 'createButton') ?? [];
+    const texts = result.program?.operations.filter(op => op.kind === 'setText') ?? [];
+    const values = texts.map(op => factValue(op.descriptorFacts.text));
+    const authority = evidenceAuthorityOf(result);
+    check(`B119 source ipairs labels: ${label}`, (expected
+      ? JSON.stringify(values) === JSON.stringify(['DOSSIER', 'INFLUENCE', 'INTEL', 'NEWS', 'FLEET', 'SETTINGS'])
+        && buttons.length === 6 && buttons.every(op => op.status === 'applied')
+        && texts.every(op => op.status === 'applied')
+        && new Set(buttons.map(op => op.cellId)).size === 6
+        && result.program?.previewLoopSelections[0]?.iterationCount === 6
+      : result.program?.previewLoopSelections.length === 0)
+      && JSON.stringify(loopModel) === before && result.program !== undefined && authority !== undefined
+      && validateX4UiLayoutEvidencePair(result.program, authority).valid,
+      detail({expected, values, buttons: buttons.map(op => ({status:op.status,cell:op.cellId})), selections:result.program?.previewLoopSelections.length}));
+  }
+  const manualIpairsModel = buildX4UiCallModel(input(ipairsFixture(), 'selftest/ipairs-manual.lua'));
+  const manualIpairsTarget = topTarget(manualIpairsModel), manualIpairsProfile = profileFor(manualIpairsModel);
+  const automaticIpairs = projectX4UiLayoutProgram(manualIpairsModel, manualIpairsTarget, manualIpairsProfile);
+  const manualIpairsCatalog = automaticIpairs.program!.previewLoopCatalog;
+  for (const count of [2, 6, 8]) {
+    const explicit = projectX4UiLayoutProgram(manualIpairsModel, manualIpairsTarget, manualIpairsProfile,
+      undefined, undefined, undefined, undefined, {catalogId: manualIpairsCatalog.id, source: manualIpairsCatalog.sourceIdentity,
+        targetId: manualIpairsCatalog.targetId, profileId: manualIpairsCatalog.profileId,
+        selections: [{id: manualIpairsCatalog.entries[0].id, iterationCount: count}]});
+    const texts = explicit.program?.operations.filter(op => op.kind === 'setText') ?? [];
+    check(`B119 ipairs explicit count preserves exact source proof boundary: ${count}`,
+      explicit.program !== undefined && explicit.program.previewLoopSelections[0]?.iterationCount === count
+      && texts.length === count && (count === 6
+        ? texts.every(op => op.descriptorFacts.text?.status === 'known')
+        : texts.every(op => op.descriptorFacts.text?.status !== 'known')),
+      detail({status:explicit.status, texts:texts.map(op => op.descriptorFacts.text)}));
+  }
   const sharedLoopCellSource = [
     'local frame = Helper.createFrameHandle({}, { width = 100, height = 80 })',
     'local tabs = frame:addTable(3, { width = 100 })',
@@ -20969,16 +21034,17 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     operation.metadata.receiver?.reference?.index?.status === 'static');
   const b119HubDeferredOperations = b119HubOperations.filter(operation =>
     operation.metadata.receiver?.reference?.index?.status !== 'static');
-  check('B119 fail-first hub source-shaped createButton closes every sampled deferred owner',
+  check('B119 source-proven hub loop preserves canonical owners and rejects duplicate creators',
     b119HubFixture.fixtureReady
-      && b119HubStaticOperations.length >= 3
+      && b119HubStaticOperations.length === 6
+      && b119HubStaticOperations.filter(operation => operation.status === 'applied').length === 3
+      && b119HubStaticOperations.filter(operation => operation.status === 'rejected').length === 3
       && b119HubStaticOperations.every(operation => b119OwnerClosure(
         b119HubFixture.program,
         b119HubFixture.authority,
         operation,
       ).exact === true)
-      && b119HubDeferredOperations.length >= 1
-      && b119HubDeferredOperations.every(operation => operation.tableId !== undefined && operation.rowId !== undefined)
+      && b119HubDeferredOperations.length === 0
       && safeSchemaPairValidation(b119HubFixture.program!, b119HubFixture.authority!).valid === true,
     detail({
       fixtureReady: b119HubFixture.fixtureReady,
@@ -21005,6 +21071,28 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
         ? safeSchemaPairValidation(b119HubFixture.program, b119HubFixture.authority)
         : undefined,
     }));
+
+  const b119HubRuntimeFixture = b119Fixture([
+    'local menu = { name = "B119HubRuntimeOwner", layer = 1 }',
+    'local TABS = runtimeTabs',
+    'function menu.display()',
+    ' local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
+    ' local st = frame:addTable(runtimeColumns, { width = runtimeWidth, reserveScrollBar = false, scaling = true })',
+    ' local sr = st:addRow(false, {})',
+    ' sr[1]:createButton({ active = true })',
+    ' sr[2]:createButton({ active = true })',
+    ' sr[3]:createButton({ active = true })',
+    ' for i, tab in ipairs(TABS) do sr[i]:createButton({ active = true }) end',
+    'end',
+  ].join('\n'), 'selftest/b119-hub-runtime-owner.lua');
+  const runtimeDeferredOwners = b119HubRuntimeFixture.program?.operations.filter(op =>
+    op.kind === 'createButton' && op.metadata.receiver?.reference?.index?.status !== 'static') ?? [];
+  check('B119 unknown ipairs list retains source-shaped deferred owner coverage',
+    b119HubRuntimeFixture.fixtureReady && runtimeDeferredOwners.length === 1
+    && runtimeDeferredOwners.every(op => op.tableId !== undefined && op.rowId !== undefined)
+    && b119HubRuntimeFixture.program !== undefined && b119HubRuntimeFixture.authority !== undefined
+    && safeSchemaPairValidation(b119HubRuntimeFixture.program, b119HubRuntimeFixture.authority).valid === true,
+    detail({status:b119HubRuntimeFixture.sampled?.status, deferred:runtimeDeferredOwners.length}));
 
   const b119ReserveFixture = b119Fixture([
     'local menu = { name = "B119ReserveFinal", layer = 1 }',
