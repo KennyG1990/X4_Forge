@@ -8,6 +8,15 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-14 14:29Z: Source numeric-loop replay implemented and headless VERIFIED:
+layout984/984,pipeline126/126,EditorSession/types/lint PASS. Unchanged original HUB applies
+six tab widths (columns1..6,16percent) at both profiles without manual loop/index input.
+Unit/full B119 PARTIAL: derived count display and rendered follow-through pending, plus
+generic labels/y/body dispatch and all remaining full-menu/installed/native journeys.
+Plan/AAR:docs/plans/2026-09-14-b119-source-loop-recovery.md; readable evidence:
+test-results/b119-source-loop-20260914/RESULTS.md. Actual checkpoint gate:
+test-results/b119-source-loop-20260914/checkpoint-retry/post-commit.json (verify existence).
+
 2026-09-14 13:40Z: Immutable source sequence counts bounded VERIFIED: parser149/149,
 layout965/965,types/lint PASS. Original HUB resolves6 columns at both profiles without
 #TABS sample; unsafe sequences retain explicit preview-only recovery. Full B119 PARTIAL;

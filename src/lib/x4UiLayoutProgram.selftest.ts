@@ -1444,6 +1444,79 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
       && !sequenceResult.program?.sampleCatalog.entries.some(entry => entry.expression === '#TABS'),
       detail(sequenceResult.program?.gaps.filter(gap => gap.category === 'count')));
   }
+  const sourceLoopFixture = (bound: string, before = '', body = '', start = '1', step = '') => [
+    `local TABS = ${tabSequence}`, before,
+    'local frame = Helper.createFrameHandle({}, { width = 100, height = 80, layer = 2 })',
+    'local tabs = frame:addTable(6, { width = 100, scaling = false })',
+    `for i = ${start}, ${bound}${step ? `, ${step}` : ''} do`,
+    '  tabs:setColWidthPercent(i, math.floor(100 / #TABS))', body, 'end',
+    'local row = tabs:addRow(false, {})',
+  ].join('\n');
+  const sourceLoopCases: readonly [string, string, readonly number[]][] = [
+    ['sequence bound', sourceLoopFixture('#TABS'), [1, 2, 3, 4, 5, 6]],
+    ['literal bound', sourceLoopFixture('6'), [1, 2, 3, 4, 5, 6]],
+    ['sequence alias', sourceLoopFixture('#names', 'local names = TABS'), [1, 2, 3, 4, 5, 6]],
+    ['descending sequence', sourceLoopFixture('1', '', '', '#TABS', '-1'), [6, 5, 4, 3, 2, 1]],
+    ['non-divisible range', sourceLoopFixture('#TABS', '', '', '1', '2'), [1, 3, 5]],
+    ['runtime bound', sourceLoopFixture('runtimeCount'), []],
+    ['escaped sequence', sourceLoopFixture('#TABS', 'touch(TABS)'), []],
+    ['sequence mutation', sourceLoopFixture('#TABS', 'TABS[1] = nil'), []],
+    ['shadowed sequence', sourceLoopFixture('#TABS', 'local TABS = runtimeTabs'), []],
+    ['break prevents complete proof', sourceLoopFixture('#TABS', '', 'break'), []],
+    ['return prevents complete proof', sourceLoopFixture('#TABS', '', 'return'), []],
+    ['conditional break', sourceLoopFixture('#TABS', '', 'if runtimeFlag then break end'), []],
+    ['induction rebind', sourceLoopFixture('#TABS', '', 'i = 6'), []],
+    ['nested loop', sourceLoopFixture('#TABS', '', 'while runtimeFlag do end'), []],
+    ['over budget', sourceLoopFixture('17'), []],
+    ['zero step', sourceLoopFixture('#TABS', '', '', '1', '0'), []],
+    ['wrong direction', sourceLoopFixture('#TABS', '', '', '1', '-1'), []],
+  ];
+  for (const [label, source, expected] of sourceLoopCases) {
+    const loopModel = buildX4UiCallModel(input(source, `selftest/source-loop-${label.replaceAll(' ', '-')}.lua`));
+    const before = JSON.stringify(loopModel);
+    const result = projectX4UiLayoutProgram(loopModel, topTarget(loopModel), profileFor(loopModel));
+    const setters = result.program?.operations.filter(operation => operation.kind === 'setColWidthPercent') ?? [];
+    const indexes = setters.filter(operation => operation.status === 'applied').map(operation => factValue(operation.descriptorFacts.columnIndex));
+    const authority = evidenceAuthorityOf(result);
+    check(`B119 automatic source numeric loop: ${label}`, JSON.stringify(indexes) === JSON.stringify(expected)
+      && (expected.length === 0 ? result.program?.previewLoopSelections.length === 0
+        : setters.every(operation => factValue(operation.descriptorFacts.percentage) === 16)
+          && result.program?.sampleCatalog.entries.length === 0)
+      && JSON.stringify(loopModel) === before
+      && result.program !== undefined && authority !== undefined
+      && validateX4UiLayoutEvidencePair(result.program, authority).valid,
+      detail({ expected, indexes, selections: result.program?.previewLoopSelections.length,
+        samples: result.program?.sampleCatalog.entries.map(entry => entry.expression) }));
+  }
+  const sharedLoopCellSource = [
+    'local frame = Helper.createFrameHandle({}, { width = 100, height = 80 })',
+    'local tabs = frame:addTable(3, { width = 100 })',
+    'local row = tabs:addRow(false, {})',
+    'for i = 1, 2 do row[3]:createText("shared", { height = 5 }) end',
+  ].join('\n');
+  const sharedLoopCellModel = buildX4UiCallModel(input(sharedLoopCellSource));
+  const sharedLoopCellResult = projectX4UiLayoutProgram(sharedLoopCellModel, topTarget(sharedLoopCellModel), profileFor(sharedLoopCellModel));
+  const sharedLoopCellOperations = sharedLoopCellResult.program?.operations.filter(operation => operation.kind === 'createText') ?? [];
+  const sharedLoopCellAuthority = evidenceAuthorityOf(sharedLoopCellResult);
+  check('B119 numeric-loop repeated writes keep the actual outer-row cell identity',
+    sharedLoopCellOperations.length === 2 && sharedLoopCellOperations[0]?.status === 'applied'
+      && sharedLoopCellOperations[1]?.status === 'rejected'
+      && new Set(sharedLoopCellOperations.map(operation => operation.cellId)).size === 1
+      && sharedLoopCellResult.program?.cells.length === 3
+      && sharedLoopCellAuthority !== undefined
+      && validateX4UiLayoutEvidencePair(sharedLoopCellResult.program, sharedLoopCellAuthority).valid,
+    detail({ status: sharedLoopCellResult.status, operations: sharedLoopCellOperations.map(operation => ({status: operation.status, cell: operation.cellId})) }));
+  const sharedLoopSetterModel = buildX4UiCallModel(input(sharedLoopCellSource.replace('createText("shared", { height = 5 })', 'setColSpan(1)')));
+  const sharedLoopSetterResult = projectX4UiLayoutProgram(sharedLoopSetterModel, topTarget(sharedLoopSetterModel), profileFor(sharedLoopSetterModel));
+  const sharedLoopSetterOperations = sharedLoopSetterResult.program?.operations.filter(operation => operation.kind === 'setColSpan') ?? [];
+  const sharedLoopSetterAuthority = evidenceAuthorityOf(sharedLoopSetterResult);
+  check('B119 numeric-loop repeated valid setters share the actual outer-row cell',
+    sharedLoopSetterOperations.length === 2 && sharedLoopSetterOperations.every(operation => operation.status === 'applied')
+      && new Set(sharedLoopSetterOperations.map(operation => operation.cellId)).size === 1
+      && sharedLoopSetterResult.program?.cells.length === 3
+      && sharedLoopSetterAuthority !== undefined
+      && validateX4UiLayoutEvidencePair(sharedLoopSetterResult.program, sharedLoopSetterAuthority).valid,
+    detail({ status: sharedLoopSetterResult.status, operations: sharedLoopSetterOperations.map(operation => ({status: operation.status, cell: operation.cellId})) }));
   const model = buildX4UiCallModel(input(positiveSource));
   const catalog = createX4UiLayoutTargetCatalog(model);
   const profile = profileFor(model, { minTextHeight: 7 });
@@ -10666,7 +10739,7 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     '  local row = table:addRow(false, {})',
     '  row[1]:createText("color", { height = 5, color = Color["text_normal"] })',
     '  if choice then row[2]:createText(dynamicText, { height = h }) end',
-    '  for i = 1, 2 do row[3]:createText(dynamicText, { height = h }) end',
+    '  for i = 1, runtimeCount do row[3]:createText(dynamicText, { height = h }) end',
     '  local other = {}',
     '  other:createButton({ height = h })',
     '  local function localWidth() return 40 end',
@@ -21665,7 +21738,7 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
         && operation.descriptorFacts.text.value === 'ACTION')
       && numericLoopActionRowPath !== undefined
       && JSON.stringify(numericLoopActionCellIndexes) === JSON.stringify([1, 5, 9])
-      && numericLoopActionCellRoots.every(root => root?.endsWith(`|${numericLoopActionRowPath}`) === true),
+      && numericLoopActionCellRoots.every(root => root === numericLoopActionRowPath),
     detail({
       selection: numericLoopActionSelection,
       status: numericLoopActionSelected.status,

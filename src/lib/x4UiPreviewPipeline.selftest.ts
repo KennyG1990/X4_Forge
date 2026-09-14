@@ -1317,7 +1317,7 @@ const previewLoopLua = [
   'function menu.display(dynamicText)',
   '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
   '  local table = frame:addTable(1, { width = 100 })',
-  '  for i = 1, 3 do',
+  '  for i = 1, runtimeCount do',
   '    local row = table:addRow(false, {})',
   '    row[1]:createText(dynamicText, { height = 10 })',
   '  end',
@@ -1786,6 +1786,19 @@ check('pipeline output is deeply frozen',
   && (replayA.program === undefined || Object.isFrozen(replayA.program)));
 check('pipeline output is JSON serializable', JSON.stringify(replayA).length > 0);
 check('aliases expose the same pure projector', buildX4UiPreviewPipeline === projectX4UiPreviewPipeline);
+
+const sourceDerivedLoopSource = sourceFor([
+  passthrough('ui.xml', previewLoopXml),
+  passthrough('ui/loop.lua', previewLoopLua.replace('runtimeCount', '3'), { reason: 'unparsed' }),
+]);
+const sourceDerivedLoopSelection = selectionFor(sourceDerivedLoopSource, 'ui/loop.lua', 'function', 'menu.display');
+const sourceDerivedLoopProjection = pipeline(sourceDerivedLoopSource, sourceDerivedLoopSelection);
+check('source-proven numeric loop issues effective replay without supplied loop input',
+  sourceDerivedLoopProjection.previewLoopSelections.length === 1
+  && sourceDerivedLoopProjection.previewLoopSelections[0]?.iterationCount === 3
+  && sourceDerivedLoopProjection.previewLoopInput?.selections[0]?.iterationCount === 3
+  && sourceDerivedLoopProjection.previewLoopInput.selections[0]?.id === sourceDerivedLoopProjection.previewLoopCatalog?.entries[0]?.id
+  && sourceDerivedLoopProjection.verification.gameVerified === false);
 
 const previewLoopSource = sourceFor([
   passthrough('ui.xml', previewLoopXml),

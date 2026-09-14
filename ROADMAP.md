@@ -8400,3 +8400,17 @@ Prior132/132 integration predates this source change. Plan/review/AAR and eviden
 docs/plans/2026-09-14-b119-sequence-length.md; test-results/b119-sequence-length-20260914/.
 Commit point: feat(ui): prove immutable source sequence lengths for imported menus.
 Normal-hook checkpoint result: checkpoint-retry/post-commit.json in that evidence directory.
+
+### 2026-09-14 — B119 source numeric-loop recovery: headless behavior VERIFIED, unit PARTIAL
+
+Existing loop normalizer/proof/replay automatically handles source-proven literal and immutable
+sequence bounds, scalar induction indexes and correct outer-row cell ownership. Unknown/unsafe
+loops and explicit overrides retain their boundaries; kernel/evidence validators unchanged.
+Layout984/984, Pipeline126/126, EditorSession/types/exact lint PASS. Original HUB applies six
+16percent tab-width setters at both profiles without manual loop/index inputs. This is not
+full-menu rendering or native proof; derived-count control display/labels/y/body remain open.
+Plan/review/AAR:docs/plans/2026-09-14-b119-source-loop-recovery.md.
+Evidence:test-results/b119-source-loop-20260914/RESULTS.md; checkpoint-retry/post-commit.json
+in the same directory is the authority for successful normal-hook local checkpoint.
+Commit point: feat(ui): recover source-proven numeric layout loops automatically.
+No push/publication/install/real-mod writes. Full B119 remains PARTIAL.

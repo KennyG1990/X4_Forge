@@ -607,7 +607,7 @@ function sampleWorkspace(): ModWorkspace {
   ]);
 }
 
-function loopWorkspace(): ModWorkspace {
+function loopWorkspace(bound = '3'): ModWorkspace {
   return workspace([
     passthrough('ui.xml', [
       '<?xml version="1.0" encoding="utf-8"?>',
@@ -623,7 +623,7 @@ function loopWorkspace(): ModWorkspace {
       'function menu.display(dynamicText)',
       '  local frame = Helper.createFrameHandle(menu, { width = 100, height = 80 })',
       '  local table = frame:addTable(1, { width = 100 })',
-      '  for i = 1, 3 do',
+      `  for i = 1, ${bound} do`,
       '    local row = table:addRow(false, {})',
       '    row[1]:createText(dynamicText, { height = 10 })',
       '  end',
@@ -2998,10 +2998,12 @@ async function run(): Promise<void> {
   assert.ok(loopCatalog, 'loop fixture projection must expose the exact catalog issued with its authority');
   assert.ok(loopBinding, 'loop fixture projection must issue an editor-only binding');
   assert.ok(loopCatalogAuthority, 'loop fixture projection must issue a catalog authority');
-  assert.equal(loopUnprojected.loops, undefined, 'omitting loop input must leave loop selections conditional');
-  assert.equal(loopUnprojected.previewLoopSelections.length, 0, 'omitting loop input must not claim a selected loop');
+  assert.equal(loopUnprojected.loops, undefined, 'source-derived replay must not manufacture explicit user loop state');
+  assert.equal(loopUnprojected.previewLoopSelections.length, 1, 'the source-proven numeric loop must replay automatically');
   const loopEntry = loopCatalog.entries[0];
   assert.ok(loopEntry, 'loop fixture must expose one direct loop entry');
+  assert.equal(loopUnprojected.previewLoopSelections[0]?.id, loopEntry.id);
+  assert.equal(loopUnprojected.previewLoopSelections[0]?.iterationCount, 3);
   assert.equal(loopEntry.depth, 1);
   assert.equal(loopEntry.provenance, 'preview-only');
   assert.ok(loopEntry.callIds.length > 0);
@@ -3235,6 +3237,25 @@ async function run(): Promise<void> {
   assert.equal(loopTargetDrift.loopReconciliation.status, 'cleared');
   assert.equal(JSON.stringify(loopWorkspaceValue), loopWorkspaceJson, 'loop actions must not mutate workspace bytes or identity');
 
+  const refusedAutomaticLoops = projectX4UiEditorSession({
+    workspace: loopWorkspaceValue, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE,
+    selection: loopSelection, loopBinding, loopCatalogAuthority,
+    loops: { ...loopCountThree.loops, selections: [{ id: loopEntry.id, iterationCount: 5 }] },
+    loopInput: { ...loopCountThree.loops, selections: [{ id: loopEntry.id, iterationCount: 6 }] },
+  });
+  assert.equal(refusedAutomaticLoops.status, 'refused');
+  assert.equal(refusedAutomaticLoops.loopReconciliation.status, 'refused');
+  assert.equal(refusedAutomaticLoops.loops, undefined);
+  assert.equal(refusedAutomaticLoops.paint, null);
+  assert.deepEqual(refusedAutomaticLoops.preview.previewLoopInput, loopUnprojected.preview.previewLoopInput,
+    'refused user counts must leave only the independently source-derived replay input');
+  assert.deepEqual(refusedAutomaticLoops.previewLoopSelections, loopUnprojected.previewLoopSelections);
+
+  // Keep the original no-forwarding oracle for genuinely runtime-dependent loops.
+  {
+  const loopWorkspaceValue = loopWorkspace('runtimeCount');
+  const runtimeLoopSeed = projectX4UiEditorSession({ workspace: loopWorkspaceValue, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE });
+  const loopSelection = selectionFor(runtimeLoopSeed.source, 'ui/loops.lua', 'function');
   const makeLoopAliasFixture = () => {
     const projection = projectX4UiEditorSession({
       workspace: loopWorkspaceValue,
@@ -3504,6 +3525,8 @@ async function run(): Promise<void> {
       });
     },
   );
+
+  }
 
   const loopPathWorkspaceValue = loopPathWorkspace();
   const loopPathSeed = projectX4UiEditorSession({ workspace: loopPathWorkspaceValue, corpus: undefined, profile: X4_UI_EDITOR_DEFAULT_PROFILE });

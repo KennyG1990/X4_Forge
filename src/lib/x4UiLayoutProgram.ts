@@ -5226,6 +5226,7 @@ const normalizePreviewLoops = (
   target: X4UiLayoutTarget,
   profileId: string,
   catalog: X4UiLayoutPreviewLoopCatalog,
+  model: X4UiCallModel,
 ):
   | { ok: true; value: NormalizedPreviewLoops }
   | {
@@ -5234,7 +5235,9 @@ const normalizePreviewLoops = (
       | 'preview-loop-profile-mismatch' | 'invalid-preview-loop';
     message: string;
   } => {
-  if (input === undefined) return { ok: true, value: { bySource: new Map(), ordered: [] } };
+  if (input === undefined) input = {
+    catalogId: catalog.id, source: identity, targetId: target.id, profileId, selections: [],
+  };
   if (!safeExactDataKeys(input, ['catalogId', 'source', 'targetId', 'profileId', 'selections'])
     || typeof safeDataField(input, 'catalogId') !== 'string'
     || typeof safeDataField(input, 'targetId') !== 'string'
@@ -5276,6 +5279,13 @@ const normalizePreviewLoops = (
   const byId = new Map(catalog.entries.map(entry => [entry.id, entry]));
   const selectedIds = new Set<string>();
   const selected: X4UiLayoutPreviewLoopSelectionBinding[] = [];
+  const select = (entry: X4UiLayoutPreviewLoopCatalogEntry, iterationCount: number): void => {
+    selectedIds.add(entry.id);
+    selected.push({
+      id: entry.id, iterationCount, loopId: entry.loopId, source: cloneLocation(entry.source),
+      kind: entry.kind, multiplicity: entry.multiplicity, depth: 1, provenance: 'preview-only',
+    });
+  };
   for (const candidate of selectionValues) {
     if (!safeExactDataKeys(candidate, ['id', 'iterationCount'])
       || typeof safeDataField(candidate, 'id') !== 'string'
@@ -5296,17 +5306,14 @@ const normalizePreviewLoops = (
     }
     const entry = byId.get(candidateId);
     if (!entry) return { ok: false, code: 'invalid-preview-loop', message: `unknown or extra preview-loop selection ID: ${candidateId}` };
-    selectedIds.add(candidateId);
-    selected.push({
-      id: entry.id,
-      iterationCount,
-      loopId: entry.loopId,
-      source: cloneLocation(entry.source),
-      kind: entry.kind,
-      multiplicity: entry.multiplicity,
-      depth: 1,
-      provenance: 'preview-only',
-    });
+    select(entry, iterationCount);
+  }
+  // Proven finite source loops need no manual count. Explicit preview choices
+  // are never overwritten, including a deliberately mismatched count.
+  for (const entry of catalog.entries) {
+    if (entry.kind !== 'numeric-for' || selectedIds.has(entry.id)) continue;
+    const proof = numericForBindingProofFor(model, entry.source);
+    if (proof) select(entry, proof.values.length);
   }
   const ordered = catalog.entries
     .filter(entry => selectedIds.has(entry.id))
@@ -5366,7 +5373,7 @@ const instantiatePreviewLoopReference = (
     delete cloned.index.directHelperScaleResult;
     delete cloned.index.numericExpression;
   }
-  if (cloned.kind !== 'global' && locationContains(instance.source, cloned.source)) {
+  if (cloned.kind !== 'global' && ownedPaths.has(reference.path)) {
     cloned.path = prefixInstancePath(prefix, cloned.path)!;
   }
   if (cloned.parentPath && ownedPaths.has(cloned.parentPath)) {
@@ -5389,6 +5396,22 @@ const instantiatePreviewLoopValue = (
   numericForBinding?: NumericForBindingProof,
 ): X4UiValue => {
   const result = cloneDeep(value) as X4UiValue;
+  const iterationValue = numericForBinding && instance.iterationCount === numericForBinding.values.length
+    ? numericForBinding.values[instance.iteration - 1] : undefined;
+  const scalar = !result.reference && numericForBinding && iterationValue !== undefined
+    && sourceLocationMatchesModel(model, value.location, value.expression)
+    ? numericForIndexValueFor(model, value, numericForBinding, iterationValue) : undefined;
+  if (scalar !== undefined) {
+    result.status = 'static';
+    result.type = 'number';
+    result.value = scalar;
+    delete result.reason;
+    delete result.symbol;
+    delete result.parameter;
+    delete result.localInvocationResult;
+    delete result.directHelperScaleResult;
+    delete result.numericExpression;
+  }
   if (result.reference) {
     result.reference = instantiatePreviewLoopReference(result.reference, instance, ownedPaths, model, numericForBinding);
     if (['frame', 'table', 'row', 'cell'].includes(result.reference.kind)
@@ -5443,12 +5466,16 @@ const previewLoopOwnedReferencePaths = (
   source: X4UiSourceLocation,
 ): ReadonlySet<string> => {
   const paths = new Set<string>();
+  const indexedParents = new Map<string, string>();
+  const collectReference = (reference: X4UiValueReference): void => {
+    if (reference.kind === 'global' || !locationContains(source, reference.source) || !reference.path) return;
+    paths.add(reference.path);
+    if (reference.kind === 'cell' && reference.parentPath) indexedParents.set(reference.path, reference.parentPath);
+  };
   const visit = (value: unknown): void => {
     if (isValueShape(value)) {
       const reference = value.reference;
-      if (reference && reference.kind !== 'global' && locationContains(source, reference.source)) {
-        if (reference.path) paths.add(reference.path);
-      }
+      if (reference) collectReference(reference);
       if (reference?.index) visit(reference.index);
       return;
     }
@@ -5459,7 +5486,7 @@ const previewLoopOwnedReferencePaths = (
     if (isObject(value)) {
       if (typeof value.kind === 'string' && typeof value.path === 'string' && isSourceLocationShape(value.source)) {
         const reference = value as unknown as X4UiValueReference;
-        if (reference.kind !== 'global' && locationContains(source, reference.source)) paths.add(reference.path);
+        collectReference(reference);
         if (reference.index) visit(reference.index);
         return;
       }
@@ -5467,6 +5494,9 @@ const previewLoopOwnedReferencePaths = (
     }
   };
   for (const call of calls) visit(call);
+  // Indexing an existing row does not allocate a new cell per iteration.
+  // Only rows created inside this loop give their cells instance-owned paths.
+  for (const [cell, row] of indexedParents) if (!paths.has(row)) paths.delete(cell);
   return paths;
 };
 
@@ -6469,6 +6499,29 @@ const localAstNumericForBoundValue = (
   const raw = model.file.text.slice(range[0], range[1]);
   if (!source || !sourceLocationMatchesModel(model, source, raw)) return undefined;
   if (node.type === 'NumericLiteral') return localAstNumericLiteralValue(model, node);
+  if (node.type === 'UnaryExpression' && node.operator === '#') {
+    const base = localAstNode(node.argument);
+    if (!base || base.type !== 'Identifier' || base.isLocal !== true || typeof base.name !== 'string') return undefined;
+    const index = numericExpressionSourceAstIndex(model);
+    const declaration = numericExpressionSourceDeclarationForReference(index, base.name, base);
+    if (!declaration) return undefined;
+    for (const alias of model.aliases.filter(alias => alias.name === base.name)) {
+      const binding = numericExpressionAliasSourceBinding(alias, model);
+      const tableSource = alias.value.reference?.source;
+      if (binding?.declarationOwner !== declaration || !tableSource) continue;
+      const tables = localAstNodeAt(index, tableSource, 'TableConstructorExpression');
+      const fields = tables.length === 1 ? localAstNodes(tables[0].fields) : undefined;
+      if (!fields) continue;
+      const descriptor: X4UiNumericExpression = {
+        kind: 'table-length', base: base.name, tableSource, value: fields.length, expression: raw, source,
+      };
+      const consumer: X4UiValue = { status: 'dynamic', type: 'number', expression: raw, location: source };
+      // Alias metadata locates a candidate only. Exact AST/declaration/immutability
+      // and this loop-bound consumer must pass the existing independent validator.
+      if (numericExpressionError(descriptor, consumer, model) === undefined) return fields.length;
+    }
+    return undefined;
+  }
   if (node.type !== 'UnaryExpression' || (node.operator !== '+' && node.operator !== '-')) return undefined;
   const argument = localAstNode(node.argument);
   const argumentRange = argument ? sourceAstRange(argument) : undefined;
@@ -6503,8 +6556,8 @@ const numericForBodyHasAmbiguousBinding = (
     const node = localAstNode(candidate);
     if (!node) return false;
     if (node.type === 'FunctionDeclaration') return containsInductionIdentifier(node);
-    if (node.type === 'ForNumericStatement'
-      || node.type === 'ForGenericStatement') return true;
+    if (['ForNumericStatement', 'ForGenericStatement', 'WhileStatement', 'RepeatStatement',
+      'BreakStatement', 'ReturnStatement', 'GotoStatement'].includes(String(node.type))) return true;
     if (node.type === 'LocalStatement'
       && localAstNodes(node.variables)?.some(variable => localAstIdentifier(variable, variableName))) return true;
     if (node.type === 'AssignmentStatement') {
@@ -11765,6 +11818,7 @@ export function projectX4UiLayoutProgram(
     target,
     previewLoopProfileId,
     previewLoopCatalog,
+    model,
   );
   if (normalizedLoops.ok === false) {
     return refusalResult(normalizedLoops.code, normalizedLoops.message, model, target.source);
