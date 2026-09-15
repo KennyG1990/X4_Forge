@@ -8,6 +8,40 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-15 00:26Z: bounded catalog-handle repair VERIFIED. [REPRODUCED] Mutable sample/path
+rebinding invalidated earlier frozen projections; exact browser diagnosis found saved B
+failed source migration after Undo. Distinct handles for equivalent new catalogs fix both
+fail-first regressions while forged/cross-catalog/stale authority remains rejected.
+Session/scenarios/types/lint PASS; exact rejected-factory causal test PASS1/1; normal-owner
+diagnostic PASS1/1; final uninstrumented history/named-scenarios/new-menu group PASS3/3,
+all first attempt. Redo screenshot inspected. No production replay cache or speedup claim.
+Protected50/realLua4/live19 and isolated3200/3201 cleanup PASS. Six-path local checkpoint
+being prepared above332e215; authority:test-results/b119-stable-catalog-authority-20260915/
+checkpoint/post-commit.json. No push/release/install/native; full goalPARTIAL.
+Plan:docs/plans/2026-09-15-b119-stable-catalog-authority.md.
+Evidence:test-results/b119-stable-catalog-authority-20260915/RESULTS.md.
+
+2026-09-14 23:51Z: five-entry complete-projection cache experiment REVERTED. It repeats
+the earlier rejected four-entry design: HUB1/1PASS and faster click times, but scenario
+Undo fails twice (expected savedB,Current custom values). Original source/test restored;
+unchanged history suite PASS3/3firstattempt;822baseline hashes/50/4/19guards verified.
+No product speedup retained. Do NOT retry LRU variants without diagnosing exact saved/
+current scenario mismatch. Earlier eager fallback projection is already removed.
+Plan:docs/plans/2026-09-14-b119-session-replay-cache.md.
+Evidence:test-results/b119-session-replay-cache-20260914/RESULTS.md.
+HEAD332e215; no new commit/push/release/install/native. Full goalPARTIAL.
+
+2026-09-14 23:18Z: prior five-path latency checkpoint committed locally332e215;
+normal precommit passed on retry,93unrelated paths preserved. New diagnostic PARTIAL:
+one HUB heading edit yields9layout/21validation/6scene calls, identical twice.
+Instrumented browser FAILED: first120s timeout,retryPASS,aggregate1flaky/1bad.
+Counts are not a latency benchmark or proof all calls are redundant. Lint and
+50/4/19/input/machine/cleanup guards PASS. No production edits; diagnostic wrapper,
+plan/handoff uncommitted. No push/install/native/release. Next: causal reproduction
+of avoidable session/scenario projection before guarded reuse.
+Plan:docs/plans/2026-09-14-b119-edit-projection-reuse.md.
+Evidence:test-results/b119-edit-projection-reuse-20260914/RESULTS.md.
+
 2026-09-14 22:39Z: conservative source-only table-alias candidate prefilter implemented;
 full goalPARTIAL. OriginalHUB paired diagnostic89.651->48.795s with exact result parity.
 Rendered HUB edit/undo/redo/export/independent reopen PASS1/1 first attempt; actions improve

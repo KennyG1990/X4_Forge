@@ -1,118 +1,114 @@
-# Session handoff — B119 table-proof latency checkpoint
+# Session handoff — B119 stable catalog authority repair
 
-## Current state — 2026-09-14 22:39Z
+## Current state / checkpoint
 
-F:/DEV_ENV/X4_Forge. Full goal ACTIVE/PARTIAL. Astra directly; no Luna/delegation.
-Read:C:/Users/Moshi/.codex/attachments/d06dfea8-8256-48a5-97f5-b524fac87153/goal-objective.md.
+Project F:/DEV_ENV/X4_Forge. Full visual-builder goal ACTIVE/PARTIAL.
+Bounded sample/path catalog-handle repair VERIFIED 2026-09-15 00:26Z.
+Preparing a six-path LOCAL development commit above HEAD/main332e2158ae4d90715f7bd4df612a5cbfcc8e3551.
+Do not infer commit success from this file. First command:
+Get-Content test-results/b119-stable-catalog-authority-20260915/checkpoint/post-commit.json
+If absent, inspect checkpoint/commit-exit.json and commit.log; recover the existing process,
+do not blindly rerun the wx evidence writer or create a second commit.
+checkpoint.mjs commit uses the normal npm run precommit:check hook; verify checks exact
+six committed paths, empty index, all excluded dirty bytes, input pins and live guards.
+No push, release, install or native-game write. Push only PUBLIC RELEASES; never republish0.0.78.
+Astra directly; no Luna or delegation.
+
+Read complete objective:
+C:/Users/Moshi/.codex/attachments/d06dfea8-8256-48a5-97f5-b524fac87153/goal-objective.md.
 Approved product plan:docs/plans/2026-09-10-b119-canvas-first-builder.md.
-Current bounded plan/acceptance/review/AAR:docs/plans/2026-09-14-b119-table-proof-latency.md.
-This turn PROGRESS: source-only table-alias prefilter, same-output diagnostic45.6% faster,
-rendered edit/undo/redo improved, all preserved acceptance boundaries. Immediate feedback still unmet.
+Lua canonical; reuse source/CAS, renderer, workspace/history and corpus owners.
 
-## Git and checkpoint — next bounded action
+## New reproduced cause / actual repair
 
-Verified parent/main c0a173b3c8da327dff241f6f9e891c3ad9fb48ef.
-The previous eleven-file checkpoint DID commit; authority:
-test-results/b119-active-section-edit-20260914/checkpoint/post-commit.json.
-First checkpoint attempt FAILED terminal1 at22:46:19Z: unchanged Vite readiness10s timeout.
-Preserved checkpoint/commit.log and commit-exit.json; HEAD unchanged, five paths remain staged.
-Unchanged focused vite-recheck then PASS at22:47:21Z with allguards intact; cause remains unknown.
-Prepared retry runner:test-results/b119-table-proof-latency-20260914/checkpoint-retry.mjs.
-Inspect retry process/receipts now:checkpoint-retry/commit-exit.json records terminal status;
-checkpoint-retry/post-commit.json alone confirms verified completion. If a hook is live, poll
-that same process; never launch a duplicate. No timeout/code/config bypass or change.
-Five owned paths only:
-- src/lib/x4UiLayoutProgram.ts
-- src/lib/x4UiLayoutProgram.selftest.ts
-- docs/plans/2026-09-14-b119-table-proof-latency.md
-- BACKLOG.md
-- SESSION-HANDOFF.md
+Read BOTH:
+docs/plans/2026-09-15-b119-scenario-mismatch-diagnostic.md
+docs/plans/2026-09-15-b119-stable-catalog-authority.md
 
-Prepare a LOCAL PARTIAL checkpoint: perf(ui): prune impossible source table alias proofs.
-Run normal npm run precommit:check / configured unchanged commit hook before commit.
-Do not restart a live hook on an observation timeout. Verify exact committed paths,
-excluded-file hashes, empty index and protected50/4/19files afterward.
-The adapted checkpoint runner pins current parent/five paths/current test receipts and93exclusions.
-Current diagnostic run.mjs pins c0a173b and is NOT a commit runner.
-Preserve93unrelated paths (Discord/data deletions, extension metadata/evidence, W3B1, generated).
-No broad staging/reset/clean/checkout/discard. Push only PUBLIC RELEASES.
-No bypass/push/release/install/native; never republish0.0.78.
+[REPRODUCED] Equivalent rebindSampleCatalogAuthority/rebindPathCatalogAuthority mutated
+the issued WeakMap record's catalog. Earlier frozen projections retained old catalog with
+same handle. Exact reference admission then refused the old pair with catalog-authority-required.
+Browser snapshots found saved B retained edited-source E3E99FB2 after Undo to7D00629E;
+saved A migrated, B did not. Checkpoint6 is sample draft refusal inside replay. B's values
+remained visible, but B was filtered as stale. This is not a JSON ordering or label-only bug.
 
-## What changed and why it is bounded
+Repair mirrors EXISTING loop rebinding: readonly issuance records, exact catalog returns
+same handle, equivalent new catalog gets a distinct handle. Populated sample/path inputs
+use successfully rebound-or-supplied authority, never newly-issued fallback for forged/missing
+supplied authority. Source/profile binding checks and cross-catalog refusal preserved.
+Production single-entry cache unchanged. NO production LRU / no retained speedup claim.
 
-Existing exactTableSequenceAliasSourceBinding repeatedly proved unrelated identifiers.
-New private AST-derived candidate name set follows LocalStatement/AssignmentStatement
-initializer pairs: exact table range seeds names; local-Identifier initializers add edges.
-Closure deliberately ignores scopes, chronology, writes and hop limits, so extra candidates
-still run the entire old proof. It can reject impossible names but cannot grant authority.
-Cache is scoped to the existing private AST index, invalidated by source-text replacement.
-No caller alias metadata, validation result or issuance result is cached.
-Complete source/declaration/scope/write checks and gameVerified=false remain.
-56production lines +41test lines; no source writer/history/renderer/API changes.
-Existing selected-DOSSIER scalar/source mapping and declaration-name index remain intact.
+The September11 partial-scalar-editing plan already documents equivalent-binding rebinding;
+this repair preserves its prohibition on using these helpers for changed-source migration.
 
-## Terminal evidence
+## Evidence / completed tests
 
-Root:test-results/b119-table-proof-latency-20260914/.
-Readable RESULTS.md; machine comparison.json and per-label receipts/logs/input pins.
-Bundled Node24.19.0:
-C:/Users/Moshi/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe.
+Root:test-results/b119-stable-catalog-authority-20260915/. Read RESULTS.md.
+- red-sample and red-path each FAILED1 as intended against mutable rebinding.
+- Full session and scenarios PASS0. Final types/lint PASS0 after diagnostic hook removal.
+- rejected-fixed: exact rejected five-entry factory through test-only response interception,
+  calling repaired current helpers: original Undo/Redo assertion PASS1/1 first attempt.
+  Observer counts1/1/1 and no replay failures.
+- diagnostic-fixed: normal owner with same observer PASS1/1 first attempt, counts1/0/1,
+  no replay failures. causal-summary.json contains compact observations.
+- history-browser: final ordinary code, no diagnostic hooks/interception, PASS3/3 first
+  attempt 00:24:22–00:26:01Z. ScenarioB Undo/Redo, named scenarios, New-menu row/Text history.
+  Redo screenshot visually inspected: Title after edit A, Scenario B, Independent B.
+  Separate shell validation1error remains visible; this fix does not clear that gate.
+- All protected50/realLua4/live19 and final824 input pins preserved; X4 absent, only unrelated
+  Deckwright3100/PID61604 listener unchanged; isolated3200/3201 process tree stopped.
+- Full diff review and diff --check pass. Optional reviewctl/BlastRadius unavailable;
+  manual review, established loop pattern, authority negatives and browser checks used.
 
-baseline-cpu89,650.731ms ->candidate-cpu48,794.636ms; exact JSON output parity.
-Same originalHUB, two profiles, real scalarCAS/inverse/transfer, stale/extra-edit refusals.
-Single diagnostic pair, not universal speedup.
-baseline-layout and layout1098/1098PASS plus source lookup/table alias continuity.
-source174/174PASS plus causal matrices; scenarios/sessionPASS; pipeline127/127PASS.
-typesPASS; two-filelintPASS.
-sceneFAILED194/196; complete failure lines exactly equal previous name-index-scene.log:
-portableHUB expects7operations/3gaps gets9/6; configuredMENU expects52inputs gets54.
-No assertions waived or changed. Original independent parent reproduction:
-test-results/b119-protected-tab-body-20260914/scene-head-baseline-receipt.json.
+Terminal handles:78522 rejected-fixed,82621 diagnostic-fixed,92867 final-types,
+67532 final-lint,61797 history-browser. Earlier types59101/lint9118 completed0 by receipts.
+No browser run active at handoff writing. Check checkpoint runner for any later live handle.
 
-browserPASS1/1firstattempt,22:32:48–22:39:05Z,0failed/flaky/bad/reporterrors,treeGone=true.
-Actual selectedDOSSIER ->headingedit ->undo/redo ->export ->independentreopen ->duplicate refusal.
-Same120s interaction budget; reference fixture265.648s separate.
-Trace action walls (include actionability/processing):
-edit14.372s,undo10.021s,redo10.257s; previous20.464/17.863/15.400s.
-Reopened screenshot visually inspected: AI INFLUENCE HUB, six tabs, DOSSIERselection,
-FACTIONSheader/bar. Later body is still largely unresolved/blank.
-Actual screenshot and trace under:
-browser/x4-ui-source-editor-Source-6101c-ts-and-reopens-real-HUB-Lua-chromium/.
-Not generated artwork. This is isolated headless Chromium3200/3201, not installed Forge/X4.
-All822/823inputpins (slashaliases, not unique physical counts), HEAD/status and50/4/19guards passed.
-Before/after X4absent, onlyDeckwright3100/PID61604. No original mod/corpus/live writes.
-Original validation handles terminal:9680baselineCPU,24893baselineLayout,73539candidateCPU,62812layout,
-22166source,38019types,39502session,57400lint,88462scene,8542browser.
-First commit30468 and focused Vite70929 are terminal. A retry has its own handle/log; inspect before resuming.
-No running agent/subagent.
+## Files / preservation
 
-OriginalHUB:
-G:/SteamLibrary/steamapps/common/X4 Foundations/extensions/x4_ai_influence/ui/addons/ai_influence_chat/aic_hub.lua.
-SHA657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F.
-Corpus:F:/Downskies/x4unpackersuiteV1/X4 unpacked 9.00.
-Replay:test-results/b119-real-menu-roundtrip-20260913/reference-replay.
+Six checkpoint paths:src/lib/x4UiEditorSession.ts,src/lib/x4UiEditorSession.selftest.ts,
+BACKLOG.md,SESSION-HANDOFF.md and the two September15 plans.
+Do not stage other work. Prior optional HUB count wrapper in
+tests/e2e/x4-ui-source-editor.spec.ts remains +7/-5, unchanged by final cleanup.
+Two older dirty plans remain:2026-09-14-b119-edit-projection-reuse.md and
+2026-09-14-b119-session-replay-cache.md. Preserve them and the prior93 unrelated paths,
+including Discord/data deletions, extension metadata/evidence, W3B1 and generated files.
+Checkpoint baseline inventories exact excluded paths and hashes.
 
-## Next after local checkpoint
+Temporary tests/e2e/x4-ui-scenario-diagnostic.ts removed from portable test suite, archived
+as test-results/b119-scenario-mismatch-20260915/scenario-diagnostic.ts.txt.
+Original import/beforeEach/afterEach hooks removed; historical route factory JS retained.
+Standalone .ts evidence files are still compiler-included despite gitignore: use .ts.txt.
+Trace JSON attachment lives INSIDE trace.zip; read-comparison.ps1 reads it without writes.
+Locate artifacts with rg --files; PowerShell does not expand positional path globs for rg.
+Do not dump raw multi-snapshot JSON. Read compact fields/causal-summary.json.
+No external ledger or memory writes.
 
-1. Continue measured latency investigation. Current diagnostic top self-time:
-closedJsonDomain10.398s, jsonEqual6.478s, model/data validation next.
-These are whole-diagnostic costs, not isolated browser editCPU. Inspect repeated validation
-ownership and mutable/untrusted boundaries before choosing a fix. Do not cache mutable trust,
-raise timeouts, add a competing renderer or pretend14s meets immediate-feedback UX.
-2. Exact helper-caption caller-literal editing, then later helper-returnY geometry.
+## Remaining important work
+
+Do not treat this correctness repair as completion of the performance goal.
+Last accepted performance work332e215: original HUB edit/undo/redo action+settlement
+14.372/10.021/10.257s; immediate feedback still unmet. Real HUB later body unresolved.
+Helper-caption caller-literal editing and helper-returnY geometry remain:
 FACTIONS caller201 ->sectionHeader123–130/createText127 ->ASCIIhelper65–73.
 Rendering is not editing; preserve shared-instance scope.
-3. All9journeys,3menus/12references,current fullintegration,packaged/installed/native remain.
-FullgoalPARTIAL, gameVerified=false; no capability-map delta.
 
-Eyeball script: open current RESULTS.md -> reopened capture; check independent workspace,
-edited heading,DOSSIERselection,FACTIONSbar. Saved browser proof, not installed/native acceptance.
-Realmod/game/save/install/config writes require impact/rollback paragraph and explicitgo.
-Keep Antigravity visible during ComputerUse; stop Escape/toolstop. Quiet-machine testing authorized,
-but recheck game/ports before another heavy run.
+Two historical complete-projection caches were rejected (four and five entry).
+The underlying failure is now diagnosed and repaired, but this does not authorize retaining
+either cache without a new bounded design, regression and actual UX evidence.
+Eager ordinary fallback projection before successful scenario transfer is ALREADY REMOVED
+(2026-09-14-b119-continuation-fallback.md). Do not rebuild it.
+Measured9layout/21validation/6scene/12session-pipeline calls per HUB edit are repeated work,
+not proof that every call is redundant. Count instrumentation is not a latency benchmark.
 
-AAR: profile-driven conservative pruning and tests-first baseline sustained.
-Oversized read output and one nonexistent glob corrected with bounded exact-path reads.
-reviewctl/BlastRadius absent; complete manual diff/graph/type/lint/negative review substituted.
-Highest evidenced risk remains synchronous editing stalls; scene failures remain visible.
-Project result/risk banked in current plan; no memory or external-ledger writes.
+Prior scene gate FAILED194/196: portableHUB expects7ops/3gaps, actual9/6;
+configuredMENU expects52samples, actual54. Exact prior failures, not waived.
+All9journeys,3realmenus/12reference obligations,current full integration,packaged/installed/
+native gates remain. gameVerified=false. Preview for layout; game for truth.
+
+Operator: quiet rendered-test authority retained; recheck X4/ports before heavy runs.
+Real mod/game/save/install/config writes require impact/rollback paragraph and explicit go.
+During authorized CUA keep Antigravity visible; obey Escape/tool stop. No CUA this unit.
+Eyeball queue: RESULTS.md -> actual scenario-B-redo.png; isolated browser only.
+Next work: finish/verify local checkpoint, then select a bounded user-facing latency/body
+editing improvement from the existing owner/corpus evidence, not another documentation-only close.

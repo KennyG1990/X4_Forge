@@ -843,8 +843,8 @@ export function sameX4UiEditorPathBinding(left: unknown, right: unknown): boolea
 }
 
 type IssuedPathCatalogAuthority = {
-  catalog: X4UiLayoutPreviewPathCatalog;
-  binding: X4UiEditorPathBinding;
+  readonly catalog: X4UiLayoutPreviewPathCatalog;
+  readonly binding: X4UiEditorPathBinding;
 };
 
 const issuedPathCatalogAuthorities = new WeakMap<object, IssuedPathCatalogAuthority>();
@@ -871,9 +871,8 @@ function rebindPathCatalogAuthority(
   if (catalog === null || binding === undefined) return undefined;
   const record = issuedPathCatalogAuthorityFor(value);
   if (record === null || !sameX4UiEditorPathBinding(record.binding, binding)) return undefined;
-  record.catalog = catalog;
-  record.binding = binding;
-  return value as X4UiEditorPathCatalogAuthority;
+  if (record.catalog === catalog) return value as X4UiEditorPathCatalogAuthority;
+  return issuePathCatalogAuthority(catalog, binding);
 }
 
 function pathCatalogAuthorityMatches(catalog: unknown, authority: unknown): boolean {
@@ -1594,8 +1593,8 @@ export function sameX4UiEditorSampleBinding(left: unknown, right: unknown): bool
 }
 
 type IssuedSampleCatalogAuthority = {
-  catalog: X4UiLayoutPreviewSampleCatalog;
-  binding: X4UiEditorSampleBinding;
+  readonly catalog: X4UiLayoutPreviewSampleCatalog;
+  readonly binding: X4UiEditorSampleBinding;
 };
 
 const issuedSampleCatalogAuthorities = new WeakMap<object, IssuedSampleCatalogAuthority>();
@@ -1622,9 +1621,8 @@ function rebindSampleCatalogAuthority(
   if (catalog === null || binding === undefined) return undefined;
   const record = issuedSampleCatalogAuthorityFor(value);
   if (record === null || !sameX4UiEditorSampleBinding(record.binding, binding)) return undefined;
-  record.catalog = catalog;
-  record.binding = binding;
-  return value as X4UiEditorSampleCatalogAuthority;
+  if (record.catalog === catalog) return value as X4UiEditorSampleCatalogAuthority;
+  return issueSampleCatalogAuthority(catalog, binding);
 }
 
 function sampleCatalogAuthorityMatches(
@@ -3223,11 +3221,12 @@ function projectX4UiEditorSessionFromSource(
     const suppliedPathCatalogAuthority = hasOwn(normalized.raw, 'pathCatalogAuthority')
       ? normalized.raw.pathCatalogAuthority
       : undefined;
-    const pathCatalogAuthority = rebindPathCatalogAuthority(
+    const reboundPathCatalogAuthority = rebindPathCatalogAuthority(
       suppliedPathCatalogAuthority,
       pathCatalog,
       pathBinding,
-    ) ?? issuedPathCatalogAuthority;
+    );
+    const pathCatalogAuthority = reboundPathCatalogAuthority ?? issuedPathCatalogAuthority;
     const issuedLoopCatalogAuthority = loopCatalog !== null && loopBinding !== undefined
       ? issueLoopCatalogAuthority(loopCatalog, loopBinding)
       : undefined;
@@ -3263,7 +3262,7 @@ function projectX4UiEditorSessionFromSource(
     } else {
       const authorityForReconciliation = suppliedPaths === undefined
         ? pathCatalogAuthority
-        : suppliedPathCatalogAuthority;
+        : reboundPathCatalogAuthority ?? suppliedPathCatalogAuthority;
       pathReconciliation = reconcileX4UiEditorPathState(
         suppliedPaths,
         pathCatalog,
@@ -3370,11 +3369,12 @@ function projectX4UiEditorSessionFromSource(
     const issuedSampleCatalogAuthority = sampleCatalog !== null && sampleBinding !== undefined
       ? issueSampleCatalogAuthority(sampleCatalog, sampleBinding)
       : undefined;
-    const sampleCatalogAuthority = rebindSampleCatalogAuthority(
+    const reboundSampleCatalogAuthority = rebindSampleCatalogAuthority(
       suppliedSampleCatalogAuthority,
       sampleCatalog,
       sampleBinding,
-    ) ?? issuedSampleCatalogAuthority;
+    );
+    const sampleCatalogAuthority = reboundSampleCatalogAuthority ?? issuedSampleCatalogAuthority;
     let sampleReconciliation: X4UiEditorSampleReconciliation;
     if (suppliedSamples !== undefined
       && sampleBinding !== undefined
@@ -3389,7 +3389,7 @@ function projectX4UiEditorSessionFromSource(
     } else {
       const authorityForReconciliation = suppliedSamples === undefined
         ? sampleCatalogAuthority
-        : suppliedSampleCatalogAuthority;
+        : reboundSampleCatalogAuthority ?? suppliedSampleCatalogAuthority;
       sampleReconciliation = reconcileX4UiEditorSampleState(
         suppliedSamples,
         sampleCatalog,

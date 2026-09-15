@@ -2602,6 +2602,31 @@ async function run(): Promise<void> {
     sampleCatalogAuthority: sampleStageAuthority,
   });
 
+  const stableSampleOwner = createX4UiEditorSessionOwner(sampleWorkspaceValue);
+  const stableSampleFirst = stableSampleOwner.project(sampleStageInput);
+  const stableSampleEntry = stableSampleFirst.sampleCatalog?.entries.find(entry => entry.expectedType === 'string');
+  assert.ok(stableSampleEntry && stableSampleFirst.sampleCatalogAuthority);
+  const stableSampleDraft = { [stableSampleEntry.id]: 'Retained scenario value' };
+  assert.equal(applyX4UiEditorSampleDraft(undefined, stableSampleFirst.sampleCatalog,
+    stableSampleDraft, stableSampleFirst.sampleCatalogAuthority).status, 'accepted');
+  const stableSampleSecond = stableSampleOwner.project({ ...sampleStageInput,
+    selection: structuredClone(sampleSelection), sampleCatalogAuthority: stableSampleFirst.sampleCatalogAuthority });
+  assert.equal(stableSampleSecond.sampleCatalog !== stableSampleFirst.sampleCatalog, true,
+    'sample rebind regression must reach an equivalent newly issued catalog');
+  assert.equal(applyX4UiEditorSampleDraft(undefined, stableSampleSecond.sampleCatalog,
+    stableSampleDraft, stableSampleSecond.sampleCatalogAuthority).status, 'accepted');
+  const retainedSampleDraft = applyX4UiEditorSampleDraft(undefined, stableSampleFirst.sampleCatalog,
+    stableSampleDraft, stableSampleFirst.sampleCatalogAuthority);
+  assert.equal(retainedSampleDraft.status, 'accepted',
+    `equivalent rebinding must not invalidate an earlier frozen sample projection: ${JSON.stringify(retainedSampleDraft)}`);
+  assert.notEqual(stableSampleFirst.sampleCatalogAuthority, stableSampleSecond.sampleCatalogAuthority);
+  assert.equal(applyX4UiEditorSampleDraft(undefined, stableSampleFirst.sampleCatalog,
+    stableSampleDraft, stableSampleSecond.sampleCatalogAuthority).status, 'refused', 'cross-catalog handles remain invalid');
+  assert.equal(applyX4UiEditorSampleDraft(undefined, stableSampleSecond.sampleCatalog,
+    stableSampleDraft, stableSampleFirst.sampleCatalogAuthority).status, 'refused');
+  assert.equal(applyX4UiEditorSampleDraft(undefined, stableSampleSecond.sampleCatalog,
+    stableSampleDraft, { ...stableSampleSecond.sampleCatalogAuthority }).status, 'refused');
+
   recordSessionCausal(
     'B119 sample-only owner projections reuse immutable catalog and stage-two previews',
     sampleStageCatalog !== null && sampleStageAuthority !== undefined && sampleStageBinding !== undefined && sampleStageChangedState.status === 'accepted',
@@ -3786,6 +3811,28 @@ async function run(): Promise<void> {
   const pathElse = pathArms.find(entry => entry.arm === 'else' && entry.reachability !== 'unreachable');
   const pathUnreachable = pathArms.find(entry => entry.reachability === 'unreachable');
   assert.ok(pathThen && pathElseIf && pathElse && pathUnreachable, 'path fixture must expose reachable mutually-exclusive arms and an unreachable arm');
+  const stablePathOwner = createX4UiEditorSessionOwner(pathWorkspaceValue);
+  const stablePathInput = { workspace: pathWorkspaceValue, corpus: canonical, profile: pathProfile, selection: pathSelection };
+  const stablePathFirst = stablePathOwner.project(stablePathInput);
+  assert.equal(updateX4UiEditorPathState(undefined, stablePathFirst.pathCatalog,
+    pathThen.id, stablePathFirst.pathCatalogAuthority).status, 'accepted');
+  const stablePathSecond = stablePathOwner.project({ ...stablePathInput,
+    selection: structuredClone(pathSelection), pathCatalogAuthority: stablePathFirst.pathCatalogAuthority });
+  assert.equal(stablePathSecond.pathCatalog !== stablePathFirst.pathCatalog, true,
+    'path rebind regression must reach an equivalent newly issued catalog');
+  assert.equal(updateX4UiEditorPathState(undefined, stablePathSecond.pathCatalog,
+    pathThen.id, stablePathSecond.pathCatalogAuthority).status, 'accepted');
+  const retainedPathUpdate = updateX4UiEditorPathState(undefined, stablePathFirst.pathCatalog,
+    pathThen.id, stablePathFirst.pathCatalogAuthority);
+  assert.equal(retainedPathUpdate.status, 'accepted',
+    `equivalent rebinding must not invalidate an earlier frozen path projection: ${JSON.stringify(retainedPathUpdate)}`);
+  assert.notEqual(stablePathFirst.pathCatalogAuthority, stablePathSecond.pathCatalogAuthority);
+  assert.equal(updateX4UiEditorPathState(undefined, stablePathFirst.pathCatalog,
+    pathThen.id, stablePathSecond.pathCatalogAuthority).status, 'refused');
+  assert.equal(updateX4UiEditorPathState(undefined, stablePathSecond.pathCatalog,
+    pathThen.id, stablePathFirst.pathCatalogAuthority).status, 'refused');
+  assert.equal(updateX4UiEditorPathState(undefined, stablePathSecond.pathCatalog,
+    pathThen.id, { ...stablePathSecond.pathCatalogAuthority }).status, 'refused');
   const pathState: X4UiEditorPathState = {
     catalogId: pathCatalog.id,
     source: pathCatalog.sourceIdentity,
