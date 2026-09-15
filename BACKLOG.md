@@ -8,6 +8,26 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-15 07:53Z: checked model-normalization candidate implemented; full goalPARTIAL.
+Immutable old/new185case comparison and full real-HUB two-profile pair/summary parity PASS.
+Headless20.281→15.146/13.987s; Layout1225/1225,SourceEdits175/175,Scene196/196,
+pipeline127/127,session/scenarios/types/lint PASS. Rendered4/4firstattempt,0flaky,
+complete verdict/cleanup/protected bytes PASS;26fresh artifacts archived.
+Browser result MIXED: Undo/Redo API11.013/10.801s, Apply16.457s plus5.079s workspace
+check. Apply through that check21.538s vs18.706s previously; no overall UX speedup claim.
+HUB body and mixed-stream editability remain incomplete. No installed/native/fullE2E proof.
+HEADbec7f3e (prior helper-return checkpoint confirmed); full normal precommit retry PASS
+08:13:37Z after an unchanged Vite readiness recheck. Preparing six-file local checkpoint;
+completion authority:test-results/b119-return-cost-20260915/checkpoint/post-commit.json.
+No push/release/install. Current plan:docs/plans/2026-09-15-b119-model-normalization.md.
+Evidence:test-results/b119-return-cost-20260915/RESULTS.md. SESSION-HANDOFF.md supersedes
+older checkpoint-next prose below. Next: checkpoint, then retained Apply-sync trace
+and source-supported body/editability; preserve all9journeys/3menus/12references.
+
+Read-only Apply trace: one workspace GET waited4.591s for response vs0.733s previously;
+not repeated polling. Other API reads overlapped. Handler/transport/shared-work cause not
+diagnosed. Exact evidence:normalization-workspace-read-inspection.log in the current root.
+
 2026-09-15: helper-return candidate has Layout1200/1200, SourceEdits175/175,
 Scene196/196(real MENU/HUB/COMM3/3), coupled checks/types/lint and rendered7/7plus
 traced3/3firstattempt PASS. Exact real-HUB Apply17.65s/Undo13.71s/Redo13.35s remain too

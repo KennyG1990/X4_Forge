@@ -1202,16 +1202,66 @@ const normalizeLayoutModelAliases = (value: unknown): unknown => {
  * the raw model separately so that alias locations remain locked edit evidence.
  */
 export const canonicalizeX4UiLayoutModel = (model: unknown): X4UiCallModel | undefined => {
+  const invalid = Symbol('invalid layout model');
+  const legacyPrototypeKey = Symbol('legacy prototype key');
+  const active = new Set<object>();
+  // Admission and copying share one walk. The output contains only newly owned
+  // plain records/dense arrays and admitted primitives, so it needs no second
+  // JSON-domain walk. Never retain a validation verdict for caller-owned input.
+  const copy = (value: unknown): unknown => {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : invalid;
+    if (typeof value !== 'object' || active.has(value)) return invalid;
+    const array = Array.isArray(value);
+    const prototype = Object.getPrototypeOf(value);
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return invalid;
+    if (Object.getOwnPropertySymbols(value).length > 0) return invalid;
+    const keys = Object.getOwnPropertyNames(value);
+    // Keep the pre-existing exceptional-key behavior outside this optimization;
+    // assigning __proto__ to a plain object does not create an ordinary member.
+    if (keys.includes('__proto__')) throw legacyPrototypeKey;
+    if (array) {
+      const entries = keys.filter(key => key !== 'length');
+      const length = Object.getOwnPropertyDescriptor(value, 'length');
+      if (!length || !Object.prototype.hasOwnProperty.call(length, 'value')
+        || length.value !== value.length || entries.length !== value.length
+        || entries.some((key, index) => key !== String(index))) return invalid;
+    }
+    active.add(value);
+    const result: Record<string, unknown> | unknown[] = array ? [] : {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      const length = array && key === 'length';
+      if (!descriptor || (!length && !descriptor.enumerable)
+        || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return invalid;
+      if (length) continue;
+      // Undefined is allowed only as an omitted record member, never an array
+      // entry. Validate sourceLiteral too, even when alias normalization drops it.
+      if (!array && descriptor.value === undefined) continue;
+      const child = copy(descriptor.value);
+      if (child === invalid) return invalid;
+      (result as Record<string, unknown>)[key] = child;
+    }
+    active.delete(value);
+    if (!array && isLayoutScalarIdentifierAlias(result as Record<string, unknown>)) {
+      delete (result as Record<string, unknown>).sourceLiteral;
+    }
+    return result;
+  };
   try {
-    if (!hasOnlyJsonDataProperties(model)) return undefined;
-    const normalized = normalizeLayoutModelAliases(cloneJsonLike(model));
-    if (!hasOnlyJsonDataProperties(normalized)
-      || closedJsonDomain(normalized, 'normalized model') !== undefined) {
+    const normalized = copy(model);
+    return normalized === invalid ? undefined : normalized as X4UiCallModel;
+  } catch (error) {
+    if (error !== legacyPrototypeKey) return undefined;
+    try {
+      if (!hasOnlyJsonDataProperties(model)) return undefined;
+      const normalized = normalizeLayoutModelAliases(cloneJsonLike(model));
+      return hasOnlyJsonDataProperties(normalized)
+        && closedJsonDomain(normalized, 'normalized model') === undefined
+        ? normalized as X4UiCallModel : undefined;
+    } catch {
       return undefined;
     }
-    return normalized as X4UiCallModel;
-  } catch {
-    return undefined;
   }
 };
 

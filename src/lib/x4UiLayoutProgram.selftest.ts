@@ -103,6 +103,67 @@ const input = (text: string, rel = 'selftest/b119-layout-program.lua') => ({
   sourcePath: `fixture://${rel}`,
 });
 
+// Canonical model admission must preserve source data without repeatedly
+// traversing it or treating mutable caller objects as cached authority.
+{
+  const position = (offset: number) => ({ line: 1, column: offset, offset });
+  const location = (offset: number) => ({ file: 'normalization.lua', start: position(offset), end: position(offset + 1) });
+  const alias = () => ({ status: 'static', type: 'number', expression: 'height', value: 20,
+    location: location(10), sourceLiteral: location(0) });
+  const original = { nested: { height: 10, absent: undefined }, value: alias() };
+  const before = structuredClone(original);
+  const copied = canonicalizeX4UiLayoutModel(original) as unknown as typeof original;
+  check('B119 model normalization: checked copy omits only undefined record values and alias provenance',
+    copied?.nested.height === 10 && !Object.hasOwn(copied.nested, 'absent')
+      && !Object.hasOwn(copied.value, 'sourceLiteral') && copied.value.location.start.offset === 10);
+  check('B119 model normalization: original remains unchanged with independent output objects',
+    JSON.stringify(original) === JSON.stringify(before) && Object.hasOwn(original.nested, 'absent')
+      && copied !== original && copied.nested !== original.nested && copied.value !== original.value);
+  original.nested.height = 30;
+  const changed = canonicalizeX4UiLayoutModel(original) as unknown as typeof original;
+  check('B119 model normalization: mutation is reevaluated without changing prior output',
+    copied.nested.height === 10 && changed?.nested.height === 30);
+  original.nested.height = NaN;
+  check('B119 model normalization: later malformed mutation is refused', canonicalizeX4UiLayoutModel(original) === undefined);
+  const literal = { ...alias(), expression: '20' };
+  const sameLocation = { ...alias(), sourceLiteral: location(10) };
+  check('B119 model normalization: literal and same-location provenance retained',
+    Object.hasOwn(canonicalizeX4UiLayoutModel(literal) || {}, 'sourceLiteral')
+      && Object.hasOwn(canonicalizeX4UiLayoutModel(sameLocation) || {}, 'sourceLiteral'));
+  let getterCalls = 0;
+  const rejected: [string, () => unknown][] = [
+    ['accessor', () => Object.defineProperty({}, 'x', { enumerable: true, get() { getterCalls++; return 1; } })],
+    ['malformed hidden alias provenance', () => ({ ...alias(), sourceLiteral: { ...location(0), bad: NaN } })],
+    ['cycle', () => { const value: { self?: unknown } = {}; value.self = value; return value; }],
+    ['undefined array entry', () => [undefined]], ['sparse array', () => new Array(2)],
+    ['extra array key', () => Object.assign([1], { extra: 2 })],
+    ['non-enumerable array entry', () => Object.defineProperty([1], '0', { enumerable: false })],
+    ['non-enumerable record key', () => Object.defineProperty({}, 'hidden', { value: 1 })],
+    ['symbol key', () => ({ [Symbol('hidden')]: 1 })], ['nonfinite number', () => ({ x: Infinity })],
+    ['function', () => ({ x() { return 1; } })], ['bigint', () => ({ x: BigInt(1) })],
+    ['custom prototype', () => Object.create({ inherited: true })], ['Date', () => new Date(0)],
+    ['non-array prototype', () => Object.setPrototypeOf([1], null)],
+  ];
+  for (const [name, factory] of rejected) {
+    check(`B119 model normalization: refuses ${name}`, canonicalizeX4UiLayoutModel(factory()) === undefined);
+  }
+  check('B119 model normalization: does not execute getters', getterCalls === 0);
+  const shared = Object.freeze({ height: 10 });
+  const dag = canonicalizeX4UiLayoutModel({ a: shared, b: shared }) as unknown as { a: typeof shared; b: typeof shared };
+  check('B119 model normalization: shared frozen input is not a cycle and copies remain independent',
+    dag?.a.height === 10 && dag.b.height === 10 && dag.a !== dag.b && dag.a !== shared);
+  const nullRecord = canonicalizeX4UiLayoutModel(Object.assign(Object.create(null), { x: 1 })) as unknown as { x: number } | undefined;
+  check('B119 model normalization: null-prototype input becomes a plain owned record',
+    Boolean(nullRecord && nullRecord.x === 1 && Object.getPrototypeOf(nullRecord) === Object.prototype));
+  const exceptional = canonicalizeX4UiLayoutModel(JSON.parse('{"__proto__":null,"x":1}'));
+  check('B119 model normalization: exceptional prototype key keeps prior compatibility',
+    JSON.stringify(exceptional) === '{"x":1}' && Object.getPrototypeOf(exceptional) === Object.prototype);
+  let keyScans = 0;
+  const observed = new Proxy({ x: 1 }, { ownKeys(target) { keyScans++; return Reflect.ownKeys(target); } });
+  check('B119 model normalization: single checked copy scans input symbols and names once each',
+    JSON.stringify(canonicalizeX4UiLayoutModel(observed)) === '{"x":1}' && keyScans === 2, String(keyScans));
+}
+
 const loadB119ActualCanonicalCorpus = async (): Promise<X4UiCorpusCanonicalSuccess> => {
   const root = process.env.X4_REFERENCE_ROOT?.trim();
   if (!root) throw new Error('X4_REFERENCE_ROOT is required for the source-backed canonical text-height regression');
