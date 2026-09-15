@@ -234,6 +234,26 @@ function detail(value: unknown): string {
 }
 
 function run(): { allPassed: boolean; pass: boolean; passed: number; total: number; checks: Check[] } {
+  const returnModel = buildX4UiCallModel(input([
+    'local function draw(frame, y)',
+    'local t = frame:addTable(1, {y = y, width = 80})',
+    'return y + Helper.scaleY(10)', 'end',
+    'local f = Helper.createFrameHandle({}, {})',
+    'local nextY = draw(f, 10)',
+    'local t = f:addTable(1, {y = nextY, width = 80})',
+  ].join('\n')));
+  const drawingReturn = returnModel.localFunctions.find(item => item.name === 'draw')?.returnValues?.[0];
+  const returnValue = drawingReturn?.values[0];
+  check('drawing helper retains frozen source-bound return expression without executing it',
+    drawingReturn?.values.length === 1 && returnValue?.numericExpression?.kind === 'binary'
+      && returnValue.status !== 'static' && Object.isFrozen(drawingReturn)
+      && Object.isFrozen(returnValue.numericExpression)
+      && returnModel.file.text.slice(returnValue.location.start.offset, returnValue.location.end.offset) === returnValue.expression,
+    detail(drawingReturn));
+  const returnedAlias = returnModel.aliases.find(item => item.name === 'nextY');
+  check('opaque local result alias retains invocation lineage without adding numeric semantics',
+    returnedAlias?.value.localInvocationResult?.expression === 'draw(f, 10)'
+      && returnedAlias.value.numericExpression === undefined && returnedAlias.value.status !== 'static', detail(returnedAlias));
   for (const expression of ['7 + Helper.scaleY(16)', '7 + metric(1) + Helper.scaleY(16)', 'tonumber(Helper.standardTextHeight) or 19']) {
     const metricModel = buildX4UiCallModel(input([
       'local function metric(mult)',

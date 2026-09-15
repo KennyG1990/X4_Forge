@@ -43,9 +43,10 @@ import {
   type X4UiSourceLocation,
   type X4UiValue,
 } from './x4UiCallModel';
-import type {
-  X4UiSourceFile,
-  X4UiSourceRegistration,
+import {
+  buildX4UiSourceCallModel,
+  type X4UiSourceFile,
+  type X4UiSourceRegistration,
 } from './x4UiSourceBundle';
 import { X4_LAYOUT_PROVENANCE } from './x4UiLayoutKernel';
 import {
@@ -3570,6 +3571,76 @@ interface StructuralInvariantState {
   valid: boolean;
 }
 
+// Only independent parser facts are retained, never caller objects, edit authority
+// or comparison verdicts. Two texts cover the usual before/after splice pair.
+const structuralNumericSourceValues = new Map<string, ReadonlyMap<string, readonly unknown[]>>();
+const structuralNumericValueKey = (value: Record<string, unknown>): string => {
+  const location = value.location as X4UiSourceLocation;
+  return JSON.stringify([location.file, location.sourcePath, location.start.offset, location.end.offset, value.expression]);
+};
+
+// Permit omission only of undefined members actually emitted by the parser.
+// JSON.stringify normalization would also erase forged unknown-undefined fields.
+const structuralParserFactMatches = (actual: unknown, expected: unknown): boolean => {
+  if (Object.is(actual, expected)) return true;
+  if (Array.isArray(actual) || Array.isArray(expected)) return Array.isArray(actual) && Array.isArray(expected)
+    && actual.length === expected.length && actual.every((value, index) => structuralParserFactMatches(value, expected[index]));
+  if (!isRecord(actual) || !isRecord(expected)) return false;
+  return Object.keys(actual).every(key => Object.prototype.hasOwnProperty.call(expected, key))
+    && Object.keys(expected).every(key => structuralParserFactMatches(ownData(actual, key), ownData(expected, key)));
+};
+
+const structuralNumericValueMatchesSource = (value: Record<string, unknown>, text: string | undefined): boolean => {
+  if (text === undefined || !isLocationRecord(value.location)) return false;
+  try {
+    const location = value.location as unknown as X4UiSourceLocation;
+    const key = JSON.stringify([location.file, location.sourcePath, text]);
+    let values = structuralNumericSourceValues.get(key);
+    if (!values) {
+      const model = buildX4UiSourceCallModel({path: location.file, sourcePath: location.sourcePath, text});
+      if (!model.parsed) return false;
+      const indexed = new Map<string, unknown[]>();
+      const seen = new Set<object>();
+      const visit = (candidate: unknown): void => {
+        if (candidate === null || typeof candidate !== 'object' || seen.has(candidate)) return;
+        seen.add(candidate);
+        if (Array.isArray(candidate)) { candidate.forEach(visit); return; }
+        if (!isRecord(candidate)) return;
+        if (isStructuralParserValueRecord(candidate) && candidate.numericExpression !== undefined) {
+          const valueKey = structuralNumericValueKey(candidate);
+          const matches = indexed.get(valueKey) || [];
+          matches.push(candidate);
+          indexed.set(valueKey, matches);
+        }
+        Object.values(candidate).forEach(visit);
+      };
+      visit(model);
+      values = indexed;
+      if (structuralNumericSourceValues.size >= 2) {
+        structuralNumericSourceValues.delete(structuralNumericSourceValues.keys().next().value!);
+      }
+      structuralNumericSourceValues.set(key, values);
+    }
+    const expected = values.get(structuralNumericValueKey(value));
+    if (!expected) return value.numericExpression === undefined;
+    return expected.some(candidate => structuralParserFactMatches(value, candidate));
+  } catch { return false; }
+};
+
+const structuralNumericTreeInvariant = (
+  value: unknown, splice: StructuralSplice | undefined, state: StructuralInvariantState,
+): unknown => {
+  if (Array.isArray(value)) return value.map(child => structuralNumericTreeInvariant(child, splice, state));
+  if (!isRecord(value)) return value;
+  if (isLocationRecord(value)) {
+    const location = structuralLocationInvariant(value, splice);
+    if (location === undefined) state.valid = false;
+    return location;
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, child]) =>
+    [key, structuralNumericTreeInvariant(child, splice, state)]));
+};
+
 const structuralInvariant = (
   value: unknown,
   key = '',
@@ -3646,6 +3717,12 @@ const structuralInvariant = (
   const result: Record<string, unknown> = {};
   for (const [childKey, child] of Object.entries(value)) {
     if (ignoredKeys.has(childKey)) continue;
+    if (schema === 'parser-value' && childKey === 'numericExpression') {
+      // The parent schema independently checked this entire value against the
+      // parser. Retain the numeric tree in the exact correspondence comparison.
+      result[childKey] = structuralNumericTreeInvariant(child, splice, state);
+      continue;
+    }
     if (child === undefined) {
       result[childKey] = child;
       continue;
@@ -4364,6 +4441,7 @@ const structuralProducerSchemaNodeIsValid = (
       && structuralIndex(ownData(value, 'order'))
       && structuralProducerSchemaNodeIsValid(ownData(value, 'value'), 'parser-value', splice)
       && structuralEnum(ownData(value, 'aliasKind'), ['definition', 'assignment'])
+      && structuralNumericValueMatchesSource(ownData(value, 'value') as Record<string, unknown>, text)
       && structuralProducerSchemaNodeIsValid(ownData(value, 'context'), 'call-context', splice);
   }
   if (schema === 'call') {
@@ -4473,8 +4551,9 @@ const structuralProducerSchemaNodeIsValid = (
   }
   if (schema === 'parser-value') {
     if (!structuralRecordKeys(value, ['status', 'type', 'expression', 'location'], [
-      'value', 'reference', 'symbol', 'reason', 'parameter', 'localInvocationResult', 'sourceLiteral',
+      'value', 'reference', 'symbol', 'reason', 'parameter', 'localInvocationResult', 'sourceLiteral', 'numericExpression',
     ])) return false;
+    if (ownData(value, 'numericExpression') !== undefined && !structuralNumericValueMatchesSource(value, text)) return false;
     const location = ownData(value, 'location');
     const sourceLiteral = ownData(value, 'sourceLiteral');
     const locationBounds = structuralLocationBounds(location);

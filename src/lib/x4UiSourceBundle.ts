@@ -468,7 +468,8 @@ function stabilizeCallModel(model: X4UiCallModel): X4UiCallModel {
   };
 }
 
-function buildSourceCallModel(source: CanonicalSourceInput): X4UiCallModel {
+/** Source-preserving parser entry point, including the equal-length BOM sentinel. */
+export function buildX4UiSourceCallModel(source: X4UiSourceFileInputWithPath): X4UiCallModel {
   // luaparse rejects U+FEFF, although the shipped Lua source is valid. A
   // single ASCII space is an equal-length parser-only sentinel, so all
   // source offsets remain aligned with the caller's raw text.
@@ -627,7 +628,7 @@ export function buildX4UiSourceBundle(input: X4UiSourceBundleInput): X4UiSourceB
     index,
     input: source,
     normalized: normalizeContainedPath(source.path),
-    callModel: buildSourceCallModel(source),
+    callModel: buildX4UiSourceCallModel(source),
     registrationIndexes: []
   }));
 
@@ -1421,7 +1422,7 @@ export function spliceX4UiSourceBundle(
   const nextText = source.text.slice(0, edit.startOffset)
     + replacement
     + source.text.slice(edit.endOffset);
-  const nextModel = buildSourceCallModel({
+  const nextModel = buildX4UiSourceCallModel({
     path: source.path,
     text: nextText,
     ...(source.sourcePath !== undefined ? { sourcePath: source.sourcePath } : {})

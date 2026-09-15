@@ -1299,6 +1299,69 @@ test('SourceEditor edits and clears primary preview inputs without changing Lua 
   await test.info().attach('b119-primary-preview-inputs', { path: screenshotPath, contentType: 'image/png' });
 });
 
+test('SourceEditor recovers a helper-return position through primary preview inputs', async ({ page, request }) => {
+  const source = [
+    'local menu = { name = "B119ReturnRecovery" }',
+    'local function heading(frame, y)',
+    '  menu.count = 1',
+    '  local t = frame:addTable(1, {y = y, width = 180, scaling = false})',
+    '  local r = t:addRow(false, {})',
+    '  r[1]:createText("Always visible heading", {})',
+    '  return y + Helper.scaleY(26)',
+    'end',
+    'local function body(frame, y)',
+    '  y = heading(frame, y)',
+    '  y = y + Helper.scaleY(8)',
+    '  local t = frame:addTable(1, {y = y, width = 180, scaling = false})',
+    '  local r = t:addRow(false, {})',
+    '  r[1]:createText("Recovered content", {})',
+    'end',
+    'function menu.createFrame()',
+    '  local frame = Helper.createFrameHandle(menu, {width = 200, height = 200})',
+    '  body(frame, 10)',
+    '  frame:display()',
+    'end',
+  ].join('\n');
+  const fixture = {
+    ...b119PropertyRecoveryWorkspace,
+    passthroughFiles: b119PropertyRecoveryWorkspace.passthroughFiles.map(file =>
+      file.path.endsWith('.lua') ? { ...file, content: source } : file),
+  };
+  await setupB119PropertyRecoveryFixture(page, request, fixture);
+  const workspaceBefore = await readServerWorkspace();
+  const historyBefore = await readB119LuaRoundtripHistory(page);
+  const inspect = page.getByTestId('x4-ui-inspect-panel');
+  const canvas = page.getByTestId('x4-ui-canvas-host').locator('canvas');
+  await expect(canvas).toBeInViewport();
+  await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
+  const initialPixels = await readNativeCanvasSignature(page);
+  await page.screenshot({ path: test.info().outputPath('helper-return-before.png') });
+  await page.getByTestId('x4-ui-preview-inputs-toggle').click();
+  const inputs = page.getByTestId('x4-ui-preview-inputs-region');
+  await expect(inputs).toBeVisible();
+  await expect(inputs).not.toContainText(/heading\(frame|Helper\.scaleY|source identity/);
+  const position = inputs.getByRole('spinbutton', { name: 'Position Y', exact: true });
+  await expect(position).toHaveCount(1);
+  await position.fill('40');
+  await inputs.getByRole('button', { name: 'Apply to preview', exact: true }).click();
+  await expect(inputs.getByTestId('x4-ui-preview-inputs-applied')).toContainText('1 values applied');
+  await expect.poll(() => readNativeCanvasSignature(page)).not.toEqual(initialPixels);
+  const recoveredPixels = await readNativeCanvasSignature(page);
+  await page.screenshot({ path: test.info().outputPath('helper-return-recovered.png') });
+  await position.fill('80');
+  await inputs.getByRole('button', { name: 'Apply to preview', exact: true }).click();
+  await expect.poll(() => readNativeCanvasSignature(page)).not.toEqual(recoveredPixels);
+  await page.screenshot({ path: test.info().outputPath('helper-return-moved.png') });
+  await inputs.getByRole('button', { name: 'Clear preview values', exact: true }).click();
+  await expect(position).toHaveValue('');
+  await expect.poll(() => readNativeCanvasSignature(page)).toEqual(initialPixels);
+  await page.screenshot({ path: test.info().outputPath('helper-return-cleared.png') });
+  expect(await readServerWorkspace()).toEqual(workspaceBefore);
+  expect(await readB119LuaRoundtripHistory(page)).toEqual(historyBefore);
+  await expect(inspect).not.toHaveAttribute('open');
+  await expect(page.getByTestId('x4-ui-game-truth')).toHaveText('Not verified in game');
+});
+
 /** Diagnostic only: precise coverage disables optimization; these are counts, not a latency benchmark. */
 async function countB119BrowserAction(page: Page, label: string, action: () => Promise<void>): Promise<void> {
   if (process.env.X4_FORGE_B119_ACTION_COUNTS !== '1') {
@@ -2827,10 +2890,12 @@ const contextualInsertionFixtures = [
   { kind: 'text' as const, menuName: 'B119 Text palette menu', internalName: 'b119_text_palette_menu_menu', text: 'B119 text widget', editedText: 'B119 edited text widget' },
   { kind: 'button' as const, menuName: 'B119 Button palette menu', internalName: 'b119_button_palette_menu_menu', text: 'B119 button widget', editedText: 'B119 edited button widget' },
   { kind: 'input' as const, menuName: 'B119 Input palette menu', internalName: 'b119_input_palette_menu_menu', text: 'B119 input widget', editedText: 'B119 edited input widget' },
+  { kind: 'text' as const, menuName: 'B119 Return alias menu', internalName: 'b119_return_alias_menu_menu', text: 'B119 alias text', editedText: 'B119 edited alias text', helperAlias: true },
 ] as const;
 
 for (const insertionFixture of contextualInsertionFixtures) {
-  test(`SourceEditor contextually inserts and edits a ${insertionFixture.kind} widget`, async ({ page, request }) => {
+  const hasHelperAlias = 'helperAlias' in insertionFixture;
+  test(`SourceEditor contextually inserts and edits a ${insertionFixture.kind} widget${hasHelperAlias ? ' with a retained helper return alias' : ''}`, async ({ page, request }) => {
     const { unrelated } = await setupContextualInsertionFixture(page, request);
     const sourceSelector = page.getByTestId('x4-ui-source-selector');
     const targetSelector = page.getByTestId('x4-ui-target-selector');
@@ -2888,6 +2953,36 @@ for (const insertionFixture of contextualInsertionFixtures) {
     expect(freshLua).toHaveLength(1);
     const insertionLua = freshLua[0];
     expect(insertionLua).toBeDefined();
+    if (hasHelperAlias) {
+      // Imported-source control: seed only the isolated workspace, never the real mod.
+      // Place the alias after the edited function so insertion must remap its source facts.
+      expect(insertionLua.content.split('\nreturn menu\n')).toHaveLength(2);
+      insertionLua.content = insertionLua.content.replace('\nreturn menu\n',
+        '\nlocal function later(value)\n  local result = value\n  return result\nend\n\nreturn menu\n');
+      const fixtureWorkspaceId = await page.evaluate(() => window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId());
+      if (!fixtureWorkspaceId) throw new Error('Return-alias fixture workspace identity is unavailable');
+      // A forced fixture seed is not an authored edit. Start its browser with no old
+      // scoped draft; otherwise the intentional draft-preservation gate produces 409.
+      await page.addInitScript(id => {
+        localStorage.removeItem(`x4_mod_studio_workspace:${id}`);
+        localStorage.removeItem(`x4_mod_studio_version:${id}`);
+      }, fixtureWorkspaceId);
+      await page.goto('about:blank');
+      await seedServerWorkspace(fresh);
+      await page.goto('/');
+      await expect(page.getByTestId('studio-workspace')).toBeVisible();
+      await page.locator('[data-workspace-view="ui-designer"]').click();
+      const option = sourceSelector.locator('option').filter({ hasText: insertionLua.path });
+      await expect(option).toHaveCount(1);
+      const sourceValue = await option.getAttribute('value');
+      if (!sourceValue) throw new Error('Return-alias fixture source option is unavailable');
+      await sourceSelector.selectOption(sourceValue);
+      await targetSelector.selectOption({ label: 'menu.createFrame' });
+      await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
+      await expect.poll(async () => b119LuaRoundtripFiles(
+        (await readB119LuaRoundtripSelectedWorkspace(page)).localWorkspace)
+        .find(file => file.path === insertionLua.path)?.content).toBe(insertionLua.content);
+    }
     expect(insertionLua.content).toContain(`name = "${insertionFixture.internalName}"`);
     expect(insertionLua.content).toMatch(/addTable\(2,/);
     expect(insertionLua.content).toContain('row[1]:createText(');
@@ -3035,6 +3130,17 @@ for (const insertionFixture of contextualInsertionFixtures) {
     await writeFile(test.info().outputPath(`contextual-${insertionFixture.kind}-row-recovery.json`),
       JSON.stringify({ before: occupiedWorkspace, after: recoveredWorkspace, sourcePath: insertionLua.path }, null, 2), 'utf8');
     await page.screenshot({ path: test.info().outputPath(`contextual-${insertionFixture.kind}-row-recovery.png`) });
+    if (hasHelperAlias) {
+      for (const [direction, expectedSource] of [['undo', expectedEditedLua], ['redo', recoveredSource]] as const) {
+        await page.locator(`[data-global-action="${direction}"]`).click();
+        await expect.poll(async () => (await readServerWorkspace() as CreationWorkspace)
+          .passthroughFiles.find(file => file.path === insertionLua.path)?.content).toBe(expectedSource);
+        assertContextualLuaSiblings(await readServerWorkspace() as CreationWorkspace,
+          insertionLua.path, expectedSource, insertionUiXml!.content, unrelated, knownLuaContents);
+        await expect(page.getByTestId('x4-ui-canvas-status')).toHaveText('rendered/current');
+      }
+      await page.screenshot({ path: test.info().outputPath('contextual-return-alias-redo.png') });
+    }
   });
 }
 

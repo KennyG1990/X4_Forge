@@ -8755,7 +8755,7 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
   ].join('\n');
   const menu = issue('MENU', menuSource, 'menu.display', { width: 100, height: 80 }, { tableWidth: 80, margin: 5 });
   const negativeWidthMenu = issue('MENU-negative-width', menuSource, 'menu.display', { width: 100, height: 80 }, { tableWidth: 80, margin: 80 });
-  const hub = issue('HUB', [
+  const hubSource = [
     'local menu = { name = "B119HubOwner", layer = 1 }',
     'local TABS = { "one", "two", "three" }',
     'function menu.display()',
@@ -8769,7 +8769,25 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
     '    sr[i]:createButton({ active = true })',
     '  end',
     'end',
-  ].join('\n'), 'menu.display');
+  ].join('\n');
+  const hub = issue('HUB', hubSource, 'menu.display');
+  const hubTwoTabs = issue('HUB-two-tabs', hubSource.replace('"one", "two", "three"', '"one", "two"'), 'menu.display');
+  const hubLoopMatches = (candidate: typeof hub, count: number): boolean => {
+    const operations = candidate.program.operations.filter(operation => operation.previewLoop !== undefined);
+    const selection = candidate.program.previewLoopSelections[0];
+    return candidate.program.previewLoopSelections.length === 1 && selection.iterationCount === count
+      && selection.kind === 'generic-for' && selection.source.start.line === 10
+      && operations.length === count && new Set(operations.map(operation => operation.id)).size === count
+      && operations.every((operation, index) => operation.kind === 'createButton' && operation.status === 'rejected'
+        && operation.source.start.line === 11 && operation.previewLoop?.iteration === index + 1
+        && operation.previewLoop.iterationCount === count && operation.previewLoop.entryId === selection.id
+        && operation.cellId === candidate.program.cells.find(cell => cell.column === index + 1)?.id
+        && operation.kernel?.refusal?.message === 'cannot overwrite an already-specialized cell')
+      && candidate.program.gaps.filter(gap => gap.category === 'cell'
+        && gap.reason === 'cannot overwrite an already-specialized cell').length === count;
+  };
+  assert(hubLoopMatches(hub, 3) && hubLoopMatches(hubTwoTabs, 2)
+    && !hubLoopMatches(hubTwoTabs, 3), 'HUB loop attempts must follow literal TABS and reject each occupied cell');
   const comm = issue('COMM', [
     'local menu = { name = "B119CommOwner", layer = 1 }',
     'function menu.display()',
@@ -8798,7 +8816,7 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
   const candidates = [menu, hub, comm];
   const expectedShape = {
     MENU: { operations: 12, applied: 7, frames: 1, tables: 3, rows: 4, cells: 32, gaps: 10 },
-    HUB: { operations: 7, applied: 6, frames: 1, tables: 1, rows: 1, cells: 12, gaps: 3 },
+    HUB: { operations: 9, applied: 6, frames: 1, tables: 1, rows: 1, cells: 12, gaps: 6 },
     COMM: { operations: 8, applied: 8, frames: 1, tables: 1, rows: 1, cells: 12, gaps: 0 },
   } as const;
   const positive = candidates.map(candidate => buildX4UiScene(candidate.sampled, corpus, candidate.profile));
@@ -8820,6 +8838,13 @@ test('B119 repaired: portable consumer-aware MENU/HUB/COMM owner shapes cross Sc
       cells: candidate.program.cells.length,
       gaps: candidate.program.gaps.length,
     };
+    if (label === 'HUB') console.log('B119 HUB loop census diagnostic: ' + JSON.stringify({
+      selections: candidate.program.previewLoopSelections.map(selection => ({line: selection.source.start.line, count: selection.iterationCount})),
+      operations: candidate.program.operations.filter(operation => operation.previewLoop !== undefined)
+        .map(operation => ({ kind: operation.kind, status: operation.status, line: operation.source.start.line,
+          iteration: operation.previewLoop?.iteration, kernelRefusal: operation.kernel?.refusal?.message })),
+      gaps: candidate.program.gaps.map(gap => ({line: gap.source.start.line, reason: gap.reason})),
+    }));
     if (label === 'MENU') {
       const sampleValuesById = new Map(candidate.program.previewSampleBindings.map(binding => [binding.id, binding] as const));
       const menuTableInputs = candidate.program.sampleCatalog.entries
@@ -9556,9 +9581,9 @@ const b119ConfiguredSourceSpecs = [
       _choiceY: 734,
       _readSpan: 6,
     },
-    expectedLayout: { samples: 52, consumed: 7, notConsumed: 45, operations: 95, applied: 31, frames: 1, tables: 6, rows: 15, cells: 136, gaps: 290 },
-    expectedScene: { frames: 1, tables: 6, rows: 2, cells: 16, widgets: 3, texts: 5, glyphs: 27, gaps: 352, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
-    expectedPaint: { commands: 447, diagnostics: 387 },
+    expectedLayout: { samples: 54, consumed: 7, notConsumed: 47, operations: 103, applied: 31, frames: 1, tables: 6, rows: 15, cells: 136, gaps: 292 },
+    expectedScene: { frames: 1, tables: 6, rows: 2, cells: 16, widgets: 3, texts: 5, glyphs: 27, gaps: 354, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
+    expectedPaint: { commands: 449, diagnostics: 389 },
   },
   {
     label: 'HUB',
@@ -9567,9 +9592,9 @@ const b119ConfiguredSourceSpecs = [
     targetName: 'hub.display',
     sourceSha256: '657476EAD08229977E1F2A69079FFDCAB56D908B72AF5C87BD4F4734DCCB8C4F',
     consumerNumbers: { vw: 1920, vh: 1080, x: 27, my: 27, w: 1866, '#TABS': 2, y: 62, i: 1 },
-    expectedLayout: { samples: 6, consumed: 4, notConsumed: 2, operations: 19, applied: 13, frames: 1, tables: 2, rows: 2, cells: 4, gaps: 30 },
-    expectedScene: { frames: 1, tables: 2, rows: 2, cells: 4, widgets: 2, texts: 3, glyphs: 17, gaps: 49, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
-    expectedPaint: { commands: 89, diagnostics: 58 },
+    expectedLayout: { samples: 2, consumed: 2, notConsumed: 0, operations: 34, applied: 20, frames: 1, tables: 2, rows: 2, cells: 8, gaps: 43 },
+    expectedScene: { frames: 1, tables: 2, rows: 2, cells: 8, widgets: 8, texts: 15, glyphs: 55, gaps: 122, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
+    expectedPaint: { commands: 252, diagnostics: 161 },
   },
   {
     label: 'COMM',
@@ -9578,9 +9603,9 @@ const b119ConfiguredSourceSpecs = [
     targetName: 'comm.display',
     sourceSha256: '5526B6F954859322E3BE266361F4DFC6F3061E1A399897148CB3BB251693483E',
     consumerNumbers: { vw: 1920, vh: 1080, mx: 27, my: 27, 'vw - mx * 2': 1866 },
-    expectedLayout: { samples: 52, consumed: 26, notConsumed: 26, operations: 99, applied: 49, frames: 1, tables: 12, rows: 13, cells: 38, gaps: 342 },
-    expectedScene: { frames: 1, tables: 12, rows: 7, cells: 21, widgets: 11, texts: 14, glyphs: 117, gaps: 431, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
-    expectedPaint: { commands: 671, diagnostics: 488 },
+    expectedLayout: { samples: 49, consumed: 25, notConsumed: 24, operations: 99, applied: 49, frames: 1, tables: 12, rows: 13, cells: 38, gaps: 340 },
+    expectedScene: { frames: 1, tables: 12, rows: 7, cells: 21, widgets: 11, texts: 14, glyphs: 140, gaps: 429, drawable: { x: 0, y: 0, width: 1920, height: 1080 } },
+    expectedPaint: { commands: 692, diagnostics: 486 },
   },
 ] as const;
 
@@ -9924,6 +9949,21 @@ if (b119ConfiguredCensus.status === 'unavailable') {
     assert(programResult !== null && programResult.status !== 'refused', source.label + ' exact sampled session must retain its Layout program: ' + JSON.stringify(sampled.preview));
     const program = programResult.program;
     const authority = programResult.evidenceAuthority;
+    const slotSamplesMatch = (entries: typeof selectedEntries, candidateProgram = program): boolean => {
+      const loop = candidateProgram.previewLoopCatalog.entries.find(entry => entry.source.start.line === 853);
+      return loop !== undefined && sourceText.slice(loop.source.start.offset, loop.source.end.offset).startsWith('for slot = 1, 3 do')
+        && entries.length === 3 && new Set(entries.map(entry => entry.id)).size === 3
+        && entries.every((entry, index) => entry.expectedType === 'string'
+          && entry.expression === 'tostring(slot) .. ".  " .. asciiClean(c.label)'
+          && sourceText.slice(entry.source.start.offset, entry.source.end.offset) === entry.expression
+          && entry.previewLoop?.entryId === loop.id && entry.previewLoop.iteration === index + 1
+          && entry.previewLoop.iterationCount === 3 && entry.consumers.length === 1
+          && entry.consumers[0].operationKind === 'setText' && entry.consumers[0].field === 'text'
+          && isDeepStrictEqual(entry.consumers[0].source, entry.source)
+          && isDeepStrictEqual(entry.consumers[0].previewLoop, entry.previewLoop)
+          && candidateProgram.operations.some(operation => operation.id === entry.consumers[0].operationId
+            && operation.kind === 'setText' && isDeepStrictEqual(operation.previewLoop, entry.previewLoop)));
+    };
     const pair = validateX4UiLayoutEvidencePair(program, authority);
     const stage = diagnoseX4UiSceneStructureForTest(program, authority);
     const layoutCounts = {
@@ -10209,10 +10249,19 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         && sourceLiteralNumericFact(table.descriptorFacts.x, 450)
         && sourceLiteralNumericFact(table.descriptorFacts.requestedWidth, 787)),
       'MENU line-539/562/720 table x/requestedWidth facts must remain source-literal 450/787 facts without sampled fields');
-      assert(selectedEntries.length === 52
+      const slotLoop = program.previewLoopCatalog.entries.find(entry => entry.source.start.line === 853);
+      assert(slotLoop !== undefined && sourceText.slice(slotLoop.source.start.offset, slotLoop.source.end.offset)
+        .startsWith('for slot = 1, 3 do'), 'MENU caption multiplicity must remain bound to the literal slot1..3 source loop');
+      const slotSamples = selectedEntries.filter(entry => entry.source.start.line === 859);
+      const forgedSlotSamples = JSON.parse(JSON.stringify(slotSamples)) as typeof slotSamples;
+      forgedSlotSamples[1] = { ...forgedSlotSamples[1], consumers: slotSamples[0].consumers };
+      assert(slotSamplesMatch(slotSamples) && !slotSamplesMatch(slotSamples.slice(0, 2))
+        && !slotSamplesMatch([slotSamples[0], slotSamples[0], slotSamples[2]]) && !slotSamplesMatch(forgedSlotSamples),
+      'MENU must retain three distinct source- and consumer-bound caption samples; missing, duplicate and cross-iteration consumers fail');
+      assert(selectedEntries.length === 54 && selectedEntries.filter(entry => entry.source.start.line !== 859).length === 51
         && consumedExpressions.length === 7
         && selectedEntries.every(entry => !['vw', 'vh', 'railX + col * (chipW + chipGap)', 'tw', 'px'].includes(entry.expression)),
-      'MENU catalog must retain exactly the current 52 source expressions and omit retired intermediate preview inputs: ' + JSON.stringify({
+      'MENU catalog must retain51 non-slot inputs plus3 independently bound slot captions and omit retired intermediates: ' + JSON.stringify({
         catalogCount: selectedEntries.length,
         consumedExpressions,
       }));
@@ -10226,6 +10275,16 @@ if (b119ConfiguredCensus.status === 'unavailable') {
     }
     if (source.label === 'COMM') {
       const bindingById = new Map(program.previewSampleBindings.map(binding => [binding.id, binding] as const));
+      console.log('B119 COMM numeric lineage diagnostic: ' + JSON.stringify({
+        layout: layoutCounts,
+        entries: selectedEntries.filter(entry => entry.expectedType === 'number').map(entry => ({
+          line: entry.source.start.line, expression: entry.expression,
+          status: bindingById.get(entry.id)?.status, value: bindingById.get(entry.id)?.value,
+          consumers: entry.consumers.map(consumer => ({ line: consumer.source.start.line, field: consumer.field })),
+        })),
+        operations: program.operations.filter(operation => operation.kind === 'addTable' && [106, 172, 234, 331].includes(operation.source.start.line))
+          .map(operation => ({ line: operation.source.start.line, status: operation.status, y: operation.descriptorFacts.y })),
+      }));
       const retiredInputs = [['vw', 477], ['vh', 478], ['my', 480], ['vw - mx * 2', 498]] as const;
       assert(retiredInputs.every(([expression, line]) => !sampleCatalog.entries.some(entry =>
         entry.expression === expression && entry.source.start.line === line)),
@@ -10241,8 +10300,8 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         && fact.expectedType === 'number' && fact.value === expected && fact.provenance === 'source-literal'
         && !Object.hasOwn(fact, 'sampleId') && !Object.hasOwn(fact, 'sampleIds')),
       'COMM four retired inputs must remain exact source-derived geometry without sampled provenance');
-      const resolvedProperties = [[106, 'comm._tab'], [172, 'comm._tab'], [172, 'y'],
-        [234, 'comm._tab'], [234, 'y'], [331, 'comm._tab'], [331, 'ty']] as const;
+      const resolvedProperties = [[106, 'comm._tab'], [172, 'comm._tab'],
+        [234, 'comm._tab'], [331, 'comm._tab'], [331, 'ty']] as const;
       for (const [line, expression] of resolvedProperties) {
         const entries = selectedEntries.filter(entry => entry.source.start.line === line && entry.expression === expression);
         assert(entries.length === 1, `COMM property ${line}:${expression} must keep one exact source-bound input`);
@@ -10260,15 +10319,91 @@ if (b119ConfiguredCensus.status === 'unavailable') {
             && isDeepStrictEqual(gap.source, entry.source)),
         `COMM resolved property ${line}:${expression} must not leave stale program/evidence warnings`);
       }
+      const calculatedPositions = [
+        { callLine: 168, callStart: 8059, callEnd: 8102,
+          call: 'sectionBar(frame, x, y, w, "CORRESPONDENT")',
+          arithmeticLine: 169, arithmeticStart: 8111, arithmeticEnd: 8131, spacing: 8, tableLine: 172 },
+        { callLine: 223, callStart: 10503, callEnd: 10554,
+          call: 'sectionBar(frame, x, y, w, PR.SUBJ .. " REMEMBERS")',
+          arithmeticLine: 224, arithmeticStart: 10563, arithmeticEnd: 10583, spacing: 6, tableLine: 234 },
+      ] as const;
+      const calculatedPositionLineage = (candidate: X4UiLayoutProgram, entries: typeof selectedEntries): boolean =>
+        calculatedPositions.every(spec => {
+          const matches = entries.filter(entry => entry.source.start.line === spec.callLine && entry.expression === spec.call);
+          if (matches.length !== 1) return false;
+          const entry = matches[0];
+          const binding = candidate.previewSampleBindings.find(item => item.id === entry.id);
+          const owners = candidate.operations.filter(operation => operation.kind === 'addTable'
+            && operation.source.start.line === spec.tableLine);
+          if (owners.length !== 1 || entry.consumers.length !== 1) return false;
+          const owner = owners[0];
+          const consumer = entry.consumers[0];
+          const fact = owner.descriptorFacts.y;
+          const arithmetic = `y + Helper.scaleY(${spec.spacing})`;
+          return entry.expectedType === 'number' && entry.source.file === source.relativePath
+            && entry.source.start.offset === spec.callStart && entry.source.end.offset === spec.callEnd
+            && sourceText.slice(spec.callStart, spec.callEnd) === spec.call
+            && consumer.operationId === owner.id && consumer.field === 'y'
+            && consumer.source.file === source.relativePath && consumer.source.start.line === spec.tableLine
+            && sourceText.slice(consumer.source.start.offset, consumer.source.end.offset) === 'y'
+            && binding?.status === 'consumed' && binding.value === 80
+            && fact?.status === 'known' && fact.expectedType === 'number'
+            && fact.value === 80 + Math.floor(spec.spacing * profile.uiScale + 0.5)
+            && fact.provenance === 'preview-sample' && fact.sampleId === entry.id
+            && fact.expression === arithmetic && fact.source.file === source.relativePath
+            && fact.source.start.line === spec.arithmeticLine
+            && fact.source.start.offset === spec.arithmeticStart && fact.source.end.offset === spec.arithmeticEnd
+            && sourceText.slice(spec.arithmeticStart, spec.arithmeticEnd) === arithmetic;
+        });
+      assert(calculatedPositionLineage(program, selectedEntries),
+        'COMM positions must derive from two exact call inputs plus source-known spacing, retaining preview provenance');
+      const firstReturn = selectedEntries.find(entry => entry.expression === calculatedPositions[0].call)!;
+      assert(!calculatedPositionLineage(program, selectedEntries.filter(entry => entry.id !== firstReturn.id))
+        && !calculatedPositionLineage(program, [...selectedEntries, firstReturn])
+        && !calculatedPositionLineage(program, selectedEntries.map(entry => entry.id !== firstReturn.id ? entry : {
+          ...entry, consumers: [{ ...entry.consumers[0], operationId: 'wrong-consumer' }],
+        })), 'COMM calculated-position oracle must reject missing, duplicate and cross-consumer inputs');
+      for (const change of ['value', 'provenance', 'source', 'sampleId'] as const) {
+        const copy = structuredClone(program);
+        const owner = copy.operations.find(operation => operation.kind === 'addTable' && operation.source.start.line === 172)!;
+        const fact = owner.descriptorFacts.y;
+        assert(fact.status === 'known' && fact.expectedType === 'number', 'COMM negative control requires the recovered fact');
+        (owner.descriptorFacts as Record<string, X4UiLayoutDescriptorFact>).y = change === 'value'
+          ? { ...fact, value: 80 } : change === 'provenance'
+            ? { ...fact, provenance: 'source-literal' } : change === 'source'
+              ? { ...fact, source: firstReturn.source } : { ...fact, sampleId: 'wrong-sample' };
+        assert(!calculatedPositionLineage(copy, selectedEntries), `COMM calculated-position oracle must reject forged ${change}`);
+      }
+      for (const spec of calculatedPositions) {
+        assert(![...program.gaps, ...authority.gaps].some(gap => gap.category === 'property'
+          && [spec.callLine, spec.arithmeticLine, spec.tableLine].some(line => line === gap.source.start.line)
+          && ['y', spec.call, `y + Helper.scaleY(${spec.spacing})`].includes(gap.expression ?? '')),
+        `COMM recovered position ${spec.tableLine} must not retain a stale property warning`);
+      }
       const blockedScaleLines = program.gaps.filter(gap => gap.category === 'scale' && gap.status === 'incomplete')
         .map(gap => gap.source.start.line).sort((left, right) => left - right);
       assert(isDeepStrictEqual(blockedScaleLines, [205, 217, 283, 286, 296, 322, 390]),
         'COMM blocked scale operations must keep all seven genuine warnings');
       const unused = program.previewSampleBindings.filter(binding => binding.status === 'not-applied');
-      assert(unused.length === 26 && program.gaps.filter(gap => gap.category === 'sample').length === 26
-        && unused.every(binding => program.gaps.some(gap => gap.category === 'sample'
+      console.log('B119_COMM_UNUSED ' + JSON.stringify({ blockedScaleLines,
+        entries: unused.map(binding => ({ line: binding.source.start.line,
+          expression: sourceText.slice(binding.source.start.offset, binding.source.end.offset) })),
+        sampleGaps: program.gaps.filter(gap => gap.category === 'sample').length }));
+      const expectedUnusedSources = [
+        [244, 'string'], [244, 'number'], [245, 'string'], [245, 'number'], [248, 'string'], [249, 'number'],
+        [268, 'number'], [275, 'string'], [280, 'string'], [282, 'number'], [295, 'number'], [298, 'number'],
+        [304, 'string'], [306, 'number'], [344, 'string'], [345, 'number'], [346, 'string'], [347, 'number'],
+        [381, 'number'], [387, 'string'], [387, 'number'], [388, 'string'], [389, 'number'], [426, 'string'],
+      ];
+      assert(isDeepStrictEqual(unused.map(binding => {
+        const entry = selectedEntries.find(item => item.id === binding.id);
+        return [binding.source.start.line, entry?.expectedType];
+      }), expectedUnusedSources)
+        && program.gaps.filter(gap => gap.category === 'sample').length === expectedUnusedSources.length,
+      'COMM unused samples must retain the exact 24 source/type identities, not just a count');
+      assert(unused.every(binding => program.gaps.some(gap => gap.category === 'sample'
           && isDeepStrictEqual(gap.source, binding.source))),
-      'COMM all26 unapplied samples must retain their exact recovery gaps');
+      'COMM every unapplied sample must retain its exact recovery gap');
       console.log('B119_COMM_NUMERIC_RECOVERY ' + JSON.stringify({ layout: layoutCounts,
         retiredSourceInputs: retiredInputs.length, resolvedPropertyWarnings: resolvedProperties.length,
         retainedBlockedScales: blockedScaleLines.length, retainedUnappliedSamples: unused.length }));
@@ -10278,7 +10413,57 @@ if (b119ConfiguredCensus.status === 'unavailable') {
     const sceneResult = sampled.preview.scene;
     assert(sceneResult !== null && sceneResult.status !== 'refused', source.label + ' exact sampled session must reach non-refused Scene: ' + JSON.stringify(sceneResult));
     const scene = sceneResult.scene;
+    const exactTextGlyphs = (candidate: X4UiScene, expected: readonly (readonly [number, string, string, string])[]): boolean =>
+      isDeepStrictEqual(candidate.texts.map(text => [text.source.start.line, text.slot, text.content ?? '',
+        text.lines.map(line => line.displayedText).join('')]), expected)
+      && candidate.texts.every(text => String.fromCodePoint(...candidate.glyphs
+        .filter(glyph => glyph.textId === text.id).map(glyph => glyph.codePoint)) === text.lines.map(line => line.displayedText).join(''))
+      && candidate.glyphs.length === expected.reduce((count, text) => count + [...text[3]].length, 0)
+      && new Set(candidate.glyphs.map(glyph => glyph.id)).size === candidate.glyphs.length;
     if (source.label === 'HUB') {
+      const tabs = ['DOSSIER', 'INFLUENCE', 'INTEL', 'NEWS', 'FLEET', 'SETTINGS'];
+      assert(sourceText.split('\n')[59].trim() === `local TABS = { ${tabs.map(name => JSON.stringify(name)).join(', ')} }`,
+        'HUB tab oracle must remain tied to the exact six-element literal source declaration');
+      const tabLineage = (candidate: X4UiLayoutProgram): boolean => {
+        const widthLoop = candidate.previewLoopCatalog.entries.find(entry => entry.source.start.line === 687);
+        const textLoop = candidate.previewLoopCatalog.entries.find(entry => entry.source.start.line === 689);
+        if (!widthLoop || !textLoop
+          || !sourceText.slice(widthLoop.source.start.offset, widthLoop.source.end.offset).startsWith('for i = 1, #TABS do')
+          || !sourceText.slice(textLoop.source.start.offset, textLoop.source.end.offset).startsWith('for i, name in ipairs(TABS) do')) return false;
+        const strip = candidate.tables.find(table => table.source.start.line === 686);
+        const constructor = candidate.operations.find(operation => operation.kind === 'addTable' && operation.tableId === strip?.id);
+        const columns = constructor?.descriptorFacts.columnCount, y = strip?.descriptorFacts.y;
+        if (columns?.status !== 'known' || columns.value !== tabs.length || strip?.numColumns !== tabs.length
+          || y?.status !== 'known' || y.value !== 27 + 16 + 16 || y.provenance !== 'source-literal') return false;
+        return (['setColWidthPercent', 'createButton', 'setText'] as const).every(kind => {
+          const operations = candidate.operations.filter(operation => operation.kind === kind
+            && operation.source.start.line === (kind === 'setColWidthPercent' ? 687 : 691));
+          return operations.length === tabs.length && new Set(operations.map(operation => operation.id)).size === tabs.length
+            && operations.every((operation, index) => {
+              const loop = operation.previewLoop;
+              if (!loop || loop.entryId !== (kind === 'setColWidthPercent' ? widthLoop.id : textLoop.id)
+                || loop.iteration !== index + 1 || loop.iterationCount !== tabs.length || operation.tableId !== strip?.id) return false;
+              const fact = operation.descriptorFacts[kind === 'setColWidthPercent' ? 'percentage' : kind === 'setText' ? 'text' : 'active'];
+              return fact?.status === 'known'
+                && fact.value === (kind === 'setColWidthPercent' ? Math.floor(100 / tabs.length) : kind === 'setText' ? tabs[index] : true)
+                && (kind !== 'setText' || fact.provenance === 'source-literal')
+                && (kind !== 'setColWidthPercent' || (operation.descriptorFacts.columnIndex?.status === 'known'
+                  && operation.descriptorFacts.columnIndex.value === index + 1));
+            });
+        });
+      };
+      assert(tabLineage(program), 'HUB must retain both exact six-iteration loops and source-derived strip geometry');
+      const firstTab = program.operations.find(operation => operation.kind === 'setText' && operation.source.start.line === 691)!;
+      assert(!tabLineage({ ...program, operations: program.operations.filter(operation => operation.id !== firstTab.id) })
+        && !tabLineage({ ...program, operations: [...program.operations, firstTab] })
+        && !tabLineage({ ...program, operations: program.operations.map(operation => operation.id !== firstTab.id ? operation : {
+          ...operation, previewLoop: { ...operation.previewLoop!, iteration: 2 },
+        }) }), 'HUB tab oracle must reject missing, duplicated and cross-iteration output');
+      const expectedText: Array<readonly [number, string, string, string]> = [
+        [679, 'primary', 'AI INFLUENCE', 'AI INFLUENCE'], [680, 'primary', 'CLOSE', 'CLOSE'], [680, 'secondary', '', ''],
+        ...tabs.flatMap(name => [[692, 'primary', name, name], [691, 'secondary', '', '']] as const),
+      ];
+      assert(exactTextGlyphs(scene, expectedText), 'HUB glyphs must be exactly the title, close button and six source captions');
       const hubLocation = (
         line: number,
         column: number,
@@ -10460,6 +10645,34 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       'HUB exact five source-derived facts and seven consumers must reject copied value, provenance, source, span, and missing-fact drift');
     }
     if (source.label === 'COMM') {
+      const expectedText = [
+        [109, 'primary', 'sampled', 'sampled'],
+        [109, 'primary', 'CORRESPONDENT', 'CORRESPONDENT'],
+        [109, 'primary', 'LEVERAGE - CLICK TO CITE', 'LEVERAGE - CLICK TO CITE'],
+        [175, 'primary', 'sampled', 'sampled'], [368, 'primary', 'sampled', 'sampled'], [370, 'primary', 'sampled', 'sampled'],
+        [438, 'primary', '', 'Type your message...'], [450, 'primary', 'SEND', '...'], [450, 'secondary', '', ''],
+        [505, 'primary', B119_COMM_OPAQUE_SAMPLE, B119_COMM_OPAQUE_SAMPLE],
+        [508, 'primary', 'DOSSIER', 'DOSSIER'], [508, 'secondary', '', ''],
+        [513, 'primary', 'END', 'END'], [513, 'secondary', '', ''],
+      ] as const;
+      assert(exactTextGlyphs(scene, expectedText), 'COMM glyphs must exactly match their source-bound text slots, including clipped SEND and default input');
+      assert(!exactTextGlyphs({ ...scene, glyphs: scene.glyphs.slice(1) }, expectedText)
+        && !exactTextGlyphs({ ...scene, glyphs: [...scene.glyphs, scene.glyphs[0]] }, expectedText)
+        && !exactTextGlyphs({ ...scene, glyphs: scene.glyphs.map((glyph, index) => index === 0
+          ? { ...glyph, textId: scene.texts[1].id } : glyph) }, expectedText),
+      'COMM glyph oracle must reject missing, duplicate and wrong-text ownership');
+      for (const [line, caption] of [[168, 'CORRESPONDENT'], [255, 'LEVERAGE - CLICK TO CITE']] as const) {
+        const invocation = program.localExpansion?.invocations.find(item => item.source.start.line === line);
+        assert(invocation !== undefined && sourceText.slice(invocation.source.start.offset, invocation.source.end.offset).includes(JSON.stringify(caption)),
+          `COMM heading must bind its exact call-site literal at ${line}`);
+        const creators = program.operations.filter(operation => invocation.operationIds.includes(operation.id)
+          && operation.kind === 'createText' && operation.source.start.line === 109);
+        assert(creators.length === 1 && creators[0].descriptorFacts.text?.status === 'known'
+          && creators[0].descriptorFacts.text.value === caption
+          && creators[0].descriptorFacts.text.provenance === 'source-literal'
+          && scene.widgets.some(widget => widget.cellId === `scene:${creators[0].cellId}` && widget.primaryContent === caption),
+        `COMM heading ${line} must use its literal caller text, not the seven-character preview sample`);
+      }
       const titleWidget = scene.widgets.find(widget => widget.kind === 'text' && widget.primaryContent === B119_COMM_OPAQUE_SAMPLE);
       const buttonGeometry = scene.widgets
         .filter(widget => widget.kind === 'button')
@@ -10533,6 +10746,31 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       commands: sampled.paint.plan.layers.reduce((count, layer) => count + layer.commands.length, 0),
       diagnostics: sampled.paint.plan.diagnostics.length,
     };
+    if (source.label === 'HUB' || source.label === 'COMM') {
+      const histogram = (keys: readonly string[]) => keys.reduce<Record<string, number>>((counts, key) => {
+        counts[key] = (counts[key] ?? 0) + 1;
+        return counts;
+      }, {});
+      console.log('B119_CENSUS_ATTRIBUTION ' + JSON.stringify({ label: source.label,
+        texts: scene.texts.map(text => ({ line: text.source.start.line, slot: text.slot,
+          content: text.content, defaultContent: text.defaultContent, selection: text.contentSelection,
+          displayed: text.lines.map(line => line.displayedText).join(''),
+          glyphs: scene.glyphs.filter(glyph => glyph.textId === text.id).length })),
+        operations: source.label === 'HUB' ? program.operations.map(operation => ({
+          line: operation.source.start.line, kind: operation.kind, status: operation.status,
+          iteration: operation.previewLoop?.iteration, iterations: operation.previewLoop?.iterationCount,
+          facts: Object.fromEntries(Object.entries(operation.descriptorFacts).map(([key, fact]) =>
+            [key, fact.status === 'known' ? fact.value : fact.status])),
+        })) : undefined,
+        samples: source.label === 'COMM' ? selectedEntries.map(entry => ({
+          line: entry.source.start.line, expression: entry.expression, type: entry.expectedType,
+          status: program.previewSampleBindings.find(binding => binding.id === entry.id)?.status,
+        })) : undefined,
+        programGaps: histogram(program.gaps.map(gap => gap.category)),
+        sceneGaps: histogram(scene.gaps.map(gap => gap.category)),
+        paintCommands: histogram(sampled.paint.plan.layers.flatMap(layer => layer.commands.map(command => command.kind))),
+      }));
+    }
     const constructorInputs = scene.widgets.filter(widget => widget.kind === 'editbox').flatMap(widget => {
       const creator = program.operations.find(operation => operation.kind === 'createEditBox' && widget.cellId === `scene:${operation.cellId}`);
       if (!creator || program.operations.some(operation => operation.kind === 'setText' && operation.cellId === creator.cellId)) return [];
@@ -10762,9 +11000,12 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         && isDeepStrictEqual(canonicalPathTables.map(table => table.source.start.line), [539, 562, 720])
         && canonicalPathTables.every(table => canonicalPathSourceLiteralNumericFact(table.descriptorFacts.x, 600)
           && canonicalPathSourceLiteralNumericFact(table.descriptorFacts.requestedWidth, 1050))
-        && selectedPathSampleCatalog.entries.length === 39
+        && selectedPathSampleCatalog.entries.length === 41
+        && selectedPathSampleCatalog.entries.filter(entry => entry.source.start.line !== 859).length === 38
+        && conservativeProgram !== undefined
+        && slotSamplesMatch(selectedPathSampleCatalog.entries.filter(entry => entry.source.start.line === 859), conservativeProgram)
         && selectedPathSampleCatalog.entries.every(entry => !['vw', 'vh', 'railX + col * (chipW + chipGap)', 'tw', 'px'].includes(entry.expression)),
-      'MENU canonical path-only case must retain source-literal 2560x1440 frame and line-539/562/720 x=600/requestedWidth=1050 facts without sample fields, plus exactly 39 current catalog entries with retired expressions absent: ' + JSON.stringify({
+      'MENU canonical path-only case must retain source-literal 2560x1440 frame and line-539/562/720 x=600/requestedWidth=1050 facts without sample fields, plus38 non-slot inputs and3 source-bound slot captions with retired expressions absent: ' + JSON.stringify({
         frame: {
           line: canonicalPathFrame?.source.start.line,
           width: canonicalPathFrame?.descriptorFacts.width,
@@ -10783,7 +11024,7 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       assert(conservativeProgram !== undefined
         && conservativeEvidenceAuthority !== undefined
         && validateX4UiLayoutEvidencePair(conservativeProgram, conservativeEvidenceAuthority).valid
-        && conservativeLayout.samples === 39
+        && conservativeLayout.samples === 41
         && conservativePendingOperations.length === 13
         && conservativePendingOperations.every(operation => operation.descriptorFacts.color?.status === 'known')
         && [
@@ -10896,22 +11137,17 @@ if (b119ConfiguredCensus.status === 'unavailable') {
         .map(sampleSemanticKey)
         .sort();
       assert(isDeepStrictEqual(selectedPathExternalGenericKeys, selectedLoopExternalGenericKeys), 'MENU selected canonical loop stage must preserve every external generic sample semantically: ' + JSON.stringify({ before: selectedPathExternalGenericKeys, after: selectedLoopExternalGenericKeys }));
-      const expectedLoopPlaceholderKeys = selectedPathSampleCatalog.entries
-        .filter(entry => selectedLoopSourceContains(entry.source, selectedLoopEntry.source))
-        .filter(entry => entry.previewLoop === undefined)
-        .map(sampleSemanticKey)
-        .sort();
+      const selectedPathAutomaticLoopEntries = selectedPathSampleCatalog.entries.filter(entry => entry.previewLoop !== undefined
+        && selectedLoopSourceContains(entry.source, selectedLoopEntry.source));
       const selectedPathLoopPlaceholderEntries = selectedPathSampleCatalog.entries.filter(entry => entry.previewLoop === undefined
         && selectedLoopSourceContains(entry.source, selectedLoopEntry.source));
-      assert(selectedPathLoopPlaceholderEntries.length === 1
-        && selectedPathLoopPlaceholderEntries[0]?.source.start.line === 859
-        && selectedPathLoopPlaceholderEntries[0]?.expectedType === 'string'
-        && selectedPathLoopPlaceholderEntries[0]?.expression === 'tostring(slot) .. ".  " .. asciiClean(c.label)'
-        && isDeepStrictEqual(selectedPathLoopPlaceholderEntries.map(sampleSemanticKey).sort(), expectedLoopPlaceholderKeys), 'MENU selected canonical loop stage must prove the exact action-label placeholder at line 859: ' + JSON.stringify(selectedPathLoopPlaceholderEntries.map(sampleSemanticIdentity)));
+      assert(selectedPathLoopPlaceholderEntries.length === 0
+        && slotSamplesMatch(selectedPathAutomaticLoopEntries, conservativeProgram), 'MENU automatic source loop must already issue three source-bound caption consumers and no generic placeholder');
       const selectedLoopGenericEntries = selectedLoopSampleCatalog.entries.filter(entry => entry.previewLoop === undefined
         && selectedLoopSourceContains(entry.source, selectedLoopEntry.source));
       assert(selectedLoopGenericEntries.length === 0, 'MENU selected canonical loop stage must leave no generic loop-body placeholder: ' + JSON.stringify(selectedLoopGenericEntries.map(sampleSemanticIdentity)));
-      assert(isDeepStrictEqual(loopSampleEntries.map(sampleSemanticKey).sort(), [expectedLoopPlaceholderKeys, expectedLoopPlaceholderKeys, expectedLoopPlaceholderKeys].flat().sort()), 'MENU selected canonical loop stage must replace the exact action-label placeholder with three scoped entries: ' + JSON.stringify(loopSampleEntries.map(sampleSemanticIdentity)));
+      assert(isDeepStrictEqual(selectedPathAutomaticLoopEntries.map(sampleSemanticIdentity), loopSampleEntries.map(sampleSemanticIdentity))
+        && isDeepStrictEqual(selectedPathAutomaticLoopEntries.map(entry => entry.consumers), loopSampleEntries.map(entry => entry.consumers)), 'MENU explicit count3 must preserve automatic source-loop caption identities and exact consumers');
       const selectedLoopSampleValues = selectedLoopSampleCatalog.entries.map(entry => ({
         id: entry.id,
         value: selectedSampleValueFor(entry),
@@ -11059,10 +11295,12 @@ if (b119ConfiguredCensus.status === 'unavailable') {
       assert(isDeepStrictEqual(externalBindingStates(selectedPathSampleCatalog, conservativeProgram),
         externalBindingStates(selectedLoopSampleCatalog, selectedProgram)),
       'MENU selected loop must preserve every external input value and consumed/not-applied state');
-      assert(conservativeProgram.previewSampleBindings.find(binding => binding.id === selectedPathLoopPlaceholderEntries[0]?.id)?.status === 'not-applied'
-        && selectedProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined).length === 3
-        && selectedProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined).every(binding => binding.status === 'consumed'),
-      'MENU selected loop must replace one unapplied placeholder with exactly three consumed action inputs');
+      const automaticActionBindings = conservativeProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined);
+      const explicitActionBindings = selectedProgram.previewSampleBindings.filter(binding => binding.previewLoop !== undefined);
+      assert(automaticActionBindings.length === 3
+        && automaticActionBindings.every(binding => binding.status === 'consumed')
+        && isDeepStrictEqual(automaticActionBindings, explicitActionBindings),
+      'MENU explicit count3 must preserve all three automatic action input bindings, values and consumed states');
       const selectedUnusedBindings = selectedProgram.previewSampleBindings.filter(binding => binding.status === 'not-applied');
       const selectedSampleGaps = selectedProgram.gaps.filter(gap => gap.category === 'sample');
       assert(selectedUnusedBindings.length === 19 && selectedSampleGaps.length === 19

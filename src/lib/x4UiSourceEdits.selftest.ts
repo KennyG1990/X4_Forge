@@ -2836,7 +2836,10 @@ const run = async (): Promise<void> => {
     ['canonical empty unscaled', contextualImportLua.replace('reserveScrollBar = false', 'reserveScrollBar = false, scaling = false'), 1],
     ['all file names reserved', contextualImportLua.replace('function menu.createFrame()', 'local row2 = 2\nfunction menu.createFrame(row3)')
       .replace('-- trailing bytes', 'local function later(row4)\n local row5 = row4\n return row5, row6\nend\n-- trailing bytes'), 1],
+    ['single-return parameter alias retained', contextualImportLua.replace('-- trailing bytes',
+      'local function later(value)\n local result = value\n return result\nend\n-- trailing bytes'), 1],
   ] as const;
+  let numericAliasLedger: ContextualLedgerInput | undefined;
   const rowPlacementReceipts = rowPlacementCases.map(([name, lua, index]) => {
     const context = contextualImportContextFor(canonicalCorpus, lua);
     const catalog = catalogFor(context);
@@ -2851,6 +2854,23 @@ const run = async (): Promise<void> => {
     const after = sessionContextFor(result.workspace, canonicalCorpus, result.path,
       target => target.kind === 'function' && target.name === 'menu.createFrame', name);
     const inserted = after.program.rows.find(row => row.id === result.insertedRow.rowId)!;
+    if (name === 'single-return parameter alias retained') {
+      const beforeFile = context.source.bundle!.sourceFiles.find(file => file.path === result.path)!;
+      const afterFile = after.source.bundle!.sourceFiles.find(file => file.path === result.path)!;
+      const creator = after.program.operations.find(operation => operation.id === result.insertedRow.creatorOperationId)!;
+      const callIndex = afterFile.callModel.calls.findIndex(call => call.source.start.offset === creator.source.start.offset);
+      const operationIndex = after.program.operations.indexOf(creator);
+      numericAliasLedger = {
+        beforeCalls: beforeFile.callModel.calls, afterCalls: afterFile.callModel.calls,
+        beforeRecords: beforeFile.callModel.records, afterRecords: afterFile.callModel.records,
+        beforeOperations: context.program.operations, afterOperations: after.program.operations,
+        entry: entry!, beforeText: beforeFile.text, afterText: afterFile.text,
+        replacementLength: result.replacement.length, insertedCallIndex: -1, insertedOperationIndex: -1,
+        replacementCallIndexes: [callIndex], replacementCallNames: ['addRow'], replacementCallOrders: [afterFile.callModel.calls[callIndex].order],
+        replacementOperationIndexes: [operationIndex], replacementOperationKinds: ['addRow'], replacementOperationIds: [creator.id],
+        replacementOperationModelOrders: [creator.modelOrder],
+      };
+    }
     const nextOldRow = context.program.rows.find(row => row.tableId === tableId && row.rowIndex === index + 1);
     const nextStatementStart = nextOldRow && context.source.bundle!.sourceFiles.find(file => file.path === result.path)!.callModel.calls
       .find(call => call.name === 'addRow' && call.source.start.offset === nextOldRow.source.start.offset)?.enclosingStatement?.deletionSource.start.offset;
@@ -2875,6 +2895,48 @@ const run = async (): Promise<void> => {
     };
   });
   console.log(`x4UiSourceEdits row placement controls: ${JSON.stringify(rowPlacementReceipts)}`);
+
+  assert.ok(numericAliasLedger, 'single-return alias row insertion must produce a standalone ledger');
+  const numericAliasValue = (input: ContextualLedgerInput, side: 'before' | 'after' = 'after') => {
+    const alias = input[side === 'before' ? 'beforeRecords' : 'afterRecords']
+      .find(record => asRecord(record)?.recordType === 'alias' && asRecord(record)?.name === 'result');
+    return asRecord(asRecord(alias)?.value)!;
+  };
+  const numericAliasAttacks: readonly [string, (input: ContextualLedgerInput) => void][] = [
+    ['changed expression', input => { asRecord(numericAliasValue(input).numericExpression)!.expression = 'other'; }],
+    ['forged literal', input => { const value = numericAliasValue(input); value.numericExpression =
+      {...asRecord(value.numericExpression), kind: 'literal', value: 99}; }],
+    ['unknown undefined member', input => { asRecord(numericAliasValue(input).numericExpression)!.unexpected = undefined; }],
+    ['removed after tree', input => { delete numericAliasValue(input).numericExpression; }],
+    ['removed both trees', input => { delete numericAliasValue(input).numericExpression; delete numericAliasValue(input, 'before').numericExpression; }],
+    ['same forged trees both sides', input => { for (const side of ['before', 'after'] as const)
+      asRecord(numericAliasValue(input, side).numericExpression)!.expression = 'other'; }],
+    ['shifted source', input => { const source = asRecord(asRecord(numericAliasValue(input).numericExpression)!.source)!;
+      const start = asRecord(source.start)!; start.offset = Number(start.offset) + 1; start.column = Number(start.column) + 1; }],
+    ['unmapped before source', input => { asRecord(numericAliasValue(input).numericExpression)!.source =
+      structuredClone(asRecord(numericAliasValue(input, 'before').numericExpression)!.source); }],
+    ['changed source after warmed proof', input => { const record = asRecord(input)!;
+      record.beforeText = input.beforeText.replace('local result = value', 'local result = other');
+      record.afterText = input.afterText.replace('local result = value', 'local result = other'); }],
+  ];
+  const numericAliasBaseline = compareX4UiSourceStructuralLedgerCorrespondence(numericAliasLedger);
+  const numericAliasReceipts = numericAliasAttacks.map(([name, mutate]) => {
+    const input = structuredClone(numericAliasLedger!); mutate(input);
+    return {name, accepted: compareX4UiSourceStructuralLedgerCorrespondence(input)};
+  });
+  const reorderedNumeric = structuredClone(numericAliasLedger);
+  const reorderedTree = asRecord(numericAliasValue(reorderedNumeric).numericExpression)!;
+  reorderedTree.source = Object.fromEntries(Object.entries(asRecord(reorderedTree.source)!).reverse());
+  const numericGetterInput = structuredClone(numericAliasLedger);
+  let numericGetterReads = 0;
+  Object.defineProperty(asRecord(numericAliasValue(numericGetterInput).numericExpression)!, 'expression',
+    {enumerable: true, get: () => { numericGetterReads++; throw new Error('numeric getter executed'); }});
+  const numericGetterAccepted = compareX4UiSourceStructuralLedgerCorrespondence(numericGetterInput);
+  console.log(`B119_STRUCTURAL_NUMERIC_ALIAS ${JSON.stringify({baseline: numericAliasBaseline, attacks: numericAliasReceipts,
+    reordered: compareX4UiSourceStructuralLedgerCorrespondence(reorderedNumeric), getterReads: numericGetterReads, getterAccepted: numericGetterAccepted})}`);
+  check('B119 structural numeric alias source proof preserves trees and rejects forged missing stale and accessor evidence',
+    numericAliasBaseline && numericAliasReceipts.every(row => !row.accepted)
+      && compareX4UiSourceStructuralLedgerCorrespondence(reorderedNumeric) && !numericGetterAccepted && numericGetterReads === 0);
 
   const rowBeforeFile = contextualProducer.source.bundle!.sourceFiles.find(file => file.path === rowProducerResult.path)!;
   const rowAfterFile = rowProducerResult.source.bundle!.sourceFiles.find(file => file.path === rowProducerResult.path)!;

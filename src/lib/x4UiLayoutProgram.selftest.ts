@@ -30,6 +30,7 @@ import {
   type X4UiLayoutTargetSelector,
 } from './x4UiLayoutProgram';
 import * as x4UiLayoutProgramExports from './x4UiLayoutProgram';
+import { buildX4UiSourceCallModel } from './x4UiSourceBundle';
 import {
   buildX4UiWorkspaceSource,
 } from './x4UiWorkspaceSource';
@@ -1374,7 +1375,175 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
 } => {
   const metricWrapper = (name = 'metric', localName = 'base', parameter = 'mult', extra = '') =>
     `local function ${name}(${parameter})\nlocal ${localName} = tonumber(Helper.standardTextHeight) or 19\n${extra}return Helper.scaleY(math.floor(${localName} * (${parameter} or 1)))\nend\n`;
+  for (const uiScale of [1, 1.4]) for (const renamed of [false, true]) for (const control of [true, false]) for (const bomCrlf of [false, true]) {
+    const name = renamed ? 'paintBand' : 'drawHeading';
+    const y = renamed ? 'offset' : 'y';
+    const text = [
+      `local function ${name}(frame, ${y})`,
+      `local t = frame:addTable(1, { y = ${y}, width = 80, scaling = false })`,
+      't:addRow(false, {})[1]:createText("heading")',
+      `return ${y} + Helper.scaleY(10)`, 'end',
+      'local function pair(frame, start)',
+      ...(control ? [`${name}(frame, start)`, 'local nextY = start + Helper.scaleY(10)']
+        : [`local nextY = ${name}(frame, start)`]),
+      'local t = frame:addTable(1, { y = nextY, width = 80, scaling = false })',
+      't:addRow(false, {})[1]:createText("following")', 'end',
+      'local f = Helper.createFrameHandle({}, { width = 100, height = 80 })',
+      'pair(f, 10)', 'pair(f, 45)', 'f:display()',
+    ].join('\n');
+    const sourceText = bomCrlf ? '\uFEFF' + text.replaceAll('\n', '\r\n') : text;
+    const model = buildX4UiSourceCallModel({ path: 'selftest/drawing-return.lua',
+      text: sourceText, sourcePath: 'fixture://selftest/drawing-return.lua' });
+    assert.equal(model.file.text, sourceText, 'return proof preserves original BOM and line endings');
+    const result = projectX4UiLayoutProgram(model, topTarget(model), profileFor(model,
+      { uiScale, localExpansion: { maxDepth: 8, maxInvocations: 64 } }));
+    const tables = result.program?.tables || [];
+    const expected = [10, 10 + Math.floor(10 * uiScale + 0.5), 45, 45 + Math.floor(10 * uiScale + 0.5)];
+    const actual = tables.map(table => table.descriptorFacts.y?.status === 'known' ? table.descriptorFacts.y.value : undefined);
+    check(`B119 drawing-helper return sibling positions ${uiScale}/${renamed}/${control}/${bomCrlf}`,
+      tables.length === 4 && result.program?.localExpansion?.invocations.every(item => item.status === 'expanded') === true
+        && JSON.stringify(actual) === JSON.stringify(expected), detail({ expected, actual, status: result.status }));
+    if (!control && !renamed) {
+      const altered = JSON.parse(JSON.stringify(model)) as X4UiCallModel;
+      const caller = altered.localInvocations.find(item => item.calleeExpression === 'pair');
+      assert.ok(caller);
+      caller.arguments[1].value = 777;
+      const forged = projectX4UiLayoutProgram(altered, topTarget(altered), profileFor(altered,
+        {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}}));
+      check(`B119 drawing-helper forged ancestor argument rejected ${uiScale}/${bomCrlf}`,
+        forged.program?.tables[1]?.descriptorFacts.y?.status !== 'known', detail(forged.status));
+    }
+  }
   for (const uiScale of [1, 1.4]) {
+    const returnedCases: readonly [string, string, string, number | undefined][] = [
+      ['root scale', 'return y + Helper.scaleY(10)', 'local nextY = drawHeading(f, 10)', 10 + Math.floor(10 * uiScale + 0.5)],
+      ['literal', 'return 25', 'local nextY = drawHeading(f, 10)', 25],
+      ['parameter return', 'return y', 'local nextY = drawHeading(f, 10)', 10],
+      ['local parameter alias return', 'local offset = y\nreturn offset', 'local nextY = drawHeading(f, 10)', 10],
+      ['fractional argument', 'return y + 5', 'local nextY = drawHeading(f, 10.5)', 15.5],
+      ['negative argument', 'return y + 5', 'local nextY = drawHeading(f, -10)', -5],
+      ['late Helper mutation', 'return y + Helper.scaleY(10)', 'Helper.scaleY = other\nlocal nextY = drawHeading(f, 10)', undefined],
+      ['late metric mutation', 'return y + metric(1)', 'metric = other\nlocal nextY = drawHeading(f, 10)', undefined],
+      ['late metric authority mutation', 'return y + metric(1)', 'math.floor = other\nlocal nextY = drawHeading(f, 10)', undefined],
+      ['sequential same helper', 'return y + 5', 'local first = drawHeading(f, 10)\nlocal nextY = drawHeading(f, first)', 20],
+      ['nested forwarding', 'return increment(y) + 5', 'local nextY = drawHeading(f, 10)', 18],
+      ['recursive return', 'return drawHeading(frame, y)', 'local nextY = drawHeading(f, 10)', undefined],
+      ['metric dependency', 'return y + metric(1) + Helper.scaleY(10)', 'local nextY = drawHeading(f, 10)',
+        10 + Math.floor(16 * uiScale + 0.5) + Math.floor(10 * uiScale + 0.5)],
+      ['alias chain', 'return y + 5', 'local first = drawHeading(f, 10)\nlocal nextY = first', 15],
+      ['alias arithmetic', 'return y + 5', 'local first = drawHeading(f, 10)\nlocal nextY = first + Helper.scaleY(8)', 15 + Math.floor(8 * uiScale + 0.5)],
+      ['alias arithmetic after reassignment', 'return y + 5', 'local first = drawHeading(f, 10)\nfirst = unknown()\nlocal nextY = first + Helper.scaleY(8)', undefined],
+      ['unknown call', 'return unknown(y)', 'local nextY = drawHeading(f, 10)', undefined],
+      ['multiple returns', 'return y, 5', 'local nextY = drawHeading(f, 10)', undefined],
+      ['conditional return', 'if unknown then return 90 end\nreturn y + 5', 'local nextY = drawHeading(f, 10)', undefined],
+      ['parameter mutation', 'y = 90\nreturn y + 5', 'local nextY = drawHeading(f, 10)', undefined],
+      ['parameter shadow', 'local y = 90\nreturn y + 5', 'local nextY = drawHeading(f, 10)', undefined],
+      ['wrong arity', 'return y + 5', 'local nextY = drawHeading(f)', undefined],
+      ['reassigned result', 'return y + 5', 'local nextY = drawHeading(f, 10)\nnextY = unknown()', undefined],
+      ['replaced helper', 'return y + 5', 'drawHeading = other\nlocal nextY = drawHeading(f, 10)', undefined],
+    ];
+    for (const [name, returned, binding, expected] of returnedCases) {
+      const text = (name.includes('metric') ? metricWrapper() : '')
+        + (name === 'nested forwarding' ? 'local function increment(value) return value + 3 end\n' : '')
+        + `local function drawHeading(frame, y)\nlocal t = frame:addTable(1, {y = y, width = 80, scaling = false})\n${returned}\nend\nlocal f = Helper.createFrameHandle({}, {width = 100, height = 80})\n${binding}\nlocal t = f:addTable(1, {y = nextY, width = 80, scaling = false})`;
+      const model = buildX4UiCallModel(input(text, `selftest/returned-${name}-${uiScale}.lua`));
+      const project = () => projectX4UiLayoutProgram(model, topTarget(model), profileFor(model,
+        {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}}));
+      const result = project();
+      const actual = result.program?.tables.at(-1)?.descriptorFacts.y;
+      check(`B119 drawing-helper ${name} ${uiScale}`, expected === undefined ? actual?.status !== 'known'
+        : actual?.status === 'known' && actual.value === expected, detail({expected, actual}));
+      if (name === 'alias arithmetic') {
+        for (const attack of ['name', 'initializer-source', 'expression'] as const) {
+          const altered = JSON.parse(JSON.stringify(model)) as X4UiCallModel;
+          const alias = altered.aliases.find(item => item.name === 'first');
+          assert.ok(alias?.value.localInvocationResult);
+          if (attack === 'name') (alias as {name: string}).name = 'other';
+          if (attack === 'initializer-source') alias.value.location.start.offset += 1;
+          if (attack === 'expression') (alias.value.localInvocationResult as {expression: string}).expression = 'drawHeading(f, 99)';
+          const forged = projectX4UiLayoutProgram(altered, topTarget(altered), profileFor(altered,
+            {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}}));
+          check(`B119 drawing-helper arithmetic alias rejects forged ${attack} ${uiScale}`,
+            forged.program?.tables.at(-1)?.descriptorFacts.y?.status !== 'known', detail(forged.status));
+        }
+      }
+      if (name === 'root scale') {
+        const altered = JSON.parse(JSON.stringify(model)) as X4UiCallModel;
+        const value = altered.localFunctions[0].returnValues?.[0].values[0];
+        assert.ok(value?.numericExpression?.kind === 'binary');
+        (value.numericExpression as unknown as {operator: string}).operator = '-';
+        const forged = projectX4UiLayoutProgram(altered, topTarget(altered), profileFor(altered,
+          {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}}));
+        check(`B119 drawing-helper forged return rejected ${uiScale}`,
+          forged.program?.tables.at(-1)?.descriptorFacts.y?.status !== 'known', detail(forged.status));
+        const missing = JSON.parse(JSON.stringify(model)) as X4UiCallModel;
+        delete (missing.localFunctions[0] as {returnValues?: unknown}).returnValues;
+        const absent = projectX4UiLayoutProgram(missing, topTarget(missing), profileFor(missing, {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}}));
+        check(`B119 drawing-helper missing return records rejected ${uiScale}`,
+          absent.program?.tables.at(-1)?.descriptorFacts.y?.status !== 'known', detail(absent.status));
+        (model.file as {text: string}).text = model.file.text.replace('y + Helper.scaleY(10)', 'y - Helper.scaleY(10)');
+        const replaced = project();
+        check(`B119 drawing-helper changed source on warmed model rejected ${uiScale}`,
+          replaced.program?.tables.at(-1)?.descriptorFacts.y?.status !== 'known', detail(replaced.status));
+      }
+    }
+    const capturedModel = buildX4UiCallModel(input([
+      'local function outer(frame, y)',
+      'local function draw(frame)',
+      'local t = frame:addTable(1, {width = 80})', 'return y + 5', 'end',
+      'local nextY = draw(frame)', 'local t = frame:addTable(1, {width = 80, y = nextY})', 'end',
+      'local f = Helper.createFrameHandle({}, {width = 100, height = 80})', 'outer(f, 10)',
+    ].join('\n'), `selftest/returned-capture-${uiScale}.lua`));
+    const captured = projectX4UiLayoutProgram(capturedModel, topTarget(capturedModel), profileFor(capturedModel,
+      {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}}));
+    check(`B119 drawing-helper captured parameter refused ${uiScale}`,
+      captured.program?.tables.at(-1)?.descriptorFacts.y?.status !== 'known', detail(captured.status));
+  }
+  for (const uiScale of [1, 1.4]) {
+    for (const opaque of [false, true]) {
+      const text = [
+        'local state = {}',
+        'local function heading(frame, y)',
+        ...(opaque ? ['state.count = 1'] : []),
+        'local t = frame:addTable(1, {y = y, width = 80, scaling = false})',
+        'return y + Helper.scaleY(26)', 'end',
+        'local function body(frame, y)', 'y = heading(frame, y)', 'y = y + Helper.scaleY(8)',
+        'local t = frame:addTable(1, {y = y, width = 80, scaling = false})', 'return y', 'end',
+        'local f = Helper.createFrameHandle({}, {width = 100, height = 80})', 'body(f, 10)',
+      ].join('\n');
+      const model = buildX4UiCallModel(input(text, `selftest/parameter-return-${opaque}-${uiScale}.lua`));
+      const profile = profileFor(model, {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}});
+      const project = (samples?: Parameters<typeof projectX4UiLayoutProgram>[3]) => projectX4UiLayoutProgram(model, topTarget(model), profile, samples);
+      const initial = project();
+      const program = initial.program!;
+      const returned = program.sampleCatalog.entries.filter(entry => entry.expression === 'heading(frame, y)');
+      const fact = program.tables.at(-1)?.descriptorFacts.y;
+      check(`B119 parameter assignment return ${opaque}/${uiScale}`, opaque
+        ? fact?.status !== 'known' && returned.length === 1
+        : fact?.status === 'known' && fact.value === 10 + Math.floor(26 * uiScale + 0.5) + Math.floor(8 * uiScale + 0.5)
+          && returned.length === 0, detail({fact, count: returned.length}));
+      if (opaque) {
+        const entry = returned[0];
+        assert.ok(entry);
+        const samples = {catalogId: program.sampleCatalog.id, source: program.sampleCatalog.sourceIdentity,
+          values: [{id: entry.id, value: 40}]};
+        const recovered = project(samples).program!;
+        const recoveredFact = recovered.tables.at(-1)?.descriptorFacts.y;
+        const consumer = entry.consumers.find(item => item.field === 'y');
+        check(`B119 opaque-return arithmetic recovery ${uiScale}`,
+          model.file.text.slice(entry.source.start.offset, entry.source.end.offset) === 'heading(frame, y)'
+            && consumer !== undefined && consumer.source.start.line > entry.source.start.line
+            && recoveredFact?.status === 'known' && recoveredFact.value === 40 + Math.floor(8 * uiScale + 0.5)
+            && recoveredFact.provenance === 'preview-sample' && recoveredFact.sampleId === entry.id
+            && recovered.previewSampleBindings.find(binding => binding.id === entry.id)?.status === 'consumed', detail(recoveredFact));
+        check(`B119 opaque-return sample wrong type rejected ${uiScale}`,
+          project({...samples, values: [{id: entry.id, value: '40'}]}).status === 'refused');
+        const changed = buildX4UiCallModel(input(text.replace('heading(frame, y)\ny =', 'heading(frame, 99)\ny ='), model.file.rel));
+        check(`B119 opaque-return stale source input rejected ${uiScale}`,
+          projectX4UiLayoutProgram(changed, topTarget(changed), profileFor(changed,
+            {uiScale, localExpansion: {maxDepth: 8, maxInvocations: 64}}), samples).status === 'refused');
+      }
+    }
     const scaled16 = Math.floor(16 * uiScale + 0.5);
     const metricCases: readonly [string, string, string, number | undefined, ('x' | 'y')?][] = [
       ['inline scale', '', '7 + Helper.scaleY(16)', 7 + scaled16],
@@ -1396,6 +1565,11 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
       ['global environment escaped', metricWrapper() + 'touch(_G)\n', '7 + metric(1)', undefined],
       ['global environment aliased', metricWrapper() + 'local env = _G; env.tonumber = other\n', '7 + metric(1)', undefined],
       ['tonumber replaced', metricWrapper() + 'tonumber = other\n', '7 + metric(1)', undefined],
+      ['irrelevant literal nodes', `local padding = {${Array.from({length: 128}, (_, index) => `"value-${index}"`).join(',')}}\n` + metricWrapper(), '7 + metric(1)', 7 + scaled16],
+      ['rawset authority replacement', metricWrapper() + 'rawset(_G, "tonumber", other)\n', '7 + metric(1)', undefined],
+      ['late nested authority assignment', metricWrapper() + 'function later() tonumber = other end\n', '7 + metric(1)', undefined],
+      ['unrelated local _G shadow', 'local _G = {}\n' + metricWrapper(), '7 + metric(1)', 7 + scaled16],
+      ['environment local replacement', 'local _ENV = {}\n' + metricWrapper(), '7 + metric(1)', undefined],
       ['Helper replaced', metricWrapper() + 'Helper = Other\n', '7 + metric(1)', undefined],
       ['Helper field replaced', metricWrapper() + 'Helper.scaleY = other\n', '7 + metric(1)', undefined],
       ['Helper field replaced through environment', metricWrapper() + '_G.Helper.scaleY = other\n', '7 + metric(1)', undefined],
@@ -15288,7 +15462,7 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     '  local table = frame:addTable(1, { width = width })',
     '  local row = table:addRow(false, {})',
     '  row[1]:createText(label, { height = 12 })',
-    '  return width',
+    '  return runtimeWidth(width)',
     'end',
     'local function display(tw, dynamicText)',
     '  local menu = { name = "Samples", layer = 1 }',
@@ -15319,7 +15493,7 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     candidate.expression === 'panel(frame, 40, "consumed")');
   const widthSample = unsampledExpansion.sampleCatalog.entries.find(candidate => candidate.expression === 'tw');
   const textSample = unsampledExpansion.sampleCatalog.entries.find(candidate => candidate.expression === 'dynamicText');
-  check('direct scale parameters apply exactly while dynamic scalar/text and consumed returns stay sample points',
+  check('direct scale parameters apply exactly while dynamic scalar/text and opaque consumed returns stay sample points',
     unsampledExpansion.tables.length === 4
       && unsampledExpansion.tables[0].requestedWidth === 30
       && factProvenance(unsampledExpansion.tables[0].descriptorFacts.requestedWidth) === 'direct-helper-scale'
@@ -15348,7 +15522,7 @@ const run = (b119CanonicalCorpus?: X4UiCorpusCanonicalSuccess): {
     sampledExpansionProfile,
     sampledExpansionInput,
   ));
-  check('exact-range samples bind helper parameters and one consumed return without inferring return semantics',
+  check('exact-range samples bind helper parameters and one opaque consumed return without inferring unknown semantics',
     sampledExpansionProgram.tables.map(candidate => candidate.requestedWidth).join(',') === '30,55,40,65'
       && sampledExpansionProgram.tables.every(candidate => candidate.kernelState?.rows.length === 1)
       && sampledExpansionProgram.cells.some(candidate =>

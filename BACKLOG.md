@@ -8,6 +8,20 @@
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
+2026-09-15: helper-return candidate has Layout1200/1200, SourceEdits175/175,
+Scene196/196(real MENU/HUB/COMM3/3), coupled checks/types/lint and rendered7/7plus
+traced3/3firstattempt PASS. Exact real-HUB Apply17.65s/Undo13.71s/Redo13.35s remain too
+slow; title/six tabs/FACTIONS survive reopen, but body coverage remains incomplete.
+57fresh artifacts including passing traces and both HUB exports preserved with hashes.
+All823source/50protected/4original-Lua/19live guards and browser cleanup pass.
+Normal precommit rerun PASS06:57Z; local14path checkpoint next, with installed hook intact.
+No push/install/native/release.
+Full9journeys/3menus/12references, responsiveness and packaged/native gates stay open.
+Earlier failures/causal reconciliation and AAR retained in the three09-15plans, not waived.
+Current commands, ownership and terminal receipt locations:SESSION-HANDOFF.md.
+Latest plan:docs/plans/2026-09-15-b119-authority-scan-index.md.
+Evidence:test-results/b119-drawing-helper-returns-20260915/RESULTS.md. Full goalPARTIAL.
+
 2026-09-15 00:26Z: bounded catalog-handle repair VERIFIED. [REPRODUCED] Mutable sample/path
 rebinding invalidated earlier frozen projections; exact browser diagnosis found saved B
 failed source migration after Undo. Distinct handles for equivalent new catalogs fix both

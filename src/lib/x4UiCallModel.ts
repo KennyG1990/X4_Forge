@@ -684,6 +684,10 @@ export interface X4UiLocalFunctionDeclaration {
   readonly parameters: readonly X4UiLocalFunctionParameterIdentity[];
   readonly hasVarargs: boolean;
   readonly returnSources: readonly X4UiSourceLocation[];
+  readonly returnValues?: readonly {
+    readonly source: X4UiSourceLocation;
+    readonly values: readonly X4UiValue[];
+  }[];
   readonly context: X4UiFunctionContext;
 }
 
@@ -1117,6 +1121,7 @@ class X4UiCallModelBuilder {
   private readonly propertyObjects = new Map<X4UiPropertyRecord, TrackedObject | undefined>();
   private readonly handlerObjects = new Map<X4UiHandlerRecord, TrackedObject | undefined>();
   private readonly localFunctions: X4UiLocalFunctionDeclaration[] = [];
+  private readonly localReturnValues = new Map<string, Array<{ source: X4UiSourceLocation; values: X4UiValue[] }>>();
   private readonly localFunctionByNode = new Map<LuaNode, InternalLocalFunction>();
   private readonly localHelperParameterSafety = new Map<string, readonly boolean[]>();
   private readonly localInvocations: X4UiLocalFunctionInvocation[] = [];
@@ -1207,7 +1212,10 @@ class X4UiCallModelBuilder {
     const properties = records.filter((record): record is X4UiPropertyRecord => record.recordType === 'property');
     const handlers = records.filter((record): record is X4UiHandlerRecord => record.recordType === 'handler');
     const aliases = records.filter((record): record is X4UiAliasRecord => record.recordType === 'alias');
-    const localFunctions = [...this.localFunctions].sort((left, right) =>
+    const localFunctions = this.localFunctions.map(declaration => {
+      const returnValues = this.localReturnValues.get(declaration.id);
+      return returnValues ? { ...declaration, returnValues } : declaration;
+    }).sort((left, right) =>
       left.source.start.offset - right.source.start.offset || left.source.end.offset - right.source.end.offset);
     const localInvocations = [...this.localInvocations].sort((left, right) =>
       left.sourceOrder - right.sourceOrder || left.source.end.offset - right.source.end.offset);
@@ -4876,7 +4884,9 @@ class X4UiCallModelBuilder {
   }
 
   private addAlias(name: string, value: InternalValue, target: LuaNode, context: X4UiFunctionContext, aliasKind: X4UiAliasRecord['aliasKind']): void {
-    if (!this.isRelevantBinding(name, value)) return;
+    // Preserve source lineage for an opaque local result without assigning it
+    // a numeric value or replacing its preview-sample contract.
+    if (!this.isRelevantBinding(name, value) && !value.publicValue.localInvocationResult) return;
     const record: X4UiAliasRecord = {
       recordType: 'alias',
       name,
@@ -5723,9 +5733,22 @@ class X4UiCallModelBuilder {
       case 'CallStatement':
         this.evaluate(nodeField<LuaNode>(statement, 'expression'), context, false);
         break;
-      case 'ReturnStatement':
-        nodeArray(statement, 'arguments').forEach(argument => this.evaluate(argument, context));
+      case 'ReturnStatement': {
+        const values = nodeArray(statement, 'arguments').map(argument => this.evaluate(argument, context));
+        const declaration = context.source && this.localFunctions.find(item =>
+          item.source.start.offset === context.source!.start.offset && item.source.end.offset === context.source!.end.offset);
+        if (declaration) {
+          const returns = this.localReturnValues.get(declaration.id) || [];
+          returns.push({ source: this.location(statement), values: values.map(value => {
+            // Multiple return values are outside the closed scalar contract.
+            // Do not materialize numeric aliases for unsupported return lists.
+            const numericExpression = values.length === 1 ? this.numericExpressionForValue(value) : undefined;
+            return { ...value.publicValue, ...(numericExpression ? { numericExpression } : {}) };
+          }) });
+          this.localReturnValues.set(declaration.id, returns);
+        }
         break;
+      }
       case 'IfStatement': {
         const clauses = nodeArray(statement, 'clauses');
         const conditions = clauses.map(clause => {
