@@ -1,0 +1,77 @@
+{
+  "url": "https://open-vsx.org/extension/x4forge/x4-forge-studio",
+  "at": "2026-10-20T01:58:34.105Z",
+  "descriptionImages": [
+    {
+      "alt": "Visual Mission Director Graph",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/01_visual_mission_director_graph.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "XML Patching and Diff Simulation",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/02_xml_patching_and_diff_simulation.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "Bulk XML Transforms Workbench",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/03_bulk_xml_transforms_workbench.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "HUD and Lua UI Editor",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/04_x4_ui_hud_and_lua_editor.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "External Integration Contracts",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/05_external_integration_contracts_editor.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "Galaxy Map Navigator",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/07_galaxy_map_and_sector_navigator.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "Wares and Jobs Configurator",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/08_wares_and_jobs_configurator.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "AI Scripts Behavior Editor",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/09_aiscripts_behavior_editor.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "T-File Localization Editor",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/10_t_file_localization_editor.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    },
+    {
+      "alt": "Project Overview and Release Center",
+      "src": "https://github.com/KennyG1990/X4_Forge/raw/HEAD/media/showcase/06_project_overview_and_release_center.png",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0
+    }
+  ],
+  "broken": 10
+}

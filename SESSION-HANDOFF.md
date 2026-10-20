@@ -1,3 +1,37 @@
+# Session handoff — Open VSX gallery image publication
+
+Date: 2026-10-19. Project: X4 Forge store showcase. GitHub owner: #46.
+
+The ten installed Antigravity screenshots are captured, visually reviewed, decoded and
+mirrored to `media/showcase/` and `vscode-extension/media/showcase/`. This publication
+changes images and task records only. Open VSX 0.0.78 README/runtime/version remain unchanged.
+Its description already links the new root paths, so a public image commit repairs it.
+
+Current acceptance state: PARTIAL until this asset commit is pushed and two fresh public
+listing loads confirm all ten images decode. Plan/evidence contract:
+`docs/plans/2026-10-19-openvsx-showcase-images.md`.
+Local capture/audit evidence is retained in the active checkout under
+`vscode-extension/evidence/showcase/2026-10-19/`; full native captures include IDE chrome
+and are intentionally excluded from public assets. Capture hashes are recorded there.
+
+Isolation: publication checkout started at public main 93c9af1. Active checkout main remains
+e20be675 with fifteen unpublished B119 commits and unrelated dirty work. Never push those
+commits as part of this media release. After the public asset push the active checkout and
+origin/main have diverged; no merge/rebase/reset was authorized or performed.
+
+Installed Studio v1.0.521 (93c9af1) was driven through its native Antigravity UI. A separate
+Forge_Showcase_20261019 workspace holds the demonstration examples. Original
+Player_Elite_Escort was restored in Beginner mode. No deployment, real mod/game/config write,
+AI provider request, or new extension package was needed.
+
+B119 remains PARTIAL with its existing acceptance gates; its active local handoff and
+unpublished implementation supersede the older public checkpoint below. This task claims
+only genuine showcase captures and image delivery, not completion of those product gates.
+
+Commit point: docs(marketplace): restore all ten Forge showcase images.
+
+## Preserved public B119 checkpoint
+
 # Session handoff — B119 same-state pending parity
 
 Date: 2026-09-09

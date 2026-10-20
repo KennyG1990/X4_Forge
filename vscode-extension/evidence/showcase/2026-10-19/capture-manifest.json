@@ -1,0 +1,96 @@
+{
+  "at": "2026-10-20T01:58:59.335Z",
+  "source": "Installed Antigravity X4 Forge Studio v1.0.521, public baseline 93c9af1",
+  "images": [
+    {
+      "name": "01_visual_mission_director_graph",
+      "width": 1259,
+      "height": 1100,
+      "bytes": 428439,
+      "sha256": "9d258a3668ec2ae83f25d59e8567b2261c2eb3370b62d14db1ee02c1a77ea517",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "02_xml_patching_and_diff_simulation",
+      "width": 1158,
+      "height": 705,
+      "bytes": 386475,
+      "sha256": "f7dc57fa2db7c9c58bf652d04ef78c4c1f91b8ad657113153f489dbfe320247c",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "03_bulk_xml_transforms_workbench",
+      "width": 1158,
+      "height": 705,
+      "bytes": 492935,
+      "sha256": "9a75cdb44fe793c779225ed7ef1a3d39b6dff7a2cc2c786396c3c10b45ef8642",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "04_x4_ui_hud_and_lua_editor",
+      "width": 2518,
+      "height": 1305,
+      "bytes": 919934,
+      "sha256": "8f47c2919b8282a1a18f0890b1bf78786a34a719dc0ba68343f975136fc6dabb",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "05_external_integration_contracts_editor",
+      "width": 2518,
+      "height": 1050,
+      "bytes": 815976,
+      "sha256": "68e77311226bbd82c7065c27b995a7939352aae24e1a085150867091f18d1e27",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "06_project_overview_and_release_center",
+      "width": 2518,
+      "height": 1305,
+      "bytes": 919345,
+      "sha256": "9429b552702fe50a052b4a97c38c032c752a67b50d68ba85ed6987c65bac2909",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "07_galaxy_map_and_sector_navigator",
+      "width": 2518,
+      "height": 1305,
+      "bytes": 1658093,
+      "sha256": "c918db9a993e3d938be96ef6f03d1e9a69e8ce7044dd95d9e451f94f775f0ed4",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "08_wares_and_jobs_configurator",
+      "width": 1370,
+      "height": 945,
+      "bytes": 492419,
+      "sha256": "a70222e9ea4d05ab5956dc2815710b0a87e8bbe42e5c0bd9e8eadfb2bcde6871",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "09_aiscripts_behavior_editor",
+      "width": 2518,
+      "height": 1305,
+      "bytes": 876809,
+      "sha256": "0da18241f646dbe3d3a381e4c61943d206763a80ff0b517d17edca4e51cfc16e",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    },
+    {
+      "name": "10_t_file_localization_editor",
+      "width": 1158,
+      "height": 705,
+      "bytes": 423766,
+      "sha256": "4ec088e80ea131ec1217427bec6f5fc248a1ed8e8188fd16bf43ba814b27c043",
+      "publicPathMatches": true,
+      "packagedPathMatches": true
+    }
+  ]
+}
