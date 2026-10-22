@@ -18,6 +18,7 @@ import type {
   AgentKeyScope,
   AgentRouteAuthorityDecision,
 } from './agentAuthority';
+import { agentScopeCovers } from './agentAuthority';
 
 export const AGENT_CAPABILITY_AUTHORITY_SCHEMA_VERSION = 'forge.agent-capability-authority.v1' as const;
 export const AGENT_CAPABILITY_AUTHORITY_API_VERSION = '2026-08-01.agent-effective.v1' as const;
@@ -108,7 +109,7 @@ export function normalizeAgentCapabilityConstraint(
     const capability = byIdentity.get(identity);
     if (!capability) errors.push(`unknown capability identity: ${identity}`);
     else if (capability.access.public) errors.push(`public capability does not belong in a key restriction: ${identity}`);
-    else if (!capability.access.agentScopes.includes(scope)) {
+    else if (!agentScopeCovers(capability.access.agentScopes, scope)) {
       errors.push(`${identity} is outside the ${scope} preset.`);
     }
   }
@@ -152,7 +153,7 @@ export function decideEffectiveCapability(
   if (route.decision.disposition !== 'canonical-capability' || route.decision.owner !== capability.id) {
     return { allowed: false, code: 'CAPABILITY_OWNER_MISMATCH', capabilityIdentity: identity };
   }
-  if (!actor.scope || !route.decision.agentScopes.includes(actor.scope)) {
+  if (!actor.scope || !agentScopeCovers(route.decision.agentScopes, actor.scope)) {
     return { allowed: false, code: 'CAPABILITY_SCOPE_DENIED', capabilityIdentity: identity };
   }
   if ((route.decision.workspaceMode === 'required' || capability.context.workspace === 'required') && !actor.workspaceId) {

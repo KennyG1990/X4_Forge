@@ -11,8 +11,22 @@
 
 import crypto from 'crypto';
 
-export type AgentKeyScope = 'read' | 'write' | 'deploy';
-export const AGENT_KEY_SCOPES = ['read', 'write', 'deploy'] as const satisfies readonly AgentKeyScope[];
+export type AgentKeyScope = 'read' | 'write' | 'deploy' | 'all';
+export const AGENT_KEY_SCOPES = ['read', 'write', 'deploy', 'all'] as const satisfies readonly AgentKeyScope[];
+/** The scopes a ROUTE may list (its reviewed preset). `all` is key-only - it is never written on a route. */
+export const AGENT_ROUTE_SCOPES = ['read', 'write', 'deploy'] as const satisfies readonly AgentKeyScope[];
+
+/**
+ * Does a KEY scope cover a route's (or capability's) reviewed agent scopes? Routes list read/write/deploy; `all` is a
+ * key-only MASTER agent scope - the union of them: every route ANY agent scope may use. It never reaches a Studio-only
+ * route (empty list) and never an unreviewed one (that fails resolution before this is asked). One helper, so every
+ * enforcement point (allows(), the request gate, capability narrowing) means the same thing by it.
+ */
+export function agentScopeCovers(routeScopes: readonly string[], keyScope: string | null | undefined): boolean {
+  if (!keyScope) return false;
+  if (keyScope === 'all') return routeScopes.length > 0;
+  return routeScopes.includes(keyScope);
+}
 
 export type AgentAuthorityResourceClass =
   | 'public'
@@ -242,7 +256,7 @@ export function createAgentRouteAuthority(value: unknown): AgentRouteAuthority {
     },
     allows(scope, method, requestPath) {
       const resolved = this.resolve(method, requestPath);
-      return resolved.ok && resolved.decision.agentScopes.includes(scope);
+      return resolved.ok && agentScopeCovers(resolved.decision.agentScopes, scope);
     },
   };
 }

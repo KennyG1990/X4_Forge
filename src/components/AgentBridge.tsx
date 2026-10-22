@@ -126,7 +126,7 @@ export default function AgentBridge({
 
   // B42: agent-key manager state (list is safe records only — never plaintext keys).
   interface AgentKeyRow {
-    id: string; label: string; scope: 'read' | 'write' | 'deploy';
+    id: string; label: string; scope: 'read' | 'write' | 'deploy' | 'all';
     createdAt: number; expiresAt: number | null; lastUsedAt: number | null;
     useCount: number; revokedAt: number | null; hashPrefix: string; workspaceId?: string;
     capabilityConstraint?: { capabilityIdentities: string[]; allowedEffects: string[] };
@@ -149,7 +149,7 @@ export default function AgentBridge({
   const [agentEffectOptions, setAgentEffectOptions] = useState<string[]>([]);
   const [keysError, setKeysError] = useState<string>('');
   const [newKeyLabel, setNewKeyLabel] = useState<string>('');
-  const [newKeyScope, setNewKeyScope] = useState<'read' | 'write' | 'deploy'>('write');
+  const [newKeyScope, setNewKeyScope] = useState<'read' | 'write' | 'deploy' | 'all'>('write');
   const [newKeyTtl, setNewKeyTtl] = useState<string>('7d');
   const [customKeyAuthority, setCustomKeyAuthority] = useState(false);
   const [selectedCapabilityIdentities, setSelectedCapabilityIdentities] = useState<string[]>([]);
@@ -177,12 +177,15 @@ export default function AgentBridge({
     if (activeTab === 'keys') void loadAgentKeys();
   }, [activeTab, loadAgentKeys]);
 
-  const eligibleCapabilityOptions = agentCapabilityOptions.filter(option => option.agentScopes.includes(newKeyScope));
+  // 'all' (the master agent scope) is eligible for every capability any agent scope may use
+  const coversScope = (scopes: Array<'read' | 'write' | 'deploy'>, scope: 'read' | 'write' | 'deploy' | 'all') =>
+    scope === 'all' ? scopes.length > 0 : scopes.includes(scope);
+  const eligibleCapabilityOptions = agentCapabilityOptions.filter(option => coversScope(option.agentScopes, newKeyScope));
   const selectedCapabilityOptions = eligibleCapabilityOptions.filter(option => selectedCapabilityIdentities.includes(option.identity));
   const selectableEffects = agentEffectOptions.filter(effect => selectedCapabilityOptions.some(option => option.effects.includes(effect)));
 
-  const resetCustomAuthorityForScope = useCallback((scope: 'read' | 'write' | 'deploy') => {
-    const eligible = agentCapabilityOptions.filter(option => option.agentScopes.includes(scope));
+  const resetCustomAuthorityForScope = useCallback((scope: 'read' | 'write' | 'deploy' | 'all') => {
+    const eligible = agentCapabilityOptions.filter(option => (scope === 'all' ? option.agentScopes.length > 0 : option.agentScopes.includes(scope)));
     setSelectedCapabilityIdentities(eligible.map(option => option.identity));
     const union = new Set(eligible.flatMap(option => option.effects));
     setSelectedAllowedEffects(agentEffectOptions.filter(effect => union.has(effect)));
@@ -193,7 +196,7 @@ export default function AgentBridge({
     if (enabled) resetCustomAuthorityForScope(newKeyScope);
   }, [newKeyScope, resetCustomAuthorityForScope]);
 
-  const setKeyScope = useCallback((scope: 'read' | 'write' | 'deploy') => {
+  const setKeyScope = useCallback((scope: 'read' | 'write' | 'deploy' | 'all') => {
     setNewKeyScope(scope);
     if (customKeyAuthority) resetCustomAuthorityForScope(scope);
   }, [customKeyAuthority, resetCustomAuthorityForScope]);
@@ -1421,13 +1424,14 @@ export default function AgentBridge({
                 <select
                   data-testid="agent-key-scope"
                   value={newKeyScope}
-                  onChange={(e) => setKeyScope(e.target.value as 'read' | 'write' | 'deploy')}
+                  onChange={(e) => setKeyScope(e.target.value as 'read' | 'write' | 'deploy' | 'all')}
                   className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-slate-200 font-mono text-[11px] outline-none"
-                  title="read = reviewed inspection/analysis · write = guarded authoring/compile/package · deploy = explicit deploy/recovery/caller-key AI; administrative routes stay Studio-only"
+                  title="read = reviewed inspection/analysis · write = guarded authoring/compile/package · deploy = explicit deploy/recovery/caller-key AI · all = every route any agent scope may use (one key for one agent); administrative routes stay Studio-only"
                 >
                   <option value="read">scope: read</option>
                   <option value="write">scope: write</option>
                   <option value="deploy">scope: deploy</option>
+                  <option value="all">scope: all (master agent scope)</option>
                 </select>
                 <select
                   data-testid="agent-key-ttl"

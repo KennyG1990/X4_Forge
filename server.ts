@@ -193,6 +193,7 @@ import {
   type AgentKeyScope,
   type AgentRouteAuthorityDecision,
 } from "./src/lib/agentKeys";
+import { agentScopeCovers } from "./src/lib/agentAuthority";
 import {
   AGENT_CAPABILITY_AUTHORITY_API_VERSION,
   AGENT_CAPABILITY_AUTHORITY_SCHEMA_VERSION,
@@ -700,7 +701,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
         policyHash: AGENT_AUTHORITY_POLICY_HASH,
       });
     }
-    if (!authority.decision.agentScopes.includes(v.scope as AgentKeyScope)) {
+    if (!agentScopeCovers(authority.decision.agentScopes, v.scope)) {
       const studioOnly = authority.decision.agentScopes.length === 0;
       return res.status(403).json({
         error: studioOnly
@@ -1136,8 +1137,8 @@ app.post("/api/agent/keys", (req, res) => {
   const scope = String(body.scope || "") as AgentKeyScope;
   const ttlName = String(body.ttl || "");
   if (!label) return res.status(400).json({ error: "Missing 'label'." });
-  if (!["read", "write", "deploy"].includes(scope)) {
-    return res.status(400).json({ error: "Invalid 'scope' — use read | write | deploy." });
+  if (!["read", "write", "deploy", "all"].includes(scope)) {
+    return res.status(400).json({ error: "Invalid 'scope' — use read | write | deploy | all." });
   }
   if (!(ttlName in AGENT_KEY_TTLS)) {
     return res.status(400).json({ error: `Invalid 'ttl' — use ${Object.keys(AGENT_KEY_TTLS).join(" | ")}.` });
