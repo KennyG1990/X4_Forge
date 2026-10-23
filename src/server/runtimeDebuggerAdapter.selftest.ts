@@ -10,6 +10,8 @@ type SelftestCheck = { name: string; pass: boolean; detail?: string };
 
 const WORKSPACE_ID = "ws_runtime_adapter";
 const DEPLOY_INFO: RuntimeDebuggerDeployInfo = {
+  validationOutcome: 'accepted-findings-and-incomplete-checks',
+  deployReceiptId: 'ar_deploy_fixture',
   workspaceId: WORKSPACE_ID,
   modId: "x4_ai_influence",
   workspaceName: "AiLive",
@@ -625,6 +627,8 @@ export function runRuntimeDebuggerAdapterSelftest(): {
     const baseline = adapter.recordSuccessfulDeploy(WORKSPACE_ID, DEPLOY_INFO);
     check("successful_deploy_creates_current_eof_baseline", baseline.ok && baseline.snapshot.baselineTokens.length === 1 && baseline.snapshot.currentSegmentId.length > 0, baseline.ok ? baseline.snapshot : baseline);
     const reconstructedDeploy = restarted.readDeployInfo(WORKSPACE_ID);
+    check('qualified_deploy_metadata_survives_restart', reconstructedDeploy?.validationOutcome === DEPLOY_INFO.validationOutcome
+      && reconstructedDeploy?.deployReceiptId === DEPLOY_INFO.deployReceiptId, reconstructedDeploy);
     check(
       "successful_deploy_fingerprint_survives_restart_reconstruction",
       baseline.ok && reconstructedDeploy?.deployedFingerprint === DEPLOY_INFO.deployedFingerprint,

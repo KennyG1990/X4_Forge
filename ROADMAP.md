@@ -7849,3 +7849,17 @@ truth. Overall B119 remains `IN_PROGRESS / PARTIAL`; same-state renderer/source 
 current-game census, arbitrary Lua/Helper/widget coverage, universal C++ acceptance, and the separately write-gated
 real-mod correction remain open. No release, universal parity, universal acceptance, or overall-B119 completion is
 claimed. Planned checkpoint subject: `fix(e2e): select safe Windows Node runtime`.
+
+## 2026-10-23 — 0.0.79 UI manifest and deployment trust release — VERIFIED
+
+Installed and activated in Antigravity IDE; publicly published on Open VSX. Exact
+downloaded VSIX equals tested/installed package. UI XML classification/coverage and
+imported registrations preserved; Forge failures distinguished from mod findings;
+authenticated per-finding approvals and source/artifact-bound deploy records proven.
+Full E2E112, focused6, routes498, oracles134, supervisor16, inspector13 and extracted
+package trust15 passed. Saved workspace/config unchanged; no mod/game deployment.
+Plan, evidence, review and AAR: docs/plans/2026-10-23-fixes-only-release.md.
+Public proof: docs/releases/0.0.79-proof.json; caller migration:
+docs/releases/0.0.79-agent-handoff.md. Owner #20 remains open for broader work.
+B119, remaining Claude review work, Microsoft publication and in-game proof are not
+claimed. Source release commit/push follows publication and mandatory precommit gate.

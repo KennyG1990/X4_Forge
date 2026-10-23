@@ -255,7 +255,8 @@ export interface ModWorkspace {
    * Files imported from an existing mod that the studio does not (yet) model as
    * editable domains. Preserved verbatim so import -> export is lossless. On
    * export they are written back at their original relative path, unless a
-   * generated file already claims that path (the generated file wins).
+   * generated file already claims that path. Imported UI manifest/Lua collisions
+   * block packaging; other modeled domains retain generated-file precedence.
    */
   passthroughFiles?: PassthroughFile[];
   /** Stale-source deploy gate (P0 2026-07-09): stamped at import with a content-keyed hash

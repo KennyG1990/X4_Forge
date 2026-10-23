@@ -61,6 +61,9 @@ const catalogOutputRepeat = path.join(root, 'catalog-output-repeat');
 const packagedOutput = path.join(root, 'packaged-output');
 
 try {
+  const memoryPlan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: { 'content.xml': '<content id="memory"/>' } });
+  check('memory-only plan never enumerates current directory', memoryPlan.ok && memoryPlan.sourceRoot === '' && memoryPlan.entries.length === 1);
+  check('memory-only plan refuses a simultaneous disk root', !buildArtifactPlan({ sourceRoot: root, memoryOnly: true }).ok);
   fs.mkdirSync(source, { recursive: true });
   write(source, 'content.xml', '<?xml version="1.0"?><content id="artifact_torture" name="Artifact Torture" version="100"/>');
   write(source, 'md/source.xml', '<?xml version="1.0"?><mdscript name="Source"><cues/></mdscript>\r\n');

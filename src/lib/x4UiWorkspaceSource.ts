@@ -507,8 +507,8 @@ function sourceDetail(status: X4UiWorkspaceSourceStatus, reason: X4UiWorkspaceSo
       return 'The accepted source bundle is the package-visible UI authority.';
     case 'generated-shadowing-source':
       return reason === 'generated-path-collision'
-        ? 'Generated UI output claims a passthrough path; the generated file wins.'
-        : 'Generated root ui.xml claims the passthrough menu; the generated manifest wins.';
+        ? 'Generated UI conflicts with imported source; packaging is blocked to preserve the imported file.'
+        : 'Generated ui.xml conflicts with the imported manifest; packaging is blocked to preserve its registrations.';
     case 'unavailable':
       return reason === 'no-root-ui-xml'
         ? 'No exact extension-root ui.xml passthrough record was supplied.'

@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "sourceFingerprint": "4793e64410149f3de5762188ba3f0d0168a6c2fc16a1225d2b254329600c5ef2",
+  "sourceFingerprint": "5b519c6c3e706342083df7d9bb2481274c85f951c5c774683828909435db1566",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
       "file": "server.ts",
-      "calls": { "writeFileSync": 44, "appendFileSync": 1, "renameSync": 17, "copyFileSync": 4, "mkdirSync": 41, "rmSync": 47, "unlinkSync": 4, "chmodSync": 2, "mkdtempSync": 9 },
+      "calls": { "writeFileSync": 48, "appendFileSync": 1, "renameSync": 17, "copyFileSync": 4, "mkdirSync": 39, "rmSync": 47, "unlinkSync": 4, "chmodSync": 2, "mkdtempSync": 9 },
       "categories": ["mixed", "authoritative-atomic", "verified-tree-transaction", "isolated-artifact-stage", "retention-cleanup", "fixture-only"],
       "owners": ["writeWorkspaceFileGuarded and fs/create", "snapshot create/prune/delete/restore", "copyRegularTree and synchronizeRegularTree", "replaceValidatedDeployment and recovery", "compileWorkspaceToFolder scratch cleanup", "replaceReleaseDirectory", "Nexus and Steam release handlers", "embedded route/artifact/workspace API selftests", "route-integration caller-key provider-dispatch marker"],
       "rationale": "The composition root contains guarded atomic source/snapshot writes, verified deployment/release directory transactions including bounded EXDEV quarantine-copy recovery with exact restore, isolated compilation/release materializers, bounded snapshot/artifact retention, and embedded scratch-only route and artifact tamper/restore fixtures including causal provider-dispatch evidence.",

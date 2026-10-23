@@ -1,3 +1,4 @@
+import { fetchVerifiedDeploy, deployValidationLabel } from './lib/deployClient';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -1749,7 +1750,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     setCompileMessage('Compiling and deploying project on the server...');
     try {
       // Audit R4: deploy-verify (full 9-stage preflight) replaces the deprecated /deploy.
-      const deployRes = await fetch('/api/agent/deploy-verify', {
+      const deployRes = await fetchVerifiedDeploy( {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace })
@@ -1787,8 +1788,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           if (convergence.snapshotHash) lastServerSnapshotHashRef.current = String(convergence.snapshotHash);
         }
         setCompileStatus('success');
-        setCompileMessage(`Deployed + verified "${deployData.modId}" to ${deployData.deployedPath || deployData.stagingPath}` +
-          (deployData.stagingPath && deployData.deployedPath ? ' (+ staging)' : ''));
+        setCompileMessage(`Deployed bytes verified for "${deployData.modId}" at ${deployData.deployedPath || deployData.stagingPath}. ` +
+          deployValidationLabel(deployData));
       } else {
         const failed = (deployData.checklist || []).find((c: { status: string }) => c.status === 'fail');
         setCompileStatus('error');

@@ -84,6 +84,8 @@ const USER_PROFILE_PLACEHOLDER = "%USERPROFILE%";
 type RuntimeValue = string | number | boolean | null;
 
 export interface RuntimeDebuggerDeployInfo {
+  validationOutcome?: string;
+  deployReceiptId?: string;
   workspaceId?: string;
   modId: string;
   workspaceName: string;
@@ -909,6 +911,8 @@ function reconstructDeploy(raw: RuntimeDebugIncident): PersistedDeployEnvelope |
     tokenHash,
     info: {
       workspaceId: typeof attrs.workspaceId === "string" ? attrs.workspaceId : undefined,
+      ...(typeof attrs.validationOutcome === 'string' ? { validationOutcome: attrs.validationOutcome } : {}),
+      ...(typeof attrs.deployReceiptId === 'string' ? { deployReceiptId: attrs.deployReceiptId } : {}),
       modId: boundedText(modId, 256),
       workspaceName: boundedText(workspaceName, 512),
       workspaceHash: boundedText(workspaceHash, 256),
@@ -1418,6 +1422,8 @@ export class RuntimeDebuggerAdapter {
           stagingPath: info.stagingPath || null,
           deployedPath: info.deployedPath || null,
           ...(info.deployedFingerprint ? { deployedFingerprint: info.deployedFingerprint } : {}),
+          validationOutcome: info.validationOutcome || null,
+          deployReceiptId: info.deployReceiptId || null,
         },
         position: {
           segmentId: baseline.snapshot.currentSegmentId,

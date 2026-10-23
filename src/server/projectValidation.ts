@@ -58,6 +58,7 @@ import {
   type ProjectRulesEvaluation,
 } from "../lib/projectRules";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
+import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence } from '../lib/validationEvidence';
 
 /**
  * MD schema index (md.xsd + common.xsd from the configured schema dir).
@@ -85,6 +86,8 @@ export interface ProjectValidationReferences {
 
 export interface ProjectValidationResult {
   ok: boolean;
+  /** Additive evidence; legacy ok is not a claim of complete coverage or runtime proof. */
+  evidence?: ValidationEvidence;
   summary: {
     files: number;
     luaFiles: number;
@@ -210,6 +213,7 @@ export function runProjectValidation(
   project: ExtensionProject,
   opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary } = {},
 ): ProjectValidationResult {
+  const coverageGaps: ValidationCoverageGap[] = [];
   const parsedRules = parseProjectRules(project);
   const structure = validateProjectStructure(project);
 
@@ -287,7 +291,13 @@ export function runProjectValidation(
         }
       }
     }
-  } catch { /* schema layer unavailable — reported via available flags */ }
+  } catch { coverageGaps.push({ check: 'schema.execution', reason: 'The schema check failed internally before completing; not a mod defect.' }); }
+  if (!mdSchemaAvailable && project.files.some(file => isDedicatedScriptFile(file, 'md'))) {
+    coverageGaps.push({ check: 'schema.md', reason: 'Required md.xsd/common.xsd index unavailable; MD schema validation did not run.' });
+  }
+  if (!aiSchemaAvailable && project.files.some(file => isDedicatedScriptFile(file, 'aiscript'))) {
+    coverageGaps.push({ check: 'schema.aiscript', reason: 'Required aiscripts.xsd index unavailable; AI-script schema validation did not run.' });
+  }
 
   // B46P2: route the non-md/aiscripts subset (factions/gamestarts/wares/jobs/ui/t + diff
   // patches) to their real game schemas via the phase-1 registry. Degrades to an empty
@@ -297,12 +307,13 @@ export function runProjectValidation(
   try {
     const resolved = resolveXsdConfig();
     const referenceLibraries = path.join(resolved.x4ReferenceRoot, "libraries");
+    const referenceUiSchemas = path.join(resolved.x4ReferenceRoot, "ui", "core");
     const useReferenceSchemas = fs.existsSync(referenceLibraries);
     const registry = (useReferenceSchemas || resolved.schemaDir || resolved.x4GamePath)
       ? discoverSchemaRegistry(
           useReferenceSchemas ? referenceLibraries : resolved.schemaDir,
-          useReferenceSchemas ? undefined : resolved.x4GamePath || undefined,
-          useReferenceSchemas ? { signature: schemaFilesSignature(referenceLibraries) } : undefined,
+          useReferenceSchemas ? referenceUiSchemas : resolved.x4GamePath || undefined,
+          useReferenceSchemas ? { signature: `${schemaFilesSignature(referenceLibraries)}|${schemaFilesSignature(referenceUiSchemas)}` } : undefined,
         )
       : null;
     schemaRegistryRef = registry;
@@ -312,7 +323,19 @@ export function runProjectValidation(
       { references, strictStructure: useReferenceSchemas },
     );
     for (const r of routed) schemaFindings.push(...r.findings);
-  } catch { /* routing degrades silently; md/aiscripts layers already reported */ }
+  } catch { coverageGaps.push({ check: 'schema.routing', reason: 'Schema routing failed internally before completing; not a mod defect.' }); }
+  for (const route of routed.filter(route => !route.domainAvailable)) {
+    coverageGaps.push({ check: `schema.${route.route.domain}`, filePath: route.path, reason: 'The governing game schema is unavailable; this schema check did not run.' });
+  }
+
+  // A loader manifest cannot be declared validated when its governing schema
+  // was never loaded. Keep other domains' existing availability policy intact.
+  for (const file of project.files.filter(f => f.path.replace(/\\/g, '/').toLowerCase() === 'ui.xml')) {
+    if (!routed.some(r => r.path === file.path && r.domainAvailable)) {
+      schemaFindings.push({ severity: 'error', domain: 'addon', filePath: file.path,
+        code: 'UI_SCHEMA_UNAVAILABLE', message: 'ui.xml validation unavailable: the addon schema could not be loaded.' });
+    }
+  }
 
   // Apply mod-owned <diff> files to the effective official document in memory, then
   // validate the result. This catches selectors that are syntactically valid but dead,
@@ -393,10 +416,13 @@ export function runProjectValidation(
         aiscriptLint.push(...lintAiscriptOrderParams(f.content, legalTypes));
       }
     }
-  } catch { /* lint is pure; only reachable on truly malformed input */ }
+  } catch { coverageGaps.push({ check: 'aiscript.order-params', reason: 'Order-parameter analysis failed before completing.' }); }
 
   const scriptPropertyFindings: ScriptPropertyFinding[] = [];
   const spIndex = getScriptPropertyIndex();
+  if (!spIndex && project.files.some(file => ['md', 'aiscript'].includes(classifyPath(file.path)))) {
+    coverageGaps.push({ check: 'scriptproperties', reason: 'Required scriptproperties.xml index unavailable; property checks did not run.' });
+  }
   const projectSymbols = spIndex ? buildProjectSymbols(project.files, spIndex) : null;
   if (spIndex) {
     for (const f of project.files) {
@@ -576,6 +602,23 @@ export function runProjectValidation(
   result.summary.rawWarnings = rules.rawWarnings;
   result.summary.suppressedWarnings = rules.suppressed.length;
   result.summary.activeWarnings = rules.activeWarnings;
+  if (!references && project.files.some(file => ['md', 'aiscript', 'lua', 'library', 'ui'].includes(classifyPath(file.path)))) {
+    coverageGaps.push({ check: 'references', reason: 'Canonical game reference vocabulary unavailable; literal-reference checks did not run.' });
+  }
+  for (const [filePath, available, check] of [
+    ['libraries/jobs.xml', !!jobsVocab, 'jobs.vocabulary'],
+    ['libraries/wares.xml', !!waresVocab, 'wares.vocabulary'],
+  ] as const) {
+    if (!available && project.files.some(file => file.path.replace(/\\/g, '/').toLowerCase() === filePath)) {
+      coverageGaps.push({ check, filePath, reason: 'The required game vocabulary is unavailable; this content check did not run.' });
+    }
+  }
+  for (const file of diffSimulation.filter(file => !file.available)) {
+    coverageGaps.push({ check: 'diff.simulation', filePath: file.path, reason: 'The effective base document was unavailable; patch application could not be verified.' });
+  }
+  // A warning suppression cannot convert a check that did not run into checked coverage.
+  const rawEvidence = buildValidationEvidence(project, flattenProjectValidationRaw(result), coverageGaps);
+  result.evidence = buildValidationEvidence(project, appliedRules.active, rawEvidence.coverage.gaps);
   return result;
 }
 
@@ -592,6 +635,8 @@ export interface FlatProjectDiagnostic {
   filePath?: string;
   sourceRef?: string;
   line?: number;
+  findingId?: string;
+  category?: 'mod-finding' | 'check-unavailable';
 }
 
 function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProjectDiagnostic[] {
@@ -683,7 +728,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
 
 /** Active diagnostic view after exact, warning-only project rules are applied. */
 export function flattenProjectValidation(result: ProjectValidationResult): FlatProjectDiagnostic[] {
-  return applyProjectRuleSuppressions(result.rules, flattenProjectValidationRaw(result)).active;
+  return result.evidence?.findings || applyProjectRuleSuppressions(result.rules, flattenProjectValidationRaw(result)).active;
 }
 
 /** Focused B119 proof: shared validation consumes the real Lua analyzer and flat view. */
@@ -884,7 +929,7 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
  * ------------------------------------------------------------------ */
 
 // B46P2: ui/**/*.xml added — ui addon documents now route to addon/coreaddon.xsd.
-const LOADABLE_RE = /^(content\.xml|forge\.rules\.json|md\/[^/]+\.xml|aiscripts\/[^/]+\.xml|t\/[^/]+\.xml|libraries\/[^/]+\.xml|ui\/.+\.xml|(?:ui|lua|subst_lua)\/.+\.lua|[^/]+\.lua)$/i;
+const LOADABLE_RE = /^(content\.xml|ui\.xml|forge\.rules\.json|md\/[^/]+\.xml|aiscripts\/[^/]+\.xml|t\/[^/]+\.xml|libraries\/[^/]+\.xml|ui\/.+\.xml|(?:ui|lua|subst_lua)\/.+\.lua|[^/]+\.lua)$/i;
 const MAX_FILES = 500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const LOAD_SKIP_DIRS = new Set(['.git', '.hg', '.svn', '.claude', '.kilo', '.forge', '.snapshots', 'node_modules', '__pycache__']);
@@ -904,11 +949,10 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
   const files: ProjectFile[] = [];
 
   const walk = (dir: string) => {
-    if (files.length >= MAX_FILES) return;
     let entries: fs.Dirent[] = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { skipped.push({ path: path.relative(root, dir).replace(/\\/g, '/') || '.', reason: 'Directory could not be enumerated; validation inventory is incomplete.' }); return; }
     for (const e of entries) {
-      if (files.length >= MAX_FILES) return;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (LOAD_SKIP_DIRS.has(e.name.toLowerCase())) continue;
@@ -918,8 +962,10 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
       if (!e.isFile()) continue;
       const rel = path.relative(root, abs).replace(/\\/g, "/");
       if (!LOADABLE_RE.test(rel)) continue;
+      if (files.length >= MAX_FILES) { skipped.push({ path: rel, reason: `Validation file limit (${MAX_FILES}) reached; file was not checked.` }); continue; }
       let statSize = 0;
-      try { statSize = fs.statSync(abs).size; } catch { continue; }
+      try { statSize = fs.statSync(abs).size; }
+      catch { skipped.push({ path: rel, reason: 'File metadata could not be read; file was not checked.' }); continue; }
       if (rel.toLowerCase() === 'forge.rules.json' && statSize > PROJECT_RULES_MAX_BYTES) {
         // Preserve the file's existence in the project envelope so the shared rules
         // parser emits a BLOCKING file_too_large finding. Treating it as a generic

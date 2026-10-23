@@ -1,3 +1,4 @@
+import { fetchVerifiedDeploy } from '../lib/deployClient';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -100,7 +101,7 @@ export default function DiagnosticsHub({
     if (showFeedback) setSyncStatus('syncing');
     try {
       // Audit R4: deploy-verify (full 9-stage preflight) replaces the deprecated /deploy.
-      const deployRes = await fetch('/api/agent/deploy-verify', {
+      const deployRes = await fetchVerifiedDeploy( {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace })

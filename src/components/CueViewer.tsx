@@ -1,3 +1,4 @@
+import { fetchVerifiedDeploy, deployValidationLabel } from '../lib/deployClient';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -252,11 +253,11 @@ export default function CueViewer({
     try {
       // Audit R4: deploy-verify (full preflight) replaces the deprecated /deploy; send the
       // CURRENT canvas workspace so the applied live-fix is what actually deploys.
-      const r = await fetch('/api/agent/deploy-verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspace }) });
+      const r = await fetchVerifiedDeploy( { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspace }) });
       const d = await r.json();
       const failed = (d.checklist || []).find((c: { status: string }) => c.status === 'fail');
       setFixMsg(d.ok
-        ? 'Deployed + verified. In game: Enter (chat) → type /refreshmd → Enter. The glow above shows the result live.'
+        ? `Deployed bytes verified. ${deployValidationLabel(d)} In game: Enter (chat) → type /refreshmd → Enter. The glow above shows the result live.`
         : `Deploy failed${d.stage ? ` at ${d.stage}` : ''}: ${d.error || (failed ? `${failed.label}: ${failed.detail}` : r.status)}`);
     } catch (e) {
       setFixMsg(`Deploy failed: ${e?.message || e}`);

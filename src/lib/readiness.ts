@@ -8,6 +8,8 @@ export type ReadinessStatus = 'pass' | 'warning' | 'fail' | 'pending' | 'stale' 
 export type ReadinessOwner = 'canvas' | 'diagnostics' | 'playtest';
 
 export interface DeployEvidence {
+  validationOutcome?: string;
+  deployReceiptId?: string;
   workspaceName?: string;
   workspaceHash?: string;
   deployedAt?: string;
@@ -143,7 +145,10 @@ export function buildReadinessStages(input: BuildReadinessInput): ReadinessStage
   } else if (deploy.workspaceHash !== input.workspaceHash || (deploy.workspaceName && deploy.workspaceName !== input.workspaceName)) {
     deployed = { id: 'deployed', label: 'Deployed', shortLabel: 'Deploy', status: 'stale', owner: 'playtest', summary: 'Workspace changed', evidence: `The current workspace differs from the ${deploy.deployedAt || 'previous'} deploy. Deploy again to refresh proof.` };
   } else {
-    deployed = { id: 'deployed', label: 'Deployed', shortLabel: 'Deploy', status: 'pass', owner: 'playtest', summary: 'Current bytes', evidence: `${deploy.deployedPath} · ${deploy.deployedAt || 'time unavailable'}` };
+    deployed = deploy.validationOutcome && deploy.validationOutcome !== 'validation-clean'
+      ? { id: 'deployed', label: 'Deployed', shortLabel: 'Deploy', status: 'warning', owner: 'playtest',
+        summary: 'Deployed with qualifications', evidence: `${deploy.validationOutcome}; receipt ${deploy.deployReceiptId || 'unavailable'}. Not a clean validation result.` }
+      : { id: 'deployed', label: 'Deployed', shortLabel: 'Deploy', status: 'pass', owner: 'playtest', summary: 'Current bytes', evidence: `${deploy.deployedPath} · ${deploy.deployedAt || 'time unavailable'}` };
   }
 
   const verdict = input.watcher.verdict;
@@ -212,6 +217,8 @@ export function runReadinessSelftest() {
   ok('missing_hash_is_stale', stage({ watcher: { ...readyWatcher, lastDeploy: { ...deploy, workspaceHash: undefined } } }, 'deployed').status === 'stale');
   ok('workspace_edit_invalidates_deploy', stage({ workspaceHash: 'new-hash' }, 'deployed').status === 'stale');
   ok('matching_deploy_passes', stage({}, 'deployed').status === 'pass');
+  ok('qualified_deploy_is_not_clean_green', stage({ watcher: { ...readyWatcher,
+    lastDeploy: { ...deploy, validationOutcome: 'accepted-findings', deployReceiptId: 'ar_fixture' } } }, 'deployed').status === 'warning');
   ok('no_log_unavailable', stage({ watcher: { ...readyWatcher, verdict: { state: 'no_log', detail: 'no log', errorCount: 0 } } }, 'seen').status === 'unavailable');
   ok('stale_log_is_stale', stage({ watcher: { ...readyWatcher, verdict: { state: 'stale', detail: 'old', errorCount: 0 } } }, 'seen').status === 'stale');
   ok('runtime_errors_fail_seen', stage({ watcher: { ...readyWatcher, verdict: { state: 'loaded_with_errors', detail: 'bad', errorCount: 2 } } }, 'seen').status === 'fail');

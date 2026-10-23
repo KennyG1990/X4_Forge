@@ -118,6 +118,9 @@ export function routeProjectFile(filePath: string, xml: string): SchemaRoute | n
     return wrapper === 'diff' ? { kind: 'schema', domain: 'diff', wrapper, rootElement: root } : null;
   }
 
+  // The extension-root loader manifest is governed by addon.xsd even when
+  // its root element is wrong; do not turn malformed manifests into unrouted files.
+  if (p === 'ui.xml') return { kind: 'schema', domain: 'addon', wrapper, rootElement: root };
   if (/(^|\/)ui\/.+\.xml$/.test(p)) {
     if (root === 'addon') return { kind: 'schema', domain: 'addon', wrapper, rootElement: root };
     if (root === 'coreaddon') return { kind: 'schema', domain: 'coreaddon', wrapper, rootElement: root };
@@ -214,6 +217,13 @@ export function validateRoutedFiles(
     if (typeof f.content !== 'string') continue;
     const route = routeProjectFile(f.path, f.content);
     if (!route) continue;
+
+    if (f.path.replace(/\\/g, '/').toLowerCase() === 'ui.xml' && route.rootElement !== 'addon') {
+      results.push({ path: f.path, route, domainAvailable: !!buildRouteIndex(route, byDomain), severityCapped: false,
+        findings: [{ severity: 'error', domain: 'addon', filePath: f.path, code: 'UI_MANIFEST_ROOT',
+          message: 'The extension-root ui.xml loader manifest must have an addon root element.' }] });
+      continue;
+    }
 
     if (route.kind === 'tfile') {
       if (route.wrapper === 'diff') {

@@ -68,6 +68,7 @@ export interface CueReferenceIndex {
 export function classifyPath(path: string): ProjectFileKind {
   const p = (path || '').replace(/\\/g, '/').toLowerCase();
   if (p === 'content.xml') return 'content';
+  if (p === 'ui.xml') return 'ui';
   if (p.endsWith('.lua')) return 'lua';
   if (/(^|\/)md\/.+\.xml$/.test(p)) return 'md';
   if (/(^|\/)aiscripts\/.+\.xml$/.test(p)) return 'aiscript';

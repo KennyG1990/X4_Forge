@@ -3,6 +3,22 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.79 — 2026-10-23
+
+- ui.xml is now classified and validated as an X4 UI manifest, not Lua. Registration checks cover missing, unsafe, duplicate, and ambiguous local targets.
+- Imported UI registrations and source bytes are preserved through import, compile, and reopen. Conflicting generated output is refused instead of overwriting them.
+- Unavailable Forge checks are separated from mod defects. They do not block deployment on their own, but incomplete checks never become a clean validation baseline.
+- Deploy-authorized agents can accept an exact finding with a reason; authenticated identity and approval evidence are recorded and linked to the durable deployment record.
+- API deployment now requires a current dry-run mod ID, source hash, artifact hash, and binding hash. Source, rule, or target drift refuses deployment; browser callers perform this preview automatically.
+- This is a focused validation/deployment repair, not completion of the broader review, B119, or in-game execution verification.
+
+## 0.0.78 — 2026-09-10
+
+- Exact protected pcall(function() ... end) bodies and bounded same-file helper calls can now materialize in the Source Editor preview.
+- Supported _G/_ENV rebinding, escape, alias, logical-flow, and self-reference cases—including composed receivers and depth exhaustion—fail closed.
+- No arbitrary Lua execution is added; this does not claim universal Helper/widget/C++ parity or full B119 1:1 completion.
+- Preview remains explicitly Not verified in game.
+
 ## 0.0.77 — 2026-09-08
 
 - Imported passthrough files remain byte-for-byte identical through preview, loose deploy, and release preparation; Forge no longer materializes them as Base64 text.

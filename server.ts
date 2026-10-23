@@ -10,6 +10,7 @@ import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import zlib from "zlib";
+import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig } from "./src/lib/xsdParser";
@@ -106,9 +107,10 @@ import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from
 import { resolveEffectiveReferenceDocument } from "./src/lib/referenceOverlay";
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
-import { getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
+import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { buildValidationEvidence, parseValidationProject, ValidationInputError } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
@@ -116,6 +118,9 @@ import { workspaceContentHash, workspaceSnapshotHash, runWorkspaceIdentitySelfte
 import { buildWorkspaceConflictPreview, runWorkspaceConflictSelftest } from "./src/lib/workspaceConflict";
 import { DestructiveRecoveryStore, runDestructiveRecoverySelftest, type DeploymentRecoveryRecord } from "./src/lib/destructiveRecovery";
 import { ActionReceiptStore } from "./src/lib/actionReceiptStore";
+import { evaluateFindingAcceptances, recordFindingAcceptances, verifyFindingAcceptanceReceipts, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord } from './src/server/deploymentTrust';
+import type { ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
 import {
@@ -193,6 +198,7 @@ import {
   type AgentKeyScope,
   type AgentRouteAuthorityDecision,
 } from "./src/lib/agentKeys";
+import { agentScopeCovers } from "./src/lib/agentAuthority";
 import {
   AGENT_CAPABILITY_AUTHORITY_API_VERSION,
   AGENT_CAPABILITY_AUTHORITY_SCHEMA_VERSION,
@@ -226,7 +232,7 @@ import {
 } from "./src/lib/requestDeadline";
 import { runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
-import { buildArtifactPlan, hashArtifactFile, materializeArtifact, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
+import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
 import { materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
@@ -700,7 +706,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
         policyHash: AGENT_AUTHORITY_POLICY_HASH,
       });
     }
-    if (!authority.decision.agentScopes.includes(v.scope as AgentKeyScope)) {
+    if (!agentScopeCovers(authority.decision.agentScopes, v.scope)) {
       const studioOnly = authority.decision.agentScopes.length === 0;
       return res.status(403).json({
         error: studioOnly
@@ -794,6 +800,8 @@ const destructiveRecoveryStore = new DestructiveRecoveryStore({ root: dataPath('
 // extension sidecar.  Construction is intentionally filesystem-light; policy/store failures
 // remain mutation-time failures so read-only diagnostics can still start.
 const actionReceiptStore = new ActionReceiptStore({ root: dataPath('action-receipts') });
+const deployValidatorHash = deploymentImplementationHash(process.argv[1]);
+const deployStudioActorId = `studio:${crypto.randomUUID()}`;
 const workspaceReceiptService = new WorkspaceReceiptService();
 
 type ActionReceiptProjection = { id: string; hash: string; status: string };
@@ -1136,8 +1144,8 @@ app.post("/api/agent/keys", (req, res) => {
   const scope = String(body.scope || "") as AgentKeyScope;
   const ttlName = String(body.ttl || "");
   if (!label) return res.status(400).json({ error: "Missing 'label'." });
-  if (!["read", "write", "deploy"].includes(scope)) {
-    return res.status(400).json({ error: "Invalid 'scope' — use read | write | deploy." });
+  if (!["read", "write", "deploy", "all"].includes(scope)) {
+    return res.status(400).json({ error: "Invalid 'scope' — use read | write | deploy | all." });
   }
   if (!(ttlName in AGENT_KEY_TTLS)) {
     return res.status(400).json({ error: `Invalid 'ttl' — use ${Object.keys(AGENT_KEY_TTLS).join(" | ")}.` });
@@ -1306,6 +1314,8 @@ type PatchDiagnosticBlock = Pick<PatchBlock, "id" | "sel" | "targetFile" | "incl
 };
 
 type LastDeployInfo = {
+  validationOutcome?: string;
+  deployReceiptId?: string;
   modId: string;
   workspaceName: string;
   /** Exact sanitized workspace content compiled for this deploy (B36 freshness proof). */
@@ -1345,6 +1355,8 @@ function recordSuccessfulDeploy(req: express.Request, info: LastDeployInfo): Las
       ...(normalizedInfo.stagingPath ? { stagingPath: normalizedInfo.stagingPath } : {}),
       ...(normalizedInfo.deployedPath ? { deployedPath: normalizedInfo.deployedPath } : {}),
       ...(normalizedInfo.deployedFingerprint ? { deployedFingerprint: normalizedInfo.deployedFingerprint } : {}),
+      validationOutcome: normalizedInfo.validationOutcome,
+      deployReceiptId: normalizedInfo.deployReceiptId,
     });
     if (baseline.ok === false) {
       console.warn(`[runtime-debugger] successful deploy baseline unavailable: ${baseline.error}`);
@@ -1632,7 +1644,18 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
     }
   }
 
-  // Canonical artifact precedence: generated/modeled output wins a path collision; a loaded
+  // Imported UI is source-owned. Include patch-generated paths and omitted records:
+  // neither is permission to silently discard the imported loader contract.
+  const generatedUiKeys = new Set(Object.keys(files).map(p => p.replace(/\\/g, '/').toLowerCase()));
+  const importedUi = (ws.passthroughFiles || []).filter(file => {
+    const rel = String(file.path || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+    return (rel === 'ui.xml' || /^ui\/.+\.lua$/.test(rel)) && generatedUiKeys.has(rel);
+  });
+  if (importedUi.length > 0) {
+    throw new Error(`UI_SOURCE_CONFLICT: generated output would replace imported UI source (${importedUi.map(file => file.path).join(', ')}). Edit the imported UI through its source editor or disable the conflicting generated output before packaging.`);
+  }
+
+  // Canonical artifact precedence for other domains: generated output wins; a loaded
   // passthrough is the next authoritative in-memory byte source; an omitted/unloaded
   // passthrough stays absent here so the stamped disk source can supply it unchanged.
   for (const pf of (ws.passthroughFiles || [])) {
@@ -4101,8 +4124,11 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/deploy",
         auth: true,
-        body: { workspace: "optional ModWorkspace; defaults to active workspace" },
-        purpose: "Compile and write the package into configured Mod Workspace and/or X4 game extensions paths."
+        body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
+          dryRun: "true to preview without writes", expectedModId: "required on apply, from preview",
+          expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
+          expectedBindingHash: "required on apply, from preview", acceptances: "optional exact {findingId,bindingHash,reason}[]; deploy permission required" },
+        purpose: "Alias of deploy-verify with identical guards and receipt contract. Never defaults to the active workspace. Preview first, then apply with all four expected identities."
       },
       {
         method: "POST",
@@ -4114,8 +4140,13 @@ app.get("/api/agent/schema", (req, res) => {
           dryRun: "optional boolean; run the full preflight and exact deployment preview without writing",
           autoReimport: "optional boolean; when the stamped source is stale, re-import it from disk before continuing",
           deployFormat: "optional loose | catalog; request value wins, then persisted config, then loose default",
+          expectedModId: "required on apply: modId from the current dry-run preview",
+          expectedSourceHash: "required on apply: sourceHash from preview (semantic validation inputs)",
+          expectedArtifactHash: "required on apply: artifactHash from preview (all output and included disk bytes)",
+          expectedBindingHash: "required on apply: bindingHash from preview (source, artifact, validator, corpus and target)",
+          acceptances: "optional array, max127, of {findingId,bindingHash,reason}; authenticated deploy-permitted identity is recorded, never supplied in the body",
         },
-        purpose: "Canonical guarded deployment route: perform source-sync, XML well-formedness, compile, full validation, deployment preview, optional dry run, materialization, byte confirmation, extension doctor, drift, and baseline checks."
+        purpose: "Preview first, then guarded apply with expected identities. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline."
       },
       {
         method: "GET",
@@ -5963,8 +5994,15 @@ function projectValidationWarnings(full: FullWorkspaceValidation): ValidationWar
 
 /** Compute the same full diagnostic set used by compile and agents. */
 function computeWorkspaceDiagnostics(ws: ModWorkspace): ServerDiagnostic[] {
-  const { modId, files } = buildWorkspaceFileManifest(ws);
-  return runFullWorkspaceValidation(ws, { modId, files }).diagnostics;
+  try {
+    const { modId, files } = buildWorkspaceFileManifest(ws);
+    return runFullWorkspaceValidation(ws, { modId, files }).diagnostics;
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('UI_SOURCE_CONFLICT:')) throw error;
+    // Persist the user's repairable source state, but never call it exportable.
+    return [{ severity: 'error', category: 'egosoft', code: 'UI_SOURCE_CONFLICT',
+      domain: 'ui', filePath: 'ui.xml', message: error.message }];
+  }
 }
 
 function summarizeDiagnostics(diags: any[]) {
@@ -7684,7 +7722,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     let content = '';
     try { content = fs.readFileSync(absPath, 'utf8'); } catch { continue; }
     inlinedBytes += content.length;
-    const known = KNOWN_DOMAIN.test(rel);
+    const known = lower === 'ui.xml' || KNOWN_DOMAIN.test(rel);
     const cls: FileClass = known ? 'partial' : 'passthrough';
     passthroughFiles.push({ path: rel, content, reason: known ? 'partial' : 'unknown_domain' });
     classification.push({ path: rel, class: cls, note: known ? 'known domain, preserved verbatim until a parser models it' : 'unknown file, preserved verbatim' });
@@ -8152,6 +8190,8 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
         severity: lf.severity,
         category: lf.layer === "x4" ? "runtime" : "lua_hygiene",
         code: lf.code,
+        validationDiagnostic: { severity: lf.severity, code: lf.code, filePath: lf.rel,
+          line: lf.line, message: lf.message, ...(lf.symbol ? { sourceRef: lf.symbol } : {}) },
         domain: lf.layer === "x4" ? "lua_ui" : "lua",
         filePath: `extensions/${folder}/${lf.rel}`,
         message: `${e?.name || folder}: ${lf.message}${lf.source === "packed" ? ` (${path.basename(lf.sourcePath)})` : ""}`,
@@ -8861,6 +8901,7 @@ app.post("/api/agent/project/validate-crossfile", (req, res) => {
 //     #6 (no ~20KB inline ceiling, no sandbox staleness) and the #5 "validate the LIVE
 //     deployed mod" workflow. Path-containment guarded; never reads outside the roots.
 function validateProjectRequest(req: express.Request, res: express.Response) {
+  let subjectIdentity: { modId: string | null; sourceHash: string | null } = { modId: null, sourceHash: null };
   try {
     let project = req.body?.project as ExtensionProject | undefined;
     let source: { mode: "inline" } | { mode: "fromPath"; root: string; loaded: string[]; skipped: { path: string; reason: string }[] } = { mode: "inline" };
@@ -8873,10 +8914,16 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
     const fromPath = typeof req.body?.fromPath === "string" ? req.body.fromPath.trim()
       : typeof req.body?.path === "string" ? req.body.path.trim()
       : "";
+    if ((req.body?.fromPath !== undefined && typeof req.body.fromPath !== 'string')
+      || (req.body?.path !== undefined && typeof req.body.path !== 'string')
+      || (req.body?.project !== undefined && (req.body?.fromPath !== undefined || req.body?.path !== undefined))
+      || (req.body?.fromPath !== undefined && req.body?.path !== undefined)) {
+      throw new ValidationInputError('Choose exactly one validation subject: project, fromPath, or path (with optional root).');
+    }
     if (fromPath) {
       const resolvedFolder = resolveModFolder(fromPath, req.body?.root);
       if ("error" in resolvedFolder) {
-        return res.status(resolvedFolder.status).json({ error: resolvedFolder.error });
+        return res.status(resolvedFolder.status).json({ ok: false, modId: null, sourceHash: null, category: 'subject-unavailable', error: resolvedFolder.error });
       }
       const load = loadProjectFromDisk(resolvedFolder.abs);
       project = load.project;
@@ -8884,14 +8931,23 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
     }
 
     if (!project || typeof project !== "object" || !Array.isArray(project.files)) {
-      return res.status(400).json({ error: "Body must be { project: { id, name, files: [...] } } or { fromPath: \"<mod folder>\" }." });
+      throw new ValidationInputError('Body must select project: { id, name, files: [...] } or fromPath.');
     }
     if (project.files.length > 2000) {
-      return res.status(413).json({ error: "Project has too many files (>2000)." });
+      return res.status(413).json({ ok: false, category: 'request-invalid', modId: null, sourceHash: null, error: "Project has too many files (>2000)." });
     }
+    project = parseValidationProject(project);
+    const subjectEvidence = buildValidationEvidence(project, []);
+    subjectIdentity = { modId: subjectEvidence.modId, sourceHash: subjectEvidence.sourceHash };
 
     const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
     const result = runProjectValidation(project, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
+    if (source.mode === 'fromPath' && source.skipped.length) {
+      result.evidence = buildValidationEvidence(project, flattenProjectValidation(result), [
+        ...(result.evidence?.coverage.gaps || []),
+        ...source.skipped.map(file => ({ check: 'source.inventory', filePath: file.path, reason: file.reason })),
+      ]);
+    }
     // Drift-as-first-class-state: when the validated mod exists as BOTH a workspace copy
     // and a deployed copy, report their divergence alongside the verdict — validating a
     // stale copy without knowing it is the trap (ROADMAP #5, confirmed 2026-07-09).
@@ -8902,12 +8958,15 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
     const { contentHash, delta: validationDelta } = validationDeltaFor(project.id || project.name, project.files, flat);
     let baselinePromotion: ReturnType<typeof recordValidationBaseline> | undefined;
     if (req.body?.recordBaseline === true) {
-      baselinePromotion = result.ok
+      baselinePromotion = result.ok && result.evidence?.coverage.complete
         ? recordValidationBaseline(project.id || project.name, contentHash, flat)
-        : { recorded: false, reason: 'Validation has active errors; the last-green baseline was not changed.' };
+        : { recorded: false, reason: 'Validation has active errors or incomplete coverage; the last-green baseline was not changed.' };
       if ('reason' in baselinePromotion && result.ok) {
         return res.status(409).json({
           ...result,
+          ok: false,
+          modId: result.evidence?.modId ?? null,
+          sourceHash: result.evidence?.sourceHash ?? null,
           flat,
           capsules: buildRemediationCapsules(flat),
           source,
@@ -8923,6 +8982,8 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
     // model — one currency for our loop, the IDE, and external agents. Additive.
     return res.json({
       ...result,
+      modId: result.evidence?.modId ?? null,
+      sourceHash: result.evidence?.sourceHash ?? null,
       flat,
       capsules: buildRemediationCapsules(flat),
       source,
@@ -8931,7 +8992,10 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
       ...(drift ? { drift } : {}),
     });
   } catch (error) {
-    return res.status(500).json({ error: errorMessage(error) || "project validate failed" });
+    if (error instanceof ValidationInputError) {
+      return res.status(400).json({ ok: false, code: error.code, category: 'request-invalid', modId: null, sourceHash: null, error: error.message });
+    }
+    return res.status(500).json({ ok: false, category: 'forge-failure', ...subjectIdentity, error: errorMessage(error) || "project validate failed" });
   }
 }
 app.post("/api/agent/project/validate/check", (req, res) => {
@@ -11516,6 +11580,8 @@ function preservedDeploymentEntries(
 }
 
 interface DeploymentTransactionHooks {
+  /** Recheck immutable source/approval authority immediately before target activation. */
+  beforeActivate?: () => void;
   /** Test seam for deterministic Windows root-lock fixtures. Production uses fs.renameSync. */
   rename?: (oldPath: string, newPath: string) => void;
   /** Test seam for proving an incomplete backup never becomes a rollback source. */
@@ -11602,7 +11668,7 @@ function replaceLockedDeploymentInPlace(
  * cannot drift from reality, and applies the same preservation rules, so `.forgekeep` and
  * runtime-owned paths show up as preserved rather than as deletions.
  */
-function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployFormat):
+function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployFormat, frozenPlan?: ArtifactPlan):
   | { added: Array<{ path: string; bytes: number }>; overwritten: Array<{ path: string; bytes: number; wasBytes: number }>; deleted: Array<{ path: string; bytes: number }>; preserved: string[]; totalBytes: number; format: DeployFormat }
   | { error: string } {
   try {
@@ -11610,7 +11676,7 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
     const stampedSource = typeof build?.sourceStamp?.dir === 'string' ? path.resolve(build.sourceStamp.dir) : '';
     const hasDiskSource = Boolean(stampedSource && fs.existsSync(stampedSource) && fs.statSync(stampedSource).isDirectory());
     const generated = buildWorkspaceFileManifest(build);
-    const plan = buildArtifactPlan({
+    const plan = frozenPlan || buildArtifactPlan({
       sourceRoot: hasDiskSource ? stampedSource : '',
       generatedFiles: generated.generatedFiles,
       passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles),
@@ -11675,6 +11741,7 @@ function replaceValidatedDeployment(
   /** True only for the workspace-side staging target — see `preservedDeploymentEntries`. */
   ownsForgeState: boolean = false,
 ): void {
+  hooks.beforeActivate?.();
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
   const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
@@ -11719,6 +11786,7 @@ function replaceValidatedDeployment(
           fs.copyFileSync(source, destination);
         }
       }
+      hooks.beforeActivate?.();
       try {
         rename(targetPath, backup);
         movedOld = true;
@@ -11728,6 +11796,7 @@ function replaceValidatedDeployment(
         return;
       }
     }
+    if (!movedOld) hooks.beforeActivate?.();
     rename(stage, targetPath);
     verifyExpectedFiles(targetPath, expected);
     if (movedOld) fs.rmSync(backup, { recursive: true, force: true });
@@ -11752,6 +11821,7 @@ function compileWorkspaceToFolder(
   writeSnapshots: boolean = false,
   artifactMode: 'loose' | 'catalog' = 'loose',
   transactionHooks: DeploymentTransactionHooks = {},
+  frozenPlan?: ArtifactPlan,
 ): string {
   ws = activeBuildWorkspace(ws);
   const targetPath = mode === 'store' ? path.join(rootPath, effectiveModId(ws)) : rootPath;
@@ -11765,7 +11835,7 @@ function compileWorkspaceToFolder(
     }
     const sourceRoot = hasDiskSource ? stampedSource : (ephemeralSource = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-generated-source-')));
     const generated = buildWorkspaceFileManifest(ws);
-    const plan = buildArtifactPlan({
+    const plan = frozenPlan || buildArtifactPlan({
       sourceRoot,
       generatedFiles: generated.generatedFiles,
       passthroughFiles: buildArtifactPassthroughFiles(ws, generated.passthroughFiles),
@@ -11896,11 +11966,56 @@ function runCompileArtifactSelftest() {
       xmlPatches: [{ id: 'p1', action: 'replace', targetFile: 'libraries/wares.xml', sel: '/wares/ware[@id="energycells"]/@transport', content: 'container', note: 'fixture' }],
     });
     const patchManifest = buildWorkspaceFileManifest(patchOnly).files;
+    const beforeGuardTarget = path.join(root, 'guarded-extensions');
+    let guardRefused = false;
+    let guardFailure = '';
+    try {
+      compileWorkspaceToFolder(patchOnly, beforeGuardTarget, 'store', false, 'loose', {
+        beforeActivate: () => { throw new Error('source-or-receipt-changed'); },
+      }, deploymentPlan(patchOnly));
+    } catch (error) { guardFailure = String(error); guardRefused = guardFailure.includes('source-or-receipt-changed'); }
+    record('deploy write-boundary guard refuses before target mutation', guardRefused && !fs.existsSync(beforeGuardTarget), guardFailure);
     record('patch-only workspace has no MD readiness error', !validatePackageReadiness(patchOnly).some(finding => finding.message.includes('no cue nodes')));
     record('patch-only workspace emits no synthetic MD file', !Object.keys(patchManifest).some(file => file.startsWith('md/')), Object.keys(patchManifest).join(', '));
     record('patch-only workspace still emits its library diff', typeof patchManifest['libraries/wares.xml'] === 'string' && patchManifest['libraries/wares.xml'].includes('<diff>'));
 
     const b119Widget = { id: 'b119_window', type: 'window', x: 100, y: 100, w: 420, h: 300, label: 'B119 UI', properties: {} };
+    const uiSource = path.join(root, 'ui-source');
+    fs.mkdirSync(path.join(uiSource, 'ui'), { recursive: true });
+    const importedUiXml = '<?xml version="1.0"?>\r\n<addon name="integrity"><environment type="menus"><!-- keep order --><dependency name="ego_detailmonitor"/><file name="ui/first.lua"/><file name="ui/second.lua"/></environment></addon>';
+    fs.writeFileSync(path.join(uiSource, 'content.xml'), '<content id="ui_integrity" name="UI Integrity" version="100"/>');
+    fs.writeFileSync(path.join(uiSource, 'ui.xml'), importedUiXml);
+    fs.writeFileSync(path.join(uiSource, 'ui/first.lua'), 'local first = 1');
+    fs.writeFileSync(path.join(uiSource, 'ui/second.lua'), 'local second = 2');
+    const uiImported = importModFolder(uiSource);
+    record('UI root import is a known source domain', uiImported.workspace.passthroughFiles?.find(f => f.path === 'ui.xml')?.reason === 'partial');
+    record('UI no-edit import preserves root manifest', buildWorkspaceFileManifest(uiImported.workspace).files['ui.xml'] === importedUiXml);
+    const uiBundle = buildX4UiSourceBundle({ uiXml: importedUiXml, luaFiles: [
+      { path: 'ui/first.lua', text: 'local first = 1' }, { path: 'ui/second.lua', text: 'local second = 2' },
+    ] });
+    const uiAdded = addX4UiSourceBundleRegistration(uiBundle, { path: 'ui/third.lua', text: 'local third = 3' });
+    if (!uiAdded.accepted) throw new Error(`UI fixture registration refused: ${uiAdded.reason}`);
+    const uiEdited = sanitizeWorkspace({ ...uiImported.workspace, passthroughFiles: [
+      ...(uiImported.workspace.passthroughFiles || []).map(f => f.path === 'ui.xml' ? { ...f, content: uiAdded.bundle.uiXml } : f),
+      { path: 'ui/third.lua', content: 'local third = 3', reason: 'partial' },
+    ] });
+    const uiManifest = buildWorkspaceFileManifest(uiEdited);
+    const uiValidation = runProjectValidation({ id: 'ui_integrity', name: 'UI Integrity', files: Object.entries(uiManifest.files).map(([p, content]) => ({ path: p, kind: classifyPath(p), content })) });
+    const missingAddonSchema = uiValidation.schema.findings.some(f => f.code === 'UI_SCHEMA_UNAVAILABLE');
+    record('UI edited manifest validates registrations and reports actual schema coverage', missingAddonSchema
+      ? !uiValidation.ok && !uiValidation.evidence.coverage.complete
+        && uiValidation.evidence.findings.every(f => f.severity !== 'error' || f.code === 'UI_SCHEMA_UNAVAILABLE')
+      : uiValidation.ok, JSON.stringify(uiValidation.schema.findings));
+    const uiTarget = compileWorkspaceToFolder(uiEdited, deployRoot, 'store', false, 'loose');
+    const uiReopened = importModFolder(uiTarget);
+    const uiRebuilt = buildWorkspaceFileManifest(uiReopened.workspace);
+    record('UI import edit compile reopen preserves manifest exactly', uiRebuilt.files['ui.xml'] === uiAdded.bundle.uiXml);
+    record('UI import edit compile reopen preserves all Lua bytes', ['first', 'second', 'third'].every(name => uiRebuilt.files[`ui/${name}.lua`] === `local ${name} = ${name === 'first' ? 1 : name === 'second' ? 2 : 3}`));
+    const uiBefore = regularTreeFingerprint(uiTarget);
+    let uiConflict = false;
+    try { compileWorkspaceToFolder(sanitizeWorkspace({ ...uiEdited, uiWidgets: [b119Widget], compileSettings: { ...uiEdited.compileSettings, ui: true } }), deployRoot, 'store', false, 'loose'); }
+    catch (error) { uiConflict = String(error).includes('UI_SOURCE_CONFLICT'); }
+    record('UI generated collision refuses and leaves destination unchanged', uiConflict && regularTreeFingerprint(uiTarget) === uiBefore);
     const b119CustomLua = '\r\n-- B119 custom bytes  \r\nreturn "exact"\r\n';
     const customOnlyWorkspace = sanitizeWorkspace({
       id: 'b119-custom-only', name: 'B119 Custom Only', version: '1.0', author: 'Forge', description: 'custom UI only',
@@ -12227,11 +12342,13 @@ function runCompileArtifactSelftest() {
       compileSettings: { ...(precedenceWorkspace.compileSettings || {}), ui: true },
       passthroughFiles: [...(precedenceWorkspace.passthroughFiles || []), { path: `ui/${effectiveModId(precedenceWorkspace)}.lua`, content: collisionBytes, reason: 'partial' }],
     });
-    const collisionManifest = buildWorkspaceFileManifest(collisionWorkspace).files;
     const collisionPath = `ui/${effectiveModId(collisionWorkspace)}.lua`;
+    let collisionRefused = false;
+    try { buildWorkspaceFileManifest(collisionWorkspace); }
+    catch (error) { collisionRefused = String(error).includes('UI_SOURCE_CONFLICT'); }
     record(
-      'B119 modeled output wins a same-path passthrough collision',
-      typeof collisionManifest[collisionPath] === 'string' && collisionManifest[collisionPath] !== collisionBytes,
+      'B119 modeled output refuses a same-path imported UI collision',
+      collisionRefused,
       collisionPath,
     );
 
@@ -12820,159 +12937,9 @@ function runCompileArtifactSelftest() {
  * POST /api/agent/deploy
  * Compiles and deploys the workspace directly into the configured X4 Extensions directory.
  */
-app.post("/api/agent/deploy", (req, res) => {
-  if (!req.body?.workspace || typeof req.body.workspace !== 'object') {
-    return res.status(400).json({
-      success: false,
-      code: 'DEPLOY_TARGET_REQUIRED',
-      error: 'Deploy requires an explicit workspace object. The global active workspace is never an implicit deployment target.',
-    });
-  }
-  const ws = sanitizeWorkspace(req.body.workspace);
-  try {
-    // STALE-SOURCE GATE (P0 2026-07-09) — same protection as deploy-verify: never let an
-    // out-of-date workspace overwrite a source folder that changed after it was imported.
-    {
-      const stamp = (ws as any)?.sourceStamp as { dir: string; hash: string; at: string } | undefined;
-      let currentHash: string | null = null;
-      if (stamp?.dir) {
-        try { if (fs.existsSync(stamp.dir)) currentHash = hashFolderFingerprint(fingerprintModFolder(stamp.dir)); } catch { currentHash = null; }
-      }
-      const verdict = assessSourceSync(stamp, currentHash, req.body?.allowStaleOverwrite === true);
-      if (!verdict.ok) {
-        return res.status(409).json({ success: false, error: verdict.detail, stage: 'source-sync' });
-      }
-    }
-    const resolved = resolveXsdConfig();
-    const modWorkspacePath = resolved.modWorkspacePath;
-    const x4GamePath = resolved.x4GamePath;
-    
-    if (!modWorkspacePath && !x4GamePath) {
-      return res.status(400).json({
-        success: false,
-        error: "Neither Mod Workspace Folder nor X4 Game Installation are configured."
-      });
-    }
-    if (modWorkspacePath && rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
+// Legacy callers use the identical authenticated identity/approval/transaction contract.
+app.post("/api/agent/deploy", (req, res) => deployVerifyHandler(req, res));
 
-    const modId = effectiveModId(ws);
-
-    // SAFETY GATE (2026-07-09): refuse to write malformed XML over an installed mod.
-    // Passthrough imports carry their original bytes into the deploy payload, so a
-    // corrupted source file (truncated mid-tag — the H1 damage class, found live in the
-    // forked x4_ai_influence workspace copy) would silently clobber a WORKING deployed
-    // mod. Same check the preflight chain runs; here it guards the legacy route too.
-    {
-      const gate = buildWorkspaceFileManifest(ws);
-      const malformed: string[] = [];
-      for (const [rel, content] of Object.entries(gate.files)) {
-        if (!/\.xml$/i.test(rel)) continue;
-        if (!checkXmlWellformed(String(content)).ok) malformed.push(rel);
-      }
-      if (malformed.length > 0) {
-        return res.status(422).json({
-          success: false,
-          error: `Deploy blocked: ${malformed.length} emitted XML file(s) are malformed (likely corrupted/truncated source): ${malformed.slice(0, 5).join(', ')}. Deploying would overwrite the installed mod with broken files. Fix or re-import the source first (use Deploy + Verify for the full preflight).`,
-          malformed,
-        });
-      }
-    }
-
-    // FB-13: compatibility does not mean weaker authority. Keep this live route and its
-    // response/deprecation contract, but refuse the same full-project errors as deploy-verify
-    // before staging or game bytes move.
-    const legacyValidation = buildDeployProjectValidation(ws);
-    if (!legacyValidation.preflight.ok) {
-      const summary = legacyValidation.preflight.summary;
-      return res.status(422).json({
-        success: false,
-        stage: 'preflight',
-        code: 'DEPLOY_VALIDATION_FAILED',
-        error: `Deploy blocked by full project validation: ${summary.schemaErrors} schema, ${summary.unresolvedCueRefs} cue, ${summary.crossFileErrors} cross-file, ${summary.aiscriptErrors} aiscript error(s).`,
-        validation: {
-          scope: 'full-project',
-          summary,
-          findings: [
-            ...legacyValidation.preflight.schema.findings,
-            ...legacyValidation.preflight.crossFile.findings,
-          ].slice(0, 20),
-        },
-      });
-    }
-
-    let stagingPath = '';
-    let deployedPath = '';
-
-    // 1. Compile to Mod Workspace Path (Staging) if configured
-    if (modWorkspacePath) {
-      if (!fs.existsSync(modWorkspacePath)) {
-        fs.mkdirSync(modWorkspacePath, { recursive: true });
-      }
-      const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
-      stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true);
-    }
-
-    // 2. Compile and deploy to Game Extensions Path if configured
-    if (x4GamePath) {
-      if (fs.existsSync(x4GamePath)) {
-        const extensionsPath = path.join(x4GamePath, 'extensions');
-        if (!fs.existsSync(extensionsPath)) {
-          fs.mkdirSync(extensionsPath, { recursive: true });
-        }
-        deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, 'catalog');
-      } else {
-        console.warn(`Configured X4 Game Installation path "${x4GamePath}" does not exist.`);
-      }
-    }
-
-    let message = '';
-    if (stagingPath && deployedPath) {
-      message = `Successfully compiled to staging workspace AND deployed to game extensions: ${deployedPath}`;
-    } else if (stagingPath) {
-      message = `Successfully compiled to staging workspace: ${stagingPath}`;
-    } else if (deployedPath) {
-      message = `Successfully deployed to game extensions: ${deployedPath}`;
-    }
-
-    const deployedFingerprint = deployedPath ? regularTreeFingerprint(deployedPath) : undefined;
-    const successfulDeploy = recordSuccessfulDeploy(req, {
-      modId,
-      workspaceName: ws.name,
-      workspaceHash: workspaceContentHash(sanitizeWorkspace(ws)),
-      deployedAt: new Date().toISOString(),
-      stagingPath: stagingPath || undefined,
-      deployedPath: deployedPath || undefined,
-      ...(deployedFingerprint ? { deployedFingerprint } : {}),
-    });
-
-    return res.json({
-      success: true,
-      message,
-      deployedPath: deployedPath || stagingPath,
-      lastDeploy: successfulDeploy,
-      artifact: lastArtifactReport,
-      // B97: tell callers in the RESPONSE, do not retire the route. A live agent is calling this
-      // today; silently removing it would break working tooling mid-session with no warning.
-      // Deprecation belongs where the caller will actually see it, while everything still works.
-      deprecation: {
-        deprecated: true,
-        replacement: '/api/agent/deploy-verify',
-        reason: 'This route deploys WITHOUT the 10-stage preflight (source-sync, XML well-formedness, full validation, byte confirmation, extension doctor, drift). deploy-verify runs all of them and supports dryRun and autoReimport.',
-        stillSupported: true,
-      },
-      // Audit A5: this route deploys WITHOUT the 9-stage preflight checklist. It stays
-      // for UI/agent compatibility (and carries the malformed-XML gate), but new flows
-      // should use deploy-verify. Converge the UI, then retire this route.
-      deprecated: true,
-      use: "/api/agent/deploy-verify"
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || "Failed to compile/deploy mod."
-    });
-  }
-});
 
 function buildDeployProjectValidation(ws: any, emitted?: { modId: string; files: CompiledFileManifest }) {
   const manifest = emitted || buildWorkspaceFileManifest(ws);
@@ -12998,6 +12965,75 @@ function buildDeployProjectValidation(ws: any, emitted?: { modId: string; files:
   return { ...manifest, preflight, diskValidationSkipped, validationFiles: [...validationFiles.values()] };
 }
 
+function deploymentPlan(ws: any): ArtifactPlan {
+  const build = activeBuildWorkspace(ws);
+  const generated = buildWorkspaceFileManifest(build);
+  const sourceRoot = typeof build.sourceStamp?.dir === 'string' ? path.resolve(build.sourceStamp.dir) : '';
+  if (!sourceRoot && (build.passthroughFiles || []).some((f: any) => f.omitted)) {
+    throw new Error('Incomplete deployment source: omitted files require their disk source.');
+  }
+  const plan = buildArtifactPlan({ sourceRoot, memoryOnly: !sourceRoot, generatedFiles: generated.generatedFiles,
+    passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles) });
+  if (!plan.ok) throw new Error(`Artifact planning failed: ${plan.errors.join('; ')}`);
+  return plan;
+}
+
+function deploymentSourceIdentity(plan: ArtifactPlan, format: DeployFormat): string {
+  // Include original disk inputs as well as emitted output: passthrough/graph overlays must
+  // not hide an external edit made after preview, even when they emit the older bytes.
+  const disk = plan.sourceRoot ? artifactPlanIdentity(buildArtifactPlan({ sourceRoot: plan.sourceRoot }), format) : null;
+  return trustHash([artifactPlanIdentity(plan, format), disk]);
+}
+
+function deploymentCorpusIdentity(projectPaths: string[]): string {
+  const resolved = resolveXsdConfig();
+  const corpus = getCanonicalReferenceCorpus();
+  const files = (corpus?.sourceFiles || []).map(relative => path.join(corpus!.root, relative));
+  // Diff validation also reads arbitrary base documents and official DLC overlays, not
+  // only the symbol-index corpus. Bind their bytes even when the index cache is unchanged.
+  const referenceRoots = [resolved.x4ReferenceRoot];
+  const dlcRoot = path.join(resolved.x4ReferenceRoot, 'extensions');
+  if (fs.existsSync(dlcRoot)) {
+    for (const entry of fs.readdirSync(dlcRoot, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^ego_dlc_/i.test(entry.name)) {
+        const root = path.join(dlcRoot, entry.name);
+        referenceRoots.push(root);
+        files.push(path.join(root, 'content.xml'));
+      }
+    }
+  }
+  for (const root of referenceRoots) for (const relative of projectPaths.filter(p => /\.xml$/i.test(p))) files.push(path.join(root, relative));
+  const md = getSchemaIndex();
+  const ai = getAiSchemaIndex();
+  files.push(...md.sourceFiles, ...(ai?.sourceFiles || []));
+  const schemaRoots = [resolved.schemaDir, path.join(resolved.x4ReferenceRoot, 'libraries'),
+    path.join(resolved.x4ReferenceRoot, 'ui', 'core')].filter(Boolean) as string[];
+  const visit = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else if (entry.isFile() && /\.xsd$/i.test(entry.name)) files.push(full);
+    }
+  };
+  for (const root of new Set(schemaRoots)) visit(root);
+  return trustHash({ roots: schemaRoots, files: deploymentCorpusFiles(files),
+    references: getReferenceSets(), md, ai,
+    properties: getScriptPropertyIndex(), jobs: getJobsVocabulary(), wares: getWaresVocabulary() });
+}
+
+function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
+  const actor = (req as any).__actor as RequestActor | undefined;
+  const authorized = !!actor?.authority && actor.authority.agentScopes.includes('deploy')
+    && (actor.kind === 'studio' || (actor.scope === 'deploy' || actor.scope === 'all'))
+    && (actor.kind === 'studio' || decideConstrainedAgentRoute(actor.authority, actor.capabilityConstraint).allowed);
+  if (!actor || !authorized || (actor.kind === 'agent' && !actor.keyId)) {
+    throw Object.assign(new Error('Effective authenticated deploy permission required.'), { code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+  }
+  return { kind: actor.kind === 'agent' ? 'agent' : 'human', id: actor.keyId || deployStudioActorId,
+    label: actor.label, scope: 'deploy', deployAuthorized: true };
+}
+
 /**
  * POST /api/agent/compile
  * Compiles a submitted workspace JSON body on-the-fly and runs the X4 Forge XML validator check.
@@ -13007,7 +13043,20 @@ function buildDeployProjectValidation(ws: any, emitted?: { modId: string; files:
 // extensions) → bytes confirm (deployed content.xml exists + id matches) → extension-doctor
 // (auto-FAIL on duplicate-id / folder-id-mismatch). Returns a single pass/fail verdict so the
 // agent/UI never skips the doctor. On-demand only (not a hot poll), so full-folder scan is fine.
-app.post("/api/agent/deploy-verify", (req, res) => {
+app.post("/api/agent/deploy-verify", (req, res) => deployVerifyHandler(req, res));
+function deployVerifyHandler(req: express.Request, res: express.Response) {
+  let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
+  let deployReceipt: ActionReceipt | undefined;
+  const recordFailedDeploy = (rolledBack: boolean) => {
+    if (!deployReceipt) return;
+    try {
+      const current = actionReceiptStore.read(deployReceipt.id);
+      const terminal = rolledBack
+        ? actionReceiptStore.rollBack(current.id, { rollbackStatus: 'performed', failure: { code: 'DEPLOY_ROLLED_BACK' } })
+        : current.status === 'prepared' ? actionReceiptStore.fail(current.id, { failure: { code: 'DEPLOY_FAILED' } }) : current;
+      captureActionReceiptProjection(req, terminal);
+    } catch { /* Storage failure never becomes a success; retain recovery and report refusal. */ }
+  };
   // PREFLIGHT CHECKLIST (beta-UX bundle C, 2026-07-09): every stage reports into an
   // ordered walkaround card — pass/warn/fail per check, later stages 'skipped' on a
   // failure — so the user sees the whole preflight, not just the first red light.
@@ -13026,10 +13075,24 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       if (id === stageId) { hit = true; continue; }
       if (hit && !checklist.some(c => c.id === id)) checklist.push({ id, label, status: 'skipped', detail: 'Not reached — fix the failure above first.' });
     }
-    return { ok: false, stage: stageId, checklist, ...payload };
+    return { ok: false, success: false, stage: stageId, checklist, ...responseIdentity, ...payload };
   };
   let pendingDeployRecovery: DeploymentRecoveryRecord | undefined;
   try {
+    const body = req.body;
+    const allowed = new Set(['path', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
+      'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'acceptances']);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
+      || (body.workspace !== undefined && (!body.workspace || typeof body.workspace !== 'object' || Array.isArray(body.workspace)))
+      || (body.path !== undefined && (typeof body.path !== 'string' || !body.path.trim()))
+      || ['dryRun', 'autoReimport', 'allowStaleOverwrite'].some(k => body[k] !== undefined && typeof body[k] !== 'boolean')) {
+      return res.status(400).json(failWith('config', { code: 'DEPLOY_INPUT_INVALID', error: 'Unknown or malformed deployment fields.' }));
+    }
+    const principal = deploymentPrincipal(req);
+    const acceptances = body.acceptances ?? [];
+    if (!Array.isArray(acceptances) || acceptances.length > 127) {
+      return res.status(400).json(failWith('config', { code: 'ACCEPTANCE_INPUT_INVALID', error: 'acceptances must contain at most 127 exact findings.' }));
+    }
     const reqPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
     const hasWorkspace = !!req.body?.workspace && typeof req.body.workspace === 'object';
     if ((!reqPath && !hasWorkspace) || (reqPath && hasWorkspace)) {
@@ -13174,6 +13237,12 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     // deployed file has cues. Exclude that one code when the emitted MD actually contains cues.
     const { modId, files } = buildWorkspaceFileManifest(ws);
 
+    responseIdentity = { ...responseIdentity, modId };
+    const frozenPlan = deploymentPlan(ws);
+    const artifactHash = deploymentSourceIdentity(frozenPlan, deployFormat);
+    const corpusPaths = frozenPlan.entries.map(entry => entry.path);
+    const corpusHash = deploymentCorpusIdentity(corpusPaths);
+
     // 1c. Wellformedness over the EMITTED manifest — closes the passthrough hole: a
     // byte-fidelity import carries its ORIGINAL (possibly truncated/corrupted) files
     // straight into the deploy payload, so "well-formed by construction" is only true
@@ -13233,9 +13302,28 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       preflightDiagnostics,
     );
     const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
-    if (!preflight.ok) {
+    const evidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
+      preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
+        filePath: d.filePath, line: d.line, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
+        message: String(d.message || d.code || 'Validation finding') })), preflight.evidence?.coverage.gaps || []);
+    const extensionsPath = path.join(x4GamePath, 'extensions');
+    const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
+    const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
+      targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
+    responseIdentity = { modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
+      artifactHash, validation: { evidence } };
+    const decision = evaluateFindingAcceptances(subject, acceptances, principal);
+    responseIdentity = { modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
+      artifactHash, bindingHash: decision.binding.hash, validation: { outcome: decision.outcome,
+        clean: decision.validationClean, evidence }, binding: decision.binding };
+    if (body.dryRun !== true && (body.expectedModId !== evidence.modId || body.expectedSourceHash !== evidence.sourceHash
+      || body.expectedArtifactHash !== artifactHash || body.expectedBindingHash !== decision.binding.hash)) {
+      return res.status(409).json(failWith('preflight', { code: 'DEPLOY_IDENTITY_MISMATCH',
+        error: 'Deployment requires expectedModId, expectedSourceHash, expectedArtifactHash and expectedBindingHash from a current dry-run preview. Nothing written.' }));
+    }
+    if (!decision.validationAllowsDeploy) {
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
-        `${preflight.summary.schemaErrors} schema, ${preflight.summary.unresolvedCueRefs} cue, ${preflight.summary.crossFileErrors} cross-file, ${preflight.summary.aiscriptErrors} aiscript error(s)`);
+        `${decision.unacceptedErrorIds.length} unaccepted mod finding(s). Review exact findings and supply a reason for each acceptance.`);
       return res.json(failWith('preflight', { modId, validationDelta, preflight: { summary: preflight.summary, findings: [...preflight.schema.findings, ...preflight.crossFile.findings].slice(0, 10) } }));
     }
     const deltaDetail = validationDelta.status === 'compared'
@@ -13243,17 +13331,12 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       : validationDelta.status === 'no_baseline'
         ? 'no last-green baseline yet'
         : `baseline unavailable: ${validationDelta.baseline.reason}`;
-    check('preflight', 'Full validation (schema/cues/lints)', pfWarnings > 0 ? 'warn' : 'pass',
-      pfWarnings > 0
-        ? `0 errors; ${pfWarnings} active warning(s), ${preflight.summary.suppressedWarnings} reviewed suppression(s), ${diskValidationSkipped.length} disk file(s) above/unavailable to the validation loader; ${deltaDetail}`
-        : `0 errors, 0 warnings across the full stack; ${deltaDetail}`);
-
-    const extensionsPath = path.join(x4GamePath, 'extensions');
-    const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
+    check('preflight', 'Full validation (schema/cues/lints)', !decision.validationClean || pfWarnings > 0 ? 'warn' : 'pass',
+      `${decision.outcome}: ${decision.approvals.length} accepted finding(s), ${pfWarnings} warning(s), coverage ${evidence.coverage.complete ? 'complete' : 'incomplete'}; ${deltaDetail}`);
     // Keep this request-local effect alongside the deploy request. It is the same planner used
     // by dry-run and is computed before any staging or target mutation, so the successful
     // response/history projection cannot fall back to the process-global artifact report.
-    const deploymentEffect = previewDeploymentEffect(ws, targetRoot, deployFormat);
+    const deploymentEffect = previewDeploymentEffect(ws, targetRoot, deployFormat, frozenPlan);
     if ('error' in deploymentEffect) {
       check('deploy', 'Deploy preview', 'fail', deploymentEffect.error);
       return res.status(400).json(failWith('deploy', {
@@ -13261,6 +13344,15 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         ...(req.body?.dryRun === true ? { dryRun: true } : {}),
       }));
     }
+
+    const assertCurrentSource = () => {
+      const currentTarget = path.join(resolveXsdConfig().x4GamePath, 'extensions', effectiveModId(activeBuildWorkspace(ws)));
+      if (deploymentSourceIdentity(deploymentPlan(ws), deployFormat) !== artifactHash
+        || deploymentCorpusIdentity(corpusPaths) !== corpusHash || path.resolve(currentTarget) !== path.resolve(targetRoot)) {
+        throw Object.assign(new Error('Source, corpus or target changed during deployment. Review a fresh preview.'), { code: 'DEPLOY_SOURCE_CHANGED' });
+      }
+    };
+    assertCurrentSource();
 
     // B93.6 — DRY RUN. Deletion is the direction that cannot be undone, and the author previously
     // only learned what a deploy removed by diffing afterwards. This reports the exact effect and
@@ -13273,25 +13365,28 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         ok: true,
         dryRun: true,
         stage: 'preview',
-        modId,
+        ...responseIdentity,
         targetRoot,
         deployFormat: { mode: deployFormat },
         effect: deploymentEffect,
         checklist,
         validationDelta,
         baselinePromotion: { recorded: false, reason: 'Dry-run deploys never change the last-green baseline.' },
-        note: 'Nothing was written. Re-send without dryRun to apply exactly this effect.',
+        note: 'Nothing was written. Apply with expectedModId, expectedSourceHash, expectedArtifactHash and expectedBindingHash from this preview.',
       });
     }
 
-    // 3. Deploy — staging (writeSnapshots) + game extensions (clean), same as /deploy.
+    const approvalRecords = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal).receipts;
+    const assertWriteAuthority = () => {
+      assertCurrentSource();
+      verifyFindingAcceptanceReceipts(actionReceiptStore, approvalRecords.map(r => r.id), subject, acceptances, principal);
+      if (deployReceipt && actionReceiptStore.read(deployReceipt.id).hash !== deployReceipt.hash) {
+        throw new Error('Deployment receipt changed before target activation.');
+      }
+    };
+    assertWriteAuthority();
+    // 3. Persist recovery and deployment authority BEFORE staging or extension writes.
     let stagingPath = '';
-    if (modWorkspacePath) {
-      if (!fs.existsSync(modWorkspacePath)) fs.mkdirSync(modWorkspacePath, { recursive: true });
-      const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
-      stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true);
-    }
-    if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     const deploymentTarget = targetRoot;
     try {
       pendingDeployRecovery = prepareDeploymentRecoveryReceipt(extensionsPath, deploymentTarget, modId);
@@ -13302,7 +13397,16 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         error: `Deploy refused before touching the extensions directory: ${error instanceof Error ? error.message : String(error)}`,
       }));
     }
-    const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat);
+    deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
+      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint);
+    assertWriteAuthority();
+    if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
+    if (modWorkspacePath) {
+      const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
+      stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
+    }
+    const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat,
+      { beforeActivate: assertWriteAuthority }, frozenPlan);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
 
     // 4. Bytes confirm — deployed content.xml exists, non-empty, id matches modId.
@@ -13314,7 +13418,14 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     // 5. Extension-doctor — filter to this mod; FAIL on duplicate-id / folder-id-mismatch / any error.
     const doctor = runExtensionDoctor(extensionsPath);
     const modFindings = (doctor.findings || []).filter((f: any) => JSON.stringify(f).toLowerCase().includes(modId.toLowerCase()));
-    const blocking = modFindings.filter((f: any) => f.severity === 'error' || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
+    const acceptedIds = new Set(decision.approvals.map(a => a.finding.findingId));
+    const doctorAccepted = modFindings.filter((f: any) => {
+      if (!f.validationDiagnostic || f.filePath !== `extensions/${path.basename(deployedPath)}/${f.validationDiagnostic.filePath}`) return false;
+      const finding = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles }, [f.validationDiagnostic]).findings[0];
+      return acceptedIds.has(finding.findingId);
+    });
+    const blocking = modFindings.filter((f: any) => (f.severity === 'error' && !doctorAccepted.includes(f))
+      || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
 
     // B84: the deploy row SAYS which format was written and what that means. A catalog
     // deploy that buried native binaries warns rather than passing quietly — the author
@@ -13324,8 +13435,8 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       (formatReport.warnings.length ? ` ⚠ ${formatReport.warnings.join(' ')}` : ''));
     check('bytes', 'Deployed bytes confirmed', bytesConfirmed ? 'pass' : 'fail',
       bytesConfirmed ? `content.xml ${deployedBytes}b, id "${deployedId}"` : `content.xml missing/empty or id mismatch (got "${deployedId}", want "${modId}")`);
-    check('doctor', 'Extension doctor', blocking.length === 0 ? 'pass' : 'fail',
-      blocking.length === 0 ? `${modFindings.length} finding(s) for this mod, none blocking` : blocking.map((f: any) => f.code).join(', '));
+    check('doctor', 'Extension doctor', blocking.length ? 'fail' : doctorAccepted.length ? 'warn' : 'pass',
+      blocking.length === 0 ? `${modFindings.length} finding(s) for this mod, ${doctorAccepted.length} exact reviewed acceptance(s), none unaccepted blocking` : blocking.map((f: any) => f.code).join(', '));
 
     // 6. Drift — after a deploy the workspace and deployed copies should agree.
     // B84: BOTH artifact modes reopen-and-hash-verify what they wrote, so either one is
@@ -13354,10 +13465,14 @@ app.post("/api/agent/deploy-verify", (req, res) => {
       if (ok) {
         try {
           deploymentRecovery = destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
+          // Audit storage is a required gate, not the best-effort history projection.
+          deployReceipt = commitDeployRecord(actionReceiptStore, deployReceipt, deployedFingerprint);
+          captureActionReceiptProjection(req, deployReceipt);
         } catch (error) {
           try {
             const restored = restoreDeploymentRecovery(pendingDeployRecovery, extensionsPath, deployedFingerprint);
             destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
+            recordFailedDeploy(true);
             const deployCheck = checklist.find(item => item.id === 'deploy');
             if (deployCheck) {
               deployCheck.status = 'fail';
@@ -13380,6 +13495,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
           const finalized = destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
           const restored = restoreDeploymentRecovery(finalized, extensionsPath);
           destructiveRecoveryStore.markUsed(finalized.id);
+          recordFailedDeploy(true);
           deploymentRollback = {
             applied: true,
             restoredFingerprint: restored.restoredFingerprint,
@@ -13413,6 +13529,8 @@ app.post("/api/agent/deploy-verify", (req, res) => {
     let successfulDeploy: LastDeployInfo | null = null;
     if (ok) {
       successfulDeploy = recordSuccessfulDeploy(req, {
+        validationOutcome: decision.outcome,
+        deployReceiptId: deployReceipt?.id,
         modId,
         workspaceName: ws.name,
         workspaceHash: workspaceContentHash(sanitizeWorkspace(ws)),
@@ -13422,9 +13540,9 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         ...(deployedFingerprint ? { deployedFingerprint } : {}),
       });
     }
-    const baselinePromotion = ok
+    const baselinePromotion = ok && decision.validationClean
       ? recordValidationBaseline(modId, preflightContentHash, preflightDiagnostics)
-      : { recorded: false as const, reason: 'Deploy byte or extension-doctor gates failed; the last-green baseline was not changed.' };
+      : { recorded: false as const, reason: 'Failed deployment, accepted findings or incomplete checks cannot promote a last-green baseline.' };
     check(
       'baseline',
       'Last-green validation baseline',
@@ -13434,7 +13552,8 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         : 'reason' in baselinePromotion ? baselinePromotion.reason : 'Validation baseline was not recorded.',
     );
     return res.json({
-      ok, stage: 'done', modId, deployedPath, stagingPath, bytesConfirmed, deployedBytes,
+      ok, success: ok, stage: 'done', ...responseIdentity, deployedPath, stagingPath, bytesConfirmed, deployedBytes,
+      ...(ok ? { deployRecord: deployReceipt, acceptanceRecords: approvalRecords } : {}),
       workspace: ws,
       ...(successfulDeploy ? { lastDeploy: successfulDeploy, deployedFingerprint } : {}),
       ...(ok ? { effect: deploymentEffect } : {}),
@@ -13460,6 +13579,7 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         scanned: doctor.findings?.length || 0,
         modFindings: modFindings.map((f: any) => ({ code: f.code, severity: f.severity })),
         blocking: blocking.map((f: any) => ({ code: f.code, severity: f.severity })),
+        accepted: doctorAccepted.map((f: any) => ({ code: f.code, filePath: f.filePath, line: f.line })),
       },
     });
   } catch (error: any) {
@@ -13482,9 +13602,14 @@ app.post("/api/agent/deploy-verify", (req, res) => {
         rollback = { applied: false, detail: `Automatic recovery also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` };
       }
     }
-    return res.status(500).json({ ok: false, stage: 'exception', error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}) });
+    recordFailedDeploy(rollback?.applied === true);
+    const code = String(error?.code || 'DEPLOY_FAILED');
+    const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : /STALE|CHANGED|MISMATCH/.test(code) ? 409
+      : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;
+    return res.status(status).json({ ok: false, success: false, stage: 'exception', ...responseIdentity, code,
+      error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}) });
   }
-});
+}
 
 app.post("/api/agent/compile", (req, res) => {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {

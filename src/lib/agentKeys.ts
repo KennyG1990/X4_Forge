@@ -123,7 +123,7 @@ function isAgentKeyRecord(value: unknown): value is AgentKeyRecord {
     constraint.allowedEffects.every(effect => typeof effect === 'string' && /^[a-z][a-z0-9-]*$/.test(effect)) &&
     new Set(constraint.allowedEffects).size === constraint.allowedEffects.length);
   return typeof row.id === 'string' && typeof row.label === 'string' &&
-    (row.scope === 'read' || row.scope === 'write' || row.scope === 'deploy') &&
+    (row.scope === 'read' || row.scope === 'write' || row.scope === 'deploy' || row.scope === 'all') &&
     (row.workspaceId === undefined || /^ws_[a-f0-9]{24}$/i.test(row.workspaceId)) &&
     constraintValid &&
     typeof row.tokenHash === 'string' && /^[a-f0-9]{64}$/.test(row.tokenHash) &&
@@ -458,6 +458,14 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
     scopeAllows('write', 'POST', '/agent/bulk-transform/apply') === true &&
     scopeAllows('write', 'POST', '/agent/project-rules/suppress') === true &&
     scopeAllows('write', 'POST', '/agent/bulk-transform/apply/extra') === false);
+  ok('all_scope_is_the_union_of_agent_routes_and_never_studio_only_or_unreviewed',
+    scopeAllows('all', 'GET', '/agent/workspace') === true &&
+    scopeAllows('all', 'POST', '/agent/workspace') === true &&
+    scopeAllows('all', 'POST', '/reference/complete') === true &&
+    scopeAllows('all', 'POST', '/agent/deploy') === true &&
+    scopeAllows('all', 'POST', '/ai/keys') === false &&
+    scopeAllows('all', 'POST', '/agent/deploy/future') === false &&
+    scopeAllows('all', 'GET', '/agent/unreviewed-future-route') === false);
   ok('deploy_scope_has_exact_deploy_not_future_prefix_power',
     scopeAllows('deploy', 'POST', '/agent/deploy') === true &&
     scopeAllows('deploy', 'POST', '/agent/deploy/future') === false &&

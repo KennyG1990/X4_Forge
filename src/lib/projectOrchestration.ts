@@ -186,6 +186,13 @@ export function runProjectOrchestrationSelftest() {
 
   const generated = generateAgentProject({ id: 'ai_influence', kind: 'ai_influence_starter' });
   const pkg = packageAgentProject(generated);
+  const uiManifest = '<?xml version="1.0"?><addon/>';
+  const withUiManifest = createProjectFile(generated, { path: 'ui.xml', kind: 'ui', content: uiManifest });
+  const uiManifestPackage = packageAgentProject(withUiManifest);
+  ok('package_retains_ui_xml_without_lua_parse_failure', uiManifestPackage.ok
+    && uiManifestPackage.files['ui.xml'] === uiManifest
+    && uiManifestPackage.validation.crossFile.mdLua.parseUnavailable.length === 0,
+  uiManifestPackage.validation.crossFile.findings);
   ok('generate_creates_multifile_project', generated.files.length >= 5, generated.files.map(f => f.path));
   ok('generate_includes_ai_influence_lua', !!pkg.files['ui/ai_influence_chat.lua'] && pkg.files['ui/ai_influence_chat.lua'].includes('poll_chat_response'));
   ok('generate_includes_contract_md_and_lua', !!pkg.files['md/ai_influence_contract.xml'] && !!pkg.files['ui/ai_influence_contract.lua']);

@@ -1,3 +1,4 @@
+import { fetchVerifiedDeploy, deployValidationLabel } from '../lib/deployClient';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -73,7 +74,7 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
   const runDeploy = async () => {
     setDeploy({ phase: 'running' });
     try {
-      const res = await fetch('/api/agent/deploy-verify', {
+      const res = await fetchVerifiedDeploy( {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace: getWorkspace() }),
@@ -81,7 +82,7 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
       const data = await res.json();
       if (res.ok && data.ok) {
         ttfm.mark('first_deploy'); // B20 funnel stage
-        setDeploy({ phase: 'ok', detail: `Deployed to ${data.deployedPath || data.stagingPath || 'the game'}.` });
+        setDeploy({ phase: 'ok', detail: `Deployed to ${data.deployedPath || data.stagingPath || 'the game'}. ${deployValidationLabel(data)}` });
         setStep(3);
       } else {
         const failed = (data.checklist || []).find((c: { status: string }) => c.status === 'fail');

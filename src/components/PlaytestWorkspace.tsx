@@ -1,3 +1,4 @@
+import { fetchVerifiedDeploy, deployValidationLabel } from '../lib/deployClient';
 import React, { useState } from 'react';
 import type { ModWorkspace } from '../types';
 import ReleaseCenter from './ReleaseCenter';
@@ -512,7 +513,7 @@ export default function PlaytestWorkspace({
     setVerifying(true);
     setVerifyResult(null);
     try {
-      const r = await fetch('/api/agent/deploy-verify', {
+      const r = await fetchVerifiedDeploy( {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(verifyPath.trim() ? { path: verifyPath.trim() } : { workspace }),
@@ -678,7 +679,8 @@ export default function PlaytestWorkspace({
               </div>
               {verifyResult && (
                 <div data-testid="verify-result" className={`rounded border p-1.5 text-[9px] font-mono leading-tight ${verifyResult.ok ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-200' : 'border-red-500/40 bg-red-500/5 text-red-200'}`}>
-                  <div className="font-bold">{verifyResult.ok ? '✓ VERIFIED' : `✗ FAILED @ ${verifyResult.stage || 'error'}`}</div>
+                  <div className="font-bold">{verifyResult.ok ? '✓ DEPLOYED BYTES VERIFIED' : `✗ FAILED @ ${verifyResult.stage || 'error'}`}</div>
+                  {verifyResult.ok && <div>{deployValidationLabel(verifyResult)}</div>}
                   {/* PREFLIGHT CHECKLIST (bundle C): the full walkaround, one row per check. */}
                   {Array.isArray(verifyResult.checklist) && verifyResult.checklist.length > 0 && (
                     <div className="mt-1.5 space-y-0.5" data-testid="preflight-checklist">

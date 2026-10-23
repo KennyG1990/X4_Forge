@@ -64,6 +64,23 @@ export interface ArtifactBuildResult {
   errors: string[];
 }
 
+/** Full deploy input identity, not the bounded semantic-validation file inventory. */
+export function artifactPlanIdentity(plan: ArtifactPlan, format: 'loose' | 'catalog'): string {
+  if (!plan.ok || plan.errors.length) throw new Error('Cannot identify a failed artifact plan.');
+  if (format !== 'loose' && format !== 'catalog') throw new Error('Unknown artifact format.');
+  const entries = plan.entries.map(entry => [
+    entry.path.replace(/\\/g, '/'), entry.size, entry.sha256, entry.catalogLoose === true,
+  ]).sort((a, b) => String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0);
+  return crypto.createHash('sha256').update(JSON.stringify({
+    scope: 'artifact-plan-v1', format, entries,
+    rules: {
+      exclude: [...plan.rules.exclude].sort(),
+      runtimeOwned: [...plan.rules.runtimeOwned].sort(),
+      catalogLoose: [...plan.rules.catalogLoose].sort(),
+    },
+  })).digest('hex');
+}
+
 export interface ArtifactVerificationResult {
   ok: boolean;
   checked: number;
@@ -72,6 +89,8 @@ export interface ArtifactVerificationResult {
 
 export interface BuildArtifactPlanOptions {
   sourceRoot: string;
+  /** Explicit in-memory source: no disk enumeration or implicit current-directory fallback. */
+  memoryOnly?: boolean;
   generatedFiles?: Record<string, string | Buffer>;
   /** Loaded workspace-owned passthrough bytes. Generated output wins collisions; source-copy is the fallback. */
   passthroughFiles?: Record<string, string | Buffer>;
@@ -193,6 +212,7 @@ function normalizeRules(values: unknown): string[] {
 
 function loadProjectRules(sourceRoot: string, errors: string[]): ArtifactRules {
   const rules: ArtifactRules = { exclude: [], runtimeOwned: [], catalogLoose: [] };
+  if (!sourceRoot) return rules;
   const configPath = path.join(sourceRoot, '.forgeartifact.json');
   if (!fs.existsSync(configPath)) return rules;
   try {
@@ -227,12 +247,13 @@ function inside(candidate: string, root: string): boolean {
 
 /** Build a complete ownership plan without reading source files into memory. */
 export function buildArtifactPlan(options: BuildArtifactPlanOptions): ArtifactPlan {
-  const sourceRoot = path.resolve(String(options.sourceRoot || ''));
+  const sourceRoot = options.memoryOnly === true ? '' : path.resolve(String(options.sourceRoot || ''));
   const errors: string[] = [];
   const entries: ArtifactEntry[] = [];
   const excluded: ArtifactExcludedEntry[] = [];
   const runtimeOwned: ArtifactExcludedEntry[] = [];
-  if (!options.sourceRoot || !fs.existsSync(sourceRoot) || !fs.statSync(sourceRoot).isDirectory()) {
+  if (options.memoryOnly && options.sourceRoot) errors.push('An in-memory artifact cannot also name a disk source.');
+  if (!options.memoryOnly && (!options.sourceRoot || !fs.existsSync(sourceRoot) || !fs.statSync(sourceRoot).isDirectory())) {
     errors.push(`Artifact source root does not exist or is not a directory: ${sourceRoot}`);
   }
   const rules = mergeRules(sourceRoot, options.rules, errors);
@@ -381,7 +402,7 @@ export function buildArtifactPlan(options: BuildArtifactPlanOptions): ArtifactPl
     }
   };
 
-  if (errors.length === 0 || fs.existsSync(sourceRoot)) walk(sourceRoot, '');
+  if (!options.memoryOnly && (errors.length === 0 || fs.existsSync(sourceRoot))) walk(sourceRoot, '');
   entries.push(...generated.values());
   entries.sort((left, right) => left.path.localeCompare(right.path));
   excluded.sort((left, right) => left.path.localeCompare(right.path));

@@ -65,7 +65,9 @@ export const E2E_VITE_ENV = {
   DISABLE_HMR: 'true',
 } as const;
 // Per-run state dir: unique-ish per process start; OS temp cleanup owns the leftovers.
-const E2E_STATE_DIR = path.join(os.tmpdir(), `x4forge-e2e-state-${process.pid}`);
+process.env.X4_FORGE_E2E_STATE_PID ||= String(process.pid);
+if (!/^\d+$/.test(process.env.X4_FORGE_E2E_STATE_PID)) throw new Error('Invalid E2E state PID.');
+export const E2E_STATE_DIR = path.join(os.tmpdir(), `x4forge-e2e-state-${process.env.X4_FORGE_E2E_STATE_PID}`);
 // B41: 127.0.0.1 EVERYWHERE, never "localhost" — vite binds whichever family
 // "localhost" resolves to at boot (varies per run on Windows), while Playwright's
 // request context resolves localhost to ::1 and does NOT fall back. A mismatched

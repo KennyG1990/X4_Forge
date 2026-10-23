@@ -156,6 +156,9 @@ fs.writeFileSync(path.join(runtimeInstalledExtension, 'content.xml'), '<content 
 // Runtime-debugger route assertions must select only this empty ephemeral log, never a
 // developer's real X4 profile/debuglog discovered through the inherited user environment.
 fs.writeFileSync(path.join(gameRoot, 'debuglog.txt'), '');
+// The runtime adapter chooses the newest discovered log unless an explicit preference
+// exists at startup. Pin this fixture rather than racing a running game's timestamps.
+fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ x4LogPath: path.join(gameRoot, 'debuglog.txt') }));
 
 const checks = [];
 const ok = (name, pass, detail) => { checks.push({ name, pass: !!pass, detail }); console.log(`${pass ? '  ok  ' : ' FAIL '}${name}${detail ? `  [${detail}]` : ''}`); };
@@ -666,6 +669,12 @@ async function main() {
   ok('stateful_route_unknown_identity_fails_named', (await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: 'ws_ffffffffffffffffffffffff' })).json?.code === 'WORKSPACE_NOT_FOUND');
   ok('legacy_unbound_key_denied_workspace_state', (await req('GET', '/api/agent/workspace', LEGACY_UNBOUND_KEY, undefined, { workspaceId: WORKSPACE_ID })).json?.code === 'WORKSPACE_BINDING_REQUIRED');
   const agentSchema = await req('GET', '/api/agent/schema', null);
+  for (const deployPath of ['/api/agent/deploy', '/api/agent/deploy-verify']) {
+    const descriptor = agentSchema.json?.endpoints?.find(endpoint => endpoint.path === deployPath && endpoint.method === 'POST');
+    ok(`deploy_identity_contract_discoverable_${deployPath.split('/').pop()}`, descriptor
+      && ['expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'acceptances'].every(field => typeof descriptor.body?.[field] === 'string')
+      && !JSON.stringify(descriptor).includes('defaults to active workspace'));
+  }
   ok('failure_contract_is_discoverable', agentSchema.status === 200 && agentSchema.json?.api_version === '2026-07-30.agent.v4' && Array.isArray(agentSchema.json?.failure_contract?.top_level?.failedStages), JSON.stringify(agentSchema.json?.failure_contract || {}));
   ok('deadline_contract_is_discoverable', agentSchema.json?.request_deadlines?.browser_api_default_ms === 30000 && agentSchema.json?.request_deadlines?.command_job?.maximum_ms === 1800000, JSON.stringify(agentSchema.json?.request_deadlines || {}));
   const capabilityContract = agentSchema.json?.capability_contract;
@@ -978,7 +987,7 @@ async function main() {
     'first-deploy EXDEV consume failure leaves receipt ready and quarantine reusable',
     'first-deploy EXDEV failed consume can be retried safely',
   ];
-  ok('artifact_selftest_public_and_green', artifactSelftest.status === 200 && artifactSelftest.json?.pass === true, `status=${artifactSelftest.status} summary=${artifactSelftest.json?.summary}`);
+  ok('artifact_selftest_public_and_green', artifactSelftest.status === 200 && artifactSelftest.json?.pass === true, `status=${artifactSelftest.status} summary=${artifactSelftest.json?.summary} failures=${JSON.stringify(artifactSelftest.json?.checks?.filter(c => !c.pass) || [])}`);
   ok('artifact_selftest_proves_locked_root_transaction', requiredArtifactChecks.every(name => artifactChecks.get(name) === true), JSON.stringify(Object.fromEntries(requiredArtifactChecks.map(name => [name, artifactChecks.get(name)]))));
 
   // --- mint a read + a write agent key with the session token ---
@@ -1471,6 +1480,8 @@ async function main() {
 
   const aiKeysPath = path.join(dataDir, 'ai-keys.json');
   const configPath = path.join(configDir, 'config.json');
+  // End the read-only log fixture before testing initially-unconfigured directory writes.
+  fs.unlinkSync(configPath);
   const harvestedSchemasPath = path.join(dataDir, 'harvested-schemas');
   ok('studio_only_mutation_fixtures_start_clean', !fs.existsSync(aiKeysPath) && !fs.existsSync(configPath) && !fs.existsSync(harvestedSchemasPath));
   const deployAiStatusDenied = await req('GET', '/api/ai/keys/status', deployKey);
@@ -3429,7 +3440,7 @@ async function main() {
       }],
     },
   });
-  ok('legacy_deploy_runs_full_project_validation', invalidLegacy.status === 422 && invalidLegacy.json?.code === 'DEPLOY_VALIDATION_FAILED' && invalidLegacy.json?.validation?.summary?.crossFileErrors > 0, `status=${invalidLegacy.status} body=${JSON.stringify(invalidLegacy.json || {})}`);
+  ok('legacy_deploy_runs_full_project_validation', invalidLegacy.status === 409 && invalidLegacy.json?.code === 'DEPLOY_IDENTITY_MISMATCH' && invalidLegacy.json?.validation?.evidence?.modErrorCount > 0, `status=${invalidLegacy.status} body=${JSON.stringify(invalidLegacy.json || {})}`);
   ok('legacy_validation_failure_writes_nothing', !fs.existsSync(path.join(liveExtensions, invalidLegacyName)) && !fs.existsSync(path.join(safeWorkspace, '.forge-builds', 'loose', invalidLegacyName)));
 
   const restoreLoose = await req('POST', '/api/schema/config', SESSION_TOKEN, { deployFormat: 'loose' });
@@ -3612,12 +3623,14 @@ async function main() {
   ok('dry_run_does_not_promote_validation_baseline', dry.json?.baselinePromotion?.recorded === false && dry.json?.validationDelta?.status === 'no_baseline', JSON.stringify(dry.json?.baselinePromotion));
 
   // #4 autoReimport actually unblocks the deploy the guard refused.
-  const autoDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: staleImport.json?.workspace, autoReimport: true });
+  const deployIdentity = preview => ({ expectedModId: preview.modId, expectedSourceHash: preview.sourceHash,
+    expectedArtifactHash: preview.artifactHash, expectedBindingHash: preview.bindingHash });
+  const autoDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: staleImport.json?.workspace, autoReimport: true, ...deployIdentity(dry.json) });
   ok('auto_reimport_unblocks_the_deploy', autoDeploy.status === 200 && autoDeploy.json?.ok === true, `status=${autoDeploy.status} stage=${autoDeploy.json?.stage}`);
   ok('auto_reimport_deploy_writes_and_returns_staging_path', autoDeploy.json?.stagingPath === dryStagingTarget && fs.existsSync(dryStagingTarget),
     `expected=${dryStagingTarget} actual=${autoDeploy.json?.stagingPath}`);
   ok('verified_deploy_returns_ready_recovery', autoDeploy.json?.recovery?.kind === 'deploy' && /^[a-f0-9]{64}$/.test(String(autoDeploy.json?.recovery?.expectedCurrentHash || '')), JSON.stringify(autoDeploy.json?.recovery || {}));
-  ok('successful_deploy_promotes_last_green_baseline', autoDeploy.json?.baselinePromotion?.recorded === true && (autoDeploy.json?.checklist || []).some(c => c.id === 'baseline' && c.status === 'pass'), JSON.stringify(autoDeploy.json?.baselinePromotion));
+  ok('only_clean_successful_deploy_promotes_last_green_baseline', autoDeploy.json?.baselinePromotion?.recorded === autoDeploy.json?.validation?.clean && (autoDeploy.json?.checklist || []).some(c => c.id === 'baseline' && c.status === (autoDeploy.json?.validation?.clean ? 'pass' : 'warn')), JSON.stringify(autoDeploy.json?.baselinePromotion));
   ok('auto_reimport_is_reported_not_silent',
     (autoDeploy.json?.checklist || []).some(c => c.id === 'source-sync' && /re-imported/i.test(c.detail || '')),
     JSON.stringify((autoDeploy.json?.checklist || []).find(c => c.id === 'source-sync')));
@@ -3653,7 +3666,7 @@ async function main() {
   const duplicateDir = path.join(liveExtensions, 'duplicate_stale_probe');
   fs.mkdirSync(duplicateDir, { recursive: true });
   fs.writeFileSync(path.join(duplicateDir, 'content.xml'), '<content id="stale_probe_mod" name="Duplicate" version="100"/>');
-  const failedDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: staleImport.json?.workspace, autoReimport: true });
+  const failedDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: staleImport.json?.workspace, autoReimport: true, ...deployIdentity(dry.json) });
   ok('failed_post_write_deploy_rolls_back_exactly', failedDeploy.status === 200 && failedDeploy.json?.ok === false && failedDeploy.json?.rollback?.applied === true && regularTreeHash(dryTarget) === targetBeforeFailedDeploy, JSON.stringify(failedDeploy.json?.rollback || {}));
   ok('failed_deploy_exposes_no_later_recovery', !failedDeploy.json?.recovery, JSON.stringify(failedDeploy.json?.recovery || null));
   fs.rmSync(duplicateDir, { recursive: true, force: true });
@@ -4021,7 +4034,8 @@ async function main() {
   ok('scratch_artifact_stays_under_workspace', hostileScratchBuild.json?.artifactPath === hostileScratchPath && fs.existsSync(path.join(hostileScratchPath, 'ext_01.cat')) && !fs.existsSync(path.join(liveExtensions, hostileName, 'ext_01.cat')));
   const invalidArtifactFormat = await req('POST', '/api/agent/artifact/build', SESSION_TOKEN, { workspace: hostileImport.json?.workspace, format: 'rar' });
   ok('artifact_build_rejects_unknown_format', invalidArtifactFormat.status === 400);
-  const hostileDeploy = await req('POST', '/api/agent/deploy', SESSION_TOKEN, { workspace: hostileImport.json?.workspace });
+  const hostileDeployPreview = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: hostileImport.json?.workspace, deployFormat: 'catalog', dryRun: true });
+  const hostileDeploy = await req('POST', '/api/agent/deploy', SESSION_TOKEN, { workspace: hostileImport.json?.workspace, deployFormat: 'catalog', ...deployIdentity(hostileDeployPreview.json) });
   ok('hostile_mod_deployed_as_verified_catalog_artifact', hostileDeploy.status === 200 && hostileDeploy.json?.success === true && hostileDeploy.json?.artifact?.verified === true && hostileDeploy.json?.artifact?.mode === 'catalog', `status=${hostileDeploy.status} artifact=${JSON.stringify(hostileDeploy.json?.artifact || {})}`);
   const hostileLooseStage = path.join(safeWorkspace, '.forge-builds', 'loose', hostileName);
   ok('deploy_stages_outside_source_checkout', hostileDeploy.json?.lastDeploy?.stagingPath === hostileLooseStage && fs.existsSync(path.join(hostileLooseStage, 'assets', 'large.weird')));

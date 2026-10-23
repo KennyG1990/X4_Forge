@@ -19,7 +19,7 @@ import {
   AGENT_CAPABILITY_DISCOVERY_ROUTE_KEY,
 } from '../src/lib/agentCapabilityAuthority';
 import {
-  AGENT_KEY_SCOPES,
+  AGENT_ROUTE_SCOPES,
   createAgentRouteAuthority,
   type AgentRouteAuthority,
   type AgentAuthorityResourceClass,
@@ -2239,14 +2239,14 @@ function reviewedAuthorityFields(
   }
   if (fallback.disposition === AGENT_CAPABILITY_DISCOVERY_DISPOSITION) {
     return {
-      agentScopes: [...AGENT_KEY_SCOPES],
+      agentScopes: [...AGENT_ROUTE_SCOPES],
       resourceClass: 'workspace',
       workspaceMode: 'required',
     };
   }
   return {
     agentScopes: fallback.disposition === 'legacy-public' || fallback.disposition === 'public-selftest'
-      ? [...AGENT_KEY_SCOPES]
+      ? [...AGENT_ROUTE_SCOPES]
       : [],
     resourceClass: fallback.disposition === 'legacy-public' || fallback.disposition === 'public-selftest'
       ? 'public'
@@ -6988,7 +6988,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
       }
       const protectedFallback = reviewedAuthorityFields(undefined, { disposition: 'session-only' }, true);
       const publicFallback = reviewedAuthorityFields(undefined, { disposition: 'legacy-public' }, true);
-      if (protectedFallback.agentScopes.length || !sameStrings(publicFallback.agentScopes, [...AGENT_KEY_SCOPES]) ||
+      if (protectedFallback.agentScopes.length || !sameStrings(publicFallback.agentScopes, [...AGENT_ROUTE_SCOPES]) ||
         publicFallback.resourceClass !== 'public') {
         errors.push('candidate default selftest failed closed protected-route or public-route presets');
       }
@@ -7106,7 +7106,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
       if (!sameStrings(scopes, disposition.agentScopes)) {
         errors.push(`${key}: runtime scopes ${scopes.join(',') || 'none'} != reviewed manifest scopes ${disposition.agentScopes.join(',') || 'none'}`);
       }
-      const allAgentScopes = sameStrings(disposition.agentScopes, [...AGENT_KEY_SCOPES]);
+      const allAgentScopes = sameStrings(disposition.agentScopes, [...AGENT_ROUTE_SCOPES]);
       const noAgentScopes = disposition.agentScopes.length === 0;
       if (['public', 'stateless-analysis'].includes(disposition.resourceClass) && !allAgentScopes) {
         errors.push(`${key}: ${disposition.resourceClass} routes must use the read/write/deploy preset`);

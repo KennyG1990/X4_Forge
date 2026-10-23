@@ -1,0 +1,14 @@
+{
+  "version": "0.0.79",
+  "status": "VERIFIED",
+  "scope": "UI manifest integrity and deployment trust; installed and Open VSX delivery",
+  "sourceBaseline": "5a495447f92b7df38d7ff7e7c219d7a2b7f4f2ec",
+  "vsixSha256": "7d40cc2b972ac397458281ab0caf0fcf89ed035c02c93c0cb2e900818f744a24",
+  "vsixBytes": 28861543,
+  "tests": {"fullE2e": 112, "focusedE2e": 6, "routes": 498, "oracles": 134, "supervisor": 16, "inspectorSelftest": 13, "exactPackageTrust": 15},
+  "installed": {"host": "Antigravity IDE", "version": "0.0.79", "activated": true, "savedStateAndConfigUnchanged": true, "aiLiveViewRestored": true},
+  "public": {"registry": "Open VSX", "version": "0.0.79", "latest": "0.0.79", "downloadHashMatches": true, "checkedAt": "2026-10-23T19:55:15.300Z", "listing": "https://open-vsx.org/extension/x4forge/x4-forge-studio"},
+  "notClaimed": ["all Claude review items", "Microsoft publication", "B119 completion", "mod deployment", "in-game proof"],
+  "plan": "docs/plans/2026-10-23-fixes-only-release.md",
+  "agentGuide": "docs/releases/0.0.79-agent-handoff.md"
+}

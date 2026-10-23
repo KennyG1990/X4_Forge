@@ -24,6 +24,7 @@ import { normPath } from './xmlLite';
 import { parse } from 'luaparse';
 import { DOMParser } from '@xmldom/xmldom';
 import { stripLuaComments } from './luaStaticAnalysis';
+import { buildX4UiSourceBundle } from './x4UiSourceBundle';
 
 export type ProjectCrossFileFindingCode =
   | 'project.structure'
@@ -38,7 +39,8 @@ export type ProjectCrossFileFindingCode =
   | 'dep.self'
   | 'md.signal_library'
   | 'md.run_actions_nonlibrary'
-  | 'validation.lua_ast_unavailable';
+  | 'validation.lua_ast_unavailable'
+  | 'ui.invalid_registration';
 
 export interface ProjectCrossFileFinding {
   code: ProjectCrossFileFindingCode;
@@ -443,7 +445,20 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
   }
 
   const mdFiles = files.filter(f => f.kind === 'md' || classifyPath(f.path) === 'md');
-  const luaFiles = files.filter(f => f.kind === 'lua' || f.kind === 'ui' || classifyPath(f.path) === 'lua');
+  // UI includes XML manifests and other assets; only Lua paths are Lua source.
+  // Match the language boundary used by project validation and packaging.
+  const luaFiles = files.filter(f => classifyPath(f.path) === 'lua');
+  for (const manifest of files.filter(f => normPath(f.path).toLowerCase() === 'ui.xml')) {
+    const bundle = buildX4UiSourceBundle({
+      uiXml: manifest.content || '',
+      luaFiles: luaFiles.map(f => ({ path: f.path, text: f.content || '' })),
+    });
+    for (const registration of bundle.registrations) {
+      if (registration.resolution === 'resolved') continue;
+      findings.push({ code: 'ui.invalid_registration', severity: 'error', file: manifest.path,
+        detail: `UI registration ${JSON.stringify(registration.rawPath)}: ${registration.resolution}.` });
+    }
+  }
   const raised = mdFiles.flatMap(f => parseMdRaisedLuaEvents(f.content || '', f.path));
   const listened = mdFiles.flatMap(f => parseMdUiListeners(f.content || '', f.path));
   const registrationAnalyses = luaFiles.map(file => ({ file, result: parseLuaRegisteredEvents(file.content || '', file.path) }));
@@ -546,6 +561,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
   {
     const kindByQName = new Map<string, 'library' | 'cue'>();
     for (const f of mdFiles) {
+      if (typeof f.content !== 'string') continue; // Missing source is coverage, not an empty inspected document.
       const script = (f.content!.match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '').toLowerCase();
       const re = /<(cue|library)\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
       let m: RegExpExecArray | null;
@@ -561,6 +577,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       return null; // keyword/external → can't resolve statically; don't flag
     };
     for (const f of mdFiles) {
+      if (typeof f.content !== 'string') continue;
       const ownScript = f.content!.match(/<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1] || '';
       let m: RegExpExecArray | null;
       const sigRe = /<signal_cue(?:_instantly)?\b[^>]*\bcue\s*=\s*"([^"]+)"/gi;
@@ -645,6 +662,24 @@ export function runProjectCrossFileSelftest() {
   ok('indexes_md_to_lua_raise_and_register', good.mdLua.raised.some(e => e.event === 'ai_influence.chat') && good.mdLua.registered.some(e => e.event === 'ai_influence.chat'), good.mdLua);
   ok('indexes_lua_to_md_emit_and_listener', good.mdLua.emitted.some(e => e.event === 'ai_influence.chat.response') && good.mdLua.listened.some(e => e.event === 'ai_influence.chat.response'), good.mdLua);
   ok('reports_content_dependencies', good.deps.dependencies.some(d => d.id === 'djfhe_http' && d.optional), good.deps);
+
+  for (const path of ['ui.xml', 'ui/addons/menu.xml', 'UI/MENU.XML', 'ui/readme.txt']) {
+    const withUiAsset = addFile(fixtureProject(), {
+      path, kind: 'ui', content: '<?xml version="1.0"?><addon/>',
+    });
+    const result = validateProjectCrossFile(withUiAsset);
+    ok(`non_lua_ui_asset_excluded:${path}`, result.ok && result.mdLua.parseUnavailable.length === 0, result.findings);
+  }
+  const xmlCannotRegister = fixtureProject();
+  xmlCannotRegister.files = xmlCannotRegister.files.filter(f => !f.path.endsWith('.lua'));
+  xmlCannotRegister.files.push({ path: 'ui.xml', kind: 'ui', content: 'RegisterEvent("ai_influence.chat", function() end)' });
+  const xmlRegistration = validateProjectCrossFile(xmlCannotRegister);
+  ok('xml_cannot_satisfy_lua_registration', xmlRegistration.summary.mdLuaMissingRegisters === 1 && xmlRegistration.mdLua.registered.length === 0, xmlRegistration.findings);
+  for (const kind of ['ui', 'other', 'lua'] as const) {
+    const broken = addFile(fixtureProject(), { path: 'UI/BROKEN.LUA', kind, content: 'local =' });
+    const result = validateProjectCrossFile(broken);
+    ok(`malformed_lua_still_blocks:${kind}`, !result.ok && result.findings.some(f => f.code === 'validation.lua_ast_unavailable' && f.file === 'UI/BROKEN.LUA'), result.findings);
+  }
 
   const noLuaRegister: ExtensionProject = {
     ...fixtureProject(),
