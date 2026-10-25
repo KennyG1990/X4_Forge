@@ -13,6 +13,7 @@ function elementChildrenOf(node: any): Element[] {
 import { checkXmlWellformed } from './xmlWellformed';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import { indexXmlElementSpans, xmlElementSemanticPath } from './xmlSourceSpans';
+import { indexImportedIdentities, importedNodeId, importedLinkId, reconcileImportedGraph } from './importedIdentity';
 
 const DOMParserToUse = typeof window !== 'undefined' && window.DOMParser ? window.DOMParser : XmlDomParser;
 const XMLSerializerToUse = typeof window !== 'undefined' && window.XMLSerializer ? window.XMLSerializer : XmlDomSerializer;
@@ -95,7 +96,7 @@ export function extractTopLevelCueXml(xmlText: string): { name: string; xml: str
   } catch { return []; }
 }
 
-export function parseXMLToWorkspace(xmlText: string, options: { path?: string } = {}): ModWorkspace | null {
+export function parseXMLToWorkspace(xmlText: string, options: { path?: string; identityPath?: string; previous?: ModWorkspace } = {}): ModWorkspace | null {
   try {
     assertXmlInputWithinLimits(xmlText);
     // Well-formedness gate FIRST. @xmldom/xmldom (the Node-side parser) does not emit a
@@ -123,6 +124,8 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
     }
 
     const modName = mdscript.getAttribute("name") || "Parsed_X4_Mod";
+    const sourcePath = options.path || options.identityPath || `md/${modName}.xml`;
+    const identities = indexImportedIdentities(mdscript, sourcePath, xmlText);
     // Treat <library> as a cue variant so reusable-subroutine cues model + round-trip like
     // any other cue. Collect <cue> and <library> in DOCUMENT ORDER (not cues-then-libraries)
     // so the regenerated MD preserves the author's top-level ordering — required for the
@@ -161,12 +164,13 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
     }
 
     const serializer = new XMLSerializerToUse();
-    const indexedSpans = options.path ? indexXmlElementSpans(xmlText) : null;
+    const indexedSpans = indexXmlElementSpans(xmlText);
     const sourceForElement = (element: Element, modeled = true): MDNode['source'] | undefined => {
-      if (!indexedSpans || !options.path) return undefined;
+      // A navigation namespace does not establish a byte-authoritative source owner.
+      if (!options.path) return undefined;
       const semanticPath = xmlElementSemanticPath(element);
       const span = indexedSpans.get(semanticPath);
-      return span ? { path: options.path.replace(/\\/g, '/'), semanticPath, start: span.start, end: span.end, modeled } : undefined;
+      return span ? { path: sourcePath.replace(/\\/g, '/'), semanticPath, start: span.start, end: span.end, modeled, identity: identities.get(element) } : undefined;
     };
 
     // Pass 1: Parse all cues
@@ -216,7 +220,7 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
         libProps.libDocXml = docEl ? serializer.serializeToString(docEl as any) : '';
       }
 
-      const cueId = `cue_${Date.now()}_${i}`;
+      const cueId = importedNodeId(identities.get(cue)!);
       elementToId.set(cue, cueId);
       
       const depth = getDepth(cue);
@@ -265,7 +269,7 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
           const parentCueId = elementToId.get(parentCueElement);
           if (parentCueId) {
             links.push({
-              id: `link_sub_${Date.now()}_${parentCueId}_${cueId}`,
+              id: '',
               sourceNodeId: parentCueId,
               sourcePortId: 'out_sub',
               targetNodeId: cueId,
@@ -340,7 +344,7 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
 
           const template = NODE_TEMPLATES.find(t => t.xmlTag === xmlTag) || schemaTemplatesByTag.get(xmlTag);
           if (template) {
-            const condNodeId = `${xmlTag}_${Date.now()}_${i}_${condIndex}`;
+            const condNodeId = importedNodeId(identities.get(child)!);
             const condNode: MDNode = {
               id: condNodeId,
               type: nodeType,
@@ -358,7 +362,7 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
 
             // Connect Cue -> Condition
             links.push({
-              id: `link_cond_${Date.now()}_${cueId}_${condNodeId}`,
+              id: '',
               sourceNodeId: cueId,
               sourcePortId: 'out_cond',
               targetNodeId: condNodeId,
@@ -471,7 +475,7 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
               ],
             } : undefined);
           if (!template) return null;
-          const actNodeId = `${xmlTag}_${Date.now()}_${i}_${actIndex}`;
+          const actNodeId = importedNodeId(identities.get(child)!);
           actIndex++;
           const actNode: MDNode = {
             id: actNodeId,
@@ -499,7 +503,7 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
             const node = buildActionNode(child);
             if (!node) continue;
             links.push({
-              id: `link_act_${Date.now()}_${prevId}_${node.id}`,
+              id: '',
               sourceNodeId: prevId,
               sourcePortId: prevPort,
               targetNodeId: node.id,
@@ -516,8 +520,12 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
       }
     }
     
-    return {
-      id: `workspace_${Date.now()}`,
+    for (const link of links) link.id = importedLinkId(link);
+    if (new Set(nodes.map(n => n.id)).size !== nodes.length || new Set(links.map(l => l.id)).size !== links.length) {
+      throw new Error('Imported identity collision; import refused.');
+    }
+    const workspace: ModWorkspace = {
+      id: `workspace_${identities.get(mdscript)!.key}`,
       name: modName,
       version: mdscript.getAttribute("version") || "1.0.0",
       author: mdscript.getAttribute("author") || "ImportedAuthor",
@@ -533,6 +541,8 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string } 
         showIcons: true
       }
     };
+    reconcileImportedGraph(workspace, options.previous);
+    return workspace;
   } catch (err) {
     console.warn("XML Import Parsing Error: ", err);
     return null;

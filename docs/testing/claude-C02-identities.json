@@ -1,0 +1,119 @@
+{
+  "status": "VERIFIED",
+  "scope": "C02 isolated source/API/rendered import and scratch-deploy integration; not installed or published",
+  "baseline": "d3eeb2e04d5f57ba19d89c7d1edce7995fea34ab",
+  "identityChecks": 22,
+  "existingRegressions": {
+    "compileFidelity": 14,
+    "mdFileIdentity": 3,
+    "workspaceIdentity": 14,
+    "nodeSourceEditing": 15
+  },
+  "integration": {
+    "pass": true,
+    "checks": [
+      "identical-imports",
+      "file-scoped-nodes-and-links",
+      "legacy-node-layout-and-link-waypoints",
+      "unrelated-file-cue-insertion",
+      "new-source-properties-win",
+      "rendered-node-position-retained",
+      "identity-metadata-persisted",
+      "compiled-import-exact-source-bytes",
+      "foreign-folder-no-transfer",
+      "different-mod-no-transfer",
+      "invalid-workspace-refused-without-state-change",
+      "changed-duplicates-no-identity-or-layout-transfer",
+      "recovery-after-duplicate-removal",
+      "stale-preview-no-write",
+      "auto-reimport-scratch-deploy-preserves-layout-and-fresh-bytes"
+    ],
+    "beforeBox": {
+      "x": 544,
+      "y": 332,
+      "width": 240,
+      "height": 215.75
+    },
+    "afterBox": {
+      "x": 544,
+      "y": 332,
+      "width": 240,
+      "height": 212.5
+    },
+    "modId": "forge_regression_lab",
+    "compiledHashes": {
+      "content.xml": "bd52c74a8a28abb9293e726e6f73f85e1741a0ddff84ad77b47dddb6977fb8ac",
+      "README.md": "2b6c549fbbeea89f87efadf7d8b2cd30f4a8b268b5db04e253f16d7a8c146c9f",
+      "md/added.xml": "55724e96b5580f341222f14945cd7cc0f1e7675545a2430b35936a3ddb8149e0",
+      "md/other.xml": "c6bb3979e24ca6268b9211409e7044dc0b826c70dfb549bd38c20304cacd3eab",
+      "md/stable.xml": "14d8512cc3bbfe74101657a52dcebc30eb4ed0601f43f1060b15f70d7276dba6",
+      "ui/lab.lua": "1232d8379de77e154ca533689af2e42629dd7574bda5a0a390799849f07607c3",
+      "ui/large.lua": "8468182dc660755d512829f815dee0695430433c12721eb3fc3035985a120dce",
+      "ui.xml": "0513465717ee5580848a2a1e03a9685258807dfc5df205de63e3bb2f4094dd59",
+      "ui_index_xml": "0513465717ee5580848a2a1e03a9685258807dfc5df205de63e3bb2f4094dd59",
+      "ui_lua": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "e2e": {
+    "passed": 1,
+    "failed": 0,
+    "flaky": 0,
+    "ownedTreeStopped": true,
+    "screenshotsInspected": true
+  },
+  "validation": [
+    {
+      "name": "e2e-post-review",
+      "exitCode": 0,
+      "finishedAt": "2026-10-25T20:16:25.7925234Z"
+    },
+    {
+      "name": "lint-post-review",
+      "exitCode": 0,
+      "finishedAt": "2026-10-25T20:16:46.8557027Z"
+    },
+    {
+      "name": "build-post-review",
+      "exitCode": 0,
+      "finishedAt": "2026-10-25T20:16:57.9325056Z"
+    },
+    {
+      "name": "precommit-final",
+      "exitCode": 0,
+      "finishedAt": "2026-10-25T20:27:56.7002038Z"
+    }
+  ],
+  "lint": {
+    "errors": 0,
+    "warnings": 608
+  },
+  "policy": {
+    "capabilities": 12,
+    "routes": 300,
+    "dynamicRegistrars": 1,
+    "mcpAliases": 11,
+    "receiptRoutes": 84,
+    "receiptSurfaces": 59,
+    "newPermissions": false
+  },
+  "normalizedSourceSha256": {
+    "server.ts": "2ea5a2c04e1dae94d806005b45223f8b948e77659c79fb5a4cc6c5d10b76532c",
+    "src/components/DirectoryExplorer.tsx": "d5055bf2c3d2e8fd82c2d95304fe8d43df1a6ce7cd8222a462ef270251f028d7",
+    "src/components/SourceControl.tsx": "de1b287a380f9ad06af734c4ee4342015a155aa198b9baf00ec536d0be72eb53",
+    "src/lib/workspaceIdentity.ts": "5726e593009f86bb9ca6b202e5e304aa9ab8505be690df1a2861ea318dd397cc",
+    "src/lib/xmlParser.ts": "51e4497599d52a9f3dd00caad8f5f037733c6ecf423aac18580f7bac2735278e",
+    "src/types.ts": "987c7141176ad754858af2cff5c430cc7a69e07387bd5d6e4461f1b14b70d2a8",
+    "src/lib/importedIdentity.ts": "76ea3f737723f4586af6c6f7764b6bac78202ede44d4d7e1f8d66a3e363c4b23",
+    "scripts/imported-identity.selftest.ts": "a298bdfd51426623d5071280333b2099353acdd84955e1917573e5a22ad4c5ff",
+    "tests/e2e/import-identities.spec.ts": "5424939c7513bf1e068b36d27ff82bf39756618eadae359ba624ee31956c8272",
+    "config/forge-route-dispositions.json": "69c8d25bcf1221ed019ccc17ecd951eaa0332788927239165204b3f7feec9902"
+  },
+  "limitations": [
+    "Native installed-host and public package verification remain release gates.",
+    "No X4 game/mod or installed extension writes.",
+    "Ambiguous duplicates do not inherit identity/layout after file changes.",
+    "Unanchored semantic edits may create new identities.",
+    "Browser card height can vary with content; retained graph coordinates and persisted dimensions were checked.",
+    "Earlier failed/flaky runs remain in private C02 evidence and are not counted as passing."
+  ]
+}

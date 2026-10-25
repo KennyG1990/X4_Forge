@@ -69,3 +69,11 @@ encoding on BACKLOG and failed after writing the C01 summary/plan. Exact state w
 remaining records written with UTF-8, without duplicating the completed close. Two tooling errors
 triggered the operator degradation rule: commit verified C01 and continue C02 in fresh context.
 C02 is not complete: only its 20 focused identity cases passed, with no integrated API/rendered proof.
+
+### C02 close — VERIFIED (local integration)
+Stable file-scoped MD node/link identities, unique legacy layout/waypoints, source-first properties,
+canonical folder plus artifact/content identity guards and persistent dimensions are implemented.
+22 focused and46 existing checks pass; actual HTTP/Load Project/scratch deploy proves15 scenarios,
+zero E2E failures/flakes. Lint/build and full precommit/type/policy pass. Evidence:
+`docs/testing/claude-C02-identities.json`; detailed acceptance/AAR in the C02 plan.
+No public/installed change. C03 warning review reuse is next; C04-C07 and release gates remain open.

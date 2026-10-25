@@ -249,7 +249,7 @@ export default function DirectoryExplorer({
           setTimeout(() => setStatusMessage(null), 2500);
         } else {
           // Fallback to standard MD script parser
-          const decoded = parseXMLToWorkspace(fileText);
+          const decoded = parseXMLToWorkspace(fileText, { identityPath: file.path });
           if (decoded && decoded.nodes.length > 0) {
             setWorkspace(decoded);
             if (setWorkspaceView) {

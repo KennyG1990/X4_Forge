@@ -1,10 +1,10 @@
 # Claude complaints — reconciled private Dev status, 2026-10-25
 
-This is a scope ledger, not a claim that the public Forge contains these changes. Evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata. Kimi remains paused. All game execution/experience proof remains separate.
+This is a scope ledger, not a claim that the public Forge contains these changes. C01 private fixes are integrated locally at d3eeb2e; C02 is now verified locally. See docs/testing/claude-C01-integration.json and claude-C02-identities.json. Evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata. Kimi remains paused. All game execution/experience proof remains separate.
 
 | Original complaint | Current scope and evidence | What remains |
 | --- | --- | --- |
-| ui.xml treated as Lua/passthrough; lost imported registrations | VERIFIED private source-domain handling, preserved registrations/edits, malformed/missing registrations refused; ui-source-domain/verdict.json | Public integration; no claim all UI semantics are covered |
+| ui.xml treated as Lua/passthrough; lost imported registrations | VERIFIED private source-domain handling, preserved registrations/edits, malformed/missing registrations refused; ui-source-domain/verdict.json | Public release/installed verification; no claim all UI semantics are covered |
 | Forge failure versus mod failure; misleading compile/deploy success | VERIFIED bounded API evidence classifications, compile/artifact truth and deploy UI outcome distinctions; compile-verdict, deploy-review-ui | Exhaustive failure-classification audit across every API remains broader than these proofs |
 | Logged overrides, accepted findings | VERIFIED exact-finding/source-bound approval, actor/reason/receipt and read-only UI; finding-overrides, deploy-review-ui | A persistent per-mod known-warning policy across source changes is NOT implemented; existing approvals intentionally require renewed review when binding facts change |
 | Exact bytes, stale result, mod identity | VERIFIED snapshot-bound validate/deploy with stale refusal and workspace-mod guard; deploy-snapshot, client-isolation | No blanket claim every API response carries mod identity; other routes need contract census if this requirement is interpreted literally |
@@ -16,8 +16,8 @@ This is a scope ledger, not a claim that the public Forge contains these changes
 | Save-aware log, reload without keyboard, structured probes | Backend protocol and freshness gates VERIFIED with synthetic logs and Lua stubs; runtime-loop, log-freshness | Native X4 file/API capability, real save-load/reload completion, general read-only state probe, user experience proof. Companion concept is SPECIFIED only; no helper installed |
 | Dead-path dependency health | VERIFIED private path diagnostics and installed API: dependency-health; exact failed path and setting, no false mod error | Parser/index/packed fallback and write-access health not certified by a readable-path result |
 | Malformed import payloads returning200 | VERIFIED strict import request boundary; import-aiscript | Not a census of request validation on every endpoint |
-| Stable node IDs | OPEN: src/lib/xmlParser.ts still constructs cue/action/condition/link IDs with Date.now() | Deterministic identity and edit/reimport stability must be implemented and tested |
+| Stable node IDs | VERIFIED local C02: deterministic file-scoped MD IDs, conservative legacy layout/waypoint preservation, actual Load Project and fresh-byte scratch deploy; docs/testing/claude-C02-identities.json | Public package/installed verification; ambiguous or unanchored matches are not inferred |
 | Engine-trap rules from gotchas | Existing mdPitfallLints has four bounded rules; no products/station rule found | Reconcile supplied gotchas with game/reference evidence; add narrowly grounded rules without reviving false positives |
 | Usable public/installed release | Private Dev backend/frontend proved in bounded scopes | Integrate into Git, required release tests, native host/package verification and publish. Do not disturb Claude stable during private work |
 
-Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. Next independently provable source work can address deterministic import IDs or broader incremental validation, one bounded unit at a time.
+Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. Next is C03 warning-only review reuse, then C04-C07 under the approved completion/release plan.

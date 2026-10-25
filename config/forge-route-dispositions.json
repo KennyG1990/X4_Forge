@@ -62,6 +62,7 @@
     "src/lib/godLint.ts",
     "src/lib/healthCard.ts",
     "src/lib/importedGraphLayout.ts",
+    "src/lib/importedIdentity.ts",
     "src/lib/instanceDiscovery.ts",
     "src/lib/intentCheck.ts",
     "src/lib/jobsContentLint.ts",

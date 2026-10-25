@@ -52,6 +52,7 @@ export interface MDNode {
     start: number;
     end: number;
     modeled: boolean;
+    identity?: { key: string; ambiguous: boolean; fileHash: string };
   };
 }
 
@@ -1970,6 +1971,8 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       label: node.label || (template ? template.label : 'MD Node'),
       x: typeof node.x === 'number' ? node.x : 100,
       y: typeof node.y === 'number' ? node.y : 100,
+      ...(Number.isFinite(node.width) && node.width > 0 ? { width: node.width } : {}),
+      ...(Number.isFinite(node.height) && node.height > 0 ? { height: node.height } : {}),
       properties: node.properties || (template ? { ...template.properties } : {}),
       // propertiesSchema is derived from the node's xmlTag (it's presentation, not user data),
       // so always re-hydrate it from the current template when one exists. This lets template
@@ -1994,6 +1997,12 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
             start: Number(node.source.start),
             end: Number(node.source.end),
             modeled: node.source.modeled !== false,
+            ...(node.source.identity && /^[a-f0-9]{16}$/.test(node.source.identity.key)
+              && /^[a-f0-9]{16}$/.test(node.source.identity.fileHash)
+              && typeof node.source.identity.ambiguous === 'boolean' ? { identity: {
+                key: node.source.identity.key, fileHash: node.source.identity.fileHash,
+                ambiguous: node.source.identity.ambiguous,
+              } } : {}),
           }
         } : {})
     };

@@ -25,7 +25,7 @@ export function stableStringify(value: unknown): string {
 
 /** FNV-1a 32-bit ×2 over a string (same recipe as compileFidelity — proven adequate for
  * "did this content change", not a security boundary). */
-function fnvHash(text: string): string {
+export function fnvHash(text: string): string {
   let h1 = 0x811c9dc5, h2 = 0x01000193 ^ 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);

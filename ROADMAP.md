@@ -7874,3 +7874,12 @@ checks, focused rendered E2E (zero flakes), typecheck/lint/builds and complete p
 Evidence: `docs/testing/claude-C01-integration.json`; plan/AAR: `docs/plans/2026-10-25-claude-completion-release.md`.
 Public/installed version remains 0.0.79. C02-C07, native game proof and release/install gates remain open.
 No live Forge, game or unrelated main-checkout writes; Kimi paused. Owner #20 remains open.
+
+## 2026-10-25 — C02 stable imported identities — VERIFIED (local integration)
+Replaced timestamp MD IDs with file-scoped source anchors. Same-folder/mod reimport keeps unique
+legacy IDs, coordinates, sizes and link waypoints while new source wins; duplicates, foreign folders
+and changed content IDs inherit no presentation. Persisted sizes and both XML quote styles fixed.
+22 focused +46 existing checks,15 real API/UI/scratch-deploy scenarios, strict E2E1/1 (0flaky),
+lint/build and complete precommit/type/policy pass. Proof: docs/testing/claude-C02-identities.json.
+AAR/limitations: C02 plan; failed runs retained. No publication, installed-host or game proof.
+Commit point: fix(import): preserve stable source identities and reimport layout.

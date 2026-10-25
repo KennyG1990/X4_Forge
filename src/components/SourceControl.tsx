@@ -811,7 +811,7 @@ Guidelines:
           setSyncStatusMsg(`X4 library XML patch imported.`);
         } else {
           // Reconstruct workspace from Egosoft Script Parser
-          const reconstructed = parseXMLToWorkspace(contentText);
+          const reconstructed = parseXMLToWorkspace(contentText, { identityPath: filePathToLoad });
           if (reconstructed && reconstructed.nodes.length > 0) {
             if (saveCheckpoint) saveCheckpoint();
             setWorkspace(reconstructed);

@@ -16,7 +16,9 @@ game-loop proof remain open. Keep live Forge/X4 untouched outside coordinated ve
 installation windows. Public release and exact installed verification precede Kimi M01; no interim pushes.
 C01 integration VERIFIED: 14 focused suites, 65 HTTP/MCP checks, rendered deployment review E2E,
 typecheck/lint/builds and complete precommit/policy gate. See `docs/testing/claude-C01-integration.json`.
-C02 private prototype has only focused proof; no further unit or public/installed release is complete.
+C02 integration VERIFIED: stable imported identities, conservative reimport layout and exact bytes;
+22 focused +46 existing regressions and15 HTTP/UI/deploy scenarios pass, with full policy/type/build gates.
+See `docs/testing/claude-C02-identities.json`. C03 warning review reuse is next; C03-C07 and public/installed release remain open.
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 

@@ -66,6 +66,7 @@ import { buildSchemaIndex, validateXmlAgainstSchema, runXsdValidateSelftest, typ
 import { runReferenceLanguageSelftest } from "./src/lib/referenceLanguage";
 import { isSameOrDescendant, runPathRolesSelftest, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
 import { parseXMLToWorkspace, setSchemaTemplatesForImport } from "./src/lib/xmlParser";
+import { reconcileImportedGraph } from './src/lib/importedIdentity';
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
 import { generateHttpGlueLua, generateContractMdScript, validateContract, runContractGlueSelftest, type IntegrationContract } from "./src/lib/contractGlue";
 import { runFileBridgeTransportSelftest } from "./src/lib/fileBridgeTransport";
@@ -7237,8 +7238,8 @@ function readExtensionFilesWithPacked(absDir: string, maxBytesPerPackedEntry = 2
 
 function parseContentMeta(xml: string): { id?: string; name?: string; version?: string; author?: string; description?: string } {
   const attr = (a: string) => {
-    const m = xml.match(new RegExp(`<content\\b[^>]*\\b${a}\\s*=\\s*"([^"]*)"`, 'i'));
-    return m?.[1];
+    const m = xml.match(new RegExp(`<content\\b[^>]*\\b${a}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, 'i'));
+    return m?.[2];
   };
   return { id: attr('id'), name: attr('name') || attr('id'), version: attr('version'), author: attr('author'), description: attr('description') };
 }
@@ -7457,7 +7458,7 @@ function canonicalMd(xml: string): string {
 }
 
 /** Import a mod folder into a workspace, preserving every file losslessly. */
-function importModFolder(absDir: string): { workspace: ModWorkspace; report: any } {
+function importModFolder(absDir: string, previous?: ModWorkspace): { workspace: ModWorkspace; report: any } {
   const relFiles = walkFilesRelative(absDir);
   let baseWorkspace: ModWorkspace | null = null;
   const meta: any = {};
@@ -7504,7 +7505,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
       mdGraphRegenerable.set(rel.toLowerCase(), missing.length === 0 && canonicalMatch);
       if (missing.length) mdRegenerationGaps.push({ path: rel, missing });
       if (!canonicalMatch) mdCanonicalMismatches.push(rel);
-      // namespace node ids per file so two scripts never collide (parser ids are Date.now()-based)
+      // Retain the existing readable stem prefix; parser identities are already file-scoped.
       const idMap = new Map<string, string>();
       for (const n of parsed.nodes as any[]) {
         const nid = `${stem}__${n.id}`; idMap.set(n.id, nid); n.id = nid;
@@ -7641,6 +7642,18 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     patches: false
   };
 
+  const sameSource = (() => {
+    if (!previous?.sourceStamp?.dir || effectiveModId(previous) !== effectiveModId(ws)) return false;
+    if (effectiveContentId(previous, effectiveModId(previous)) !== effectiveContentId(ws, effectiveModId(ws))) return false;
+    try {
+      const canonical = (p: string) => {
+        const real = fs.realpathSync(p);
+        return process.platform === 'win32' ? real.toLowerCase() : real;
+      };
+      return canonical(previous.sourceStamp.dir) === canonical(absDir);
+    } catch { return false; }
+  })();
+  const importedIdentity = reconcileImportedGraph(ws, sameSource ? previous : undefined);
   const originalFiles: any[] = [];
   if (contentRel && contentOriginalText) {
     originalFiles.push({
@@ -7788,6 +7801,7 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
   const counts = classification.reduce((a: any, c) => { a[c.class] = (a[c.class] || 0) + 1; return a; }, {});
   const report = {
     folder: absDir,
+    importedIdentity,
     totalFiles: relFiles.length,
     counts,
     graphNodeCount: ws.nodes.length,
@@ -7860,7 +7874,9 @@ app.post("/api/agent/mod-folder/import", (req, res) => {
         ...(modLikeChildren.length ? { modsFoundInside: modLikeChildren.slice(0, 20) } : {}),
       });
     }
-    const { workspace, report } = importModFolder(r.abs);
+    const prior = resolveWorkspaceAuthority(req, res, false);
+    if (res.headersSent) return;
+    const { workspace, report } = importModFolder(r.abs, prior?.workspace);
     return res.json({ success: true, workspace, report });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'mod-folder import failed' });
@@ -13203,7 +13219,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         const stampedDir = typeof sourceStamp?.dir === 'string' ? sourceStamp.dir : '';
         if (req.body?.autoReimport === true && stampedDir && fs.existsSync(stampedDir)) {
           try {
-            const reimported = importModFolder(stampedDir);
+            const reimported = importModFolder(stampedDir, ws);
             ws = reimported.workspace as any;
             (ws as any).sourceStamp = {
               dir: stampedDir,
