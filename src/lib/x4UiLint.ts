@@ -33,6 +33,7 @@ export const X4_UI_LINT_RULES = {
   colspanOverrun: 'x4-ui.colspan-overrun',
   fontScale: 'x4-ui.font-scale',
   renderedNonAscii: 'x4-ui.rendered-non-ascii',
+  buttonTextComplexProperty: 'x4-ui.button-text-complex-property',
   rowHeightBudget: 'x4-ui.row-height-budget',
   tableHeightBudget: 'x4-ui.table-height-budget',
   editBoxHeightMinimum: 'x4-ui.editbox-height-minimum',
@@ -429,6 +430,7 @@ class X4UiLintEvaluator {
     this.checkPercentages();
     this.checkColspans();
     this.checkFontsAndRenderedText();
+    this.checkButtonTextComplexProperties();
     this.checkEditBoxHeights();
     this.checkRowHeightBudgets();
     this.checkInlineDisplay();
@@ -483,6 +485,41 @@ class X4UiLintEvaluator {
       warningCount: findings.filter(finding => finding.severity === 'warning').length,
       verificationGapCount: verificationGaps.length
     };
+  }
+
+  private checkButtonTextComplexProperties(): void {
+    // X4 9.00 helper.lua: complexCellProperties.button creates text/text2
+    // descriptor tables in initTableCell, then properties:apply assigns options
+    // directly. A scalar replaces that descriptor; button:setText/setText2
+    // instead writes its .text member and preserves the descriptor defaults.
+    for (const call of this.calls) {
+      if (call.name !== 'createButton' || staticReference(call.semantics.cell)?.kind !== 'cell') continue;
+      const tableKey = this.tableKeyFromReference(staticReference(call.semantics.cell));
+      const table = tableKey ? this.tables.get(tableKey) : undefined;
+      const frame = table?.frameKey ? this.frames.get(table.frameKey) : undefined;
+      const helper = staticReference(frame?.call.receiver);
+      if (!frame || frame.call.name !== 'createFrameHandle' || frame.call.method !== '.'
+        || helper?.kind !== 'global' || helper.path !== 'Helper' || frame.call.semantics.dataFlow) continue;
+      for (const property of call.semantics.unsupportedProperties || []) {
+        // Lua keys are case-sensitive. Unknown, mutated, nil and table values
+        // are deliberately outside this narrow, proven scalar-error rule.
+        if (property.name !== 'text' && property.name !== 'text2') continue;
+        const value = property.value;
+        if (value.status !== 'static' || !['string', 'number', 'boolean'].includes(value.type)) continue;
+        const setter = property.name === 'text' ? 'setText' : 'setText2';
+        this.addFinding({
+          rule: X4_UI_LINT_RULES.buttonTextComplexProperty,
+          severity: 'error',
+          location: property.source,
+          category: 'property',
+          message: `createButton ${property.name} is a complex descriptor, not a scalar option. Use :${setter}() instead.`,
+          cause: `The shipped helper initializes button.${property.name} as a property table; the createButton option overwrites it with a ${value.type}.`,
+          failureMode: 'Later text-property access no longer has the descriptor table and its defaults; button text construction can fail.',
+          evidenceBoundary: 'Only an exact text/text2 key with a statically proven scalar value on a tracked X4 button-cell call is rejected. Dynamic options and other descriptor shapes are not proven safe by this rule.',
+          nextAction: `Remove ${property.name} from createButton options and chain :${setter}(value, properties) onto the returned button.`,
+        });
+      }
+    }
   }
 
   private addFinding(input: FindingInput): void {

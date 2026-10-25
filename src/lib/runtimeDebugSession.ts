@@ -39,6 +39,8 @@ export type RuntimeDebugSegmentReason =
   | "profile-change"
   | "truncation"
   | "file-replaced-or-rotated"
+  | "save-loaded"
+  | "game-started"
   | "analyzer-policy-change";
 
 export type RuntimeDebugSessionHealth =
@@ -90,6 +92,8 @@ export interface RuntimeDebugIncidentInput {
   reason?: string;
   evidence?: readonly string[];
   attributes?: Readonly<Record<string, string | number | boolean | null>>;
+  /** Opt-in parser status: keep the latest bounded attributes when this signature repeats. */
+  replaceAttributes?: boolean;
   segmentId?: string;
   position?: Omit<RuntimeDebugLinePosition, "segmentId"> & { segmentId?: string };
 }
@@ -240,6 +244,8 @@ export interface RuntimeDebugAnalyzerReanalysisInput extends RuntimeDebugLogSele
 }
 
 export interface RuntimeDebugIngestInput extends RuntimeDebugSessionOpenInput {
+  /** Domain parser decides whether a complete line starts a new in-file lifecycle. */
+  boundaryForLine?: (line: RuntimeDebugLine) => 'save-loaded' | 'game-started' | undefined;
   /** Optional generic parser seam. The store still owns no parsing logic. */
   normalizeLines?: (
     lines: readonly RuntimeDebugLine[],
@@ -522,6 +528,7 @@ function persistedAttributionDisposition(attributes: Record<string, string | num
  */
 function incidentRetentionPriority(incident: Pick<RuntimeDebugIncident, "attributes" | "severity" | "classification">): number {
   if (incident.classification === "runtime_analyzer_policy") return 500;
+  if (incident.classification === "runtime_lifecycle") return 75;
 
   const disposition = persistedAttributionDisposition(incident.attributes);
   const engineFailure = incident.attributes.isEngineFailure === true
@@ -545,6 +552,8 @@ function validReason(value: unknown): value is RuntimeDebugSegmentReason {
     || value === "profile-change"
     || value === "truncation"
     || value === "file-replaced-or-rotated"
+    || value === "save-loaded"
+    || value === "game-started"
     || value === "analyzer-policy-change";
 }
 
@@ -1285,6 +1294,7 @@ export class RuntimeDebugSessionStore {
         existing.startByte = item.incident.startByte;
         existing.endByte = item.incident.endByte;
         for (const evidence of item.incident.evidence) if (!existing.evidence.includes(evidence) && existing.evidence.length < this.caps.maxEvidenceSamples) existing.evidence.push(evidence);
+        if (item.input.replaceAttributes) existing.attributes = item.incident.attributes;
         existing.lastOrdinal = ordinal;
       } else {
         state.incidents.push({ ...item.incident, firstOrdinal: ordinal, lastOrdinal: ordinal });
@@ -1549,9 +1559,31 @@ export class RuntimeDebugSessionStore {
     }
     state.counts.bytesRead += bytesRead;
     state.counts.linesRead += lines.length;
-    this.updateSegmentAfterRead(state, fileIdentity);
     try {
-      if (input.normalizeLines) this.applyIncidents(state, input.normalizeLines(lines, clone(this.currentSegment(state))));
+      // readLines has advanced the byte cursor, including any partial final line. Preserve
+      // it while splitting complete lines; never discard or reread the partial remainder.
+      const finalCursor = { ...state.cursor };
+      let group: RuntimeDebugLine[] = [];
+      const flush = () => {
+        if (group.length && input.normalizeLines) this.applyIncidents(state, input.normalizeLines(group, clone(this.currentSegment(state))));
+        group = [];
+      };
+      for (const line of lines) {
+        const reason = !line.truncated ? input.boundaryForLine?.(line) : undefined;
+        if (reason) {
+          flush();
+          state.cursor.byteOffset = line.startByte;
+          state.cursor.lineNumber = line.lineNumber - 1;
+          this.updateSegmentAfterRead(state, fileIdentity);
+          const next = this.startSegment(state, prepared.selection, reason, line.startByte, line.lineNumber - 1);
+          boundary = { segmentId: next.id, reason };
+        }
+        line.segmentId = state.currentSegmentId;
+        group.push(line);
+      }
+      state.cursor = finalCursor;
+      this.updateSegmentAfterRead(state, fileIdentity);
+      flush();
     } catch (error) {
       return failure("error", error instanceof RuntimeDebugSessionStoreError ? error.code : "SESSION_NORMALIZER_FAILED", errorText(error), false, toSnapshot(state));
     }

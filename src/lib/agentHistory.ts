@@ -394,7 +394,7 @@ export function describeAction(input: {
   if (kind === 'import') {
     if (httpFailed) return { title: `Import FAILED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.code } };
     const ws = body?.workspace || {};
-    const fileCount = (ws.passthroughFiles?.length ?? 0) + (ws.nodes?.length ? 0 : 0);
+    const fileCount = ((ws.uiSourceFiles?.length ?? 0) + (ws.passthroughFiles?.length ?? 0)) + (ws.nodes?.length ? 0 : 0);
     const counted = body?.classification?.total ?? body?.fileCount ?? fileCount;
     const root = request?.root ? ` from ${request.root}` : '';
     const version = ws.version ? `, v${ws.version}` : '';

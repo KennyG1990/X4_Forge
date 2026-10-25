@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "5b519c6c3e706342083df7d9bb2481274c85f951c5c774683828909435db1566",
+  "sourceFingerprint": "e17381448e34f4770093b969f20c7c8cd0f255007ce2bec514f3a940c92a34de",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -347,6 +347,36 @@
       "owners": ["exportVerifiedReleaseArtifact"],
       "rationale": "User-selected release ZIP export copies to an exclusive sibling temp, checks receipt hash/size, backs up an existing target, promotes, reopens, and rolls back.",
       "failureContract": "Any mismatch or promotion error reports failure and restores the prior selected output; final success names verified bytes only."
+    },
+    {
+      "file": "src/server/deploymentSnapshot.ts",
+      "calls": {
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "isolated-artifact-stage"
+      ],
+      "owners": [
+        "captureDeploymentSnapshot"
+      ],
+      "rationale": "Prior private exact-byte deployment snapshot materializes and verifies an owned temporary payload before validation and activation.",
+      "failureContract": "Only its uniquely created temporary root is disposed; source/game paths are not cleanup targets. Snapshot mismatch refuses deployment."
+    },
+    {
+      "file": "src/server/runtimeControl.ts",
+      "calls": {
+        "mkdirSync": 1
+      },
+      "categories": [
+        "authoritative-atomic"
+      ],
+      "owners": [
+        "RuntimeControl.safeDirectory",
+        "RuntimeControl.request"
+      ],
+      "rationale": "Private runtime reload outbox creates regular owned directories, persists authorization before atomic journal and fixed-command queue delivery.",
+      "failureContract": "Deploy authority, exact workspace/session, fresh companion, one global pending command and expiry required. Receipt failure sends nothing; uncertain delivery never automatically retries; symbolic directories refused."
     }
   ],
   "hostStores": [

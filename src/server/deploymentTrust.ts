@@ -46,6 +46,7 @@ export function prepareDeployRecord(
   store: ActionReceiptStore, subject: AcceptanceSubject, decision: AcceptanceDecision,
   principal: AcceptancePrincipal, approvals: ActionReceipt[], recoveryId: string,
   beforeFingerprint: string,
+  validatedArtifactHash?: string,
 ): ActionReceipt {
   if (approvals.length > 127) throw new Error('At most 127 finding approvals fit a deployment record.');
   const target = { role: 'deploy' as const, root: 'extensions', relativePath: subject.evidence.modId!,
@@ -62,7 +63,9 @@ export function prepareDeployRecord(
     validation: { validator: 'deployment-trust-v1', ruleHash: subject.validatorHash },
     rollback: { required: true, mode: 'recovery', reference: recoveryId },
     metadata: { operation: 'deploy', ...Object.fromEntries(Object.entries(decision.binding).filter(([k]) => k !== 'hash')),
-      actorLabel: principal.label, outcome: decision.outcome, recoveryId },
+      actorLabel: principal.label, outcome: decision.outcome, recoveryId,
+      ...decision.counts,
+      ...(validatedArtifactHash ? { validatedArtifactHash, validatedArtifactScope: 'logical-artifact-bytes' } : {}) },
   });
 }
 

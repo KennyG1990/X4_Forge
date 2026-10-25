@@ -20,7 +20,7 @@ import {
 } from './extensionProject';
 import { parseModManifest, type ModDependency, type ModManifest } from './modDependencyGraph';
 import { classifyCueRef } from './cueLineage';
-import { normPath } from './xmlLite';
+import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parse } from 'luaparse';
 import { DOMParser } from '@xmldom/xmldom';
 import { stripLuaComments } from './luaStaticAnalysis';
@@ -31,6 +31,7 @@ export type ProjectCrossFileFindingCode =
   | 'cue.unresolved'
   | 'md_lua.missing_register'
   | 'lua_md.missing_listener'
+  | 'lua_md.emit_verification_gap'
   | 'md_lua.payload_collision'
   | 'md_lua.payload_missing_writer'
   | 'md_lua.payload_unused_writer'
@@ -82,6 +83,7 @@ export interface ProjectCrossFileValidationResult {
     mdLuaMissingRegisters: number;
     luaMdMissingListeners: number;
     luaRegistrationUnavailable: number;
+    luaEmitUnverified: number;
     payloadContractErrors: number;
     dependencies: number;
   };
@@ -95,6 +97,13 @@ export interface ProjectCrossFileValidationResult {
     missingRegisters: ProjectEventRef[];
     missingListeners: ProjectUiEventRef[];
     parseUnavailable: Array<{ file: string; detail: string }>;
+    emitCoverage: {
+      scope: 'direct-global-AddUITriggeredEvent-calls';
+      exact: number;
+      prefix: number;
+      unresolved: number;
+      files: LuaEmitCoverage[];
+    };
     payload: {
       reads: Array<{ key: string; scope: 'global' | 'verb'; file: string; destination: string; branch?: string }>;
       writes: Array<{ key: string; file: string }>;
@@ -116,44 +125,29 @@ function stripMdLiteral(value: string | undefined): string {
   return raw;
 }
 
-function parseAttr(tag: string, name: string): string | undefined {
-  return tag.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i'))?.[1];
-}
-
 function parseMdRaisedLuaEvents(content: string, file: string): ProjectEventRef[] {
   const out: ProjectEventRef[] = [];
-  const re = /<raise_lua_event\b[^>]*>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content || '')) !== null) {
-    const event = stripMdLiteral(parseAttr(m[0], 'name'));
+  const root = parseXmlLenient(content);
+  if (!root) return out; // XML well-formedness is checked by project validation.
+  walkElements(root, element => {
+    if (element.nodeName !== 'raise_lua_event') return;
+    const event = stripMdLiteral(element.getAttribute('name') ?? undefined);
     if (event) out.push({ event, file });
-  }
+  });
   return out;
 }
 
 function parseMdUiListeners(content: string, file: string): ProjectUiEventRef[] {
   const out: ProjectUiEventRef[] = [];
-  const re = /<event_ui_triggered\b[^>]*>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content || '')) !== null) {
-    const namespace = stripMdLiteral(parseAttr(m[0], 'screen'));
-    const control = stripMdLiteral(parseAttr(m[0], 'control'));
+  const root = parseXmlLenient(content);
+  if (!root) return out;
+  walkElements(root, element => {
+    if (element.nodeName !== 'event_ui_triggered') return;
+    const namespace = stripMdLiteral(element.getAttribute('screen') ?? undefined);
+    const control = stripMdLiteral(element.getAttribute('control') ?? undefined);
     if (namespace && control) out.push({ namespace, control, event: `${namespace}.${control}`, file });
-  }
+  });
   return out;
-}
-
-function parseLuaLocalStrings(content: string): Map<string, string> {
-  const vars = new Map<string, string>();
-  const re = /\blocal\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["']([^"']+)["']/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content || '')) !== null) vars.set(m[1], m[2]);
-  return vars;
-}
-
-/** True when the source right after `endIndex` continues with a Lua `..` concatenation. */
-function continuesWithConcat(content: string, endIndex: number): boolean {
-  return /^\s*\.\./.test((content || '').slice(endIndex, endIndex + 8));
 }
 
 function walkLuaAst(node: any, visit: (node: any) => void): void {
@@ -223,6 +217,7 @@ function luaStringPrefix(node: any, strings: Map<string, LuaStringValue>, substi
   if (node.type === 'BinaryExpression' && node.operator === '..') {
     const left = luaStringPrefix(node.left, strings, substituted);
     if (!left) return null;
+    if (left.prefix) return left; // Nothing after an unknown segment extends the known prefix.
     const right = luaStringPrefix(node.right, strings, substituted);
     return right
       ? {
@@ -399,21 +394,90 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaF
   };
 }
 
-function parseLuaUiEmits(content: string, file: string): ProjectUiEventRef[] {
+export interface LuaEmitCoverage {
+  file: string;
+  parsed: boolean;
+  exact: number;
+  prefix: number;
+  unresolved: number;
+  reasons: Array<'dynamic-arguments' | 'prefix-only' | 'source-encoding' | 'ambiguous-callee'>;
+}
+
+function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEventRef[]; coverage: LuaEmitCoverage } {
   const out: ProjectUiEventRef[] = [];
-  const vars = parseLuaLocalStrings(content);
-  const arg = `(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))`;
-  const re = new RegExp(`\\bAddUITriggeredEvent\\s*\\(\\s*${arg}\\s*,\\s*${arg}`, 'g');
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content || '')) !== null) {
-    const namespace = m[1] || m[2] || vars.get(m[3] || '') || '';
-    const control = m[4] || m[5] || vars.get(m[6] || '') || '';
-    // Dynamic control name: literal followed by `..` concat (e.g. "log_" .. category),
-    // or a trailing-underscore literal — the literal is only the event-name PREFIX.
-    const prefix = (continuesWithConcat(content, re.lastIndex) || /_$/.test(control)) || undefined;
-    if (namespace && control) out.push({ namespace, control, event: `${namespace}.${control}`, file, ...(prefix ? { prefix } : {}) });
+  const coverage: LuaEmitCoverage = { file, parsed: false, exact: 0, prefix: 0, unresolved: 0, reasons: [] };
+  const gap = (reason: LuaEmitCoverage['reasons'][number]) => {
+    if (!coverage.reasons.includes(reason)) coverage.reasons.push(reason);
+  };
+  const source = buildLuaAnalysisSource(content || '');
+  let ast: any;
+  try {
+    ast = parse(source.content, { comments: false, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1' });
+  } catch {
+    return { events: out, coverage }; // Registration analysis reports the parse failure for this file.
   }
-  return out;
+  coverage.parsed = true;
+  // Only immutable, unambiguous local constants may supply event arguments.
+  // Shadowing or another assignment makes the name unknown, not a guessed value.
+  const assignments = new Map<string, { count: number; init: any; local: boolean }>();
+  const shadowed = new Set<string>();
+  walkLuaAst(ast, node => {
+    if (node.type === 'FunctionDeclaration') {
+      const functionName = luaIdentifier(node.identifier);
+      if (functionName) shadowed.add(functionName);
+      for (const parameter of node.parameters || []) {
+        const name = luaIdentifier(parameter);
+        if (name) shadowed.add(name);
+      }
+    }
+    if (node.type === 'ForGenericStatement' || node.type === 'ForNumericStatement') {
+      for (const variable of node.variables || [node.variable]) {
+        const name = luaIdentifier(variable);
+        if (name) shadowed.add(name);
+      }
+    }
+    if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
+    (node.variables || []).forEach((variable: any, index: number) => {
+      const name = luaIdentifier(variable);
+      if (!name) return;
+      assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init: (node.init || [])[index], local: node.type === 'LocalStatement' });
+    });
+  });
+  const strings = new Map<string, LuaStringValue>();
+  const resolve = (expression: any): LuaStringValue | null => {
+    // luaparse's lexical annotation prevents a later local declaration from
+    // lending its value to an earlier global reference or unrelated function.
+    let usesGlobalConstant = false;
+    walkLuaAst(expression, node => {
+      if (node.type === 'Identifier' && strings.has(node.name) && !node.isLocal) usesGlobalConstant = true;
+    });
+    return usesGlobalConstant ? null : luaStringPrefix(expression, strings, source.substituted);
+  };
+  for (const [name, assignment] of assignments) {
+    if (assignment.count !== 1 || !assignment.local || shadowed.has(name)) continue;
+    const value = resolve(assignment.init);
+    if (value) strings.set(name, value);
+  }
+  walkLuaAst(ast, node => {
+    if (node.type !== 'CallExpression' || luaIdentifier(node.base) !== 'AddUITriggeredEvent' || node.base.isLocal) return;
+    if (assignments.has('AddUITriggeredEvent') || shadowed.has('AddUITriggeredEvent')) {
+      coverage.unresolved++; gap('ambiguous-callee'); return;
+    }
+    const namespace = resolve(node.arguments?.[0]);
+    const control = resolve(node.arguments?.[1]);
+    if (namespace?.tainted || control?.tainted) {
+      coverage.unresolved++; gap('source-encoding'); return;
+    }
+    if (!namespace?.value || namespace.prefix || !control?.value) {
+      coverage.unresolved++; gap('dynamic-arguments'); return;
+    }
+    if (control.prefix) { coverage.prefix++; gap('prefix-only'); }
+    else coverage.exact++;
+    // A literal trailing underscore is still an exact name; only an actual
+    // unresolved concatenation justifies prefix matching.
+    out.push({ namespace: namespace.value, control: control.value, event: `${namespace.value}.${control.value}`, file, ...(control.prefix ? { prefix: true } : {}) });
+  });
+  return { events: out, coverage };
 }
 
 function findContentManifest(project: ExtensionProject): ModManifest | null {
@@ -469,7 +533,23 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       detail: analysis.result.detail || 'Lua registration analysis unavailable.',
     }));
   const registered = registrationAnalyses.flatMap(analysis => analysis.result.events);
-  const emitted = luaFiles.flatMap(f => parseLuaUiEmits(f.content || '', f.path));
+  const emitAnalyses = luaFiles.map(f => parseLuaUiEmits(f.content || '', f.path));
+  const emitted = emitAnalyses.flatMap(analysis => analysis.events);
+  const emitCoverage = {
+    scope: 'direct-global-AddUITriggeredEvent-calls' as const,
+    exact: emitAnalyses.reduce((n, analysis) => n + analysis.coverage.exact, 0),
+    prefix: emitAnalyses.reduce((n, analysis) => n + analysis.coverage.prefix, 0),
+    unresolved: emitAnalyses.reduce((n, analysis) => n + analysis.coverage.unresolved, 0),
+    files: emitAnalyses.map(analysis => analysis.coverage),
+  };
+  for (const coverage of emitCoverage.files) {
+    const unverified = coverage.prefix + coverage.unresolved;
+    if (!unverified) continue;
+    findings.push({
+      code: 'lua_md.emit_verification_gap', severity: 'info', file: coverage.file,
+      detail: `Lua-to-MD event wiring is not fully verified for ${unverified} direct AddUITriggeredEvent call(s): ${coverage.prefix} prefix-only, ${coverage.unresolved} unresolved (${coverage.reasons.join(', ')}). A possible prefix match is not proof of every runtime event.`,
+    });
+  }
   const payload = validateIndexedPayloadContract(mdFiles, luaFiles);
   findings.push(...payload.findings);
   for (const unavailable of parseUnavailable) {
@@ -609,12 +689,13 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       mdLuaMissingRegisters: missingRegisters.length,
       luaMdMissingListeners: missingListeners.length,
       luaRegistrationUnavailable: parseUnavailable.length,
+      luaEmitUnverified: emitCoverage.prefix + emitCoverage.unresolved,
       payloadContractErrors: payload.findings.filter(f => f.severity === 'error').length,
       dependencies: manifest?.deps.length || 0,
     },
     findings,
     cueIndex,
-    mdLua: { raised, registered, emitted, listened, missingRegisters, missingListeners, parseUnavailable, payload: { reads: payload.reads, writes: payload.writes } },
+    mdLua: { raised, registered, emitted, listened, missingRegisters, missingListeners, parseUnavailable, emitCoverage, payload: { reads: payload.reads, writes: payload.writes } },
     deps: { manifest, dependencies: manifest?.deps || [] },
   };
 }

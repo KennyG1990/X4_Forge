@@ -29,15 +29,25 @@ export interface AcceptancePrincipal {
   deployAuthorized: boolean;
 }
 interface FindingAcceptance { finding: ValidationEvidenceFinding; reason: string }
+export interface FindingReviewCounts {
+  acceptedErrors: number;
+  acceptedWarnings: number;
+  unacceptedErrors: number;
+  unacceptedWarnings: number;
+  unavailableChecks: number;
+}
 export interface AcceptanceDecision {
   binding: ReturnType<typeof acceptanceBinding>;
   approvals: FindingAcceptance[];
   unacceptedErrorIds: string[];
+  unacceptedWarningIds: string[];
+  counts: FindingReviewCounts;
   /** This is only the finding-policy decision; durable receipts and all deploy gates still apply. */
   validationAllowsDeploy: boolean;
   validationClean: boolean;
   outcome: 'blocked-mod-findings' | 'accepted-findings-and-incomplete-checks'
-    | 'accepted-findings' | 'incomplete-checks' | 'validation-clean';
+    | 'accepted-findings' | 'accepted-findings-with-outstanding-warnings'
+    | 'incomplete-checks' | 'warnings-present' | 'validation-clean';
 }
 export class FindingAcceptanceError extends Error {
   constructor(readonly code: string, message: string) { super(`${code}: ${message}`); }
@@ -100,14 +110,38 @@ export function evaluateFindingAcceptances(
   const unacceptedErrorIds = subject.evidence.findings.filter(finding =>
     finding.category === 'mod-finding' && finding.severity === 'error' && !seen.has(finding.findingId),
   ).map(finding => finding.findingId);
+  const unacceptedWarningIds = subject.evidence.findings.filter(finding =>
+    finding.category === 'mod-finding' && finding.severity === 'warning' && !seen.has(finding.findingId),
+  ).map(finding => finding.findingId);
+  const counts: FindingReviewCounts = {
+    acceptedErrors: approvals.filter(a => a.finding.category === 'mod-finding' && a.finding.severity === 'error').length,
+    acceptedWarnings: approvals.filter(a => a.finding.category === 'mod-finding' && a.finding.severity === 'warning').length,
+    unacceptedErrors: unacceptedErrorIds.length,
+    unacceptedWarnings: unacceptedWarningIds.length,
+    unavailableChecks: Math.max(subject.evidence.checkUnavailableCount, subject.evidence.coverage.gaps.length),
+  };
   const incomplete = !subject.evidence.coverage.complete || subject.evidence.coverage.gaps.length > 0
     || subject.evidence.findings.some(finding => finding.category === 'check-unavailable');
   const validationAllowsDeploy = unacceptedErrorIds.length === 0;
-  return { binding, approvals, unacceptedErrorIds, validationAllowsDeploy,
-    validationClean: validationAllowsDeploy && !incomplete && approvals.length === 0,
+  return { binding, approvals, unacceptedErrorIds, unacceptedWarningIds, counts, validationAllowsDeploy,
+    validationClean: validationAllowsDeploy && !incomplete && approvals.length === 0 && unacceptedWarningIds.length === 0,
     outcome: !validationAllowsDeploy ? 'blocked-mod-findings' : approvals.length
-      ? incomplete ? 'accepted-findings-and-incomplete-checks' : 'accepted-findings'
-      : incomplete ? 'incomplete-checks' : 'validation-clean',
+      ? incomplete ? 'accepted-findings-and-incomplete-checks' : unacceptedWarningIds.length ? 'accepted-findings-with-outstanding-warnings' : 'accepted-findings'
+      : incomplete ? 'incomplete-checks' : unacceptedWarningIds.length ? 'warnings-present' : 'validation-clean',
+  };
+}
+
+/** A review projection supplements raw evidence; an approval never removes a finding. */
+export function projectFindingReview(decision: AcceptanceDecision, principal: AcceptancePrincipal, receipts?: readonly ActionReceipt[]) {
+  return {
+    status: receipts === undefined ? 'proposed' as const : 'recorded' as const,
+    counts: decision.counts,
+    outstandingFindingIds: [...decision.unacceptedErrorIds, ...decision.unacceptedWarningIds],
+    approvals: decision.approvals.map(({ finding, reason }) => ({
+      findingId: finding.findingId, code: finding.code, category: finding.category, severity: finding.severity, reason,
+      actor: { kind: principal.kind, id: principal.id, label: principal.label },
+      ...(receipts === undefined ? {} : { receiptId: receipts.find(r => r.metadata?.findingId === finding.findingId)?.id }),
+    })),
   };
 }
 
@@ -126,7 +160,7 @@ function receiptInputs(decision: AcceptanceDecision, principal: AcceptancePrinci
       validation: { validator: 'finding-acceptance-v1', ruleHash: hash([decision.binding.validatorHash, decision.binding.corpusHash]) },
       rollback: { required: false, mode: 'none' },
       metadata: { operation: 'accept-finding', ...Object.fromEntries(Object.entries(decision.binding).filter(([key]) => key !== 'hash')),
-        findingId: finding.findingId, findingCode: finding.code || 'uncoded', findingCategory: finding.category,
+        findingId: finding.findingId, findingCode: finding.code || 'uncoded', findingCategory: finding.category, findingSeverity: finding.severity,
         reason, actorLabel: principal.label, outcome: 'finding-accepted-not-deployed' },
     };
   });

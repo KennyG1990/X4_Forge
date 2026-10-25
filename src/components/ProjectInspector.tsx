@@ -1,3 +1,4 @@
+import { workspaceSourceFiles } from '../types';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -57,7 +58,7 @@ function projectFromWorkspace(ws: ModWorkspace): ExtensionProject {
   if (ws.customLua && ws.customLua.trim()) {
     files.push({ path: `ui/${id}_custom.lua`, kind: 'lua', content: ws.customLua });
   }
-  for (const pf of ws.passthroughFiles || []) {
+  for (const pf of workspaceSourceFiles(ws)) {
     files.push({ path: pf.path, kind: classifyPath(pf.path), content: pf.content });
   }
   return { id, name: ws.name, files };

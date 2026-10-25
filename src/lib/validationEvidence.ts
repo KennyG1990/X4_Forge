@@ -41,6 +41,7 @@ export interface ValidationEvidence {
 const unavailableCodes = new Set([
   'validation.lua_ast_unavailable', 'validation.disk_file_skipped', 'UI_SCHEMA_UNAVAILABLE',
   'x4-ui.truncated-evidence', 'x4-ui.verification-gap',
+  'lua_md.emit_verification_gap',
 ]);
 const normalizedPath = (value: string) => value.replace(/\\/g, '/').toLowerCase();
 

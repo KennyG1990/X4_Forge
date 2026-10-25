@@ -96,14 +96,27 @@ const TOOLS = [
   {
     name: "compile_workspace",
     capabilityId: "workspace.compile",
-    capabilityVersion: 1,
+    capabilityVersion: 2,
     description: "Compile the explicitly bound workspace to an in-memory file manifest and return file names plus a bounded validator summary. This does not write or package the mod.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     handler: async () => {
       const d = requireResponse(await forge("POST", "/api/agent/compile", {}), "workspace compile", {
         success: "boolean", modId: "string", file_count: "number", files: "object", diagnostics: "array", validation: "object",
       });
-      return { modId: d.modId, files: Object.keys(d.files || {}), diagnostics: (d.diagnostics || []).slice(0, 100) };
+      requireResponse(d.validation, "workspace compile validation", { ok: "boolean" });
+      // Older servers may claim success even when their validation failed.
+      const success = d.success === true && d.validation.ok === true;
+      return {
+        success, generation: d.generation || { success: true },
+        modId: d.modId, files: Object.keys(d.files || {}),
+        diagnostics: d.diagnostics.slice(0, 100), validation: d.validation,
+        ...(!success ? {
+          status: d.status || "BLOCKED",
+          code: d.code || "PROJECT_VALIDATION_FAILED",
+          error: d.error || "Generated output did not pass project validation. Inspect diagnostics before deployment.",
+          failedStages: d.failedStages || ["validation"],
+        } : {}),
+      };
     },
   },
   {
@@ -1098,7 +1111,10 @@ rl.on("line", async (line) => {
       if (inputError) return replyError(id, -32602, `Invalid arguments for ${params?.name}: ${inputError}`);
       try {
         const result = await TOOLS[toolIndex].handler(toolArguments, { contractState: availability.contractState });
-        return reply(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
+        return reply(id, {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false ? { isError: true } : {}),
+        });
       } catch (err) {
         return reply(id, { content: [{ type: "text", text: `ERROR: ${err && err.message ? err.message : String(err)}` }], isError: true });
       }

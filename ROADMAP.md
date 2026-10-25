@@ -7863,3 +7863,14 @@ Public proof: docs/releases/0.0.79-proof.json; caller migration:
 docs/releases/0.0.79-agent-handoff.md. Owner #20 remains open for broader work.
 B119, remaining Claude review work, Microsoft publication and in-game proof are not
 claimed. Source release commit/push follows publication and mandatory precommit gate.
+
+
+## 2026-10-25 — C01 Claude private-fix integration — VERIFIED
+Reviewed private fixes integrated into the isolated release worktree: UI source ownership/registrations,
+exact snapshot validation/deploy, qualified finding/compile/artifact responses, addressed workspace
+guards, lifecycle/freshness prototype, Lua event/button coverage/cache and dependency diagnostics.
+Portable fixtures plus actual HTTP/MCP regression runner added. 14 focused suites, 65 HTTP/MCP
+checks, focused rendered E2E (zero flakes), typecheck/lint/builds and complete precommit passed.
+Evidence: `docs/testing/claude-C01-integration.json`; plan/AAR: `docs/plans/2026-10-25-claude-completion-release.md`.
+Public/installed version remains 0.0.79. C02-C07, native game proof and release/install gates remain open.
+No live Forge, game or unrelated main-checkout writes; Kimi paused. Owner #20 remains open.

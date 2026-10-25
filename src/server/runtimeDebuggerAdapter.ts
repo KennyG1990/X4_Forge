@@ -9,6 +9,7 @@
  */
 
 import crypto from "crypto";
+import { parseRuntimeLifecycle, type RuntimeLifecycleEvent } from '../lib/runtimeLifecycle';
 import fs from "fs";
 import path from "path";
 import {
@@ -59,11 +60,12 @@ import type { WorkspaceRecord } from "../lib/workspaceRegistry";
 
 export const RUNTIME_DEBUGGER_ADAPTER_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_DEBUGGER_COVERAGE_TARGET = 0.99 as const;
-export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 2 as const;
+export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 3 as const;
 
 const INTERNAL_DEPLOY_KEY = "__forge_runtime_deploy_metadata__";
 const INTERNAL_EXPECTED_PREFIX = "__forge_runtime_expected__:";
 const INTERNAL_ANALYZER_POLICY_KEY = "__forge_runtime_analyzer_policy__";
+const INTERNAL_LIFECYCLE_PREFIX = '__forge_runtime_lifecycle__:';
 const INTERNAL_ATTR = "runtimeInternal";
 const INTERNAL_DEPLOY = "deploy";
 const INTERNAL_EXPECTED = "expected";
@@ -111,7 +113,7 @@ export interface RuntimeDebuggerAdapterOptions {
   forbiddenRoots?: readonly string[];
   store?: RuntimeDebugSessionStore;
   now?: () => number;
-  /** Explicit configured log path; authoritative when it resolves to a readable file. */
+  /** Explicit configured log path pins selection, even when temporarily unavailable. */
   preferredLogPath?: string;
   /** The server supplies its existing bounded log discovery helper. */
   logCandidates?: () => readonly string[];
@@ -164,6 +166,14 @@ export interface RuntimeDebuggerAdapterResult {
     };
     verdict: RuntimeDebuggerVerdict;
     hiddenOtherModSummary: string;
+    lifecycle?: { saveBoundaryCoverage: 'observed' | 'unavailable'; byteOffset: number; events: Array<RuntimeLifecycleEvent & { segmentId: string; startByte: number; current: boolean }> };
+    logRead: {
+      state: 'caught-up' | 'catching-up' | 'partial-line' | 'unavailable';
+      byteOffset: number;
+      observedSize: number | null;
+      unreadBytes: number | null;
+      pendingLineBytes: number;
+    };
   };
   selectedLogPath: string;
   logUpdatedAt?: string;
@@ -1218,8 +1228,9 @@ export class RuntimeDebuggerAdapter {
   }
 
   private selectLog(): SelectedLog | null {
-    const preferred = this.readableLog(this.preferredLogPath);
-    if (preferred) return preferred;
+    // Do not switch profiles while a configured log is missing/rotating. Discovery
+    // is only for callers that have not chosen a log, not a substitute for that choice.
+    if (this.preferredLogPath?.trim()) return this.readableLog(this.preferredLogPath);
     let freshest: SelectedLog | null = null;
     for (const candidate of this.logCandidates()) {
       const readable = this.readableLog(candidate);
@@ -1441,7 +1452,9 @@ export class RuntimeDebuggerAdapter {
     const deployInfo = input.deployInfo || this.readDeployInfo(workspaceId);
     const ownership = this.ownership(input, deployInfo);
     const selected = this.selectLog();
-    if (!selected) return this.unavailableResult(input, ownership, deployInfo, expectedSteps, "No readable X4 debuglog is available.");
+    if (!selected) return this.unavailableResult(input, ownership, deployInfo, expectedSteps, this.preferredLogPath?.trim()
+      ? 'The configured X4 debuglog is unavailable. Automatic discovery is disabled while an explicit log path is configured.'
+      : 'No readable X4 debuglog is available.');
 
     let before: RuntimeDebugSessionSnapshot | undefined;
     const prior = this.store.readSnapshot(workspaceId);
@@ -1503,10 +1516,19 @@ export class RuntimeDebuggerAdapter {
       profileId: selected.profileId,
       baselineOffset: 0,
       baselineLineNumber: before?.cursor.lineNumber || 0,
+      boundaryForLine: line => {
+        const event = parseRuntimeLifecycle(line.text, ownership.active.contentIds);
+        return event?.event === 'save-loaded' || event?.event === 'game-started' ? event.event : undefined;
+      },
       normalizeLines: (lines, segment) => {
-        ingestedLines = [...lines];
-        analyzedBatch = analyzeLines(lines, ownership.index, ownership.inventory.complete);
-        return incidentInputs(analyzedBatch, lines, segment.id, ownership.active, keyCache);
+        const lifecycle = lines.map(line => ({ line, event: line.truncated ? null : parseRuntimeLifecycle(line.text, ownership.active.contentIds) }));
+        ingestedLines = lifecycle.filter(item => !item.event).map(item => item.line);
+        analyzedBatch = analyzeLines(ingestedLines, ownership.index, ownership.inventory.complete);
+        return [...incidentInputs(analyzedBatch, ingestedLines, segment.id, ownership.active, keyCache), ...lifecycle.filter(item => item.event).map(({ line, event }) => ({
+          key: INTERNAL_LIFECYCLE_PREFIX + (event?.event.startsWith('helper-') ? 'helper-status' : line.startByte), replaceAttributes: true, summary: 'Attributed mod lifecycle report',
+          classification: 'runtime_lifecycle', severity: 'info', attributes: { runtimeInternal: 'lifecycle', event: JSON.stringify(event) },
+          segmentId: segment.id, position: line,
+        }))];
       },
     });
     if (ingest.ok === false) ingestFailure = ingest;
@@ -1530,6 +1552,21 @@ export class RuntimeDebuggerAdapter {
        else if (read.ok === false) ingestFailure = read;
     }
     deployAfterRestart = deployAfterRestart || (snapshot ? this.reconstructDeployInfo(snapshot) : null);
+    // A bounded cursor may still precede a save boundary. Re-stat after ingestion so
+    // growth during this read is visible; "caught-up" is relative to this observation,
+    // never a promise that the game cannot append another line after the response.
+    const latestLog = this.readableLog(selected.logPath);
+    const byteOffset = snapshot?.cursor.byteOffset || 0;
+    const pendingLineBytes = (snapshot?.cursor.partialLineBytes || 0) + (snapshot?.cursor.partialLineDroppedBytes || 0);
+    const sameLog = latestLog && latestLog.stat.dev === selected.stat.dev && latestLog.stat.ino === selected.stat.ino
+      && latestLog.stat.size >= byteOffset;
+    const unreadBytes = sameLog ? latestLog.stat.size - byteOffset : null;
+    const logRead: RuntimeDebuggerAdapterResult['payload']['logRead'] = {
+      state: !snapshot || ingestFailure || metadataFailure || !sameLog ? 'unavailable'
+        : unreadBytes! > 0 ? 'catching-up' : pendingLineBytes > 0 ? 'partial-line' : 'caught-up',
+      byteOffset, observedSize: latestLog?.stat.size ?? null, unreadBytes, pendingLineBytes,
+    };
+    if (logRead.state !== 'caught-up') state = 'unavailable';
     const segment = snapshot ? currentSegment(snapshot) : undefined;
     const allIncidents = snapshot
       ? snapshot.incidents.map(reconstructIncident).filter((item): item is ReconstructedIncident => Boolean(item))
@@ -1545,6 +1582,7 @@ export class RuntimeDebuggerAdapter {
     const effectiveDropped = snapshot ? postPolicyDropped(snapshot, policyBoundary) : undefined;
     const dropped = effectiveDropped ? effectiveDropped.incidents + effectiveDropped.segments : 1;
     const coverage = coverageFor(state === "current" ? currentIncidents : relevantIncidents.filter(incident => !isInternalKey(incident.key)), dropped);
+    if (logRead.state !== 'caught-up') coverage.met = false;
     const expected = snapshot
       ? this.currentExpected(expectedSteps, state, snapshot, ingestedLines, analyzedBatch)
       : evaluateExpectedRuntimeSteps(expectedSteps, { available: false, lines: [] });
@@ -1566,7 +1604,7 @@ export class RuntimeDebuggerAdapter {
       .filter(incident => incident.attribution.disposition !== "excluded_other_mod")
       .sort(compareRuntimeIncidents)
       .slice(0, MAX_RESPONSE_INCIDENTS)
-      .map(incident => ({ ...incident, sessionSegmentId: incident.segmentId, sessionCurrent: incident.segmentId === segment?.id }));
+      .map(incident => ({ ...incident, sessionSegmentId: incident.segmentId, sessionCurrent: state === 'current' && incident.segmentId === segment?.id }));
     const hiddenOtherModCount = relevantIncidents
       .filter(incident => incident.attribution.disposition === "excluded_other_mod")
       .reduce((sum, incident) => sum + Math.max(1, incident.count), 0);
@@ -1577,11 +1615,17 @@ export class RuntimeDebuggerAdapter {
       ? redactedText(ingestFailure.error, 2048, "Runtime session unavailable.")
       : metadataFailure
         ? redactedText(metadataFailure.error, 2048, "Runtime expected-step state unavailable.")
+        : logRead.state !== 'caught-up'
+          ? logRead.state === 'catching-up'
+            ? `Reading the log backlog: ${logRead.unreadBytes} unread byte(s) at the last observation. A newer save boundary may be unread; current evidence is withheld.`
+            : logRead.state === 'partial-line'
+              ? `Waiting for a complete log line (${logRead.pendingLineBytes} pending byte(s)); current evidence is withheld.`
+              : 'Log freshness could not be established; current evidence is withheld.'
         : state === "current"
           ? "Current successful-deploy session; log ingestion is incremental and bounded."
           : "Historical pre-baseline evidence is retained; it cannot satisfy current-session verdicts.";
     const publicExpected = redactedExpectedSteps(expected.slice(0, MAX_RESPONSE_EXPECTED));
-    const publicVerdict: RuntimeDebuggerVerdict = { ...verdict, detail: redactedText(verdict.detail, 2048) };
+    const publicVerdict: RuntimeDebuggerVerdict = { ...verdict, detail: redactedText(logRead.state === 'caught-up' ? verdict.detail : sessionDetail, 2048) };
     const authority: RuntimeDebuggerAuthority = {
       workspaceId,
       displayName: redactedText(ownership.active.displayName, 512, "runtime workspace"),
@@ -1591,6 +1635,7 @@ export class RuntimeDebuggerAdapter {
     };
     const payload = {
       schemaVersion: RUNTIME_DEBUGGER_ADAPTER_SCHEMA_VERSION,
+      logRead,
       authority,
       identity: {
         workspaceId,
@@ -1621,6 +1666,14 @@ export class RuntimeDebuggerAdapter {
       hiddenOtherModSummary: hiddenOtherModCount > 0
         ? `${Math.min(1_000_000_000, hiddenOtherModCount)} occurrence(s) belong to known unrelated extensions and are hidden.`
         : ownership.inventory.complete ? "No unrelated-extension incidents were observed." : "Unrelated-extension inventory is incomplete; bare-path ownership remains unresolved.",
+      lifecycle: {
+        saveBoundaryCoverage: logRead.state === 'caught-up' && snapshot?.segments.some(s => s.id === snapshot.currentSegmentId && (s.reason === 'save-loaded' || s.reason === 'game-started')) ? 'observed' as const : 'unavailable' as const,
+        byteOffset: snapshot?.cursor.byteOffset || 0,
+        events: (snapshot?.incidents || []).filter(i => i.key.startsWith(INTERNAL_LIFECYCLE_PREFIX)).flatMap(i => {
+          const event = parseRuntimeLifecycle('FORGE-LIFECYCLE ' + String(i.attributes.event || ''), ownership.active.contentIds);
+          return event ? [{ ...event, segmentId: i.segmentId, startByte: i.startByte, current: logRead.state === 'caught-up' && i.segmentId === snapshot?.currentSegmentId }] : [];
+        }).slice(-32),
+      },
       verdict: publicVerdict,
     } satisfies RuntimeDebuggerAdapterResult["payload"];
     const lastLogMtime = (() => { try { return new Date(selected.stat.mtimeMs || this.now()).toISOString(); } catch { return undefined; } })();
@@ -1710,6 +1763,7 @@ export class RuntimeDebuggerAdapter {
         ...(ownership.inventory.scannedAt ? { inventoryScannedAt: ownership.inventory.scannedAt } : {}),
       },
       session: { state: "unavailable", observedAt: safeIso(this.now), detail: publicDetail },
+      logRead: { state: 'unavailable', byteOffset: 0, observedSize: null, unreadBytes: null, pendingLineBytes: 0 },
       incidents: [],
       coverage: coverageFor([], 1),
       expectedSteps: publicExpected,

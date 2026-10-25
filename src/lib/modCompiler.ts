@@ -357,7 +357,7 @@ export const hasEffectiveAuthoredOutput = (workspace: ModWorkspace): boolean => 
     ...(workspace.passthroughFiles || []).filter(file => /(^|[\\/])md[\\/].*\.xml$/i.test(file.path)).map(file => file.content || ''),
   ];
   const sourceHasMdEntry = sourceMd.some(content => /<(?:cue|library)\b/.test(content));
-  const passthroughHasPayload = (workspace.passthroughFiles || []).some(file => {
+  const passthroughHasPayload = [...(workspace.uiSourceFiles || []), ...(workspace.passthroughFiles || [])].some(file => {
     const normalized = file.path.replace(/\\/g, '/').toLowerCase();
     if (normalized === 'content.xml' || /(^|\/)readme(?:\.[^/]*)?$/.test(normalized)) return false;
     if (/^md\/.*\.xml$/.test(normalized)) return /<(?:cue|library)\b/.test(file.content || '');

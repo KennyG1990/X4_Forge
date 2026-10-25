@@ -1,3 +1,4 @@
+import { workspaceSourceFiles } from '../types';
 /**
  * Pure, source-canonical scalar edit authority for the X4 UI editor.
  *
@@ -967,7 +968,7 @@ const sameRecord = (
 );
 
 const workspaceSnapshotMatches = (workspace: ModWorkspace, source: X4UiWorkspaceSource): boolean => {
-  const current = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : undefined;
+  const current = workspaceSourceFiles(workspace);
   return Boolean(
     current
     && current.length === source.cas.passthroughFiles.length
@@ -5474,8 +5475,8 @@ const byteLocality = (
   expectedText: string,
   replacement: string,
 ): boolean => {
-  const beforeFiles = Array.isArray(beforeWorkspace.passthroughFiles) ? beforeWorkspace.passthroughFiles : [];
-  const afterFiles = Array.isArray(afterWorkspace.passthroughFiles) ? afterWorkspace.passthroughFiles : [];
+  const beforeFiles = workspaceSourceFiles(beforeWorkspace);
+  const afterFiles = workspaceSourceFiles(afterWorkspace);
   if (beforeFiles.length !== afterFiles.length || afterWorkspace === beforeWorkspace) return false;
   let changedRecordCount = 0;
   for (let index = 0; index < beforeFiles.length; index += 1) {

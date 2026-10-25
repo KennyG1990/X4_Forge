@@ -49,7 +49,7 @@ function firstElement(parent: Element | undefined): Element | null {
 }
 
 function syntheticWorkspace(workspace: ModWorkspace, nodes: MDNode[], links: ModWorkspace['links']): ModWorkspace {
-  return { ...workspace, nodes, links, originalFiles: [], passthroughFiles: [] };
+  return { ...workspace, nodes, links, originalFiles: [], uiSourceFiles: [], passthroughFiles: [] };
 }
 
 function renderNodeFragment(workspace: ModWorkspace, node: MDNode): string | null {

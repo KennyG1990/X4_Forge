@@ -127,6 +127,7 @@
     "src/lib/requestDeadline.ts",
     "src/lib/runtimeDebugger.ts",
     "src/lib/runtimeDebugSession.ts",
+    "src/lib/runtimeLifecycle.ts",
     "src/lib/schemaRegistry.ts",
     "src/lib/schemaRouting.ts",
     "src/lib/schemaTypes.ts",
@@ -159,6 +160,7 @@
     "src/lib/x4RulePacks.selftest.ts",
     "src/lib/x4RulePacks.ts",
     "src/lib/x4RulePackTypes.ts",
+    "src/lib/x4UiAnalysisCache.ts",
     "src/lib/x4UiCallModel.ts",
     "src/lib/x4UiGameVerification.ts",
     "src/lib/x4UiLint.ts",
@@ -176,6 +178,8 @@
     "src/server/bulkTransformApplyReceiptAdapter.ts",
     "src/server/bulkTransformApplyReceiptFacts.ts",
     "src/server/bulkTransformRoutes.ts",
+    "src/server/dependencyHealth.ts",
+    "src/server/deploymentSnapshot.ts",
     "src/server/deploymentTrust.ts",
     "src/server/findingAcceptance.ts",
     "src/server/gameDetectRoutes.ts",
@@ -183,9 +187,12 @@
     "src/server/githubDeviceFlow.ts",
     "src/server/githubRoutes.ts",
     "src/server/liveBridge.ts",
+    "src/server/modFolderImportRequest.ts",
     "src/server/npcIdentityProbe.ts",
     "src/server/projectValidation.ts",
     "src/server/referenceRoutes.ts",
+    "src/server/runtimeCompanion.ts",
+    "src/server/runtimeControl.ts",
     "src/server/runtimeDebuggerAdapter.selftest.ts",
     "src/server/runtimeDebuggerAdapter.ts",
     "src/server/selftestRegistry.ts",
@@ -1910,6 +1917,18 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/runtime-control": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "GET /api/agent/runtime-debugger": {
       "disposition": "canonical-capability",
       "owner": "runtime.debug.read",
@@ -3224,6 +3243,28 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/runtime-control/preview": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
+    "POST /api/agent/runtime-control/reload": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/setup/harvest-schemas": {
       "disposition": "session-only",
       "owner": "agent-api",
@@ -3589,19 +3630,19 @@
     "runtime.debug.read@1": "8d0d15b310655431fa08afdf161575c5873a62261f1e511e9b0ccf9260d84311",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
-    "workspace.compile@1": "f499ed768aa66f810f0da7ea3c230c98fdd0493d54ec0c08055b0ba2abed51de",
+    "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 12,
-    "hash": "cb2660085f5c295719d3bc901a7a70b8470eee20c8a913da0f0db20543b3bf0e"
+    "version": 13,
+    "hash": "300ef5fe9a064fce16abbcc6c2c89d5200015261eb0f7eeafcb77735d8ffaeea"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
     "list_schema_domains": "578cd399452547080765b87adccba3c66d839d7a80eeab320f73aebec7d29893",
     "get_workspace": "f24000a8bb446b4d3f881e018336a64f8206757dd0e7df7db555be2bd2a1e7e7",
-    "compile_workspace": "37660dbf2abb6bc6b17c79bcebb30e430352ed04bdd09d3beb495d2485b35794",
+    "compile_workspace": "9a1ffc30e138ed52d70b8a93ec7fb20c54ab4937550f1b9b2a096c5b65e2e0b1",
     "author_check": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
     "stage_and_validate": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
     "readiness": "8791e498bef78bc853bfd48e07e3404adc25171cb7ffdd16ffa183ff097c3fa7",
@@ -3614,7 +3655,7 @@
     "validate_mod": "project.validate@1",
     "list_schema_domains": "schema.domains.list@1",
     "get_workspace": "workspace.read@2",
-    "compile_workspace": "workspace.compile@1",
+    "compile_workspace": "workspace.compile@2",
     "author_check": "project.validate@1",
     "stage_and_validate": "project.validate@1",
     "readiness": "readiness.read@1",

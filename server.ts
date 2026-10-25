@@ -1,3 +1,4 @@
+import { workspaceSourceFiles, isUiSourcePath } from './src/types';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -106,10 +107,12 @@ import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
 import { resolveEffectiveReferenceDocument } from "./src/lib/referenceOverlay";
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
+import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
 import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { buildValidationEvidence, parseValidationProject, ValidationInputError } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
@@ -118,7 +121,9 @@ import { workspaceContentHash, workspaceSnapshotHash, runWorkspaceIdentitySelfte
 import { buildWorkspaceConflictPreview, runWorkspaceConflictSelftest } from "./src/lib/workspaceConflict";
 import { DestructiveRecoveryStore, runDestructiveRecoverySelftest, type DeploymentRecoveryRecord } from "./src/lib/destructiveRecovery";
 import { ActionReceiptStore } from "./src/lib/actionReceiptStore";
-import { evaluateFindingAcceptances, recordFindingAcceptances, verifyFindingAcceptanceReceipts, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
+import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
+import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
+import { RuntimeControl } from './src/server/runtimeControl';
 import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord } from './src/server/deploymentTrust';
 import type { ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
@@ -217,7 +222,7 @@ import { AgentHistoryStore } from "./src/lib/agentHistoryStore";
 import { runAgentHistorySelftest } from "./src/lib/agentHistory.selftest";
 import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { runBugReportSelftest } from "./src/lib/bugReport";
-import { normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
+import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -1276,7 +1281,7 @@ function buildArtifactPassthroughFiles(
 ): Record<string, string | Buffer> {
   const ws = activeBuildWorkspace(workspaceInput);
   const passthroughByPath = new Map<string, PassthroughFile>();
-  for (const pf of ws.passthroughFiles || []) {
+  for (const pf of workspaceSourceFiles(ws)) {
     if (!pf || typeof pf.path !== 'string') continue;
     const rel = pf.path.replace(/\\/g, '/').replace(/^\/+/, '');
     if (!rel || rel.includes('..')) continue;
@@ -1647,7 +1652,14 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
   // Imported UI is source-owned. Include patch-generated paths and omitted records:
   // neither is permission to silently discard the imported loader contract.
   const generatedUiKeys = new Set(Object.keys(files).map(p => p.replace(/\\/g, '/').toLowerCase()));
-  const importedUi = (ws.passthroughFiles || []).filter(file => {
+  const uiSourceClaims = new Set<string>();
+  for (const file of workspaceSourceFiles(ws)) {
+    const key = file.path.replace(/\\/g, '/').toLowerCase();
+    if (!isUiSourcePath(key)) continue;
+    if (uiSourceClaims.has(key)) throw new Error(`UI_SOURCE_CONFLICT: duplicate UI source owner for ${file.path}`);
+    uiSourceClaims.add(key);
+  }
+  const importedUi = (workspaceSourceFiles(ws)).filter(file => {
     const rel = String(file.path || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
     return (rel === 'ui.xml' || /^ui\/.+\.lua$/.test(rel)) && generatedUiKeys.has(rel);
   });
@@ -1658,7 +1670,7 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
   // Canonical artifact precedence for other domains: generated output wins; a loaded
   // passthrough is the next authoritative in-memory byte source; an omitted/unloaded
   // passthrough stays absent here so the stamped disk source can supply it unchanged.
-  for (const pf of (ws.passthroughFiles || [])) {
+  for (const pf of (workspaceSourceFiles(ws))) {
     if (!pf || typeof pf.path !== 'string') continue;
     const rel = pf.path.replace(/\\/g, '/').replace(/^\/+/, '');
     if (!rel || rel.includes('..')) continue;
@@ -4042,7 +4054,7 @@ app.get("/api/agent/schema", (req, res) => {
         path: "/api/agent/compile",
         auth: true,
         body: { workspace: "optional ModWorkspace; defaults to active workspace" },
-        purpose: "Compile every supported workspace domain into an in-memory file manifest without writing to disk."
+        purpose: "Generate an in-memory manifest and validate it. HTTP 200 preserves preview files; success reflects validation.ok, while generation.success reports generation only."
       },
       {
         method: "POST",
@@ -4056,7 +4068,7 @@ app.get("/api/agent/schema", (req, res) => {
         path: "/api/agent/artifact/build",
         auth: true,
         body: { workspace: "optional ModWorkspace; defaults to active workspace", format: "loose | catalog (default catalog)" },
-        purpose: "Build and hash-verify a complete disk-backed artifact under <Mod Workspace>/.forge-builds without writing to the installed game."
+        purpose: "Generate an artifact under <Mod Workspace>/.forge-builds without writing to the game. success reflects project validation; artifact.verified covers artifact bytes only. Failed validation retains the artifact and diagnostics with PROJECT_VALIDATION_FAILED."
       },
       {
         method: "GET",
@@ -4128,7 +4140,7 @@ app.get("/api/agent/schema", (req, res) => {
           dryRun: "true to preview without writes", expectedModId: "required on apply, from preview",
           expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
           expectedBindingHash: "required on apply, from preview", acceptances: "optional exact {findingId,bindingHash,reason}[]; deploy permission required" },
-        purpose: "Alias of deploy-verify with identical guards and receipt contract. Never defaults to the active workspace. Preview first, then apply with all four expected identities."
+        purpose: "Alias of deploy-verify with identical guards and receipt contract. Never defaults to the active workspace. Preview first, then apply with all four expected identities. Workspace-bound agent keys can only preview or deploy the mod identified by their addressed workspace."
       },
       {
         method: "POST",
@@ -4146,7 +4158,7 @@ app.get("/api/agent/schema", (req, res) => {
           expectedBindingHash: "required on apply: bindingHash from preview (source, artifact, validator, corpus and target)",
           acceptances: "optional array, max127, of {findingId,bindingHash,reason}; authenticated deploy-permitted identity is recorded, never supplied in the body",
         },
-        purpose: "Preview first, then guarded apply with expected identities. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline."
+        purpose: "Preview first, then guarded apply with expected identities. Workspace-bound agent keys must address a workspace whose mod matches the requested path or inline workspace, including after auto-reimport; mismatch returns DEPLOY_WORKSPACE_MOD_MISMATCH before writes. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline."
       },
       {
         method: "GET",
@@ -5144,6 +5156,7 @@ app.get("/api/agent/status", (req, res) => {
       },
       lastDeploy: deployInfoForWorkspace(record),
       deployFormat: (() => { const r = resolveDeployFormat(undefined); return { format: r.format, source: r.source }; })(),
+      dependencyHealth: buildDependencyHealth(resolved),
       readiness: {
         schemaLoaded: !!schemaLibrary.loaded,
         schemaElements: schemaLibrary.events.length + schemaLibrary.actions.length + schemaLibrary.conditions.length,
@@ -7056,6 +7069,28 @@ function handleAddressedRuntimeDebugger(
 app.get("/api/agent/runtime-debugger", (req, res) => handleAddressedRuntimeDebugger(req, res, false));
 app.get("/api/agent/debug-watcher/brief", (req, res) => handleAddressedRuntimeDebugger(req, res, true));
 
+const runtimeControl = new RuntimeControl(dataPath('runtime-control'), actionReceiptStore,
+  ['dev-build', 'runtime-loop-test'].includes(process.env.X4_FORGE_MODE || ''));
+function handleRuntimeControl(req: express.Request, res: express.Response, action: 'status' | 'preview' | 'reload') {
+  try {
+    const record = resolveWorkspaceAuthority(req, res, true);
+    if (!record) return;
+    if (Object.keys(req.query).length) return res.status(400).json({code:'RUNTIME_INPUT_INVALID',error:'Query parameters are not supported.'});
+    if (action === 'preview' && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length))
+      return res.status(400).json({code:'RUNTIME_INPUT_INVALID',error:'Preview requires an empty object; identities come from the addressed workspace.'});
+    const payload = buildAddressedDebugWatcherBrief(record, [], false) as RuntimeDebuggerAdapterResult['payload'];
+    const subject = {workspaceId:record.workspaceId,head:record.head,modId:effectiveModId(activeBuildWorkspace(record.workspace)),payload};
+    const result = action === 'reload' ? runtimeControl.request(subject,req.body,deploymentPrincipal(req))
+      : action === 'preview' ? runtimeControl.preview(subject) : runtimeControl.status(subject);
+    return res.status(action === 'reload' ? 202 : 200).json({ok:true,...result});
+  } catch(error) {
+    return res.status(error.status || 507).json({ok:false,code:error.code || 'RUNTIME_CONTROL_FAILED',error:error.message || 'Runtime control unavailable; no execution proof.'});
+  }
+}
+app.get('/api/agent/runtime-control', (req,res) => handleRuntimeControl(req,res,'status'));
+app.post('/api/agent/runtime-control/preview', (req,res) => handleRuntimeControl(req,res,'preview'));
+app.post('/api/agent/runtime-control/reload', (req,res) => handleRuntimeControl(req,res,'reload'));
+
 // NPC Identity Probe (agent-only legacy) moved to src/server/npcIdentityProbe.ts — audit A6.
 registerNpcIdentityProbeRoutes(app, { findDebugLogCandidates, readTail, errorMessage });
 
@@ -7728,7 +7763,16 @@ function importModFolder(absDir: string): { workspace: ModWorkspace; report: any
     classification.push({ path: rel, class: cls, note: known ? 'known domain, preserved verbatim until a parser models it' : 'unknown file, preserved verbatim' });
   }
 
-  ws.passthroughFiles = passthroughFiles;
+  ws.uiSourceFiles = passthroughFiles.filter(file => isUiSourcePath(file.path)).map(({ reason: _reason, ...file }) => ({
+    ...file, kind: /^ui\.xml$/i.test(file.path) ? 'ui' : 'lua'
+  }));
+  ws.passthroughFiles = passthroughFiles.filter(file => !isUiSourcePath(file.path));
+  for (const item of classification) {
+    if (ws.uiSourceFiles.some(file => file.path === item.path && !file.omitted)) {
+      item.class = 'editable';
+      item.note = 'UI source domain: exact bytes with guarded source editing and schema/cross-file validation';
+    }
+  }
 
   // STALE-SOURCE GATE stamp (P0 2026-07-09): content-keyed hash of the source folder at
   // import time. Deploy recomputes it; mismatch = the disk changed since this canvas
@@ -7794,7 +7838,9 @@ function resolveModFolder(reqPath: string, requestedRoot?: unknown): { abs: stri
 
 app.post("/api/agent/mod-folder/import", (req, res) => {
   try {
-    const r = resolveModFolder(req.body?.path, req.body?.root);
+    const parsed = parseModFolderImportRequest(req.body);
+    if (parsed.ok === false) return res.status(400).json({ success: false, code: parsed.code, error: parsed.error });
+    const r = resolveModFolder(parsed.value.path, parsed.value.root);
     if ('error' in r) return res.status(r.status).json({ error: r.error });
     // B93.2: never 200 on a degenerate result. Pointing this at a root that is not a mod (or at a
     // whole library of mods) previously returned success with a multi-thousand-file garbage
@@ -7924,6 +7970,7 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
       inputFiles: Object.keys(files).length,
       outputFiles: Object.keys(outFiles).length,
       passthroughCount: (workspace.passthroughFiles || []).length,
+      uiSourceCount: (workspace.uiSourceFiles || []).length,
       checks,
       importSummary: report.summary,
       importReport: report
@@ -7956,7 +8003,7 @@ app.post("/api/agent/round-trip-check", (req, res) => {
       const ext = path.extname(rel).toLowerCase();
       const inputAbs = path.join(r.abs, rel);
       const inputContent = ROUND_TRIP_TEXT_EXTS.has(ext) ? fs.readFileSync(inputAbs, 'utf8') : undefined;
-      const inPassthrough = (workspace.passthroughFiles || []).find(p => p.path.toLowerCase() === rel.toLowerCase());
+      const inPassthrough = workspaceSourceFiles(workspace).find(p => p.path.toLowerCase() === rel.toLowerCase());
       if (inPassthrough) {
         if (inPassthrough.omitted) {
           omittedPreserved.push(rel);
@@ -11830,7 +11877,7 @@ function compileWorkspaceToFolder(
   try {
     const stampedSource = typeof ws?.sourceStamp?.dir === 'string' ? path.resolve(ws.sourceStamp.dir) : '';
     const hasDiskSource = Boolean(stampedSource && fs.existsSync(stampedSource) && fs.statSync(stampedSource).isDirectory());
-    if (!hasDiskSource && (ws.passthroughFiles || []).some((file: any) => file?.omitted)) {
+    if (!hasDiskSource && (workspaceSourceFiles(ws)).some((file: any) => file?.omitted)) {
       throw new Error('Cannot build a complete artifact: omitted passthrough files have no available disk source. Re-import the project from its workspace folder.');
     }
     const sourceRoot = hasDiskSource ? stampedSource : (ephemeralSource = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-generated-source-')));
@@ -11988,16 +12035,17 @@ function runCompileArtifactSelftest() {
     fs.writeFileSync(path.join(uiSource, 'ui/first.lua'), 'local first = 1');
     fs.writeFileSync(path.join(uiSource, 'ui/second.lua'), 'local second = 2');
     const uiImported = importModFolder(uiSource);
-    record('UI root import is a known source domain', uiImported.workspace.passthroughFiles?.find(f => f.path === 'ui.xml')?.reason === 'partial');
+    record('UI root import is an explicit source domain', uiImported.workspace.uiSourceFiles?.find(f => f.path === 'ui.xml')?.kind === 'ui'
+      && !uiImported.workspace.passthroughFiles?.some(f => isUiSourcePath(f.path)));
     record('UI no-edit import preserves root manifest', buildWorkspaceFileManifest(uiImported.workspace).files['ui.xml'] === importedUiXml);
     const uiBundle = buildX4UiSourceBundle({ uiXml: importedUiXml, luaFiles: [
       { path: 'ui/first.lua', text: 'local first = 1' }, { path: 'ui/second.lua', text: 'local second = 2' },
     ] });
     const uiAdded = addX4UiSourceBundleRegistration(uiBundle, { path: 'ui/third.lua', text: 'local third = 3' });
     if (!uiAdded.accepted) throw new Error(`UI fixture registration refused: ${uiAdded.reason}`);
-    const uiEdited = sanitizeWorkspace({ ...uiImported.workspace, passthroughFiles: [
-      ...(uiImported.workspace.passthroughFiles || []).map(f => f.path === 'ui.xml' ? { ...f, content: uiAdded.bundle.uiXml } : f),
-      { path: 'ui/third.lua', content: 'local third = 3', reason: 'partial' },
+    const uiEdited = sanitizeWorkspace({ ...uiImported.workspace, uiSourceFiles: [
+      ...(uiImported.workspace.uiSourceFiles || []).map(f => f.path === 'ui.xml' ? { ...f, content: uiAdded.bundle.uiXml } : f),
+      { path: 'ui/third.lua', content: 'local third = 3', kind: 'lua' },
     ] });
     const uiManifest = buildWorkspaceFileManifest(uiEdited);
     const uiValidation = runProjectValidation({ id: 'ui_integrity', name: 'UI Integrity', files: Object.entries(uiManifest.files).map(([p, content]) => ({ path: p, kind: classifyPath(p), content })) });
@@ -12941,35 +12989,21 @@ function runCompileArtifactSelftest() {
 app.post("/api/agent/deploy", (req, res) => deployVerifyHandler(req, res));
 
 
-function buildDeployProjectValidation(ws: any, emitted?: { modId: string; files: CompiledFileManifest }) {
-  const manifest = emitted || buildWorkspaceFileManifest(ws);
-  const validationFiles = new Map<string, { path: string; kind: ReturnType<typeof classifyPath>; content: string }>(
-    Object.entries(manifest.files).map(([p, c]) => [p.toLowerCase(), { path: p, kind: classifyPath(p), content: String(c) }]),
-  );
-  const sourceStamp = (ws as any)?.sourceStamp as { dir?: string } | undefined;
-  const diskValidationSkipped: Array<{ path: string; reason: string }> = [];
-  if (sourceStamp?.dir && fs.existsSync(sourceStamp.dir)) {
-    const diskLoad = loadProjectFromDisk(sourceStamp.dir, manifest.modId);
-    diskValidationSkipped.push(...diskLoad.skipped);
-    for (const file of diskLoad.project.files) {
-      const key = file.path.toLowerCase();
-      if (!validationFiles.has(key)) validationFiles.set(key, { path: file.path, kind: file.kind, content: file.content });
-    }
-  }
+function buildDeployProjectValidation(modId: string, snapshot: DeploymentSnapshot) {
   const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
   const preflight = runProjectValidation({
-    id: manifest.modId,
-    name: manifest.modId,
-    files: [...validationFiles.values()],
+    id: modId,
+    name: modId,
+    files: snapshot.files,
   } as any, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
-  return { ...manifest, preflight, diskValidationSkipped, validationFiles: [...validationFiles.values()] };
+  return { preflight, diskValidationSkipped: snapshot.skipped, validationFiles: snapshot.files };
 }
 
 function deploymentPlan(ws: any): ArtifactPlan {
   const build = activeBuildWorkspace(ws);
   const generated = buildWorkspaceFileManifest(build);
   const sourceRoot = typeof build.sourceStamp?.dir === 'string' ? path.resolve(build.sourceStamp.dir) : '';
-  if (!sourceRoot && (build.passthroughFiles || []).some((f: any) => f.omitted)) {
+  if (!sourceRoot && workspaceSourceFiles(build).some((f: any) => f.omitted)) {
     throw new Error('Incomplete deployment source: omitted files require their disk source.');
   }
   const plan = buildArtifactPlan({ sourceRoot, memoryOnly: !sourceRoot, generatedFiles: generated.generatedFiles,
@@ -13046,6 +13080,7 @@ function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
 app.post("/api/agent/deploy-verify", (req, res) => deployVerifyHandler(req, res));
 function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
+  let snapshot: DeploymentSnapshot | undefined;
   let deployReceipt: ActionReceipt | undefined;
   const recordFailedDeploy = (rolledBack: boolean) => {
     if (!deployReceipt) return;
@@ -13198,50 +13233,38 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       check('source-sync', 'Canvas in sync with source folder', verdict.reason === 'in_sync' ? 'pass' : 'warn', verdict.detail);
     }
 
-    // 1b. Well-formedness gate on the SOURCE .xml files on disk. importModFolder keeps MD as
-    // byte-fidelity passthrough text (it doesn't re-run the parser's well-formedness check on
-    // every file), so a malformed file (mismatched/unclosed tag — which X4 rejects on load but
-    // @xmldom/xmldom silently tolerates) could otherwise sail through deploy-verify. This makes
-    // deploy-verify catch the exact class that previously deployed "clean" and then failed in X4.
-    if (modSourceDir) {
-      const xmlFiles: string[] = [];
-      const walk = (dir: string) => {
-        let entries: fs.Dirent[] = [];
-        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-        for (const e of entries) {
-          const full = path.join(dir, e.name);
-          if (e.isDirectory()) { if (!/^(\.|node_modules$)/.test(e.name)) walk(full); }
-          else if (/\.xml$/i.test(e.name)) xmlFiles.push(full);
-        }
-      };
-      walk(modSourceDir);
-      const malformed: any[] = [];
-      for (const f of xmlFiles) {
-        let txt = '';
-        try { txt = fs.readFileSync(f, 'utf8'); } catch { continue; }
-        const wf = checkXmlWellformed(txt);
-        if (!wf.ok) {
-          malformed.push({ file: path.relative(modSourceDir, f).replace(/\\/g, '/'), errors: wf.errors.slice(0, 3) });
-        }
-      }
-      if (malformed.length > 0) {
-        check('wellformed', 'XML well-formed', 'fail', malformed.map(m => m.file).join(', '));
-        return res.json(failWith('wellformed', { modId: ws?.name || reqPath, malformed }));
-      }
-      check('wellformed', 'XML well-formed', 'pass', `${xmlFiles.length} source XML file(s) parse cleanly`);
-    }
-
     // 2. Compile gate — reuse the exact diagnostics the /compile route runs, but gate on the
     // EMITTED files, not the graph. A byte-fidelity import keeps MD as passthrough text (empty
     // graph), so runModDoctor's "no cue nodes" (package.readiness) false-fires even though the
     // deployed file has cues. Exclude that one code when the emitted MD actually contains cues.
-    const { modId, files } = buildWorkspaceFileManifest(ws);
-
+    const { modId } = buildWorkspaceFileManifest(ws);
     responseIdentity = { ...responseIdentity, modId };
-    const frozenPlan = deploymentPlan(ws);
-    const artifactHash = deploymentSourceIdentity(frozenPlan, deployFormat);
-    const corpusPaths = frozenPlan.entries.map(entry => entry.path);
+    // Expected artifact hashes establish what will ship, not which agent workspace
+    // is allowed to claim that deployment. Keep explicit Studio artifact workflows,
+    // but bind agent previews and writes to the addressed workspace's current mod.
+    // This runs after optional source re-import, before snapshots/approvals/receipts.
+    if (principal.kind === 'agent') {
+      const addressed = resolveWorkspaceAuthority(req, res);
+      if (!addressed) return;
+      const workspaceModId = effectiveModId(activeBuildWorkspace(addressed.workspace));
+      responseIdentity = { ...responseIdentity, workspaceId: addressed.workspaceId,
+        workspaceModId, workspaceHash: addressed.head };
+      if (modId !== workspaceModId) {
+        const detail = `This agent's addressed workspace is mod "${workspaceModId}", but the requested deployment is mod "${modId}". Use the workspace and bound key for the intended mod.`;
+        check('preflight', 'Deployment workspace identity', 'fail', detail);
+        return res.status(409).json(failWith('preflight', {
+          code: 'DEPLOY_WORKSPACE_MOD_MISMATCH', error: detail,
+        }));
+      }
+    }
+    const sourcePlan = deploymentPlan(ws);
+    const artifactHash = deploymentSourceIdentity(sourcePlan, deployFormat);
+    snapshot = captureDeploymentSnapshot(sourcePlan, deployFormat);
+    const frozenPlan = snapshot.plan;
+    const files = Object.fromEntries(snapshot.files.map(file => [file.path, file.content || '']));
+    const corpusPaths = sourcePlan.entries.map(entry => entry.path);
     const corpusHash = deploymentCorpusIdentity(corpusPaths);
+    responseIdentity = { ...responseIdentity, artifactHash, validatedArtifact: snapshot.manifest };
 
     // 1c. Wellformedness over the EMITTED manifest — closes the passthrough hole: a
     // byte-fidelity import carries its ORIGINAL (possibly truncated/corrupted) files
@@ -13282,10 +13305,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     // 2b. PREFLIGHT — the FULL validation stack over the emitted manifest (same engine as
     // project/validate: structure, cue refs, MD↔Lua wiring, XSD md+aiscript, order-param
     // lint, scriptproperty chains, pitfall lints). Errors block; warnings surface.
-    const deployValidation = buildDeployProjectValidation(
-      sourceStamp?.dir || !modSourceDir ? ws : { ...ws, sourceStamp: { ...(sourceStamp || {}), dir: modSourceDir } },
-      { modId, files },
-    );
+    const deployValidation = buildDeployProjectValidation(modId, snapshot);
     const { preflight, diskValidationSkipped } = deployValidation;
     const preflightDiagnostics: ValidationWarningInput[] = [
       ...flattenProjectValidation(preflight),
@@ -13310,12 +13330,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
       targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
-    responseIdentity = { modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
+    responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
       artifactHash, validation: { evidence } };
     const decision = evaluateFindingAcceptances(subject, acceptances, principal);
-    responseIdentity = { modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
+    responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
       artifactHash, bindingHash: decision.binding.hash, validation: { outcome: decision.outcome,
-        clean: decision.validationClean, evidence }, binding: decision.binding };
+        clean: decision.validationClean, evidence, review: projectFindingReview(decision, principal) }, binding: decision.binding };
     if (body.dryRun !== true && (body.expectedModId !== evidence.modId || body.expectedSourceHash !== evidence.sourceHash
       || body.expectedArtifactHash !== artifactHash || body.expectedBindingHash !== decision.binding.hash)) {
       return res.status(409).json(failWith('preflight', { code: 'DEPLOY_IDENTITY_MISMATCH',
@@ -13332,7 +13352,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         ? 'no last-green baseline yet'
         : `baseline unavailable: ${validationDelta.baseline.reason}`;
     check('preflight', 'Full validation (schema/cues/lints)', !decision.validationClean || pfWarnings > 0 ? 'warn' : 'pass',
-      `${decision.outcome}: ${decision.approvals.length} accepted finding(s), ${pfWarnings} warning(s), coverage ${evidence.coverage.complete ? 'complete' : 'incomplete'}; ${deltaDetail}`);
+      `${decision.outcome}: ${decision.counts.acceptedWarnings} accepted warning(s), ${decision.counts.unacceptedWarnings} outstanding warning(s); ${decision.counts.acceptedErrors} accepted error(s), ${decision.counts.unacceptedErrors} outstanding error(s); ${decision.counts.unavailableChecks} unavailable check(s); ${deltaDetail}`);
     // Keep this request-local effect alongside the deploy request. It is the same planner used
     // by dry-run and is computed before any staging or target mutation, so the successful
     // response/history projection cannot fall back to the process-global artifact report.
@@ -13346,6 +13366,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     }
 
     const assertCurrentSource = () => {
+      snapshot!.assertIntegrity();
       const currentTarget = path.join(resolveXsdConfig().x4GamePath, 'extensions', effectiveModId(activeBuildWorkspace(ws)));
       if (deploymentSourceIdentity(deploymentPlan(ws), deployFormat) !== artifactHash
         || deploymentCorpusIdentity(corpusPaths) !== corpusHash || path.resolve(currentTarget) !== path.resolve(targetRoot)) {
@@ -13372,11 +13393,13 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         checklist,
         validationDelta,
         baselinePromotion: { recorded: false, reason: 'Dry-run deploys never change the last-green baseline.' },
-        note: 'Nothing was written. Apply with expectedModId, expectedSourceHash, expectedArtifactHash and expectedBindingHash from this preview.',
+        note: 'No staging or installed files were written. Validation used a temporary verified artifact snapshot. Apply with expectedModId, expectedSourceHash, expectedArtifactHash and expectedBindingHash from this preview.',
       });
     }
 
     const approvalRecords = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal).receipts;
+    responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, evidence,
+      review: projectFindingReview(decision, principal, approvalRecords) };
     const assertWriteAuthority = () => {
       assertCurrentSource();
       verifyFindingAcceptanceReceipts(actionReceiptStore, approvalRecords.map(r => r.id), subject, acceptances, principal);
@@ -13398,7 +13421,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       }));
     }
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
-      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint);
+      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash);
     assertWriteAuthority();
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     if (modWorkspacePath) {
@@ -13542,7 +13565,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     }
     const baselinePromotion = ok && decision.validationClean
       ? recordValidationBaseline(modId, preflightContentHash, preflightDiagnostics)
-      : { recorded: false as const, reason: 'Failed deployment, accepted findings or incomplete checks cannot promote a last-green baseline.' };
+      : { recorded: false as const, reason: 'Failed deployment, outstanding warnings, accepted findings or incomplete checks cannot promote a last-green baseline.' };
     check(
       'baseline',
       'Last-green validation baseline',
@@ -13608,6 +13631,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;
     return res.status(status).json({ ok: false, success: false, stage: 'exception', ...responseIdentity, code,
       error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}) });
+  } finally {
+    try { snapshot?.dispose(); } catch (error) { console.warn('Deployment snapshot cleanup failed', error); }
   }
 }
 
@@ -13668,7 +13693,7 @@ app.post("/api/agent/compile", (req, res) => {
     ).delta;
 
     return res.json({
-      success: true,
+      ...generatedOutputVerdict(full.validation.ok),
       ...(record ? { workspaceId: record.workspaceId } : {}),
       modId,
       file_count: Object.keys(files).length,
@@ -13722,7 +13747,7 @@ app.post("/api/agent/package", (req, res) => {
     ).delta;
 
     return res.json({
-      success: true,
+      ...generatedOutputVerdict(full.validation.ok),
       ...(record ? { workspaceId: record.workspaceId } : {}),
       modId,
       file_count: Object.keys(files).length,
@@ -13764,12 +13789,12 @@ app.post("/api/agent/artifact/build", (req, res) => {
     const built = buildWorkspaceFileManifest(ws);
     const full = runFullWorkspaceValidation(ws, built);
     return res.json({
-      success: true,
+      ...generatedOutputVerdict(full.validation.ok),
       ...(record ? { workspaceId: record.workspaceId } : {}),
       modId: built.modId,
       format,
       artifactPath,
-      artifact: lastArtifactReport,
+      artifact: { ...lastArtifactReport, verificationScope: 'artifact-bytes' },
       diagnostics: full.diagnostics,
       validation: { scope: 'full-project', ok: full.validation.ok, summary: full.validation.summary },
     });
@@ -13873,7 +13898,7 @@ function prepareReleaseBuild(
       }
       stages.push(releaseStage('source', 'Resolve complete source', 'pass', `Using disk-backed source ${sourceRoot}.`));
     } else {
-      if ((workspace.passthroughFiles || []).some(file => file?.omitted)) {
+      if (workspaceSourceFiles(workspace).some(file => file?.omitted)) {
         return { status: 409, code: 'RELEASE_SOURCE_INCOMPLETE', error: 'The workspace omits passthrough bytes and has no disk source. Re-import the mod folder before packaging.', stages: [releaseStage('source', 'Resolve complete source', 'fail', 'Large or binary passthrough files were omitted from browser state and cannot be reconstructed safely.')] };
       }
       ephemeralSource = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-release-source-'));

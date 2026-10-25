@@ -296,7 +296,7 @@ export function runRuntimeDebuggerAdapterSelftest(): {
       () => now,
       { preferredLogPath: path.join(root, "missing-preferred.log"), logCandidates: () => [automaticOlderPath, automaticFreshestPath] },
     ).buildBrief({ record, manifest, expectedSteps: [] });
-    check("missing_preferred_log_path_falls_back_to_freshest_automatic_candidate", missingPreferredResult.selectedLogPath === path.resolve(automaticFreshestPath), missingPreferredResult.selectedLogPath);
+    check("missing_explicit_log_path_never_switches_profile", missingPreferredResult.selectedLogPath === "" && missingPreferredResult.payload.session.state === "unavailable" && missingPreferredResult.payload.logRead.state === "unavailable", missingPreferredResult.selectedLogPath);
 
     const uniqueLegacyPath = path.join(root, "unique-legacy.log");
     fs.writeFileSync(uniqueLegacyPath, `${directFailureLine("11.0", "legacy_folder")}\n`, "utf8");

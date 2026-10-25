@@ -259,6 +259,8 @@ export interface ModWorkspace {
    * block packaging; other modeled domains retain generated-file precedence.
    */
   passthroughFiles?: PassthroughFile[];
+  /** Byte-authoritative UI manifest and Lua sources, edited through the guarded UI source model. */
+  uiSourceFiles?: UiSourceFile[];
   /** Stale-source deploy gate (P0 2026-07-09): stamped at import with a content-keyed hash
    * of the source folder; deploy blocks when the folder changed since (see compileFidelity). */
   sourceStamp?: { dir: string; hash: string; at: string };
@@ -293,6 +295,20 @@ export interface PassthroughFile {
   omitted?: boolean;
   /** size on disk in bytes (recorded for omitted/preserved files) */
   bytes?: number;
+}
+
+export interface UiSourceFile extends PassthroughFile {
+  kind: 'ui' | 'lua';
+}
+
+export function isUiSourcePath(filePath: string): boolean {
+  return /^ui\.xml$/i.test(filePath) || /^ui\/.+\.lua$/i.test(filePath);
+}
+
+/** One source inventory for legacy workspaces and the explicit UI source domain. */
+export function workspaceSourceFiles(workspace: Pick<ModWorkspace, 'uiSourceFiles' | 'passthroughFiles'>): PassthroughFile[] {
+  return [...(Array.isArray(workspace.uiSourceFiles) ? workspace.uiSourceFiles : []),
+    ...(Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : [])];
 }
 
 // Built-in game variables for X4 standard database definitions
@@ -2079,6 +2095,16 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     sourceStamp: (ws.sourceStamp && typeof ws.sourceStamp.dir === 'string' && typeof ws.sourceStamp.hash === 'string')
       ? { dir: String(ws.sourceStamp.dir), hash: String(ws.sourceStamp.hash), at: String(ws.sourceStamp.at || '') }
       : undefined,
+    ...(Array.isArray(ws.uiSourceFiles) ? { uiSourceFiles: ws.uiSourceFiles
+      .filter((f: any) => f && typeof f.path === 'string' && (typeof f.content === 'string' || f.omitted === true))
+      .map((f: any) => ({
+        path: String(f.path).replace(/\\/g, '/'),
+        kind: /^ui\.xml$/i.test(f.path) ? 'ui' as const : 'lua' as const,
+        ...(typeof f.content === 'string' ? { content: f.content } : {}),
+        ...(f.contentEncoding === 'base64' ? { contentEncoding: 'base64' as const } : {}),
+        ...(f.omitted === true ? { omitted: true } : {}),
+        ...(Number.isFinite(Number(f.bytes)) ? { bytes: Number(f.bytes) } : {})
+      })) } : {}),
     passthroughFiles: (Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles : [])
       .filter((f: any) => f && typeof f.path === 'string' && (typeof f.content === 'string' || f.omitted === true))
       .map((f: any) => ({

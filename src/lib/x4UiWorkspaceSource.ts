@@ -1,3 +1,4 @@
+import { workspaceSourceFiles, isUiSourcePath } from '../types';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -239,7 +240,15 @@ function cloneWorkspaceForSplice(
   passthroughFiles: readonly PassthroughFile[]
 ): ModWorkspace {
   const clonedWorkspace = cloneClosedData(workspace);
-  clonedWorkspace.passthroughFiles = cloneClosedData(passthroughFiles) as PassthroughFile[];
+  const files = cloneClosedData(passthroughFiles) as PassthroughFile[];
+  if (Array.isArray(workspace.uiSourceFiles)) {
+    clonedWorkspace.uiSourceFiles = files.filter(file => isUiSourcePath(file.path)).map(({ reason: _reason, ...file }) => ({
+      ...file, kind: /^ui\.xml$/i.test(file.path) ? 'ui' : 'lua'
+    }));
+    clonedWorkspace.passthroughFiles = files.filter(file => !isUiSourcePath(file.path));
+  } else {
+    clonedWorkspace.passthroughFiles = files;
+  }
   return clonedWorkspace;
 }
 
@@ -392,9 +401,7 @@ function buildState(
   workspace: ModWorkspace,
   options: X4UiWorkspaceSourceBuildOptions
 ): SourceBuildState {
-  const workspaceFiles = Array.isArray(workspace.passthroughFiles)
-    ? workspace.passthroughFiles
-    : [];
+  const workspaceFiles = workspaceSourceFiles(workspace);
   const rootIndexes = workspaceFiles
     .map((file, index) => typeof file?.path === 'string' && file.path.toLowerCase() === 'ui.xml' ? index : -1)
     .filter(index => index >= 0);
@@ -511,7 +518,7 @@ function sourceDetail(status: X4UiWorkspaceSourceStatus, reason: X4UiWorkspaceSo
         : 'Generated ui.xml conflicts with the imported manifest; packaging is blocked to preserve its registrations.';
     case 'unavailable':
       return reason === 'no-root-ui-xml'
-        ? 'No exact extension-root ui.xml passthrough record was supplied.'
+        ? 'No exact extension-root ui.xml source record was supplied.'
         : 'The workspace has no unambiguous usable root UI source record.';
     case 'locked':
       return 'The source bundle is present but locked by an explicit source or registration condition.';
@@ -692,7 +699,7 @@ function currentCompileShadowed(
   workspace: ModWorkspace,
   source: X4UiWorkspaceSource
 ): boolean {
-  const currentFiles = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : [];
+  const currentFiles = workspaceSourceFiles(workspace);
   const facts = compileFacts(workspace, source.cas.generatedPathInputs, currentFiles);
   return facts.generatedRootUiXml || facts.generatedCollisions.length > 0;
 }
@@ -718,7 +725,7 @@ export function spliceX4UiWorkspaceSource(
   const splice = spliceX4UiSourceBundle(source.bundle, edit);
   if (!splice.accepted) return refusal(workspace, source, splice.reason as X4UiSourceSpliceRefusalReason);
 
-  const currentFiles = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : undefined;
+  const currentFiles = workspaceSourceFiles(workspace);
   if (!sameRecordArray(currentFiles, source.cas.passthroughFiles)) {
     return refusal(workspace, source, 'concurrent-passthrough-change', splice.bundle);
   }

@@ -491,6 +491,7 @@ const QUIET_READ_OVERRIDE_ROUTES = new Set([
 ]);
 
 const VISIBLE_READ_OVERRIDE_ROUTES = new Set([
+  'POST /api/agent/runtime-control/preview',
   'POST /api/agent/mod-folder/import',
   'POST /api/agent/project/content-xml',
   'POST /api/agent/project/create',
@@ -576,6 +577,7 @@ function legacyRoutePolicy(
   }
   if (QUIET_READ_OVERRIDE_ROUTES.has(route.routeKey)) return readOnlyRoutePolicy();
   if (VISIBLE_READ_OVERRIDE_ROUTES.has(route.routeKey)) return auditedReadRoutePolicy();
+  if (route.routeKey === 'POST /api/agent/runtime-control/reload') return durableRoutePolicy(['filesystem-write']);
   if (route.routeKey === 'POST /api/agent/deploy-verify') {
     return durableRoutePolicy(['filesystem-write', 'deploy', 'delete'], 'W3B2');
   }
@@ -856,7 +858,7 @@ export function buildActionReceiptCoverageCandidate(
         ? {
           kind: 'reviewed-legacy',
           id: discovered.routeKey,
-          reviewRef: LEGACY_REVIEW_REF,
+          reviewRef: discovered.routeKey.startsWith('POST /api/agent/runtime-control/') ? 'docs/plans/2026-10-24-dev-runtime-loop.md#api-contract--proof-boundary' : LEGACY_REVIEW_REF,
         }
         : {
           kind: 'canonical',

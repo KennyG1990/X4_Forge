@@ -1,3 +1,4 @@
+import { workspaceSourceFiles } from '../types';
 /**
  * Deterministic, pure runtime-debugging model for X4 Forge.
  *
@@ -435,7 +436,7 @@ function collectManifest(input: RuntimeExtensionInput, workspace?: ModWorkspace)
   if (workspace?.contentOriginal) add({ path: 'content.xml', text: workspace.contentOriginal });
   if (workspace?.mdOriginal) add({ path: workspace.mdOriginal.path, text: workspace.mdOriginal.content });
   for (const file of workspace?.originalFiles || []) add({ path: file.path, text: file.content });
-  for (const file of workspace?.passthroughFiles || []) {
+  for (const file of workspace ? workspaceSourceFiles(workspace) : []) {
     if (!file.omitted && typeof file.content === 'string') add({ path: file.path, text: file.content });
   }
   if (workspace?.customLua) {

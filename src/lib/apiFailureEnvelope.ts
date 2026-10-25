@@ -8,6 +8,20 @@
 
 type JsonRecord = Record<string, unknown>;
 
+/** Generation is useful preview evidence; only project validation decides suitability. */
+export function generatedOutputVerdict(validationOk: boolean) {
+  return validationOk === true
+    ? { success: true, generation: { success: true } }
+    : {
+      success: false,
+      generation: { success: true },
+      status: 'BLOCKED',
+      code: 'PROJECT_VALIDATION_FAILED',
+      error: 'Generated output did not pass project validation. Inspect diagnostics before deployment.',
+      failedStages: ['validation'],
+    };
+}
+
 const FAILURE_STATUSES = new Set(['FAILED', 'BLOCKED', 'ERROR', 'REJECTED', 'TIMED_OUT']);
 const FAILED_STAGE_STATUSES = new Set(['FAIL', 'FAILED', 'ERROR', 'BLOCKED', 'REJECTED']);
 
@@ -185,6 +199,15 @@ export function runApiFailureEnvelopeSelftest() {
   ok('existing_fields_are_not_overwritten', existing.code === 'SOURCE_STALE' && existing.error === 'Exact existing error' && existing.custom === 7);
   const contradictory = normalizeApiFailureBody(500, { success: true, error: 'Route contradicted its HTTP status.' }) as JsonRecord;
   ok('http_failure_cannot_claim_success', contradictory.success === false);
+
+  const generated = generatedOutputVerdict(true);
+  ok('validated_generation_succeeds', generated.success === true && generated.generation.success === true);
+  const rejected = generatedOutputVerdict(false);
+  const preview = { ...rejected, files: { 'ui/test.lua': 'invalid preview' }, validation: { ok: false } };
+  const normalizedPreview = normalizeApiFailureBody(200, preview) as JsonRecord;
+  ok('invalid_generation_is_blocked', rejected.success === false && rejected.status === 'BLOCKED' && rejected.code === 'PROJECT_VALIDATION_FAILED');
+  ok('invalid_generation_preserves_preview', normalizedPreview.files === preview.files && normalizedPreview.validation === preview.validation && normalizedPreview.generation === preview.generation);
+  ok('invalid_generation_names_validation_stage', JSON.stringify(normalizedPreview.failedStages) === '["validation"]' && normalizedPreview.error === rejected.error);
 
   const passed = checks.filter(check => check.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

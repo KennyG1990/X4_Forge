@@ -52,7 +52,7 @@ export function canonicalWorkspaceContentPayload(ws: ModWorkspace | null | undef
     uiWidgets: w.uiWidgets, aiScripts: w.aiScripts, wares: w.wares, jobs: w.jobs,
     tFiles: w.tFiles, xmlPatches: w.xmlPatches, customLua: w.customLua,
     compileSettings: w.compileSettings, dependencies: w.dependencies,
-    passthroughFiles: w.passthroughFiles, originalFiles: w.originalFiles,
+    uiSourceFiles: w.uiSourceFiles, passthroughFiles: w.passthroughFiles, originalFiles: w.originalFiles,
     sourceStamp: w.sourceStamp, integrationContract: w.integrationContract,
     mdFileStem: w.mdFileStem,
   };

@@ -1,0 +1,525 @@
+{
+  "clean": {
+    "ok": true,
+    "stage": "done",
+    "modId": "forge_regression_lab",
+    "sourceHash": "fbc6f2378a5924faa0818f1310d7f3b4fb2292b43579e539d55fdda032f55bbe",
+    "artifactHash": "a77220daccef087bf6de38ae77690d453f5e1b1abe661dcdb4fdaf6eb5142c1d",
+    "validation": {
+      "outcome": "validation-clean",
+      "clean": true,
+      "review": {
+        "status": "recorded",
+        "counts": {
+          "acceptedErrors": 0,
+          "acceptedWarnings": 0,
+          "unacceptedErrors": 0,
+          "unacceptedWarnings": 0,
+          "unavailableChecks": 0
+        },
+        "outstandingFindingIds": [],
+        "approvals": []
+      }
+    },
+    "bindingHash": "d3e50b21d9247841434ef3f7d9fc87efcdb4f8822db8bb236ac570605c34ea31",
+    "bytesConfirmed": true,
+    "checklist": [
+      {
+        "id": "config",
+        "label": "Paths configured",
+        "status": "pass"
+      },
+      {
+        "id": "import",
+        "label": "Mod source read",
+        "status": "pass"
+      },
+      {
+        "id": "source-sync",
+        "label": "Canvas in sync with source folder",
+        "status": "pass"
+      },
+      {
+        "id": "wellformed",
+        "label": "XML well-formed",
+        "status": "pass"
+      },
+      {
+        "id": "compile",
+        "label": "Compile diagnostics",
+        "status": "pass"
+      },
+      {
+        "id": "preflight",
+        "label": "Full validation (schema/cues/lints)",
+        "status": "pass"
+      },
+      {
+        "id": "deploy",
+        "label": "Written to staging + extensions",
+        "status": "pass"
+      },
+      {
+        "id": "bytes",
+        "label": "Deployed bytes confirmed",
+        "status": "pass"
+      },
+      {
+        "id": "doctor",
+        "label": "Extension doctor",
+        "status": "pass"
+      },
+      {
+        "id": "drift",
+        "label": "Workspace/deployed sync",
+        "status": "pass"
+      },
+      {
+        "id": "baseline",
+        "label": "Last-green validation baseline",
+        "status": "pass"
+      }
+    ],
+    "deployedPath": "scratch/extensions/forge_regression_lab"
+  },
+  "warnings": {
+    "ok": true,
+    "stage": "done",
+    "modId": "forge_regression_lab",
+    "sourceHash": "a957933b0137fca0d94988e891fe4b39d454e442b9db64616a0980f5fca4d720",
+    "artifactHash": "2289fbdcefbe4e1e583f2703bfe673a5e5fb3a91cb9627f3b8c04e750ab038c8",
+    "validation": {
+      "outcome": "warnings-present",
+      "clean": false,
+      "review": {
+        "status": "recorded",
+        "counts": {
+          "acceptedErrors": 0,
+          "acceptedWarnings": 0,
+          "unacceptedErrors": 0,
+          "unacceptedWarnings": 1,
+          "unavailableChecks": 0
+        },
+        "outstandingFindingIds": [
+          "723bec01144102a02346c84b35e0b8a49c1fbe9d3cf57350afdb4fb7ee5c0909"
+        ],
+        "approvals": []
+      }
+    },
+    "bindingHash": "2c7f77e729c969d23deedaa7da5c4b389248f68df445cfe4d208539dfa23d6d3",
+    "bytesConfirmed": true,
+    "checklist": [
+      {
+        "id": "config",
+        "label": "Paths configured",
+        "status": "pass"
+      },
+      {
+        "id": "import",
+        "label": "Mod source read",
+        "status": "pass"
+      },
+      {
+        "id": "source-sync",
+        "label": "Canvas in sync with source folder",
+        "status": "pass"
+      },
+      {
+        "id": "wellformed",
+        "label": "XML well-formed",
+        "status": "pass"
+      },
+      {
+        "id": "compile",
+        "label": "Compile diagnostics",
+        "status": "pass"
+      },
+      {
+        "id": "preflight",
+        "label": "Full validation (schema/cues/lints)",
+        "status": "warn"
+      },
+      {
+        "id": "deploy",
+        "label": "Written to staging + extensions",
+        "status": "pass"
+      },
+      {
+        "id": "bytes",
+        "label": "Deployed bytes confirmed",
+        "status": "pass"
+      },
+      {
+        "id": "doctor",
+        "label": "Extension doctor",
+        "status": "pass"
+      },
+      {
+        "id": "drift",
+        "label": "Workspace/deployed sync",
+        "status": "pass"
+      },
+      {
+        "id": "baseline",
+        "label": "Last-green validation baseline",
+        "status": "warn"
+      }
+    ],
+    "deployedPath": "scratch/extensions/forge_regression_lab"
+  },
+  "proposed": {
+    "ok": true,
+    "dryRun": true,
+    "stage": "preview",
+    "modId": "forge_regression_lab",
+    "sourceHash": "ebb63c0e71203ec9af0ad158c4f63e888777a96c99f12f6faff1c7063b0f543a",
+    "artifactHash": "31eca6ed08b29e3084ce67e2b189134afe05272cf93a127cda9e6f10a1ae1bad",
+    "validation": {
+      "outcome": "accepted-findings-with-outstanding-warnings",
+      "clean": false,
+      "review": {
+        "status": "proposed",
+        "counts": {
+          "acceptedErrors": 0,
+          "acceptedWarnings": 1,
+          "unacceptedErrors": 0,
+          "unacceptedWarnings": 1,
+          "unavailableChecks": 0
+        },
+        "outstandingFindingIds": [
+          "203f3ccafc80e70bdc0359f71dde3f6e6d6387edbd43f5dcd86000426e54c886"
+        ],
+        "approvals": [
+          {
+            "findingId": "11b998a0832c1e3bd7b920c39e941b42aa2f19af2698b92c0af37dff898cef8b",
+            "code": "scriptproperty.unknown",
+            "category": "mod-finding",
+            "severity": "warning",
+            "reason": "Reviewed scratch fixture warning; not approval for a real mod.",
+            "actor": {
+              "id": "fixture-reviewer",
+              "label": "Fixture reviewer"
+            },
+            "receiptId": "fixture-receipt-0"
+          }
+        ]
+      }
+    },
+    "bindingHash": "ed30a826251c8554fbdb2b5572fad92dc4ec768e40cdc04809b859eca2b48c98",
+    "checklist": [
+      {
+        "id": "config",
+        "label": "Paths configured",
+        "status": "pass"
+      },
+      {
+        "id": "import",
+        "label": "Mod source read",
+        "status": "pass"
+      },
+      {
+        "id": "source-sync",
+        "label": "Canvas in sync with source folder",
+        "status": "pass"
+      },
+      {
+        "id": "wellformed",
+        "label": "XML well-formed",
+        "status": "pass"
+      },
+      {
+        "id": "compile",
+        "label": "Compile diagnostics",
+        "status": "pass"
+      },
+      {
+        "id": "preflight",
+        "label": "Full validation (schema/cues/lints)",
+        "status": "warn"
+      },
+      {
+        "id": "deploy",
+        "label": "Deploy preview (dry run \u2014 nothing written)",
+        "status": "pass"
+      }
+    ],
+    "deployedPath": "scratch/extensions/forge_regression_lab"
+  },
+  "accepted": {
+    "ok": true,
+    "stage": "done",
+    "modId": "forge_regression_lab",
+    "sourceHash": "a957933b0137fca0d94988e891fe4b39d454e442b9db64616a0980f5fca4d720",
+    "artifactHash": "2289fbdcefbe4e1e583f2703bfe673a5e5fb3a91cb9627f3b8c04e750ab038c8",
+    "validation": {
+      "outcome": "accepted-findings",
+      "clean": false,
+      "review": {
+        "status": "recorded",
+        "counts": {
+          "acceptedErrors": 0,
+          "acceptedWarnings": 1,
+          "unacceptedErrors": 0,
+          "unacceptedWarnings": 0,
+          "unavailableChecks": 0
+        },
+        "outstandingFindingIds": [],
+        "approvals": [
+          {
+            "findingId": "723bec01144102a02346c84b35e0b8a49c1fbe9d3cf57350afdb4fb7ee5c0909",
+            "code": "scriptproperty.unknown",
+            "category": "mod-finding",
+            "severity": "warning",
+            "reason": "Reviewed scratch fixture warning; not approval for a real mod.",
+            "actor": {
+              "id": "fixture-reviewer",
+              "label": "Fixture reviewer"
+            },
+            "receiptId": "fixture-receipt-0"
+          }
+        ]
+      }
+    },
+    "bindingHash": "2c7f77e729c969d23deedaa7da5c4b389248f68df445cfe4d208539dfa23d6d3",
+    "bytesConfirmed": true,
+    "checklist": [
+      {
+        "id": "config",
+        "label": "Paths configured",
+        "status": "pass"
+      },
+      {
+        "id": "import",
+        "label": "Mod source read",
+        "status": "pass"
+      },
+      {
+        "id": "source-sync",
+        "label": "Canvas in sync with source folder",
+        "status": "pass"
+      },
+      {
+        "id": "wellformed",
+        "label": "XML well-formed",
+        "status": "pass"
+      },
+      {
+        "id": "compile",
+        "label": "Compile diagnostics",
+        "status": "pass"
+      },
+      {
+        "id": "preflight",
+        "label": "Full validation (schema/cues/lints)",
+        "status": "warn"
+      },
+      {
+        "id": "deploy",
+        "label": "Written to staging + extensions",
+        "status": "pass"
+      },
+      {
+        "id": "bytes",
+        "label": "Deployed bytes confirmed",
+        "status": "pass"
+      },
+      {
+        "id": "doctor",
+        "label": "Extension doctor",
+        "status": "pass"
+      },
+      {
+        "id": "drift",
+        "label": "Workspace/deployed sync",
+        "status": "pass"
+      },
+      {
+        "id": "baseline",
+        "label": "Last-green validation baseline",
+        "status": "warn"
+      }
+    ],
+    "deployedPath": "scratch/extensions/forge_regression_lab"
+  },
+  "mixed": {
+    "ok": true,
+    "stage": "done",
+    "modId": "forge_regression_lab",
+    "sourceHash": "ebb63c0e71203ec9af0ad158c4f63e888777a96c99f12f6faff1c7063b0f543a",
+    "artifactHash": "31eca6ed08b29e3084ce67e2b189134afe05272cf93a127cda9e6f10a1ae1bad",
+    "validation": {
+      "outcome": "accepted-findings-with-outstanding-warnings",
+      "clean": false,
+      "review": {
+        "status": "recorded",
+        "counts": {
+          "acceptedErrors": 0,
+          "acceptedWarnings": 1,
+          "unacceptedErrors": 0,
+          "unacceptedWarnings": 1,
+          "unavailableChecks": 0
+        },
+        "outstandingFindingIds": [
+          "203f3ccafc80e70bdc0359f71dde3f6e6d6387edbd43f5dcd86000426e54c886"
+        ],
+        "approvals": [
+          {
+            "findingId": "11b998a0832c1e3bd7b920c39e941b42aa2f19af2698b92c0af37dff898cef8b",
+            "code": "scriptproperty.unknown",
+            "category": "mod-finding",
+            "severity": "warning",
+            "reason": "Reviewed scratch fixture warning; not approval for a real mod.",
+            "actor": {
+              "id": "fixture-reviewer",
+              "label": "Fixture reviewer"
+            },
+            "receiptId": "fixture-receipt-0"
+          }
+        ]
+      }
+    },
+    "bindingHash": "ed30a826251c8554fbdb2b5572fad92dc4ec768e40cdc04809b859eca2b48c98",
+    "bytesConfirmed": true,
+    "checklist": [
+      {
+        "id": "config",
+        "label": "Paths configured",
+        "status": "pass"
+      },
+      {
+        "id": "import",
+        "label": "Mod source read",
+        "status": "pass"
+      },
+      {
+        "id": "source-sync",
+        "label": "Canvas in sync with source folder",
+        "status": "pass"
+      },
+      {
+        "id": "wellformed",
+        "label": "XML well-formed",
+        "status": "pass"
+      },
+      {
+        "id": "compile",
+        "label": "Compile diagnostics",
+        "status": "pass"
+      },
+      {
+        "id": "preflight",
+        "label": "Full validation (schema/cues/lints)",
+        "status": "warn"
+      },
+      {
+        "id": "deploy",
+        "label": "Written to staging + extensions",
+        "status": "pass"
+      },
+      {
+        "id": "bytes",
+        "label": "Deployed bytes confirmed",
+        "status": "pass"
+      },
+      {
+        "id": "doctor",
+        "label": "Extension doctor",
+        "status": "pass"
+      },
+      {
+        "id": "drift",
+        "label": "Workspace/deployed sync",
+        "status": "pass"
+      },
+      {
+        "id": "baseline",
+        "label": "Last-green validation baseline",
+        "status": "warn"
+      }
+    ],
+    "deployedPath": "scratch/extensions/forge_regression_lab"
+  },
+  "incomplete": {
+    "ok": true,
+    "stage": "done",
+    "modId": "forge_regression_lab",
+    "sourceHash": "4336f765c1e51d278fe050e5a9f8002caf7f99aefeffa36bfe3642499817548a",
+    "artifactHash": "7ca6327a9210998a32fabf7d71dd1dffda0d6e062eb78efac03b7169f9b0d5f7",
+    "validation": {
+      "outcome": "incomplete-checks",
+      "clean": false,
+      "review": {
+        "status": "recorded",
+        "counts": {
+          "acceptedErrors": 0,
+          "acceptedWarnings": 0,
+          "unacceptedErrors": 0,
+          "unacceptedWarnings": 0,
+          "unavailableChecks": 1
+        },
+        "outstandingFindingIds": [],
+        "approvals": []
+      }
+    },
+    "bindingHash": "66612841c2b21e202a0e32efb6a4670ac58ed16403f2694ec5008a2b71e104c4",
+    "bytesConfirmed": true,
+    "checklist": [
+      {
+        "id": "config",
+        "label": "Paths configured",
+        "status": "pass"
+      },
+      {
+        "id": "import",
+        "label": "Mod source read",
+        "status": "pass"
+      },
+      {
+        "id": "source-sync",
+        "label": "Canvas in sync with source folder",
+        "status": "pass"
+      },
+      {
+        "id": "wellformed",
+        "label": "XML well-formed",
+        "status": "pass"
+      },
+      {
+        "id": "compile",
+        "label": "Compile diagnostics",
+        "status": "pass"
+      },
+      {
+        "id": "preflight",
+        "label": "Full validation (schema/cues/lints)",
+        "status": "warn"
+      },
+      {
+        "id": "deploy",
+        "label": "Written to staging + extensions",
+        "status": "pass"
+      },
+      {
+        "id": "bytes",
+        "label": "Deployed bytes confirmed",
+        "status": "pass"
+      },
+      {
+        "id": "doctor",
+        "label": "Extension doctor",
+        "status": "pass"
+      },
+      {
+        "id": "drift",
+        "label": "Workspace/deployed sync",
+        "status": "pass"
+      },
+      {
+        "id": "baseline",
+        "label": "Last-green validation baseline",
+        "status": "warn"
+      }
+    ],
+    "deployedPath": "scratch/extensions/forge_regression_lab"
+  }
+}

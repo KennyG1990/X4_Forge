@@ -83,10 +83,12 @@ export function lintReferenceLiterals(
     });
   };
 
-  // Unambiguous MD/AIScript expression form, also used in Lua strings sent to MD.
-  for (const m of masked.matchAll(/\bfaction\.([A-Za-z_][\w-]*)\b/g)) add('faction', m[1], m.index || 0, references.factions);
-  for (const m of masked.matchAll(/\bware\.([A-Za-z_][\w-]*)\b/g)) add('ware', m[1], m.index || 0, references.wares);
-  for (const m of masked.matchAll(/\bmacro\.([A-Za-z_][\w-]*)\b/g)) add('macro', m[1], m.index || 0, references.macros);
+  // Root keyword expressions, also used in Lua strings sent to MD. A word
+  // boundary alone matches the property suffix in $object.ware.name (and even
+  // the variable $ware.name); neither is a literal corpus reference.
+  for (const m of masked.matchAll(/(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/g)) add('faction', m[1], m.index || 0, references.factions);
+  for (const m of masked.matchAll(/(?<![\w$.\]])ware\.([A-Za-z_][\w-]*)\b/g)) add('ware', m[1], m.index || 0, references.wares);
+  for (const m of masked.matchAll(/(?<![\w$.\]])macro\.([A-Za-z_][\w-]*)\b/g)) add('macro', m[1], m.index || 0, references.macros);
 
   if (isLua) {
     // Corpus-proven literal APIs. Variable first arguments are intentionally skipped.

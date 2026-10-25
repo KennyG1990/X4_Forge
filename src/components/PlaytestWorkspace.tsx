@@ -1,4 +1,5 @@
-import { fetchVerifiedDeploy, deployValidationLabel } from '../lib/deployClient';
+import { fetchVerifiedDeploy } from '../lib/deployClient';
+import DeployValidationSummary from './DeployValidationSummary';
 import React, { useState } from 'react';
 import type { ModWorkspace } from '../types';
 import ReleaseCenter from './ReleaseCenter';
@@ -678,9 +679,8 @@ export default function PlaytestWorkspace({
                 </button>
               </div>
               {verifyResult && (
-                <div data-testid="verify-result" className={`rounded border p-1.5 text-[9px] font-mono leading-tight ${verifyResult.ok ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-200' : 'border-red-500/40 bg-red-500/5 text-red-200'}`}>
-                  <div className="font-bold">{verifyResult.ok ? '✓ DEPLOYED BYTES VERIFIED' : `✗ FAILED @ ${verifyResult.stage || 'error'}`}</div>
-                  {verifyResult.ok && <div>{deployValidationLabel(verifyResult)}</div>}
+                <div data-testid="verify-result" className="rounded border border-slate-600 bg-slate-900/50 p-2 text-[10px] font-mono leading-relaxed">
+                  <DeployValidationSummary result={verifyResult} />
                   {/* PREFLIGHT CHECKLIST (bundle C): the full walkaround, one row per check. */}
                   {Array.isArray(verifyResult.checklist) && verifyResult.checklist.length > 0 && (
                     <div className="mt-1.5 space-y-0.5" data-testid="preflight-checklist">

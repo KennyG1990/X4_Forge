@@ -14,8 +14,9 @@
  */
 
 import { parse } from 'luaparse';
-import { buildX4UiCallModel, type X4UiSourceLocation } from './x4UiCallModel';
-import { lintX4UiCallModel, type X4UiLintFinding, type X4UiLintResult } from './x4UiLint';
+import { type X4UiSourceLocation } from './x4UiCallModel';
+import { type X4UiLintFinding, type X4UiLintResult } from './x4UiLint';
+import { analyzeX4UiFile } from './x4UiAnalysisCache';
 
 /**
  * Strip Lua comments so source-pattern rules match CODE, not prose. Without this the
@@ -405,11 +406,11 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
         sourcePath: file.sourcePath
       });
       if (isUiLikelyLua(file)) {
-        const x4UiResult = lintX4UiCallModel(buildX4UiCallModel({
+        const x4UiResult = analyzeX4UiFile({
           rel: file.rel,
           text: file.text,
           sourcePath: file.sourcePath
-        }));
+        });
         addX4UiResult(file, x4UiResult, x4UiResults, x4UiSummary, findings);
       }
       continue;
@@ -494,11 +495,11 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
     }
 
     if (isUiLikelyLua(file, ast)) {
-      const x4UiResult = lintX4UiCallModel(buildX4UiCallModel({
+      const x4UiResult = analyzeX4UiFile({
         rel: file.rel,
         text: file.text,
         sourcePath: file.sourcePath
-      }));
+      });
       addX4UiResult(file, x4UiResult, x4UiResults, x4UiSummary, findings);
     }
   }

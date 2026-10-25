@@ -1,34 +1,36 @@
-# Session handoff — 0.0.79 fixes release
+# Session handoff — Claude completion/release program
 
-2026-10-23. X4 Forge; owner #20 remains open for the broader program.
-Installed and Open VSX delivery VERIFIED. Scope: UI-manifest classification,
-validation and imported registrations; qualified Forge failures; authenticated
-finding approvals; source/artifact/binding guards and durable deployment records.
-Not all Claude review items, B119, Microsoft publication or in-game proof.
+2026-10-25. X4 Forge. C01 integration VERIFIED; full program PARTIAL.
+Release worktree C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge,
+branch codex/forge-fixes-release. Baseline f274a7c; public/installed 0.0.79 unchanged.
+C01 local commit title: fix(forge): integrate isolated Claude regression fixes. Check git log before repeating.
+No interim push. Original G: checkout has unrelated changes and remains untouched.
 
-Release checkout: C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge,
-branch codex/forge-fixes-release, public baseline 5a49544. Original G: checkout and
-broad candidate preserved. Do not push their unrelated work.
+Plan: docs/plans/2026-10-25-claude-completion-release.md.
+Proof: docs/testing/claude-C01-integration.json; private lab/evidence/claude-program/C01.
+14 focused suites, 65 actual HTTP/MCP checks, focused rendered E2E, typecheck/lint/builds,
+full precommit including 84-route/59-surface receipt audit all passed. Lint has 608 warnings, 0 errors.
+Failed health fixture run retained; fixed environment isolation. HTTP fixture uses owned child server,
+random credentials/port and scratch game/state/config. No installed host/game proof implied.
 
-Antigravity IDE activated 0.0.79. Server/served UI match exact tested VSIX; AiLive
-view restored. Saved state/config hashes and existing agent credentials preserved.
-No mod/game writes. Last observed port55978: rediscover before reuse.
-Mod still has findings: Claude must run fresh validation, not assume it is clean.
+NEXT C02: private source has a prototype (not integrated/committed):
+src/lib/importedIdentity.ts, xmlParser.ts, workspaceIdentity.ts, types.ts, server.ts,
+DirectoryExplorer.tsx, SourceControl.tsx, scripts/imported-identity.selftest.ts.
+Plan: private source/docs/plans/2026-10-25-c02-stable-import-identities.md.
+20 focused cases pass; HTTP/rendered/type/policy proof still required. Private backup backups/claude-C02.
+Next command: inspect private C02 diff against backups/claude-C02, then write/run isolated HTTP and
+rendered import/reimport proof. Match exact source folder+mod, retain unique IDs/layout/waypoints,
+refuse ambiguous transfers, and preserve exact compiled source after reconciliation.
+Do not copy broad private docs/config or overwrite C01 portability repairs.
+C03 warning-review reuse, C04 concrete coverage, C05 incremental validation, C06 API/source coordination,
+C07 actual paired game loop still open. Kimi paused until public+installed Claude release verified.
 
-Public: https://open-vsx.org/extension/x4forge/x4-forge-studio
-SHA256: 7d40cc2b972ac397458281ab0caf0fcf89ed035c02c93c0cb2e900818f744a24.
-Tests: fullE2E112, focused6, routes498, oracles134, supervisor16, inspector13,
-exact-package trust15, all passed. Public download equals tested/installed VSIX.
-Plan/AAR: docs/plans/2026-10-23-fixes-only-release.md.
-Proof: docs/releases/0.0.79-proof.json.
-Claude migration: docs/releases/0.0.79-agent-handoff.md.
-Private evidence: test-results/fixes-only-release/.
-No player eyeball gate for this bounded backend release.
+Live Forge/X4 unchanged. Rediscover before use; last baseline live PID25532 port61409, Dev PID71180
+port56266. These are historical, not liveness proof. Native game verification and release installation
+need separately coordinated windows; no keyboard fallback. Current eyeball queue: C07 game and
+final exact-package native-host proof only, after isolated candidates pass; no immediate Ken check.
 
-Rollback: C:/Users/Moshi/.antigravity-ide/hotfix-backups/release-0.0.79-20261023/
-extension-0.0.78 (2101 files byte-compared). Restore code, not later user state.
-
-Commit question: mandatory hook and non-force source push follow publication.
-Check git log/direct remote before repeating. Public79 is immutable; no republish.
-Update #20 after source delivery, without closing the broader program.
-Commit point: fix(release): ship 0.0.79 UI manifest and deployment trust repairs.
+GitHub #20/Notion safety task and hub updated IN PROGRESS; sync commit evidence after local commit.
+Degradation call made after rejected patch and documentation encoding error. Patch was atomic/no
+mutation; UTF-8 record retry completed. Preserve the verified checkpoint, use fresh context for C02.
+Commit point: fix(forge): integrate isolated Claude regression fixes.

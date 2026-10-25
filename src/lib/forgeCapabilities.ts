@@ -516,9 +516,9 @@ export const FORGE_CAPABILITIES = [
   },
   {
     id: 'workspace.compile',
-    version: 1,
+    version: 2,
     title: 'Compile a workspace in memory',
-    description: 'Compile supported workspace domains to an in-memory file manifest without writing the game.',
+    description: 'Generate and validate an in-memory manifest without writing the game. success reflects validation.ok; failed validation retains preview files and diagnostics with PROJECT_VALIDATION_FAILED. generation.success reports generation only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -533,6 +533,11 @@ export const FORGE_CAPABILITIES = [
     },
     outputSchema: objectOutput({
       success: { type: 'boolean' },
+      generation: { type: 'object', properties: { success: { type: 'boolean' } }, required: ['success'], additionalProperties: false },
+      status: { type: 'string' },
+      code: { type: 'string' },
+      error: { type: 'string' },
+      failedStages: { type: 'array', items: { type: 'string' } },
       modId: { type: 'string' },
       file_count: { type: 'number' },
       files: { type: 'object', additionalProperties: true },

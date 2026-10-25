@@ -6,6 +6,18 @@
 
 ## P0 — Active
 
+### Claude complaint completion and release — C01-C07 `in_progress` (GitHub #20; runtime #14/#35)
+
+Approved sequence and gates: `docs/plans/2026-10-25-claude-completion-release.md`.
+C01 integrates the reviewed private fixes into the isolated release worktree, then validates and
+commits locally. C02 stable imported identities, C03 remembered warning reviews, C04 grounded
+coverage/traps, C05 measured incremental validation, C06 API/source coordination and C07 real
+game-loop proof remain open. Keep live Forge/X4 untouched outside coordinated verification and
+installation windows. Public release and exact installed verification precede Kimi M01; no interim pushes.
+C01 integration VERIFIED: 14 focused suites, 65 HTTP/MCP checks, rendered deployment review E2E,
+typecheck/lint/builds and complete precommit/policy gate. See `docs/testing/claude-C01-integration.json`.
+C02 private prototype has only focused proof; no further unit or public/installed release is complete.
+
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 
 Port, do not invent: the full program will use X4 9.00's shipped `helper.lua` / `widget_fullscreen.lua`, preserve real

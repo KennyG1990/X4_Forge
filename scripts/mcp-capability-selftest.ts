@@ -71,7 +71,7 @@ async function stop(server: http.Server): Promise<void> {
 interface JsonRpcMessage {
   id?: number;
   method?: string;
-  result?: { tools?: any[]; content?: Array<{ type?: string; text?: string }> };
+  result?: { tools?: any[]; content?: Array<{ type?: string; text?: string }>; isError?: boolean };
   error?: { code?: number; message?: string };
 }
 
@@ -217,7 +217,7 @@ type Mode = 'live' | 'read' | 'write' | 'legacy' | 'malformed' | 'current-missin
   'narrowed' | 'alias-narrowed' | 'v2' | 'wrong-workspace' | 'authority-wrong-hash' | 'effective-malformed' |
   'effective-missing' | 'effective-expanded';
 let mode: Mode = 'live';
-let endpointMode: 'normal' | 'invalid-json' | 'empty-json' | 'missing-fields' | 'missing-workspace-snapshot' = 'normal';
+let endpointMode: 'normal' | 'invalid-json' | 'empty-json' | 'missing-fields' | 'missing-workspace-snapshot' | 'compile-invalid' | 'compile-contradictory' | 'compile-missing-ok' = 'normal';
 const contract = buildForgeCapabilityContract(sha256);
 const wrongHashContract = {
   ...contract,
@@ -604,6 +604,16 @@ const server = http.createServer((request, response) => {
     }));
     return;
   }
+  if (request.method === 'POST' && request.url === '/api/agent/compile') {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      success: endpointMode !== 'compile-invalid',
+      modId: 'compile_fixture', file_count: 1, files: { 'ui/test.lua': 'preview' },
+      diagnostics: [{ severity: 'warning', message: 'retain me' }],
+      validation: endpointMode === 'compile-missing-ok' ? {} : { ok: endpointMode === 'normal', summary: {} },
+    }));
+    return;
+  }
   response.writeHead(404, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify({ error: 'not found' }));
 });
@@ -624,6 +634,28 @@ try {
   });
 
   mode = 'live';
+  await withMcp(baseUrl, async client => {
+    for (const fixture of ['normal', 'compile-invalid', 'compile-contradictory'] as const) {
+      endpointMode = fixture;
+      const reply = await client.request('tools/call', { name: 'compile_workspace', arguments: {} });
+      const payload = JSON.parse(reply.result!.content![0].text!);
+      const valid = fixture === 'normal';
+      assert.equal(payload.success, valid, `${fixture}: validation controls the compile verdict`);
+      assert.equal(Boolean(reply.result?.isError), !valid, `${fixture}: MCP must flag invalid output`);
+      assert.equal(payload.validation.ok, valid);
+      assert.equal(payload.generation.success, true);
+      assert.deepEqual(payload.files, ['ui/test.lua']);
+      assert.equal(payload.diagnostics[0].message, 'retain me');
+      if (!valid) {
+        assert.equal(payload.code, 'PROJECT_VALIDATION_FAILED');
+        assert.deepEqual(payload.failedStages, ['validation']);
+      }
+    }
+    endpointMode = 'compile-missing-ok';
+    const missing = await client.request('tools/call', { name: 'compile_workspace', arguments: {} });
+    assert.equal(missing.result?.isError, true, 'missing validation.ok must fail closed');
+    endpointMode = 'normal';
+  });
   for (const [label, auth] of [
     ['missing-key', { key: '' }],
     ['missing-workspace', { workspaceId: '' }],

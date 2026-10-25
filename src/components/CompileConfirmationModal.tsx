@@ -20,6 +20,8 @@ import {
   Square
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
+import DeployValidationSummary from './DeployValidationSummary';
+import type { DeployReviewData } from '../lib/deployClient';
 
 export interface DeployChecklistRow {
   id: string;
@@ -39,6 +41,7 @@ interface CompileConfirmationModalProps {
   compileStatus?: 'idle' | 'compiling' | 'success' | 'error';
   compileMessage?: string;
   checklist?: DeployChecklistRow[];
+  deployResult?: DeployReviewData | null;
 }
 
 const CHECK_COLORS: Record<DeployChecklistRow['status'], string> = {
@@ -60,7 +63,8 @@ export default function CompileConfirmationModal({
   modWorkspacePath,
   compileStatus = 'idle',
   compileMessage = '',
-  checklist = []
+  checklist = [],
+  deployResult = null
 }: CompileConfirmationModalProps) {
   // B84: the deploy FORMAT toggle. Hooks must sit above the `isOpen` early return.
   // The value is server-persisted config, not workspace state, so every deploy surface
@@ -191,7 +195,7 @@ export default function CompileConfirmationModal({
       onClick={onClose}
     >
       <div
-        className="w-[520px] max-h-[90vh] flex flex-col bg-[#0b0e14] border border-emerald-500/25 rounded-xl shadow-2xl shadow-emerald-950/20"
+        className="w-[520px] max-h-[90vh] flex flex-col overflow-hidden bg-[#0b0e14] border border-emerald-500/25 rounded-xl shadow-2xl shadow-emerald-950/20"
         onClick={e => e.stopPropagation()}
       >
         {/* Header wrapper block */}
@@ -218,6 +222,7 @@ export default function CompileConfirmationModal({
           </button>
         </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
         {/* Info panel context line */}
         <div className="px-4 py-2 border-b border-white/5 bg-slate-900/30 flex items-center justify-between text-[10px] font-mono select-none">
           <div className="flex items-center gap-1.5 text-slate-400">
@@ -235,7 +240,7 @@ export default function CompileConfirmationModal({
         </div>
 
         {/* Scrollable grid area of targets */}
-        <div className="p-4 flex-1 overflow-y-auto space-y-3 custom-scrollbar">
+        <div className="p-4 space-y-3">
           <div className="flex items-center justify-between text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 select-none">
             <span>Choose Elements to Build</span>
             <div className="flex items-center gap-3">
@@ -379,12 +384,13 @@ export default function CompileConfirmationModal({
 
         {/* B7: deploy-verify preflight result — rendered IN the wizard, not hidden in Playtest */}
         {compileStatus !== 'idle' && (
-          <div className="mx-4 mb-4 p-2.5 bg-[#0f131c] border border-white/5 rounded text-[10px] font-mono leading-relaxed space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar" data-testid="wizard-preflight-card">
+          <div className="mx-4 mb-4 p-2.5 bg-[#0f131c] border border-white/5 rounded text-[10px] font-mono leading-relaxed space-y-1 shrink-0 max-h-[40vh] overflow-y-auto custom-scrollbar" data-testid="wizard-preflight-card">
+            {deployResult && compileStatus !== 'compiling' ? <DeployValidationSummary result={deployResult} /> :
             <div className={`uppercase text-[8.5px] font-bold tracking-wider ${
-              compileStatus === 'compiling' ? 'text-cyan-400' : compileStatus === 'success' ? 'text-emerald-400' : 'text-red-400'
+              compileStatus === 'compiling' ? 'text-cyan-400' : 'text-slate-300'
             }`}>
-              {compileStatus === 'compiling' ? 'Running preflight & deploy…' : compileStatus === 'success' ? 'Deployed + verified' : 'Deploy failed'}
-            </div>
+              {compileStatus === 'compiling' ? 'Running preflight & deploy…' : compileStatus === 'success' ? 'Deployment result unavailable' : 'Build stopped'}
+            </div>}
             {compileMessage && <div className="text-slate-300 break-all">{compileMessage}</div>}
             {checklist.map(row => (
               <div key={row.id} className="flex items-start gap-1.5">
@@ -403,8 +409,9 @@ export default function CompileConfirmationModal({
           </div>
         )}
 
+        </div>
         {/* Footer controls wrapper block */}
-        <div className="p-4 border-t border-white/5 bg-[#070a0f] flex items-center justify-between rounded-b-xl select-none">
+        <div className="p-4 shrink-0 border-t border-white/5 bg-[#070a0f] flex items-center justify-between rounded-b-xl select-none">
           <div className="text-[10px] font-mono text-slate-500">
             <span className="text-emerald-400 font-bold">{selectedCount}</span> of 6 targets active
           </div>

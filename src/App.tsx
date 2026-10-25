@@ -1,4 +1,4 @@
-import { fetchVerifiedDeploy, deployValidationLabel } from './lib/deployClient';
+import { fetchVerifiedDeploy, type DeployReviewData } from './lib/deployClient';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -851,6 +851,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   const [isCompileModalOpen, setIsCompileModalOpen] = useState<boolean>(false);
   // B7: deploy-verify checklist rows surfaced in the Compile wizard itself.
   const [deployChecklist, setDeployChecklist] = useState<Array<{ id: string; label: string; status: 'pass' | 'warn' | 'fail' | 'skipped'; detail: string }>>([]);
+  const [deployResult, setDeployResult] = useState<DeployReviewData | null>(null);
   // B1 sync-trust: persistent canvas↔server content divergence gets a visible badge.
   const [syncDiverged, setSyncDiverged] = useState<boolean>(false);
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string>(() => selectedWorkspaceId());
@@ -1746,6 +1747,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
 
   const executeCompileModProject = async () => {
     setCompileStatus('compiling');
+    setDeployResult(null);
     setDeployChecklist([]);
     setCompileMessage('Compiling and deploying project on the server...');
     try {
@@ -1756,6 +1758,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         body: JSON.stringify({ workspace })
       });
       const deployData = await deployRes.json();
+      setDeployResult(deployData);
       setDeployChecklist(Array.isArray(deployData.checklist) ? deployData.checklist : []);
       if (deployRes.ok && deployData.ok) {
         if (deployData.workspace && typeof deployData.workspace === 'object') {
@@ -1788,8 +1791,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           if (convergence.snapshotHash) lastServerSnapshotHashRef.current = String(convergence.snapshotHash);
         }
         setCompileStatus('success');
-        setCompileMessage(`Deployed bytes verified for "${deployData.modId}" at ${deployData.deployedPath || deployData.stagingPath}. ` +
-          deployValidationLabel(deployData));
+        setCompileMessage(`Deployment target: ${deployData.deployedPath || deployData.stagingPath || 'not supplied'}.`);
       } else {
         const failed = (deployData.checklist || []).find((c: { status: string }) => c.status === 'fail');
         setCompileStatus('error');
@@ -1810,6 +1812,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     setCompileStatus('idle');
     setCompileMessage('');
     setDeployChecklist([]);
+    setDeployResult(null);
     setIsCompileModalOpen(true);
   };
 
@@ -3093,6 +3096,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         compileStatus={compileStatus}
         compileMessage={compileMessage}
         checklist={deployChecklist}
+        deployResult={deployResult}
       />
     </div>
   );

@@ -765,6 +765,8 @@ interface TrackedObject {
   mutatedProperties: Set<string>;
   /** The source table escaped to a call whose effects are not modeled. */
   escaped: boolean;
+  /** Descriptor proof cannot reuse fields after opaque calls, even nonnumeric fields. */
+  descriptorEvidenceEscaped?: boolean;
   /** Private AST declaration retained for source-owned literal resolution. */
   declarationNode?: LuaNode;
   cellKind?: 'text' | 'button' | 'editbox' | 'icon';
@@ -1506,6 +1508,8 @@ class X4UiCallModelBuilder {
     const visit = (object: TrackedObject): void => {
       if (visited.has(object)) return;
       visited.add(object);
+
+      if (invalidateNumericTables && object.reference.origin === 'literal') object.descriptorEvidenceEscaped = true;
 
       if (invalidateNumericTables
         && object.reference.origin === 'literal'
@@ -4049,11 +4053,19 @@ class X4UiCallModelBuilder {
         return projection;
       };
       const fields = [...options.object.fields.entries()];
+      // Do not promote stale descriptor fields to button-error evidence after
+      // an opaque call or mutation. Other projections retain their contracts.
+      const uncertainButtonDescriptor = callName === 'createButton'
+        && (options.object.escaped || options.object.mutated || options.object.descriptorEvidenceEscaped);
+      if (uncertainButtonDescriptor) {
+        this.addGap('property', 'unknown', this.location(callNode), 'createButton options may have changed through mutation or an opaque call');
+      }
       const isSupported = (name: string): boolean => exactFrameTextureSetter
         ? propertyNames.includes(name)
         : wanted.has(normalizePropertyName(name));
       semantics.properties = fields.filter(([name]) => isSupported(name)).map(project);
       if (callName === 'setText' || callName === 'setText2'
+        || (callName === 'createButton' && !uncertainButtonDescriptor)
         || callName === 'setDefaultCellProperties'
         || callName === 'setDefaultComplexCellProperties'
         || callName === 'setHotkey'

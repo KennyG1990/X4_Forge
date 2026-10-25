@@ -1,0 +1,23 @@
+# Claude complaints — reconciled private Dev status, 2026-10-25
+
+This is a scope ledger, not a claim that the public Forge contains these changes. Evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata. Kimi remains paused. All game execution/experience proof remains separate.
+
+| Original complaint | Current scope and evidence | What remains |
+| --- | --- | --- |
+| ui.xml treated as Lua/passthrough; lost imported registrations | VERIFIED private source-domain handling, preserved registrations/edits, malformed/missing registrations refused; ui-source-domain/verdict.json | Public integration; no claim all UI semantics are covered |
+| Forge failure versus mod failure; misleading compile/deploy success | VERIFIED bounded API evidence classifications, compile/artifact truth and deploy UI outcome distinctions; compile-verdict, deploy-review-ui | Exhaustive failure-classification audit across every API remains broader than these proofs |
+| Logged overrides, accepted findings | VERIFIED exact-finding/source-bound approval, actor/reason/receipt and read-only UI; finding-overrides, deploy-review-ui | A persistent per-mod known-warning policy across source changes is NOT implemented; existing approvals intentionally require renewed review when binding facts change |
+| Exact bytes, stale result, mod identity | VERIFIED snapshot-bound validate/deploy with stale refusal and workspace-mod guard; deploy-snapshot, client-isolation | No blanket claim every API response carries mod identity; other routes need contract census if this requirement is interpreted literally |
+| Shared active workspace collisions | VERIFIED addressed workspaces, credential binding, paired CAS and wrong-mod deployment refusal; client-isolation | No raw source-folder editor lock; clients must select/provision their own workspace |
+| Reference/property and listener false positives | VERIFIED specific property/literal and AST/XML listener cases; validation-noise | General MD expressions, aliases/wrappers and dynamic event resolution remain partial; unresolved direct events now explicitly incomplete (event-coverage) |
+| AI-script handmade allowlist | Reported get_safe_pos case already passed current Forge and independent game XSD oracle; legal/invalid cases proved (import-aiscript) | Broad parity with the full XSD language/corpus is not established |
+| Large Lua coverage and vanilla widget rules | Full large-file parse/tail-error and specific button text rule proved; lab summary, lua-button-text; coverage gaps explicit | Comprehensive Lua semantics and further vanilla helper traps remain open |
+| Slow full validation | VERIFIED file-local Lua analysis caching with changed/dependent source parity; incremental-lua | XML/reference/project incremental validation and representative minute-scale latency benchmark remain open |
+| Save-aware log, reload without keyboard, structured probes | Backend protocol and freshness gates VERIFIED with synthetic logs and Lua stubs; runtime-loop, log-freshness | Native X4 file/API capability, real save-load/reload completion, general read-only state probe, user experience proof. Companion concept is SPECIFIED only; no helper installed |
+| Dead-path dependency health | VERIFIED private path diagnostics and installed API: dependency-health; exact failed path and setting, no false mod error | Parser/index/packed fallback and write-access health not certified by a readable-path result |
+| Malformed import payloads returning200 | VERIFIED strict import request boundary; import-aiscript | Not a census of request validation on every endpoint |
+| Stable node IDs | OPEN: src/lib/xmlParser.ts still constructs cue/action/condition/link IDs with Date.now() | Deterministic identity and edit/reimport stability must be implemented and tested |
+| Engine-trap rules from gotchas | Existing mdPitfallLints has four bounded rules; no products/station rule found | Reconcile supplied gotchas with game/reference evidence; add narrowly grounded rules without reviving false positives |
+| Usable public/installed release | Private Dev backend/frontend proved in bounded scopes | Integrate into Git, required release tests, native host/package verification and publish. Do not disturb Claude stable during private work |
+
+Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. Next independently provable source work can address deterministic import IDs or broader incremental validation, one bounded unit at a time.

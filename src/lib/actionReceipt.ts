@@ -244,7 +244,9 @@ const SAFE_METADATA_KEYS = new Set([
   'outcome', 'stage', 'recoveryId',
   // Exact-finding approval audit facts; never raw requests, credentials or source bytes.
   'modId', 'sourceHash', 'artifactHash', 'validatorHash', 'corpusHash', 'targetHash',
+  'validatedArtifactHash', 'validatedArtifactScope',
   'findingId', 'findingCode', 'findingCategory', 'reason', 'actorLabel',
+  'findingSeverity', 'acceptedErrors', 'acceptedWarnings', 'unacceptedErrors', 'unacceptedWarnings', 'unavailableChecks',
 ]);
 
 const RECEIPT_KEYS = [
