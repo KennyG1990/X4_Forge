@@ -8052,3 +8052,18 @@ docs/plans/2026-10-26-bounded-claude-release.md. Final Git delivery/CI is postco
 on the matching GitHub release/owner. No live installation or game proof. Full Claude program,
 A15, corrupt-save diagnostics and game-loop proof remain open; Kimi paused. Narrow embedded
 import-modal layout remains a named UI limitation; expanded native proof passed.
+
+
+### 2026-10-26 — 0.0.80 public artifact and CI repair checkpoint
+
+VERIFIED public artifact/local CI-harness repair; final remote Quality is pending at
+this precommit capture. Release c97d5d8 is pushed and GitHub/Open VSX downloads match
+97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3.
+Windows short TEMP aliases reproduce strict receipt/session rejection; CI now supplies
+physical TEMP without weakening either store. Sweep failures retain bounded check
+names/details. Owned-root deletion yields and retries finitely, still requiring absence.
+Local: alias recovery119 receipt/45 adapter, two134-oracle runs with cleanup,500 routes,
+eight actual HTTP/CLI reporting cases, lint0errors599warnings and full precommit pass.
+Evidence: docs/releases/0.0.80-delivery.json. No application source/package changes,
+republish, live installation, active-mod edit or game input. All failed runs retained.
+No capability-map delta. Full Claude program remains PARTIAL; Kimi paused.

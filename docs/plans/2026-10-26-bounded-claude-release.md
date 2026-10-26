@@ -389,3 +389,83 @@ freeze must explicitly record these two nonruntime changes rather than claim unc
 
 Pending. Baseline failures are real release blockers; previous bounded D0 success remains
 valid for its stated scope but was not a complete release gate.
+
+## Post-publication CI repair — SPECIFIED
+
+Baseline: release commit c97d5d8515d30029446c97f5c7ec2017c8244ecf is pushed; Open VSX
+and GitHub v0.0.80 downloads match the tested 97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3 VSIX.
+Quality run40409196050 failed two runtime-discovered oracles: action-receipt12/13 and
+runtime-debugger10/46; other132 passed. The aggregate failure dump lost individual
+failed-check details. Full release remains PARTIAL; no live installation is authorized.
+
+Bounded unit: reproduce the two failures with isolated filesystem fixtures, identify
+whether production code or test-environment setup is responsible, and repair the
+smallest correct surface. Hypothesis only: a Windows short-path TEMP alias conflicts
+with deliberately strict physical-path containment. Do not relax junction/symlink
+rejection or change immutable public0.0.80 bytes. A production fix would require a new
+corrective package; a fixture-only repair must prove unchanged application runtime.
+
+Reconcile: reuse ActionReceiptStore, RuntimeDebugSessionStore and their existing
+selftests plus the serial oracle integration/sweep. The stores intentionally require
+physical paths. Existing graph navigation and ADR/capability records were checked;
+no alternate receipt/session store is being introduced. No capability-map delta yet.
+
+Acceptance: exact failed-check reproduction; ordinary and aliased scratch fixtures;
+negative containment controls remain passing; complete runtime-discovered oracle run;
+typecheck/lint/precommit and relevant CI gates. If sweep diagnostics change, prove a
+failing oracle retains its bounded check name/detail without masking failure. Inspect
+the complete diff and distinguish source/test fixes from shipped-artifact evidence.
+
+Evidence: test-results/release-0.0.80/ci-repair-* and existing github-ci-40409196050.
+Rollback: reviewed c97 tree; revert only this repair's explicit paths if necessary.
+No shared database, live/Dev bundle, game files, credentials or desktop interaction.
+Use private environment/data/config/coordination roots for all runtime tests. Preserve
+the failed CI and every failed local run. Commit/push only a validated public-release
+completion fix, then require green CI and update/read back GitHub/Notion provenance.
+
+Reproduction: real Windows8.3 alias produces receipt12/13 and adapter11/46 failures;
+the corresponding physical path passes119/119 and45/45. Exact workflow command
+recovers both. The first complete rerun passed both but failed artifact-pipeline:
+the reproduction TEMP was inside the repository, so target/source-overlap prevention
+correctly refused its fixture. Evidence ci-repair-verified-c982f5c0ca and
+ci-repair-oracles-d0920851 is retained. Move only the private test TEMP outside source
+for the full rerun; do not change the artifact safety rule. No production-code delta.
+
+Second full rerun:134/134 oracles passed; private-root cleanup failed with EPERM.
+No matching test Node process remained at inspection, and Windows DELETE-access
+probes later succeeded for the root and all remaining DB files. The original locking
+cause is unconfirmed. Retain ci-repair-oracles-023ae4ae. Reuse the harness's bounded
+owned-root cleanup, switch to asynchronous removal so child-close/handle-release
+events can progress, and extend its existing finite retry budget. Directory absence
+remains mandatory; no error is ignored. Require repeated full oracle cleanup proof.
+
+
+### CI repair review, close and AAR — precommit capture
+
+Local repair VERIFIED: exact workflow command converts a real8.3 TEMP alias to its
+physical path and both affected fixtures pass119/119 and45/45. Two complete runtime
+sweeps pass134/134 with successful owned-root removal;500 route assertions,8 real
+HTTP/CLI reporting controls, lint0errors599warnings and full precommit pass. All
+application/shared/controller/dependency files remain equal to c97. ZIP inspection
+confirms none of these CI harness scripts is in the published VSIX. Public Git/tag/
+Open VSX/GitHub artifact readbacks pass. No republish/version bump is appropriate.
+
+Fresh-eyes review: no containment guard or test expectation was relaxed; failed
+details are bounded to10 rows with200/1024-character fields, arbitrary fields omitted.
+HTTP errors and invalid JSON still refuse. Cleanup exhaustion still fails. Existing
+mandatory hooks remain unchanged. No capability-map delta; rollback is the explicit
+CI/documentation delta only. Follow-up remote CI remains REQUIRED after commit/push;
+this precommit snapshot cannot certify its future outcome. Read back the matching
+GitHub release/#20 and Notion safety task for final delivery provenance.
+
+AAR triggers: remote failure, corrected TEMP location, and local cleanup failure.
+Sustain: negative fixtures and immutable package hashes kept production guards intact.
+Improve approach: keep artifact-test temporary roots outside source; a valid fixture
+for one store is not necessarily valid for a complete deployment suite.
+Improve tools: the sweep omitted exact failures; bounded details now travel with the
+failing endpoint. Asynchronous deletion permits handle-close progress and proves absence.
+Highest-risk observed weakness: remote failure summaries concealed the failed checks,
+forcing a locally reproduced inference; repaired by tested per-check reporting. The
+original remote cause and Windows cleanup delay are not presented as independently
+observed diagnoses. Lessons banked here; full Claude/game claims remain out of scope.
+Commit point: ci: resolve Windows temp aliases and retain oracle failure evidence.

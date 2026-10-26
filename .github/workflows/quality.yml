@@ -30,6 +30,13 @@ jobs:
           node-version: 24
           cache: npm
 
+      # Hosted Windows runners can expose TEMP through an 8.3 alias. The durable
+      # stores deliberately reject nonphysical roots; give test fixtures the
+      # physical path instead of weakening their containment checks.
+      - name: Resolve physical test temporary directory
+        run: >-
+          node --input-type=module -e "import fs from 'node:fs'; import os from 'node:os'; const temp = fs.realpathSync.native(os.tmpdir()); if (/[\r\n]/.test(temp)) throw new Error('Invalid temporary directory'); fs.appendFileSync(process.env.GITHUB_ENV, 'TEMP=' + temp + '\nTMP=' + temp + '\n'); console.log('Physical test TEMP: ' + temp);"
+
       - name: Install locked dependencies
         run: npm ci
 
@@ -49,7 +56,7 @@ jobs:
         run: npm run lint -- --max-warnings 600
 
       - name: Run deterministic oracle integration
-        run: npm run test:oracles
+        run: node scripts/oracle-sweep.test.mjs && npm run test:oracles
 
       - name: Audit capability and route contracts
         run: npm run test:capabilities

@@ -99,7 +99,16 @@ async function hitOne(p) {
     const green = body ? (body.allPassed ?? body.pass ?? false) : false;
     const passed = body?.passed;
     const total = body?.total;
+    // Retain the failing house's evidence, not only an unrelated aggregate
+    // selftest. Bound both rows and fields; never dump arbitrary response data.
+    const failedChecks = !green && Array.isArray(body?.checks)
+      ? body.checks.filter(check => check?.pass === false).slice(0, 10).map(check => ({
+        name: String(check.name ?? "unnamed").slice(0, 200),
+        ...(check.detail === undefined ? {} : { detail: String(check.detail).slice(0, 1024) }),
+      }))
+      : [];
     return { path: p, status, green: status === 200 && !!green, passed, total,
+      ...(failedChecks.length ? { failedChecks } : {}),
       error: status !== 200 ? (body?.error || `HTTP ${status}`) : (green ? null : "oracle reported failure") };
   } catch (e) {
     return { path: p, status: 0, green: false, error: e?.name === "AbortError" ? "timeout" : String(e?.message || e) };
@@ -137,6 +146,7 @@ async function main() {
     for (const r of results) {
       const tally = (r.passed != null && r.total != null) ? ` ${r.passed}/${r.total}` : "";
       console.log(`${r.green ? "PASS" : "FAIL"} ${r.path}${tally}${r.green ? "" : `  — ${r.error}`}`);
+      for (const check of r.failedChecks || []) console.log(`  ${JSON.stringify(check)}`);
     }
     console.log(`\n[oracle-sweep] ${results.length - red.length}/${results.length} green` + (red.length ? `; ${red.length} RED` : ""));
   }

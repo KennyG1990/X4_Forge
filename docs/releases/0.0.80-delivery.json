@@ -1,0 +1,78 @@
+{
+  "status": "PRECOMMIT_LOCAL_VERIFIED_PUBLIC_ARTIFACT_VERIFIED_REMOTE_CI_PENDING",
+  "version": "0.0.80",
+  "releaseCommit": "c97d5d8515d30029446c97f5c7ec2017c8244ecf",
+  "githubRelease": "https://github.com/KennyG1990/X4_Forge/releases/tag/v0.0.80",
+  "openVsx": "https://open-vsx.org/extension/x4forge/x4-forge-studio",
+  "vsixSha256": "97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3",
+  "vsixBytes": 28918294,
+  "initialCi": {
+    "run": 40409196050,
+    "status": "FAILED",
+    "oracles": "132/134",
+    "url": "https://github.com/KennyG1990/X4_Forge/actions/runs/40409196050"
+  },
+  "changeBoundary": [
+    ".github/workflows/quality.yml",
+    "scripts/oracle-integration.mjs",
+    "scripts/oracle-sweep.mjs",
+    "scripts/oracle-sweep.test.mjs",
+    "release documentation"
+  ],
+  "applicationSourceDelta": [],
+  "republished": false,
+  "liveInstalled": false,
+  "kimi": "PAUSED",
+  "localProof": {
+    "workflowAliasRecovery": {
+      "receipts": {
+        "passed": 119,
+        "total": 119
+      },
+      "runtime": {
+        "passed": 45,
+        "total": 45
+      }
+    },
+    "oracleRuns": "2 x 134/134 with cleanup",
+    "routes": "500/500",
+    "lint": "0 errors,599 warnings",
+    "precommit": "PASS",
+    "sweepHttpCases": "4 cases in JSON and text; 8 runs",
+    "gates": {
+      "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\ci-repair-verified-b7b7987d26\\receipt.json",
+      "sha256": "afcb71ba7271db50291d376aae55d58f86c8d530bf798b1256f3ea97b4271751"
+    },
+    "repeatOracles": {
+      "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\ci-repair-oracles-repeat\\receipt.json",
+      "sha256": "661959897c18b2b508487f669617f4b6a4f154f8d58649b777859cad8b6d593e"
+    },
+    "aliasReproduction": {
+      "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\ci-repair-path-alias-probe\\run-da52b50a06\\receipt.json",
+      "sha256": "7a11238b5931e7227ae9bd5564876199f39a6e47bc27203ff8781e96f8c9f34d"
+    },
+    "publicGit": {
+      "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\public-push.json",
+      "sha256": "684f674599e3e4a5d3ac63b011de863f3596253add6cc32a7b3fff5fd2d89a21"
+    },
+    "githubArtifact": {
+      "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\github-release-verification\\receipt.json",
+      "sha256": "fb42661104ac7abadc4f688c90c589df09ae2c7bc70ae3c7923ddf3cde70c104"
+    },
+    "openVsxArtifact": {
+      "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\openvsx-2d306848a490\\receipt.json",
+      "sha256": "938f951046319f3489ab66b3bf133830c68e69eea3cdf084df1c71fd5372a30c"
+    }
+  },
+  "preservedFailures": [
+    "github-ci-40409196050/failed.log",
+    "ci-repair-oracles-d0920851/receipt.json",
+    "ci-repair-oracles-023ae4ae/receipt.json"
+  ],
+  "limits": [
+    "CI on this follow-up is checked after its commit/push; see matching release and owner #20.",
+    "Original CI path cause is inferred from the matching local reproduction, not recovered per-check CI evidence.",
+    "Windows cleanup delay cause remains unconfirmed; absence is still mandatory.",
+    "A15, corrupt-save checks, additional Claude cases and real game-loop proof remain open."
+  ]
+}

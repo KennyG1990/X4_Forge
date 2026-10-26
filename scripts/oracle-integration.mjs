@@ -31,10 +31,12 @@ function killTree(pid) {
   catch { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
 }
 
-function removeOwnedRoot(root) {
+async function removeOwnedRoot(root) {
   let cleanupError;
   try {
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    // Let child-close events and Windows handle release progress between retries.
+    // Absence is still mandatory; exhausting this bounded wait fails the gate.
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   } catch (error) {
     cleanupError = error;
   }
@@ -102,7 +104,10 @@ try {
   console.error(`[oracle-integration] ${error instanceof Error ? error.message : String(error)}`);
 } finally {
   killTree(server?.pid);
-  const cleanupOk = [tmp, discoveryDirForTests].map(removeOwnedRoot).every(Boolean);
+  let cleanupOk = true;
+  for (const root of [tmp, discoveryDirForTests]) {
+    if (!await removeOwnedRoot(root)) cleanupOk = false;
+  }
   if (!cleanupOk) exitCode = 1;
 }
 
