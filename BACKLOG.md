@@ -9,6 +9,11 @@
 ### Claude complaint completion and release — C01-C07 `in_progress` (GitHub #20; runtime #14/#35)
 
 Approved sequence and gates: `docs/plans/2026-10-25-claude-completion-release.md`.
+New OPEN intake A01-A17: `docs/plans/2026-10-25-claude-additional-reports.md`.
+Includes CRITICAL save corruption detection/read-only UTF-8 scan, new validator and engine-trap
+cases, stable warning identity, deployment diagnostics, project gates and concrete runtime failures.
+Reported conditions await independent reproduction; C01-C04's narrower proof does not cover them.
+Documentation only: no change to execution order or permission to touch the running game.
 C01-C04 integration VERIFIED locally: reviewed private fixes, stable imported identities, and
 warning-only exact-input review reuse/revocation with authenticated provenance. Evidence:
 `docs/testing/claude-C01-integration.json`, `claude-C02-identities.json`, `claude-C03-warning-reviews.json`.
@@ -22,6 +27,10 @@ Next C05 measured incremental validation, C06 API/source
 coordination and C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
 verification and installation windows. Public release and exact installed verification precede
 Kimi M01; no interim pushes. Kimi paused.
+
+C05 active feature owner: https://github.com/KennyG1990/X4_Forge/issues/47
+and https://app.notion.com/p/4054618ed15b81749116e21f47c9ac09. Resolve only after its own
+performance/parity/test-mod gates pass; no blanket closure of the other complaint cases.
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 

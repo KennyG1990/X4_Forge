@@ -22,6 +22,15 @@ This is a scope ledger, not a claim that the public Forge contains these changes
 
 Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. C03 warning-only review reuse and bounded C04 validation are verified locally. Next is C05, followed by C06-C07 under the approved completion/release plan.
 
+Additional intake A01-A17 is OPEN: [2026-10-25 Claude additional reports](2026-10-25-claude-additional-reports.md).
+It preserves blocked-deploy details/acceptance commands, conditional event names, line-stable warning
+identity, previous-deployment fidelity labels, Windows console encoding, CRITICAL corrupt-save
+detection and read-only UTF-8 scanning (optional substring-flow heuristic), new-file reload guidance,
+four conditional engine traps, macro/ware property reads, nested-brace scope, X4 globals, project
+behavior gates, keyboard-free reload failures and 54 MB current-save log tails. These are reported,
+not newly reproduced. Earlier C01-C04 evidence does not close these new cases. Original numbering
+1-17 below is retained; implementation is not started by this documentation intake.
+
 ## Original complaint inventory
 
 Consolidated from Claude's two pasted reviews, with repeated complaints merged. This is the

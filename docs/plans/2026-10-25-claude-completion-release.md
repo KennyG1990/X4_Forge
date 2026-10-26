@@ -2,6 +2,13 @@
 Lane FULL. Program IN_PROGRESS. Owner authorized C01-C07, coordinated game/release windows, Open VSX-first public release and live installation, then Kimi M01. No interim pushes. Existing main-checkout edits preserved.
 
 ## Acceptance and sequence
+Scope addendum: `2026-10-25-claude-additional-reports.md` records A01-A17, mapped to original
+complaints and C03/C04 supplements, C05 warning dependencies, C06 diagnostics/project gates and
+C07 save/reload work. All are SPECIFIED/OPEN, with A06 corrupt-save detection marked CRITICAL.
+The earlier C01-C04 closes retain their exact historical bounds; expanded coverage is not complete.
+Reconcile these new cases before declaring the Claude program complete. Intake alone neither
+starts implementation nor changes the coordinated live-game/release boundaries or execution order.
+
 C01 integrate reviewed private changes into clean release worktree at f274a7c; portable regression fixtures; full selected regression/API/browser tests, policy audit, precommit then local commit. C02 deterministic imported node/link identities with unambiguous reimport/layout preservation. C03 warning-only exact-evidence approval reuse with original/new actor receipts and revocation; no error/safety auto-approval. C04 concrete Claude/gotcha matrix grounded in actual X4 schemas/properties/vanilla, unresolved cases explicitly incomplete. C05 profile full validation; dependency-aware reuse equal to uncached output, 50% warm-edit improvement if baseline >2s, otherwise no material regression. C06 mod-specific API identity/strict input/error census and canonical-source coordination for Forge writes; external edits still refused through hashes. C07 existing runtime/companion pairing, sessions, read-only probes and receipt-backed reload states, then coordinated disposable-save game proof.
 
 Release gate: all reported cases proved with honest coverage, full required checks and native/package tests; choose unused stable version; publish exact tested VSIX Open VSX first, verify public bytes, final release commit/push/GitHub release; Microsoft if access permits. Separate live installation window only after Claude checkpoints and no deploy is active. Back up/restore installed bundle/config/state if verification fails. Kimi remains paused until public+installed release verified; then implement existing M01 disabled native MCP lifecycle in Dev only.

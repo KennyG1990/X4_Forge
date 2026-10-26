@@ -1,4 +1,16 @@
 # Session handoff — Claude C04 verified local integration
+Documentation intake after C04: A01-A17 saved in docs/plans/2026-10-25-claude-additional-reports.md;
+complaint ledger, completion plan and BACKLOG linked. New cases remain SPECIFIED/OPEN, especially
+CRITICAL A06 save-corruption detection. GitHub #20 and existing Notion task/hub are synchronized.
+This intake has no implementation or runtime tests; this is the authorized complaint-doc commit.
+Use git log for its exact SHA. Active A01-A17 bug/feature checklists in GitHub/Notion remain OPEN;
+resolve each only with acceptance evidence/commit, tracking published/installed separately.
+No new feature completion or release is claimed; Kimi remains paused.
+Preserve post-C04 isolation observation: live discovery refreshed at23:28 via installed Antigravity
+supervisor during the commit hook (cause unknown); final all-four-hash invariant failed despite
+unchanged bundles/Dev discovery. No task-issued live restart or correction. Prior post-E2E hashes
+were unchanged at23:16. Reconcile current environment before any future heavy tests.
+
 2026-10-25. X4 Forge. C01-C04 VERIFIED in bounded local scopes; full program PARTIAL.
 Worktree: C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge
 Branch codex/forge-fixes-release. This checkpoint is C04; git log -1 supplies exact SHA.
