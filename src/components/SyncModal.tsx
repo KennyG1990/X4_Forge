@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -172,6 +172,7 @@ export default function SyncModal({
   const [selectedPath, setSelectedPath] = useState('');
   const [previewReport, setPreviewReport] = useState<any>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const previewGeneration = useRef(0);
   const [importLoading, setImportLoading] = useState(false);
   const [showOfficial, setShowOfficial] = useState(false);
 
@@ -212,18 +213,25 @@ export default function SyncModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, modWorkspacePath, filesystemPath]);
 
-  useEffect(() => {
-    if (!selectedPath || candidates.some(c => c.root === selectedRoot && c.path === selectedPath)) return;
-    setSelectedPath('');
+  // Discovery is a navigation aid, not the authority for a manually entered path.
+  // In particular, partial input and paths typed while a scan is pending must survive.
+  const invalidatePreview = () => {
+    previewGeneration.current += 1;
     setPreviewReport(null);
-  }, [candidates, selectedPath, selectedRoot]);
+    setPreviewLoading(false);
+  };
 
   const loadProjectTree = async () => {
+    invalidatePreview();
     setLoadingTree(true);
     setStatusBanner(null);
     setExpandedPaths({});
     setLoadingPaths({});
     setNodeErrors({});
+    // A refresh or late path-config hydration invalidates the old preview, but
+    // must also replace it. Otherwise a selected project can remain pending
+    // forever when its earlier response arrives after this generation changes.
+    if (selectedPath.trim()) void previewProject(selectedRoot, selectedPath);
     const results = await Promise.all(PROJECT_SOURCES.map(async source => {
       try {
         const res = await fetch(`/api/fs/list?root=${source.root}&depth=1`);
@@ -293,6 +301,7 @@ export default function SyncModal({
 
   const previewProject = async (root: ProjectSourceRoot, path: string) => {
     if (!path) return;
+    const generation = ++previewGeneration.current;
     setPreviewLoading(true);
     setPreviewReport(null);
     setStatusBanner(null);
@@ -303,12 +312,13 @@ export default function SyncModal({
         body: JSON.stringify({ root, path })
       });
       const data = await res.json();
+      if (generation !== previewGeneration.current) return;
       if (!res.ok || data.error) throw new Error(data.error || `Preview failed (${res.status})`);
       setPreviewReport(data);
     } catch (e) {
-      setStatusBanner({ type: 'refused', msg: e.message || 'Project preview failed.' });
+      if (generation === previewGeneration.current) setStatusBanner({ type: 'refused', msg: e.message || 'Project preview failed.' });
     } finally {
-      setPreviewLoading(false);
+      if (generation === previewGeneration.current) setPreviewLoading(false);
     }
   };
 
@@ -683,7 +693,7 @@ export default function SyncModal({
                     {PROJECT_SOURCES.map(source => (
                       <button
                         key={source.root}
-                        onClick={() => { setSelectedRoot(source.root); setPreviewReport(null); }}
+                        onClick={() => { setSelectedRoot(source.root); invalidatePreview(); }}
                         className={`px-2 py-2 font-mono text-[9px] uppercase cursor-pointer ${selectedRoot === source.root ? 'bg-cyan-500/15 text-cyan-200' : 'bg-black/35 text-slate-500 hover:text-slate-300'}`}
                         title={source.label}
                       >
@@ -693,7 +703,7 @@ export default function SyncModal({
                   </div>
                   <input
                     value={selectedPath}
-                    onChange={e => setSelectedPath(e.target.value)}
+                    onChange={e => { setSelectedPath(e.target.value); invalidatePreview(); }}
                     placeholder="Relative folder path, e.g. sn_mod_support_apis"
                     className="flex-1 bg-black/35 border border-white/10 rounded px-2 py-2 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
                   />

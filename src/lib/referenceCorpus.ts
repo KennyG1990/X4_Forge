@@ -499,11 +499,11 @@ export function getReferenceCorpus(rootInput: string, force = false): ReferenceC
   const signature = signatureFor(files);
   if (!force && cache && cache.root.toLowerCase() === root.toLowerCase() && cache.signature === signature
     && cache.corpus.manifestGeneration === discovery.manifestGeneration) {
-    cache.checkedAt = now;
+    cache.checkedAt = Date.now();
     return cache.corpus;
   }
   const corpus = buildCorpus(root, files, signature, discovery.manifestGeneration);
-  cache = { root, signature, corpus, checkedAt: now };
+  cache = { root, signature, corpus, checkedAt: Date.now() };
   return corpus;
 }
 

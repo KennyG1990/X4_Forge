@@ -28,7 +28,6 @@ import {
   runAgentRouteAuthoritySelftest,
   type AgentAuthorityResolution,
   type AgentKeyScope,
-  type AgentRouteAuthorityDecision,
 } from './agentAuthority';
 import {
   AGENT_CAPABILITY_DISCOVERY_ROUTE_KEY,

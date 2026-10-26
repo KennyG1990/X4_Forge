@@ -6,7 +6,8 @@ import {
 } from './e2e-process-ownership-sampler.mjs';
 import { terminateCapturedProcessTree } from './e2e-process-termination-executor.mjs';
 
-const DEFAULT_OVERALL_DEADLINE_MS = 1_800_000;
+// Allow the 120-test serial suite one hour overall; per-test and cleanup limits stay unchanged.
+const DEFAULT_OVERALL_DEADLINE_MS = 3_600_000;
 const TERMINAL_GRACE_MS = 5_000;
 const OWNERSHIP_SAMPLE_INTERVAL_MS = 1_000;
 const TERMINATION_MAX_PASSES = 20;

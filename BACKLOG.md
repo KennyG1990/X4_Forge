@@ -6,6 +6,20 @@
 
 ## P0 — Active
 
+### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)
+
+User authorized publishing completed fixes before finishing the program, then returning to Dev.
+Plan: `docs/plans/2026-10-26-bounded-claude-release.md`. No uncoordinated live installation.
+All13 source/build/stage gates, exact extracted package80 checks, uninstrumented installed
+API62 checks, installed runtime134 oracles and coordinated native import/rescan proof pass.
+Open VSX0.0.80 is public; both downloaded artifacts match the tested VSIX. Final Git/CI
+delivery remains pending at this precommit snapshot and is recorded on the matching GitHub
+release/owner after commit. Root and staged runtime
+audits are clear; extension tooling passes high-severity gate with4moderate uuid-chain findings.
+Remove the scoped Identity4.13.0 tooling pin when
+upstream supports patched MSAL within the packager's declared range; rerun audit/package proof.
+Do not mark remaining Claude complaints complete or resume Kimi from this bounded release.
+
 ### Claude complaint completion and release — C01-C07 `in_progress` (GitHub #20; runtime #14/#35)
 
 Approved sequence and gates: `docs/plans/2026-10-25-claude-completion-release.md`.

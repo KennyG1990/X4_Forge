@@ -2,6 +2,12 @@
 Lane FULL. Program IN_PROGRESS. Owner authorized C01-C07, coordinated game/release windows, Open VSX-first public release and live installation, then Kimi M01. No interim pushes. Existing main-checkout edits preserved.
 
 ## Acceptance and sequence
+2026-10-26 user update: release the currently completed and validated Dev fixes as a bounded
+incremental public update, then continue the remaining Claude work in Dev. The new release
+contract is `2026-10-26-bounded-claude-release.md`. This supersedes the earlier requirement
+to finish every complaint before publishing; it does not waive release checks or authorize
+an uncoordinated live restart. Claude remains PARTIAL and Kimi paused.
+
 Scope addendum: `2026-10-25-claude-additional-reports.md` records A01-A17, mapped to original
 complaints and C03/C04 supplements, C05 warning dependencies, C06 diagnostics/project gates and
 C07 save/reload work. All are SPECIFIED/OPEN, with A06 corrupt-save detection marked CRITICAL.

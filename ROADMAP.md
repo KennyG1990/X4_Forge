@@ -8036,3 +8036,19 @@ Only Dev dist/launcher and scratch fixture deployment changed. Enumerated live p
 protected hashes matched; no game input, active-mod edits, public release, push or live installation.
 Not a universal installed/native-control/game claim. A15 and remaining complaints stay open; Kimi
 paused. Commit point: fix(dev): isolate coordination and verify updated Dev host.
+
+## 2026-10-26 — 0.0.80 source/package/Open VSX artifact VERIFIED
+
+Completed C01-C06c/D0 fixes and bounded release repairs are published as stable0.0.80.
+Public version/latest downloads match tested VSIX SHA256
+97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3.
+Source proof:120 E2E/0flakes,134 oracles,500 routes, all13 release gates. Exact artifact:
+80 extracted checks,62 installed API checks,134 installed oracles, coordinated native import
+rescan/preview. Staged runtime audit0;4moderate packaging-tool findings disclosed. Failed runs,
+metadata/link transformations and delayed public visibility retained; only one upload.
+
+Evidence: docs/releases/0.0.80-proof.json; agent contract:0.0.80-agent-handoff.md; plan:
+docs/plans/2026-10-26-bounded-claude-release.md. Final Git delivery/CI is postcommit provenance
+on the matching GitHub release/owner. No live installation or game proof. Full Claude program,
+A15, corrupt-save diagnostics and game-loop proof remain open; Kimi paused. Narrow embedded
+import-modal layout remains a named UI limitation; expanded native proof passed.

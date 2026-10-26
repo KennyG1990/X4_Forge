@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
-import { readServerWorkspace } from './ephemeral';
+import { ephemeralWorkspaceHeaders, readServerWorkspace } from './ephemeral';
+import type { ModWorkspace } from '../../src/types';
 
 const workspacePath = 'D:\\X4ForgeMods';
 const filesystemPath = 'G:\\Games\\X4 Foundations\\extensions';
@@ -170,6 +171,144 @@ test('Load Mod Project keeps a healthy source browsable when the other root fail
   await expect(filesystemSource.getByRole('button', { name: 'Select filesystem_mod from Filesystem' })).toBeVisible();
 });
 
+test('Load Mod Project preserves manual paths, refreshes previews and rejects stale or missing folders', async ({ page, request }, testInfo) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-manual-project-load-'));
+  const staging = path.join(temp, 'staging');
+  const deployment = path.join(temp, 'deployment');
+  const mod = path.join(staging, 'manual_mod');
+  fs.mkdirSync(path.join(mod, 'md'), { recursive: true });
+  fs.mkdirSync(deployment, { recursive: true });
+  fs.writeFileSync(path.join(mod, 'content.xml'), '<content id="manual_mod" name="Manual import" version="1"/>');
+  fs.writeFileSync(path.join(mod, 'md', 'manual.xml'), '<mdscript name="Manual"><cues><cue name="Init"><actions><set_value name="$value" exact="1"/></actions></cue></cues></mdscript>');
+  const headers = await ephemeralWorkspaceHeaders(true);
+  const originalResponse = await request.get(`${API}/api/schema/config`, { headers });
+  expect(originalResponse.ok(), await originalResponse.text()).toBeTruthy();
+  const original = await originalResponse.json();
+  const restore = { modWorkspacePath: original.config?.modWorkspacePath || '', filesystemPath: original.config?.filesystemPath || '' };
+  let releaseScan!: () => void;
+  let releasePreview!: () => void;
+  let releaseRefreshPreview!: () => void;
+  const scanGate = new Promise<void>(resolve => { releaseScan = resolve; });
+  const previewGate = new Promise<void>(resolve => { releasePreview = resolve; });
+  const refreshPreviewGate = new Promise<void>(resolve => { releaseRefreshPreview = resolve; });
+  let pendingScans = 0;
+  let completedScans = 0;
+  let pendingPreviews = 0;
+  let completedPreviews = 0;
+  let holdNextRefreshPreview = false;
+  let heldRefreshNodeCount: number | null = null;
+  let completedRefreshPreviews = 0;
+  try {
+    const configured = await request.post(`${API}/api/schema/config`, { headers, data: { modWorkspacePath: staging, filesystemPath: deployment } });
+    expect(configured.ok(), await configured.text()).toBeTruthy();
+    await page.addInitScript(() => localStorage.setItem('x4_forge_experience_mode', 'expert'));
+    await page.goto('/');
+    await expect(page.getByTestId('studio-workspace')).toBeVisible();
+    // Delay actual API responses, preserving their bytes and status. No fabricated
+    // discovery, preview or import result can satisfy this regression.
+    await page.route('**/api/fs/list?**', async route => {
+      const response = await route.fetch();
+      pendingScans += 1;
+      await scanGate;
+      await route.fulfill({ response });
+      completedScans += 1;
+    });
+    await page.route('**/api/agent/round-trip-check', async route => {
+      const holdForRefresh = holdNextRefreshPreview;
+      if (holdForRefresh) holdNextRefreshPreview = false;
+      const response = await route.fetch();
+      pendingPreviews += 1;
+      await previewGate;
+      if (holdForRefresh) {
+        const body = await response.json() as { importReport?: { graphNodeCount?: number }; graphNodeCount?: number };
+        heldRefreshNodeCount = body.importReport?.graphNodeCount ?? body.graphNodeCount ?? null;
+        await refreshPreviewGate;
+      }
+      await route.fulfill({ response });
+      completedPreviews += 1;
+      if (holdForRefresh) completedRefreshPreviews += 1;
+    });
+    await page.getByTitle('Load existing mods or push updates to GitHub').click();
+    const input = page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis');
+    await expect.poll(() => pendingScans).toBeGreaterThanOrEqual(2);
+    await expect(page.getByTestId('project-source-workspace')).toContainText(staging);
+    await expect(page.getByTestId('project-source-filesystem')).toContainText(deployment);
+    await input.pressSequentially('manual');
+    await expect(input).toHaveValue('manual');
+    releaseScan();
+    await expect.poll(() => completedScans).toBeGreaterThanOrEqual(2);
+    await expect(page.getByRole('button', { name: 'Select manual_mod from Mod Workspace', exact: true })).toBeVisible();
+    await expect(input).toHaveValue('manual');
+    await input.press('End');
+    await input.pressSequentially('_mod');
+    await expect(input).toHaveValue('manual_mod');
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect.poll(() => pendingPreviews).toBe(1);
+    await input.fill('missing_mod');
+    releasePreview();
+    await expect.poll(() => completedPreviews).toBe(1);
+    const beforeRefusal = await readServerWorkspace();
+    const refusalPromise = page.waitForResponse(response => response.url().endsWith('/api/agent/mod-folder/import') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Load Project', exact: true }).click();
+    const refusal = await refusalPromise;
+    expect(refusal.status()).toBe(404);
+    const refused = await refusal.json();
+    await expect(page.getByText(refused.error, { exact: true })).toBeVisible();
+    await expect(input).toHaveValue('missing_mod');
+    await expect(page.getByText(/\d+ graph nodes/)).toHaveCount(0);
+    await expect(page.getByText('preview pending', { exact: true })).toBeVisible();
+    expect((await readServerWorkspace()).nodes).toEqual(beforeRefusal.nodes);
+    await page.screenshot({ path: testInfo.outputPath('manual-path-refused.png'), fullPage: true });
+    await input.fill('manual_mod');
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(page.getByText('2 graph nodes', { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('manual-path-preview.png'), fullPage: true });
+
+    // Hold a real two-node response, then refresh after the source gains an
+    // action. Refresh must request a new preview, and the delayed old result
+    // must not replace the new three-node preview when it finally arrives.
+    holdNextRefreshPreview = true;
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect.poll(() => heldRefreshNodeCount).toBe(2);
+    fs.writeFileSync(path.join(mod, 'md', 'manual.xml'), '<mdscript name="Manual"><cues><cue name="Init"><actions><set_value name="$value" exact="1"/><set_value name="$second" exact="2"/></actions></cue></cues></mdscript>');
+    await page.getByTitle('Refresh projects', { exact: true }).click();
+    await expect(page.getByText('3 graph nodes', { exact: true })).toBeVisible();
+    await expect(input).toHaveValue('manual_mod');
+    releaseRefreshPreview();
+    await expect.poll(() => completedRefreshPreviews).toBe(1);
+    // Give the delivered response its render turn before asserting ownership.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(page.getByText('3 graph nodes', { exact: true })).toBeVisible();
+    await expect(page.getByText('2 graph nodes', { exact: true })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('manual-path-refreshed-preview.png'), fullPage: true });
+
+    // A completed preview also expires immediately when the input changes.
+    await input.press('End');
+    await input.pressSequentially('_missing');
+    await expect(input).toHaveValue('manual_mod_missing');
+    await expect(page.getByText(/\d+ graph nodes/)).toHaveCount(0);
+    await expect(page.getByText('preview pending', { exact: true })).toBeVisible();
+    await input.fill('manual_mod');
+    const importedPromise = page.waitForResponse(response => response.url().endsWith('/api/agent/mod-folder/import') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Load Project', exact: true }).click();
+    const importedResponse = await importedPromise;
+    expect(importedResponse.status()).toBe(200);
+    const imported = await importedResponse.json();
+    expect(imported.success).toBe(true);
+    expect(imported.modId).toBe('manual_mod');
+    await expect(page.getByText('Load Mod Project', { exact: true })).toHaveCount(0);
+    await expect.poll(async () => (await readServerWorkspace()).nodes.map((node: { id: string }) => node.id)).toEqual(imported.workspace.nodes.map((node: { id: string }) => node.id));
+  } finally {
+    releaseScan();
+    releasePreview();
+    releaseRefreshPreview();
+    await page.unrouteAll({ behavior: 'wait' });
+    const restored = await request.post(`${API}/api/schema/config`, { headers, data: restore });
+    expect(restored.ok(), await restored.text()).toBeTruthy();
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('Load Mod Project visibly decomposes a complex multi-script project without collapsing or overlapping cues', async ({ page, request }) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-complex-project-load-'));
   const staging = path.join(temp, 'staging');
@@ -240,16 +379,37 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
     await expect(page.getByText(/8 graph nodes/i)).toBeVisible();
     await expect(page.getByText(/0 whole cues collapsed/i)).toBeVisible();
 
+    const importedResponsePromise = page.waitForResponse(response => response.url().endsWith('/api/agent/mod-folder/import') && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Load Project', exact: true }).click();
+    const importedResponse = await importedResponsePromise;
+    expect(importedResponse.status()).toBe(200);
+    const imported = await importedResponse.json() as { success: boolean; modId: string; workspace: ModWorkspace };
+    expect(imported.success).toBe(true);
+    expect(imported.modId).toBe('complex_manifest_id');
+    expect(imported.workspace.nodes).toHaveLength(8);
+    // C02 identities come from source ownership, not the retired alpha__cue_ prefix.
+    // Identify each exact parent cue semantically before using its returned ID in the UI.
+    const parentCue = (stem: 'alpha' | 'beta') => {
+      const matches = imported.workspace.nodes.filter(node => node.source?.path === `md/${stem}.xml`
+        && node.xmlTag === 'cue' && node.properties.name === 'Init');
+      expect(matches).toHaveLength(1);
+      expect(matches[0].properties.mdFileStem).toBe(stem);
+      return matches[0];
+    };
+    const alphaCue = parentCue('alpha');
+    const betaCue = parentCue('beta');
+    const betaNodes = imported.workspace.nodes.filter(node => node.source?.path === 'md/beta.xml');
+    expect(betaNodes).toHaveLength(4);
+    expect(alphaCue.id).not.toBe(betaCue.id);
+    const alpha = page.getByTestId(`canvas-node-${alphaCue.id}`);
+    const beta = page.getByTestId(`canvas-node-${betaCue.id}`);
     await expect(page.getByText('Load Mod Project', { exact: true })).toHaveCount(0);
     const scriptFilter = page.getByTestId('canvas-md-script-filter');
     await expect(scriptFilter).toBeVisible();
     await scriptFilter.selectOption('alpha');
-    await expect(page.locator('[data-testid^="canvas-node-alpha__cue_"]').first()).toBeVisible();
-    await expect(page.locator('[data-testid^="canvas-node-beta__"]')).toHaveCount(0);
+    await expect(alpha).toBeVisible();
+    for (const node of betaNodes) await expect(page.getByTestId(`canvas-node-${node.id}`)).toHaveCount(0);
     await scriptFilter.selectOption('');
-    const alpha = page.locator('[data-testid^="canvas-node-alpha__cue_"]').first();
-    const beta = page.locator('[data-testid^="canvas-node-beta__cue_"]').first();
     await expect(alpha).toBeVisible();
     await expect(beta).toBeVisible();
     const [alphaBox, betaBox] = await Promise.all([alpha.boundingBox(), beta.boundingBox()]);

@@ -95,7 +95,7 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
     'extensions.conflicts.analyze@1',
     'history.list@1',
     'readiness.read@1',
-    'workspace.compile@1',
+    'workspace.compile@2',
     'workspace.read@2',
     'runtime.debug.read@1',
   ]) {

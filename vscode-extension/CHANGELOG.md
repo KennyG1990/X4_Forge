@@ -3,6 +3,16 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.80 — 2026-10-26
+
+- Reimporting a mod preserves matching graph identities and layout. Manual import paths survive directory scans, and changing a path discards its old preview.
+- Reviewed warnings can be reused while their mod, source and validation evidence remain unchanged. Each deployment records the original approver and reason; reviews can be revoked, and errors never inherit approval.
+- Deployment validates its captured output and refuses changed source, wrong mod identities and stale approval bindings. Compile and artifact responses distinguish usable output from failed or incomplete work.
+- Validation reuses unchanged XML, Lua and reference analysis, with dependency-aware invalidation. Supported checks use the configured X4 corpus, while unsupported cases remain explicitly unverified.
+- Addressed project APIs enforce stricter input and identity contracts. Participating Forge processes coordinate writes to the same source folder and report ownership; external editor changes still require hash checks.
+- Dev builds require private coordination storage. Packaged validation identities include their installed dependency metadata, and compatible dependency updates clear high-severity dependency audit findings.
+- This release covers completed Claude review fixes. Project test gates, corrupt-save detection and verified in-game reload/probe support remain unfinished; it does not claim that every complaint is resolved.
+
 ## 0.0.79 — 2026-10-23
 
 - ui.xml is now classified and validated as an X4 UI manifest, not Lua. Registration checks cover missing, unsafe, duplicate, and ambiguous local targets.

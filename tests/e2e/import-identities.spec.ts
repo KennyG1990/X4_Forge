@@ -84,6 +84,7 @@ test('C02 import identities, legacy layout, ambiguity and byte fidelity', async 
   // replacement followed by a browser reload with an intentionally stale local draft.
   await page.getByTitle('Load existing mods or push updates to GitHub').click();
   await page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis').fill('forge_regression_lab');
+  await expect(page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis')).toHaveValue('forge_regression_lab');
   await page.getByRole('button', { name: 'Load Project', exact: true }).click();
   await page.waitForFunction((count: number) => (window as any).__X4_E2E__?.getWorkspace().nodes.length === count, updated.workspace.nodes.length, { timeout: 15_000 });
   await expect(rendered).toBeVisible();

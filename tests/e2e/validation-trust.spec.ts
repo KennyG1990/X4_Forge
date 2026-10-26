@@ -40,7 +40,7 @@ test('malformed or ambiguous validation subjects never return a successful empty
     const response = await request.post(`${E2E_API_ORIGIN}/api/agent/project/validate`, { data });
     expect(response.status(), await response.text()).toBe(400);
     const body = await response.json();
-    expect(body).toMatchObject({ ok: false, code: 'VALIDATION_INPUT_INVALID', modId: null, sourceHash: null });
+    expect(body).toMatchObject({ ok: false, code: 'PROJECT_INPUT_INVALID', category: 'request-invalid', modId: null, sourceHash: null, sourceHashScope: 'unresolved' });
   }
 });
 

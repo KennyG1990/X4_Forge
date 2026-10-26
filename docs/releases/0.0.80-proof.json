@@ -1,0 +1,1852 @@
+{
+  "schemaVersion": 1,
+  "version": "0.0.80",
+  "status": "PARTIAL",
+  "documentState": "PRECOMMIT_RELEASE_SNAPSHOT",
+  "recordedAt": "2026-10-26T21:39:55.826399+00:00",
+  "scope": "Verified source, exact package, isolated installed host and public Open VSX artifact for bounded C01-C06c/D0 fixes. This snapshot precedes final Git commit/push/CI; matching GitHub release and owner issue retain postcommit delivery proof. Full Claude program remains incomplete.",
+  "sourceBaseline": "7d3d850f46ec419eef08009c9135a698ff93882f",
+  "candidateIncludesUncommittedChanges": true,
+  "plan": "docs/plans/2026-10-26-bounded-claude-release.md",
+  "agentGuide": "docs/releases/0.0.80-agent-handoff.md",
+  "integrationEvidence": [
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C01-integration.json",
+      "sha256": "d92acbab5945542a38339a62a94befa3cf2b0148ece0b661f6ccba9438651a0c"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C02-identities.json",
+      "sha256": "f6b2091fd7889c182a740d465726f0e30b4f76f649ee63089ca7ccb6b3efe8f6"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C03-warning-reviews.json",
+      "sha256": "133eedd46da65e822ba0a6618ebe191e4d61a93ec5745176a1a78cf92c52390d"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C04-validation.json",
+      "sha256": "9f36305c447526b34690ac9dc80295586394248a0c2918f7cb003665f7f042fa"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C05-incremental.json",
+      "sha256": "e9a96d9a9ce713d41e9bd4b51f0a961bde16b865a66f90c09759e6527dbf1c26"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C06-api.json",
+      "sha256": "1057c73f3415ca1d49f0a3ad50db8e7b87aa4a533c3887e86f60cc423439fde2"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C06b-contracts.json",
+      "sha256": "c721c4976b0d78e876538862cd443def9abce1e2e3a6c3c3425895d69b637657"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-C06c-coordination.json",
+      "sha256": "246649458b9b7a12f88bde5c18612e30452276ca83db40b9c391320681149d7c"
+    },
+    {
+      "status": "VERIFIED",
+      "path": "docs/testing/claude-D0-dev-parity.json",
+      "sha256": "68e6c8bd9715d33adc8dfd34d370d970cd3b96dfd019baf67d5d3c638d50b2a9"
+    }
+  ],
+  "verifiedCheckpoints": {
+    "warningReviewAndDependencyMetadata": {
+      "status": "VERIFIED",
+      "checks": 55,
+      "evidence": {
+        "path": "test-results/release-0.0.80/warning-review-metadata-20261026-134334.log",
+        "sha256": "9934290fea64938c48d382b2074460cbfc26c93fd16259006a3cec07dcc98586"
+      }
+    },
+    "importAndProjectBrowser": {
+      "status": "VERIFIED",
+      "passed": 5,
+      "failed": 0,
+      "flaky": 0,
+      "finishedAt": "2026-10-26T18:04:46.418261+00:00",
+      "lifecycleComplete": true,
+      "ownedTreeGone": true,
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/import-preview-4/receipt.json",
+        "sha256": "e694939f4d7acd3a073d0ed4f070e533c8b0eb8141c146c13c9325a116b4023d"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/import-preview-4/e2e-verdict.json",
+        "sha256": "c4a48aded87218c139b6efbce5b839d1321905a98d3c9d2657d8ee78706e4c28"
+      }
+    },
+    "deploymentTrustRepeated": {
+      "status": "VERIFIED",
+      "passed": 2,
+      "failed": 0,
+      "flaky": 0,
+      "finishedAt": "2026-10-26T18:18:05.088331+00:00",
+      "lifecycleComplete": true,
+      "ownedTreeGone": true,
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/deployment-repeat-4/receipt.json",
+        "sha256": "608b49757b4435f657cff5576dae59101fb5dc4fb3122fbcadb481372621c6fa"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/deployment-repeat-4/e2e-verdict.json",
+        "sha256": "f00cbb69c324a406b4ba6c9b77cdda0669fe698142933f9cac28383390e14b61"
+      },
+      "repeatEach": 2
+    },
+    "referenceCache": {
+      "status": "VERIFIED",
+      "checks": 11,
+      "fileProbes": 12,
+      "simulatedDiscoveryMsPerProbe": 1100,
+      "evidence": {
+        "path": "test-results/release-0.0.80/reference-cache-fixed.log",
+        "sha256": "49767c2c6438890ac28b285a7e1360be80ba5f0d26f49abbd0d804095951d608"
+      },
+      "failedBaseline": {
+        "path": "test-results/release-0.0.80/reference-cache-baseline.log",
+        "sha256": "66ce39cb814e47c18c12af54a4778ea65ac2eb01c41b796298f1e3a81a18b59a"
+      }
+    },
+    "validationRequestContract": {
+      "status": "VERIFIED",
+      "passed": 3,
+      "failed": 0,
+      "flaky": 0,
+      "finishedAt": "2026-10-26T18:40:10.885449+00:00",
+      "lifecycleComplete": true,
+      "ownedTreeGone": true,
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/validation-contract-1/receipt.json",
+        "sha256": "495f6c5cc07338f8c600f452dbd114fc90dca2afa8e9ebc529ef9af3c658f038"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/validation-contract-1/e2e-verdict.json",
+        "sha256": "ac7dcd62bee7d9559b39aeb616543b0db465e5206fa2d882f2ab2d9870b57491"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/validation-contract-1/run.log",
+        "sha256": "095d958fd642f048e95a7dd37eb48fd4507d801218d47d582e5363cd1140b0ff"
+      },
+      "testSource": "tests/e2e/validation-trust.spec.ts",
+      "malformedSubjects": [
+        "project is null",
+        "project.files contains null",
+        "project and path address competing subjects",
+        "fromPath is numeric",
+        "file content is numeric",
+        "file paths collide case-insensitively (ui/a.lua and UI/A.LUA)"
+      ],
+      "requiredRefusal": {
+        "httpStatus": 400,
+        "ok": false,
+        "code": "PROJECT_INPUT_INVALID",
+        "category": "request-invalid",
+        "modId": null,
+        "sourceHash": null,
+        "sourceHashScope": "unresolved"
+      },
+      "otherChecks": [
+        "Validation binds content.xml mod identity and source changes; syntax errors remain distinct from unavailable coverage.",
+        "Incomplete source cannot be promoted to a last-green baseline."
+      ],
+      "limitation": "Three focused tests, including all six malformed input shapes, passed. The subsequent full-e2e-3 run also passed 120/0/0. Neither result substitutes for exact package or installed-host proof."
+    },
+    "finalLint": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:05:04.222523+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-lint-1/receipt.json",
+        "sha256": "7b9d6ebdc2b3405c73c7ca89fddf856b5c82f58dcca8f04497c821b25ac9df59"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-lint-1/run.log",
+        "sha256": "8a9ce2fda474e0dd48d188a224717e58a15e1305fd08ca30469f79b2f6dd19c4"
+      },
+      "errors": 0,
+      "warnings": 599,
+      "warningLimit": 600,
+      "limitation": "Passing lint before later test-only repairs. final-lint-2 also passed 0 errors/599 warnings after the route-harness repair."
+    },
+    "runtimeOracles": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:05:33.723840+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-oracles-1/receipt.json",
+        "sha256": "aa2fa049a593b81cd622a02f8d09353022f24417df6d0d168b4eb710e194c4e2"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-oracles-1/run.log",
+        "sha256": "8988e45a87b97a429e59be4e2c1beaceff5f1a22b1d898622b79f319c400dc97"
+      },
+      "passed": 134,
+      "total": 134,
+      "limitation": "Runtime-discovered oracles against the isolated source server; not packaged-host or game proof."
+    },
+    "publicBaselineCandidate": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:33:18.441308+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/public-baseline-2/receipt.json",
+        "sha256": "290a671b493b07f0654411e4c87ac12e81ad38945c974bf576b5371410dac4e0"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/public-baseline-2/run.log",
+        "sha256": "63c3a63ec1e9c64216a1658ebd139954bd536990c08f75a606582e8205731630"
+      },
+      "baselineCommit": "f274a7c40197fb1c9d00f6eadf298a2ce7676a5c",
+      "method": "npm run test:capabilities -- --generate-candidate",
+      "regeneratedAtEpoch": 1793043195.2472734,
+      "candidate": {
+        "path": "test-results/forge-route-dispositions.candidate.json",
+        "sha256": "7c91e8928aa504774f7cf9f868afc2051370fa38f6645b2f53daa8d55edd37d5"
+      },
+      "trackedManifest": {
+        "path": "config/forge-route-dispositions.json",
+        "sha256": "7c91e8928aa504774f7cf9f868afc2051370fa38f6645b2f53daa8d55edd37d5"
+      },
+      "byteIdenticalToTrackedManifest": true,
+      "trackedManifestUnchanged": true,
+      "supersedesInvalidMethod": "public-baseline-1",
+      "limitation": "Candidate generation/audit evidence only. No promotion, publication or public release is established."
+    },
+    "finalTypecheck": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:26:25.509544+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-typecheck-2/receipt.json",
+        "sha256": "1eb9c6066b3b447fdd705b669491dd0c8af0e603c2570726d506da8989226ecd"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-typecheck-2/run.log",
+        "sha256": "511f6c2299771c820179a230df46bf919294b7cb0593fd767b1c76b1d78f95fb"
+      },
+      "result": "tsc --noEmit passed after the bounded two-file repair."
+    },
+    "referenceCacheAfterTypeRepair": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:26:47.929311+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/cache-type-repair-1/receipt.json",
+        "sha256": "4fa7869883317083b5c2d5cd7ffedb1099a77201678ac9b7498da65d85e58f64"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/cache-type-repair-1/run.log",
+        "sha256": "cb459e8bc499279b5d1926c7fcca11588e69ec17e4cd1c5fa2ef94f9eb8ba116"
+      },
+      "checks": 11,
+      "ownedChildExited": true,
+      "privateFixtureRemoved": true,
+      "limitation": "Focused cache regression after an erased-type change; not a new whole-system performance measurement."
+    },
+    "precommitAfterTypeRepair": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:45:13.342588+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-precommit-2/receipt.json",
+        "sha256": "af3e4d54b6217343b640a09e14188907daa17a03a4cdf7460f84c807cd4609bc"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-precommit-2/run.log",
+        "sha256": "87f23242d08d474bfb9fc73830fd2b498ecc92a0f258f1e579ddfc86f8ecba53"
+      },
+      "scope": "Complete precommit passed after the two-file type/config repair, before the subsequent test-only route-harness repair.",
+      "receiptRoutes": 85,
+      "receiptSurfaces": 61,
+      "freshRetestAfterRouteHarnessRepair": "final-precommit-3 VERIFIED"
+    },
+    "e2ePolicy": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:45:28.135303+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-policy-1/receipt.json",
+        "sha256": "c8d8f42f38e6685cbd8335faabb516c3c40b86b40ec06e031e25c884df68af3b"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-policy-1/run.log",
+        "sha256": "d47b41c9b751643969fe829e2bcee78bba232dd237c2a947eb339433400cc5aa"
+      },
+      "scope": "Required E2E-policy checks passed; final log includes flake-policy selftest 8/8."
+    },
+    "rootThresholdAudit": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:45:36.627259+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-root-audit-1/receipt.json",
+        "sha256": "b4fe75cdf2bbe27938caf3ec902da520828a0b6a4c58ad89c2bf15015b7aea9d"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-root-audit-1/run.log",
+        "sha256": "ea93f27d70a11e7e1862319bae5582d52f34a250740d99d3ff5ed1017ead6c23"
+      },
+      "threshold": "high",
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "limitation": "Audit result applies to this resolved dependency tree and observation time."
+    },
+    "extensionThresholdAudit": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:45:45.396337+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-extension-audit-1/receipt.json",
+        "sha256": "e9fa692e6b9694a5c25120da512e5c343b2438e14261556d211118c144457d33"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-extension-audit-1/run.log",
+        "sha256": "7bc1bb6cd133feab9afa8fb77ef4193fc9e49551531e699eea4bc29d305230ad"
+      },
+      "threshold": "high",
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 4,
+        "high": 0,
+        "critical": 0,
+        "total": 4
+      },
+      "limitation": "Passing the high-severity gate does not mean zero moderate findings."
+    },
+    "lintAfterRouteHarnessRepair": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:53:33.365722+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-lint-2/receipt.json",
+        "sha256": "718020d5ff9ff7589c8d8849afcc4c61f1c5c3139a755e8f5995a1035eb9ca1d"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-lint-2/run.log",
+        "sha256": "8a9ce2fda474e0dd48d188a224717e58a15e1305fd08ca30469f79b2f6dd19c4"
+      },
+      "errors": 0,
+      "warnings": 599,
+      "warningLimit": 600
+    },
+    "routesAfterContractRepair": {
+      "status": "VERIFIED",
+      "passed": 500,
+      "total": 500,
+      "failed": 0,
+      "finishedAt": "2026-10-26T19:54:55.542672+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-routes-2/receipt.json",
+        "sha256": "ba986e0fa33ac603dcbb62c523e5e35fa94504187607f2e3bd2018f01d48dcb6"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-routes-2/run.log",
+        "sha256": "3d60e8f1e12150c7159a846205942f95675f903d48903f6fe9fc497915188de9"
+      },
+      "scope": "Full isolated route harness after the reviewed test-only contract repair, including two added negative assertions. Does not establish final exact-VSIX or native-host proof."
+    },
+    "finalPrecommit": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T20:06:26.869608+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-precommit-3/receipt.json",
+        "sha256": "a23a7e4644235dfe44c30468090d4757c328ba93e8d35b4361db241711e5f2b8"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-precommit-3/run.log",
+        "sha256": "8e5422827e2d40bac4b01cdf453a112ffaa7dd3c4758af6d388cbd7910b2fddc"
+      },
+      "scope": "Complete precommit after the reviewed route-harness repair.",
+      "receiptRoutes": 85,
+      "receiptSurfaces": 61
+    },
+    "extensionBuild": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T20:06:40.246576+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-extension-build-1/receipt.json",
+        "sha256": "555b8a4155156aeb7d761db74905cadfefe58bd26a43add01561140ea527a998"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-extension-build-1/run.log",
+        "sha256": "2db197b6b2fcbb9ac03b8c6f44cb0b0a410966d256b211f33a5df95b50eced27"
+      },
+      "scope": "Extension host/supervisor build; not installation or native-host execution proof."
+    },
+    "stagedApplication": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T20:07:00.623555+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-stage-1/receipt.json",
+        "sha256": "6ea5f2b968e03bfc1ee02844528396ebb84cc6ebe792a9145e9b3bc727c64257"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-stage-1/run.log",
+        "sha256": "41d85bd27e6511ceb210f4dcf0d68321d5c61d6a7f74ea679eb405c0b1583376"
+      },
+      "scope": "Runtime application staging completed with pruned dependencies; exact VSIX packaging and inspection remain separate."
+    },
+    "stagedDependencyAudit": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T20:07:10.153127+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-stage-audit-1/receipt.json",
+        "sha256": "47090411d2c635d96cc5253bda8712f991e70f3194d331a612e300acada2bfb9"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-stage-audit-1/run.log",
+        "sha256": "9b8c375ecf1f41dc4fdf2e3c822ecf71296a3e8ab12a7f09c099083c2a37bb84"
+      },
+      "threshold": "high",
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "scope": "The staged application dependency tree, before exact VSIX package proof."
+    },
+    "stagedApplicationProbe": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T20:07:25.596178+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-stage-probe-1/receipt.json",
+        "sha256": "407be7cb79ec1ade393fb1a251dac71af66b3ac0f611611be0178fd68890b792"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-stage-probe-1/run.log",
+        "sha256": "64de8fe32ac9a598bfe84b1edaa217369f58b82b5b515fe5bc40cfef2eecaabd"
+      },
+      "passed": 16,
+      "total": 16,
+      "checksInclude": [
+        "Staged sidecar boots and serves the production UI.",
+        "Directory configuration remains authenticated and canonical corpus completion works.",
+        "Supervisor reports its exact owned server PID.",
+        "Parent pipe loss stops the supervised sidecar and removes discovery even while the claimed parent PID remains alive.",
+        "Invalid parent contract refuses before spawn.",
+        "Stubborn owned fixture is force-reaped without killing the claimed parent."
+      ],
+      "scope": "Isolated staged-app/supervisor smoke proof. This is not exact VSIX installation, native-host UI proof, A15 Windows Job containment or in-game proof."
+    },
+    "vsixInspectorPolicy": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T20:07:33.936455+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-inspector-policy-1/receipt.json",
+        "sha256": "41f16be2792abe70a33094d4f93faec304ae6f1e116cde7f491ec960329487ff"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-inspector-policy-1/run.log",
+        "sha256": "a27d8b4153054928c907e4646e8e9a8373e94ce04f06384aa71f4751eb57f7e1"
+      },
+      "passed": 13,
+      "total": 13,
+      "scope": "Inspector rejection/policy selftests only. The currently running candidate package has not yet been inspected by this record."
+    }
+  },
+  "referenceCorpusBenchmark": {
+    "status": "VERIFIED",
+    "scope": "Actual reference corpus, private ready-manifest database, three consecutive in-process calls per run. Whole validation, HTTP, installed-host and game latency are not established.",
+    "before": {
+      "status": "VERIFIED",
+      "recordedAt": "2026-10-26T18:08:37.156Z",
+      "corpusHash": "a18a7abef897398a494933483a2f246badea667ef7c9dcdbefdf3137b6244d50",
+      "helperHash": "8d9a6b5aebcf2ac3893673fe2d886e7adfaf224df6ad6b80b155a524099f9649",
+      "sourceHashes": {
+        "src/lib/referenceCorpus.ts": "c5be7882deb36650b128d300cb55c75b56c7e215f442f11070e1091627fe76f7",
+        "src/lib/referenceManifest.ts": "809c2008b43b6a7f864bf27fa844967af00f08b29795d9cdd56b0cb7ea21aee4",
+        "src/lib/db.ts": "8620b22e99e26dfb242ad7b88c0b87b9ab58c70a7e9145021fad8db33e821a2a",
+        "src/lib/dataDir.ts": "e3b77936857cc0bd6b25fdcbdb4ca46bbea1be928e0b5c41780da51ed64cf8f6",
+        "package-lock.json": "20fd5237e8d86903e07094a3d81b6ba1001039585757464b050c0da27163e213"
+      },
+      "profileSha256": "b5d322c4718f15bb45534a2f374a3d1b0ce435c42019319cabd2344759d73350",
+      "manifestScanMs": 42037.2527,
+      "manifestFiles": 1028384,
+      "manifestBytes": 33206154495,
+      "calls": [
+        {
+          "index": 1,
+          "elapsedMs": 1811.7382999999973,
+          "sourceFiles": 383,
+          "symbols": 9979,
+          "sameObjectAsFirst": true,
+          "signatureSha256": "2a034e87aaed1fde029c15b1bb0775951153de4912d461f0f6d5926d1cd8671a"
+        },
+        {
+          "index": 2,
+          "elapsedMs": 1068.108699999997,
+          "sourceFiles": 383,
+          "symbols": 9979,
+          "sameObjectAsFirst": true,
+          "signatureSha256": "2a034e87aaed1fde029c15b1bb0775951153de4912d461f0f6d5926d1cd8671a"
+        },
+        {
+          "index": 3,
+          "elapsedMs": 1088.4083000000028,
+          "sourceFiles": 383,
+          "symbols": 9979,
+          "sameObjectAsFirst": true,
+          "signatureSha256": "2a034e87aaed1fde029c15b1bb0775951153de4912d461f0f6d5926d1cd8671a"
+        }
+      ],
+      "evidence": {
+        "path": "test-results/release-0.0.80/reference-baseline-1/corpus-profile.json",
+        "sha256": "13a92720032e0e498ab98f8c544f57b58972b01f2988a417790caec2a5002f6c"
+      },
+      "receipt": {
+        "path": "test-results/release-0.0.80/reference-baseline-1/receipt.json",
+        "sha256": "743262181613ab9ae4f2d082f4e509257402155e165aeaf85674ffa9f1d958bf"
+      }
+    },
+    "after": {
+      "status": "VERIFIED",
+      "recordedAt": "2026-10-26T18:15:10.948Z",
+      "corpusHash": "a18a7abef897398a494933483a2f246badea667ef7c9dcdbefdf3137b6244d50",
+      "helperHash": "75956f50c1ac1f78e163f7685d5694d643197b348fb201d33d38afe891598386",
+      "sourceHashes": {
+        "src/lib/referenceCorpus.ts": "22c7e520435b55465e4fa72e44f226e3287f63c7bc9917a261e6940764483cbe",
+        "src/lib/referenceManifest.ts": "809c2008b43b6a7f864bf27fa844967af00f08b29795d9cdd56b0cb7ea21aee4",
+        "src/lib/db.ts": "8620b22e99e26dfb242ad7b88c0b87b9ab58c70a7e9145021fad8db33e821a2a",
+        "src/lib/dataDir.ts": "e3b77936857cc0bd6b25fdcbdb4ca46bbea1be928e0b5c41780da51ed64cf8f6",
+        "package-lock.json": "20fd5237e8d86903e07094a3d81b6ba1001039585757464b050c0da27163e213"
+      },
+      "profileSha256": "b074a9e39bd208ea806d967922f36dd6db0beead9d709727b4e027efc7470138",
+      "manifestScanMs": 31056.2465,
+      "manifestFiles": 1028384,
+      "manifestBytes": 33206154495,
+      "calls": [
+        {
+          "index": 1,
+          "elapsedMs": 2393.9611000000004,
+          "sourceFiles": 383,
+          "symbols": 9979,
+          "sameObjectAsFirst": true,
+          "signatureSha256": "2a034e87aaed1fde029c15b1bb0775951153de4912d461f0f6d5926d1cd8671a"
+        },
+        {
+          "index": 2,
+          "elapsedMs": 0.07890000000043074,
+          "sourceFiles": 383,
+          "symbols": 9979,
+          "sameObjectAsFirst": true,
+          "signatureSha256": "2a034e87aaed1fde029c15b1bb0775951153de4912d461f0f6d5926d1cd8671a"
+        },
+        {
+          "index": 3,
+          "elapsedMs": 0.1463999999978114,
+          "sourceFiles": 383,
+          "symbols": 9979,
+          "sameObjectAsFirst": true,
+          "signatureSha256": "2a034e87aaed1fde029c15b1bb0775951153de4912d461f0f6d5926d1cd8671a"
+        }
+      ],
+      "evidence": {
+        "path": "test-results/release-0.0.80/reference-fixed-1/corpus-profile.json",
+        "sha256": "1d91922cebe09271496a1d4ba0658ee1d582751f3421aac68291e75fe9897872"
+      },
+      "receipt": {
+        "path": "test-results/release-0.0.80/reference-fixed-1/receipt.json",
+        "sha256": "40d62d1a245a3c4461590b61bbbfa17ac02d08258e365920891985c73f558a7f"
+      }
+    },
+    "interpretation": "Unchanged warm calls avoid expensive rediscovery inside the existing interval. Both runs have identical corpus and selected-file signature hashes. The observed cold call is slower after the change; a universal or cold-path speedup is not claimed. Manifest scans are separate measured setup work."
+  },
+  "dependencies": {
+    "status": "PARTIAL",
+    "rootAudit": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "evidence": {
+        "path": "test-results/release-0.0.80/dependency-repair/root-audit-after.json",
+        "sha256": "e5e87a4bb3c7a16b0cab9e2c2b86fb405b8a559f0b4b0b87767ce000bae73462"
+      }
+    },
+    "extensionAudit": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 4,
+        "high": 0,
+        "critical": 0,
+        "total": 4
+      },
+      "evidence": {
+        "path": "test-results/release-0.0.80/dependency-repair/extension-audit-final.json",
+        "sha256": "ea3faebf47327a18fb27a9eadad2fafc2559f78f25539efaba192c35fa412428"
+      }
+    },
+    "remainingModerate": "Four propagated advisory entries from uuid 8.3.2 in VSCE tooling; not zero total vulnerabilities. Maintenance follow-up is retained in the dependency delta.",
+    "targetedOverride": "@vscode/vsce > @azure/identity pinned to 4.13.0 within the declared range; no forced MSAL-major override.",
+    "repairEvidence": {
+      "path": "test-results/release-0.0.80/dependency-repair/dependency-delta.json",
+      "sha256": "c77b4e60f56a0f72b34b43a2fe098da2cfb98307a2e7dced0519ff6181625546"
+    },
+    "initialInstalledMismatch": {
+      "evidence": {
+        "path": "test-results/release-0.0.80/dependency-repair/pre-ci-installed-delta.json",
+        "sha256": "17552b32595bbf65fee541d159f6795a25f46cd45eb90553260651c7e60e3747"
+      },
+      "limitation": "Initial root lock repair preceded node_modules synchronization; earlier runs do not establish behavior with the repaired dependency tree."
+    },
+    "cleanInstallReceipts": [
+      {
+        "path": "test-results/release-0.0.80/root-ci-1/receipt.json",
+        "sha256": "8124f6a99decb9456bf5b5ad58ab78b31c09afe2ca37d71eb03ee68932159d45"
+      },
+      {
+        "path": "test-results/release-0.0.80/extension-ci-1/receipt.json",
+        "sha256": "1958a30f2b97824858b43ad2c859e7424bfd3aa49741e59fd3a84038645c665a"
+      }
+    ],
+    "exactStagedDependencyAudit": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T20:07:10.153127+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-stage-audit-1/receipt.json",
+        "sha256": "47090411d2c635d96cc5253bda8712f991e70f3194d331a612e300acada2bfb9"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-stage-audit-1/run.log",
+        "sha256": "9b8c375ecf1f41dc4fdf2e3c822ecf71296a3e8ab12a7f09c099083c2a37bb84"
+      },
+      "threshold": "high",
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "scope": "The staged application dependency tree, before exact VSIX package proof."
+    },
+    "exactVsixNativeCompatibility": {
+      "status": "PARTIAL",
+      "extractedNodeNativeSQLite": "VERIFIED in the 80-check extracted runtime proof",
+      "installedAntigravityHost": "PENDING",
+      "evidence": {
+        "path": "test-results/release-0.0.80/exact-package-runs/run-e03cb583b9eb4823b2764f3f243e03ce/native-sqlite.json",
+        "sha256": "43fc14fd28cc36b9283d8912ee104ee93eef3965113e5f6578f22bacf718008b"
+      }
+    },
+    "latestRootThresholdAudit": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:45:36.627259+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-root-audit-1/receipt.json",
+        "sha256": "b4fe75cdf2bbe27938caf3ec902da520828a0b6a4c58ad89c2bf15015b7aea9d"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-root-audit-1/run.log",
+        "sha256": "ea93f27d70a11e7e1862319bae5582d52f34a250740d99d3ff5ed1017ead6c23"
+      },
+      "threshold": "high",
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "limitation": "Audit result applies to this resolved dependency tree and observation time."
+    },
+    "latestExtensionThresholdAudit": {
+      "status": "VERIFIED",
+      "finishedAt": "2026-10-26T19:45:45.396337+00:00",
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-extension-audit-1/receipt.json",
+        "sha256": "e9fa692e6b9694a5c25120da512e5c343b2438e14261556d211118c144457d33"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-extension-audit-1/run.log",
+        "sha256": "7bc1bb6cd133feab9afa8fb77ef4193fc9e49551531e699eea4bc29d305230ad"
+      },
+      "threshold": "high",
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 4,
+        "high": 0,
+        "critical": 0,
+        "total": 4
+      },
+      "limitation": "Passing the high-severity gate does not mean zero moderate findings."
+    },
+    "runtimeProvenance": {
+      "status": "VERIFIED_METADATA",
+      "rootLock": {
+        "path": "package-lock.json",
+        "sha256": "20fd5237e8d86903e07094a3d81b6ba1001039585757464b050c0da27163e213"
+      },
+      "extractedAppManifest": {
+        "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/extracted/extension/app/package.json",
+        "sha256": "d61ef42f9d48b251f7a0a2adca0085a237e03741fd2a875947194900dd2b4d69"
+      },
+      "extractedAppLock": {
+        "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/extracted/extension/app/package-lock.json",
+        "sha256": "12444aaefb1d215273c784b99993e4c46acaa3f02db82fba1c858627c9d93b64"
+      },
+      "differentResolvedVersions": [
+        {
+          "name": "better-sqlite3",
+          "sourceRootLockAndInstalled": "12.10.0",
+          "exactStagedLockAndExtracted": "12.11.1",
+          "stagedDeclaredRange": "^12.10.0",
+          "rootMetadata": {
+            "path": "node_modules/better-sqlite3/package.json",
+            "sha256": "d1db58a099dfdef5d10253e873e358eb1e9e2ebb01fa6ef0d40150e37cef6317"
+          },
+          "extractedMetadata": {
+            "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/extracted/extension/app/node_modules/better-sqlite3/package.json",
+            "sha256": "4665126292eff5dffe6c0ffabf98c4de18e479aa0b53edd775028eb567b3ecc1"
+          }
+        },
+        {
+          "name": "fast-xml-parser",
+          "sourceRootLockAndInstalled": "5.8.0",
+          "exactStagedLockAndExtracted": "5.11.2",
+          "stagedDeclaredRange": "^5.8.0",
+          "rootMetadata": {
+            "path": "node_modules/fast-xml-parser/package.json",
+            "sha256": "c046296e09fbcf48e59514ad3165011164a1eb589985f51035203f4d0175bae0"
+          },
+          "extractedMetadata": {
+            "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/extracted/extension/app/node_modules/fast-xml-parser/package.json",
+            "sha256": "6e37d7f4edb7ead1c89dbd645f336e3dab813e0a4bf6164411ada9c693b40052"
+          }
+        },
+        {
+          "name": "@google/genai",
+          "sourceRootLockAndInstalled": "2.8.0",
+          "exactStagedLockAndExtracted": "2.31.0",
+          "stagedDeclaredRange": "^2.4.0",
+          "rootMetadata": {
+            "path": "node_modules/@google/genai/package.json",
+            "sha256": "793e1178a1d1f11e1ab2398261ef707970544d9003e879dd7a0c78eba11daed3"
+          },
+          "extractedMetadata": {
+            "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/extracted/extension/app/node_modules/@google/genai/package.json",
+            "sha256": "ca301294d43caa85045718279f4550f636f4efa06bfd1ea76a9816172b677286"
+          }
+        }
+      ],
+      "scope": "Metadata and lock agreement verified read-only. The 120-test source E2E used root dependency bytes, not the newer staged dependency bytes. Extracted 80-check proof exercised the exact candidate dependencies; an additional runtime-discovered oracle sweep against the actual installed host/dependencies remains required.",
+      "installedHostOracleSweep": "PENDING"
+    }
+  },
+  "fullE2e": {
+    "status": "VERIFIED",
+    "scheduledTests": 120,
+    "workers": 1,
+    "startedAt": "2026-10-26T18:40:24.674597+00:00",
+    "passed": 120,
+    "failed": 0,
+    "flaky": 0,
+    "terminalReceipt": {
+      "path": "test-results/release-0.0.80/full-e2e-3/receipt.json",
+      "sha256": "1c27dc16cad22d2aefcf4ab7f31593f6a201463b6022bb7ba51fedd616b14702"
+    },
+    "lifecycleComplete": true,
+    "runEvidence": "test-results/release-0.0.80/full-e2e-3",
+    "note": "Terminal full source/browser suite passed 120/0/0 with owned tree gone, test ports closed and protected state unchanged. Three exact nonruntime files changed afterward; the retained timing snapshot, typed-JavaScript equivalence and independently reviewed route-harness diff bind the current freeze. Fresh route verification passed500/500 and precommit3 passed. The final source/stage batch passed all13 gates with unchanged source file hashes. No exact-package, installed-host, public-release or in-game proof is implied.",
+    "finishedAt": "2026-10-26T19:02:49.429950+00:00",
+    "verdict": {
+      "path": "test-results/release-0.0.80/full-e2e-3/e2e-verdict.json",
+      "sha256": "4be24856f45b496c5728e2a9a74e211c9ff71e1d7fb0d13f62f8e263f65dbf69"
+    },
+    "log": {
+      "path": "test-results/release-0.0.80/full-e2e-3/run.log",
+      "sha256": "2c2ace753a8d2267e7fbcea5c8d2123f5f779c20d361a08f60e8afc4d2846f9b"
+    },
+    "ownedTreeGone": true,
+    "remainingPortsAtWrapperClose": [],
+    "protectedUnchanged": true,
+    "protectedBefore": {
+      "path": "test-results/release-0.0.80/full-e2e-3/protected-before.json",
+      "sha256": "944fc6b6ceca9067c5f37670e3d272872107feab6929d7690e28a661f783d1f6"
+    },
+    "protectedAfter": {
+      "path": "test-results/release-0.0.80/full-e2e-3/protected-after.json",
+      "sha256": "944fc6b6ceca9067c5f37670e3d272872107feab6929d7690e28a661f783d1f6"
+    },
+    "sourceCompatibilityAfterRun": {
+      "scope": "Exact three nonruntime files changed after the passing 120-test full suite: TypeScript config, cache selftest erased types, and reviewed route harness. No production delta or pre-E2E hash observation is claimed.",
+      "originalSnapshot": {
+        "path": "test-results/release-0.0.80/remaining-gates-1/source-before.json",
+        "sha256": "3f9b673222cf2ccd452f590b760ed382b81618904bf88f66ae7876606498c2a7"
+      },
+      "currentFreeze": {
+        "path": "test-results/release-0.0.80/remaining-gates-final/source-before.json",
+        "sha256": "7581da3611c68400726a2e842fc38b8a31a77655921ef5fded12a3115f9a1653"
+      },
+      "changedPaths": {
+        "scripts/route-integration.mjs": {
+          "before": "40230523c7a15c8fec119cb9e9b6ea3b9beb59c7502f2ad723be122213e34600",
+          "after": "98aca6cc6c112ce65b35a29e5ff2c57ad2d6cdfde2cb587eb408198070e7dbe8"
+        },
+        "tsconfig.json": {
+          "before": "114b91d74f85752ea82b8569fe2364f1d4f5a881f7a7503cfd44fc2d0c0ea1ce",
+          "after": "605c1fd7ab1ad12aa527e8cda94d5730770e5fc5d11e9d4ec0277a0d587a0e53"
+        },
+        "scripts/reference-corpus-cache.selftest.ts": {
+          "before": "e89102ea1278b51923755ee82cbe52ba828a0cb98389acbdbfee950b456ca095",
+          "after": "f9dcaf86221fa96027bb7769b53affdc5095295d7a5bc6f4d745fcf137fdd796"
+        }
+      },
+      "typeRepairCompatibility": {
+        "path": "test-results/release-0.0.80/remaining-gates-verified/source-compatibility.json",
+        "sha256": "ef58cb45c02c5ff7e8175c02c05960e15a1fbc4b0ff5a10e390fc8639a07154f"
+      },
+      "routeRepairReview": {
+        "path": "test-results/release-0.0.80/route-contract-repair-1/review.json",
+        "sha256": "26118c7a7e24edb3aace42808e7c90c249a4d269f27e8d50e41e05661e315704"
+      },
+      "routeRepairDiff": {
+        "path": "test-results/release-0.0.80/route-contract-repair-1/reviewed.diff",
+        "sha256": "34c02b4f8a090d099191d5e89d6ec4b475888de46ba0e1666792936125304594"
+      },
+      "compatibilityRecord": {
+        "path": "test-results/release-0.0.80/remaining-gates-final/source-compatibility.json",
+        "sha256": "b0edeb04d8ffa37a7763dcafe2ac21364f2db39747de9356091b1e339833fc5f"
+      }
+    }
+  },
+  "preservedFailedRuns": [
+    {
+      "run": "full-e2e-1",
+      "status": "FAILED",
+      "exitCode": 1,
+      "finishedAt": "2026-10-26T16:47:14.512338+00:00",
+      "terminalReportComplete": false,
+      "passed": null,
+      "failed": null,
+      "flaky": null,
+      "lifecycleComplete": false,
+      "lifecycleErrors": [
+        "e2e-lifecycle-ownership-incomplete"
+      ],
+      "remainingPortsAtWrapperClose": [
+        3101
+      ],
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/full-e2e-1/receipt.json",
+        "sha256": "10d88a377e0aa771a2a004a30d78479b36b3ab71a5674ec989b3f5cedbcadf32"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/full-e2e-1/e2e-verdict.json",
+        "sha256": "cd9e26802172fe59ecfe65a1b66b80aa520521b4e6f56d5169410ae05c39eb45"
+      },
+      "reason": "30-minute aggregate deadline expired; structured report unavailable and ownership initialization incomplete. Failed run is not relabeled as passing.",
+      "manualCleanup": {
+        "pass": true,
+        "ownedProcessesIdentified": 4,
+        "evidence": {
+          "path": "test-results/release-0.0.80/full-e2e-1/manual-cleanup.json",
+          "sha256": "287ad66626487e9c47c8fc9cc43f72849269a8f265aa981077cdfbf868dbbb65"
+        },
+        "limitation": "This later manual cleanup is separate from the failed automatic lifecycle result."
+      }
+    },
+    {
+      "run": "cleanup-smoke-1",
+      "status": "FAILED",
+      "exitCode": 1,
+      "finishedAt": "2026-10-26T17:27:37.883178+00:00",
+      "terminalReportComplete": false,
+      "passed": null,
+      "failed": null,
+      "flaky": null,
+      "lifecycleComplete": true,
+      "lifecycleErrors": [],
+      "remainingPortsAtWrapperClose": [],
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/cleanup-smoke-1/receipt.json",
+        "sha256": "50eb9dd43f8497e7d0ce86fcf294b9f1805f5a4928dfab6a02a00152440a918e"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/cleanup-smoke-1/e2e-verdict.json",
+        "sha256": "3c1e5e3883c937a17e93378a2adfec00a4333fa31a84e0eeab0b67d7ee87803e"
+      },
+      "reason": "Server startup failed with ERR_PACKAGE_PATH_NOT_EXPORTED in dependency fingerprint resolution; no tests completed. Automatic owned-tree cleanup passed."
+    },
+    {
+      "run": "release-smoke-2",
+      "status": "FAILED",
+      "exitCode": 1,
+      "finishedAt": "2026-10-26T17:46:14.463618+00:00",
+      "terminalReportComplete": true,
+      "passed": 8,
+      "failed": 3,
+      "flaky": 0,
+      "lifecycleComplete": true,
+      "lifecycleErrors": [],
+      "remainingPortsAtWrapperClose": [],
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/release-smoke-2/receipt.json",
+        "sha256": "c9bb4ff593ddb4a631ff5f611ed59de3d511c74eb155e18afcc27f5691e81416"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/release-smoke-2/e2e-verdict.json",
+        "sha256": "75acd4327ae531ada718c6f31a160b1912bb5740f23028a45c5c695f17d22507"
+      },
+      "reason": "Three genuine required test failures: deployment trust and two project-browser scenarios; no waiver."
+    },
+    {
+      "run": "release-smoke-3",
+      "status": "FAILED",
+      "exitCode": 1,
+      "finishedAt": "2026-10-26T17:57:18.539255+00:00",
+      "terminalReportComplete": true,
+      "passed": 9,
+      "failed": 2,
+      "flaky": 0,
+      "lifecycleComplete": true,
+      "lifecycleErrors": [],
+      "remainingPortsAtWrapperClose": [],
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/release-smoke-3/receipt.json",
+        "sha256": "63161a405e26dfc1cb8a27ae30f5154218e1ed7433ad5100c81d843f7757eab0"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/release-smoke-3/e2e-verdict.json",
+        "sha256": "8657da68aa5b71197cb10aeb23eb09c1422db57da4caab65986de1b042924614"
+      },
+      "reason": "Two remaining required test failures: deployment trust and imported-node selector assumptions; no waiver."
+    },
+    {
+      "run": "full-e2e-2",
+      "status": "FAILED",
+      "exitCode": 1,
+      "finishedAt": "2026-10-26T18:39:08.817313+00:00",
+      "terminalReportComplete": true,
+      "passed": 119,
+      "failed": 1,
+      "flaky": 0,
+      "lifecycleComplete": true,
+      "ownedTreeGone": true,
+      "lifecycleErrors": [],
+      "remainingPortsAtWrapperClose": [],
+      "protectedUnchanged": true,
+      "receipt": {
+        "path": "test-results/release-0.0.80/full-e2e-2/receipt.json",
+        "sha256": "d5c351c22b4896dbd7363128b7839b47e0e4363e147c1a7c91b5f0ecccdddb7c"
+      },
+      "verdict": {
+        "path": "test-results/release-0.0.80/full-e2e-2/e2e-verdict.json",
+        "sha256": "6500fb13d30deeb176d71a29b6bf0b08b96647ac72be34f9f8564aabba70445b"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/full-e2e-2/run.log",
+        "sha256": "7b7afa7ec25501a28d1a5b296951c63e8f4572377a0b90aab67964cffd49fdcf"
+      },
+      "failedTraces": [
+        {
+          "path": "test-results/release-0.0.80/full-e2e-2/e2e/validation-trust-malformed-20bf1-n-a-successful-empty-result-chromium/trace.zip",
+          "sha256": "e81fd0b1c3a122c7521e1145228aa7e95e117ce676eb2b50bd774ff4cf60571f"
+        },
+        {
+          "path": "test-results/release-0.0.80/full-e2e-2/e2e/validation-trust-malformed-20bf1-n-a-successful-empty-result-chromium-retry1/trace.zip",
+          "sha256": "70245bae2691e247e0c732ee308056fcf4f190aa2eb25b13e8bf1484a0726686"
+        }
+      ],
+      "reason": "The malformed-subject test and retry stopped at project:null: HTTP 400/ok:false with null modId/sourceHash was already correct, but the legacy assertion expected VALIDATION_INPUT_INVALID instead of the PROJECT_INPUT_INVALID returned by C06 early request validation. The full run remains FAILED; it is not waived or relabeled.",
+      "diagnosis": {
+        "classification": "REPRODUCED",
+        "route": "POST /api/agent/project/validate",
+        "firstRejectedInput": {
+          "project": null
+        },
+        "expectedCodeInStaleTest": "VALIDATION_INPUT_INVALID",
+        "actualCode": "PROJECT_INPUT_INVALID",
+        "owner": "server.ts projectApiInputMiddleware -> validateProjectApiBody",
+        "repairBoundary": "tests/e2e/validation-trust.spec.ts only: require the exact current code, request-invalid category and unresolved identity scope; retain HTTP 400 and null identities. Production validation was not changed for this test repair.",
+        "focusedRetest": "validation-contract-1",
+        "fullSuiteRetest": "full-e2e-3 VERIFIED: 120 passed, 0 failed, 0 flaky; the earlier failed verdict remains retained."
+      }
+    },
+    {
+      "run": "public-baseline-1",
+      "status": "FAILED",
+      "exitCode": 0,
+      "finishedAt": "2026-10-26T19:10:13.979862+00:00",
+      "wrapperReportedPass": true,
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/public-baseline-1/receipt.json",
+        "sha256": "cc74a8b34adb93fc27e3db4050f4b58cded8890b781277d159527c21ec952234"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/public-baseline-1/run.log",
+        "sha256": "8b65abbc4d11ab27a738a4e58f569d5922d952356bd0ab036a939158faa224d8"
+      },
+      "methodValidForIntendedGate": false,
+      "ordinaryCapabilityAuditPassed": true,
+      "reason": "The --generate-candidate argument was passed to npm without --. npm treated it as unknown configuration and the script ran normal audit only. Exit 0 and wrapper pass are retained, but this run is invalid candidate-generation evidence.",
+      "correctedBy": "public-baseline-2"
+    },
+    {
+      "run": "final-precommit-1",
+      "status": "FAILED",
+      "exitCode": 1,
+      "finishedAt": "2026-10-26T19:21:43.319878+00:00",
+      "wrapperReportedPass": false,
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-precommit-1/receipt.json",
+        "sha256": "db7127833b0e8af435c7fae678710b2bc42b44749f251e36942e3d3684fdbec2"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-precommit-1/run.log",
+        "sha256": "a780fcaff9ee6e06c171a76ff26675794d5df408966f1ed8644edcf2dd3129dc"
+      },
+      "reason": "Required precommit stopped at TypeScript: the cache selftest assigned to readonly fs.statSync, and tsconfig included generated/private test-results artifacts, including a retained profiler source copy with invalid relative imports.",
+      "completedSubgatesBeforeFailure": {
+        "capabilityAudit": {
+          "passed": true,
+          "capabilities": 12,
+          "literalRoutes": 301,
+          "dynamicRegistrars": 1,
+          "mcpAliases": 11
+        },
+        "mcpCapabilitySelftest": {
+          "passed": true
+        },
+        "receiptCoverageAudit": {
+          "passed": true,
+          "routes": 85,
+          "surfaces": 61
+        }
+      },
+      "correctedTypecheck": "final-typecheck-2",
+      "fullPrecommitRetest": "final-precommit-2 and final-precommit-3 VERIFIED; original failed attempt remains retained."
+    },
+    {
+      "run": "final-routes-1",
+      "status": "FAILED",
+      "exitCode": 1,
+      "finishedAt": "2026-10-26T19:47:18.233315+00:00",
+      "passed": 485,
+      "failed": 13,
+      "total": 498,
+      "protectedUnchanged": true,
+      "remainingPortsAtWrapperClose": [],
+      "receipt": {
+        "path": "test-results/release-0.0.80/final-routes-1/receipt.json",
+        "sha256": "f8c4fe828c7e3eaec501c60cec36f3066f36d7bf59f6428197bb94d5f29f5863"
+      },
+      "log": {
+        "path": "test-results/release-0.0.80/final-routes-1/run.log",
+        "sha256": "0c6ca2c8a3ce3181abebee0dd841202ca42d24748c376b75e1390bb662cdf04d"
+      },
+      "failedAssertions": [
+        "capability_validation_rejects_undeclared_input",
+        "canonical_runtime_debugger_matches_legacy_payload",
+        "custom_key_denies_unselected_canonical_capability_before_mutation",
+        "b119_ui_lua_above_legacy_cap_imports_byte_exactly",
+        "b119_ui_lua_above_bounded_allowance_stays_omitted",
+        "b119_ui_total_inline_budget_remains_bounded",
+        "changed_green_warning_set_can_be_accepted_deliberately",
+        "validation_delta_reports_resolved_warning",
+        "nexus_release_requires_explicit_workspace",
+        "invalid_export_receipt_is_refused",
+        "compile_rejects_undeclared_top_level_input",
+        "compile_rejects_non_object_body_before_workspace_authority",
+        "compile_rejects_non_object_inline_workspace"
+      ],
+      "reason": "Thirteen stale route-harness expectations conflicted with the current request contract, compile capability v2, addressed runtime subject, editable UI source representation and incomplete-coverage baseline policy. The failed run remains retained. A separately reviewed test-only repair requires a fresh full route run.",
+      "retest": "final-routes-2 VERIFIED 500/500; original 485/498 failed verdict remains preserved."
+    },
+    {
+      "run": "installed-oracles-4ea828a7b942",
+      "status": "FAILED",
+      "runnerStarted": false,
+      "reason": "Preflight treated IDE-added archive-identical .vsixmanifest as an unknown installed file; no oracle runner started. Narrow archive-derived metadata parity repair passed seven controls and real134-oracle rerun.",
+      "receipt": {
+        "path": "test-results/release-0.0.80/installed-oracles-4ea828a7b942/receipt.json",
+        "sha256": "d61534e1b3c877cfe067deba94c7558799dd5b551571cf1d935dba965c69744a"
+      }
+    }
+  ],
+  "protectedState": {
+    "status": "VERIFIED_FOR_LISTED_COMPLETED_RUNS",
+    "noChangesObserved": true,
+    "scope": "Saved comparisons of enumerated live/Dev protected files and discovery for completed wrappers and installed checks. No file drift observed. Native desktop foreground collision occurred; no continuous game-health or no-disruption claim.",
+    "completedRuns": [
+      "root-ci-1",
+      "extension-ci-1",
+      "typecheck-final-1",
+      "lint-final-1",
+      "capabilities-final-1",
+      "lifecycle-diagnostic-6",
+      "reference-baseline-1",
+      "reference-fixed-1",
+      "import-preview-4",
+      "deployment-repeat-4",
+      "full-e2e-1",
+      "cleanup-smoke-1",
+      "release-smoke-2",
+      "release-smoke-3",
+      "full-e2e-2",
+      "validation-contract-1",
+      "full-e2e-3",
+      "final-lint-1",
+      "final-oracles-1",
+      "public-baseline-1",
+      "public-baseline-2",
+      "final-precommit-1",
+      "final-typecheck-2",
+      "cache-type-repair-1",
+      "final-precommit-2",
+      "final-policy-1",
+      "final-root-audit-1",
+      "final-extension-audit-1",
+      "final-routes-1",
+      "final-lint-2",
+      "final-routes-2",
+      "final-precommit-3",
+      "final-extension-build-1",
+      "final-stage-1",
+      "final-stage-audit-1",
+      "final-stage-probe-1",
+      "final-inspector-policy-1"
+    ],
+    "currentFullRunAfterCheck": {
+      "path": "test-results/release-0.0.80/full-e2e-3/protected-after.json",
+      "sha256": "944fc6b6ceca9067c5f37670e3d272872107feab6929d7690e28a661f783d1f6"
+    },
+    "liveInstallationPerformed": false,
+    "gameInteractionsPerformed": false
+  },
+  "remainingRequiredReleaseGates": [
+    "Final release commit, non-force public push, matching GitHub release and required CI",
+    "GitHub/Notion postcommit release readback"
+  ],
+  "vsixSha256": "97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3",
+  "vsixBytes": 28918294,
+  "exactPackage": {
+    "status": "VERIFIED",
+    "scope": "Exact VSIX packaging, archive inspection and extracted production-mode HTTP/MCP scratch proof. This is not an installed Antigravity-host or game proof.",
+    "archiveEntryCount": 2108,
+    "artifact": {
+      "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/x4-forge-studio-0.0.80.vsix",
+      "sha256": "97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3"
+    },
+    "candidateRecord": {
+      "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/candidate.json",
+      "sha256": "9b8eb88d62527908515193f8271a01745240ab11915a84566df62f1984851060"
+    },
+    "buildReceipt": {
+      "path": "test-results/release-0.0.80/exact-package-build-1/receipt.json",
+      "sha256": "6cb5e520358df7dd32159272cece208b62fea0bf43bddc491cd28cd9d566aeac"
+    },
+    "inspectionReceipt": {
+      "path": "test-results/release-0.0.80/exact-inspector-1/receipt.json",
+      "sha256": "89e0a778d231c2faa6111f4ffbafaf0c9005d69c6a9ba803729232907599298c"
+    },
+    "extractedRuntime": {
+      "status": "VERIFIED",
+      "passed": 80,
+      "failed": 0,
+      "verdict": {
+        "path": "test-results/release-0.0.80/exact-package-runs/run-e03cb583b9eb4823b2764f3f243e03ce/verdict.json",
+        "sha256": "e5a6a8b147be98130064081f88885abece5556a8a6d4e7dceaa40a365a9baef8"
+      },
+      "evidenceManifest": {
+        "path": "test-results/release-0.0.80/exact-package-runs/run-e03cb583b9eb4823b2764f3f243e03ce/evidence-manifest.json",
+        "sha256": "8a0404f2dc3f7cf87939c6d54628a6931064b66e13da427fcff06a46d3e743f2"
+      },
+      "helper": {
+        "path": "test-results/release-0.0.80/exact-package-proof.py",
+        "sha256": "fe1fa8d5351f9f7bc989501ebe896f024e4d100ff524ff45207ef7890bf21e42"
+      },
+      "moduleGuard": {
+        "path": "test-results/release-0.0.80/exact-package-runs/run-e03cb583b9eb4823b2764f3f243e03ce/module-provenance-guard.cjs",
+        "sha256": "33e9cd13e2b746688afff685257472a9079e40438d72c4553f3e45466aca881d"
+      },
+      "server": {
+        "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/extracted/extension/app/dist/server.cjs",
+        "sha256": "8ad716f346eb39b42771eee9d3357e472af48a31f1bb533d91c83853e2bd9d4b"
+      },
+      "mcp": {
+        "path": "C:/Users/Moshi/.x4forge-dev-build/lab/evidence/releases/0.0.80/extracted/extension/mcp/x4forge-mcp.cjs",
+        "sha256": "bba82581e6c67137a740f78d1fb8a5d8261d3e358e91bac90678930d9b5663cf"
+      },
+      "fixtureHash": "7dcfe36975c79c383d783a3b347eb03bd0140484c23b95db90eef107a29f3559",
+      "scope": [
+        "Production sidecar mode with private state/config/data/discovery/cache/coordination/scratch game roots",
+        "Exact extracted app/node_modules and packaged MCP, no repository NODE_PATH fallback",
+        "Native SQLite loaded; cache and coordinator registry private and request claims observed",
+        "Exact ui.xml source bytes and ordered registrations preserved",
+        "Preview/apply receipts, exact scratch bytes, stale-source and wrong-identity refusals",
+        "Compile/package/artifact positive and negative truth through HTTP/MCP",
+        "Normal production reload unavailable; no reload outbox or real-game interaction",
+        "Named dependency diagnostics and recovery"
+      ],
+      "instrumentation": "A fail-closed CommonJS resolution guard enforces package-local dependency use for this extracted proof. Uninstrumented installed-host proof remains required.",
+      "cleanup": {
+        "scope": "observed retained process handles, not Job containment",
+        "evidence": {
+          "path": "test-results/release-0.0.80/exact-package-runs/run-e03cb583b9eb4823b2764f3f243e03ce/process-cleanup.json",
+          "sha256": "6d0a1f61b1a71ddfd8351df311d3ca1fbeb2512ee3c1fd0ecd87002a89e1906a"
+        },
+        "noJobContainmentClaim": true
+      },
+      "realGameTouched": false
+    }
+  },
+  "nativeHost": {
+    "status": "VERIFIED",
+    "installedVersion": "0.0.80",
+    "evidence": {
+      "path": "test-results/release-0.0.80/native-ui-final/receipt.json",
+      "sha256": "4aac9774adfbfadb94a5ca2921884ec640a08339dfd612937bf94a6ab37af927"
+    },
+    "privateDispatch": [
+      {
+        "mode": "install",
+        "status": "DISPATCHED_NOT_VERIFIED",
+        "dispatchSucceeded": true,
+        "cliExitCode": 0,
+        "protectedUnchanged": true,
+        "receipt": {
+          "path": "test-results/release-0.0.80/host-install-5460509d9045/receipt.json",
+          "sha256": "f799f6ccd5dc055d96c166cc071292d56b3871a260854434c73097f4408a395b"
+        }
+      },
+      {
+        "mode": "launch",
+        "status": "DISPATCHED_NOT_VERIFIED",
+        "dispatchSucceeded": true,
+        "cliExitCode": 0,
+        "protectedUnchanged": true,
+        "receipt": {
+          "path": "test-results/release-0.0.80/host-launch-a748ff555d08/receipt.json",
+          "sha256": "59f211c1376cc07e426e2b876108c3f119a34b90b4eaf523a8dc4384d4cf71fc"
+        }
+      }
+    ],
+    "currentBoundary": "User-coordinated desktop window completed manual-path rescan and current preview observation. Native dialog closed; desktop input ended. No game proof.",
+    "additionalRequiredGate": null,
+    "publicOrLiveInstallationClaim": false,
+    "api": {
+      "status": "VERIFIED",
+      "checks": 62,
+      "evidence": {
+        "path": "C:\\Users\\Moshi\\.x4forge-dev-build\\lab\\release-host-0.0.80\\evidence\\installed-5d13b73a0b5e\\verdict.json",
+        "sha256": "76a9a75142c060c120513372235298b7c08de6f5ec6783d64bda7b681b5a5ae4"
+      }
+    },
+    "installedOracles": {
+      "status": "VERIFIED",
+      "green": 134,
+      "total": 134,
+      "runtimeDiscoveryOnly": true,
+      "ownedClientStopped": true,
+      "exactPackageUnchanged": true,
+      "protectedUnchanged": true,
+      "evidence": {
+        "path": "test-results/release-0.0.80/installed-oracles-b04e1189d388/receipt.json",
+        "sha256": "6e42b67fdd45c181a8739f67a61956bfab5bdd79a721551df6c6706f152451e2"
+      }
+    },
+    "metadataRepair": {
+      "status": "VERIFIED",
+      "failedPreflight": {
+        "path": "test-results/release-0.0.80/installed-oracles-4ea828a7b942/receipt.json",
+        "sha256": "d61534e1b3c877cfe067deba94c7558799dd5b551571cf1d935dba965c69744a"
+      },
+      "runnerStartedInFailedAttempt": false,
+      "scope": "IDE-installed .vsixmanifest is required and hash-bound to archive extension.vsixmanifest; all other extra/missing/changed files refused",
+      "controls": {
+        "path": "test-results/release-0.0.80/installed-manifest-repair-1/verification.json",
+        "sha256": "58c55f9ba2252e3a862e35169e5a8977e930faef8014fdcef5294e44307fc0de"
+      }
+    },
+    "rendered": {
+      "status": "VERIFIED",
+      "receipt": {
+        "path": "test-results/release-0.0.80/native-ui-final/receipt.json",
+        "sha256": "4aac9774adfbfadb94a5ca2921884ec640a08339dfd612937bf94a6ab37af927"
+      },
+      "screenshots": [
+        {
+          "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\native-ui-final\\import-preview.jpg",
+          "sha256": "937fca3e0e8e20c05992bfac449be173cc9949b461b546d96484cd6d1f62f139"
+        },
+        {
+          "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\release-0.0.80\\native-ui-final\\shell-after-close.jpg",
+          "sha256": "e3ac652455055e5f21bc8c41ef03b4b192bd519ab3020325e0d08f47310c0f66"
+        }
+      ],
+      "observations": [
+        {
+          "pass": true,
+          "detail": "Unique X4 FORGE RELEASE TEST 0.0.80 window rendered stable Forge managed sidecar on56585 with private roots."
+        },
+        {
+          "pass": true,
+          "detail": "Manually entered forge_regression_lab remained after Refresh projects."
+        },
+        {
+          "pass": true,
+          "detail": "Preview displayed36 files,35 editable,1generated,0partial/passthrough/binary and3 graphnodes; MissionDirector andLua/UI domains detected."
+        },
+        {
+          "pass": true,
+          "detail": "LOAD PROJECT enabled for current preview; dialog closed without loading/deploying."
+        }
+      ],
+      "limits": [
+        "Prior foreground collision and input guard retained in task record.",
+        "Narrow1440-window modal layout compressed columns; coordinated proof used expanded native window.",
+        "Dynamic network race rejection additionally covered by source/browser tests; no full native race claim."
+      ]
+    }
+  },
+  "public": {
+    "status": "VERIFIED",
+    "registry": "Open VSX",
+    "version": "0.0.80",
+    "downloadHashMatches": true,
+    "latestDownloadHashMatches": true,
+    "checkedAt": "2026-10-26T21:37:32.277010+00:00",
+    "url": "https://open-vsx.org/extension/x4forge/x4-forge-studio",
+    "metadataUrl": "https://open-vsx.org/api/x4forge/x4-forge-studio/0.0.80",
+    "receipt": {
+      "path": "test-results/release-0.0.80/openvsx-2d306848a490/receipt.json",
+      "sha256": "938f951046319f3489ab66b3bf133830c68e69eea3cdf084df1c71fd5372a30c"
+    },
+    "initialDelayedVisibility": {
+      "path": "test-results/release-0.0.80/openvsx-2d306848a490/receipt.initial-unknown.json",
+      "sha256": "d2b2ac28028400380177775b23835a649e2f00595143edfbcfc3eed88b092910"
+    },
+    "readOnlyRecovery": {
+      "path": "test-results/release-0.0.80/openvsx-2d306848a490/readback-recovery.json",
+      "sha256": "a7af2bf181d7effbf44e81272ac28e34413d3f90a98bbffd8dd8f5ac760cfd83"
+    },
+    "uploadAttempts": 1,
+    "downloadSha256": "97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3",
+    "bytes": 28918294
+  },
+  "github": {
+    "status": "POST_COMMIT_VERIFICATION_REQUIRED",
+    "releaseCommit": null,
+    "pushedCommit": null,
+    "releaseUrl": "https://github.com/KennyG1990/X4_Forge/releases/tag/v0.0.80",
+    "requiredCi": null,
+    "note": "Captured before this release commit; final commit, remote equality and required CI are checked afterward and recorded in that GitHub release and owner issue20/Notion."
+  },
+  "liveInstalled": {
+    "status": "NOT_PERFORMED",
+    "version": null,
+    "automaticInstallationAuthorizedByThisRelease": false
+  },
+  "notClaimed": [
+    "All Claude complaints completed",
+    "A15 project-test registry or asynchronous test execution",
+    "Critical corrupt-save detection",
+    "Production keyboard-free reload/probe loop or disposable-save game proof",
+    "Universal Lua/MD correctness or all engine traps",
+    "Universal validation latency improvement",
+    "Microsoft Marketplace publication",
+    "Live Forge installation",
+    "Kimi implementation"
+  ],
+  "remainingGateBatch": {
+    "status": "VERIFIED",
+    "scheduledSteps": 13,
+    "runEvidence": "test-results/release-0.0.80/remaining-gates-final",
+    "runner": "test-results/release-0.0.80/remaining-gates-3.py",
+    "activeStage": null,
+    "terminalResult": {
+      "pass": true,
+      "gates": 13,
+      "sourceFileCount": 744,
+      "sourceHash": "4692ff224674a9d5ea4f9790039b3d5a126265f624c9ae862bd3ed382a51d970",
+      "sourceFileHashesUnchanged": true,
+      "completedAt": "2026-10-26T20:07:35.508774+00:00"
+    },
+    "priorStoppedBatches": [
+      "test-results/release-0.0.80/remaining-gates-1",
+      "test-results/release-0.0.80/remaining-gates-verified"
+    ],
+    "originalSourceBefore": {
+      "path": "test-results/release-0.0.80/remaining-gates-1/source-before.json",
+      "sha256": "3f9b673222cf2ccd452f590b760ed382b81618904bf88f66ae7876606498c2a7"
+    },
+    "sourceBefore": {
+      "path": "test-results/release-0.0.80/remaining-gates-final/source-before.json",
+      "sha256": "7581da3611c68400726a2e842fc38b8a31a77655921ef5fded12a3115f9a1653"
+    },
+    "sourceFileCount": 744,
+    "sourceCompatibility": {
+      "scope": "Exact three nonruntime files changed after the passing 120-test full suite: TypeScript config, cache selftest erased types, and reviewed route harness. No production delta or pre-E2E hash observation is claimed.",
+      "originalSnapshot": {
+        "path": "test-results/release-0.0.80/remaining-gates-1/source-before.json",
+        "sha256": "3f9b673222cf2ccd452f590b760ed382b81618904bf88f66ae7876606498c2a7"
+      },
+      "currentFreeze": {
+        "path": "test-results/release-0.0.80/remaining-gates-final/source-before.json",
+        "sha256": "7581da3611c68400726a2e842fc38b8a31a77655921ef5fded12a3115f9a1653"
+      },
+      "changedPaths": {
+        "scripts/route-integration.mjs": {
+          "before": "40230523c7a15c8fec119cb9e9b6ea3b9beb59c7502f2ad723be122213e34600",
+          "after": "98aca6cc6c112ce65b35a29e5ff2c57ad2d6cdfde2cb587eb408198070e7dbe8"
+        },
+        "tsconfig.json": {
+          "before": "114b91d74f85752ea82b8569fe2364f1d4f5a881f7a7503cfd44fc2d0c0ea1ce",
+          "after": "605c1fd7ab1ad12aa527e8cda94d5730770e5fc5d11e9d4ec0277a0d587a0e53"
+        },
+        "scripts/reference-corpus-cache.selftest.ts": {
+          "before": "e89102ea1278b51923755ee82cbe52ba828a0cb98389acbdbfee950b456ca095",
+          "after": "f9dcaf86221fa96027bb7769b53affdc5095295d7a5bc6f4d745fcf137fdd796"
+        }
+      },
+      "typeRepairCompatibility": {
+        "path": "test-results/release-0.0.80/remaining-gates-verified/source-compatibility.json",
+        "sha256": "ef58cb45c02c5ff7e8175c02c05960e15a1fbc4b0ff5a10e390fc8639a07154f"
+      },
+      "routeRepairReview": {
+        "path": "test-results/release-0.0.80/route-contract-repair-1/review.json",
+        "sha256": "26118c7a7e24edb3aace42808e7c90c249a4d269f27e8d50e41e05661e315704"
+      },
+      "routeRepairDiff": {
+        "path": "test-results/release-0.0.80/route-contract-repair-1/reviewed.diff",
+        "sha256": "34c02b4f8a090d099191d5e89d6ec4b475888de46ba0e1666792936125304594"
+      },
+      "compatibilityRecord": {
+        "path": "test-results/release-0.0.80/remaining-gates-final/source-compatibility.json",
+        "sha256": "b0edeb04d8ffa37a7763dcafe2ac21364f2db39747de9356091b1e339833fc5f"
+      }
+    },
+    "completedStageAttempts": [
+      "final-oracles-1",
+      "public-baseline-2",
+      "final-policy-1",
+      "final-root-audit-1",
+      "final-extension-audit-1",
+      "final-lint-2",
+      "final-routes-2",
+      "final-precommit-3",
+      "final-extension-build-1",
+      "final-stage-1",
+      "final-stage-audit-1",
+      "final-stage-probe-1",
+      "final-inspector-policy-1"
+    ],
+    "pendingFreshSequence": [],
+    "limitation": "All thirteen required source/build/stage gates passed and the 744-file source hash map stayed unchanged across the final batch. Retained three-file compatibility explains the earlier post-E2E nonruntime repairs. Exact package, installed host, publication and release finalization are not established.",
+    "results": {
+      "path": "test-results/release-0.0.80/remaining-gates-final/results.json",
+      "sha256": "1b145f2c91f27d552098e69d869e784a00ed86ddb4bdccf0a23ee191360ebd36"
+    },
+    "sourceAfter": {
+      "path": "test-results/release-0.0.80/remaining-gates-final/source-after.json",
+      "sha256": "4dc9e0e739a12537ae08644d661b0b4ed6d3e48a18c80cbdc813fddb7d048a49"
+    },
+    "completedStages": [
+      {
+        "logicalStage": "final-oracles-1",
+        "attempt": "final-oracles-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-oracles-1/receipt.json",
+          "sha256": "aa2fa049a593b81cd622a02f8d09353022f24417df6d0d168b4eb710e194c4e2"
+        }
+      },
+      {
+        "logicalStage": "public-baseline-1",
+        "attempt": "public-baseline-2",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/public-baseline-2/receipt.json",
+          "sha256": "290a671b493b07f0654411e4c87ac12e81ad38945c974bf576b5371410dac4e0"
+        }
+      },
+      {
+        "logicalStage": "final-policy-1",
+        "attempt": "final-policy-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-policy-1/receipt.json",
+          "sha256": "c8d8f42f38e6685cbd8335faabb516c3c40b86b40ec06e031e25c884df68af3b"
+        }
+      },
+      {
+        "logicalStage": "final-root-audit-1",
+        "attempt": "final-root-audit-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-root-audit-1/receipt.json",
+          "sha256": "b4fe75cdf2bbe27938caf3ec902da520828a0b6a4c58ad89c2bf15015b7aea9d"
+        }
+      },
+      {
+        "logicalStage": "final-extension-audit-1",
+        "attempt": "final-extension-audit-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-extension-audit-1/receipt.json",
+          "sha256": "e9fa692e6b9694a5c25120da512e5c343b2438e14261556d211118c144457d33"
+        }
+      },
+      {
+        "logicalStage": "final-lint-1",
+        "attempt": "final-lint-2",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-lint-2/receipt.json",
+          "sha256": "718020d5ff9ff7589c8d8849afcc4c61f1c5c3139a755e8f5995a1035eb9ca1d"
+        }
+      },
+      {
+        "logicalStage": "final-routes-1",
+        "attempt": "final-routes-2",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-routes-2/receipt.json",
+          "sha256": "ba986e0fa33ac603dcbb62c523e5e35fa94504187607f2e3bd2018f01d48dcb6"
+        }
+      },
+      {
+        "logicalStage": "final-precommit-1",
+        "attempt": "final-precommit-3",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-precommit-3/receipt.json",
+          "sha256": "a23a7e4644235dfe44c30468090d4757c328ba93e8d35b4361db241711e5f2b8"
+        }
+      },
+      {
+        "logicalStage": "final-extension-build-1",
+        "attempt": "final-extension-build-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-extension-build-1/receipt.json",
+          "sha256": "555b8a4155156aeb7d761db74905cadfefe58bd26a43add01561140ea527a998"
+        }
+      },
+      {
+        "logicalStage": "final-stage-1",
+        "attempt": "final-stage-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-stage-1/receipt.json",
+          "sha256": "6ea5f2b968e03bfc1ee02844528396ebb84cc6ebe792a9145e9b3bc727c64257"
+        }
+      },
+      {
+        "logicalStage": "final-stage-audit-1",
+        "attempt": "final-stage-audit-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-stage-audit-1/receipt.json",
+          "sha256": "47090411d2c635d96cc5253bda8712f991e70f3194d331a612e300acada2bfb9"
+        }
+      },
+      {
+        "logicalStage": "final-stage-probe-1",
+        "attempt": "final-stage-probe-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-stage-probe-1/receipt.json",
+          "sha256": "407be7cb79ec1ade393fb1a251dac71af66b3ac0f611611be0178fd68890b792"
+        }
+      },
+      {
+        "logicalStage": "final-inspector-policy-1",
+        "attempt": "final-inspector-policy-1",
+        "status": "VERIFIED",
+        "receipt": {
+          "path": "test-results/release-0.0.80/final-inspector-policy-1/receipt.json",
+          "sha256": "41f16be2792abe70a33094d4f93faec304ae6f1e116cde7f491ec960329487ff"
+        }
+      }
+    ]
+  },
+  "typecheckBoundaryRepair": {
+    "status": "VERIFIED",
+    "scope": "Type-only selftest annotation repair plus exclusion of generated test-results from TypeScript input discovery. No product-runtime source changed. JavaScript equivalence concerns the repaired selftest file, not an entire rebuilt package.",
+    "changedFiles": [
+      {
+        "logicalSource": "tsconfig.json",
+        "retainedBefore": {
+          "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/tsconfig.before.json.txt",
+          "sha256": "114b91d74f85752ea82b8569fe2364f1d4f5a881f7a7503cfd44fc2d0c0ea1ce"
+        },
+        "currentAfter": {
+          "path": "tsconfig.json",
+          "sha256": "605c1fd7ab1ad12aa527e8cda94d5730770e5fc5d11e9d4ec0277a0d587a0e53"
+        }
+      },
+      {
+        "logicalSource": "scripts/reference-corpus-cache.selftest.ts",
+        "retainedBefore": {
+          "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/reference-corpus-cache.selftest.ts.before.txt",
+          "sha256": "e89102ea1278b51923755ee82cbe52ba828a0cb98389acbdbfee950b456ca095"
+        },
+        "currentAfter": {
+          "path": "scripts/reference-corpus-cache.selftest.ts",
+          "sha256": "f9dcaf86221fa96027bb7769b53affdc5095295d7a5bc6f4d745fcf137fdd796"
+        }
+      }
+    ],
+    "beforeInputCount": 527,
+    "afterInputCount": 505,
+    "removedGeneratedInputs": [
+      "test-results/claude-C03/parse-check.mjs",
+      "test-results/claude-C06c/fixed-8b1a4b7901/harness/c06c-write-barrier.cjs",
+      "test-results/fixes-only-release/package-release.mjs",
+      "test-results/fixes-only-release/package/extracted/extension/app/dist/assets/index-CPtlY9QF.js",
+      "test-results/fixes-only-release/package/extracted/extension/app/dist/server.cjs",
+      "test-results/fixes-only-release/package/extracted/extension/mcp/x4forge-mcp.cjs",
+      "test-results/fixes-only-release/package/extracted/extension/out/extension.js",
+      "test-results/fixes-only-release/package/extracted/extension/out/sidecar-supervisor.js",
+      "test-results/fixes-only-release/packaged-trust-probe.mjs",
+      "test-results/fixes-only-release/run-check.mjs",
+      "test-results/fixes-only-release/verify-installed.mjs",
+      "test-results/fixes-only-release/verify-public.mjs",
+      "test-results/release-0.0.80/lifecycle-capture-comparison.mjs",
+      "test-results/release-0.0.80/lifecycle-command-diagnostic.mjs",
+      "test-results/release-0.0.80/lifecycle-diagnostic.mjs",
+      "test-results/release-0.0.80/lifecycle-env-comparison.mjs",
+      "test-results/release-0.0.80/lifecycle-query-comparison.mjs",
+      "test-results/release-0.0.80/lint-erased-js-proof.mjs",
+      "test-results/release-0.0.80/reference-baseline-1/reference-profile.baseline.cjs",
+      "test-results/release-0.0.80/reference-baseline-1/reference-profile.baseline.ts",
+      "test-results/release-0.0.80/reference-corpus-profile.ts",
+      "test-results/release-0.0.80/reference-profile.cjs"
+    ],
+    "addedInputs": [],
+    "compilerOptionsUnchanged": true,
+    "onlyTestResultsExcluded": true,
+    "serverAndRegressionSelftestRetained": true,
+    "retainedSourceCounts": {
+      "scripts/": 89,
+      "tests/e2e/": 37,
+      "src/": 320
+    },
+    "emittedJavaScriptIdentical": true,
+    "baseline": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/baseline.json",
+      "sha256": "8aa6e9da5c0ad9644043f3dea646510d2de77b276e9af0c76e69ac08952eb8d2"
+    },
+    "result": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/result.json",
+      "sha256": "f9d84b718a9b0b21dde7022b78def6652f7bf4a7dbccb442ddf85b1b052f1293"
+    },
+    "inventoryBefore": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/inventory-before.json",
+      "sha256": "0ea7f6a979fe0e9d64d0063170484ada7ba9833a4b8090d528fdcadbe6547c80"
+    },
+    "inventoryAfter": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/inventory-after.json",
+      "sha256": "b34b1e01f564a5309a08328f2d56970b5707991634c04c48455f337344b0a63f"
+    },
+    "emittedBefore": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/emitted-before.js.txt",
+      "sha256": "e52627a093ac1a782201c4cdac0c883edbd426fdf6ed4c2500f1c1aed7dc50a0"
+    },
+    "emittedAfter": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/emitted-after.js.txt",
+      "sha256": "e52627a093ac1a782201c4cdac0c883edbd426fdf6ed4c2500f1c1aed7dc50a0"
+    },
+    "verificationLog": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/verification-2.log",
+      "sha256": "613d0a6f82312235071c53d82e56d296ac583480f050cac8b2461c38078a162d"
+    },
+    "retainedFailedVerification": {
+      "path": "test-results/release-0.0.80/typecheck-boundary-repair-1/failed-verification-1.json",
+      "sha256": "248be16b5e54cd4ada3e5e4302091b0ad20e7ec7b767246d0c99018f65bb9f8f"
+    },
+    "failedVerificationReason": "The first helper compared normalized config against raw JSON; a following shell command masked its nonzero exit. That attempt is retained as failed, not accepted. Corrected verification compares raw configs and preserves the actual Node exit.",
+    "sourceCompatibility": {
+      "path": "test-results/release-0.0.80/remaining-gates-verified/source-compatibility.json",
+      "sha256": "ef58cb45c02c5ff7e8175c02c05960e15a1fbc4b0ff5a10e390fc8639a07154f"
+    },
+    "limitation": "Original source timing snapshot is retained. No pre-E2E hash capture is claimed; only these two documented nonruntime changes follow that passing run."
+  },
+  "currentDevHealth": {
+    "status": "VERIFIED_READ_ONLY",
+    "observedResult": "HEALTHY_READ_ONLY",
+    "finishedAt": "2026-10-26T19:43:50.581214+00:00",
+    "checksPassed": 12,
+    "httpStatus": 200,
+    "statusResponseMs": 5596.162,
+    "extensionIdentity": {
+      "name": "x4-forge-studio-dev",
+      "publisher": "x4forge",
+      "version": "0.0.79"
+    },
+    "installedD0ServerSha256": "53c9607486b3763d32372645b4cd9a6e05577d3f7767ddc9d89c77f9f0d9b9c6",
+    "matchesExpectedD0Build": true,
+    "workspaceName": "Forge Regression Lab",
+    "workspaceId": "ws_faaf7baad1749dc2d684d3f8",
+    "privateResolvedRoots": true,
+    "dependencyPathsReadable": true,
+    "currentNativeCoordinatorAvailable": true,
+    "sameProcessAndCoordinatorAsInstalledD0Proof": true,
+    "baselineDriftFields": [],
+    "postReadDriftFields": [],
+    "evidence": {
+      "path": "test-results/release-0.0.80/dev-health-final/health.json",
+      "sha256": "0b1fa1a4008a4874e8ae3af37afc4e5381c0ac080ed79e50740100f77ae84b26"
+    },
+    "redactedStatus": {
+      "path": "test-results/release-0.0.80/dev-health-final/status.redacted.json",
+      "sha256": "e8131419abba400d229ae08483de8117339769414adaef4151e3a6f3a56bf4b1"
+    },
+    "before": {
+      "path": "test-results/release-0.0.80/dev-health-final/dev-before.redacted.json",
+      "sha256": "afacc45560596f847f8f1c8ef500e9280a2d94ca07f659a8aed3462e50212f75"
+    },
+    "after": {
+      "path": "test-results/release-0.0.80/dev-health-final/dev-after.redacted.json",
+      "sha256": "afacc45560596f847f8f1c8ef500e9280a2d94ca07f659a8aed3462e50212f75"
+    },
+    "evidenceManifest": {
+      "path": "test-results/release-0.0.80/dev-health-final/evidence-manifest.json",
+      "sha256": "ffd3af036badbd23b1d0d471fb49669793beb9b4b8a6435d8af76baf1c6df0b1"
+    },
+    "limitations": [
+      "Only the existing D0 Dev bundle is assessed; this is not 0.0.80 exact-package or installed-host proof.",
+      "Native coordinator availability is current; private cache/registry path continuity uses the same running process/instance and retained installed D0 evidence. No new SQLite selftest or direct database connection was opened.",
+      "No tests, scratch deployment, restart, workspace writes, native UI observation, live Forge request or game interaction were performed."
+    ],
+    "releaseCandidateInstalled": false
+  },
+  "routeContractRepair": {
+    "status": "VERIFIED",
+    "reviewStatus": "VERIFIED",
+    "scope": "Test-only scripts/route-integration.mjs contract repair; no production source changes. Review is not execution proof.",
+    "retainedBefore": {
+      "path": "test-results/release-0.0.80/route-contract-repair-1/route-integration.before.mjs.txt",
+      "sha256": "40230523c7a15c8fec119cb9e9b6ea3b9beb59c7502f2ad723be122213e34600"
+    },
+    "currentAfter": {
+      "path": "scripts/route-integration.mjs",
+      "sha256": "98aca6cc6c112ce65b35a29e5ff2c57ad2d6cdfde2cb587eb408198070e7dbe8"
+    },
+    "review": {
+      "path": "test-results/release-0.0.80/route-contract-repair-1/review.json",
+      "sha256": "26118c7a7e24edb3aace42808e7c90c249a4d269f27e8d50e41e05661e315704"
+    },
+    "reviewedDiff": {
+      "path": "test-results/release-0.0.80/route-contract-repair-1/reviewed.diff",
+      "sha256": "34c02b4f8a090d099191d5e89d6ec4b475888de46ba0e1666792936125304594"
+    },
+    "reconciledPriorFailures": 13,
+    "reviewChecks": [
+      "All thirteen failed assertions reconciled against current source contracts",
+      "Six strict input errors retain status/category/identity refusal and exact cause",
+      "Compile capability v2 and runtime addressed subject are asserted explicitly",
+      "UI source domain exact bytes and unchanged 4MiB/6MiB budgets remain asserted",
+      "Dynamic event coverage gap cannot replace baseline; covered warning retains positive resolution test",
+      "No production change; reviewed complete diff; syntax and whitespace checks passed"
+    ],
+    "addedNegativeAssertions": [
+      "dynamic_event_validation_reports_incomplete_coverage",
+      "incomplete_dynamic_event_cannot_replace_last_green"
+    ],
+    "expectedRouteAssertionCount": 500,
+    "routeRetest": "final-routes-2",
+    "routeRetestStatus": "VERIFIED",
+    "freshLint": {
+      "path": "test-results/release-0.0.80/final-lint-2/receipt.json",
+      "sha256": "718020d5ff9ff7589c8d8849afcc4c61f1c5c3139a755e8f5995a1035eb9ca1d"
+    },
+    "freshPrecommit": "final-precommit-3 VERIFIED",
+    "routeReceipt": {
+      "path": "test-results/release-0.0.80/final-routes-2/receipt.json",
+      "sha256": "ba986e0fa33ac603dcbb62c523e5e35fa94504187607f2e3bd2018f01d48dcb6"
+    },
+    "routeLog": {
+      "path": "test-results/release-0.0.80/final-routes-2/run.log",
+      "sha256": "3d60e8f1e12150c7159a846205942f95675f903d48903f6fe9fc497915188de9"
+    },
+    "routeAssertionsPassed": 500,
+    "freshPrecommitReceipt": {
+      "path": "test-results/release-0.0.80/final-precommit-3/receipt.json",
+      "sha256": "a23a7e4644235dfe44c30468090d4757c328ba93e8d35b4361db241711e5f2b8"
+    }
+  },
+  "publicationToolRepairs": {
+    "installedManifest": {
+      "path": "test-results/release-0.0.80/installed-manifest-repair-1/verification.json",
+      "sha256": "58c55f9ba2252e3a862e35169e5a8977e930faef8014fdcef5294e44307fc0de"
+    },
+    "markdownAutolinks": {
+      "path": "test-results/release-0.0.80/markdown-repair-1/verification.json",
+      "sha256": "ca5091be688064e042c7161e53b76afc1cab0662e04d62e09b2a5821dd2339a6"
+    },
+    "localPreflight": {
+      "path": "test-results/release-0.0.80/publication-preflight-51ec47a06950/output.log",
+      "sha256": "6ce7f802fabe56010c98d5fb53a7f6dd4af7acc30899024b4cc71401e12a6f96"
+    },
+    "scope": "Private publisher guards only; no package/application edits; earlier refused local attempts retained."
+  }
+}

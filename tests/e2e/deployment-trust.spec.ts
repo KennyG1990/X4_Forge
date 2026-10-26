@@ -38,6 +38,11 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     const configured = await post('/api/schema/config', { x4GamePath: game, modWorkspacePath: staging,
       filesystemPath: source, deployFormat: 'loose' });
     expect(configured.status, JSON.stringify(configured.body)).toBe(200);
+    const imported = await post('/api/agent/mod-folder/import', { root: 'workspace', path: 'trust_fixture' });
+    expect(imported.status, JSON.stringify(imported.body)).toBe(200);
+    expect(imported.body.success).toBe(true);
+    expect(imported.body.modId).toBe('trust_fixture');
+    await seedServerWorkspace(imported.body.workspace);
     const keys: Record<string, { token: string; id: string }> = {};
     for (const scope of ['read', 'write', 'deploy']) {
       const minted = await post('/api/agent/keys', { label: `trust-${scope}`, scope, ttl: '1h' });
@@ -75,6 +80,21 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     expect((await post(route, { ...apply, acceptances: [{ ...acceptances[0], bindingHash: '0'.repeat(64) }] }, keys.deploy.token)).status).toBe(409);
     expect(fs.existsSync(target)).toBe(false);
 
+    // C03 previews read durable warning-review history. Capture the clean binding while
+    // that store is healthy; the fault below must refuse previews as well as writes.
+    const cleanStoragePreview = await (async () => {
+      fs.writeFileSync(path.join(source, 'ui', 'bad.lua'), 'local valid = true');
+      try {
+        const cleanPreview = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
+        evidence.cleanStoragePreview = cleanPreview;
+        expect(cleanPreview.status, JSON.stringify(cleanPreview.body)).toBe(200);
+        expect(cleanPreview.body.ok, JSON.stringify(cleanPreview.body)).toBe(true);
+        return cleanPreview;
+      } finally {
+        fs.writeFileSync(path.join(source, 'ui', 'bad.lua'), 'local broken = )');
+      }
+    })();
+
     // Persistence failure is induced only inside this run's known ephemeral state root.
     fs.mkdirSync(path.dirname(receiptRoot), { recursive: true });
     const parked = `${receiptRoot}.test-backup`;
@@ -87,11 +107,14 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
       expect(failed.status, JSON.stringify(failed.body)).toBe(507);
       expect(fs.existsSync(target)).toBe(false);
       expect(fs.existsSync(path.join(staging, '.forge-builds'))).toBe(false);
-      // No approvals: deployment-receipt preparation itself must precede even
-      // creation of the extensions parent, not only the mod directory.
+      // No approvals: unreadable review/receipt storage must still refuse a clean
+      // deployment before creation of the extensions parent or build directory.
       fs.writeFileSync(path.join(source, 'ui', 'bad.lua'), 'local valid = true');
-      const cleanStoragePreview = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
-      expect(cleanStoragePreview.body.ok, JSON.stringify(cleanStoragePreview.body)).toBe(true);
+      const brokenStoragePreview = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
+      evidence.brokenStoragePreview = brokenStoragePreview;
+      expect(brokenStoragePreview.status, JSON.stringify(brokenStoragePreview.body)).toBe(507);
+      expect(brokenStoragePreview.body.ok).toBe(false);
+      expect(brokenStoragePreview.body.code).toBe('RECEIPT_ROOT_ESCAPE');
       const cleanStorageFailure = await post(route, { path: 'trust_fixture', ...identities(cleanStoragePreview.body) }, keys.deploy.token);
       evidence.cleanStorageFailure = cleanStorageFailure;
       expect(cleanStorageFailure.status, JSON.stringify(cleanStorageFailure.body)).toBe(507);
@@ -213,8 +236,15 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     await page.getByTestId('verify-path-input').fill('trust_fixture');
     await page.getByTestId('deploy-verify-btn').click();
     const rendered = page.getByTestId('verify-result');
-    await expect(rendered).toContainText('DEPLOYED BYTES VERIFIED', { timeout: 45_000 });
-    await expect(rendered).toContainText('Validation qualified: incomplete-checks');
+    const summary = rendered.getByTestId('deploy-review-summary');
+    await expect(summary.getByTestId('deploy-review-title')).toHaveText('Deployed — incomplete checks', { timeout: 45_000 });
+    await expect(summary).toHaveAttribute('data-tone', 'qualified');
+    const unavailableChecks = incomplete.body.validation.review.counts.unavailableChecks;
+    expect(unavailableChecks).toBeGreaterThan(0);
+    await expect(summary.getByTestId('deploy-review-counts')).toContainText(`Unavailable checks: ${unavailableChecks}.`);
+    await expect(summary).toContainText('Some checks could not be completed.');
+    await expect(summary).toContainText('Deployed file bytes confirmed.');
+    await expect(summary).toContainText('This result does not verify behavior in X4.');
     expect(browserDeploys).toHaveLength(2);
     expect(browserDeploys[0].dryRun).toBe(true);
     expect(browserDeploys[1].expectedModId).toBe('trust_fixture');

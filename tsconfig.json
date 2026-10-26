@@ -25,5 +25,5 @@
     "noEmit": true
   }
   ,
-  "exclude": ["dist", "node_modules", "temp_import"]
+  "exclude": ["dist", "node_modules", "temp_import", "test-results"]
 }

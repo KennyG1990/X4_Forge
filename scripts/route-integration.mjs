@@ -163,6 +163,15 @@ fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ x4LogPath
 const checks = [];
 const ok = (name, pass, detail) => { checks.push({ name, pass: !!pass, detail }); console.log(`${pass ? '  ok  ' : ' FAIL '}${name}${detail ? `  [${detail}]` : ''}`); };
 
+function isProjectInputRefusal(response) {
+  return response.status === 400
+    && response.json?.code === 'PROJECT_INPUT_INVALID'
+    && response.json?.category === 'request-invalid'
+    && response.json?.ok === false && response.json?.success === false
+    && response.json?.modId === null && response.json?.sourceHash === null
+    && response.json?.sourceHashScope === 'unresolved';
+}
+
 function schemaErrors(schema, value, at = '$') {
   const errors = [];
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return [`${at}: schema is missing`];
@@ -739,7 +748,10 @@ async function main() {
     patchCapability?.surfaces?.ui?.some(projection => projection?.status === 'disconnected') &&
     previewCapability?.surfaces?.builtInHarness?.some(projection => projection?.status === 'connected'));
   const invalidCapabilityValidation = await req('POST', '/api/agent/project/validate/check', SESSION_TOKEN, { project: { files: [] }, unexpected: true });
-  ok('capability_validation_rejects_undeclared_input', invalidCapabilityValidation.status === 400 && invalidCapabilityValidation.json?.code === 'CAPABILITY_INPUT_INVALID');
+  ok('capability_validation_rejects_undeclared_input',
+    isProjectInputRefusal(invalidCapabilityValidation)
+      && invalidCapabilityValidation.json.error === 'Body has unknown fields: unexpected.',
+    JSON.stringify(invalidCapabilityValidation.json));
   const previewBefore = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
   const hostilePreview = await req('POST', '/api/agent/generate/preview', SESSION_TOKEN, {
     prompt: '__FORGE_ROUTE_TEST_PREVIEW__',
@@ -1086,6 +1098,9 @@ async function main() {
   const comparableRuntimePayload = payload => {
     const copy = JSON.parse(JSON.stringify(payload || null));
     if (copy?.session) delete copy.session.observedAt;
+    // C06 adds the addressed subject to each response's top level. The legacy
+    // runtimeDebugger field remains the adapter payload, without that envelope.
+    if (copy) for (const field of ['modId', 'modVersion', 'sourceHash', 'sourceHashScope']) delete copy[field];
     return copy;
   };
   const noLeak = response => !String(response.raw || '').includes(SESSION_TOKEN) && !String(response.raw || '').includes(runtimeLogPath);
@@ -1106,6 +1121,15 @@ async function main() {
     JSON.stringify({ status: canonicalRuntime.status, keys: Object.keys(canonicalRuntimeJson), authority: canonicalRuntimeJson.authority }));
   ok('canonical_runtime_debugger_matches_legacy_payload',
     canonicalRuntime.status === 200
+      && canonicalRuntimeJson.modId === 'x4_ai_influence'
+      && canonicalRuntimeJson.modId === addressedWorkspaceBeforeCanonical.json?.modId
+      && canonicalRuntimeJson.modVersion === addressedWorkspaceBeforeCanonical.json?.modVersion
+      && canonicalRuntimeJson.sourceHash === addressedWorkspaceBeforeCanonical.json?.workspaceHash
+      && canonicalRuntimeJson.sourceHashScope === 'workspace-head'
+      && runtimeJson.modId === canonicalRuntimeJson.modId
+      && runtimeJson.modVersion === canonicalRuntimeJson.modVersion
+      && runtimeJson.sourceHash === canonicalRuntimeJson.sourceHash
+      && runtimeJson.sourceHashScope === canonicalRuntimeJson.sourceHashScope
       && JSON.stringify(comparableRuntimePayload(canonicalRuntimeJson)) === JSON.stringify(comparableRuntimePayload(runtimePayload)),
     JSON.stringify({ canonical: canonicalRuntimeJson, legacy: runtimePayload }));
   ok('canonical_runtime_debugger_does_not_write_workspace_or_game_log',
@@ -1360,7 +1384,7 @@ async function main() {
   const storeAfterCustomDenials = fs.readFileSync(agentKeysFile);
   ok('custom_key_denies_unselected_canonical_capability_before_mutation',
     customCompileDenied.status === 403 && customCompileDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED' &&
-    customCompileDenied.json?.capabilityIdentity === 'workspace.compile@1' &&
+    customCompileDenied.json?.capabilityIdentity === 'workspace.compile@2' &&
     customCompileDenied.json?.policyVersion === 'forge.route-dispositions.v4' && customCompileDenied.json?.policyHash === authorityHash &&
     workspaceAfterCustomDenials.json?.workspaceHash === workspaceBeforeCustomDenials.json?.workspaceHash &&
     workspaceAfterCustomDenials.json?.snapshotHash === workspaceBeforeCustomDenials.json?.snapshotHash,
@@ -1670,15 +1694,16 @@ async function main() {
   fs.writeFileSync(path.join(b119UiPolicyRoot, 'unrelated', 'b119_binary.bin'), Buffer.alloc(Buffer.byteLength(b119InlineLua, 'utf8'), 0x42));
   const b119UiPolicyImport = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: b119UiPolicyName });
   const b119UiWorkspace = b119UiPolicyImport.json?.workspace;
-  const b119InlineEntry = b119UiWorkspace?.passthroughFiles?.find(entry => entry.path === 'ui/b119_inline.lua');
+  const b119InlineEntry = b119UiWorkspace?.uiSourceFiles?.find(entry => entry.path === 'ui/b119_inline.lua');
   const b119InlineClassification = b119UiPolicyImport.json?.report?.classification?.find(entry => entry.path === 'ui/b119_inline.lua');
   ok('b119_ui_lua_above_legacy_cap_imports_byte_exactly',
     b119UiPolicyImport.status === 200
-      && b119InlineEntry?.reason === 'partial'
+      && b119InlineEntry?.kind === 'lua'
       && b119InlineEntry?.omitted !== true
       && typeof b119InlineEntry?.content === 'string'
       && Buffer.from(b119InlineEntry.content, 'utf8').equals(fs.readFileSync(path.join(b119UiPolicyRoot, 'ui', 'b119_inline.lua')))
-      && b119InlineClassification?.class === 'partial',
+      && b119InlineClassification?.class === 'editable'
+      && !b119UiWorkspace?.passthroughFiles?.some(entry => entry.path === 'ui/b119_inline.lua'),
     `status=${b119UiPolicyImport.status} bytes=${Buffer.byteLength(String(b119InlineEntry?.content || ''), 'utf8')}`);
   const b119ComparableEntry = b119UiWorkspace?.passthroughFiles?.find(entry => entry.path === 'unrelated/b119_comparable.txt');
   const b119ComparableClassification = b119UiPolicyImport.json?.report?.classification?.find(entry => entry.path === 'unrelated/b119_comparable.txt');
@@ -1696,15 +1721,19 @@ async function main() {
       && b119BinaryEntry?.bytes === fs.statSync(path.join(b119UiPolicyRoot, 'unrelated', 'b119_binary.bin')).size
       && b119BinaryClassification?.class === 'binary',
     `reason=${b119BinaryEntry?.reason} omitted=${b119BinaryEntry?.omitted}`);
-  const b119UiXmlEntry = b119UiWorkspace?.passthroughFiles?.find(entry => entry.path === 'ui.xml');
-  const b119OversizedEntry = b119UiWorkspace?.passthroughFiles?.find(entry => entry.path === 'ui/b119_oversized.lua');
+  const b119UiXmlEntry = b119UiWorkspace?.uiSourceFiles?.find(entry => entry.path === 'ui.xml');
+  const b119OversizedEntry = b119UiWorkspace?.uiSourceFiles?.find(entry => entry.path === 'ui/b119_oversized.lua');
   ok('b119_ui_lua_above_bounded_allowance_stays_omitted',
-    b119UiXmlEntry?.content === b119UiXml
+    b119UiXmlEntry?.kind === 'ui'
+      && b119UiXmlEntry.content === b119UiXml
       && b119UiXmlEntry.content.includes(b119OversizedRegistration)
-      && b119OversizedEntry?.reason === 'too_large'
+      && b119OversizedEntry?.kind === 'lua'
       && b119OversizedEntry?.omitted === true
-      && b119OversizedEntry?.bytes === fs.statSync(path.join(b119UiPolicyRoot, 'ui', 'b119_oversized.lua')).size,
-    `registered=${b119UiXmlEntry?.content?.includes(b119OversizedRegistration) === true} reason=${b119OversizedEntry?.reason} omitted=${b119OversizedEntry?.omitted}`);
+      && !Object.hasOwn(b119OversizedEntry, 'content')
+      && b119OversizedEntry.bytes > 4 * 1024 * 1024
+      && b119OversizedEntry.bytes === fs.statSync(path.join(b119UiPolicyRoot, 'ui', 'b119_oversized.lua')).size
+      && !b119UiWorkspace?.passthroughFiles?.some(entry => ['ui.xml', 'ui/b119_oversized.lua'].includes(entry.path)),
+    `registered=${b119UiXmlEntry?.content?.includes(b119OversizedRegistration) === true} kind=${b119OversizedEntry?.kind} omitted=${b119OversizedEntry?.omitted}`);
 
   const b119BudgetName = 'b119_ui_total_budget_fixture';
   const b119BudgetRoot = path.join(safeWorkspace, b119BudgetName);
@@ -1715,13 +1744,24 @@ async function main() {
   fs.writeFileSync(path.join(b119BudgetRoot, 'ui', 'b119_budget_a.lua'), b119BudgetLua);
   fs.writeFileSync(path.join(b119BudgetRoot, 'ui', 'b119_budget_b.lua'), b119BudgetLua);
   const b119BudgetImport = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: b119BudgetName });
-  const b119BudgetEntries = b119BudgetImport.json?.workspace?.passthroughFiles?.filter(entry => /^ui\/b119_budget_[ab]\.lua$/.test(entry.path)) || [];
+  const b119BudgetEntries = b119BudgetImport.json?.workspace?.uiSourceFiles?.filter(entry => /^ui\/b119_budget_[ab]\.lua$/.test(entry.path)) || [];
+  const b119BudgetInlineEntries = b119BudgetEntries.filter(entry => entry.omitted !== true);
+  const b119BudgetOmittedEntries = b119BudgetEntries.filter(entry => entry.omitted === true);
+  const b119BudgetWorkspace = b119BudgetImport.json?.workspace;
+  const b119TotalInlineBytes = [...(b119BudgetWorkspace?.uiSourceFiles || []), ...(b119BudgetWorkspace?.passthroughFiles || [])]
+    .reduce((total, entry) => total + (typeof entry.content === 'string' ? Buffer.byteLength(entry.content, 'utf8') : 0), 0);
   ok('b119_ui_total_inline_budget_remains_bounded',
     b119BudgetImport.status === 200
       && b119BudgetEntries.length === 2
-      && b119BudgetEntries.some(entry => entry.reason === 'partial' && entry.omitted !== true)
-      && b119BudgetEntries.some(entry => entry.reason === 'too_large' && entry.omitted === true),
-    JSON.stringify(b119BudgetEntries.map(entry => ({ path: entry.path, reason: entry.reason, omitted: entry.omitted, bytes: entry.bytes }))));
+      && b119BudgetEntries.every(entry => entry.kind === 'lua')
+      && b119BudgetInlineEntries.length === 1 && b119BudgetOmittedEntries.length === 1
+      && b119BudgetInlineEntries[0].content === b119BudgetLua
+      && !Object.hasOwn(b119BudgetOmittedEntries[0], 'content')
+      && b119BudgetOmittedEntries[0].bytes === Buffer.byteLength(b119BudgetLua, 'utf8')
+      && b119BudgetOmittedEntries[0].bytes < 4 * 1024 * 1024
+      && b119TotalInlineBytes <= 6 * 1024 * 1024
+      && !b119BudgetWorkspace?.passthroughFiles?.some(entry => /^ui\/b119_budget_[ab]\.lua$/.test(entry.path)),
+    JSON.stringify({ entries: b119BudgetEntries.map(entry => ({ path: entry.path, kind: entry.kind, omitted: entry.omitted, bytes: entry.bytes })), totalInlineBytes: b119TotalInlineBytes }));
 
   const patchModRoot = path.join(safeWorkspace, 'patch_capability');
   const patchOldRoot = path.join(tmp, 'patch-old');
@@ -3738,20 +3778,56 @@ async function main() {
   const deltaRecord = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaBaseProject, recordBaseline: true });
   ok('green_validation_records_baseline_explicitly', deltaRecord.status === 200 && deltaRecord.json?.baselinePromotion?.recorded === true && fs.existsSync(baselineFile), JSON.stringify(deltaRecord.json?.baselinePromotion));
   const recordedBaselineBytes = fs.readFileSync(baselineFile, 'utf8');
-  const deltaWarningProject = {
+  const deltaDynamicProject = {
     ...deltaBaseProject,
     files: [...deltaBaseProject.files, {
       path: 'ui/main.lua', kind: 'lua',
       content: 'AddUITriggeredEvent("validation_delta_probe", "event_" .. category)',
     }],
   };
+  const deltaDynamicCheck = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaDynamicProject });
+  ok('dynamic_event_validation_reports_incomplete_coverage',
+    deltaDynamicCheck.status === 200 && deltaDynamicCheck.json?.ok === true
+      && deltaDynamicCheck.json?.evidence?.coverage?.complete === false
+      && deltaDynamicCheck.json?.flat?.some(finding => finding.code === 'lua_md.emit_verification_gap' && finding.filePath === 'ui/main.lua')
+      && fs.readFileSync(baselineFile, 'utf8') === recordedBaselineBytes,
+    JSON.stringify({ coverage: deltaDynamicCheck.json?.evidence?.coverage, flat: deltaDynamicCheck.json?.flat }));
+  const deltaDynamicRecord = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaDynamicProject, recordBaseline: true });
+  ok('incomplete_dynamic_event_cannot_replace_last_green',
+    deltaDynamicRecord.status === 409 && deltaDynamicRecord.json?.ok === false
+      && deltaDynamicRecord.json?.code === 'VALIDATION_BASELINE_RECORD_FAILED'
+      && deltaDynamicRecord.json?.baselinePromotion?.recorded === false
+      && deltaDynamicRecord.json?.evidence?.coverage?.complete === false
+      && fs.readFileSync(baselineFile, 'utf8') === recordedBaselineBytes,
+    JSON.stringify({ status: deltaDynamicRecord.status, code: deltaDynamicRecord.json?.code, promotion: deltaDynamicRecord.json?.baselinePromotion }));
+  // This warning has complete static coverage. A dynamic event cannot stand in
+  // for a fully checked warning when testing deliberate last-green promotion.
+  const deltaWarningProject = {
+    ...deltaBaseProject,
+    files: [...deltaBaseProject.files, {
+      path: 'scripts/path_warning.lua', kind: 'lua',
+      content: 'package.path = package.path .. ";extensions/?.lua"\n',
+    }],
+  };
   const deltaAdded = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaWarningProject });
-  ok('validation_delta_reports_new_warning', deltaAdded.status === 200 && deltaAdded.json?.ok === true && deltaAdded.json?.validationDelta?.counts?.new > 0, JSON.stringify(deltaAdded.json?.validationDelta));
+  ok('validation_delta_reports_new_warning',
+    deltaAdded.status === 200 && deltaAdded.json?.ok === true
+      && deltaAdded.json?.evidence?.coverage?.complete === true
+      && deltaAdded.json?.validationDelta?.counts?.new > 0
+      && deltaAdded.json?.validationDelta?.newWarnings?.some(finding => finding.code === 'lua.broad_package_path' && finding.filePath === 'scripts/path_warning.lua'),
+    JSON.stringify({ coverage: deltaAdded.json?.evidence?.coverage, delta: deltaAdded.json?.validationDelta }));
   ok('comparison_only_validation_preserves_baseline', fs.readFileSync(baselineFile, 'utf8') === recordedBaselineBytes);
   const deltaWarningRecord = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaWarningProject, recordBaseline: true });
-  ok('changed_green_warning_set_can_be_accepted_deliberately', deltaWarningRecord.status === 200 && deltaWarningRecord.json?.baselinePromotion?.recorded === true, JSON.stringify(deltaWarningRecord.json?.baselinePromotion));
+  ok('changed_green_warning_set_can_be_accepted_deliberately',
+    deltaWarningRecord.status === 200 && deltaWarningRecord.json?.ok === true
+      && deltaWarningRecord.json?.evidence?.coverage?.complete === true
+      && deltaWarningRecord.json?.baselinePromotion?.recorded === true,
+    JSON.stringify(deltaWarningRecord.json?.baselinePromotion));
   const deltaResolved = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaBaseProject });
-  ok('validation_delta_reports_resolved_warning', deltaResolved.status === 200 && deltaResolved.json?.validationDelta?.counts?.resolved > 0, JSON.stringify(deltaResolved.json?.validationDelta));
+  ok('validation_delta_reports_resolved_warning',
+    deltaResolved.status === 200 && deltaResolved.json?.validationDelta?.counts?.resolved > 0
+      && deltaResolved.json?.validationDelta?.resolvedWarnings?.some(finding => finding.code === 'lua.broad_package_path' && finding.filePath === 'scripts/path_warning.lua'),
+    JSON.stringify(deltaResolved.json?.validationDelta));
   const beforeFailedPromotion = fs.readFileSync(baselineFile, 'utf8');
   const rejectedPromotion = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, {
     project: { id: 'validation_delta_probe', name: 'validation_delta_probe', files: [{ path: 'md/broken.xml', kind: 'md', content: '<mdscript><cues></mdscript>' }] },
@@ -4088,7 +4164,11 @@ async function main() {
 
   const releaseRoot = path.join(safeWorkspace, '.forge-builds', 'releases');
   const noWorkspaceRelease = await req('POST', '/api/agent/release/nexus/prepare', SESSION_TOKEN, {});
-  ok('nexus_release_requires_explicit_workspace', noWorkspaceRelease.status === 400 && noWorkspaceRelease.json?.code === 'WORKSPACE_REQUIRED' && noWorkspaceRelease.json?.failedStages?.includes('source'), `status=${noWorkspaceRelease.status}`);
+  ok('nexus_release_requires_explicit_workspace',
+    isProjectInputRefusal(noWorkspaceRelease)
+      && noWorkspaceRelease.json.error === 'Body must include the explicit workspace to package.'
+      && Array.isArray(noWorkspaceRelease.json.failedStages) && noWorkspaceRelease.json.failedStages.length === 0,
+    JSON.stringify(noWorkspaceRelease.json));
   ok('missing_workspace_release_writes_nothing', !fs.existsSync(releaseRoot));
 
   fs.writeFileSync(path.join(releaseSource, 'after-import.txt'), 'stale source proof');
@@ -4137,7 +4217,10 @@ async function main() {
   const agentExportReceipt = await req('POST', '/api/agent/release/export/receipt', deployKey, { platform: 'nexus', modId: releaseName, method: 'browser-save', destination: 'agent-claimed.zip', artifactPath: nexusRelease.json.zipPath, sha256: nexusRelease.json.sha256, sizeBytes: nexusRelease.json.sizeBytes });
   ok('agent_key_cannot_claim_user_export_receipt', agentExportReceipt.status === 403, `status=${agentExportReceipt.status}`);
   const invalidExportReceipt = await req('POST', '/api/agent/release/export/receipt', SESSION_TOKEN, { platform: 'nexus', modId: releaseName, method: 'browser-save', destination: 'fixture.zip', sha256: 'not-a-hash', sizeBytes: 1 });
-  ok('invalid_export_receipt_is_refused', invalidExportReceipt.status === 400 && invalidExportReceipt.json?.code === 'RELEASE_EXPORT_RECEIPT_INVALID', `status=${invalidExportReceipt.status}`);
+  ok('invalid_export_receipt_is_refused',
+    isProjectInputRefusal(invalidExportReceipt)
+      && invalidExportReceipt.json.error === 'artifactPath must be a valid bounded string.',
+    JSON.stringify(invalidExportReceipt.json));
   const pristineNexusZip = fs.readFileSync(nexusRelease.json.zipPath);
   fs.appendFileSync(nexusRelease.json.zipPath, Buffer.from('substitution'));
   const substitutedNexusExport = await req('POST', '/api/agent/release/artifact/download', SESSION_TOKEN, { platform: 'nexus', modId: releaseName, artifactPath: nexusRelease.json.zipPath });
@@ -4349,18 +4432,18 @@ async function main() {
   ok('compile_live_buffer_windows_absolute_path_rejected', windowsAbsoluteOverride.status === 400, `status=${windowsAbsoluteOverride.status}`);
   const undeclaredCompileInput = await req('POST', '/api/agent/compile', SESSION_TOKEN, { unexpected: true });
   ok('compile_rejects_undeclared_top_level_input',
-    undeclaredCompileInput.status === 400 && undeclaredCompileInput.json?.code === 'CAPABILITY_INPUT_INVALID' &&
-    /unknown compile field/i.test(String(undeclaredCompileInput.json?.error || '')),
+    isProjectInputRefusal(undeclaredCompileInput) &&
+    undeclaredCompileInput.json.error === 'Body has unknown fields: unexpected.',
     JSON.stringify(undeclaredCompileInput.json || {}));
   const nonObjectCompileBody = await req('POST', '/api/agent/compile', SESSION_TOKEN, [], { workspaceId: 'ws_missing_compile_precedence' });
   ok('compile_rejects_non_object_body_before_workspace_authority',
-    nonObjectCompileBody.status === 400 && nonObjectCompileBody.json?.code === 'CAPABILITY_INPUT_INVALID' &&
-    /JSON object body/i.test(String(nonObjectCompileBody.json?.error || '')),
+    isProjectInputRefusal(nonObjectCompileBody) &&
+    nonObjectCompileBody.json.error === 'Body must be a JSON object.',
     JSON.stringify(nonObjectCompileBody.json || {}));
   const nonObjectCompileWorkspace = await req('POST', '/api/agent/compile', SESSION_TOKEN, { workspace: 'invalid' });
   ok('compile_rejects_non_object_inline_workspace',
-    nonObjectCompileWorkspace.status === 400 && nonObjectCompileWorkspace.json?.code === 'CAPABILITY_INPUT_INVALID' &&
-    /workspace must be a JSON object/i.test(String(nonObjectCompileWorkspace.json?.error || '')),
+    isProjectInputRefusal(nonObjectCompileWorkspace) &&
+    nonObjectCompileWorkspace.json.error === 'workspace must be a JSON object.',
     JSON.stringify(nonObjectCompileWorkspace.json || {}));
   const invalidOverrideBeforeAuthority = await req('POST', '/api/agent/compile', SESSION_TOKEN,
     { fileOverrides: { 'md/fixture.xml': 42 } }, { workspaceId: 'ws_missing_compile_precedence' });

@@ -151,9 +151,31 @@ function parseMdUiListeners(content: string, file: string): ProjectUiEventRef[] 
   return out;
 }
 
-function walkLuaAst(node: any, visit: (node: any) => void): void {
+/** Fields consumed from luaparse's AST; other parser metadata remains unknown. */
+interface LuaAstNode {
+  type?: string;
+  name?: string;
+  value?: unknown;
+  operator?: string;
+  isLocal?: boolean;
+  range?: number[];
+  left?: LuaAstNode;
+  right?: LuaAstNode;
+  identifier?: LuaAstNode;
+  variable?: LuaAstNode;
+  variables?: LuaAstNode[];
+  init?: LuaAstNode[];
+  parameters?: LuaAstNode[];
+  body?: LuaAstNode[];
+  expression?: LuaAstNode;
+  base?: LuaAstNode;
+  arguments?: LuaAstNode[];
+  [key: string]: unknown;
+}
+
+function walkLuaAst(node: unknown, visit: (node: LuaAstNode) => void): void {
   if (!node || typeof node !== 'object') return;
-  visit(node);
+  visit(node as LuaAstNode);
   for (const [key, value] of Object.entries(node)) {
     if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
     if (Array.isArray(value)) value.forEach(item => walkLuaAst(item, visit));
@@ -161,7 +183,7 @@ function walkLuaAst(node: any, visit: (node: any) => void): void {
   }
 }
 
-function luaIdentifier(node: any): string | null {
+function luaIdentifier(node: LuaAstNode): string | null {
   return node?.type === 'Identifier' && typeof node.name === 'string' ? node.name : null;
 }
 
@@ -195,7 +217,7 @@ function buildLuaAnalysisSource(content: string): LuaAnalysisSource {
   return { content: codeUnits.join(''), substituted };
 }
 
-function luaStringLiteralTainted(node: any, substituted: Uint8Array): boolean {
+function luaStringLiteralTainted(node: LuaAstNode, substituted: Uint8Array): boolean {
   const range = node?.range;
   if (!Array.isArray(range) || range.length < 2 || !Number.isInteger(range[0]) || !Number.isInteger(range[1])) return true;
   const start = range[0] as number;
@@ -207,7 +229,7 @@ function luaStringLiteralTainted(node: any, substituted: Uint8Array): boolean {
   return false;
 }
 
-function luaStringPrefix(node: any, strings: Map<string, LuaStringValue>, substituted: Uint8Array): LuaStringValue | null {
+function luaStringPrefix(node: LuaAstNode, strings: Map<string, LuaStringValue>, substituted: Uint8Array): LuaStringValue | null {
   if (!node) return null;
   if (node.type === 'StringLiteral' && typeof node.value === 'string') {
     return { value: node.value, prefix: false, tainted: luaStringLiteralTainted(node, substituted) };
@@ -241,16 +263,16 @@ function boundedLuaParseDetail(error: unknown): string {
 
 function parseLuaRegisteredEvents(content: string, file: string): LuaRegistrationParseResult {
   const source = buildLuaAnalysisSource(content || '');
-  let ast: any;
+  let ast: LuaAstNode;
   try {
     ast = parse(source.content, { comments: false, locations: true, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1' });
   } catch (error) {
     return { events: [], available: false, detail: boundedLuaParseDetail(error) };
   }
 
-  const assignments = new Map<string, { count: number; init: any; local: boolean }>();
+  const assignments = new Map<string, { count: number; init: LuaAstNode; local: boolean }>();
   const parameters = new Set<string>();
-  const functions = new Map<string, any>();
+  const functions = new Map<string, LuaAstNode>();
   walkLuaAst(ast, node => {
     if (node.type === 'FunctionDeclaration') {
       const name = luaIdentifier(node.identifier);
@@ -268,14 +290,14 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
       }
     }
     if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
-    (node.variables || []).forEach((variable: any, index: number) => {
+    (node.variables || []).forEach((variable, index) => {
       const name = luaIdentifier(variable);
       if (name) assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1,
         init: (node.init || [])[index], local: node.type === 'LocalStatement' });
     });
   });
   const strings = new Map<string, LuaStringValue>();
-  const resolve = (expression: any) => {
+  const resolve = (expression: LuaAstNode) => {
     let foreign = false;
     walkLuaAst(expression, node => { if (node.type === 'Identifier' && strings.has(node.name) && !node.isLocal) foreign = true; });
     return foreign ? null : luaStringPrefix(expression, strings, source.substituted);
@@ -290,12 +312,12 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
   // Retain possible aliases even after reassignment so they produce a gap, not invented certainty.
   walkLuaAst(ast, node => {
     if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
-    (node.variables || []).forEach((variable: any, i: number) => {
+    (node.variables || []).forEach((variable, i) => {
       const name = luaIdentifier(variable), sourceName = luaIdentifier(node.init?.[i]);
       if (name && sourceName && possibleRegistrars.has(sourceName)) possibleRegistrars.add(name);
     });
   });
-  const engineRegistrar = (node: any): boolean => {
+  const engineRegistrar = (node: LuaAstNode): boolean => {
     const name = luaIdentifier(node);
     if (name === 'RegisterEvent') return !node.isLocal && !assignments.has(name) && !parameters.has(name);
     return !!name && node.isLocal && registrars.has(name);
@@ -305,7 +327,7 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
   }
   // Support only a single unconditional forwarding call. More complex wrappers remain unverified.
   const wrappers = new Map<string, number>();
-  const forwardingCalls = new Set<any>();
+  const forwardingCalls = new Set<LuaAstNode>();
   for (const [wrapperName, node] of functions) {
     if (!immutable(wrapperName) || node.body?.length !== 1) continue;
     const call = node.body[0]?.type === 'CallStatement' ? node.body[0].expression : null;
@@ -456,7 +478,7 @@ function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEven
     if (!coverage.reasons.includes(reason)) coverage.reasons.push(reason);
   };
   const source = buildLuaAnalysisSource(content || '');
-  let ast: any;
+  let ast: LuaAstNode;
   try {
     ast = parse(source.content, { comments: false, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1' });
   } catch {
@@ -465,7 +487,7 @@ function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEven
   coverage.parsed = true;
   // Only immutable, unambiguous local constants may supply event arguments.
   // Shadowing or another assignment makes the name unknown, not a guessed value.
-  const assignments = new Map<string, { count: number; init: any; local: boolean }>();
+  const assignments = new Map<string, { count: number; init: LuaAstNode; local: boolean }>();
   const shadowed = new Set<string>();
   walkLuaAst(ast, node => {
     if (node.type === 'FunctionDeclaration') {
@@ -483,14 +505,14 @@ function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEven
       }
     }
     if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
-    (node.variables || []).forEach((variable: any, index: number) => {
+    (node.variables || []).forEach((variable, index) => {
       const name = luaIdentifier(variable);
       if (!name) return;
       assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init: (node.init || [])[index], local: node.type === 'LocalStatement' });
     });
   });
   const strings = new Map<string, LuaStringValue>();
-  const resolve = (expression: any): LuaStringValue | null => {
+  const resolve = (expression: LuaAstNode): LuaStringValue | null => {
     // luaparse's lexical annotation prevents a later local declaration from
     // lending its value to an earlier global reference or unrelated function.
     let usesGlobalConstant = false;
