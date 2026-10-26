@@ -356,6 +356,7 @@ async function main() {
       FORGE_ALLOW_RUN_COMMAND: 'true',
       STUDIO_API_TOKEN: SESSION_TOKEN,
       X4_STATE_DIR: stateDir,
+      X4_SOURCE_COORDINATION_DIR: path.join(stateDir, 'source-coordination'),
       X4_DATA_DIR: dataDir,
       X4_CONFIG_DIR: configDir,
       X4_GAME_PATH: gameRoot,
@@ -4398,6 +4399,7 @@ async function main() {
       cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...defaultClosedEnv, PORT: String(defaultClosedPort), API_ONLY: 'true', STUDIO_API_TOKEN: defaultClosedToken,
              X4_STATE_DIR: path.join(tmp, 'state-default-closed'), X4_DATA_DIR: path.join(tmp, 'data-default-closed'),
+             X4_SOURCE_COORDINATION_DIR: path.join(tmp, 'coordination-default-closed'),
              X4_CONFIG_DIR: path.join(tmp, 'config-default-closed'), X4_REFERENCE_ROOT: referenceRoot,
              X4FORGE_DISCOVERY_DIR: path.join(tmp, 'discovery-default-closed') },
     });
@@ -4431,6 +4433,7 @@ async function main() {
       cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, PORT: String(prodPort), NODE_ENV: 'production', FORGE_ALLOW_RUN_COMMAND: '', STUDIO_API_TOKEN: prodToken,
              X4_STATE_DIR: stateDir, X4_DATA_DIR: dataDir, X4_CONFIG_DIR: configDir, X4_REFERENCE_ROOT: referenceRoot,
+             X4_SOURCE_COORDINATION_DIR: path.join(stateDir, 'source-coordination'),
              X4FORGE_DISCOVERY_DIR: path.join(tmp, 'discovery-prod') },
     });
     try {
@@ -4469,6 +4472,7 @@ async function main() {
       cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, PORT: String(optInPort), NODE_ENV: 'production', FORGE_ALLOW_RUN_COMMAND: 'true', STUDIO_API_TOKEN: optInToken,
              X4_STATE_DIR: path.join(tmp, 'state-prod-opt-in'), X4_DATA_DIR: path.join(tmp, 'data-prod-opt-in'),
+             X4_SOURCE_COORDINATION_DIR: path.join(tmp, 'coordination-prod-opt-in'),
              X4_CONFIG_DIR: path.join(tmp, 'config-prod-opt-in'), X4_REFERENCE_ROOT: referenceRoot,
              X4FORGE_DISCOVERY_DIR: path.join(tmp, 'discovery-prod-opt-in') },
     });

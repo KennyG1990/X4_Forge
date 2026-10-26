@@ -60,6 +60,8 @@ try {
       API_ONLY: 'true',
       DISABLE_HMR: 'true',
       X4_STATE_DIR: stateDir,
+      X4_SOURCE_COORDINATION_DIR: path.join(stateDir, 'source-coordination'),
+      X4_CONFIG_DIR: path.join(stateDir, 'config'),
       X4_DATA_DIR: dataDir,
     },
   });

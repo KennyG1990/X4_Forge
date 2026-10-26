@@ -80,6 +80,7 @@ try {
       PORT: String(port),
       STUDIO_API_TOKEN: token,
       X4_STATE_DIR: path.join(tmp, 'state'),
+      X4_SOURCE_COORDINATION_DIR: path.join(tmp, 'source-coordination'),
       X4_DATA_DIR: path.join(tmp, 'data'),
       X4_CONFIG_DIR: path.join(tmp, 'config'),
       X4_REFERENCE_ROOT: referenceRoot,

@@ -63,6 +63,8 @@ try {
     cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PORT: String(port), NODE_ENV: 'development', STUDIO_API_TOKEN: token,
       X4_STATE_DIR: stateDir, X4_DATA_DIR: dataDir, X4_CONFIG_DIR: configDir,
+      X4_SOURCE_COORDINATION_DIR: path.join(stateDir, 'source-coordination'),
+      X4FORGE_DISCOVERY_DIR: path.join(stateDir, 'discovery'),
       X4_REFERENCE_ROOT: root, X4_XSD_PATH: path.join(root, 'libraries') },
   });
   server.stdout.on('data', chunk => { output += chunk; });

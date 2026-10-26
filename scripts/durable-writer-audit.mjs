@@ -7,6 +7,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = path.join(root, "config", "durable-writers.json");
 const sourceRoots = [path.join(root, "src"), path.join(root, "vscode-extension", "src"), path.join(root, "vscode-extension", "mcp")];
 const topLevelSources = [path.join(root, "server.ts")];
+// Source discovery is independent of the manifest: deleting a registration must
+// fail the audit, not silently opt this authoritative SQL owner out of scanning.
+const additionalDatabaseSources = ["src/server/sharedSourceCoordinator.ts"];
+const DATABASE_COUNT_KEYS = ["mutationStatements", "transactionCalls", "statementRuns", "execCalls", "pragmaCalls"];
 
 const CALL_PATTERNS = {
   writeFileSync: /\b(?:fs\.)?writeFileSync\s*\(/g,
@@ -124,6 +128,18 @@ function scanSourceText(file, rawText) {
   return { calls, hostCalls, browserCalls, fingerprintParts };
 }
 
+function scanDatabaseSource(file) {
+  const text = canonicalizeEol(fs.readFileSync(file, "utf8"));
+  return {
+    file: relative(file),
+    mutationStatements: countMatches(text, /\b(?:INSERT(?:\s+OR\s+IGNORE)?\s+INTO|UPDATE|DELETE\s+FROM|DROP\s+TABLE|CREATE\s+TABLE|VACUUM)\b/gi),
+    transactionCalls: countMatches(text, /\.transaction\s*\(/g),
+    statementRuns: countMatches(text, /\.run\s*\(/g),
+    execCalls: countMatches(text, /\.exec\s*\(/g),
+    pragmaCalls: countMatches(text, /\.pragma\s*\(/g),
+  };
+}
+
 export function scanSources() {
   const files = [...topLevelSources, ...sourceRoots.flatMap(dir => walk(dir, []))];
   const writers = [];
@@ -138,22 +154,15 @@ export function scanSources() {
     if (Object.keys(hostCalls).length) hostStores.push({ file: relative(file), calls: hostCalls });
     if (Object.keys(browserCalls).length) browserOutputs.push({ file: relative(file), calls: browserCalls });
   }
-  const dbFile = path.join(root, "src", "lib", "db.ts");
-  const dbText = canonicalizeEol(fs.readFileSync(dbFile, "utf8"));
-  const database = {
-    file: relative(dbFile),
-    mutationStatements: countMatches(dbText, /\b(?:INSERT(?:\s+OR\s+IGNORE)?\s+INTO|UPDATE|DELETE\s+FROM|DROP\s+TABLE|CREATE\s+TABLE|VACUUM)\b/gi),
-    transactionCalls: countMatches(dbText, /\.transaction\s*\(/g),
-    statementRuns: countMatches(dbText, /\.run\s*\(/g),
-    execCalls: countMatches(dbText, /\.exec\s*\(/g),
-    pragmaCalls: countMatches(dbText, /\.pragma\s*\(/g),
-  };
+  const database = scanDatabaseSource(path.join(root, "src", "lib", "db.ts"));
+  const additionalDatabases = additionalDatabaseSources.map(file => scanDatabaseSource(path.join(root, file)));
   return {
     sourceFingerprint: fingerprintForParts(fingerprintParts),
     writers: writers.sort((a, b) => a.file.localeCompare(b.file)),
     hostStores: hostStores.sort((a, b) => a.file.localeCompare(b.file)),
     browserOutputs: browserOutputs.sort((a, b) => a.file.localeCompare(b.file)),
     database,
+    additionalDatabases,
   };
 }
 
@@ -241,11 +250,30 @@ export function auditManifest(manifest, current) {
     if (!ALLOWED_CATEGORIES.has(db.category) || db.category !== "sqlite-transaction") errors.push("database category must be sqlite-transaction");
     if (!Array.isArray(db.owners) || !db.owners.length) errors.push("database owners required");
     if (typeof db.failureContract !== "string" || db.failureContract.trim().length < 12) errors.push("database failureContract required");
-    const countKeys = ["mutationStatements", "transactionCalls", "statementRuns", "execCalls", "pragmaCalls"];
-    for (const key of countKeys) {
+    for (const key of DATABASE_COUNT_KEYS) {
       if (db[key] !== current.database[key]) errors.push(`database ${key} changed; declared=${db[key]} actual=${current.database[key]}`);
     }
   }
+
+  if (manifest?.additionalDatabases !== undefined && !Array.isArray(manifest.additionalDatabases)) errors.push("additionalDatabases must be an array");
+  const declaredDatabases = new Map();
+  for (const entry of Array.isArray(manifest?.additionalDatabases) ? manifest.additionalDatabases : []) {
+    if (!entry || typeof entry.file !== "string" || !entry.file) { errors.push("additional database entry missing file"); continue; }
+    if (declaredDatabases.has(entry.file) || entry.file === current.database.file) errors.push(`duplicate database inventory: ${entry.file}`);
+    declaredDatabases.set(entry.file, entry);
+    if (entry.category !== "sqlite-transaction") errors.push(`${entry.file}: database category must be sqlite-transaction`);
+    if (!Array.isArray(entry.owners) || !entry.owners.length || entry.owners.some(owner => typeof owner !== "string" || !owner.trim())) errors.push(`${entry.file}: database owners required`);
+    if (typeof entry.failureContract !== "string" || entry.failureContract.trim().length < 12) errors.push(`${entry.file}: database failureContract required`);
+  }
+  const actualDatabases = new Map((current.additionalDatabases || []).map(entry => [entry.file, entry]));
+  for (const [file, found] of actualDatabases) {
+    const entry = declaredDatabases.get(file);
+    if (!entry) { errors.push(`unregistered database source: ${file}`); continue; }
+    for (const key of DATABASE_COUNT_KEYS) {
+      if (entry[key] !== found[key]) errors.push(`${file}: database ${key} changed; declared=${entry[key]} actual=${found[key]}`);
+    }
+  }
+  for (const file of declaredDatabases.keys()) if (!actualDatabases.has(file)) errors.push(`stale database entry: ${file}`);
   return errors;
 }
 
@@ -275,6 +303,23 @@ function selftest() {
   ok("browser_output_delta_rejected", auditManifest(base, { ...current, browserOutputs: [{ file: "export.ts", calls: { anchorDownload: 2 } }] }).some(error => error.includes("browser-output call counts changed")));
   ok("stale_browser_output_rejected", auditManifest({ ...base, browserOutputs: [...base.browserOutputs, { ...base.browserOutputs[0], file: "gone-export.ts" }] }, current).some(error => error.includes("stale browser-output")));
   ok("database_delta_rejected", auditManifest(base, { ...current, database: { ...current.database, transactionCalls: 2 } }).some(error => error.includes("database transactionCalls changed")));
+  const additionalDatabase = { ...base.database, file: "shared-coordination.ts", owners: ["source coordination"], failureContract: "Failure refuses work and never drops active ownership." };
+  const withAdditional = { ...base, additionalDatabases: [additionalDatabase] };
+  const currentAdditional = { ...current, additionalDatabases: [{ ...current.database, file: additionalDatabase.file }] };
+  ok("additional_database_valid", auditManifest(withAdditional, currentAdditional).length === 0);
+  ok("additional_database_missing_registration_rejected", auditManifest(base, currentAdditional).some(error => error.includes("unregistered database source")));
+  ok("additional_database_empty_registration_rejected", auditManifest({ ...withAdditional, additionalDatabases: [] }, currentAdditional).some(error => error.includes("unregistered database source")));
+  for (const key of DATABASE_COUNT_KEYS) {
+    const changed = { ...currentAdditional, additionalDatabases: [{ ...currentAdditional.additionalDatabases[0], [key]: additionalDatabase[key] + 1 }] };
+    ok(`additional_database_${key}_delta_rejected`, auditManifest(withAdditional, changed).some(error => error.includes(`database ${key} changed`)));
+  }
+  ok("additional_database_stale_rejected", auditManifest(withAdditional, current).some(error => error.includes("stale database entry")));
+  ok("additional_database_duplicate_rejected", auditManifest({ ...withAdditional, additionalDatabases: [additionalDatabase, additionalDatabase] }, currentAdditional).some(error => error.includes("duplicate database inventory")));
+  ok("legacy_database_duplicate_rejected", auditManifest({ ...withAdditional, additionalDatabases: [additionalDatabase, base.database] }, currentAdditional).some(error => error.includes("duplicate database inventory")));
+  ok("additional_database_missing_owner_rejected", auditManifest({ ...withAdditional, additionalDatabases: [{ ...additionalDatabase, owners: [] }] }, currentAdditional).some(error => error.includes("database owners required")));
+  ok("additional_database_missing_failure_contract_rejected", auditManifest({ ...withAdditional, additionalDatabases: [{ ...additionalDatabase, failureContract: "" }] }, currentAdditional).some(error => error.includes("database failureContract required")));
+  ok("additional_database_manifest_shape_rejected", auditManifest({ ...withAdditional, additionalDatabases: {} }, currentAdditional).some(error => error.includes("additionalDatabases must be an array")));
+  ok("shared_source_sql_discovered_independently", scanSources().additionalDatabases.some(entry => entry.file === "src/server/sharedSourceCoordinator.ts" && entry.mutationStatements > 0 && entry.transactionCalls > 0));
   const fixtureFile = path.join(root, "synthetic-durable-writer-eol-fixture.ts");
   const fixtureLf = [
     "const prefix = '0123456789012345678901234567890123456789';",
@@ -320,5 +365,7 @@ if (args.has("--print-current")) {
     for (const error of errors) console.error(`  - ${error}`);
     process.exit(1);
   }
-  console.log(`[durable-writer audit] PASS — ${current.writers.length} raw filesystem source(s), ${current.hostStores.length} host-store source(s), ${current.browserOutputs.length} browser-output source(s), ${current.database.mutationStatements} SQLite mutation statement(s), ${current.database.transactionCalls} transaction(s), ${current.database.statementRuns} run(s), ${current.database.execCalls} exec(s), ${current.database.pragmaCalls} pragma(s)`);
+  const databases = [current.database, ...current.additionalDatabases];
+  const total = key => databases.reduce((sum, database) => sum + database[key], 0);
+  console.log(`[durable-writer audit] PASS — ${current.writers.length} raw filesystem source(s), ${current.hostStores.length} host-store source(s), ${current.browserOutputs.length} browser-output source(s), ${databases.length} SQLite owner(s), ${total("mutationStatements")} mutation statement(s), ${total("transactionCalls")} transaction(s), ${total("statementRuns")} run(s), ${total("execCalls")} exec(s), ${total("pragmaCalls")} pragma(s)`);
 }

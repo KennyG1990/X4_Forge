@@ -8,7 +8,7 @@ This is a scope ledger, not a claim that the public Forge contains these changes
 | Forge failure versus mod failure; misleading compile/deploy success | VERIFIED bounded API evidence classifications, compile/artifact truth and deploy UI outcome distinctions; compile-verdict, deploy-review-ui | Exhaustive failure-classification audit across every API remains broader than these proofs |
 | Logged overrides, accepted findings | VERIFIED C03 warning-only exact-input reuse, original actor/reason plus per-deploy receipts, durable list/revoke controls; docs/testing/claude-C03-warning-reviews.json | All validation-source edits conservatively invalidate reviews. C05 caches analysis facts only, not approval authority; finer approval dependencies and A03 line-stable warning identity remain OPEN. No public/installed proof yet |
 | Exact bytes, stale result, mod identity | VERIFIED snapshot-bound validate/deploy with stale refusal and workspace-mod guard; deploy-snapshot, client-isolation | No blanket claim every API response carries mod identity; other routes need contract census if this requirement is interpreted literally |
-| Shared active workspace collisions | VERIFIED addressed workspaces, credential binding, paired CAS and wrong-mod deployment refusal; client-isolation. C06a adds observable cooperative canonical-source coordination; docs/testing/claude-C06-api.json records current gates | Lock scope is one server process. Cross-sidecar coordination, external editors and broader concurrent route tests are not covered; clients must select/provision their own workspace |
+| Shared active workspace collisions | VERIFIED locally: addressed workspaces, credential binding, paired CAS and wrong-mod refusal; C06c adds shared canonical-source coordination, owner/timing and conservative recovery across participating local processes. Pre-fix race and52 compiled two-server checks: docs/testing/claude-C06c-coordination.json | Clients must select/provision their own workspace. Editors, older/nonparticipating Forge and arbitrary commands are not controlled. Exact package/installed proof remains pending; internal coordinator receipt adapter stays UNWIRED under W3B1 |
 | Reference/property and listener false positives | VERIFIED specific property/literal and AST/XML listener cases; validation-noise | C04 proves immutable local registration aliases/simple forwarding wrappers; dynamic, reassigned and prefix cases explicitly incomplete. General MD expressions/arbitrary alias/wrapper/event semantics remain unverified; docs/testing/claude-C04-validation.json |
 | AI-script handmade allowlist | Reported get_safe_pos case already passed current Forge and independent game XSD oracle; legal/invalid cases proved (import-aiscript) | Broad parity with the full XSD language/corpus is not established |
 | Large Lua coverage and vanilla widget rules | Full large-file parse/tail-error and specific button text rule proved; lab summary, lua-button-text; coverage gaps explicit | Comprehensive Lua semantics and further vanilla helper traps remain open |
@@ -63,3 +63,17 @@ original validation and false-success complaints; they are not Kimi recommendati
 Workspace/runtime/release contracts now have isolated evidence: 119 focused checks, 108 C06b HTTP calls across seven scenarios, existing C06a regression, compiled HTTP/MCP checks and rendered release controls. Final precommit/commit status is recorded in `../testing/claude-C06b-contracts.json`; this note does not close the program. Workspace previews, log bytes, validation inputs, artifact plan inputs and packaged ZIP bytes have distinct scopes. Legacy folder selectors remain compatible and explicit. Refusal receipts, two-mod isolation, malformed/legacy reports, source drift and scratch metadata adoption are tested.
 
 Remaining: shared cross-process coordination, trusted project gates A15, active-mod formatter A01/A04, additional validation/engine cases and warning identity, critical save-corruption checks, new-file guidance, paired reload/probe/save-aware runtime proof, and the public/installed release. Kimi paused. No real-mod/game/installed write.
+
+## C06c checkpoint — 2026-10-26
+
+Shared coordination is now VERIFIED locally among participating Forge processes.72 focused,
+52 compiled two-server and65 HTTP/MCP checks,134 runtime oracles,3 selected E2E and1 corrected
+cache-containment reproof pass. Type/lint/build/full standalone precommit pass; mandatory hook
+gates the checkpoint. Evidence: `../testing/claude-C06c-coordination.json`. Source owners/timing,
+atomic overlapping claims, stale-hash refusal and conservative crash recovery are covered.
+External editors, old/nonparticipating Forge and arbitrary commands remain outside the lock.
+
+The first oracle opened a pre-existing shared cache; SHM changed, no demonstrated content mutation
+or disruption. User confirmed healthy. Development cache now uses instance data, with runtime
+containment proof. Installed files/game unchanged. Internal registry receipt adapter stays UNWIRED
+under W3B1. Other remaining work above stays OPEN; no public release/install, Kimi paused.

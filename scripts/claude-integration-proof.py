@@ -28,6 +28,7 @@ responses = {}
 env = {k:v for k,v in os.environ.items() if not k.startswith('X4')}
 env.update(PORT=str(port), NODE_ENV='production', STUDIO_API_TOKEN=token,
            X4_STATE_DIR=str(run/'state'), X4_DATA_DIR=str(run/'data'),
+           X4_SOURCE_COORDINATION_DIR=str(run/'source-coordination'),
            X4_CONFIG_DIR=str(run/'config'), X4FORGE_DISCOVERY_DIR=str(run/'discovery'),
            X4_FORGE_MODE='claude-integration-test', NODE_PATH=str(ROOT/'node_modules'))
 entry = ROOT/'dist/server.cjs'

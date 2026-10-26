@@ -199,6 +199,7 @@
     "src/server/runtimeDebuggerAdapter.selftest.ts",
     "src/server/runtimeDebuggerAdapter.ts",
     "src/server/selftestRegistry.ts",
+    "src/server/sharedSourceCoordinator.ts",
     "src/server/validationRoutes.ts",
     "src/server/workspaceCreateReceiptAdapter.ts",
     "src/server/workspaceReceiptService.selftest.ts",

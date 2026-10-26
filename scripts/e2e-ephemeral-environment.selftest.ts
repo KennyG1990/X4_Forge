@@ -138,7 +138,7 @@ assert.equal(apiServer.url, `${E2E_API_ORIGIN}/api/agent/schema`, 'API webServer
 const env = apiServer.env as Record<string, unknown>;
 assert.equal(env.API_PORT, String(E2E_API_PORT), 'API webServer API_PORT must use the resolved API port');
 assert.equal(env.PORT, String(E2E_API_PORT), 'API webServer PORT must use the resolved API port');
-const mutableNames = ['X4_STATE_DIR', 'X4_CONFIG_DIR', 'X4_DATA_DIR', 'X4FORGE_DISCOVERY_DIR'];
+const mutableNames = ['X4_STATE_DIR', 'X4_CONFIG_DIR', 'X4_DATA_DIR', 'X4FORGE_DISCOVERY_DIR', 'X4_SOURCE_COORDINATION_DIR'];
 const mutablePaths = Object.fromEntries(mutableNames.map(name => [name, requireEnv(env, name)]));
 const stateRoot = path.resolve(mutablePaths.X4_STATE_DIR);
 const liveDataPath = path.resolve(process.cwd(), 'data');

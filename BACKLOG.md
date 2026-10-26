@@ -36,7 +36,14 @@ C06b VERIFIED local: remaining named workspace/runtime/release contracts, refusa
 scoped source identity, with folder/content selector compatibility.119 focused,108 actual HTTP
 calls across7 groups,65 compiled HTTP/MCP,134 oracles, rendered release controls and full gates
 pass. Evidence: docs/testing/claude-C06b-contracts.json. No new API authority or installed update.
-Cross-process locking, A15 project gates and separately recorded added complaints stay OPEN.
+A15 project gates and separately recorded added complaints stay OPEN.
+C06c VERIFIED locally: shared canonical-source ownership across participating Forge processes,
+conservative dead-owner recovery and unavailable-storage refusal. Pre-fix lost write reproduced;
+72 focused,52 compiled two-server,65 HTTP/MCP checks,134 runtime oracles and serial E2E pass.
+Evidence: docs/testing/claude-C06c-coordination.json. Public/installed proof remains pending.
+Initial oracle opened the pre-existing shared optional cache; SHM timestamp changed, no demonstrated
+content mutation/disruption. User confirmed live healthy; server cache now uses instance data and
+actual scratch containment passed. Internal coordinator receipt adapter stays UNWIRED under W3B1.
 Next finish C06, then C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
 verification and installation windows. Public release and exact installed verification precede
 Kimi M01; no interim pushes. Kimi paused.

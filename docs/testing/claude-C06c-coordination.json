@@ -1,0 +1,112 @@
+{
+  "unit": "C06c",
+  "status": "VERIFIED",
+  "releaseState": "local integration only; not published or installed",
+  "baselineRevision": "d245526060093866366e30248677fee82d52ebb9",
+  "owner": "https://github.com/KennyG1990/X4_Forge/issues/20",
+  "plan": "docs/plans/2026-10-26-c06c-shared-source-coordination.md",
+  "evidenceRoot": "C:\\Users\\Moshi\\.x4forge-dev-build\\lab\\evidence\\claude-program\\C06c",
+  "reproduction": {
+    "path": "http/baseline-6e933abcf7/verdict.json",
+    "result": "two compiled servers accepted the same old hash; paused writer overwrote the other"
+  },
+  "focused": {
+    "coordinator": 72,
+    "receiptInventory": 25,
+    "writerAudit": 30,
+    "existingC06a": 35,
+    "existingC06b": 119,
+    "receiptBundle": 18,
+    "receiptCandidate": 57
+  },
+  "productionHttp": {
+    "path": "http/fixed-11faa7506f/verdict.json",
+    "pass": true,
+    "checks": 52,
+    "serverSha256": "37d9839946906586ff287006fe0112bfbb63a5b10a779b7452b8fbb4b5d70bff",
+    "ownedChildrenStopped": true,
+    "portsClosed": true,
+    "protectedFilesUnchanged": true
+  },
+  "e2e": {
+    "status": "PASS",
+    "selectedThree": "e2e-three-pass-verdict.json",
+    "selectedThreePassed": 3,
+    "selectedThreeFailed": 0,
+    "selectedThreeFlaky": 0,
+    "cacheContainmentReproof": "e2e-containment-final-verdict.json",
+    "containmentPassed": 1,
+    "containmentFailed": 0,
+    "containmentFlaky": 0,
+    "runtimeOracles": 134,
+    "oracles": "oracles-final.json",
+    "cache": "studio-cache-containment.json",
+    "ownedTreesStopped": true
+  },
+  "boundaries": [
+    "No installed extension, real-mod, game or standing-configuration mutation; earlier shared-cache open is separately disclosed.",
+    "No push, public package or installation",
+    "Cooperative participating processes only; editors, older Forge, arbitrary run-command and manual WorkshopTool are excluded",
+    "Local filesystem required; mapped network drive locality is not independently established",
+    "Alive, reused or unknown PIDs retain ownership; no active age expiry",
+    "Exact release failure can leave claim until confirmed process exit; no rollback claim",
+    "Internal coordinator ActionReceipt adapter remains UNWIRED under broader W3B1 obligation",
+    "Exact packaged/installed-host and game verification remain later gates",
+    "Kimi paused"
+  ],
+  "failedRuns": [
+    "http/fixed-4677433d75 (missing inert scratch X4.exe marker)",
+    "lint.log (unsafe-finally; restructured and focused tests rerun)",
+    "e2e-first.log (durable-owner inventory drift)",
+    "c06b-regression.log (wrong test filename, corrected run passed)",
+    "test-results/claude-C06c/fixed-8b1a4b7901 (reviewed manifest pin not yet updated; refused before workspace creation)",
+    "receipt-bundle-selftest.log (stale positive count expectations; corrected to reviewed85/61)",
+    "e2e-cache-isolated.log (passed behavior but new containment assertion initially unreachable; reviewer caught it and final GET assertion/reached flag passed)",
+    "close documentation patch rejected before mutation: duplicate operations on SESSION-HANDOFF; corrected to one file write"
+  ],
+  "policy": {
+    "routeCount": 301,
+    "receiptRoutes": 85,
+    "receiptSurfaces": 61,
+    "existingAuthoritiesUnchanged": true,
+    "newSources": [
+      "src/server/sharedSourceCoordinator.ts"
+    ],
+    "newSurfaces": [
+      "filesystem-writer:src/server/sharedSourceCoordinator.ts",
+      "sqlite:src/server/sharedSourceCoordinator.ts"
+    ],
+    "manifestHash": "ed8f3a10fe058a048024c9b21998642f4300db43f19dc76ff3d7d56aad77b1ad",
+    "internalCoordinatorReceiptAdapter": "UNWIRED; declared obligation under W3B1, not claimed runtime receipt coverage"
+  },
+  "isolationIncident": {
+    "observed": "Initial passing oracle opened pre-existing shared optional SQLite cache. SHM timestamp changed; observed DB/WAL timestamps predated the run.",
+    "impact": "No demonstrated cache-content mutation or user-visible disruption. User confirmed live Forge working normally.",
+    "response": "Paused runtime tests; server cache now uses X4_DATA_DIR/studio-cache; final actual path assertion passed. Old cache not copied, reset or deleted.",
+    "continuousLiveStateInvarianceClaimed": false,
+    "evidence": "shared-cache-observation.json"
+  },
+  "pendingGates": [
+    "mandatory commit hook gates local checkpoint",
+    "post-commit external tracker update/readback; private tracker-readback.json"
+  ],
+  "statusScope": "bounded local source/API behavior; mandatory hook gates checkpoint; full Claude program PARTIAL",
+  "httpMcpRegression": {
+    "pass": true,
+    "checks": 65,
+    "path": "http-mcp-verdict.json"
+  },
+  "gates": {
+    "typecheck": "PASS",
+    "lint": {
+      "errors": 0,
+      "existingWarnings": 618
+    },
+    "build": "PASS",
+    "standalonePrecommit": {
+      "exitCode": 0,
+      "path": "precommit.log"
+    },
+    "mandatoryCommitHook": "Required before checkpoint can exist; raw outcome in private commit-hook.log and checkpoint.json"
+  }
+}

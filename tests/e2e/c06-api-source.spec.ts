@@ -60,7 +60,7 @@ test('C06 API identity, strict requests, source coordination and deploy refusal 
     path: `${project.id}/${file}`, content, expectedSha256: before,
   }, { ...headers, 'x-client-id': `client_c06_fixture_000${i}` })));
   expect(raced.map(r => r.status).sort()).toEqual([200, 409]);
-  expect(raced.find(r => r.status === 200)!.data.sourceOperation.scope).toBe('server-process');
+  expect(raced.find(r => r.status === 200)!.data.sourceOperation.scope).toBe('shared-participating-processes');
   expect(raced.find(r => r.status === 200)!.data.sourceOperation.active[0].owner.operation).toBe('/api/fs/write');
   const malformed = await post('/api/fs/write', { path: `${project.id}/${file}`, content: { corrupted: true } }); expect(malformed.status).toBe(400);
   expect(hash(filename)).not.toBe(before); expect(fs.readFileSync(filename, 'utf8')).toMatch(/^return [12]$/);

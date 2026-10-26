@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { E2E_API_ORIGIN } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_STATE_DIR } from '../../playwright.config';
 import { ephemeralWorkspaceHeaders, seedServerWorkspace } from './ephemeral';
 
 test('C05 warm HTTP validation sees edits and scratch deploy refuses stale bytes', async ({request,page}) => {
@@ -66,12 +66,22 @@ test('C05 warm HTTP validation sees edits and scratch deploy refuses stale bytes
   const index=await request.get(E2E_API_ORIGIN+'/api/agent/selftest-index');expect(index.ok()).toBe(true);
   const paths=(await index.json()).selftests as string[];expect(paths.length).toBeGreaterThan(0);
   const oracles=[];
+  let cacheContainmentChecked=false;
   for(const route of paths){
     const response=await request.get(E2E_API_ORIGIN+'/api'+route,{timeout:60_000});
     const data=await response.json();
+    if(route==='/agent/db-selftest'){
+      expect(data.available).toBe(true);
+      const expectedCache=path.join(E2E_STATE_DIR,'data','studio-cache','index.db');
+      expect(path.resolve(data.liveCache)).toBe(expectedCache);
+      expect(fs.existsSync(expectedCache)).toBe(true);
+      cacheContainmentChecked=true;
+      fs.writeFileSync(path.join(out,'studio-cache-containment.json'),JSON.stringify({pass:true,expectedCache,actualCache:data.liveCache},null,2));
+    }
     fs.writeFileSync(path.join(out,`oracle-${route.split('/').pop()}.json`),JSON.stringify({status:response.status(),data},null,2));
     oracles.push({route,status:response.status(),pass:response.ok()&&!!(data.allPassed??data.pass),passed:data.passed,total:data.total});
     fs.writeFileSync(path.join(out,'oracles.json'),JSON.stringify(oracles,null,2));
   }
   expect(oracles.filter(o=>!o.pass)).toEqual([]);
+  expect(cacheContainmentChecked).toBe(true);
 });

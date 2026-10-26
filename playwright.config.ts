@@ -127,6 +127,7 @@ const ephemeralEnv = {
   // so it never starts a second embedded Vite/HMR server (port 24678).
   API_ONLY: 'true',
   X4_STATE_DIR: E2E_STATE_DIR,
+  X4_SOURCE_COORDINATION_DIR: path.join(E2E_STATE_DIR, 'source-coordination'),
   // Config is mutable API state too. Keep schema/directory writes inside the same
   // per-run sandbox so a failed test can never strand the installed Forge on a
   // deleted temporary workspace.

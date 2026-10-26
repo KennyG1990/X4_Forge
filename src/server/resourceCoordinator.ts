@@ -22,7 +22,7 @@ export function canonicalSourceKey(input: string): string {
   return `source:${resolved}`;
 }
 
-function conflicts(a: string, b: string): boolean {
+export function conflicts(a: string, b: string): boolean {
   return a === b || (a.startsWith('source:') && b.startsWith('source:')
     && (a.startsWith(b.endsWith(path.sep) ? b : b + path.sep) || b.startsWith(a.endsWith(path.sep) ? a : a + path.sep)));
 }

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "ae9d178a63731ad2c1aa7775e634c3c14d98ea93d6228516a8e1472cc6a2ad2b",
+  "sourceFingerprint": "8b0864e20f1325103fd08e7f9b1b591c7e59047eb66737b56abc9e12fa58be57",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -377,6 +377,14 @@
       ],
       "rationale": "Private runtime reload outbox creates regular owned directories, persists authorization before atomic journal and fixed-command queue delivery.",
       "failureContract": "Deploy authority, exact workspace/session, fresh companion, one global pending command and expiry required. Receipt failure sends nothing; uncertain delivery never automatically retries; symbolic directories refused."
+    },
+    {
+      "file": "src/server/sharedSourceCoordinator.ts",
+      "calls": { "mkdirSync": 1 },
+      "categories": ["sqlite-transaction"],
+      "owners": ["SharedSourceCoordinator"],
+      "rationale": "Dedicated local per-user SQLite registry serializes cooperating source operations with atomic all-resource claims, bounded queues, exact instance/request ownership and confirmed-dead process recovery. Existing cache DB is not reused. Tests explicitly select disposable registries.",
+      "failureContract": "Native-driver, path, schema, corruption or storage failures refuse protected writes and remain diagnosable. Live or unknown owners never expire by age. Exact release failure conservatively retains ownership and reports uncertainty; no rollback is inferred. Editors, older Forge versions and registry tampering are outside the cooperative contract."
     }
   ],
   "hostStores": [
@@ -505,5 +513,18 @@
     "statementRuns": 14,
     "execCalls": 14,
     "pragmaCalls": 2
-  }
+  },
+  "additionalDatabases": [
+    {
+      "file": "src/server/sharedSourceCoordinator.ts",
+      "category": "sqlite-transaction",
+      "owners": ["SharedSourceCoordinator.open", "SharedSourceCoordinator.transaction", "SharedSourceCoordinator.claims", "SharedSourceCoordinator.run"],
+      "failureContract": "A dedicated local registry uses immediate SQLite transactions for schema initialization and atomic all-resource queue/claim/release changes. Unknown schema, corrupt data, unavailable native binding and storage failure refuse protected work; no cache fallback or schema reset is allowed. Only confirmed-dead processes are reclaimed; active owners never expire by age. Exact request/instance release failure retains conservative ownership and preserves both operation and cleanup errors.",
+      "mutationStatements": 5,
+      "transactionCalls": 6,
+      "statementRuns": 5,
+      "execCalls": 1,
+      "pragmaCalls": 7
+    }
+  ]
 }

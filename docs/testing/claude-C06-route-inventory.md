@@ -1,4 +1,4 @@
-# C06 route reconciliation — bounded C06a/C06b checkpoints
+# C06 route reconciliation — bounded C06a/C06b/C06c checkpoints
 
 The source authority is `server.ts`, the reviewed route-disposition manifest and each existing domain owner. This is an inventory and explicit disposition, not a claim that every route below has new exhaustive E2E coverage.
 
@@ -21,7 +21,38 @@ The source authority is `server.ts`, the reviewed route-disposition manifest and
 
 Extend the old workspace receipt queue with a bounded, failure-safe resource scheduler. Resolve canonical filesystem owners using the nearest existing real path; compare canonical keys again after waiting. Reject changed aliases/configuration before invoking a queued handler. Acquire overlapping resources together; serialize intersecting parents/children; permit unrelated resources. Release only when the handler settles, including rejection/rollback, not when a socket closes. A queued request whose response has ended performs no later work. Status is a copied snapshot of owner, operation, workspace, queue time and start time, with no credential.
 
-Scope is explicitly **one server process**. This does not lock a second Forge sidecar, an external editor or the operating system. Output-root locks are deliberately conservative and may serialize otherwise independent deployments. Cross-process coordination and narrower output locking remain OPEN; do not advertise a machine-wide lock. Existing deployment source/corpus/target hashes remain the authoritative refusal boundary.
+C06a's scheduler was process-local. C06c retains that scheduler for workspace receipts and
+routes source operations through a dedicated shared SQLite registry. Scope is **participating
+Forge processes using the same local registry**. Status exposes instance/PID, actor, operation,
+workspace and queue/start times. It does not control older Forge versions, arbitrary run-command
+operations, manual WorkshopTool, external editors or the operating system. Output-root locks
+remain conservative and may serialize otherwise independent deployments. Existing source,
+corpus and target hashes remain independent refusal boundaries.
+
+The default registry is per-user local state, independent of sidecar `X4_STATE_DIR`.
+`X4_SOURCE_COORDINATION_DIR` selects an absolute local namespace; all isolated test launchers
+provide their own. Different registry directories do not coordinate. Recognized test modes
+without an explicit override fail closed. UNC paths are rejected; mapped-drive locality is an
+operating assumption. No real registry was opened during C06c proof.
+
+The existing disposable studio index cache is now opened beneath `X4_DATA_DIR/studio-cache`,
+as the reference-manifest cache already was. The first broad oracle run exposed an older
+shared `%TEMP%/x4-studio-cache` open; its shared-memory timestamp changed, while observed DB/WAL
+timestamps predated the run. Runtime testing paused and Ken confirmed live Forge healthy.
+Subsequent proof requires the db-selftest to return the actual scratch cache path. No old
+cache migration, reset or cleanup is performed, and continuous all-live-state invariance
+is not claimed for the earlier run.
+
+Claims acquire all overlapping resources atomically, preserve FIFO among conflicts and allow
+unrelated sources to proceed. Queue timeout never expires active work. Only confirmed-dead
+processes are reclaimed; unknown or reused PIDs conservatively retain claims. Missing/incompatible
+native bindings, schema/corruption and storage failures are Forge infrastructure failures with
+no process-only fallback. A cleanup failure after work completes explicitly warns that writes
+may already exist and ownership may remain; it does not claim refusal or rollback.
+
+Both new storage surfaces are inventoried as `receipt-required` authoritative state. Their
+internal ActionReceipt adapter remains UNWIRED under W3B1/#20. This is not universal receipt
+coverage; existing API/workspace receipts retain their own bounded proof.
 
 ## Claude follow-up ownership
 
@@ -35,4 +66,4 @@ The complete C06 program remains PARTIAL. No C07 or Kimi implementation, public 
 
 ## C06b evidence and limitations
 
-Plan/review/AAR: `../plans/2026-10-26-c06b-api-contract-completion.md`; evidence: `claude-C06b-contracts.json`. The named API census is bounded; shared cross-process source locking, trusted project commands A15, client helper A01/A04 and game-loop work remain open. Release metadata is recorded provenance, not authenticated against same-user file editing. Runtime and release operational folder IDs remain labelled separately from content.xml identities. No capability route, permission, public release or installed-host claim is added.
+Plan/review/AAR: `../plans/2026-10-26-c06b-api-contract-completion.md`; evidence: `claude-C06b-contracts.json`. The named API census is bounded. C06c now supplies the participating-process lock described above; final evidence is `claude-C06c-coordination.json`. Trusted project commands A15, client helper A01/A04 and game-loop work remain open. Release metadata is recorded provenance, not authenticated against same-user file editing. Runtime and release operational folder IDs remain labelled separately from content.xml identities. No capability route, permission, public release or installed-host claim is added.

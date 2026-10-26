@@ -225,7 +225,8 @@ import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
-import { canonicalSourceKey, forgeResourceCoordinator } from './src/server/resourceCoordinator';
+import { canonicalSourceKey } from './src/server/resourceCoordinator';
+import { forgeSourceCoordinator } from './src/server/sharedSourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -398,7 +399,7 @@ let objectIndexRefreshing: string | null = null;
 let studioDb: StudioDb | null | undefined; // undefined = not attempted yet
 function getStudioDb(): StudioDb | null {
   if (studioDb !== undefined) return studioDb;
-  studioDb = isDbAvailable().available ? openStudioDb() : null;
+  studioDb = isDbAvailable().available ? openStudioDb(dataPath('studio-cache')) : null;
   if (studioDb) console.log(`[studio-db] SQLite cache active at ${studioDb.path}`);
   return studioDb;
 }
@@ -1163,16 +1164,17 @@ function coordinatedSourceOperation(handler: (req: express.Request, res: express
       const run = () => {
         if (res.writableEnded || res.destroyed) return; // timed out/disconnected while queued: never mutate later
         if (keys.length && (req.path.startsWith('/api/fs/') || req.path.includes('/deploy') || req.path.includes('/artifact/build'))) {
-          res.locals.sourceOperation = forgeResourceCoordinator.status(keys);
+          res.locals.sourceOperation = forgeSourceCoordinator.status(keys);
         }
         return handler(req, res);
       };
       if (!keys.length) { await run(); return; }
-      await forgeResourceCoordinator.run(keys, { actor: actor?.keyId || actor?.label || 'studio',
+      await forgeSourceCoordinator.run(keys, { actor: actor?.keyId || actor?.label || 'studio',
         operation: req.path, workspaceId: ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspaceId }, run, () => sourceOperationKeys(req));
     } catch (error) {
       if (res.headersSent || res.writableEnded) return next(error);
-      res.status(error.status || 500).json({ ok: false, code: error.code || 'SOURCE_COORDINATION_FAILED', error: error.message });
+      res.status(error.status || 500).json({ ok: false, code: error.code || 'SOURCE_COORDINATION_FAILED', error: error.message,
+        ...(error.category ? { failureCategory: error.category } : {}) });
     }
   };
 }
@@ -5234,7 +5236,7 @@ app.get("/api/agent/status", (req, res) => {
         sourceFolder: sourceDir || undefined,
       },
       sourceSync,
-      sourceCoordination: forgeResourceCoordinator.status(sourceDir ? [canonicalSourceKey(sourceDir)] : []),
+      sourceCoordination: forgeSourceCoordinator.status(sourceDir ? [canonicalSourceKey(sourceDir)] : []),
       environment: { scope: 'server-process', pid: process.pid, mode: process.env.X4_FORGE_MODE || 'standalone' },
       roots: {
         modWorkspacePath: resolved.modWorkspacePath || null,

@@ -2841,6 +2841,23 @@
       ]
     },
     {
+      "id": "filesystem-writer:src/server/sharedSourceCoordinator.ts",
+      "kind": "filesystem-writer",
+      "owner": "SharedSourceCoordinator",
+      "sourceRef": "config/durable-writers.json#/writers/44",
+      "integrationBatch": "W3B1",
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "id": "filesystem-writer:src/server/workspaceCreateReceiptAdapter.selftest.ts",
       "kind": "filesystem-writer",
       "owner": "runWorkspaceCreateReceiptAdapterSelftest",
@@ -3184,6 +3201,23 @@
       "integrationBatch": "W3B0-internal",
       "semanticClass": "fixture-cache",
       "policy": "separately-governed",
+      "effects": [
+        "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "id": "sqlite:src/server/sharedSourceCoordinator.ts",
+      "kind": "sqlite",
+      "owner": "SharedSourceCoordinator.open | SharedSourceCoordinator.transaction | SharedSourceCoordinator.claims | SharedSourceCoordinator.run",
+      "sourceRef": "config/durable-writers.json#/additionalDatabases/0",
+      "integrationBatch": "W3B1",
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
       "effects": [
         "filesystem-write"
       ],

@@ -232,24 +232,31 @@ function buildSurfaces(authority: unknown): {
       authorities.set(id, { categories, owners });
     }
   }
-  const database = requireRecord(root.database, 'durable-writers.database');
-  const databaseFile = requireString(database.file, 'durable-writers.database.file');
-  const databaseOwners = reviewedStrings(
-    database.owners,
-    'durable-writers.database.owners',
-    'ACTION_RECEIPT_COVERAGE_SURFACE_OWNER_DUPLICATE',
-  );
-  const databaseCategory = requireString(database.category, 'durable-writers.database.category');
-  const databaseId = addSurface(
-    surfaces,
-    ids,
-    'sqlite',
-    databaseFile,
-    databaseOwners.join(' | '),
-    'config/durable-writers.json#/database',
-  );
-  authorities.set(databaseId, { categories: [databaseCategory], owners: databaseOwners });
-  counts.sqlite = 1;
+  const addDatabase = (value: unknown, label: string, sourceRef: string): void => {
+    const database = requireRecord(value, label);
+    const file = requireString(database.file, `${label}.file`);
+    const owners = reviewedStrings(
+      database.owners,
+      `${label}.owners`,
+      'ACTION_RECEIPT_COVERAGE_SURFACE_OWNER_DUPLICATE',
+    );
+    const category = requireString(database.category, `${label}.category`);
+    const id = addSurface(surfaces, ids, 'sqlite', file, owners.join(' | '), sourceRef);
+    authorities.set(id, { categories: [category], owners });
+    counts.sqlite += 1;
+  };
+  // Keep the reviewed legacy identity/pointer while discovering separately owned
+  // SQL authorities. Presence in this inventory does not assert receipt wiring.
+  addDatabase(root.database, 'durable-writers.database', 'config/durable-writers.json#/database');
+  if (root.additionalDatabases !== undefined) {
+    if (!Array.isArray(root.additionalDatabases)) {
+      throw stableError('ACTION_RECEIPT_COVERAGE_AUTHORITY_INVALID', 'durable-writers.additionalDatabases:array-required');
+    }
+    for (let index = 0; index < root.additionalDatabases.length; index += 1) {
+      addDatabase(root.additionalDatabases[index], `durable-writers.additionalDatabases[${index}]`,
+        `config/durable-writers.json#/additionalDatabases/${index}`);
+    }
+  }
   surfaces.sort((left, right) => compareOrdinal(left.id, right.id));
   return { surfaces, counts, authorities };
 }

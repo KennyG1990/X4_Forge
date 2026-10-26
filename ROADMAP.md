@@ -7988,3 +7988,26 @@ Plan/review/AAR: docs/plans/2026-10-26-c06b-api-contract-completion.md.
 Evidence: docs/testing/claude-C06b-contracts.json. Owner GitHub#20 and existing Notion safety task.
 Full C06, added complaints and C07 remain PARTIAL; Kimi paused. Local commit only, no push/release.
 Commit point: fix(api): complete workspace runtime and release subject contracts.
+
+## 2026-10-26 — C06c VERIFIED locally: shared source coordination
+
+Participating Forge processes share atomic canonical-source claims, intersecting FIFO and
+owner/timing status. Confirmed-dead owners recover; unknown/alive PIDs retain ownership, with no
+age-based active takeover. Native/schema/storage failures refuse protected writes. Workspace
+receipt scheduling and external-editor hash checks remain; no editor or older-Forge lock claim.
+
+Old two-server lost write reproduced.72 focused/52 compiled two-server/65 HTTP-MCP checks,
+134 runtime oracles,3 selected E2E plus1 corrected cache-containment reproof pass without flakes.
+Type/lint/build/full standalone precommit pass; mandatory commit hook gates the checkpoint.
+Policy remains301 routes,85 receipt routes/61 surfaces; new internal receipt adapter UNWIRED
+under W3B1. No full-suite, exact VSIX/installed-host or game proof claimed for this unit.
+
+Initial oracle opened the shared optional cache; SHM changed, no demonstrated content mutation
+or disruption. User confirmed live healthy. Server cache now uses instance data; actual path
+containment passed. Four protected bundle/discovery hashes matched; owned test processes stopped.
+No installed/mod/game/standing-config write, desktop input, push or publication. Kimi paused.
+
+Plan/review/AAR: docs/plans/2026-10-26-c06c-shared-source-coordination.md.
+Evidence: docs/testing/claude-C06c-coordination.json. Existing GitHub#20/Notion owner stays open;
+A15, additional Claude cases, C07 and public/installed release remain. Commit point:
+fix(source): coordinate writes across Forge processes.
