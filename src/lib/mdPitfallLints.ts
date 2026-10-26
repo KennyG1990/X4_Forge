@@ -37,10 +37,10 @@
  */
 
 import { DOMParser } from '@xmldom/xmldom';
-import { maskNonExpressionSpans } from './scriptProperties';
+import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
 
 export interface MdPitfallFinding {
-  code: 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey';
+  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey';
   severity: 'error' | 'warning';
   cue?: string;
   filePath?: string;
@@ -96,7 +96,7 @@ function hasXmlAttribute(element: ElementLike, name: string): boolean {
  * look like a custom key: it is flagged only when it contains no known-property hit,
  * so with no union supplied we skip the lint entirely rather than guess).
  */
-export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>; filePath?: string } = {}): MdPitfallFinding[] {
+export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>; propertyIndex?: ScriptPropertyIndex; filePath?: string } = {}): MdPitfallFinding[] {
   const out: MdPitfallFinding[] = [];
   if (!xml || typeof xml !== 'string' || !/<mdscript\b/i.test(xml)) return out;
   const masked = maskNonExpressionSpans(xml);
@@ -124,6 +124,30 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   const root = doc?.documentElement;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
   if (!root || root.nodeName !== 'mdscript' || parseError) return out;
+
+  // Prior X4 9.00 station probe (#635): products? was false on producing stations,
+  // whereas products.count worked. Gate the advisory on actual corpus metadata;
+  // do not infer a receiver type or generalize to every pseudo datatype.
+  const model = opts.propertyIndex?.model;
+  const productDefinitions = model ? [...model.datatypes.values()].flatMap(entry =>
+    entry.properties.filter(property => property.name === 'products')) : [];
+  if (model?.datatypes.get('warelist')?.pseudo && productDefinitions.length
+    && productDefinitions.every(property => property.type === 'warelist')) {
+    const elements = root.getElementsByTagName('*');
+    for (let i = 0; i < elements.length; i++) {
+      const element = elements[i] as unknown as { attributes: ArrayLike<{ name: string; value: string }>; lineNumber?: number };
+      for (let a = 0; a < element.attributes.length; a++) {
+        const attr = element.attributes[a];
+        // Expression-valued attributes only. DOM decoding precedes MD string masking.
+        if (!['value', 'exact', 'min', 'max', 'chance', 'weight'].includes(attr.name)) continue;
+        const expression = attr.value.replace(/'[^']*'|"[^"]*"/g, match => ' '.repeat(match.length));
+        if (!/\.products\?(?![\w$])/.test(expression)) continue;
+        out.push({ code: 'md_pitfall.products_existence', severity: 'warning', filePath: opts.filePath,
+          line: element.lineNumber,
+          detail: 'Reported X4 9.00 station trap: .products? returned false on producing stations. The loaded scriptproperties.xml defines products as pseudo warelist. For a valid station, test .products.count gt 0 before selecting a product. Receiver type and current game behavior are not established by this advisory; .$products? table keys are a different expression.' });
+      }
+    }
+  }
 
   // ---- 4. cancel_conversation runtime semantic requiredness -----------------------------
   const cancelElements = root.getElementsByTagName('cancel_conversation');

@@ -161,6 +161,7 @@ function entryFromReference(reference: ScriptPropertyReference): SPEntry {
     kind: reference.kind,
     name: reference.name,
     parent: reference.parent,
+    pseudo: reference.pseudo,
     heads,
     headDocs,
     propNames: reference.properties.map(property => property.name),

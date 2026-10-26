@@ -1,0 +1,259 @@
+{
+  "unit": "C04",
+  "status": "VERIFIED",
+  "scope": "Bounded isolated source, real HTTP/browser and scratch deployment; not native installed host, public package or game proof",
+  "baseline": "eecc942315b9a819c7bcd7c85ae2660e4b65d359",
+  "recordedAt": "2026-10-26T03:25:53.589659+00:00",
+  "focused": {
+    "passed": 34,
+    "total": 34
+  },
+  "independentXsd": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "aiscript get_safe_pos",
+        "pass_": true,
+        "valid": true,
+        "expected": true,
+        "diagnostics": []
+      },
+      {
+        "name": "aiscript unknown action",
+        "pass_": true,
+        "valid": false,
+        "expected": false,
+        "diagnostics": [
+          "<string>:1:0:ERROR:SCHEMASV:SCHEMAV_ELEMENT_CONTENT: Element 'forge_invalid_action': This element is not expected. Expected is one of ( do_all, do_for_each, do_any, do_if, do_while, abort_scan, abort_scripts, set_alert_level, activate_landinggears, deactivate_landinggears )."
+        ]
+      },
+      {
+        "name": "aiscript illegal attribute",
+        "pass_": true,
+        "valid": false,
+        "expected": false,
+        "diagnostics": [
+          "<string>:1:0:ERROR:SCHEMASV:SCHEMAV_CVC_COMPLEX_TYPE_3_2_1: Element 'get_safe_pos', attribute 'forge_invalid': The attribute 'forge_invalid' is not allowed."
+        ]
+      },
+      {
+        "name": "MD legal debug action",
+        "pass_": true,
+        "valid": true,
+        "expected": true,
+        "diagnostics": []
+      },
+      {
+        "name": "MD delay is not an action",
+        "pass_": true,
+        "valid": false,
+        "expected": false,
+        "diagnostics": [
+          "<string>:1:0:ERROR:SCHEMASV:SCHEMAV_ELEMENT_CONTENT: Element 'delay': This element is not expected. Expected is one of ( do_if, abort_scan, abort_scripts, set_alert_level, activate_landinggears, deactivate_landinggears, animate_chair, trigger_animation, check_animation_state, activate_weapongroup )."
+        ]
+      },
+      {
+        "name": "products guard is schema legal",
+        "pass_": true,
+        "valid": true,
+        "expected": true,
+        "diagnostics": []
+      },
+      {
+        "name": "cancel target disjunction is not enforced by XSD",
+        "pass_": true,
+        "valid": true,
+        "expected": true,
+        "diagnostics": []
+      }
+    ],
+    "vanillaSafePosCounts": {
+      "md": 71,
+      "aiscripts": 114
+    },
+    "authorityHashes": {
+      "libraries\\md.xsd": "9959e42a07bb97225b35c16cede1043c8a55ad418fac22eeaf706642a1650756",
+      "libraries\\aiscripts.xsd": "90aaa25ded4fd5a756c19b48178c0b2bdeaa30eb9078d2247072656de0666cb5",
+      "libraries\\common.xsd": "8eec878511d06dd2be88a7054eb54556b29e481bf0feba20fe2cf3c6eabd3452"
+    }
+  },
+  "http": {
+    "pass": true,
+    "checks": [
+      "real-properties-nested-selectors-and-ware-reads",
+      "unknown-property-and-ware-controls",
+      "game-xsd-safe-position-and-invalid-attribute",
+      "grounded-engine-traps-and-repair",
+      "large-tail-alias-real-absence-and-syntax-error",
+      "dynamic-registration-explicit-unverified",
+      "all-33-lua-files-parsed",
+      "real-listener-and-comment-decoy",
+      "rendered-qualified-warning-deployment",
+      "unverified-deploy-receipt-exact-bytes-and-stale-refusal",
+      "registration-repair-recovery"
+    ],
+    "modId": "forge_regression_lab",
+    "sourceHash": "dd79c5b42c9cb4b3cd15a979f1861c30926461ea2397cfb34557509858506f0a",
+    "deployReceiptId": "ar_c24d79e2abf34ea6c518c16b2c041cabfced705c3ba1ff40960d1d5deae7be4c"
+  },
+  "e2e": {
+    "verdict": {
+      "passed": 1,
+      "failed": 0,
+      "flaky": 0,
+      "badResults": 0,
+      "noTests": false,
+      "totalTests": 1,
+      "issues": [],
+      "quarantinedIssues": 0,
+      "green": true,
+      "structuredReportMissing": false,
+      "structuredReportIncomplete": false,
+      "globalReportErrors": false,
+      "reportErrorCount": 0
+    },
+    "lifecycle": {
+      "complete": true,
+      "errors": [],
+      "trigger": "child-close",
+      "childExit": {
+        "code": 0,
+        "signal": null
+      },
+      "ownershipComplete": true,
+      "rootPid": 58120,
+      "capturedPids": [
+        2724,
+        35712,
+        41236,
+        46548,
+        48104,
+        51576,
+        58120,
+        62576,
+        69112,
+        69264,
+        73496
+      ],
+      "reusedPids": [],
+      "termination": {
+        "complete": true,
+        "errors": [],
+        "treeGone": true,
+        "passes": 1,
+        "capturedPids": [
+          2724,
+          35712,
+          41236,
+          46548,
+          48104,
+          51576,
+          58120,
+          62576,
+          69112,
+          69264,
+          73496
+        ],
+        "commandedPids": [],
+        "reusedPids": [],
+        "remainingPids": []
+      }
+    }
+  },
+  "checks": {
+    "typecheck": "PASS in full precommit",
+    "lint": {
+      "errors": 0,
+      "warnings": 614
+    },
+    "productionBuild": "PASS",
+    "precommit": "PASS",
+    "referenceCorpus": "16/16",
+    "referenceLanguage": "13/13",
+    "eventCoverage": "20/20",
+    "existingSuites": "property/reference/cross-file/pitfall/Lua-button/UI-manifest PASS"
+  },
+  "isolation": {
+    "protectedDiscoveryAndBundleHashesUnchanged": 4,
+    "testPortsClosed": [
+      3100,
+      3101
+    ],
+    "desktopInputUsed": false,
+    "realModOrGameWrites": false
+  },
+  "limitations": [
+    "Station products advisory uses prior documented X4 9.00/#635 observation, not fresh game proof or receiver inference",
+    "Dynamic registration/emit and arbitrary wrapper inference remain explicitly unavailable",
+    "General MD expression semantics, upvalue limits, UTF-8 save flows and lifecycle are unverified; see gotcha matrix",
+    "C05-C07, release/package/native installation and game gates remain open; Kimi paused"
+  ],
+  "sourceSha256Lf": {
+    "src/lib/scriptProperties.ts": "f2f73502407543b78607ad75fc93f5ed71772ad2cfebebe0c964d8f7a96568c3",
+    "src/lib/referenceCorpus.ts": "c5be7882deb36650b128d300cb55c75b56c7e215f442f11070e1091627fe76f7",
+    "src/lib/referenceLanguage.ts": "b2a31715aa95b9fcb865d0807aa02a1fbe0a14ce7038da3eca47fc39c2f46750",
+    "src/lib/mdPitfallLints.ts": "b725f1b9116e6d16392d98f11c60826d39e78aaa9e20421ce3d9238e073c9e8b",
+    "src/server/projectValidation.ts": "cc7a0067f6bffabf24b0223797e549052c0010c6d000a76e0cc5507e8c37d680",
+    "src/lib/projectCrossFileValidation.ts": "d294eba7c2886318d3db52d15444f873c55e0f95e1a2137e6cbcacb1328ceac2",
+    "src/lib/validationEvidence.ts": "f52dc979eea25d75dd4d49bd053e7465414c2f35e494a3ae714e425fa5281ac2",
+    "scripts/claude-validation-matrix.selftest.ts": "13c116c81565517c7b5637c167823f5bc41bfddba28ec51b8f7bf2d1590dbd1e",
+    "scripts/claude-xsd-proof.py": "f8ca2b2ab3c7a3d662dbce3640116aef0a55870726f288ab75de2fa21f3d87c4",
+    "tests/e2e/claude-validation-matrix.spec.ts": "30d40cdd466a026a1493b3db7a276331d72215187ce5eb7fb9de15d82c475861"
+  },
+  "evidenceLogs": {
+    "matrix-reviewed.log": {
+      "sha256": "b251477de6e7908974ee0c69119bb34644d1b272d962ae0800e5d8bf44216b9b",
+      "bytes": 3391
+    },
+    "xsd-final.log": {
+      "sha256": "21c1e8c9153391dd1882f890f05a2ab161d23e9b4f6251710cb429f5c9860ec2",
+      "bytes": 2325
+    },
+    "reference-regressions.log": {
+      "sha256": "24f7a1ec70000ab91d6fa691afcaece7ed717db1964ceb34e11ce3a9dcd28a28",
+      "bytes": 1963
+    },
+    "validation-noise.selftest.log": {
+      "sha256": "b9c8351945f6382eb1319e90280137bc60fa7eb2d3f30004232ddb0a84ae53db",
+      "bytes": 26935
+    },
+    "event-coverage-selftest.log": {
+      "sha256": "61cf59d6160fe5f8917258cc64ac70dcb155af928e868bf2cfeebf7112287937",
+      "bytes": 605
+    },
+    "lua-button-text-selftest.log": {
+      "sha256": "1edde3ad9dad1e7d8bc9445bd82e733b4b06fb73a429db4ce9ac098a35b26f14",
+      "bytes": 4333
+    },
+    "lua-button-integration-selftest.log": {
+      "sha256": "3b39598caf0917d05d492f8d14b6378ccb5e0b39c1bba0256809760545f12e6b",
+      "bytes": 10438
+    },
+    "ui-manifest-integrity.selftest.log": {
+      "sha256": "1cc5f76d317563718c0add6da5cfbd64b1c4095fbf23ff12f3c5a536385c8f7a",
+      "bytes": 1552
+    },
+    "lint-first.log": {
+      "sha256": "78f7218beaa00aa1f56d9d9f4e20e23277fb227bd96eb8f3b394256184223e44",
+      "bytes": 70894
+    },
+    "build-reviewed.log": {
+      "sha256": "84801253c2eecfd998e6e912c64f6bfb86f29ad82af4353d59e3d42a05e47f8b",
+      "bytes": 923
+    },
+    "precommit-final.log": {
+      "sha256": "08332c9b2ba084a9cdc93b993659fd5c156cd7eff780c92a2ffa8e9a56a95099",
+      "bytes": 8009
+    },
+    "e2e-second.log": {
+      "sha256": "04417dcb88ee7c2f6608c1bc87c95b17d59a29e28d56fdba6c1e6fe5541c912c",
+      "bytes": 2369
+    }
+  },
+  "retainedFailedRuns": [
+    "baseline-matrix.log",
+    "matrix-first.log",
+    "xsd-first.log",
+    "e2e-first.log"
+  ]
+}

@@ -453,7 +453,7 @@ export function runProjectValidation(
   const pitfallFindings: MdPitfallFinding[] = [];
   for (const f of project.files) {
     if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
-      pitfallFindings.push(...lintMdPitfalls(f.content, { propertyUnion: spIndex?.union, filePath: f.path }));
+      pitfallFindings.push(...lintMdPitfalls(f.content, { propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path }));
     }
   }
 

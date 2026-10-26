@@ -1,6 +1,6 @@
 # Claude complaints — reconciled private Dev status, 2026-10-25
 
-This is a scope ledger, not a claim that the public Forge contains these changes. C01 private fixes are integrated locally at d3eeb2e; C02 and C03 are now verified locally. See docs/testing/claude-C01-integration.json and claude-C02-identities.json. Evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata. Kimi remains paused. All game execution/experience proof remains separate.
+This is a scope ledger, not a claim that the public Forge contains these changes. C01 private fixes are integrated locally at d3eeb2e; C02-C04 are now verified locally. See docs/testing/claude-C01-integration.json and claude-C02-identities.json. Evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata. Kimi remains paused. All game execution/experience proof remains separate.
 
 | Original complaint | Current scope and evidence | What remains |
 | --- | --- | --- |
@@ -9,7 +9,7 @@ This is a scope ledger, not a claim that the public Forge contains these changes
 | Logged overrides, accepted findings | VERIFIED C03 warning-only exact-input reuse, original actor/reason plus per-deploy receipts, durable list/revoke controls; docs/testing/claude-C03-warning-reviews.json | All validation-source edits conservatively invalidate reviews; narrower dependency-aware reuse remains C05. No public/installed proof yet |
 | Exact bytes, stale result, mod identity | VERIFIED snapshot-bound validate/deploy with stale refusal and workspace-mod guard; deploy-snapshot, client-isolation | No blanket claim every API response carries mod identity; other routes need contract census if this requirement is interpreted literally |
 | Shared active workspace collisions | VERIFIED addressed workspaces, credential binding, paired CAS and wrong-mod deployment refusal; client-isolation | No raw source-folder editor lock; clients must select/provision their own workspace |
-| Reference/property and listener false positives | VERIFIED specific property/literal and AST/XML listener cases; validation-noise | General MD expressions, aliases/wrappers and dynamic event resolution remain partial; unresolved direct events now explicitly incomplete (event-coverage) |
+| Reference/property and listener false positives | VERIFIED specific property/literal and AST/XML listener cases; validation-noise | C04 proves immutable local registration aliases/simple forwarding wrappers; dynamic, reassigned and prefix cases explicitly incomplete. General MD expressions/arbitrary alias/wrapper/event semantics remain unverified; docs/testing/claude-C04-validation.json |
 | AI-script handmade allowlist | Reported get_safe_pos case already passed current Forge and independent game XSD oracle; legal/invalid cases proved (import-aiscript) | Broad parity with the full XSD language/corpus is not established |
 | Large Lua coverage and vanilla widget rules | Full large-file parse/tail-error and specific button text rule proved; lab summary, lua-button-text; coverage gaps explicit | Comprehensive Lua semantics and further vanilla helper traps remain open |
 | Slow full validation | VERIFIED file-local Lua analysis caching with changed/dependent source parity; incremental-lua | XML/reference/project incremental validation and representative minute-scale latency benchmark remain open |
@@ -17,10 +17,10 @@ This is a scope ledger, not a claim that the public Forge contains these changes
 | Dead-path dependency health | VERIFIED private path diagnostics and installed API: dependency-health; exact failed path and setting, no false mod error | Parser/index/packed fallback and write-access health not certified by a readable-path result |
 | Malformed import payloads returning200 | VERIFIED strict import request boundary; import-aiscript | Not a census of request validation on every endpoint |
 | Stable node IDs | VERIFIED local C02: deterministic file-scoped MD IDs, conservative legacy layout/waypoint preservation, actual Load Project and fresh-byte scratch deploy; docs/testing/claude-C02-identities.json | Public package/installed verification; ambiguous or unanchored matches are not inferred |
-| Engine-trap rules from gotchas | Existing mdPitfallLints has four bounded rules; no products/station rule found | Reconcile supplied gotchas with game/reference evidence; add narrowly grounded rules without reviving false positives |
+| Engine-trap rules from gotchas | VERIFIED C04 qualified products? advisory grounded in prior station probe and loaded pseudo-warelist metadata, four prior rules retained | Complete gotcha dispositions: docs/testing/claude-C04-gotcha-matrix.md; runtime and unsupported semantics remain unverified, no fresh station/game proof |
 | Usable public/installed release | Private Dev backend/frontend proved in bounded scopes | Integrate into Git, required release tests, native host/package verification and publish. Do not disturb Claude stable during private work |
 
-Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. C03 warning-only review reuse is verified locally. Next is C04, followed by C05-C07 under the approved completion/release plan.
+Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. C03 warning-only review reuse and bounded C04 validation are verified locally. Next is C05, followed by C06-C07 under the approved completion/release plan.
 
 ## Original complaint inventory
 

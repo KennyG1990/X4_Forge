@@ -33,6 +33,8 @@ export interface SPEntry {
   name: string;
   /** datatype inheritance parent (`<datatype name="ship" type="container">`) */
   parent?: string;
+  /** Authored pseudo datatype metadata; not an inferred runtime type. */
+  pseudo?: boolean;
   /** literal HEAD tokens of this entry's own property names ("isclass.{$class}" → "isclass") */
   heads: Set<string>;
   /** head → `result` documentation text (for autocomplete; first definition wins) */
@@ -154,6 +156,7 @@ export function parseScriptProperties(xml: string): ScriptPropertyModel {
       kind,
       name,
       parent: (node.getAttribute('type') || '').toLowerCase() || undefined,
+      pseudo: node.getAttribute('pseudo') ? ['true', '1'].includes(node.getAttribute('pseudo') || '') : undefined,
       heads: new Set<string>(),
       headDocs: new Map<string, string>(),
       propNames: [],

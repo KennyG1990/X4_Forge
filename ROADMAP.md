@@ -7894,3 +7894,33 @@ typecheck/lint/build and complete precommit/policy/receipt audits pass. Evidence
 All validation inputs remain dependencies; any source edit requires review until C05 refinement.
 Live/installed Dev bundles, discovery and X4 untouched. No publication/install; C04-C07 remain open.
 Kimi paused. Commit point: fix(deploy): reuse and revoke exact warning reviews.
+
+## 2026-10-25 — C04 validation cases — VERIFIED locally
+
+Preserved real pseudo datatype metadata through existing corpus adapters; added the narrowly
+qualified station products? advisory; removed false authority from mutable/shadowed/dynamic
+Lua registration aliases. Immutable local aliases and simple unconditional forwarding wrappers
+remain supported. Unresolved registrations are check-unavailable; literal absence remains a
+mod error. Existing validators and deploy policy are retained. No new network/permission surface.
+
+Evidence: docs/testing/claude-C04-validation.json and claude-C04-gotcha-matrix.md.
+Baseline 23/32 reproduced the missing advisory/registration gaps. Final 34/34 focused checks,
+7/7 independent real-game-XSD controls, existing reference/property/cross-file/pitfall/Lua/UI suites
+and 11 actual test-mod HTTP/browser/deploy scenario groups pass. E2E:1 passed,0 failed,0 flaky;
+owned tree stopped. Rendered amber outstanding-warning result inspected. Dynamic incomplete
+receipt, exact bytes, stale refusal and recovery proved. Typecheck, production build, full precommit
+policy/receipt audits pass. Lint:0 errors,614 warnings (six more any annotations than baseline).
+Source hashes and log fingerprints are in the evidence JSON; failed runs remain private evidence.
+
+Review: all bounded acceptance points done and evidenced. The entire recovered gotcha inventory
+has explicit dispositions; it is not universally statically verified. General MD grammar/time units,
+integer and dynamic semantics, upvalues, UTF-8/save flows and runtime lifecycle remain unverified.
+The station advisory uses the previous #635 probe, not fresh game execution or inferred receiver
+typing. C05-C07 and public/package/native/game gates remain open. Four protected installed/live
+discovery and bundle hashes unchanged; ports3100/3101 closed. No game, real mod or config writes.
+Rollback: exact C04 diff from eecc942; after commit use a scoped corrective commit. No interim push.
+Capability delta: bounded station advisory and honest registration uncertainty only. Kimi paused.
+Commit point: fix(validation): ground engine traps and registration coverage.
+
+
+Detailed acceptance/review/AAR: docs/plans/2026-10-25-c04-validation-matrix.md.

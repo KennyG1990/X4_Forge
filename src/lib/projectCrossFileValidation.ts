@@ -32,6 +32,7 @@ export type ProjectCrossFileFindingCode =
   | 'md_lua.missing_register'
   | 'lua_md.missing_listener'
   | 'lua_md.emit_verification_gap'
+  | 'md_lua.registration_verification_gap'
   | 'md_lua.payload_collision'
   | 'md_lua.payload_missing_writer'
   | 'md_lua.payload_unused_writer'
@@ -179,6 +180,7 @@ interface LuaRegistrationParseResult {
   events: ProjectEventRef[];
   available: boolean;
   detail?: string;
+  gap?: boolean;
 }
 
 function buildLuaAnalysisSource(content: string): LuaAnalysisSource {
@@ -246,52 +248,93 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
     return { events: [], available: false, detail: boundedLuaParseDetail(error) };
   }
 
-  const strings = new Map<string, LuaStringValue>();
-  const registrars = new Set<string>(['RegisterEvent']);
+  const assignments = new Map<string, { count: number; init: any; local: boolean }>();
+  const parameters = new Set<string>();
+  const functions = new Map<string, any>();
   walkLuaAst(ast, node => {
+    if (node.type === 'FunctionDeclaration') {
+      const name = luaIdentifier(node.identifier);
+      if (name) {
+        functions.set(name, node);
+        assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init: node, local: !!node.isLocal });
+      }
+      for (const parameter of node.parameters || []) {
+        const name = luaIdentifier(parameter); if (name) parameters.add(name);
+      }
+    }
+    if (node.type === 'ForGenericStatement' || node.type === 'ForNumericStatement') {
+      for (const variable of node.variables || [node.variable]) {
+        const name = luaIdentifier(variable); if (name) parameters.add(name);
+      }
+    }
     if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
     (node.variables || []).forEach((variable: any, index: number) => {
       const name = luaIdentifier(variable);
-      const init = (node.init || [])[index];
-      if (!name || !init) return;
-      const stringValue = luaStringPrefix(init, strings, source.substituted);
-      if (stringValue) strings.set(name, stringValue);
-      const sourceName = luaIdentifier(init);
-      if (sourceName && registrars.has(sourceName)) registrars.add(name);
+      if (name) assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1,
+        init: (node.init || [])[index], local: node.type === 'LocalStatement' });
     });
   });
-
-  // Simple wrappers are common and deterministic: local function reg(event, fn)
-  // RegisterEvent(event, fn) end. Record which wrapper parameter becomes the event name.
-  const wrappers = new Map<string, number>();
+  const strings = new Map<string, LuaStringValue>();
+  const resolve = (expression: any) => {
+    let foreign = false;
+    walkLuaAst(expression, node => { if (node.type === 'Identifier' && strings.has(node.name) && !node.isLocal) foreign = true; });
+    return foreign ? null : luaStringPrefix(expression, strings, source.substituted);
+  };
+  const immutable = (name: string) => assignments.get(name)?.count === 1 && assignments.get(name)?.local && !parameters.has(name);
+  for (const [name, assignment] of assignments) {
+    if (!immutable(name)) continue;
+    const value = resolve(assignment.init); if (value) strings.set(name, value);
+  }
+  const registrars = new Set<string>();
+  const possibleRegistrars = new Set<string>(['RegisterEvent']);
+  // Retain possible aliases even after reassignment so they produce a gap, not invented certainty.
   walkLuaAst(ast, node => {
-    if (node.type !== 'FunctionDeclaration') return;
-    const wrapperName = luaIdentifier(node.identifier);
-    if (!wrapperName) return;
-    const params = (node.parameters || []).map(luaIdentifier);
-    walkLuaAst(node.body || [], child => {
-      if (child.type !== 'CallExpression' || !registrars.has(luaIdentifier(child.base) || '')) return;
-      const eventParam = luaIdentifier((child.arguments || [])[0]);
-      const index = params.indexOf(eventParam);
-      if (index >= 0) wrappers.set(wrapperName, index);
+    if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
+    (node.variables || []).forEach((variable: any, i: number) => {
+      const name = luaIdentifier(variable), sourceName = luaIdentifier(node.init?.[i]);
+      if (name && sourceName && possibleRegistrars.has(sourceName)) possibleRegistrars.add(name);
     });
   });
+  const engineRegistrar = (node: any): boolean => {
+    const name = luaIdentifier(node);
+    if (name === 'RegisterEvent') return !node.isLocal && !assignments.has(name) && !parameters.has(name);
+    return !!name && node.isLocal && registrars.has(name);
+  };
+  for (const [name, assignment] of assignments) {
+    if (immutable(name) && engineRegistrar(assignment.init)) registrars.add(name);
+  }
+  // Support only a single unconditional forwarding call. More complex wrappers remain unverified.
+  const wrappers = new Map<string, number>();
+  const forwardingCalls = new Set<any>();
+  for (const [wrapperName, node] of functions) {
+    if (!immutable(wrapperName) || node.body?.length !== 1) continue;
+    const call = node.body[0]?.type === 'CallStatement' ? node.body[0].expression : null;
+    if (!call || !engineRegistrar(call.base)) continue;
+    const params = (node.parameters || []).map(luaIdentifier);
+    if (new Set(params).size !== params.length) continue;
+    const index = params.indexOf(luaIdentifier(call.arguments?.[0]));
+    if (index >= 0) { wrappers.set(wrapperName, index); forwardingCalls.add(call); }
+  }
 
   const out: ProjectEventRef[] = [];
   const seen = new Set<string>();
   let taintedEventArgument = false;
+  let unverified = false;
   walkLuaAst(ast, node => {
-    if (node.type !== 'CallExpression') return;
+    if (node.type !== 'CallExpression' || forwardingCalls.has(node)) return;
     const callee = luaIdentifier(node.base);
     if (!callee) return;
-    const argIndex = registrars.has(callee) ? 0 : wrappers.get(callee);
-    if (argIndex === undefined) return;
-    const value = luaStringPrefix((node.arguments || [])[argIndex], strings, source.substituted);
+    // A locally defined function named RegisterEvent is not the engine API.
+    if (callee === 'RegisterEvent' && node.base.isLocal) return;
+    const argIndex = engineRegistrar(node.base) ? 0 : node.base.isLocal ? wrappers.get(callee) : undefined;
+    if (argIndex === undefined) { if (possibleRegistrars.has(callee)) unverified = true; return; }
+    const value = resolve((node.arguments || [])[argIndex]);
     if (value?.tainted) {
       taintedEventArgument = true;
       return;
     }
-    if (!value?.value) return;
+    if (!value?.value) { unverified = true; return; }
+    if (value.prefix) unverified = true;
     const key = `${value.value}\0${value.prefix}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -301,8 +344,11 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
     ? {
       events: out,
       available: false,
+      gap: true,
       detail: 'Lua registration event argument contains non-Latin-1 source text; registration analysis unavailable.',
     }
+    : unverified ? { events: out, available: false, gap: true,
+      detail: 'MD-to-Lua registration wiring is unverified: dynamic arguments, prefix-only matches, reassigned aliases or ambiguous callees cannot prove runtime registrations. Only immutable aliases and simple unconditional forwarding wrappers are supported.' }
     : { events: out, available: true };
 }
 
@@ -531,6 +577,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
     .map(analysis => ({
       file: analysis.file.path,
       detail: analysis.result.detail || 'Lua registration analysis unavailable.',
+      gap: analysis.result.gap,
     }));
   const registered = registrationAnalyses.flatMap(analysis => analysis.result.events);
   const emitAnalyses = luaFiles.map(f => parseLuaUiEmits(f.content || '', f.path));
@@ -554,8 +601,8 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
   findings.push(...payload.findings);
   for (const unavailable of parseUnavailable) {
     findings.push({
-      code: 'validation.lua_ast_unavailable',
-      severity: 'error',
+      code: unavailable.gap ? 'md_lua.registration_verification_gap' : 'validation.lua_ast_unavailable',
+      severity: unavailable.gap ? 'info' : 'error',
       file: unavailable.file,
       detail: unavailable.detail,
     });
@@ -901,7 +948,7 @@ AddUITriggeredEvent("ai_influence", "chat.response", {})`,
   ok('unicode_event_literal_is_unavailable_not_sanitized',
     taintedEventResult.summary.luaRegistrationUnavailable === 1
       && taintedEventResult.mdLua.parseUnavailable.some(entry => entry.file === 'ui/chat.lua')
-      && taintedEventResult.findings.some(f => f.code === 'validation.lua_ast_unavailable' && f.file === 'ui/chat.lua')
+      && taintedEventResult.findings.some(f => f.code === 'md_lua.registration_verification_gap' && f.file === 'ui/chat.lua')
       && taintedEventResult.mdLua.missingRegisters.length === 0
       && taintedEventResult.summary.mdLuaMissingRegisters === 0
       && !taintedEventResult.mdLua.registered.some(e => e.event.includes('?')),

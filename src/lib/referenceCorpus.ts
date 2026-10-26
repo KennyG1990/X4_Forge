@@ -80,6 +80,7 @@ export interface ScriptPropertyReference {
   kind: 'keyword' | 'datatype';
   name: string;
   parent?: string;
+  pseudo?: boolean;
   dynamic: boolean;
   dynamicResultType?: string;
   properties: ScriptPropertyRecord[];
@@ -383,6 +384,7 @@ function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReferenc
     parent?: string,
     dynamic = false,
     dynamicResultType?: string,
+    pseudo?: boolean,
   ) => {
     const name = nameInput.trim().toLowerCase();
     if (!name) return;
@@ -394,6 +396,7 @@ function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReferenc
     found.set(key, existing ? {
       ...existing,
       parent: parent || existing.parent,
+      pseudo: pseudo ?? existing.pseudo,
       dynamic: existing.dynamic || dynamic,
       dynamicResultType: dynamicResultType || existing.dynamicResultType,
       properties,
@@ -402,6 +405,7 @@ function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReferenc
       kind,
       name,
       parent,
+      pseudo,
       dynamic,
       dynamicResultType,
       properties,
@@ -412,7 +416,7 @@ function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReferenc
     const xml = fs.readFileSync(file.absolute, 'utf8');
     const model = parseScriptProperties(xml);
     for (const entry of [...model.keywords.values(), ...model.datatypes.values()]) {
-      merge(entry.kind, entry.name, entry.properties, entry.parent, entry.dynamic, entry.dynamicResultType);
+      merge(entry.kind, entry.name, entry.properties, entry.parent, entry.dynamic, entry.dynamicResultType, entry.pseudo);
     }
     // DLC diffs commonly add properties directly to an existing datatype/keyword,
     // with the owner present only in the selector rather than as a payload element.
