@@ -1,0 +1,98 @@
+{
+  "unit": "D0",
+  "status": "VERIFIED",
+  "statusScope": "bounded source and installed Dev parity; local checkpoint is accepted only after mandatory commit hook passes",
+  "baselineRevision": "b5ef1e01fadaf340f2238f3105d86a731c03ef1b",
+  "owner": "https://github.com/KennyG1990/X4_Forge/issues/20",
+  "plan": "docs/plans/2026-10-26-dev-parity-project-gates.md",
+  "evidenceRoot": "C:\\Users\\Moshi\\.x4forge-dev-build\\lab\\evidence\\claude-program\\D0",
+  "installation": "install-1793028069630",
+  "serverSha256": "53c9607486b3763d32372645b4cd9a6e05577d3f7767ddc9d89c77f9f0d9b9c6",
+  "sourceGuard": {
+    "focused": 88,
+    "compiledHttp": 22,
+    "pass": true,
+    "proof": "http-guard-final/run-52d0e8db1756/verdict.json",
+    "before": "resolver-before.json",
+    "red": "resolver-red.log"
+  },
+  "harnessRepair": {
+    "reproduced": "creation-time-impossible stale numeric parent edge caused global parent-cycle refusal",
+    "contractChecks": 43,
+    "samplerChecks": 8,
+    "lifecycleChecks": 12,
+    "snapshotReplayRows": 1176,
+    "realInitializer": "ownership-initialize-fixed-corrected-call.json",
+    "sourceSha256": "a4797536766164d7ac2eaca31af321b6d25236f9063f20ccaebd9292b4b72a66",
+    "independentReview": "no scoped blocker; not a substitute for full lifecycle proof"
+  },
+  "httpMcp": {
+    "pass": true,
+    "checks": 65,
+    "proof": "http-mcp-verdict.json"
+  },
+  "e2e": {
+    "pass": true,
+    "passed": 2,
+    "failed": 0,
+    "flaky": 0,
+    "runtimeOracles": 134,
+    "verdict": "e2e-final-verdict.json",
+    "lifecycleComplete": true,
+    "treeGone": true,
+    "protectedBaseline": "e2e-final-isolation.json",
+    "renderedArtifacts": [
+      "e2e-final-claude-C05/warm-deploy.png",
+      "e2e-final-claude-C06/blocked-findings.png"
+    ]
+  },
+  "installedDev": {
+    "pass": true,
+    "checks": 35,
+    "proof": "install-1793028069630/installed-c2661e6e3b/verdict.json",
+    "nativeEvidence": "install-1793028069630/native-host.json",
+    "privateRootsVerified": true,
+    "nativeSqliteVerified": true,
+    "activePrivateClaimObserved": true,
+    "workspaceIdentityAndHeadPreserved": true,
+    "standingHashesPreserved": true,
+    "uiManifestEditableNotPassthrough": true,
+    "exactRegistrationsPreserved": true,
+    "staleRefusalNoWrite": true,
+    "exactBytesAndDurableReceipt": true
+  },
+  "gates": {
+    "typecheck": "PASS",
+    "lint": "PASS: 0 errors, 618 existing warnings",
+    "productionBuild": "PASS",
+    "standalonePrecommit": "PASS",
+    "routeCount": 301,
+    "receiptRoutes": 85,
+    "receiptSurfaces": 61,
+    "mandatoryCommitHook": "required; no bypass or checkpoint if it fails"
+  },
+  "rollback": {
+    "verifiedBackup": "install-1793028069630/backup",
+    "displacedDist": "install-1793028069630/displaced-dist",
+    "helper": "install-1793028069630/d0-refresh.py",
+    "constraints": "close and positively identify Dev absence; fresh live-state reconciliation required if baseline changed; restore Dev dist/launcher only"
+  },
+  "boundaries": [
+    "Dev app dist and launcher updated only; existing profile, identity, key, configuration and workspaces retained",
+    "Native visual proof is the updated shell and preserved canvas, not interaction proof for every complaint panel",
+    "No real game/mod writes or game input; realGameTouched=false in private proof describes scoped actions, not an independent measurement of all X4 state",
+    "Live PID/creation time, discovery and enumerated protected file hashes matched; active files Claude edits are outside that invariant",
+    "No public package, push, publication, live installation or game verification",
+    "A15 not implemented; human approval remains required for each new or changed test setup",
+    "Kimi paused"
+  ],
+  "failedAttempts": [
+    "e2e-first-verdict.json: tests2/0/0 but lifecycle failed; retained",
+    "ownership-initialize-fixed.json: agent omitted required snapshotOptions; corrected call passed",
+    "read-only native capture returned X4 pixels with Dev accessibility; no input; waited for user loading-finished confirmation",
+    "generated Python cache cleanup blocked by automatic review; left untracked and excluded from commit",
+    "documentation patch context mismatch rejected atomically; exact readback and corrected patch succeeded"
+  ],
+  "capabilityDelta": "Dev runtime now enforces/uses private coordination and cache; public authority unchanged",
+  "aar": "Exact environment/byte/receipt checks sustained. Align graph cycle checks with existing creation-time traversal. Preserve typed failures and use exact reviewed request shapes. Native screenshot pixels must agree with selected window. No universal cleanup or game claim."
+}

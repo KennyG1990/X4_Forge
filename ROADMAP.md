@@ -8011,3 +8011,28 @@ Plan/review/AAR: docs/plans/2026-10-26-c06c-shared-source-coordination.md.
 Evidence: docs/testing/claude-C06c-coordination.json. Existing GitHub#20/Notion owner stays open;
 A15, additional Claude cases, C07 and public/installed release remain. Commit point:
 fix(source): coordinate writes across Forge processes.
+
+
+## 2026-10-26 — D0 VERIFIED: isolated Dev host parity
+
+Dev mode now requires an explicit private coordination namespace and rejects aliases of the
+production default before opening its registry. Exact tested application53c96074…9b9c6 installed
+in the separate Dev Antigravity after hash-verified app/launcher backup. Private coordination and
+cache/native SQLite observed; identity/profile/credentials/config/workspace preserved.
+
+88 focused resolver,22 compiled guard,65 HTTP/MCP,134 runtime oracles and serial E2E2/0/0 pass.
+Initial lifecycle gate failure reproduced a false numeric parent cycle caused by PID reuse;
+existing chronology predicate now also governs cycle checks.43/8/12 focused checks, exact snapshot
+replay, real initializer and full final process-tree cleanup pass. Failed evidence retained.
+
+Installed35/35 checks prove editable ui.xml/no passthrough, exact registrations/Lua content,
+clean/invalid validation, stale no-write refusal, recovery, exact scratch deployment and durable
+receipt. Native updated shell/preserved canvas inspected; two pre-existing template errors remain.
+Full standalone precommit passes301 routes/85 receipt routes/61 surfaces; mandatory hook gates
+this local checkpoint. Evidence: docs/testing/claude-D0-dev-parity.json; plan/review/AAR:
+docs/plans/2026-10-26-dev-parity-project-gates.md. Existing GitHub#20/Notion owner remains open.
+
+Only Dev dist/launcher and scratch fixture deployment changed. Enumerated live process/discovery/
+protected hashes matched; no game input, active-mod edits, public release, push or live installation.
+Not a universal installed/native-control/game claim. A15 and remaining complaints stay open; Kimi
+paused. Commit point: fix(dev): isolate coordination and verify updated Dev host.

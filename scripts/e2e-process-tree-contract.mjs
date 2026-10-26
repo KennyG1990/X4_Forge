@@ -209,8 +209,14 @@ function hasParentCycle(rowsByPid) {
       path.push(currentPid);
       state.set(currentPid, 1);
 
-      const parentPid = rowsByPid.get(currentPid).parentPid;
+      const currentRow = rowsByPid.get(currentPid);
+      const parentPid = currentRow.parentPid;
       if (parentPid === 0 || !rowsByPid.has(parentPid)) {
+        break;
+      }
+      // A historical parent PID may now identify a newer, unrelated process.
+      // Match traversal's chronology rule; unknown/equal times still fail closed.
+      if (!canTraverseChild(rowsByPid.get(parentPid), currentRow)) {
         break;
       }
 
@@ -835,6 +841,64 @@ function assertDisappearanceFailure(result, expectedCode) {
 }
 
 function runSelftest() {
+  const assertChronologyCaptureAgreement = (rootIdentity, snapshotRows, expectedCaptured) => {
+    const before = structuredClone(snapshotRows);
+    const initial = captureInitialOwnedProcessClosure(rootIdentity, snapshotRows);
+    assert.equal(initial.complete, true, JSON.stringify(initial.errors));
+    assert.deepEqual(initial.errors, []);
+    assert.equal(initial.rootPresent, true);
+    assert.deepEqual(initial.captured, expectedCaptured);
+
+    const repeated = captureOwnedProcessClosure({
+      rootIdentity,
+      previousCaptured: [rootIdentity],
+      snapshotRows,
+    });
+    assert.equal(repeated.complete, true, JSON.stringify(repeated.errors));
+    assert.equal(repeated.rootPresent, true);
+    assert.deepEqual(repeated.captured, expectedCaptured);
+    assert.deepEqual(repeated.newlyCaptured, expectedCaptured.filter(({ pid }) => pid !== rootIdentity.pid));
+    assert.deepEqual(repeated.activeOwned.map(({ pid, creationToken }) => ({ pid, creationToken })), expectedCaptured);
+    assert.deepEqual(repeated.reusedPids, []);
+
+    const present = inspectCapturedProcessDisappearance({ captured: initial.captured, snapshotRows });
+    assert.equal(present.complete, true, JSON.stringify(present.errors));
+    assert.equal(present.treeGone, false);
+    assert.deepEqual(present.remaining, expectedCaptured);
+
+    const ownedPids = new Set(expectedCaptured.map(({ pid }) => pid));
+    const afterExit = snapshotRows.filter(({ pid }) => !ownedPids.has(pid));
+    const after = captureOwnedProcessClosure({
+      rootIdentity,
+      previousCaptured: initial.captured,
+      snapshotRows: afterExit,
+    });
+    assert.equal(after.complete, true, JSON.stringify(after.errors));
+    assert.equal(after.rootPresent, false);
+    assert.deepEqual(after.captured, expectedCaptured);
+    assert.deepEqual(after.newlyCaptured, []);
+    assert.deepEqual(after.activeOwned, []);
+    const gone = inspectCapturedProcessDisappearance({ captured: initial.captured, snapshotRows: afterExit });
+    assert.equal(gone.complete, true, JSON.stringify(gone.errors));
+    assert.equal(gone.treeGone, true);
+    assert.deepEqual(gone.remaining, []);
+    assert.deepEqual(snapshotRows, before);
+  };
+
+  const assertSnapshotRejectedAcrossOwnership = (snapshotRows, expectedCode) => {
+    const rootIdentity = { pid: 10, creationToken: 'root' };
+    assertFailure(captureInitialOwnedProcessClosure(rootIdentity, snapshotRows), expectedCode);
+    assertRepeatedFailure(captureOwnedProcessClosure({
+      rootIdentity,
+      previousCaptured: [rootIdentity],
+      snapshotRows,
+    }), expectedCode);
+    assertDisappearanceFailure(inspectCapturedProcessDisappearance({
+      captured: [rootIdentity],
+      snapshotRows,
+    }), expectedCode);
+  };
+
   const tests = [
     ['root+child+grandchild', () => {
       const result = captureInitialOwnedProcessClosure(
@@ -994,6 +1058,78 @@ function runSelftest() {
         { pid: 20, creationToken: '20261301000000.000000+000' },
         { pid: 30, creationToken: 'fixture-grandchild' },
       ]);
+    }],
+    ['chronology-unrelated-reused-parent-cycle-agrees-across-ownership', () => {
+      const root = { pid: 10, creationToken: '20261026103000.000000-240' };
+      const child = { pid: 20, creationToken: '20261026103001.000000-240' };
+      // Numeric cycle observed in D0: 58312 predates the current process 51460,
+      // so that historical parent PID cannot identify its present incarnation.
+      const snapshotRows = [
+        { ...root, parentPid: 0 },
+        { ...child, parentPid: root.pid },
+        { pid: 34388, parentPid: 78676, creationToken: '20261026101726.337384-240' },
+        { pid: 78676, parentPid: 58312, creationToken: '20261026101721.418350-240' },
+        { pid: 58312, parentPid: 51460, creationToken: '20261026101717.474586-240' },
+        { pid: 51460, parentPid: 79464, creationToken: '20261026101731.911982-240' },
+        { pid: 79464, parentPid: 46740, creationToken: '20261026101727.466808-240' },
+        { pid: 46740, parentPid: 34388, creationToken: '20261026101727.050884-240' },
+      ];
+      assertChronologyCaptureAgreement(root, snapshotRows, [root, child]);
+    }],
+    ['chronology-root-reused-parent-cycle-does-not-capture-old-process', () => {
+      const root = { pid: 10, creationToken: '20261026103000.000000-240' };
+      const child = { pid: 20, creationToken: '20261026103001.000000-240' };
+      assertChronologyCaptureAgreement(root, [
+        { ...root, parentPid: 30 },
+        { ...child, parentPid: root.pid },
+        { pid: 30, parentPid: root.pid, creationToken: '20261026102900.000000-240' },
+      ], [root, child]);
+    }],
+    ['chronology-posix-reused-parent-cycle-agrees-across-ownership', () => {
+      const root = { pid: 10, creationToken: 'Tue Aug 4 05:06:07 2026' };
+      const child = { pid: 20, creationToken: 'Tue Aug 4 05:06:08 2026' };
+      assertChronologyCaptureAgreement(root, [
+        { ...root, parentPid: 30 },
+        { ...child, parentPid: root.pid },
+        { pid: 30, parentPid: root.pid, creationToken: 'Mon Aug 3 05:06:07 2026' },
+      ], [root, child]);
+    }],
+    ['chronology-equal-time-cycles-remain-fail-closed', () => {
+      for (const [first, second] of [
+        ['20261026103000.000000-240', '20261026103000.000000-240'],
+        ['20261026103000.000000-240', '20261026143000.000000+000'],
+        ['Tue Aug 4 05:06:07 2026', 'Tue Aug 4 05:06:07 2026'],
+      ]) {
+        assertSnapshotRejectedAcrossOwnership([
+          { pid: 10, parentPid: 0, creationToken: 'root' },
+          { pid: 20, parentPid: 30, creationToken: first },
+          { pid: 30, parentPid: 20, creationToken: second },
+        ], 'parent-cycle');
+      }
+    }],
+    ['chronology-opaque-time-cycles-remain-fail-closed', () => {
+      assertSnapshotRejectedAcrossOwnership([
+        { pid: 10, parentPid: 0, creationToken: 'root' },
+        { pid: 20, parentPid: 30, creationToken: 'older' },
+        { pid: 30, parentPid: 20, creationToken: 'newer' },
+      ], 'parent-cycle');
+    }],
+    ['chronology-partly-unparseable-cycles-remain-fail-closed', () => {
+      assertSnapshotRejectedAcrossOwnership([
+        { pid: 10, parentPid: 0, creationToken: 'root' },
+        { pid: 20, parentPid: 30, creationToken: '20261326103000.000000-240' },
+        { pid: 30, parentPid: 20, creationToken: '20261026103000.000000-240' },
+      ], 'parent-cycle');
+    }],
+    ['chronology-does-not-relax-malformed-self-parent-or-duplicate-rows', () => {
+      const rootRow = { pid: 10, parentPid: 0, creationToken: 'root' };
+      for (const [rows, code] of [
+        [[rootRow, {}], 'invalid-row'],
+        [[rootRow, { pid: 20, parentPid: 20, creationToken: '20261026103000.000000-240' }], 'self-parent'],
+        [[rootRow, { ...rootRow, creationToken: '20261026103000.000000-240' }], 'duplicate-pid'],
+      ]) {
+        assertSnapshotRejectedAcrossOwnership(rows, code);
+      }
     }],
     ['same-pid-wrong-root-token', () => {
       const result = captureInitialOwnedProcessClosure(

@@ -1,13 +1,13 @@
 # Claude complaints — reconciled private Dev status, 2026-10-25
 
-This is a scope ledger, not a claim that the public Forge contains these changes. C01 private fixes are integrated locally at d3eeb2e; C02-C05 are now verified locally. See docs/testing/claude-C01-integration.json through claude-C05-incremental.json. Earlier evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata; current integration is in the release worktree. Kimi remains paused. All game execution/experience proof remains separate.
+This is a scope ledger, not a claim that the public Forge contains these changes. C01 private fixes are integrated locally at d3eeb2e; C02-C06c have bounded local evidence. D0 now installs that integrated application plus the Dev isolation guard into the separate Dev Antigravity, with35 installed API/scratch checks and native rendering. See docs/testing/claude-D0-dev-parity.json for exactly what was retested; it does not prove every complaint in the native host. Earlier evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata; current integration is in the release worktree. Kimi remains paused. All game execution/experience proof remains separate.
 
 | Original complaint | Current scope and evidence | What remains |
 | --- | --- | --- |
-| ui.xml treated as Lua/passthrough; lost imported registrations | VERIFIED private source-domain handling, preserved registrations/edits, malformed/missing registrations refused; ui-source-domain/verdict.json | Public release/installed verification; no claim all UI semantics are covered |
+| ui.xml treated as Lua/passthrough; lost imported registrations | VERIFIED private source-domain handling, preserved registrations/edits, malformed/missing registrations refused; D0 additionally proves installed Dev editable UI classification, no passthrough entry, exact manifest/Lua content and ordered registrations | Public release; no claim all UI semantics are covered |
 | Forge failure versus mod failure; misleading compile/deploy success | VERIFIED bounded API evidence classifications, compile/artifact truth and deploy UI outcome distinctions; compile-verdict, deploy-review-ui | Exhaustive failure-classification audit across every API remains broader than these proofs |
 | Logged overrides, accepted findings | VERIFIED C03 warning-only exact-input reuse, original actor/reason plus per-deploy receipts, durable list/revoke controls; docs/testing/claude-C03-warning-reviews.json | All validation-source edits conservatively invalidate reviews. C05 caches analysis facts only, not approval authority; finer approval dependencies and A03 line-stable warning identity remain OPEN. No public/installed proof yet |
-| Exact bytes, stale result, mod identity | VERIFIED snapshot-bound validate/deploy with stale refusal and workspace-mod guard; deploy-snapshot, client-isolation | No blanket claim every API response carries mod identity; other routes need contract census if this requirement is interpreted literally |
+| Exact bytes, stale result, mod identity | VERIFIED snapshot-bound validate/deploy with stale refusal and workspace-mod guard; D0 installed Dev repeats addressed test-mod validation, stale no-write refusal, fresh exact-byte scratch deploy and durable receipt readback | No blanket claim every API response carries mod identity; game-loaded bytes remain a separate coordinated proof |
 | Shared active workspace collisions | VERIFIED locally: addressed workspaces, credential binding, paired CAS and wrong-mod refusal; C06c adds shared canonical-source coordination, owner/timing and conservative recovery across participating local processes. Pre-fix race and52 compiled two-server checks: docs/testing/claude-C06c-coordination.json | Clients must select/provision their own workspace. Editors, older/nonparticipating Forge and arbitrary commands are not controlled. Exact package/installed proof remains pending; internal coordinator receipt adapter stays UNWIRED under W3B1 |
 | Reference/property and listener false positives | VERIFIED specific property/literal and AST/XML listener cases; validation-noise | C04 proves immutable local registration aliases/simple forwarding wrappers; dynamic, reassigned and prefix cases explicitly incomplete. General MD expressions/arbitrary alias/wrapper/event semantics remain unverified; docs/testing/claude-C04-validation.json |
 | AI-script handmade allowlist | Reported get_safe_pos case already passed current Forge and independent game XSD oracle; legal/invalid cases proved (import-aiscript) | Broad parity with the full XSD language/corpus is not established |
@@ -18,7 +18,7 @@ This is a scope ledger, not a claim that the public Forge contains these changes
 | Malformed import payloads returning200 | VERIFIED strict import request boundary; import-aiscript. C06a extends strict project author/validate/compile/package envelopes and explicit actual/unresolved identities | Full C06 route census remains OPEN; bounded evidence docs/testing/claude-C06-api.json |
 | Stable node IDs | VERIFIED local C02: deterministic file-scoped MD IDs, conservative legacy layout/waypoint preservation, actual Load Project and fresh-byte scratch deploy; docs/testing/claude-C02-identities.json | Public package/installed verification; ambiguous or unanchored matches are not inferred |
 | Engine-trap rules from gotchas | VERIFIED C04 qualified products? advisory grounded in prior station probe and loaded pseudo-warelist metadata, four prior rules retained | Complete gotcha dispositions: docs/testing/claude-C04-gotcha-matrix.md; runtime and unsupported semantics remain unverified, no fresh station/game proof |
-| Usable public/installed release | Private Dev backend/frontend proved in bounded scopes | Integrate into Git, required release tests, native host/package verification and publish. Do not disturb Claude stable during private work |
+| Usable public/installed release | D0 tested application installed in isolated Dev Antigravity; native rendering, served hashes and35 installed API/scratch checks passed | Exact public VSIX, comprehensive release/native-host checks, publish and coordinated live installation remain. Claude stable remains untouched |
 
 Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. C03 warning-only review reuse, bounded C04 validation and C05 incremental validation are verified locally. Next is C06-C07 under the approved completion/release plan; additional A01-A17 requests remain active.
 
@@ -77,3 +77,20 @@ The first oracle opened a pre-existing shared cache; SHM changed, no demonstrate
 or disruption. User confirmed healthy. Development cache now uses instance data, with runtime
 containment proof. Installed files/game unchanged. Internal registry receipt adapter stays UNWIRED
 under W3B1. Other remaining work above stays OPEN; no public release/install, Kimi paused.
+
+## D0 checkpoint — 2026-10-26
+
+Integrated application SHA25653c96074…9b9c6 is now installed in Dev only. Explicit private
+coordination is mandatory in dev-build mode; cache and actual active source claim were observed
+under private directories. Existing identity/configuration/credentials/workspace preserved.
+35 installed checks cover exact UI import, Lua rejection, stale/no-write refusal, recovery,
+scratch deployment bytes and durable receipt. Native Dev rendering inspected; existing template's
+two validation errors are unchanged. This does not count as native interaction proof for every
+validation/approval panel, a public package test, a live installation or game proof.
+
+88 focused resolver checks,22 compiled guard checks,65 HTTP/MCP checks,134 runtime oracles,
+serial E2E2/0/0 and full standalone precommit passed. Initial E2E cleanup gate failed because
+PID reuse produced a false numeric parent cycle; bounded chronology repair has43/8/12 focused
+checks, real initializer and complete final lifecycle proof. Failed evidence remains preserved.
+Evidence: `../testing/claude-D0-dev-parity.json`. Final commit is gated by the mandatory hook.
+A15 and all previously open added/game complaints remain active. Kimi remains paused.

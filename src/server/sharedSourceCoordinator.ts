@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { conflicts, type ResourceOwner } from './resourceCoordinator';
+import { canonicalSourceKey, conflicts, type ResourceOwner } from './resourceCoordinator';
 
 export const SOURCE_COORDINATION_FILENAME = 'source-coordination.sqlite';
 export const SOURCE_COORDINATION_SCHEMA_VERSION = 1;
@@ -322,20 +322,29 @@ export class SharedSourceCoordinator {
 }
 
 export function resolveSourceCoordinationDirectory(env: NodeJS.ProcessEnv = process.env): string {
+  const mode = env.X4_FORGE_MODE ?? '';
+  const devBuild = /^dev-build$/i.test(mode.trim());
+  const productionDirectory = process.platform === 'win32'
+    ? path.join(env.LOCALAPPDATA || os.homedir(), 'X4Forge', 'source-coordination')
+    : path.join(os.homedir(), '.local', 'state', 'x4forge', 'source-coordination');
   const override = env.X4_SOURCE_COORDINATION_DIR?.trim();
   if (env.X4_SOURCE_COORDINATION_DIR !== undefined) {
     if (!override || !path.isAbsolute(override) || /^(?:\\\\|\/\/)/.test(override)) throw new Error('X4_SOURCE_COORDINATION_DIR must be an absolute local directory.');
+    // Read-only canonical resolution rejects aliases without creating/opening a registry.
+    if (devBuild && canonicalSourceKey(override) === canonicalSourceKey(productionDirectory)) {
+      throw new Error('Dev Build requires a private X4_SOURCE_COORDINATION_DIR distinct from the production coordination directory.');
+    }
     return path.resolve(override);
   }
-  const mode = env.X4_FORGE_MODE ?? '';
+  if (devBuild) {
+    throw new Error('Dev Build requires an explicit private X4_SOURCE_COORDINATION_DIR; the user registry was not opened.');
+  }
   if (env.NODE_ENV === 'test' || env.FORGE_ROUTE_TEST_MODE === '1'
     || env.X4_FORGE_E2E_STATE_PID || env.X4_FORGE_E2E_API_PORT || env.X4_FORGE_E2E_WEB_PORT
     || /(?:^|[-_])(test|e2e)(?:[-_]|$)/i.test(mode)) {
     throw new Error('Test/E2E processes require an explicit scratch X4_SOURCE_COORDINATION_DIR; the user registry was not opened.');
   }
-  return process.platform === 'win32'
-    ? path.join(env.LOCALAPPDATA || os.homedir(), 'X4Forge', 'source-coordination')
-    : path.join(os.homedir(), '.local', 'state', 'x4forge', 'source-coordination');
+  return productionDirectory;
 }
 
 // A lazy facade also keeps a missing test override/native binding from crashing server import.

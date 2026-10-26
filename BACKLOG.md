@@ -44,6 +44,11 @@ Evidence: docs/testing/claude-C06c-coordination.json. Public/installed proof rem
 Initial oracle opened the pre-existing shared optional cache; SHM timestamp changed, no demonstrated
 content mutation/disruption. User confirmed live healthy; server cache now uses instance data and
 actual scratch containment passed. Internal coordinator receipt adapter stays UNWIRED under W3B1.
+D0 Dev-host parity is verified in the separate Dev Antigravity: exact tested bundle installed,
+private coordination/cache paths observed,35 installed scratch checks and native rendering passed.
+Evidence: docs/testing/claude-D0-dev-parity.json; final local checkpoint requires its commit hook.
+This is not a public release/live update or full complaint/game verification. A15 remains next:
+human-only approval of new/changed setups; agents rerun unchanged approved setups. Kimi paused.
 Next finish C06, then C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
 verification and installation windows. Public release and exact installed verification precede
 Kimi M01; no interim pushes. Kimi paused.

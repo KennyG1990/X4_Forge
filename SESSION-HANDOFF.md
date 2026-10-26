@@ -1,52 +1,60 @@
-# Session handoff — C06c verified local checkpoint; Claude program PARTIAL
+# Session handoff — D0 Dev parity verified; A15 next
 
 X4 Forge. Worktree C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge;
-branch codex/forge-fixes-release; baseline d245526060093866366e30248677fee82d52ebb9.
-Git log -1 supplies this checkpoint SHA after the mandatory full hook passes. No push/release/
-install, real mod/game/standing-config writes or desktop input. Main checkout preserved. Kimi
-paused. User confirmed live Forge healthy after the cache-isolation incident below.
+branch codex/forge-fixes-release; baseline b5ef1e01fadaf340f2238f3105d86a731c03ef1b.
+This checkpoint is accepted only after the mandatory commit hook passes; use git log -1/status
+for the current SHA/state. No push/publication/live installation. Main checkout preserved.
+Kimi paused. Claude program PARTIAL. Do not equate installed bundle parity with all complaints done.
 
-C06c: lazy shared SQLite source coordinator; atomic all-key claims, overlapping FIFO, independent
-progress, canonical aliases/parent-child conflicts, deadlines/bounds, status owners/timing and
-conservative confirmed-dead-process recovery. No active TTL. Unknown/alive/reused PIDs retain.
-Unavailable native/schema/storage refuses protected writes; no unlocked fallback. Exact release
-failure can retain claim until process exit; error text never invents rollback. Existing local
-workspace receipt scheduler unchanged. Internal coordinator receipt adapter remains UNWIRED under
-W3B1; inventory declares its obligation. Older Forge/editors/arbitrary commands are excluded.
+D0: explicit private dev-build coordination (default/alias refusal); guarded Dev-only update.
+Exact backend53c9607486b3763d32372645b4cd9a6e05577d3f7767ddc9d89c77f9f0d9b9c6 installed and served.
+88 focused resolver,22 compiled guard,65 HTTP/MCP,134 runtime oracles, E2E2/0/0 and standalone full
+precommit pass (301 routes;85 receipt routes/61 surfaces;lint0errors618existingwarnings).
+Installed35/35: exact editable ui.xml/not passthrough, preserved registrations/Lua, private native
+SQLite/cache/active claim, addressed workspace, invalid Lua, stale refusal/no writes, exact scratch
+deployment and durable receipt. Native shell and preserved Player_Elite_Escort canvas inspected;
+two pre-existing template errors remain. No native interaction proof for every complaint panel.
 
-Proof: docs/testing/claude-C06c-coordination.json; plan/review/AAR:
-docs/plans/2026-10-26-c06c-shared-source-coordination.md. Old compiled two-server lost write
-reproduced.72 focused,52 compiled two-server,65 HTTP/MCP checks,134 runtime oracles; selected
-E2E3/0/0 plus corrected cache containment1/0/0. Build/type/lint0errors618existingwarnings and
-full standalone precommit pass (301 routes;85 receipt routes/61 surfaces). Mandatory hook must
-pass before commit. Private evidence: ~/.x4forge-dev-build/lab/evidence/claude-program/C06c.
-Current compiled hash37d9839946906586ff287006fe0112bfbb63a5b10a779b7452b8fbb4b5d70bff.
-Final HTTP path http/fixed-11faa7506f/verdict.json. Owned processes stopped and ports closed.
+Evidence: docs/testing/claude-D0-dev-parity.json; plan/review/AAR:
+docs/plans/2026-10-26-dev-parity-project-gates.md. Private D0 root:
+C:/Users/Moshi/.x4forge-dev-build/lab/evidence/claude-program/D0.
+Install/backup/rollback/helpers/native screenshot: install-1793028069630;
+installed proof: installed-c2661e6e3b/verdict.json. Before any rollback, reconcile exact Dev absence
+and live baseline; never run historical PID kills. Old app/launcher retained and verified.
 
-ISOLATION INCIDENT: initial passing oracle opened optional %TEMP%/x4-studio-cache, also used by
-installed stable0.0.79. SHM timestamp changed; observed DB/WAL timestamps predated the run. No
-demonstrated content mutation/disruption. Runtime paused; user confirmed healthy. Development
-server getStudioDb now passes dataPath('studio-cache'). Final db-selftest GET proves actual
-ephemeral path; reached flag prevents vacuous assertion. Old cache not copied/reset/deleted.
-Four protected bundle/discovery hashes remained unchanged. Do not claim continuous live-state
-invariance. Do not touch installed source/cache or use real mod to test.
+Last observed Dev PID36600/port60296; live PID14356/port65106. These are historical only.
+Dev launcher now pins private coordination and X4_GAME_PATH=scratch-game. Credentials/config/
+workspace heads preserved. Enumerated live process/discovery/protected hashes matched. No input
+or writes to real X4/active mod. Only private Dev was closed/reopened using its exact native window.
+User confirmed X4 load finished and continued isolated work; Claude uses healthy live Forge.
 
-Remaining: A15 trusted exact-snapshot project commands; A01/A04 active-mod deploy.py formatter;
-A02 conditional names, A03 stable warning identity, A06 critical UTF-8/save scans, A07 new-file
-guidance, A08-A14 grounded added validator/engine cases; A16/A17/C07 paired runtime transport,
-reload/probe/save isolation and real game verification. Broader W3B1 receipt adapter and full
-public/installed release gates remain. Native game and release installation windows must be
-coordinated; Claude actively uses live Forge/X4. Kimi cannot resume yet.
+Failed E2E cleanup gate retained. Root cause reproduced: reused numeric parent IDs created false
+cycle. scripts/e2e-process-tree-contract.mjs now uses existing chronology predicate in cycle check;
+43 contract/8 sampler/12 lifecycle pass, exact1176-row replay and actual initializer/E2E cleanup pass.
+Missing snapshotOptions was an agent invocation error, corrected without weakening API. Initial
+native screenshot mismatched UIA; no input, paused for loading confirmation, then correct native
+capture after activation. Old Dev crash09:12 preceded changes; shutdown trigger remains unconfirmed.
+Generated scripts/__pycache__/c06c-coordination-proof.cpython-312.pyc remains untracked: removal was
+policy-blocked; exclude from explicit staging. Do not bypass the cleanup rejection. No broad git add.
 
-Next first commands: git status --short; git log -1; read BACKLOG and the route inventory, then
-reconcile A15 trust/command execution against existing project gate infrastructure. Do not infer
-authorization for arbitrary mod-supplied commands. Document its bounded plan before editing.
-Ask machine state before new heavy tests; explicit scratch coordination/config/discovery/data
-directories required. Use existing game corpus, never live namespaces or real mod writes.
+Next bounded unit A15 is SPECIFIED, not implemented: server-owned inert proposals, human-only
+setup approval, exact executable/dependency fingerprints, async verification and Windows guarded
+runner cleanup. Operational approval must come from the user for the concrete Dev scratch setup;
+never approve it on their behalf. Static diagnostics never execute commands; no auto-install.
+Read-only reconciliation is in the plan. requireStudioActor is approval guard; deploymentPrincipal
+requires deploy scope and cannot guard Studio-only routes. Existing receipt transaction/store,
+PlaytestWorkspace and shared deployClient are the owners. MCP currently intentionally has no deploy
+tools; any added verification tool needs an explicit curated capability/receipt declaration.
+Parent PID death alone cannot reclaim a guarded child lease. Persist guard before launch, Job
+assignment before resume, confirm zero active children; uncertain cleanup retains ownership.
 
-Tracking: GitHub#20 / Notion3ae4618ed15b8169985ff065ec98a747; hub3ad4618ed15b81408777e434a7f4a888.
-Keep parent In Progress/Partial. No C06c rendered-control eyeball queue; game experience remains
-gated on its future coordinated window. External final update/readback follows the commit.
-Degradation called after repeated filename/lint/read errors; no next implementation unit this
-turn. Failed runs preserved; do not reuse earlier test hashes after future production edits.
-Commit point: fix(source): coordinate writes across Forge processes.
+First commands next unit: git status/log; read BACKLOG and D0/A15 plan; reconcile exact capability,
+receipt, coordination and UI interfaces, then document the bounded A15 implementation contract.
+Only after D0 commit. Machine ask before new heavy tests if state has changed. Keep all scratch
+config/data/discovery/cache/coordination private; real game/active-mod formatter proofs still need
+coordinated windows. C07/A06 and other remaining ledger cases stay open; no Kimi work.
+
+Existing owner GitHub#20 / Notion3ae4618ed15b8169985ff065ec98a747;
+hub3ad4618ed15b81408777e434a7f4a888. Keep parent open/partial; update/read back checkpoint and
+exact local commit once hook succeeds. Public version/live installation unchanged.
+Commit point: fix(dev): isolate coordination and verify updated Dev host.

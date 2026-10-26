@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
-import { SharedSourceCoordinator, SOURCE_COORDINATION_FILENAME, processLiveness, resolveSourceCoordinationDirectory, type RegistryDatabase } from '../src/server/sharedSourceCoordinator';
+import { SharedSourceCoordinator, SOURCE_COORDINATION_FILENAME, processLiveness, resolveSourceCoordinationDirectory, forgeSourceCoordinator, type RegistryDatabase } from '../src/server/sharedSourceCoordinator';
 
 const checks: string[] = [];
 const check = (name: string, test: () => unknown) => { test(); checks.push(name); };
@@ -74,8 +74,47 @@ try {
     { NODE_ENV: 'test' }, { FORGE_ROUTE_TEST_MODE: '1' }, { X4_FORGE_E2E_STATE_PID: '123' },
     { X4_FORGE_E2E_API_PORT: '3101' }, { X4_FORGE_E2E_WEB_PORT: '3100' }, { X4_FORGE_MODE: 'claude-integration-test' },
   ]) check(`isolated mode requires explicit registry: ${Object.keys(env)[0]}`, () => assert.throws(() => resolveSourceCoordinationDirectory(env), /explicit scratch/));
+  const fakeUserEnvironment = { LOCALAPPDATA: path.join(root, 'fake-user-data') };
+  const productionRegistry = resolveSourceCoordinationDirectory(fakeUserEnvironment);
+  for (const mode of ['dev-build', ' DEV-BUILD ']) {
+    check(`Dev mode refuses missing private registry: ${mode}`, () => assert.throws(() => resolveSourceCoordinationDirectory({ ...fakeUserEnvironment, X4_FORGE_MODE: mode }), /explicit private/));
+  }
+  for (const bad of ['', '   ', 'relative-registry', '\\\\server\\share\\registry', '//server/share/registry']) {
+    check(`Dev mode rejects nonlocal or relative registry: ${bad}`, () => assert.throws(() => resolveSourceCoordinationDirectory({ ...fakeUserEnvironment, X4_FORGE_MODE: 'dev-build', X4_SOURCE_COORDINATION_DIR: bad })));
+  }
+  check('Dev mode refuses explicit production registry', () => assert.throws(() => resolveSourceCoordinationDirectory({ ...fakeUserEnvironment, X4_FORGE_MODE: 'dev-build', X4_SOURCE_COORDINATION_DIR: productionRegistry }), /distinct from the production/));
+  check('production still accepts explicit production registry', () => assert.equal(resolveSourceCoordinationDirectory({ ...fakeUserEnvironment, X4_SOURCE_COORDINATION_DIR: productionRegistry }), productionRegistry));
+  check('Dev mode accepts an explicit private registry without creating it', () => assert.equal(resolveSourceCoordinationDirectory({ ...fakeUserEnvironment, X4_FORGE_MODE: 'dev-build', X4_SOURCE_COORDINATION_DIR: path.join(root, 'dev-registry') }), path.join(root, 'dev-registry')));
   check('production directory ignores per-process X4_STATE_DIR', () => assert.equal(resolveSourceCoordinationDirectory({ X4_STATE_DIR: path.join(root, 'state-A') }), resolveSourceCoordinationDirectory({ X4_STATE_DIR: path.join(root, 'state-B') })));
   check('resolver alone creates no registry', () => assert.deepEqual(fs.readdirSync(root), []));
+  const savedEnvironment = Object.fromEntries(['X4_FORGE_MODE', 'X4_SOURCE_COORDINATION_DIR', 'LOCALAPPDATA'].map(name => [name, process.env[name]]));
+  try {
+    process.env.X4_FORGE_MODE = 'dev-build';
+    process.env.LOCALAPPDATA = fakeUserEnvironment.LOCALAPPDATA;
+    delete process.env.X4_SOURCE_COORDINATION_DIR;
+    check('Dev facade reports unavailable before opening default registry', () => {
+      const status = forgeSourceCoordinator.status([]);
+      assert.equal(status.available, false);
+      assert.equal(status.code, 'SOURCE_COORDINATION_UNAVAILABLE');
+      assert.match(status.reason!, /explicit private/);
+    });
+    await assert.rejects(forgeSourceCoordinator.run([`source:${path.join(root, 'fixture')}`], { actor: 'dev', operation: 'write' }, () => assert.fail('missing Dev registry cannot invoke handler')), { code: 'SOURCE_COORDINATION_UNAVAILABLE', status: 503 });
+    checks.push('Dev facade refuses writes without a private registry');
+    check('Dev refusal creates no registry or scratch files', () => assert.deepEqual(fs.readdirSync(root), []));
+  } finally {
+    for (const [name, value] of Object.entries(savedEnvironment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  if (process.platform === 'win32') {
+    fs.mkdirSync(productionRegistry, { recursive: true });
+    const registryAlias = path.join(root, 'production-registry-alias');
+    fs.symlinkSync(productionRegistry, registryAlias, 'junction');
+    check('Dev mode refuses production registry through junction alias', () => assert.throws(() => resolveSourceCoordinationDirectory({ ...fakeUserEnvironment, X4_FORGE_MODE: 'dev-build', X4_SOURCE_COORDINATION_DIR: registryAlias }), /distinct from the production/));
+    check('Dev mode refuses production registry with Windows case changes', () => assert.throws(() => resolveSourceCoordinationDirectory({ ...fakeUserEnvironment, X4_FORGE_MODE: 'dev-build', X4_SOURCE_COORDINATION_DIR: productionRegistry.toUpperCase() }), /distinct from the production/));
+    check('Dev alias refusal does not open the production registry', () => assert.deepEqual(fs.readdirSync(productionRegistry), []));
+  }
   check('own process is observably alive', () => assert.equal(processLiveness(process.pid), 'alive'));
   check('invalid PID is unknown', () => { assert.equal(processLiveness(-1), 'unknown'); assert.equal(processLiveness(0), 'unknown'); });
   const actualKill = process.kill;
