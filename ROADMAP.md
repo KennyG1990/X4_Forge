@@ -7924,3 +7924,27 @@ Commit point: fix(validation): ground engine traps and registration coverage.
 
 
 Detailed acceptance/review/AAR: docs/plans/2026-10-25-c04-validation-matrix.md.
+
+## 2026-10-26 — C05 incremental validation — VERIFIED local integration
+
+Existing bounded analysis reuse now covers XML/schema/reference/symbol/property/pitfall facts,
+with exact source and resource dependencies. Full project verdicts, cross-file checks and approval
+policy remain fresh.26 focused parity/invalidation/recovery groups, existing Lua/C04/noise/manifest
+regressions,134 runtime-discovered oracles and7 actual HTTP/browser/scratch-deploy groups pass.
+E2E1passed/0failed/0flaky; owned tree stopped; rendered incomplete-check result inspected. Final
+lint0errors614warnings, production build and full precommit/type/policy/receipt audits pass.
+Two migrated oracle fixtures corrected without weakening permission/byte assertions; failures kept.
+
+Frozen52-file/5.4MB workload: warm single-edit47.73s ->3.13s median (93.45% reduction); largest
+658KB XML edit6.12s vs48.38s full (87.36%). Regression mod146.58ms ->121.73ms. Complete outputs
+match fresh full runs and original baseline hashes. Cold representative validation remains~50s;
+no actual active-mod latency or universal validation claim. Evidence: docs/testing/claude-C05-incremental.json.
+Acceptance/review/AAR: docs/plans/2026-10-26-c05-incremental-validation.md. Rollback baseline2abc6aa;
+a scoped corrective commit reverses the task if necessary. Resource TTL/mtime/packed-cache limits
+remain explicit. Approval authority is not narrowed; A03 and other additional complaints stay open.
+
+User's live-host extension update explains the contemporaneous host replacement consistently with
+process logs; no task restart or installed bundle write. Fresh post-E2E protected hashes match and
+ports3100/3101 stopped. No game/native/package/public proof or push. C06-C07, additional requests
+and coordinated game/release/install windows remain open. Kimi paused. C05 is local only.
+Commit point: perf(validation): reuse unchanged project validation facts.

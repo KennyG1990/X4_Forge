@@ -1,0 +1,997 @@
+{
+  "unit": "C05",
+  "status": "VERIFIED",
+  "pending": [],
+  "recordedAt": "2026-10-26T01:24:15.2020514-04:00",
+  "baseline": "2abc6aa8eaa1a2924e45db81430083c1fa66232e",
+  "scope": "Isolated source, HTTP, rendered browser and scratch deployment. No native installation, public package or game proof.",
+  "focused": {
+    "pass": true,
+    "passed": 26,
+    "total": 26,
+    "stats": {
+      "hits": 2971,
+      "misses": 374,
+      "bypasses": 0,
+      "evictions": 0,
+      "entries": 374,
+      "accountedBytes": 115800
+    },
+    "checks": [
+      {
+        "name": "cold exact full-result equality",
+        "pass": true
+      },
+      {
+        "name": "unchanged actually reuses facts",
+        "pass": true
+      },
+      {
+        "name": "full comparison bypasses new facts",
+        "pass": true
+      },
+      {
+        "name": "changed XML property and recovery",
+        "pass": true
+      },
+      {
+        "name": "same-file datatype inference changes",
+        "pass": true
+      },
+      {
+        "name": "malformed XML and repair",
+        "pass": true
+      },
+      {
+        "name": "schema violation and repair",
+        "pass": true
+      },
+      {
+        "name": "add remove rename file",
+        "pass": true
+      },
+      {
+        "name": "changed project identity",
+        "pass": true
+      },
+      {
+        "name": "duplicate-path ordered symbols preserve old semantics",
+        "pass": true
+      },
+      {
+        "name": "sibling literal registration removal and recovery",
+        "pass": true
+      },
+      {
+        "name": "file-set coverage removal and recovery",
+        "pass": true
+      },
+      {
+        "name": "sibling local ware definition invalidates reference facts",
+        "pass": true
+      },
+      {
+        "name": "changed external reference sets",
+        "pass": true
+      },
+      {
+        "name": "missing reference vocabulary remains unavailable",
+        "pass": true
+      },
+      {
+        "name": "rules are evaluated fresh",
+        "pass": true
+      },
+      {
+        "name": "result mutation cannot poison first or reused values",
+        "pass": true
+      },
+      {
+        "name": "new property warning keeps exact locations",
+        "pass": true
+      },
+      {
+        "name": "bounded cache eviction and copies",
+        "pass": true
+      },
+      {
+        "name": "oversized inputs and outputs analyzed without retention",
+        "pass": true
+      },
+      {
+        "name": "exceptions retry and recover",
+        "pass": true
+      },
+      {
+        "name": "cache limits reject invalid values",
+        "pass": true
+      },
+      {
+        "name": "reference-root change has fresh equality",
+        "pass": true
+      },
+      {
+        "name": "schema dependency edit invalidates facts",
+        "pass": true
+      },
+      {
+        "name": "routed schema removal and recovery",
+        "pass": true
+      },
+      {
+        "name": "declared property-corpus refresh invalidates facts",
+        "pass": true
+      }
+    ]
+  },
+  "regressionScripts": [
+    {
+      "exitCode": 0,
+      "timestamp": "2026-10-26T01:00:09.071772-04:00",
+      "script": "incremental-lua-selftest.ts"
+    },
+    {
+      "exitCode": 0,
+      "timestamp": "2026-10-26T01:00:15.7078095-04:00",
+      "script": "claude-validation-matrix.selftest.ts"
+    },
+    {
+      "exitCode": 0,
+      "timestamp": "2026-10-26T01:00:17.9589886-04:00",
+      "script": "validation-noise.selftest.ts"
+    },
+    {
+      "exitCode": 0,
+      "timestamp": "2026-10-26T01:00:22.9923415-04:00",
+      "script": "ui-manifest-integrity.selftest.ts"
+    }
+  ],
+  "baselinePerformance": {
+    "outputs": [
+      {
+        "bytes": 614826,
+        "samples": [
+          {
+            "mode": "cold",
+            "ms": 903.9501999999998,
+            "sha256": "3fe86f3d2f328411b996354fcd6c1b59f89d74d8a8c0a225b947050015342e95"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 139.41769999999997,
+            "sha256": "3fe86f3d2f328411b996354fcd6c1b59f89d74d8a8c0a225b947050015342e95"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 135.1243000000004,
+            "sha256": "3fe86f3d2f328411b996354fcd6c1b59f89d74d8a8c0a225b947050015342e95"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 146.58350000000019,
+            "sha256": "f593f9813f5bbbd8a53401a58a384d2530c485a7c5e0a151b68818dc44a5eb1e"
+          }
+        ],
+        "files": 36,
+        "name": "regression"
+      },
+      {
+        "bytes": 5397907,
+        "samples": [
+          {
+            "mode": "cold",
+            "ms": 50593.7772,
+            "sha256": "da8dc3f348f600abd423f9e0176321c084496020ffaef29520d1bd877627f893"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 48211.07119999999,
+            "sha256": "da8dc3f348f600abd423f9e0176321c084496020ffaef29520d1bd877627f893"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 47925.97630000001,
+            "sha256": "da8dc3f348f600abd423f9e0176321c084496020ffaef29520d1bd877627f893"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 47728.831799999985,
+            "sha256": "1ad2a49ea62a33fed1f9c92e89baee3bb003a3ba4023c405ab5b7c5d5fd79d04"
+          }
+        ],
+        "files": 52,
+        "name": "representative"
+      }
+    ],
+    "referenceMs": 1151.3333000000002
+  },
+  "finalPerformance": {
+    "referenceMs": 1251.6231000000002,
+    "outputs": [
+      {
+        "name": "regression",
+        "files": 36,
+        "sourceBytes": 614826,
+        "samples": [
+          {
+            "mode": "cold",
+            "ms": 936.6961000000001,
+            "sha256": "3fe86f3d2f328411b996354fcd6c1b59f89d74d8a8c0a225b947050015342e95"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 114.10259999999971,
+            "sha256": "3fe86f3d2f328411b996354fcd6c1b59f89d74d8a8c0a225b947050015342e95"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 118.10809999999992,
+            "sha256": "3fe86f3d2f328411b996354fcd6c1b59f89d74d8a8c0a225b947050015342e95"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 112.32909999999993,
+            "sha256": "3fe86f3d2f328411b996354fcd6c1b59f89d74d8a8c0a225b947050015342e95"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 111.85059999999976,
+            "sha256": "f593f9813f5bbbd8a53401a58a384d2530c485a7c5e0a151b68818dc44a5eb1e"
+          },
+          {
+            "mode": "fresh-full",
+            "ms": 110.67500000000018,
+            "sha256": "f593f9813f5bbbd8a53401a58a384d2530c485a7c5e0a151b68818dc44a5eb1e"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 121.73379999999997,
+            "sha256": "a5c99e504576ffa80b441f7b9f14b84c61686917fe93710853bd6a8fdd8c3b8b"
+          },
+          {
+            "mode": "fresh-full",
+            "ms": 124.77169999999933,
+            "sha256": "a5c99e504576ffa80b441f7b9f14b84c61686917fe93710853bd6a8fdd8c3b8b"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 151.3728999999994,
+            "sha256": "47b99caadd8e8ec305dabe1c0f26f95c5dda421092bd163c46cb07de83833a3a"
+          },
+          {
+            "mode": "fresh-full",
+            "ms": 130.2394000000004,
+            "sha256": "47b99caadd8e8ec305dabe1c0f26f95c5dda421092bd163c46cb07de83833a3a"
+          }
+        ],
+        "baselineSingleEditMs": 146.58350000000019,
+        "medianSingleEditMs": 121.73379999999997,
+        "limitMs": 166.58350000000019,
+        "reductionPercent": 16.95259016192149,
+        "pass": true,
+        "stats": {
+          "hits": 456,
+          "misses": 97,
+          "bypasses": 0,
+          "evictions": 0,
+          "entries": 97,
+          "accountedBytes": 26670
+        }
+      },
+      {
+        "name": "representative",
+        "files": 52,
+        "sourceBytes": 5397907,
+        "samples": [
+          {
+            "mode": "cold",
+            "ms": 49650.0459,
+            "sha256": "da8dc3f348f600abd423f9e0176321c084496020ffaef29520d1bd877627f893"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 3101.115399999995,
+            "sha256": "da8dc3f348f600abd423f9e0176321c084496020ffaef29520d1bd877627f893"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 3112.761200000001,
+            "sha256": "da8dc3f348f600abd423f9e0176321c084496020ffaef29520d1bd877627f893"
+          },
+          {
+            "mode": "unchanged",
+            "ms": 3122.819199999998,
+            "sha256": "da8dc3f348f600abd423f9e0176321c084496020ffaef29520d1bd877627f893"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 3175.3994000000093,
+            "sha256": "1ad2a49ea62a33fed1f9c92e89baee3bb003a3ba4023c405ab5b7c5d5fd79d04"
+          },
+          {
+            "mode": "fresh-full",
+            "ms": 48381.87090000001,
+            "sha256": "1ad2a49ea62a33fed1f9c92e89baee3bb003a3ba4023c405ab5b7c5d5fd79d04"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 3078.8159000000014,
+            "sha256": "e25880b62b80a937cd1a21ea9ccbcbecc19d892877ae86710f9955d9e6b60644"
+          },
+          {
+            "mode": "fresh-full",
+            "ms": 48307.1057,
+            "sha256": "e25880b62b80a937cd1a21ea9ccbcbecc19d892877ae86710f9955d9e6b60644"
+          },
+          {
+            "mode": "single-edit",
+            "ms": 3127.153099999996,
+            "sha256": "71029c6a84592cbfb1f6c1b7a63cad5eec954a6741a65fcd0c3d24f301c15369"
+          },
+          {
+            "mode": "fresh-full",
+            "ms": 49869.89229999998,
+            "sha256": "71029c6a84592cbfb1f6c1b7a63cad5eec954a6741a65fcd0c3d24f301c15369"
+          }
+        ],
+        "baselineSingleEditMs": 47728.831799999985,
+        "medianSingleEditMs": 3127.153099999996,
+        "limitMs": 23864.415899999993,
+        "reductionPercent": 93.44808372200721,
+        "pass": true,
+        "stats": {
+          "hits": 1032,
+          "misses": 193,
+          "bypasses": 0,
+          "evictions": 0,
+          "entries": 193,
+          "accountedBytes": 1247380
+        }
+      }
+    ]
+  },
+  "largestEdit": {
+    "file": "md/story_diplomacy_intro.xml",
+    "bytes": 657747,
+    "incrementalMs": 6117.304199999999,
+    "fullMs": 48382.5349,
+    "reductionPercent": 87.35637929545523,
+    "sha256": "059f3c1572e849addad2383b9aa193c573d6e2cf72c5401a1068a61f1a052127",
+    "pass": true
+  },
+  "workloadManifest": {
+    "selection": "8 largest loose MD and 8 largest loose AI files below 800KB in configured X4 9.00 corpus, plus regression mod; immutable snapshot, not the active user mod",
+    "files": [
+      {
+        "path": "content.xml",
+        "bytes": 123,
+        "sha256": "bd52c74a8a28abb9293e726e6f73f85e1741a0ddff84ad77b47dddb6977fb8ac"
+      },
+      {
+        "path": "md/forge_regression_lab.xml",
+        "bytes": 242,
+        "sha256": "65db66055f9a8698b6e7ee6271c015b91f35546f4a462a95e3d507f49736f606"
+      },
+      {
+        "path": "ui/helper_00.lua",
+        "bytes": 43,
+        "sha256": "d64cb786e647d22c97ea62c993cc2cfd5a1cc8d4d64b8c6a55f4369e69598f3b"
+      },
+      {
+        "path": "ui/helper_01.lua",
+        "bytes": 43,
+        "sha256": "eb395017ba4095f1773ebc22cdfb5f21815729813f7d946f3393a8c8f7f6bf6c"
+      },
+      {
+        "path": "ui/helper_02.lua",
+        "bytes": 43,
+        "sha256": "e70714c9c0918fa4ac8c08344224ae8c08ff73ba8c219902013aeb33e670cc92"
+      },
+      {
+        "path": "ui/helper_03.lua",
+        "bytes": 43,
+        "sha256": "0daede6ebbfea8b00d106949f7092043d4192d1cf53221631a150da80b233f54"
+      },
+      {
+        "path": "ui/helper_04.lua",
+        "bytes": 43,
+        "sha256": "e700d3cb82f9e45af96af2f398d8fd1e74f5f6a4e01ea6e12e485f6fe9a66335"
+      },
+      {
+        "path": "ui/helper_05.lua",
+        "bytes": 43,
+        "sha256": "5a5a6ab90a037f5094d0ca6f4e5a5d890dc0df0a111819642a5f998472f191f7"
+      },
+      {
+        "path": "ui/helper_06.lua",
+        "bytes": 43,
+        "sha256": "3b4ca60af36f216f8db8ceea228542c6b1efd9747eb2756ed9f32f803a7904f0"
+      },
+      {
+        "path": "ui/helper_07.lua",
+        "bytes": 43,
+        "sha256": "d8ce1eaa38c712d6c6f63a7d8b7369eeacddb611e79ddb68925155d3ec7316f3"
+      },
+      {
+        "path": "ui/helper_08.lua",
+        "bytes": 43,
+        "sha256": "665a1533e2ebf0e3a8c3f9be47af1a1340cad8616ddfb86ca0954a1ccfc1333e"
+      },
+      {
+        "path": "ui/helper_09.lua",
+        "bytes": 43,
+        "sha256": "9ec0ec24a10c0e0112270fe6ef0b1665679d17c0a7ebbc5292b0fa9f025ae8e7"
+      },
+      {
+        "path": "ui/helper_10.lua",
+        "bytes": 44,
+        "sha256": "b9d17e83d0e86b6219629ceba85be9e2cd76afcc9abd94697dbb7052bf4237af"
+      },
+      {
+        "path": "ui/helper_11.lua",
+        "bytes": 44,
+        "sha256": "e1350a1da00e7ed27fb21d14ce2692e227e62f2f1b4b7c8c6b2e3d965a7e127a"
+      },
+      {
+        "path": "ui/helper_12.lua",
+        "bytes": 44,
+        "sha256": "4f0ca9fdeb64462cba7b1cb26efb871515b5c7d09e2b5e9e7a614c5fd86c49c6"
+      },
+      {
+        "path": "ui/helper_13.lua",
+        "bytes": 44,
+        "sha256": "d77ef5be3f3760fe9d0ce4b688502fd2ef8a2b548779cc88fd738d8409bbf6cb"
+      },
+      {
+        "path": "ui/helper_14.lua",
+        "bytes": 44,
+        "sha256": "5eaa668a193fc0591ac8c8bb8c21bac79b946499891a2005be9e8102eee962b2"
+      },
+      {
+        "path": "ui/helper_15.lua",
+        "bytes": 44,
+        "sha256": "9af85603d0dfea4239631db532f2cd32cc49430729fa568efda020ae54bb893a"
+      },
+      {
+        "path": "ui/helper_16.lua",
+        "bytes": 44,
+        "sha256": "4999184041bf2f7b640815588851c40e8a012544d52ce2717b0b3469fa5d3c27"
+      },
+      {
+        "path": "ui/helper_17.lua",
+        "bytes": 44,
+        "sha256": "4214d34543c6524412f090fe214030c39376bee87812b2c589d897d5f9621b9e"
+      },
+      {
+        "path": "ui/helper_18.lua",
+        "bytes": 44,
+        "sha256": "075eb09937796884e8ff0b31d67bcaf57ab5aad0f77fefe4854caa047d0b37a5"
+      },
+      {
+        "path": "ui/helper_19.lua",
+        "bytes": 44,
+        "sha256": "60ebfa574b0e9de37bfce22a95efb8148bb9ed67ed8fd73b8dd2dd49d4053ef8"
+      },
+      {
+        "path": "ui/helper_20.lua",
+        "bytes": 44,
+        "sha256": "0414822f648f5917f14a47d4a0d2597e064d55da559e7b7bb56b437bc726b09c"
+      },
+      {
+        "path": "ui/helper_21.lua",
+        "bytes": 44,
+        "sha256": "5876ed65beaa1b7d8e0aa7ea02dafa35f80cdcdc071f8c1d6353839006df71ae"
+      },
+      {
+        "path": "ui/helper_22.lua",
+        "bytes": 44,
+        "sha256": "af99cc9cf6129c898b60879e4e5c3dd18b101706f6d6c4be9ae60505d3a0c6de"
+      },
+      {
+        "path": "ui/helper_23.lua",
+        "bytes": 44,
+        "sha256": "b7cb188a83bcc365c650433801a93093c9cad934daccc52100fe23f5f580b01d"
+      },
+      {
+        "path": "ui/helper_24.lua",
+        "bytes": 44,
+        "sha256": "1258056be4ec34ffa700393dca6c25dc89cfc4d6b682b2ed252794fa8e1af566"
+      },
+      {
+        "path": "ui/helper_25.lua",
+        "bytes": 44,
+        "sha256": "6c44ec055dc0d21ff48040334f6a365c99993b1f566ad6e522c498a6745a41da"
+      },
+      {
+        "path": "ui/helper_26.lua",
+        "bytes": 44,
+        "sha256": "dff6d2ba663a68656b7725600bd574dd61cf3f582aa8c652a6323211bd16c248"
+      },
+      {
+        "path": "ui/helper_27.lua",
+        "bytes": 44,
+        "sha256": "0e286996c0b7772f895f03e30742559d827f05a0104b872f84426fb706224cc9"
+      },
+      {
+        "path": "ui/helper_28.lua",
+        "bytes": 44,
+        "sha256": "77423a01e24d022daf10277255f410fec148d301a4991aa8cf5afe4a0e327eab"
+      },
+      {
+        "path": "ui/helper_29.lua",
+        "bytes": 44,
+        "sha256": "eff6d6c4d4c5b77c18553fd76cfd725dcdff32a868c0b1791ac7745947d6dd98"
+      },
+      {
+        "path": "ui/helper_30.lua",
+        "bytes": 44,
+        "sha256": "9a4767a630b4feccbfe9d1e6888c66daec6b3debe390a08ee6df84888fc33210"
+      },
+      {
+        "path": "ui/lab.lua",
+        "bytes": 288,
+        "sha256": "60b1d132142f02e8b3a5baf327aa863e79db6be78f88b555b07ad6aa5c2d576b"
+      },
+      {
+        "path": "ui/large.lua",
+        "bytes": 612567,
+        "sha256": "8468182dc660755d512829f815dee0695430433c12721eb3fc3035985a120dce"
+      },
+      {
+        "path": "ui.xml",
+        "bytes": 252,
+        "sha256": "0513465717ee5580848a2a1e03a9685258807dfc5df205de63e3bb2f4094dd59"
+      },
+      {
+        "path": "md/story_diplomacy_intro.xml",
+        "bytes": 657706,
+        "sha256": "cec1de9d80415c3cf64d6faf02bd433f6bb414c50f713c1aab885170be8e4985"
+      },
+      {
+        "path": "md/npc_state_machines.xml",
+        "bytes": 640684,
+        "sha256": "89f94d66ddac81f9eae4a810fac4000c2d333c26e2d00bcbe38f664e69f2111d"
+      },
+      {
+        "path": "md/x4ep1_mentor_subscription.xml",
+        "bytes": 608904,
+        "sha256": "a0de18e1f5e9cc929515904b641601b54b757af948ce35142b5e2d4cc54849f9"
+      },
+      {
+        "path": "md/diplomacy.xml",
+        "bytes": 512308,
+        "sha256": "b18883b9ea0f4d87a88439a99315091f9163783facbc84fcbafc296288b08f71"
+      },
+      {
+        "path": "md/x4ep1_trade_subscriptions.xml",
+        "bytes": 392507,
+        "sha256": "1da8ea712bb236d9fcbad1e9929f2dd2244aa76966a59125d80c9f5407d3562d"
+      },
+      {
+        "path": "md/terraforming.xml",
+        "bytes": 332275,
+        "sha256": "fb76d17a88a847d1db337462a905b7de59c5163b9ef169ed3180ac017ceb615f"
+      },
+      {
+        "path": "md/factionlogic_economy.xml",
+        "bytes": 286668,
+        "sha256": "9ce3072e900b4b75933983abcd5622e777c4d7fefe2a8bf7b8b8c6a52a03c934"
+      },
+      {
+        "path": "md/lib_generic.xml",
+        "bytes": 273587,
+        "sha256": "b8215e41f2c8260fbf9e91397ac969cb8692d229094c3c8d894d20a96e4e26db"
+      },
+      {
+        "path": "aiscripts/order.fight.escort.xml",
+        "bytes": 195900,
+        "sha256": "9366d7412e143c21847ae7ed723d94c7091910fc02b12c3cbfa4318ea97d2750"
+      },
+      {
+        "path": "aiscripts/fight.attack.object.capital.xml",
+        "bytes": 195544,
+        "sha256": "88b9ef53d8665d04b458d9fbce1d4c7efdce14a0fb3aaeb951183703bffb324d"
+      },
+      {
+        "path": "aiscripts/fight.attack.object.medium.xml",
+        "bytes": 132969,
+        "sha256": "0ffca3f8339879294eaa4031f57bf6fef128e31f7a6bbf3ecef2913511ac705e"
+      },
+      {
+        "path": "aiscripts/order.move.recon.xml",
+        "bytes": 130493,
+        "sha256": "d1868d85f4556d15a7ad72ba8f300d9bdd6f8d8bcec431109c79057bfe734613"
+      },
+      {
+        "path": "aiscripts/order.mining.routine.xml",
+        "bytes": 123754,
+        "sha256": "a3f614428e8bab3853fe060a80c1380cc6a5b019bc9dec07b0ee70f54f2ca6cd"
+      },
+      {
+        "path": "aiscripts/order.dock.xml",
+        "bytes": 101841,
+        "sha256": "e03fbf2be30de3631003f61d4ba0bcb6221e3dfe74106010d71bb0286138ef8b"
+      },
+      {
+        "path": "aiscripts/move.attack.object.capital.xml",
+        "bytes": 99036,
+        "sha256": "3efcc39f47063f3f44aea7d48bc913ce54502384483cbbea9961064c5dffcf1a"
+      },
+      {
+        "path": "aiscripts/move.generic.xml",
+        "bytes": 98905,
+        "sha256": "9acf1da213b3f5e52605af17236bff48114a3e6e3373c5d526baa57358e23c54"
+      }
+    ]
+  },
+  "http": {
+    "checks": [
+      "identical-warm-response",
+      "schema-error-and-repair",
+      "sibling-listener-change",
+      "exact-deployed-bytes",
+      "stale-refusal-no-write",
+      "fresh-preview-new-identity",
+      "rendered-qualified-result"
+    ],
+    "timings": [
+      {
+        "route": "/api/agent/project/validate",
+        "ms": 1155.5015999999998,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/project/validate",
+        "ms": 154.9139,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/project/validate",
+        "ms": 129.39409999999998,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/project/validate",
+        "ms": 147.5925000000002,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/project/validate",
+        "ms": 134.33300000000008,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/project/validate",
+        "ms": 132.82879999999977,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/project/validate",
+        "ms": 135.3481999999999,
+        "status": 200
+      },
+      {
+        "route": "/api/schema/config",
+        "ms": 257.23070000000007,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/mod-folder/import",
+        "ms": 56.17729999999983,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/deploy-verify",
+        "ms": 1337.4496000000004,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/deploy-verify",
+        "ms": 5512.345499999999,
+        "status": 200
+      },
+      {
+        "route": "/api/agent/deploy-verify",
+        "ms": 848.1518000000015,
+        "status": 409
+      },
+      {
+        "route": "/api/agent/deploy-verify",
+        "ms": 1326.1016999999993,
+        "status": 200
+      }
+    ],
+    "modId": "forge_regression_lab",
+    "sourceHash": "9aec9d3b56fbf745e5bd4b224773d1906548500dba6f533bb2e1fa5085e310c9",
+    "deployReceiptId": "ar_f5cd3dfcfe36b989e1aba1a48921859d1392b27c997b7e20740364968d701399",
+    "deployedFiles": [
+      {
+        "path": "content.xml",
+        "sha256": "bd52c74a8a28abb9293e726e6f73f85e1741a0ddff84ad77b47dddb6977fb8ac"
+      },
+      {
+        "path": "md/forge_regression_lab.xml",
+        "sha256": "4bd73cd2988fbac7b55a8183c50f2df39a22d293adebe54ec92eafaec044c37e"
+      },
+      {
+        "path": "ui/helper_00.lua",
+        "sha256": "d64cb786e647d22c97ea62c993cc2cfd5a1cc8d4d64b8c6a55f4369e69598f3b"
+      },
+      {
+        "path": "ui/helper_01.lua",
+        "sha256": "eb395017ba4095f1773ebc22cdfb5f21815729813f7d946f3393a8c8f7f6bf6c"
+      },
+      {
+        "path": "ui/helper_02.lua",
+        "sha256": "e70714c9c0918fa4ac8c08344224ae8c08ff73ba8c219902013aeb33e670cc92"
+      },
+      {
+        "path": "ui/helper_03.lua",
+        "sha256": "0daede6ebbfea8b00d106949f7092043d4192d1cf53221631a150da80b233f54"
+      },
+      {
+        "path": "ui/helper_04.lua",
+        "sha256": "e700d3cb82f9e45af96af2f398d8fd1e74f5f6a4e01ea6e12e485f6fe9a66335"
+      },
+      {
+        "path": "ui/helper_05.lua",
+        "sha256": "5a5a6ab90a037f5094d0ca6f4e5a5d890dc0df0a111819642a5f998472f191f7"
+      },
+      {
+        "path": "ui/helper_06.lua",
+        "sha256": "3b4ca60af36f216f8db8ceea228542c6b1efd9747eb2756ed9f32f803a7904f0"
+      },
+      {
+        "path": "ui/helper_07.lua",
+        "sha256": "d8ce1eaa38c712d6c6f63a7d8b7369eeacddb611e79ddb68925155d3ec7316f3"
+      },
+      {
+        "path": "ui/helper_08.lua",
+        "sha256": "665a1533e2ebf0e3a8c3f9be47af1a1340cad8616ddfb86ca0954a1ccfc1333e"
+      },
+      {
+        "path": "ui/helper_09.lua",
+        "sha256": "9ec0ec24a10c0e0112270fe6ef0b1665679d17c0a7ebbc5292b0fa9f025ae8e7"
+      },
+      {
+        "path": "ui/helper_10.lua",
+        "sha256": "b9d17e83d0e86b6219629ceba85be9e2cd76afcc9abd94697dbb7052bf4237af"
+      },
+      {
+        "path": "ui/helper_11.lua",
+        "sha256": "e1350a1da00e7ed27fb21d14ce2692e227e62f2f1b4b7c8c6b2e3d965a7e127a"
+      },
+      {
+        "path": "ui/helper_12.lua",
+        "sha256": "4f0ca9fdeb64462cba7b1cb26efb871515b5c7d09e2b5e9e7a614c5fd86c49c6"
+      },
+      {
+        "path": "ui/helper_13.lua",
+        "sha256": "d77ef5be3f3760fe9d0ce4b688502fd2ef8a2b548779cc88fd738d8409bbf6cb"
+      },
+      {
+        "path": "ui/helper_14.lua",
+        "sha256": "5eaa668a193fc0591ac8c8bb8c21bac79b946499891a2005be9e8102eee962b2"
+      },
+      {
+        "path": "ui/helper_15.lua",
+        "sha256": "9af85603d0dfea4239631db532f2cd32cc49430729fa568efda020ae54bb893a"
+      },
+      {
+        "path": "ui/helper_16.lua",
+        "sha256": "4999184041bf2f7b640815588851c40e8a012544d52ce2717b0b3469fa5d3c27"
+      },
+      {
+        "path": "ui/helper_17.lua",
+        "sha256": "4214d34543c6524412f090fe214030c39376bee87812b2c589d897d5f9621b9e"
+      },
+      {
+        "path": "ui/helper_18.lua",
+        "sha256": "075eb09937796884e8ff0b31d67bcaf57ab5aad0f77fefe4854caa047d0b37a5"
+      },
+      {
+        "path": "ui/helper_19.lua",
+        "sha256": "60ebfa574b0e9de37bfce22a95efb8148bb9ed67ed8fd73b8dd2dd49d4053ef8"
+      },
+      {
+        "path": "ui/helper_20.lua",
+        "sha256": "0414822f648f5917f14a47d4a0d2597e064d55da559e7b7bb56b437bc726b09c"
+      },
+      {
+        "path": "ui/helper_21.lua",
+        "sha256": "5876ed65beaa1b7d8e0aa7ea02dafa35f80cdcdc071f8c1d6353839006df71ae"
+      },
+      {
+        "path": "ui/helper_22.lua",
+        "sha256": "af99cc9cf6129c898b60879e4e5c3dd18b101706f6d6c4be9ae60505d3a0c6de"
+      },
+      {
+        "path": "ui/helper_23.lua",
+        "sha256": "b7cb188a83bcc365c650433801a93093c9cad934daccc52100fe23f5f580b01d"
+      },
+      {
+        "path": "ui/helper_24.lua",
+        "sha256": "1258056be4ec34ffa700393dca6c25dc89cfc4d6b682b2ed252794fa8e1af566"
+      },
+      {
+        "path": "ui/helper_25.lua",
+        "sha256": "6c44ec055dc0d21ff48040334f6a365c99993b1f566ad6e522c498a6745a41da"
+      },
+      {
+        "path": "ui/helper_26.lua",
+        "sha256": "dff6d2ba663a68656b7725600bd574dd61cf3f582aa8c652a6323211bd16c248"
+      },
+      {
+        "path": "ui/helper_27.lua",
+        "sha256": "0e286996c0b7772f895f03e30742559d827f05a0104b872f84426fb706224cc9"
+      },
+      {
+        "path": "ui/helper_28.lua",
+        "sha256": "77423a01e24d022daf10277255f410fec148d301a4991aa8cf5afe4a0e327eab"
+      },
+      {
+        "path": "ui/helper_29.lua",
+        "sha256": "eff6d6c4d4c5b77c18553fd76cfd725dcdff32a868c0b1791ac7745947d6dd98"
+      },
+      {
+        "path": "ui/helper_30.lua",
+        "sha256": "9a4767a630b4feccbfe9d1e6888c66daec6b3debe390a08ee6df84888fc33210"
+      },
+      {
+        "path": "ui/lab.lua",
+        "sha256": "60b1d132142f02e8b3a5baf327aa863e79db6be78f88b555b07ad6aa5c2d576b"
+      },
+      {
+        "path": "ui/large.lua",
+        "sha256": "8468182dc660755d512829f815dee0695430433c12721eb3fc3035985a120dce"
+      },
+      {
+        "path": "ui.xml",
+        "sha256": "0513465717ee5580848a2a1e03a9685258807dfc5df205de63e3bb2f4094dd59"
+      }
+    ]
+  },
+  "e2e": {
+    "passed": 1,
+    "flaky": 0,
+    "screenshot": "test-results/claude-C05/run-8ccfd7f3-5c90-48bf-a5aa-2175a32002a9/warm-deploy.png",
+    "treeGone": true,
+    "run": "test-results/claude-C05/run-8ccfd7f3-5c90-48bf-a5aa-2175a32002a9",
+    "failed": 0,
+    "renderedObservation": "Amber Deployed - incomplete checks, unavailable checks 1; byte confirmation and no in-game claim.",
+    "screenshotSha256": "c0dd1e187e26893691c41c6979b180656ddca53e7680e4295e97830bcd9080a7"
+  },
+  "runtimeOracles": {
+    "failed": 0,
+    "discovered": 134,
+    "passed": 134
+  },
+  "checks": {
+    "build": "passed including oracle fixtures",
+    "precommit": "PASS; capability/MCP/durable-writer/receipt/size/type gates; precommit-final.log",
+    "typecheck": "passed after oracle fixture corrections",
+    "lint": "0 errors, 614 warnings"
+  },
+  "boundaries": [
+    "Fresh comparison bypasses new file-fact caches, not existing schema/corpus resource caches.",
+    "Schema indexes use path-set/mtime; corpus signature checks are throttled to 1 second and use size/mtime/ctime. Packed-game fallback index refresh requires service reload.",
+    "No instantaneous detection of same-metadata schema changes is claimed.",
+    "Benchmark uses frozen vanilla files and regression fixture, not Claude active mod. Representative diagnostics are preserved, not asserted clean.",
+    "Approvals and final deploy decisions are not cached; conservative approval invalidation and A03 remain open.",
+    "No live or installed Dev writes/restarts, game actions, push or release issued by task."
+  ],
+  "isolation": {
+    "afterReconciledE2eProtectedHashesUnchanged": true,
+    "observation": "Live extension host restarted during first E2E. User reports an extension update in live host; live/Dev bundles unchanged. Fresh baseline reconciled before passing rerun. Installed Dev backend PID71180 has remained running since October25; screenshot notification was historical.",
+    "ports3100And3101Stopped": true
+  },
+  "failuresRetained": [
+    "focused-first: 24/26; corrected two fixture assumptions",
+    "benchmark-first: comparing distinct source identities; corrected exact-edit comparison",
+    "e2e-first: 132/134 oracles; stale compile@1 key fixture and Lua passthrough fixture. Updated fixtures, same assertions; final 134/134."
+  ],
+  "sources": [
+    {
+      "path": "src/lib/x4UiAnalysisCache.ts",
+      "sha256": "606109a798c23289eb16aa2c7801d0d0418833f0fc3e92ed7767ffdcf59f153c"
+    },
+    {
+      "path": "src/lib/schemaRouting.ts",
+      "sha256": "a06f8147d8ed06f6c4d5c9dc808d7131de330bbb46d9b3047f04e9783be404f3"
+    },
+    {
+      "path": "src/server/projectValidation.ts",
+      "sha256": "78cb463a9c52d4fb58ee057446eed5f898629dff34bf3a5c1b0c1c4659695cd3"
+    },
+    {
+      "path": "src/lib/agentKeys.ts",
+      "sha256": "0b589d0a5f0d77145f4957c522d034cc6457308ee5c95293a840e60c1f1b10c9"
+    },
+    {
+      "path": "server.ts",
+      "sha256": "b8be940768acd7bd3dd0bf8994432efb7de63c2722c755e514169858c322f9fe"
+    },
+    {
+      "path": "scripts/incremental-project.selftest.ts",
+      "sha256": "9025b4646acd895998f769c8897394bd5b59fe17ebc27ea6f987eeee312ce863"
+    },
+    {
+      "path": "scripts/incremental-project-benchmark.ts",
+      "sha256": "528db9a566fdb9b207e8de26dd741b3b706a84db0d6e5093bf1be7b4d4278299"
+    },
+    {
+      "path": "tests/e2e/incremental-project.spec.ts",
+      "sha256": "b292b82fcab4e0562ebfda631e26672484902165ae410da047ea5f118443a026"
+    }
+  ],
+  "evidenceHashes": [
+    {
+      "name": "after-e2e-first.json",
+      "sha256": "729d02a54e3d589a186b8872abdc98f9abd46d5a9b31c4a2f6d08c6921c77f8a"
+    },
+    {
+      "name": "after-e2e-second.json",
+      "sha256": "a3707e5c536d9ed7e2206db7e8fc31987c5c370cba49b15ba156feeeee133619"
+    },
+    {
+      "name": "baseline-profile.json",
+      "sha256": "b2d2c9b119a6d08e7e93feadbe0efcc1353f8dbed88d770a6a5c93177dd2031f"
+    },
+    {
+      "name": "baseline-unprofiled-profile.json",
+      "sha256": "b95a5924d69e0c2a22396b95bb31f8daa1ca282721f66a722fb6f310dc865525"
+    },
+    {
+      "name": "benchmark-first.log",
+      "sha256": "a104ab01850b5019a4c9a99003d02e1c18bb3189cb8674c57aad7c49ec040a4c"
+    },
+    {
+      "name": "benchmark-second.log",
+      "sha256": "1242383759014586d1abbcae3c9dec5d917bd5e739962c2de606edff69add663"
+    },
+    {
+      "name": "build-reviewed.log",
+      "sha256": "66cd22b7c66afc31b83c8152d6622d9a1f284fceb4d7cff550db8a8ab116e277"
+    },
+    {
+      "name": "e2e-first-verdict.json",
+      "sha256": "960efb8b80727e328236c6c93b046922bd7b3f80170f5125ec208e17c78d0dd8"
+    },
+    {
+      "name": "e2e-second-verdict.json",
+      "sha256": "c528027a84c97e990520ecc23bdb176d39e0dddeaa263f1bab3ad827cd349b32"
+    },
+    {
+      "name": "focused-first.log",
+      "sha256": "fbba3e4ecd28e85e8370db639b7923253e42537a9c5de70079f2441d5f17238f"
+    },
+    {
+      "name": "focused-second.log",
+      "sha256": "9401368c916ba2742d7faa1677d5e79a9fc78fbc2ecccd6a5728e6a371250287"
+    },
+    {
+      "name": "incremental-benchmark.json",
+      "sha256": "93b203fdfe9aaca139b72da1a93be76594b387d8879dbd3c95c942f788384fd4"
+    },
+    {
+      "name": "largest-edit-benchmark.json",
+      "sha256": "14572c058be5a3243c8e7cabefa923edaece8de1b5b6501c365b6c3e193bc216"
+    },
+    {
+      "name": "lint-reviewed.log",
+      "sha256": "cfd2057cf2cbff6a002aa5b665b7e87ec65089b795db9f7f4148ab80ca608296"
+    },
+    {
+      "name": "oracle-failed-agent-keys.json",
+      "sha256": "664ff8f84e01c2449de5066909be0dce764916fb892c83ce5c955bdc598fbf91"
+    },
+    {
+      "name": "oracle-failed-artifact-pipeline.json",
+      "sha256": "6d53eb6359e2c823565139f5fbc54ee2a088bce51d2e26819c0a8536ec2d776d"
+    },
+    {
+      "name": "precommit-final.log",
+      "sha256": "e72726a59320f2887572a4a3bca9e58c76170576e8af9f7ed5d14e0e636ba237"
+    }
+  ]
+}

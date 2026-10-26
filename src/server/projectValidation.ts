@@ -25,7 +25,7 @@ import path from "path";
 import { compareModCopies, type DriftReport, type FileFingerprint } from "../lib/modDrift";
 import { resolveXsdConfig } from "../lib/xsdParser";
 import { discoverSchemaRegistry, expandIncludeChain, schemaFilesSignature, type SchemaRegistry } from "../lib/schemaRegistry";
-import { sniffRootElement, validateRoutedFiles, type RoutedFileResult } from "../lib/schemaRouting";
+import { sniffRootElement, validateRoutedFiles, buildRouteIndex, routeProjectFile, CORPUS_PROVEN_DOMAINS, type RoutedFileResult } from "../lib/schemaRouting";
 import { buildSchemaIndex, validateXmlAgainstSchema, type XsdDiagnostic } from "../lib/xsdValidate";
 import { simulateXmlDiff, type DiffFinding } from "../lib/diffSimulator";
 import { resolveEffectiveReferenceDocument, type OverlayFinding, type OverlaySource } from "../lib/referenceOverlay";
@@ -59,6 +59,22 @@ import {
 } from "../lib/projectRules";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence } from '../lib/validationEvidence';
+import { createBoundedAnalysisCache } from '../lib/x4UiAnalysisCache';
+
+// Resource services replace their owned immutable indexes on a new generation. Weak keys do
+// not retain old corpora. File facts additionally bind exact source and project reference sets.
+const resourceGenerations = new WeakMap<object, number>();
+let nextResourceGeneration = 0;
+function resourceGeneration(resource: object | null | undefined): number {
+  if (!resource) return 0;
+  let generation = resourceGenerations.get(resource);
+  if (!generation) { generation = ++nextResourceGeneration; resourceGenerations.set(resource, generation); }
+  return generation;
+}
+const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 512, maxBytes: 32 * 1024 * 1024 });
+/** Internal deterministic observability; no additional HTTP surface or persistent state. */
+export const clearProjectValidationCache = validationFacts.clear;
+export const getProjectValidationCacheStats = validationFacts.stats;
 
 /**
  * MD schema index (md.xsd + common.xsd from the configured schema dir).
@@ -211,8 +227,19 @@ function referencesForProject(project: ExtensionProject, base?: ProjectValidatio
  */
 export function runProjectValidation(
   project: ExtensionProject,
-  opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary } = {},
+  opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary; incremental?: boolean } = {},
 ): ProjectValidationResult {
+  const fileKeys = new Map<ProjectFile, string>();
+  const fact = <T>(stage: string, file: ProjectFile, dependency: unknown, compute: () => T): T => {
+    if (opts.incremental === false) return compute();
+    let fileKey = fileKeys.get(file);
+    if (!fileKey) {
+      fileKey = crypto.createHash('sha256').update(JSON.stringify([file.path, file.kind, file.content])).digest('hex');
+      fileKeys.set(file, fileKey);
+    }
+    const key = JSON.stringify([stage, fileKey, dependency]);
+    return validationFacts.get(key, compute, 2 * (file.content?.length || 0)) as T;
+  };
   const coverageGaps: ValidationCoverageGap[] = [];
   const parsedRules = parseProjectRules(project);
   const structure = validateProjectStructure(project);
@@ -229,7 +256,7 @@ export function runProjectValidation(
   for (const file of project.files) {
     if (typeof file.content !== "string") continue;
     if (!/\.xml$/i.test(file.path)) continue;
-    const wellformed = checkXmlWellformed(file.content);
+    const wellformed = fact('xml', file, null, () => checkXmlWellformed(file.content!));
     if (wellformed.ok) continue;
     // Report every position, not just the first: a mismatched tag often produces a cascade and
     // the LAST one is frequently the real edit site.
@@ -260,6 +287,9 @@ export function runProjectValidation(
   const luaErrors = lua.findings.filter(finding => finding.severity === "error").length;
   const luaWarnings = lua.findings.filter(finding => finding.severity === "warning").length;
   const references = referencesForProject(project, opts.references);
+  const referenceGeneration = crypto.createHash('sha256').update(JSON.stringify(
+    references ? Object.entries(references).map(([kind, values]) => [kind, [...(values || [])]]) : null,
+  )).digest('hex');
   const structuralErrors = structure.filter(i => i.severity === "error").length;
 
   const schemaFindings: XsdDiagnostic[] = [];
@@ -274,9 +304,9 @@ export function runProjectValidation(
     if (mdSchemaAvailable) {
       for (const f of project.files) {
         if (isDedicatedScriptFile(f, "md")) {
-          schemaFindings.push(...validateXmlAgainstSchema(f.content, mdIndex, {
+          schemaFindings.push(...fact('md-schema', f, [resourceGeneration(mdIndex), referenceGeneration], () => validateXmlAgainstSchema(f.content, mdIndex, {
             filePath: f.path, domain: "mission_director", reportUnknownElements: true, references, strictStructure: true,
-          }));
+          })));
         }
       }
     }
@@ -285,9 +315,10 @@ export function runProjectValidation(
     if (aiIndexRef && aiSchemaAvailable) {
       for (const f of project.files) {
         if (isDedicatedScriptFile(f, "aiscript")) {
-          schemaFindings.push(...validateXmlAgainstSchema(f.content, aiIndexRef, {
+          const aiIndex = aiIndexRef;
+          schemaFindings.push(...fact('ai-schema', f, [resourceGeneration(aiIndex), referenceGeneration], () => validateXmlAgainstSchema(f.content, aiIndex, {
             filePath: f.path, domain: "ai_scripts", reportUnknownElements: true, references, strictStructure: true,
-          }));
+          })));
         }
       }
     }
@@ -317,11 +348,15 @@ export function runProjectValidation(
         )
       : null;
     schemaRegistryRef = registry;
-    routed = validateRoutedFiles(
-      project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string })),
-      registry,
-      { references, strictStructure: useReferenceSchemas },
-    );
+    const domains = new Map(registry?.domains.map(domain => [domain.domain, domain]));
+    routed = project.files.filter(f => typeof f.content === 'string').flatMap(file => {
+      const route = routeProjectFile(file.path, file.content!);
+      if (!route) return [];
+      // Resolve the current index BEFORE a hit: changed includes/availability must invalidate.
+      const index = buildRouteIndex(route, domains);
+      return fact('routed-schema', file, [resourceGeneration(index), referenceGeneration, useReferenceSchemas, [...CORPUS_PROVEN_DOMAINS]],
+        () => validateRoutedFiles([{ path: file.path, content: file.content! }], registry, { references, strictStructure: useReferenceSchemas }));
+    });
     for (const r of routed) schemaFindings.push(...r.findings);
   } catch { coverageGaps.push({ check: 'schema.routing', reason: 'Schema routing failed internally before completing; not a mod defect.' }); }
   for (const route of routed.filter(route => !route.domainAvailable)) {
@@ -413,7 +448,7 @@ export function runProjectValidation(
     const legalTypes = getAiOrderParamTypes(aiIndexRef);
     for (const f of project.files) {
       if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
-        aiscriptLint.push(...lintAiscriptOrderParams(f.content, legalTypes));
+        aiscriptLint.push(...fact('ai-order', f, [...legalTypes], () => lintAiscriptOrderParams(f.content!, legalTypes)));
       }
     }
   } catch { coverageGaps.push({ check: 'aiscript.order-params', reason: 'Order-parameter analysis failed before completing.' }); }
@@ -423,15 +458,29 @@ export function runProjectValidation(
   if (!spIndex && project.files.some(file => ['md', 'aiscript'].includes(classifyPath(file.path)))) {
     coverageGaps.push({ check: 'scriptproperties', reason: 'Required scriptproperties.xml index unavailable; property checks did not run.' });
   }
-  const projectSymbols = spIndex ? buildProjectSymbols(project.files, spIndex) : null;
+  const propertyGeneration = resourceGeneration(spIndex);
+  // Keep the original whole-file-list implementation as the independent full-run oracle and
+  // for duplicate paths, whose existing ordered merge semantics are not file-independent.
+  const fullSymbols = opts.incremental === false || new Set(project.files.map(file => file.path)).size !== project.files.length;
+  const symbolFacts = spIndex && !fullSymbols ? project.files.filter(f => typeof f.content === 'string').map(file =>
+    fact('symbols', file, propertyGeneration, () => {
+      const symbols = buildProjectSymbols([file], spIndex);
+      return { path: file.path, variables: symbols.variables, types: symbols.variableTypesFor(file.path) };
+    })) : [];
+  const symbolTypes = new Map(symbolFacts.map(symbol => [symbol.path, symbol.types]));
+  const projectSymbols = spIndex ? fullSymbols ? buildProjectSymbols(project.files, spIndex) : {
+    variables: symbolFacts.flatMap(symbol => symbol.variables),
+    variableTypesFor: (filePath: string) => symbolTypes.get(filePath) || {},
+  } : null;
   if (spIndex) {
     for (const f of project.files) {
       const k = f.kind || classifyPath(f.path);
       if ((k === "md" || k === "aiscript") && typeof f.content === "string") {
-        scriptPropertyFindings.push(...lintScriptPropertyChains(f.content, spIndex, {
+        const variableTypes = projectSymbols?.variableTypesFor(f.path);
+        scriptPropertyFindings.push(...fact('properties', f, [propertyGeneration, variableTypes], () => lintScriptPropertyChains(f.content!, spIndex, {
           filePath: f.path,
-          variableTypes: projectSymbols?.variableTypesFor(f.path),
-        }));
+          variableTypes,
+        })));
       }
     }
   }
@@ -444,7 +493,7 @@ export function runProjectValidation(
       // The pure linter is quiet outside its explicit expression/attribute/API
       // shapes, so running it for every textual project file also covers generic
       // XML categories without inventing a non-existent `xml` classifier kind.
-      referenceFindings.push(...lintReferenceLiterals(f.content, references, { filePath: f.path, kind }));
+      referenceFindings.push(...fact('references', f, referenceGeneration, () => lintReferenceLiterals(f.content!, references, { filePath: f.path, kind })));
     }
   }
 
@@ -453,7 +502,7 @@ export function runProjectValidation(
   const pitfallFindings: MdPitfallFinding[] = [];
   for (const f of project.files) {
     if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
-      pitfallFindings.push(...lintMdPitfalls(f.content, { propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path }));
+      pitfallFindings.push(...fact('pitfalls', f, propertyGeneration, () => lintMdPitfalls(f.content!, { propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path })));
     }
   }
 

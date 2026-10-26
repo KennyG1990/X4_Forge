@@ -133,7 +133,7 @@ export function routeProjectFile(filePath: string, xml: string): SchemaRoute | n
 }
 
 /** Build the (cached-by-path-set) index for a route: domain chain, plus diff chain when wrapped. */
-function buildRouteIndex(route: SchemaRoute, byDomain: Map<string, SchemaDomainInfo>): SchemaIndex | null {
+export function buildRouteIndex(route: SchemaRoute, byDomain: Map<string, SchemaDomainInfo>): SchemaIndex | null {
   const paths: string[] = [];
   const add = (info?: SchemaDomainInfo) => { if (info) paths.push(info.path, ...info.includes); };
   if (route.wrapper === 'diff') add(byDomain.get('diff'));

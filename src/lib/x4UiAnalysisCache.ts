@@ -4,31 +4,28 @@ import { lintX4UiCallModel, type X4UiLintResult } from './x4UiLint';
 const DEFAULT_MAX_ENTRIES = 128;
 const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
 
-/** Process-local cache of pure file-local facts, never project validation verdicts. */
-export function createX4UiAnalysisCache(
+/** Bounded process-local pure facts. Never approvals or final project/deployment verdicts. */
+export function createBoundedAnalysisCache<T>(
   limits = { maxEntries: DEFAULT_MAX_ENTRIES, maxBytes: DEFAULT_MAX_BYTES },
-  compute: (input: X4UiLuaFileInput) => X4UiLintResult = input => lintX4UiCallModel(buildX4UiCallModel(input)),
 ) {
   const { maxEntries, maxBytes } = limits;
   for (const value of [maxEntries, maxBytes]) {
     if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('Cache limits must be nonnegative safe integers.');
   }
-  const entries = new Map<string, { result: X4UiLintResult; bytes: number }>();
+  const entries = new Map<string, { result: T; bytes: number }>();
   let accountedBytes = 0;
   let hits = 0;
   let misses = 0;
   let bypasses = 0;
   let evictions = 0;
   return {
-    analyze(input: X4UiLuaFileInput): X4UiLintResult {
+    get(key: string, compute: () => T, sourceBytes = 0): T {
       // Bound retained payload, not the size of inputs the validator may inspect.
       // An oversized source is still analyzed in full and never silently truncated.
-      const sourceBytes = 2 * (input.rel.length + input.text.length + (input.sourcePath?.length || 0));
       if (!maxEntries || sourceBytes > maxBytes) {
         misses++; bypasses++;
-        return compute(input);
+        return compute();
       }
-      const key = JSON.stringify([input.rel, input.sourcePath ?? null, input.text]);
       const cached = entries.get(key);
       if (cached) {
         hits++;
@@ -37,7 +34,7 @@ export function createX4UiAnalysisCache(
       }
       misses++;
       // Exceptions are deliberately not memoized; a later attempt can recover.
-      const result = compute(input);
+      const result = compute();
       // UTF-16 key plus serialized-result payload accounting is deterministic;
       // object/Map overhead is also bounded by entry count, not an exact heap claim.
       const bytes = 2 * (key.length + JSON.stringify(result).length);
@@ -54,6 +51,22 @@ export function createX4UiAnalysisCache(
     },
     stats() { return { hits, misses, bypasses, evictions, entries: entries.size, accountedBytes }; },
     clear() { entries.clear(); accountedBytes = hits = misses = bypasses = evictions = 0; },
+  };
+}
+
+/** Existing UI cache keeps its exact key, limits, result copies and observability. */
+export function createX4UiAnalysisCache(
+  limits = { maxEntries: DEFAULT_MAX_ENTRIES, maxBytes: DEFAULT_MAX_BYTES },
+  compute: (input: X4UiLuaFileInput) => X4UiLintResult = input => lintX4UiCallModel(buildX4UiCallModel(input)),
+) {
+  const cache = createBoundedAnalysisCache<X4UiLintResult>(limits);
+  return {
+    analyze(input: X4UiLuaFileInput): X4UiLintResult {
+      const sourceBytes = 2 * (input.rel.length + input.text.length + (input.sourcePath?.length || 0));
+      return cache.get(JSON.stringify([input.rel, input.sourcePath ?? null, input.text]), () => compute(input), sourceBytes);
+    },
+    stats: cache.stats,
+    clear: cache.clear,
   };
 }
 

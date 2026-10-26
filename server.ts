@@ -12233,19 +12233,16 @@ function runCompileArtifactSelftest() {
       Object.keys(importedIdentityBuild.files).filter(file => file.startsWith('ui/')).join(', '),
     );
 
-    // B119 causal regression: a loaded workspace-owned passthrough byte must beat the
-    // older stamped source copy, while omitted entries continue to fall back to disk.
+    // Loaded UI source must beat the older stamped disk copy. Since C01 these files
+    // are owned by uiSourceFiles; editing a nonexistent passthrough entry tests nothing.
+    // Omitted UI and generic passthrough entries still fall back to their disk bytes.
     const precedenceWorkspace = sanitizeWorkspace({
       ...imported.workspace,
+      uiSourceFiles: (imported.workspace.uiSourceFiles || [])
+        .filter(file => file.path.toLowerCase() !== omittedPath.toLowerCase())
+        .map(file => file.path.toLowerCase() === precedencePath.toLowerCase()
+          ? { ...file, content: committedPassthroughLua } : file),
       passthroughFiles: (imported.workspace.passthroughFiles || []).map((file: any) => {
-        if (String(file.path || '').toLowerCase() === precedencePath.toLowerCase()) {
-          return { ...file, content: committedPassthroughLua, omitted: false };
-        }
-        if (String(file.path || '').toLowerCase() === omittedPath.toLowerCase()) {
-          const withoutContent = { ...file };
-          delete withoutContent.content;
-          return { ...withoutContent, omitted: true, bytes: Buffer.byteLength(omittedDiskLua, 'utf8') };
-        }
         if (String(file.path || '').toLowerCase() === unrelatedDiskPath.toLowerCase()) {
           const withoutContent = { ...file };
           delete withoutContent.content;
@@ -12320,7 +12317,7 @@ function runCompileArtifactSelftest() {
     const previewEffect = previewDeploymentEffect(precedenceWorkspace, previewTarget, 'loose');
     const previewEntry = 'error' in previewEffect ? undefined : previewEffect.overwritten.find(entry => entry.path === precedencePath);
     record(
-      'B119 preview reports newer loaded passthrough bytes over stale disk bytes',
+      'B119 preview reports newer loaded UI source bytes over stale disk bytes',
       !!previewEntry && previewEntry.bytes === Buffer.byteLength(committedPassthroughLua, 'utf8') && previewEntry.wasBytes === Buffer.byteLength(stalePassthroughLua, 'utf8'),
       'error' in previewEffect ? previewEffect.error : JSON.stringify(previewEntry),
     );
@@ -12328,7 +12325,7 @@ function runCompileArtifactSelftest() {
     const looseDeployRoot = path.join(root, 'loose-extensions');
     const looseTarget = compileWorkspaceToFolder(precedenceWorkspace, looseDeployRoot, 'store', false, 'loose');
     record(
-      'B119 loose materialization writes loaded workspace passthrough bytes',
+      'B119 loose materialization writes loaded workspace UI source bytes',
       fs.readFileSync(path.join(looseTarget, ...precedencePath.split('/'))).equals(Buffer.from(committedPassthroughLua, 'utf8')),
       path.join(looseTarget, precedencePath),
     );
@@ -12399,7 +12396,7 @@ function runCompileArtifactSelftest() {
       }
     }
     record(
-      'B119 catalog DAT slice is byte-identical to loaded workspace passthrough',
+      'B119 catalog DAT slice is byte-identical to loaded workspace UI source',
       !!catalogPassthroughBytes && catalogPassthroughBytes.equals(Buffer.from(committedPassthroughLua, 'utf8')),
       catalogPassthroughBytes ? `${catalogPassthroughBytes.length} bytes` : 'catalog entry missing',
     );

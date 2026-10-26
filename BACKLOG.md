@@ -14,23 +14,26 @@ Includes CRITICAL save corruption detection/read-only UTF-8 scan, new validator 
 cases, stable warning identity, deployment diagnostics, project gates and concrete runtime failures.
 Reported conditions await independent reproduction; C01-C04's narrower proof does not cover them.
 Documentation only: no change to execution order or permission to touch the running game.
-C01-C04 integration VERIFIED locally: reviewed private fixes, stable imported identities, and
+C01-C05 integration VERIFIED locally: reviewed private fixes, stable imported identities, and
 warning-only exact-input review reuse/revocation with authenticated provenance. Evidence:
 `docs/testing/claude-C01-integration.json`, `claude-C02-identities.json`, `claude-C03-warning-reviews.json`.
 C03 passed29 focused +51 existing checks,19 actual HTTP/browser/deploy scenarios, two green E2E
 runs (zero flakes), type/lint/build and complete precommit/policy gates. Source edits conservatively
-invalidate reviews; dependency-aware reuse remains C05. No public/installed/game claim.
+invalidate reviews; C05 reuses analysis facts without narrowing approval authority. Finer approval
+dependencies and A03 remain open. No public/installed/game claim.
 C04:34 focused,7 real-XSD controls,11 HTTP/browser/deploy scenarios and full gates passed;
 see docs/testing/claude-C04-validation.json and the gotcha disposition matrix. Station advisory
 uses a prior probe; unsupported dynamic/runtime semantics remain named.
-Next C05 measured incremental validation, C06 API/source
+C05:26 focused groups,134 runtime oracles and7 HTTP/browser/deploy groups pass; representative
+warm edit47.73s ->3.13s, largest XML edit6.12s vs48.38s full, with complete-result equality.
+Evidence: docs/testing/claude-C05-incremental.json. Cold~50s; active-mod latency not claimed.
+Next C06 API/source
 coordination and C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
 verification and installation windows. Public release and exact installed verification precede
 Kimi M01; no interim pushes. Kimi paused.
 
-C05 active feature owner: https://github.com/KennyG1990/X4_Forge/issues/47
-and https://app.notion.com/p/4054618ed15b81749116e21f47c9ac09. Resolve only after its own
-performance/parity/test-mod gates pass; no blanket closure of the other complaint cases.
+C05 owner #47 and Notion4054618ed15b81749116e21f47c9ac09 close at this validated local
+checkpoint. Parent #20 and additional complaint checklists stay active until individually proved.
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 

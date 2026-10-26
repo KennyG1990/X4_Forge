@@ -352,14 +352,14 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
   ok('malformed_workspace_binding_rejected', malformedBindingRejected);
 
   const constrained = store.create('contract-only', 'write', null, 'ws_111111111111111111111111', {
-    capabilityIdentities: ['workspace.compile@1'],
+    capabilityIdentities: ['workspace.compile@2'],
     allowedEffects: ['audit-retention-delete', 'analyze', 'read', 'audit-write'],
   });
   const constrainedVerify = store.verify(constrained.token, T0 + 1000);
   ok('capability_constraint_is_canonical_and_roundtrips',
     constrainedVerify.ok === true &&
     JSON.stringify(constrainedVerify.capabilityConstraint) === JSON.stringify({
-      capabilityIdentities: ['workspace.compile@1'],
+      capabilityIdentities: ['workspace.compile@2'],
       allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'],
     }) &&
     JSON.stringify(store.list().find(row => row.id === constrained.record.id)?.capabilityConstraint) ===
@@ -369,19 +369,19 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
   const afterReturnedRecordMutation = store.verify(constrained.token, T0 + 1000);
   ok('returned_create_record_cannot_mutate_internal_authority', afterReturnedRecordMutation.ok === true &&
     afterReturnedRecordMutation.scope === 'write' &&
-    JSON.stringify(afterReturnedRecordMutation.capabilityConstraint?.capabilityIdentities) === JSON.stringify(['workspace.compile@1']));
+    JSON.stringify(afterReturnedRecordMutation.capabilityConstraint?.capabilityIdentities) === JSON.stringify(['workspace.compile@2']));
   const mutableListCopy = store.list().find(row => row.id === constrained.record.id);
   mutableListCopy?.capabilityConstraint?.capabilityIdentities.push('workspace.generate.preview@1');
   ok('listed_constraint_cannot_mutate_internal_authority',
-    JSON.stringify(store.verify(constrained.token, T0 + 1000).capabilityConstraint?.capabilityIdentities) === JSON.stringify(['workspace.compile@1']));
+    JSON.stringify(store.verify(constrained.token, T0 + 1000).capabilityConstraint?.capabilityIdentities) === JSON.stringify(['workspace.compile@2']));
   const beforeInvalidConstraint = JSON.stringify(store.list());
   const rejectedConstraints: AgentCapabilityConstraint[] = [
     { capabilityIdentities: ['project.validate@1'], allowedEffects: ['read'] },
-    { capabilityIdentities: ['workspace.compile@2'], allowedEffects: ['read'] },
-    { capabilityIdentities: ['workspace.compile@1', 'workspace.compile@1'], allowedEffects: ['read'] },
+    { capabilityIdentities: ['workspace.compile@3'], allowedEffects: ['read'] },
+    { capabilityIdentities: ['workspace.compile@2', 'workspace.compile@2'], allowedEffects: ['read'] },
     { capabilityIdentities: ['schema.domains.list@1'], allowedEffects: ['read'] },
-    { capabilityIdentities: ['workspace.compile@1'], allowedEffects: ['read', 'read'] },
-    { capabilityIdentities: ['workspace.compile@1'], allowedEffects: ['read', 'deploy'] },
+    { capabilityIdentities: ['workspace.compile@2'], allowedEffects: ['read', 'read'] },
+    { capabilityIdentities: ['workspace.compile@2'], allowedEffects: ['read', 'deploy'] },
   ];
   ok('invalid_capability_constraints_fail_before_create', rejectedConstraints.every((constraint) => {
     try { store.create('bad constraint', 'read', null, undefined, constraint); } catch { return true; }
@@ -390,7 +390,7 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
   let surplusEffectRejected = false;
   try {
     store.create('surplus effect', 'write', null, undefined, {
-      capabilityIdentities: ['workspace.compile@1'],
+      capabilityIdentities: ['workspace.compile@2'],
       allowedEffects: ['read', 'deploy'],
     });
   } catch (error) {
@@ -399,8 +399,8 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
   ok('surplus_effect_is_rejected_inside_an_otherwise_valid_preset',
     surplusEffectRejected && JSON.stringify(store.list()) === beforeInvalidConstraint);
   const malformedConstraintInputs = [
-    normalizeAgentCapabilityConstraint('workspace.compile@1', [], 'write'),
-    normalizeAgentCapabilityConstraint(['workspace.compile@1'], ['unknown-effect'], 'write'),
+    normalizeAgentCapabilityConstraint('workspace.compile@2', [], 'write'),
+    normalizeAgentCapabilityConstraint(['workspace.compile@2'], ['unknown-effect'], 'write'),
   ];
   ok('non_array_and_unknown_effect_constraints_fail_closed',
     malformedConstraintInputs.every(result => result.ok === false) && JSON.stringify(store.list()) === beforeInvalidConstraint);
@@ -524,19 +524,19 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
     JSON.stringify(customEffective.capabilities.map(capability => `${capability.id}@${capability.version}`)) === JSON.stringify([
       'schema.domains.list@1',
       'schema.element.explain@1',
-      'workspace.compile@1',
+      'workspace.compile@2',
     ]));
   const effectDenied = buildEffectiveCapabilitySelection(
     {
       kind: 'agent',
       scope: 'write',
       workspaceId: boundVerify.workspaceId,
-      constraint: { capabilityIdentities: ['workspace.compile@1'], allowedEffects: ['read', 'analyze', 'audit-write'] },
+      constraint: { capabilityIdentities: ['workspace.compile@2'], allowedEffects: ['read', 'analyze', 'audit-write'] },
     },
     (method, template) => resolveAgentRouteTemplateAuthority(method, template),
   );
   ok('one_disallowed_effect_denies_the_whole_capability',
-    effectDenied.exclusions.some(exclusion => exclusion.capabilityIdentity === 'workspace.compile@1' &&
+    effectDenied.exclusions.some(exclusion => exclusion.capabilityIdentity === 'workspace.compile@2' &&
       exclusion.code === 'CAPABILITY_EFFECT_DENIED' && exclusion.disallowedEffects?.includes('audit-retention-delete')));
   const compileDecision = resolveAgentRouteAuthority('POST', '/agent/compile');
   const workspaceReadDecision = resolveAgentRouteAuthority('GET', '/agent/workspace');
@@ -573,7 +573,7 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
     }
 
     const staleSource = s1.create('stale constraint', 'write', null, 'ws_111111111111111111111111', {
-      capabilityIdentities: ['workspace.compile@1'],
+      capabilityIdentities: ['workspace.compile@2'],
       allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'],
     });
     const staleRecord: AgentKeyRecord = {
@@ -596,7 +596,7 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
         JSON.stringify(['schema.domains.list@1', 'schema.element.explain@1']));
     const staleRevoked = staleStore.revoke(staleRecord.id);
     const replacement = staleStore.create('replacement', 'write', null, 'ws_111111111111111111111111', {
-      capabilityIdentities: ['workspace.compile@1'],
+      capabilityIdentities: ['workspace.compile@2'],
       allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'],
     });
     ok('stale_constraint_remains_listable_revokeable_and_replaceable', staleRevoked &&
@@ -605,7 +605,7 @@ export function runAgentKeysSelftest(): { pass: boolean; checks: Array<{ name: s
     const reopenedV3 = createAgentKeyStore({ file: tmpFile, now: () => T0 + 1 });
     ok('constrained_v3_disk_roundtrip_preserves_immutable_authority',
       JSON.stringify(reopenedV3.verify(replacement.token, T0 + 1).capabilityConstraint) === JSON.stringify({
-        capabilityIdentities: ['workspace.compile@1'],
+        capabilityIdentities: ['workspace.compile@2'],
         allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'],
       }));
 
