@@ -224,6 +224,8 @@ import { runAgentHistorySelftest } from "./src/lib/agentHistory.selftest";
 import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
+import { projectApiEnvelope, projectApiSubject, fileApiSubject, validateProjectApiBody } from './src/server/projectApiContract';
+import { canonicalSourceKey, forgeResourceCoordinator } from './src/server/resourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -415,7 +417,16 @@ function reloadSchemaLibrary(): SchemaLibrary {
 function apiFailureEnvelopeMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (!req.path.startsWith('/api')) return next();
   const originalJson = res.json.bind(res);
-  res.json = ((body: unknown) => originalJson(normalizeApiFailureBody(res.statusCode, body))) as typeof res.json;
+  res.json = ((body: unknown) => {
+    const envelope = projectApiEnvelope(req.originalUrl.split('?')[0], body, res.locals.apiSubject);
+    if (envelope && typeof envelope === 'object' && !Array.isArray(envelope) && res.locals.sourceOperation) {
+      (envelope as Record<string, unknown>).sourceOperation = res.locals.sourceOperation;
+    }
+    const classified = envelope && typeof envelope === 'object' && !Array.isArray(envelope) && res.statusCode >= 400
+      ? { category: res.statusCode >= 500 ? 'forge-failure' : res.statusCode === 400 || res.statusCode === 413 ? 'request-invalid' : 'request-refused', ...envelope }
+      : envelope;
+    return originalJson(normalizeApiFailureBody(res.statusCode, classified));
+  }) as typeof res.json;
   return next();
 }
 app.use(apiFailureEnvelopeMiddleware);
@@ -1096,6 +1107,61 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
 }
 
 app.use("/api", ledgerMiddleware);
+
+function projectApiInputMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (req.method !== 'POST') return next();
+  try { validateProjectApiBody(req.path, req.body); return next(); }
+  catch (error) { return res.status(400).json({ ok: false, code: 'PROJECT_INPUT_INVALID', category: 'request-invalid', error: error.message }); }
+}
+app.use(projectApiInputMiddleware);
+
+/** Lock the canonical disk owner, never the editable display name. No disk writes here. */
+function sourceOperationKeys(req: express.Request): string[] {
+  const resolved = resolveXsdConfig();
+  const keys: string[] = [];
+  const workspace = req.body?.workspace ?? ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace;
+  const source = workspace?.sourceStamp?.dir;
+  if (typeof source === 'string' && source) keys.push(canonicalSourceKey(source));
+  const target = req.body?.fromPath ?? req.body?.path;
+  if (typeof target === 'string' && target && !req.path.startsWith('/api/fs/')) {
+    const folder = resolveModFolder(target, req.body?.root);
+    if (!('error' in folder)) keys.push(canonicalSourceKey(folder.abs));
+  }
+  if (req.path.startsWith('/api/fs/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
+    if (resolved.modWorkspacePath) {
+      const relative = typeof target === 'string' ? target.replace(/\\/g, '/').split('/')[0] : '';
+      keys.push(canonicalSourceKey(relative && relative !== '..' ? path.join(resolved.modWorkspacePath, relative) : resolved.modWorkspacePath));
+    }
+  }
+  if (/\/(deploy(?:-verify)?|artifact\/build|release\/|package\/release)/.test(req.path)) {
+    // Include output roots; an artifact/deployment transaction must never interleave its staging.
+    if (resolved.modWorkspacePath) keys.push(canonicalSourceKey(path.join(resolved.modWorkspacePath, '.forge-builds')));
+    if (req.path.includes('/deploy') && resolved.x4GamePath) keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
+  }
+  return [...new Set(keys)];
+}
+
+function coordinatedSourceOperation(handler: (req: express.Request, res: express.Response) => unknown): express.RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const keys = sourceOperationKeys(req);
+      const actor = (req as any).__actor as RequestActor | undefined;
+      const run = () => {
+        if (res.writableEnded || res.destroyed) return; // timed out/disconnected while queued: never mutate later
+        if (keys.length && (req.path.startsWith('/api/fs/') || req.path.includes('/deploy') || req.path.includes('/artifact/build'))) {
+          res.locals.sourceOperation = forgeResourceCoordinator.status(keys);
+        }
+        return handler(req, res);
+      };
+      if (!keys.length) { await run(); return; }
+      await forgeResourceCoordinator.run(keys, { actor: actor?.keyId || actor?.label || 'studio',
+        operation: req.path, workspaceId: ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspaceId }, run, () => sourceOperationKeys(req));
+    } catch (error) {
+      if (res.headersSent || res.writableEnded) return next(error);
+      res.status(error.status || 500).json({ ok: false, code: error.code || 'SOURCE_COORDINATION_FAILED', error: error.message });
+    }
+  };
+}
 
 // ---------------------------------------------------------------------------
 // B42: agent-key management (SESSION TOKEN ONLY — scopeAllows denies /agent/keys
@@ -4985,7 +5051,7 @@ function writeWorkspaceFileGuarded(
   return describeWrittenBytes(String(content ?? ''), safePath);
 }
 
-app.post("/api/fs/write", (req, res) => {
+app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
   try {
     const targetPath = String(req.body?.path || '').trim();
     const incoming = req.body?.content ?? '';
@@ -5031,7 +5097,7 @@ app.post("/api/fs/write", (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to write file." });
   }
-});
+}));
 
 // ---------------------------------------------------------------------------
 // B86 — AGENT ACTION LEDGER surface.
@@ -5111,6 +5177,7 @@ app.get("/api/agent/status", (req, res) => {
     const resolved = resolveXsdConfig();
     const record = requestWorkspace(req);
     const ws = record.workspace as ModWorkspace;
+    res.locals.apiSubject = { modId: effectiveModId(activeBuildWorkspace(ws)), sourceHash: record.head, sourceHashScope: 'workspace-head' };
     const sourceDir = typeof (ws as any)?.sourceStamp?.dir === 'string' ? (ws as any).sourceStamp.dir : '';
 
     // Is the canvas stale relative to the folder it was imported from? This is the exact question
@@ -5153,6 +5220,8 @@ app.get("/api/agent/status", (req, res) => {
         sourceFolder: sourceDir || undefined,
       },
       sourceSync,
+      sourceCoordination: forgeResourceCoordinator.status(sourceDir ? [canonicalSourceKey(sourceDir)] : []),
+      environment: { scope: 'server-process', pid: process.pid, mode: process.env.X4_FORGE_MODE || 'standalone' },
       roots: {
         modWorkspacePath: resolved.modWorkspacePath || null,
         filesystemPath: resolved.filesystemPath || null,
@@ -5219,7 +5288,7 @@ app.get("/api/agent/history/:id/raw", (req, res) => {
   }
 });
 
-app.post("/api/agent/history/:id/revert", (req, res) => {
+app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res) => {
   try {
     let record = requestWorkspace(req);
     const row = agentHistoryStore.find(String(req.params.id));
@@ -5335,10 +5404,10 @@ app.post("/api/agent/history/:id/revert", (req, res) => {
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'Revert failed.' });
   }
-});
+}));
 
 // Server Filesystem create endpoint
-app.post("/api/fs/create", (req, res) => {
+app.post("/api/fs/create", coordinatedSourceOperation((req, res) => {
   try {
     const { name, type } = req.body;
     if (!name) {
@@ -5371,7 +5440,7 @@ app.post("/api/fs/create", (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to create resource." });
   }
-});
+}));
 
 // Server Filesystem snapshots list endpoint
 app.get("/api/fs/snapshots", (req, res) => {
@@ -5427,7 +5496,7 @@ app.get("/api/fs/snapshots", (req, res) => {
 });
 
 // Server Filesystem save snapshot endpoint
-app.post("/api/fs/snapshot", (req, res) => {
+app.post("/api/fs/snapshot", coordinatedSourceOperation((req, res) => {
   try {
     const { modId, workspace, name } = req.body;
     if (!modId || !workspace) {
@@ -5483,7 +5552,7 @@ app.post("/api/fs/snapshot", (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to save snapshot." });
   }
-});
+}));
 
 function workspaceSnapshotRestoreFailureStatus(code: string): number {
   if (code === 'WORKSPACE_SNAPSHOT_PATH_UNSAFE') return 403;
@@ -5545,7 +5614,7 @@ function workspaceSnapshotRestoreReadyRecovery(
 }
 
 // Server Filesystem restore snapshot endpoint
-app.post("/api/fs/restore-snapshot", async (req, res) => {
+app.post("/api/fs/restore-snapshot", coordinatedSourceOperation(async (req, res) => {
   const deadlineRequest = req as DeadlineAwareRequest;
   const responseUnavailable = () => res.writableEnded
     || res.destroyed
@@ -5637,10 +5706,10 @@ app.post("/api/fs/restore-snapshot", async (req, res) => {
   } catch {
     return respondFailure('WORKSPACE_SNAPSHOT_RESTORE_RECEIPT_EXECUTION_FAILED');
   }
-});
+}));
 
 // Server Filesystem delete snapshot endpoint
-app.post("/api/fs/delete-snapshot", (req, res) => {
+app.post("/api/fs/delete-snapshot", coordinatedSourceOperation((req, res) => {
   try {
     const { modId, snapshotName } = req.body;
     if (!modId || !snapshotName) {
@@ -5662,12 +5731,12 @@ app.post("/api/fs/delete-snapshot", (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to delete snapshot." });
   }
-});
+}));
 
 // Remove a mod directory (undeploy / clean an orphan) from the configured roots — the deploy
 // path can create folders, so there must be a safe way to remove them. Scoped exactly like
 // fs/write: relative path only, must stay strictly inside a root, never deletes the root itself.
-app.post("/api/fs/delete-dir", (req, res) => {
+app.post("/api/fs/delete-dir", coordinatedSourceOperation((req, res) => {
   try {
     const relativePath = String(req.body?.path || '').trim();
     if (!relativePath) return res.status(400).json({ error: "Missing path parameter." });
@@ -5692,7 +5761,7 @@ app.post("/api/fs/delete-dir", (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to delete directory." });
   }
-});
+}));
 
 app.get("/api/schema/element/:tag", (req, res) => {
   const tag = req.params.tag;
@@ -7086,6 +7155,7 @@ function handleRuntimeControl(req: express.Request, res: express.Response, actio
       return res.status(400).json({code:'RUNTIME_INPUT_INVALID',error:'Preview requires an empty object; identities come from the addressed workspace.'});
     const payload = buildAddressedDebugWatcherBrief(record, [], false) as RuntimeDebuggerAdapterResult['payload'];
     const subject = {workspaceId:record.workspaceId,head:record.head,modId:effectiveModId(activeBuildWorkspace(record.workspace)),payload};
+    res.locals.apiSubject = { modId: subject.modId, sourceHash: subject.head, sourceHashScope: 'workspace-head' };
     const result = action === 'reload' ? runtimeControl.request(subject,req.body,deploymentPrincipal(req))
       : action === 'preview' ? runtimeControl.preview(subject) : runtimeControl.status(subject);
     return res.status(action === 'reload' ? 202 : 200).json({ok:true,...result});
@@ -7855,7 +7925,7 @@ function resolveModFolder(reqPath: string, requestedRoot?: unknown): { abs: stri
   return { error: `Folder not found in configured roots: ${rel}`, status: 404 };
 }
 
-app.post("/api/agent/mod-folder/import", (req, res) => {
+app.post("/api/agent/mod-folder/import", coordinatedSourceOperation((req, res) => {
   try {
     const parsed = parseModFolderImportRequest(req.body);
     if (parsed.ok === false) return res.status(400).json({ success: false, code: parsed.code, error: parsed.error });
@@ -7882,11 +7952,12 @@ app.post("/api/agent/mod-folder/import", (req, res) => {
     const prior = resolveWorkspaceAuthority(req, res, false);
     if (res.headersSent) return;
     const { workspace, report } = importModFolder(r.abs, prior?.workspace);
+    res.locals.apiSubject = projectApiSubject(loadProjectFromDisk(r.abs).project);
     return res.json({ success: true, workspace, report });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'mod-folder import failed' });
   }
-});
+}));
 
 app.get("/api/agent/round-trip-selftest", (req, res) => {
   let tmp = '';
@@ -8893,6 +8964,7 @@ app.post("/api/agent/project/files", (req, res) => {
     if (!req.body?.workspace && !record) return;
     const workspace = activeBuildWorkspace(req.body?.workspace ?? record!.workspace);
     const built = buildWorkspaceFileManifest(workspace);
+    res.locals.apiSubject = fileApiSubject(built.modId, built.files);
     const configuredRoot = resolveXsdConfig().modWorkspacePath;
     const candidate = String(workspace.sourceFolder || workspace.sourceStamp?.dir || '').trim();
     let sourceRoot: string | null = null;
@@ -8926,7 +8998,8 @@ app.post("/api/agent/project/generate", (req, res) => {
     const spec = req.body?.spec || req.body || {};
     const project = generateAgentProject(spec);
     const packaged = packageAgentProject(project);
-    return res.json({ success: true, project, summary: packaged.summary, validation: packaged.validation });
+    return res.json({ ...generatedOutputVerdict(packaged.ok), project, summary: packaged.summary,
+      validation: { ...packaged.validation, ok: packaged.ok, scope: 'project-package-checks' } });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project generate failed" });
   }
@@ -8939,7 +9012,8 @@ app.post("/api/agent/project/package", (req, res) => {
       return res.status(400).json({ error: "Body must be { project: { id, name, files } }." });
     }
     const packaged = packageAgentProject(project);
-    return res.json({ success: true, ...packaged });
+    return res.json({ ...generatedOutputVerdict(packaged.ok), ...packaged,
+      validation: { ...packaged.validation, ok: packaged.ok, scope: 'project-package-checks' } });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project package failed" });
   }
@@ -8954,6 +9028,7 @@ app.post("/api/agent/project/validate-crossfile", (req, res) => {
     if (project.files.length > 2000) {
       return res.status(413).json({ error: "Project has too many files (>2000)." });
     }
+    res.locals.apiSubject = projectApiSubject(parseValidationProject(project));
     return res.json(validateProjectCrossFile(project));
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project cross-file validate failed" });
@@ -9077,7 +9152,7 @@ app.post("/api/agent/project/validate/check", (req, res) => {
   req.body = applyForgeCapabilityFixedBody('project.validate', req.body);
   return validateProjectRequest(req, res);
 });
-app.post("/api/agent/project/validate", validateProjectRequest);
+app.post("/api/agent/project/validate", coordinatedSourceOperation(validateProjectRequest));
 
 type ExactSuppressionScope = { code: string; file?: string; sourceRef?: string };
 type SuppressionTarget = {
@@ -9240,7 +9315,7 @@ app.post('/api/agent/project-rules/prepare-suppression', (req, res) => {
   }
 });
 
-app.post('/api/agent/project-rules/suppress', (req, res) => {
+app.post('/api/agent/project-rules/suppress', coordinatedSourceOperation((req, res) => {
   try {
     const resolved = resolveXsdConfig();
     if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
@@ -9285,7 +9360,7 @@ app.post('/api/agent/project-rules/suppress', (req, res) => {
   } catch (error) {
     return res.status(500).json({ success: false, code: 'SUPPRESSION_WRITE_FAILED', error: errorMessage(error) || 'Suppression write failed.' });
   }
-});
+}));
 
 // B59a — patch-day readiness: does a mod's <diff> selectors still match after a game update?
 // Reads the mod's diff patches, evaluates each selector against the OLD and NEW vanilla files
@@ -9480,7 +9555,9 @@ app.post("/api/agent/project/content-xml", (req, res) => {
     if (!meta || typeof meta !== "object" || !meta.id) {
       return res.status(400).json({ error: "Body must be { meta: { id, name?, version?, author?, description?, deps? } }." });
     }
-    return res.json({ contentXml: buildContentXml(meta) });
+    const contentXml = buildContentXml(meta);
+    res.locals.apiSubject = fileApiSubject(meta.id, { 'content.xml': contentXml });
+    return res.json({ contentXml });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "content-xml authoring failed" });
   }
@@ -13004,7 +13081,7 @@ function runCompileArtifactSelftest() {
  * Compiles and deploys the workspace directly into the configured X4 Extensions directory.
  */
 // Legacy callers use the identical authenticated identity/approval/transaction contract.
-app.post("/api/agent/deploy", (req, res) => deployVerifyHandler(req, res));
+app.post("/api/agent/deploy", coordinatedSourceOperation((req, res) => deployVerifyHandler(req, res)));
 
 
 function buildDeployProjectValidation(modId: string, snapshot: DeploymentSnapshot) {
@@ -13095,7 +13172,7 @@ function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
 // extensions) → bytes confirm (deployed content.xml exists + id matches) → extension-doctor
 // (auto-FAIL on duplicate-id / folder-id-mismatch). Returns a single pass/fail verdict so the
 // agent/UI never skips the doctor. On-demand only (not a hot poll), so full-folder scan is fine.
-app.post("/api/agent/deploy-verify", (req, res) => deployVerifyHandler(req, res));
+app.post("/api/agent/deploy-verify", coordinatedSourceOperation((req, res) => deployVerifyHandler(req, res)));
 
 // Reviews are listed with fresh evidence by deploy-verify dryRun; revocation never deploys.
 app.post('/api/agent/warning-reviews/revoke', (req, res) => {
@@ -13129,6 +13206,7 @@ app.post('/api/agent/warning-reviews/revoke', (req, res) => {
 });
 function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
+  let writeAttempted = false;
   let snapshot: DeploymentSnapshot | undefined;
   let deployReceipt: ActionReceipt | undefined;
   const recordFailedDeploy = (rolledBack: boolean) => {
@@ -13157,9 +13235,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     let hit = false;
     for (const [id, label] of STAGES) {
       if (id === stageId) { hit = true; continue; }
-      if (hit && !checklist.some(c => c.id === id)) checklist.push({ id, label, status: 'skipped', detail: 'Not reached — fix the failure above first.' });
+      if (hit && !checklist.some(c => c.id === id)) checklist.push({ id, label, status: 'skipped', detail: 'Not reached - fix the failure above first.' });
     }
-    return { ok: false, success: false, stage: stageId, checklist, ...responseIdentity, ...payload };
+    return { ok: false, success: false, stage: stageId, checklist, ...responseIdentity,
+      deployment: { state: writeAttempted ? 'attempted' : 'not-deployed', writeAttempted, fidelityScope: writeAttempted ? 'attempted-deployment' : 'none' }, ...payload };
   };
   let pendingDeployRecovery: DeploymentRecoveryRecord | undefined;
   try {
@@ -13397,9 +13476,19 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         error: 'Deployment requires expectedModId, expectedSourceHash, expectedArtifactHash and expectedBindingHash from a current dry-run preview. Nothing written.' }));
     }
     if (!decision.validationAllowsDeploy) {
+      const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
+      const acceptanceRequest = { method: 'POST', path: '/api/agent/deploy-verify',
+        body: { ...(body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
+          ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
+          dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
+          expectedArtifactHash: artifactHash, expectedBindingHash: decision.binding.hash,
+          acceptances: [...acceptances, ...blockingFindings.map(finding => ({ findingId: finding.findingId, bindingHash: decision.binding.hash, reason: '' }))] },
+        instruction: 'Supply a nonempty reason for each exact finding before POSTing this body. Deploy permission is required. Stale evidence and safety gates still refuse.' };
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
-        `${decision.unacceptedErrorIds.length} unaccepted mod finding(s). Review exact findings and supply a reason for each acceptance.`);
-      return res.json(failWith('preflight', { modId, validationDelta, preflight: { summary: preflight.summary, findings: [...preflight.schema.findings, ...preflight.crossFile.findings].slice(0, 10) } }));
+        blockingFindings.map(f => `${f.code || 'mod-finding'} | ${f.filePath || '(project)'}${f.line ? ':' + f.line : ''} | ${f.message} | findingId=${f.findingId}`).join('\n')
+        + '\nAcceptance: POST /api/agent/deploy-verify using acceptanceRequest.body with a reason for each finding.');
+      return res.json(failWith('preflight', { modId, category: 'mod-findings', code: 'UNACCEPTED_MOD_FINDINGS', blockingFindings,
+        acceptanceRequest, validationDelta, preflight: { summary: preflight.summary, findings: blockingFindings } }));
     }
     const deltaDetail = validationDelta.status === 'compared'
       ? `${validationDelta.counts.new} new, ${validationDelta.counts.resolved} resolved since ${validationDelta.baseline.recordedAt}`
@@ -13480,6 +13569,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash);
     assertWriteAuthority();
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
+    writeAttempted = true;
     if (modWorkspacePath) {
       const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
       stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
@@ -13692,7 +13782,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
   }
 }
 
-app.post("/api/agent/compile", (req, res) => {
+app.post("/api/agent/compile", coordinatedSourceOperation((req, res) => {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
     return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', success: false, error: 'workspace.compile requires a JSON object body.' });
   }
@@ -13741,6 +13831,7 @@ app.post("/api/agent/compile", (req, res) => {
     const mdPath = `md/${modId}.xml`;
     const uiIndexPath = `ui.xml`;
     const uiLuaPath = `ui/${modId}.lua`;
+    res.locals.apiSubject = fileApiSubject(modId, files);
     const full = runFullWorkspaceValidation(ws, { modId, files });
     const validationDelta = validationDeltaFor(
       modId,
@@ -13783,18 +13874,19 @@ app.post("/api/agent/compile", (req, res) => {
       error: error.message || "Failed to compile workspace schema to XML."
     });
   }
-});
+}));
 
 /**
  * POST /api/agent/package
  * Agent-friendly alias for compile that returns the complete package file manifest.
  */
-app.post("/api/agent/package", (req, res) => {
+app.post("/api/agent/package", coordinatedSourceOperation((req, res) => {
   const record = req.body?.workspace ? null : resolveWorkspaceAuthority(req, res, true);
   if (!req.body?.workspace && !record) return;
   const ws = sanitizeWorkspace(req.body?.workspace || record!.workspace);
   try {
     const { modId, files } = buildWorkspaceFileManifest(ws);
+    res.locals.apiSubject = fileApiSubject(modId, files);
     const full = runFullWorkspaceValidation(ws, { modId, files });
     const validationDelta = validationDeltaFor(
       modId,
@@ -13828,9 +13920,9 @@ app.post("/api/agent/package", (req, res) => {
       error: error.message || "Failed to package workspace schema to file manifest."
     });
   }
-});
+}));
 
-app.post("/api/agent/artifact/build", (req, res) => {
+app.post("/api/agent/artifact/build", coordinatedSourceOperation((req, res) => {
   const record = req.body?.workspace ? null : resolveWorkspaceAuthority(req, res, true);
   if (!req.body?.workspace && !record) return;
   const ws = sanitizeWorkspace(req.body?.workspace || record!.workspace);
@@ -13843,6 +13935,7 @@ app.post("/api/agent/artifact/build", (req, res) => {
     const buildRoot = path.join(resolved.modWorkspacePath, '.forge-builds', format);
     const artifactPath = compileWorkspaceToFolder(ws, buildRoot, 'store', false, format);
     const built = buildWorkspaceFileManifest(ws);
+    res.locals.apiSubject = fileApiSubject(built.modId, built.files);
     const full = runFullWorkspaceValidation(ws, built);
     return res.json({
       ...generatedOutputVerdict(full.validation.ok),
@@ -13857,7 +13950,7 @@ app.post("/api/agent/artifact/build", (req, res) => {
   } catch (error) {
     return res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
   }
-});
+}));
 
 type ReleaseBump = 'none' | 'patch' | 'minor';
 
@@ -14124,11 +14217,11 @@ function artifactPlanToExpectedEntry(plan: ArtifactPlan, rootFolder: string, arc
   throw new Error(`Artifact entry has no readable bytes: ${entry.path}`);
 }
 
-app.post('/api/agent/release/nexus/prepare', nexusReleaseHandler);
+app.post('/api/agent/release/nexus/prepare', coordinatedSourceOperation(nexusReleaseHandler));
 // B9 compatibility alias. It now uses the same explicit, disk-complete, reopen-verified engine.
-app.post('/api/agent/package/release', nexusReleaseHandler);
+app.post('/api/agent/package/release', coordinatedSourceOperation(nexusReleaseHandler));
 
-app.post('/api/agent/release/steam/prepare', (req, res) => {
+app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, res) => {
   if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'workspace')) {
     return sendReleaseFailure(res, 400, 'FAILED', 'WORKSPACE_REQUIRED', 'Body must include the explicit workspace to package.', [releaseStage('source', 'Resolve complete source', 'fail', 'No explicit workspace was supplied.')]);
   }
@@ -14273,7 +14366,7 @@ app.post('/api/agent/release/steam/prepare', (req, res) => {
     if (scratchParent) fs.rmSync(scratchParent, { recursive: true, force: true });
     prepared.cleanup();
   }
-});
+}));
 
 type ReleasePlatform = 'nexus' | 'steam';
 
@@ -14430,7 +14523,7 @@ app.post('/api/agent/release/steam/verify', (req, res) => {
   }
 });
 
-app.post('/api/agent/release/steam/adopt', (req, res) => {
+app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res) => {
   const modId = String(req.body?.modId || '').trim();
   if (!/^[A-Za-z][\w.-]*$/.test(modId)) return sendReleaseFailure(res, 400, 'FAILED', 'MOD_ID_REQUIRED', 'A safe modId from the verified Steam report is required.', [releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'The supplied modId is missing or unsafe.')]);
   const resolved = resolveXsdConfig();
@@ -14508,7 +14601,7 @@ app.post('/api/agent/release/steam/adopt', (req, res) => {
     return res.json({ success: true, status: 'PARTIAL', code: 'STEAM_ADOPTION_REPORT_WRITE_FAILED', platform: 'steam', modId, ...preview, beforeContent: undefined, afterContent: undefined, sourceWritePerformed: beforeSha256 !== afterSha256, sourceReimportRequired: true, writtenSha256, error: `Source content.xml was written and verified, but the release report update failed: ${detail}`, stages: partialStages, failedStages: ['adoption-report'] });
   }
   return res.json({ success: true, status: 'VERIFIED_AND_ADOPTED', platform: 'steam', modId, ...preview, beforeContent: undefined, afterContent: undefined, sourceWritePerformed: beforeSha256 !== afterSha256, sourceReimportRequired: true, writtenSha256, stages, failedStages: [] });
-});
+}));
 
 function populateNodeMetadata(nodes: any[]): any[] {
   if (!nodes || !Array.isArray(nodes)) return [];

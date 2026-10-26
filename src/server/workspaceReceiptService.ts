@@ -1,3 +1,4 @@
+import { ResourceCoordinator } from './resourceCoordinator';
 /**
  * W3B1a — route-agnostic receipt transaction adapter for the installed sidecar.
  *
@@ -139,11 +140,6 @@ export interface WorkspaceReceiptServiceOptions {
   policyBundle?: ActionReceiptPolicyBundle;
   /** Synchronous injection seam for unavailable/invalid-policy tests and host bootstrapping. */
   policyBundleLoader?: () => ActionReceiptPolicyBundle;
-}
-
-interface QueueEntry {
-  tail: Promise<void>;
-  pending: number;
 }
 
 interface PreparedFacts {
@@ -363,7 +359,7 @@ export class WorkspaceReceiptService {
   private readonly policyBundleLoader: () => ActionReceiptPolicyBundle;
   private policyBundle?: ActionReceiptPolicyBundle;
   private policyBundleFailure?: WorkspaceReceiptServiceCode;
-  private readonly queues = new Map<string, QueueEntry>();
+  private readonly coordinator = new ResourceCoordinator();
 
   constructor(options: WorkspaceReceiptServiceOptions = {}) {
     this.policyBundleLoader = options.policyBundleLoader ?? loadActionReceiptPolicyBundle;
@@ -393,24 +389,8 @@ export class WorkspaceReceiptService {
   }
 
   private async withSerializationKey<T>(key: string, task: () => Promise<T>): Promise<T> {
-    const queueKey = hashBoundedReceiptFacts(key);
-    const current = this.queues.get(queueKey);
-    const entry: QueueEntry = current ?? { tail: Promise.resolve(), pending: 0 };
-    if (current === undefined) this.queues.set(queueKey, entry);
-
-    const predecessor = entry.tail;
-    let release!: () => void;
-    entry.tail = new Promise<void>(resolve => { release = resolve; });
-    entry.pending += 1;
-
-    try {
-      await predecessor;
-      return await task();
-    } finally {
-      release();
-      entry.pending -= 1;
-      if (entry.pending === 0 && this.queues.get(queueKey) === entry) this.queues.delete(queueKey);
-    }
+    return this.coordinator.run([`workspace:${hashBoundedReceiptFacts(key)}`],
+      { actor: 'receipt-service', operation: 'workspace-transaction' }, task);
   }
 
   private replayResult(existing: ActionReceipt): WorkspaceReceiptServiceResult {

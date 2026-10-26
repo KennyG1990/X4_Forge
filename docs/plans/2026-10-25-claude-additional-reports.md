@@ -6,6 +6,8 @@ Status: SPECIFIED / OPEN. Source: Ken's pasted Claude session review. These repo
 
 Mapping: C06; original 1/2/5.
 
+C06a disposition: PARTIAL. Forge response/Playtest now exposes every blocker and a source-bound acceptance request with required reasons. Actual refusal/acceptance/receipt/stale-source tests pass. The active mod's deploy.py truncates displayed stage detail to90 characters; client console integration remains OPEN and untouched. Evidence: `../testing/claude-C06-api.json`.
+
 Reported: RESULT: NOT DEPLOYED reported only "1 unaccepted mod finding"; identifying it required opening validate_ws_result.json.
 
 Acceptance: Print every blocking finding inline: code, file, line, message and stable identity, plus the actual supported acceptance command with a required reason where policy permits acceptance. Non-overridable blockers explain that boundary. Prove refusal and acceptance against the same source/receipt; no acceptance bypass.
@@ -30,6 +32,8 @@ Acceptance: Use file + code + semantic source reference + enclosing cue/function
 
 Mapping: C06; original 5/6.
 
+C06a disposition: OPEN, owner identified by read-only source inspection. The exact alarm is the active mod's unconditional deploy.py fidelity block. Forge prewrite refusal adds `deployment.state:not-deployed` and `fidelityScope:none`; helper integration and partial-write cases remain outstanding. No active-mod edits.
+
 Reported: A NOT DEPLOYED run printed "THE DEPLOYED LUA IS NOT THE ONE YOU BUILT" (760228 vs 746022 bytes), comparing the previous deployment.
 
 Acceptance: Suppress current-deployment fidelity alarms when no write occurred, or clearly label the comparison "previous deployment" with its identity/time. Prove refused, preview, successful and partial/failed-write outcomes. Reconcile Forge response versus project deploy.py formatter before choosing the fix owner.
@@ -37,6 +41,8 @@ Acceptance: Suppress current-deployment fidelity alarms when no write occurred, 
 ### A05 — Windows console encoding
 
 Mapping: C06; original 5.
+
+C06a disposition: RESOLVED / VERIFIED locally for the reported stage text (not published or installed). The exact Forge skipped-stage string is ASCII and passed Windows CP437/CP1252/UTF-8 stdout and redirected-byte checks. No global ban on Unicode or native terminal screenshot claim. Evidence: `../testing/claude-C06-api.json`.
 
 Reported: Stage text appeared as "Not reached � fix the failure above first".
 

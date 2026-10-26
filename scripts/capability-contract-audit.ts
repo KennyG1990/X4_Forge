@@ -953,6 +953,7 @@ const REVIEWED_MIDDLEWARE_IDENTIFIERS = new Set([
   'authMiddleware',
   'workspaceAuthorityMiddleware',
   'ledgerMiddleware',
+  'projectApiInputMiddleware',
   'apiUnknownRouteMiddleware',
 ]);
 

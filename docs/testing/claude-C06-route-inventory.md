@@ -1,0 +1,34 @@
+# C06 route reconciliation — bounded C06a checkpoint
+
+The source authority is `server.ts`, the reviewed route-disposition manifest and each existing domain owner. This is an inventory and explicit disposition, not a claim that every route below has new exhaustive E2E coverage.
+
+| Family / routes under `/api` | Existing owner and C06a delta | Proof / remaining boundary |
+|---|---|---|
+| `agent/project/create`, `file/create`, `generate`, `content-xml` | Existing orchestration/content builders; strict object/metadata/file contracts; returned-file identity | Focused malformed cases; actual create/file/generate HTTP. Content-only identity is explicitly scoped to its generated file. |
+| `agent/mod-folder/import` | Existing strict import parser, path resolver and importer; identity from actual loaded project; canonical source lock | Actual scratch import, bad payload rejection, import/validation identity equality. Import does not change addressed workspace. |
+| `agent/project/validate`, `validate/check`, `validate-crossfile` | Existing full validator/evidence and cross-file validator; strict selector/root/flag contracts; evidence identity | Actual inline/disk validation, warm-result equality, schema/edit/recovery and existing capability tests. `/validate/check` retains its capability-fixed fields. |
+| `agent/compile`, `agent/package`, `agent/artifact/build`, `agent/project/files` | Existing manifest/validation/inventory owners; reject malformed workspace envelope; exact compiled text identity | Actual test-mod calls. Artifact byte identity remains separate from semantic input identity. Build may materialize an invalid artifact but must report failed validation. |
+| `agent/deploy`, `agent/deploy-verify` | Existing immutable snapshot, expected identities, acceptance records, recovery and activation; source/output serialization; full blocker details and acceptance template; ASCII skipped stage text | Actual refusal, reason-required acceptance, durable receipts, exact bytes and stale refusal. No current-deployment fidelity assertion on a prewrite refusal. |
+| `fs/write`, `fs/create` | Existing guarded writer/validation/CAS; strict body, canonical source serialization with owner/timing projection | Actual two-client same-revision race: one write, one 409; malformed content does not overwrite. CAS remains optional for legacy callers, so a caller omitting the precondition does not gain protection against arbitrary editor writes. |
+| `fs/snapshot`, `fs/delete-snapshot`, `fs/restore-snapshot`, `fs/delete-dir`, `agent/history/:id/revert` | Existing snapshot/history/recovery policies retained; source serialization wraps full operation and cleanup | Existing receipt/oracle/policy tests; dedicated concurrent route tests beyond fs/write remain open. |
+| `agent/project-rules/suppress` | Existing exact scope, rules writer and receipt; source lock surrounds operation | Existing rules/receipt regression evidence retained; no approval widening. |
+| `agent/release/nexus/prepare`, `agent/package/release`, `agent/release/steam/prepare`, `agent/release/steam/adopt` | Existing artifact/release guards retained; source/output lock surrounds operation | No publishing/upload/native invocation tested or performed. Wider release-response identity and request census remains OPEN. |
+| `agent/workspace` read/replace/merge/create/restore and bulk transform | Existing immutable workspace authority, CAS and transaction receipt owner retained; queue primitive reused | Existing transaction service tests and policy audits. Workspace response hashes are explicitly workspace-content/head, not validated artifact hashes. Complete successful mod-ID/strictness coverage of these routes remains OPEN. |
+| `agent/runtime-control`, `/preview`, `/reload`; `agent/runtime-debugger`, `agent/debug-watcher/brief`, log/probe routes | Existing optional runtime protocol; control responses carry addressed workspace/mod subject; existing strict runtime request validation | No game invocation. Complete source identity census and paired game proof remain C06/C07 OPEN; workspace-head does not prove game-loaded bytes. |
+| `agent/status`, `agent/health-card`, `agent/game-log/status` | Existing state/dependency health; explicit process/environment scope and current-source coordination status | Status tested against scratch workspace. Global health does not invent validated mod identity. |
+
+## Source coordination contract
+
+Extend the old workspace receipt queue with a bounded, failure-safe resource scheduler. Resolve canonical filesystem owners using the nearest existing real path; compare canonical keys again after waiting. Reject changed aliases/configuration before invoking a queued handler. Acquire overlapping resources together; serialize intersecting parents/children; permit unrelated resources. Release only when the handler settles, including rejection/rollback, not when a socket closes. A queued request whose response has ended performs no later work. Status is a copied snapshot of owner, operation, workspace, queue time and start time, with no credential.
+
+Scope is explicitly **one server process**. This does not lock a second Forge sidecar, an external editor or the operating system. Output-root locks are deliberately conservative and may serialize otherwise independent deployments. Cross-process coordination and narrower output locking remain OPEN; do not advertise a machine-wide lock. Existing deployment source/corpus/target hashes remain the authoritative refusal boundary.
+
+## Claude follow-up ownership
+
+- A01: Forge API/Playtest improvements belong here. The active mod's `tools/deploy.py` truncates stage detail to 90 characters, so its complete console integration remains OPEN; do not claim that client now prints every finding.
+- A04: read-only inspection found the exact mismatch string in that mod's `tools/deploy.py` at its unconditional post-request fidelity block. Forge prewrite refusal now labels `not-deployed` / `fidelityScope:none`; the mod formatter remains OPEN and untouched.
+- A05: exact reported skipped-stage string now uses ASCII. Preserve Windows stdout/redirected proof before resolving this bounded case; no claim that all Unicode in mod content is forbidden.
+- A07: new-file reload guidance needs the existing deploy diff plus C07 authoritative game proof; OPEN.
+- A15: project behavior gates require an explicit trusted command registry, actor/command/input hashes, bounded process/output/time limits, cancellation/cleanup and snapshot-bound deployment receipts. No shell/command execution from imported source is added in C06a. OPEN as the next independently executable security unit.
+
+The complete C06 program remains PARTIAL. No C07 or Kimi implementation, public release, installed upgrade or game mutation follows from this checkpoint.

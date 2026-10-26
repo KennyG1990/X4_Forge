@@ -27,8 +27,12 @@ uses a prior probe; unsupported dynamic/runtime semantics remain named.
 C05:26 focused groups,134 runtime oracles and7 HTTP/browser/deploy groups pass; representative
 warm edit47.73s ->3.13s, largest XML edit6.12s vs48.38s full, with complete-result equality.
 Evidence: docs/testing/claude-C05-incremental.json. Cold~50s; active-mod latency not claimed.
-Next C06 API/source
-coordination and C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
+C06a VERIFIED local checkpoint: strict project contracts/scoped identities, cooperative source
+coordination and deploy diagnostics.35 focused +25 receipt checks,65 HTTP/MCP checks,134 oracles,
+2 serial corpus/browser tests pass; evidence docs/testing/claude-C06-api.json. Full C06 remains OPEN:
+wider route contracts, cross-process coordination and A15 trusted project gates. A01 active-client
+truncation and A04 previous-deploy fidelity formatter remain open; no real-mod changes.
+Next finish C06, then C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
 verification and installation windows. Public release and exact installed verification precede
 Kimi M01; no interim pushes. Kimi paused.
 

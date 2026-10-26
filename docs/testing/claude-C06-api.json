@@ -1,0 +1,1173 @@
+{
+  "unit": "C06a",
+  "status": "VERIFIED",
+  "programStatus": "PARTIAL: C06a only; complete C06 remains OPEN",
+  "pending": [],
+  "recordedAt": "2026-10-26T02:50:56.841747-04:00",
+  "baseline": "2caca03f0e9bb0284517df873ba9478a6209f330",
+  "scope": "Isolated source, compiled server, HTTP/MCP, rendered browser and scratch deployment; no installed host or game proof.",
+  "focused": {
+    "pass": true,
+    "count": 35,
+    "checks": [
+      "authoring response uses manifest identity, not project label",
+      "source edits invalidate identity",
+      "unresolved subject is explicit",
+      "known source survives failure",
+      "authoring result derives actual project",
+      "reject /project/create {\"meta\":{\"id\":123}}",
+      "reject /project/create {\"meta\":{\"id\":\"lab\",\"unexpected\":1}}",
+      "reject /project/generate {\"spec\":{\"id\":\"lab\",\"kind\":\"unknown\"}}",
+      "reject /project/package {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/file/create {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/file/create {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/validate {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/validate {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/validate {\"path\":\"\"}",
+      "reject /project/validate {\"path\":\"lab\",\"root\":1}",
+      "reject /project/validate {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /package {\"workspace\":{}}",
+      "reject /artifact/build {\"workspace\":[]}",
+      "reject /project/content-xml {\"meta\":{\"id\":\"lab\",\"deps\":[false]}}",
+      "valid authored metadata is accepted",
+      "malformed writer content cannot coerce",
+      "writer precondition cannot coerce an array into a hash",
+      "canonical aliases resolve identically",
+      "missing descendants resolve through real parent",
+      "same source queues across workspaces while independent source proceeds",
+      "owner and timing observable",
+      "status cannot mutate authority",
+      "FIFO holds through completion",
+      "exception releases resource",
+      "empty final queue",
+      "bounded pending operations refuse before execution",
+      "queue expiry never executes operation",
+      "expiry recovery",
+      "retargeted source or configuration refuses before execution",
+      "retarget refusal releases resource"
+    ]
+  },
+  "receiptService": {
+    "allPassed": true,
+    "pass": true,
+    "passed": 25,
+    "total": 25
+  },
+  "e2e": {
+    "schemaVersion": 2,
+    "generatedAt": "2026-10-26T06:26:34.745Z",
+    "policy": {
+      "retryCount": 1,
+      "actualFlakeBudget": 0,
+      "maximumActiveQuarantines": 3,
+      "maximumQuarantineDays": 14,
+      "activeQuarantines": [],
+      "errors": []
+    },
+    "source": "json-report",
+    "reportCode": "structured-report-inspected",
+    "childExit": 0,
+    "verdict": {
+      "passed": 2,
+      "failed": 0,
+      "flaky": 0,
+      "badResults": 0,
+      "noTests": false,
+      "totalTests": 2,
+      "issues": [],
+      "quarantinedIssues": 0,
+      "green": true,
+      "structuredReportMissing": false,
+      "structuredReportIncomplete": false,
+      "globalReportErrors": false,
+      "reportErrorCount": 0
+    },
+    "reportInspection": {
+      "complete": true,
+      "errors": [],
+      "discoveredTests": 2,
+      "terminalTests": 2,
+      "derivedTotals": {
+        "expected": 2,
+        "unexpected": 0,
+        "flaky": 0,
+        "skipped": 0
+      },
+      "reportErrorCount": 0
+    },
+    "lifecycle": {
+      "complete": true,
+      "errors": [],
+      "trigger": "child-close",
+      "childExit": {
+        "code": 0,
+        "signal": null
+      },
+      "ownershipComplete": true,
+      "rootPid": 17744,
+      "capturedPids": [
+        14820,
+        17744,
+        24812,
+        26948,
+        35776,
+        52852,
+        53796,
+        59680,
+        66796,
+        66892,
+        70168,
+        76392
+      ],
+      "reusedPids": [],
+      "termination": {
+        "complete": true,
+        "errors": [],
+        "treeGone": true,
+        "passes": 1,
+        "capturedPids": [
+          14820,
+          17744,
+          24812,
+          26948,
+          35776,
+          52852,
+          53796,
+          59680,
+          66796,
+          66892,
+          70168,
+          76392
+        ],
+        "commandedPids": [],
+        "reusedPids": [],
+        "remainingPids": []
+      }
+    },
+    "runnerInteractionFailed": false
+  },
+  "testMod": {
+    "pass": true,
+    "checks": [
+      "author-create-file-generate-package-crossfile-identities",
+      "malformed-subjects-refuse-without-inventing-identity",
+      "import-validation-compile-package-artifact-inventory-identities",
+      "actual-two-client-source-CAS-and-coordination-owner",
+      "queried-source-owner-status-empty-after-completion",
+      "all-blockers-exact-acceptance-reason-receipt-stale-refusal",
+      "rendered-blocking-finding-in-deploy-result"
+    ],
+    "requests": 29,
+    "commitBaseline": "2caca03",
+    "limitations": [
+      "process-local source coordination",
+      "no native/game/installed-host proof"
+    ]
+  },
+  "regression": {
+    "path": "test-results/claude-C05/run-2373019d-fd72-43a7-bcb3-fc5d749fcff3",
+    "oracles": [
+      {
+        "route": "/agent/action-census-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      },
+      {
+        "route": "/agent/action-receipt-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 119,
+        "total": 119
+      },
+      {
+        "route": "/agent/agent-brief-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      },
+      {
+        "route": "/agent/agent-history-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/agent-keys-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/agent-loop-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      },
+      {
+        "route": "/agent/ai-key-store-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/ai-spend-meter-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 24,
+        "total": 24
+      },
+      {
+        "route": "/agent/aiscript-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      },
+      {
+        "route": "/agent/aiscript-roundtrip-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 19,
+        "total": 19
+      },
+      {
+        "route": "/agent/api-failure-envelope-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/api-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/architect-loop-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "route": "/agent/artifact-pipeline-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/auto-layout-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 8,
+        "total": 8
+      },
+      {
+        "route": "/agent/blueprint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 22,
+        "total": 22
+      },
+      {
+        "route": "/agent/bridge-live-state-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 8,
+        "total": 8
+      },
+      {
+        "route": "/agent/bug-report-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/bulk-corpus-transform-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 15,
+        "total": 15
+      },
+      {
+        "route": "/agent/canvas-interaction-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 18,
+        "total": 18
+      },
+      {
+        "route": "/agent/catdat-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/compile-fidelity-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "route": "/agent/compile-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/composite-blocks-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 23,
+        "total": 23
+      },
+      {
+        "route": "/agent/continuous-polling-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/contract-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 32,
+        "total": 32
+      },
+      {
+        "route": "/agent/critic-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 23,
+        "total": 23
+      },
+      {
+        "route": "/agent/cue-lineage-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 35,
+        "total": 35
+      },
+      {
+        "route": "/agent/data-dir-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/db-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/destructive-recovery-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 22,
+        "total": 22
+      },
+      {
+        "route": "/agent/diagnostic-explain-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/experience-mode-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      },
+      {
+        "route": "/agent/explain-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 30,
+        "total": 30
+      },
+      {
+        "route": "/agent/expression-suggest-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 17,
+        "total": 17
+      },
+      {
+        "route": "/agent/extension-project-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 31,
+        "total": 31
+      },
+      {
+        "route": "/agent/external-api-registry-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 50,
+        "total": 50
+      },
+      {
+        "route": "/agent/factions-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 11,
+        "total": 11
+      },
+      {
+        "route": "/agent/file-bridge-transport-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "route": "/agent/forge-capabilities-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/forge-probe-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 9,
+        "total": 9
+      },
+      {
+        "route": "/agent/forge-state-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 15,
+        "total": 15
+      },
+      {
+        "route": "/agent/forge-watch-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 8,
+        "total": 8
+      },
+      {
+        "route": "/agent/friendly-names-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 11,
+        "total": 11
+      },
+      {
+        "route": "/agent/galaxy-map-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 22,
+        "total": 22
+      },
+      {
+        "route": "/agent/game-detect-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 11,
+        "total": 11
+      },
+      {
+        "route": "/agent/github-credential-store-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 7,
+        "total": 7
+      },
+      {
+        "route": "/agent/github-device-flow-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 4,
+        "total": 4
+      },
+      {
+        "route": "/agent/god-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 9,
+        "total": 9
+      },
+      {
+        "route": "/agent/health-card-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 10,
+        "total": 10
+      },
+      {
+        "route": "/agent/imported-graph-layout-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 6,
+        "total": 6
+      },
+      {
+        "route": "/agent/instance-discovery-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/intent-check-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 13,
+        "total": 13
+      },
+      {
+        "route": "/agent/jobs-content-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 18,
+        "total": 18
+      },
+      {
+        "route": "/agent/lang-service-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      },
+      {
+        "route": "/agent/latest-value-write-queue-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/live-canvas-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 10,
+        "total": 10
+      },
+      {
+        "route": "/agent/live-fixes-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 9,
+        "total": 9
+      },
+      {
+        "route": "/agent/live-log-nav-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 11,
+        "total": 11
+      },
+      {
+        "route": "/agent/local-workspace-cache-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/log-file-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 5,
+        "total": 5
+      },
+      {
+        "route": "/agent/log-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/log-telemetry-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 17,
+        "total": 17
+      },
+      {
+        "route": "/agent/lua-logic-blocks-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 7,
+        "total": 7
+      },
+      {
+        "route": "/agent/lua-md-binding-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 11,
+        "total": 11
+      },
+      {
+        "route": "/agent/lua-runtime-log-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 13,
+        "total": 13
+      },
+      {
+        "route": "/agent/lua-staleness-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "route": "/agent/lua-static-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/md-file-identity-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 3,
+        "total": 3
+      },
+      {
+        "route": "/agent/md-pitfall-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 23,
+        "total": 23
+      },
+      {
+        "route": "/agent/migration-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 11,
+        "total": 11
+      },
+      {
+        "route": "/agent/mod-dependency-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 24,
+        "total": 24
+      },
+      {
+        "route": "/agent/mod-distribution-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 31,
+        "total": 31
+      },
+      {
+        "route": "/agent/mod-doctor-reference-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 4,
+        "total": 4
+      },
+      {
+        "route": "/agent/mod-drift-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 10,
+        "total": 10
+      },
+      {
+        "route": "/agent/mod-patterns-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/mod-recipes-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 13,
+        "total": 13
+      },
+      {
+        "route": "/agent/mod-templates-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 36,
+        "total": 36
+      },
+      {
+        "route": "/agent/node-align-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 10,
+        "total": 10
+      },
+      {
+        "route": "/agent/node-diagnostics-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 13,
+        "total": 13
+      },
+      {
+        "route": "/agent/node-selection-document-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 15,
+        "total": 15
+      },
+      {
+        "route": "/agent/node-toolbox-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "route": "/agent/npc-identity-probe/selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 6,
+        "total": 6
+      },
+      {
+        "route": "/agent/object-index-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 22,
+        "total": 22
+      },
+      {
+        "route": "/agent/override-map-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      },
+      {
+        "route": "/agent/parent-liveness-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/patch-readiness-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 10,
+        "total": 10
+      },
+      {
+        "route": "/agent/path-roles-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/platform-release-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 24,
+        "total": 24
+      },
+      {
+        "route": "/agent/port-semantics-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 26,
+        "total": 26
+      },
+      {
+        "route": "/agent/position-picker-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 8,
+        "total": 8
+      },
+      {
+        "route": "/agent/project-crossfile-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 33,
+        "total": 33
+      },
+      {
+        "route": "/agent/project-file-inventory-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/project-orchestration-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/project-rules-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 20,
+        "total": 20
+      },
+      {
+        "route": "/agent/proposal-review-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 18,
+        "total": 18
+      },
+      {
+        "route": "/agent/quick-fixes-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 20,
+        "total": 20
+      },
+      {
+        "route": "/agent/readiness-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 22,
+        "total": 22
+      },
+      {
+        "route": "/agent/reference-corpus-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/reference-language-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 13,
+        "total": 13
+      },
+      {
+        "route": "/agent/reference-literal-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 7,
+        "total": 7
+      },
+      {
+        "route": "/agent/reference-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/request-deadline-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/round-trip-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 17,
+        "total": 17
+      },
+      {
+        "route": "/agent/runtime-debugger-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 45,
+        "total": 45
+      },
+      {
+        "route": "/agent/schema-discovery-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/schema-registry-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 13,
+        "total": 13
+      },
+      {
+        "route": "/agent/schema-routing-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 26,
+        "total": 26
+      },
+      {
+        "route": "/agent/scriptproperties-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 61,
+        "total": 61
+      },
+      {
+        "route": "/agent/selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 10,
+        "total": 10
+      },
+      {
+        "route": "/agent/semantics-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 50,
+        "total": 50
+      },
+      {
+        "route": "/agent/simulate-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 59,
+        "total": 59
+      },
+      {
+        "route": "/agent/tfile-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 18,
+        "total": 18
+      },
+      {
+        "route": "/agent/ttfm-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 9,
+        "total": 9
+      },
+      {
+        "route": "/agent/ui-compiler-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 22,
+        "total": 22
+      },
+      {
+        "route": "/agent/ui-layout-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 19,
+        "total": 19
+      },
+      {
+        "route": "/agent/ui-widget-validate-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 9,
+        "total": 9
+      },
+      {
+        "route": "/agent/validation-delta-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/vanilla-ui-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "route": "/agent/wares-content-lint-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "route": "/agent/wares-jobs-roundtrip-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 15,
+        "total": 15
+      },
+      {
+        "route": "/agent/watcher-verdict-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 9,
+        "total": 9
+      },
+      {
+        "route": "/agent/workspace-conflict-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 8,
+        "total": 8
+      },
+      {
+        "route": "/agent/workspace-identity-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "route": "/agent/workspace-persistence-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/workspace-receipt-service-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 25,
+        "total": 25
+      },
+      {
+        "route": "/agent/workspace-registry-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 33,
+        "total": 33
+      },
+      {
+        "route": "/agent/x4-rule-packs-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 32,
+        "total": 32
+      },
+      {
+        "route": "/agent/x4-ui-integration-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/xml-input-limits-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/xml-source-spans-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 4,
+        "total": 4
+      },
+      {
+        "route": "/agent/xml-wellformed-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 6,
+        "total": 6
+      },
+      {
+        "route": "/agent/xpath-synth-selftest",
+        "status": 200,
+        "pass": true
+      },
+      {
+        "route": "/agent/xsd-model-selftest",
+        "status": 200,
+        "pass": true,
+        "passed": 12,
+        "total": 12
+      }
+    ]
+  },
+  "compiledHttpMcp": {
+    "pass": true,
+    "checks": 65,
+    "path": "test-results/claude-integration/run-4ef16660"
+  },
+  "encoding": {
+    "pass": true,
+    "actualResponse": "test-results\\claude-C06\\run-f3708ac1-2952-46a3-9467-84ad37fd320e",
+    "windowsStdoutEncodings": {
+      "cp437": true,
+      "cp1252": true,
+      "utf-8": true
+    },
+    "redirectedAsciiBytes": true,
+    "nativeTerminalScreenshot": false
+  },
+  "rendered": {
+    "screenshot": "test-results/claude-C06/run-3d5c1ce5-cc59-4157-9a88-ac22c4474d1e/blocked-findings.png",
+    "inspected": true,
+    "surface": "isolated Chromium app; finding/file/message/acceptance instruction visible"
+  },
+  "gates": {
+    "lint": {
+      "exit": 0,
+      "errors": 0,
+      "warnings": 620
+    },
+    "productionBuild": {
+      "exit": 0
+    },
+    "policyCandidateReview": {
+      "pass": true,
+      "changedFields": [
+        "sources"
+      ],
+      "addedSources": [
+        "src/server/projectApiContract.ts",
+        "src/server/resourceCoordinator.ts"
+      ],
+      "routeScopePermissionChanges": false,
+      "candidateSha256": "ae6d8784a5e37eaf3eebe15a0c41f30869bcb45897f2dfc114974601a064a521"
+    },
+    "policyPromotion": {
+      "exit": 0,
+      "reviewedSha256": "ae6d8784a5e37eaf3eebe15a0c41f30869bcb45897f2dfc114974601a064a521"
+    },
+    "typecheck": {
+      "exit": 0,
+      "after": "asserted object narrowing in test script"
+    },
+    "capabilityAudit": {
+      "pass": true,
+      "capabilities": 12,
+      "routes": 301,
+      "mcpAliases": 11
+    },
+    "mcpCapabilitySelftest": {
+      "pass": true
+    },
+    "receiptCoverage": {
+      "status": "PASS",
+      "routes": 85,
+      "surfaces": 59
+    },
+    "standalonePrecommit": {
+      "exit": 1,
+      "failedAt": "typecheck in new test assertions",
+      "recovery": "Test-only narrowing; focused35 and full typecheck rerun passed. Commit additionally runs complete mandatory precommit hook."
+    },
+    "commitHook": {
+      "required": "Complete npm run precommit:check must exit0 before Git creates this checkpoint; final execution receipt is in private C06/commit.log."
+    }
+  },
+  "limits": [
+    "cooperative source lock is process-local, not an OS or cross-sidecar lock",
+    "external-editor writes remain guarded by source/CAS hashes; legacy fs callers may omit CAS",
+    "full runtime/release/workspace contract census remains open",
+    "A01 helper display truncation and A04 previous-deploy fidelity formatter remain untouched/open",
+    "A07 and A15 remain open",
+    "disconnect behavior and broader concurrent route combinations lack dedicated end-to-end proof",
+    "no public release, live installation, real-game or native-host claim"
+  ],
+  "failedRuns": [
+    "e2e-first: generated verdict shape",
+    "e2e-second: invalid fixture client IDs",
+    "precommit-first/second: writer fingerprint",
+    "capability-candidate-first: anonymous input middleware not reviewable",
+    "precommit-final: test assertions accessed unknown; fixed with runtime object assertion and rerun typecheck"
+  ],
+  "evidenceRoot": "private lab/evidence/claude-program/C06",
+  "artifacts": {
+    "serverBundleSha256": "43d4f82cdd8d6686810b785e8d4dc3c5acac9898760770fcce31baaf471c65b2",
+    "testModFixtureSha256": "7dcfe36975c79c383d783a3b347eb03bd0140484c23b95db90eef107a29f3559"
+  },
+  "sourceFiles": {
+    "server.ts": "8db6697060aaf17f011105525c65d451d0773c3a9203fd311a150b9eb3290de3",
+    "src/server/projectApiContract.ts": "0784a719f1815e75e7e87af0abc0d1b964b3b50dbc6fc8af56038a1f2f134cd1",
+    "src/server/resourceCoordinator.ts": "325192f42b4c773c88fdc0e376ab8e123afeb7bb08a1bc8f546d6912cfabd7aa",
+    "src/server/workspaceReceiptService.ts": "27a98ac50becd34437264b5f40fe3798fc3c2f2879b56763e700123b3a7f6247",
+    "scripts/capability-contract-audit.ts": "11fb0d5d66600136a089e900fcc779d6c15e0f7fdfd4edf57300b3e8c984bc3c",
+    "scripts/c06-api.selftest.ts": "3702e72b7d14b9934822b31f2a4c4f586749addf6e7b563def590df17584f7d5",
+    "tests/e2e/c06-api-source.spec.ts": "0dea7c78bdc747b103400b3ba2c38d05294ce2990f6afd3c34d755a989de0a23"
+  },
+  "isolation": {
+    "taskIssuedLiveMutation": false,
+    "installedLiveAndDevBundlesUnchanged": true,
+    "devDiscoveryUnchanged": true,
+    "liveDiscoveryChanged": true,
+    "liveHostRecreatedAt": "2026-10-26T02:36:47-04:00",
+    "liveSidecarStartedAt": "2026-10-26T06:37:01.478Z",
+    "observedParentChain": "Antigravity host -> Node supervisor -> Node sidecar",
+    "cause": "unconfirmed; no task-issued native launch/reload/restart",
+    "response": "No more runtime integration tests; read-only observation and static gates only",
+    "continuousLiveStateInvariant": false
+  }
+}

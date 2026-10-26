@@ -7948,3 +7948,22 @@ process logs; no task restart or installed bundle write. Fresh post-E2E protecte
 ports3100/3101 stopped. No game/native/package/public proof or push. C06-C07, additional requests
 and coordinated game/release/install windows remain open. Kimi paused. C05 is local only.
 Commit point: perf(validation): reuse unchanged project validation facts.
+
+## 2026-10-26 - C06a API/source coordination - VERIFIED local checkpoint
+
+Baseline2caca03. Bounded project request/identity contracts, manifest-based source subjects,
+canonical process-local source serialization with owner/timing/bounds/expiry/retarget refusal,
+all-blocker deployment diagnostics and reason-required acceptance templates. A05 exact skipped
+stage text is ASCII, verified in Windows output encodings. C06 remains PARTIAL: wider
+runtime/release/workspace contracts, cross-sidecar coordination, A01/A04 helper integration,
+A07 and A15 remain OPEN. No public release, installed upgrade, real-mod or game writes; Kimi paused.
+
+35 focused,25 receipt-service,65 compiled HTTP/MCP checks;134 runtime-discovered oracles;
+C06+C05 final serial E2E2/0/0, rendered refusal inspected, owned trees stopped. Build/lint/type
+and capability/MCP/receipt gates pass. Initial E2E, policy and test-type failures retained;
+corrected cases reran. Complete mandatory precommit hook gates the local checkpoint commit.
+Evidence: docs/testing/claude-C06-api.json. Route limits: docs/testing/claude-C06-route-inventory.md.
+Review/AAR: docs/plans/2026-10-26-c06-api-source-coordination.md. Parent GitHub#20 remains OPEN.
+Live discovery changed under an Antigravity host recreated02:36:47; cause unconfirmed, no
+task-issued restart. Both installed bundles and Dev discovery unchanged; no continuous live
+state invariant claimed. Runtime testing paused after observation; static close only.
