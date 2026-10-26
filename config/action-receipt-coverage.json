@@ -1346,6 +1346,31 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/warning-reviews/revoke",
+      "method": "POST",
+      "template": "/api/agent/warning-reviews/revoke",
+      "owner": "agent-api",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1warning-reviews~1revoke",
+      "integrationBatch": "W3B2",
+      "history": "visible",
+      "capability": {
+        "kind": "reviewed-legacy",
+        "id": "POST /api/agent/warning-reviews/revoke",
+        "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/workspace",
       "method": "POST",
       "template": "/api/agent/workspace",

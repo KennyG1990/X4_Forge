@@ -9,16 +9,16 @@
 ### Claude complaint completion and release — C01-C07 `in_progress` (GitHub #20; runtime #14/#35)
 
 Approved sequence and gates: `docs/plans/2026-10-25-claude-completion-release.md`.
-C01 integrates the reviewed private fixes into the isolated release worktree, then validates and
-commits locally. C02 stable imported identities, C03 remembered warning reviews, C04 grounded
-coverage/traps, C05 measured incremental validation, C06 API/source coordination and C07 real
-game-loop proof remain open. Keep live Forge/X4 untouched outside coordinated verification and
-installation windows. Public release and exact installed verification precede Kimi M01; no interim pushes.
-C01 integration VERIFIED: 14 focused suites, 65 HTTP/MCP checks, rendered deployment review E2E,
-typecheck/lint/builds and complete precommit/policy gate. See `docs/testing/claude-C01-integration.json`.
-C02 integration VERIFIED: stable imported identities, conservative reimport layout and exact bytes;
-22 focused +46 existing regressions and15 HTTP/UI/deploy scenarios pass, with full policy/type/build gates.
-See `docs/testing/claude-C02-identities.json`. C03 warning review reuse is next; C03-C07 and public/installed release remain open.
+C01-C03 integration VERIFIED locally: reviewed private fixes, stable imported identities, and
+warning-only exact-input review reuse/revocation with authenticated provenance. Evidence:
+`docs/testing/claude-C01-integration.json`, `claude-C02-identities.json`, `claude-C03-warning-reviews.json`.
+C03 passed29 focused +51 existing checks,19 actual HTTP/browser/deploy scenarios, two green E2E
+runs (zero flakes), type/lint/build and complete precommit/policy gates. Source edits conservatively
+invalidate reviews; dependency-aware reuse remains C05. No public/installed/game claim.
+Next C04 grounded validation/traps, then C05 measured incremental validation, C06 API/source
+coordination and C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
+verification and installation windows. Public release and exact installed verification precede
+Kimi M01; no interim pushes. Kimi paused.
 
 ### B119 · X4 UI editor — linter-first real layout port `in_progress` (P0, GitHub #41)
 

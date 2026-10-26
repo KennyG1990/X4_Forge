@@ -3298,6 +3298,16 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/warning-reviews/revoke": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/workspace": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",

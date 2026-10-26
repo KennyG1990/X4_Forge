@@ -247,6 +247,7 @@ const SAFE_METADATA_KEYS = new Set([
   'validatedArtifactHash', 'validatedArtifactScope',
   'findingId', 'findingCode', 'findingCategory', 'reason', 'actorLabel',
   'findingSeverity', 'acceptedErrors', 'acceptedWarnings', 'unacceptedErrors', 'unacceptedWarnings', 'unavailableChecks',
+  'reviewScopeHash', 'reviewContextHash', 'reviewEvidenceHash', 'originalReceiptId', 'originalActorId', 'originalActorLabel', 'originalActorKind',
 ]);
 
 const RECEIPT_KEYS = [

@@ -1,35 +1,29 @@
-# Session handoff — Claude completion/release program
-2026-10-25. X4 Forge. C01 and C02 VERIFIED locally; full program PARTIAL.
-Release worktree: C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge
-Branch codex/forge-fixes-release. C01 d3eeb2e. C02 commit title below; inspect git log/status
-for resulting hash before repeating a commit. No interim pushes. Original G checkout preserved.
+# Session handoff — Claude C03 verified local integration
+2026-10-25. X4 Forge. C01-C03 VERIFIED locally; C04 next. Kimi paused.
+Worktree: C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge
+Branch: codex/forge-fixes-release. C03 commit is this checkpoint; use git log -1 for exact SHA.
+Baseline before C03:3d25783470b221574b2cef508c1a958c588b55ba. No interim push.
+Main G checkout/unrelated edits, installed live/Dev bundles and X4 untouched; public0.0.79 unchanged.
 
-C02: deterministic file-scoped MD IDs; unique legacy IDs/layout/waypoints retained on same
-canonical folder plus artifact/content ID; fresh source wins. Duplicate ambiguity never inherits
-layout; source identities and positive finite sizes survive sanitation. Content metadata accepts
-both XML attribute quote styles. Source policy adds importedIdentity.ts only; routes unchanged.
-Proof: docs/testing/claude-C02-identities.json and private lab/evidence/claude-program/C02.
-22 focused +46 existing regressions pass;15 actual HTTP/UI/deploy scenarios; real Load Project,
-source bytes, stale refusal/auto-reimport scratch deploy; E2E1/1,0fail/0flaky, cleanup verified.
-Final lint0errors/608warnings, production build and full precommit/type/policy passed.
-Failed runs retained: fixture fingerprint/schema/registration errors, browser stale-draft wait,
-card-height flake, idle keepalive reset, initial source-inventory refusal. See detailed C02 AAR.
-Final browser test uses actual import UI, waits for new graph and resets camera before coordinates.
-No installed/native or real-game result implied. All live/Dev protected hashes unchanged.
+C03: warning-only unchanged-evidence reuse via existing finding/action receipts, original reviewer
+and reason, fresh per-deploy provenance, durable revocation and scoped authenticated controls.
+Errors/safety/unavailable/legacy-unscoped never inherit approval. All validation inputs conservatively
+remain dependencies; any source edit invalidates review. C05 owns narrower dependency-aware reuse.
+Receipt scans fail closed on corruption, incomplete revocation,10000 entries or64MiB total.
 
-NEXT C03: docs/plans/2026-10-25-claude-completion-release.md, approved program.
-First inspect src/server/findingAcceptance.ts, src/server/deploymentTrust.ts and their route/store
-callers; reuse existing approvals/rules/receipts. Warning-only exact context/evidence reuse,
-original actor/reason + each deployment reuse record; changed evidence/corpus/validator,
-new/revoked findings and all errors/safety failures require fresh review. List/revoke controls,
-new/known/resolved display, actual HTTP/UI/scratch deploy positive/negative/recovery proof.
-Validate/commit each bounded unit locally; no intermediate push. Maintain GitHub#20/Notion.
-C04-C07 and real game transport/save/reload proof, full public release/package/installed gates
-remain open. Separate coordinated game-verification and installation windows; Kimi stays paused.
+Evidence: docs/testing/claude-C03-warning-reviews.json. Plan/review/AAR:
+docs/plans/2026-10-25-c03-warning-review-reuse.md.29 focused +40 acceptance +11 review pass;
+19 actual scratch-mod HTTP/browser/deploy scenarios, two green zero-flake E2E runs; rendered
+qualified/revoked screenshots inspected. Final build/lint (0errors608warnings)/type/fullprecommit
+pass. Reviewed one-route deploy-only policy and receipt manifest promoted. Protected hashes
+unchanged; owned test stack stopped. No native installed-host/game claim. Failed earlier runs retained.
+Private evidence: C:/Users/Moshi/.x4forge-dev-build/lab/evidence/claude-program/C03.
+GitHub #20 and existing Notion safety task/hub carry bounded status; overall program PARTIAL.
 
-Private source archive contains the earlier C02 prototype; do NOT copy it over this integration.
-Current source of truth is this worktree. Installed Dev/live remain untouched. Rediscover current
-processes/ports before use; do not rely on historical PIDs. No desktop input used this unit.
-Eyeball queue: no immediate Ken check; C07 game and final native-host proof are future windows.
-Operator degradation call made after repeated fixture corrections; close C02, fresh context for C03.
-Commit point: fix(import): preserve stable source identities and reimport layout.
+Next first commands: git status --short; read BACKLOG.md and the completion plan, then reconcile
+C04 against game schemas/scriptproperties/vanilla code and the concrete Claude/gotcha examples.
+Document bounded C04 contract before edits. No arbitrary engine-trap claims; establish station
+products? conditions before adding a rule. Machine state last confirmed X4+Claude live, otherwise
+quiet; confirm again for a new heavy-validation session. C04-C07 and coordinated game/release/install
+windows remain open. No immediate Ken eyeball queue for C03; its rendered browser proof is complete.
+Do not push, publish, install or resume Kimi during these interim checkpoints.

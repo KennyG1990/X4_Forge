@@ -122,7 +122,7 @@ import { workspaceContentHash, workspaceSnapshotHash, runWorkspaceIdentitySelfte
 import { buildWorkspaceConflictPreview, runWorkspaceConflictSelftest } from "./src/lib/workspaceConflict";
 import { DestructiveRecoveryStore, runDestructiveRecoverySelftest, type DeploymentRecoveryRecord } from "./src/lib/destructiveRecovery";
 import { ActionReceiptStore } from "./src/lib/actionReceiptStore";
-import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
+import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
 import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord } from './src/server/deploymentTrust';
@@ -4159,7 +4159,12 @@ app.get("/api/agent/schema", (req, res) => {
           expectedBindingHash: "required on apply: bindingHash from preview (source, artifact, validator, corpus and target)",
           acceptances: "optional array, max127, of {findingId,bindingHash,reason}; authenticated deploy-permitted identity is recorded, never supplied in the body",
         },
-        purpose: "Preview first, then guarded apply with expected identities. Workspace-bound agent keys must address a workspace whose mod matches the requested path or inline workspace, including after auto-reimport; mismatch returns DEPLOY_WORKSPACE_MOD_MISMATCH before writes. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline."
+        purpose: "Preview first, then guarded apply with expected identities. Workspace-bound agent keys must address a workspace whose mod matches the requested path or inline workspace, including after auto-reimport; mismatch returns DEPLOY_WORKSPACE_MOD_MISMATCH before writes. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline. warningReviews lists known/new/resolved/invalidated/revoked reviews. Only unchanged warning evidence is reused automatically; all validation-input bytes, corpus, validator and coverage must match. Reuse receipts retain the original approver/reason."
+      },
+      {
+        method: "POST", path: "/api/agent/warning-reviews/revoke",
+        body: { receiptId: "original receipt ID from validation.review.warningReviews.rows", reviewScopeHash: "scopeHash from the same review list", reason: "nonblank single-line reason, at most 512 characters" },
+        purpose: "Deploy permission required. Durably revoke a warning review; no mod/game files change. Obtain a fresh deploy preview afterward."
       },
       {
         method: "GET",
@@ -13094,6 +13099,37 @@ function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
 // (auto-FAIL on duplicate-id / folder-id-mismatch). Returns a single pass/fail verdict so the
 // agent/UI never skips the doctor. On-demand only (not a hot poll), so full-folder scan is fine.
 app.post("/api/agent/deploy-verify", (req, res) => deployVerifyHandler(req, res));
+
+// Reviews are listed with fresh evidence by deploy-verify dryRun; revocation never deploys.
+app.post('/api/agent/warning-reviews/revoke', (req, res) => {
+  try {
+    const principal = deploymentPrincipal(req);
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).some(k => !['receiptId', 'reviewScopeHash', 'reason'].includes(k))
+      || typeof body.receiptId !== 'string' || !/^ar_[a-f0-9]{64}$/.test(body.receiptId)
+      || typeof body.reviewScopeHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.reviewScopeHash)
+      || typeof body.reason !== 'string') return res.status(400).json({ ok: false, code: 'ACCEPTANCE_INPUT_INVALID' });
+    if (principal.kind === 'agent') {
+      const addressed = resolveWorkspaceAuthority(req, res);
+      if (!addressed) return;
+      const original = actionReceiptStore.read(body.receiptId);
+      const dir = addressed.workspace.sourceStamp?.dir;
+      const canonical = dir ? fs.realpathSync.native(dir) : '';
+      const scope = canonical ? trustHash([process.platform === 'win32' ? canonical.toLowerCase() : canonical, original.metadata?.modId]) : '';
+      if (effectiveModId(activeBuildWorkspace(addressed.workspace)) !== original.metadata?.modId || scope !== body.reviewScopeHash)
+        return res.status(409).json({ ok: false, code: 'REVIEW_WORKSPACE_MISMATCH', error: 'Review does not belong to this agent workspace source and mod.' });
+    }
+    const receipt = revokeWarningReview(actionReceiptStore, body.reviewScopeHash, body.receiptId, body.reason, principal);
+    captureActionReceiptProjection(req, receipt);
+    return res.json({ ok: true, modId: receipt.metadata?.modId, sourceHash: receipt.metadata?.sourceHash,
+      sourceIdentityScope: 'original-review', receipt,
+      outcome: 'warning-review-revoked', scope: 'review-history-only', note: 'No source or deployed files changed. Obtain a fresh deployment preview.' });
+  } catch (error: any) {
+    return res.status(error.code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : error.code === 'ACCEPTANCE_INPUT_INVALID' ? 400 : 409)
+      .json({ ok: false, code: error.code || 'REVIEW_STORE_UNAVAILABLE', error: error.message });
+  }
+});
 function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let snapshot: DeploymentSnapshot | undefined;
@@ -13346,6 +13382,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
       targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
+    const reviewSource = modSourceDir || ws.sourceStamp?.dir;
+    if (reviewSource) {
+      const canonical = fs.realpathSync.native(reviewSource);
+      subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonical.toLowerCase() : canonical, evidence.modId]),
+        history: actionReceiptStore.listVerified(), invocationId: crypto.randomUUID() };
+    }
     responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
       artifactHash, validation: { evidence } };
     const decision = evaluateFindingAcceptances(subject, acceptances, principal);
@@ -13413,11 +13455,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       });
     }
 
-    const approvalRecords = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal).receipts;
+    const { receipts: approvalRecords, decision: recordedDecision } = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal);
     responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, evidence,
-      review: projectFindingReview(decision, principal, approvalRecords) };
+      review: projectFindingReview(recordedDecision, principal, approvalRecords) };
     const assertWriteAuthority = () => {
       assertCurrentSource();
+      if (subject.warningReviews) subject.warningReviews.history = actionReceiptStore.listVerified();
       verifyFindingAcceptanceReceipts(actionReceiptStore, approvalRecords.map(r => r.id), subject, acceptances, principal);
       if (deployReceipt && actionReceiptStore.read(deployReceipt.id).hash !== deployReceipt.hash) {
         throw new Error('Deployment receipt changed before target activation.');

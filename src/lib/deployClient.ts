@@ -27,7 +27,10 @@ export interface DeployReviewData {
       status?: string;
       counts?: Partial<Record<'acceptedErrors' | 'acceptedWarnings' | 'unacceptedErrors' | 'unacceptedWarnings' | 'unavailableChecks', number>>;
       approvals?: Array<{ findingId: string; code?: string; severity?: string; reason: string;
-        actor?: { id?: string; label?: string }; receiptId?: string }>;
+        actor?: { id?: string; label?: string }; receiptId?: string; reused?: boolean;
+        originalReceiptId?: string; originalActor?: { id?: string; label?: string } }>;
+      warningReviews?: { scopeHash: string; dependencyScope: string; newFindingIds: string[]; knownFindingIds: string[];
+        rows: Array<{ receiptId: string; code: string; state: string; reason: string; actor: { id?: string; label?: string }; recordedAt: string }> };
     };
   };
 }

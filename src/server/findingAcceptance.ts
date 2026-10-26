@@ -18,6 +18,8 @@ export interface AcceptanceSubject {
   corpusHash: string;
   /** Hash of the resolved deployment target identity, not a caller-provided folder label. */
   targetHash: string;
+  /** Server-owned context; never accept history or scope from a request body. */
+  warningReviews?: { scopeHash: string; history: readonly ActionReceipt[]; invocationId: string };
 }
 export interface AcceptancePrincipal {
   kind: 'agent' | 'human';
@@ -28,7 +30,7 @@ export interface AcceptancePrincipal {
   /** Effective route/capability decision, not merely the key's broad scope. */
   deployAuthorized: boolean;
 }
-interface FindingAcceptance { finding: ValidationEvidenceFinding; reason: string }
+interface FindingAcceptance { finding: ValidationEvidenceFinding; reason: string; original?: ActionReceipt }
 export interface FindingReviewCounts {
   acceptedErrors: number;
   acceptedWarnings: number;
@@ -42,6 +44,10 @@ export interface AcceptanceDecision {
   unacceptedErrorIds: string[];
   unacceptedWarningIds: string[];
   counts: FindingReviewCounts;
+  warningReviews?: ReturnType<typeof warningReviewStatus>;
+  reviewScopeHash?: string;
+  reviewEvidenceHash?: string;
+  reviewInvocationId?: string;
   /** This is only the finding-policy decision; durable receipts and all deploy gates still apply. */
   validationAllowsDeploy: boolean;
   validationClean: boolean;
@@ -58,17 +64,62 @@ const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
 function refuse(code: string, message: string): never { throw new FindingAcceptanceError(code, message); }
 
+const warningContext = (f: ValidationEvidenceFinding) => hash([f.category, f.severity, f.code || '',
+  (f.filePath || '').replace(/\\/g, '/').toLowerCase(), f.sourceRef || '', f.line ?? null, f.message]);
+const reusable = (r: ActionReceipt, scope: string) => r.status === 'committed'
+  && r.metadata?.operation === 'accept-finding' && r.metadata.reviewScopeHash === scope
+  && r.metadata.findingCategory === 'mod-finding' && r.metadata.findingSeverity === 'warning'
+  && !r.metadata.originalReceiptId && r.validation.code === 'FINDING_ACCEPTED_NOT_DEPLOYED' && r.after?.outcome === 'applied'
+  && r.after.resources.length === r.authority.resources.length && r.after.resources.every(resource => resource.hash === r.input.requestHash);
+const revocations = (subject: AcceptanceSubject) => (subject.warningReviews?.history || [])
+  .filter(r => r.status === 'committed' && r.metadata?.operation === 'revoke-warning-review'
+    && r.metadata.reviewScopeHash === subject.warningReviews?.scopeHash);
+const reviewEvidence = (s: AcceptanceSubject) => hash([1, s.evidence.modId, s.evidence.modVersion,
+  s.evidence.sourceHash, s.validatorHash, s.corpusHash, s.targetHash, s.evidence.version,
+  s.evidence.coverage.complete, s.evidence.coverage.gaps.map(g => JSON.stringify(g)).sort()]);
+
+/** Listing retains invalidated/resolved reviews without turning them into permission. */
+export function warningReviewStatus(subject: AcceptanceSubject) {
+  const context = subject.warningReviews;
+  const revoked = new Set(revocations(subject).map(r => r.metadata?.originalReceiptId));
+  const current = new Map(subject.evidence.findings.filter(f => f.category === 'mod-finding' && f.severity === 'warning')
+    .map(f => [warningContext(f), f]));
+  const records = (context?.history || []).filter(r => reusable(r, context!.scopeHash))
+    .sort((a, b) => b.times.preparedAt.localeCompare(a.times.preparedAt) || b.id.localeCompare(a.id));
+  const latest = new Map<string, string>();
+  for (const r of records) if (!latest.has(String(r.metadata?.reviewContextHash))) latest.set(String(r.metadata?.reviewContextHash), r.id);
+  const rows = records.map(r => {
+    const finding = current.get(String(r.metadata?.reviewContextHash));
+    const state = revoked.has(r.id) ? 'revoked' : latest.get(String(r.metadata?.reviewContextHash)) !== r.id ? 'superseded'
+      : !finding ? subject.evidence.coverage.complete && !subject.evidence.coverage.gaps.length ? 'resolved' : 'unverified'
+      : r.metadata?.reviewEvidenceHash !== reviewEvidence(subject) ? 'invalidated' : 'known';
+    return { receiptId: r.id, findingId: finding?.findingId, code: String(r.metadata?.findingCode || ''), state,
+      reason: String(r.metadata?.reason || ''), actor: { ...r.actor, label: String(r.metadata?.actorLabel || '') },
+      recordedAt: r.times.preparedAt, evidenceHash: String(r.metadata?.reviewEvidenceHash || '') };
+  });
+  const known = new Set(rows.filter(r => r.state === 'known').map(r => r.findingId));
+  return { rows, newFindingIds: [...current.values()].filter(f => !known.has(f.findingId)).map(f => f.findingId),
+    knownFindingIds: [...known], dependencyScope: 'all-validation-inputs' as const };
+}
+
 export function acceptanceBinding(subject: AcceptanceSubject) {
   const { evidence, artifactHash, validatorHash, corpusHash, targetHash } = subject;
   if (!evidence.modId || ![evidence.sourceHash, artifactHash, validatorHash, corpusHash, targetHash].every(value => typeof value === 'string' && sha.test(value))) {
     refuse('ACCEPTANCE_SUBJECT_INVALID', 'Resolved mod identity and source/artifact/validator/corpus/target hashes are required.');
   }
+  if (subject.warningReviews && (!sha.test(subject.warningReviews.scopeHash) || !subject.warningReviews.invocationId))
+    refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid server review context.');
+  if (subject.warningReviews?.history.some(r => r.metadata?.reviewScopeHash === subject.warningReviews?.scopeHash
+    && r.metadata?.operation === 'revoke-warning-review' && r.status !== 'committed'))
+    refuse('ACCEPTANCE_RECEIPT_INCOMPLETE', 'An incomplete revocation requires recovery before review reuse.');
   const facts = {
     version: 1, modId: evidence.modId, modVersion: evidence.modVersion,
     sourceHash: evidence.sourceHash, artifactHash, validatorHash, corpusHash, targetHash,
     evidenceVersion: evidence.version,
     findings: evidence.findings.map(f => [f.findingId, f.category, f.severity]).sort(),
     coverage: { complete: evidence.coverage.complete, gaps: evidence.coverage.gaps.map(gap => JSON.stringify(gap)).sort() },
+    ...(subject.warningReviews ? { reviewScopeHash: subject.warningReviews.scopeHash,
+      revocations: revocations(subject).map(r => r.id).sort() } : {}),
   };
   return { hash: hash(facts), modId: evidence.modId, sourceHash: evidence.sourceHash,
     artifactHash, validatorHash, corpusHash, targetHash };
@@ -89,7 +140,7 @@ export function evaluateFindingAcceptances(
   const findings = new Map(subject.evidence.findings.map(finding => [finding.findingId, finding]));
   if (findings.size !== subject.evidence.findings.length) refuse('ACCEPTANCE_SUBJECT_INVALID', 'Ambiguous duplicate finding identities.');
   const seen = new Set<string>();
-  const approvals = requests.map((value: unknown) => {
+  const approvals: FindingAcceptance[] = requests.map((value: unknown) => {
     if (!object(value) || Object.keys(value).some(key => !['findingId', 'bindingHash', 'reason'].includes(key))
       || typeof value.findingId !== 'string' || !sha.test(value.findingId)
       || typeof value.bindingHash !== 'string' || !sha.test(value.bindingHash)
@@ -107,6 +158,16 @@ export function evaluateFindingAcceptances(
     if (!finding || finding.severity === 'info') refuse('ACCEPTANCE_FINDING_STALE', 'The exact actionable finding is not present in current evidence.');
     return { finding, reason };
   });
+  const remembered = subject.warningReviews ? warningReviewStatus(subject) : undefined;
+  if (remembered) {
+    for (const row of remembered.rows) {
+      if (row.state !== 'known' || !row.findingId || seen.has(row.findingId)) continue;
+      const original = subject.warningReviews!.history.find(r => r.id === row.receiptId)!;
+      approvals.push({ finding: findings.get(row.findingId)!, reason: row.reason, original });
+      seen.add(row.findingId);
+    }
+  }
+  if (approvals.length > 127) refuse('ACCEPTANCE_INPUT_INVALID', 'At most 127 combined explicit and remembered approvals fit a deployment.');
   const unacceptedErrorIds = subject.evidence.findings.filter(finding =>
     finding.category === 'mod-finding' && finding.severity === 'error' && !seen.has(finding.findingId),
   ).map(finding => finding.findingId);
@@ -124,6 +185,8 @@ export function evaluateFindingAcceptances(
     || subject.evidence.findings.some(finding => finding.category === 'check-unavailable');
   const validationAllowsDeploy = unacceptedErrorIds.length === 0;
   return { binding, approvals, unacceptedErrorIds, unacceptedWarningIds, counts, validationAllowsDeploy,
+    ...(remembered ? { warningReviews: remembered, reviewScopeHash: subject.warningReviews!.scopeHash,
+      reviewEvidenceHash: reviewEvidence(subject), reviewInvocationId: subject.warningReviews!.invocationId } : {}),
     validationClean: validationAllowsDeploy && !incomplete && approvals.length === 0 && unacceptedWarningIds.length === 0,
     outcome: !validationAllowsDeploy ? 'blocked-mod-findings' : approvals.length
       ? incomplete ? 'accepted-findings-and-incomplete-checks' : unacceptedWarningIds.length ? 'accepted-findings-with-outstanding-warnings' : 'accepted-findings'
@@ -137,17 +200,21 @@ export function projectFindingReview(decision: AcceptanceDecision, principal: Ac
     status: receipts === undefined ? 'proposed' as const : 'recorded' as const,
     counts: decision.counts,
     outstandingFindingIds: [...decision.unacceptedErrorIds, ...decision.unacceptedWarningIds],
-    approvals: decision.approvals.map(({ finding, reason }) => ({
+    ...(decision.warningReviews ? { warningReviews: { ...decision.warningReviews, scopeHash: decision.reviewScopeHash } } : {}),
+    approvals: decision.approvals.map(({ finding, reason, original }) => ({
       findingId: finding.findingId, code: finding.code, category: finding.category, severity: finding.severity, reason,
       actor: { kind: principal.kind, id: principal.id, label: principal.label },
+      ...(original ? { reused: true, originalReceiptId: original.id,
+        originalActor: { ...original.actor, label: original.metadata?.actorLabel } } : {}),
       ...(receipts === undefined ? {} : { receiptId: receipts.find(r => r.metadata?.findingId === finding.findingId)?.id }),
     })),
   };
 }
 
 function receiptInputs(decision: AcceptanceDecision, principal: AcceptancePrincipal): ActionReceiptPrepareInput[] {
-  return decision.approvals.map(({ finding, reason }) => {
-    const requestHash = hash([decision.binding.hash, finding.findingId, reason, principal.kind, principal.id]);
+  return decision.approvals.map(({ finding, reason, original }) => {
+    const requestHash = hash([decision.binding.hash, finding.findingId, reason, principal.kind, principal.id,
+      ...(original ? [original.id, decision.reviewInvocationId] : [])]);
     const resource = { role: 'data' as const, root: 'finding-acceptances',
       relativePath: `${decision.binding.hash}/${finding.findingId}`, beforeHash: decision.binding.hash };
     return {
@@ -161,7 +228,12 @@ function receiptInputs(decision: AcceptanceDecision, principal: AcceptancePrinci
       rollback: { required: false, mode: 'none' },
       metadata: { operation: 'accept-finding', ...Object.fromEntries(Object.entries(decision.binding).filter(([key]) => key !== 'hash')),
         findingId: finding.findingId, findingCode: finding.code || 'uncoded', findingCategory: finding.category, findingSeverity: finding.severity,
-        reason, actorLabel: principal.label, outcome: 'finding-accepted-not-deployed' },
+        reason, actorLabel: principal.label, outcome: 'finding-accepted-not-deployed',
+        ...(decision.reviewScopeHash && finding.category === 'mod-finding' && finding.severity === 'warning' ? {
+          reviewScopeHash: decision.reviewScopeHash, reviewContextHash: warningContext(finding), reviewEvidenceHash: decision.reviewEvidenceHash,
+        } : {}),
+        ...(original ? { originalReceiptId: original.id, originalActorId: original.actor.id,
+          originalActorKind: original.actor.kind, originalActorLabel: original.metadata?.actorLabel } : {}) },
     };
   });
 }
@@ -190,6 +262,8 @@ export function recordFindingAcceptances(
     });
   });
   verifyFindingAcceptanceReceipts(store, receipts.map(receipt => receipt.id), subject, requests, principal, safetyFailures);
+  if (subject.warningReviews) decision.warningReviews = warningReviewStatus({ ...subject,
+    warningReviews: { ...subject.warningReviews, history: store.listVerified() } });
   return { decision, receipts };
 }
 
@@ -212,4 +286,38 @@ export function verifyFindingAcceptanceReceipts(
     }
   }
   return decision;
+}
+
+/** An immutable revocation, not deletion of the original approval or its deployments. */
+export function revokeWarningReview(store: ActionReceiptStore, scopeHash: string, receiptId: string,
+  reason: string, principal: AcceptancePrincipal): ActionReceipt {
+  if (!principal.deployAuthorized || (principal.kind === 'agent' && principal.scope !== 'deploy') || !principal.id || !principal.label)
+    refuse('DEPLOY_APPROVAL_FORBIDDEN', 'Effective deploy permission required.');
+  if (!sha.test(scopeHash) || typeof reason !== 'string' || !reason.trim() || reason.length > 512
+    || [...reason].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+    || redactReceiptMetadata({ reason: reason.trim() })?.reason !== reason.trim())
+    refuse('ACCEPTANCE_INPUT_INVALID', 'A safe scope and nonblank single-line reason of at most 512 characters are required.');
+  const original = store.read(receiptId);
+  if (!reusable(original, scopeHash)) refuse('REVIEW_SCOPE_MISMATCH', 'Only an original warning review for this source/mod may be revoked.');
+  const resource = { role: 'data' as const, root: 'action-receipts', relativePath: `${original.id}.json`, beforeHash: original.hash };
+  const input: ActionReceiptPrepareInput = {
+    actor: { kind: principal.kind, id: principal.id },
+    client: { channel: principal.kind === 'agent' ? 'api' : 'studio', id: principal.id, version: 'warning-review-v1' },
+    capability: { legacyRoute: '/api/agent/warning-reviews/revoke', method: 'POST', reviewed: true, reviewRef: 'claude-C03' },
+    authority: { scope: 'global', operationId: `revoke:${hash([original.id, principal.id, reason.trim()])}`,
+      requestScope: 'deployment.warning-review', resources: [resource] },
+    effects: { declared: [{ id: 'revoke-review', operation: 'revoke-review', resource, reversible: false }] },
+    input: { requestHash: hash([original.hash, reason.trim(), principal.id]), beforeHash: original.hash },
+    validation: { validator: 'warning-review-v1' }, rollback: { required: false, mode: 'none' },
+    metadata: { operation: 'revoke-warning-review', reviewScopeHash: scopeHash, originalReceiptId: original.id,
+      modId: original.metadata?.modId, sourceHash: original.metadata?.sourceHash, reason: reason.trim(), actorLabel: principal.label },
+  };
+  const prepared = store.prepareWithDisposition(input);
+  if (!prepared.created) {
+    if (prepared.receipt.status !== 'committed') refuse('ACCEPTANCE_RECEIPT_INCOMPLETE', 'Incomplete revocation; nothing may be reused.');
+    return prepared.receipt;
+  }
+  return store.commit(prepared.receipt.id, { validation: { ...input.validation, status: 'passed', code: 'WARNING_REVIEW_REVOKED' },
+    after: { outcome: 'applied', resources: [{ role: resource.role, root: resource.root,
+      relativePath: resource.relativePath, hash: input.input.requestHash }] } });
 }

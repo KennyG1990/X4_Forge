@@ -578,6 +578,7 @@ function legacyRoutePolicy(
   if (QUIET_READ_OVERRIDE_ROUTES.has(route.routeKey)) return readOnlyRoutePolicy();
   if (VISIBLE_READ_OVERRIDE_ROUTES.has(route.routeKey)) return auditedReadRoutePolicy();
   if (route.routeKey === 'POST /api/agent/runtime-control/reload') return durableRoutePolicy(['filesystem-write']);
+  if (route.routeKey === 'POST /api/agent/warning-reviews/revoke') return durableRoutePolicy(['filesystem-write'], 'W3B2');
   if (route.routeKey === 'POST /api/agent/deploy-verify') {
     return durableRoutePolicy(['filesystem-write', 'deploy', 'delete'], 'W3B2');
   }

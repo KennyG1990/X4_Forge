@@ -7883,3 +7883,14 @@ and changed content IDs inherit no presentation. Persisted sizes and both XML qu
 lint/build and complete precommit/type/policy pass. Proof: docs/testing/claude-C02-identities.json.
 AAR/limitations: C02 plan; failed runs retained. No publication, installed-host or game proof.
 Commit point: fix(import): preserve stable source identities and reimport layout.
+
+## 2026-10-25 — C03 remembered warning reviews — VERIFIED (local integration)
+Unchanged warning evidence reuses the original authenticated approval/reason; every deploy records
+its own reuse receipt. Durable deploy-authorized revocation, scoped source/mod checks and rendered
+new/known/resolved/invalidated/revoked history preserve raw findings and qualified success.
+29 focused +51 existing checks,19 actual HTTP/browser/deploy scenarios, two zero-flake E2E runs,
+typecheck/lint/build and complete precommit/policy/receipt audits pass. Evidence:
+`docs/testing/claude-C03-warning-reviews.json`; detailed acceptance/review/AAR in the C03 plan.
+All validation inputs remain dependencies; any source edit requires review until C05 refinement.
+Live/installed Dev bundles, discovery and X4 untouched. No publication/install; C04-C07 remain open.
+Kimi paused. Commit point: fix(deploy): reuse and revoke exact warning reviews.

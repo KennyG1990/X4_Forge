@@ -280,6 +280,20 @@ export class ActionReceiptStore {
     return this.readChecked(id);
   }
 
+  /** Bounded, verified enumeration. Never use a partial/corrupt ledger as authority. */
+  listVerified(): ActionReceipt[] {
+    if (!this.ensureRoot(false)) return [];
+    const entries = fs.readdirSync(this.root);
+    if (entries.length > 10000) throw new ActionReceiptStoreError('RECEIPT_SCAN_LIMIT', 'Receipt history exceeds the 10000-entry review limit.');
+    let bytes = 0;
+    return entries.filter(name => /^ar_[a-f0-9]{64}\.json$/.test(name)).sort().map(name => {
+      this.assertEntrySafe(path.join(this.root, name));
+      bytes += fs.statSync(path.join(this.root, name)).size;
+      if (bytes > 64 * 1024 * 1024) throw new ActionReceiptStoreError('RECEIPT_SCAN_LIMIT', 'Review history exceeds the 64 MiB scan limit.');
+      return this.readChecked(name.slice(0, -5));
+    });
+  }
+
   tryRead(id: string): ActionReceiptStoreResult {
     try { return { ok: true, receipt: this.readChecked(id) }; }
     catch (error) { const detail = errorDetails(error); return { ok: false, ...detail }; }

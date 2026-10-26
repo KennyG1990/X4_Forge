@@ -1,0 +1,147 @@
+{
+  "status": "VERIFIED",
+  "scope": "C03 isolated source/API/rendered warning-review and scratch-deploy integration; not installed or published",
+  "baseline": "3d25783470b221574b2cef508c1a958c588b55ba",
+  "recordedAt": "2026-10-26T02:18:57.811Z",
+  "dependencyScope": "all-validation-inputs",
+  "limitations": [
+    "Any validation-source edit invalidates reviews; dependency-aware reuse across unrelated edits remains C05.",
+    "No native installed-host or game proof.",
+    "Legacy unscoped reviews never gain automatic reuse authority."
+  ],
+  "focusedChecks": 29,
+  "existingRegressions": {
+    "acceptance": 40,
+    "review": 11
+  },
+  "integration": {
+    "pass": true,
+    "checks": [
+      "fresh-warning-explicit-approval",
+      "preview-no-target-write",
+      "cross-agent-reuse",
+      "original-actor-reason-and-receipts",
+      "qualified-not-clean",
+      "read-write-forbidden",
+      "strict-input",
+      "wrong-scope-refused",
+      "other-workspace-source-refused",
+      "actual-rendered-list-and-revoke",
+      "revoke-no-target-write",
+      "revoked-preview-refused",
+      "fresh-explicit-reapproval-recovery",
+      "rules-byte-change-invalidates",
+      "exact-evidence-restoration-recovers",
+      "source-change-invalidation",
+      "new-warning-not-inherited",
+      "stale-source-no-write",
+      "resolved-review-visible"
+    ],
+    "originalReceiptId": "ar_dc970272f42fd4530f824fe8a35f832df76f459db6e0bce375343e1a87787947",
+    "reuseReceiptId": "ar_ef1f1f105b56f98bb2fd176b1b356ac37463ce30284a2dd533a4fe3ed36a6b70",
+    "sourceHash": "aada57c3cbcb81d7cb8c55cd898cfd3a9e45d2c80efb8c0b36b1341361393c4b",
+    "deployReceiptId": "ar_7063b573121cdc2c0184ae0fec150bd10dc8c5835808250daa5555d3c6b1d193"
+  },
+  "e2e": {
+    "passed": 1,
+    "failed": 0,
+    "flaky": 0,
+    "consecutiveGreenRuns": 2,
+    "ownedTreeStopped": true,
+    "screenshotsInspected": [
+      "known-review.png",
+      "qualified-deployment.png",
+      "revoked-review.png"
+    ]
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 608
+  },
+  "protected": {
+    "files": 4,
+    "unchanged": true
+  },
+  "validation": [
+    {
+      "name": "baseline-reproduction",
+      "sha256": "5ba35b6ba39f46961d3a46c716985fe0a4391d1eb0663c961ffaf3d428e604d5",
+      "finishedAt": "2026-10-25T22:47:44.016Z",
+      "result": "failure-reproduced"
+    },
+    {
+      "name": "focused-final",
+      "sha256": "2b7ebe7518c15c17e15022d20fe5a8defb0300895f896394e21750716a95dba5",
+      "finishedAt": "2026-10-26T02:13:04.180Z",
+      "result": "passed"
+    },
+    {
+      "name": "acceptance-final",
+      "sha256": "aad7eb4dee240c04921657baedddb172e9c099f7ade25279f51ec29dcb567768",
+      "finishedAt": "2026-10-26T02:12:58.301Z",
+      "result": "passed"
+    },
+    {
+      "name": "review-final",
+      "sha256": "a043205d65feefc3aaa05ecdd3b5f603fad0c2756dd8ea656212be0165307e81",
+      "finishedAt": "2026-10-26T02:13:00.373Z",
+      "result": "passed"
+    },
+    {
+      "name": "typecheck-reviewed",
+      "sha256": "2e17a34721fae501c9a9a318eda50ebf07acceccddf3f095a98f83c8222cc810",
+      "finishedAt": "2026-10-26T02:00:05.489Z",
+      "result": "passed"
+    },
+    {
+      "name": "lint-release-check",
+      "sha256": "08788aa8e73edb24cdd87ff5d9cfa49b65f932fa1bf6baa4ed05abd70d886f8e",
+      "finishedAt": "2026-10-26T02:08:48.657Z",
+      "result": "passed"
+    },
+    {
+      "name": "build-final",
+      "sha256": "9a89825186a715ae26f2a1606192cc81d711a2a606bb6eaa20cdcc0cde7aabd0",
+      "finishedAt": "2026-10-26T02:08:22.598Z",
+      "result": "passed"
+    },
+    {
+      "name": "route-promote",
+      "sha256": "944482b916c1382188ef8b13d9906d5ccccaa263d74416c7e7c437c7db74c590",
+      "finishedAt": "2026-10-26T01:53:15.343Z",
+      "result": "passed"
+    },
+    {
+      "name": "receipt-promote",
+      "sha256": "54532041efae3230f8bd18d2cfe2e8392b76e3e549e12b20ddc9e6dd82f09fa8",
+      "finishedAt": "2026-10-26T02:03:16.627Z",
+      "result": "passed"
+    },
+    {
+      "name": "e2e-final",
+      "sha256": "bf3ebc315aa5dd1922963e1864ae1e64b76181d4a3db3dd5431f4d82f75a5a12",
+      "finishedAt": "2026-10-26T02:07:00.288Z",
+      "result": "passed"
+    },
+    {
+      "name": "precommit-final",
+      "sha256": "667a05a2f284f8eddb2b6038974902c6a53803256121e2e4dbe4580af41fd50f",
+      "finishedAt": "2026-10-26T02:18:09.608Z",
+      "result": "passed"
+    }
+  ],
+  "sourceHashesLf": {
+    "server.ts": "8e2c9a5a199b97d1b7026f5f52128616e4f50d40ae60c1be23fab69bcaedfc7f",
+    "src/server/findingAcceptance.ts": "ce687fe6d226aaad334aef9d21ce1e6d668061c7925b0dc0a2bfe6ee06035740",
+    "src/lib/actionReceiptStore.ts": "7148424025aaaab8cccd80aba9c1175bf698041d9ad032ded48194f07eabdfd2",
+    "src/lib/actionReceipt.ts": "06e8f85b0f49a67b45b7f68a80df53a5f4fd68a6d7b7c218c5edba4ecfc4bd0b",
+    "src/lib/actionReceiptPolicyBundle.ts": "19d58ffa47864e11ea750eb65b57a5a9e8d330b99fcc8e64e54e96e52ffca7cf",
+    "src/lib/deployClient.ts": "9accb108e4245d8615c4c5e350a85259fed2c4216a77da8bce682c1ea84cc46b",
+    "src/components/DeployValidationSummary.tsx": "b56f59d22b5322d38868fc10f711ef9255109e20dcbcb812218d04ce5c3b9960",
+    "config/forge-route-dispositions.json": "dd50dea150c7f88502979422c8db3b1c38ba9fcf3ef1bf46fd96125b8f10e872",
+    "config/action-receipt-coverage.json": "a4a9a51790fa1f75ecec43b82b73d6d14ef7f1a313ed8b47a26ce23f2751906b",
+    "scripts/action-receipt-coverage-audit.ts": "d09b5c6933af240935791205d18ba56836f5941bce1f0b64ea6a14cc2bfeb612",
+    "scripts/warning-review-reuse.selftest.ts": "d17791fdd4de4609d7a43c844e7ee426ce8efd31e11eb85606eb6ef3bcc84738",
+    "tests/e2e/warning-review-reuse.spec.ts": "6543e92a15fcd0897ebae4ccd6f111bdb53364314165ed33cc663f38c6a17acc"
+  }
+}

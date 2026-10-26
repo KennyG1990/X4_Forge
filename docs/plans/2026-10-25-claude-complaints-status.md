@@ -1,12 +1,12 @@
 # Claude complaints — reconciled private Dev status, 2026-10-25
 
-This is a scope ledger, not a claim that the public Forge contains these changes. C01 private fixes are integrated locally at d3eeb2e; C02 is now verified locally. See docs/testing/claude-C01-integration.json and claude-C02-identities.json. Evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata. Kimi remains paused. All game execution/experience proof remains separate.
+This is a scope ledger, not a claim that the public Forge contains these changes. C01 private fixes are integrated locally at d3eeb2e; C02 and C03 are now verified locally. See docs/testing/claude-C01-integration.json and claude-C02-identities.json. Evidence below is private at `../lab/evidence/`. Private source is an archive with no Git metadata. Kimi remains paused. All game execution/experience proof remains separate.
 
 | Original complaint | Current scope and evidence | What remains |
 | --- | --- | --- |
 | ui.xml treated as Lua/passthrough; lost imported registrations | VERIFIED private source-domain handling, preserved registrations/edits, malformed/missing registrations refused; ui-source-domain/verdict.json | Public release/installed verification; no claim all UI semantics are covered |
 | Forge failure versus mod failure; misleading compile/deploy success | VERIFIED bounded API evidence classifications, compile/artifact truth and deploy UI outcome distinctions; compile-verdict, deploy-review-ui | Exhaustive failure-classification audit across every API remains broader than these proofs |
-| Logged overrides, accepted findings | VERIFIED exact-finding/source-bound approval, actor/reason/receipt and read-only UI; finding-overrides, deploy-review-ui | A persistent per-mod known-warning policy across source changes is NOT implemented; existing approvals intentionally require renewed review when binding facts change |
+| Logged overrides, accepted findings | VERIFIED C03 warning-only exact-input reuse, original actor/reason plus per-deploy receipts, durable list/revoke controls; docs/testing/claude-C03-warning-reviews.json | All validation-source edits conservatively invalidate reviews; narrower dependency-aware reuse remains C05. No public/installed proof yet |
 | Exact bytes, stale result, mod identity | VERIFIED snapshot-bound validate/deploy with stale refusal and workspace-mod guard; deploy-snapshot, client-isolation | No blanket claim every API response carries mod identity; other routes need contract census if this requirement is interpreted literally |
 | Shared active workspace collisions | VERIFIED addressed workspaces, credential binding, paired CAS and wrong-mod deployment refusal; client-isolation | No raw source-folder editor lock; clients must select/provision their own workspace |
 | Reference/property and listener false positives | VERIFIED specific property/literal and AST/XML listener cases; validation-noise | General MD expressions, aliases/wrappers and dynamic event resolution remain partial; unresolved direct events now explicitly incomplete (event-coverage) |
@@ -20,4 +20,31 @@ This is a scope ledger, not a claim that the public Forge contains these changes
 | Engine-trap rules from gotchas | Existing mdPitfallLints has four bounded rules; no products/station rule found | Reconcile supplied gotchas with game/reference evidence; add narrowly grounded rules without reviving false positives |
 | Usable public/installed release | Private Dev backend/frontend proved in bounded scopes | Integrate into Git, required release tests, native host/package verification and publish. Do not disturb Claude stable during private work |
 
-Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. Next is C03 warning-only review reuse, then C04-C07 under the approved completion/release plan.
+Current highest user-priority remaining item is native game loop proof. It is deliberately not attempted while Claude owns the running game. C03 warning-only review reuse is verified locally. Next is C04, followed by C05-C07 under the approved completion/release plan.
+
+## Original complaint inventory
+
+Consolidated from Claude's two pasted reviews, with repeated complaints merged. This is the
+requested scope, not a completion claim:
+
+1. Separate Forge/internal failures from mod failures; internal failures alone must not masquerade as mod errors.
+2. Support exact, logged finding overrides with authenticated approver, reason and deployment record.
+3. Ground checks in X4 schemas, script properties and vanilla code: transporttag, waretransport, property reads misread as ware IDs/names, get_safe_pos, and existing listeners.
+4. Cover large Lua files and their tails honestly, expose unsupported analysis, and ground widget/helper rules in vanilla source.
+5. Make deployment status truthful and useful instead of the repeated "DEPLOYED - NOT Forge-validated" warning.
+6. Validate and deploy the exact same bytes in one workflow; refuse stale changes instead of shipping anyway.
+7. Include mod identity/source hash in results and require expected identity at deployment.
+8. Isolate client workspaces or provide explicit queryable source ownership/coordination.
+9. Remember reviewed per-mod warnings; preserve actor/reason, distinguish new/known/resolved, invalidate changed evidence, and allow revocation.
+10. Reload UI/refresh MD without keyboard or screen automation.
+11. Provide save-aware log tails, reload/session markers and structured tagged probes.
+12. Expose named read-only live-game state probes rather than inference from logs or raw commands.
+13. Make health diagnostics identify missing dependencies and dead configured paths.
+14. Reject malformed API/import requests instead of returning HTTP 200 with unusable results.
+15. Keep imported node identities stable.
+16. Validate incrementally with measured performance and full-run equivalence.
+17. Add narrowly grounded MD engine-trap rules, including the reported station products? case after verifying its conditions.
+
+Follow-up scope explicitly requested by Ken: complete ui.xml classification/validation/imported
+registration preservation, and truthful compile/artifact success responses. These extend the
+original validation and false-success complaints; they are not Kimi recommendations.
