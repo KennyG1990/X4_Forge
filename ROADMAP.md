@@ -7967,3 +7967,24 @@ Review/AAR: docs/plans/2026-10-26-c06-api-source-coordination.md. Parent GitHub#
 Live discovery changed under an Antigravity host recreated02:36:47; cause unconfirmed, no
 task-issued restart. Both installed bundles and Dev discovery unchanged; no continuous live
 state invariant claimed. Runtime testing paused after observation; static close only.
+
+## 2026-10-26 — C06b VERIFIED: scoped workspace/runtime/release API contracts
+
+Strict inputs extend the existing receipt/CAS and release owners. Workspace collections carry
+per-record subjects; previews identify proposed content separately. Runtime and release folder
+selectors remain compatible while sourceIdentity names actual content. Pasted logs and recorded
+release evidence have explicit provenance. Prepared logical inputs, validation inputs and final
+ZIP bytes have separate hashes; legacy/malformed reports remain unresolved.
+
+Proof:119 focused checks,108 C06b HTTP calls in7 scenarios,35 C06a checks,65 compiled HTTP/MCP,
+134 runtime-discovered oracles; C06a+C06b E2E2/0/0 and existing incremental/oracle E2E1/0/0.
+Rendered release controls inspected; source drift, failed receipts, two-mod/copy identities,
+legacy reports, byte corruption, download/export and scratch metadata adoption proved.
+Type/lint/build/full precommit pass (0 lint errors/618 warnings;301 routes;85 receipt routes/59
+surfaces). Failed fixture/review runs retained. Four protected live/Dev hashes remained unchanged;
+owned test trees stopped. No native-host, WorkshopTool/upload, real-mod/game or installed proof.
+
+Plan/review/AAR: docs/plans/2026-10-26-c06b-api-contract-completion.md.
+Evidence: docs/testing/claude-C06b-contracts.json. Owner GitHub#20 and existing Notion safety task.
+Full C06, added complaints and C07 remain PARTIAL; Kimi paused. Local commit only, no push/release.
+Commit point: fix(api): complete workspace runtime and release subject contracts.

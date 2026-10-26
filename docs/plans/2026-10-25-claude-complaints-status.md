@@ -57,3 +57,9 @@ requested scope, not a completion claim:
 Follow-up scope explicitly requested by Ken: complete ui.xml classification/validation/imported
 registration preservation, and truthful compile/artifact success responses. These extend the
 original validation and false-success complaints; they are not Kimi recommendations.
+
+## C06b checkpoint — 2026-10-26
+
+Workspace/runtime/release contracts now have isolated evidence: 119 focused checks, 108 C06b HTTP calls across seven scenarios, existing C06a regression, compiled HTTP/MCP checks and rendered release controls. Final precommit/commit status is recorded in `../testing/claude-C06b-contracts.json`; this note does not close the program. Workspace previews, log bytes, validation inputs, artifact plan inputs and packaged ZIP bytes have distinct scopes. Legacy folder selectors remain compatible and explicit. Refusal receipts, two-mod isolation, malformed/legacy reports, source drift and scratch metadata adoption are tested.
+
+Remaining: shared cross-process coordination, trusted project gates A15, active-mod formatter A01/A04, additional validation/engine cases and warning identity, critical save-corruption checks, new-file guidance, paired reload/probe/save-aware runtime proof, and the public/installed release. Kimi paused. No real-mod/game/installed write.

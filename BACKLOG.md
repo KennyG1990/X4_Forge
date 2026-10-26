@@ -32,6 +32,11 @@ coordination and deploy diagnostics.35 focused +25 receipt checks,65 HTTP/MCP ch
 2 serial corpus/browser tests pass; evidence docs/testing/claude-C06-api.json. Full C06 remains OPEN:
 wider route contracts, cross-process coordination and A15 trusted project gates. A01 active-client
 truncation and A04 previous-deploy fidelity formatter remain open; no real-mod changes.
+C06b VERIFIED local: remaining named workspace/runtime/release contracts, refusal receipts and
+scoped source identity, with folder/content selector compatibility.119 focused,108 actual HTTP
+calls across7 groups,65 compiled HTTP/MCP,134 oracles, rendered release controls and full gates
+pass. Evidence: docs/testing/claude-C06b-contracts.json. No new API authority or installed update.
+Cross-process locking, A15 project gates and separately recorded added complaints stay OPEN.
 Next finish C06, then C07 actual game-loop proof. Keep live Forge/X4 untouched outside coordinated
 verification and installation windows. Public release and exact installed verification precede
 Kimi M01; no interim pushes. Kimi paused.

@@ -224,7 +224,7 @@ import { runAgentHistorySelftest } from "./src/lib/agentHistory.selftest";
 import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
-import { projectApiEnvelope, projectApiSubject, fileApiSubject, validateProjectApiBody } from './src/server/projectApiContract';
+import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
 import { canonicalSourceKey, forgeResourceCoordinator } from './src/server/resourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
@@ -418,7 +418,15 @@ function apiFailureEnvelopeMiddleware(req: express.Request, res: express.Respons
   if (!req.path.startsWith('/api')) return next();
   const originalJson = res.json.bind(res);
   res.json = ((body: unknown) => {
-    const envelope = projectApiEnvelope(req.originalUrl.split('?')[0], body, res.locals.apiSubject);
+    let envelope = projectApiEnvelope(req.originalUrl.split('?')[0], body, res.locals.apiSubject);
+    // Preview content is a different subject from the registry head. Resolve its emitted
+    // content identity, including edited metadata, rather than an old imported manifest.
+    if (body && typeof body === 'object' && !Array.isArray(body) && 'previewWorkspace' in body) {
+      const preview = (body as { previewWorkspace?: ModWorkspace }).previewWorkspace;
+      if (preview && Array.isArray(preview.nodes) && Array.isArray(preview.links)) {
+        envelope = { ...(envelope as object), ...workspaceResponseSubject(preview) };
+      }
+    }
     if (envelope && typeof envelope === 'object' && !Array.isArray(envelope) && res.locals.sourceOperation) {
       (envelope as Record<string, unknown>).sourceOperation = res.locals.sourceOperation;
     }
@@ -1109,8 +1117,14 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
 app.use("/api", ledgerMiddleware);
 
 function projectApiInputMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (req.method !== 'POST') return next();
-  try { validateProjectApiBody(req.path, req.body); return next(); }
+  try {
+    if (req.method === 'POST') validateProjectApiBody(req.path, req.body);
+    // Canonical runtime owners retain their established input error codes.
+    if (req.method === 'GET' && !req.path.startsWith('/api/agent/runtime-control') && req.path !== '/api/agent/runtime-debugger') {
+      validateProjectApiQuery(req.path, req.query);
+    }
+    return next();
+  }
   catch (error) { return res.status(400).json({ ok: false, code: 'PROJECT_INPUT_INVALID', category: 'request-invalid', error: error.message }); }
 }
 app.use(projectApiInputMiddleware);
@@ -5778,11 +5792,25 @@ app.get("/api/schema/element/:tag", (req, res) => {
   return res.json(element);
 });
 
+/** Workspace head identifies graph/source state, not validation or game-loaded bytes. */
+function workspaceResponseSubject(workspace: ModWorkspace, head?: string): ApiSubject {
+  const ws = activeBuildWorkspace(workspace);
+  const manifest = fileApiSubject('workspace', { 'content.xml': contentXmlFor(effectiveModId(ws), ws) });
+  return { ...workspaceApiSubject(workspace, { modId: manifest.modId, head }), modVersion: manifest.modVersion };
+}
+function workspaceRecordSubject(record: WorkspaceRecord): ApiSubject {
+  return workspaceResponseSubject(record.workspace, record.head);
+}
+function workspaceSummaryWithSubject(row: ReturnType<typeof workspaceRegistry.summary>) {
+  const found = workspaceRegistry.lookup(row.workspaceId);
+  return { ...row, ...(found.ok ? workspaceRecordSubject(found.record) : { modId: null, sourceHash: null, sourceHashScope: 'unresolved' }) };
+}
+
 /** ADR-F5 bootstrap/list/create surfaces. Selection remains tab-local; the server never
  * stores a process-global "active" pointer. */
 app.get('/api/agent/workspaces', (req, res) => {
   const actor = (req as any).__actor as RequestActor | undefined;
-  const rows = workspaceRegistry.list();
+  const rows = workspaceRegistry.list().map(workspaceSummaryWithSubject);
   if (actor?.kind === 'agent') {
     if (!actor.workspaceId) return res.status(403).json({ code: 'WORKSPACE_BINDING_REQUIRED', error: 'This legacy agent key is not bound to a workspace.' });
     return res.json({ workspaces: rows.filter(row => row.workspaceId === actor.workspaceId), defaultWorkspaceId: actor.workspaceId });
@@ -5805,6 +5833,7 @@ app.post('/api/agent/workspaces/bootstrap', (req, res) => {
   }
   const found = workspaceRegistry.lookup(requested);
   if (found.ok === false) return res.status(found.code === 'WORKSPACE_NOT_FOUND' ? 404 : 400).json({ code: found.code, error: found.error });
+  res.locals.apiSubject = workspaceRecordSubject(found.record);
   return res.json({ ...workspaceRegistry.summary(found.record), workspace: found.record.workspace, clientId: clientId || null });
 });
 
@@ -5873,6 +5902,8 @@ app.post('/api/agent/workspaces', async (req, res) => {
       'Only the Studio session can create workspaces.',
     );
   }
+  try { validateWorkspaceCreateBody(req.body); }
+  catch (error) { return respondFailure(400, 'WORKSPACE_CREATE_RECEIPT_FACTS_INVALID', error.message); }
   const clientId = String(req.body?.clientId || req.headers['x-client-id'] || '').trim();
   if (!/^client_[a-z0-9_-]{8,80}$/i.test(clientId)) {
     return respondFailure(
@@ -5925,6 +5956,7 @@ app.post('/api/agent/workspaces', async (req, res) => {
           result.receipt,
         );
       }
+      res.locals.apiSubject = workspaceRecordSubject(result.record);
       return res.status(result.replayed ? 200 : 201).json({
         ...workspaceRegistry.summary(result.record),
         workspace: result.record.workspace,
@@ -5952,6 +5984,7 @@ app.post('/api/agent/workspaces', async (req, res) => {
 
 app.get("/api/agent/workspace", (req, res) => {
   const record = requestWorkspace(req);
+    res.locals.apiSubject = workspaceRecordSubject(record);
   return res.json({
     workspaceId: record.workspaceId,
     workspace: record.workspace,
@@ -6861,6 +6894,8 @@ async function executeWorkspaceReceiptMutation(
     throw new Error('Workspace receipt transaction failed.');
   }
   captureActionReceiptProjection(req, result.receipt);
+  const subjectRecord = workspaceRegistry.lookup(record.workspaceId);
+  if (subjectRecord.ok) res.locals.apiSubject = workspaceRecordSubject(subjectRecord.record);
   if (!result.ok) {
     if (!result.receipt) abandonedRecovery(recoveryPrepared?.id);
     else if (result.receipt.status === 'failed') abandonedRecovery(recoveryPrepared?.id);
@@ -6912,16 +6947,14 @@ app.post("/api/agent/workspace", async (req, res) => {
   }
   try {
     const record = requestWorkspace(req);
+    res.locals.apiSubject = workspaceRecordSubject(record);
     const { workspace, expectedVersion, expectedHead, expectedSnapshotHash, dryRun, force } = req.body || {};
     const actor = (req as any).__actor as RequestActor | undefined;
     let preflightFailure: WorkspaceMutationResult | undefined;
     let preflightKind: 'body' | 'scope' | undefined;
-    if (!workspace || typeof workspace !== 'object') {
-      preflightFailure = {
-        status: 400,
-        changed: false,
-        body: { error: "Missing required 'workspace' body parameter." },
-      };
+    try { validateWorkspaceMutationBody('replace', req.body); }
+    catch (error) {
+      preflightFailure = { status: 400, changed: false, body: { code: 'PROJECT_INPUT_INVALID', error: error.message } };
       preflightKind = 'body';
     }
     if (preflightFailure === undefined && force === true && actor?.kind === 'agent' && actor.scope !== 'deploy') {
@@ -6982,16 +7015,14 @@ app.post("/api/agent/workspace/merge", async (req, res) => {
   }
   try {
     const record = requestWorkspace(req);
+    res.locals.apiSubject = workspaceRecordSubject(record);
     const { changes, expectedVersion, expectedHead, expectedSnapshotHash, dryRun, force } = req.body || {};
     const actor = (req as any).__actor as RequestActor | undefined;
     let preflightFailure: WorkspaceMutationResult | undefined;
     let preflightKind: 'body' | 'scope' | undefined;
-    if (!changes || typeof changes !== 'object') {
-      preflightFailure = {
-        status: 400,
-        changed: false,
-        body: { error: "Missing required 'changes' object (top-level workspace fields to merge)." },
-      };
+    try { validateWorkspaceMutationBody('merge', req.body); }
+    catch (error) {
+      preflightFailure = { status: 400, changed: false, body: { code: 'PROJECT_INPUT_INVALID', error: error.message } };
       preflightKind = 'body';
     }
     if (preflightFailure === undefined && force === true && actor?.kind === 'agent' && actor.scope !== 'deploy') {
@@ -7047,7 +7078,7 @@ app.get("/api/agent/workspace/parked", (req, res) => {
   return res.json({
     workspaceId: current.workspaceId,
     parked: workspaceRegistry.list().filter(row => row.workspaceId !== current.workspaceId).map(row => ({
-      ...row,
+      ...workspaceSummaryWithSubject(row),
       nodeCount: (workspaceRegistry.lookup(row.workspaceId).ok ? ((workspaceRegistry.lookup(row.workspaceId) as any).record.workspace.nodes || []).length : 0),
     })),
   });
@@ -7065,6 +7096,7 @@ app.post("/api/agent/workspace/restore-parked", (req, res) => {
   if (!targetWorkspaceId) return res.status(400).json({ code: 'TARGET_WORKSPACE_ID_REQUIRED', error: "Missing required 'targetWorkspaceId' body parameter." });
   const target = workspaceRegistry.lookup(targetWorkspaceId);
   if (target.ok === false) return res.status(target.code === 'WORKSPACE_NOT_FOUND' ? 404 : 400).json({ code: target.code, error: target.error });
+  res.locals.apiSubject = workspaceRecordSubject(target.record);
   return res.json({ success: true, ...workspaceRegistry.summary(target.record), workspace: target.record.workspace });
 });
 
@@ -7075,6 +7107,7 @@ app.post("/api/agent/workspace/restore-parked", (req, res) => {
 app.get("/api/agent/diagnostics", (req, res) => {
   try {
     const record = requestWorkspace(req);
+    res.locals.apiSubject = workspaceRecordSubject(record);
     const diagnostics = computeWorkspaceDiagnostics(record.workspace as ModWorkspace);
     return res.json({ workspaceId: record.workspaceId, version: record.version, summary: summarizeDiagnostics(diagnostics), diagnostics });
   } catch (error) {
@@ -7112,6 +7145,13 @@ function handleAddressedRuntimeDebugger(
   try {
     const record = resolveWorkspaceAuthority(req, res, true);
     if (!record) return;
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    if (compatibilityEnvelope && typeof req.query.modId === 'string' && req.query.modId) {
+      const ws = activeBuildWorkspace(record.workspace);
+      if (![effectiveModId(ws), res.locals.apiSubject.modId, toSafeModId(ws.name)].includes(req.query.modId)) {
+        return res.status(409).json({ code: 'RUNTIME_MOD_MISMATCH', error: 'Requested mod filter does not match the addressed workspace.' });
+      }
+    }
     if (!compatibilityEnvelope) {
       const unknown = Object.keys(req.query).filter(key => key !== "expect");
       if (unknown.length) {
@@ -7155,7 +7195,7 @@ function handleRuntimeControl(req: express.Request, res: express.Response, actio
       return res.status(400).json({code:'RUNTIME_INPUT_INVALID',error:'Preview requires an empty object; identities come from the addressed workspace.'});
     const payload = buildAddressedDebugWatcherBrief(record, [], false) as RuntimeDebuggerAdapterResult['payload'];
     const subject = {workspaceId:record.workspaceId,head:record.head,modId:effectiveModId(activeBuildWorkspace(record.workspace)),payload};
-    res.locals.apiSubject = { modId: subject.modId, sourceHash: subject.head, sourceHashScope: 'workspace-head' };
+    res.locals.apiSubject = workspaceRecordSubject(record);
     const result = action === 'reload' ? runtimeControl.request(subject,req.body,deploymentPrincipal(req))
       : action === 'preview' ? runtimeControl.preview(subject) : runtimeControl.status(subject);
     return res.status(action === 'reload' ? 202 : 200).json({ok:true,...result});
@@ -7175,8 +7215,9 @@ registerNpcIdentityProbeRoutes(app, { findDebugLogCandidates, readTail, errorMes
 // named hypothesis deterministically. No AI provider involved.
 app.post("/api/agent/log-diagnose", (req, res) => {
   try {
-    const tail = String(req.body?.tail || "");
-    const rawMod = String(req.body?.modId || "").trim();
+    const tail: string = req.body.tail;
+    const rawMod: string = req.body.modId.trim();
+    res.locals.apiSubject = pastedLogApiSubject(tail, rawMod);
     if (!rawMod) return res.status(400).json({ code: 'MOD_ID_REQUIRED', error: 'log-diagnose requires an explicit modId.' });
     const modIds = Array.from(new Set([toSafeModId(rawMod), rawMod.toLowerCase().trim(), toSafeModId(rawMod).replace(/_mod$/, "")].filter(s => s && s.length >= 3)));
     const { issues } = analyzeGameLog(tail, modIds);
@@ -9468,6 +9509,7 @@ function computeServerReadiness(record: WorkspaceRecord) {
 app.get("/api/agent/readiness", (req, res) => {
   try {
     const record = requestWorkspace(req);
+    res.locals.apiSubject = workspaceRecordSubject(record);
     const { ws, modId, stages } = computeServerReadiness(record);
     return res.json({
       workspaceId: record.workspaceId,
@@ -13961,6 +14003,8 @@ interface ReleaseBuildContext {
   version: string;
   manifestXml: string;
   plan: ArtifactPlan;
+  validatedSource: ApiSubject;
+  preparedSource: ApiSubject;
   stages: ReleaseStage[];
   warnings: number;
   cleanup(): void;
@@ -14022,6 +14066,7 @@ function prepareReleaseBuild(
   bump: ReleaseBump,
   platform: 'nexus' | 'steam',
   resolved: ReturnType<typeof resolveXsdConfig>,
+  onValidated: (subject: ApiSubject) => void = () => {},
 ): ReleaseBuildContext | { status: number; code: string; error: string; stages: ReleaseStage[] } {
   const stages: ReleaseStage[] = [];
   let ephemeralSource = '';
@@ -14057,6 +14102,12 @@ function prepareReleaseBuild(
 
     const built = buildWorkspaceFileManifest(workspace);
     const full = runFullWorkspaceValidation(workspace, built);
+    const evidence = full.validation.evidence;
+    const validatedSource: ApiSubject = {
+      modId: evidence.modId, modVersion: evidence.modVersion,
+      sourceHash: evidence.sourceHash, sourceHashScope: evidence.hashScope,
+    };
+    onValidated(validatedSource);
     const blocking = full.diagnostics.filter(diagnostic => diagnostic.severity === 'error');
     if (blocking.length > 0) {
       cleanup();
@@ -14117,7 +14168,13 @@ function prepareReleaseBuild(
     // content.xml identity. Egosoft replaces content.xml id with ws_<id> after first
     // publish, but an update must keep using the original folder name.
     const folderName = stampedSource ? path.basename(sourceRoot) : built.modId;
-    return { workspace, modId: built.modId, folderName, version: manifest.meta.version, manifestXml, plan, stages, warnings, cleanup };
+    // Version preparation changes content.xml after full validation. Keep that input
+    // evidence separate from the logical artifact plan and the final ZIP byte hash.
+    const preparedSource: ApiSubject = {
+      modId: manifest.meta.id, modVersion: manifest.meta.version,
+      sourceHash: artifactPlanIdentity(plan, 'loose'), sourceHashScope: 'release-artifact-inputs-v1',
+    };
+    return { workspace, modId: built.modId, folderName, version: manifest.meta.version, manifestXml, plan, validatedSource, preparedSource, stages, warnings, cleanup };
   } catch (error) {
     cleanup();
     return { status: 500, code: 'RELEASE_PREPARE_FAILED', error: errorMessage(error) || 'Release preparation failed.', stages: [...stages, releaseStage('prepare', 'Prepare release', 'fail', errorMessage(error) || 'Unknown preparation failure.')] };
@@ -14155,7 +14212,7 @@ function nexusReleaseHandler(req: express.Request, res: express.Response) {
   const resolved = resolveXsdConfig();
   if (!resolved.modWorkspacePath) return sendReleaseFailure(res, 400, 'BLOCKED', 'MOD_WORKSPACE_REQUIRED', 'Configure a Mod Workspace Folder before packaging.', [releaseStage('output', 'Resolve release output root', 'fail', 'No Mod Workspace Folder is configured.')]);
   if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
-  const prepared = prepareReleaseBuild(req.body.workspace, bump, 'nexus', resolved);
+  const prepared = prepareReleaseBuild(req.body.workspace, bump, 'nexus', resolved, subject => { res.locals.apiSubject = subject; });
   if ('error' in prepared) return sendReleaseFailure(res, prepared.status, 'FAILED', prepared.code, prepared.error, prepared.stages);
   try {
     let releasesDir: string;
@@ -14197,8 +14254,8 @@ function nexusReleaseHandler(req: express.Request, res: express.Response) {
       releaseStage('output', 'Save verified output', 'pass', zipPath, { sha256, sizeBytes: diskBytes.length }),
     ];
     const reportPath = `${zipPath}.forge-release.json`;
-    atomicWriteJson(reportPath, { platform: 'nexus', status: 'VERIFIED', createdAt: new Date().toISOString(), modId: prepared.modId, folderName: prepared.folderName, version: prepared.version, zipPath, sha256, sizeBytes: diskBytes.length, entries: reopened.entries, stages, failedStages: [] });
-    return res.json({ success: true, status: 'VERIFIED', platform: 'nexus', modId: prepared.modId, folderName: prepared.folderName, version: prepared.version, zipPath, reportPath, sha256, sizeBytes: diskBytes.length, fileCount: reopened.entries.length, warnings: prepared.warnings, readme, stages, failedStages: [] });
+    atomicWriteJson(reportPath, { platform: 'nexus', status: 'VERIFIED', createdAt: new Date().toISOString(), modId: prepared.modId, modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource, folderName: prepared.folderName, version: prepared.version, zipPath, sha256, sizeBytes: diskBytes.length, entries: reopened.entries, stages, failedStages: [] });
+    return res.json({ success: true, status: 'VERIFIED', platform: 'nexus', modId: prepared.modId, modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource, folderName: prepared.folderName, version: prepared.version, zipPath, reportPath, sha256, sizeBytes: diskBytes.length, fileCount: reopened.entries.length, warnings: prepared.warnings, readme, stages, failedStages: [] });
   } catch (error) {
     const detail = errorMessage(error) || 'Unknown Nexus packaging failure.';
     return sendReleaseFailure(res, 500, 'FAILED', 'NEXUS_RELEASE_FAILED', detail, [...prepared.stages, releaseStage('archive', 'Build Nexus ZIP', 'fail', detail)]);
@@ -14229,7 +14286,7 @@ app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, re
   const resolved = resolveXsdConfig();
   if (!resolved.modWorkspacePath) return sendReleaseFailure(res, 400, 'BLOCKED', 'MOD_WORKSPACE_REQUIRED', 'Configure a Mod Workspace Folder before packaging.', [releaseStage('output', 'Resolve release output root', 'fail', 'No Mod Workspace Folder is configured.')]);
   if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
-  const prepared = prepareReleaseBuild(req.body.workspace, bump, 'steam', resolved);
+  const prepared = prepareReleaseBuild(req.body.workspace, bump, 'steam', resolved, subject => { res.locals.apiSubject = subject; });
   if ('error' in prepared) return sendReleaseFailure(res, prepared.status, 'FAILED', prepared.code, prepared.error, prepared.stages);
   let scratchParent = '';
   try {
@@ -14351,6 +14408,7 @@ app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, re
     const sourceManifestSha256 = sourceManifestPath ? hashArtifactFile(sourceManifestPath) : null;
     atomicWriteJson(reportPath, {
       platform: 'steam', status, createdAt: new Date().toISOString(), modId: prepared.modId, folderName: prepared.folderName, version: prepared.version,
+      modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource,
       targetPath, backupPath, backupHash, backupSizeBytes: backupDisk.length,
       preview: preview && previewName ? { ...preview, stagedPath: path.join(targetPath, previewName) } : null,
       preparedManifestXml: prepared.manifestXml,
@@ -14358,7 +14416,7 @@ app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, re
       toolPath: toolReady ? path.resolve(toolPath) : null, command, integrityFiles, stages: prepared.stages,
       failedStages: prepared.stages.filter(stage => stage.status === 'fail').map(stage => stage.id),
     });
-    return res.json({ success: true, status, platform: 'steam', readyForUpload, modId: prepared.modId, folderName: prepared.folderName, version: prepared.version, workshopId: manifest?.workshopId || null, targetPath, backupPath, backupHash, backupSizeBytes: backupDisk.length, reportPath, preview, command, sourceManifestAdoptionAvailable: Boolean(sourceManifestPath), warnings: prepared.warnings, stages: prepared.stages, failedStages: prepared.stages.filter(stage => stage.status === 'fail').map(stage => stage.id) });
+    return res.json({ success: true, status, platform: 'steam', readyForUpload, modId: prepared.modId, modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource, folderName: prepared.folderName, version: prepared.version, workshopId: manifest?.workshopId || null, targetPath, backupPath, backupHash, backupSizeBytes: backupDisk.length, reportPath, preview, command, sourceManifestAdoptionAvailable: Boolean(sourceManifestPath), warnings: prepared.warnings, stages: prepared.stages, failedStages: prepared.stages.filter(stage => stage.status === 'fail').map(stage => stage.id) });
   } catch (error) {
     const detail = errorMessage(error) || 'Unknown Steam preparation failure.';
     return sendReleaseFailure(res, 500, 'FAILED', 'STEAM_RELEASE_FAILED', detail, [...prepared.stages, releaseStage('steam', 'Prepare Steam release', 'fail', detail)]);
@@ -14370,7 +14428,7 @@ app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, re
 
 type ReleasePlatform = 'nexus' | 'steam';
 
-function verifyPreparedReleaseArtifact(platform: ReleasePlatform, modId: string, requestedPath: string, modWorkspacePath: string): { artifactPath: string; reportPath: string; sha256: string; sizeBytes: number } {
+function verifyPreparedReleaseArtifact(platform: ReleasePlatform, modId: string, requestedPath: string, modWorkspacePath: string): { artifactPath: string; reportPath: string; sha256: string; sizeBytes: number; sourceIdentity: ApiSubject } {
   const releaseRoot = resolveReleaseOutputRoot(modWorkspacePath, platform, false);
   const artifactPath = path.resolve(requestedPath);
   const relativeArtifact = path.relative(releaseRoot, artifactPath);
@@ -14389,7 +14447,7 @@ function verifyPreparedReleaseArtifact(platform: ReleasePlatform, modId: string,
     || actualHash !== recordedHash || artifactStat.size !== recordedSize) {
     throw new Error('The artifact no longer matches its Forge release report. Rebuild it before export.');
   }
-  return { artifactPath, reportPath, sha256: recordedHash, sizeBytes: recordedSize };
+  return { artifactPath, reportPath, sha256: recordedHash, sizeBytes: recordedSize, sourceIdentity: releaseReportApiSubject(report) };
 }
 
 app.post('/api/agent/release/artifact/download', (req, res) => {
@@ -14403,8 +14461,13 @@ app.post('/api/agent/release/artifact/download', (req, res) => {
   if (!resolved.modWorkspacePath) return res.status(400).json({ success: false, code: 'MOD_WORKSPACE_REQUIRED', error: 'Configure a Mod Workspace Folder first.' });
   try {
     const verified = verifyPreparedReleaseArtifact(platform, modId, requestedPath, resolved.modWorkspacePath);
+    res.locals.apiSubject = verified.sourceIdentity;
     res.setHeader('X-X4-Forge-SHA256', verified.sha256);
     res.setHeader('X-X4-Forge-Size', String(verified.sizeBytes));
+    res.setHeader('X-X4-Forge-Mod-Id', verified.sourceIdentity.modId || '');
+    res.setHeader('X-X4-Forge-Source-Hash', verified.sourceIdentity.sourceHash || '');
+    res.setHeader('X-X4-Forge-Source-Scope', verified.sourceIdentity.sourceHashScope);
+    res.setHeader('X-X4-Forge-Source-Provenance', verified.sourceIdentity.sourceIdentityProvenance || 'unresolved');
     return res.download(verified.artifactPath, path.basename(verified.artifactPath));
   } catch (error) {
     return res.status(409).json({ success: false, code: 'RELEASE_ARTIFACT_VERIFICATION_FAILED', error: errorMessage(error) || 'Could not verify the prepared release artifact.' });
@@ -14427,6 +14490,7 @@ app.post('/api/agent/release/export/receipt', (req, res) => {
   if (!resolved.modWorkspacePath) return res.status(400).json({ success: false, code: 'MOD_WORKSPACE_REQUIRED', error: 'Configure a Mod Workspace Folder first.' });
   try {
     const verified = verifyPreparedReleaseArtifact(platform, modId, artifactPath, resolved.modWorkspacePath);
+    res.locals.apiSubject = verified.sourceIdentity;
     if (verified.sha256 !== sha256 || verified.sizeBytes !== sizeBytes) throw new Error('The saved-output receipt does not match the prepared artifact report.');
     return res.json({ success: true, status: 'RECORDED', platform, modId, method, destination, artifactPath: verified.artifactPath, sha256, sizeBytes, recordedAt: new Date().toISOString() });
   } catch (error) {
@@ -14484,6 +14548,7 @@ app.post('/api/agent/release/steam/verify', (req, res) => {
   const loaded = resolveSteamReleaseReport(resolved.modWorkspacePath, modId);
   if (loaded.ok === false) return sendReleaseFailure(res, loaded.status, 'FAILED', loaded.code, loaded.error, [releaseStage('post-tool', 'Resolve prepared Steam release', 'fail', loaded.error)]);
   const { reportPath, targetPath, report } = loaded;
+  res.locals.apiSubject = releaseReportApiSubject(report);
   try {
     const contentPath = path.join(targetPath, 'content.xml');
     const contentStat = fs.existsSync(contentPath) ? fs.lstatSync(contentPath) : null;
@@ -14531,6 +14596,7 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   const loaded = resolveSteamReleaseReport(resolved.modWorkspacePath, modId);
   if (loaded.ok === false) return sendReleaseFailure(res, loaded.status, 'FAILED', loaded.code, loaded.error, [releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', loaded.error)]);
   const { reportPath, targetPath, report } = loaded;
+  res.locals.apiSubject = releaseReportApiSubject(report);
   const priorStages = report.stages || [];
   if (report.status !== 'VERIFIED_AFTER_WORKSHOP_TOOL' && report.status !== 'VERIFIED_AND_ADOPTED') {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_NOT_VERIFIED', 'Verify the WorkshopTool result before adopting source metadata.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', `Report status is ${report.status || 'unknown'}, not VERIFIED_AFTER_WORKSHOP_TOOL.`)]);

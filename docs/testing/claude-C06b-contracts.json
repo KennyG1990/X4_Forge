@@ -1,0 +1,1776 @@
+{
+  "unit": "C06b",
+  "status": "VERIFIED",
+  "pending": [],
+  "programStatus": "PARTIAL: full C06, C07 and added complaint cases remain open; Kimi paused",
+  "baseline": "a34ea676b7c87bfbfb5774ea4cbf618275b87a8a",
+  "recordedAt": "2026-10-26T09:25:09.707392+00:00",
+  "scope": "Isolated source, compiled HTTP/MCP, browser and scratch release artifacts; no native-host installation, WorkshopTool/upload or game proof.",
+  "focused": {
+    "suite": "c06b-api-contracts",
+    "passed": 119,
+    "total": 119,
+    "allPassed": true,
+    "checks": [
+      {
+        "name": "bootstrap header/default selectors remain valid",
+        "pass": true
+      },
+      {
+        "name": "bootstrap explicit selectors",
+        "pass": true
+      },
+      {
+        "name": "bootstrap array refused",
+        "pass": true
+      },
+      {
+        "name": "bootstrap coerced client refused",
+        "pass": true
+      },
+      {
+        "name": "bootstrap invalid workspace selector refused",
+        "pass": true
+      },
+      {
+        "name": "bootstrap unknown options refused",
+        "pass": true
+      },
+      {
+        "name": "restore valid selector",
+        "pass": true
+      },
+      {
+        "name": "restore nonstring selector refused",
+        "pass": true
+      },
+      {
+        "name": "workspace create preserves default",
+        "pass": true
+      },
+      {
+        "name": "workspace create preserves name",
+        "pass": true
+      },
+      {
+        "name": "workspace create preserves clientId/workspace",
+        "pass": true
+      },
+      {
+        "name": "workspace create refuses []",
+        "pass": true
+      },
+      {
+        "name": "workspace create refuses {\"workspace\":[]}",
+        "pass": true
+      },
+      {
+        "name": "workspace create refuses {\"workspace\":{}}",
+        "pass": true
+      },
+      {
+        "name": "workspace create refuses {\"workspace\":{\"name\":\"Explicit malformed\"}}",
+        "pass": true
+      },
+      {
+        "name": "workspace create refuses {\"name\":false}",
+        "pass": true
+      },
+      {
+        "name": "workspace create refuses {\"workspace\":{\"nodes\":\"lost graph\"}}",
+        "pass": true
+      },
+      {
+        "name": "workspace create refuses {\"force\":true}",
+        "pass": true
+      },
+      {
+        "name": "receipt routes bypass generic body rejection",
+        "pass": true
+      },
+      {
+        "name": "workspace replace valid CAS",
+        "pass": true
+      },
+      {
+        "name": "workspace mutation body transport selectors preserved",
+        "pass": true
+      },
+      {
+        "name": "workspace create body transport selectors preserved",
+        "pass": true
+      },
+      {
+        "name": "workspace mutation malformed transport refused",
+        "pass": true
+      },
+      {
+        "name": "workspace merge partial clear remains valid",
+        "pass": true
+      },
+      {
+        "name": "missing workspace retains receipt preflight message",
+        "pass": true
+      },
+      {
+        "name": "missing changes retains receipt preflight message",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses array",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses workspaceArray",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses graphString",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses flag",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses force",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses version",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses negativeVersion",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses head",
+        "pass": true
+      },
+      {
+        "name": "workspace replace refuses unknown",
+        "pass": true
+      },
+      {
+        "name": "merge refuses array changes",
+        "pass": true
+      },
+      {
+        "name": "merge refuses scalar known graph field",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/nexus/prepare default bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/nexus/prepare supported bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/nexus/prepare unknown bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/nexus/prepare malformed workspace",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/nexus/prepare missing workspace",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/nexus/prepare unknown field",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/package/release default bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/package/release supported bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/package/release unknown bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/package/release malformed workspace",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/package/release missing workspace",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/package/release unknown field",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/steam/prepare default bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/steam/prepare supported bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/steam/prepare unknown bump",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/steam/prepare malformed workspace",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/steam/prepare missing workspace",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/steam/prepare unknown field",
+        "pass": true
+      },
+      {
+        "name": "Steam UI empty optional values",
+        "pass": true
+      },
+      {
+        "name": "Steam flag is not truthiness",
+        "pass": true
+      },
+      {
+        "name": "Steam path is not coerced",
+        "pass": true
+      },
+      {
+        "name": "artifact valid download",
+        "pass": true
+      },
+      {
+        "name": "artifact unsafe mod id",
+        "pass": true
+      },
+      {
+        "name": "artifact unknown platform",
+        "pass": true
+      },
+      {
+        "name": "export UI receipt",
+        "pass": true
+      },
+      {
+        "name": "export refuses sizeString",
+        "pass": true
+      },
+      {
+        "name": "export refuses hash",
+        "pass": true
+      },
+      {
+        "name": "export refuses controls",
+        "pass": true
+      },
+      {
+        "name": "export refuses method",
+        "pass": true
+      },
+      {
+        "name": "export refuses flag",
+        "pass": true
+      },
+      {
+        "name": "Steam verify ID",
+        "pass": true
+      },
+      {
+        "name": "Steam adoption preview",
+        "pass": true
+      },
+      {
+        "name": "Steam adoption CAS",
+        "pass": true
+      },
+      {
+        "name": "Steam apply string refused",
+        "pass": true
+      },
+      {
+        "name": "Steam adoption malformed hash refused",
+        "pass": true
+      },
+      {
+        "name": "Steam verify unknown fields refused",
+        "pass": true
+      },
+      {
+        "name": "pasted log empty trace is valid",
+        "pass": true
+      },
+      {
+        "name": "pasted log nonstring trace refused",
+        "pass": true
+      },
+      {
+        "name": "pasted log unknown fields refused",
+        "pass": true
+      },
+      {
+        "name": "canonical runtime supported query",
+        "pass": true
+      },
+      {
+        "name": "legacy brief caller modId preserved",
+        "pass": true
+      },
+      {
+        "name": "log filter remains valid",
+        "pass": true
+      },
+      {
+        "name": "workspace query addressing remains valid",
+        "pass": true
+      },
+      {
+        "name": "legacy runtime query addressing remains valid",
+        "pass": true
+      },
+      {
+        "name": "readiness query addressing preserved",
+        "pass": true
+      },
+      {
+        "name": "query refuses /api/agent/runtime-debugger {\"modId\":\"c06_test\"}",
+        "pass": true
+      },
+      {
+        "name": "query refuses /api/agent/debug-watcher/brief {\"expect\":[\"one\",\"two\"]}",
+        "pass": true
+      },
+      {
+        "name": "query refuses /api/agent/debug-watcher/brief {\"expect\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "pass": true
+      },
+      {
+        "name": "query refuses /api/agent/game-log/status {\"modId\":123}",
+        "pass": true
+      },
+      {
+        "name": "query refuses /api/agent/runtime-control {\"workspaceId\":\"ws_cccccccccccccccccccccccc\"}",
+        "pass": true
+      },
+      {
+        "name": "query refuses /api/agent/diagnostics {\"unknown\":\"yes\"}",
+        "pass": true
+      },
+      {
+        "name": "workspace actual manifest identity",
+        "pass": true
+      },
+      {
+        "name": "workspace editable name does not fabricate mod identity",
+        "pass": true
+      },
+      {
+        "name": "workspace current head has explicit scope",
+        "pass": true
+      },
+      {
+        "name": "preview hash tracks preview instead of current head",
+        "pass": true
+      },
+      {
+        "name": "collection preserves distinct items without fabricated top-level mod",
+        "pass": true
+      },
+      {
+        "name": "unknown collection row remains unresolved",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/runtime-debugger exposes unresolved source honestly",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/debug-watcher/brief exposes unresolved source honestly",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/diagnostics exposes unresolved source honestly",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/readiness exposes unresolved source honestly",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/release/nexus/prepare exposes unresolved source honestly",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/package/release exposes unresolved source honestly",
+        "pass": true
+      },
+      {
+        "name": "runtime source identity leaves game evidence untouched",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/runtime-control preserves operational folder ID and scoped content identity",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/runtime-control/preview preserves operational folder ID and scoped content identity",
+        "pass": true
+      },
+      {
+        "name": "/api/agent/runtime-control/reload preserves operational folder ID and scoped content identity",
+        "pass": true
+      },
+      {
+        "name": "explicit subject cannot be overridden by unrelated payload evidence",
+        "pass": true
+      },
+      {
+        "name": "legacy release metadata never invents source from zip hash",
+        "pass": true
+      },
+      {
+        "name": "recorded release evidence is explicitly labelled",
+        "pass": true
+      },
+      {
+        "name": "release folder selector may differ from recorded content ID",
+        "pass": true
+      },
+      {
+        "name": "mismatched prepared and validated content ID is unresolved",
+        "pass": true
+      },
+      {
+        "name": "malformed prepared source evidence is unresolved",
+        "pass": true
+      },
+      {
+        "name": "wrong prepared source scope is unresolved",
+        "pass": true
+      },
+      {
+        "name": "exact prepared source scope preserves validated identity",
+        "pass": true
+      },
+      {
+        "name": "release envelope preserves folder selector and distinguishes source ID",
+        "pass": true
+      },
+      {
+        "name": "release unknown source keeps selector without claiming current canvas hash",
+        "pass": true
+      },
+      {
+        "name": "malformed recorded release evidence is unresolved",
+        "pass": true
+      },
+      {
+        "name": "unsafe recorded release header ID refused \"c06\\r\\nInjected: yes\"",
+        "pass": true
+      },
+      {
+        "name": "unsafe recorded release header ID refused \"unicode_\ud83d\ude00\"",
+        "pass": true
+      },
+      {
+        "name": "unsafe recorded release header ID refused \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "pass": true
+      },
+      {
+        "name": "pasted log hashes supplied UTF-8 bytes in its own scope",
+        "pass": true
+      }
+    ]
+  },
+  "c06aRegression": {
+    "pass": true,
+    "count": 35,
+    "checks": [
+      "authoring response uses manifest identity, not project label",
+      "source edits invalidate identity",
+      "unresolved subject is explicit",
+      "known source survives failure",
+      "authoring result derives actual project",
+      "reject /project/create {\"meta\":{\"id\":123}}",
+      "reject /project/create {\"meta\":{\"id\":\"lab\",\"unexpected\":1}}",
+      "reject /project/generate {\"spec\":{\"id\":\"lab\",\"kind\":\"unknown\"}}",
+      "reject /project/package {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/file/create {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/file/create {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/validate {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/validate {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /project/validate {\"path\":\"\"}",
+      "reject /project/validate {\"path\":\"lab\",\"root\":1}",
+      "reject /project/validate {\"project\":{\"id\":\"lab\",\"name\":\"Lab\",\"files\":[{\"path\":\"content.xml\",\"ki",
+      "reject /package {\"workspace\":{}}",
+      "reject /artifact/build {\"workspace\":[]}",
+      "reject /project/content-xml {\"meta\":{\"id\":\"lab\",\"deps\":[false]}}",
+      "valid authored metadata is accepted",
+      "malformed writer content cannot coerce",
+      "writer precondition cannot coerce an array into a hash",
+      "canonical aliases resolve identically",
+      "missing descendants resolve through real parent",
+      "same source queues across workspaces while independent source proceeds",
+      "owner and timing observable",
+      "status cannot mutate authority",
+      "FIFO holds through completion",
+      "exception releases resource",
+      "empty final queue",
+      "bounded pending operations refuse before execution",
+      "queue expiry never executes operation",
+      "expiry recovery",
+      "retargeted source or configuration refuses before execution",
+      "retarget refusal releases resource"
+    ]
+  },
+  "integration": {
+    "status": "VERIFIED",
+    "checks": [
+      "collection-per-row-bootstrap-restore-two-mod-preview-identities",
+      "strict-workspace-inputs-failed-receipts-cas-refusal-recovery-no-source-write",
+      "addressed-runtime-strict-query-legacy-display-alias-distinct-folder-protocol-pasted-log-provenance",
+      "release-prepare-distinct-subjects-persisted-report-binary-export-two-mod-isolation",
+      "stale-source-artifact-drift-malformed-legacy-missing-report-refusal-and-recovery",
+      "simulated-workshop-metadata-verify-adopt-source-cas-and-restoration-no-tool-or-upload",
+      "real-rendered-release-controls-no-network-publication-no-game-writes"
+    ],
+    "callCount": 108,
+    "boundaries": {
+      "actualApi": true,
+      "actualBrowser": true,
+      "game": false,
+      "workshopTool": false,
+      "publication": false,
+      "liveForge": false
+    }
+  },
+  "e2e": {
+    "schemaVersion": 2,
+    "generatedAt": "2026-10-26T09:07:12.621Z",
+    "policy": {
+      "retryCount": 1,
+      "actualFlakeBudget": 0,
+      "maximumActiveQuarantines": 3,
+      "maximumQuarantineDays": 14,
+      "activeQuarantines": [],
+      "errors": []
+    },
+    "source": "json-report",
+    "reportCode": "structured-report-inspected",
+    "childExit": 0,
+    "verdict": {
+      "passed": 2,
+      "failed": 0,
+      "flaky": 0,
+      "badResults": 0,
+      "noTests": false,
+      "totalTests": 2,
+      "issues": [],
+      "quarantinedIssues": 0,
+      "green": true,
+      "structuredReportMissing": false,
+      "structuredReportIncomplete": false,
+      "globalReportErrors": false,
+      "reportErrorCount": 0
+    },
+    "reportInspection": {
+      "complete": true,
+      "errors": [],
+      "discoveredTests": 2,
+      "terminalTests": 2,
+      "derivedTotals": {
+        "expected": 2,
+        "unexpected": 0,
+        "flaky": 0,
+        "skipped": 0
+      },
+      "reportErrorCount": 0
+    },
+    "lifecycle": {
+      "complete": true,
+      "errors": [],
+      "trigger": "child-close",
+      "childExit": {
+        "code": 0,
+        "signal": null
+      },
+      "ownershipComplete": true,
+      "rootPid": 7948,
+      "capturedPids": [
+        7948,
+        13532,
+        25172,
+        38248,
+        49140,
+        61528,
+        64692,
+        72192,
+        78424,
+        79412,
+        79648,
+        82908,
+        83616,
+        83900,
+        84620,
+        85648
+      ],
+      "reusedPids": [],
+      "termination": {
+        "complete": true,
+        "errors": [],
+        "treeGone": true,
+        "passes": 1,
+        "capturedPids": [
+          7948,
+          13532,
+          25172,
+          38248,
+          49140,
+          61528,
+          64692,
+          72192,
+          78424,
+          79412,
+          79648,
+          82908,
+          83616,
+          83900,
+          84620,
+          85648
+        ],
+        "commandedPids": [],
+        "reusedPids": [],
+        "remainingPids": []
+      }
+    },
+    "runnerInteractionFailed": false
+  },
+  "oracleE2E": {
+    "schemaVersion": 2,
+    "generatedAt": "2026-10-26T09:10:29.341Z",
+    "policy": {
+      "retryCount": 1,
+      "actualFlakeBudget": 0,
+      "maximumActiveQuarantines": 3,
+      "maximumQuarantineDays": 14,
+      "activeQuarantines": [],
+      "errors": []
+    },
+    "source": "json-report",
+    "reportCode": "structured-report-inspected",
+    "childExit": 0,
+    "verdict": {
+      "passed": 1,
+      "failed": 0,
+      "flaky": 0,
+      "badResults": 0,
+      "noTests": false,
+      "totalTests": 1,
+      "issues": [],
+      "quarantinedIssues": 0,
+      "green": true,
+      "structuredReportMissing": false,
+      "structuredReportIncomplete": false,
+      "globalReportErrors": false,
+      "reportErrorCount": 0
+    },
+    "reportInspection": {
+      "complete": true,
+      "errors": [],
+      "discoveredTests": 1,
+      "terminalTests": 1,
+      "derivedTotals": {
+        "expected": 1,
+        "unexpected": 0,
+        "flaky": 0,
+        "skipped": 0
+      },
+      "reportErrorCount": 0
+    },
+    "lifecycle": {
+      "complete": true,
+      "errors": [],
+      "trigger": "child-close",
+      "childExit": {
+        "code": 0,
+        "signal": null
+      },
+      "ownershipComplete": true,
+      "rootPid": 44872,
+      "capturedPids": [
+        37552,
+        44872,
+        46272,
+        52036,
+        62804,
+        68508,
+        71484,
+        82472,
+        84900,
+        85336
+      ],
+      "reusedPids": [],
+      "termination": {
+        "complete": true,
+        "errors": [],
+        "treeGone": true,
+        "passes": 1,
+        "capturedPids": [
+          37552,
+          44872,
+          46272,
+          52036,
+          62804,
+          68508,
+          71484,
+          82472,
+          84900,
+          85336
+        ],
+        "commandedPids": [],
+        "reusedPids": [],
+        "remainingPids": []
+      }
+    },
+    "runnerInteractionFailed": false
+  },
+  "oracles": [
+    {
+      "route": "/agent/action-census-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    },
+    {
+      "route": "/agent/action-receipt-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 119,
+      "total": 119
+    },
+    {
+      "route": "/agent/agent-brief-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    },
+    {
+      "route": "/agent/agent-history-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/agent-keys-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/agent-loop-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    },
+    {
+      "route": "/agent/ai-key-store-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/ai-spend-meter-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 24,
+      "total": 24
+    },
+    {
+      "route": "/agent/aiscript-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    },
+    {
+      "route": "/agent/aiscript-roundtrip-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 19,
+      "total": 19
+    },
+    {
+      "route": "/agent/api-failure-envelope-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/api-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/architect-loop-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 14,
+      "total": 14
+    },
+    {
+      "route": "/agent/artifact-pipeline-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/auto-layout-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 8,
+      "total": 8
+    },
+    {
+      "route": "/agent/blueprint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 22,
+      "total": 22
+    },
+    {
+      "route": "/agent/bridge-live-state-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 8,
+      "total": 8
+    },
+    {
+      "route": "/agent/bug-report-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/bulk-corpus-transform-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 15,
+      "total": 15
+    },
+    {
+      "route": "/agent/canvas-interaction-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 18,
+      "total": 18
+    },
+    {
+      "route": "/agent/catdat-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/compile-fidelity-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 14,
+      "total": 14
+    },
+    {
+      "route": "/agent/compile-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/composite-blocks-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 23,
+      "total": 23
+    },
+    {
+      "route": "/agent/continuous-polling-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/contract-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 32,
+      "total": 32
+    },
+    {
+      "route": "/agent/critic-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 23,
+      "total": 23
+    },
+    {
+      "route": "/agent/cue-lineage-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 35,
+      "total": 35
+    },
+    {
+      "route": "/agent/data-dir-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/db-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/destructive-recovery-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 22,
+      "total": 22
+    },
+    {
+      "route": "/agent/diagnostic-explain-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/experience-mode-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    },
+    {
+      "route": "/agent/explain-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 30,
+      "total": 30
+    },
+    {
+      "route": "/agent/expression-suggest-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 17,
+      "total": 17
+    },
+    {
+      "route": "/agent/extension-project-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 31,
+      "total": 31
+    },
+    {
+      "route": "/agent/external-api-registry-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 50,
+      "total": 50
+    },
+    {
+      "route": "/agent/factions-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 11,
+      "total": 11
+    },
+    {
+      "route": "/agent/file-bridge-transport-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 14,
+      "total": 14
+    },
+    {
+      "route": "/agent/forge-capabilities-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/forge-probe-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 9,
+      "total": 9
+    },
+    {
+      "route": "/agent/forge-state-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 15,
+      "total": 15
+    },
+    {
+      "route": "/agent/forge-watch-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 8,
+      "total": 8
+    },
+    {
+      "route": "/agent/friendly-names-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 11,
+      "total": 11
+    },
+    {
+      "route": "/agent/galaxy-map-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 22,
+      "total": 22
+    },
+    {
+      "route": "/agent/game-detect-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 11,
+      "total": 11
+    },
+    {
+      "route": "/agent/github-credential-store-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 7,
+      "total": 7
+    },
+    {
+      "route": "/agent/github-device-flow-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 4,
+      "total": 4
+    },
+    {
+      "route": "/agent/god-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 9,
+      "total": 9
+    },
+    {
+      "route": "/agent/health-card-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "route": "/agent/imported-graph-layout-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 6,
+      "total": 6
+    },
+    {
+      "route": "/agent/instance-discovery-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/intent-check-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 13,
+      "total": 13
+    },
+    {
+      "route": "/agent/jobs-content-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 18,
+      "total": 18
+    },
+    {
+      "route": "/agent/lang-service-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    },
+    {
+      "route": "/agent/latest-value-write-queue-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/live-canvas-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "route": "/agent/live-fixes-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 9,
+      "total": 9
+    },
+    {
+      "route": "/agent/live-log-nav-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 11,
+      "total": 11
+    },
+    {
+      "route": "/agent/local-workspace-cache-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/log-file-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 5,
+      "total": 5
+    },
+    {
+      "route": "/agent/log-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/log-telemetry-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 17,
+      "total": 17
+    },
+    {
+      "route": "/agent/lua-logic-blocks-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 7,
+      "total": 7
+    },
+    {
+      "route": "/agent/lua-md-binding-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 11,
+      "total": 11
+    },
+    {
+      "route": "/agent/lua-runtime-log-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 13,
+      "total": 13
+    },
+    {
+      "route": "/agent/lua-staleness-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 14,
+      "total": 14
+    },
+    {
+      "route": "/agent/lua-static-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/md-file-identity-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 3,
+      "total": 3
+    },
+    {
+      "route": "/agent/md-pitfall-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 23,
+      "total": 23
+    },
+    {
+      "route": "/agent/migration-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 11,
+      "total": 11
+    },
+    {
+      "route": "/agent/mod-dependency-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 24,
+      "total": 24
+    },
+    {
+      "route": "/agent/mod-distribution-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 31,
+      "total": 31
+    },
+    {
+      "route": "/agent/mod-doctor-reference-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 4,
+      "total": 4
+    },
+    {
+      "route": "/agent/mod-drift-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "route": "/agent/mod-patterns-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/mod-recipes-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 13,
+      "total": 13
+    },
+    {
+      "route": "/agent/mod-templates-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 36,
+      "total": 36
+    },
+    {
+      "route": "/agent/node-align-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "route": "/agent/node-diagnostics-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 13,
+      "total": 13
+    },
+    {
+      "route": "/agent/node-selection-document-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 15,
+      "total": 15
+    },
+    {
+      "route": "/agent/node-toolbox-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 14,
+      "total": 14
+    },
+    {
+      "route": "/agent/npc-identity-probe/selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 6,
+      "total": 6
+    },
+    {
+      "route": "/agent/object-index-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 22,
+      "total": 22
+    },
+    {
+      "route": "/agent/override-map-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    },
+    {
+      "route": "/agent/parent-liveness-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/patch-readiness-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "route": "/agent/path-roles-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/platform-release-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 24,
+      "total": 24
+    },
+    {
+      "route": "/agent/port-semantics-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 26,
+      "total": 26
+    },
+    {
+      "route": "/agent/position-picker-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 8,
+      "total": 8
+    },
+    {
+      "route": "/agent/project-crossfile-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 33,
+      "total": 33
+    },
+    {
+      "route": "/agent/project-file-inventory-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/project-orchestration-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/project-rules-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 20,
+      "total": 20
+    },
+    {
+      "route": "/agent/proposal-review-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 18,
+      "total": 18
+    },
+    {
+      "route": "/agent/quick-fixes-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 20,
+      "total": 20
+    },
+    {
+      "route": "/agent/readiness-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 22,
+      "total": 22
+    },
+    {
+      "route": "/agent/reference-corpus-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/reference-language-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 13,
+      "total": 13
+    },
+    {
+      "route": "/agent/reference-literal-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 7,
+      "total": 7
+    },
+    {
+      "route": "/agent/reference-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/request-deadline-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/round-trip-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 17,
+      "total": 17
+    },
+    {
+      "route": "/agent/runtime-debugger-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 45,
+      "total": 45
+    },
+    {
+      "route": "/agent/schema-discovery-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/schema-registry-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 13,
+      "total": 13
+    },
+    {
+      "route": "/agent/schema-routing-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 26,
+      "total": 26
+    },
+    {
+      "route": "/agent/scriptproperties-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 61,
+      "total": 61
+    },
+    {
+      "route": "/agent/selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "route": "/agent/semantics-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 50,
+      "total": 50
+    },
+    {
+      "route": "/agent/simulate-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 59,
+      "total": 59
+    },
+    {
+      "route": "/agent/tfile-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 18,
+      "total": 18
+    },
+    {
+      "route": "/agent/ttfm-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 9,
+      "total": 9
+    },
+    {
+      "route": "/agent/ui-compiler-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 22,
+      "total": 22
+    },
+    {
+      "route": "/agent/ui-layout-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 19,
+      "total": 19
+    },
+    {
+      "route": "/agent/ui-widget-validate-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 9,
+      "total": 9
+    },
+    {
+      "route": "/agent/validation-delta-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/vanilla-ui-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 16,
+      "total": 16
+    },
+    {
+      "route": "/agent/wares-content-lint-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 14,
+      "total": 14
+    },
+    {
+      "route": "/agent/wares-jobs-roundtrip-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 15,
+      "total": 15
+    },
+    {
+      "route": "/agent/watcher-verdict-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 9,
+      "total": 9
+    },
+    {
+      "route": "/agent/workspace-conflict-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 8,
+      "total": 8
+    },
+    {
+      "route": "/agent/workspace-identity-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 14,
+      "total": 14
+    },
+    {
+      "route": "/agent/workspace-persistence-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/workspace-receipt-service-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 25,
+      "total": 25
+    },
+    {
+      "route": "/agent/workspace-registry-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 33,
+      "total": 33
+    },
+    {
+      "route": "/agent/x4-rule-packs-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 32,
+      "total": 32
+    },
+    {
+      "route": "/agent/x4-ui-integration-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/xml-input-limits-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/xml-source-spans-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 4,
+      "total": 4
+    },
+    {
+      "route": "/agent/xml-wellformed-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 6,
+      "total": 6
+    },
+    {
+      "route": "/agent/xpath-synth-selftest",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "route": "/agent/xsd-model-selftest",
+      "status": 200,
+      "pass": true,
+      "passed": 12,
+      "total": 12
+    }
+  ],
+  "compiledHttpMcp": {
+    "pass": true,
+    "checks": {
+      "completed": true,
+      "clean-preview-no-write": true,
+      "stale-refused-before-write": true,
+      "wrong-ModId-refused": true,
+      "wrong-SourceHash-refused": true,
+      "wrong-ArtifactHash-refused": true,
+      "wrong-BindingHash-refused": true,
+      "clean-bytes-record": true,
+      "clean-exact-snapshot": true,
+      "clean-snapshot-record": true,
+      "warnings-preview-no-write": true,
+      "warnings-bytes-record": true,
+      "warnings-exact-snapshot": true,
+      "warnings-snapshot-record": true,
+      "accepted-preview-no-write": true,
+      "accepted-bytes-record": true,
+      "accepted-exact-snapshot": true,
+      "accepted-snapshot-record": true,
+      "mixed-preview-no-write": true,
+      "mixed-bytes-record": true,
+      "mixed-exact-snapshot": true,
+      "mixed-snapshot-record": true,
+      "incomplete-preview-no-write": true,
+      "incomplete-bytes-record": true,
+      "incomplete-exact-snapshot": true,
+      "incomplete-snapshot-record": true,
+      "clean": true,
+      "accepted": true,
+      "mixed": true,
+      "incomplete": true,
+      "proposed-not-recorded": true,
+      "manifest-source-owned": true,
+      "good-compile-truth": true,
+      "good-compile-identity": true,
+      "good-compile-manifest-preserved": true,
+      "good-package-truth": true,
+      "good-package-identity": true,
+      "good-package-manifest-preserved": true,
+      "good-artifact/build-truth": true,
+      "good-artifact/build-identity": true,
+      "good-artifact-byte-scope": true,
+      "mcp-good-truth": true,
+      "mcp-good-evidence": true,
+      "invalid-compile-truth": true,
+      "invalid-compile-identity": true,
+      "compile-failure-envelope": true,
+      "invalid-compile-manifest-preserved": true,
+      "invalid-package-truth": true,
+      "invalid-package-identity": true,
+      "package-failure-envelope": true,
+      "invalid-package-manifest-preserved": true,
+      "invalid-artifact/build-truth": true,
+      "invalid-artifact/build-identity": true,
+      "artifact/build-failure-envelope": true,
+      "invalid-artifact-byte-scope": true,
+      "mcp-invalid-truth": true,
+      "mcp-invalid-evidence": true,
+      "strict-import": true,
+      "no-game-no-ready": true,
+      "compile-no-source-or-deploy-write": true,
+      "health-readable": true,
+      "health-missing-named": true,
+      "health-recovered": true,
+      "owned-server-stopped": true,
+      "harness-unchanged": true
+    },
+    "pid": 65256,
+    "run": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-fixes-release\\X4_Forge\\test-results\\claude-integration\\run-30c24329",
+    "scriptHash": "2f8f952a771d9cf437ab3176f4cf4edc975f97fa3d1d376c0cdca057f2d73004",
+    "serverHash": "1d7bed86599c2f4d83af48bb0519c8e2aa5b74beb65f9912b851dc7c64d15177"
+  },
+  "rendered": {
+    "inspected": true,
+    "screenshot": "test-results\\claude-C06b\\run-992211d0-de93-4b98-b418-6bb1d03322a4\\release-controls.png",
+    "observation": "Existing release panel renders VERIFIED package stages with separate deploy/game readiness; actual prepared response consumed."
+  },
+  "isolation": [
+    {
+      "path": "C:\\Users\\Moshi\\.x4forge\\latest.json",
+      "matches": true,
+      "sha256": "45C649E93CB5B1199AC1AE4E173D693C1AC317E959AB9A1EF2C369389141240B"
+    },
+    {
+      "path": "C:\\Users\\Moshi\\.antigravity-ide\\extensions\\x4forge.x4-forge-studio-0.0.79\\app\\dist\\server.cjs",
+      "matches": true,
+      "sha256": "FB2311A7A0BAAE8A981823CFE093F4D2FB65FAE07C900710977BD83A2F4A99BD"
+    },
+    {
+      "path": "C:\\Users\\Moshi\\.x4forge-dev-build\\discovery\\latest.json",
+      "matches": true,
+      "sha256": "B8AC20DBD3801ECB612057B0550A53BCF4EB6886F84677BE4921F800CF035EB9"
+    },
+    {
+      "path": "C:\\Users\\Moshi\\.x4forge-dev-build\\extension\\app\\dist\\server.cjs",
+      "matches": true,
+      "sha256": "6A1003EF09D49D475F4005883C71E1EC5A6CD481B0A8B72292ECAAF7592B2D1F"
+    }
+  ],
+  "gates": {
+    "typecheck": "PASS",
+    "lint": {
+      "errors": 0,
+      "warnings": 618
+    },
+    "build": "PASS",
+    "writerAudit": "PASS",
+    "precommit": "PASS: full standalone gate; mandatory hook also required before commit",
+    "capabilities": {
+      "pass": true,
+      "capabilities": 12,
+      "literalRoutes": 301,
+      "dynamicRegistrars": 1,
+      "mcpAliases": 11
+    },
+    "receipts": {
+      "pass": true,
+      "routes": 85,
+      "surfaces": 59
+    },
+    "noNewPolicyAuthority": true
+  },
+  "sourceHashes": {
+    "server.ts": "141c7de328f8ef4f6a745fab3b9275339766e483aa2e2ebf76da3601aed8de59",
+    "src/server/projectApiContract.ts": "25552cf93e10b6a1db8d8741da59234e5a1a6e651583e329af15cf83241f41a3",
+    "scripts/c06-contracts.selftest.ts": "548b6c10075d8530056472fbc694883750ffd04f9dd4c9723690ed259f8a66d2",
+    "tests/e2e/c06-contracts.spec.ts": "d7a3c4faf313172df487255ee54ef1d692989e970b3a2d08ebf2b1687afa1f83"
+  },
+  "limits": [
+    "Runtime folder selector is not content identity; sourceIdentity distinguishes them.",
+    "Workspace-head and pasted-log hashes do not prove game-loaded bytes.",
+    "Release report metadata is recorded provenance, not authenticated against a same-user editor.",
+    "Prepared logical-artifact inputs differ from final ZIP bytes and pre-bump full validation.",
+    "Cross-process source locking, trusted project gates and coordinated live-game proof remain open."
+  ],
+  "retainedFailures": [
+    "contracts-red.json:17/98 before helper implementation",
+    "contracts-green-review.json: review patch mismatch corrected before green",
+    "e2e-first-failed.json: test supplied conflicting workspace IDs",
+    "e2e-second-failed.json: invalid preview PNG fixture refused"
+  ]
+}
