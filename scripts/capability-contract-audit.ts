@@ -749,10 +749,25 @@ interface LexicalBindingResolution {
   ambiguous: boolean;
 }
 
+// Each audit probe parses its own immutable AST, including when paths repeat.
+const lexicalBindingResolvers = new WeakMap<ts.SourceFile, (identifier: ts.Identifier) => LexicalBindingResolution>();
+
 function createLexicalBindingResolver(file: ts.SourceFile): (identifier: ts.Identifier) => LexicalBindingResolution {
-  const declarations = new Map<string, ts.Node[]>();
+  const cached = lexicalBindingResolvers.get(file);
+  if (cached) return cached;
+  const declarations = new Map<string, Map<ts.Node, LexicalBindingResolution>>();
   const add = (name: string, declaration: ts.Node): void => {
-    declarations.set(name, [...(declarations.get(name) || []), declaration]);
+    const scope = ts.isImportSpecifier(declaration) || ts.isNamespaceImport(declaration) || ts.isImportClause(declaration)
+      ? file : runtimeDeclarationScope(declaration);
+    if (!scope) return;
+    let bindings = declarations.get(name);
+    if (!bindings) {
+      bindings = new Map();
+      declarations.set(name, bindings);
+    }
+    bindings.set(scope, bindings.has(scope)
+      ? { declaration: null, ambiguous: true }
+      : { declaration, ambiguous: false });
   };
   const collect = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
@@ -769,28 +784,18 @@ function createLexicalBindingResolver(file: ts.SourceFile): (identifier: ts.Iden
     ts.forEachChild(node, collect);
   };
   collect(file);
-  const scopeFor = (declaration: ts.Node): ts.Node | null => {
-    if (ts.isImportSpecifier(declaration) || ts.isNamespaceImport(declaration) || ts.isImportClause(declaration)) return file;
-    return runtimeDeclarationScope(declaration);
+  const resolve = (identifier: ts.Identifier): LexicalBindingResolution => {
+    const bindings = declarations.get(identifier.text);
+    if (bindings) {
+      for (let scope: ts.Node | undefined = identifier; scope; scope = scope.parent) {
+        const binding = bindings.get(scope);
+        if (binding) return binding;
+      }
+    }
+    return { declaration: null, ambiguous: false };
   };
-  const depth = (node: ts.Node): number => {
-    let value = 0;
-    let current: ts.Node | undefined = node;
-    while (current) { value += 1; current = current.parent; }
-    return value;
-  };
-  return identifier => {
-    const candidates = (declarations.get(identifier.text) || [])
-      .map(declaration => ({ declaration, scope: scopeFor(declaration) }))
-      .filter((candidate): candidate is { declaration: ts.Node; scope: ts.Node } =>
-        !!candidate.scope && nodeIsWithin(candidate.scope, identifier));
-    if (!candidates.length) return { declaration: null, ambiguous: false };
-    const deepest = Math.max(...candidates.map(candidate => depth(candidate.scope)));
-    const nearest = candidates.filter(candidate => depth(candidate.scope) === deepest);
-    return nearest.length === 1
-      ? { declaration: nearest[0].declaration, ambiguous: false }
-      : { declaration: null, ambiguous: true };
-  };
+  lexicalBindingResolvers.set(file, resolve);
+  return resolve;
 }
 
 function variableDeclarationIsConst(declaration: ts.VariableDeclaration): boolean {
@@ -1217,9 +1222,11 @@ function reviewedMiddlewareDeclarationErrors(file: ts.SourceFile, source: string
       errors.push(`${source}: reviewed middleware ${name} reassigns or shadows formal parameter(s): ${invalid.join(', ')}`);
       continue;
     }
-    const parameterDependencies = (expression: ts.Node, seen = new Set<string>()): Set<number> => {
+    const parameterDependencies = (expression: ts.Node): Set<number> => {
       const dependencies = new Set<number>();
-      const collectDependencies = (node: ts.Node, activeAliases: Set<string>): void => {
+      // Each alias has the same sources on every path through this query.
+      const visitedAliases = new Set<string>();
+      const collectDependencies = (node: ts.Node): void => {
         if (node !== expression && ts.isFunctionLike(node)) return;
         if (ts.isIdentifier(node)) {
           const parameterIndex = parameterNames.indexOf(node.text);
@@ -1228,24 +1235,24 @@ function reviewedMiddlewareDeclarationErrors(file: ts.SourceFile, source: string
             return;
           }
           const sources = aliasSources.get(node.text);
-          if (sources?.length && !activeAliases.has(node.text)) {
-            const nextAliases = new Set(activeAliases).add(node.text);
-            for (const aliasSource of sources) collectDependencies(aliasSource, nextAliases);
+          if (sources?.length && !visitedAliases.has(node.text)) {
+            visitedAliases.add(node.text);
+            for (const aliasSource of sources) collectDependencies(aliasSource);
           }
           return;
         }
         if (ts.isPropertyAccessExpression(node)) {
-          collectDependencies(node.expression, activeAliases);
+          collectDependencies(node.expression);
           return;
         }
         if (ts.isPropertyAssignment(node)) {
-          if (ts.isComputedPropertyName(node.name)) collectDependencies(node.name.expression, activeAliases);
-          collectDependencies(node.initializer, activeAliases);
+          if (ts.isComputedPropertyName(node.name)) collectDependencies(node.name.expression);
+          collectDependencies(node.initializer);
           return;
         }
-        ts.forEachChild(node, child => collectDependencies(child, activeAliases));
+        ts.forEachChild(node, collectDependencies);
       };
-      collectDependencies(expression, seen);
+      collectDependencies(expression);
       return dependencies;
     };
     const inspectBody = (node: ts.Node): void => {
@@ -3807,9 +3814,15 @@ function parseMcpMappings(text: string, relative = 'vscode-extension/mcp/x4forge
   return { mappings, errors };
 }
 
+let cachedMcpInventory: { text: string; inventory: McpInventory } | undefined;
+
 function mcpInventory(): McpInventory {
   const relative = 'vscode-extension/mcp/x4forge-mcp.cjs';
-  return parseMcpMappings(fs.readFileSync(path.join(ROOT, relative), 'utf8'), relative);
+  const text = fs.readFileSync(path.join(ROOT, relative), 'utf8');
+  if (cachedMcpInventory?.text === text) return cachedMcpInventory.inventory;
+  const inventory = parseMcpMappings(text, relative);
+  cachedMcpInventory = { text, inventory };
+  return inventory;
 }
 
 function sameStrings(a: readonly string[], b: readonly string[]): boolean {
@@ -4206,12 +4219,13 @@ function importBindingMatches(
   for (const statement of file.statements) {
     if (!ts.isImportDeclaration(statement) || !statement.importClause || statement.importClause.isTypeOnly ||
       !ts.isStringLiteralLike(statement.moduleSpecifier)) continue;
-    const resolved = resolveLocalSource(ROOT, relative, statement.moduleSpecifier.text);
-    if (resolved !== target) continue;
-    if (exported === 'default' && statement.importClause.name?.text === localName) matches.push(statement.importClause);
-    if (exported !== 'default' && statement.importClause.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
+    if (exported === 'default') {
+      if (statement.importClause.name?.text === localName &&
+        resolveLocalSource(ROOT, relative, statement.moduleSpecifier.text) === target) matches.push(statement.importClause);
+    } else if (statement.importClause.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
       for (const element of statement.importClause.namedBindings.elements) {
-        if (!element.isTypeOnly && element.name.text === localName && (element.propertyName?.text || element.name.text) === exported) matches.push(element);
+        if (!element.isTypeOnly && element.name.text === localName && (element.propertyName?.text || element.name.text) === exported &&
+          resolveLocalSource(ROOT, relative, statement.moduleSpecifier.text) === target) matches.push(element);
       }
     }
   }
@@ -4246,7 +4260,16 @@ function runtimeBindingResolvesTo(file: ts.SourceFile, name: string, use: ts.Nod
   });
 }
 
+const runtimeBindingWrites = new WeakMap<ts.SourceFile, Map<string, boolean>>();
+
 function runtimeBindingIsWritten(file: ts.SourceFile, name: string): boolean {
+  let writes = runtimeBindingWrites.get(file);
+  if (!writes) {
+    writes = new Map();
+    runtimeBindingWrites.set(file, writes);
+  }
+  const cached = writes.get(name);
+  if (cached !== undefined) return cached;
   const targetIdentifiers = (node: ts.Node): ts.Identifier[] => {
     if (ts.isIdentifier(node)) return node.text === name ? [node] : [];
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) ||
@@ -4279,6 +4302,7 @@ function runtimeBindingIsWritten(file: ts.SourceFile, name: string): boolean {
     ts.forEachChild(node, visit);
   };
   visit(file);
+  writes.set(name, written);
   return written;
 }
 
