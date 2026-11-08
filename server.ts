@@ -125,7 +125,7 @@ import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionRec
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt } from './src/server/deploymentTrust';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput } from './src/server/deploymentTrust';
 import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
@@ -11834,6 +11834,7 @@ function preservedDeploymentEntries(
 }
 
 interface DeploymentTransactionHooks {
+  onStagedFingerprint?: (fingerprint: string) => void;
   /** Recheck immutable source/approval authority immediately before target activation. */
   beforeActivate?: () => void;
   /** Test seam for deterministic Windows root-lock fixtures. Production uses fs.renameSync. */
@@ -12020,7 +12021,8 @@ function replaceValidatedDeployment(
   let movedOld = false;
   try {
     copyRegularTree(artifactRoot, stage);
-    if (fs.existsSync(targetPath)) {
+    const targetExisted = fs.existsSync(targetPath);
+    if (targetExisted) {
       for (const { path: relativePath, origin } of preservedDeploymentEntries(targetPath, plan, ownsForgeState)) {
         const source = path.join(targetPath, ...relativePath.split('/'));
         if (!fs.existsSync(source)) continue;
@@ -12043,7 +12045,10 @@ function replaceValidatedDeployment(
           fs.copyFileSync(source, destination);
         }
       }
-      hooks.beforeActivate?.();
+    }
+    hooks.onStagedFingerprint?.(regularTreeFingerprint(stage));
+    hooks.beforeActivate?.();
+    if (targetExisted) {
       try {
         rename(targetPath, backup);
         movedOld = true;
@@ -12053,7 +12058,6 @@ function replaceValidatedDeployment(
         return preservationOverrides;
       }
     }
-    if (!movedOld) hooks.beforeActivate?.();
     rename(stage, targetPath);
     verifyExpectedFiles(targetPath, expected);
     if (movedOld) fs.rmSync(backup, { recursive: true, force: true });
@@ -13338,6 +13342,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
   let targetMatchesPreState = false;
+  let outputUnconfirmed = false;
   let snapshot: DeploymentSnapshot | undefined;
   let deployReceipt: ActionReceipt | undefined;
   const recordFailedDeploy = (rolledBack: boolean, targetConflict = false) => {
@@ -13814,27 +13819,66 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
       stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
     }
-    const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat,
-      { beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); } }, frozenPlan);
+    let stagedFingerprint: string | undefined;
+    const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
+      beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); },
+      onStagedFingerprint: fingerprint => { stagedFingerprint = fingerprint; },
+    }, frozenPlan);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
 
-    // 4. Bytes confirm — deployed content.xml exists, non-empty, id matches modId.
-    const deployedContent = path.join(deployedPath, 'content.xml');
-    const deployedBytes = fs.existsSync(deployedContent) ? fs.statSync(deployedContent).size : 0;
-    const deployedId = deployedBytes ? (fs.readFileSync(deployedContent, 'utf8').match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || '') : '';
-    const bytesConfirmed = deployedBytes > 0 && deployedId.toLowerCase() === modId.toLowerCase();
+    const inspectOutput = () => {
+      // 4. Confirm manifest identity. The receipt also requires an exact physical tree match.
+      const deployedContent = path.join(deployedPath, 'content.xml');
+      const deployedBytes = fs.existsSync(deployedContent) ? fs.statSync(deployedContent).size : 0;
+      const deployedId = deployedBytes ? (fs.readFileSync(deployedContent, 'utf8').match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || '') : '';
+      const bytesConfirmed = deployedBytes > 0 && deployedId.toLowerCase() === modId.toLowerCase();
 
-    // 5. Extension-doctor — filter to this mod; FAIL on duplicate-id / folder-id-mismatch / any error.
-    const doctor = runExtensionDoctor(extensionsPath);
-    const modFindings = (doctor.findings || []).filter((f: any) => JSON.stringify(f).toLowerCase().includes(modId.toLowerCase()));
-    const acceptedIds = new Set(decision.approvals.map(a => a.finding.findingId));
-    const doctorAccepted = modFindings.filter((f: any) => {
-      if (!f.validationDiagnostic || f.filePath !== `extensions/${path.basename(deployedPath)}/${f.validationDiagnostic.filePath}`) return false;
-      const finding = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles }, [f.validationDiagnostic]).findings[0];
-      return acceptedIds.has(finding.findingId);
-    });
-    const blocking = modFindings.filter((f: any) => (f.severity === 'error' && !doctorAccepted.includes(f))
-      || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
+      // 5. Extension-doctor — filter to this mod; FAIL on duplicate-id / folder-id-mismatch / any error.
+      const doctor = runExtensionDoctor(extensionsPath);
+      const modFindings = (doctor.findings || []).filter((f: any) => JSON.stringify(f).toLowerCase().includes(modId.toLowerCase()));
+      const acceptedIds = new Set(decision.approvals.map(a => a.finding.findingId));
+      const doctorAccepted = modFindings.filter((f: any) => {
+        if (!f.validationDiagnostic || f.filePath !== `extensions/${path.basename(deployedPath)}/${f.validationDiagnostic.filePath}`) return false;
+        const finding = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles }, [f.validationDiagnostic]).findings[0];
+        return acceptedIds.has(finding.findingId);
+      });
+      const blocking = modFindings.filter((f: any) => (f.severity === 'error' && !doctorAccepted.includes(f))
+        || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
+      return { deployedBytes, deployedId, bytesConfirmed, doctor, modFindings, doctorAccepted, blocking };
+    };
+    let output: ReturnType<typeof inspectOutput> | undefined;
+    let inspectionFailure: unknown;
+    try { output = inspectOutput(); }
+    catch (error) { inspectionFailure = error; }
+
+    let deployedFingerprint: string | undefined;
+    try { deployedFingerprint = deploymentTargetFingerprint(deployedPath); }
+    catch { /* An unobservable target cannot support a terminal output receipt. */ }
+    if (!deployedFingerprint || deployedFingerprint === 'absent' || deployedFingerprint !== stagedFingerprint) {
+      const recovery = pendingDeployRecovery;
+      outputUnconfirmed = true;
+      // Do not restore over an intervening writer, including if reporting this refusal throws.
+      pendingDeployRecovery = undefined;
+      const message = 'Deployment output changed or could not be verified after activation. Forge left the destination as observed.';
+      check('bytes', 'Deployed bytes confirmed', 'fail', message);
+      if (deployedFingerprint && deployedFingerprint !== 'absent') {
+        try {
+          destructiveRecoveryStore.finalizeDeployment(recovery.id, deployedFingerprint);
+          deployReceipt = recordIncompleteDeployOutput(actionReceiptStore, deployReceipt, deployedFingerprint);
+          captureActionReceiptProjection(req, deployReceipt);
+        } catch {
+          return res.status(507).json(failWith('bytes', {
+            code: 'DEPLOY_RECEIPT_UNAVAILABLE', error: message + ' The incomplete receipt could not be finalized.', bytesConfirmed: false,
+          }));
+        }
+      }
+      return res.status(409).json(failWith('bytes', {
+        code: 'DEPLOY_OUTPUT_CHANGED', error: message, bytesConfirmed: false, deployRecord: deployReceipt,
+      }));
+    }
+
+    if (!output) throw inspectionFailure;
+    const { deployedBytes, deployedId, bytesConfirmed, doctor, modFindings, doctorAccepted, blocking } = output;
 
     // B84: the deploy row SAYS which format was written and what that means. A catalog
     // deploy that buried native binaries warns rather than passing quietly — the author
@@ -13867,7 +13911,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
 
     const ok = bytesConfirmed && blocking.length === 0;
     const deployedAt = new Date().toISOString();
-    const deployedFingerprint = regularTreeFingerprint(deployedPath);
     let deploymentRecovery: DeploymentRecoveryRecord | undefined;
     let deploymentRollback: { applied: true; restoredFingerprint: string; reason: string } | undefined;
     if (pendingDeployRecovery) {
@@ -14029,7 +14072,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         rollback = { applied: false, detail: `Automatic recovery also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` };
       }
     }
-    recordFailedDeploy(rollback?.applied === true, error?.code === 'DEPLOY_TARGET_CHANGED');
+    if (!outputUnconfirmed) recordFailedDeploy(rollback?.applied === true, error?.code === 'DEPLOY_TARGET_CHANGED');
     const code = String(error?.code || 'DEPLOY_FAILED');
     const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : /STALE|CHANGED|MISMATCH/.test(code) ? 409
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;

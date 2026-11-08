@@ -140,6 +140,11 @@ is incomplete. Check `deployment.fidelityScope` before comparing files.
 refers to an unverified attempt, and `none` covers preview, refusal, or an
 exact restore to prior bytes.
 
+If the target changes after activation, `DEPLOY_OUTPUT_CHANGED` means Forge
+did not verify a successful deploy. A readable changed tree has an incomplete
+receipt. An absent or unreadable target leaves the outcome unknown and its
+receipt prepared. Use the operation lookup before deciding whether to retry.
+
 **On `autoReimport: true`:** if you write to the workspace on disk, the Forge's canvas graph is stale *by
 construction* on every patch. Without this flag the deploy 409s at the source-sync stage every single time.
 

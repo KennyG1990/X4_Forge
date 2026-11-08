@@ -195,15 +195,29 @@ export function prepareDeployRecord(
   return receipt;
 }
 
+function deploymentAfterResources(prepared: ActionReceipt, fingerprint: string) {
+  return prepared.authority.resources.map(resource => ({
+    role: resource.role, root: resource.root, relativePath: resource.relativePath,
+    hash: resource.role === 'deploy' ? fingerprint : resource.beforeHash!,
+  }));
+}
+
+export function recordIncompleteDeployOutput(store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string): ActionReceipt {
+  const code = 'DEPLOY_OUTPUT_CHANGED';
+  return store.transition(prepared.id, {
+    to: 'incomplete', at: new Date().toISOString(),
+    validation: { ...prepared.validation, status: 'failed', code },
+    failure: { code }, rollbackStatus: 'available',
+    after: { outcome: 'partial', resources: deploymentAfterResources(prepared, fingerprint) },
+  });
+}
+
 export function commitDeployRecord(store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string): ActionReceipt {
   const result = store.commit(prepared.id, {
     validation: { ...prepared.validation, status: 'passed', code: 'DEPLOYED_BYTES_VERIFIED',
       summary: String(prepared.metadata?.outcome) },
     rollbackStatus: 'available',
-    after: { outcome: 'applied', resources: prepared.authority.resources.map(resource => ({
-      role: resource.role, root: resource.root, relativePath: resource.relativePath,
-      hash: resource.role === 'deploy' ? fingerprint : resource.beforeHash!,
-    })) },
+    after: { outcome: 'applied', resources: deploymentAfterResources(prepared, fingerprint) },
   });
   const durable = store.read(result.id);
   if (durable.hash !== result.hash || durable.status !== 'committed') throw new Error('Deployment receipt readback mismatch.');
