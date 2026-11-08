@@ -125,8 +125,8 @@ import { ActionReceiptStore } from "./src/lib/actionReceiptStore";
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord } from './src/server/deploymentTrust';
-import type { ActionReceipt } from './src/lib/actionReceipt';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt } from './src/server/deploymentTrust';
+import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
 import {
@@ -1152,6 +1152,10 @@ function sourceOperationKeys(req: express.Request): string[] {
     // Include output roots; an artifact/deployment transaction must never interleave its staging.
     if (resolved.modWorkspacePath) keys.push(canonicalSourceKey(path.join(resolved.modWorkspacePath, '.forge-builds')));
     if (req.path.includes('/deploy') && resolved.x4GamePath) keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
+  }
+  if (req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify') {
+    const operation = requestDeployOperation(req);
+    if (operation) keys.push(canonicalSourceKey(dataPath('action-receipts', `${actionReceiptIdForOperation(operation)}.json`)));
   }
   return [...new Set(keys)];
 }
@@ -4219,10 +4223,11 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/deploy",
         auth: true,
+        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
         body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
           dryRun: "true to preview without writes", expectedModId: "required on apply, from preview",
           expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
-          expectedBindingHash: "required on apply, from preview", expectedTargetFingerprint: "optional targetFingerprint from preview",
+          expectedBindingHash: "required on apply, from preview", expectedTargetFingerprint: "targetFingerprint from preview; required for agent apply with x-forge-operation-id, optional otherwise",
           acceptances: "optional exact {findingId,bindingHash,reason}[]; deploy permission required" },
         purpose: "Alias of deploy-verify with identical guards and receipt contract. Never defaults to the active workspace. Preview first, then apply with all four expected identities. Workspace-bound agent keys can only preview or deploy the mod identified by their addressed workspace."
       },
@@ -4230,6 +4235,7 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/deploy-verify",
         auth: true,
+        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
         body: {
           path: "required when workspace is omitted: mod folder path under a configured root",
           workspace: "required when path is omitted: ModWorkspace payload",
@@ -4240,7 +4246,7 @@ app.get("/api/agent/schema", (req, res) => {
           expectedSourceHash: "required on apply: sourceHash from preview (semantic validation inputs)",
           expectedArtifactHash: "required on apply: artifactHash from preview (all output and included disk bytes)",
           expectedBindingHash: "required on apply: bindingHash from preview (source, artifact, validator, corpus and target)",
-          expectedTargetFingerprint: "optional targetFingerprint from preview",
+          expectedTargetFingerprint: "targetFingerprint from preview; required for agent apply with x-forge-operation-id, optional otherwise",
           acceptances: "optional array, max127, of {findingId,bindingHash,reason}; authenticated deploy-permitted identity is recorded, never supplied in the body",
         },
         purpose: "Preview first, then guarded apply with expected identities. Workspace-bound agent keys must address a workspace whose mod matches the requested path or inline workspace, including after auto-reimport; mismatch returns DEPLOY_WORKSPACE_MOD_MISMATCH before writes. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline. warningReviews lists known/new/resolved/invalidated/revoked reviews. Only unchanged warning evidence is reused automatically; all validation-input bytes, corpus, validator and coverage must match. Reuse receipts retain the original approver/reason."
@@ -5192,8 +5198,32 @@ app.post("/api/agent/check-expression", (req, res) => {
 
 app.get("/api/agent/status", (req, res) => {
   try {
-    const resolved = resolveXsdConfig();
     const record = requestWorkspace(req);
+    const operationId = req.query.deployOperationId;
+    if (operationId !== undefined) {
+      res.set('Cache-Control', 'no-store');
+      if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {
+        return res.status(400).json({ ok: false, code: 'DEPLOY_OPERATION_INPUT_INVALID' });
+      }
+      try {
+        const principal = deploymentPrincipal(req);
+        if (principal.kind !== 'agent') return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+        const identity = deployReceiptIdentity(principal, { workspaceId: record.workspaceId, operationId });
+        const receipt = readDeployOperationReceipt(actionReceiptStore, identity);
+        if (!receipt) return res.status(404).json({
+          ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
+        });
+        return res.json({
+          ok: true, workspaceId: record.workspaceId, outcome: receipt.status === 'prepared' ? 'unknown' : receipt.status, receipt,
+        });
+      } catch (error: any) {
+        const forbidden = error?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
+        return res.status(forbidden ? 403 : 503).json({
+          ok: false, code: forbidden ? 'DEPLOY_APPROVAL_FORBIDDEN' : 'DEPLOY_RECEIPT_UNAVAILABLE',
+        });
+      }
+    }
+    const resolved = resolveXsdConfig();
     const ws = record.workspace as ModWorkspace;
     res.locals.apiSubject = { modId: effectiveModId(activeBuildWorkspace(ws)), sourceHash: record.head, sourceHashScope: 'workspace-head' };
     const sourceDir = typeof (ws as any)?.sourceStamp?.dir === 'string' ? (ws as any).sourceStamp.dir : '';
@@ -13260,6 +13290,18 @@ app.post('/api/agent/warning-reviews/revoke', (req, res) => {
       .json({ ok: false, code: error.code || 'REVIEW_STORE_UNAVAILABLE', error: error.message });
   }
 });
+function requestDeployOperation(req: express.Request) {
+  const actor = (req as any).__actor as RequestActor | undefined;
+  const operationId = req.get('x-forge-operation-id');
+  if (req.body?.dryRun === true || actor?.kind !== 'agent' || !actor.keyId || operationId === undefined) return;
+  if (!ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {
+    throw Object.assign(new Error('x-forge-operation-id must be a bounded operation identifier.'), {
+      code: 'DEPLOY_OPERATION_INPUT_INVALID', status: 400,
+    });
+  }
+  return deployReceiptIdentity({ kind: 'agent', id: actor.keyId }, { workspaceId: requestWorkspace(req).workspaceId, operationId });
+}
+
 function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
@@ -13315,6 +13357,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const acceptances = body.acceptances ?? [];
     if (!Array.isArray(acceptances) || acceptances.length > 127) {
       return res.status(400).json(failWith('config', { code: 'ACCEPTANCE_INPUT_INVALID', error: 'acceptances must contain at most 127 exact findings.' }));
+    }
+    const operation = requestDeployOperation(req);
+    const recorded = operation && readDeployOperationReceipt(actionReceiptStore, operation);
+    if (recorded) {
+      return res.status(409).json(failWith('preflight', {
+        code: 'DEPLOY_OPERATION_ALREADY_RECORDED',
+        error: 'This operation already has a receipt. Read its outcome before starting another deployment.',
+        receipt: { id: recorded.id, hash: recorded.hash, status: recorded.status },
+      }));
     }
     const reqPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
     const hasWorkspace = !!req.body?.workspace && typeof req.body.workspace === 'object';
@@ -13564,6 +13615,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         if (body[field] === undefined) missing.push(field);
         else if (body[field] !== current) mismatched.push(field);
       }
+      if (operation && body.expectedTargetFingerprint === undefined) missing.push('expectedTargetFingerprint');
       if (missing.length || mismatched.length) {
         const details = [
           missing.length ? `Missing preview fields: ${missing.join(', ')}.` : '',
@@ -13674,7 +13726,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     }
     if (pendingDeployRecovery.beforeFingerprint !== targetFingerprint) throw targetChanged();
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
-      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash);
+      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation);
     assertWriteAuthority();
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     writeAttempted = true;

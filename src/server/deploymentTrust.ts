@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import type { ActionReceipt } from '../lib/actionReceipt';
+import { actionReceiptIdForOperation, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import type { AcceptanceDecision, AcceptancePrincipal, AcceptanceSubject } from './findingAcceptance';
 
@@ -137,22 +137,49 @@ export function deploymentCorpusFiles(files: string[]): Array<[string, string]> 
   });
 }
 
+export function deployReceiptIdentity(
+  principal: Pick<AcceptancePrincipal, 'kind' | 'id'>,
+  caller?: { workspaceId: string; operationId: string },
+): ActionReceiptOperationIdentity {
+  const requestScope = 'deployment.verified';
+  return {
+    actor: { kind: principal.kind, id: principal.id },
+    client: { channel: principal.kind === 'agent' ? 'api' : 'studio', id: principal.id, version: 'deployment-trust-v1' },
+    capability: { legacyRoute: '/api/agent/deploy-verify', method: 'POST', reviewed: true, reviewRef: 'validation-trust-repair-batch2' },
+    authority: caller
+      ? { scope: 'workspace', workspaceId: caller.workspaceId, operationId: `deploy:${trustHash(caller.operationId)}`, requestScope }
+      : { scope: 'global', operationId: `deploy:${randomUUID()}`, requestScope },
+  };
+}
+
+export function readDeployOperationReceipt(store: ActionReceiptStore, identity: ActionReceiptOperationIdentity): ActionReceipt | null {
+  const id = actionReceiptIdForOperation(identity);
+  const result = store.tryRead(id);
+  if (result.ok === true) {
+    if (result.receipt.id !== id) {
+      throw Object.assign(new Error('Deployment receipt identity mismatch.'), { code: 'RECEIPT_CORRUPT' });
+    }
+    return result.receipt;
+  }
+  if (result.code === 'RECEIPT_NOT_FOUND') return null;
+  throw Object.assign(new Error('Deployment receipt could not be verified.'), { code: result.code });
+}
+
 export function prepareDeployRecord(
   store: ActionReceiptStore, subject: AcceptanceSubject, decision: AcceptanceDecision,
   principal: AcceptancePrincipal, approvals: ActionReceipt[], recoveryId: string,
   beforeFingerprint: string,
   validatedArtifactHash?: string,
+  identity = deployReceiptIdentity(principal),
 ): ActionReceipt {
   if (approvals.length > 127) throw new Error('At most 127 finding approvals fit a deployment record.');
   const target = { role: 'deploy' as const, root: 'extensions', relativePath: subject.evidence.modId!,
     beforeHash: trustHash(beforeFingerprint) };
   const resources = [target, ...approvals.map(receipt => ({ role: 'data' as const,
     root: 'action-receipts', relativePath: `${receipt.id}.json`, beforeHash: receipt.hash }))];
-  return store.prepare({
-    actor: { kind: principal.kind, id: principal.id },
-    client: { channel: principal.kind === 'agent' ? 'api' : 'studio', id: principal.id, version: 'deployment-trust-v1' },
-    capability: { legacyRoute: '/api/agent/deploy-verify', method: 'POST', reviewed: true, reviewRef: 'validation-trust-repair-batch2' },
-    authority: { scope: 'global', operationId: `deploy:${randomUUID()}`, requestScope: 'deployment.verified', resources },
+  const { receipt, created } = store.prepareWithDisposition({
+    ...identity,
+    authority: { ...identity.authority, resources },
     effects: { declared: [{ id: 'deploy', operation: 'replace', resource: target, reversible: true }] },
     input: { requestHash: trustHash([decision.binding.hash, approvals.map(r => r.hash)]), beforeHash: target.beforeHash },
     validation: { validator: 'deployment-trust-v1', ruleHash: subject.validatorHash },
@@ -162,6 +189,10 @@ export function prepareDeployRecord(
       ...decision.counts,
       ...(validatedArtifactHash ? { validatedArtifactHash, validatedArtifactScope: 'logical-artifact-bytes' } : {}) },
   });
+  if (!created) throw Object.assign(new Error('This deployment operation already has a receipt.'), {
+    code: 'DEPLOY_OPERATION_ALREADY_RECORDED',
+  });
+  return receipt;
 }
 
 export function commitDeployRecord(store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string): ActionReceipt {

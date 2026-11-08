@@ -10,8 +10,10 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
   // Several real deployments run before the separately bounded Playtest check.
   test.setTimeout(330_000);
   const auth = await ephemeralWorkspaceHeaders();
-  const post = async (route: string, data: unknown, token = E2E_TOKEN) => {
-    const response = await request.post(`${API}${route}`, { headers: { ...auth, Authorization: `Bearer ${token}` }, data });
+  const post = async (route: string, data: unknown, token = E2E_TOKEN, operationId?: string) => {
+    const response = await request.post(`${API}${route}`, { headers: {
+      ...auth, Authorization: `Bearer ${token}`, ...(operationId ? { 'x-forge-operation-id': operationId } : {}),
+    }, data });
     return { status: response.status(), body: await response.json() };
   };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-deploy-trust-'));
@@ -169,12 +171,26 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
       if (hadReceipts) fs.renameSync(parked, receiptRoot);
     }
 
-    const deployed = await post(route, apply, keys.deploy.token);
+    const operationId = 'forge_deploy_trust_operation';
+    const unbound = await post(route, apply, keys.deploy.token, operationId);
+    expect(unbound.status).toBe(409);
+    expect(unbound.body).toMatchObject({ identityMismatch: { missing: ['expectedTargetFingerprint'] }, deployment: { writeAttempted: false } });
+    const boundApply = { ...apply, expectedTargetFingerprint: preview.body.targetFingerprint };
+    const deployed = await post(route, boundApply, keys.deploy.token, operationId);
     evidence.deployed = deployed;
     expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
     expect(deployed.body.ok, JSON.stringify(deployed.body)).toBe(true);
     expect(deployed.body.baselinePromotion.recorded).toBe(false);
     expect(deployed.body.validation.clean).toBe(false);
+    const recovery = await request.get(`${API}/api/agent/status?deployOperationId=${operationId}`, {
+      headers: { ...auth, Authorization: `Bearer ${keys.deploy.token}` },
+    });
+    expect(recovery.status()).toBe(200);
+    expect(await recovery.json()).toMatchObject({ outcome: 'committed', receipt: { id: deployed.body.deployRecord.id, hash: deployed.body.deployRecord.hash } });
+    const replay = await post('/api/agent/deploy', boundApply, keys.deploy.token, operationId);
+    expect(replay.status).toBe(409);
+    expect(replay.body).toMatchObject({ code: 'DEPLOY_OPERATION_ALREADY_RECORDED', deployment: { writeAttempted: false },
+      receipt: { id: deployed.body.deployRecord.id, hash: deployed.body.deployRecord.hash } });
     expect(fs.readFileSync(path.join(target, 'ui', 'bad.lua'), 'utf8')).toBe('local broken = )');
     expect(fs.readFileSync(path.join(target, 'payload.bin'))).toEqual(fs.readFileSync(path.join(source, 'payload.bin')));
     const reopened = new ActionReceiptStore({ root: receiptRoot });

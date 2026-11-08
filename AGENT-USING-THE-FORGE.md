@@ -116,10 +116,22 @@ and gitignore the by-products.
 3. IMPLEMENT   patch through the Forge API, byte-exact readback, count-asserted anchors.
 4. VALIDATE    POST /api/agent/project/validate  → loop to ok:true
                + syntax gate, unit tests, wiring gate (see §6)
-5. DEPLOY      POST /api/agent/deploy-verify {path: "<mod folder>", autoReimport: true}
+5. DEPLOY      Preview, review, and apply through /api/agent/deploy-verify (below).
 6. PROVE       IN-GAME. Not optional. See §7.
 7. RECORD      write what you learned into the methods library.
 ```
+
+### Recover an agent deploy after a lost response
+
+Preview with `dryRun: true`. Review the effect and apply with all four expected preview
+identities and `expectedTargetFingerprint` from the preview. Send a fresh
+`x-forge-operation-id` for each intended apply. Keep that identifier with the workspace
+and deploy key until you know the outcome.
+
+If the reply disappears, query `GET /api/agent/status?deployOperationId=<encoded-id>`
+with the same deploy key and workspace headers. A committed receipt identifies the
+historical write. Missing or prepared evidence leaves the outcome unknown. Reusing a
+recorded operation ID refuses a second apply and returns the existing receipt pointer.
 
 **On `autoReimport: true`:** if you write to the workspace on disk, the Forge's canvas graph is stale *by
 construction* on every patch. Without this flag the deploy 409s at the source-sync stage every single time.
