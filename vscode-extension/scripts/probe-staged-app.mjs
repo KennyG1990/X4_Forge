@@ -62,6 +62,7 @@ async function waitForExit(processHandle, timeoutMs) {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 let child;
+let stubborn;
 let output = '';
 try {
   check('staged server exists', fs.existsSync(serverPath), serverPath);
@@ -158,9 +159,17 @@ try {
   check('invalid parent contract refuses before spawn', invalid.status === 64 && /refusing to spawn/.test(invalid.stderr || ''), `status=${invalid.status}`);
 
   const stubbornPath = path.join(tmp, 'stubborn-child.cjs');
-  fs.writeFileSync(stubbornPath, 'setInterval(() => {}, 1000);');
+  fs.writeFileSync(stubbornPath, `
+const { spawn } = require('node:child_process');
+const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+  stdio: 'ignore',
+  windowsHide: true,
+});
+console.log('X4FORGE_PROBE_DESCENDANT_PID=' + descendant.pid);
+setInterval(() => {}, 1000);
+`);
   let stubbornOutput = '';
-  const stubborn = spawn(process.execPath, [supervisorPath, stubbornPath], {
+  stubborn = spawn(process.execPath, [supervisorPath, stubbornPath], {
     cwd: tmp,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -174,18 +183,27 @@ try {
   stubborn.stdout.on('data', chunk => { stubbornOutput += chunk; });
   stubborn.stderr.on('data', chunk => { stubbornOutput += chunk; });
   let stubbornPid = 0;
-  for (let attempt = 0; attempt < 30 && !stubbornPid; attempt++) {
+  let descendantPid = 0;
+  for (let attempt = 0; attempt < 30 && (!stubbornPid || !descendantPid); attempt++) {
     await sleep(50);
     stubbornPid = Number(/X4FORGE_SUPERVISED_PID=(\d+)/.exec(stubbornOutput)?.[1] || 0);
+    descendantPid = Number(/X4FORGE_PROBE_DESCENDANT_PID=(\d+)/.exec(stubbornOutput)?.[1] || 0);
   }
-  check('stubborn fixture was spawned by supervisor', stubbornPid > 0 && pidAlive(stubbornPid), String(stubbornPid));
+  check('stubborn fixture and descendant started', stubbornPid > 0 && descendantPid > 0
+    && pidAlive(stubbornPid) && pidAlive(descendantPid), `childPid=${stubbornPid} descendantPid=${descendantPid}`);
+  const forceStart = performance.now();
   stubborn.stdin.end();
   const stubbornExit = await waitForExit(stubborn, 3500);
-  check('supervisor force reaps pipe-ignorant owned child', stubbornExit && !pidAlive(stubbornPid), `supervisorExit=${stubborn.exitCode} childPid=${stubbornPid}`);
+  while (stubbornExit && (pidAlive(stubbornPid) || pidAlive(descendantPid)) && performance.now() - forceStart < 3500) {
+    await sleep(10);
+  }
+  check('supervisor force reaps pipe-ignorant owned tree', stubbornExit && performance.now() - forceStart <= 3500 && !pidAlive(stubbornPid) && !pidAlive(descendantPid),
+    `elapsedMs=${Math.round(performance.now() - forceStart)} supervisorExit=${stubborn.exitCode} childPid=${stubbornPid} descendantPid=${descendantPid}`);
   check('force reap never kills claimed parent pid', pidAlive(process.pid), String(process.pid));
 } catch (error) {
   check('probe completed without exception', false, error instanceof Error ? error.message : String(error));
 } finally {
+  if (stubborn?.exitCode === null && stubborn?.signalCode === null) killTree(stubborn.pid);
   killTree(child?.pid);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
 }

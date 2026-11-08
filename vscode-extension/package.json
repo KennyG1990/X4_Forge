@@ -2,7 +2,7 @@
   "name": "x4-forge-studio",
   "displayName": "X4 Forge Studio",
   "description": "X4: Foundations modding studio for visual Mission Director graphs, native X4-aware XML editing, deterministic validation, safe patches, and guarded package and deploy workflows.",
-  "version": "0.0.80",
+  "version": "0.0.81",
   "icon": "icon.png",
   "publisher": "x4forge",
   "license": "MIT",
@@ -193,6 +193,7 @@
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "3.9.2",
     "esbuild": "^0.25.0",
+    "koffi": "3.3.7",
     "typescript": "~5.8.2"
   }
 }

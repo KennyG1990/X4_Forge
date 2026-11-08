@@ -1,0 +1,42 @@
+{
+  "version": "0.0.81",
+  "status": "OPEN_VSX_VERIFIED_BEFORE_RELEASE_COMMIT",
+  "sourceCheckpoint": "085e363da87f2c4e3915c7c690896847f0ec96cc",
+  "releaseSourcePatchSha256": "6f24fbfa1a4c48e01eac40018e49fb9fc1d2f6a0066de999ab34438c48287b07",
+  "vsix": {
+    "sha256": "be16ebafb333d77b6a4058cc56201b131488764bdf9d153c926b18a783066330",
+    "bytes": 29844349,
+    "stable": true,
+    "platformVerified": "win32-x64"
+  },
+  "openVsx": {
+    "latest": "0.0.81",
+    "download": "https://open-vsx.org/api/x4forge/x4-forge-studio/0.0.81/file/x4forge.x4-forge-studio-0.0.81.vsix",
+    "downloadHashMatches": true
+  },
+  "sourceChecks": {
+    "browser": "120/120 on unchanged product source",
+    "routes": "500/500",
+    "typecheck": "PASS",
+    "build": "PASS",
+    "precommit": "PASS",
+    "lint": {
+      "errors": 0,
+      "warnings": 599
+    },
+    "productionServerSha256": "fc8568f70b78d538aeb02a0ae533ea37bd9d8ab7ef9f4b2ba6b4362b4a9b207f"
+  },
+  "installedChecks": {
+    "archiveFilesMatched": 2200,
+    "sidecarSmoke": "16/16",
+    "nativeDeployAndIsolation": "16/16",
+    "runtimeOracles": "134/134",
+    "lifecycle": "7/7",
+    "forcedTreeCleanupMs": 769,
+    "forcedTreeDeadlineMs": 3500,
+    "runtimeAuditVulnerabilities": 0
+  },
+  "releaseScope": "Native deploy preview identity diagnostics and destination protection, capability audit reuse, and Windows sidecar process-tree containment.",
+  "limits": "Private Antigravity CLI install and headless Windows x64 proof. Existing live editor and game were untouched. Exact native editor view and in-game behavior were outside this check.",
+  "ownerIssue": "https://github.com/KennyG1990/X4_Forge/issues/20"
+}

@@ -6,8 +6,9 @@
  * authority, so PID reuse can never keep the server alive or cause an unrelated process to die.
  */
 
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import { enterWindowsSidecarJob } from './windowsSidecarJob';
 
 const MODE = 'pipe-v1';
 const NONCE_PATTERN = /^[a-f0-9]{32,128}$/i;
@@ -23,10 +24,7 @@ function validContract(): boolean {
 
 function forceKillOwnedTree(child: ChildProcess): void {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    return;
-  }
+  if (process.platform === 'win32') return;
   try { process.kill(-child.pid, 'SIGKILL'); }
   catch { try { process.kill(child.pid, 'SIGKILL'); } catch { /* already gone */ } }
 }
@@ -41,6 +39,12 @@ if (!validContract()) fail('invalid or missing pipe-v1 parent contract; refusing
 const [serverArg, ...nodeArgs] = process.argv.slice(2);
 if (!serverArg) fail('missing server entrypoint.', 64);
 const serverPath = path.resolve(serverArg);
+if (process.platform === 'win32') {
+  try { enterWindowsSidecarJob(); }
+  catch (error) {
+    fail(`Windows sidecar containment unavailable: ${error instanceof Error ? error.message : String(error)}`, 70);
+  }
+}
 
 const server = spawn(process.execPath, [...nodeArgs, serverPath], {
   cwd: process.cwd(),
@@ -69,6 +73,10 @@ function beginShutdown(reason: string, signalChild: boolean): void {
     try { server.kill('SIGTERM'); } catch { /* force fallback below */ }
   }
   forceTimer = setTimeout(() => {
+    if (process.platform === 'win32') {
+      console.error('[sidecar-supervisor] graceful shutdown expired; closing the Windows Job.');
+      process.exit(1);
+    }
     forceKillOwnedTree(server);
     failsafeTimer = setTimeout(() => process.exit(1), 1500);
     failsafeTimer.unref();

@@ -22,6 +22,7 @@
  */
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -105,6 +106,11 @@ for (const name of RUNTIME_DEPS) {
   }
   deps[name] = version;
 }
+if (process.platform === "win32") {
+  const extensionPkg = JSON.parse(fs.readFileSync(path.join(EXT_ROOT, "package.json"), "utf8"));
+  deps.koffi = extensionPkg.devDependencies.koffi;
+  if (!deps.koffi) throw new Error("Windows sidecar Job binding is not pinned.");
+}
 fs.writeFileSync(
   path.join(APP, "package.json"),
   JSON.stringify(
@@ -135,6 +141,13 @@ function stripMaps(dir) {
 }
 stripMaps(path.join(APP, "node_modules"));
 console.log(`[stage-app] stripped ${vendorMaps} vendor sourcemaps from node_modules`);
+
+// Assert the Windows package can load its own native sidecar containment binding.
+if (process.platform === "win32") {
+  const require = createRequire(import.meta.url);
+  const binding = require(path.join(APP, "node_modules", "koffi", "index.cjs"));
+  if (binding.version !== deps.koffi) throw new Error("Unexpected staged Windows Job binding version.");
+}
 
 // Assertions: native module present; no secrets / dev-only files staged.
 const sqliteDir = path.join(APP, "node_modules", "better-sqlite3");

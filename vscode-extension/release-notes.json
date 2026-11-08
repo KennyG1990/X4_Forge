@@ -11,6 +11,12 @@
     "0.0.69": "2026-08-09",
     "0.0.67": "2026-08-09"
   },
+  "0.0.81": [
+    "On Windows, Forge cleans up its backend and child processes when the editor closes or the supervisor exits, even if the backend stops responding.",
+    "Forge explains which preview identity is missing or stale, so you know when to preview again before deploying.",
+    "Studio checks that the installed destination still matches what you reviewed. If it changes before deployment, Forge preserves the other writer's files and asks you to preview again.",
+    "Forge reports a clear error when a file occupies the mod folder it needs for deployment."
+  ],
   "0.0.80": [
     "Reimporting a mod preserves matching graph identities and layout. Manual import paths survive directory scans, and changing a path discards its old preview.",
     "Reviewed warnings can be reused while their mod, source and validation evidence remain unchanged. Each deployment records the original approver and reason; reviews can be revoked, and errors never inherit approval.",

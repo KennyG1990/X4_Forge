@@ -3,6 +3,13 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.81 — 2026-11-08
+
+- On Windows, Forge cleans up its backend and child processes when the editor closes or the supervisor exits, even if the backend stops responding.
+- Forge explains which preview identity is missing or stale, so you know when to preview again before deploying.
+- Studio checks that the installed destination still matches what you reviewed. If it changes before deployment, Forge preserves the other writer's files and asks you to preview again.
+- Forge reports a clear error when a file occupies the mod folder it needs for deployment.
+
 ## 0.0.80 — 2026-10-26
 
 - Reimporting a mod preserves matching graph identities and layout. Manual import paths survive directory scans, and changing a path discards its old preview.
