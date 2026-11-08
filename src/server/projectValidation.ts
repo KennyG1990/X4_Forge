@@ -770,7 +770,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
   // validator re-reports structure issues under its own code — same message, same file).
   const seen = new Set<string>();
   return out.filter(f => {
-    const key = `${f.severity}|${f.filePath || ""}|${f.message}`;
+    const key = JSON.stringify([f.severity, f.filePath || "", f.message, f.column === undefined ? null : [f.line, f.column]]);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

@@ -76,6 +76,7 @@ export function buildValidationEvidence(
       VALIDATION_EVIDENCE_VERSION, modId, project.id, sourceHash, category, finding.code || '',
       normalizedPath(finding.filePath || ''), finding.sourceRef || '', finding.line ?? null,
       finding.severity, finding.message,
+      ...(finding.column === undefined ? [] : [finding.column]),
     ])).digest('hex');
     if (category === 'check-unavailable') gaps.push({ check: finding.code!, filePath: finding.filePath, reason: finding.message });
     return { ...finding, findingId, category };

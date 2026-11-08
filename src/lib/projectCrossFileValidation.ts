@@ -20,6 +20,7 @@ import {
 } from './extensionProject';
 import { parseModManifest, type ModDependency, type ModManifest } from './modDependencyGraph';
 import { classifyCueRef } from './cueLineage';
+import { collectMdStringResults } from './expressionAst';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parse } from 'luaparse';
 import { DOMParser, type Element as XmlElement } from '@xmldom/xmldom';
@@ -59,6 +60,8 @@ export interface ProjectCrossFileFinding {
 export interface ProjectEventRef {
   event: string;
   file: string;
+  line?: number;
+  column?: number;
   /**
    * True when the Lua event name is built dynamically (string concatenation, e.g.
    * `RegisterEvent(NS .. suffix, …)` / `"log_" .. category`) — `event` is then the
@@ -130,15 +133,38 @@ function stripMdLiteral(value: string | undefined): string {
   return raw;
 }
 
-function parseMdRaisedLuaEvents(content: string, file: string): ProjectEventRef[] {
+function parseMdRaisedLuaEvents(content: string, file: string, findings: ProjectCrossFileFinding[]): ProjectEventRef[] {
   const out: ProjectEventRef[] = [];
-  const root = parseXmlLenient(content);
-  if (!root) return out; // XML well-formedness is checked by project validation.
-  walkElements(root, element => {
-    if (element.nodeName !== 'raise_lua_event') return;
-    const event = stripMdLiteral(element.getAttribute('name') ?? undefined);
-    if (event) out.push({ event, file });
-  });
+  let documentRoot: XmlElement | null = null;
+  try {
+    let malformed = false;
+    const parsed = new DOMParser({ onError: () => { malformed = true; } })
+      .parseFromString(content.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
+    if (!malformed) documentRoot = parsed;
+  } catch { /* Retain the existing fragment scan, without synthetic coordinates. */ }
+  const record = (expression: string | null | undefined, line?: number, column?: number) => {
+    if (!expression?.trim()) return;
+    const location = { file, line, column };
+    const { values, unresolved } = collectMdStringResults(expression);
+    for (const event of values) out.push({ event, ...location });
+    if (unresolved) findings.push({
+      code: 'md_lua.registration_verification_gap', severity: 'info', ...location,
+      detail: 'MD-to-Lua registration wiring is not fully verified. Forge checked the literal results, but this event name has an unresolved result.',
+    });
+  };
+  if (documentRoot) {
+    const elements = Array.from(documentRoot.getElementsByTagName('raise_lua_event'));
+    if (documentRoot.nodeName === 'raise_lua_event') elements.unshift(documentRoot);
+    for (const element of elements) {
+      const attribute = element.getAttributeNode('name');
+      record(attribute?.value, attribute?.lineNumber, attribute?.columnNumber);
+    }
+  } else {
+    const fragment = parseXmlLenient(content);
+    if (fragment) walkElements(fragment, element => {
+      if (element.nodeName === 'raise_lua_event') record(element.getAttribute('name'));
+    });
+  }
   return out;
 }
 
@@ -648,7 +674,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
         detail: `UI registration ${JSON.stringify(registration.rawPath)}: ${registration.resolution}.` });
     }
   }
-  const raised = mdFiles.flatMap(f => parseMdRaisedLuaEvents(f.content || '', f.path));
+  const raised = mdFiles.flatMap(f => parseMdRaisedLuaEvents(f.content || '', f.path, findings));
   const listened = mdFiles.flatMap(f => parseMdUiListeners(f.content || '', f.path));
   const registrationAnalyses = luaFiles.map(file => ({ file, result: parseLuaRegisteredEvents(file.content || '', file.path) }));
   const parseUnavailable = registrationAnalyses
@@ -708,6 +734,8 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       code: 'md_lua.missing_register',
       severity: 'error',
       file: event.file,
+      line: event.line,
+      column: event.column,
       event: event.event,
       detail: `MD raises Lua event "${event.event}" but no project Lua file registers it.`,
     });
@@ -869,6 +897,24 @@ export function runProjectCrossFileSelftest() {
 
   const good = validateProjectCrossFile(fixtureProject());
   ok('valid_project_has_no_errors', good.ok, good.findings);
+  const conditionalRaises = validateProjectCrossFile(addFile(fixtureProject(), {
+    path: 'md/conditional_events.xml', kind: 'md',
+    content: [
+      '',
+      '<mdscript name="ConditionalEvents"><cues><cue name="Start"><actions>',
+      `<raise_lua_event name="if $flag then 'ai_influence.chat' else 'ai_influence.chat'"/>`,
+      `<raise_lua_event name="if ($flag == 'if then else') then if $next then 'ai_influence.chat' else 'missing.nested' else 'ai_influence.chat'"/>`,
+      `<raise_lua_event name="if $flag then $event else 'missing.mixed'"/>`,
+      `<raise_lua_event name="if $object.then then 'missing.no_else'"/>`,
+      `<raise_lua_event name="$event"/>`,
+      '</actions></cue></cues></mdscript>',
+    ].join('\n'),
+  })).findings.filter(f => f.file === 'md/conditional_events.xml');
+  ok('conditional_md_events_preserve_literal_blockers_gaps_and_source_positions',
+    conditionalRaises.filter(f => f.code === 'md_lua.missing_register').map(f => `${f.line}:${f.event}`).join(',')
+      === '4:missing.nested,5:missing.mixed,6:missing.no_else'
+    && conditionalRaises.filter(f => f.code === 'md_lua.registration_verification_gap').map(f => f.line).join(',') === '5,6,7'
+    && conditionalRaises.every(f => (f.column ?? 0) > 0), conditionalRaises);
   ok('indexes_md_to_lua_raise_and_register', good.mdLua.raised.some(e => e.event === 'ai_influence.chat') && good.mdLua.registered.some(e => e.event === 'ai_influence.chat'), good.mdLua);
   ok('indexes_lua_to_md_emit_and_listener', good.mdLua.emitted.some(e => e.event === 'ai_influence.chat.response') && good.mdLua.listened.some(e => e.event === 'ai_influence.chat.response'), good.mdLua);
   ok('reports_content_dependencies', good.deps.dependencies.some(d => d.id === 'djfhe_http' && d.optional), good.deps);
