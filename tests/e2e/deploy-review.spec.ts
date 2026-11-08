@@ -23,7 +23,9 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   });
   await page.route('**/api/schema/config',route=>route.fulfill({json:{loaded:true,config:{modWorkspacePath:path.join(evidence,'ui-only-staging')},resolved:{mdExists:true},deployFormat:{format:'loose'}}}));
   await page.route('**/api/agent/compile',route=>route.fulfill({json:{success:true,diagnostics:[],validation:{scope:'full-project',ok:true}}}));
-  let fixture=fixtures.accepted, delay=0, calls=0;
+  let fixture=fixtures.accepted, delay=0, calls=0, omitTargetFingerprint=false;
+  const applyIdentities: unknown[] = [];
+  const modeledTargetFingerprint = 'absent';
   await page.route('**/api/agent/deploy-verify',async route=>{
     calls++;
     const body=route.request().postDataJSON();
@@ -31,7 +33,18 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
     const result=structuredClone(fixture);
     // Workspace adoption is a separate API contract; never write a historical fixture's workspace.
     delete result.workspace;
-    if(body.dryRun && result.ok){result.stage='preview';result.dryRun=true;delete result.bytesConfirmed;delete result.deployedPath;}
+    if(body.dryRun && result.ok){
+      result.stage='preview';result.dryRun=true;delete result.bytesConfirmed;delete result.deployedPath;
+      // These historical apply responses do not contain a preview destination identity.
+      if(!omitTargetFingerprint) result.targetFingerprint=modeledTargetFingerprint;
+    }
+    if(body.dryRun === false){
+      applyIdentities.push({
+        modId: body.expectedModId, sourceHash: body.expectedSourceHash,
+        artifactHash: body.expectedArtifactHash, bindingHash: body.expectedBindingHash,
+        targetFingerprint: body.expectedTargetFingerprint,
+      });
+    }
     await route.fulfill({json:result});
   });
   await page.goto('/');
@@ -84,5 +97,16 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   fixture={ok:false,stage:'preflight',error:'Fixture refusal'};await page.getByTestId('deploy-verify-btn').click();
   await expect(page.getByTestId('verify-result').getByTestId('deploy-review-title')).toHaveText('Deployment failed');
   await expect(page.getByTestId('verify-result')).toContainText('Fixture refusal');
-  expect(calls).toBeGreaterThan(10);
+  expect(applyIdentities).toEqual(
+    [fixtures.accepted, fixtures.mixed, fixtures.clean, fixtures.warnings, fixtures.accepted, fixtures.incomplete, fixtures.clean]
+      .map(({modId, sourceHash, artifactHash, bindingHash}) => ({
+        modId, sourceHash, artifactHash, bindingHash, targetFingerprint: modeledTargetFingerprint,
+      })),
+  );
+  const previousCalls = calls;
+  fixture=fixtures.clean;omitTargetFingerprint=true;
+  await page.getByTestId('deploy-verify-btn').click();
+  await expect(page.getByTestId('verify-result')).toContainText('Forge did not provide a deploy identity. No deployment was attempted.');
+  expect(calls).toBe(previousCalls + 1);
+  expect(applyIdentities).toHaveLength(7);
 });

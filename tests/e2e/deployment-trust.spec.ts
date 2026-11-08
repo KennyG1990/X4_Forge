@@ -7,7 +7,8 @@ import { ActionReceiptStore } from '../../src/lib/actionReceiptStore';
 import { ephemeralWorkspaceHeaders, seedServerWorkspace } from './ephemeral';
 
 test('authenticated deployment binds bytes and persists exact approvals, with fail-closed API negatives', async ({ request, page }, testInfo) => {
-  test.setTimeout(240_000);
+  // Several real deployments run before the separately bounded Playtest check.
+  test.setTimeout(330_000);
   const auth = await ephemeralWorkspaceHeaders();
   const post = async (route: string, data: unknown, token = E2E_TOKEN) => {
     const response = await request.post(`${API}${route}`, { headers: { ...auth, Authorization: `Bearer ${token}` }, data });
