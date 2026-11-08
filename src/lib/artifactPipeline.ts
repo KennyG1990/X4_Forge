@@ -108,6 +108,7 @@ export interface BuildArtifactPlanOptions {
  */
 const UNIVERSAL_EXCLUDES = [
   '.git/**',
+  '.github/**',
   '.gitignore',
   '.gitattributes',
   '.gitmodules',

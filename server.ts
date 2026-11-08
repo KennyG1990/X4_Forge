@@ -1499,15 +1499,13 @@ type ArtifactBuildReport = {
    */
   nativeBinaries: string[];
   /**
-   * B84: soft `.forgekeep` keep-hints that named a path the build actually manages. The
-   * build won; these are reported so the author learns their hint is a no-op instead of
-   * assuming the deployed copy was left alone.
+   * B84: preservation entries that collided with built output. Keep the path list
+   * for existing clients and report provenance alongside it.
    */
   preservationOverrides: string[];
+  preservationOverrideDetails: PreservationOverride[];
 };
 let lastArtifactReport: ArtifactBuildReport | null = null;
-/** B84: filled by `replaceValidatedDeployment`, read when the artifact report is built. */
-let lastPreservationOverrides: string[] = [];
 
 /**
  * B84 — deployment packaging format. `loose` writes every file to disk as a file (the
@@ -1573,15 +1571,19 @@ function resolveDeployFormat(requested: unknown): DeployFormatResolution {
  */
 function describeDeployFormat(format: DeployFormat, report: ArtifactBuildReport | null) {
   const natives = report?.nativeBinaries || [];
-  const overrides = report?.preservationOverrides || [];
-  const overrideNote = overrides.length
-    ? [
-        `${overrides.length} ".forgekeep" entry(ies) name paths this mod actually builds ` +
-        `(${overrides.slice(0, 5).join(', ')}${overrides.length > 5 ? `, +${overrides.length - 5} more` : ''}), ` +
-        `so the freshly built version was deployed and the keep-hint had no effect. Remove them from ` +
-        `.forgekeep — keep-hints are for files the build does NOT produce, like an external bridge folder.`,
-      ]
-    : [];
+  const overrideNote: string[] = [];
+  const sources = [
+    ['forgekeep', 'explicit .forgekeep hint', 'Remove a redundant hint from .forgekeep.'],
+    ['foreign-dotfile', 'automatically preserved foreign dot-entry', 'If this path should stay outside the artifact, exclude it in .forgeartifact.json.'],
+    ['forge-state', 'Forge staging metadata', 'Review the artifact plan for this path.'],
+  ] as const;
+  for (const [origin, label, guidance] of sources) {
+    const paths = (report?.preservationOverrideDetails || []).filter(entry => entry.origin === origin).map(entry => entry.path);
+    if (!paths.length) continue;
+    const shown = paths.slice(0, 5).join(', ');
+    const remaining = paths.length > 5 ? `, +${paths.length - 5} more` : '';
+    overrideNote.push(`Built output replaced ${label} (${shown}${remaining}). ${guidance}`);
+  }
   if (format === 'catalog') {
     const volumes = report?.catalogVolumes ?? 0;
     const packed = report?.includedFiles ?? 0;
@@ -11759,6 +11761,7 @@ function verifyExpectedFiles(targetRoot: string, expected: Array<{ path: string;
  *    source edit — the same stale-content class as the B81 read/write root split.
  */
 type PreservedOrigin = 'runtime' | 'forgekeep' | 'forge-state' | 'foreign-dotfile';
+type PreservationOverride = { path: string; origin: Exclude<PreservedOrigin, 'runtime'> };
 
 function preservedDeploymentEntries(
   targetPath: string,
@@ -11986,7 +11989,7 @@ function replaceValidatedDeployment(
   hooks: DeploymentTransactionHooks = {},
   /** True only for the workspace-side staging target — see `preservedDeploymentEntries`. */
   ownsForgeState: boolean = false,
-): void {
+): PreservationOverride[] {
   hooks.beforeActivate?.();
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
@@ -12005,7 +12008,7 @@ function replaceValidatedDeployment(
       try { fs.rmSync(path.join(parent, name), { recursive: true, force: true }); } catch { /* a locked orphan is reported by the doctor */ }
     }
   } catch { /* sweeping is best-effort and must never block a deploy */ }
-  lastPreservationOverrides = [];
+  const preservationOverrides: PreservationOverride[] = [];
   let movedOld = false;
   try {
     copyRegularTree(artifactRoot, stage);
@@ -12021,7 +12024,7 @@ function replaceValidatedDeployment(
           // A soft keep-hint yields to the build, and the override is REPORTED rather than
           // silently applied. Letting the hint win would freeze the deployed copy against
           // every future source edit.
-          lastPreservationOverrides.push(relativePath);
+          preservationOverrides.push({ path: relativePath, origin });
           continue;
         }
         const stat = fs.lstatSync(source);
@@ -12039,7 +12042,7 @@ function replaceValidatedDeployment(
       } catch (error) {
         if (!isLockedRootRenameError(error)) throw error;
         replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
-        return;
+        return preservationOverrides;
       }
     }
     if (!movedOld) hooks.beforeActivate?.();
@@ -12058,6 +12061,7 @@ function replaceValidatedDeployment(
     }
     throw error;
   }
+  return preservationOverrides;
 }
 
 function compileWorkspaceToFolder(
@@ -12092,7 +12096,7 @@ function compileWorkspaceToFolder(
     if (artifactMode === 'catalog') {
       const packaged = materializeCatalogArtifact(plan, artifactRoot);
       if (!packaged.ok) throw new Error(`Packed artifact failed: ${packaged.errors.join('; ')}`);
-      replaceValidatedDeployment(artifactRoot, targetPath, packaged.files, plan, transactionHooks, writeSnapshots);
+      const preservationOverrides = replaceValidatedDeployment(artifactRoot, targetPath, packaged.files, plan, transactionHooks, writeSnapshots);
       lastArtifactReport = {
         mode: artifactMode,
         sourceRoot,
@@ -12107,7 +12111,8 @@ function compileWorkspaceToFolder(
         catalogVolumes: packaged.catalogs.volumes.length,
         verified: true,
         nativeBinaries: plan.entries.filter(entry => isNativeBinaryPath(entry.path)).map(entry => entry.path),
-        preservationOverrides: [...lastPreservationOverrides],
+        preservationOverrides: preservationOverrides.map(entry => entry.path),
+        preservationOverrideDetails: preservationOverrides,
       };
     } else {
       const built = materializeArtifact(plan, artifactRoot);
@@ -12119,7 +12124,7 @@ function compileWorkspaceToFolder(
       // so a file deleted from the mod stayed in the game folder forever and kept being
       // loaded by X4 — and loose deploys got none of the sibling-backup, rollback, hash
       // verification, or locked-root (B83) protection that catalog deploys already had.
-      replaceValidatedDeployment(artifactRoot, targetPath, plan.entries, plan, transactionHooks, writeSnapshots);
+      const preservationOverrides = replaceValidatedDeployment(artifactRoot, targetPath, plan.entries, plan, transactionHooks, writeSnapshots);
       lastArtifactReport = {
         mode: artifactMode,
         sourceRoot,
@@ -12134,7 +12139,8 @@ function compileWorkspaceToFolder(
         catalogVolumes: 0,
         verified: true,
         nativeBinaries: plan.entries.filter(entry => isNativeBinaryPath(entry.path)).map(entry => entry.path),
-        preservationOverrides: [...lastPreservationOverrides],
+        preservationOverrides: preservationOverrides.map(entry => entry.path),
+        preservationOverrideDetails: preservationOverrides,
       };
     }
 
@@ -12634,6 +12640,7 @@ function runCompileArtifactSelftest() {
     fs.writeFileSync(path.join(target, 'preserved', 'state.bin'), 'forgekeep state');
     fs.writeFileSync(path.join(target, '.forgekeep'), 'preserved\n../outside\nC:\\escape\n');
 
+    sourceWrite('.github/workflows/fixture.yml', 'name: fixture');
     const importedBuild = buildWorkspaceFileManifest(imported.workspace);
     const importedPlan = buildArtifactPlan({
       sourceRoot: source,
@@ -12654,6 +12661,8 @@ function runCompileArtifactSelftest() {
     record('catalog pair emitted', fs.existsSync(path.join(target, 'ext_01.cat')) && fs.existsSync(path.join(target, 'ext_01.dat')));
     record('stale loose payload removed by validated swap', !fs.existsSync(path.join(target, 'stale-loose.txt')));
     record('development metadata excluded from deploy', !fs.existsSync(path.join(target, '.git')));
+    record('GitHub workflow excluded from catalog deploy', !importedPlan.entries.some(entry => entry.path.startsWith('.github/'))
+      && !fs.existsSync(path.join(target, '.github')));
     record('runtime-owned state preserved', fs.readFileSync(path.join(target, 'runtime', 'state.db'), 'utf8') === 'deployed mutable state');
     record('valid forgekeep top-level path preserved', fs.readFileSync(path.join(target, 'preserved', 'state.bin'), 'utf8') === 'forgekeep state');
     record('unsafe forgekeep paths ignored', !fs.existsSync(path.join(deployRoot, 'outside')) && !fs.existsSync(path.join(deployRoot, 'C:', 'escape')));
