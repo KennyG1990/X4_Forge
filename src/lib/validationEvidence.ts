@@ -6,6 +6,11 @@ import { checkXmlWellformed } from './xmlWellformed';
 import { parseXmlLenient } from './xmlLite';
 
 export const VALIDATION_EVIDENCE_VERSION = 1 as const;
+export interface ValidationSourceLocation {
+  file: string;
+  line?: number;
+  column?: number;
+}
 export interface EvidenceDiagnostic {
   severity: 'error' | 'warning' | 'info';
   code?: string;
@@ -13,6 +18,7 @@ export interface EvidenceDiagnostic {
   sourceRef?: string;
   line?: number;
   column?: number;
+  target?: ValidationSourceLocation;
   message: string;
 }
 export interface ValidationCoverageGap {

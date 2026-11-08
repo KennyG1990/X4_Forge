@@ -114,7 +114,7 @@ import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeRefer
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
-import { buildValidationEvidence, parseValidationProject, ValidationInputError } from './src/lib/validationEvidence';
+import { buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
@@ -1410,6 +1410,8 @@ type ServerDiagnostic = {
   domain: string;
   filePath: string;
   line?: number;
+  column?: number;
+  target?: ValidationSourceLocation;
   nodeId?: string;
   message: string;
   sourceRef?: { kind: string; id?: string; label?: string };
@@ -6126,6 +6128,8 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
       domain: finding.domain || "project",
       filePath: finding.filePath || "project",
       line: finding.line,
+      column: finding.column,
+      target: finding.target,
       nodeId: finding.nodeId,
       message: finding.message,
       sourceRef: finding.sourceRef,
@@ -6138,6 +6142,8 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
       domain: finding.filePath ? classifyPath(finding.filePath) : "project",
       filePath: finding.filePath || "project",
       line: finding.line,
+      column: finding.column,
+      target: finding.target,
       message: finding.message,
       sourceRef: finding.sourceRef ? { kind: "project", label: finding.sourceRef } : undefined,
       ...(finding.severity === 'warning' && finding.code && (finding.filePath || finding.sourceRef) ? {
@@ -6151,7 +6157,7 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
   ];
   const seen = new Set<string>();
   const diagnostics = combined.filter((d) => {
-    const key = [d.severity, d.code, d.filePath, d.line || 0, d.nodeId || "", d.message].join("|");
+    const key = [d.severity, d.code, d.filePath, d.line || 0, d.column || 0, d.nodeId || "", d.message].join("|");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

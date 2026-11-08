@@ -6,6 +6,7 @@
 import { schemaElementToTemplate, type SchemaElement } from './lib/schemaTypes';
 import { isContainerTag } from './lib/portSemantics';
 import type { IntegrationContract } from './lib/contractGlue';
+import { duplicateMdCueMessage } from './lib/cueLineage';
 
 // Node port representation
 export interface Port {
@@ -1569,7 +1570,7 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
     if (cueNamesSeen.has(scopedCueName)) {
       diagnostics.push({
         severity: 'error',
-        message: `Duplicate cue name "${cueName}"${scriptScope ? ` in script "${scriptScope}"` : ''}. All cue names must be unique within their script file.`,
+        message: duplicateMdCueMessage(cueName, scriptScope),
         nodeId: cue.id,
         category: 'egosoft'
       });

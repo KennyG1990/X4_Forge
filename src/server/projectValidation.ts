@@ -58,7 +58,7 @@ import {
   type ProjectRulesEvaluation,
 } from "../lib/projectRules";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
-import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence } from '../lib/validationEvidence';
+import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence, type ValidationSourceLocation } from '../lib/validationEvidence';
 import { createBoundedAnalysisCache } from '../lib/x4UiAnalysisCache';
 
 // Resource services replace their owned immutable indexes on a new generation. Weak keys do
@@ -685,6 +685,7 @@ export interface FlatProjectDiagnostic {
   sourceRef?: string;
   line?: number;
   column?: number;
+  target?: ValidationSourceLocation;
   findingId?: string;
   category?: 'mod-finding' | 'check-unavailable';
 }
@@ -710,7 +711,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
   }
   for (const f of result.crossFile.findings) {
     out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef: f.event || f.dependencyId,
-      line: f.line, column: f.column, message: f.detail });
+      line: f.line, column: f.column, target: f.target, message: f.detail });
   }
   for (const d of result.schema.findings) {
     out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line, message: d.message });

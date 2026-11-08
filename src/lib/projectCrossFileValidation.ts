@@ -19,8 +19,9 @@ import {
   type ExtensionProject,
 } from './extensionProject';
 import { parseModManifest, type ModDependency, type ModManifest } from './modDependencyGraph';
-import { classifyCueRef } from './cueLineage';
+import { classifyCueRef, duplicateMdCueMessage, findDuplicateMdCueDeclarations, parseMdScriptRoot } from './cueLineage';
 import { collectMdStringResults } from './expressionAst';
+import type { ValidationSourceLocation } from './validationEvidence';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parse } from 'luaparse';
 import { DOMParser, type Element as XmlElement } from '@xmldom/xmldom';
@@ -43,6 +44,7 @@ export type ProjectCrossFileFindingCode =
   | 'md.signal_library'
   | 'md.run_actions_nonlibrary'
   | 'md.cue_library_ref_unresolved'
+  | 'md.cue_duplicate_name'
   | 'validation.lua_ast_unavailable'
   | 'ui.invalid_registration';
 
@@ -52,6 +54,7 @@ export interface ProjectCrossFileFinding {
   file?: string;
   line?: number;
   column?: number;
+  target?: ValidationSourceLocation;
   event?: string;
   dependencyId?: string;
   detail: string;
@@ -589,16 +592,16 @@ function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
   let checked = 0;
   for (const file of mdFiles) {
     if (typeof file.content !== 'string') continue;
-    let malformed = false;
-    let root: XmlElement | null;
-    try {
-      root = new DOMParser({ onError: () => { malformed = true; } })
-        .parseFromString(file.content.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
-    } catch {
-      continue;
-    }
-    if (malformed || root?.nodeName !== 'mdscript') continue;
+    const root = parseMdScriptRoot(file.content);
+    if (!root) continue;
     const name = root.getAttribute('name');
+    const elements = root.getElementsByTagName('*');
+    for (const duplicate of findDuplicateMdCueDeclarations(elements)) {
+      const target = { file: file.path, ...duplicate.first };
+      findings.push({ code: 'md.cue_duplicate_name', severity: 'error', file: file.path,
+        line: duplicate.line, column: duplicate.column, target,
+        detail: duplicateMdCueMessage(duplicate.name, name ?? '', target) });
+    }
     if (!name) continue;
     const key = name.toLowerCase();
     if (scripts.has(key)) {
@@ -606,7 +609,7 @@ function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
       continue;
     }
     const declarations = new Set<string>();
-    for (const node of Array.from(root.getElementsByTagName('*'))) {
+    for (const node of Array.from(elements)) {
       if (node.nodeName !== 'cue' && node.nodeName !== 'library') continue;
       const declaration = node.getAttribute('name');
       if (declaration) declarations.add(declaration.toLowerCase());
@@ -1195,6 +1198,21 @@ AddUITriggeredEvent("ai_influence", "chat.response", {})`,
   }));
   ok('cue_instances_do_not_claim_a_missing_name_in_ambiguous_scripts',
     ambiguousInstances.length === 1 && ambiguousInstances[0]?.line === 4, ambiguousInstances);
+
+  const duplicateFile = 'md/duplicate_names.xml';
+  const duplicateProject = addFile(addFile(fixtureProject(), {
+    path: duplicateFile, kind: 'md',
+    content: '<mdscript name="Duplicated"><cues><cue name="First"><cues><cue name="Listen"/></cues></cue>\n'
+      + '<cue name="Second"><cues><cue name="LIsten"/><cue name="Listen"/></cues></cue><library name="Listen"/></cues></mdscript>',
+  }), {
+    path: 'md/other_names.xml', kind: 'md',
+    content: '<mdscript name="Duplicated"><cues><cue name="Listen"/></cues></mdscript>',
+  });
+  const duplicates = validateProjectCrossFile(duplicateProject).findings.filter(f => f.code === 'md.cue_duplicate_name');
+  ok('duplicate_cue_and_library_names_are_exact_and_scoped_to_each_file',
+    duplicates.length === 2 && duplicates.every(f => f.file === duplicateFile && f.line === 2
+      && f.target?.file === duplicateFile && f.target?.line === 1)
+      && (duplicates[0]?.column ?? 0) < (duplicates[1]?.column ?? 0), duplicates);
 
   const duplicateDeps = addFile(fixtureProject(), {
     path: 'content.xml',
