@@ -29,7 +29,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { atomicWriteFile } from './workspaceState';
+import { atomicWriteFile } from './workspaceState.js';
 
 export interface InstanceRecord {
   port: number;
@@ -89,10 +89,10 @@ function sanitizeRecord(value: unknown): InstanceRecord | null {
   return record;
 }
 
-function readSanitizedRecord(target: string): InstanceRecord | null {
+function readSanitizedRecord(target: string, migrateLegacy = true): InstanceRecord | null {
   const parsed = JSON.parse(fs.readFileSync(target, 'utf8')) as unknown;
   const sanitized = sanitizeRecord(parsed);
-  if (!sanitized) return null;
+  if (!sanitized || !migrateLegacy) return sanitized;
   const canonical = JSON.stringify(sanitized, null, 2);
   if (JSON.stringify(parsed, null, 2) !== canonical) writeRestricted(target, canonical);
   return sanitized;
@@ -135,7 +135,7 @@ export function pruneDeadInstances(): number {
 }
 
 /** List live instances, newest first. */
-export function listInstances(): InstanceRecord[] {
+export function listInstances({ migrateLegacy = true }: { migrateLegacy?: boolean } = {}): InstanceRecord[] {
   const out: InstanceRecord[] = [];
   try {
     const dir = instancesDir();
@@ -143,7 +143,7 @@ export function listInstances(): InstanceRecord[] {
     for (const name of fs.readdirSync(dir)) {
       if (!name.endsWith('.json')) continue;
       try {
-        const rec = readSanitizedRecord(path.join(dir, name));
+        const rec = readSanitizedRecord(path.join(dir, name), migrateLegacy);
         if (rec && typeof rec.port === 'number' && pidAlive(rec.pid)) out.push(rec);
       } catch { /* a torn record must not hide the others */ }
     }
@@ -176,14 +176,18 @@ export function publishInstance(record: InstanceRecord): { instanceFile: string;
 export function unpublishInstance(pid: number): void {
   try {
     fs.rmSync(instancePath(pid), { force: true });
-    const remaining = listInstances();
+    const latestFile = latestPath();
+    const latest = readSanitizedRecord(latestFile, false);
+    if (latest?.pid !== pid) return;
+    const remaining = listInstances({ migrateLegacy: false });
+    // Another instance may have published while we were enumerating survivors.
+    const current = readSanitizedRecord(latestFile, false);
+    if (current?.pid !== pid || current.startedAt !== latest.startedAt || current.port !== latest.port) return;
     if (!remaining.length) {
-      fs.rmSync(latestPath(), { force: true });
+      fs.rmSync(latestFile, { force: true });
       return;
     }
-    let latest: InstanceRecord | null = null;
-    try { latest = readSanitizedRecord(latestPath()); } catch { latest = null; }
-    if (!latest || latest.pid === pid) writeRestricted(latestPath(), JSON.stringify(remaining[0], null, 2));
+    writeRestricted(latestFile, JSON.stringify(remaining[0], null, 2));
   } catch { /* shutdown must not throw */ }
 }
 

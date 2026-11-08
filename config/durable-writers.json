@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "110b236e7fdb59789cc6f9daf2d93dc790dd5e0e12faeedcae4c151b7f04ae19",
+  "sourceFingerprint": "9de9644562bb4c79bf10e1162ae83ea3d2b027a75f9b627c9f11182abd0ea267",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -88,8 +88,8 @@
       "calls": { "rmSync": 5, "mkdtempSync": 1 },
       "categories": ["ephemeral-atomic", "retention-cleanup"],
       "owners": ["publishInstance", "pruneDeadInstances", "unpublishInstance"],
-      "rationale": "Address-only discovery records use restricted atomic writes; raw calls remove dead or shutting-down instance pointers.",
-      "failureContract": "Discovery failure is fail-soft for server startup, but torn records cannot replace a valid record and dead PIDs are never returned."
+      "rationale": "Address-only discovery records use restricted atomic writes. The managed supervisor uses the existing cleanup after the owned child exits and its PID is no longer live.",
+      "failureContract": "Discovery failure is fail-soft. Shutdown deletes the owned PID record and rechecks the latest pointer before removal or repointing. Survivor enumeration during shutdown leaves other records untouched. Startup pruning recovers after simultaneous process loss."
     },
     {
       "file": "src/lib/pathRoles.ts",

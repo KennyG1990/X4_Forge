@@ -74,10 +74,12 @@ function beginShutdown(reason: string, signalChild: boolean): void {
   }
   forceTimer = setTimeout(() => {
     if (process.platform === 'win32') {
-      console.error('[sidecar-supervisor] graceful shutdown expired; closing the Windows Job.');
-      process.exit(1);
+      console.error('[sidecar-supervisor] graceful shutdown expired; terminating the owned server.');
+      // Let the child's exit handler retire discovery before the Job closes over its descendants.
+      try { server.kill('SIGKILL'); } catch { /* the Job closes on the failsafe below */ }
+    } else {
+      forceKillOwnedTree(server);
     }
-    forceKillOwnedTree(server);
     failsafeTimer = setTimeout(() => process.exit(1), 1500);
     failsafeTimer.unref();
   }, GRACE_MS);
@@ -94,9 +96,17 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
 }
 
 server.once('error', error => fail(`server spawn failed: ${error.message}`, 1));
-server.once('exit', (code, signal) => {
+server.once('exit', async (code, signal) => {
+  shuttingDown = true;
   if (forceTimer) clearTimeout(forceTimer);
   if (failsafeTimer) clearTimeout(failsafeTimer);
+  // Abrupt exit can skip the server's own cleanup. Leave a reused PID alone.
+  try {
+    const { pidAlive, unpublishInstance } = await import('../../src/lib/instanceDiscovery.js');
+    if (server.pid && !pidAlive(server.pid)) unpublishInstance(server.pid);
+  } catch {
+    console.warn('[sidecar-supervisor] Discovery cleanup unavailable. Startup pruning can recover stale records.');
+  }
   console.error(`[sidecar-supervisor] owned server exited (code=${code ?? 'null'}, signal=${signal ?? 'none'}).`);
   process.exit(code ?? (signal ? 1 : 0));
 });

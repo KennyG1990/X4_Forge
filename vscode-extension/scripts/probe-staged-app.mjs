@@ -172,10 +172,19 @@ try {
   const stubbornPath = path.join(tmp, 'stubborn-child.cjs');
   fs.writeFileSync(stubbornPath, `
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
   stdio: 'ignore',
   windowsHide: true,
 });
+const discovery = process.env.X4FORGE_DISCOVERY_DIR;
+const instances = path.join(discovery, 'instances');
+fs.mkdirSync(instances, { recursive: true });
+const record = JSON.stringify({ pid: process.pid, port: Number(process.env.PORT),
+  startedAt: new Date().toISOString(), cwd: process.cwd(), mode: 'staged-probe' });
+fs.writeFileSync(path.join(instances, process.pid + '.json'), record);
+fs.writeFileSync(path.join(discovery, 'latest.json'), record);
 console.log('X4FORGE_PROBE_DESCENDANT_PID=' + descendant.pid);
 setInterval(() => {}, 1000);
 `);
@@ -186,6 +195,8 @@ setInterval(() => {}, 1000);
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
+      PORT: String(port),
+      X4FORGE_DISCOVERY_DIR: discoveryDir,
       X4_FORGE_PARENT_MODE: 'pipe-v1',
       X4_FORGE_PARENT_PID: String(process.pid),
       X4_FORGE_PARENT_NONCE: 'b'.repeat(64),
@@ -202,6 +213,10 @@ setInterval(() => {}, 1000);
   }
   check('stubborn fixture and descendant started', stubbornPid > 0 && descendantPid > 0
     && pidAlive(stubbornPid) && pidAlive(descendantPid), `childPid=${stubbornPid} descendantPid=${descendantPid}`);
+  const stubbornRecord = path.join(discoveryDir, 'instances', `${stubbornPid}.json`);
+  const stubbornLatest = path.join(discoveryDir, 'latest.json');
+  check('stubborn fixture published its discovery', fs.existsSync(stubbornRecord)
+    && JSON.parse(fs.readFileSync(stubbornLatest, 'utf8')).pid === stubbornPid);
   const forceStart = performance.now();
   stubborn.stdin.end();
   const stubbornExit = await waitForExit(stubborn, 3500);
@@ -211,6 +226,7 @@ setInterval(() => {}, 1000);
   check('supervisor force reaps pipe-ignorant owned tree', stubbornExit && performance.now() - forceStart <= 3500 && !pidAlive(stubbornPid) && !pidAlive(descendantPid),
     `elapsedMs=${Math.round(performance.now() - forceStart)} supervisorExit=${stubborn.exitCode} childPid=${stubbornPid} descendantPid=${descendantPid}`);
   check('force reap never kills claimed parent pid', pidAlive(process.pid), String(process.pid));
+  check('force reap removes owned discovery', !fs.existsSync(stubbornRecord) && !fs.existsSync(stubbornLatest));
 } catch (error) {
   check('probe completed without exception', false, error instanceof Error ? error.message : String(error));
 } finally {
