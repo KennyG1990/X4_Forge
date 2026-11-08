@@ -107,6 +107,21 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
       fs.rmdirSync(path.dirname(target));
     }
 
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, 'replacement file');
+    try {
+      const stale = await post(route, { ...apply, expectedTargetFingerprint: preview.body.targetFingerprint }, keys.deploy.token);
+      expect(stale.status).toBe(409);
+      expect(stale.body).toMatchObject({ code: 'DEPLOY_TARGET_CHANGED', deployment: { writeAttempted: false } });
+      const invalid = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
+      expect(invalid.status).toBe(400);
+      expect(invalid.body).toMatchObject({ code: 'DEPLOY_TARGET_INVALID', deployment: { writeAttempted: false } });
+      expect(fs.readFileSync(target, 'utf8')).toBe('replacement file');
+    } finally {
+      fs.unlinkSync(target);
+      fs.rmdirSync(path.dirname(target));
+    }
+
     // C03 previews read durable warning-review history. Capture the clean binding while
     // that store is healthy; the fault below must refuse previews as well as writes.
     const cleanStoragePreview = await (async () => {

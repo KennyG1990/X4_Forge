@@ -11348,7 +11348,9 @@ function pathHasEntry(filePath: string): boolean {
 function deploymentTargetFingerprint(targetPath: string): string {
   if (!pathHasEntry(targetPath)) return 'absent';
   const stat = fs.lstatSync(targetPath);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Deployment target is not a regular directory.');
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw Object.assign(new Error('Deployment target is not a regular directory.'), { code: 'DEPLOY_TARGET_INVALID' });
+  }
   return regularTreeFingerprint(targetPath);
 }
 
@@ -13514,11 +13516,21 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         message: String(d.message || d.code || 'Validation finding') })), preflight.evidence?.coverage.gaps || []);
     const extensionsPath = path.join(x4GamePath, 'extensions');
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
-    const targetFingerprint = deploymentTargetFingerprint(targetRoot);
     const targetChanged = () => Object.assign(
       new Error('Deployment target contents changed. Review a new dry-run preview before retrying.'),
       { code: 'DEPLOY_TARGET_CHANGED' },
     );
+    let targetFingerprint: string;
+    try {
+      targetFingerprint = deploymentTargetFingerprint(targetRoot);
+    } catch (error) {
+      const invalid = error as Error & { code?: string };
+      if (invalid.code !== 'DEPLOY_TARGET_INVALID') throw error;
+      const stale = body.dryRun !== true && body.expectedTargetFingerprint !== undefined;
+      const refusal = stale ? targetChanged() : invalid;
+      check('preflight', 'Deployment target contents', 'fail', refusal.message);
+      return res.status(stale ? 409 : 400).json(failWith('preflight', { code: refusal.code, error: refusal.message }));
+    }
     const assertCurrentTarget = () => {
       let current: string;
       try { current = deploymentTargetFingerprint(targetRoot); }
