@@ -73,9 +73,18 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     expect((await post(route, apply, constrained.body.token || constrained.body.key)).status).toBe(403);
     expect((await post(route, { ...apply, actor: 'forged' }, keys.deploy.token)).status).toBe(400);
     expect((await post(route, { ...apply, acceptances: [{ ...acceptances[0], reason: '' }] }, keys.deploy.token)).status).toBe(400);
-    expect((await post(route, { ...apply, expectedModId: 'other_mod' }, keys.deploy.token)).status).toBe(409);
-    for (const field of ['expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash']) {
-      expect((await post(route, { ...apply, [field]: '0'.repeat(64) }, keys.deploy.token)).status).toBe(409);
+    const incompleteIdentity = await post(route, { ...apply, expectedModId: undefined, expectedBindingHash: '0'.repeat(64) }, keys.deploy.token);
+    expect(incompleteIdentity.status).toBe(409);
+    expect(incompleteIdentity.body.identityMismatch).toEqual({ missing: ['expectedModId'], mismatched: ['expectedBindingHash'] });
+    for (const field of ['expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash']) {
+      const wrong = await post(route, { ...apply, [field]: '0'.repeat(64) }, keys.deploy.token);
+      expect(wrong.status).toBe(409);
+      expect(wrong.body).toMatchObject({
+        code: 'DEPLOY_IDENTITY_MISMATCH',
+        identityMismatch: { missing: [], mismatched: [field] },
+        deployment: { writeAttempted: false },
+      });
+      expect(wrong.body.checklist).toContainEqual(expect.objectContaining({ id: 'preflight', status: 'fail' }));
     }
     expect((await post(route, { ...apply, acceptances: [{ ...acceptances[0], bindingHash: '0'.repeat(64) }] }, keys.deploy.token)).status).toBe(409);
     expect(fs.existsSync(target)).toBe(false);

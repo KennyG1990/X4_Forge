@@ -13514,10 +13514,29 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
       artifactHash, bindingHash: decision.binding.hash, validation: { outcome: decision.outcome,
         clean: decision.validationClean, evidence, review: projectFindingReview(decision, principal) }, binding: decision.binding };
-    if (body.dryRun !== true && (body.expectedModId !== evidence.modId || body.expectedSourceHash !== evidence.sourceHash
-      || body.expectedArtifactHash !== artifactHash || body.expectedBindingHash !== decision.binding.hash)) {
-      return res.status(409).json(failWith('preflight', { code: 'DEPLOY_IDENTITY_MISMATCH',
-        error: 'Deployment requires expectedModId, expectedSourceHash, expectedArtifactHash and expectedBindingHash from a current dry-run preview. Nothing written.' }));
+    if (body.dryRun !== true) {
+      const expectedIdentity = {
+        expectedModId: evidence.modId,
+        expectedSourceHash: evidence.sourceHash,
+        expectedArtifactHash: artifactHash,
+        expectedBindingHash: decision.binding.hash,
+      };
+      const missing: string[] = [];
+      const mismatched: string[] = [];
+      for (const [field, current] of Object.entries(expectedIdentity)) {
+        if (body[field] === undefined) missing.push(field);
+        else if (body[field] !== current) mismatched.push(field);
+      }
+      if (missing.length || mismatched.length) {
+        const details = [
+          missing.length ? `Missing preview fields: ${missing.join(', ')}.` : '',
+          mismatched.length ? `Preview fields no longer match: ${mismatched.join(', ')}.` : '',
+          'Run a new dry-run preview and review it before retrying. Nothing written.',
+        ].filter(Boolean).join(' ');
+        check('preflight', 'Deployment preview identity', 'fail', details);
+        return res.status(409).json(failWith('preflight', { code: 'DEPLOY_IDENTITY_MISMATCH',
+          error: details, identityMismatch: { missing, mismatched } }));
+      }
     }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
