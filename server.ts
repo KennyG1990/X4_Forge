@@ -11834,6 +11834,8 @@ function preservedDeploymentEntries(
 }
 
 interface DeploymentTransactionHooks {
+  onTargetWrite?: (state: 'mutated' | 'restored') => void;
+  expectedTargetBeforeWrite?: string;
   onStagedFingerprint?: (fingerprint: string) => void;
   /** Recheck immutable source/approval authority immediately before target activation. */
   beforeActivate?: () => void;
@@ -11882,6 +11884,7 @@ function replaceLockedDeploymentInPlace(
     hooks.beforeActivate?.();
 
     targetMutated = true;
+    hooks.onTargetWrite?.('mutated');
     synchronizeRegularTree(stage, targetPath);
     hooks.afterFallbackApply?.(targetPath);
     verifyExpectedFiles(targetPath, expected);
@@ -11892,11 +11895,15 @@ function replaceLockedDeploymentInPlace(
   } catch (error) {
     try {
       if (backupVerified && targetMutated && fs.existsSync(backup)) {
+        if (regularTreeFingerprint(backup) !== originalFingerprint) {
+          throw new Error('Locked-root backup changed before local rollback.');
+        }
         synchronizeRegularTree(backup, targetPath);
         const restoredFingerprint = regularTreeFingerprint(targetPath);
         if (restoredFingerprint !== originalFingerprint) {
           throw new Error(`rollback fingerprint mismatch: expected ${originalFingerprint}, got ${restoredFingerprint}`);
         }
+        hooks.onTargetWrite?.('restored');
       }
       if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true });
       if (fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
@@ -12018,6 +12025,7 @@ function replaceValidatedDeployment(
     }
   } catch { /* sweeping is best-effort and must never block a deploy */ }
   const preservationOverrides: PreservationOverride[] = [];
+  const discardBackup = () => fs.rmSync(backup, { recursive: true, force: true });
   let movedOld = false;
   try {
     copyRegularTree(artifactRoot, stage);
@@ -12052,6 +12060,7 @@ function replaceValidatedDeployment(
       try {
         rename(targetPath, backup);
         movedOld = true;
+        hooks.onTargetWrite?.('mutated');
       } catch (error) {
         if (!isLockedRootRenameError(error)) throw error;
         replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
@@ -12059,14 +12068,23 @@ function replaceValidatedDeployment(
       }
     }
     rename(stage, targetPath);
+    if (!movedOld) hooks.onTargetWrite?.('mutated');
     verifyExpectedFiles(targetPath, expected);
-    if (movedOld) fs.rmSync(backup, { recursive: true, force: true });
+    if (movedOld) discardBackup();
   } catch (error) {
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
     if (movedOld) {
       try {
+        if (hooks.expectedTargetBeforeWrite !== undefined
+          && deploymentTargetFingerprint(backup) !== hooks.expectedTargetBeforeWrite) {
+          try { discardBackup(); } catch { /* The durable recovery path still has its own snapshot. */ }
+          throw new Error('Deployment backup changed before local rollback.');
+        }
         if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { recursive: true, force: true });
-        if (fs.existsSync(backup)) rename(backup, targetPath);
+        if (fs.existsSync(backup)) {
+          rename(backup, targetPath);
+          hooks.onTargetWrite?.('restored');
+        }
       } catch (rollbackError) {
         throw new Error(`${error instanceof Error ? error.message : String(error)}; rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
@@ -13342,6 +13360,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
   let targetMatchesPreState = false;
+  const targetWrite: { state: 'untouched' | 'mutated' | 'restored' } = { state: 'untouched' };
   let outputUnconfirmed = false;
   let snapshot: DeploymentSnapshot | undefined;
   let deployReceipt: ActionReceipt | undefined;
@@ -13353,7 +13372,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       const failure = { validation: { ...current.validation, status: 'failed' as const, code }, failure: { code } };
       const terminal = rolledBack
         ? actionReceiptStore.rollBack(current.id, { ...failure, rollbackStatus: 'performed' })
-        : current.status === 'prepared' ? actionReceiptStore.fail(current.id, failure) : current;
+        : current.status === 'prepared' ? actionReceiptStore.fail(current.id, {
+          ...failure, ...(targetWrite.state === 'untouched' ? { rollbackStatus: 'not_required' as const } : {}),
+        }) : current;
       captureActionReceiptProjection(req, terminal);
     } catch { /* Storage failure never becomes a success; retain recovery and report refusal. */ }
   };
@@ -13376,7 +13397,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     return {
       state: writeAttempted ? 'attempted' : 'not-deployed',
       writeAttempted,
-      fidelityScope: writeAttempted && !targetMatchesPreState ? 'attempted-deployment' : 'none',
+      fidelityScope: writeAttempted && targetWrite.state === 'mutated' && !targetMatchesPreState ? 'attempted-deployment' : 'none',
     };
   };
   const failWith = (stageId: string, payload: Record<string, unknown>) => {
@@ -13823,6 +13844,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
       beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); },
       onStagedFingerprint: fingerprint => { stagedFingerprint = fingerprint; },
+      expectedTargetBeforeWrite: targetFingerprint,
+      onTargetWrite: state => { targetWrite.state = state; },
     }, frozenPlan);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
 
@@ -14054,25 +14077,32 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     let rollback: { applied: boolean; detail: string } | undefined;
     if (pendingDeployRecovery) {
       try {
-        const conflict = error?.code === 'DEPLOY_TARGET_CHANGED';
-        const currentFingerprint = conflict ? undefined : deploymentTargetFingerprint(pendingDeployRecovery.targetPath);
-        if (conflict || currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
-          targetMatchesPreState = !conflict;
+        if (targetWrite.state === 'untouched') {
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
-          rollback = { applied: false, detail: 'The deploy transaction failed before changing the target; the unused recovery receipt was removed.' };
-        } else if (currentFingerprint !== undefined && currentFingerprint !== 'absent') {
-          const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, currentFingerprint);
-          targetMatchesPreState = true;
+          rollback = { applied: false, detail: 'Forge did not change the deployment target. Its unused recovery snapshot was removed.' };
+        } else if (targetWrite.state === 'restored') {
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
-          rollback = { applied: true, detail: `The exceptional deploy was rolled back to ${restored.restoredFingerprint}.` };
+          rollback = { applied: true, detail: 'The deployment transaction already restored the target.' };
         } else {
-          rollback = { applied: false, detail: 'The deploy failed with its target missing; automatic recovery refused because no post-state hash could be proven.' };
+          const currentFingerprint = deploymentTargetFingerprint(pendingDeployRecovery.targetPath);
+          if (currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
+            targetMatchesPreState = true;
+            destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
+            rollback = { applied: false, detail: 'The target already matches the pre-deploy snapshot.' };
+          } else if (currentFingerprint !== 'absent') {
+            const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, currentFingerprint);
+            targetMatchesPreState = true;
+            destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
+            rollback = { applied: true, detail: `The exceptional deploy was rolled back to ${restored.restoredFingerprint}.` };
+          } else {
+            rollback = { applied: false, detail: 'The deploy failed with its target missing; automatic recovery refused because no post-state hash could be proven.' };
+          }
         }
       } catch (rollbackError) {
         rollback = { applied: false, detail: `Automatic recovery also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` };
       }
     }
-    if (!outputUnconfirmed) recordFailedDeploy(rollback?.applied === true, error?.code === 'DEPLOY_TARGET_CHANGED');
+    if (!outputUnconfirmed) recordFailedDeploy(rollback?.applied === true || targetWrite.state === 'restored', error?.code === 'DEPLOY_TARGET_CHANGED');
     const code = String(error?.code || 'DEPLOY_FAILED');
     const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : /STALE|CHANGED|MISMATCH/.test(code) ? 409
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;
